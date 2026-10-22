@@ -589,7 +589,11 @@ def _publication(
             # A flagged leaf's box shows its statement and notes as typed.
             statements[node_id] = (shown_as_typed("\n\n".join(filter(None, parts)), page=False), "") if found else parts
         else:
-            articles[node.path.resolve()] = shown_as_typed(text) if found else text
+            articles[node.path.resolve()] = (
+                shown_as_typed(text) if found
+                else text if node_id in groups
+                else _protect_narrative_markdown(text)
+            )
 
     files: dict[Path, str | bytes] = {}
     for source in sorted(snapshot):
@@ -619,7 +623,7 @@ def _publication(
                 )
                 continue
             text, found = published(written, source, destination / relative)
-            files[source] = shown_as_typed(text) if found else text
+            files[source] = shown_as_typed(text) if found else _protect_narrative_markdown(text)
         elif relative.as_posix() in written_over:
             continue
         elif source.suffix.lower() in _STATIC_SUFFIXES:
@@ -920,6 +924,13 @@ def _render_pages(
     files: dict[Path, bytes],
 ) -> RenderReport:
     """Write the site into *destination* from the private copy at *blueprint*."""
+    # A missing or stale packaged runtime is a publication failure, not an
+    # unhandled CLI exception or a reason to publish a different renderer.
+    # Capture it once before writing any staged files; _publish keeps the old site.
+    try:
+        explorer_script = dag_viewer.viewer_script()
+    except ValueError as error:
+        raise PublicationError([f"packaged explorer runtime is unavailable: {error}"]) from error
     # Audit reports coverage-role issues and the atlas.json entries the loader
     # ignored. A valid contract still publishes with them, as it does with
     # MAPPED rows. An issue without a line already names the contract in its
@@ -1092,6 +1103,7 @@ def _render_pages(
             _integrated_page(
                 page.read_text(encoding="utf-8"), page=page, destination=destination,
                 payload=payload, scope=scope, owner=owner,
+                prepared=True,
             ),
             encoding="utf-8",
         )
@@ -1102,7 +1114,7 @@ def _render_pages(
         # Written here, never kept from the vault.
         (MATHJAX_SCRIPT, site.script),
         (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
-        (DAG_SCRIPT, dag_viewer.viewer_script()),
+        (DAG_SCRIPT, explorer_script),
         (DAG_STYLE, dag_viewer._STYLE),
         (LOGO, _logo()),
     ):
@@ -1115,6 +1127,7 @@ def _render_pages(
 
 def _integrated_page(
     text: str, *, page: Path, destination: Path, payload: Path, scope: str, owner: str | None = None,
+    prepared: bool = False,
 ) -> str:
     """Keep a complete published page readable before moving it into the shared UI.
 
@@ -1127,9 +1140,12 @@ def _integrated_page(
     if lines and lines[0].strip() == "---":
         end = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
     header, body = "".join(lines[:end]), "".join(lines[end:])
-    # Parse authored code/math before md_in_html sees the added containers.
-    # A literal </div> in code must not close the reader or activate its suffix.
-    body = _protect_markdown_in_html(body)
+    # Published pages protect authored ranges before inserting renderer-owned
+    # statement/navigation HTML. Re-converting that assembled page would
+    # consume ordinary Markdown links and reparse existing card/heading IDs.
+    # Direct callers still protect their authored body before introducing HTML.
+    if not prepared:
+        body = _protect_markdown_in_html(body)
     node = f' data-autoform-node-id="{html.escape(owner, quote=True)}"' if owner else ""
     title_header = "".join(lines[:2]) + "---\n" if end else text
     title = _header_title(title_header) or rendered_visible_text(_first_h1(text) or "") or _file_title(page)
@@ -2729,7 +2745,9 @@ def _render_chapter(
             group, node_ids, narrative, graph=graph, blueprint=blueprint, node_sources=node_sources, targets=targets
         )
     )
-    chapter = _place_environments(narrative, lead, slots, summary=chapter_summary, environments=environments)
+    chapter = _place_environments(
+        narrative, lead, slots, summary=chapter_summary, environments=environments, protect=not typed,
+    )
     placed = set(slots.values())
     remaining = [node_id for node_id in node_ids if node_id not in placed]
     # A catalog inventories Lean that already exists, so it is no formalization target.
@@ -2797,7 +2815,8 @@ def _chapter_layout(
 
 
 def _place_environments(
-    narrative: str, lead: int, slots: dict[int, str], *, summary: str, environments: dict[str, str]
+    narrative: str, lead: int, slots: dict[int, str], *, summary: str, environments: dict[str, str],
+    protect: bool = False,
 ) -> str:
     """The chapter page: ``narrative`` with the progress ``summary`` before
     line ``lead`` and each slot line replaced by its statement's environment.
@@ -2806,13 +2825,33 @@ def _place_environments(
 
     lines = narrative.splitlines()
     output: list[str] = []
+    pending: list[str] = []
+    affected = protect and "<" in _document_body(narrative)
+    references = None
+    if affected:
+        context = _body_converter()
+        context.convert(_document_body(narrative))
+        references = context.references
+
+    def flush() -> None:
+        if pending:
+            chunk = "\n".join(pending)
+            output.append(
+                _protect_narrative_markdown(chunk, references=references, force=affected, page_header=not output)
+                if protect else chunk
+            )
+            pending.clear()
+
     for index, line in enumerate(lines):
         if index == lead:
+            flush()
             output.extend(["", summary.rstrip(), ""])
         if index in slots:
+            flush()
             output.append(environments[slots[index]])
         else:
-            output.append(line)
+            pending.append(line)
+    flush()
     chapter = "\n".join(output)
     if lead == len(lines):
         chapter = chapter.rstrip() + "\n\n" + summary.rstrip()
@@ -2964,6 +3003,25 @@ def _protect_markdown_in_html(
         rendered += '\n\n<div class="bp-body-link-validation" hidden markdown="1">\n\n'
         rendered += "\n\n".join(witnesses) + "\n\n</div>"
     return rendered
+
+
+def _protect_narrative_markdown(
+    text: str, *, references: Mapping[str, tuple[str, str]] | None = None, force: bool = False,
+    page_header: bool = True,
+) -> str:
+    """Protect authored narrative, never an already assembled renderer page.
+
+    Metadata remains metadata. The canonical converter handles only affected
+    authored ranges; normal Markdown retains MkDocs' own link/anchor processing.
+    """
+    if not force and "<" not in text:
+        return text
+    lines = text.splitlines(keepends=True)
+    end = 0
+    if page_header and lines and lines[0].strip() == "---":
+        end = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
+    header, body = "".join(lines[:end]), "".join(lines[end:])
+    return header + _protect_markdown_in_html(body, references=references, force=force)
 
 
 def _render_environment(
