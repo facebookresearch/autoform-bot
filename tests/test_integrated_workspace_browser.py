@@ -349,7 +349,7 @@ def test_far_right_genuine_math_menu_and_hover_submenu_stay_inside_the_workspace
     formula.scroll_into_view_if_needed()
     _frames(page)
     box = formula.bounding_box()
-    assert box and box["x"] + box["width"] > width - 50
+    assert box and box["width"] > 4
 
     def scrolls() -> dict:
         return page.evaluate("""() => {
@@ -369,6 +369,10 @@ def test_far_right_genuine_math_menu_and_hover_submenu_stay_inside_the_workspace
         menus = page.get_by_role("menu")
         root = menus.first.bounding_box()
         assert root and root["x"] >= 0 and root["y"] >= 0
+        # Phone display math keeps its natural centered width. Prove this
+        # actual right-click would overflow using the real menu's width and
+        # the pinned library's 5px anchor offset, not a fixed page inset.
+        assert box["x"] + box["width"] - 2 - 5 + root["width"] > width
         assert root["x"] + root["width"] <= width
         assert root["y"] + root["height"] <= page.viewport_size["height"]
         show = page.get_by_role("menuitem", name=re.compile(r"^Show Math As(?:\s*\u25ba)?$"))
