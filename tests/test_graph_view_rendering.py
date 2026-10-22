@@ -697,16 +697,20 @@ def test_explorer_elevation_is_two_shadows_and_a_selection_ring_that_keeps_the_c
     assert "border-width" not in style
 
 
-def test_explorer_canvas_paints_its_labels_in_the_site_family_at_11px_or_more() -> None:
-    """Painted labels inherit the site family and are readable when the dependency map opens."""
+def test_explorer_labels_use_the_site_family_and_remain_readable_at_initial_scale() -> None:
+    """Canvas labels and integrated DOM cards stay readable; weights need no text labels."""
     script = _viewer_source()
     assert script.count('refs.ctx.font = "10px sans-serif";') == 1  # Parse probe only, never a painted label.
     assert 'family = getComputedStyle(host).fontFamily; refs.ctx.font = "11px " + family;' in script
     assert 'ctx.font = "700 13px " + family;' in script
     assert 'ctx.font = Math.max(11, 10 * state.transform.scale) + "px " + family;' in script
-    # The integrated router measures and paints the same 13px family; its .9 initial floor gives 11.7px.
-    assert 'refs.ctx.font = "600 13px " + family;' in script
-    assert 'ctx.font = "600 " + (13 * scale) + "px " + family;' in script
+    # The integrated map uses DOM titles/statuses, not painted numeric weights.
+    # Their actual published CSS must remain readable at the .9 initial floor.
+    rules = re.findall(r"\.bp-dag-integrated(?:\.bp-dag-atlas)? \.bp-dag-node-(?:title|meta) \{([^}]+)\}", dag_viewer._STYLE)
+    sizes = [float(size) for rule in rules for size in re.findall(r"font-size:\s*([\d.]+)px", rule)]
+    assert len(sizes) >= 3 and min(sizes) * .9 >= 11
+    painter = script.split("function drawRoute(", 1)[1].split("function updateOverlays(", 1)[0]
+    assert "fillText" not in painter and "measureText" not in painter
     assert 'readableFloor = navigation ? .9 :' in script
 
 

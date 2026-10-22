@@ -56,8 +56,8 @@ function lineHits(a,b,box,pad=0) {
     {x:box.x+box.w+pad,y:box.y+box.h+pad},{x:box.x-pad,y:box.y+box.h+pad}];
   return corners.some((corner,index)=>segmentCrosses(a,b,corner,corners[(index+1)%4]));
 }
-function check(input,direction) {
-  const before=JSON.stringify(input),result=layoutGraph(input.nodes,input.edges,direction);
+function check(input,direction,produced) {
+  const before=JSON.stringify(input),result=produced||layoutGraph(input.nodes,input.edges,direction);
   assert.equal(JSON.stringify(input),before,'Layout mutated captured graph data');
   const originalRoutes=result.routes;
   result.routes=originalRoutes.map(route=>route.parts?Object.assign({},route,{
@@ -81,7 +81,7 @@ function check(input,direction) {
   }));
   assert.deepEqual(result.clusters.flatMap(cluster=>cluster.members).sort(),input.nodes.map(node=>node.id).sort());
   boxes.forEach(a=>boxes.forEach(b=>assert.equal(a.cluster===b.cluster,reachable.get(a.id).has(b.id)&&reachable.get(b.id).has(a.id),'Structural clusters must be actual SCCs')));
-  const labels=[];
+  const labels=[],labelled=result.routes.filter(route=>route.label);
   result.routes.forEach(route=>{
     assert(route.points.length>=2);assert(route.points.every(point=>Number.isFinite(point.x)&&Number.isFinite(point.y)));
     route.points.slice(1).forEach((point,index)=>boxes.forEach(box=>assert(!lineHits(route.points[index],point,box,box.id===route.source||box.id===route.target?0:12),'An authoritative edge crosses a mathematical card')));
@@ -94,7 +94,7 @@ function check(input,direction) {
       for(let step=0;step<=24;step++) {
         const t=step/24,at={x:(1-t)*(1-t)*p.x+2*t*(1-t)*point.x+t*t*q.x,y:(1-t)*(1-t)*p.y+2*t*(1-t)*point.y+t*t*q.y};
         boxes.forEach(box=>assert(!inside(at,box),'Rounded route enters a mathematical card'));
-        result.routes.forEach(other=>{
+        labelled.forEach(other=>{
           if(other!==route&&other.label)assert(!inside(at,other.label,1),'Rounded route occludes another count label');
         });
       }
@@ -111,7 +111,7 @@ function check(input,direction) {
     }
   });
   result.routes.forEach((route,index)=>{
-    result.routes.forEach(other=>{
+    labelled.forEach(other=>{
       if(route===other||!other.label)return;
       route.points.slice(1).forEach((point,at)=>assert(!lineHits(route.points[at],point,other.label,4),'Another edge occludes a count label'));
     });
@@ -132,10 +132,16 @@ function normal(result) {
 """
 
 
-def _run(body: str, fixture: object) -> None:
+def _run(body: str, fixture: object, *, timed_body: str | None = None) -> None:
     script = "const ROOT=" + json.dumps(str(_ROOT)) + ";\n" + _LOADER
-    script += "vm.runInContext(functions+" + json.dumps(_ORACLE + body) + ",context,{timeout:2000});"
-    result = subprocess.run([_NODE, "-e", script], input=json.dumps(fixture), text=True, capture_output=True, timeout=5)
+    script += "context.report=(stage,details={})=>process.stdout.write(JSON.stringify({stage,...details})+'\\n');\n"
+    script += "vm.runInContext(functions+" + json.dumps(_ORACLE) + ",context,{timeout:2000});\n"
+    if timed_body is not None:
+        script += "vm.runInContext(" + json.dumps(timed_body) + ",context,{timeout:2000});\n"
+    oracle_budget = 5000 if timed_body is not None else 2000
+    script += "vm.runInContext(" + json.dumps(body) + f",context,{{timeout:{oracle_budget}}});"
+    result = subprocess.run([_NODE, "-e", script], input=json.dumps(fixture), text=True, capture_output=True,
+                            timeout=10 if timed_body is not None else 5)
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-6000:]
 
 
@@ -342,8 +348,30 @@ def test_dense_cyclic_scopes_have_bounded_work_and_preserve_all_routes(count: in
         pairs[source, target] = (rng.randrange(6), rng.randrange(1, 6))
     fixture = _graph(count, [(source, target, *pairs[source, target]) for source, target in sorted(pairs)])
     _run(f"""
-      const began=performance.now(),scene=layoutGraph(fixture.nodes,fixture.edges,{json.dumps(direction)});
-      assert(performance.now()-began<1000,'The bounded production layout exceeded one second');
-      const result=check(fixture,{json.dumps(direction)});
-      assert.equal(result.routes.length,scene.routes.length);
-    """, fixture)
+      report('oracle-start',{{direction:{json.dumps(direction)},nodes:fixture.nodes.length,edges:fixture.edges.length}});
+      const oracleBegan=performance.now(),result=check(fixture,{json.dumps(direction)},scene);
+      assert.equal(result.routes.length,productionLanes);
+      report('oracle-complete',{{milliseconds:performance.now()-oracleBegan,lanes:result.routes.length}});
+    """, fixture, timed_body=f"""
+      report('production-start',{{direction:{json.dumps(direction)},nodes:fixture.nodes.length,edges:fixture.edges.length}});
+      const beforeProduction=JSON.stringify(fixture),began=performance.now();
+      const scene=layoutGraph(fixture.nodes,fixture.edges,{json.dumps(direction)}),elapsed=performance.now()-began;
+      const productionLanes=scene.routes.length;
+      report('production-complete',{{milliseconds:elapsed,lanes:productionLanes}});
+      assert(elapsed<1000,'The bounded production layout exceeded one second: '+elapsed+'ms');
+      assert.equal(JSON.stringify(fixture),beforeProduction,'Timed production layout mutated captured graph input');
+      report('production-input-unchanged');
+    """)
+
+
+def test_timed_scene_is_checked_without_repeating_the_solver() -> None:
+    _run("""
+      report('oracle-start');check(fixture,'lr',scene);assert.equal(calls,1);
+      assert.equal(JSON.stringify(fixture),beforeProduction);report('oracle-complete');
+    """, _graph(2, [(0, 1, 3, 2)]), timed_body="""
+      var calls=0;const actual=layoutGraph;layoutGraph=(...args)=>{calls++;return actual(...args);};
+      const beforeProduction=JSON.stringify(fixture),began=performance.now();
+      const scene=layoutGraph(fixture.nodes,fixture.edges,'lr');
+      assert(performance.now()-began<1000);assert.equal(calls,1);
+      assert.equal(JSON.stringify(fixture),beforeProduction);report('production-input-unchanged');
+    """)
