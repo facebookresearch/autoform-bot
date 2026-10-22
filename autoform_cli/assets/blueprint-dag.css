@@ -6,7 +6,7 @@
   --dag-mono: var(--md-code-font-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   --dag-radius-row: 6px; --dag-radius-control: 8px; --dag-radius-panel: var(--bp-radius, 12px);
   --dag-e1: 0 1px 2px rgb(0 0 0 / .06); --dag-e2: 0 8px 24px rgb(0 0 0 / .16); --dag-overlay-border: transparent;
-  position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr); width: 100%;
+  position: relative; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); width: 100%;
   height: clamp(608px, calc(100svh - 112px), 1024px); min-height: 608px; overflow: hidden;
   border: 1px solid var(--dag-border); border-radius: var(--dag-radius-panel); background: var(--dag-bg); color: var(--dag-fg);
   box-shadow: var(--dag-e1); isolation: isolate;

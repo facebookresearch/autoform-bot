@@ -193,7 +193,7 @@
     }
 
     function captureState() {
-      var active = document.activeElement, key = active === dom$search ? "search" : active && active.dataset.autoformNodeId;
+      var active = document.activeElement, key = active === dom$search ? "search" : dom$readingBody && dom$readingBody.contains(active) ? "reading" : active && active.dataset.autoformNodeId;
       return {node: ui$selected && ui$selected.id, requestedNode: ui$requestedNode, mode: ui$mode, direction: ui$direction,
         statuses: Array.from(ui$selectedStatuses), isolates: ui$showIsolated, camera: Object.assign({}, ui$transform),
         query: ui$query, area: ui$area, readingOpen: host.classList.contains("bp-dag-sheet-open"), focus: key,
@@ -222,7 +222,8 @@
         dom$navigation.scrollTop = saved.outlineScroll || 0;
         if (dom$readingBody) dom$readingBody.scrollTop = saved.readingScroll || 0;
         dom$inventoryScroll.scrollTop = saved.inventoryScroll || 0;
-        var chosen = saved.focus === "search" ? dom$search : overlays.get(saved.focus);
+        var chosen = saved.focus === "search" ? dom$search : saved.focus === "reading" ? dom$readingBody : overlays.get(saved.focus);
+        if (chosen === dom$readingBody) chosen.tabIndex = -1;
         if (chosen) chosen.focus({preventScroll: true});
         restoring = false; resolve();
       }); }); });
@@ -240,7 +241,7 @@
       dom$search.placeholder = "Search " + index.nodes.length.toLocaleString() + " roadmap entries";
       if (currentBundle) { updateProjection(); dom$breadcrumb.replaceChildren(trailList(routeTrail(currentBundle))); }
       renderNavigation(); renderReaderContext(); renderInventory(false); refresh(false);
-      if (ui$requestedNode) { fit(); if (ui$selected) center(ui$selected, .82); }
+      if (ui$requestedNode) { fit(); centerIfHidden(ui$selected); }
     }
     function applyRoute(bundle) {
       var isCurrent = bundle.isCurrent;
@@ -271,13 +272,14 @@
       if (ui$selected) ui$selectedStatuses.add(ui$selected.status);
       setSheet(!sheetLayout() || Boolean(bundle.nodeId), ui$selected);
       renderNavigation(); refresh(true); firstResize = true; resize();
-      if (ui$selected && mapAllowed) center(ui$selected, .82);
+      if (ui$selected && mapAllowed) centerIfHidden(ui$selected);
       if (navigation) navigation.loadIndex().catch(showError);
       readingReady = readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || (isCurrent && !isCurrent())) { resolve(); return; }
         var target = bundle.anchor && document.getElementById(bundle.anchor);
-        if (target && dom$readingBody.contains(target) && !bundle.snapshot) {
-          target.classList.add("bp-reading-current"); target.scrollIntoView({block: "start"});
+        if (target && dom$readingBody.contains(target)) {
+          target.classList.add("bp-reading-current");
+          if (!bundle.snapshot) dom$readingBody.scrollTop += target.getBoundingClientRect().top - dom$readingBody.getBoundingClientRect().top - 24;
         }
         if (bundle.focus && dom$readingBody && !bundle.snapshot) {
           var heading = dom$readingBody.querySelector("h1"); if (heading) { heading.tabIndex = -1; heading.focus({preventScroll: true}); }
@@ -347,7 +349,7 @@
         nodes.push({id: key, kind: "scope", title: area, area: area, _region: area, _topics: members.length, status: members[0].status,
           status_counts: Array.from(counts.entries()), member_count: members.reduce(function (sum, node) { return sum + (node.member_count === undefined ? 0 : node.member_count); }, 0),
           summary: members.slice(0, 3).map(function (node) { return node.title; }).join(" · "),
-          layout: {x: (slot % 2) * 304, y: Math.floor(slot++ / 2) * 156, width: 264, height: 120}});
+          layout: {x: (slot % 2) * 304, y: Math.floor(slot++ / 2) * 172, width: 264, height: 136}});
       });
       payload.nodes.forEach(function (node) { if (!owners.has(node.id) && mapNode(node)) { replacements.set(node.id, node.id); nodes.push(node); } });
       payload.edges.forEach(function (edge) {
@@ -355,7 +357,7 @@
         var key = a + "\n" + b, found = links.get(key) || {source: a, target: b, statement: 0, proof: 0};
         found.statement += edge.statement || 0; found.proof += edge.proof || 0; links.set(key, found);
       });
-      if (selectedArea) nodes.forEach(function (node, i) { node.layout = {x: (i % 2) * 304, y: Math.floor(i / 2) * 138, width: 264, height: 108}; });
+      if (selectedArea) nodes.forEach(function (node, i) { node.layout = {x: (i % 2) * 304, y: Math.floor(i / 2) * 172, width: 264, height: node._region ? 136 : 108}; });
       return Object.assign({}, payload, {nodes: nodes, edges: Array.from(links.values()), regions: []});
     }
     function updateProjection() {
@@ -753,7 +755,7 @@
       return stops.length ? "conic-gradient(" + stops.join(",") + ")" : "var(--dag-node-stroke)";
     }
     function world(node) {
-      if (node._region && ui$orientation === "tb") return {x: 0, y: node._index * 146, w: node.width, h: node.height};
+      if (node._region && ui$orientation === "tb") return {x: 0, y: node._index * 164, w: node.width, h: node.height};
       if (ui$orientation === "tb" && !atlas) {
         if (node.isolated) {
           var mobileColumns = dom$stage.clientWidth < 540 ? 2 : 3;
@@ -892,6 +894,10 @@
       if (!node) return; var box = world(node), free = freeArea(); ui$transform.scale = Math.max(ui$transform.scale, minimumScale || .82);
       ui$transform.x = (free.left + free.right) / 2 - (box.x + box.w / 2) * ui$transform.scale;
       ui$transform.y = free.band / 2 - (box.y + box.h / 2) * ui$transform.scale; schedule();
+    }
+    function centerIfHidden(node) {
+      if (!node) return; var box = screen(node);
+      if (box.x < 12 || box.y < 12 || box.x + box.w > dom$stage.clientWidth - 12 || box.y + box.h > dom$stage.clientHeight - 12) center(node, .82);
     }
     // A click leaves the map where it is unless the details it opens cover the node; then it pans just clear.
     function reveal(node) {

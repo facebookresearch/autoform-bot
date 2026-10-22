@@ -80,6 +80,7 @@ function setup(extra = {}) {
   const win = {location:{href:entries[0].url},
     addEventListener(type, cb) { listeners.set(type, cb); }, removeEventListener(type) { listeners.delete(type); }};
   win.history = {
+    scrollRestoration: extra.scrollRestoration || 'auto',
     get state() { return entries[pointer].state; }, get length() { return entries.length; },
     replaceState(value, _title, url) { entries[pointer] = {url,state:structuredClone(value)}; win.location.href = url; },
     pushState(value, _title, url) { entries.splice(pointer+1); entries.push({url,state:structuredClone(value)}); pointer++; win.location.href=url; },
@@ -234,6 +235,25 @@ def test_snapshot_byte_bounds_evict_without_empty_cache_errors_and_fall_back_to_
     """)
 
 
+def test_native_scroll_restoration_is_owned_only_after_commit_and_released_without_overriding_other_owners() -> None:
+    _run(r"""
+      const app=setup(); assert.equal(app.win.history.scrollRestoration,'auto');
+      await app.nav.start(); assert.equal(app.win.history.scrollRestoration,'manual');
+      app.nav.dispose(); assert.equal(app.win.history.scrollRestoration,'auto');
+      let release; const delayed=setup({commit(){return new Promise(resolve=>{release=resolve;});}});
+      const waiting=delayed.nav.start(); await until(()=>delayed.commits.length===1);
+      assert.equal(delayed.win.history.scrollRestoration,'manual'); // The renderer's readiness is still pending.
+      release(); await waiting; delayed.nav.dispose(); assert.equal(delayed.win.history.scrollRestoration,'auto');
+      const existing=setup({scrollRestoration:'manual'}); await existing.nav.start(); existing.nav.dispose();
+      assert.equal(existing.win.history.scrollRestoration,'manual');
+      const changed=setup(); await changed.nav.start(); changed.win.history.scrollRestoration='auto'; changed.nav.dispose();
+      assert.equal(changed.win.history.scrollRestoration,'auto');
+      const failure=setup({fetch(_url,_settings,reply){return reply({},rootSpec.route,503);}});
+      assert.equal(await failure.nav.start(),null); assert.equal(failure.win.history.scrollRestoration,'auto');
+      failure.nav.dispose();
+    """)
+
+
 def test_alias_notice_loads_canonical_article_and_keeps_legacy_selection() -> None:
     _run(r"""
       const alias={title:'Old explorer',route:aSpec.route,data:'../../dependencies/a.json',catalog:'../index.json',scope:'a',prose:'Reading notice only'};
@@ -368,7 +388,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
       const records=new Map(),byId=new Map(),overlays=new Map(),navigation=app.nav;
       const mapAllowed=true,presentStatuses=['planned'],palette={planned:{}},LIST_PAGE=100;
       const updateProjection=()=>{},closeSearch=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
-      const resize=()=>{},center=()=>{},showError=()=>{},trailList=()=>[],routeTrail=()=>[],sheetLayout=()=>false;
+      const resize=()=>{},center=()=>{},centerIfHidden=()=>{},showError=()=>{},trailList=()=>[],routeTrail=()=>[],sheetLayout=()=>false;
       const requestAnimationFrame=callback=>setImmediate(callback);
       const applyRoute=eval('('+callback('applyRoute')+')');
       const restoreState=eval('('+callback('restoreState')+')');

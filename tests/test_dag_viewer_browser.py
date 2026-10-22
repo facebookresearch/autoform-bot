@@ -1610,10 +1610,11 @@ def test_a_published_app_page_without_script_keeps_the_site_chrome(webkit_browse
         loading = page.locator(".bp-dag-loading")
         playwright.expect(loading).to_be_attached()
         playwright.expect(loading).to_be_hidden()
-        _assert_site_chrome_is_reachable(page)
+        # WebKit's no-script trial click can follow the native Next link; audit this page before it.
         playwright.expect(page.locator('.bp-reading-source .bp-thmwrapper[data-autoform-node-id="algebra/result"]')).to_contain_text(
             "The main result."
         )
+        _assert_site_chrome_is_reachable(page)
         playwright.expect(page.locator(".bp-dag-integrated")).to_have_count(0)
         # A legacy entrance is still a usable native notice, not a blank graph without JavaScript.
         page.goto(f"{site_url}/dependencies/chapters/algebra.html")

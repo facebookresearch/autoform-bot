@@ -26,6 +26,7 @@
     var initialTitle = source && source.getAttribute("data-page-title") ||
       initialPage && initialPage.getAttribute("data-page-title") || doc.title || "Mathematics";
     var disposed = false, started = null, epoch = 0, active = null, current = null, currentKey = null;
+    var scrollChecked = false, scrollOwned = false;
     var snapshots = new Map(), keySequence = 0, keySeed = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
     var index = null, indexPromise = null, indexController = null, indexed = new Map(), routes = new Map(), documents = new Set();
     var bound = new Map(), htmlCache = new Map(), jsonCache = new Map(), cacheBytes = 0;
@@ -396,6 +397,10 @@
         win.history.replaceState(historyState(bundle.snapshot, bundle.url, key), "", bundle.url);
       }
       current = bundle; currentKey = key;
+      if (!scrollChecked) {
+        scrollChecked = true;
+        if (win.history.scrollRestoration === "auto") { win.history.scrollRestoration = "manual"; scrollOwned = true; }
+      }
       await options.onCommit(bundle); assertAlive(request);
       bound.forEach(function (listener, root) {
         if (root.isConnected === false) { root.removeEventListener("click", listener, true); bound.delete(root); }
@@ -492,6 +497,7 @@
       disposed = true; epoch++;
       host.removeAttribute("aria-busy");
       if (active) active.abort(); if (indexController) indexController.abort();
+      if (scrollOwned && win.history.scrollRestoration === "manual") win.history.scrollRestoration = "auto";
       win.removeEventListener("popstate", popstate);
       bound.forEach(function (listener, root) { root.removeEventListener("click", listener, true); }); bound.clear();
       htmlCache.clear(); jsonCache.clear(); cacheBytes = 0; index = null; indexed.clear(); routes.clear(); documents.clear();

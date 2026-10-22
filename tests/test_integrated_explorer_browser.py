@@ -289,8 +289,14 @@ def _math_source(page: object, container: object, *, mathml: bool = False) -> st
         _math_menu_evidence(page, "opened")
         # MathJax 3.2.2's submenu appends a visible pointer to its accessible
         # name. Posting also changes Original Form to the input's TeX Commands.
-        page.get_by_role("menuitem", name=re.compile(r"^Show Math As(?:\s*\u25ba)?$")).hover()
-        page.get_by_role("menuitem", name="MathML Code" if mathml else "TeX Commands", exact=True).click()
+        command = page.get_by_role("menuitem", name="MathML Code" if mathml else "TeX Commands", exact=True)
+        # The context menu can open Show Math As immediately. At a viewport
+        # edge its posted submenu overlaps the parent, so hovering the parent
+        # again would target an obscured point. Use the actual posted command,
+        # or open it with the menu's ordinary keyboard action.
+        if not command.is_visible():
+            page.get_by_role("menuitem", name=re.compile(r"^Show Math As(?:\s*\u25ba)?$")).press("ArrowRight")
+        command.click()
         source = page.locator(".CtxtMenu_Info pre")
         source.wait_for(state="visible")
         text = source.inner_text()
