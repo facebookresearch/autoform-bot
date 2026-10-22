@@ -981,9 +981,12 @@
       return [done, total];
     }
     // A topic's or region's statuses as a progress bar, in legend order since a region merges its topics' counts as it meets them.
+    // status.STATES' order: the palette's keys arrive sorted, and regions merge their topics' counts out of order.
+    var LEGEND = "mathlib fully_proved proved defined conditional can_prove stated can_state not_ready planned".split(" ");
+    function legendRank(key) { var index = LEGEND.indexOf(key); return index < 0 ? LEGEND.length : index; }
     function statusRing(node) {
-      var order = Object.keys(palette), entries = (node.status_counts || []).filter(function (entry) { return entry[1] > 0; })
-        .sort(function (a, b) { return order.indexOf(a[0]) - order.indexOf(b[0]); });
+      var entries = (node.status_counts || []).filter(function (entry) { return entry[1] > 0; })
+        .sort(function (a, b) { return legendRank(a[0]) - legendRank(b[0]); });
       var total = entries.reduce(function (sum, entry) { return sum + entry[1]; }, 0), cursor = 0, stops = [];
       entries.forEach(function (entry) {
         var color = (palette[entry[0]] || palette.planned || {})[isDark() ? "dark" : "light"] || {};

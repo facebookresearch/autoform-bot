@@ -902,7 +902,10 @@ def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> 
     assert '"linear-gradient(90deg," + stops.join(",") + ")"' in script
     assert 'stops.push((color.stroke || "#9ca3af") + " " + cursor + "% " + end + "%");' in script
     # Regions merge their topics' counts in the order they meet them; the bar keeps the legend's.
-    assert ".sort(function (a, b) { return order.indexOf(a[0]) - order.indexOf(b[0]); });" in script
+    assert ".sort(function (a, b) { return legendRank(a[0]) - legendRank(b[0]); });" in script
+    # The palette's keys arrive sorted, so the client spells out the legend's order; it must match status.STATES.
+    legend = re.search(r'var LEGEND = "([a-z_ ]+)"\.split\(" "\);', script)
+    assert legend is not None and legend.group(1).split() == [state.key for state in status.STATES]
 
     # Every region is the book's panel with a rule and a muted label; no hue competes with status.
     assert "regionColors" not in script
