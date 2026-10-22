@@ -1276,6 +1276,63 @@ def test_the_published_landing_page_is_one_full_page_explorer_opened_by_its_hero
     playwright.expect(page.locator("#bp-live-activity")).to_have_count(0)
 
 
+@pytest.mark.parametrize("width", (390, 1280))
+def test_dashboard_live_activity_follows_the_integrated_landing_and_soft_navigation(
+    desktop_page: object, site_url: str, width: int,
+) -> None:
+    """A genuine local response enhances the complete reader, not a retired second hero.
+
+    Static 404 absence is tested above; this journey verifies the populated
+    overlay survives reader replacement and Back without another document.
+    """
+    from autoform_cli.dashboard import LIVE_SCHEMA
+
+    page = desktop_page
+    page.set_viewport_size({"width": width, "height": 900})
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    page.route("**/__autoform/live.json", lambda route: route.fulfill(json={
+        "schema": LIVE_SCHEMA, "source_revision": "fixture-local-overlay", "claims": [{
+            "node_id": "algebra/result", "title": "Result", "owner": "reader-worker", "note": "Local proof attempt",
+        }],
+    }))
+    _open_site(page, site_url, "index.html")
+    page.evaluate("() => window.__liveActivityDocument = document")
+
+    def assert_landing_panel() -> None:
+        playwright.expect(page.locator("#bp-live-activity")).to_have_count(1)
+        activity = page.locator(".bp-reading-body .bp-landing-intro > #bp-live-activity")
+        playwright.expect(activity).to_have_count(1)
+        playwright.expect(activity).to_contain_text("Live local work")
+        playwright.expect(activity).to_contain_text("Result — reader-worker")
+        playwright.expect(page.locator(".bp-reading-body .bp-hero-title")).to_have_count(1)
+        playwright.expect(page.locator(".bp-dag-intro")).to_have_count(0)
+        if width == 390:
+            handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+            if handle.get_attribute("aria-expanded") == "false":
+                handle.click()
+        playwright.expect(activity).to_be_visible()
+
+    assert_landing_panel()
+    algebra_route = _site_route(page, site_url, "algebra")
+    for _ in range(2):
+        if width == 390:
+            outline = page.get_by_role("button", name="Toggle topic outline", exact=True)
+            if outline.get_attribute("aria-expanded") == "false":
+                outline.click()
+        page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]').click()
+        page.wait_for_url(algebra_route)
+        if width == 390 and outline.get_attribute("aria-expanded") == "true":
+            outline.click()
+        playwright.expect(page.locator("#bp-live-activity")).to_have_count(0)
+        playwright.expect(page.locator('.bp-reading-body [data-autoform-node-id="algebra/result"] .bp-live-badge')).to_have_count(1)
+        page.evaluate("() => history.back()")
+        page.wait_for_url(f"{site_url}/index.html")
+        assert_landing_panel()
+    assert documents == [f"{site_url}/index.html"]
+    assert page.evaluate("() => document === __liveActivityDocument") is True
+
+
 def test_on_a_phone_the_landing_hero_opens_in_the_details_sheet(mobile_page: object, site_url: str) -> None:
     """A collapsed phone reader remains named; opening it reveals the same authored landing content."""
     page = _open_site(mobile_page, site_url, "index.html")

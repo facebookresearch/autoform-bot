@@ -1076,9 +1076,15 @@ def _render_pages(
         for source, content in site.files.items()
         if isinstance(content, str) and source.suffix.lower() in PAGE_SUFFIXES
     } | set(group_pages.values()) | {overview}
-    for page in canonical_pages:
+    wrapped_files: set[tuple[int, int]] = set()
+    for page in sorted(canonical_pages):
         if not page.is_file():
             continue
+        metadata = page.stat()
+        identity = (metadata.st_dev, metadata.st_ino)
+        if identity in wrapped_files:
+            continue
+        wrapped_files.add(identity)
         payload, scope, owner = page_contexts.get(
             page, (destination / graph_pages.PROJECT_PAYLOAD, "roadmap", None)
         )
@@ -1112,14 +1118,18 @@ def _integrated_page(
 ) -> str:
     """Keep a complete published page readable before moving it into the shared UI.
 
-    Only generated framing is added. The header, mathematical body, statement
-    IDs, citations, status markup and shown-as-typed boxes remain verbatim.
+    The header and semantic reading content are preserved. Affected Markdown
+    is parsed before adding containers, so literal code, formulas, statement
+    IDs, citations and shown-as-typed boxes retain their rendered meaning.
     """
     lines = text.splitlines(keepends=True)
     end = 0
     if lines and lines[0].strip() == "---":
         end = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
     header, body = "".join(lines[:end]), "".join(lines[end:])
+    # Parse authored code/math before md_in_html sees the added containers.
+    # A literal </div> in code must not close the reader or activate its suffix.
+    body = _protect_markdown_in_html(body)
     node = f' data-autoform-node-id="{html.escape(owner, quote=True)}"' if owner else ""
     title_header = "".join(lines[:2]) + "---\n" if end else text
     title = _header_title(title_header) or rendered_visible_text(_first_h1(text) or "") or _file_title(page)
