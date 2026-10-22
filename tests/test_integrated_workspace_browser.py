@@ -910,7 +910,11 @@ def reader_declutter_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
         + exposition + "\n\n## Depends on\n\nNo prerequisites.\n"
     ))
     _write(blueprint / "roadmap/beta/README.md", (
-        "---\nnavigation: module\n---\n\n# Second mathematical topic\n\nA complete reading note is retained.\n"
+        "---\nnavigation: module\n---\n\n# Second mathematical topic\n\n"
+        "A complete reading note is retained. Read the [topic note](note.md).\n"
+    ))
+    _write(blueprint / "roadmap/beta/note.md", (
+        "# Topic note\n\nA narrative reading note, not a formalization target or a claimed Lean proof.\n"
     ))
     render_site(blueprint, project / "site-src", lean_root=project)
     configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
@@ -920,6 +924,9 @@ def reader_declutter_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
     index_path = project / "site/dependencies/index.json"
     index = json.loads(index_path.read_text(encoding="utf-8"))
     records = {record["id"]: record for record in index["nodes"]}
+    for node_id in ("alpha", "beta"):
+        assert records[node_id]["kind"] == "scope" and records[node_id]["scope"] == node_id
+        assert records[node_id]["parent"] == "roadmap"
     published_root = index_path.parent / unquote(urlsplit(records["roadmap"]["route"]).path)
     tree = html5lib.parse(published_root.read_text(encoding="utf-8"), treebuilder="etree", namespaceHTMLElements=False)
     reading = next(element for element in tree.iter() if "bp-reading-source" in element.get("class", "").split())
