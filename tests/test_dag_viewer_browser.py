@@ -623,8 +623,14 @@ def test_connected_project_maps_open_at_readable_scale(
     box = node.bounding_box()
     assert box is not None
     assert box["height"] >= 44
+    # The meta line counter-scales against the .8 floor, so it renders at about 11px rather than 9.6px.
+    meta_pixels = node.evaluate(
+        "node => parseFloat(getComputedStyle(node.querySelector('.bp-dag-node-meta')).fontSize)"
+        " * new DOMMatrix(getComputedStyle(node).transform).a"
+    )
+    assert meta_pixels >= 10.9
     density = page.locator(".bp-dag-density")
-    playwright.expect(density).to_have_text("Pan or Contents to see all 33 articles")
+    playwright.expect(density).to_have_text("Showing part of the map. Drag to see more, or open Contents for all 33.")
     # The note is plain text at the map's bottom-left, not a bubble over the map.
     style = density.evaluate(
         "element => ['borderTopStyle', 'boxShadow', 'pointerEvents'].map(name => getComputedStyle(element)[name])"
@@ -637,7 +643,7 @@ def test_connected_project_maps_open_at_readable_scale(
     # On a phone it sat flush on the collapsed sheet's peek; it keeps 8px above it.
     page.emulate_media(reduced_motion="reduce")
     page.set_viewport_size({"width": 390, "height": 844})
-    playwright.expect(density).to_have_text("Pan or Contents to see all 33 articles")
+    playwright.expect(density).to_have_text("Showing part of the map. Drag to see more, or open Contents for all 33.")
     note, sheet = density.bounding_box(), page.locator(".bp-dag-inspector").bounding_box()
     assert note is not None and sheet is not None
     assert abs(sheet["y"] - 8 - (note["y"] + note["height"])) < 1
@@ -873,6 +879,8 @@ def test_mobile_isolates_do_not_overlap_the_connected_dag(mobile_page: object, e
     a, b = connected.bounding_box(), isolated.bounding_box()
     assert a is not None and b is not None
     assert a["y"] + a["height"] <= b["y"] or b["y"] + b["height"] <= a["y"]
+    # Every card fits at the readable floor, so the map does not tell the reader to drag.
+    playwright.expect(page.locator(".bp-dag-density")).to_be_hidden()
     page.locator(".bp-dag-filter-summary").tap()
     playwright.expect(page.get_by_role("checkbox", name="Show unlinked")).to_be_visible()
 

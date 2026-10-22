@@ -240,11 +240,14 @@ def test_isolated_inventory_does_not_spread_the_connected_dag(tmp_path: Path) ->
     output = tmp_path / "mixed.json"
     dag_viewer.write_payload(output, view, links={})
     payload = json.loads(output.read_text(encoding="utf-8"))
-    columns = {node["id"]: node["layout"]["column"] for node in payload["nodes"]}
+    layout = {node["id"]: node["layout"] for node in payload["nodes"]}
 
-    assert columns["root"] == 0
-    assert columns["result"] == 1
-    assert columns["isolated-0"] >= 3
+    assert (layout["root"]["column"], layout["root"]["row"]) == (0, 0)
+    assert (layout["result"]["column"], layout["result"]["row"]) == (1, 0)
+    # The isolates fill rows under the chain, from its left edge, rather than columns beside it.
+    assert (layout["isolated-0"]["column"], layout["isolated-0"]["row"]) == (0, 2)
+    assert all(layout[f"isolated-{index}"]["row"] >= 2 for index in range(100))
+    assert max(layout[f"isolated-{index}"]["column"] for index in range(100)) >= 1
 
 
 def test_high_level_topics_use_a_readable_grouped_knowledge_atlas(tmp_path: Path) -> None:
@@ -503,7 +506,10 @@ def test_card_meta_counts_items_in_a_readable_colour() -> None:
     assert 'plural(node.member_count || 0, "article", "articles")' in script
     assert "internal link" not in script
     rule = re.search(r"\.bp-dag-node-meta \{([^}]*)\}", dag_viewer._STYLE)
-    assert rule is not None and "opacity" not in rule.group(1) and "font-size: 12px" in rule.group(1)
+    assert rule is not None and "opacity" not in rule.group(1)
+    # 12px at rest, and counter-scaled so it renders at 11px or more at the .8 and .68 zoom floors.
+    assert "font-size: clamp(12px, calc(11px / var(--dag-k, 1)), 17px);" in rule.group(1)
+    assert 'refs.nodeLayer.style.setProperty("--dag-k", state.transform.scale);' in script
     share = re.search(r"color: color-mix\(in srgb, var\(--dag-node-text\) (\d+)%, var\(--dag-node-fill\)\)", rule.group(1))
     assert share is not None
     weight = int(share.group(1)) / 100
@@ -724,8 +730,11 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     script, style = _viewer_source(), dag_viewer._STYLE
     assert "bp-dag-guide" not in script and "bp-dag-guide" not in style
     assert "dependency neighborhood" not in script
-    # The density note stays, only for a readable crop or for labels hidden by zoom, as plain text.
-    assert 'state.readableCrop ? "Pan or "' in script and '" to see all "' in script and '"Zoom in to reveal "' in script
+    # The density note stays, only while a shown card's real box leaves the stage or labels are hidden by zoom, as plain text.
+    note = script.split("var cropped = state.active.some(function (node) {", 1)[1].split("\n    function ", 1)[0]
+    assert "var box = screen(node); return box.x < 0 || box.y < 0 || box.x + box.w > refs.stage.clientWidth" in note
+    assert 'cropped ? "Showing part of the map. Drag to see more, or open "' in note and '" for all "' in note
+    assert '"Zoom in to reveal "' in note and "readableCrop" not in script and "Pan or " not in script
     density = next(rule for rule in style.splitlines() if rule.startswith(".bp-dag-density {"))
     assert "left: 16px; bottom: 12px;" in density and "pointer-events: none;" in density
     # On phones it clears the collapsed sheet's 52px peek and 8px inset by 8px.

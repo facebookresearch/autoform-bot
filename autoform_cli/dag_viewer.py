@@ -54,7 +54,7 @@ def _positions(view: GraphView) -> dict[str, dict[str, int]]:
             connected.update((edge.source, edge.target))
 
     # Isolates are inventory, not dependency topology. Rank only the connected
-    # graph, then park the isolates in a separate stable grid beside it, which
+    # graph, then park the isolates in a separate stable grid below it, which
     # the reader can hide.
     node_ids = [node_id for node_id in all_node_ids if node_id in connected]
     order_index = {node_id: index for index, node_id in enumerate(node_ids)}
@@ -116,14 +116,16 @@ def _positions(view: GraphView) -> dict[str, dict[str, int]]:
             result[node_id] = _cell(column, row)
 
     isolated = [node_id for node_id in all_node_ids if node_id not in connected]
-    isolate_base = max((position["column"] for position in result.values()), default=-2) + 2
+    isolate_base = max((position["row"] for position in result.values()), default=-2) + 2
     # One tall column of isolates made a project of 30 chapters fit as
-    # unreadable specks, so they fill a widescreen grid beside the ranked DAG.
+    # unreadable specks, so they fill a widescreen grid, at least as wide as
+    # the ranked DAG, in rows under it. Beside it they pushed a short chain
+    # into a corner of the first view.
     cell_aspect = (_NODE_HEIGHT + _ROW_GAP) / (_NODE_WIDTH + _COLUMN_GAP)
-    isolate_columns = max(1, math.ceil(math.sqrt(len(isolated) * cell_aspect * (16 / 9))))
+    isolate_columns = max(len(by_rank), 1, math.ceil(math.sqrt(len(isolated) * cell_aspect * (16 / 9))))
     for slot, node_id in enumerate(isolated):
-        column = isolate_base + slot % isolate_columns
-        row = slot // isolate_columns
+        column = slot % isolate_columns
+        row = isolate_base + slot // isolate_columns
         result[node_id] = _cell(column, row)
     return result
 

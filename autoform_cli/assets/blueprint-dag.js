@@ -381,7 +381,7 @@
       ui$mode = "graph", ui$moved = false, ui$orientation = "lr", ui$pointers = new Map(), ui$pinch = null,
       ui$query = "", ui$searchLimit = 12, ui$selected = null, ui$searchCache = [], ui$searchCacheQuery = null,
       ui$searchError = null, ui$searchLoading = false, ui$searchNodes = data.nodes, ui$searchPromise = null,
-      ui$spotlight = null, ui$navigationLimit = atlas ? 120 : 50, ui$mapAllowed = mapAllowed, ui$readableCrop = false,
+      ui$spotlight = null, ui$navigationLimit = atlas ? 120 : 50, ui$mapAllowed = mapAllowed,
       ui$introInSheet = sheetLayout(), ui$selectedStatuses = new Set(presentStatuses), ui$showIsolated = true,
       ui$transform = {x: 20, y: 20, scale: 1}, ui$reading = Boolean(firstBundle && firstBundle.readingSource),
       ui$area = null, ui$filtersTouched = false, ui$relationIds = null, ui$hovered = null,
@@ -1136,37 +1136,43 @@
       if (firstResize || changed) { firstResize = false; fit(); } else if (ui$mode === "graph") draw();
     }
     function fit() {
-      calculateActive(); var nodes = ui$active.length ? ui$active : data.nodes; if (!nodes.length) return;
-      var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      nodes.forEach(function (node) {
-        var box = world(node); minX = Math.min(minX, box.x); minY = Math.min(minY, box.y);
-        maxX = Math.max(maxX, box.x + box.w); maxY = Math.max(maxY, box.y + box.h);
-      });
-      if (!navigation && atlas) (data.regions || []).forEach(function (region) {
-        minX = Math.min(minX, region.x); minY = Math.min(minY, region.y);
-        maxX = Math.max(maxX, region.x + region.width); maxY = Math.max(maxY, region.y + region.height);
-      });
-      var current = geometry();
-      if (current) current.routes.forEach(function (route) {
-        if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target)) return;
-        minX = Math.min(minX, route.bounds.x); minY = Math.min(minY, route.bounds.y);
-        maxX = Math.max(maxX, route.bounds.x + route.bounds.w); maxY = Math.max(maxY, route.bounds.y + route.bounds.h);
-      });
+      calculateActive(); var all = ui$active.length ? ui$active : data.nodes; if (!all.length) return;
       var compact = compactRegions(), pad = navigation ? 36 : 54, side = compact ? 18 : pad,
-        top = compact ? 52 : pad, bottom = compact ? 44 : pad, width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
+        top = compact ? 52 : navigation ? 56 : pad, bottom = compact ? 44 : pad, stageW = dom$stage.clientWidth;
       // A phone's open reader leaves the map only the band above it, so the map fits there.
       var shown = navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-open") ? freeArea().band : dom$stage.clientHeight;
-      var fitted = Math.min((dom$stage.clientWidth - side * 2) / width,
-        (shown - top - bottom) / height);
       var readableFloor = navigation ? .9 : atlas ? MIN_ATLAS_SCALE : MIN_READABLE_SCALE;
-      ui$readableCrop = fitted < readableFloor;
-      ui$transform.scale = clamp(Math.max(fitted, readableFloor), MIN_SCALE, 1.35);
-      ui$transform.x = ui$readableCrop && !compact ? pad - minX * ui$transform.scale :
-        (dom$stage.clientWidth - width * ui$transform.scale) / 2 - minX * ui$transform.scale;
-      ui$transform.y = ui$readableCrop ? top - minY * ui$transform.scale :
-        (shown + top - bottom - height * ui$transform.scale) / 2 - minY * ui$transform.scale;
-      if (ui$readableCrop && navigation) center(ui$selected || nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; }) || nodes[0], readableFloor);
+      // Unlinked cards are inventory: when the whole map cannot open readable and whole, the first view frames the linked graph.
+      var linked = all.filter(function (node) { return !node.isolated; }), box = frame(all);
+      if ((box.wide || box.tall) && linked.length) box = frame(linked);
+      var scale = ui$transform.scale = box.scale;
+      // An axis that fits is centred and one that does not starts at the graph's leading edge, so a crop never sits in a corner.
+      ui$transform.x = (box.wide ? side : (stageW - box.w * scale) / 2) - box.x * scale;
+      ui$transform.y = (box.tall ? top : (shown + top - bottom - box.h * scale) / 2) - box.y * scale;
+      if (box.fitted < readableFloor && navigation) center(ui$selected || box.nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; }) || box.nodes[0], readableFloor);
       schedule(); remember();
+      function frame(nodes) {
+        var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        nodes.forEach(function (node) {
+          var cell = world(node); minX = Math.min(minX, cell.x); minY = Math.min(minY, cell.y);
+          maxX = Math.max(maxX, cell.x + cell.w); maxY = Math.max(maxY, cell.y + cell.h);
+        });
+        if (!navigation && atlas) (data.regions || []).forEach(function (region) {
+          minX = Math.min(minX, region.x); minY = Math.min(minY, region.y);
+          maxX = Math.max(maxX, region.x + region.width); maxY = Math.max(maxY, region.y + region.height);
+        });
+        var current = geometry();
+        if (current) current.routes.forEach(function (route) {
+          if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target)) return;
+          minX = Math.min(minX, route.bounds.x); minY = Math.min(minY, route.bounds.y);
+          maxX = Math.max(maxX, route.bounds.x + route.bounds.w); maxY = Math.max(maxY, route.bounds.y + route.bounds.h);
+        });
+        var width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY), fitted = Math.min((stageW - side * 2) / width, (shown - top - bottom) / height),
+          scale = clamp(Math.max(fitted, readableFloor), MIN_SCALE, 1.35);
+        // Across, the padding gives way first: cards that fit the stage's full width stay whole.
+        return {nodes: nodes, x: minX, y: minY, w: width, h: height, fitted: fitted, scale: scale,
+          wide: width * scale > stageW && !compact, tall: height * scale > shown - top - bottom};
+      }
     }
     // Open details cover part of the map; this is the larger part they leave, in stage pixels.
     function freeArea() {
@@ -1375,9 +1381,15 @@
         control.dataset.subdued = String(Boolean(spotlight && !spotlight.nodes.has(node.id)));
         control.tabIndex = node.id === tabId ? 0 : -1;
       });
-      dom$density.hidden = !ui$readableCrop && !(visible.length && ui$transform.scale < .34);
-      dom$density.textContent = ui$readableCrop ? "Pan or " + (navigation ? "Results" : "Contents") + " to see all " + ui$active.length + (atlas ? " topics" : " articles") :
-        (visible.length && ui$transform.scale < .34 ? "Zoom in to reveal " + visible.length + " node labels" : "");
+      // The note asks for a drag only while a shown card's real box reaches past the stage, and for a zoom only while labels are too small.
+      var cropped = ui$active.some(function (node) {
+        var box = screen(node); return box.x < 0 || box.y < 0 || box.x + box.w > dom$stage.clientWidth || box.y + box.h > dom$stage.clientHeight;
+      }), tiny = visible.length && ui$transform.scale < .34;
+      dom$density.hidden = !cropped && !tiny;
+      dom$density.textContent = cropped ? "Showing part of the map. Drag to see more, or open " + (navigation ? "Results" : "Contents") + " for all " + ui$active.length + "." :
+        tiny ? "Zoom in to reveal " + visible.length + " node labels" : "";
+      // Card meta counter-scales through this factor, so it stays readable at the zoom floors.
+      dom$nodeLayer.style.setProperty("--dag-k", ui$transform.scale);
     }
     function makeNodeControl(node) {
       var control = button("bp-dag-node", ""); control.dataset.autoformNodeId = node.id; control.dataset.kind = node.kind || "node";
