@@ -388,12 +388,16 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     # Only the publisher's controlled formula service refreshes mathematics;
     # navigation clones the complete reading source rather than graph summaries.
     assert "typesetPromise" not in script
-    assert "window.AutoformMath.refresh(container)" in script
     assert "window.AutoformMath.refresh(refs.readingBody)" in script
     assert "refs.readingBody.replaceChildren(bundle.readingSource)" in script
-    assert "typeset(refs.navigationInner); refs.navigationInner.textContent" in script
-    # Relation rows that Show more appends to the details are typeset in their list.
-    assert 'more.addEventListener("click", function () { appendNextBatch(); typeset(list); });' in script
+    assert "navigation.bindReader(refs.readingBody)" in script
+    # All enhancement enters through the canonical complete-reader router.
+    assert '!window.AutoformNavigation || !host.closest(".bp-explorer-page")' in script
+    assert '!navigation || !firstBundle || !firstBundle.readingSource' in script
+    assert "window.AutoformNavigation.create" in script
+    assert "function appendRelations(" not in script and "function drawRegions(" not in script
+    assert 'ui$relationIds = pair[1]' in dag_viewer._SCRIPT
+    assert 'setMode("list", true)' in script
     assert 'refs.announcement.setAttribute("aria-live", "polite")' in script
     assert "control.dataset.autoformNodeId = node.id" in script
     assert "new ResizeObserver(resize)" in script
@@ -401,19 +405,16 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert "event.type === \"pointerup\" && wasSingle && !state.moved" in script
     assert "touch-action: none; cursor: grab;" in container
     assert 'url.origin === window.location.origin' in script
-    assert 'w: node.width, h: node.height' in script
-    assert 'spotlight.before.has(edge.source) && spotlight.before.has(edge.target)' in script
-    assert 'spotlight.after.has(edge.source) && spotlight.after.has(edge.target)' in script
-    # Global overview relationships remain visible; edge work still uses only
-    # incident edges of the selected node or currently visible nodes.
-    assert "if (atlas && state.selected)" in script
-    assert "(incident.get(state.selected.id) || []).forEach" in script
-    assert "visible.forEach(function (node) { (incident.get(node.id) || []).forEach" in script
+    assert "return geometry().nodes.get(node.id)" in script
+    assert 'spotlight.before.has(route.source) && spotlight.before.has(route.target)' in script
+    assert 'spotlight.after.has(route.source) && spotlight.after.has(route.target)' in script
+    # The single bounded scene paints the authoritative routes, not a second grid projection.
+    assert "current.routes.forEach" in script and "if (!current) return" in script
     assert "if (!state.activeDirty) return" in script
     assert "if (query === state.searchCacheQuery) return state.searchCache" in script
     assert f'data.schema !== "{dag_viewer.SCHEMA}"' in script
-    assert f'index.schema !== "{dag_viewer.SEARCH_SCHEMA}"' in script
-    assert 'ctx.fillText("×" + count' in script
+    assert f'INDEX_SCHEMA = "{dag_viewer.SEARCH_SCHEMA}"' in script
+    assert 'ctx.fillText("×"' not in script
     # Ranking matches exact names before prefixes, and statement text last.
     assert script.index("if (title === query)") < script.index("if (title.startsWith(query))")
     assert script.index("if (lean === query)") < script.index("if (lean.startsWith(query))")
@@ -427,11 +428,13 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
 
 
 def test_explorer_counts_agree_with_their_nouns() -> None:
-    """The rail read "1 items · 1 dependencies"."""
+    """Integrated result/source counts and typed relation descriptions use the same plural formatter."""
     script = _viewer_source()
 
     assert 'return count.toLocaleString() + " " + (count === 1 ? one : many);' in script
-    assert 'plural(data.edge_count || data.edges.length, "dependency", "dependencies")' in script
+    assert 'plural(counts.statement, "statement dependency", "statement dependencies")' in script
+    assert 'plural(counts.proof, "proof dependency", "proof dependencies")' in script
+    assert 'ui$mode === "sources" ? "source"' in dag_viewer._SCRIPT
     assert '.toLocaleString() + " dependencies"' not in script
 
 
@@ -463,11 +466,14 @@ def test_card_meta_counts_items_in_a_readable_colour() -> None:
 
 
 def test_rail_rows_show_a_status_swatch_and_a_lone_group_no_heading() -> None:
-    """Leaf rows ended in status phrases of every length, and a rail of one group still named it."""
+    """The rail is the semantic scope outline; leaf status belongs to result cards and search."""
     script = _viewer_source()
 
-    assert 'if (groups.size > 1) section.appendChild(element("h2", "", label));' in script
-    assert 'mark.title = statusLabel(node.status); mark.setAttribute("role", "img"); mark.setAttribute("aria-label", mark.title);' in script
+    assert 'element("h2", "bp-outline-label", "Topics")' in script
+    assert 'node.scope === node.id && ["collection", "transparent", "source"].indexOf(node.navigation) < 0' in script
+    assert 'link.title = node.title; link.dataset.navigationNodeId = node.id;' in script
+    assert "function renderNavigation() {" in script and "renderOutline()" in script
+    assert "bp-dag-navigation-group" not in script
     assert '(node.member_count || 0).toLocaleString() : statusLabel(node.status)' not in script
 
 
@@ -485,25 +491,20 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
 
 
 def test_details_close_in_their_corner_and_space_the_status_from_the_link() -> None:
-    """The close button floated beside the kicker, the status touched Open article, and the sheet named the title twice."""
+    """Already-collapsible readers have a native corner close control and one complete source."""
     script, style = _viewer_source(), dag_viewer._STYLE
 
-    close = re.search(r"\.bp-dag-close \{([^}]*)\}", style)
+    close = re.search(r"\.bp-dag-sheet-open \.bp-dag-sheet-handle \{([^}]*)\}", style)
     assert close is not None
-    for declaration in ("position: absolute;", "top: 10px;", "right: 10px;", "width: 32px;", "height: 32px;"):
+    for declaration in ("position: absolute;", "top: 12px;", "right: 12px;", "width: 32px;", "height: 32px;"):
         assert declaration in close.group(1)
-    # The header text stops short of the 32px button 10px from the edge.
-    assert ".bp-dag-inspector-header { padding-right: 32px; }" in style
+    assert ".bp-dag-sheet-open .bp-reading-body h1 { padding-right: 32px; }" in style
     assert "titleWrap" not in script
-    actions = re.search(r"\.bp-dag-actions \{([^}]*)\}", style)
-    assert actions is not None and "flex-wrap: wrap;" in actions.group(1) and "gap: 8px 16px;" in actions.group(1)
-    assert 'element("span", "bp-dag-status-pill",' in script
-    assert "actions.appendChild(mark);" in script and "actions.appendChild(open);" in script
-    phone = style.split("@media (max-width: 680px) {\n", 1)[1].split("\n}", 1)[0]
-    # The handle repeats the selection's title, so the sheet hides its heading but keeps it for assistive technology.
-    assert ".bp-dag-viewer.bp-dag-viewer .bp-dag-inspector-header h2 { position: absolute; width: 1px;" in phone
-    assert "padding: 10px 48px 8px 12px;" in phone
-    assert ".bp-dag-viewer:not(.bp-dag-sheet-open) .bp-dag-close { display: none; }" in phone
+    assert 'refs.sheetHandle.title = opened ? "Close reading" : "Open reading";' in script
+    assert 'refs.sheetHandle.setAttribute("aria-expanded", String(Boolean(open)))' in script
+    assert 'element("span", "bp-dag-status-pill",' not in script
+    assert 'element("article", "bp-reading-body md-typeset")' in script
+    assert 'refs.readingBody.replaceChildren(bundle.readingSource)' in script
 
 
 def test_details_drop_instructions_and_label_paths_compactly() -> None:
@@ -523,32 +524,33 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
         '"Mathematics knowledge map"',
     ):
         assert gone not in script, gone
-    # Human review requires a level without authored edges to say so.
-    assert '"No dependencies are authored between these topics."' in script
-    assert 'if (node.declaration) header.appendChild(element("p", "bp-dag-kicker",' in script
-    assert '[["All", "both", 1], ["Prerequisites " + (path.before.size - 1), "prerequisites", path.before.size - 1]' in script
-    pivots = re.search(r"\.bp-dag-pivots \{([^}]*)\}", style)
-    assert pivots is not None and "display: flex;" in pivots.group(1) and "border: 1px solid" in pivots.group(1)
+    assert '", no dependency edges in this view"' in script
+    assert '[["Prerequisites", links.before], ["Used by", links.after]]' in script
+    assert 'if (links.before.length || links.after.length) refs.readingNeighbors.appendChild(row)' in script
+    assert "function appendRelations(" not in script and "bp-dag-pivots" not in script
+    assert ".bp-reading-links { display: grid; grid-template-columns: 1fr 1fr;" in style
 
 
 def test_a_click_pans_its_node_clear_of_the_details_it_opens() -> None:
     """Every other way of choosing a node placed it beside the drawer; a click left it under the drawer."""
     script = _viewer_source()
 
-    assert "if (moveCamera) center(node, .82); else reveal(node);" in script
-    # Centring and revealing share the drawer's geometry, on either side and as the phone sheet.
-    reveal = script.split("function reveal(node) {", 1)[1].split("\n    function ", 1)[0]
-    assert "free = freeArea()" in reveal and "free = freeArea()" in script.split("function center(", 1)[1]
-    # Only a node that the details cover moves.
-    assert "box.x + box.w > free.right" in reveal and "box.x < free.left" in reveal
-    assert "box.y + box.h > (free.top || 0) + free.band" in reveal
+    assert 'navigation.navigateNode(recordId(node), {history: "push", focus: "reading"})' in script
+    assert "if (state.selected && mapAllowed) centerIfHidden(state.selected)" in script
+    center = script.split("function center(", 1)[1].split("\n    function ", 1)[0]
+    assert "free = freeArea()" in center
+    hidden = script.split("function centerIfHidden(node) {", 1)[1].split("\n    function ", 1)[0]
+    assert "refs.stage.clientWidth - 12" in hidden and "refs.stage.clientHeight - 12" in hidden
+    assert "function selectNode(" not in script
 
 
 def test_explorer_pages_relations_and_clamps_zoom() -> None:
     script = _viewer_source()
 
-    assert "Math.min(visible + RELATION_PAGE, ids.length)" in script
-    assert "ids.slice(visible, next)" in script
+    assert 'pair[1].slice(0, 5)' in script
+    assert '"Show all " + pair[1].length' in script
+    assert 'nodes.slice(0, state.listLimit)' in script
+    assert 'Math.min(LIST_PAGE, nodes.length - visible.length)' in script
     assert "clamp(old * factor, MIN_SCALE, 4)" in script
 
 
@@ -571,10 +573,10 @@ def test_explorer_names_its_scope_once_and_lists_only_its_ancestors_above_it() -
     for retired in ("bp-dag-view-kind", "bp-dag-navigation-kicker", "bp-dag-navigation-home"):
         assert retired not in script and retired not in style
     assert "Current scope" not in script and "Library atlas" not in script
-    # The rail's one-line trail drops the current crumb, which the h1 right under it names.
-    rail = 'trailList(trail.slice(0, -1), "bp-dag-navigation-path")'
-    assert rail in script
-    assert script.index(rail) < script.index('element("h1", "bp-dag-navigation-title"')
+    assert 'refs.breadcrumb.replaceChildren(trailList(trail))' in script
+    assert 'refs.pageHeading.textContent = currentBundle && currentBundle.title || data.title;' in script
+    assert 'element("h1", "bp-dag-navigation-title"' not in script
+    assert 'link.setAttribute("aria-current", "page")' in script
     assert ":is(.bp-dag-breadcrumb, .bp-dag-navigation-path) li + li::before { content: \"/\";" in style
 
 
@@ -590,43 +592,19 @@ def test_explorer_chrome_is_sized_in_px_not_in_materials_growing_rem() -> None:
 
 
 def test_explorer_head_is_one_row_where_the_rail_always_shows() -> None:
-    """Over the rail the hidden breadcrumb left a head row holding only the textbook link."""
+    """One persistent context/Library row precedes the responsive control row; no legacy book-link reparenting."""
     style = dag_viewer._STYLE
-    one_row = style.split("@media (min-width: 1101px) {\n", 1)[1].split("\n}", 1)[0]
-    assert ".bp-dag-context { display: contents; }" in one_row
-    assert ".bp-dag-viewer:has(.bp-dag-navigation-path) .bp-dag-breadcrumb { display: none; }" in one_row
-    # The textbook link ends the row in the DOM too, so Tab follows the row instead of starting at its end.
-    assert "order:" not in one_row
-    # The landing page's trail stays beside the search, capped so that it cannot push the controls over the link.
-    assert ".bp-dag-breadcrumb { flex: 0 1 auto; max-width: 32%; }" in one_row
     script = _viewer_source()
-    assert script.index("head.appendChild(toolbar);") < script.index("placeBook();")
-    assert "context.appendChild(bookLink)" not in script
-    # At 1,100px and below a grid draws the link at the end of the first row, under phones on a line of its own.
-    # The runtime moves it before the toolbar there, so that Tab still follows what is drawn.
-    assert 'narrow = matchMedia("(max-width: 1100px)")' in script
-    assert "head.insertBefore(bookLink, narrow.matches ? toolbar : null);" in script
-    assert 'narrow.addEventListener("change", placeBook);' in script
-    narrow = style.split("@media (max-width: 1100px) {\n", 1)[1].split("\n}", 1)[0]
-    assert ".bp-dag-book { grid-area: 1 / 2;" in narrow and ".bp-dag-toolbar { grid-column: 1 / -1; }" in narrow
-    phones = style.split("@media (max-width: 680px) {\n", 1)[1].split("\n}", 1)[0]
-    assert ".bp-dag-book { grid-area: 2 / 1;" in phones
-    # Margins, not padding, space the link, so its focus ring sits on the text.
-    assert ".bp-dag-book { grid-area: 1 / 2; align-self: center; margin-right: 16px; }" in narrow
-    assert ".bp-dag-book { grid-area: 2 / 1; justify-self: start; margin: 4px 8px 0; }" in phones
-    assert not [rule for rule in style.splitlines() if ".bp-dag-book {" in rule and "padding" in rule]
-    # Up to 1,100px open details cover the rail, so the head keeps a row where the trail then appears.
-    assert (
-        "@media (min-width: 681px) and (max-width: 1100px) { "
-        ".bp-dag-viewer:has(.bp-dag-navigation-path) .bp-dag-breadcrumb { visibility: hidden; } }"
-    ) in style
-    assert ".bp-dag-viewer.bp-dag-has-selection.bp-dag-sheet-open .bp-dag-breadcrumb { visibility: visible; }" in style
-    # A head without a textbook link has nothing for that row while the rail keeps the trail, so it collapses.
-    assert (
-        ".bp-dag-viewer:has(.bp-dag-navigation-path):not(.bp-dag-has-selection.bp-dag-sheet-open) "
-        ".bp-dag-head:not(:has(.bp-dag-book)) .bp-dag-context { display: none; }"
-    ) in style.split("@media (min-width: 681px) and (max-width: 1100px) {\n", 1)[1].split("\n}", 1)[0]
-    # That row grows the head while details open, so the map shifts back by it instead of jumping under the pointer.
+    assert ".bp-dag-integrated .bp-dag-head { display: block; padding: 0; }" in style
+    assert ".bp-dag-integrated .bp-dag-context { display: flex;" in style
+    assert ".bp-dag-integrated .bp-dag-breadcrumb { display: block; visibility: visible !important; }" in style
+    assert ".bp-dag-integrated .bp-dag-toolbar { display: flex;" in style
+    assert "context.insertBefore(bookLink, crumbs)" in script
+    assert "placeBook" not in script and "head.insertBefore(bookLink" not in script
+    narrow = style.split("@media (max-width: 1100px) {\n", 2)[2].split("\n}", 1)[0]
+    assert ".bp-dag-integrated .bp-dag-toolbar { flex-wrap: wrap; }" in narrow
+    assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: 100%; }" in narrow
+    # The existing vertical compensation remains atomic with both class changes.
     sheet = script.split("function setSheet(open, selected) {", 1)[1].split("\n    function ", 1)[0]
     assert 'var top = refs.body.offsetTop;' in sheet
     assert 'host.classList.toggle("bp-dag-sheet-open", Boolean(open));' in sheet
@@ -640,7 +618,7 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     assert "bp-dag-guide" not in script and "bp-dag-guide" not in style
     assert "dependency neighborhood" not in script
     # The density note stays, only for a readable crop or for labels hidden by zoom, as plain text.
-    assert 'state.readableCrop ? "Pan or "' in script and '" to see all "' in script and '"Zoom in to reveal "' in script
+    assert 'state.readableCrop ? "Pan or Results to see all "' in script and '"Zoom in to reveal "' in script
     density = next(rule for rule in style.splitlines() if rule.startswith(".bp-dag-density {"))
     assert "left: 16px; bottom: 12px;" in density and "pointer-events: none;" in density
     # On phones it clears the collapsed sheet's 52px peek and 8px inset by 8px.
@@ -702,8 +680,7 @@ def test_explorer_labels_use_the_site_family_and_remain_readable_at_initial_scal
     script = _viewer_source()
     assert script.count('refs.ctx.font = "10px sans-serif";') == 1  # Parse probe only, never a painted label.
     assert 'family = getComputedStyle(host).fontFamily; refs.ctx.font = "11px " + family;' in script
-    assert 'ctx.font = "700 13px " + family;' in script
-    assert 'ctx.font = Math.max(11, 10 * state.transform.scale) + "px " + family;' in script
+    assert 'if (refs.ctx.font.indexOf("11px") < 0) family = "sans-serif";' in script
     # The integrated map uses DOM titles/statuses, not painted numeric weights.
     # Their actual published CSS must remain readable at the .9 initial floor.
     rules = re.findall(r"\.bp-dag-integrated(?:\.bp-dag-atlas)? \.bp-dag-node-(?:title|meta) \{([^}]+)\}", dag_viewer._STYLE)
@@ -711,7 +688,7 @@ def test_explorer_labels_use_the_site_family_and_remain_readable_at_initial_scal
     assert len(sizes) >= 3 and min(sizes) * .9 >= 11
     painter = script.split("function drawRoute(", 1)[1].split("function updateOverlays(", 1)[0]
     assert "fillText" not in painter and "measureText" not in painter
-    assert 'readableFloor = navigation ? .9 :' in script
+    assert 'readableFloor = .9;' in script
 
 
 def _contrast(first: str, second: str) -> float:
