@@ -514,25 +514,24 @@ def _safe_fallback_href(value: str) -> bool:
 
 
 def viewer_script() -> str:
-    """Return the built browser runtime with its pinned layout engine.
+    """Return only a prebuilt browser runtime matching its packaged sources.
 
     The checked-in bundle is built from readable shared modules with a pinned
     development compiler; consumers never need Node. Its fingerprint must match
-    those packaged sources. During development an unbuilt edit falls back to
-    the current source instead of quietly publishing an obsolete client.
+    those packaged sources. A missing, corrupt or stale bundle fails publication
+    instead of bypassing the runtime budget with a raw development client.
     """
     built = Path(__file__).with_name("assets") / "blueprint-explorer.min.js"
     fingerprint = hashlib.sha256(_SCRIPT.encode("utf-8")).hexdigest()
-    if built.is_file():
+    try:
         contents = built.read_text(encoding="utf-8")
-        if contents.startswith(f"/* autoform-explorer-source-sha256:{fingerprint} */\n"):
-            return contents
-    # Keep the embedded source readable in Python without shipping indentation
-    # that browsers do not need. Internal spaces and the line breaks between
-    # code lines stay intact.
-    # Whole-line comments explain the source, not the page, so they stay here.
-    lines = (line.lstrip() for line in _SCRIPT.splitlines())
-    return "\n".join(line for line in lines if line and not line.startswith("//")) + "\n"
+    except (OSError, UnicodeError) as error:
+        raise ValueError("Explorer bundle is missing or corrupt; run npm run build:explorer before publication.") from error
+    if not contents.startswith(f"/* autoform-explorer-source-sha256:{fingerprint} */\n"):
+        raise ValueError("Explorer bundle is stale; run npm run build:explorer before publication.")
+    if len(contents.encode("utf-8")) >= 132_000:
+        raise ValueError("Explorer bundle exceeds the JavaScript budget; run npm run build:explorer before publication.")
+    return contents
 
 
 # Published pages put the explorer inside Material's article.md-typeset, whose
@@ -555,7 +554,7 @@ _STYLE = _asset_text("blueprint-dag.css").strip()
 
 
 _SCRIPT = "\n".join(_asset_text(name) for name in (
-    "blueprint-dagre.vendor.js", "blueprint-navigation.js", "blueprint-dag.js",
+    "blueprint-navigation.js", "blueprint-dag.js",
 ))
 
 

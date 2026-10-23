@@ -70,7 +70,10 @@ Use claims only when other people or sessions may work on the same project at
 the same time, or when the user asks for them. Before choosing none, run
 `autoform claim list` once, with any `--worker-id`: an unexpired claim on the
 board means another session uses them, and if the command fails, as it does in a
-checkout without an `origin`, tell the user and go on without claims. A claim
+checkout without an `origin`, tell the user and go on without claims. A failure
+labelled `error: timeout:`, `error: transport:` or `error: contention:` means the
+board exists but could not be read, not that it holds no claims: run the command
+once more, then ask the user before going on without them. A claim
 excludes only workers that also claim, and `work list` does not read the board,
 so on such a project every worker uses them. When the run uses claims, tell each
 subagent so, and follow the [claim rules](references/claims.md) at each step.
@@ -79,18 +82,21 @@ subagent so, and follow the [claim rules](references/claims.md) at each step.
 
 Lean imports are allowed; do not pre-block a proof because it needs one. Before
 an effective module header or import change, run `autoform work import-impact`
-as documented in the CLI reference. When the run uses claims, follow the [import
-claims](references/claims.md#import-edits) from then on; otherwise send the lead
-the report's `claim_targets` and `affected_claim_targets` and wait for its
-answer, as above. Capture baseline skeleton evidence for the report's currently
-built, named affected articles. The report covers added imports, so when an edit
-removes an import, also baseline the articles of modules only that import kept
-in the build. The report's affected articles are not a lock. Do not acquire or
-edit them merely because they are listed; treat reported unresolved declarations
-as unknown validation scope, not proof they are unaffected. Disclosure alone is
-not a conflict or failed validation. After rebuilding, repeat the skeleton
-evidence and use Agent Review to judge semantic changes. If any article actually
-needs changes, then repair each under the review gates of the [revision
+as documented in the CLI reference. When the default scope cannot build or load
+every root library, rerun it with `--module-scope import-closure`; its affected
+articles may include more than the default scope's, never fewer. When the run
+uses claims, follow the [import claims](references/claims.md#import-edits) from
+then on; otherwise send the lead the report's `claim_targets` and
+`affected_claim_targets` and wait for its answer, as above. Capture baseline
+skeleton evidence for the report's currently built, named affected articles. The
+report covers added imports, so when an edit removes an import, also baseline
+the articles of modules only that import kept in the build. The report's
+affected articles are not a lock. Do not acquire or edit them merely because
+they are listed; treat reported unresolved declarations as unknown validation
+scope, not proof they are unaffected. Disclosure alone is not a conflict or
+failed validation. After rebuilding, repeat the skeleton evidence and use Agent
+Review to judge semantic changes. If any article actually needs changes, then
+repair each under the review gates of the [revision
 contract](../../autoform_cli/README.md#revision-contract). Stop for an active
 conflict (an affected target another worker holds, or another owner's live claim
 on one) or failed validation, not for a blanket import rule.

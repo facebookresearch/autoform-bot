@@ -26,7 +26,9 @@ The bundled example mirrors only artifacts with explicit equivalence tests:
 
 - generated workflow templates, after substituting the example's concrete
   Autoform source and ref;
-- `.github/autoform_audit.py` byte-for-byte; and
+- `.github/autoform_audit.py` byte-for-byte, which itself carries
+  `autoform_cli/probes/audit_probe.lean` verbatim (`scripts/sync_audit_probe.py`
+  rewrites both copies); and
 - significant `mkdocs.yml` settings except the example-specific site name and
   repository URL.
 

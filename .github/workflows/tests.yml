@@ -261,3 +261,6 @@ jobs:
           tests/test_skeleton.py::test_packet_publication_rolls_back_when_interrupted_after_backup_rename
           tests/test_skeleton.py::test_packet_publication_restores_old_trees_when_quarantine_cleanup_fails
           tests/test_skeleton.py::test_packet_publication_does_not_overwrite_during_backup_restore
+          tests/test_claims.py::test_git_runs_without_terminal_prompts
+          tests/test_claims.py::test_git_stops_at_the_deadline_and_names_the_step
+          tests/test_claims.py::test_git_does_not_start_once_the_deadline_has_passed

@@ -28,7 +28,9 @@ claim is still held.
 ## Import edits
 
 Compare the import-impact report's claim keys with the JSON from
-`autoform claim list --worker-id WORKER`: another owner's live affected claim is
+`autoform claim list --worker-id WORKER` given its `claim_targets` and
+`affected_claim_targets`, which lists only those claims: another owner's live
+affected claim is
 a conflict, and malformed evidence is unverifiable. An expired valid claim is
 not active. Before the edit, atomically acquire the required article and module
 `claim_targets`; an already-held same-worker article claim is upgraded, not

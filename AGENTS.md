@@ -69,7 +69,7 @@ The [CLI reference](autoform_cli/README.md) gives each command's exact rules.
 | `audit` | any finding; reporting findings is its job | none |
 | `render` | an input it refuses to publish (a symlink, a special or sensitive file), an output that overlaps the source, unresolved names under `--require-declarations` | unresolved names otherwise, omitted repository links |
 | `skeleton` | a stale or missing build, an unresolved or refused declaration | none; its report is trust evidence |
-| `work`, `search` | invalid usage (2); bytes changed since the graph loaded; a refused library | none; they leave out values they cannot represent, which `check` warns about |
+| `work`, `search` | invalid usage (2); bytes changed since the graph loaded; a refused library; under `--module-scope import-closure`, a file outside the captured sources that may import the closure | none; they leave out values they cannot represent, which `check` warns about |
 | `library index` | a missing or stale build (2); a stale index under `--check` (1) | none |
 | `project`, `doctor` | an inspection or catalog error, a failed diagnosis | a release pairing it cannot resolve |
 | `init` | an existing entry that differs from one it manages, without `--force` | the entries it left alone |

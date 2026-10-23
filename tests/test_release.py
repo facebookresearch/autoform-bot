@@ -38,6 +38,22 @@ def test_every_manifest_and_the_lock_name_the_project_version(repo_root: Path) -
     assert manifests == dict.fromkeys(manifests, version)
 
 
+def test_the_readme_installs_the_release_tag(repo_root: Path) -> None:
+    """Each installer in the README pins the release's tag, so a release that
+    leaves the README behind would install another version for new users."""
+
+    tag = f"v{_project_version(repo_root)[1]}"
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+    installation = readme.split("\n## Installation\n", 1)[1].split("\n## ", 1)[0]
+    commands = "".join(re.findall(r"^```bash\n(.*?)^```$", installation, re.M | re.S)).splitlines()
+    for command in (
+        f"claude plugin marketplace add facebookresearch/autoform-bot@{tag}",
+        f"codex plugin marketplace add facebookresearch/autoform-bot --ref {tag}",
+        f"muse plugins marketplace add autoform 'https://github.com/facebookresearch/autoform-bot.git#{tag}'",
+    ):
+        assert command in commands, command
+
+
 def test_the_changelog_names_the_project_version_as_its_newest_release(repo_root: Path) -> None:
     """A release moves Unreleased under a heading naming the new version, so a
     bump that leaves its changes under Unreleased fails here."""

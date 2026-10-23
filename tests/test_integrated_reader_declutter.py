@@ -80,7 +80,7 @@ def test_incomplete_or_missing_outline_and_disposal_restore_only_this_instances_
     """)
 
 
-@pytest.mark.parametrize("scenario", ["mixed", "prose", "sources", "bibliography", "proof", "math", "native_anchor", "external", "source_destination"])
+@pytest.mark.parametrize("scenario", ["mixed", "prose", "sources", "bibliography", "proof", "math", "native_anchor", "external", "source_destination", "narrative_leaf"])
 def test_source_proof_math_mixed_and_noncanonical_sections_stay_complete(scenario: str) -> None:
     mutation = {
         "mixed": "projectedList.children[0].text='Mathematical explanation outside the link.';",
@@ -92,6 +92,7 @@ def test_source_proof_math_mixed_and_noncanonical_sections_stay_complete(scenari
         "native_anchor": "projectedList.children[0].children[0].attrs.href+='#retained-formula';",
         "external": "projectedList.children[0].children[0].attrs.href='https://outside.test/reference.html';",
         "source_destination": "app.nav.getIndex().nodes.find(node=>node.id==='topic-a').navigation='source';",
+        "narrative_leaf": "const leaf=app.nav.getIndex().nodes.find(node=>node.id==='topic-a');leaf.kind='node';leaf.scope='roadmap';leaf.result=false;",
     }[scenario]
     _exercise(mutation + r"""
       const before=reading.textContent;

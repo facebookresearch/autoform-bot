@@ -425,7 +425,7 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     # Counts are words on a pill, drawn only on a link the selection lights.
     assert 'var text = count + " links"' in script and '"×" + ' not in script
     assert "if (count > 1 && role > 0 && Math.hypot(bx - ax, by - ay) > 90) pill(" in script
-    assert "if (label && role > 0) pill(ctx, route.count," in script
+    assert "if (cue && route.count > 1 && role > 0) pill(ctx, route.count, cue.x," in script
     assert 'ctx.setLineDash([6, 4])' in script and "setLineDash([5, 5])" not in script
     # Ranking matches exact names before prefixes, and statement text last.
     assert script.index("if (title === query)") < script.index("if (title.startsWith(query))")
@@ -619,8 +619,11 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
     assert '"No dependencies are authored between these topics."' in script
     assert 'if (node.declaration) header.appendChild(element("p", "bp-dag-kicker",' in script
     # The lists come first in one vocabulary; the pivots below them only steer the map, so a side without relations is left out.
-    assert 'appendRelations("Uses", before); appendRelations("Used by", after);' in script
-    assert script.index('appendRelations("Used by", after);') < script.index('caption = "Highlight on map"')
+    assert 'appendRelations("Uses", before, weights.before); appendRelations("Used by", after, weights.after);' in script
+    assert script.index('appendRelations("Used by", after, weights.after);') < script.index('caption = "Highlight on map"')
+    # Each row names its link's weight by kind, which the map draws only as a width.
+    assert "weights = relationCounts(data.edges, node.id);" in script
+    assert 'choose.setAttribute("aria-label", choose.title);' in script
     assert '[["All", "both", 1], ["Uses", "prerequisites", before.length], ["Used by", "dependents", after.length]]' in script
     assert "if (!entry[2]) return;" in script and "pivot.disabled" not in script
     # Atlas cards name a neighbour by the list it sits in; rows carry the map's status dot; the kicker reads in sentence case.
@@ -933,16 +936,23 @@ def test_selection_focus_and_the_current_statement_do_not_borrow_status_blue() -
         assert _contrast(mixed(link, page, 0.45), page) < 3
 
 
-def test_explorer_canvas_paints_its_labels_in_the_site_family_at_11px_or_more() -> None:
-    """Painted labels inherit the site family and are readable when the dependency map opens."""
+def test_explorer_labels_use_the_site_family_and_remain_readable_at_initial_scale() -> None:
+    """Canvas labels and integrated DOM cards stay readable; weights need no text labels."""
     script = _viewer_source()
     assert script.count('refs.ctx.font = "10px sans-serif";') == 1  # Parse probe only, never a painted label.
     assert 'family = getComputedStyle(host).fontFamily; refs.ctx.font = "11px " + family;' in script
     assert 'ctx.fillStyle = dark ? "#B0B3B8" : "#65676B"; ctx.font = "600 13px " + family;' in script
     # The free-standing map paints its count pills at a fixed 13px.
     assert 'pill(ctx, count, (ax + bx) / 2, (ay + by) / 2 + offset * 3, 1);' in script
-    # The integrated router measures and paints the same 13px family; its .9 initial floor gives 11.7px.
-    assert 'refs.ctx.font = "600 13px " + family;' in script
+    # The integrated map uses DOM titles/statuses and weighted widths, not painted numeric weights at rest.
+    # Their actual published CSS must remain readable at the .9 initial floor.
+    rules = re.findall(r"\.bp-dag-integrated(?:\.bp-dag-atlas)? \.bp-dag-node-(?:title|meta) \{([^}]+)\}", dag_viewer._STYLE)
+    sizes = [float(size) for rule in rules for size in re.findall(r"font-size:\s*([\d.]+)px", rule)]
+    assert len(sizes) >= 3 and min(sizes) * .9 >= 11
+    painter = script.split("function drawRoute(", 1)[1].split("function updateOverlays(", 1)[0]
+    assert "fillText" not in painter and "measureText" not in painter
+    # Only a lit link names its count, on a pill in the site family; the .9 initial floor gives 11.7px.
+    assert "if (cue && route.count > 1 && role > 0) pill(ctx, route.count, cue.x, cue.y + (stack || 0) * 11 * scale, scale);" in painter
     assert 'ctx.font = "600 " + 13 * scale + "px " + family;' in script
     assert 'readableFloor = navigation ? .9 :' in script
 
