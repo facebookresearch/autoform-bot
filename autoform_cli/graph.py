@@ -61,6 +61,7 @@ _FRONTMATTER_KEYS = frozenset(
         "not_ready",
         "origin",
         "discussion",
+        "review_approved",
         "open_statements",
         "published",
     }
@@ -134,6 +135,11 @@ class Node:
     #: Presentation only: a collection is transparent in a mathematical
     #: overview; a source is a book or other provenance, not a peer topic.
     navigation: str | None = None
+    #: Hash of the complete review surface a person approved. Unlike the
+    #: skeleton alone, this binds the article, source, and read-backs. Kept as
+    #: written: ``review check`` reports a value that is not the current hash,
+    #: malformed or not, so loading never refuses one.
+    review_approved: str | None = None
 
     @property
     def formalizable(self) -> bool:
@@ -311,6 +317,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             summary=parsed_node.summary,
             navigation=metadata.get("navigation"),
             area=metadata.get("area"),
+            review_approved=metadata.get("review_approved"),
         )
 
     for node_id, area in _atlas_assignments(blueprint, nodes)[0].items():

@@ -49,7 +49,11 @@ first build or Lean tool call, so the worktrees unpack from a full cache instead
 of downloading into it together. If the rerun fails too, ask the user before
 creating worktrees, since each would then fetch or build Mathlib on its own.
 Builds take no claim, so workers on one machine may build at the same time:
-dispatch no more at once than its memory can build for.
+dispatch no more at once than its memory can build for. When the lakefile sets
+`enableArtifactCache` and `restoreAllArtifacts`, as `project new` writes it, a
+worktree can reuse the modules another checkout already built from the same
+sources and dependencies instead of rebuilding them; if it lacks them, Setup
+offers to add them.
 
 Claims are optional. Within one run the lead keeps its workers apart, so the run
 needs none: no two workers, the lead included, hold the same target at once. A
@@ -241,13 +245,24 @@ pre-existing findings instead of fixing them. A `catalog-unbounded-limit` or
 the audit: report it, and change that code only when the user asks, rebuilding
 before anything is recorded.
 
+If `<PROJECT>/blueprint/.autoform-review` exists, project CI also runs the
+statement-review gate: `autoform review check` fails on a formalized statement
+until it has current read-backs and `review_approved` holds its current review
+hash. Human Review files the read-backs and copies that hash only when a person
+approves; never write either yourself. Hand each newly formalized statement,
+and each article whose read-backs or approval the result made stale (an import
+edit's repairs included), to Human Review; until that review lands, the gate
+stays red wherever the result is integrated.
+
 Commit the verified result in its worktree and rebase onto or merge the current
 shared branch. On the result, run the default `lake build` and `autoform audit`,
 delete every note the audit now reports as stale in a follow-up commit, confirm
 that dependency readiness is unchanged, and confirm that the selected article
 differs from its starting `article_revision` only by this worker's edits; if
-integration changed the candidate, repeat the review, check, and audit. For an
-import edit, also re-run `autoform work import-impact` on the result; if
+integration changed the candidate, repeat the review, check, and audit. With the
+review marker, then run `autoform review check` with `--lean-root`, which needs
+that build because it extracts every Lean-mapped article, and report its
+findings for every article they name. For an import edit, also re-run `autoform work import-impact` on the result; if
 integration brought in a change to an article it lists as affected, that changed
 the candidate too, so capture a fresh baseline of that article on the shared
 branch. In a run without claims, send the lead that report's

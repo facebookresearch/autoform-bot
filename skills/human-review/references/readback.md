@@ -78,11 +78,19 @@ and so is one with spacing such as `\,`, `\;`, `\quad`, or `~`: MathJax spaces
 a formula itself, so write `$\int f(x) dx$`, not `$\int f(x)\,dx$`. Write
 `\neq` or `\notin` for a negated relation. Never put a bracket right after
 `\begin{aligned}` or `\begin{gathered}`, or a `[` or `*` right after `\\`; in
-`\text`, write one space at a time; never write something with nothing in it,
-such as `\frac{}{}`, `x^{}`, or `\left.\right.`; and never leave two cells, or
-two rows, empty one after the other. In a formula write `\%` for a percent
-sign, never `%`. Keep it to a few kilobytes: a read-back over 32 KiB or 500
-lines is refused.
+`\text`, write braces and one space at a time; never write something with
+nothing in it, such as `$$ $$`, `\frac{}{}`, `x^{}`, or `\left.\right.`; and
+never leave two cells, or two rows, empty one after the other. In a formula
+write `\%` for a percent sign, never `%`. Keep it to a few kilobytes: a
+read-back over 32 KiB or 500 lines is refused.
+
+## Return only testimony
+
+Return only the testimony described above. Do not create a vault card, copy
+metadata, infer a destination path, or inspect a manifest. The coordinator
+records your response for the exact packet through Autoform's `review record`
+command, and `review check` rejects it once the packet is no longer the
+declaration's.
 
 A read-back testifies about one exact packet. If its bytes change, a
 coordinator must request a new blind read-back; a Lean or Mathlib bump that

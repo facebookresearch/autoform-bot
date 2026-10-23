@@ -115,7 +115,10 @@ empty, since a library may already prove the result. The
 [library search rules](../formalize/references/library-search.md) give the
 details.
 If a library already proves a result, reuse that proof instead of proving the
-result again: the result keeps its article. If a proof needs a library result
+result again: the result keeps its article. Its `## Proof depends on` then lists
+only the articles that proof uses, usually none; write the source's own route in
+its proof sketch, since linking each step would block the article on results its
+proof never needs. If a proof needs a library result
 that has no article yet, add an article for it, proved from the library, and
 link it under `## Proof depends on`. Whenever an article reuses a shared
 library declaration, name it in its implementation note, not in the article,

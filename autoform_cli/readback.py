@@ -15,16 +15,18 @@ GitHub sees the Lean and the testimony side by side without the site. They are
 testimony, not derived state, so they are committed with the book, and each one
 records the evidence hash of the packet text it was written from, and the
 declaration's statement hash then. When the packet no longer matches a fresh
-extraction's, the card is stale, and a check that compares them reports it,
-rather than presenting it as current. The statement hash is a record only: it
-covers the Lean version, which a bump can change while the packet the auditor
-read stays the same.
+extraction's, the card is stale: a check that compares them reports it, and the
+site shows it marked invalid, rather than presenting it as current. The
+statement hash is a record only: it covers the Lean version, which a bump can
+change while the packet the auditor read stays the same.
 
-Testimony is plain text with TeX formulas between dollar signs. GitHub and a
-Markdown viewer of the vault show it as typed, inside the card's text block.
-:func:`split_testimony` is the one reading of where the formulas are, and
-:func:`formula_problems` says whether each can be typeset or is to be shown as
-typed. No formula makes testimony invalid.
+Testimony is plain text with TeX formulas between dollar signs. Every reader
+shows the text as typed: GitHub and a Markdown viewer of the vault inside the
+card's text block, the site escaped. :func:`split_testimony` is the one
+reading of where the formulas are, and :func:`formula_problems` says whether
+each can be typeset: the site typesets those it accepts, with a TeX input of
+the card's own, and shows the others as typed. No formula makes testimony
+invalid.
 """
 
 from __future__ import annotations
@@ -40,7 +42,7 @@ import stat
 import time
 import unicodedata
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable, Iterator, Mapping
 from urllib.parse import unquote_to_bytes
 
@@ -212,6 +214,9 @@ _TESTIMONY_TEX = _TEX_LETTERS | frozenset(
 _TEX_ENVIRONMENTS = frozenset(
     {"cases", "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix", "smallmatrix", "aligned", "gathered"}
 )
+#: The environments that draw a delimiter around their rows, a parenthesis,
+#: bracket, bar or brace, which shows even when they hold nothing.
+_TEX_FENCED_ENVIRONMENTS = frozenset({"cases", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix"})
 #: What to write for commands and environments outside the allowlist.
 _TEX_INSTEAD = {
     r"\choose": r"\binom{n}{k} for {n \choose k}",
@@ -286,7 +291,7 @@ _TEX_NULL_AFTER = re.compile(r"\s*\.")
 _TEX_EMPTY_PAIR_AFTER = re.compile(r"\s*\.[\s{}]*\\right\s*\.")
 _TEX_EMPTY_GROUP = re.compile(r"\s*\{[\s{}]*\}")
 _TEX_OPERATORNAME_STAR = re.compile(r"(?<=\\operatorname)\s*\*")
-_TEX_ENVIRONMENT_NAME = re.compile(r"\\(?:begin|end)\s*\{[^{}]*\}")
+_TEX_ENVIRONMENT_NAME = re.compile(r"\\(?:begin|end)\s*\{([^{}]*)\}")
 _TEX_CONTROL_SEQUENCE = re.compile(r"\\(?:[A-Za-z]+|.)", re.DOTALL)
 #: A dollar sign, or a backslash and the character it escapes, which is never
 #: a delimiter: ``\$`` is a dollar sign in a formula and shown as typed in text.
@@ -543,7 +548,10 @@ def _add_card(found: dict[tuple[str, str], Readback], readback: Readback) -> Non
 
     key = (readback.article_id, readback.declaration)
     if previous := found.get(key):
-        duplicate = f"multiple cards claim the same declaration identity: {str(previous.path)!r} and {str(readback.path)!r}"
+        # Named from the vault, as a site shows them, never by a machine's
+        # path: a card's article id is the folder it was found in.
+        first, second = (PurePosixPath(READBACKS_DIR, card.article_id, card.path.name) for card in (previous, readback))
+        duplicate = f"multiple cards claim the same declaration identity: {str(first)!r} and {str(second)!r}"
         found[key] = replace(
             previous,
             validation_errors=tuple(dict.fromkeys((*previous.validation_errors, duplicate))),
@@ -891,9 +899,9 @@ def formula_problems(tex: str) -> tuple[str, ...]:
     ``\\begin{aligned}`` or ``\\begin{gathered}``; no run of spaces in
     ``\\text`` and its kin, which keep every space, nor an argument of spaces
     alone; nothing MathJax spaces though it shows nothing, such as an empty
-    ``\\frac``, script, or ``\\left.`` and ``\\right.`` pair; and no two empty
-    cells, or two empty rows, one after the other. Each check is a linear scan
-    of the formula.
+    ``\\frac``, script, or ``\\left.`` and ``\\right.`` pair, or a whole
+    formula with nothing in it; and no two empty cells, or two empty rows, one
+    after the other. Each check is a linear scan of the formula.
     """
 
     if (length := len(tex.encode("utf-16-le", "surrogatepass")) // 2) > _TEX_MAX_LENGTH:
@@ -966,7 +974,7 @@ def formula_problems(tex: str) -> tuple[str, ...]:
         elif name in _TEX_TEXT_COMMANDS and token.start() >= text_until:
             # Text mode shows its argument as typed, commands and all, so a
             # text command inside it starts nothing.
-            text_until, blank = _text_argument(tex, token.end())
+            text_until, blank, _ = _text_argument(tex, token.end())
             if blank:
                 problems.append(blank.format(command=name))
         deepest = max(deepest, len(opened))
@@ -992,6 +1000,9 @@ def formula_problems(tex: str) -> tuple[str, ...]:
             "combining marks, which MathJax sets each as a symbol of its own, over the one before it; write an "
             "accent such as \\acute{x}, or the character already composed"
         )
+    # A displayed formula with nothing in it still takes a line.
+    if not problems and _shows_nothing(tex):
+        problems.append("nothing in it, which shows a blank; leave it out")
     return tuple(dict.fromkeys(problems))
 
 
@@ -1017,30 +1028,45 @@ def _end_cell(environment: list, cell: str, separator: str, problems: list[str])
 
 
 def _shows_nothing(cell: str) -> bool:
-    """Whether a cell shows nothing: it holds only spaces, braces, null
-    delimiters such as ``\\left.``, environments with nothing in them, and
-    commands that draw nothing of their own, such as a font with nothing to
-    set."""
+    """Whether a cell, or a whole formula, shows nothing: it holds only
+    spaces, braces, the separators of empty cells and rows, null delimiters
+    such as ``\\left.``, environments with nothing in them that draw no
+    delimiter of their own, and commands that draw nothing of their own, such
+    as a font with nothing to set. A text command shows its argument as
+    typed, so one with more than spaces in it shows something."""
 
-    cell = _TEX_NULL_DELIMITER.sub("", _TEX_ENVIRONMENT_NAME.sub("", _TEX_OPERATORNAME_STAR.sub("", cell)))
-    cell = _TEX_CONTROL_SEQUENCE.sub(lambda command: "" if command.group() in _TEX_DRAWS_NOTHING else "x", cell)
-    # Script marks are left only where they have nothing to set.
-    return not cell.strip(" \t\n{}^_")
+    text_until = 0
+    for command in _TEX_CONTROL_SEQUENCE.finditer(cell):
+        if command.start() >= text_until and command.group() in _TEX_TEXT_COMMANDS:
+            text_until, _, shown = _text_argument(cell, command.end())
+            if shown.strip(" \t"):
+                return False
+    cell = _TEX_ENVIRONMENT_NAME.sub(
+        lambda name: "x" if name.group(1) in _TEX_FENCED_ENVIRONMENTS else "", _TEX_OPERATORNAME_STAR.sub("", cell)
+    )
+    cell = _TEX_CONTROL_SEQUENCE.sub(
+        lambda command: "" if command.group() in _TEX_DRAWS_NOTHING or command.group() == "\\\\" else "x",
+        _TEX_NULL_DELIMITER.sub("", cell),
+    )
+    # Script marks and separators are left only where they have nothing to set.
+    return not cell.strip(" \t\n{}^_&")
 
 
-def _text_argument(tex: str, index: int) -> tuple[int, str]:
+def _text_argument(tex: str, index: int) -> tuple[int, str, str]:
     """Where the argument of the text command that ends at ``index`` ends,
-    and why it shows a blank, if it does.
+    why a site shows it as typed, if it does, and what it shows, if it is
+    braced.
 
     MathJax skips spaces before the argument, shows a braced one as typed, and
     drops its line ends but keeps every space and tab, the first and last as
-    no-break spaces.
+    no-break spaces. Without braces it takes the one character or command
+    after it, which can be one that closes a group or ends an environment.
     """
 
     while index < len(tex) and tex[index] in " \t\n":
         index += 1
     if index == len(tex) or tex[index] != "{":
-        return index, ""
+        return index, "{command} without braces, which MathJax reads as the one thing after it; write {command}{{...}}", ""
     depth, position = 0, index
     while position < len(tex):
         if tex[position] == "\\":
@@ -1052,10 +1078,10 @@ def _text_argument(tex: str, index: int) -> tuple[int, str]:
         position += 1
     shown = tex[index + 1 : position].replace("\n", "")
     if _TEX_SPACE_RUN.search(shown):
-        return position + 1, "a run of spaces in {command}, which keeps every space; write one space at a time"
+        return position + 1, "a run of spaces in {command}, which keeps every space; write one space at a time", shown
     if shown and not shown.strip(" \t"):
-        return position + 1, "{command} with only spaces in it, which shows a blank; leave it out"
-    return position + 1, ""
+        return position + 1, "{command} with only spaces in it, which shows a blank; leave it out", shown
+    return position + 1, "", shown
 
 
 def _empty_arguments(tex: str, index: int, count: int, *, star: bool = False) -> bool:

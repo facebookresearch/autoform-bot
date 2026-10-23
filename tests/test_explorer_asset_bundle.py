@@ -45,9 +45,15 @@ def test_explorer_compiler_is_private_pinned_development_tooling() -> None:
     lock = json.loads((_ROOT / "package-lock.json").read_text(encoding="utf-8"))
     assert package["private"] is True
     assert not package.get("dependencies")
-    assert package["devDependencies"] == {"esbuild": "0.28.2", "terser": "5.51.2"}
+    assert package["devDependencies"] == {"esbuild": "0.28.2", "jsdom": "26.1.0", "terser": "5.51.2"}
     assert not any(name.startswith("node_modules/@dagrejs/") for name in lock["packages"])
     assert lock["packages"]["node_modules/esbuild"]["version"] == "0.28.2"
+    dom = lock["packages"]["node_modules/jsdom"]
+    assert dom["version"] == "26.1.0" and dom["dev"] is True
+    assert dom["resolved"] == "https://registry.npmjs.org/jsdom/-/jsdom-26.1.0.tgz"
+    assert dom["integrity"] == (
+        "sha512-Cvc9WUhxSMEo4McES3P7oK3QaXldCfNWp7pl2NNeiIFlCoLr3kfq9kb1fxftiwk1FLV7CvpvDfonxtzUDeSOPg=="
+    )
     terser = lock["packages"]["node_modules/terser"]
     assert terser["version"] == "5.51.2"
     assert terser["resolved"] == "https://registry.npmjs.org/terser/-/terser-5.51.2.tgz"

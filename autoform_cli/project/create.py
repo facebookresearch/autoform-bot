@@ -743,10 +743,14 @@ def _build_project_plan(
     autoform_ref: str,
     library: SharedLibrary | None,
 ) -> tuple[_ScaffoldFile, ...]:
+    # Worktrees share builds through Lake's artifact cache; restoring keeps each
+    # module's .olean in .lake/build, where Autoform's probes load it.
     lakefile = (
         f'name = "{package}"\n'
         'version = "0.1.0"\n'
-        f'defaultTargets = ["{package}"]\n\n'
+        f'defaultTargets = ["{package}"]\n'
+        "enableArtifactCache = true\n"
+        "restoreAllArtifacts = true\n\n"
         "[[require]]\n"
         'name = "mathlib"\n'
         f'git = "{version.mathlib_git}"\n'

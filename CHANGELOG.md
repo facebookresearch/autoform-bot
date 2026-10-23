@@ -9,6 +9,8 @@ date when the release is tagged.
 
 ## Unreleased
 
+### Changed
+
 - **Claims.** `claim list TARGET...` lists only those claims, without
   fetching or reading any other claim. `--timeout` (120 seconds by default)
   bounds a listing, a slow step is named on stderr, and a failure goes to
@@ -17,6 +19,19 @@ date when the release is tagged.
   commands, and a listing that runs out of time or is interrupted no longer
   leaves its transport running. Formalize treats a labelled `claim list`
   failure as an unreadable board, not as a board without claims (#432).
+- **Render.** An article's page lists its `mathlib_declaration` names in a
+  Mathlib row, as text without a link, so a `mathlib: true` article names the
+  declaration it restates (#388).
+- **Builds.** `project new` turns on Lake's artifact cache with
+  `enableArtifactCache` and `restoreAllArtifacts`, so checkouts and worktrees
+  on one toolchain reuse each other's builds; Setup offers the same two lines
+  to an existing project. A probe that finds no `.olean` for a module Lake
+  calls built now names the cache-without-restore cause (#431).
+- **Library results in Roadmap.** When a shared library already proves a
+  result, Roadmap lists under the article's `## Proof depends on` only the
+  articles that proof uses, and keeps the source's route in the proof sketch,
+  so the article is not blocked on steps its proof never needs; Agent Review
+  checks the same (#443).
 
 ## 0.6.0 (2026-10-22)
 

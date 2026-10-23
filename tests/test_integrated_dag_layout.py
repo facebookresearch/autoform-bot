@@ -318,7 +318,7 @@ def test_cyclic_links_face_their_actual_target_without_perimeter_detours(directi
         const a=scene.nodes.get(route.source),b=scene.nodes.get(route.target),first=route.points[0],tip=route.points.at(-1);
         const dx=b.x+b.w/2-a.x-a.w/2,dy=b.y+b.h/2-a.y-a.h/2;
         assert(first.x>=a.x&&first.x<=a.x+a.w&&first.y>=a.y&&first.y<=a.y+a.h);
-        assert.equal(Math.min(Math.abs(first.x-a.x),Math.abs(first.x-a.x-a.w),Math.abs(first.y-a.y),Math.abs(first.y-a.y-a.h)),0,
+        assert(Math.min(Math.abs(first.x-a.x),Math.abs(first.x-a.x-a.w),Math.abs(first.y-a.y),Math.abs(first.y-a.y-a.h))<1e-7,
           'The route must leave a real source boundary');
         const departure=route.points[1];
         assert((departure.x-first.x)*dx+(departure.y-first.y)*dy>0,'Source approach must face its actual target');

@@ -67,6 +67,43 @@ jobs:
         env:
           AUTOFORM_REQUIRE_BROWSER_TESTS: "1"
 
+  mathjax:
+    name: MathJax read-back cards (Node)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22.23.2"
+      - name: Install locked native DOM test bridge
+        run: |
+          timeout --signal=TERM --kill-after=30s 3m npm ci --ignore-scripts --no-audit --no-fund --prefer-offline \
+            --fetch-timeout=30000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=10000
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          python-version: "3.13"
+          enable-cache: true
+      - name: Install locked development environment
+        run: uv sync --frozen --extra dev
+      # The npm tarball of the release the site loads, checked against the
+      # sha256 of the one whose sha1 and sha512 npm publishes.
+      - name: Install pinned MathJax 3.2.2
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=15s 2m curl -sSfL \
+            https://registry.npmjs.org/mathjax/-/mathjax-3.2.2.tgz -o mathjax.tgz
+          echo "1b9c0a1c44df864e915690558e72adb9cc5203360daefd385084ced3b6c64c09  mathjax.tgz" \
+            | sha256sum --check --strict
+          mkdir mathjax
+          tar xzf mathjax.tgz -C mathjax
+          echo "AUTOFORM_MATHJAX_DIR=$PWD/mathjax/package" >> "$GITHUB_ENV"
+      - name: Typeset read-back cards in Node with the script render writes
+        run: uv run --frozen --extra dev pytest -q tests/test_site_mathjax_node.py
+        env:
+          AUTOFORM_REQUIRE_MATHJAX_TESTS: "1"
+
   real-lean:
     name: real Lean (fixture toolchain)
     runs-on: ubuntu-latest

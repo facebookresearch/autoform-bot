@@ -65,6 +65,8 @@ def test_dollar_signs_are_taken_in_turn_and_a_backslash_escapes_one(testimony: s
         r"$x > 0 \text{ and } y > 0$, $\mbox{for all } n$, and $\begin{matrix} a & & b \\ \\ c \end{matrix}$.",
         r"$\begin{matrix}[t] a \end{matrix}$ and $\begin{pmatrix} [1, 2] \end{pmatrix}$ show their brackets.",
         r"$\operatorname*{argmax}_x f$, $\left. f \right|_{0}^{1}$, ${}^{2}C$, $\frac{1}{2}$, and $\_{}$ show what they hold.",
+        # An environment with a delimiter of its own, and text, show even with nothing else in them.
+        r"The empty matrix $\begin{pmatrix}\end{pmatrix}$, $\begin{cases}\end{cases}$, and $\text{^}$ show something.",
     ],
 )
 def test_plain_text_and_allowlisted_tex_are_accepted_and_typeset(testimony: str) -> None:
@@ -156,6 +158,14 @@ def test_testimony_that_hides_what_it_says_is_refused(testimony: str, reason: st
         (r"P \frac{}{ } Q", "\\frac with nothing in it, which shows a blank"),
         (r"P \stackrel{}{} Q", "\\stackrel with nothing in it, which shows a blank"),
         (r"P \bigl. Q", "\\bigl. with nothing to size, which shows a blank"),
+        ("", "nothing in it, which shows a blank"),
+        (" \n ", "nothing in it, which shows a blank"),
+        (r"{} \mathbf{ }", "nothing in it, which shows a blank"),
+        (r"\begin{aligned}\end{aligned}", "nothing in it, which shows a blank"),
+        (r"\left. \begin{aligned} \\ \end{aligned} \right.", "nothing in it, which shows a blank"),
+        (r"\begin{matrix} \begin{matrix}\\\end{matrix} \\ \begin{matrix}\\\end{matrix} \\ Q \end{matrix}", "two empty rows"),
+        (r"\begin{matrix} \begin{matrix}\\\end{matrix} & \begin{matrix}\\\end{matrix} & Q \end{matrix}", "two empty cells"),
+        (r"\begin{matrix}\text\\\end{matrix} \text x \left( \text\right)", "\\text without braces"),
         # Formulas that are malformed, too deep or long, or hold what MathJax cannot set.
         ("a $ b", "a dollar sign; write \\$ for one"),
         (r"{x", _UNBALANCED),

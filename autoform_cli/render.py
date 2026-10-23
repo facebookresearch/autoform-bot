@@ -43,6 +43,7 @@ from ._tree_snapshot import (
     bind_directory_tree,
     descriptor_capture_supported,
 )
+from .approvals import approval_statuses
 from .coverage import (
     COVERAGE_DISPOSITIONS,
     CoverageSummary,
@@ -107,9 +108,27 @@ from .markdown import (
 )
 from .markdown import content_lines as _content_lines
 from .markdown import outside_fences as _outside_fences
-from .mathjax import MATHJAX_SCRIPT, TEX_MACROS, mathjax_script
+from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, TEX_MACROS, mathjax_script, project_macros
 from .publishable import publishable_article, shown_as_typed
-from .readback import READBACKS_DIR
+from .readback import (
+    READBACKS_DIR,
+    Readback,
+    formula_problems,
+    load_readbacks,
+    readback_for,
+    split_testimony,
+    typesetting_warnings,
+)
+from .review import (
+    ReviewArticle,
+    ReviewError,
+    ReviewFinding,
+    ReviewState,
+    build_review_bundle,
+    readback_errors,
+    review_states,
+)
+from .skeleton import NodeSkeleton, SkeletonReport, _plural, source_passage
 from .status import is_definition
 
 _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
@@ -574,9 +593,9 @@ def _publication(
     articles: dict[Path, str] = {}
     statements: dict[str, tuple[str, str]] = {}
     for node_id, node in graph.nodes.items():
-        # The captured bytes, the state the graph describes once capture checks
-        # it. Check's graph also holds the articles in unpublished folders, which
-        # capture leaves out.
+        # The captured bytes, the state the graph and any review disclosure
+        # describe once capture checks it. Check's graph also holds the
+        # articles in unpublished folders, which capture leaves out.
         captured = snapshot.get(node.path)
         if captured is None:
             continue
@@ -602,8 +621,8 @@ def _publication(
         # the repository, so the book has one reference surface rather than two.
         if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
             continue
-        # Read-back cards are testimony about a statement, never pages of
-        # their own.
+        # Read-back cards are testimony about a statement, shown in its review
+        # panel under --review, never pages of their own.
         if relative.parts[:1] == (READBACKS_DIR,):
             continue
         # The graph has read atlas.json, and nothing on the site reads it. It may
@@ -754,6 +773,7 @@ def render_site(
     lean_root: str | Path | None = None,
     repository_url: str | None = None,
     ref: str | None = None,
+    review: Callable[[], SkeletonReport] | None = None,
 ) -> RenderReport:
     """Write deterministic, read-only projections of the Markdown blueprint.
 
@@ -763,6 +783,17 @@ def render_site(
     and never embeds timestamps or machine-specific paths. The blueprint and the
     Lean sources are each read once, and every page, link and hash comes from
     those bytes. The site is built beside the output and swapped in whole.
+
+    With ``review``, every Lean-mapped statement shows its review, judged as
+    ``review check`` judges it, from the read-back cards and the
+    ``tex-macros.json`` this render captured. ``review`` extracts the
+    skeletons, reading the vault and the Lean build once more. It is called
+    after the checks of the output, the capture, the graph, the coverage
+    contract and the Lean sources, so a render they refuse costs no Lean. The
+    review is refused unless the articles loaded here, and the sources they
+    cite, are the blueprint the extraction read. It covers the whole vault,
+    folders that are not published included, and each article and passage it
+    shows is the one the site publishes.
     """
     blueprint = blueprint_root(blueprint_dir)
     requested_destination = Path(output_dir).expanduser()
@@ -869,6 +900,22 @@ def render_site(
             spellings=spellings,
             root_prefix=root_prefix,
         )
+        reviews: dict[str, str] = {}
+        review_warnings: list[str] = []
+        if review is not None:
+            # After every check above, and the one _render_pages makes of the
+            # captured files in its way, so a render they refuse runs no Lean.
+            if stops := _in_the_way(copy, graph, _captured_files(snapshot, copy)):
+                raise PublicationError(stops)
+            # The cards and macros the review judges are the ones this render
+            # captured, so the site and publication.json describe one state.
+            try:
+                cards = load_readbacks(graph.blueprint_dir)
+            except ValueError as error:
+                raise ReviewError([ReviewFinding("", "readback-unlistable", str(error))]) from error
+            macros = project_macros(_captured_files(snapshot, copy).get(copy / TEX_MACROS))
+            captured = [name for name, _ in snapshot.files]
+            reviews, review_warnings = _review_disclosures(blueprint, graph, review(), cards, macros, captured)
         source_revision = _source_revision(snapshot)
         report = _publish(
             destination,
@@ -886,9 +933,11 @@ def render_site(
                 unpublished=_unpublished_folders(snapshot, copy),
                 unpublished_nodes=unpublished_nodes,
                 files=_captured_files(snapshot, copy),
+                reviews=reviews,
             ),
         )
     report.warnings[:0] = recovered
+    report.warnings.extend(review_warnings)
     authored = {*dict(snapshot.files), *dict(snapshot.omitted)}
     report.warnings.extend(
         f"{path} is not published: the dependency explorer writes its own file there"
@@ -922,6 +971,7 @@ def _render_pages(
     unpublished: tuple[Path, ...] = (),
     unpublished_nodes: frozenset[str],
     files: dict[Path, bytes],
+    reviews: dict[str, str],
 ) -> RenderReport:
     """Write the site into *destination* from the private copy at *blueprint*."""
     # A missing or stale packaged runtime is a publication failure, not an
@@ -1033,6 +1083,7 @@ def _render_pages(
             node_sources=node_sources,
             containers=containers,
             statements=site.statements,
+            reviews=reviews,
             typed=page in site.typed,
         )
         page.write_text(chapter, encoding="utf-8")
@@ -2700,6 +2751,7 @@ def _render_chapter(
     node_sources: dict[Path, str],
     containers: frozenset[str],
     statements: dict[str, tuple[str, str]],
+    reviews: dict[str, str],
     typed: bool = False,
 ) -> tuple[str, int, list[str]]:
     """Render one narrative article with statements at its authored link slots."""
@@ -2721,6 +2773,7 @@ def _render_chapter(
             repo_root=repo_root,
             destination=destination,
             statements=statements,
+            reviews=reviews,
         )
         environments[node_id] = environment
         linked += node_linked
@@ -3038,6 +3091,7 @@ def _render_environment(
     repo_root: Path,
     destination: Path,
     statements: dict[str, tuple[str, str]],
+    reviews: dict[str, str],
 ) -> tuple[str, int, list[str]]:
     node_status = statuses[node.id]
     caption, _, number = numbers[node.id].rpartition(" ")
@@ -3061,6 +3115,10 @@ def _render_environment(
     code_links, implementation_rows, linked, unresolved = _lean_presentation(node, linker)
     source_link = _vault_source_link(node, repo_root=repo_root, linker=linker)
     meta_rows = implementation_rows
+    if mathlib_names := declaration_names(node.mathlib_declaration or ""):
+        # As text: render links only bytes it matched to a commit, and it never
+        # reads the pinned Mathlib.
+        meta_rows.append(("Mathlib", " · ".join(f"<code>{html.escape(name)}</code>" for name in mathlib_names)))
     if node_status.key == "conditional":
         # A conditional proof must never read as finished, so the open
         # statements it rests on are named on the statement itself.
@@ -3114,8 +3172,264 @@ def _render_environment(
         lines.append(meta)
     if dependencies:
         lines.append(dependencies)
+    if node.id in reviews:
+        lines.extend(["", reviews[node.id], ""])
     lines.append("</div>")
     return "\n".join(lines), linked, unresolved
+
+
+def _review_disclosures(
+    blueprint: Path,
+    graph: Graph,
+    skeleton: SkeletonReport,
+    readbacks: Mapping[tuple[str, str], Readback],
+    macros: Mapping[str, object],
+    captured: Iterable[str],
+) -> tuple[dict[str, str], list[str]]:
+    """Each Lean-mapped statement ``graph`` publishes, by node id, with its
+    review: what a reviewer must trust, what a blind auditor says it means, and
+    where its approval stands; and a warning for each formula a current card
+    of a published statement shows as typed.
+
+    ``skeleton`` covers the whole vault, a folder that says ``published:
+    false`` included, which the copy ``graph`` was loaded from lacks. So the
+    evidence is derived from the vault at ``blueprint`` as it is now, which
+    refuses a ``skeleton`` extracted from another state, and every article
+    ``graph`` publishes must still be the one it was derived from. The
+    approval is judged by :func:`~autoform_cli.review.review_states`, as
+    ``review check`` judges it, with ``readbacks`` and ``macros`` as the site
+    has them. A passage shown must come from a file the site publishes, judged
+    by its name in ``captured``, the captured files' names.
+    """
+
+    changed = "while the site was being rendered; rerun once the blueprint is idle"
+    try:
+        whole = load_graph(blueprint)
+    except GraphValidationError as error:
+        reason = f"the blueprint changed {changed}: {'; '.join(error.issues)}"
+        raise ReviewError([ReviewFinding("", "review-snapshot-changed", reason)]) from error
+    published = {
+        node_id
+        for node_id, node in whole.nodes.items()
+        if not any(node.path.is_relative_to(folder) for folder in whole.unpublished)
+    }
+    edited = [
+        ReviewFinding(node_id, "review-snapshot-changed", f"the article changed {changed}")
+        for node_id in sorted(published | set(graph.nodes))
+        if node_id not in graph.nodes
+        or node_id not in whole.nodes
+        or whole.nodes[node_id].source_sha256 != graph.nodes[node_id].source_sha256
+    ]
+    if edited:
+        raise ReviewError(edited)
+    bundle = build_review_bundle(whole, skeleton, macros=macros)
+    # A link resolved on a disk that ignores case and Unicode form keeps the
+    # spelling it was written in; capture refuses two names that differ only
+    # in case or Unicode form.
+    spellings = {_folded(name): name for name in captured}
+    # A passage shown must be the one the copy cuts, from a file the site holds.
+    for article in bundle.articles:
+        if article.node_id not in graph.nodes:
+            continue
+        issues: list[str] = []
+        shown = source_passage(graph.nodes[article.node_id], graph.blueprint_dir, issues=issues)
+        if shown == (article.passage, article.passage_locator):
+            if article.passage_locator is not None:
+                # The locator ends in its line range; a file's name may hold a #.
+                cited = article.passage_locator.rpartition("#")[0]
+                cited = spellings.get(_folded(cited), cited)
+                if _left_out(PurePosixPath(cited), graph):
+                    reason = f"cites a passage from {cited}, a file the site leaves out"
+                    edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
+            continue
+        if shown[0] is None and issues:
+            reason = f"cites a passage the site does not publish: {issues[0]}"
+            edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
+        else:
+            edited.append(ReviewFinding(article.node_id, "review-snapshot-changed", f"the cited passage changed {changed}"))
+    if edited:
+        raise ReviewError(edited)
+    states = review_states(whole, bundle, readbacks)
+    labels = approval_statuses(states)
+    disclosures: dict[str, str] = {}
+    warnings: list[str] = []
+    for article in bundle.articles:
+        # Only what the site publishes: neither the page nor a warning names
+        # a statement in a folder it leaves out.
+        if article.node_id not in graph.nodes:
+            continue
+        disclosures[article.node_id] = _review_disclosure(
+            article,
+            skeleton.node(article.node_id),
+            states[article.node_id],
+            labels[article.node_id].label if article.node_id in labels else None,
+            readbacks,
+        )
+        for declaration in article.declarations:
+            card = readback_for(readbacks, article.article_id, declaration.name)
+            if card is not None and not readback_errors(declaration, card):
+                warnings.extend(
+                    f"{article.node_id}: read-back for {declaration.name}: {warning}"
+                    for warning in typesetting_warnings(card.text)
+                )
+    return disclosures, warnings
+
+
+def _folded(name: str) -> str:
+    """``name`` as capture compares names for a collision."""
+
+    return unicodedata.normalize("NFC", name).casefold()
+
+
+def _left_out(cited: PurePosixPath, graph: Graph) -> bool:
+    """Whether the site leaves out the captured file at ``cited``, a path in
+    the blueprint as captured, as :func:`_publication` does: a file under
+    ``readbacks/``, the atlas, a file render writes its own over, or one that
+    is neither a page nor a file the site copies. Notes under ``sources/``
+    count as published, on the site or at the verified commit."""
+
+    return (
+        cited.parts[:1] == (READBACKS_DIR,)
+        or cited.as_posix().casefold() == "atlas.json"
+        or cited.as_posix() in _site_paths(graph)
+        or cited.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
+    )
+
+
+def _review_disclosure(
+    article: ReviewArticle,
+    record: NodeSkeleton,
+    state: ReviewState,
+    label: str | None,
+    readbacks: Mapping[tuple[str, str], Readback],
+) -> str:
+    count = len(record.declarations)
+    lines_to_trust = sum(item.skeleton_lines for item in record.declarations)
+    approval = {
+        "incomplete": ("open", "not yet approved"),
+        "unapproved": ("open", "ready to approve"),
+        "unverifiable": ("drift", "approval cannot be verified because testimony is incomplete or invalid"),
+        "drift": ("drift", "the recorded approval is not the current complete review"),
+        "approved": (label, label),
+    }
+    kind, shown = approval[state.status]
+    # The summary is not selectable, so the hash to copy into review_approved
+    # is a row of the panel.
+    rows = [("Prepared evidence", f"<code>{html.escape(article.evidence_hash)}</code>")]
+    if state.review_hash is not None:
+        rows.append(("Review hash", f"<code>{html.escape(state.review_hash)}</code>"))
+    if state.approved is not None:
+        rows.append(("Approved", f"<code>{_typed(state.approved, one_line=True)}</code>"))
+    # Excluded from search: the panel holds packets and testimony, which would
+    # fill the index, as #90 keeps large pages out of it.
+    parts = [
+        '<details class="bp-review" markdown="1" data-search-exclude>',
+        f"<summary>Review · {_plural(count, 'skeleton')}, {_plural(lines_to_trust, 'line')} to trust · "
+        f'<span class="bp-review-{kind}">{html.escape(shown)}</span></summary>',
+        "",
+        _render_rows(rows, css_class="bp-skeleton-meta"),
+        "",
+    ]
+    if article.passage is not None:
+        locator = article.passage_locator or "cited source"
+        parts.extend(
+            [
+                '<div class="bp-skeleton">',
+                f'<div class="bp-skeleton-title">Source passage · {_typed(locator, one_line=True)}</div>',
+                f"<pre><code>{_typed(article.passage)}</code></pre>",
+                "</div>",
+                "",
+            ]
+        )
+    for declaration, prepared in zip(record.declarations, article.declarations):
+        # The packet shown is the one whose hash the card records, never a
+        # friendlier reconstruction that could hold text the auditor never saw.
+        # The approval binds the packet alone, so each other row says so: they
+        # describe the declaration as built now, its proof included.
+        assumed = ", ".join(f"<code>{_typed(name, one_line=True)}</code>" for name in declaration.assumed)
+        axioms = ", ".join(f"<code>{_typed(name, one_line=True)}</code>" for name in declaration.axioms)
+        rows = [
+            ("Packet", f"<code>{html.escape(prepared.packet_hash)}</code> · what the approval binds"),
+            ("Statement hash", f"<code>{html.escape(declaration.statement_hash)}</code> · a record, not bound"),
+            ("Assumes", f"{assumed or 'nothing beyond Lean core'} · proof included, not bound"),
+            ("Axioms", f"{axioms or 'none'} · proof included, not bound"),
+        ]
+        packet = _typed(prepared.packet.rstrip("\n"))
+        card = readback_for(readbacks, article.article_id, declaration.name)
+        errors = () if card is None else readback_errors(prepared, card)
+        # The read-back before the packet, as Human Review walks a person
+        # through them, so the Lean does not frame the testimony.
+        parts.extend(
+            [
+                '<div class="bp-skeleton">',
+                f'<div class="bp-skeleton-title">{_typed(declaration.kind, one_line=True)} '
+                f"<code>{_typed(declaration.name, one_line=True)}</code></div>",
+                "</div>",
+                "",
+                _readback_block(card, errors),
+                "",
+                '<div class="bp-skeleton">',
+                f'<pre class="bp-lean"><code>{packet}</code></pre>',
+                _render_rows(rows, css_class="bp-skeleton-meta"),
+                "</div>",
+                "",
+            ]
+        )
+    parts.append("</details>")
+    return "\n".join(parts)
+
+
+#: How render marks a card's formulas for the card's TeX input.
+_CARD_DELIMITERS = {"inline": ("\\(", "\\)"), "display": ("\\[", "\\]")}
+
+
+def _readback_block(card: Readback | None, errors: tuple[str, ...]) -> str:
+    """A card as one line of HTML, which the page's Markdown leaves alone.
+
+    The testimony is shown as typed, with line ends kept as character
+    references. A current card's formulas are the pieces
+    :func:`~autoform_cli.readback.split_testimony` finds: each that
+    :func:`~autoform_cli.readback.formula_problems` accepts is marked for the
+    card's own TeX input, and any other is shown as typed, dollar signs and
+    all. An invalid card's are all left as typed.
+    """
+
+    if card is None:
+        return f'<div class="{CARD_CLASS} bp-readback-missing">No read-back filed for this skeleton yet.</div>'
+    pieces = [("text", card.text)] if errors else split_testimony(card.text)
+    shown = []
+    for kind, piece in pieces:
+        if kind == "text":
+            shown.append(html.escape(piece))
+        elif formula_problems(piece):
+            delimiter = "$$" if kind == "display" else "$"
+            shown.append(html.escape(delimiter + piece + delimiter))
+        else:
+            opening, closing = _CARD_DELIMITERS[kind]
+            shown.append(f'<span class="{CARD_FORMULA_CLASS}">{opening}{html.escape(piece)}{closing}</span>')
+    body = "".join(shown)
+    model = f" · {html.escape(card.model)}" if card.model else ""
+    status = "invalid · " + "; ".join(errors) if errors else "current"
+    return (
+        f'<div class="{CARD_CLASS} bp-readback-{"invalid" if errors else "current"}">'
+        f'<div class="bp-readback-title">Read-back{model} · <span class="bp-readback-status">{html.escape(status)}</span></div>'
+        f'<div class="bp-readback-body">{body}</div></div>'
+    ).translate(_ONE_LINE)
+
+
+#: What the page's Markdown would act on in raw HTML: it ends a line at a
+#: carriage return as at a line feed, and expands tabs from its own columns.
+#: Character references for them it leaves alone.
+_AS_TYPED = str.maketrans({"\r": "&#13;", "\t": "&#9;"})
+_ONE_LINE = str.maketrans({"\r": "&#13;", "\n": "&#10;", "\t": "&#9;"})
+
+
+def _typed(text: str, *, one_line: bool = False) -> str:
+    """``text`` as HTML the page's Markdown leaves as typed: escaped, with
+    fence markers, carriage returns and tabs as character references, and
+    with ``one_line`` its line feeds too."""
+
+    return _FenceSafeHtml.escaped(html.escape(text)).translate(_ONE_LINE if one_line else _AS_TYPED)
 
 
 def _lean_presentation(
@@ -3336,6 +3650,8 @@ def _stylesheet() -> str:
   --bp-rule: #CED0D4;
   --bp-surface: #FFFFFF;
   --bp-sunken: #F0F2F5;
+  --bp-page: #FFFFFF;
+  --bp-scroll-shade: rgba(5, 5, 5, 0.22);
   --bp-link: #0064E0;
   --bp-link-hover: #0082FB;
   --bp-blue: #0064E0;
@@ -3350,6 +3666,8 @@ def _stylesheet() -> str:
   --bp-rule: #3E4042;
   --bp-surface: #242526;
   --bp-sunken: #1C1D1F;
+  --bp-page: #18191A;
+  --bp-scroll-shade: rgba(228, 230, 235, 0.3);
   --bp-link: #2D88FF;
   --bp-link-hover: #7FB8FF;
   --bp-blue: #2D88FF;
@@ -3865,13 +4183,68 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-dependencies summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
 .bp-dependency-body {{ margin-top: 0.35rem; color: var(--bp-fg); }}
+.bp-review {{
+  margin: 0.65rem 0 0 2rem;
+  font-family: {sans};
+  font-size: 0.82rem;
+  color: var(--bp-muted);
+}}
+.bp-review summary {{
+  width: fit-content;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  color: var(--bp-link);
+  user-select: none;
+}}
+.bp-review summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+.bp-review-self-approved {{ color: var(--bp-muted); font-style: italic; }}
+.bp-review-open {{ color: var(--bp-muted); }}
+/* Each text color reads at 4.5:1 or more on its scheme's background. */
+.bp-review-drift {{ color: #946200; font-weight: 600; }}
+[data-md-color-scheme=slate] .bp-review-drift {{ color: #F0B429; }}
+.bp-skeleton {{ margin-top: 0.6rem; color: var(--bp-fg); }}
+.bp-skeleton-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
+.bp-lean {{
+  margin: 0 0 0.4rem;
+  padding: 0.6rem 0.8rem;
+  font-family: {mono};
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  border-left: 3px solid var(--bp-rule);
+}}
+.bp-skeleton-meta {{ margin-bottom: 0.5rem; }}
+/* A card too wide for the page scrolls, with a shade at each edge it can
+   scroll toward: covers in the review panel's color scroll with the content
+   and hide the shade at the end it has reached. */
+.bp-readback {{
+  margin: 0.4rem 0 1rem;
+  padding: 0.6rem 0.8rem;
+  color: var(--bp-fg);
+  border-left: 3px solid var(--bp-blue);
+  overflow-x: auto;
+  background:
+    linear-gradient(to right, var(--md-admonition-bg-color, var(--bp-page)) 40%, transparent) left / 1.5rem 100% no-repeat local,
+    linear-gradient(to left, var(--md-admonition-bg-color, var(--bp-page)) 40%, transparent) right / 1.5rem 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, var(--bp-scroll-shade), transparent) left / 0.6rem 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--bp-scroll-shade), transparent) right / 0.6rem 100% no-repeat scroll;
+  background-color: var(--md-admonition-bg-color, var(--bp-page));
+}}
+.bp-readback-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
+.bp-readback-body {{ white-space: pre-wrap; }}
+.bp-readback-status {{ font-weight: 400; color: var(--bp-muted); }}
+.bp-readback-invalid {{ border-left-color: #B42318; }}
+[data-md-color-scheme=slate] .bp-readback-invalid {{ border-left-color: #F97066; }}
+.bp-readback-missing {{ border-left-color: var(--bp-rule); font-style: italic; }}
 /* A formula paints only within its own band, its box plus the slack its
    glyphs need, which a negative margin gives back. Across, it paints as TeX
    sets it, laps included, but only inside the block that holds it, and a
    display scrolls in its own; so no article formula can cover a card, a mark,
    a label, another line, or the side columns, whatever the renderer or theme.
-   Inline formulas become inline blocks to have a box to clip, and the display
-   selector outranks MathJax's own sheets, which are added after this one. */
+   A card scrolls instead, so nothing in it is cut. Inline formulas become
+   inline blocks to have a box to clip, and the display selector outranks
+   MathJax's own sheets, which are added after this one. */
 mjx-container {{
   overflow-x: visible !important;
   overflow-y: clip !important;
@@ -3890,7 +4263,7 @@ div.arithmatex {{ overflow-x: auto; }}
 /* Material caps every svg at its container's width, which would shrink a wide
    SVG formula until it cannot be read; it keeps the size TeX set instead. */
 mjx-container > svg {{ max-width: none !important; }}
-:is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container) {{
+:is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *) {{
   overflow-x: clip;
 }}
 /* A page or statement published as typed: its text wraps, and nothing in it

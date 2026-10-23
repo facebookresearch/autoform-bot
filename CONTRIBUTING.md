@@ -17,12 +17,18 @@ make check-example  # validate, render, and build the bundled example site
 CI (`.github/workflows/tests.yml`) runs the same four steps on Python 3.10 and
 3.13 for every pull request, for pushes to `main`, and for pushes to `scratch/`
 branches, which run CI on a branch with no pull request; a newer commit on a
-pull request cancels the older run. Five more jobs run beside it. `WebKit
+pull request cancels the older run. Six more jobs run beside it. `WebKit
 integrated book and explorer regressions` installs the `browser` extra and WebKit and
 runs the graph, integrated navigation and genuine MathJax browser suites with `AUTOFORM_REQUIRE_BROWSER_TESTS=1`,
 so a missing browser fails the job instead of skipping its tests; locally they
 skip without the extra, and `make test-browser` installs both and runs them as
-CI does. `real Lean
+CI does. `MathJax read-back cards (Node)` downloads the npm tarball of MathJax
+3.2.2, checks its sha256, and runs `tests/test_site_mathjax_node.py` in Node
+with `AUTOFORM_REQUIRE_MATHJAX_TESTS=1`; locally those tests skip unless `node`
+is on `PATH` and `AUTOFORM_MATHJAX_DIR` names an unpacked MathJax 3.2.2
+package. Run `npm ci --ignore-scripts` for their pinned development-only JSDOM
+document bridge; it exercises the generated runtime and real TeX inputs, not
+browser layout. Consumers do not need Node or JSDOM. `real Lean
 (fixture toolchain)` builds and audits a project from the bundled Mathlib
 release and runs
 the real-Lean suites other than the skeleton suite, which `real Lean skeleton

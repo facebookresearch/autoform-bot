@@ -703,6 +703,132 @@ def test_generated_ci_pins_the_checkout_that_scaffolded_it(
     assert "@main" not in verify
 
 
+def test_generated_ci_rebuilds_opted_in_statement_review_evidence(tmp_path: Path) -> None:
+    """The gate is opt-in: init writes the step that honours the marker, never
+    the marker itself, neither for a new project nor on repair."""
+
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
+
+    assert 'marker="blueprint/.autoform-review"' in verify
+    assert "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620" in verify
+    assert "review cards or approvals exist without $marker" in verify
+    assert "review_approved[[:space:]]*:' -- blueprint/roadmap" in verify
+    assert "AUTOFORM_REVIEW_ENABLED=true" in verify
+    # The check derives its own evidence, so CI extracts once.
+    assert "autoform review check blueprint --lean-root .\n" in verify
+    assert not (tmp_path / "blueprint/.autoform-review").exists()
+    # A rerun repairs what is missing, and the marker is not missing.
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    assert not (tmp_path / "blueprint/.autoform-review").exists()
+
+
+def _gnu_sha256sum(tmp_path: Path) -> bool:
+    """Whether ``sha256sum --check --strict`` works here, as on GitHub's runners."""
+
+    probe = tmp_path / "sha256-probe"
+    probe.write_bytes(b"")
+    line = f"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  {probe}\n"
+    try:
+        checked = subprocess.run(["sha256sum", "--check", "--strict"], input=line, text=True, capture_output=True)
+    except OSError:
+        return False
+    return checked.returncode == 0
+
+
+@pytest.mark.parametrize(
+    ("setup", "status", "enabled", "message"),
+    [
+        ("nothing", 0, False, ""),
+        ("cards", 1, False, "review cards or approvals exist without blueprint/.autoform-review"),
+        ("approval", 1, False, "review cards or approvals exist without blueprint/.autoform-review"),
+        ("marker", 0, True, ""),
+        ("marker with cards", 0, True, ""),
+        ("wrong marker", 1, False, "invalid Autoform review policy marker"),
+        ("linked marker", 1, False, "invalid Autoform review policy marker"),
+    ],
+)
+def test_the_review_gate_runs_with_the_marker_and_fails_on_reviews_without_it(
+    tmp_path: Path, setup: str, status: int, enabled: bool, message: str
+) -> None:
+    """The workflow's Detect step, run as CI runs it: the check is on only with
+    a valid marker, and cards or approvals without one fail instead of going
+    unchecked."""
+
+    yaml = pytest.importorskip("yaml")
+    if shutil.which("bash") is None or shutil.which("git") is None:
+        pytest.skip("needs bash and git")
+    if "marker" in setup and setup != "linked marker" and not _gnu_sha256sum(tmp_path):
+        pytest.skip("needs GNU sha256sum, as on GitHub's runners")
+    project = tmp_path / "project"
+    scaffold_project(project, title="Finite Flat", autoform_ref="1" * 40)
+    steps = yaml.safe_load((project / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8"))["jobs"]
+    (script,) = [step["run"] for job in steps.values() for step in job.get("steps", []) if step.get("name") == "Detect statement review"]
+    marker = project / "blueprint/.autoform-review"
+    if setup in {"cards", "marker with cards"}:
+        (project / "blueprint/readbacks/af_0123456789abcdef01234567").mkdir(parents=True)
+    if setup == "approval":
+        (project / "blueprint/roadmap/result.md").write_text(
+            "---\nreview_approved: sha256:" + "a" * 64 + "\n---\n\n# Result\n", encoding="utf-8"
+        )
+    if setup in {"marker", "marker with cards"}:
+        marker.write_text("autoform-review-policy/v1\n", encoding="utf-8")
+    elif setup == "wrong marker":
+        marker.write_text("autoform-review-policy/v2\n", encoding="utf-8")
+    elif setup == "linked marker":
+        (tmp_path / "elsewhere").write_text("autoform-review-policy/v1\n", encoding="utf-8")
+        marker.symlink_to(tmp_path / "elsewhere")
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+    environment = tmp_path / "github-env"
+    environment.write_text("", encoding="utf-8")
+
+    ran = subprocess.run(
+        ["bash", "-c", script],
+        cwd=project,
+        env={**os.environ, "GITHUB_ENV": str(environment)},
+        capture_output=True,
+        text=True,
+    )
+
+    assert ran.returncode == status, ran.stderr
+    assert ("AUTOFORM_REVIEW_ENABLED=true" in environment.read_text(encoding="utf-8")) == enabled
+    assert message in ran.stderr
+
+
+# What a statement-review step mentions: a review or skeleton command, a
+# --review flag, the skeleton report's directory or artifact, or Lean set up
+# for the review.
+_REVIEW_MARKERS = ("autoform review", "autoform skeleton", "--review", "autoform-skeleton", "for statement review")
+
+
+@pytest.mark.parametrize(
+    ("name", "gated"),
+    [
+        ("autoform-verify.yml", "Verify statement reviews"),
+    ],
+)
+def test_statement_review_steps_run_only_in_projects_that_opted_in(tmp_path: Path, name: str, gated: str) -> None:
+    """A project without the review marker never extracts a skeleton report,
+    and its Lean-mapped articles need no durable article_id, so a review step
+    that ran there would fail its CI. Steps are found by what they mention, not
+    by name, so a step added later is held to the gate too."""
+
+    yaml = pytest.importorskip("yaml")
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    jobs = yaml.safe_load((tmp_path / ".github/workflows" / name).read_text(encoding="utf-8"))["jobs"]
+    review = [
+        step
+        for job in jobs.values()
+        for step in job.get("steps", [])
+        if any(marker in json.dumps(step) for marker in _REVIEW_MARKERS)
+    ]
+
+    assert gated in [step.get("name") for step in review]
+    for step in review:
+        assert step.get("if") == "env.AUTOFORM_REVIEW_ENABLED == 'true'", f"{step.get('name')} runs without the opt-in"
+
+
 def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:
     scaffold_project(
         tmp_path,
