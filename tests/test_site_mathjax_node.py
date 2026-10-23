@@ -152,14 +152,18 @@ function describe() {
   assert.strictEqual(MathJax.startup.adaptor.document, document, "MathJax must use the genuine native DOM");
   assert.strictEqual(MathJax.config, configuration, "The generated configuration must survive actual engine initialization");
   assert(shown, "The generated document subscription must initialize");
-  assert.strictEqual(await shown(), true);
+  // Material's subscription is fire-and-forget; await the actual scoped
+  // readiness API, which coalesces with the refresh that event requests.
+  shown();
+  assert.strictEqual(await nativeWindow.AutoformMath.refresh(document), true);
   report.passes.push(describe());
   assert.strictEqual(document.querySelectorAll("[data-autoform-math-stage]").length, 0);
 
   docs = [];
   const next = new nativeWindow.DOMParser().parseFromString(fs.readFileSync(secondPath, "utf8"), "text/html");
   document.body.replaceChildren(...Array.from(next.body.childNodes));
-  assert.strictEqual(await shown(), true);
+  shown();
+  assert.strictEqual(await nativeWindow.AutoformMath.refresh(document), true);
   report.passes.push(describe());
   assert.strictEqual(document.querySelectorAll("[data-autoform-math-stage]").length, 0);
 })().catch(error => {
