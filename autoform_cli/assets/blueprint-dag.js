@@ -45,10 +45,12 @@
       host: host,
       onCommit: function (bundle) {
         if (!host.isConnected) { navigation.dispose(); return; }
+        // Cold layout must measure the actual full-page shell, not Material's
+        // old content column. The error path below restores native reading.
+        document.body.classList.add("bp-dag-app-page");
         var ready;
         if (!client) { client = mount(host, bundle.graph, instance, bundle, navigation); clients.set(host, client); ready = client.ready; }
         else ready = client.applyRoute(bundle);
-        document.body.classList.add("bp-dag-app-page");
         if (index) client.useIndex(index);
         return ready;
       },

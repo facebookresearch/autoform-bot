@@ -300,7 +300,7 @@ def explorer_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Exp
     assert len(graphs["chapter"]["nodes"]) == 63
     assert len(graphs["flat"]["nodes"]) == 1_000
     assert [records[f"chapter/{name}"]["status"] for name in ("foundation", "middle", "target")] == [
-        "fully_proved", "can_prove", "planned",
+        "fully_proved", "can_prove", "not_ready",
     ]
     assert sum(node["title"].startswith("Auxiliary result ") for node in records.values()) == 60
     assert all(records[node_id]["result"] for node_id in ("chapter/target", "remote/deep-theorem", "flat/item-0150"))
@@ -1079,7 +1079,8 @@ def test_hiding_the_selected_status_clears_selection(desktop_page: object, explo
     page.mouse.click(2, 2)
     playwright.expect(popover).to_be_hidden()
     summary.click()
-    page.locator('.bp-dag-filter-popover input[value="planned"]').uncheck()
+    target_status = explorer_consumer.records["chapter/target"]["status"]
+    page.locator(f'.bp-dag-filter-popover input[value="{target_status}"]').uncheck()
     playwright.expect(page.locator(".bp-dag-has-selection")).to_have_count(0)
     assert page.url == explorer_consumer.route("chapter/target")
     playwright.expect(page.locator(".bp-reading-body")).to_contain_text("Final sentence of the complete target statement.")
@@ -2047,7 +2048,8 @@ def test_edges_group_and_status_summary_follow_checkbox_and_history_state(
     _consumer_ready(page, explorer_consumer)
     summary.click()
     enabled = len({node["status"] for node in explorer_consumer.records.values()})
-    page.locator('.bp-dag-filter-popover input[value="planned"]').uncheck()
+    target_status = explorer_consumer.records["chapter/target"]["status"]
+    page.locator(f'.bp-dag-filter-popover input[value="{target_status}"]').uncheck()
     playwright.expect(summary).to_have_text(f"Status · {enabled - 1} · edges only")
     isolates.check()
     playwright.expect(summary).to_have_text(f"Status · {enabled - 1}")

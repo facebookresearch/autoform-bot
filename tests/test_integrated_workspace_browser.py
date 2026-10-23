@@ -231,10 +231,13 @@ def navigation_overview_site(tmp_path_factory: pytest.TempPathFactory) -> Iterat
                 "A complete mathematical statement follows.\n\n- [Proposed identity](result.md)\n"
             ))
             previous = f"topic-{(number - 1) % len(areas)}-0"
+            # Different theorem leaves induce a cyclic area aggregation; the
+            # authored theorem graph itself must remain an acyclic blueprint.
+            prerequisites = f"- [Previous identity](../{previous}/result.md)" if part else "No prerequisites."
             _write(blueprint / f"roadmap/{topic}/result.md", (
                 "---\ndeclaration: theorem\nnot_ready: true\n---\n\n# Proposed identity\n\n"
                 "The equality $0=0$ is an unverified fixture target, not a claim of a Lean proof.\n\n"
-                f"## Depends on\n\n- [Previous identity](../{previous}/result.md)\n"
+                f"## Depends on\n\n{prerequisites}\n"
             ))
     render_site(blueprint, project / "site-src")
     configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
@@ -246,7 +249,7 @@ def navigation_overview_site(tmp_path_factory: pytest.TempPathFactory) -> Iterat
     index = json.loads((project / "site/dependencies/index.json").read_text(encoding="utf-8"))
     records = {record["id"]: record for record in index["nodes"]}
     graph = json.loads((project / "site/dependencies.json").read_text(encoding="utf-8"))
-    assert len(graph["nodes"]) == 15 and len(_area_edges(graph)) == 15
+    assert len(graph["nodes"]) == 15 and len(_area_edges(graph)) == 10
     with _served(project / "site") as url:
         yield _WorkspaceSite(url, records, graph)
 
