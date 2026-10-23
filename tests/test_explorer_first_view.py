@@ -42,7 +42,8 @@ var dom$nodeLayer = {style: {setProperty(name, value) { this[name] = value; }}, 
 function calculateActive() {} function compactRegions() { return false; } function geometry() { return null; }
 function sheetLayout() { return false; } function freeArea() { return {}; } function center() {} function schedule() {} function remember() {}
 function colors() { return {}; } function statusRing() { return ''; }
-function makeNodeControl() { return {style: {setProperty() {}}, dataset: {}, querySelector() { return null; }, remove() {}}; }
+function makeNodeControl(node) { return {style: {setProperty() {}}, dataset: {}, querySelector() { return null; }, remove() {},
+  label: node.title, getAttribute() { return this.label; }, setAttribute(name, value) { this.label = value; }}; }
 `;
 const run = String.raw`data = {nodes: fixture.nodes.map(node => Object.assign({}, node, {x: node.layout.x, y: node.layout.y, width: node.layout.width, height: node.layout.height, column: node.layout.column, row: node.layout.row}))};
 // As resize() and adoptGraph() do: a narrow stage stacks the ranks, with the unlinked cards in a grid below.

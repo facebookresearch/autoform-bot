@@ -1274,6 +1274,7 @@
       // A hovered card previews its direct neighbours on any map; a selection keeps its own spotlight.
       var spotlight = (atlas || !ui$selected) && subject ? atlasSpotlight(subject) : pathSpotlight();
       if (navigation) {
+        var bottom = mapHeight(), labels = [];
         current.routes.forEach(function (route) {
           if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target) || quiet && !edgeIndexes.has(route.edgeIndex)) return;
           var bounds = {x: route.bounds.x * ui$transform.scale + ui$transform.x, y: route.bounds.y * ui$transform.scale + ui$transform.y,
@@ -1286,8 +1287,11 @@
             painted = Object.assign({}, route, {points: points, radii: radii});
           }
           // A pair linked in both kinds stacks its two count pills.
-          drawRoute(ctx, painted, edgeRole(spotlight, route.source, route.target), edge.statement && edge.proof ? route.kind === "proof" ? 1 : -1 : 0);
+          var label = drawRoute(ctx, painted, edgeRole(spotlight, route.source, route.target), edge.statement && edge.proof ? route.kind === "proof" ? 1 : -1 : 0, bottom);
+          if (label) labels.push(label);
         });
+        var cards = visible.map(screen);
+        labels.forEach(function (label) { drawPill(ctx, label, cards); });
       } else edgeIndexes.forEach(function (index) {
         var edge = data.edges[index]; if (!ui$activeIds.has(edge.source) || !ui$activeIds.has(edge.target)) return;
         var source = byId.get(edge.source), target = byId.get(edge.target); if (!source || !target) return;
@@ -1379,14 +1383,16 @@
       if (count > 1 && role > 0 && Math.hypot(bx - ax, by - ay) > 90) pill(ctx, count, (ax + bx) / 2, (ay + by) / 2 + offset * 3, 1);
       ctx.restore();
     }
-    function drawRoute(ctx, route, role, stack) {
+    // A lit count comes back as a pill for draw() to paint after every route; bottom is the map's visible band.
+    function drawRoute(ctx, route, role, stack, bottom) {
       if (!route.points || route.points.length < 2) return;
       var scale = ui$transform.scale, points = route.points.map(function (point) {
         return {x: point.x * scale + ui$transform.x, y: point.y * scale + ui$transform.y};
       });
       // Colour and fade follow the link's role; the width stays the router's weighted strength, a step wider when lit.
       ctx.save(); edgeStyle(ctx, role, false); ctx.lineWidth = (route.strength + (role > 0 ? 1 : 0)) * scale;
-      ctx.lineCap = "round"; ctx.lineJoin = "round";
+      // Round caps would close a lit proof link's 4px gaps, so its dashes keep butt ends.
+      ctx.lineCap = route.kind === "proof" ? "butt" : "round"; ctx.lineJoin = "round";
       if (route.kind === "proof") ctx.setLineDash([6 * scale, 4 * scale]);
       ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
       for (var index = 1; index < points.length - 1; index++) {
@@ -1417,7 +1423,7 @@
         }
         segments.sort(function (a, b) { return b.length - a.length; }); segments = segments.slice(0, 3); cache.set(key, segments);
       }
-      var cue = null, visible = 0, width = dom$stage.clientWidth, height = dom$stage.clientHeight;
+      var spots = [], width = dom$stage.clientWidth, height = bottom || dom$stage.clientHeight;
       segments.forEach(function (segment) {
         var x = segment.x * scale + ui$transform.x, y = segment.y * scale + ui$transform.y, dx = segment.dx * segment.length * scale, dy = segment.dy * segment.length * scale;
         var low = 0, high = 1;
@@ -1426,16 +1432,42 @@
           else { var a = (12 - axis[0]) / axis[1], b = (axis[2] - 12 - axis[0]) / axis[1]; low = Math.max(low, Math.min(a, b)); high = Math.min(high, Math.max(a, b)); }
         });
         var length = (high - low) * segment.length * scale;
-        if (length < 12 || length <= visible) return;
-        visible = length; cue = {x: x + dx * (low + high) / 2, y: y + dy * (low + high) / 2, dx: segment.dx, dy: segment.dy};
+        if (length >= 12) spots.push({x: x + dx * (low + high) / 2, y: y + dy * (low + high) / 2, dx: segment.dx, dy: segment.dy, length: length});
       });
+      spots.sort(function (a, b) { return b.length - a.length; });
+      var cue = spots[0];
       // Only a lit link names its count, in words on a pill in the cue's place; its terminal arrow still shows the direction.
-      if (cue && route.count > 1 && role > 0) pill(ctx, route.count, cue.x, cue.y + (stack || 0) * 11 * scale, scale);
-      else if (cue) {
+      // A route with no straight part long enough for the cue takes its pill halfway along.
+      if (route.count > 1 && role > 0) {
+        if (!cue) {
+          var half = 0;
+          points.slice(1).forEach(function (b, i) { half += Math.hypot(b.x - points[i].x, b.y - points[i].y) / 2; });
+          points.slice(1).some(function (b, i) {
+            var a = points[i], length = Math.hypot(b.x - a.x, b.y - a.y);
+            if (half > length) { half -= length; return false; }
+            spots.push({x: a.x + (b.x - a.x) * half / (length || 1), y: a.y + (b.y - a.y) * half / (length || 1)}); return true;
+          });
+        }
+        ctx.restore();
+        return {count: route.count, role: role, scale: scale, spots: spots.map(function (spot) { return {x: spot.x, y: spot.y + (stack || 0) * 11 * scale}; })};
+      }
+      if (cue) {
         ctx.lineWidth = Math.min(1.6, route.strength) * scale;
         ctx.beginPath(); ctx.moveTo(cue.x - (cue.dx * 6 + cue.dy * 3) * scale, cue.y - (cue.dy * 6 - cue.dx * 3) * scale);
         ctx.lineTo(cue.x, cue.y); ctx.lineTo(cue.x - (cue.dx * 6 - cue.dy * 3) * scale, cue.y - (cue.dy * 6 + cue.dx * 3) * scale); ctx.stroke();
       }
+      ctx.restore(); return null;
+    }
+    // Pills paint after every route, so no later stroke crosses one; each takes its route's first spot clear of the cards.
+    function drawPill(ctx, label, cards) {
+      var scale = label.scale, h = 20 * scale; ctx.save(); edgeStyle(ctx, label.role, false);
+      ctx.font = "600 " + 13 * scale + "px " + family; var w = ctx.measureText(label.count + " links").width + 12 * scale;
+      var spot = label.spots.find(function (spot) {
+        return cards.every(function (box) {
+          return spot.x + w / 2 + 4 < box.x || spot.x - w / 2 - 4 > box.x + box.w || spot.y + h / 2 + 4 < box.y || spot.y - h / 2 - 4 > box.y + box.h;
+        });
+      }) || label.spots[0];
+      if (spot) pill(ctx, label.count, spot.x, spot.y, scale);
       ctx.restore();
     }
 
@@ -1457,6 +1489,7 @@
       // Keep an owned focus while panning; otherwise start on a contained card.
       var tabId = keep.has(focusedId) ? focusedId : available && available.id || ui$selected && ui$selected.id || candidates[0] && candidates[0].id;
       overlays.forEach(function (control, id) { if (!keep.has(id)) { control.remove(); overlays.delete(id); } });
+      var weights = ui$selected && relationCounts(data.edges, ui$selected.id);
       candidates.forEach(function (node, index) {
         var control = overlays.get(node.id);
         if (!control) { control = makeNodeControl(node); overlays.set(node.id, control); dom$nodeLayer.appendChild(control); }
@@ -1472,6 +1505,13 @@
           else if ((dependents.get(ui$selected.id) || []).indexOf(node.id) >= 0) relation = "dependent";
         }
         control.dataset.relation = relation;
+        // The map shows a link's weight only as width and a lit pill, so a card linked to the selection names it by kind for screen readers.
+        if (!control.$label) control.$label = control.getAttribute("aria-label");
+        var named = [control.$label];
+        if (weights && node !== ui$selected) [["used by ", weights.before], ["uses ", weights.after]].forEach(function (side) {
+          var counts = side[1].get(node.id); if (counts) named.push(side[0] + ui$selected.title + " · " + weightWords(counts));
+        });
+        if (control.getAttribute("aria-label") !== named.join(", ")) control.setAttribute("aria-label", named.join(", "));
         var relationLabel = control.querySelector(".bp-dag-node-relation");
         if (relationLabel) relationLabel.textContent = relation === "prerequisite" ? "Uses" : relation === "dependent" ? "Used by" : "";
         control.dataset.subdued = String(Boolean(spotlight && !spotlight.nodes.has(node.id)));
@@ -1888,6 +1928,10 @@
         line.appendChild(element("span", "", String(row[1]))); list.appendChild(line);
       }); section.appendChild(list); dom$inspectorInner.appendChild(section);
     }
+    function weightWords(counts) {
+      return [counts.statement && plural(counts.statement, "statement dependency", "statement dependencies"),
+        counts.proof && plural(counts.proof, "proof dependency", "proof dependencies")].filter(Boolean).join(", ");
+    }
     function appendRelations(label, ids, weights) {
       if (!ids.length) return;
       var section = element("section", "bp-dag-section"); section.appendChild(element("h3", "", label + " (" + ids.length + ")"));
@@ -1902,8 +1946,7 @@
           // The map draws a link's weight as its width; the list names it by kind for readers and screen readers.
           var counts = weights.get(id);
           if (counts) {
-            choose.title = related.title + " · " + [counts.statement && plural(counts.statement, "statement dependency", "statement dependencies"),
-              counts.proof && plural(counts.proof, "proof dependency", "proof dependencies")].filter(Boolean).join(", ");
+            choose.title = related.title + " · " + weightWords(counts);
             choose.setAttribute("aria-label", choose.title);
           }
         choose.addEventListener("click", function () { activateNode(related, true); }); item.appendChild(choose); list.appendChild(item);

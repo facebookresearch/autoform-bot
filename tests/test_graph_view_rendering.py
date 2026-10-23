@@ -425,7 +425,10 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     # Counts are words on a pill, drawn only on a link the selection lights.
     assert 'var text = count + " links"' in script and '"×" + ' not in script
     assert "if (count > 1 && role > 0 && Math.hypot(bx - ax, by - ay) > 90) pill(" in script
-    assert "if (cue && route.count > 1 && role > 0) pill(ctx, route.count, cue.x," in script
+    assert "if (route.count > 1 && role > 0) {" in script
+    # Pills paint after every route is stroked and before the plates, so no later route crosses one.
+    paint = "labels.forEach(function (label) { drawPill(ctx, label, cards); });"
+    assert script.index("current.routes.forEach(function (route) {") < script.index(paint) < script.index("visible.forEach(function (node) { drawPlate(")
     assert 'ctx.setLineDash([6, 4])' in script and "setLineDash([5, 5])" not in script
     # Ranking matches exact names before prefixes, and statement text last.
     assert script.index("if (title === query)") < script.index("if (title.startsWith(query))")
@@ -624,6 +627,10 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
     # Each row names its link's weight by kind, which the map draws only as a width.
     assert "weights = relationCounts(data.edges, node.id);" in script
     assert 'choose.setAttribute("aria-label", choose.title);' in script
+    # A card linked to the selection names the same per-kind weights in its accessible name, so the integrated reader keeps them too.
+    assert "var weights = state.selected && relationCounts(data.edges, state.selected.id);" in script
+    assert '[["used by ", weights.before], ["uses ", weights.after]]' in script
+    assert 'if (control.getAttribute("aria-label") !== named.join(", ")) control.setAttribute("aria-label", named.join(", "));' in script
     assert '[["All", "both", 1], ["Uses", "prerequisites", before.length], ["Used by", "dependents", after.length]]' in script
     assert "if (!entry[2]) return;" in script and "pivot.disabled" not in script
     # Atlas cards name a neighbour by the list it sits in; rows carry the map's status dot; the kicker reads in sentence case.
@@ -949,10 +956,11 @@ def test_explorer_labels_use_the_site_family_and_remain_readable_at_initial_scal
     rules = re.findall(r"\.bp-dag-integrated(?:\.bp-dag-atlas)? \.bp-dag-node-(?:title|meta) \{([^}]+)\}", dag_viewer._STYLE)
     sizes = [float(size) for rule in rules for size in re.findall(r"font-size:\s*([\d.]+)px", rule)]
     assert len(sizes) >= 3 and min(sizes) * .9 >= 11
-    painter = script.split("function drawRoute(", 1)[1].split("function updateOverlays(", 1)[0]
-    assert "fillText" not in painter and "measureText" not in painter
+    painter = script.split("function drawRoute(", 1)[1].split("function drawPill(", 1)[0]
+    assert "fillText" not in painter and "measureText" not in painter and "pill(" not in painter
     # Only a lit link names its count, on a pill in the site family; the .9 initial floor gives 11.7px.
-    assert "if (cue && route.count > 1 && role > 0) pill(ctx, route.count, cue.x, cue.y + (stack || 0) * 11 * scale, scale);" in painter
+    assert "spots: spots.map(function (spot) { return {x: spot.x, y: spot.y + (stack || 0) * 11 * scale}; })" in painter
+    assert "if (spot) pill(ctx, label.count, spot.x, spot.y, scale);" in script
     assert 'ctx.font = "600 " + 13 * scale + "px " + family;' in script
     assert 'readableFloor = navigation ? .9 :' in script
 

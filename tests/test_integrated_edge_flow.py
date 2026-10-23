@@ -29,7 +29,7 @@ function original(name) {
   assert.fail('Production function did not parse: '+name);
 }
 const context={assert,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};vm.createContext(context);
-const helpers=['drawRoute','relationCounts','edgeStyle','pill'].map(original).join('\n');
+const helpers=['drawRoute','drawPill','relationCounts','edgeStyle','pill'].map(original).join('\n');
 """
 
 _CANVAS = r"""
@@ -158,7 +158,9 @@ def test_only_a_lit_link_names_its_count_in_words_in_its_two_colours(dark: bool)
     _run(r"""
       const lit={1:fixture.dark?'#2D88FF':'#0064E0',2:fixture.dark?'#E4E6EB':'#1C1E21'};
       [1,2].forEach(role=>{
-        const input=route([{x:100,y:300},{x:600,y:300}]),ctx=new Canvas();drawRoute(ctx,input,role,0);
+        const input=route([{x:100,y:300},{x:600,y:300}]),ctx=new Canvas(),label=drawRoute(ctx,input,role,0);
+        // The route hands its pill back, so draw() can paint every pill after the last route is stroked.
+        assert.equal(ctx.texts.length,0);assert.equal(ctx.strokes.length,1);assert.equal(label.role,role);drawPill(ctx,label,[]);
         assert.equal(ctx.strokes[0].strokeStyle,lit[role]);assert.equal(ctx.strokes[0].lineWidth,input.strength+1);
         assert.equal(ctx.texts.length,1);assert.equal(ctx.texts[0].text,'12 links');assert.equal(ctx.texts[0].fill,lit[role]);
         assert.equal(ctx.texts[0].font,'600 13px sans-serif');
@@ -167,12 +169,38 @@ def test_only_a_lit_link_names_its_count_in_words_in_its_two_colours(dark: bool)
         assert.equal(ctx.fills[0].fillStyle,lit[role]);assert.equal(triangle(ctx.fills[0]).length,3);
         assert.equal(ctx.fills[1].fillStyle,fixture.dark?'#18191a':'#f0f2f5');
       });
-      const stacked=[-1,1].map(stack=>{const ctx=new Canvas();drawRoute(ctx,route([{x:100,y:300},{x:600,y:300}]),1,stack);return ctx.texts[0].y;});
+      const stacked=[-1,1].map(stack=>{const ctx=new Canvas();drawPill(ctx,drawRoute(ctx,route([{x:100,y:300},{x:600,y:300}]),1,stack),[]);return ctx.texts[0].y;});
       assert(stacked[1]-stacked[0]>=20);
-      const single=new Canvas();drawRoute(single,route([{x:100,y:300},{x:600,y:300}],1),1,0);assert.equal(single.texts.length,0);
-      const faded=new Canvas();drawRoute(faded,route([{x:100,y:300},{x:600,y:300}]),0,0);
+      const single=new Canvas();assert.equal(drawRoute(single,route([{x:100,y:300},{x:600,y:300}],1),1,0),null);assert.equal(single.texts.length,0);
+      const faded=new Canvas();assert.equal(drawRoute(faded,route([{x:100,y:300},{x:600,y:300}]),0,0),null);
       assert.equal(faded.texts.length,0);assert.equal(faded.strokes[0].globalAlpha,.08);
+      // A route with no straight part long enough for the cue still names a lit count, halfway along; at rest it shows no chevron.
+      const short=new Canvas(),shortLabel=drawRoute(short,route([{x:100,y:300},{x:170,y:300}]),1,0);
+      assert.deepEqual(shortLabel.spots,[{x:135,y:300}]);drawPill(short,shortLabel,[]);
+      assert.equal(short.texts.length,1);assert.equal(short.texts[0].x,135);
+      const resting=new Canvas();drawRoute(resting,route([{x:100,y:300},{x:170,y:300}]),-1,0);assert.equal(resting.strokes.length,1);
+      // The pill takes the route's first spot clear of every card, and the longest spot when none is clear.
+      const bent=route([{x:100,y:100},{x:100,y:600},{x:500,y:600}]),card={x:60,y:300,w:80,h:100};
+      const first=new Canvas(),spots=drawRoute(first,bent,1,0).spots;assert.equal(spots[0].x,100);assert.equal(spots[1].y,600);
+      drawPill(first,{count:12,role:1,scale:1,spots},[card]);assert.equal(first.texts[0].y,600+4.5);
+      const blocked=new Canvas();drawPill(blocked,{count:12,role:1,scale:1,spots},[card,{x:200,y:560,w:200,h:80}]);
+      assert.equal(blocked.texts[0].x,100);
+      // A phone's open reader leaves the map only the band above it, so the pill sits in the visible part of the link.
+      const banded=drawRoute(new Canvas(),route([{x:300,y:100},{x:300,y:650}]),1,0,315).spots[0];
+      assert(banded.y<=303&&banded.y>=12,'Pill under the reader: '+banded.y);
     """, {"dark": dark, "lit": True})
+
+
+@pytest.mark.parametrize("scale", [.6, 1, 2])
+def test_proof_dashes_keep_butt_caps_so_lit_gaps_stay_open(scale: float) -> None:
+    _run(r"""
+      [[-1,1],[1,1],[2,3],[1,12]].forEach(([role,count])=>{
+        fixture.kind='proof';const dashed=new Canvas();drawRoute(dashed,route([{x:100,y:300},{x:600,y:300}],count),role,0);
+        const stroke=dashed.strokes[0];assert.equal(stroke.lineCap,'butt');assert.deepEqual(stroke.dash,[6*fixture.scale,4*fixture.scale]);
+        fixture.kind='statement';const solid=new Canvas();drawRoute(solid,route([{x:100,y:300},{x:600,y:300}],count),role,0);
+        assert.equal(solid.strokes[0].lineCap,'round');
+      });
+    """, {"scale": scale, "lit": True})
 
 
 @pytest.mark.parametrize("arrays", [False, True])

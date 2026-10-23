@@ -289,7 +289,7 @@ def test_renderer_geometry_cache_changes_only_for_captured_geometry_inputs() -> 
 def test_lit_links_take_two_accents_and_name_their_count_in_words_only_when_lit() -> None:
     """Execute the production edge roles, styles, painter and count pill on routes from the bounded engine."""
     _run(r"""
-      ['edgeRole','edgeStyle','pill','drawRoute'].forEach(name=>(0,eval)(original(name)));
+      ['edgeRole','edgeStyle','pill','drawRoute','drawPill'].forEach(name=>(0,eval)(original(name)));
       var dark=false,family='sans-serif',isDark=()=>dark,rounded=(ctx,...box)=>ctx.calls.push(['box',...box]);
       var ui$transform={x:0,y:300,scale:1},dom$stage={clientWidth:1600,clientHeight:900};
       const fake=()=>({calls:[],setLineDash(dash){this.calls.push(['dash',dash]);},measureText(text){return {width:text.length*7*parseFloat(this.font.split(' ')[1])/13};},
@@ -311,18 +311,27 @@ def test_lit_links_take_two_accents_and_name_their_count_in_words_only_when_lit(
       for(const scale of [1,.6]) {
         ui$transform.scale=scale;
         pair.forEach(route=>[-1,0].forEach(role=>{
-          const ctx=fake();drawRoute(ctx,route,role,route.kind==='proof'?1:-1);
+          const ctx=fake();assert.equal(drawRoute(ctx,route,role,route.kind==='proof'?1:-1),null);
           assert(!ctx.calls.some(call=>call[0]==='text'),'A link at rest or faded names no count');
           assert.equal(ctx.calls.find(call=>call[0]==='stroke')[2],route.strength*scale);
         }));
-        const lit=pair.map(route=>{const ctx=fake();drawRoute(ctx,route,1,route.kind==='proof'?1:-1);
+        const lit=pair.map(route=>{const ctx=fake();drawPill(ctx,drawRoute(ctx,route,1,route.kind==='proof'?1:-1),[]);
           assert.equal(ctx.calls.find(call=>call[0]==='stroke')[2],(route.strength+1)*scale);
           const texts=ctx.calls.filter(call=>call[0]==='text');assert.equal(texts.length,1);
           assert.deepEqual(texts[0].slice(1,4),[route.count+' links','600 '+13*scale+'px sans-serif','#0064E0']);return texts[0];});
         assert(Math.abs(lit[0][5]-lit[1][5])>=20*scale,'Statement and proof pills stack apart');
-        const ctx=fake();drawRoute(ctx,single,2,0);
+        const ctx=fake();assert.equal(drawRoute(ctx,single,2,0),null);
         assert(!ctx.calls.some(call=>call[0]==='text'),'A single link needs no count');
         assert.equal(ctx.calls.find(call=>call[0]==='stroke')[1],'#1C1E21');
+      }
+      // An unlinked card beside the source leaves the route no straight part long enough for the cue; its lit count still shows.
+      ui$transform.scale=1;
+      for(const width of [208,232,264]) for(const height of [100,116,148]) {
+        const scene=layoutGraph(['a','b','c'].map(id=>({id,width,height})),[{source:'a',target:'b',statement:12,proof:0}],'lr');
+        const ctx=fake(),label=drawRoute(ctx,scene.routes[0],1,0);
+        assert(label&&label.spots.length,'A lit count lost its pill at '+width+'x'+height);
+        drawPill(ctx,label,Array.from(scene.nodes.values()).map(box=>({x:box.x,y:box.y+300,w:box.w,h:box.h})));
+        assert.deepEqual(ctx.calls.filter(call=>call[0]==='text').map(call=>call[1]),['12 links']);
       }
     """, {})
 
