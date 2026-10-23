@@ -5,7 +5,7 @@
   window.__AUTOFORM_DAG_VIEWER_V2__ = true;
 
   var NODE_W = 196, NODE_H = 56, MAX_MAP_NODES = 120, LIST_PAGE = 100;
-  var SEARCH_PAGE = 50, RELATION_PAGE = 50, MIN_SCALE = .002, MIN_READABLE_SCALE = .8, MIN_ATLAS_SCALE = .68, hostSequence = 0;
+  var SEARCH_PAGE = 50, MIN_SCALE = .002, hostSequence = 0;
   var clients = new Map();
   var clamp = function (value, low, high) { return Math.max(low, Math.min(high, value)); };
   var plural = function (count, one, many) { return count.toLocaleString() + " " + (count === 1 ? one : many); };
@@ -34,49 +34,37 @@
 
   function start(host) {
     if (host.getAttribute("data-dag-ready") === "true") return;
+    // A bare graph host has linked reading/data fallbacks, not a second client.
+    if (!window.AutoformNavigation || !host.closest(".bp-explorer-page")) return;
     host.setAttribute("data-dag-ready", "true");
     host.classList.add("bp-dag-enhancing");
     var loading = host.querySelector(".bp-dag-loading"); if (loading) loading.hidden = false;
     var instance = ++hostSequence;
-    if (window.AutoformNavigation && host.closest(".bp-explorer-page")) {
-      var client = null, index = null;
-      var navigation = window.AutoformNavigation.create({
-        host: host,
-        onCommit: function (bundle) {
-          if (!host.isConnected) { navigation.dispose(); return; }
-          document.body.classList.add("bp-dag-app-page");
-          var ready;
-          if (!client) { client = mount(host, bundle.graph, instance, bundle, navigation); clients.set(host, client); ready = client.ready; }
-          else ready = client.applyRoute(bundle);
-          if (index) client.useIndex(index);
-          return ready;
-        },
-        onIndex: function (loaded) { index = loaded; if (client) client.useIndex(loaded); },
-        captureState: function () { return client ? client.captureState() : {}; },
-        restoreState: function (snapshot, bundle) { if (client) return client.restoreState(snapshot, bundle); },
-        onError: function (error) {
-          if (client) client.showError(error);
-          else {
-            host.classList.remove("bp-dag-enhancing"); document.body.classList.remove("bp-dag-app-page");
-            if (loading) { loading.textContent = "The interactive map is unavailable: " + error.message + ". The complete mathematical page remains readable."; loading.classList.add("bp-dag-error"); }
-          }
+    var client = null, index = null;
+    var navigation = window.AutoformNavigation.create({
+      host: host,
+      onCommit: function (bundle) {
+        if (!host.isConnected) { navigation.dispose(); return; }
+        var ready;
+        if (!client) { client = mount(host, bundle.graph, instance, bundle, navigation); clients.set(host, client); ready = client.ready; }
+        else ready = client.applyRoute(bundle);
+        document.body.classList.add("bp-dag-app-page");
+        if (index) client.useIndex(index);
+        return ready;
+      },
+      onIndex: function (loaded) { index = loaded; if (client) client.useIndex(loaded); },
+      captureState: function () { return client ? client.captureState() : {}; },
+      restoreState: function (snapshot, bundle) { if (client) return client.restoreState(snapshot, bundle); },
+      onError: function (error) {
+        if (client) client.showError(error);
+        else {
+          host.classList.remove("bp-dag-enhancing"); document.body.classList.remove("bp-dag-app-page");
+          if (loading) { loading.textContent = "The interactive map is unavailable: " + error.message + ". The complete mathematical page remains readable."; loading.classList.add("bp-dag-error"); }
         }
-      });
-      clients.set(host, {dispose: function () { navigation.dispose(); }});
-      navigation.start(); return;
-    }
-    document.body.classList.add("bp-dag-app-page");
-    fetch(host.getAttribute("data-graph-src"), {credentials: "same-origin"}).then(function (response) {
-      if (!response.ok) throw new Error("HTTP " + response.status);
-      return response.json().then(function (graph) { return {graph: graph, url: response.url}; });
-    }).then(function (loaded) { clients.set(host, mount(host, graphAt(loaded.graph, loaded.url), instance)); }).catch(function (error) {
-      host.classList.remove("bp-dag-enhancing");
-      document.body.classList.remove("bp-dag-app-page");
-      if (loading) {
-        loading.textContent = "The interactive graph could not be loaded: " + error.message;
-        loading.classList.add("bp-dag-error");
       }
     });
+    clients.set(host, {dispose: function () { navigation.dispose(); }});
+    navigation.start();
   }
 
   function graphAt(payload, base) {
@@ -316,6 +304,7 @@
       saved = {points: part.points.slice().reverse(), radii: part.radii.slice().reverse(), bounds: part.bounds}; reversedParts.set(part, saved); return saved;
     }
     var paths = new Map(), sparse = springs.length <= vertices.length * 3;
+    var flowRange = Math.max(4, Math.log2(1 + routes.reduce(function (largest, route) { return Math.max(largest, route.count); }, 0)));
     routes.forEach(function (route) {
       var a = vertices[ids.get(route.source)], b = vertices[ids.get(route.target)], offset = route.kind === "proof" ? 4 : -4;
       // Cyclic aggregations have no global left-to-right order. Use the facing
@@ -323,7 +312,10 @@
       var dx = b.x + b.w / 2 - a.x - a.w / 2, dy = b.y + b.h / 2 - a.y - a.h / 2;
       var alongY = Math.abs(dy) - (a.h + b.h) / 2 > Math.abs(dx) - (a.w + b.w) / 2;
       var side = (alongY ? dy : dx) < 0 ? -1 : 1, source = port(a, side, offset, alongY), target = port(b, -side, offset, alongY);
-      route.label = null; route.strength = Math.min(4.8, 1.2 + .55 * Math.log2(1 + route.count));
+      // Blend absolute size and this scene's relative flow: large library
+      // aggregates must not all saturate to one indistinguishable stroke.
+      var flowSize = Math.log2(1 + route.count);
+      route.label = null; route.strength = 1.2 + 1.6 * flowSize / (flowSize + 4) + 2 * flowSize / flowRange;
       route.flow = {source: a.cluster, target: b.cluster, returning: a.rank >= b.rank};
       var key = ids.get(route.source) + ":" + ids.get(route.target) + ":" + route.kind, saved = paths.get(key);
       if (saved) { Object.assign(route, saved); return; }
@@ -360,57 +352,47 @@
   }
 
   function mount(host, data, instance, firstBundle, navigation) {
+    if (!navigation || !firstBundle || !firstBundle.readingSource) throw new Error("A complete mathematical page and navigation are required");
     if (!data || data.schema !== "autoform-dag-view/v2" || !data.palette ||
         !Array.isArray(data.nodes) || !Array.isArray(data.edges)) throw new Error("unsupported graph payload");
     var contextGraph = data, sharedIndex = null, records = new Map(), currentBundle = firstBundle;
     var alive = true, cleanup = [], observers = [], frame = 0, readingReady = Promise.resolve(), restoration = 0, checkpointTimer = 0, restoring = false;
-    var intro = host.querySelector(".bp-dag-intro"), introHeading = intro && intro.querySelector("h1");
-    var introTitle = introHeading ? introHeading.textContent.trim() : ""; if (intro) intro.remove();
     host.textContent = "";
     host.classList.remove("bp-dag-enhancing");
-    var view, atlas, palette, byId, prerequisites, dependents, incident, statusCounts, presentStatuses;
-    var mobileIsolateBase, mapAllowed, scene, sceneData, sceneDirection, sceneCompact, sceneFamily;
+    var view, atlas, palette, byId, prerequisites, dependents, statusCounts, presentStatuses;
+    var mapAllowed, scene, sceneData, sceneDirection, sceneCompact, sceneFamily;
     function recordId(node) {
       return node._recordId || (records.get(node.id) === node || ["scope", "boundary"].indexOf(node.kind) < 0 ? node.id : node.id.replace(/^(scope|boundary):/, ""));
     }
     function mapNode(node) {
       var record = records.get(recordId(node));
-      return node.map !== false && !(navigation && node.kind === "scope" && record && record.navigation === "source");
+      return node.map !== false && !(node.kind === "scope" && record && record.navigation === "source");
     }
     function adoptGraph(payload) {
     data = graphAt(payload, currentBundle && currentBundle.dataURL);
     var shown = data.nodes.filter(mapNode), ids = new Set(shown.map(function (n) { return n.id; }));
     data.nodes = shown; data.edges = data.edges.filter(function (e) { return ids.has(e.source) && ids.has(e.target); });
     view = data.view || {}; atlas = view.presentation === "atlas"; host.classList.toggle("bp-dag-atlas", atlas);
-    palette = data.palette || {}; byId = new Map(); prerequisites = new Map(); dependents = new Map(); incident = new Map();
+    palette = data.palette || {}; byId = new Map(); prerequisites = new Map(); dependents = new Map();
     statusCounts = new Map(); presentStatuses = [];
     data.nodes.forEach(function (node, index) {
       var layout = node.layout || {};
-      node._index = index; node.column = layout.column; node.row = layout.row;
-      node.x = Number.isFinite(layout.x) ? layout.x : (node.column || 0) * 312;
-      node.y = Number.isFinite(layout.y) ? layout.y : (node.row || 0) * 66;
+      node._index = index;
       node.width = Number.isFinite(layout.width) ? layout.width : NODE_W;
-      node.height = Math.max(navigation ? 100 : NODE_H, Number.isFinite(layout.height) ? layout.height : NODE_H);
+      node.height = Math.max(100, Number.isFinite(layout.height) ? layout.height : NODE_H);
       node.isolated = node.isolated === true;
       byId.set(node.id, node);
-      prerequisites.set(node.id, []); dependents.set(node.id, []); incident.set(node.id, []);
+      prerequisites.set(node.id, []); dependents.set(node.id, []);
       statusCounts.set(node.status, (statusCounts.get(node.status) || 0) + 1);
     });
-    data.edges.forEach(function (edge, index) {
+    data.edges.forEach(function (edge) {
       if (prerequisites.has(edge.target) && byId.has(edge.source)) prerequisites.get(edge.target).push(edge.source);
       if (dependents.has(edge.source) && byId.has(edge.target)) dependents.get(edge.source).push(edge.target);
-      if (incident.has(edge.source)) incident.get(edge.source).push(index);
-      if (incident.has(edge.target)) incident.get(edge.target).push(index);
     });
-    var isolateIndex = 0;
     data.nodes.forEach(function (node) {
       node.isolated = node.isolated || ((prerequisites.get(node.id) || []).length + (dependents.get(node.id) || []).length === 0);
-      node._isolateIndex = node.isolated ? isolateIndex++ : -1;
     });
-    mobileIsolateBase = (data.nodes.reduce(function (largest, node) {
-      return node.isolated ? largest : Math.max(largest, Number.isFinite(node.column) ? node.column : 0);
-    }, -2) + 2) * (NODE_H + 72);
-    if (navigation && sharedIndex) {
+    if (sharedIndex) {
       statusCounts = new Map();
       sharedIndex.nodes.forEach(function (node) { statusCounts.set(node.status, (statusCounts.get(node.status) || 0) + 1); });
     }
@@ -429,10 +411,10 @@
       ui$mode = "graph", ui$moved = false, ui$orientation = "lr", ui$pointers = new Map(), ui$pinch = null,
       ui$query = "", ui$searchLimit = 12, ui$selected = null, ui$searchCache = [], ui$searchCacheQuery = null,
       ui$searchError = null, ui$searchLoading = false, ui$searchNodes = data.nodes, ui$searchPromise = null,
-      ui$spotlight = null, ui$navigationLimit = atlas ? 120 : 50, ui$mapAllowed = mapAllowed, ui$readableCrop = false,
-      ui$introInSheet = sheetLayout(), ui$selectedStatuses = new Set(presentStatuses), ui$showIsolated = true,
+      ui$spotlight = null, ui$mapAllowed = mapAllowed, ui$readableCrop = false,
+      ui$selectedStatuses = new Set(presentStatuses), ui$showIsolated = true,
       ui$transform = {x: 20, y: 20, scale: 1}, ui$reading = Boolean(firstBundle && firstBundle.readingSource),
-      ui$area = null, ui$filtersTouched = false, ui$relationIds = null,
+      ui$area = null, ui$overviewOnly = false, ui$filtersTouched = false, ui$relationIds = null,
       ui$requestedNode = firstBundle && firstBundle.nodeId || null, ui$outlineLimit = 120;
     if (!mapAllowed) ui$mode = "list";
     var dom$announcement, dom$body, dom$breadcrumb, dom$canvas, dom$ctx, dom$density, dom$edgeFieldset, dom$empty,
@@ -445,28 +427,26 @@
       dom$wholeSearch, dom$zoomIn, dom$zoomOut;
     var overlays = new Map(), scheduled = false, firstResize = true, family;
     var trail = Array.isArray(view.breadcrumbs) ? view.breadcrumbs : [];
-    host.classList.toggle("bp-dag-integrated", Boolean(navigation));
+    host.classList.add("bp-dag-integrated");
 
-    buildShell(); markIntro();
+    buildShell();
     bindEvents();
     // The router has already validated its index. Project before the first
     // layout, including direct theorem entries, not a transient raw scope.
     if (navigation && navigation.getIndex) useIndex(navigation.getIndex());
-    applyLocation();
     resize();
-    redirectLegacyFocus();
-    if (firstBundle) readingReady = applyRoute(firstBundle);
+    readingReady = applyRoute(firstBundle);
 
     function globalListen(target, type, handler, options) {
       target.addEventListener(type, handler, options); cleanup.push(function () { target.removeEventListener(type, handler, options); });
     }
     function remember() {
-      if (!navigation || restoring) return;
+      if (restoring) return;
       clearTimeout(checkpointTimer); checkpointTimer = setTimeout(function () { if (alive && !restoring) navigation.checkpoint(); }, 80);
     }
 
     function captureState() {
-      var active = document.activeElement, key = active === dom$search ? "search" : dom$readingBody && dom$readingBody.contains(active) ? "reading" : active && active.dataset.autoformNodeId;
+      var active = document.activeElement, key = active === dom$search ? "search" : dom$readingBody && dom$readingBody.contains(active) ? "reading" : active && (active.dataset.autoformNodeId || active.dataset.inventoryNodeId);
       return {node: ui$selected && ui$selected.id, requestedNode: ui$requestedNode, mode: ui$mode, direction: ui$direction,
         statuses: Array.from(ui$selectedStatuses), isolates: ui$showIsolated, camera: Object.assign({}, ui$transform),
         query: ui$query, area: ui$area, readingOpen: host.classList.contains("bp-dag-sheet-open"), focus: key,
@@ -495,7 +475,8 @@
         dom$navigation.scrollTop = saved.outlineScroll || 0;
         if (dom$readingBody) dom$readingBody.scrollTop = saved.readingScroll || 0;
         dom$inventoryScroll.scrollTop = saved.inventoryScroll || 0;
-        var chosen = saved.focus === "search" ? dom$search : saved.focus === "reading" ? dom$readingBody : overlays.get(saved.focus);
+        var chosen = saved.focus === "search" ? dom$search : saved.focus === "reading" ? dom$readingBody :
+          ui$mode === "graph" ? overlays.get(saved.focus) : dom$inventoryRows.get(saved.focus);
         if (chosen === dom$readingBody) chosen.tabIndex = -1;
         if (chosen) chosen.focus({preventScroll: true});
         restoring = false; resolve();
@@ -543,8 +524,15 @@
       if (legacy.status) ui$selectedStatuses = new Set(legacy.status.split(",").filter(function (key) { return palette[key]; }));
       if (legacy.isolates === "0") ui$showIsolated = false;
       if (ui$selected) ui$selectedStatuses.add(ui$selected.status);
-      setSheet(!sheetLayout() || Boolean(bundle.nodeId), ui$selected);
-      renderNavigation(); refresh(true); firstResize = true; resize();
+      // Decide only after the outline has proved and hidden duplicated child
+      // indexes. A canonical scope ID alone is not a request to read a result.
+      renderNavigation();
+      var record = records.get(bundle.nodeId);
+      ui$overviewOnly = Boolean(mapAllowed && data.nodes.length && data.nodes.every(function (node) { return node._region; }) &&
+        !bundle.focus && !bundle.anchor && !(record && record.result) && navigation.readerIsOverview && navigation.readerIsOverview(dom$readingBody));
+      host.classList.toggle("bp-dag-overview-only", ui$overviewOnly);
+      setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false : !ui$overviewOnly && (!sheetLayout() || Boolean(bundle.nodeId)), ui$selected);
+      refresh(true); firstResize = true; resize();
       if (ui$selected && mapAllowed) centerIfHidden(ui$selected);
       if (navigation) navigation.loadIndex().catch(showError);
       readingReady = readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
@@ -631,7 +619,7 @@
       return Object.assign({}, payload, {nodes: nodes, edges: Array.from(links.values()), regions: []});
     }
     function updateProjection() {
-      var projected = navigation ? neighborhood(ui$requestedNode) || regionProjection(contextGraph, ui$area) : contextGraph;
+      var projected = neighborhood(ui$requestedNode) || regionProjection(contextGraph, ui$area);
       host.classList.toggle("bp-dag-area-expanded", Boolean(navigation && ui$area));
       adoptGraph(projected); ui$mapAllowed = mapAllowed; ui$activeDirty = true; ui$spotlight = null;
       overlays.forEach(function (control) { control.remove(); }); overlays.clear();
@@ -724,10 +712,8 @@
 
       var toolbar = element("div", "bp-dag-toolbar");
       toolbar.setAttribute("role", "group"); toolbar.setAttribute("aria-label", "Dependency explorer controls");
-      if (navigation) {
-        dom$outlineToggle = button("bp-dag-button bp-dag-outline-toggle", "Topics", "Toggle topic outline");
-        dom$outlineToggle.setAttribute("aria-expanded", "false"); toolbar.appendChild(dom$outlineToggle);
-      }
+      dom$outlineToggle = button("bp-dag-button bp-dag-outline-toggle", "Topics", "Toggle topic outline");
+      dom$outlineToggle.setAttribute("aria-expanded", "false"); toolbar.appendChild(dom$outlineToggle);
       var searchWrap = dom$searchWrap = element("div", "bp-dag-search-wrap");
       dom$search = element("input", "bp-dag-search");
       dom$search.type = "search"; dom$search.placeholder = "Search the roadmap";
@@ -753,14 +739,11 @@
 
       var modes = element("div", "bp-dag-modes"); modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "Explorer view");
       dom$graphMode = button("bp-dag-mode-button", mapAllowed ? "Map" : "Map · too many items");
-      dom$graphMode.disabled = !mapAllowed; dom$listMode = button("bp-dag-mode-button", "Contents");
+      dom$graphMode.disabled = !mapAllowed; dom$listMode = button("bp-dag-mode-button", "Results");
       modes.appendChild(dom$graphMode); modes.appendChild(dom$listMode); toolbar.appendChild(modes);
-      if (navigation) {
-        dom$listMode.textContent = "Results";
-        dom$sourcesMode = button("bp-dag-mode-button", "Sources");
-        dom$regionsMode = button("bp-dag-mode-button", "Regions");
-        modes.appendChild(dom$sourcesMode); modes.appendChild(dom$regionsMode);
-      }
+      dom$sourcesMode = button("bp-dag-mode-button", "Sources");
+      dom$regionsMode = button("bp-dag-mode-button", "Regions");
+      modes.appendChild(dom$sourcesMode); modes.appendChild(dom$regionsMode);
 
       var zoomGroup = element("div", "bp-dag-zoom"); zoomGroup.setAttribute("role", "group"); zoomGroup.setAttribute("aria-label", "Zoom controls");
       dom$zoomOut = button("bp-dag-button", "−", "Zoom out"); dom$zoomIn = button("bp-dag-button", "+", "Zoom in");
@@ -770,20 +753,8 @@
       dom$hiddenButton = button("bp-dag-hidden-button", ""); toolbar.appendChild(dom$hiddenButton);
       head.appendChild(toolbar);
       dom$error = element("div", "bp-dag-error"); dom$error.setAttribute("role", "alert"); dom$error.hidden = true; head.appendChild(dom$error);
-      // Tab follows where the head draws the link: after the controls in one row, before them in the grid.
-      var book = safeHref(view.book);
-      if (book || navigation) {
-        var bookLink = element("a", "bp-dag-book", "Open the textbook page"), narrow = matchMedia("(max-width: 1100px)");
-        bookLink.href = book || currentBundle.url;
-        if (navigation) {
-          bookLink.textContent = "Library"; context.insertBefore(bookLink, crumbs);
-          dom$homeLink = bookLink;
-        } else {
-          var placeBook = function () { var had = document.activeElement === bookLink; head.insertBefore(bookLink, narrow.matches ? toolbar : null); if (had) bookLink.focus(); };
-          placeBook(); narrow.addEventListener("change", placeBook);
-          cleanup.push(function () { narrow.removeEventListener("change", placeBook); });
-        }
-      }
+      var bookLink = dom$homeLink = element("a", "bp-dag-book", "Library");
+      bookLink.href = safeHref(view.book) || currentBundle.url; context.insertBefore(bookLink, crumbs);
       host.appendChild(head);
 
       var body = dom$body = element("div", "bp-dag-body"), main = element("div", "bp-dag-main");
@@ -797,10 +768,8 @@
         "use Control or Command plus scroll to zoom, and use arrow keys between node buttons.");
       dom$canvas = element("canvas", "bp-dag-canvas"); dom$canvas.setAttribute("aria-hidden", "true");
       dom$nodeLayer = element("div", "bp-dag-node-layer"); dom$density = element("div", "bp-dag-density"); dom$density.hidden = true;
-      if (navigation) {
-        dom$mapContext = element("div", "bp-map-context"); dom$mapKey = element("div", "bp-map-key");
-        dom$stage.appendChild(dom$mapContext); dom$stage.appendChild(dom$mapKey);
-      }
+      dom$mapContext = element("div", "bp-map-context"); dom$mapKey = element("div", "bp-map-key");
+      dom$stage.appendChild(dom$mapContext); dom$stage.appendChild(dom$mapKey);
       dom$empty = element("div", "bp-dag-empty", data.nodes.length ? "No nodes match these controls." :
         "This roadmap has no articles yet."); dom$empty.hidden = true;
       dom$stage.appendChild(dom$canvas); dom$stage.appendChild(dom$nodeLayer);
@@ -817,23 +786,21 @@
       dom$inventory.appendChild(inventoryHead); dom$inventory.appendChild(dom$inventoryScroll); dom$inventory.appendChild(dom$loadMore);
       main.appendChild(dom$inventory); body.appendChild(main);
 
-      dom$inspector = element("aside", "bp-dag-inspector bp-reading-pane"); dom$inspector.setAttribute("aria-label", navigation ? "Mathematical reading" : "Node inspector");
-      dom$sheetHandle = button("bp-dag-sheet-handle", navigation ? "Reading" : "Graph details", navigation ? "Toggle mathematical reading" : "Toggle graph details");
+      dom$inspector = element("aside", "bp-dag-inspector bp-reading-pane"); dom$inspector.setAttribute("aria-label", "Mathematical reading");
+      dom$sheetHandle = button("bp-dag-sheet-handle", "Reading", "Toggle mathematical reading");
       dom$sheetHandle.setAttribute("aria-expanded", "false");
       dom$inspectorInner = element("div", "bp-dag-inspector-inner");
       dom$inspectorInner.id = "bp-dag-inspector-content-" + instance;
       dom$sheetHandle.setAttribute("aria-controls", dom$inspectorInner.id);
       dom$inspector.appendChild(dom$sheetHandle);
       dom$inspector.appendChild(dom$inspectorInner); body.appendChild(dom$inspector); host.appendChild(body);
-      if (navigation) {
-        dom$readingContext = element("div", "bp-reading-context");
-        dom$readingBody = element("article", "bp-reading-body md-typeset");
-        dom$readingNeighbors = element("section", "bp-reading-neighbors");
-        dom$inspectorInner.appendChild(dom$readingContext);
-        dom$inspectorInner.appendChild(dom$readingBody);
-        dom$inspectorInner.appendChild(dom$readingNeighbors);
-        navigation.bindReader(dom$readingBody);
-      }
+      dom$readingContext = element("div", "bp-reading-context");
+      dom$readingBody = element("article", "bp-reading-body md-typeset");
+      dom$readingNeighbors = element("section", "bp-reading-neighbors");
+      dom$inspectorInner.appendChild(dom$readingContext);
+      dom$inspectorInner.appendChild(dom$readingBody);
+      dom$inspectorInner.appendChild(dom$readingNeighbors);
+      navigation.bindReader(dom$readingBody);
       dom$announcement = element("p", "bp-dag-sr-only"); dom$announcement.setAttribute("aria-live", "polite"); host.appendChild(dom$announcement);
       dom$ctx = dom$canvas.getContext("2d");
       // Reset the probe first: a rejected site font must not inherit an earlier 11px font.
@@ -853,52 +820,10 @@
       });
       return list;
     }
-    function typeset(container) { if (window.AutoformMath) window.AutoformMath.refresh(container); }
     function renderNavigation() {
       if (!dom$navigationInner) return;
-      typeset(dom$navigationInner); dom$navigationInner.textContent = ""; dom$navigationNodes = new Map();
-      if (navigation && sharedIndex) { renderOutline(); return; }
-      if (intro) { if (!ui$introInSheet) dom$navigationInner.appendChild(intro); } else {
-      // The h1 names the current scope, so the rail's trail lists only its ancestors.
-      if (trail.length > 1) dom$navigationInner.appendChild(trailList(trail.slice(0, -1), "bp-dag-navigation-path"));
-      dom$navigationInner.appendChild(element("h1", "bp-dag-navigation-title", data.title || "Mathematics"));
-      if (view.summary) dom$navigationInner.appendChild(element("p", "bp-dag-navigation-summary", view.summary));
-      dom$navigationInner.appendChild(element("p", "bp-dag-navigation-counts", plural(data.nodes.length, atlas ? "topic" : "item",
-        atlas ? "topics" : "items") + " · " + plural(data.edge_count || data.edges.length, "dependency", "dependencies")));
-      }
-
-      var visible = data.nodes.slice(0, ui$navigationLimit), groups = new Map();
-      visible.forEach(function (node) {
-        var label = node.area || (atlas ? "Other mathematics" : "Inside this scope");
-        if (!groups.has(label)) groups.set(label, []); groups.get(label).push(node);
-      });
-      groups.forEach(function (nodes, label) {
-        var section = element("section", "bp-dag-navigation-group");
-        if (groups.size > 1) section.appendChild(element("h2", "", label));
-        var list = element("ul", "bp-dag-navigation-list");
-        nodes.forEach(function (node) {
-          var item = element("li"), href = safeHref(node.url), control;
-          if (href) { control = element("a", "bp-dag-navigation-link"); control.href = href; }
-          else {
-            control = button("bp-dag-navigation-link", "");
-            control.addEventListener("click", function () { activateNode(node, true); });
-          }
-          control.dataset.navigationNodeId = node.id;
-          control.appendChild(element("span", "", node.title));
-          // A scope counts its items; a leaf shows its status as a swatch, so the rows end evenly.
-          var mark = node.kind === "scope" ? element("span", "bp-dag-navigation-meta", (node.member_count || 0).toLocaleString()) : swatch(node.status);
-          if (node.kind !== "scope") { mark.title = statusLabel(node.status); mark.setAttribute("role", "img"); mark.setAttribute("aria-label", mark.title); }
-          control.appendChild(mark);
-          item.appendChild(control); list.appendChild(item); dom$navigationNodes.set(node.id, control);
-        });
-        section.appendChild(list); dom$navigationInner.appendChild(section);
-      });
-      if (visible.length < data.nodes.length) {
-        var more = button("bp-dag-navigation-more", "Show " + Math.min(50, data.nodes.length - visible.length) + " more");
-        more.addEventListener("click", function () { ui$navigationLimit += 50; renderNavigation(); });
-        dom$navigationInner.appendChild(more);
-      }
-      syncNavigationSelection();
+      dom$navigationInner.replaceChildren(); dom$navigationNodes = new Map();
+      if (sharedIndex) renderOutline();
     }
 
     function syncNavigationSelection() {
@@ -979,7 +904,6 @@
         else if (event.key === "-") { zoomAt(.82, dom$stage.clientWidth / 2, dom$stage.clientHeight / 2); event.preventDefault(); }
         else if (event.key === "0") { fit(); event.preventDefault(); }
       });
-      if (!navigation) { globalListen(window, "hashchange", applyLocation); globalListen(window, "popstate", applyLocation); }
       globalListen(document, "keydown", function (event) {
         var target = event.target, own = target === dom$search;
         if (!own && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || "") || target.isContentEditable)) return;
@@ -1000,7 +924,7 @@
 
     function statusLabel(key) { return palette[key] && palette[key].label ? palette[key].label : key.replace(/_/g, " "); }
     function renderStatusFields() {
-      dom$statusFieldset.replaceChildren(element("legend", "", navigation ? "Formalization status" : "Statuses in this view"));
+      dom$statusFieldset.replaceChildren(element("legend", "", "Formalization status"));
       dom$statusInputs.clear();
       presentStatuses.forEach(function (key) {
         var label = element("label", "bp-dag-check"), input = element("input");
@@ -1042,7 +966,7 @@
         data.nodes.length && data.nodes.every(function (node) { return node._region; }));
     }
     function geometry() {
-      if (!navigation || !mapAllowed) return null;
+      if (!mapAllowed) return null;
       var compact = compactRegions();
       if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family) {
         scene = layoutGraph(data.nodes.map(function (node) { return {id: node.id, width: compact ? 312 : node.width,
@@ -1052,19 +976,7 @@
       return scene;
     }
     function world(node) {
-      var current = geometry(); if (current && current.nodes.has(node.id)) return current.nodes.get(node.id);
-      if (ui$orientation === "tb" && !atlas) {
-        if (node.isolated) {
-          var mobileColumns = dom$stage.clientWidth < 540 ? 2 : 3;
-          return {x: (node._isolateIndex % mobileColumns) * (NODE_W + 20),
-            y: mobileIsolateBase + Math.floor(node._isolateIndex / mobileColumns) * (NODE_H + 22),
-            w: node.width, h: node.height};
-        }
-        var row = Number.isFinite(node.row) ? node.row : Math.round(node.y / 66);
-        var column = Number.isFinite(node.column) ? node.column : Math.round(node.x / 312);
-        return {x: row * (NODE_W + 36), y: column * (NODE_H + 72), w: node.width, h: node.height};
-      }
-      return {x: node.x, y: node.y, w: node.width, h: node.height};
+      return geometry().nodes.get(node.id);
     }
     function screen(node) {
       var box = world(node), scale = ui$transform.scale;
@@ -1142,9 +1054,6 @@
     }
     function resize() {
       syncSheetAccessibility();
-      if (intro && ui$introInSheet !== sheetLayout()) {
-        ui$introInSheet = !ui$introInSheet; renderNavigation(); if (!ui$selected) renderInspector(); markIntro();
-      }
       if (!dom$canvas || !dom$stage.clientWidth || !dom$stage.clientHeight) return;
       host.classList.toggle("bp-dag-compact-regions", compactRegions());
       var ratio = Math.min(2, window.devicePixelRatio || 1);
@@ -1155,27 +1064,27 @@
       if (firstResize || changed) { firstResize = false; fit(); } else if (ui$mode === "graph") draw();
     }
     function fit() {
+      if (!mapAllowed) return;
       calculateActive(); var nodes = ui$active.length ? ui$active : data.nodes; if (!nodes.length) return;
+      // Fit a bounded authored-area overview to its cards, not a peripheral
+      // return path. Never shrink the repository or relax the readable floor.
+      var overview = navigation && !compactRegions() && nodes.length <= 12 && nodes.every(function (node) { return node._region; });
       var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       nodes.forEach(function (node) {
         var box = world(node); minX = Math.min(minX, box.x); minY = Math.min(minY, box.y);
         maxX = Math.max(maxX, box.x + box.w); maxY = Math.max(maxY, box.y + box.h);
       });
-      if (!navigation && atlas) (data.regions || []).forEach(function (region) {
-        minX = Math.min(minX, region.x); minY = Math.min(minY, region.y);
-        maxX = Math.max(maxX, region.x + region.width); maxY = Math.max(maxY, region.y + region.height);
-      });
       var current = geometry();
-      if (current) current.routes.forEach(function (route) {
+      if (current && !overview) current.routes.forEach(function (route) {
         if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target)) return;
         minX = Math.min(minX, route.bounds.x); minY = Math.min(minY, route.bounds.y);
         maxX = Math.max(maxX, route.bounds.x + route.bounds.w); maxY = Math.max(maxY, route.bounds.y + route.bounds.h);
       });
-      var compact = compactRegions(), pad = navigation ? 36 : 54, side = compact ? 18 : pad,
+      var compact = compactRegions(), pad = 36, side = compact ? 18 : pad,
         top = compact ? 52 : pad, bottom = compact ? 44 : pad, width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY);
       var fitted = Math.min((dom$stage.clientWidth - side * 2) / width,
         (dom$stage.clientHeight - top - bottom) / height);
-      var readableFloor = navigation ? .9 : atlas ? MIN_ATLAS_SCALE : MIN_READABLE_SCALE;
+      var readableFloor = .9;
       ui$readableCrop = fitted < readableFloor;
       ui$transform.scale = clamp(Math.max(fitted, readableFloor), MIN_SCALE, 1.35);
       ui$transform.x = ui$readableCrop && !compact ? pad - minX * ui$transform.scale :
@@ -1189,12 +1098,9 @@
     function freeArea() {
       var band = dom$stage.clientHeight, left = 0, right = dom$stage.clientWidth, drawer = dom$inspector;
       if (compactRegions() && (!sheetLayout() || !host.classList.contains("bp-dag-sheet-open"))) return {top: 52, band: Math.max(NODE_H, band - 96), left: 18, right: right - 18};
-      if (navigation && !sheetLayout()) return {band: band, left: left, right: right};
+      if (!sheetLayout()) return {band: band, left: left, right: right};
       if (host.classList.contains("bp-dag-sheet-open")) {
-        var start = drawer.offsetLeft - dom$stage.parentNode.offsetLeft, end = start + drawer.offsetWidth;
         if (sheetLayout()) band = Math.max(NODE_H, Math.min(band, drawer.offsetTop));
-        else if (start > right - end) right = Math.max(NODE_W, Math.min(right, start));
-        else left = Math.min(Math.max(0, end), right - NODE_W);
       }
       return {band: band, left: left, right: right};
     }
@@ -1207,14 +1113,6 @@
       if (!node) return; var box = screen(node);
       if (box.x < 12 || box.y < 12 || box.x + box.w > dom$stage.clientWidth - 12 || box.y + box.h > dom$stage.clientHeight - 12) center(node, .82);
     }
-    // A click leaves the map where it is unless the details it opens cover the node; then it pans just clear.
-    function reveal(node) {
-      var box = screen(node), free = freeArea(), pad = 12;
-      if (free.right < dom$stage.clientWidth && box.x + box.w > free.right) ui$transform.x += free.right - pad - box.x - box.w;
-      if (free.left > 0 && box.x < free.left) ui$transform.x += free.left + pad - box.x;
-      if (free.band < dom$stage.clientHeight && box.y + box.h > (free.top || 0) + free.band) ui$transform.y += (free.top || 0) + free.band - pad - box.y - box.h;
-      schedule();
-    }
     function zoomAt(factor, x, y) {
       var old = ui$transform.scale, next = clamp(old * factor, MIN_SCALE, 4);
       ui$transform.x = x - (x - ui$transform.x) * next / old;
@@ -1225,18 +1123,10 @@
       calculateActive(); var ctx = dom$ctx, ratio = Math.min(2, window.devicePixelRatio || 1);
       var width = dom$stage.clientWidth, height = dom$stage.clientHeight;
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height);
-      var current = navigation && geometry(); if (navigation && !current) return;
-      if (atlas && !navigation) drawRegions(ctx);
+      var current = geometry(); if (!current) return;
       var visible = ui$active.filter(function (node) { return inViewport(screen(node), 80); });
-      var edgeIndexes = new Set();
-      if (atlas && ui$selected) {
-        (incident.get(ui$selected.id) || []).forEach(function (index) { edgeIndexes.add(index); });
-      } else {
-        visible.forEach(function (node) { (incident.get(node.id) || []).forEach(function (index) { edgeIndexes.add(index); }); });
-      }
       var spotlight = atlas && ui$selected ? atlasSpotlight() : pathSpotlight();
-      if (navigation) {
-        current.routes.forEach(function (route) {
+      current.routes.forEach(function (route) {
           if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target)) return;
           var bounds = {x: route.bounds.x * ui$transform.scale + ui$transform.x, y: route.bounds.y * ui$transform.scale + ui$transform.y,
             w: route.bounds.w * ui$transform.scale, h: route.bounds.h * ui$transform.scale};
@@ -1250,38 +1140,9 @@
             painted = Object.assign({}, route, {points: points, radii: radii});
           }
           drawRoute(ctx, painted, highlighted);
-        });
-      } else edgeIndexes.forEach(function (index) {
-        var edge = data.edges[index]; if (!ui$activeIds.has(edge.source) || !ui$activeIds.has(edge.target)) return;
-        var source = byId.get(edge.source), target = byId.get(edge.target); if (!source || !target) return;
-        var a = screen(source), b = screen(target);
-        if (!inViewport({x: Math.min(a.x, b.x), y: Math.min(a.y, b.y),
-          w: Math.abs(b.x - a.x) + Math.max(a.w, b.w), h: Math.abs(b.y - a.y) + Math.max(a.h, b.h)}, 40)) return;
-        var highlighted = !spotlight ||
-          (spotlight.before.has(edge.source) && spotlight.before.has(edge.target)) ||
-          (spotlight.after.has(edge.source) && spotlight.after.has(edge.target));
-        if (edge.statement) drawEdge(ctx, a, b, false, highlighted, edge.statement, edge.proof ? -4 : 0);
-        if (edge.proof) drawEdge(ctx, a, b, true, highlighted, edge.proof, edge.statement ? 4 : 0);
       });
       visible.forEach(function (node) { drawPlate(ctx, node, screen(node), !spotlight || spotlight.nodes.has(node.id)); });
       updateOverlays(visible, spotlight);
-    }
-    function drawRegions(ctx) {
-      var regionColors = isDark() ?
-        ["#17233a", "#24203b", "#16312d", "#332719", "#2d1f2a", "#1d2d3a", "#2c2b20"] :
-        ["#eaf1fb", "#f0ebfb", "#e8f5f0", "#fbf2df", "#f8eaf0", "#e8f3f8", "#f4f2df"];
-      (data.regions || []).forEach(function (region, index) {
-        var box = {x: region.x * ui$transform.scale + ui$transform.x,
-          y: region.y * ui$transform.scale + ui$transform.y,
-          w: region.width * ui$transform.scale, h: region.height * ui$transform.scale};
-        if (!inViewport(box, 60)) return;
-        ctx.save(); ctx.fillStyle = regionColors[index % regionColors.length];
-        ctx.strokeStyle = isDark() ? "#35435c" : "#b9c7da"; ctx.lineWidth = 1.2;
-        rounded(ctx, box.x, box.y, box.w, box.h, 18); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = isDark() ? "#d9e3f2" : "#30445f"; ctx.font = "700 13px " + family;
-        ctx.textAlign = "left"; ctx.fillText(region.label + " · " + region.count, box.x + 13, box.y + 21);
-        ctx.restore();
-      });
     }
     function atlasSpotlight() {
       var before = new Set([ui$selected.id]), after = new Set([ui$selected.id]);
@@ -1305,30 +1166,6 @@
       }
       if (tiny) ctx.fillRect(box.x, box.y, Math.max(3, box.w), Math.max(3, box.h));
       else { rounded(ctx, box.x, box.y, box.w, box.h, 7 * ui$transform.scale); ctx.fill(); ctx.stroke(); }
-      ctx.restore();
-    }
-    function drawEdge(ctx, a, b, dashed, highlighted, count, offset) {
-      var horizontal = ui$orientation === "lr";
-      var ax = horizontal ? a.x + a.w : a.x + a.w / 2 + offset;
-      var ay = horizontal ? a.y + a.h / 2 + offset : a.y + a.h;
-      var bx = horizontal ? b.x : b.x + b.w / 2 + offset;
-      var by = horizontal ? b.y + b.h / 2 + offset : b.y;
-      ctx.save(); ctx.globalAlpha = highlighted ? .58 : .065; ctx.strokeStyle = isDark() ? "#a8b0bb" : "#64748b";
-      ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = highlighted ? 1.35 : 1; if (dashed) ctx.setLineDash([5, 5]);
-      ctx.beginPath(); ctx.moveTo(ax, ay);
-      if (horizontal) { var mx = ax + (bx - ax) * .5; ctx.bezierCurveTo(mx, ay, mx, by, bx, by); }
-      else { var my = ay + (by - ay) * .5; ctx.bezierCurveTo(ax, my, bx, my, bx, by); }
-      ctx.stroke(); ctx.setLineDash([]);
-      if (ui$transform.scale > .18) {
-        ctx.beginPath();
-        if (horizontal) { ctx.moveTo(bx, by); ctx.lineTo(bx - 6, by - 3.5); ctx.lineTo(bx - 6, by + 3.5); }
-        else { ctx.moveTo(bx, by); ctx.lineTo(bx - 3.5, by - 6); ctx.lineTo(bx + 3.5, by - 6); }
-        ctx.closePath(); ctx.fill();
-      }
-      if (count > 1 && ui$transform.scale > .32) {
-        ctx.globalAlpha = highlighted ? .82 : .2; ctx.font = Math.max(11, 10 * ui$transform.scale) + "px " + family;
-        ctx.textAlign = "center"; ctx.fillText("×" + count, (ax + bx) / 2, (ay + by) / 2 - 4);
-      }
       ctx.restore();
     }
     function drawRoute(ctx, route, highlighted) {
@@ -1428,7 +1265,7 @@
         control.tabIndex = node.id === tabId ? 0 : -1;
       });
       dom$density.hidden = !ui$readableCrop && !(visible.length && ui$transform.scale < .34);
-      dom$density.textContent = ui$readableCrop ? "Pan or " + (navigation ? "Results" : "Contents") + " to see all " + ui$active.length + " items" :
+      dom$density.textContent = ui$readableCrop ? "Pan or Results to see all " + ui$active.length + " items" :
         (visible.length && ui$transform.scale < .34 ? "Zoom in to reveal " + visible.length + " node labels" : "");
     }
     function makeNodeControl(node) {
@@ -1444,13 +1281,11 @@
       content.appendChild(element("span", "bp-dag-node-relation", ""));
       if (content !== control) control.appendChild(content);
       control.addEventListener("click", function (event) { event.stopPropagation(); activateNode(node, false); });
-      if (!navigation) control.addEventListener("dblclick", function () { var href = safeHref(node.url); if (href) window.location.href = href; });
       control.addEventListener("keydown", function (event) {
         if (/^Arrow(Left|Right|Up|Down)$/.test(event.key)) {
           var next = nearest(node, event.key);
           if (next) {
             event.preventDefault();
-            if (!navigation) selectNode(next, ui$selected ? "replace" : "push", false);
             center(next, .7);
             focusNodeControl(next);
           }
@@ -1517,24 +1352,11 @@
       return terms.length > 1 && terms.every(function (term) { return all.indexOf(term) >= 0; }) ? 12 : 0;
     }
     function ensureGlobalSearch() {
-      if (navigation) return navigation.loadIndex().then(function (loaded) { useIndex(loaded); if (ui$query) renderSearch(); }).catch(function (error) {
-        ui$searchError = error.message; if (ui$query) renderSearch();
-      });
-      var source = host.getAttribute("data-catalog-src");
-      if (!source || ui$searchPromise || ui$searchNodes !== data.nodes) return ui$searchPromise;
+      if (sharedIndex) return Promise.resolve(sharedIndex);
+      if (ui$searchPromise) return ui$searchPromise;
       ui$searchLoading = true;
-      ui$searchPromise = fetch(source, {credentials: "same-origin"}).then(function (response) {
-        if (!response.ok) throw new Error("HTTP " + response.status);
-        return response.json().then(function (index) { return {index: index, url: response.url}; });
-      }).then(function (loaded) {
-        if (!loaded.index || loaded.index.schema !== "autoform-dag-search/v1" || !Array.isArray(loaded.index.nodes))
-          throw new Error("unsupported search index");
-        loaded.index.nodes.forEach(function (node, index) {
-          node._index = index;
-          if (node.url) node.url = new URL(node.url, loaded.url).href;
-        });
-        ui$searchNodes = loaded.index.nodes; ui$searchCacheQuery = null; ui$searchError = null;
-        dom$search.placeholder = "Search " + loaded.index.nodes.length.toLocaleString() + " roadmap entries";
+      ui$searchPromise = navigation.loadIndex().then(function (loaded) {
+        useIndex(loaded); ui$searchError = null;
       }).catch(function (error) {
         ui$searchError = error.message;
       }).then(function () {
@@ -1546,18 +1368,8 @@
         if (inside) (Array.from(dom$searchResults.querySelectorAll("button")).find(function (control) {
           return (control.dataset.resultId || "more") === key;
         }) || dom$search).focus();
-      });
+      }).finally(function () { ui$searchPromise = null; });
       return ui$searchPromise;
-    }
-    function redirectLegacyFocus() {
-      if (navigation) return;
-      var requested = locationParams().get("node");
-      if (!requested || byId.has(requested) || !host.getAttribute("data-catalog-src")) return;
-      ensureGlobalSearch().then(function () {
-        var target = ui$searchNodes.find(function (node) { return node.id === requested; });
-        var href = target && safeHref(target.url);
-        if (href && new URL(href, window.location.href).href !== window.location.href) window.location.replace(href);
-      });
     }
     function rankMatches(nodes, query) {
       return nodes.map(function (node) {
@@ -1617,34 +1429,15 @@
       var first = !dom$searchResults.hidden && dom$searchResults.querySelector("button");
       if (first) first.focus(); return Boolean(first);
     }
-    function activateNode(node, moveCamera) {
-      if (navigation) {
-        if (node._region) {
-          navigation.checkpoint();
-          var keyboard = document.activeElement && document.activeElement.dataset.autoformNodeId === node.id;
-          ui$area = node._region; ui$requestedNode = null; updateProjection(); setSheet(false, null);
-          refresh(true); firstResize = true; resize(); writeLocation("push");
-          if (keyboard && ui$active.length) focusNodeControl(ui$active.find(function (item) { return item.area === ui$area && !item._region; }) || ui$active[0]); return;
-        }
-        navigation.navigateNode(recordId(node), {history: "push", focus: "reading"}); closeSearch(); return;
+    function activateNode(node) {
+      if (node._region) {
+        navigation.checkpoint();
+        var keyboard = document.activeElement && document.activeElement.dataset.autoformNodeId === node.id;
+        ui$area = node._region; ui$requestedNode = null; updateProjection(); setSheet(false, null);
+        refresh(true); firstResize = true; resize(); writeLocation("push");
+        if (keyboard && ui$active.length) focusNodeControl(ui$active.find(function (item) { return item.area === ui$area && !item._region; }) || ui$active[0]); return;
       }
-      var local = byId.get(node.id); if (local) node = local;
-      var href = safeHref(node.url);
-      if (!local) { if (href) window.location.href = href; return; }
-      if (node.kind === "boundary" && href) { window.location.href = href; return; }
-      if (node.kind === "scope" && ui$selected === node && href) { window.location.href = href; return; }
-      chooseNode(node, moveCamera);
-    }
-    function chooseNode(node, moveCamera) {
-      closeSearch(); if (!ui$selectedStatuses.has(node.status)) ui$selectedStatuses.add(node.status);
-      if (node.isolated) ui$showIsolated = true; ui$activeDirty = true;
-      ui$mode = ui$mapAllowed ? "graph" : "list";
-      selectNode(node, "push", moveCamera && ui$mapAllowed);
-      if (ui$mapAllowed) focusNodeControl(node);
-      else requestAnimationFrame(function () {
-        var target = dom$inspectorInner.querySelector(".bp-dag-open") || dom$inspectorInner.querySelector("a, button");
-        if (target) target.focus();
-      });
+      navigation.navigateNode(recordId(node), {history: "push", focus: "reading"}); closeSearch();
     }
     function focusNodeControl(node) {
       requestAnimationFrame(function () { requestAnimationFrame(function () {
@@ -1652,20 +1445,11 @@
       }); });
     }
 
-    function selectNode(node, historyMode, moveCamera) {
-      if (!node) return; if (!ui$selected || ui$selected.id !== node.id) ui$direction = "both";
-      ui$selected = node; ui$activeDirty = true; ui$spotlight = null;
-      setSheet(true, node);
-      syncControls(); renderInspector(); renderInventory(false);
-      dom$announcement.textContent = "Selected " + node.title + ", " + statusLabel(node.status);
-      if (historyMode) writeLocation(historyMode); if (moveCamera) center(node, .82); else reveal(node);
-    }
     function clearSelection(updateHistory, returnFocus) {
       if (navigation && updateHistory) navigation.checkpoint();
       var refit = ui$direction !== "both", cleared = ui$selected;
       ui$selected = null; ui$direction = "both"; ui$activeDirty = true; ui$spotlight = null;
-      if (!navigation) ui$requestedNode = null;
-      setSheet(navigation && !sheetLayout(), null);
+      setSheet(navigation && !sheetLayout() && !ui$overviewOnly, null);
       syncNavigationSelection(); renderInspector(); renderInventory(false); if (refit) requestAnimationFrame(fit); else schedule();
       if (updateHistory) writeLocation("push");
       var chosen = returnFocus && cleared && (ui$mode === "list" ? dom$inventoryRows.get(cleared.id) : overlays.get(cleared.id));
@@ -1680,17 +1464,13 @@
       dom$sheetHandle.setAttribute("aria-expanded", String(Boolean(open)));
       syncSheetAccessibility();
     }
-    function sheetLayout() { return Boolean(window.matchMedia && window.matchMedia(navigation ? "(max-width: 720px)" : "(max-width: 680px)").matches); }
-    // The collapsed sheet is inert, so phones name the page with a hidden heading.
-    function markIntro() {
-      if (!intro) return;
-      if (introHeading) introHeading.setAttribute("aria-hidden", String(ui$introInSheet));
-      if (!dom$pageHeading) { dom$pageHeading = element("h1", "bp-dag-sr-only", introTitle); host.prepend(dom$pageHeading); }
-      dom$pageHeading.hidden = !ui$introInSheet;
-    }
+    function sheetLayout() { return Boolean(window.matchMedia && window.matchMedia("(max-width: 720px)").matches); }
     function syncSheetAccessibility() {
       if (!dom$inspectorInner || !dom$sheetHandle) return;
-      var collapsed = !host.classList.contains("bp-dag-sheet-open") && (!navigation || sheetLayout() || Boolean(ui$area));
+      var opened = host.classList.contains("bp-dag-sheet-open");
+      var collapsed = !opened && (sheetLayout() || Boolean(ui$area) || ui$overviewOnly);
+      dom$sheetHandle.textContent = opened && !sheetLayout() && (ui$area || ui$overviewOnly) ? "×" : "Reading";
+      dom$sheetHandle.title = opened ? "Close reading" : "Open reading";
       if (collapsed) {
         if (dom$inspectorInner.contains(document.activeElement)) dom$sheetHandle.focus();
         dom$inspectorInner.setAttribute("inert", ""); dom$inspectorInner.setAttribute("aria-hidden", "true");
@@ -1703,9 +1483,6 @@
         dom$pageHeading.hidden = !collapsed;
       }
     }
-    function setDirection(direction) {
-      ui$direction = direction; ui$activeDirty = true; writeLocation("push"); refresh(true); fit();
-    }
     function revealAll() {
       ui$selectedStatuses = new Set(presentStatuses); ui$showIsolated = true; ui$direction = "both";
       ui$activeDirty = true; writeLocation("replace"); refresh(true); fit();
@@ -1716,8 +1493,7 @@
       dom$statusInputs.forEach(function (input, key) { if (input.checked) ui$selectedStatuses.add(key); });
       if (ui$selected && !ui$selectedStatuses.has(ui$selected.status)) {
         ui$selected = null; ui$direction = "both"; ui$spotlight = null;
-        if (!navigation) ui$requestedNode = null;
-        setSheet(navigation && !sheetLayout(), null);
+        setSheet(navigation && !sheetLayout() && !ui$overviewOnly, null);
         dom$announcement.textContent = "Selection cleared because its status is hidden.";
       }
       ui$activeDirty = true; writeLocation("replace"); refresh(true);
@@ -1734,84 +1510,11 @@
       if (updateHistory) writeLocation("replace");
     }
 
-    function renderInspector() {
-      if (navigation && ui$reading) { renderReaderContext(); return; }
-      dom$inspectorInner.replaceChildren();
-      var node = ui$selected;
-      dom$sheetHandle.textContent = node ? node.title : introTitle || "Graph details";
-      if (!node) {
-        if (intro) { if (ui$introInSheet) dom$inspectorInner.appendChild(intro); }
-        else {
-          dom$inspectorInner.appendChild(element("h2", "", data.title || "Dependencies"));
-          if (view.summary) dom$inspectorInner.appendChild(element("p", "bp-dag-summary", view.summary));
-        }
-        dom$inspectorInner.appendChild(element("p", "bp-dag-overview", plural(data.nodes.length, atlas ? "topic" : "node", atlas ? "topics" : "nodes") + " · " +
-          plural(data.edge_count || data.edges.length, "authored dependency", "authored dependencies") + "."));
-        if (atlas && !data.edges.length) dom$inspectorInner.appendChild(element("p", "bp-dag-overview", "No dependencies are authored between these topics."));
-        if (atlas && (data.regions || []).length) distribution("Mathematical regions", data.regions.map(function (region) { return [region.label, region.count]; }));
-        distribution(atlas ? "Topics by least-complete status" : "Nodes by status", presentStatuses.map(function (key) { return [statusLabel(key), statusCounts.get(key), key]; }));
-        if (statusCounts.has("inventory_checked") || statusCounts.has("inventory_pending")) dom$inspectorInner.appendChild(element("p", "bp-dag-overview", "Inventory statuses are neutral: an inventory records inspection, not a mathematical proof."));
-        return;
-      }
-      var header = element("div", "bp-dag-inspector-header");
-      if (node.declaration) header.appendChild(element("p", "bp-dag-kicker", node.declaration + (node.area ? " · " + node.area : "")));
-      header.appendChild(element("h2", "", node.title));
-      var close = button("bp-dag-close", "×", "Close details");
-      close.addEventListener("click", function () {
-        setSheet(false, ui$selected);
-        var chosen = ui$mode === "list" ? dom$inventoryRows.get(node.id) : overlays.get(node.id); if (chosen) chosen.focus();
-      }); header.appendChild(close); dom$inspectorInner.appendChild(header);
-      var entries = node.status_counts || [], inventoryOnly = node.kind === "scope" && entries.length && entries.every(function (entry) { return palette[entry[0]] && palette[entry[0]].neutral; });
-      var actions = element("div", "bp-dag-actions"), mark = element("span", "bp-dag-status-pill", inventoryOnly ? "inventory only" : statusLabel(node.status)), color = colors(node);
-      mark.style.setProperty("--dag-pill-fill", color.fill); mark.style.setProperty("--dag-pill-stroke", color.stroke); actions.appendChild(mark);
-      var href = safeHref(node.url);
-      if (href) { var open = element("a", "bp-dag-open", node.kind === "scope" || node.kind === "boundary" ? "Explore topic" : "Open article"); open.href = href; actions.appendChild(open); }
-      dom$inspectorInner.appendChild(actions);
-      if (node.lean) dom$inspectorInner.appendChild(element("p", "bp-dag-lean", "Lean: " + node.lean + (node.lean_more ? " and " + node.lean_more + " more" : "")));
-      if (node.summary) dom$inspectorInner.appendChild(element("p", "bp-dag-summary", node.summary));
-      if (node.kind === "scope" && node.internal_dependency_count) dom$inspectorInner.appendChild(element("p", "bp-dag-overview", plural(node.internal_dependency_count, "authored dependency connects", "authored dependencies connect") + " results inside this topic."));
-      var before = prerequisites.get(node.id) || [], after = dependents.get(node.id) || [], path = pathSpotlight();
-      if (before.length || after.length) {
-        var pivots = element("div", "bp-dag-pivots"); pivots.setAttribute("role", "group"); pivots.setAttribute("aria-label", "Paths");
-        [["All", "both", 1], ["Prerequisites " + (path.before.size - 1), "prerequisites", path.before.size - 1], ["Dependents " + (path.after.size - 1), "dependents", path.after.size - 1]].forEach(function (entry) {
-          var pivot = button("bp-dag-pivot", entry[0]); pivot.disabled = !entry[2]; pivot.setAttribute("aria-pressed", String(ui$direction === entry[1]));
-          pivot.addEventListener("click", function () { setDirection(entry[1]); }); pivots.appendChild(pivot);
-        }); dom$inspectorInner.appendChild(pivots);
-      }
-      appendRelations("Direct prerequisites", before); appendRelations("Direct dependents", after);
-      if (entries.length > 1 || node.member_count > 1) distribution(node.member_count + " items in this scope", entries.map(function (entry) { return [statusLabel(entry[0]), entry[1], entry[0]]; }));
-    }
-    function distribution(title, rows) {
-      var section = element("section", "bp-dag-section"), list = element("div", "bp-dag-distribution"); section.appendChild(element("h3", "", title));
-      rows.forEach(function (row) {
-        var line = element("div", "bp-dag-distribution-row"), name = element("span", "bp-dag-distribution-label");
-        if (row[2]) name.appendChild(swatch(row[2])); name.appendChild(document.createTextNode(row[0])); line.appendChild(name);
-        line.appendChild(element("span", "", String(row[1]))); list.appendChild(line);
-      }); section.appendChild(list); dom$inspectorInner.appendChild(section);
-    }
-    function appendRelations(label, ids) {
-      if (!ids.length) return;
-      var section = element("section", "bp-dag-section"); section.appendChild(element("h3", "", label + " (" + ids.length + ")"));
-      var list = element("ul", "bp-dag-relation-list"), visible = 0;
-      var more = button("bp-dag-load-more", "");
-      function appendNextBatch() {
-        var next = Math.min(visible + RELATION_PAGE, ids.length);
-        ids.slice(visible, next).forEach(function (id) {
-          var related = byId.get(id); if (!related) return;
-          var item = element("li"), choose = button("bp-dag-relation-button", related.title);
-        choose.addEventListener("click", function () { activateNode(related, true); }); item.appendChild(choose); list.appendChild(item);
-        });
-        visible = next;
-        more.hidden = visible >= ids.length;
-        more.textContent = more.hidden ? "" : "Show " + Math.min(RELATION_PAGE, ids.length - visible) + " more";
-      }
-      more.addEventListener("click", function () { appendNextBatch(); typeset(list); }); appendNextBatch();
-      section.appendChild(list); section.appendChild(more); dom$inspectorInner.appendChild(section);
-    }
+    function renderInspector() { renderReaderContext(); }
 
     function inventoryNodes() {
       var query = ui$query.toLocaleLowerCase();
-      var pool = navigation && sharedIndex ? sharedIndex.nodes.filter(function (node) {
+      var pool = sharedIndex ? sharedIndex.nodes.filter(function (node) {
         if (ui$relationIds) return ui$relationIds.indexOf(node.id) >= 0;
         if (ui$mode === "sources") return node.navigation === "source";
         if (ui$mode === "regions") return false;
@@ -1828,11 +1531,12 @@
     function renderInventory(resetScroll) {
       if (!dom$inventoryList) return;
       var nodes = inventoryNodes(), visible = nodes.slice(0, ui$listLimit); dom$inventoryList.textContent = "";
-      var articles = navigation && nodes.some(function (node) { return node.catalog === "module"; });
+      var articles = nodes.some(function (node) { return node.catalog === "module"; });
       if (navigation && ui$mode !== "sources") dom$inventory.querySelector("h2").textContent = articles ? "Results & articles" : "Results";
       dom$inventoryRows = new Map();
       visible.forEach(function (node) {
         var item = element("li"), row = button("bp-dag-inventory-row", "");
+        row.dataset.inventoryNodeId = node.id;
         if (ui$selected && node.id === ui$selected.id) row.setAttribute("aria-current", "true");
         dom$inventoryRows.set(node.id, row);
         row.appendChild(element("span", "bp-dag-inventory-title", node.title));
@@ -1841,10 +1545,10 @@
         row.addEventListener("click", function () { activateNode(node, true); }); item.appendChild(row); dom$inventoryList.appendChild(item);
       });
       // A count, or "N of M" while a page or a filter shows fewer.
-      var shown = visible.length < nodes.length ? visible : nodes, total = navigation || shown === visible ? nodes : data.nodes;
+      var shown = visible.length < nodes.length ? visible : nodes, total = nodes;
       dom$inventorySummary.textContent = shown.length < total.length ? shown.length.toLocaleString() + " of " +
-        total.length.toLocaleString() : plural(total.length, navigation ? ui$mode === "sources" ? "source" : articles ? "article" : "result" : atlas ? "topic" : "item",
-          navigation ? ui$mode === "sources" ? "sources" : articles ? "articles" : "results" : atlas ? "topics" : "items");
+        total.length.toLocaleString() : plural(total.length, ui$mode === "sources" ? "source" : articles ? "article" : "result",
+          ui$mode === "sources" ? "sources" : articles ? "articles" : "results");
       if (ui$query && host.getAttribute("data-catalog-src")) {
         dom$inventorySummary.appendChild(document.createTextNode(" · ")); dom$inventorySummary.appendChild(dom$wholeSearch);
       }
@@ -1854,44 +1558,8 @@
       if (resetScroll && dom$inventoryScroll) dom$inventoryScroll.scrollTop = 0;
       else if (current) current.scrollIntoView({block: "nearest"});
     }
-    function inventoryKey() { return ui$mode + " " + Array.from(ui$selectedStatuses).sort().join(); }
-
-    function locationParams() { return new URLSearchParams(window.location.hash.replace(/^#/, "")); }
-    function applyLocation() {
-      var params = locationParams(), node = byId.get(params.get("node")) || null, direction = params.get("direction");
-      var listed = inventoryKey();
-      ui$selected = node;
-      ui$direction = node && /^(prerequisites|dependents|both)$/.test(direction || "") ? direction : "both";
-      var requested = params.get("status");
-      if (requested === "-") ui$selectedStatuses = new Set();
-      else if (requested) ui$selectedStatuses = new Set(requested.split(",").filter(function (key) {
-        return presentStatuses.indexOf(key) >= 0;
-      }));
-      else ui$selectedStatuses = new Set(presentStatuses);
-      ui$showIsolated = params.get("isolates") !== "0";
-      ui$mode = params.get("view") === "list" || !ui$mapAllowed ? "list" : "graph";
-      ui$activeDirty = true; ui$spotlight = null;
-      if (node) {
-        ui$selectedStatuses.add(node.status);
-        setSheet(true, node);
-      } else setSheet(false, null);
-      syncControls(); renderInspector(); renderInventory(inventoryKey() !== listed); schedule();
-      if (node) setTimeout(function () { center(node, .82); }, 0);
-    }
     function writeLocation(method) {
-      if (navigation) { if (navigation.checkpoint) navigation.checkpoint(method); return; }
-      var params = new URLSearchParams();
-      if (ui$selected) params.set("node", ui$selected.id);
-      if (ui$selected && ui$direction !== "both") params.set("direction", ui$direction);
-      if (ui$selectedStatuses.size !== presentStatuses.length) params.set("status",
-        ui$selectedStatuses.size ? Array.from(ui$selectedStatuses).join(",") : "-");
-      if (!ui$showIsolated) params.set("isolates", "0");
-      if (ui$mode === "list") params.set("view", "list");
-      var hash = params.toString();
-      var target = window.location.pathname + window.location.search + (hash ? "#" + hash : "");
-      var current = window.location.pathname + window.location.search + window.location.hash;
-      if (target === current) return;
-      window.history[method + "State"](null, "", target);
+      if (navigation.checkpoint) navigation.checkpoint(method);
     }
 
     syncControls();

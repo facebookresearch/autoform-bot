@@ -365,7 +365,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
         assert(following); return viewer.slice(start+4,start+4+following.index).trim();
       }
       const hooks={},app=setup(hooks),calls=[];
-      let alive=true,readingReady=Promise.resolve(),restoration=0,currentBundle,contextGraph,trail,firstResize,
+      let alive=true,readingReady=Promise.resolve(),restoration=0,currentBundle,contextGraph,data,trail,firstResize,
         restoring=false,checkpointTimer;
       let release,mathReady; function deferMath() { mathReady=new Promise(resolve=>{release=resolve;}); }
       const window=app.win,document=app.initial.doc,host=app.initial.host;
@@ -381,13 +381,13 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
       };
       // Supply the renderer's actual private lexical collaborators; executed source stays verbatim.
       let ui$selected=null,ui$filtersTouched,ui$area,ui$requestedNode,ui$selectedStatuses,ui$showIsolated,
-        ui$mode,ui$listLimit,ui$relationIds,ui$direction,ui$query,ui$transform,ui$activeDirty,ui$reading;
+        ui$mode,ui$listLimit,ui$relationIds,ui$direction,ui$query,ui$transform,ui$activeDirty,ui$reading,ui$overviewOnly,ui$outlineLimit;
       const dom$readingBody=refs.$readingBody,dom$search=refs.$search,dom$error=refs.$error,
         dom$breadcrumb=refs.$breadcrumb,dom$navigation=refs.$navigation,dom$inventoryScroll=refs.$inventoryScroll;
       let dom$outlineToggle;
-      const records=new Map(),byId=new Map(),overlays=new Map(),navigation=app.nav;
+      const records=new Map(),byId=new Map(),overlays=new Map(),dom$inventoryRows=new Map(),navigation=app.nav;
       const mapAllowed=true,presentStatuses=['planned'],palette={planned:{}},LIST_PAGE=100;
-      const updateProjection=()=>{},closeSearch=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
+      const updateProjection=()=>{data=contextGraph;},closeSearch=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
       const resize=()=>{},center=()=>{},centerIfHidden=()=>{},showError=()=>{},trailList=()=>[],routeTrail=()=>[],sheetLayout=()=>false;
       const requestAnimationFrame=callback=>setImmediate(callback);
       const applyRoute=eval('('+callback('applyRoute')+')');

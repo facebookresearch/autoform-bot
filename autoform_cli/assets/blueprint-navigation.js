@@ -6,6 +6,7 @@
  * a deliberate view/filter action without changing the canonical permalink. Snapshot fields are opaque.
  * declutterReader(root, representedScopeIds) hides duplicated pure child-scope indexes only in the
  * enhanced reader clone, after the renderer has supplied its actual semantic-outline coverage.
+ * readerIsOverview(root) conservatively recognizes that owned, navigation-only reading projection.
  */
 (function () {
   "use strict";
@@ -226,16 +227,31 @@
     function indexedNode(id) {
       return indexed.get(id) || typeof id === "string" && indexed.get(id.replace(/^(?:scope|boundary):/, "")) || null;
     }
+    function legacyHash(hash) {
+      var parameters = new URLSearchParams(hash), seen = new Set();
+      if (parameters.has("node")) return true;
+      var entries = Array.from(parameters);
+      return entries.length > 0 && entries.every(function (entry) {
+        var key = entry[0], value = entry[1]; if (seen.has(key)) return false; seen.add(key);
+        if (key === "view") return value === "graph" || value === "list";
+        if (key === "direction") return ["both", "prerequisites", "dependents"].indexOf(value) >= 0;
+        if (key === "isolates") return value === "0" || value === "1";
+        if (key === "status") return value === "-" || value.split(",").every(function (status) {
+          return /^(?:mathlib|fully_proved|proved|defined|conditional|can_prove|stated|can_state|not_ready|planned|inventory_checked|inventory_pending)$/.test(status);
+        });
+        return false;
+      });
+    }
     function selection(url, navigation) {
-      var hash = new URL(url).hash.slice(1), parameters = new URLSearchParams(hash);
+      var hash = new URL(url).hash.slice(1), parameters = new URLSearchParams(hash), legacy = legacyHash(hash);
       var explicit = navigation.nodeId && indexedNode(navigation.nodeId);
       var node = explicit || routes.get(url) || indexedNode(parameters.get("node"));
       var nodeId = explicit ? explicit.id : navigation.nodeId || node && node.id || parameters.get("node") || null;
       var anchor = navigation.anchor;
       if (anchor === undefined) {
-        try { anchor = hash && !parameters.has("node") ? decodeURIComponent(hash) : null; } catch (_error) { anchor = hash; }
+        try { anchor = hash && !legacy ? decodeURIComponent(hash) : null; } catch (_error) { anchor = hash; }
       }
-      return {node: node, nodeId: nodeId, anchor: anchor, parameters: parameters.has("node") ? Object.fromEntries(parameters) : {},
+      return {node: node, nodeId: nodeId, anchor: anchor, parameters: legacy ? Object.fromEntries(parameters) : {},
         focus: navigation.focus !== undefined ? Boolean(navigation.focus) : Boolean(node && node.result || parameters.has("node"))};
     }
     function copyFragment(element, base) {
@@ -470,11 +486,11 @@
       // section anchors, used only to preserve content, never to select an index.
       var protectedAnchor = /^(?:sources?|references?|bibliograph(?:y|ies)|proof|statement|notation|depends-on)(?:-|$)/i;
       function protectedSection(heading) {
-        if (heading.closest(protectedContext) || heading.querySelector(protectedContent)) return true;
+        if (heading.closest(protectedContext) || heading.querySelector(protectedContent) || /[$\\]/.test(heading.textContent)) return true;
         var level = Number(heading.tagName.slice(1)), previous = heading;
         while (previous) {
           if (/^H[1-6]$/.test(previous.tagName) && Number(previous.tagName.slice(1)) <= level) {
-            if (protectedAnchor.test(previous.id || "")) return true;
+            if (protectedAnchor.test(previous.id || "") || /[$\\]/.test(previous.textContent)) return true;
             level = Number(previous.tagName.slice(1)) - 1;
           }
           previous = previous.previousElementSibling;
@@ -514,6 +530,60 @@
       if (changed.length) decluttered.set(root, changed);
       return lists;
     }
+    function readerIsOverview(root) {
+      if (disposed || !index || !current || !root || !bound.has(root) || !host.contains(root) ||
+          !root.matches(".bp-reading-body") || root.isConnected === false) return false;
+      var sources = root.querySelectorAll(".bp-reading-source"), reading = sources[0];
+      var owner = reading && indexed.get(reading.getAttribute("data-autoform-node-id"));
+      if (sources.length !== 1 || reading.parentElement !== root || reading.hasAttribute("hidden") ||
+          reading.hasAttribute("aria-hidden") || reading.hasAttribute("inert") || !owner || owner.kind !== "scope" ||
+          owner.scope !== owner.id || owner.id !== current.scope || owner.result === true ||
+          ["collection", "transparent", "source"].indexOf(owner.navigation) >= 0 ||
+          current.nodeId && indexedNode(current.nodeId) !== owner) return false;
+      // Only this instance's proven duplicate indexes may be ignored. An
+      // authored hidden attribute is never evidence of navigation-only content.
+      var ignored = new Set((decluttered.get(root) || []).filter(function (entry) {
+        return !entry.hidden && entry.node.hidden && entry.node.parentElement === reading;
+      }).map(function (entry) { return entry.node; }));
+      function attributes(node, allowed) {
+        return Array.from(node.attributes).every(function (attribute) { return allowed.indexOf(attribute.name) >= 0; });
+      }
+      function plain(node) { return Array.from(node.childNodes).every(function (child) { return child.nodeType === 3 || child.nodeType === 8; }); }
+      function elements(node) {
+        var children = Array.from(node.childNodes);
+        return children.some(function (child) { return child.nodeType !== 1 && child.nodeType !== 8 &&
+          (child.nodeType !== 3 || child.textContent.trim()); }) ? null : children.filter(function (child) { return child.nodeType === 1; });
+      }
+      function chapters(node) {
+        if (node.tagName !== "NAV" || node.getAttribute("class") !== "bp-book-nav" ||
+            node.getAttribute("aria-label") !== "Blueprint chapters" || !attributes(node, ["class", "aria-label"])) return false;
+        var links = elements(node), directions = [];
+        return links && links.length > 0 && links.length <= 2 && links.every(function (anchor) {
+          var direction = anchor.getAttribute("class") === "bp-book-nav-link bp-book-nav-previous" ? "previous" :
+            anchor.getAttribute("class") === "bp-book-nav-link bp-book-nav-next" ? "next" : null;
+          var href = link(anchor.getAttribute("href"), current.documentURL), target = href && routes.get(href), parts = elements(anchor);
+          if (anchor.tagName !== "A" || !direction || !target || !attributes(anchor, ["class", "href"]) ||
+              directions.indexOf(direction) >= 0 || direction === "previous" && directions.length || !parts || parts.length !== 2) return false;
+          directions.push(direction);
+          var label = parts[0], title = parts[1], contents = Array.from(label.childNodes), arrow = contents[0];
+          return label.tagName === "SPAN" && label.getAttribute("class") === "bp-book-nav-direction" && attributes(label, ["class"]) &&
+            contents.length === 2 && arrow.nodeType === 1 && arrow.tagName === "SPAN" && arrow.getAttribute("aria-hidden") === "true" &&
+            attributes(arrow, ["aria-hidden"]) && plain(arrow) && arrow.textContent === (direction === "previous" ? "←" : "→") &&
+            contents[1].nodeType === 3 && contents[1].textContent === (direction === "previous" ? " Previous" : " Next") &&
+            title.tagName === "SPAN" && title.getAttribute("class") === "bp-book-nav-title" && attributes(title, ["class"]) &&
+            plain(title) && title.textContent === target.title;
+        });
+      }
+      var headings = 0, navigation = 0;
+      return Array.from(reading.childNodes).every(function (node) {
+        if (node.nodeType === 8 || node.nodeType === 3 && !node.textContent.trim()) return true;
+        if (node.nodeType !== 1) return false;
+        if (ignored.has(node)) return !/^H[1-6]$/.test(node.tagName) || !/[$\\]/.test(node.textContent);
+        if (node.tagName === "H1" && attributes(node, ["id"]) && plain(node) && !/[$\\]/.test(node.textContent) &&
+            node.textContent.trim() === owner.title) return ++headings === 1;
+        return chapters(node) && ++navigation === 1;
+      }) && headings === 1;
+    }
     function bindReader(root) {
       if (!root || bound.has(root) || disposed) return;
       function click(event) {
@@ -524,7 +594,7 @@
         if (!internal(href)) return;
         // Ordinary in-article section anchors stay native; article permalinks change the graph as well.
         if (current && resource(href) === resource(current.url) && new URL(href).hash && !routes.has(href) &&
-            !new URLSearchParams(new URL(href).hash.slice(1)).has("node")) return;
+            !legacyHash(new URL(href).hash.slice(1))) return;
         event.preventDefault(); event.stopPropagation(); navigate(href);
       }
       root.addEventListener("click", click, true); bound.set(root, click);
@@ -539,7 +609,7 @@
       win.history.replaceState(historyState(snapshot, win.location.href, key), "", win.location.href);
       var url = new URL(win.location.href);
       if (current && resource(current.url) === resource(url.href) && url.hash && !routes.has(url.href) &&
-          !new URLSearchParams(url.hash.slice(1)).has("node")) {
+          !legacyHash(url.hash.slice(1))) {
         // Native section anchors scroll the existing reading DOM. They must
         // not discard the selected theorem or replace its full reading pane.
         var request = fresh(), anchor;
@@ -579,7 +649,7 @@
       decluttered = new WeakMap();
     }
     return {start: start, navigate: navigate, navigateNode: navigateNode, loadIndex: loadIndex,
-      getIndex: function () { return index; }, bindReader: bindReader, declutterReader: declutterReader,
+      getIndex: function () { return index; }, bindReader: bindReader, declutterReader: declutterReader, readerIsOverview: readerIsOverview,
       checkpoint: checkpoint, dispose: dispose};
   }
 
