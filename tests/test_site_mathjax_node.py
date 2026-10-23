@@ -162,7 +162,7 @@ function describe() {
   assert.strictEqual(await shown(), true);
   report.passes.push(describe());
   assert.strictEqual(document.querySelectorAll("[data-autoform-math-stage]").length, 0);
-}).catch(error => {
+})().catch(error => {
   report.errors.push("harness: " + error.stack);
 }).finally(() => {
   dom.window.close();
