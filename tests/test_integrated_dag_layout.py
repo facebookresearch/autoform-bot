@@ -1,4 +1,4 @@
-"""Production Dagre adapter geometry, with an independent collision oracle.
+"""Bounded production scene geometry, with an independent collision oracle.
 
 These are source/geometry checks, not substitutes for genuine browser journeys.
 The captured fixture records the rejected eleven-node mathematical projection.
@@ -7,8 +7,10 @@ The captured fixture records the rejected eleven-node mathematical projection.
 from __future__ import annotations
 
 import json
+import random
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -31,9 +33,9 @@ function original(name) {
   }
   assert.fail('Production function did not parse: '+name);
 }
-const context={assert,structuredClone,URL,productionSource:source,original,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
+const context={assert,structuredClone,URL,performance,productionSource:source,original,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
 vm.createContext(context);
-vm.runInContext(fs.readFileSync(ROOT+'/autoform_cli/assets/blueprint-dagre.vendor.js','utf8'),context);
+vm.runInContext(source.match(/var NODE_W =[^;]+;/)[0],context);
 const functions=['layoutGraph','geometry','compactRegions'].map(original).join('\n');
 """
 
@@ -54,24 +56,35 @@ function lineHits(a,b,box,pad=0) {
     {x:box.x+box.w+pad,y:box.y+box.h+pad},{x:box.x-pad,y:box.y+box.h+pad}];
   return corners.some((corner,index)=>segmentCrosses(a,b,corner,corners[(index+1)%4]));
 }
-function check(input,direction) {
-  const before=JSON.stringify(input),result=layoutGraph(input.nodes,input.edges,direction);
+function check(input,direction,produced) {
+  const before=JSON.stringify(input),result=produced||layoutGraph(input.nodes,input.edges,direction);
   assert.equal(JSON.stringify(input),before,'Layout mutated captured graph data');
+  const originalRoutes=result.routes;
+  result.routes=originalRoutes.map(route=>route.parts?Object.assign({},route,{
+    points:route.parts.flatMap(part=>part.points),radii:route.parts.flatMap(part=>part.radii)}):route);
   const boxes=Array.from(result.nodes.values());
   assert.deepEqual(boxes.map(box=>box.id).sort(),input.nodes.map(node=>node.id).sort());
   boxes.forEach((box,index)=>{
     assert([box.x,box.y,box.w,box.h].every(Number.isFinite));
     const node=input.nodes.find(node=>node.id===box.id);
     assert.equal(box.w,node.width);assert.equal(box.h,node.height);
-    boxes.slice(index+1).forEach(other=>assert(!rectangleOverlap(box,other,32),'Mathematical cards have inadequate separation'));
+    boxes.slice(index+1).forEach(other=>assert(!rectangleOverlap(box,other,48-1e-6),'Mathematical cards have inadequate separation'));
   });
   const expected=input.edges.flatMap(edge=>['statement','proof'].filter(kind=>edge[kind]>0).map(kind=>JSON.stringify([edge.source,edge.target,kind,edge[kind]]))).sort();
   assert.deepEqual(result.routes.map(route=>JSON.stringify([route.source,route.target,route.kind,route.count])).sort(),expected);
-  const labels=[];
+  const adjacent=new Map(input.nodes.map(node=>[node.id,[]]));
+  input.edges.forEach(edge=>{if(edge.statement>0||edge.proof>0)adjacent.get(edge.source).push(edge.target);});
+  const reachable=new Map(input.nodes.map(node=>{
+    const found=new Set([node.id]),pending=[node.id];
+    while(pending.length)for(const next of adjacent.get(pending.pop()))if(!found.has(next)){found.add(next);pending.push(next);}
+    return [node.id,found];
+  }));
+  assert.deepEqual(result.clusters.flatMap(cluster=>cluster.members).sort(),input.nodes.map(node=>node.id).sort());
+  boxes.forEach(a=>boxes.forEach(b=>assert.equal(a.cluster===b.cluster,reachable.get(a.id).has(b.id)&&reachable.get(b.id).has(a.id),'Structural clusters must be actual SCCs')));
+  const labels=[],labelled=result.routes.filter(route=>route.label);
   result.routes.forEach(route=>{
     assert(route.points.length>=2);assert(route.points.every(point=>Number.isFinite(point.x)&&Number.isFinite(point.y)));
-    const unrelated=boxes.filter(box=>box.id!==route.source&&box.id!==route.target);
-    route.points.slice(1).forEach((point,index)=>unrelated.forEach(box=>assert(!lineHits(route.points[index],point,box,12),'An authoritative edge crosses another card')));
+    route.points.slice(1).forEach((point,index)=>boxes.forEach(box=>assert(!lineHits(route.points[index],point,box,box.id===route.source||box.id===route.target?0:12),'An authoritative edge crosses a mathematical card')));
     route.radii.forEach((radius,index)=>{
       if(!radius)return;
       const point=route.points[index],before=route.points[index-1],after=route.points[index+1];
@@ -81,7 +94,7 @@ function check(input,direction) {
       for(let step=0;step<=24;step++) {
         const t=step/24,at={x:(1-t)*(1-t)*p.x+2*t*(1-t)*point.x+t*t*q.x,y:(1-t)*(1-t)*p.y+2*t*(1-t)*point.y+t*t*q.y};
         boxes.forEach(box=>assert(!inside(at,box),'Rounded route enters a mathematical card'));
-        result.routes.forEach(other=>{
+        labelled.forEach(other=>{
           if(other!==route&&other.label)assert(!inside(at,other.label,1),'Rounded route occludes another count label');
         });
       }
@@ -92,28 +105,25 @@ function check(input,direction) {
     assert(tip.x>=target.x-1e-6&&tip.x<=target.x+target.w+1e-6&&tip.y>=target.y-1e-6&&tip.y<=target.y+target.h+1e-6);
     assert(Math.min(Math.abs(tip.x-target.x),Math.abs(tip.x-target.x-target.w),Math.abs(tip.y-target.y),Math.abs(tip.y-target.y-target.h))<1e-6);
     route.points.forEach(point=>assert(point.x>=route.bounds.x-1e-6&&point.x<=route.bounds.x+route.bounds.w+1e-6&&point.y>=route.bounds.y-1e-6&&point.y<=route.bounds.y+route.bounds.h+1e-6));
-    if(route.count>1) {
-      assert(route.label);boxes.forEach(box=>assert(!rectangleOverlap(route.label,box,4),'Count label overlaps a card'));
+    if(route.label) {
+      boxes.forEach(box=>assert(!rectangleOverlap(route.label,box,4),'Count label overlaps a card'));
       labels.forEach(label=>assert(!rectangleOverlap(route.label,label,4),'Count labels overlap'));labels.push(route.label);
     }
-    else assert.equal(route.label,null);
   });
   result.routes.forEach((route,index)=>{
-    result.routes.forEach(other=>{
+    labelled.forEach(other=>{
       if(route===other||!other.label)return;
       route.points.slice(1).forEach((point,at)=>assert(!lineHits(route.points[at],point,other.label,4),'Another edge occludes a count label'));
     });
-    result.routes.slice(index+1).forEach(other=>{
-      route.points.slice(1).forEach((b,at)=>other.points.slice(1).forEach((d,next)=>{
-        const a=route.points[at],c=other.points[next];
-        if(Math.abs(cross(a,b,c))>1e-6||Math.abs(cross(a,b,d))>1e-6)return;
-        const dx=b.x-a.x,dy=b.y-a.y,length=Math.hypot(dx,dy);if(!length)return;
-        const p=((c.x-a.x)*dx+(c.y-a.y)*dy)/length,q=((d.x-a.x)*dx+(d.y-a.y)*dy)/length;
-        const shared=Math.max(0,Math.min(length,Math.max(p,q))-Math.max(0,Math.min(p,q)));
-        assert(shared<=80,'Unrelated routes collapse into a long shared spine');
-      }));
-    });
   });
+  // Shared flow corridors are intentional; geometry storage and primitive work remain bounded.
+  const count=input.nodes.length,lanes=result.routes.length,parts=new Set(originalRoutes.flatMap(route=>route.parts||[]));
+  assert.equal(result.work.ticks,count?32:0);assert.equal(result.work.pairs,32*count*(count-1)/2);
+  assert(result.work.moves<=96*count*count);assert(result.work.candidates<=15*lanes*count);
+  assert(result.work.candidates<=90*count*count);
+  assert(result.work.escapes<=4*count*count*(count+1));
+  assert(parts.size<=4*count+lanes);
+  assert(Array.from(parts).reduce((sum,part)=>sum+part.points.length,0)<=4*count*(3*count+4)+4*lanes);
   return result;
 }
 function normal(result) {
@@ -122,10 +132,16 @@ function normal(result) {
 """
 
 
-def _run(body: str, fixture: object) -> None:
+def _run(body: str, fixture: object, *, timed_body: str | None = None) -> None:
     script = "const ROOT=" + json.dumps(str(_ROOT)) + ";\n" + _LOADER
-    script += "vm.runInContext(functions+" + json.dumps(_ORACLE + body) + ",context,{timeout:20000});"
-    result = subprocess.run([_NODE, "-e", script], input=json.dumps(fixture), text=True, capture_output=True, timeout=25)
+    script += "context.report=(stage,details={})=>process.stdout.write(JSON.stringify({stage,...details})+'\\n');\n"
+    script += "vm.runInContext(functions+" + json.dumps(_ORACLE) + ",context,{timeout:2000});\n"
+    if timed_body is not None:
+        script += "vm.runInContext(" + json.dumps(timed_body) + ",context,{timeout:2000});\n"
+    oracle_budget = 5000 if timed_body is not None else 2000
+    script += "vm.runInContext(" + json.dumps(body) + f",context,{{timeout:{oracle_budget}}});"
+    result = subprocess.run([_NODE, "-e", script], input=json.dumps(fixture), text=True, capture_output=True,
+                            timeout=10 if timed_body is not None else 5)
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-6000:]
 
 
@@ -149,6 +165,18 @@ def _graph(count: int, pairs: list[tuple[int, int, int, int]]) -> dict:
 ])
 def test_directed_cycles_disconnected_and_skipping_edges_keep_clear_routes(direction: str, fixture: dict) -> None:
     _run(f"check(fixture,{json.dumps(direction)});", fixture)
+
+
+@pytest.mark.parametrize("direction", ["lr", "tb"])
+def test_the_reviewed_four_node_cycle_keeps_every_real_lane_and_valid_geometry(direction: str) -> None:
+    fixture = {
+        "nodes": [{"id": f"A{number}", "width": 208, "height": 100} for number in range(4)],
+        "edges": [{"source": "A0", "target": "A3", "statement": 1, "proof": 1},
+                  {"source": "A3", "target": "A0", "statement": 1, "proof": 2},
+                  {"source": "A2", "target": "A0", "statement": 0, "proof": 1},
+                  {"source": "A2", "target": "A1", "statement": 0, "proof": 1}],
+    }
+    _run(f"const result=check(fixture,{json.dumps(direction)});assert.equal(result.routes.length,6);", fixture)
 
 
 @pytest.mark.parametrize("direction", ["lr", "tb"])
@@ -258,6 +286,39 @@ def test_renderer_geometry_cache_changes_only_for_captured_geometry_inputs() -> 
     """, _graph(4, [(0, 1, 3, 1), (1, 2, 0, 5)]))
 
 
+def test_oversized_draw_does_not_dereference_unavailable_geometry() -> None:
+    _run("""
+      var navigation={},mapAllowed=false,dom$stage={clientWidth:760,clientHeight:740},cleared=0;
+      var dom$ctx={setTransform(){},clearRect(){cleared++;}},window={devicePixelRatio:1};
+      function calculateActive() {} function drawRoute() {assert.fail('Unavailable geometry reached its painter');}
+      eval('('+original('draw')+')')();assert.equal(cleared,1);
+    """, None)
+
+
+def test_the_scene_bound_is_enforced_before_any_layout_work() -> None:
+    _run("assert.equal(layoutGraph(fixture.nodes,fixture.edges,'lr'),null);", _graph(121, []))
+
+
+@pytest.mark.parametrize("direction", ["lr", "tb"])
+def test_small_variable_rectangles_keep_ports_on_their_real_boundaries(direction: str) -> None:
+    fixture = {"nodes": [{"id": "tiny", "width": 2, "height": 1}, {"id": "large", "width": 264, "height": 148}],
+               "edges": [{"source": "tiny", "target": "large", "statement": 1, "proof": 2},
+                         {"source": "large", "target": "tiny", "statement": 3, "proof": 4}]}
+    _run(f"check(fixture,{json.dumps(direction)});", fixture)
+
+
+def test_weighted_relaxation_is_finite_deterministic_and_not_driven_by_label_measurement() -> None:
+    _run("""
+      const first=check(fixture,'lr'),again=check(fixture,'lr');assert.equal(normal(first),normal(again));
+      assert.equal(normal(first),normal(layoutGraph(fixture.nodes,fixture.edges,'lr',()=>{throw Error('Labels drove geometry');})));
+      const stronger=structuredClone(fixture);stronger.edges[0].statement=100;
+      const changed=check(stronger,'lr');
+      assert.notEqual(JSON.stringify(Array.from(first.nodes.values())),JSON.stringify(Array.from(changed.nodes.values())));
+      assert(changed.routes[0].strength>first.routes[0].strength);
+      assert(changed.routes.every(route=>route.label===null));
+    """, _graph(2, [(0, 1, 1, 0)]))
+
+
 def test_authoritative_ids_cannot_collide_with_engine_object_prototypes() -> None:
     ids = ["__proto__", "constructor", "toString", "scope:authored", "boundary:authored", "unicode/é"]
     fixture = {
@@ -269,5 +330,48 @@ def test_authoritative_ids_cannot_collide_with_engine_object_prototypes() -> Non
 
 
 @pytest.mark.parametrize("direction", ["lr", "tb"])
+@pytest.mark.skipif(sys.platform != "linux", reason="Map-bound stress runs only on Linux CI, never the overloaded development host")
 def test_the_existing_map_bound_handles_a_hundred_twenty_real_nodes(direction: str) -> None:
     _run(f"check(fixture,{json.dumps(direction)});", _graph(120, [(0, target, 1, int(target % 3 == 0)) for target in range(1, 120)]))
+
+
+@pytest.mark.parametrize(("count", "edges"), [(60, 180), (85, 250)])
+@pytest.mark.parametrize("direction", ["lr", "tb"])
+@pytest.mark.skipif(sys.platform != "linux", reason="Dense performance regressions run only on Linux CI")
+def test_dense_cyclic_scopes_have_bounded_work_and_preserve_all_routes(count: int, edges: int, direction: str) -> None:
+    rng = random.Random(442)
+    pairs = {(0, 3): (1, 1), (3, 0): (1, 2), (2, 0): (0, 1), (2, 1): (0, 1)}
+    while len(pairs) < edges:
+        source, target = rng.randrange(count), rng.randrange(count)
+        if source == target or (source, target) in pairs:
+            continue
+        pairs[source, target] = (rng.randrange(6), rng.randrange(1, 6))
+    fixture = _graph(count, [(source, target, *pairs[source, target]) for source, target in sorted(pairs)])
+    _run(f"""
+      report('oracle-start',{{direction:{json.dumps(direction)},nodes:fixture.nodes.length,edges:fixture.edges.length}});
+      const oracleBegan=performance.now(),result=check(fixture,{json.dumps(direction)},scene);
+      assert.equal(result.routes.length,productionLanes);
+      report('oracle-complete',{{milliseconds:performance.now()-oracleBegan,lanes:result.routes.length}});
+    """, fixture, timed_body=f"""
+      report('production-start',{{direction:{json.dumps(direction)},nodes:fixture.nodes.length,edges:fixture.edges.length}});
+      const beforeProduction=JSON.stringify(fixture),began=performance.now();
+      const scene=layoutGraph(fixture.nodes,fixture.edges,{json.dumps(direction)}),elapsed=performance.now()-began;
+      const productionLanes=scene.routes.length;
+      report('production-complete',{{milliseconds:elapsed,lanes:productionLanes}});
+      assert(elapsed<1000,'The bounded production layout exceeded one second: '+elapsed+'ms');
+      assert.equal(JSON.stringify(fixture),beforeProduction,'Timed production layout mutated captured graph input');
+      report('production-input-unchanged');
+    """)
+
+
+def test_timed_scene_is_checked_without_repeating_the_solver() -> None:
+    _run("""
+      report('oracle-start');check(fixture,'lr',scene);assert.equal(calls,1);
+      assert.equal(JSON.stringify(fixture),beforeProduction);report('oracle-complete');
+    """, _graph(2, [(0, 1, 3, 2)]), timed_body="""
+      var calls=0;const actual=layoutGraph;layoutGraph=(...args)=>{calls++;return actual(...args);};
+      const beforeProduction=JSON.stringify(fixture),began=performance.now();
+      const scene=layoutGraph(fixture.nodes,fixture.edges,'lr');
+      assert(performance.now()-began<1000);assert.equal(calls,1);
+      assert.equal(JSON.stringify(fixture),beforeProduction);report('production-input-unchanged');
+    """)

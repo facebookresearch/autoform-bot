@@ -485,7 +485,7 @@ def test_unavailable_engine_keeps_reading_and_navigation_usable(
     assert r"\stolen+\RR" in reader.inner_text()
 
 
-def test_refresh_event_rebuilds_copied_math_without_reading_unmarked_text(
+def test_internal_refresh_rebuilds_copied_math_without_reading_unmarked_text(
     reader_page: object, reader_site: str, pinned_runtime: _PinnedRuntime,
 ) -> None:
     page = reader_page
@@ -499,7 +499,6 @@ def test_refresh_event_rebuilds_copied_math_without_reading_unmarked_text(
       formula.replaceWith(formula.cloneNode(true));
       const literal = document.createElement('p'); literal.id = 'unmarked-prices'; literal.textContent = '$5 and $10';
       reader.appendChild(literal);
-      reader.dispatchEvent(new CustomEvent('autoform:math-refresh', {bubbles: true}));
     }""")
     assert page.evaluate("() => AutoformMath.refresh(document.querySelector('#test-complete-reader'))") is True
     reader = _wait_reader(page, _ALGEBRA_TITLE, _ALGEBRA_TEX)

@@ -333,13 +333,14 @@ def test_formula_options_and_project_macros_are_fresh_for_every_navigation() -> 
     """)
 
 
-def test_bubbling_refresh_event_uses_connected_scope_or_explicit_root() -> None:
+def test_internal_refresh_uses_only_the_requested_connected_scope() -> None:
     _run(r"""
       await install(); const first = reader("\\(first\\)");
-      document.listeners.get("autoform:math-refresh")({target: first}); await flush();
+      await window.AutoformMath.refresh(first);
       const second = reader("\\(second\\)");
-      document.listeners.get("autoform:math-refresh")({target: document, detail: {root: second}}); await flush();
+      await window.AutoformMath.refresh(second);
       assert.deepEqual(stats.renders, [["\\(first\\)"], ["\\(second\\)"]]);
+      assert.equal(document.listeners.has("autoform:math-refresh"), false);
     """)
 
 

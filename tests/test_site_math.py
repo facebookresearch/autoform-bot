@@ -1469,7 +1469,10 @@ def test_a_landing_page_named_in_lowercase_is_rendered(tmp_path: Path) -> None:
 
     landing = next(path for path in site.iterdir() if path.name.lower() == "readme.md")
     if (site / "README.md").is_file():  # the disk ignores case
-        assert 'class="bp-dag-intro bp-landing-intro"' in landing.read_text(encoding="utf-8")
+        text = landing.read_text(encoding="utf-8")
+        assert text.count('class="bp-reading-source"') == text.count('class="bp-landing-intro"') == 1
+        assert text.index('class="bp-reading-source"') < text.index('class="bp-landing-intro"')
+        assert 'class="bp-dag-intro bp-landing-intro"' not in text
 
 
 def test_a_landing_page_that_is_not_utf8_is_left_out(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

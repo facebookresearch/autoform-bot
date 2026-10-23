@@ -258,6 +258,11 @@ def _focus_graph_node(page: object, target_id: str) -> object:
         page.get_by_role("button", name="Fit shown nodes", exact=True).click()
         _frames(page)
         start = page.locator('.bp-dag-node[tabindex="0"]').first
+        before_focus = start.evaluate("""node => {
+          const box=node.getBoundingClientRect(),layer=node.closest('.bp-dag-node-layer');
+          return {id:node.dataset.autoformNodeId,box:{left:box.left,top:box.top,right:box.right,bottom:box.bottom},
+            windowScroll:[scrollX,scrollY],layerScroll:layer&&[layer.scrollLeft,layer.scrollTop]};
+        }""")
         start.focus()
         for key in path:
             page.keyboard.press(key)
@@ -265,9 +270,25 @@ def _focus_graph_node(page: object, target_id: str) -> object:
         active = page.locator(".bp-dag-node:focus")
         node_id = active.get_attribute("data-autoform-node-id")
         if node_id == target_id:
-            assert active.evaluate("""node => {
-              const box=node.getBoundingClientRect();return node.contains(document.elementFromPoint(box.left+box.width/2,box.top+box.height/2));
-            }""") is True
+            diagnostic = active.evaluate("""node => {
+              function box(element) {if(!element)return null;const r=element.getBoundingClientRect();
+                return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height};}
+              const bounds=box(node),x=bounds.left+bounds.width/2,y=bounds.top+bounds.height/2,hit=document.elementFromPoint(x,y);
+              const ancestors=[];
+              for(let element=node.parentElement;element&&ancestors.length<8;element=element.parentElement) {
+                const style=getComputedStyle(element);ancestors.push({tag:element.tagName,class:element.className,
+                  box:box(element),scroll:[element.scrollLeft,element.scrollTop],overflow:[style.overflowX,style.overflowY],
+                  clipPath:style.clipPath,transform:style.transform,position:style.position});
+              }
+              const pane=document.querySelector('.bp-reading-pane'),handle=pane&&pane.querySelector('.bp-dag-sheet-handle');
+              return {hit:node.contains(hit),id:node.dataset.autoformNodeId,box:bounds,center:[x,y],
+                hitElement:hit&&{tag:hit.tagName,id:hit.id,class:hit.className},ancestors,
+                viewport:{width:innerWidth,height:innerHeight,scroll:[scrollX,scrollY],
+                  visual:window.visualViewport&&{width:window.visualViewport.width,height:window.visualViewport.height,left:window.visualViewport.offsetLeft,top:window.visualViewport.offsetTop}},
+                reading:{box:box(pane),expanded:handle&&handle.getAttribute('aria-expanded')}};
+            }""")
+            diagnostic.update(before_focus=before_focus, keys=list(path))
+            assert diagnostic["hit"] is True, json.dumps(diagnostic, indent=2)
             return active
         if node_id in visited:
             continue
@@ -911,7 +932,11 @@ def reader_declutter_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
         + exposition + "\n\n## Depends on\n\nNo prerequisites.\n"
     ))
     _write(blueprint / "roadmap/beta/README.md", (
-        "---\nnavigation: module\n---\n\n# Second mathematical topic\n\nA complete reading note is retained.\n"
+        "---\nnavigation: module\n---\n\n# Second mathematical topic\n\n"
+        "A complete reading note is retained. Read the [topic note](note.md).\n"
+    ))
+    _write(blueprint / "roadmap/beta/note.md", (
+        "# Topic note\n\nA narrative reading note, not a formalization target or a claimed Lean proof.\n"
     ))
     render_site(blueprint, project / "site-src", lean_root=project)
     configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
@@ -921,6 +946,9 @@ def reader_declutter_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
     index_path = project / "site/dependencies/index.json"
     index = json.loads(index_path.read_text(encoding="utf-8"))
     records = {record["id"]: record for record in index["nodes"]}
+    for node_id in ("alpha", "beta"):
+        assert records[node_id]["kind"] == "scope" and records[node_id]["scope"] == node_id
+        assert records[node_id]["parent"] == "roadmap"
     published_root = index_path.parent / unquote(urlsplit(records["roadmap"]["route"]).path)
     tree = html5lib.parse(published_root.read_text(encoding="utf-8"), treebuilder="etree", namespaceHTMLElements=False)
     reading = next(element for element in tree.iter() if "bp-reading-source" in element.get("class", "").split())
@@ -999,8 +1027,13 @@ def test_decluttered_reader_keeps_native_math_anchors_leaf_navigation_and_back_p
     assert card.get_attribute("id")
     page.evaluate("() => history.back()")
     page.wait_for_url(site.route("alpha"))
+    playwright.expect(reader.locator("h1")).to_have_text(site.records["alpha"]["title"])
     page.evaluate("() => history.back()")
     page.wait_for_url(site.route("roadmap") + "#retained-section")
+    # popstate changes the URL before the bounded asynchronous reader commit.
+    # Missing catalogue nodes in the outgoing chapter must not satisfy hidden.
+    playwright.expect(reader.locator("#retained-section")).to_be_visible()
+    playwright.expect(reader.locator("#topic-catalogue + ul")).to_have_count(1)
     playwright.expect(reader.locator("#topic-catalogue + ul")).to_be_hidden()
     assert _DECLUTTER_END in reader.inner_text()
     assert documents == [site.route("roadmap")]

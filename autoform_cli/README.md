@@ -274,7 +274,7 @@ uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform check blueprint --lean-root .
 ```
 
 `autoform --version` prints the installed version, followed by the plugin
-checkout's commit when it runs from one, as in `autoform 0.5.0 (745a88599469)`;
+checkout's commit when it runs from one, as in `autoform 0.6.0 (745a88599469)`;
 a debrief records the same string.
 
 Create a new project's vault, site configuration, and CI. The layout is fixed,
@@ -1157,14 +1157,15 @@ Report the coordination and review scope of an import edit without forbidding
 the edit:
 
 ```bash
-autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH [--json] [--timeout SECONDS]
+autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH [--json] [--timeout SECONDS] [--module-scope SCOPE]
 ```
 
 `import-impact` is advisory and does not edit authored roadmap or Lean source;
-its Lake freshness check may refresh build hash sidecars. The probe imports
-every module of the root libraries, so each must be built: a missing or stale
-build exits 2 with the `lake build` command for those libraries, how many
-modules were checked, and the first module Lake found unbuilt. Freshness is
+its Lake freshness check may refresh build hash sidecars. Under the default
+scope the probe imports every module of the root libraries, so each must be
+built: a missing or stale build exits 2 with the `lake build` command for those
+libraries, how many modules were checked, and the first module Lake found
+unbuilt. Freshness is
 Lake's rehash of this checkout's `.lake` against this checkout's sources, so a
 build in another clone or worktree does not make this one fresh.
 `SELECTOR` identifies the working article and `MODULE` the module whose
@@ -1183,11 +1184,32 @@ reached is no longer built. The report does not list such modules.
 
 JSON uses `autoform-module-import-impact/v1` and binds the graph with
 `module_graph_revision`; `module_scope` is `loaded-root-library-graph`.
+
+`--module-scope import-closure` loads only the root-package modules whose source
+may import `MODULE`: a file is a candidate when its text contains every component
+of a candidate's name, repeated until no new file matches, and Lean loads what
+the candidates import. Only those modules must be built, and stale-build advice
+names them. `affected_modules` is still exact. An article owns an affected
+declaration when one of its `lean:` names equals the declaration or is a dotted
+prefix of it, so `affected_articles` may list more articles than the default
+scope does, and `article_local` is always `false`; `affected_unowned_helpers`
+keep the default parent-chain rule. `unresolved_articles` leaves out a name it
+cannot resolve when the Lean source index places it in a module outside
+`affected_modules`, since the import edit cannot affect it. A `.lean` file
+outside the captured sources, such as one in `.lake/packages` or a path
+dependency, that may import a candidate makes the command exit 2 and asks for
+the default scope. The check over-refuses when a component of a candidate's
+name is a common word that dependency sources contain; then use the default
+scope.
+
 The import edit's `claim_targets` contain only the selected article and a stable
 `module_claim_target` resource, `lean-module/<lowercase-slug>-<sha256[:16]>`.
 `affected_claim_targets` are downstream warnings, not pre-emptive ownership
 requirements; `claim_keys` and `affected_claim_keys` match the JSON from
-`autoform claim list --worker-id WORKER`. `unresolved_articles` reports local
+`autoform claim list --worker-id WORKER`, and given the corresponding
+`claim_targets` or `affected_claim_targets` as targets it lists only those
+claims.
+`unresolved_articles` reports local
 declarations absent from the loaded environment without globally blocking
 unrelated edits, while every `affected_unowned_helpers` entry includes its own
 claim target and key.
@@ -1248,6 +1270,7 @@ autoform claim acquire af_5b0e4d3c2a1f09e8d7c6b5a4
 autoform claim renew af_5b0e4d3c2a1f09e8d7c6b5a4
 autoform claim release af_5b0e4d3c2a1f09e8d7c6b5a4
 autoform claim acquire af_5b0e4d3c2a1f09e8d7c6b5a4 af_0123456789abcdef01234567
+autoform claim list af_5b0e4d3c2a1f09e8d7c6b5a4 af_0123456789abcdef01234567
 ```
 
 Claims are optional: use them when other people or sessions may work on the same
@@ -2440,13 +2463,38 @@ deadlocking.
 
 `claim list` copies the whole board with one fetch and reads every lease at
 once, so its cost hardly grows with the number of claims. Each lease it prints
-is the one its ref named when the board answered. A peer's renewal meanwhile
+is the one its ref named when the board answered. The listing is not a proven
+consistent snapshot of the whole board: Git can read the refs it advertises one
+by one, so a peer's multi-claim acquire or release made while the board answers
+can show some of its claims changed and others not. A peer's renewal meanwhile
 changes nothing, except that a server speaking Git's older stateless HTTP
 protocol may refuse the fetch, which is then repeated up to three times. A
 board with claim keys that differ only in case, which a case-insensitive
 scratch cannot store under their names, is listed with one more command that
 names its claims first. A listing is a report, not a lock: every acquire,
 renew, and release checks ownership again.
+
+`claim list TARGET...` lists only those targets' claims, in the same JSON; a
+target without a claim is left out, and a duplicate target exits 2. It names
+the targets' refs, fetches only those and reads their leases, so changes to
+other claims never make it retry and no other claim's lease is copied, and a
+target released meanwhile has the targets named again, never the whole board.
+Naming the targets still downloads the board's list of refs, branches
+included, so over a network its cost grows with that list. `--timeout SECONDS`,
+120 by default, bounds the whole listing, however long it is set, and a step
+still running after five seconds is named on stderr as `claim list: <step>...`. A listing
+that fails exits 1 with nothing on stdout and one line on stderr: `error:
+timeout:` when the board did not answer in time, naming the step; `error:
+contention:` when the board refused every fetch because claims kept moving; or
+`error: transport:` for any other failure to reach or read the board. Every
+claim command runs Git with `GIT_TERMINAL_PROMPT=0` and no input, so Git itself
+never waits for a password, though a credential helper or `GIT_ASKPASS` program
+it is configured to use still can, until the time limit. `claim list` also
+runs Git in its own process group, without a terminal on Linux and macOS so
+`ssh` cannot prompt either, and stops a Git command that runs out of time or is
+interrupted together with everything it started. The other claim commands run
+Git in the caller's process group, so a terminal's interrupt reaches Git, which
+then removes the ref lock it holds.
 
 A Git process that stops while updating a claim ref leaves a lock file in the
 board, and Git then refuses the updates it guards:
@@ -2653,21 +2701,14 @@ not the graph's shortened summaries.
 compatibility shells for those canonical pages, not a second viewer. They share
 the same client and a layout-free global search index, never an all-repository
 node cloud. The graph and search schemas remain `autoform-dag-view/v2` and
-`autoform-dag-search/v1`. Search records keep their existing `url` meaning and
-may additionally carry `route`, `scope`, `data_url`, `parent`, `navigation`,
-`area` and `result`; module inventories also carry `catalog: "module"`.
-`result` identifies an authored concrete declaration leaf,
-not a proof or compilation claim; containers, source tracks and inventories are
-false. Module inventory articles stay navigable in “Results & articles”, with
-neutral inventory statuses, rather than disappearing from large mathematical
-scopes or being counted as proved declarations. Optional `relations` rows are `[source_id, target_id, statement_count,
-proof_count]`. These are derived from the same captured publication as the
-reading pages and preserve authored statement/proof edge types.
+`autoform-dag-search/v1`. These viewer payloads and controller hooks are internal
+implementation details and may change; they are not a public application API.
+Containment, canonical reading routes and typed dependencies are projections
+of the captured publication. Narrative containers, source tracks and neutral
+module inventories are not claims of completed mathematical proofs.
 
-The shared reader requests formula refresh through `AutoformMath.refresh(root)`
-or a bubbling `autoform:math-refresh` event with `detail.root`. Its Promise
-settles after the controlled, coalesced pass; success is `true`, unavailable or
-unsafe input is `false`. The pinned safe MathJax configuration remains the only
+The shared reader refreshes formulas through its internal controlled,
+coalesced renderer. The pinned safe MathJax configuration remains the only
 typesetter: no arbitrary text scan or unrestricted `MathJax.typesetPromise()`
 is used. Raw marked text supplies its own source; rendered clones can reuse
 retained source only when stamped by the current runtime. Formula refresh waits

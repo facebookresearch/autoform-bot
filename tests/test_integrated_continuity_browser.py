@@ -277,6 +277,8 @@ def test_region_graph_first_keeps_native_reading_reopen_and_back_pane_camera(
     page.wait_for_url(site.route(scope_id.removeprefix("scope:")))
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
     playwright.expect(inner).not_to_have_attribute("inert", "")
+    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(site.records[scope_id.removeprefix("scope:")]["title"])
+    playwright.expect(page.locator(".bp-dag-viewer")).not_to_have_attribute("aria-busy", "true")
     _search(page, _TARGET_TITLE, _TARGET)
     page.wait_for_url(site.route(_TARGET))
     _selected(page, _TARGET)

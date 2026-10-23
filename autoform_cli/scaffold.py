@@ -18,6 +18,7 @@ import stat
 import subprocess
 import tempfile
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -41,6 +42,7 @@ _DOTTED = {
 DEFAULT_AUTOFORM_SOURCE = "https://github.com/facebookresearch/autoform-bot.git"
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _REMOTE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_EXACT_TAG_REF = re.compile(r"refs/tags/[A-Za-z0-9][A-Za-z0-9._/-]*")
 _SOURCE_HOST = re.compile(
     r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
@@ -245,8 +247,30 @@ def _safe_remote_source(root: Path, remote: str) -> str | None:
     return _normalize_autoform_source(source, allow_github_scp=True)
 
 
-def _remote_contains_ref(root: Path, remote: str, ref: str) -> bool:
-    """Whether a cached tracking ref for *remote* contains *ref*."""
+def _exact_tag_destinations(root: Path, remote: str) -> set[str]:
+    """Tags *remote*'s own fetch refspecs write by exact name, glob-free."""
+
+    encoded = _git_bytes(
+        root,
+        "config",
+        "--get-all",
+        f"remote.{remote}.fetch",
+        limit=_MAX_GIT_REMOTE_LIST_BYTES,
+    )
+    try:
+        refspecs = encoded.decode("utf-8").splitlines() if encoded else []
+    except UnicodeError:
+        return set()
+    destinations = set()
+    for refspec in refspecs:
+        _, colon, destination = refspec.removeprefix("+").partition(":")
+        if colon and _EXACT_TAG_REF.fullmatch(destination):
+            destinations.add(destination)
+    return destinations
+
+
+def _remote_contains_ref(root: Path, remote: str, ref: str, tags: set[str]) -> bool:
+    """Whether a cached tracking ref for *remote*, or one of *tags*, contains *ref*."""
 
     prefix = f"refs/remotes/{remote}/"
     contained = _git_bytes(
@@ -256,6 +280,7 @@ def _remote_contains_ref(root: Path, remote: str, ref: str) -> bool:
         "--count=1",
         "--format=%(refname)",
         prefix,
+        *sorted(tags),
         limit=_MAX_GIT_REMOTE_LIST_BYTES,
     )
     if contained is None:
@@ -264,11 +289,13 @@ def _remote_contains_ref(root: Path, remote: str, ref: str) -> bool:
         refs = contained.decode("utf-8").splitlines()
     except UnicodeError:
         return False
-    return bool(refs) and all(name.startswith(prefix) and name != prefix for name in refs)
+    return bool(refs) and all(
+        (name.startswith(prefix) and name != prefix) or name in tags for name in refs
+    )
 
 
 def _select_remote_source(root: Path, ref: str) -> str | None:
-    """Choose a safe remote whose cached tracking refs contain *ref*.
+    """Choose a safe remote whose cached tracking refs or fetched tags contain *ref*.
 
     Prefer Autoform's canonical source, then conventional ``origin`` and
     ``upstream`` names. Without those, accept only one distinct safe source so
@@ -282,9 +309,20 @@ def _select_remote_source(root: Path, ref: str) -> str | None:
         names = encoded.decode("utf-8").splitlines()
     except UnicodeError:
         return None
+    valid = [name for name in names if _REMOTE_NAME.fullmatch(name) is not None]
+    # `git clone --depth 1 --branch <tag>` (Claude Code, Muse Code) leaves no
+    # refs/remotes/ at all, only the tag and a refspec naming it. Count the tag
+    # as evidence for the one remote whose refspec fetches it by exact name; a
+    # tag several remotes claim, or one created without such a refspec, counts
+    # for none of them. A remote whose name is not read might claim it too, so
+    # with one present no tag counts.
+    tags = {name: _exact_tag_destinations(root, name) if len(valid) == len(names) else set() for name in valid}
+    names = valid
+    claimed = Counter(tag for destinations in tags.values() for tag in destinations)
     candidates: dict[str, str] = {}
     for name in names:
-        if _REMOTE_NAME.fullmatch(name) is None or not _remote_contains_ref(root, name, ref):
+        own = {tag for tag in tags[name] if claimed[tag] == 1}
+        if not _remote_contains_ref(root, name, ref, own):
             continue
         source = _safe_remote_source(root, name)
         if source is not None:
@@ -410,9 +448,9 @@ def plugin_pin(
     the root of a checkout: a directory that merely sits inside somebody else's
     repository answers questions about that repository.
 
-    Tracked checkout files must be clean, a cached tracking ref for the selected
-    remote must contain HEAD, and the committed renderer plus template paths,
-    bytes, and executable-bit classifications must match both the retained
+    Tracked checkout files must be clean, a cached tracking ref or fetched tag
+    for the selected remote must contain HEAD, and the committed renderer plus
+    template paths, bytes, and executable-bit classifications must match both the retained
     template bytes and any installed plugin copy. Otherwise the source and
     commit do not describe fetchable scaffold behavior, so no pin is returned.
     Every Git identity and tree query ignores local replacement objects.

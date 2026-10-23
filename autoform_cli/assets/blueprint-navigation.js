@@ -159,7 +159,7 @@
           throw new Error("Invalid graph node");
         ids.add(node.id);
         return Object.assign({}, node, {url: link(node.url, base, true), route: link(node.route, base),
-          data_url: link(node.data_url, base), article_url: link(node.article_url, base, true)});
+          data_url: link(node.data_url, base)});
       });
       payload.edges.forEach(function (edge) {
         if (!edge || !ids.has(edge.source) || !ids.has(edge.target)) throw new Error("Unknown graph endpoint");
@@ -183,7 +183,7 @@
         if (!node || typeof node.id !== "string" || typeof node.title !== "string" || ids.has(node.id))
           throw new Error("Invalid search node");
         var copy = Object.assign({}, node, {_index: position, url: link(node.url, base, true), route: link(node.route, base),
-          data_url: link(node.data_url, base), article_url: link(node.article_url, base, true)});
+          data_url: link(node.data_url, base)});
         ids.set(copy.id, copy);
         if (copy.route) byRoute.set(copy.route, copy);
         return copy;
