@@ -307,6 +307,30 @@ def test_small_variable_rectangles_keep_ports_on_their_real_boundaries(direction
     _run(f"check(fixture,{json.dumps(direction)});", fixture)
 
 
+@pytest.mark.parametrize("direction", ["lr", "tb"])
+def test_cyclic_links_face_their_actual_target_without_perimeter_detours(direction: str) -> None:
+    """Direction comes from the real endpoints, not a DAG order a cycle cannot have."""
+    fixture = _graph(2, [(0, 1, 2, 3), (1, 0, 5, 7)])
+    _run(f"""
+      const direction={json.dumps(direction)},scene=check(fixture,direction);
+      scene.routes.forEach(route=>{{
+        assert(!route.detoured,'Two connected cards need no whole-scene return corridor');
+        const a=scene.nodes.get(route.source),b=scene.nodes.get(route.target),first=route.points[0],tip=route.points.at(-1);
+        const dx=b.x+b.w/2-a.x-a.w/2,dy=b.y+b.h/2-a.y-a.h/2;
+        assert(first.x>=a.x&&first.x<=a.x+a.w&&first.y>=a.y&&first.y<=a.y+a.h);
+        assert.equal(Math.min(Math.abs(first.x-a.x),Math.abs(first.x-a.x-a.w),Math.abs(first.y-a.y),Math.abs(first.y-a.y-a.h)),0,
+          'The route must leave a real source boundary');
+        const departure=route.points[1];
+        assert((departure.x-first.x)*dx+(departure.y-first.y)*dy>0,'Source approach must face its actual target');
+        assert(route.arrow.dx*dx+route.arrow.dy*dy>0,'Target approach must flow towards its actual target');
+        const travelled=route.points.slice(1).reduce((sum,point,index)=>sum+Math.hypot(point.x-route.points[index].x,point.y-route.points[index].y),0);
+        const direct=Math.abs(first.x-tip.x)+Math.abs(first.y-tip.y);
+        assert(travelled<=direct+96,'A clear cyclic link should not take a scenic route');
+      }});
+      assert.equal(scene.routes.length,4);assert.equal(scene.clusters.length,1);
+    """, fixture)
+
+
 def test_weighted_relaxation_is_finite_deterministic_and_not_driven_by_label_measurement() -> None:
     _run("""
       const first=check(fixture,'lr'),again=check(fixture,'lr');assert.equal(normal(first),normal(again));

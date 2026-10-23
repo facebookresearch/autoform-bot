@@ -283,7 +283,11 @@
         return vertices.every(function (node) { work.candidates++; return !hits(points[index], at, node, node.id === route.source || node.id === route.target ? 0 : 20); });
       });
     }
-    function port(node, side, offset) {
+    function port(node, side, offset, alongY) {
+      if (alongY) {
+        var verticalAt = {x: node.x + node.w / 2 + Math.max(-node.w / 4, Math.min(node.w / 4, offset)), y: side > 0 ? node.y + node.h : node.y};
+        return {at: verticalAt, stub: {x: verticalAt.x, y: verticalAt.y + side * 24}};
+      }
       var at = {x: side > 0 ? node.x + node.w : node.x, y: node.y + node.h / 2 + Math.max(-node.h / 4, Math.min(node.h / 4, offset))};
       return {at: at, stub: {x: at.x + side * 24, y: at.y}};
     }
@@ -313,20 +317,31 @@
     }
     var paths = new Map(), sparse = springs.length <= vertices.length * 3;
     routes.forEach(function (route) {
-      var a = vertices[ids.get(route.source)], b = vertices[ids.get(route.target)], offset = route.kind === "proof" ? 4 : -4, source = port(a, 1, offset), target = port(b, -1, offset);
+      var a = vertices[ids.get(route.source)], b = vertices[ids.get(route.target)], offset = route.kind === "proof" ? 4 : -4;
+      // Cyclic aggregations have no global left-to-right order. Use the facing
+      // boundaries rather than sending an upstream link around the whole map.
+      var dx = b.x + b.w / 2 - a.x - a.w / 2, dy = b.y + b.h / 2 - a.y - a.h / 2;
+      var alongY = Math.abs(dy) - (a.h + b.h) / 2 > Math.abs(dx) - (a.w + b.w) / 2;
+      var side = (alongY ? dy : dx) < 0 ? -1 : 1, source = port(a, side, offset, alongY), target = port(b, -side, offset, alongY);
       route.label = null; route.strength = Math.min(4.8, 1.2 + .55 * Math.log2(1 + route.count));
       route.flow = {source: a.cluster, target: b.cluster, returning: a.rank >= b.rank};
       var key = ids.get(route.source) + ":" + ids.get(route.target) + ":" + route.kind, saved = paths.get(key);
       if (saved) { Object.assign(route, saved); return; }
-      var middle = (source.stub.x + target.stub.x) / 2, above = Math.min(a.y, b.y) - 32, below = Math.max(a.y + a.h, b.y + b.h) + 32;
+      var primary = alongY ? "y" : "x", secondary = alongY ? "x" : "y", size = alongY ? "w" : "h";
+      var middle = (source.stub[primary] + target.stub[primary]) / 2, above = Math.min(a[secondary], b[secondary]) - 32, below = Math.max(a[secondary] + a[size], b[secondary] + b[size]) + 32;
+      function localPoint(first, second) { return alongY ? {x: second, y: first} : {x: first, y: second}; }
       var candidates = [
-        [source.at, source.stub, {x: middle, y: source.stub.y}, {x: middle, y: target.stub.y}, target.stub, target.at],
-        [source.at, source.stub, {x: source.stub.x, y: above}, {x: target.stub.x, y: above}, target.stub, target.at],
-        [source.at, source.stub, {x: source.stub.x, y: below}, {x: target.stub.x, y: below}, target.stub, target.at]
-      ], chosen = sparse && candidates.find(function (points) { return clear(points, route); });
+        [source.at, source.stub, localPoint(middle, source.stub[secondary]), localPoint(middle, target.stub[secondary]), target.stub, target.at],
+        [source.at, source.stub, localPoint(source.stub[primary], above), localPoint(target.stub[primary], above), target.stub, target.at],
+        [source.at, source.stub, localPoint(source.stub[primary], below), localPoint(target.stub[primary], below), target.stub, target.at]
+      ];
+      function length(points) { return points.slice(1).reduce(function (sum, at, index) { return sum + Math.hypot(at.x - points[index].x, at.y - points[index].y); }, 0); }
+      var chosen = sparse && candidates.sort(function (a, b) { return length(a) - length(b); }).find(function (points) { return clear(points, route); });
       if (chosen) { var local = section(chosen); route.points = local.points; route.radii = local.radii; route.bounds = local.bounds; }
       else {
-        var outgoing = escape(ids.get(route.source), 1, offset), incoming = reversed(escape(ids.get(route.target), -1, offset));
+        // The bounded shared obstacle escapes run on the scene's primary axis.
+        side = dx < 0 ? -1 : 1; source = port(a, side, offset); target = port(b, -side, offset);
+        var outgoing = escape(ids.get(route.source), side, offset), incoming = reversed(escape(ids.get(route.target), -side, offset));
         var from = outgoing.points[outgoing.points.length - 1], to = incoming.points[0], lane = route.flow.returning ? extent.y + extent.h + 64 + offset : extent.y - 64 + offset;
         var internalFrom = vertical ? {x: from.y, y: from.x} : from, internalTo = vertical ? {x: to.y, y: to.x} : to;
         var trunk = section([internalFrom, {x: internalFrom.x, y: lane}, {x: internalTo.x, y: lane}, internalTo], true);
