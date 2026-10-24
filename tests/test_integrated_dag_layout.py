@@ -330,7 +330,7 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
       eval(constants);
       const start=productionSource.indexOf('  function mount('),end=productionSource.indexOf('    function globalListen(',start);
       assert(start>=0&&end>start,'The real cold-mount boundary must exist');
-      const helpers=['scopeOverviewProjection','safeHref','graphAt','useIndex','updateProjection','neighborhood','neighborIds','regionProjection',
+      const helpers=['scopeOverviewProjection','safeHref','graphAt','useIndex','requestWikiLinks','useWikiLinks','updateProjection','neighborhood','neighborIds','regionProjection',
         'geometry','compactRegions'].map(original).join('\n');
       const seams=`
         function buildShell() {events.push('shell');family='sans-serif';dom$stage={clientWidth:900};
@@ -338,9 +338,13 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
           dom$search={};dom$breadcrumb={replaceChildren(){}};}
         function bindEvents() {events.push('bind');}
         function sheetLayout() {return false;} function renderNavigation() {} function renderReaderContext() {}
+        function renderWikiContext() {events.push('optional-wiki');}
         function renderInventory() {} function refresh() {} function routeTrail() {return [];} function trailList() {return [];}
         function centerIfHidden() {}
-        function applyRoute(bundle) {assert.strictEqual(bundle,firstBundle);events.push('route');return Promise.resolve();}
+        function applyRoute(bundle) {
+          assert.strictEqual(bundle,firstBundle);assert.equal(ui$wikiRequested,true);
+          assert.equal(ui$wikiLinks.availability,'unavailable');events.push('route');return Promise.resolve();
+        }
         function record(phase) {
           assert.strictEqual(sharedIndex,index,"Cold layout must use the router's validated index");
           assert.equal(ui$requestedNode,fixture.entry,'First fit must retain the canonical requested route');
@@ -355,6 +359,7 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
       assert.equal(bootstrap(host,payload,1,firstBundle,navigation),fixture.entry);
       const phase=name=>events.findIndex(event=>typeof event==='string'?event===name:event.phase===name);
       assert(phase('shell')<phase('bind')&&phase('bind')<phase('index')&&phase('index')<phase('fit'));
+      assert(phase('fit')<phase('optional-wiki'),'Optional references must not delay the first mathematical fit');
       assert(phase('fit')<phase('resize')&&phase('resize')<phase('route'));
       assert(events.filter(event=>event==='index').length===1);
       assert.throws(()=>bootstrap(host,payload,1,firstBundle,null),/complete mathematical page and navigation/);

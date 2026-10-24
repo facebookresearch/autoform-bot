@@ -510,6 +510,8 @@ def test_details_close_in_their_corner_and_space_the_status_from_the_link() -> N
 
 def test_details_drop_instructions_and_label_paths_compactly() -> None:
     """The drawer explained its own controls, invented a summary for topics without one and titled its pivots."""
+    from tests.test_wiki_workspace_controls import _run
+
     script, style = _viewer_source(), dag_viewer._STYLE
 
     for gone in (
@@ -527,7 +529,16 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
         assert gone not in script, gone
     assert '", no dependency edges in this view"' in script
     assert '[["Prerequisites", links.before], ["Used by", links.after]]' in script
-    assert 'if (links.before.length || links.after.length) refs.readingNeighbors.appendChild(row)' in script
+    _run(r"""
+      configure([focus]);renderReaderContext();
+      assert.equal(marked(dom$readingNeighbors,'bp-reading-links'),undefined,
+        'An edge-free result must not acquire empty prerequisite/dependent columns');
+      const base=record('B','chapter',{title:'Actual prerequisite'});
+      configure([focus,base],[['B','F',2,3]]);renderReaderContext();
+      const row=marked(dom$readingNeighbors,'bp-reading-links');assert(row);
+      assert(row.textContent.includes('Prerequisites · 1'));assert(row.textContent.includes('Used by · 0'));
+      assert.equal(links(row).length,1);assert.equal(links(row)[0].textContent,'Actual prerequisite');
+    """)
     assert "function appendRelations(" not in script and "bp-dag-pivots" not in script
     assert ".bp-reading-links { display: grid; grid-template-columns: 1fr 1fr;" in style
 
