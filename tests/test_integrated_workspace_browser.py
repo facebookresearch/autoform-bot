@@ -771,12 +771,15 @@ def test_long_ancestor_labels_and_full_reading_heading_stay_within_their_panes(
         trail_box, head_box = page.locator(".bp-dag-breadcrumb").bounding_box(), page.locator(".bp-dag-head").bounding_box()
         assert trail_box is not None and head_box is not None and trail_box["width"] >= head_box["width"] / 2
     if width == 1000:
-        # A tablet keeps Topics, search, filter, views and zoom on one row.
-        assert page.locator(".bp-dag-toolbar").evaluate(
-            "bar => { const boxes = [...bar.children].filter(child => child.getClientRects().length)"
-            ".map(child => child.getBoundingClientRect());"
-            " return Math.max(...boxes.map(box => box.top)) < Math.min(...boxes.map(box => box.bottom)); }"
-        ) is True
+        # A tablet gives Topics and search the first row and filter, views and zoom the second, rather than three rows.
+        boxes = page.locator(".bp-dag-toolbar").evaluate(
+            "bar => [...bar.children].filter(child => child.getClientRects().length)"
+            ".map(child => { const box = child.getBoundingClientRect(); return [box.top, box.bottom]; })"
+        )
+        first, second = boxes[:2], boxes[2:]
+        assert max(top for top, _ in first) < min(bottom for _, bottom in first), boxes
+        assert max(top for top, _ in second) < min(bottom for _, bottom in second), boxes
+        assert min(top for top, _ in second) >= max(bottom for _, bottom in first), boxes
     if width <= 1100:
         page.get_by_role("button", name="Toggle topic outline", exact=True).click()
     outline = page.locator(".bp-dag-navigation")

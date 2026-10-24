@@ -723,7 +723,7 @@ def test_explorer_head_is_one_row_where_the_rail_always_shows() -> None:
     assert "placeBook" not in script and "head.insertBefore(bookLink" not in script
     narrow = style.split("@media (max-width: 1100px) {\n", 2)[2].split("\n}", 1)[0]
     assert ".bp-dag-integrated .bp-dag-toolbar { flex-wrap: wrap; }" in narrow
-    # The filter starts the second row on a tablet, or sits mid-row from 1000px, so its menu anchors to its button's left.
+    # The filter starts the second row on a tablet, so its menu anchors to its button's left.
     assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: calc(100% - 96px); }" in narrow
     assert ".bp-dag-integrated .bp-dag-filter-popover { left: 0; right: auto;" in narrow
     # The existing vertical compensation remains atomic with both class changes.
@@ -832,10 +832,9 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li { min-width: 4em; }" in style
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:has(.bp-dag-sr-only) { flex: none; min-width: 0; }" in style
     tablet = style.split("@media (max-width: 1100px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
-    # Two rows below 1000px and one from there; search no longer takes a row of its own.
+    # Two rows, Topics and search on the first; search no longer takes a row of its own.
     assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: calc(100% - 96px); }" in tablet
-    assert "@media (min-width: 1000px) and (max-width: 1100px) { .bp-dag-integrated .bp-dag-search-wrap { flex-basis: 160px; } }" in style
-    # Topics was a few px above Status in the same row.
+    # Topics sat a few px above the control beside it.
     assert ".bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; align-items: center; }" in tablet
     phones = style.split("@media (max-width: 720px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
     assert ".bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :last-child) { display: none; }" in phones
