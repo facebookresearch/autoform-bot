@@ -828,7 +828,7 @@ def test_choosing_from_contents_keeps_the_readers_place_and_focus(desktop_page: 
     assert abs(scroll.evaluate("element => element.scrollTop") - offset) < 1
 
 
-def test_phone_selection_opens_full_reading_and_returns_to_a_reachable_selected_map(
+def test_phone_selection_opens_the_reader_at_half_and_returns_to_a_reachable_selected_map(
     mobile_page: object, explorer_consumer: _ExplorerConsumer,
 ) -> None:
     page = mobile_page
@@ -841,7 +841,11 @@ def test_phone_selection_opens_full_reading_and_returns_to_a_reachable_selected_
     playwright.expect(page.locator(".bp-reading-body h1")).to_be_focused()
     sheet, body = page.locator(".bp-reading-pane").bounding_box(), page.locator(".bp-dag-body").bounding_box()
     assert sheet is not None and body is not None
-    assert abs(sheet["y"] - body["y"]) < 1 and abs(sheet["height"] - body["height"]) < 1
+    # The three-position sheet opens a selection at half, leaving the top 45%
+    # to the map with the selected node above the sheet.
+    assert sheet["y"] == pytest.approx(body["y"] + body["height"] * .45, abs=2) and abs(sheet["height"] - body["height"]) < 1
+    selected = node.bounding_box()
+    assert selected is not None and selected["y"] + selected["height"] <= sheet["y"]
     playwright.expect(_reading_card(page, "chapter/target")).to_contain_text("Final sentence of the complete target statement.")
     _close_phone_reading(page)
     box, peek, stage = node.bounding_box(), page.locator(".bp-dag-sheet-handle").bounding_box(), page.locator(".bp-dag-stage").bounding_box()
@@ -2256,11 +2260,12 @@ def test_sheet_selection_close_clear_filter_and_history_states_stay_consistent(
 
     if width == 390:
         handle.click()
-    # Ordinary reading links, rather than forced offscreen node clicks, retain
-    # each entry's open reader state for the Back/Forward assertions.
-    page.locator(".bp-reading-neighbors").get_by_role("link", name=re.compile(r"^Foundation")).click()
+    # Ordinary reading links in each statement's own dependency disclosure,
+    # rather than forced offscreen node clicks, retain each entry's open
+    # reader state for the Back/Forward assertions.
+    _open_dependency(_reading_card(page, "chapter/middle"), "Foundation").click()
     _consumer_selected(page, explorer_consumer, "chapter/foundation")
-    page.locator(".bp-reading-neighbors").get_by_role("link", name=re.compile(r"^Middle lemma")).click()
+    _open_dependency(_reading_card(page, "chapter/foundation"), "Middle lemma").click()
     middle = _consumer_selected(page, explorer_consumer, "chapter/middle")
     _assert_sheet_state(page, selected="chapter/middle", opened=True)
     survivor = page.locator('.bp-dag-node:not([data-autoform-node-id="chapter/middle"])').first
