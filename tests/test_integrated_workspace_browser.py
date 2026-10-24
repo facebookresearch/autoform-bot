@@ -771,9 +771,9 @@ def test_long_ancestor_labels_and_full_reading_heading_stay_within_their_panes(
     playwright.expect(crumbs.nth(3)).to_have_text(_TARGET_TITLE)
     playwright.expect(crumbs.nth(3)).to_have_attribute("aria-current", "page")
     if width <= 720:
-        # A phone keeps only the first crumb and the current page.
+        # A phone keeps the first crumb, the parent and the current page; the "…" gives way.
         playwright.expect(crumbs.nth(1)).to_be_hidden()
-        playwright.expect(crumbs.nth(2)).to_be_hidden()
+        playwright.expect(crumbs.nth(2)).to_be_visible()
     else:
         playwright.expect(crumbs.nth(1)).to_be_visible()
         playwright.expect(crumbs.nth(2)).to_have_text(_DEEP_TITLE)

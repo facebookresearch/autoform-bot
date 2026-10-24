@@ -859,7 +859,7 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     # Topics sat a few px above the control beside it.
     assert ".bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; align-items: center; }" in tablet
     phones = style.split("@media (max-width: 720px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
-    assert ".bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :last-child) { display: none; }" in phones
+    assert ".bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :nth-last-child(-n+2)) { display: none; }" in phones
     assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: 100%; }" in phones
 
 

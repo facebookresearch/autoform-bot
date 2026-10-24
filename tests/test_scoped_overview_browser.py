@@ -525,11 +525,7 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     _zoom_group(page, key)
     focused = _focus_graph_node(page, consumer.groups[key][0]["id"])
     playwright.expect(page.locator(".bp-dag-breadcrumb")).to_contain_text(_AREAS[0])
-    if width <= 720:
-        # A phone's trail shows only first / current: the scope crumb is there but hidden, and Areas or Back return to the scope.
-        playwright.expect(page.locator(".bp-dag-breadcrumb a", has_text=_SCOPE_TITLE)).to_have_count(1)
-    else:
-        playwright.expect(page.locator(".bp-dag-breadcrumb").get_by_role("link", name=_SCOPE_TITLE, exact=True)).to_have_count(1)
+    playwright.expect(page.locator(".bp-dag-breadcrumb").get_by_role("link", name=_SCOPE_TITLE, exact=True)).to_have_count(1)
     expanded_camera = _geometry(focused)["camera"]
     page.get_by_role("button", name=re.compile(r"^(Areas|Regions)$")).click()
     _committed(page)
