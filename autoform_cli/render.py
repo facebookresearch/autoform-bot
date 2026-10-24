@@ -4205,7 +4205,7 @@ div.arithmatex {{ overflow-x: auto; }}
 /* Material caps every svg at its container's width, which would shrink a wide
    SVG formula until it cannot be read; it keeps the size TeX set instead. */
 mjx-container > svg {{ max-width: none !important; }}
-:is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *, .bp-dag-viewer *) {{
+:is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *) {{
   overflow-x: clip;
 }}
 /* A page or statement published as typed: its text wraps, and nothing in it
