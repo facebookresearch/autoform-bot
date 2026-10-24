@@ -1756,7 +1756,7 @@
       return nodes.filter(function (node) { return ui$selectedStatuses.has(node.status); });
     }
     function renderInventory(resetScroll) {
-      if (!dom$inventoryList) return;
+      if (!dom$inventoryList || ui$mode === "graph") return;
       var nodes = inventoryNodes(), visible = nodes.slice(0, ui$listLimit); dom$inventoryList.textContent = "";
       var articles = nodes.some(function (node) { return node.catalog === "module"; });
       if (navigation && ui$mode !== "sources") dom$inventory.querySelector("h2").textContent = articles ? "Results & articles" : "Results";
