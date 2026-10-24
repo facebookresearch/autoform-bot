@@ -844,6 +844,34 @@ def test_definitions_and_mathlib_marked_targets_count_as_complete(tmp_path: Path
     assert '<div class="bp-figure-value">100%</div>' in overview
 
 
+def test_a_mathlib_article_shows_its_mathlib_declarations_as_text(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    article = (
+        "---\ndeclaration: theorem\nmathlib: true\n{names}"
+        "mathlib_file: Mathlib/Algebra/Group/Defs.lean\n---\n\n# Upstream\n"
+    )
+    upstream = project / "blueprint/roadmap/upstream.md"
+    upstream.write_text(article.format(names=""), encoding="utf-8")
+    without = render_site(project / "blueprint", tmp_path / "without", lean_root=project)
+    upstream.write_text(article.format(names="mathlib_declaration: add_comm, «a&b»\n"), encoding="utf-8")
+    shown = render_site(project / "blueprint", tmp_path / "shown", lean_root=project)
+
+    row = (
+        '<div class="bp-row"><span class="bp-key">Mathlib</span>'
+        '<span class="bp-value"><code>add_comm</code> · <code>«a&amp;b»</code></span></div>'
+    )
+    page = (tmp_path / "shown/roadmap/README.md").read_text(encoding="utf-8")
+    assert page.count(row) == 1
+    # The row is the page's only change, and --require-declarations ignores it.
+    before = (tmp_path / "without/roadmap/README.md").read_text(encoding="utf-8")
+    assert page.replace(f'<div class="bp-meta">{row}</div>\n', "") == before
+    assert (shown.unresolved, shown.unchecked, shown.warnings) == (
+        without.unresolved,
+        without.unchecked,
+        without.warnings,
+    )
+
+
 def test_completion_percentage_reserves_100_for_complete_work() -> None:
     assert _completion_percentage(0, 200) == 0
     assert _completion_percentage(1, 200) == 1

@@ -264,7 +264,16 @@ def test_region_graph_first_keeps_native_reading_reopen_and_back_pane_camera(
     playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_LIBRARY)
     playwright.expect(page.locator(".bp-reading-body")).to_be_visible()
     if width > 720:
-        playwright.expect(handle).to_be_hidden()
+        playwright.expect(handle).to_be_visible()
+        playwright.expect(handle).to_have_text("×")
+        playwright.expect(page.locator(".bp-reading-body")).to_be_focused()
+        url = page.url
+        handle.click()
+        playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+        playwright.expect(inner).to_have_attribute("inert", "")
+        assert page.url == url and page.evaluate("() => document === __workspaceDocument") is True
+        handle.click()
+        playwright.expect(handle).to_have_attribute("aria-expanded", "true")
         playwright.expect(page.locator(".bp-reading-body")).to_be_focused()
     page.get_by_role("button", name="Areas", exact=True).click()
     _focus_graph_region(page, "Geometry").press("Enter")

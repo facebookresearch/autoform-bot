@@ -14,6 +14,10 @@
 # protect their own activation unless equivalent coverage already exists
 # there, so review that change explicitly. Then require pull requests and
 # code-owner review, dismiss stale approvals, and audit every bypass.
+# With statement review on, review_approved is only a drift checksum: a code
+# owner of blueprint/ authorizes it by approving the pull request that writes
+# it, once approval of the most recent push is required too.
 
+# /blueprint/ @OWNER
 # /blueprint/roadmap/README.md @OWNER
 # /.github/ @OWNER

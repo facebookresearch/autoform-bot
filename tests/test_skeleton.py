@@ -2681,7 +2681,7 @@ def test_lake_freshness_is_checked_once_before_one_probe_per_module(tmp_path: Pa
     assert sorted(command[4:] for command in calls[2:]) == [["Skel.Main"], ["Skel.Uses"]]
 
 
-@pytest.mark.parametrize("failure", ["exit", "killed", "timeout", "malformed"])
+@pytest.mark.parametrize("failure", ["exit", "killed", "timeout", "malformed", "uncached"])
 def test_a_failed_module_probe_leaves_only_its_roots_unresolved(
     tmp_path: Path, monkeypatch, failure: str
 ) -> None:
@@ -2699,6 +2699,10 @@ def test_a_failed_module_probe_leaves_only_its_roots_unresolved(
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         if failure == "killed":
             return subprocess.CompletedProcess(command, -9, stdout="", stderr="")
+        if failure == "uncached":
+            # Lake's artifact cache without restore leaves the .olean only in the cache.
+            missing = "error: object file '.lake/build/lib/lean/Skel/Uses.olean' of module Skel.Uses does not exist"
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr=missing)
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="error: Skel.Uses broke")
 
     _fake_lake(monkeypatch, project, answer)
@@ -2716,6 +2720,8 @@ def test_a_failed_module_probe_leaves_only_its_roots_unresolved(
         "killed": "the skeleton probe was killed by signal 9",
         "timeout": "rerun with --timeout <seconds>",
         "malformed": "duplicate records for Skel.heavy_of_notation",
+        "uncached": "the skeleton probe found no .olean for Skel.Uses; if Lake's artifact cache "
+        "is enabled, set `restoreAllArtifacts = true` in the lakefile, otherwise run `lake build`",
     }[failure] in issue.reason
 
 
@@ -4304,6 +4310,37 @@ def _build(project: Path, *targets: str) -> None:
         ["lake", "build", *targets], cwd=project, capture_output=True, text=True, timeout=600, check=False
     )
     assert build.returncode == 0, build.stdout + build.stderr
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_statement_review_round_trips_on_a_built_project(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """`review prepare` writes the packet real Lean extracts, `review record`
+    files a card for it without Lean, and `review check`, extracting again,
+    finds the card current, asks for the approval, then accepts it."""
+
+    project = _project(tmp_path)
+    _build(project, "Skel.Main")
+    blueprint = _blueprint(tmp_path, lean={"supervision": "Skel.supervision_nonAmbiguous"})
+    article = blueprint / "roadmap" / "basics" / "supervision.md"
+    text = article.read_text(encoding="utf-8")
+    article.write_text(text.replace("---\n", "---\narticle_id: af_0123456789abcdef01234567\n", 1), encoding="utf-8")
+    packets = tmp_path / "packets"
+    assert main(["review", "prepare", str(blueprint), "--lean-root", str(project), "--packets", str(packets)]) == 0
+    (entry,) = json.loads((packets / "manifest.json").read_text(encoding="utf-8"))["packets"]
+    testimony = tmp_path / "testimony.txt"
+    testimony.write_text("For every value $y$, at most one value equals $y$.\n", encoding="utf-8")
+    record = ["review", "record", str(blueprint), "--packets", str(packets), "--model", "test-model"]
+    record += ["--article-id", entry["article_id"], "--declaration", entry["declaration"], "--testimony", str(testimony)]
+    assert main(record) == 0
+    capsys.readouterr()
+
+    assert main(["review", "check", str(blueprint), "--lean-root", str(project), "--json"]) == 1
+    (finding,) = json.loads(capsys.readouterr().out)["findings"]
+    assert finding["code"] == "review-unapproved"
+    approval = finding["reason"].rsplit(" ", 1)[1]
+    text = article.read_text(encoding="utf-8")
+    article.write_text(text.replace("---\n", f"---\nreview_approved: {approval}\n", 1), encoding="utf-8")
+    assert main(["review", "check", str(blueprint), "--lean-root", str(project)]) == 0
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")

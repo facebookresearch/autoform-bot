@@ -209,6 +209,49 @@ def workspace_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Worksp
 
 
 @pytest.fixture(scope="module")
+def navigation_overview_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_WorkspaceSite]:
+    """An authored five-area overview with navigation, but no mathematical prose to hide."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("navigation-only-overview") / "project"
+    scaffold_project(project, title="Authored mathematical map")
+    blueprint = project / "blueprint"
+    areas = ("Algebra", "Analysis", "Discrete mathematics", "Geometry", "Logic")
+    topics = [(area, f"topic-{number}-{part}") for number, area in enumerate(areas) for part in range(3)]
+    _write(blueprint / "README.md", "# Authored mathematical map\n\n- [Mathematical map](roadmap/README.md)\n")
+    _write(blueprint / "roadmap/README.md", "# Mathematical map\n\n## Topics\n\n" + "\n".join(
+        f"- [{area} topic {topic[-1]}]({topic}/README.md)" for area, topic in topics
+    ) + "\n")
+    for number, area in enumerate(areas):
+        for part in range(3):
+            topic = f"topic-{number}-{part}"
+            _write(blueprint / f"roadmap/{topic}/README.md", (
+                f"---\nnavigation: module\narea: {area}\n---\n\n# {area} topic {part}\n\n"
+                "A complete mathematical statement follows.\n\n- [Proposed identity](result.md)\n"
+            ))
+            previous = f"topic-{(number - 1) % len(areas)}-0"
+            _write(blueprint / f"roadmap/{topic}/result.md", (
+                "---\ndeclaration: theorem\nnot_ready: true\n---\n\n# Proposed identity\n\n"
+                "The equality $0=0$ is an unverified fixture target, not a claim of a Lean proof.\n\n"
+                f"## Depends on\n\n- [Previous identity](../{previous}/result.md)\n"
+            ))
+    render_site(blueprint, project / "site-src")
+    configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
+    configuration["extra_javascript"] = [
+        entry for entry in configuration["extra_javascript"]
+        if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE
+    ]
+    build(configuration)
+    index = json.loads((project / "site/dependencies/index.json").read_text(encoding="utf-8"))
+    records = {record["id"]: record for record in index["nodes"]}
+    graph = json.loads((project / "site/dependencies.json").read_text(encoding="utf-8"))
+    assert len(graph["nodes"]) == 15 and len(_area_edges(graph)) == 15
+    with _served(project / "site") as url:
+        yield _WorkspaceSite(url, records, graph)
+
+
+@pytest.fixture(scope="module")
 def workspace_browser() -> Iterator[object]:
     required = os.environ.get("AUTOFORM_REQUIRE_BROWSER_TESTS") == "1"
     with playwright.sync_playwright() as runtime:
@@ -418,6 +461,60 @@ def test_wide_workspace_has_three_nonoverlapping_panes_complete_math_and_one_h1(
     assert viewer["width"] == pytest.approx(1600, abs=1) and viewer["height"] == pytest.approx(900, abs=1)
     assert _pixels(page)["painted"] > 0
     assert _math_source(page, card.locator("mjx-container").last) == _TARGET_TEX[-1]
+
+
+@pytest.mark.parametrize("width", [1600, 1000, 390])
+def test_empty_authored_overview_opens_on_the_map_and_restores_its_reading_and_camera(
+    workspace_page: object, navigation_overview_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int,
+) -> None:
+    page, site = workspace_page, navigation_overview_site
+    page.set_viewport_size({"width": width, "height": 900 if width > 720 else 844})
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _open(page, site, workspace_runtime)
+    page.locator(".bp-dag-overview-only").wait_for()
+    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    inner = page.locator(".bp-reading-pane .bp-dag-inspector-inner")
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    playwright.expect(inner).to_have_attribute("inert", "")
+    playwright.expect(inner).to_have_attribute("aria-hidden", "true")
+    assert page.locator(".bp-dag-stage").evaluate("""stage => {
+      const box=stage.getBoundingClientRect(); return stage.contains(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2));
+    }""") is True
+    controls = page.locator('.bp-dag-node[data-autoform-node-id^="region:"]')
+    if width == 1600:
+        playwright.expect(controls).to_have_count(5)
+        assert controls.evaluate_all("""nodes => nodes.every(node => {
+          const box=node.getBoundingClientRect(),stage=node.closest('.bp-dag-stage').getBoundingClientRect();
+          return box.left>=stage.left+12&&box.right<=stage.right-12&&box.top>=stage.top+12&&box.bottom<=stage.bottom-12;
+        })""") is True, "The initial five-area desktop overview should not need Fit or panning"
+    source = page.locator(".bp-reading-body > .bp-reading-source")
+    root_text = source.text_content()
+    assert all(f"{area} topic" in root_text for area in ("Algebra", "Analysis", "Discrete mathematics", "Geometry", "Logic"))
+    assert _pixels(page)["painted"] > 0
+    handle.click()
+    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    assert inner.get_attribute("inert") is None and inner.get_attribute("aria-hidden") is None
+    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Mathematical map")
+    playwright.expect(handle).to_be_visible()
+    playwright.expect(handle).to_have_attribute("title", "Close reading")
+    handle.click()
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    _frames(page)
+    camera = controls.first.evaluate("node => getComputedStyle(node).transform")
+    target = "topic-0-0/result"
+    _search(page, target, target)
+    page.wait_for_url(site.route(target))
+    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    _full_math(page, target, 1)
+    page.evaluate("() => history.back()")
+    page.wait_for_url(site.route("roadmap"))
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    _frames(page)
+    assert controls.first.evaluate("node => getComputedStyle(node).transform") == camera
+    assert source.text_content() == root_text
+    assert page.evaluate("() => document === __workspaceDocument") is True
+    assert len(documents) == 1
 
 
 @pytest.mark.parametrize("width", [1280, 1600, 390])

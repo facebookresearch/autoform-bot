@@ -220,10 +220,13 @@ An article asserts only facts a human or agent verified:
 | `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. CI's `autoform check` at an older `AUTOFORM_REF` rejects the marker, so move the pin first; until then, retract by removing `statement` and `proof` and keeping `lean:`. |
 | `proof: formalized` | The Lean proof compiles. Requires `statement: formalized` and `lean:`. Under the open policy it may rest on open statements, and the article is then conditional; only the derived `fully_proved` means complete and `sorry`-free. |
 | `mathlib: true` | The result is upstreamed into Mathlib. |
+| `mathlib_declaration: add_comm` | Mathlib name(s) the article restates; `audit` requires one on a `mathlib: true` article. Render shows each on the article's page as text, without a link, since nothing checks it against the pinned Mathlib. |
+| `mathlib_file: Mathlib/Algebra/Group/Defs.lean` | The Mathlib file that declares it, as a portable relative path; `search` reports it. |
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
 | `lean: Ns.decl` | Declaration name(s) that discharge the article. |
 | `discussion: 42` | Issue number or URL where the article is being discussed. |
-| `article_id: af_...` | Durable identity, `af_` plus 24 lowercase hex digits; `autoform work` requires it on unfinished formalizable leaves. |
+| `article_id: af_...` | Durable identity, `af_` plus 24 lowercase hex digits; `autoform work` requires it on unfinished formalizable leaves, `review record` on the article it records, and `review prepare`, `review check`, and `render --review` on every Lean-mapped article but a module catalog. |
+| `review_approved: sha256:<64 hex>` | The hash of the complete review surface someone approved for this article. It shows that surface is unchanged, not who approved it. |
 | `open_statements: allowed` | Project policy, valid only in `roadmap/README.md`: a theorem's statement may land with a `sorry` proof (see [Open statements](#open-statements)). Absent or `forbidden` keeps the strict policy. |
 | `published: false` | Folder setting, valid only in the `README.md` of a folder below `roadmap/`: `check` and `audit` validate the folder and everything in it, but render leaves it out of the site and of the publication hash. No link on a published roadmap article may point into it, whether a dependency, a source or prose; a link from any other page keeps only its text, with a warning. `audit` and render reject coverage evidence that points into it. A folder inside an unpublished one is unpublished too, whatever its own README says. |
 
@@ -325,6 +328,10 @@ interrupt after staging can leave a hidden `.autoform-new-*` directory in the
 parent, and the error says so; inspect it before removing it. The published
 tree has fixed modes, 0755 for directories and 0644 for files (0755 for
 executables), whatever the umask.
+Its `lakefile.toml` sets `enableArtifactCache = true` and
+`restoreAllArtifacts = true`, so checkouts on the same toolchain share builds
+through Lake's artifact cache while each module's `.olean` stays in
+`.lake/build`, where Autoform's probes load it.
 A private creation bundle adds generated production-module roots, so package
 names cannot shadow Mathlib libraries such as `Archive` or `Counterexamples`.
 Its release identity is cross-checked with the public catalog and its complete
@@ -785,11 +792,13 @@ hides a toolchain library, or a blueprint or source tree that changes during
 extraction still stops the whole command.
 `--output` records the `autoform-skeleton/v5` report, which contains no
 timestamp or absolute path, for a later render or review to consume. The
-report identifies the exact blueprint, its complete target set, and whether
+report identifies the exact blueprint, by a hash of every article's bytes and
+of the passage each article cites, its complete target set, and whether
 the extraction covered all targets or an explicit `--node` selection; a
 report whose selection, articles, and unresolved declarations disagree can be
-neither built nor loaded.
-It quotes each trusted definition's source and records theorem
+neither built nor loaded. Review evidence is derived only from a report that
+selects every article and whose targets are the blueprint's `lean:` names. It
+quotes each trusted definition's source and records theorem
 dependencies by elaborated signature, so it stands on its own without ever
 copying a theorem proof.
 Declarations in one project share most of what they trust, so the report states
@@ -864,12 +873,18 @@ reviewed them. An article review hash additionally binds the joint packet to the
 cited passage, its locator, and the drift hash, so a review recorded against it
 does not survive a change of meaning that leaves the packet text unchanged. All
 three are advisory provenance checksums when candidate code controls the
-checkout.
+checkout. Human approval records one `review_approved` hash over the complete
+review surface: the article's title and its statement as the site's statement
+box shows it, cited passage and locator, the exact joint packet and each
+declaration's packet, the project TeX macros the statement uses, and each
+validated read-back's model and testimony, so changing any of them invalidates
+it, while a proof edit, or a Lean or Mathlib bump that leaves the packets
+unchanged, changes none of them.
 
 A read-back is an independent agent's mathematical-English account of one
 declaration packet. The coordinator gives that agent only an opaque packet and
-the read-back instructions, then records the returned testimony.
-Cards live at `blueprint/readbacks/<article_id>/<encoded-declaration>.md`;
+the read-back instructions, then records the returned testimony through the
+CLI. Cards live at `blueprint/readbacks/<article_id>/<encoded-declaration>.md`;
 the durable `article_id` keeps testimony attached when an article moves, while
 the encoded filename avoids platform-specific Lean-name collisions, and before
 its first dot never spells a name Windows keeps for a device, as `Aux.lemma`
@@ -886,9 +901,10 @@ provenance.
 
 Testimony is plain text with TeX formulas between dollar signs. GitHub and a
 Markdown viewer of the vault show it as typed, in the card's text block, and
-render copies nothing under `readbacks/` to the site. Its formulas are the
-pieces `readback.split_testimony` finds, so `\$` is a dollar sign that opens
-nothing. The rules are in the read-back guide
+`render --review` shows it escaped in the statement's *Review* panel, but
+copies no file under `readbacks/` to the site. Its formulas are the pieces
+`readback.split_testimony` finds, so `\$` is a dollar sign that opens nothing.
+The rules are in the read-back guide
 `skills/human-review/references/readback.md`, and `readback.py` applies them.
 Testimony must show a reader everything it says, so invisible and reordering
 characters, and combining marks stacked over the lines around or with nothing
@@ -902,7 +918,8 @@ statements need out of MathJax 3.2.2's base and ams packages, with no spacing,
 phantom, colour, box, size, or macro command, and hold nothing that shows as a
 blank, such as a run of spaces in `\text`, an empty `\frac` or script, or two
 empty cells one after the other. `readback.typesetting_warnings` names each
-formula that cannot be, which a site shows as typed.
+formula that cannot be, which the site shows as typed, dollar signs and all,
+while it typesets the rest, and render warns about each.
 
 Cards are read without following links, so a linked card or directory is
 skipped. A card file holds at most 4 MiB, no file is read more than one byte
@@ -944,7 +961,9 @@ Windows checks out a path over 260 characters, which a long declaration name
 makes, only with `core.longpaths` set.
 
 `--packets DIR` writes one comment-stripped packet per skeleton, with a
-manifest mapping packets to articles and hashes. The destination must be empty
+manifest mapping packets to articles and hashes. Their file names spell each
+article and declaration, so a blind auditor is given the packets
+`review prepare` writes instead, named by hash. The destination must be empty
 or carry Autoform's packet manifest; each run replaces the complete managed
 tree, so removed declarations cannot leave stale packets behind. A concurrent
 change detected before commit aborts publication instead of being overwritten.
@@ -1024,6 +1043,111 @@ article names, because a source theorem is often formalized by several
 declarations together and each alone is honestly incomplete. A judge of
 faithfulness is given the article packet and its passage; an auditor asked what
 one declaration asserts is given that declaration's packet alone.
+
+Review a formalized statement with three commands, then publish the review:
+
+```bash
+autoform review prepare blueprint --lean-root . --packets review-packets
+autoform review record blueprint --packets review-packets \
+  --article-id af_0123456789abcdef01234567 --declaration Ns.result \
+  --testimony read-back.txt --model muse-spark-1.1
+autoform review check blueprint --lean-root .
+autoform render blueprint --lean-root . --review
+```
+
+`review prepare` extracts every Lean-mapped article from the current built tree
+and writes one blind packet per declaration under `blind/`, named by the hash
+of its bytes, so that, unlike a `skeleton --packets` file, its name tells its
+reader nothing, with a manifest that maps each to its article and hashes for
+the coordinator. Every Lean-mapped review article must be a declaration-sized
+leaf; a module catalog, whose `lean:` names inventory a module rather than
+state one result, is not under review. An article marked `origin: cited` must
+link to an in-vault, non-Markdown source snapshot with an exact
+`#L<start>-L<end>` range, and no article may cite blank lines; preparation
+refuses a citation it cannot put before the reviewer.
+
+`review record` runs no Lean. It reads the packet `review prepare` wrote for
+the article and declaration and refuses one whose bytes do not match its hash,
+a packet or testimony that is not a regular file (a FIFO is refused unread), an
+`article_id` the blueprint no longer has, and testimony the read-back rules
+refuse; then it files the card under its compare-and-swap, and warns about each
+formula a site would show as typed instead of typesetting, and why. When a card
+is already there with different content, the record must name its hash with
+`--expected-card-hash`. Whether the card is current is for `review check` to
+judge: a card whose packet is not the declaration's current packet is reported
+invalid there, and no approval can be computed from it, so prepare again and
+record the new packet.
+
+`review check` derives its evidence from its own extraction, never from a
+committed file, and fails until every Lean-mapped article has current cards and
+a `review_approved` that matches its review hash, which it prints. A card and
+an approval each bind each declaration's packet, the bytes the reviewer read,
+not its statement hash, which covers the Lean version: a Lean or Mathlib bump
+that leaves a statement's packet unchanged keeps its card and its approval. The
+statement hash a card records is not compared. An approval also binds the
+project TeX macros the statement uses, from `blueprint/tex-macros.json`,
+directly or through another macro, since the site typesets the statement with
+them: a change to one marks stale the approvals of the statements that use it,
+and leaves the others current. It judges one state of the blueprint: it reads
+the articles, the sources they cite, and the cards before Lean runs and cuts
+every passage it compares from those bytes. When the extraction ends, it
+requires the extraction to have seen the same articles and sources and the
+cards to be unchanged, and it cuts every statement it compares from its article
+read once more, which must still have the bytes it read first. An edit that
+breaks any of these comparisons fails the check with `review-snapshot-changed`;
+run it again once the blueprint is idle. These are comparisons, not a lock: a
+change restored between them goes unseen, and an edit after the last does not
+affect a verdict already reached. `tex-macros.json` is read once, after Lean,
+and compared with nothing. `review prepare`, `review check`, and
+`render --review` accept the same `--timeout SECONDS` probe override as
+`skeleton`.
+
+`render --review` makes the same check, from one extraction of its own, and
+puts a *Review* disclosure under every formalized statement: the approval state,
+the review hash to approve, as a row that can be selected, the cited passage,
+and for each declaration its read-back card, marked current, invalid with the
+reasons, or missing, and the exact packet that was hashed. The packet is all
+the approval binds of a declaration, so the rows beside it mark its statement
+hash, and what it assumes and its axioms, proof included, as not bound. Render
+runs the extraction once its output, the vault it captured, the graph, the
+coverage contract and the Lean sources pass their checks, so a render they
+refuse costs no Lean. It judges the cards and the `tex-macros.json` it
+captured, the bytes `publication.json` hashes, and the articles and cited
+passages it publishes must be the ones the extraction read: an edit to one
+between the capture and the end of the extraction fails it with
+`review-snapshot-changed`. A card's formulas are typeset only when
+`readback.formula_problems` accepts them; any other is shown as typed, and
+render warns about it with its exit status unchanged. A passage cut from a file
+the site leaves out, such as a script, a file under `readbacks/`, or
+`atlas.json`, is refused with `review-source-unpublished`. A folder whose
+README says `published: false` is reviewed with the rest of the vault, and its
+articles, which render leaves out, get no disclosure and no warning; nor does a
+module catalog, which is not under review. The panels stay out of the site's
+search. `--timeout` is accepted only with `--review`, and when the review is
+refused, render prints the reasons on stdout and exits 1, as its other refusals
+do.
+
+The gate is opt-in for every project: a project turns it on by committing
+`blueprint/.autoform-review` holding `autoform-review-policy/v1` and a line
+end, and `autoform init` never writes that marker, neither for a new project
+nor on repair. With the marker, the generated CI runs `review check` after the
+Lean build, without turning advisory roadmap or coverage findings into merge
+blockers. Without it, cards or `review_approved` assertions fail CI instead of
+going unchecked, and once it is committed, deleting every card cannot turn the
+check off.
+
+`review_approved` records unchanged evidence, not who approved it:
+`review check` prints the expected hash, so anyone, an agent included, can
+paste it. An approval is current when `review_approved` equals the current
+review hash, which `review check` enforces, and a current approval is labelled
+self-approved wherever it is shown.
+
+`review_approved` is thus a drift checksum, not an authorization.
+Authorization has to come from repository policy: CODEOWNERS gives `blueprint/`
+a code owner (the `/blueprint/` rule in `CODEOWNERS.autoform.example`), and a
+ruleset on the default branch requires code-owner review, dismisses stale
+approvals and requires approval of the most recent push. Without that policy,
+a current approval authorizes nothing.
 
 When `--output`, `--packets`, and `--passages` are combined, all three outputs
 are staged before publication and a failed commit restores the previous set.
@@ -1439,13 +1563,15 @@ explorer” link is needed on each statement.
 configuration, on every build; `mkdocs.yml` lists it before the MathJax
 bundle, as `autoform init` writes both. It expects MathJax 3.2.2, the release
 its TeX settings were checked against, loads it itself when no bundle is
-listed, and leaves formulas as typed under any other release. The articles on
-a page share one TeX input, with the packages base, ams, noundefined,
-boldsymbol, mathtools, braket, mhchem, and amscd (`CD` diagrams), and the
-project's macros from
-`blueprint/tex-macros.json`, written as MathJax's `tex.macros` is: a name maps
-to a body, `[body, arguments]`, or `[body, arguments, default]`. So that no
-formula changes another or colors a
+listed, and leaves formulas as typed under any other release. Another script
+in `mkdocs.yml` cannot replace that configuration: an assignment to
+`window.MathJax`, such as the snippet Material's documentation gives, is
+ignored with an error in the browser console. The articles on a page share
+one TeX input, with the packages base, ams, noundefined, boldsymbol,
+mathtools, braket, mhchem, and amscd (`CD` diagrams), and the project's macros
+from `blueprint/tex-macros.json`, written as MathJax's `tex.macros` is: a name
+maps to a body, `[body, arguments]`, or `[body, arguments, default]`. So that
+no formula changes another or colors a
 symbol like the site's status marks, that input turns off `\label`,
 `\mmlToken`, `\DeclareMathOperator`, the paired-delimiter and tag-form
 commands of mathtools, and `\mathtoolsset`: each shows in red and does nothing,
@@ -1459,15 +1585,19 @@ commands; and verb and bussproofs are not loaded either. So `\cancel`,
 take one of their names; `check` and `render` warn about a macro they leave
 out. They judge and build the script from
 the copy of `tex-macros.json` that `render` reads once and publishes beside it,
-so an edit made during a render reaches neither. That input reads only the
-formulas the site's Markdown marks, such as
+so an edit made during a render reaches neither. Each read-back card is
+typeset with a TeX input of its own that knows only base, ams, and
+noundefined, so nothing an article, another card, or the project's macros
+define reaches it. The articles' input, and `check`, read only the formulas
+the site's Markdown marks, such as
 `$...$` or `$$...$$` in an article. Other text, such as a
 statement's title in its heading, a `discussion:` value, the lead on the home
 page, the navigation, and a table of contents, is shown as typed, TeX and all.
 Every formula paints only within its own line and the block that holds it,
 with either renderer and any theme, so no article formula can cover a card, a
 mark, or the text beside it. An inline formula wider than its paragraph is cut
-at the paragraph's edge, so write one that wide as a display, which scrolls.
+at the paragraph's edge, so write one that wide as a display, which scrolls,
+as does a card too wide for the page.
 
 A project scaffolded before `render` wrote that file keeps a
 `blueprint/javascripts/mathjax.js` and lists the MathJax bundle in `mkdocs.yml`
@@ -1687,20 +1817,21 @@ rather than indexing what it could, when an entry it must read cannot be read
 safely: a `.lean` file that cannot be read, a folder that cannot be listed or
 searched, a `.lean` entry that is a symbolic link or a special file (editor
 lock links named `.#*.lean` are skipped), or an unreadable `manifest.json`
-below the root, which is read to recognize skeleton output folders, or an
-unreadable `publication.json` below the root, which is read to recognize
-rendered sites. These stops apply in every folder the walk
+below the root, which is read to recognize skeleton and review packet output
+folders, or an unreadable `publication.json` below the root, which is read to
+recognize rendered sites. These stops apply in every folder the walk
 enters, so an unreadable folder of unrelated files inside the Lean root stops
 indexing too; other files are never read. `render` without `--lean-root` uses
 the blueprint's parent folder as the Lean root. To clear a stop, fix the
 permissions, or move the entry out of the Lean root or into a folder the walk
 skips: `.direnv`, `.git`, `.lake`, `.obsidian`, `.trash`, `.venv`,
 `build`, a folder below the root that holds a `.git` entry, a
-recognized skeleton output folder, or a folder below the root that holds a
-complete `publication.json`, such as a rendered site or the `mkdocs` copy of
-one. Every command skips these folders, so `render` and the other commands
-index the same files. `render` marks the site it is writing before it copies
-any file into it, so a command that indexes during a render skips it too.
+recognized skeleton or review packet output folder, or a folder below the
+root that holds a complete `publication.json`, such as a rendered site or the
+`mkdocs` copy of one. Every command skips these folders, so `render` and the
+other commands index the same files. `render` marks the site it is writing
+before it copies any file into it, so a command that indexes during a render
+skips it too.
 `mkdocs build` empties `site/` and then copies files in name order, so `site/`
 can hold copies before its `publication.json`; a command that indexes during
 the build can read them, so run it again once the build is done. There is no
@@ -1777,7 +1908,8 @@ internally consistent, and that cited work resolves to local source
 material without escaping the blueprint. Coverage files are checked for broken
 links and explicitly declared gaps. With `--lean-root`, local declaration names
 and declaration kinds are checked against the Lean source index, along with the
-elaboration limits each target runs under.
+elaboration limits each target runs under. It leaves `review_approved` to
+`review check`, since judging it needs a Lean extraction.
 
 An alias has its target's kind, size, and elaboration limits when the index
 can be sure what the target is. The audit tries the names Lean tries, in the
@@ -2169,10 +2301,11 @@ without running Lean.
 Run it in the library's CI after the build, with the same `--lib` flags, and
 pin the Autoform revision: the bytes of an index depend on it.
 
-The generator is tested on Lean 4.34.1 and 4.35.0 only and is not supported on
-Windows: it exits 2, before it runs Lean, when the package's `lean-toolchain` is
-neither `leanprover/lean4:v4.34.1` nor `leanprover/lean4:v4.35.0`, nor a spelling
-elan resolves to one of them, such as `v4.35.0`.
+The generator has been tested on Lean 4.34.1 and 4.35.0 only, CI runs its real
+tests on 4.35.0, and it is not supported on Windows: it exits 2, before it runs
+Lean, when the package's `lean-toolchain` is neither `leanprover/lean4:v4.34.1`
+nor `leanprover/lean4:v4.35.0`, nor a spelling elan resolves to one of them,
+such as `v4.35.0`.
 The index's `package` is the name in the package's `lake-manifest.json`, else in its
 `lakefile.toml`, and the command exits 2 when neither gives one; the folder it
 is checked out in never matters.
@@ -2379,7 +2512,7 @@ including a fork on GitHub, so the audit trusts that toolchain too.
 
 `autoform init` writes `.github/CODEOWNERS.autoform.example`. GitHub ignores
 that filename, so the example cannot mask or replace a repository's active
-owners. Its two suggested rules cover Autoform's control paths: the roadmap's
+owners. Two of its suggested rules cover Autoform's control paths: the roadmap's
 `open_statements` policy and `.github/` CI. To activate them, find the first
 existing CODEOWNERS file in GitHub's order (`.github/CODEOWNERS`, `CODEOWNERS`,
 then `docs/CODEOWNERS`), or choose `.github/CODEOWNERS` when none exists; copy
@@ -2611,6 +2744,11 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
    every other dependent. Roadmap edits only Markdown: it releases any claims
    and leaves the Lean revision to Formalize.
 
+With the review marker, a commit that drops a declaration from an article's
+`lean:` also deletes that declaration's read-back cards under
+`blueprint/readbacks/<article_id>/`, which `review check` otherwise reports as
+orphaned, and one that removes `lean:` also removes `review_approved`.
+
 ## Local runtime doctor
 
 Use the runtime projection and roadmap audit together without contacting any
@@ -2735,7 +2873,10 @@ available views. It contains no timestamp or absolute path, so identical inputs
 produce identical output files. Render reads the blueprint and the Lean sources
 once each and derives every page, link and hash from those bytes; an edit saved
 during a render waits for the next one, and until then the dashboard reports the
-built site as stale. The vault's hidden implementation notes are read in place
+built site as stale. Under `--review`, the extraction reads both again, and an
+article or cited passage edited between the capture and the end of the
+extraction fails the render instead (see `render --review` under statement
+review); a later edit waits for the next one. The vault's hidden implementation notes are read in place
 only to validate them. Repository links appear only when the Lean bytes match
 one locally available Git commit, recorded by its full object ID; a clean
 checkout that Git converts on checkout still matches. Otherwise the render stays

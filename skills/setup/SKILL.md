@@ -141,6 +141,14 @@ Name the require `repl`, as that example does: the runtime runs
 Then run `lake update repl` so an existing manifest locks it without moving
 Mathlib, commit the manifest, and verify `lake build @repl/repl`.
 
+`project new` turns on Lake's artifact cache with `enableArtifactCache = true`
+and `restoreAllArtifacts = true` in `lakefile.toml`, so checkouts and worktrees
+on the same toolchain reuse each other's builds instead of rebuilding them.
+For an existing project whose lakefile lacks them, offer to add both; a
+`lakefile.lean` takes them in its `package` declaration. Never enable the cache
+without `restoreAllArtifacts`: Autoform's probes load each module's `.olean`
+from `.lake/build`, where only a restore puts it.
+
 `autoform init` is the whole vault: `blueprint/` with its landing page,
 `roadmap/README.md`, `coverage/`, and `sources/`, plus `mkdocs.yml`, the theme
 override, both workflows, and ignore rules. Do not hand-build any of it and do
@@ -177,8 +185,10 @@ branch, a tag, or an abbreviated sha, because CI would silently reinstall a
 different Autoform later and break a project that was passing.
 
 The two workflows it writes are `autoform-verify.yml`, which validates the
-Markdown DAG, builds Lean, rejects unfinished or unsafe proofs, and audits
-theorem axioms on pull requests, and `blueprint-pages.yml`, which validates the
+Markdown DAG, builds Lean, rejects unfinished or unsafe proofs, audits theorem
+axioms on pull requests, and runs the statement-review gate where the project
+has opted in with `blueprint/.autoform-review` (`init` never writes that
+marker; see the CLI reference), and `blueprint-pages.yml`, which validates the
 DAG and its `lean:` declarations, renders the blueprint, builds MkDocs, and
 deploys GitHub Pages only for a commit `autoform verify` passed on main. Pass
 `--autoform-ref` to pin them at an immutable commit.

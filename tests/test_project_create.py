@@ -42,7 +42,9 @@ _CORE_FILES = ("lean-toolchain", "lakefile.toml", "lake-manifest.json", "src/Pro
 _UNLISTED_LAKEFILE = (
     'name = "Project"\n'
     'version = "0.1.0"\n'
-    'defaultTargets = ["Project"]\n\n'
+    'defaultTargets = ["Project"]\n'
+    "enableArtifactCache = true\n"
+    "restoreAllArtifacts = true\n\n"
     "[[require]]\n"
     'name = "mathlib"\n'
     'git = "https://github.com/leanprover-community/mathlib4"\n'
@@ -296,7 +298,9 @@ def test_creates_complete_supported_project(tmp_path: Path) -> None:
     assert (target / "lakefile.toml").read_text(encoding="utf-8") == (
         'name = "FiniteFlat"\n'
         'version = "0.1.0"\n'
-        'defaultTargets = ["FiniteFlat"]\n\n'
+        'defaultTargets = ["FiniteFlat"]\n'
+        "enableArtifactCache = true\n"
+        "restoreAllArtifacts = true\n\n"
         "[[require]]\n"
         'name = "mathlib"\n'
         'git = "https://github.com/leanprover-community/mathlib4"\n'
@@ -2094,7 +2098,9 @@ def test_library_project_is_complete_and_locked(tmp_path: Path) -> None:
     assert (target / "lakefile.toml").read_text(encoding="utf-8") == (
         'name = "Gauss"\n'
         'version = "0.1.0"\n'
-        'defaultTargets = ["Gauss"]\n\n'
+        'defaultTargets = ["Gauss"]\n'
+        "enableArtifactCache = true\n"
+        "restoreAllArtifacts = true\n\n"
         "[[require]]\n"
         'name = "mathlib"\n'
         'git = "https://github.com/leanprover-community/mathlib4"\n'
