@@ -11,14 +11,20 @@ date when the release is tagged.
 
 ### Changed
 
-- **Claims.** `claim list TARGET...` lists only those claims, without
-  fetching or reading any other claim. `--timeout` (120 seconds by default)
-  bounds a listing, a slow step is named on stderr, and a failure goes to
-  stderr labelled `timeout:`, `contention:` or `transport:` with nothing on
-  stdout. Git no longer waits for a terminal password prompt in claim
-  commands, and a listing that runs out of time or is interrupted no longer
-  leaves its transport running. Formalize treats a labelled `claim list`
-  failure as an unreadable board, not as a board without claims (#432).
+- **Docs.** The CLI reference's contracts moved to `autoform_cli/reference/`
+  (validation and audit, search, open statements, claims and revisions,
+  runtime and publication). The reference, skills and contributor docs keep
+  only the rules users and agents act on; internals moved to module
+  docstrings, and upgrade notes to this file. `tests/test_doc_budgets.py`
+  fails when one of these docs grows past its line budget (#458).
+- **Claims.** `claim list TARGET...` fetches and reads only those claims.
+  `--timeout` (120 seconds by default) bounds a listing, a slow step is named on
+  stderr, and a failure goes to stderr labelled `timeout:`, `contention:` or
+  `transport:` with nothing on stdout. Git no longer waits for a terminal
+  password prompt in claim commands, and a `claim list` or `claim cleanup`
+  listing that runs out of time or is interrupted no longer leaves its
+  transport running. Formalize treats a labelled `claim list` failure as an
+  unreadable board, not as a board without claims (#432).
 - **Render.** An article's page lists its `mathlib_declaration` names in a
   Mathlib row, as text without a link, so a `mathlib: true` article names the
   declaration it restates (#388).
@@ -32,6 +38,40 @@ date when the release is tagged.
   articles that proof uses, and keeps the source's route in the proof sketch,
   so the article is not blocked on steps its proof never needs; Agent Review
   checks the same (#443).
+- **Dependency explorer.** The rail and the details typeset the TeX in titles
+  and summaries, with the articles' input and the project's macros, where the
+  explorer's own MathJax calls had typeset nothing on a generated site. Map
+  cards, the Contents list, search and the explorer's head still show a title
+  as typed (#455).
+- **Theme.** A new project's site opens in the reader's own light or dark
+  setting, with Material's sun or moon to switch it, and the explorer's head
+  carries the same switch (#444). Setup leaves an existing `mkdocs.yml` alone,
+  so an existing site stays dark until the `palette:` and `scheme: slate` lines
+  under `theme:` are replaced with the scaffolded pair:
+
+  ```yaml
+    palette:
+      - media: "(prefers-color-scheme: light)"
+        scheme: default
+        toggle:
+          icon: material/weather-night
+          name: Use dark theme
+      - media: "(prefers-color-scheme: dark)"
+        scheme: slate
+        toggle:
+          icon: material/weather-sunny
+          name: Use light theme
+  ```
+
+### Fixed
+
+- **Claims.** `autoform dashboard` runs its claim listing's Git in the
+  dashboard's process group again, so Ctrl+C or a signal to that group stops
+  Git along with the dashboard (#447). On macOS and Windows, a listing shows
+  both of two claims whose keys, or folders in them, differ only in case,
+  including with Apple's Git, which stored one key's name holding the other's
+  lease (#452). The claim contract now says what `--timeout` bounds and which
+  listings run Git apart from their caller (#448).
 
 ## 0.6.0 (2026-10-22)
 
@@ -40,16 +80,46 @@ theme. Each group names the pull requests to read for detail.
 
 ### Upgrading from 0.5.0
 
+- **Pin.** CI at an older `AUTOFORM_REF` rejects `area:`, `navigation:`,
+  `catalog:` and `statement: retracted` in `check` and `INVENTORIED` in
+  `render`, so move the pin before using them; until then, retract by removing
+  `statement` and `proof` and keeping `lean:`. Older refs assign no areas from
+  `blueprint/atlas.json` but publish it with every id it names, so a project
+  with unpublished folders moves the pin before adding it (#90).
 - **Site.** Render refuses to replace the `autoform-publication/v1` site 0.5.0
   wrote, and the dashboard reports it as stale: delete that output directory,
-  such as a local `site-src`, once by hand (#165, #90).
+  such as a local `site-src`, once by hand (#165, #90). A v2 site is replaced
+  by the first render and reported as stale until then.
 - **Check.** A repository that passed 0.5.0's `check` can fail this one's; see
-  **Checks that fail** below.
+  **Checks that fail** below. `check`'s status line counts only leaves that
+  carry `declaration`, and with `--lean-root` the distinct `lean:` names it
+  resolved. A `blueprint/atlas.json` that is not `autoform-atlas/v1` draws a
+  warning from `check`, `render` and `audit`.
+- **Universe binders.** `def f.{u}` is read as `f`, so a `lean:` name for it
+  resolves and an alias of one is read through its target. A name declared
+  that way in one file and plainly in another is `defined more than once` in
+  `check` and `lean-target-ambiguous` in `audit` (#348, #90).
+- **Coverage and audit.** `audit`'s coverage line always shows an inventoried
+  count, and its text output adds `warning:` lines. A `DECOMPOSED` link that
+  reaches only prose or `not_ready` leaves that declare nothing yet is a
+  `decomposed-without-declaration` warning, which `render` also prints;
+  neither fails (#90).
+- **JSON consumers.** Runtime nodes and every `autoform search --json` hit
+  carry a nullable `catalog` (`module` for a module catalog); search stays
+  `autoform-search/v1`, so a consumer that rejects unknown keys must accept it
+  (#90).
 - **TeX.** Formulas can no longer define notation: `\newcommand`, `\def`,
   `\DeclareMathOperator`, `\label`, `\color`, `\cancel`, `\href` and the like
   show in red, and `check` warns about a formula that defines a command. Put
   the project's macros in `blueprint/tex-macros.json`; render replaces an
-  edited `blueprint/javascripts/mathjax.js`, with a warning (#215).
+  edited `blueprint/javascripts/mathjax.js`, with a warning, so move its macros
+  to `tex-macros.json` and delete it (#215).
+- **Mermaid.** Authored diagrams lose click callbacks, HTML labels and the
+  status palette's `classDef` colours, such as `A:::fully_proved`. A
+  `mkdocs.yml` that loads Mermaid from the CDN may drop that line once CI's
+  `AUTOFORM_REF` includes #378; a render pinned before it needs the line.
+- **MkDocs.** Setup leaves an existing `mkdocs.yml` alone; a large site can add
+  Material's `navigation.prune` feature by hand, as the scaffold does.
 - **Debrief.** Setup, Roadmap and Formalize now debrief their lead agent
   before the final report, on by default; `AUTOFORM_DEBRIEF=0` turns it off.
   Subagent debriefs run only with `AUTOFORM_SUBAGENT_DEBRIEF=1` (#195).

@@ -27,6 +27,33 @@ reading of where the formulas are, and :func:`formula_problems` says whether
 each can be typeset: the site typesets those it accepts, with a TeX input of
 the card's own, and shows the others as typed. No formula makes testimony
 invalid.
+``\\$`` is a dollar sign that opens nothing, and no file under ``readbacks/``
+is copied to the site. Loading accepts code points this Python's Unicode data
+leaves unassigned, which a write refuses, so a filed card loads the same under
+every Python. The user-facing rules are in the CLI reference's read-back cards
+section and in ``skills/human-review/references/readback.md``; the mechanics
+below are what they leave out.
+
+Paths. The durable ``article_id`` keeps testimony attached when an article
+moves. The encoded filename avoids platform-specific Lean-name collisions, and
+before its first dot never spells a name Windows keeps for a device, as
+``Aux.lemma`` would.
+
+Loading. No card file is read more than one byte past its 4 MiB limit, and a
+card's frontmatter is read from its first 32 lines. A card is attributed to the
+declaration its path names, even when that name is too long for the filename to
+spell, so a card that records another declaration, or whose ``.md`` is in
+another case, is reported as that declaration's invalid card.
+
+Writing. Writes name a card by the hash of its bytes, so a card that is not
+UTF-8 is replaced like any other. Filing content identical to the current card
+writes nothing in its directory, so it succeeds even in a read-only one. The
+blueprint ``.gitignore`` that ``autoform init`` writes for a new project
+ignores the ``.autoform-readback-*.tmp`` staging file. A crash just after a
+write can lose the card; filing it again restores it. The lock and
+compare-and-swap cover Autoform's writers only: an editor's save, or a
+directory moved, during a write is not detected. Git for Windows checks text
+out with CRLF line ends by default, hence the ``* -text`` ``.gitattributes``.
 """
 
 from __future__ import annotations

@@ -34,6 +34,11 @@ from tests.test_lean_sources import _git_commit
 _HREF = re.compile(r'href="([^"]+)"')
 _EXAMPLE = Path("skills/setup/assets/cabannes-thesis-project")
 _LEAN_FLOOR = "v" + ".".join(str(part) for part in _MINIMUM_LEAN)
+
+
+def _cli_reference(repo_root: Path) -> list[Path]:
+    """The CLI reference: autoform_cli/README.md and its contract pages in autoform_cli/reference/."""
+    return [repo_root / "autoform_cli/README.md", *sorted((repo_root / "autoform_cli/reference").glob("*.md"))]
 # Upstream tag v4.32.0 of leanprover-community/repl points at this commit:
 # `git ls-remote --tags https://github.com/leanprover-community/repl.git`
 # lists refs/tags/v4.32.0 at it.
@@ -522,9 +527,10 @@ def test_skills_teach_the_shipped_frontmatter_model(repo_root: Path) -> None:
     accepts; a key it rejects makes agents author articles that fail to load.
     """
     taught = []
-    for page in [repo_root / "autoform_cli/README.md", *sorted((repo_root / "skills").rglob("*.md"))]:
+    reference = _cli_reference(repo_root)
+    for page in [*reference, *sorted((repo_root / "skills").rglob("*.md"))]:
         text = page.read_text(encoding="utf-8")
-        keys = [] if page.parent.name == "autoform_cli" else re.findall(r"`([a-z_]+):(?: [^`]*)?`", text)
+        keys = [] if page in reference else re.findall(r"`([a-z_]+):(?: [^`]*)?`", text)
         for block in re.findall(r"```[a-z]*\n---\n(.*?)\n---\n", text, re.DOTALL):
             keys += re.findall(r"^([a-z_]+):", block, re.MULTILINE)
         taught += [(page.relative_to(repo_root).as_posix(), key) for key in keys if key not in _NOT_FRONTMATTER]
@@ -563,7 +569,7 @@ def test_cli_reference_documents_only_commands_that_exist(repo_root: Path) -> No
 
     from autoform_cli.__main__ import main
 
-    reference = (repo_root / "autoform_cli/README.md").read_text(encoding="utf-8")
+    reference = "\n".join(page.read_text(encoding="utf-8") for page in _cli_reference(repo_root))
     documented = _documented_invocations(reference)
     assert {("check",), ("audit",), ("render",), ("search",), ("claim", "acquire")} <= documented
 
@@ -604,23 +610,25 @@ def test_skill_links_into_the_cli_reference_land_on_a_section(repo_root: Path) -
     longer matches a heading leaves the agent at the top of a long file with no
     contract to read.
     """
-    reference_path = repo_root / "autoform_cli/README.md"
-    sections: set[str] = set()
-    fenced = False
-    for line in reference_path.read_text(encoding="utf-8").splitlines():
-        if line.lstrip().startswith("```"):
-            fenced = not fenced
-        elif not fenced and (heading := re.fullmatch(r"#{1,6} +(.+?) *", line)):
-            sections.add(re.sub(r"[^\w -]", "", heading[1].lower()).replace(" ", "-"))
+    sections: dict[Path, set[str]] = {}
+    for reference_path in _cli_reference(repo_root):
+        fenced, found = False, set()
+        for line in reference_path.read_text(encoding="utf-8").splitlines():
+            if line.lstrip().startswith("```"):
+                fenced = not fenced
+            elif not fenced and (heading := re.fullmatch(r"#{1,6} +(.+?) *", line)):
+                found.add(re.sub(r"[^\w -]", "", heading[1].lower()).replace(" ", "-"))
+        sections[reference_path.resolve()] = found
 
     cited = 0
+    pattern = r"\(([^)\s]*autoform_cli/(?:README|reference/[\w-]+)\.md)(?:#([^)\s]+))?\)"
     for page in sorted((repo_root / "skills").rglob("*.md")):
         where = page.relative_to(repo_root)
-        links = re.findall(r"\(([^)\s]*autoform_cli/README\.md)(?:#([^)\s]+))?\)", page.read_text(encoding="utf-8"))
-        for target, fragment in links:
-            assert (page.parent / target).resolve() == reference_path, f"{where} links past the reference: {target}"
+        for target, fragment in re.findall(pattern, page.read_text(encoding="utf-8")):
+            resolved = (page.parent / target).resolve()
+            assert resolved in sections, f"{where} links past the reference: {target}"
             if fragment:
-                assert fragment in sections, f"{where} links to a missing section: #{fragment}"
+                assert fragment in sections[resolved], f"{where} links to a missing section: {target}#{fragment}"
                 cited += 1
     assert cited
 
@@ -859,7 +867,7 @@ def test_documented_autoform_commands_parse(repo_root: Path, monkeypatch: pytest
         for name in re.findall(r"^name:(.+)$", template.read_text(encoding="utf-8"), re.MULTILINE)
     }
     failures, checked = [], 0
-    for page in [repo_root / "autoform_cli/README.md", *sorted((repo_root / "skills").rglob("*.md"))]:
+    for page in [*_cli_reference(repo_root), *sorted((repo_root / "skills").rglob("*.md"))]:
         for command, fenced in _documented_commands(page.read_text(encoding="utf-8")):
             if not fenced and f"autoform {command}" in workflows:
                 continue

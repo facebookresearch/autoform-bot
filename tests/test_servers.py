@@ -81,15 +81,6 @@ class TestProjectResolution:
 class TestReplServer:
     """Contracts for the Lean REPL MCP adapter."""
 
-    def test_import_server(self):
-        from servers.repl import server  # noqa: F401
-
-    def test_import_core(self):
-        from servers.repl import core  # noqa: F401
-
-    def test_import_pool(self):
-        from servers.repl import pool  # noqa: F401
-
     def test_create_server(self):
         from servers.repl.server import create_repl_server
 
@@ -113,9 +104,6 @@ class TestReplServer:
 
 class TestLspServer:
     """Contracts for the Lean language-server service."""
-
-    def test_import_server(self):
-        from servers.lsp import server  # noqa: F401
 
     def test_create_server(self):
         from servers.lsp.server import create_lsp_server

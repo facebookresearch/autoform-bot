@@ -122,19 +122,19 @@ def test_a_dense_chapter_frames_its_linked_cards_and_says_part_of_it_is_hidden()
     width, height = 1152, 847
     result = _first_view(view, width, height)
     boxes = result["boxes"]
-    # The linked cards cannot open readable and whole either, so the camera centres the first of them.
-    assert result["scale"] == pytest.approx(0.9)
-    assert _inside(boxes["foundation"], width, height) and _centred(boxes["foundation"], width, height)
+    # Unlinked cards pack apart from the chain, so the linked cards open readable and whole.
+    assert result["scale"] >= 0.9
+    assert all(_inside(boxes[node], width, height) for node in chain)
     assert not _inside(boxes["auxiliary-0"], width, height)
     # Cards really are off screen, so the note says so and names the way to all of them.
     assert result["hidden"] is False
     assert result["note"] == "Drag to see more, or open Results for all 63."
 
 
-@pytest.mark.parametrize(("width", "scale"), ((900, None), (800, 0.9)))
+@pytest.mark.parametrize(("width", "scale"), ((900, None), (740, 0.9)))
 def test_a_map_that_fits_shows_every_card_and_no_pan_note(width: int, scale: float | None) -> None:
     """The note told readers to pan when every card was already on screen."""
-    # At 800px the map is wider than the stage less its padding at the .9 floor, but not wider than the stage,
+    # At 740px the map is wider than the stage less its padding at the .9 floor, but not wider than the stage,
     # so the padding gives way and the whole map stays centred instead of a card being centred.
     view = _view(["a", "b", "c", "loose"], [("a", "b"), ("b", "c")])
     height = 600
@@ -148,17 +148,17 @@ def test_a_map_that_fits_shows_every_card_and_no_pan_note(width: int, scale: flo
 
 
 def test_a_phone_map_that_fits_at_the_floor_shows_its_unlinked_cards_too() -> None:
-    """On a phone the whole map fits at the .9 floor, yet framing only the pair would push the unlinked card off."""
+    """On a phone the whole map fits at or above the .9 floor, yet framing only the pair would push the unlinked card off."""
     view = _view(["a", "b", "loose"], [("a", "b")])
     width, height = 430, 800
     result = _first_view(view, width, height)
-    assert result["scale"] == pytest.approx(0.9)
+    assert result["scale"] >= 0.9
     assert all(_inside(box, width, height) for box in result["boxes"].values())
     assert result["hidden"] is True and result["note"] == ""
     # A narrower phone cannot show all three, so it frames the linked pair and says the rest is off screen.
-    narrow = _first_view(view, 390, 700)
-    assert _inside(narrow["boxes"]["a"], 390, 700) and _inside(narrow["boxes"]["b"], 390, 700)
-    assert not _inside(narrow["boxes"]["loose"], 390, 700)
+    narrow = _first_view(view, 390, 560)
+    assert _inside(narrow["boxes"]["a"], 390, 560) and _inside(narrow["boxes"]["b"], 390, 560)
+    assert not _inside(narrow["boxes"]["loose"], 390, 560)
     assert narrow["hidden"] is False and narrow["note"].endswith("for all 3.")
 
 
@@ -181,6 +181,6 @@ def test_the_workspace_map_starts_below_its_title() -> None:
     result = _first_view(view, width, height)
     assert result["scale"] > 0.9
     assert min(box["y"] for box in result["boxes"].values()) == pytest.approx(56)
-    assert max(box["y"] + box["h"] for box in result["boxes"].values()) == pytest.approx(height - 36)
+    assert max(box["y"] + box["h"] for box in result["boxes"].values()) == pytest.approx(height - 44)
     assert all(_inside(box, width, height) for box in result["boxes"].values())
     assert result["hidden"] is True

@@ -38,7 +38,7 @@ const kinds = source.match(/\bvar KINDS =[^;]+;/);
 assert(kinds, 'Production kind words missing');
 const functions = [
   'element', 'button', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
-  'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'calculateActive',
+  'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'matchesStatus', 'calculateActive',
   'statusLabel', 'finished', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');

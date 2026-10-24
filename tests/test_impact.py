@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -39,6 +38,7 @@ from autoform_cli.impact import (
 from autoform_cli.lean import snapshot_project_sources
 from autoform_cli.skeleton import LeanLibrary, SkeletonError, lean_libraries
 from autoform_cli.work import work_context
+from tests.conftest import _lean_toolchain_available
 
 _SKELETON_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "skeleton-project"
 
@@ -2837,32 +2837,6 @@ def test_cli_import_impact_takes_the_import_closure_scope(tmp_path: Path, monkey
     report = json.loads(output.out)
     assert report["module_scope"] == "import-closure"
     assert report["article_local"] is False
-
-
-def _lean_toolchain_available() -> bool:
-    """Whether a project pinned like the skeleton fixture builds here without a download.
-
-    This repeats tests/test_skeleton.py's check, including its
-    AUTOFORM_REQUIRE_REAL_LEAN_TESTS switch, rather than importing that module.
-    """
-
-    def unavailable(reason: str) -> bool:
-        if os.environ.get("AUTOFORM_REQUIRE_REAL_LEAN_TESTS") == "1":
-            raise RuntimeError(f"real Lean tests are required but unavailable: {reason}")
-        return False
-
-    if shutil.which("lake") is None:
-        return unavailable("lake is not on PATH")
-    elan = shutil.which("elan")
-    if elan is None:
-        return True
-    pinned = (_SKELETON_FIXTURE / "lean-toolchain").read_text(encoding="utf-8").strip()
-    try:
-        listed = subprocess.run([elan, "toolchain", "list"], capture_output=True, text=True, timeout=30, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return unavailable("elan toolchain discovery failed")
-    available = any(line.split()[:1] == [pinned] for line in listed.stdout.splitlines())
-    return available or unavailable(f"{pinned} is not installed")
 
 
 _IMP_BASIC = """\

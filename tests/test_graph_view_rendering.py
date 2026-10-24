@@ -388,6 +388,7 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     # Only the publisher's controlled formula service refreshes mathematics;
     # navigation clones the complete reading source rather than graph summaries.
     assert "typesetPromise" not in script
+    assert "autoform:typeset" not in script and "FORMULA_CLASS_JSON" not in script
     assert "window.AutoformMath.refresh(refs.readingBody)" in script
     assert "refs.readingBody.replaceChildren(bundle.readingSource)" in script
     assert "navigation.bindReader(refs.readingBody)" in script
@@ -516,7 +517,7 @@ def test_the_phone_reader_peeks_opens_to_half_or_covers_the_map() -> None:
     # Its accessible name starts with the title it shows; an open desktop reader over an area or the overview closes with ×.
     assert 'refs.sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");' in script
     assert "Toggle mathematical reading" not in script
-    assert "var close = opened && !sheetLayout() && (state.area || state.overviewOnly)" in script
+    assert "var close = opened && !sheetLayout() && (state.area || state.overviewOnly || state.scopeOverview)" in script
     assert "band = Math.max(NODE_H, Math.min(band, drawer.clientHeight * .45));" in script
     assert 'navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-open") ? freeArea().band : refs.stage.clientHeight;' in script
     assert "box.y + box.h > (free.top || 0) + free.band - 12) center(node, .82);" in script
@@ -574,8 +575,8 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
     script = _viewer_source()
     style = dag_viewer.render_container("graph.json")
 
-    assert 'var lead = node._region ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, tail = scopeMeta || statusLabel(node.status);' in script
-    assert 'var meta = node._region || !lead ? tail : lead + " · " + tail;' in script
+    assert 'var lead = area ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, tail = scopeMeta || statusLabel(node.status);' in script
+    assert 'var meta = area || !lead ? tail : lead + " · " + tail;' in script
     assert 'if (lead) { line.appendChild(element("span", "", lead)); line.appendChild(element("span", "", " · ")); }' in script
     # An area card's summary takes the topic count, and the meta keeps "2,070 of 2,485 fully proved" whole beside it.
     assert 'element("span", "bp-dag-node-summary", lead + ": " + node.summary)' in script
@@ -837,7 +838,7 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     """Map and Areas both read as pressed at the root, a deep trail sat in a third of an empty row, and tablets had three rows."""
     script, style = _viewer_source(), dag_viewer._STYLE
     # Areas stays: inside an area it is the way back to the overview, whose root crumb is then not a link.
-    assert 'var areas = state.mode === "graph" && !state.area && data.nodes.some(function (node) { return node._region; });' in script
+    assert 'var areas = state.mode === "graph" && !state.area && !state.overviewGroup && data.nodes.some(function (node) { return node._region; });' in script
     assert 'pressed(refs.graphMode, state.mode === "graph" && !areas);' in script
     assert 'if (refs.regionsMode) pressed(refs.regionsMode, areas);' in script
     assert 'refs.graphMode.setAttribute("aria-pressed", String(state.mode === "graph"));' not in script

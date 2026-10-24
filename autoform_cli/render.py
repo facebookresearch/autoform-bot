@@ -5,6 +5,33 @@ which every node page is wrapped in a numbered statement box carrying its
 derived status, a link to the Lean code that discharges it, and its place in
 the DAG -- the presentation ``leanblueprint`` gives a LaTeX blueprint, driven
 from Markdown instead.
+
+The user-facing rules are the publication contract in
+``autoform_cli/reference/runtime-and-publication.md``. The legacy full route is
+a project-scale compatibility shell backed by a layout-free global search
+index, never an all-repository node cloud. ``autoform-publication/v3`` records
+what v2 records, but the site holds the shared explorer's JSON projections and
+script in place of v2's Mermaid dependency maps, and the blueprint hash is taken
+under a label of its own, so no v2 ``source_revision`` equals a v3 one.
+
+Repository matching: a clean checkout that Git converts on checkout still
+matches its commit. A blueprint outside the repository, or in a submodule or
+other checkout nested in it, gets no blueprint links and no warning.
+
+Committing a site: it is built and synced in a hidden
+``.autoform-publication-*`` directory beside the output, then swapped in with
+one atomic exchange (``renamex_np`` on macOS, ``renameat2`` on Linux); renders
+committing into the same parent directory take turns when it can be locked. On
+filesystems without the exchange (NFS, SMB, 9p or WSL2 ``/mnt/c``, exFAT,
+sshfs) the previous site is first renamed to
+``.autoform-publication-backup-<name>``; if render dies between the two
+renames, the next render moves it back before anything else. macOS metadata
+files are ignored when an existing site is matched against its inventory.
+Render never indexes a leftover staging directory as Lean source. On macOS
+``fsync`` does not flush the drive's cache, so a power loss can still lose the
+newest site. Native Windows has no directory-descriptor traversal: render reads
+the blueprint and the output as two pathname captures that must agree and
+commits through the backup swap without a lock.
 """
 
 from __future__ import annotations

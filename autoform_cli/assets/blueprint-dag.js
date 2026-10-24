@@ -102,7 +102,7 @@
   }
 
   // Deterministic, bounded scene geometry; public graph data remains untouched.
-  function layoutGraph(nodes, edges, direction) {
+  function layoutGraph(nodes, edges, direction, stageAspect) {
     var boxes = new Map(), routes = [], work = {ticks: 0, pairs: 0, moves: 0, candidates: 0, escapes: 0};
     if (nodes.length > MAX_MAP_NODES) return null;
     if (!nodes.length) return {nodes: boxes, routes: routes, clusters: [], work: work, bounds: {x: 0, y: 0, w: 1, h: 1}};
@@ -130,6 +130,12 @@
       a.target < b.target ? -1 : a.target > b.target ? 1 : a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : a.count - b.count; });
     adjacency.forEach(function (neighbors) { neighbors.sort(function (a, b) { return a - b; }); });
     var springs = Array.from(links.values()).sort(function (a, b) { return a.a - b.a || a.b - b.b; });
+    var islands = [], islandIds = new Map();
+    vertices.forEach(function (node, index) {
+      var key = root(index), island = islandIds.get(key);
+      if (island === undefined) { island = islands.length; islandIds.set(key, island); islands.push({key: node.id, members: [], components: [], links: 0}); }
+      node.island = island; islands[island].members.push(index);
+    });
     var sequence = 0, stack = [], components = [], visitIndex = [], low = [], onStack = [], componentOf = [];
     function visit(index) {
       visitIndex[index] = low[index] = sequence++; stack.push(index); onStack[index] = true;
@@ -144,20 +150,24 @@
       components.push({members: members, key: vertices[members[0]].id, rank: 0, indegree: 0, after: new Set()});
     }
     vertices.forEach(function (_node, index) { if (visitIndex[index] === undefined) visit(index); });
+    components.forEach(function (component, index) { islands[vertices[component.members[0]].island].components.push(index); });
     springs.forEach(function (link) {
       var a = componentOf[link.a], b = componentOf[link.b];
       if (a !== b && !components[a].after.has(b)) { components[a].after.add(b); components[b].indegree++; }
+      islands[vertices[link.a].island].links++;
       vertices[link.a].degree++; vertices[link.b].degree++;
     });
-    var queue = components.map(function (_component, index) { return index; }).filter(function (index) { return !components[index].indegree; });
-    while (queue.length) {
-      queue.sort(function (a, b) { return components[a].key < components[b].key ? -1 : 1; });
-      var first = queue.shift(), component = components[first];
-      component.after.forEach(function (next) {
-        components[next].rank = Math.max(components[next].rank, component.rank + 1);
-        if (!--components[next].indegree) queue.push(next);
-      });
-    }
+    islands.forEach(function (island) {
+      var queue = island.components.filter(function (index) { return !components[index].indegree; });
+      while (queue.length) {
+        queue.sort(function (a, b) { return components[a].key < components[b].key ? -1 : 1; });
+        var first = queue.shift(), component = components[first];
+        component.after.forEach(function (next) {
+          components[next].rank = Math.max(components[next].rank, component.rank + 1);
+          if (!--components[next].indegree) queue.push(next);
+        });
+      }
+    });
     function overlap(a, b, padding) {
       return a.x < b.x + b.w + padding && a.x + a.w > b.x - padding && a.y < b.y + b.h + padding && a.y + a.h > b.y - padding;
     }
@@ -183,25 +193,31 @@
       component.w = extent.w; component.h = extent.h;
       placed.forEach(function (node) { node.x -= extent.x; node.y -= extent.y; });
     });
-    var ranks = [], primary = 36;
-    components.forEach(function (component) { (ranks[component.rank] || (ranks[component.rank] = [])).push(component); });
-    ranks.forEach(function (rank) {
-      rank.sort(function (a, b) { return a.key < b.key ? -1 : 1; });
-      var width = Math.max.apply(null, rank.map(function (component) { return component.w; }));
-      var height = rank.reduce(function (sum, component) { return sum + component.h + 96; }, -96), secondary = -height / 2;
-      rank.forEach(function (component) {
-        component.members.forEach(function (index) {
-          var node = vertices[index]; node.x += primary + (width - component.w) / 2; node.y += secondary;
-          node.seedX = node.x; node.seedY = node.y; node.cluster = componentOf[index]; node.rank = component.rank;
+    islands.forEach(function (island) {
+      var ranks = [], primary = 36;
+      island.components.forEach(function (index) { var component = components[index]; (ranks[component.rank] || (ranks[component.rank] = [])).push(component); });
+      ranks.forEach(function (rank) {
+        rank.sort(function (a, b) { return a.key < b.key ? -1 : 1; });
+        var width = Math.max.apply(null, rank.map(function (component) { return component.w; }));
+        var height = rank.reduce(function (sum, component) { return sum + component.h + 96; }, -96), secondary = -height / 2;
+        rank.forEach(function (component) {
+          component.members.forEach(function (index) {
+            var node = vertices[index]; node.x += primary + (width - component.w) / 2; node.y += secondary;
+            node.seedX = node.x; node.seedY = node.y; node.cluster = componentOf[index]; node.rank = component.rank;
+          });
+          secondary += component.h + 96;
         });
-        secondary += component.h + 96;
+        primary += width + 144;
       });
-      primary += width + 144;
     });
-    var cohorts = new Map();
-    vertices.forEach(function (node, index) {
-      var key = node.area || node.scope || "component:" + root(index), group = cohorts.get(key) || [];
-      group.push(index); cohorts.set(key, group);
+    var cohorts = [];
+    islands.forEach(function (island) {
+      var groups = new Map();
+      island.members.forEach(function (index) {
+        var node = vertices[index], key = node.area || node.scope || "component:" + root(index), group = groups.get(key) || [];
+        group.push(index); groups.set(key, group);
+      });
+      groups.forEach(function (group) { cohorts.push(group); });
     });
     // Every accepted move preserves separated rectangles; no unbounded collision repair.
     for (var tick = 0; tick < 32; tick++) {
@@ -221,6 +237,7 @@
       vertices.forEach(function (a, index) {
         vertices.slice(index + 1).forEach(function (b, next) {
           work.pairs++;
+          if (a.island !== b.island) return;
           var dx = b.x + b.w / 2 - a.x - a.w / 2, dy = b.y + b.h / 2 - a.y - a.h / 2, distance = Math.max(1, dx * dx + dy * dy);
           var push = Math.min(2, 5000 / distance);
           forces[index].x -= dx / Math.sqrt(distance) * push; forces[index].y -= dy / Math.sqrt(distance) * push;
@@ -232,13 +249,15 @@
         [[dx, dy], [0, dy], [dx, 0]].some(function (move) {
           var candidate = {x: Math.max(node.seedX - 64, Math.min(node.seedX + 64, node.x + move[0])),
             y: Math.max(node.seedY - 96, Math.min(node.seedY + 96, node.y + move[1])), w: node.w, h: node.h};
-          var clear = vertices.every(function (other) { work.moves++; return other === node || !overlap(candidate, other, gap); });
+          var clear = vertices.every(function (other) { work.moves++; return other === node || other.island !== node.island || !overlap(candidate, other, gap); });
           if (clear) { node.x = candidate.x; node.y = candidate.y; } return clear;
         });
       });
       work.ticks++;
     }
-    var extent = bounds(vertices.reduce(function (all, node) { return all.concat([{x: node.x, y: node.y}, {x: node.x + node.w, y: node.y + node.h}]); }, []));
+    islands.forEach(function (island) {
+      island.extent = bounds(island.members.reduce(function (all, index) { var node = vertices[index]; return all.concat([{x: node.x, y: node.y}, {x: node.x + node.w, y: node.y + node.h}]); }, []));
+    });
     function point(at) { return vertical ? {x: at.y, y: at.x} : {x: at.x, y: at.y}; }
     function rectangle(box) { return vertical ? {x: box.y, y: box.x, w: box.h, h: box.w} : {x: box.x, y: box.y, w: box.w, h: box.h}; }
     vertices.forEach(function (node) { boxes.set(node.id, Object.assign({id: node.id, cluster: node.cluster, rank: node.rank}, rectangle(node))); });
@@ -263,20 +282,21 @@
         result.push({x: at.x, y: at.y});
       }); return result;
     }
-    function section(points, clearCorners) {
+    function section(points, clearCorners, island) {
       points = simplify(points);
       var radii = points.map(function (at, index) {
         if (!index || index === points.length - 1) return 0;
         var a = points[index - 1], b = points[index + 1], da = Math.hypot(at.x - a.x, at.y - a.y), db = Math.hypot(b.x - at.x, b.y - at.y), radius = Math.min(8, da / 3, db / 3);
         var hull = bounds([{x: at.x - (at.x - a.x) * radius / da, y: at.y - (at.y - a.y) * radius / da}, at,
           {x: at.x + (b.x - at.x) * radius / db, y: at.y + (b.y - at.y) * radius / db}]);
-        return !clearCorners && vertices.some(function (node) { return overlap(hull, node, 12); }) ? 0 : radius;
+        return !clearCorners && vertices.some(function (node) { return node.island === island && overlap(hull, node, 12); }) ? 0 : radius;
       });
       return {points: points.map(point), radii: radii, bounds: rectangle(bounds(points))};
     }
     function clear(points, route) {
+      var island = vertices[ids.get(route.source)].island;
       return points.slice(1).every(function (at, index) {
-        return vertices.every(function (node) { work.candidates++; return !hits(points[index], at, node, node.id === route.source || node.id === route.target ? 0 : 20); });
+        return vertices.every(function (node) { work.candidates++; return node.island !== island || !hits(points[index], at, node, node.id === route.source || node.id === route.target ? 0 : 20); });
       });
     }
     function port(node, side, offset, alongY) {
@@ -292,11 +312,13 @@
     // progress is monotone, so at most N wraps; each node/side/kind is cached.
     function escape(index, side, offset) {
       var key = index + ":" + side + ":" + offset, saved = escapes.get(key); if (saved) return saved;
+      var island = vertices[index].island, extent = islands[island].extent;
       var start = port(vertices[index], side, offset), current = start.stub, points = [start.at, current], limit = side > 0 ? extent.x + extent.w + 64 : extent.x - 64;
-      for (var step = 0; step <= vertices.length; step++) {
+      for (var step = 0; step <= islands[island].members.length; step++) {
         var first = null, nearest = Infinity;
         vertices.forEach(function (node) {
           work.escapes++;
+          if (node.island !== island) return;
           var wall = side > 0 ? node.x - 20 : node.x + node.w + 20, distance = (wall - current.x) * side;
           if (current.y > node.y - 20 + 1e-7 && current.y < node.y + node.h + 20 - 1e-7 && distance >= -1e-7 && distance < nearest) { first = node; nearest = distance; }
         });
@@ -311,10 +333,11 @@
       var saved = reversedParts.get(part); if (saved) return saved;
       saved = {points: part.points.slice().reverse(), radii: part.radii.slice().reverse(), bounds: part.bounds}; reversedParts.set(part, saved); return saved;
     }
-    var paths = new Map(), sparse = springs.length <= vertices.length * 3;
+    var paths = new Map();
     var flowRange = Math.max(4, Math.log2(1 + routes.reduce(function (largest, route) { return Math.max(largest, route.count); }, 0)));
     routes.forEach(function (route) {
       var a = vertices[ids.get(route.source)], b = vertices[ids.get(route.target)], offset = route.kind === "proof" ? 4 : -4;
+      var island = islands[a.island], extent = island.extent, sparse = island.links <= island.members.length * 3;
       // Cyclic aggregations have no global left-to-right order. Use the facing
       // boundaries rather than sending an upstream link around the whole map.
       var dx = b.x + b.w / 2 - a.x - a.w / 2, dy = b.y + b.h / 2 - a.y - a.h / 2;
@@ -337,7 +360,7 @@
       ];
       function length(points) { return points.slice(1).reduce(function (sum, at, index) { return sum + Math.hypot(at.x - points[index].x, at.y - points[index].y); }, 0); }
       var chosen = sparse && candidates.sort(function (a, b) { return length(a) - length(b); }).find(function (points) { return clear(points, route); });
-      if (chosen) { var local = section(chosen); route.points = local.points; route.radii = local.radii; route.bounds = local.bounds; }
+      if (chosen) { var local = section(chosen, false, a.island); route.points = local.points; route.radii = local.radii; route.bounds = local.bounds; }
       else {
         // The bounded shared obstacle escapes run on the scene's primary axis.
         side = dx < 0 ? -1 : 1; source = port(a, side, offset); target = port(b, -side, offset);
@@ -354,9 +377,130 @@
       else { saved.points = route.points; saved.radii = route.radii; }
       paths.set(key, saved);
     });
+    if (islands.length > 1) {
+      // Only genuinely unlinked components are packed. Their complete route
+      // envelopes, not individual ranks/cards, determine the separated shelves.
+      islands.forEach(function (island) {
+        island.points = island.members.reduce(function (all, index) { var box = boxes.get(vertices[index].id); return all.concat([{x: box.x, y: box.y}, {x: box.x + box.w, y: box.y + box.h}]); }, []);
+      });
+      routes.forEach(function (route) {
+        var points = islands[vertices[ids.get(route.source)].island].points;
+        points.push({x: route.bounds.x, y: route.bounds.y}, {x: route.bounds.x + route.bounds.w, y: route.bounds.y + route.bounds.h});
+      });
+      var spacing = 96, area = 0, widest = 0;
+      islands.forEach(function (island) {
+        island.packing = bounds(island.points); area += (island.packing.w + spacing) * (island.packing.h + spacing); widest = Math.max(widest, island.packing.w);
+      });
+      var aspect = Number.isFinite(stageAspect) && stageAspect > 0 ? Math.max(.25, Math.min(4, stageAspect)) : 1.4;
+      var width = Math.max(widest, Math.sqrt(area * aspect)), x = 0, y = 0, rowHeight = 0;
+      islands.slice().sort(function (a, b) { return b.packing.h - a.packing.h || b.packing.w - a.packing.w || (a.key < b.key ? -1 : 1); }).forEach(function (island) {
+        if (x && x + island.packing.w > width) { x = 0; y += rowHeight + spacing; rowHeight = 0; }
+        island.shift = {x: x - island.packing.x, y: y - island.packing.y};
+        x += island.packing.w + spacing; rowHeight = Math.max(rowHeight, island.packing.h);
+      });
+      // Cached escapes/reversed paths share point, bound and arrow objects.
+      // Translate each object once so packing cannot distort a typed route.
+      var translated = new WeakSet();
+      function translate(at, shift) { if (!translated.has(at)) { at.x += shift.x; at.y += shift.y; translated.add(at); } }
+      vertices.forEach(function (node) { translate(boxes.get(node.id), islands[node.island].shift); });
+      routes.forEach(function (route) {
+        var shift = islands[vertices[ids.get(route.source)].island].shift;
+        if (route.parts) route.parts.forEach(function (part) { part.points.forEach(function (at) { translate(at, shift); }); translate(part.bounds, shift); });
+        else route.points.forEach(function (at) { translate(at, shift); });
+        translate(route.bounds, shift); translate(route.arrow, shift);
+      });
+      // Translation can round (card.x + card.w) differently from its port.
+      // Re-anchor only the endpoint's normal coordinate to the actual boundary.
+      function pinPort(at, box, dx, dy) {
+        if (Math.abs(dx) > Math.abs(dy)) at.x = dx > 0 ? box.x + box.w : box.x;
+        else at.y = dy > 0 ? box.y + box.h : box.y;
+      }
+      routes.forEach(function (route) {
+        var first = route.parts ? route.parts[0].points : route.points, last = route.parts ? route.parts[route.parts.length - 1].points : route.points;
+        var source = first[0], next = first[1], target = last[last.length - 1];
+        pinPort(source, boxes.get(route.source), next.x - source.x, next.y - source.y);
+        pinPort(target, boxes.get(route.target), -route.arrow.dx, -route.arrow.dy);
+        route.arrow.x = target.x; route.arrow.y = target.y;
+      });
+    }
     var all = Array.from(boxes.values()).reduce(function (points, box) { return points.concat([{x: box.x, y: box.y}, {x: box.x + box.w, y: box.y + box.h}]); }, []);
     routes.forEach(function (route) { all.push({x: route.bounds.x, y: route.bounds.y}, {x: route.bounds.x + route.bounds.w, y: route.bounds.y + route.bounds.h}); });
     return {nodes: boxes, routes: routes, clusters: components.map(function (component) { return {id: component.key, rank: component.rank, members: component.members.map(function (index) { return vertices[index].id; })}; }), work: work, bounds: bounds(all)};
+  }
+
+  // A derived overview of a large local scope, not a new mathematical graph.
+  // Areas are authored; unassigned topics remain an explicitly structural bucket.
+  function scopeOverviewProjection(payload, selectedGroup, reservedIds) {
+    var local = payload.nodes.filter(function (node) { return node.kind !== "boundary"; });
+    if (local.length <= 40 || payload.nodes.length > MAX_MAP_NODES) return null;
+    var areas = new Set(local.map(function (node) { return node.area; }).filter(function (area) { return typeof area === "string" && area.trim(); }));
+    if (areas.size < 2) return null;
+    var groups = new Map(), owners = new Map(), used = new Set(reservedIds || []);
+    payload.nodes.forEach(function (node) { used.add(node.id); });
+    local.forEach(function (node) {
+      var assigned = typeof node.area === "string" && node.area.trim(), key = assigned ? "area:" + node.area : "unassigned";
+      var group = groups.get(key);
+      if (!group) { group = {key: key, area: assigned ? node.area : null, members: [], edges: []}; groups.set(key, group); }
+      group.members.push(node); owners.set(node.id, group);
+    });
+    var serial = 0;
+    groups.forEach(function (group) {
+      do { group.id = "view-group:" + serial++; } while (used.has(group.id));
+      used.add(group.id);
+    });
+    if (!groups.has(selectedGroup)) selectedGroup = null;
+    var projected = [], endpoints = new Map(), bundles = new Map();
+    groups.forEach(function (group) {
+      if (group.key === selectedGroup) {
+        group.members.forEach(function (node) { projected.push(node); endpoints.set(node.id, node.id); });
+        return;
+      }
+      var counts = new Map(), unknown = false, items = 0, internal = 0;
+      group.members.forEach(function (node) {
+        endpoints.set(node.id, group.id);
+        (node.status_counts || []).forEach(function (entry) { counts.set(entry[0], (counts.get(entry[0]) || 0) + entry[1]); });
+        if (node.member_count === undefined) unknown = true; else items += node.member_count;
+        internal += node.internal_dependency_count || 0;
+      });
+      projected.push({id: group.id, kind: "scope", title: group.area || "Unassigned topics", area: group.area || undefined,
+        _region: group.area || undefined, _overviewGroup: group.key, _topics: group.members.length,
+        _unknownCount: unknown, member_count: items, status_counts: Array.from(counts.entries()),
+        status: group.area ? group.members[0].status : "inventory_pending", internal_dependency_count: internal,
+        summary: group.members.slice(0, 3).map(function (node) { return node.title; }).join(" · "),
+        layout: {width: 264, height: 148}});
+    });
+    payload.nodes.forEach(function (node) {
+      if (node.kind === "boundary") { projected.push(node); endpoints.set(node.id, node.id); }
+    });
+    payload.edges.forEach(function (edge) {
+      var source = endpoints.get(edge.source), target = endpoints.get(edge.target);
+      if (!source || !target) throw new Error("Unknown scoped overview endpoint");
+      if (source === target && source !== edge.source) {
+        owners.get(edge.source).edges.push(edge); return;
+      }
+      var key = JSON.stringify([source, target]), bundle = bundles.get(key);
+      if (!bundle) { bundle = {source: source, target: target, statement: 0, proof: 0, _overviewEdges: []}; bundles.set(key, bundle); }
+      bundle.statement += edge.statement || 0; bundle.proof += edge.proof || 0; bundle._overviewEdges.push(edge);
+    });
+    groups.forEach(function (group) {
+      var node = projected.find(function (candidate) { return candidate.id === group.id; });
+      if (node) {
+        node._overviewEdges = group.edges;
+        node.internal_dependency_count += group.edges.reduce(function (sum, edge) { return sum + (edge.statement || 0) + (edge.proof || 0); }, 0);
+      }
+    });
+    return Object.assign({}, payload, {nodes: projected, edges: Array.from(bundles.values()), regions: [],
+      view: Object.assign({}, payload.view, {presentation: "atlas"}),
+      _scopeOverview: {groups: Array.from(groups.values()), selectedGroup: selectedGroup, originalNodes: payload.nodes.length}});
+  }
+
+  function scopeOverviewFlow(route, counts, flowRange) {
+    if (!counts) return route;
+    var count = counts[route.kind];
+    if (!count) return null;
+    if (count === route.count) return route;
+    var size = Math.log2(1 + count);
+    return Object.assign({}, route, {count: count, strength: 1.2 + 1.6 * size / (size + 4) + 2 * size / flowRange});
   }
 
   function mount(host, data, instance, firstBundle, navigation) {
@@ -368,8 +512,9 @@
     host.textContent = "";
     host.classList.remove("bp-dag-enhancing");
     var view, atlas, palette, byId, prerequisites, dependents, statusCounts, presentStatuses;
-    var mapAllowed, scene, sceneData, sceneDirection, sceneCompact, sceneFamily;
+    var mapAllowed, scene, sceneData, sceneDirection, sceneCompact, sceneFamily, sceneAspect;
     function recordId(node) {
+      if (node._overviewGroup) return null;
       return node._recordId || (records.get(node.id) === node || ["scope", "boundary"].indexOf(node.kind) < 0 ? node.id : node.id.replace(/^(scope|boundary):/, ""));
     }
     function mapNode(node) {
@@ -422,7 +567,8 @@
       ui$spotlight = null, ui$mapAllowed = mapAllowed,
       ui$selectedStatuses = new Set(presentStatuses), ui$showIsolated = true,
       ui$transform = {x: 20, y: 20, scale: 1}, ui$reading = Boolean(firstBundle && firstBundle.readingSource),
-      ui$area = null, ui$overviewOnly = false, ui$filtersTouched = false, ui$relationIds = null, ui$hovered = null,
+      ui$area = null, ui$overviewGroup = null, ui$scopeOverview = false, ui$overviewOnly = false, ui$filtersTouched = false, ui$relationIds = null,
+      ui$hovered = null,
       ui$requestedNode = firstBundle && firstBundle.nodeId || null, ui$outlineLimit = 120;
     if (!mapAllowed) ui$mode = "list";
     var dom$announcement, dom$body, dom$breadcrumb, dom$canvas, dom$ctx, dom$density, dom$edgeFieldset, dom$empty,
@@ -457,7 +603,7 @@
       var active = document.activeElement, key = active === dom$search ? "search" : dom$readingBody && dom$readingBody.contains(active) ? "reading" : active && (active.dataset.autoformNodeId || active.dataset.inventoryNodeId);
       return {node: ui$selected && ui$selected.id, requestedNode: ui$requestedNode, mode: ui$mode, direction: ui$direction,
         statuses: Array.from(ui$selectedStatuses), isolates: ui$showIsolated, camera: Object.assign({}, ui$transform),
-        query: ui$query, area: ui$area, readingOpen: host.classList.contains("bp-dag-sheet-open"), focus: key,
+        query: ui$query, area: ui$area, overviewGroup: ui$overviewGroup, readingOpen: host.classList.contains("bp-dag-sheet-open"), focus: key,
         readingScroll: dom$readingBody ? dom$readingBody.scrollTop : 0, outlineScroll: dom$navigation.scrollTop,
         inventoryScroll: dom$inventoryScroll.scrollTop, listLimit: ui$listLimit, relationIds: ui$relationIds,
         outlineOpen: host.classList.contains("bp-dag-outline-open"), outlineLimit: ui$outlineLimit};
@@ -465,7 +611,7 @@
     function restoreState(saved, bundle) {
       if (!saved) return;
       var ticket = ++restoration, isCurrent = bundle && bundle.isCurrent; restoring = true; clearTimeout(checkpointTimer);
-      ui$filtersTouched = true; ui$area = saved.area || null;
+      ui$filtersTouched = true; ui$area = saved.area || null; ui$overviewGroup = saved.overviewGroup || null;
       ui$requestedNode = saved.requestedNode === undefined ? saved.node || null : saved.requestedNode;
       updateProjection(); ui$selected = saved.node && byId.get(saved.node) || null;
       ui$selectedStatuses = new Set(saved.statuses || presentStatuses); ui$showIsolated = saved.isolates !== false;
@@ -507,7 +653,7 @@
     function applyRoute(bundle) {
       var isCurrent = bundle.isCurrent;
       if (!alive || (isCurrent && !isCurrent())) return;
-      restoration++; restoring = false; clearTimeout(checkpointTimer); currentBundle = bundle; contextGraph = bundle.graph; ui$area = null; ui$requestedNode = bundle.nodeId || null;
+      restoration++; restoring = false; clearTimeout(checkpointTimer); currentBundle = bundle; contextGraph = bundle.graph; ui$area = null; ui$overviewGroup = null; ui$requestedNode = bundle.nodeId || null;
       document.title = bundle.title; dom$error.hidden = true;
       ui$filtersTouched = false; ui$relationIds = null;
       ui$query = ""; dom$search.value = ""; closeSearch(); setFilters(false);
@@ -538,7 +684,9 @@
       ui$overviewOnly = Boolean(mapAllowed && data.nodes.length && data.nodes.every(function (node) { return node._region; }) &&
         !bundle.focus && !bundle.anchor && !(record && record.result) && navigation.readerIsOverview && navigation.readerIsOverview(dom$readingBody));
       host.classList.toggle("bp-dag-overview-only", ui$overviewOnly);
-      setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false : !ui$overviewOnly && (!sheetLayout() || Boolean(bundle.nodeId)), ui$selected);
+      var readingRequested = Boolean(bundle.focus || bundle.anchor || record && record.result);
+      setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false : readingRequested ||
+        !ui$scopeOverview && !ui$overviewOnly && (!sheetLayout() || Boolean(bundle.nodeId)), ui$selected);
       refresh(true); firstResize = true; resize();
       if (ui$selected && mapAllowed) centerIfHidden(ui$selected);
       if (navigation) navigation.loadIndex().catch(showError);
@@ -564,12 +712,17 @@
       while (pending && !seen.has(pending.id)) {
         seen.add(pending.id);
         if (["collection", "transparent"].indexOf(pending.navigation) < 0) entries.unshift({label: pending.title,
-          url: pending.id === bundle.scope && (!record || record.id === pending.id) ? null : pending.route || pending.url});
+          url: pending.id === bundle.scope && (!record || record.id === pending.id) && !ui$overviewGroup ? null : pending.route || pending.url});
         pending = records.get(semanticParent(pending));
       }
       if (record && record.scope !== record.id) entries.push({label: record.title});
       if (ui$area) entries.push({label: ui$area});
+      var group = currentOverviewGroup();
+      if (group) entries.push({label: group.area || "Unassigned topics"});
       return entries;
+    }
+    function currentOverviewGroup() {
+      return ui$overviewGroup && data._scopeOverview && data._scopeOverview.groups.find(function (group) { return group.key === ui$overviewGroup; });
     }
     function neighborIds(id) {
       var before = [], after = [];
@@ -628,9 +781,15 @@
       return Object.assign({}, payload, {nodes: nodes, edges: Array.from(links.values()), regions: []});
     }
     function updateProjection() {
-      var projected = neighborhood(ui$requestedNode) || regionProjection(contextGraph, ui$area);
+      var focus = neighborhood(ui$requestedNode), eligible = contextGraph.nodes.filter(mapNode), known = new Set(eligible.map(function (node) { return node.id; }));
+      var overview = !focus && scopeOverviewProjection(Object.assign({}, contextGraph, {nodes: eligible,
+        edges: contextGraph.edges.filter(function (edge) { return known.has(edge.source) && known.has(edge.target); })}), ui$overviewGroup, records.keys());
+      var projected = focus || overview || regionProjection(contextGraph, ui$area);
+      ui$scopeOverview = Boolean(overview); ui$overviewGroup = overview && overview._scopeOverview.selectedGroup || null;
+      host.classList.toggle("bp-dag-scope-overview", ui$scopeOverview);
       host.classList.toggle("bp-dag-area-expanded", Boolean(navigation && ui$area));
       adoptGraph(projected); ui$mapAllowed = mapAllowed; ui$activeDirty = true; ui$spotlight = ui$hovered = null;
+      if (dom$breadcrumb && currentBundle) { trail = routeTrail(currentBundle); dom$breadcrumb.replaceChildren(trailList(trail)); }
       overlays.forEach(function (control) { control.remove(); }); overlays.clear();
       ui$selected = byId.get(ui$requestedNode) || null;
       if (!ui$filtersTouched) ui$selectedStatuses = new Set(presentStatuses);
@@ -972,7 +1131,7 @@
     function solid(key, color) { return ((palette[key] || palette.planned || {}).light || {}).fill === "#FFFFFF" ? color.fill : color.stroke; }
     function isDark() { return document.body.getAttribute("data-md-color-scheme") === "slate"; }
     function colors(node) {
-      if (node._region) return isDark() ? {fill: "#242526", stroke: "#737578", text: "#E4E6EB"} : {fill: "#FFFFFF", stroke: "#CED0D4", text: "#1C1E21"};
+      if (node._region || node._overviewGroup) return isDark() ? {fill: "#242526", stroke: "#737578", text: "#E4E6EB"} : {fill: "#FFFFFF", stroke: "#CED0D4", text: "#1C1E21"};
       var entry = palette[node.status] || palette.planned || {};
       return entry[isDark() ? "dark" : "light"] || {fill: "#fff", stroke: "#9ca3af", text: "#374151"};
     }
@@ -999,15 +1158,22 @@
     }
     function compactRegions() {
       return Boolean(navigation && atlas && !ui$area && dom$stage && dom$stage.clientWidth > 0 && dom$stage.clientWidth <= 620 &&
-        data.nodes.length && data.nodes.every(function (node) { return node._region; }));
+        data.nodes.length && data.nodes.every(function (node) { return node._region || node._overviewGroup; }));
     }
     function geometry() {
       if (!mapAllowed) return null;
-      var compact = compactRegions();
-      if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family) {
+      var compact = compactRegions(), aspect = dom$stage.clientWidth / Math.max(1, dom$stage.clientHeight);
+      aspect = Math.round((Number.isFinite(aspect) && aspect > 0 ? clamp(aspect, .25, 4) : 1.4) * 10) / 10;
+      if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family || sceneAspect !== aspect) {
+        var anchor = typeof document !== "undefined" && document.activeElement && document.activeElement.dataset &&
+          document.activeElement.dataset.autoformNodeId, previous = sceneData === data && scene && scene.nodes.get(anchor);
         scene = layoutGraph(data.nodes.map(function (node) { return {id: node.id, width: compact ? 312 : node.width,
-          height: compact ? 96 : Math.max(node.height, node._region ? 148 : 100), area: node.area, scope: node.scope}; }), data.edges, ui$orientation);
-        sceneData = data; sceneDirection = ui$orientation; sceneCompact = compact; sceneFamily = family;
+          height: compact ? 96 : Math.max(node.height, node._region ? 148 : 100), area: node.area, scope: node.scope}; }), data.edges, ui$orientation,
+          aspect);
+        var moved = previous && scene.nodes.get(anchor);
+        if (moved) { ui$transform.x += (previous.x + previous.w / 2 - moved.x - moved.w / 2) * ui$transform.scale;
+          ui$transform.y += (previous.y + previous.h / 2 - moved.y - moved.h / 2) * ui$transform.scale; }
+        sceneData = data; sceneDirection = ui$orientation; sceneCompact = compact; sceneFamily = family; sceneAspect = aspect;
       }
       return scene;
     }
@@ -1029,9 +1195,9 @@
       calculateActive();
       host.classList.toggle("bp-dag-compact-regions", compactRegions());
       if (navigation) {
-        var record = records.get(currentBundle && currentBundle.nodeId), links = record && record.result && neighborIds(record.id);
+        var record = records.get(currentBundle && currentBundle.nodeId), links = record && record.result && neighborIds(record.id), group = currentOverviewGroup();
         // A long title gives way before the counts after it.
-        dom$mapContext.replaceChildren(element("span", "", links ? record.title : ui$area || currentBundle && currentBundle.title || data.title),
+        dom$mapContext.replaceChildren(element("span", "", links ? record.title : group ? group.area || "Unassigned topics" : ui$area || currentBundle && currentBundle.title || data.title),
           links ? " · uses " + links.before.length + " · used by " + links.after.length : "");
         dom$mapKey.replaceChildren();
         ["statement", "proof"].forEach(function (kind) {
@@ -1045,7 +1211,7 @@
       dom$filterSummary.textContent = "Filter: " + (enabled === presentStatuses.length ? "all" : enabled + " of " + presentStatuses.length) +
         " statuses" + (ui$showIsolated ? "" : " · linked only");
       // The areas overview is the map at the root, so Map gives way to Areas there and one view reads as pressed.
-      var areas = ui$mode === "graph" && !ui$area && data.nodes.some(function (node) { return node._region; });
+      var areas = ui$mode === "graph" && !ui$area && !ui$overviewGroup && data.nodes.some(function (node) { return node._region; });
       pressed(dom$graphMode, ui$mode === "graph" && !areas);
       pressed(dom$listMode, ui$mode === "list");
       if (dom$sourcesMode) pressed(dom$sourcesMode, ui$mode === "sources");
@@ -1068,17 +1234,36 @@
       if (!ui$selected) return null;
       return ui$spotlight || (ui$spotlight = spotlightOf(collect(ui$selected.id, prerequisites), collect(ui$selected.id, dependents)));
     }
+    function matchesStatus(node) {
+      return (node._region || node._overviewGroup) && node.status_counts && node.status_counts.length ?
+        node.status_counts.some(function (pair) { return ui$selectedStatuses.has(pair[0]); }) : ui$selectedStatuses.has(node.status);
+    }
     function calculateActive() {
       if (!ui$activeDirty) return;
       var directional = null;
       if (ui$selected && ui$direction === "prerequisites") directional = collect(ui$selected.id, prerequisites);
       if (ui$selected && ui$direction === "dependents") directional = collect(ui$selected.id, dependents);
       ui$active = data.nodes.filter(function (node) {
-        var matches = node._region && node.status_counts && node.status_counts.length ? node.status_counts.some(function (pair) { return ui$selectedStatuses.has(pair[0]); }) : ui$selectedStatuses.has(node.status);
-        return matches && (ui$showIsolated || !node.isolated || node === ui$selected) &&
+        return matchesStatus(node) && (ui$showIsolated || !node.isolated || node === ui$selected) &&
           (!directional || directional.has(node.id));
       });
       ui$activeIds = new Set(ui$active.map(function (node) { return node.id; }));
+      if (data._scopeOverview) {
+        var members = data._scopeOverview.groups.reduce(function (all, group) { return all.concat(group.members); }, []);
+        data.nodes.forEach(function (node) { if (node.kind === "boundary") members.push(node); });
+        var visibleIds = new Set(members.filter(matchesStatus).map(function (node) { return node.id; }));
+        data._scopeOverview._flows = data.edges.map(function (edge) {
+          return edge._overviewEdges.reduce(function (counts, original) {
+            if (visibleIds.has(original.source) && visibleIds.has(original.target)) {
+              counts.statement += original.statement || 0; counts.proof += original.proof || 0;
+            }
+            return counts;
+          }, {statement: 0, proof: 0});
+        });
+        data._scopeOverview._flowRange = Math.max(4, Math.log2(1 + data.edges.reduce(function (max, edge) {
+          return Math.max(max, edge.statement || 0, edge.proof || 0);
+        }, 0)));
+      }
       var hidden = data.nodes.length - ui$active.length;
       dom$hiddenButton.textContent = "Show " + hidden + " filtered out"; dom$hiddenButton.hidden = !hidden;
       dom$empty.hidden = ui$active.length !== 0;
@@ -1105,9 +1290,8 @@
       calculateActive(); var all = ui$active.length ? ui$active : data.nodes; if (!all.length) return;
       // Fit a bounded authored-area overview to its cards, not a peripheral
       // return path. Never shrink the repository or relax the readable floor.
-      var overview = !compactRegions() && all.length <= 12 && all.every(function (node) { return node._region; });
       var compact = compactRegions(), pad = 36, side = compact ? 18 : pad,
-        top = compact ? 52 : 56, bottom = compact ? 44 : pad, stageW = dom$stage.clientWidth;
+        top = compact ? 52 : 56, bottom = 44, stageW = dom$stage.clientWidth;
       var shown = mapHeight();
       var readableFloor = .9;
       // Unlinked cards are inventory: when the whole map cannot open readable and whole, the first view frames the linked graph.
@@ -1125,17 +1309,13 @@
           var cell = world(node); minX = Math.min(minX, cell.x); minY = Math.min(minY, cell.y);
           maxX = Math.max(maxX, cell.x + cell.w); maxY = Math.max(maxY, cell.y + cell.h);
         });
-        var current = geometry();
-        if (current && !overview) current.routes.forEach(function (route) {
-          if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target)) return;
-          minX = Math.min(minX, route.bounds.x); minY = Math.min(minY, route.bounds.y);
-          maxX = Math.max(maxX, route.bounds.x + route.bounds.w); maxY = Math.max(maxY, route.bounds.y + route.bounds.h);
-        });
+        // Route detours are context, not a reason to shrink useful mathematical cards.
         var width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY), fitted = Math.min((stageW - side * 2) / width, (shown - top - bottom) / height),
           scale = clamp(Math.max(fitted, readableFloor), MIN_SCALE, 1.35);
         // Across, the padding gives way first: cards that fit the stage's full width stay whole.
+        // A map scaled to fit its height exactly can overshoot it by a rounding error, which is not a crop.
         return {nodes: nodes, x: minX, y: minY, w: width, h: height, fitted: fitted, scale: scale,
-          wide: width * scale > stageW && !compact, tall: height * scale > shown - top - bottom};
+          wide: width * scale > stageW && !compact, tall: height * scale > shown - top - bottom + 1e-6};
       }
     }
     // A phone's open reader leaves the map only the band above it, so the map fits there and counts what falls below as off screen.
@@ -1162,6 +1342,17 @@
     }
     function zoomAt(factor, x, y) {
       var old = ui$transform.scale, next = clamp(old * factor, MIN_SCALE, 4);
+      if (ui$scopeOverview && ui$overviewGroup && factor < 1 && next < .82) {
+        navigation.checkpoint(); ui$overviewGroup = null; updateProjection(); firstResize = true; resize(); writeLocation("push"); return;
+      }
+      if (ui$scopeOverview && !ui$overviewGroup) {
+        if (factor > 1 && next >= 1.6) {
+          var group = ui$active.find(function (node) { var box = screen(node); return node._overviewGroup &&
+            x >= box.x && x <= box.x + box.w && y >= box.y && y <= box.y + box.h; });
+          if (group) { activateNode(group); return; }
+        }
+        next = Math.max(.9, next);
+      }
       ui$transform.x = x - (x - ui$transform.x) * next / old;
       ui$transform.y = y - (y - ui$transform.y) * next / old; ui$transform.scale = next; schedule(); remember();
     }
@@ -1174,17 +1365,22 @@
       var visible = ui$active.filter(function (node) { return inViewport(screen(node), 80); });
       // The area overview stays quiet until a card is selected, hovered or focused; then only its own links show.
       // The compact overview (phones and most tablets) keeps every link: a tap there opens an area and nothing hovers, so nothing could light one.
-      var quiet = !compactRegions() && data.nodes.every(function (node) { return node._region; }), subject = ui$selected || ui$hovered;
+      var quiet = !compactRegions() && data.nodes.every(function (node) { return node._region || node._overviewGroup; }), subject = ui$selected || ui$hovered;
       // A hovered card previews its direct neighbours on any map; a selection keeps its own spotlight.
       var spotlight = (atlas || !ui$selected) && subject ? atlasSpotlight(subject) : pathSpotlight();
       var bottom = mapHeight(), labels = [];
       current.routes.forEach(function (route) {
           if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target) ||
             quiet && !(subject && (route.source === subject.id || route.target === subject.id))) return;
+          if (data._scopeOverview) {
+            route = scopeOverviewFlow(route, data._scopeOverview._flows[route.edgeIndex], data._scopeOverview._flowRange);
+            if (!route) return;
+          }
           var bounds = {x: route.bounds.x * ui$transform.scale + ui$transform.x, y: route.bounds.y * ui$transform.scale + ui$transform.y,
             w: route.bounds.w * ui$transform.scale, h: route.bounds.h * ui$transform.scale};
           if (!inViewport(bounds, 40)) return;
-          var painted = route, edge = data.edges[route.edgeIndex];
+          // A scope overview stacks by its status-filtered flows, which can drop one kind of a bundle.
+          var painted = route, edge = data._scopeOverview ? data._scopeOverview._flows[route.edgeIndex] : data.edges[route.edgeIndex];
           if (route.parts) {
             var points = [], radii = [];
             route.parts.forEach(function (part) { points = points.concat(part.points); radii = radii.concat(part.radii); });
@@ -1388,6 +1584,7 @@
     }
     function makeNodeControl(node) {
       var control = button("bp-dag-node", ""); control.dataset.autoformNodeId = node.id; control.dataset.kind = node.kind || "node";
+      if (node._overviewGroup) control.dataset.overviewGroup = node._overviewGroup;
       // A topic or region names its fully proved share, which its bar cannot: statement formalized shares proved's green.
       var count = finished(node), scopeMeta = node.kind === "scope" ? node._unknownCount ? "Topic" : count[1] ?
         num(count[0]) + " of " + num(count[1]) + " fully proved" : plural(node.member_count || 0, "article", "articles") :
@@ -1395,8 +1592,10 @@
       // ATLAS titles such as "Theorem (Crystallographic Restriction)" already name their kind, so the meta does not repeat it.
       var kind = KINDS.get((node.declaration || "").toLowerCase());
       if (kind && (node.title || "").indexOf(kind) === 0) kind = "";
-      var lead = node._region ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, tail = scopeMeta || statusLabel(node.status);
-      var meta = node._region || !lead ? tail : lead + " · " + tail;
+      // A scope overview's group card is an area card, including its unassigned-topics bucket.
+      var area = node._region || node._overviewGroup;
+      var lead = area ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, tail = scopeMeta || statusLabel(node.status);
+      var meta = area || !lead ? tail : lead + " · " + tail;
       control.setAttribute("aria-label", node.title + (node.area ? ", " + node.area : "") + ", " +
         meta + (node.isolated ? ", no dependency edges in this view" : ""));
       var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : control;
@@ -1406,7 +1605,7 @@
       if (lead) { line.appendChild(element("span", "", lead)); line.appendChild(element("span", "", " · ")); }
       line.appendChild(element("span", "", tail));
       // An area's summary leads with its topic count, which the stylesheet then drops from the meta.
-      if (node._region && node.summary) content.appendChild(element("span", "bp-dag-node-summary", lead + ": " + node.summary));
+      if (area && node.summary) content.appendChild(element("span", "bp-dag-node-summary", lead + ": " + node.summary));
       content.appendChild(element("span", "bp-dag-node-relation", ""));
       if (content !== control) control.appendChild(content);
       // A drag or pinch that began on the card is not a tap; a keyboard click has no detail and always opens it.
@@ -1582,6 +1781,14 @@
       if (first) first.focus(); return Boolean(first);
     }
     function activateNode(node) {
+      if (node._overviewGroup) {
+        navigation.checkpoint(); ui$overviewGroup = node._overviewGroup; ui$requestedNode = null; ui$selected = null; ui$direction = "both";
+        updateProjection(); setSheet(false, null); refresh(true); firstResize = true; resize(); writeLocation("push");
+        var group = data._scopeOverview.groups.find(function (item) { return item.key === ui$overviewGroup; });
+        var member = group && ui$active.find(function (item) { return group.members.some(function (original) { return original.id === item.id; }); });
+        if (member) { centerIfHidden(member); focusNodeControl(member); } else dom$sheetHandle.focus();
+        return;
+      }
       if (node._region) {
         navigation.checkpoint();
         var keyboard = document.activeElement && document.activeElement.dataset.autoformNodeId === node.id;
@@ -1601,7 +1808,7 @@
       if (navigation && updateHistory) navigation.checkpoint();
       var refit = ui$direction !== "both", cleared = ui$selected;
       ui$selected = null; ui$direction = "both"; ui$activeDirty = true; ui$spotlight = null;
-      setSheet(navigation && !sheetLayout() && !ui$overviewOnly, null);
+      setSheet(navigation && !sheetLayout() && !ui$overviewOnly && !ui$scopeOverview, null);
       syncNavigationSelection(); renderInspector(); renderInventory(false); if (refit) requestAnimationFrame(fit); else schedule();
       if (updateHistory) writeLocation("push");
       var chosen = returnFocus && cleared && (ui$mode === "list" ? dom$inventoryRows.get(cleared.id) : overlays.get(cleared.id));
@@ -1622,10 +1829,10 @@
     function syncSheetAccessibility() {
       if (!dom$inspectorInner || !dom$sheetHandle) return;
       var opened = host.classList.contains("bp-dag-sheet-open");
-      var collapsed = !opened && (sheetLayout() || Boolean(ui$area) || ui$overviewOnly);
+      var collapsed = !opened && (sheetLayout() || Boolean(ui$area) || ui$overviewOnly || ui$scopeOverview);
       // The handle names the page or entry, with its status, rather than a generic "Reading"; its accessible name starts with that title.
       // An open desktop reader over an area or the overview closes with ×.
-      var close = opened && !sheetLayout() && (ui$area || ui$overviewOnly), title = (currentBundle || data).title,
+      var close = opened && !sheetLayout() && (ui$area || ui$overviewOnly || ui$scopeOverview), title = (currentBundle || data).title,
         record = records.get(currentBundle && currentBundle.nodeId || ui$requestedNode || (ui$selected && ui$selected.id));
       dom$sheetHandle.replaceChildren(close ? "×" : record && record.status ? swatch(record.status) : "", close ? "" : title);
       dom$sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");
@@ -1652,21 +1859,26 @@
       dom$statusInputs.forEach(function (input, key) { if (input.checked) ui$selectedStatuses.add(key); });
       if (ui$selected && !ui$selectedStatuses.has(ui$selected.status)) {
         ui$selected = null; ui$direction = "both"; ui$spotlight = null;
-        setSheet(navigation && !sheetLayout() && !ui$overviewOnly, null);
+        setSheet(navigation && !sheetLayout() && !ui$overviewOnly && !ui$scopeOverview, null);
         dom$announcement.textContent = "Selection cleared because its status is hidden.";
       }
       ui$activeDirty = true; writeLocation("replace"); refresh(true);
     }
     function setMode(mode, updateHistory) {
       if (mode === "graph" && !ui$mapAllowed) return;
+      var overviewNavigation = mode === "regions" && ui$scopeOverview && Boolean(ui$overviewGroup);
+      if (overviewNavigation && updateHistory) navigation.checkpoint();
       if (mode !== "list") ui$relationIds = null;
-      if (mode === "regions" && navigation && currentBundle && currentBundle.scope !== "roadmap" && records.has("roadmap")) {
+      if (mode === "regions" && ui$scopeOverview) {
+        ui$overviewGroup = null; ui$requestedNode = null; ui$selected = null; ui$direction = "both";
+        updateProjection(); setSheet(false, null); mode = "graph"; fit();
+      } else if (mode === "regions" && navigation && currentBundle && currentBundle.scope !== "roadmap" && records.has("roadmap")) {
         navigation.navigateNode("roadmap", {history: "push", focus: false}); return;
       }
       if (mode === "regions") { ui$area = null; ui$requestedNode = null; updateProjection(); mode = "graph"; fit(); }
       ui$mode = mode; syncControls(); if (mode !== "graph") renderInventory(true); else schedule();
       if (navigation && sheetLayout()) setSheet(false, ui$selected);
-      if (updateHistory) writeLocation("replace");
+      if (updateHistory) writeLocation(overviewNavigation ? "push" : "replace");
     }
 
     function renderInspector() { renderReaderContext(); }

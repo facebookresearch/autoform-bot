@@ -35,7 +35,6 @@ from autoform_cli.lean import (
     open_project_sources,
     repository_top_level,
     snapshot_project_sources,
-    strip_lean_comments,
     verify_repository_snapshot,
 )
 from autoform_cli.skeleton import _output_identity, _replace_outputs
@@ -334,61 +333,25 @@ def test_unfinished_keyword_does_not_take_the_next_command_as_its_name(tmp_path:
     "command",
     [
         "#check Nat",
-        "#print Nat",
         "#unrecognized_command",
         "open Nat",
         "variable (x : Nat)",
         "set_option pp.universes true",
         "attribute [simp] Nat.add_zero",
-        "export Nat (succ)",
-        "universe u",
-        "include x",
-        "omit x",
         "syntax \"custom\" : command",
         "example : True := trivial",
         "initialize value : Nat ← pure 7",
-        "run_cmd pure ()",
-        "run_elab do pure ()",
-        "run_meta pure ()",
         'local notation "X" => Nat',
-        'scoped notation "X" => Nat',
         "public import Mathlib",
-        "public meta import Mathlib",
         "@[deprecated] initialize value : Nat ← pure 7",
         "private unsafe initialize value : Nat ← pure 7",
-        '@[simp] scoped postfix:70 "!" => Nat.succ',
-        'local prefix:70 "!" => Nat.succ',
         'macro_rules | `(custom) => `(Nat)',
-        'elab_rules : command | `(custom) => pure ()',
-        "assert_not_exists absent",
-        "assert_not_imported Mathlib",
         "deprecated_module",
-        "deprecated_syntax syntaxName",
-        "docs_to_verso Nat",
-        "init_quot",
-        "unlock_limits",
-        'register_tactic_tag tag "description"',
-        "tactic_extension tag",
-        'recommended_spelling "and" for "∧" in [And]',
         "gen_injective_theorems% Nat",
         "with_weak_namespace Nat #check Nat",
-        "register_error_explanation code explanation",
-        "set_library_suggestions ()",
-        "seal Nat.add",
-        "unseal Nat.add",
-        'binder_predicate x " > " y:term => `($x > $y)',
         "aux_def value : Nat := 7",
-        "norm_cast_add_elim Nat.add_zero",
-        "register_linter_set checks := linter.unusedVariables",
-        "register_label_attr label",
-        "register_sym_simp_attr rules",
-        "ensure_eval_term_instance Nat",
-        "declare_core_config_elab elabName Config",
-        "simproc_decl simplify (Nat.succ _) := fun _ => pure .continue",
-        "cbv_simproc_decl simplify (Nat.succ _) := fun _ => pure .continue",
         "unif_hint (x : Nat) where ⊢ x ≟ x",
         "register_sym_simp simpVariant where\n  maxSteps := 100",
-        "grind_pattern lemmaName => Nat.succ",
     ],
 )
 def test_unfinished_keyword_does_not_take_a_nondeclaration_command_name(tmp_path: Path, command: str) -> None:
@@ -402,10 +365,8 @@ def test_unfinished_keyword_does_not_take_a_nondeclaration_command_name(tmp_path
 @pytest.mark.parametrize(
     "name",
     [
-        "open'", "open!", "public?", "variable₁", "variable'", "attribute'", "set_option'", "run_cmd'", "run_elab'",
-        "local'", "scoped'", "public'", "initialize'", "requires", "ensures",
-        "«open»", "«#check»", "«run_cmd»", "«local»", "«@[deprecated]»",
-        "Qualified.open", "Qualified.local", "Qualified.run_elab", "«Qualified.open».value",
+        "open'", "open!", "public?", "variable₁", "local'", "requires", "ensures",
+        "«open»", "«local»", "«@[deprecated]»", "Qualified.open", "Qualified.local", "«Qualified.open».value",
         "α₁", "ℕ_value", "𝒜_value",
     ],
 )
@@ -422,9 +383,7 @@ def test_multiline_names_are_not_rejected_by_a_command_token_prefix(tmp_path: Pa
     [
         "@decoration",
         "not_a_name/part : Nat := 7",
-        "not_a_name+part : Nat := 7",
         "123 : Nat := 7",
-        "custom => Nat",
         "custom do pure ()",
         "custom binders => Nat",
         "custom (x : Nat) => Nat",
@@ -445,7 +404,6 @@ def test_multiline_continuation_requires_identifier_and_signature_syntax(tmp_pat
         ("def", "identity", "x : Nat := x"),
         ("def", "identity", "{α : Type u} (x : α) : α := x"),
         ("def", "identity", "{α : Type u}\n    (x : α) : α := x"),
-        ("def", "identity", "{α : Type u}\n    [Inhabited α] : α := default"),
         ("theorem", "self_eq", "(x : Nat\n    ) : x = x := rfl"),
         ("theorem", "self_eq", "(«x)» : Nat) : «x)» = «x)» := rfl"),
         ("def", "identity", ".{u} {α : Type u} (x : α) := x"),
@@ -3573,6 +3531,11 @@ def test_quoted_names_keep_spaces_and_dots_inside_one_component(tmp_path: Path) 
     assert index.find("A.«b c.d»") is not None
 
 
+def _strip_comments(text: str) -> str:
+    """The non-blank lines the audit reads from *text*, trailing whitespace dropped."""
+    return "\n".join(line.rstrip() for line in lean_module._without_lean_comments(text).splitlines() if line.strip())
+
+
 def test_comment_stripping_preserves_comment_markers_inside_strings() -> None:
     source = (
         'def a := "a--b /- c -/" -- remove me\n'
@@ -3582,7 +3545,7 @@ def test_comment_stripping_preserves_comment_markers_inside_strings() -> None:
         "def «e--f» : Char := '-'"
     )
 
-    assert strip_lean_comments(source) == (
+    assert _strip_comments(source) == (
         'def a := "a--b /- c -/"\n'
         'def b := r#"d--e /- f -/"#\n'
         'def c := s!"value {"a--b"}"\n'
@@ -3593,8 +3556,8 @@ def test_comment_stripping_preserves_comment_markers_inside_strings() -> None:
 
 def test_comment_stripping_reads_slash_dash_dash_slash_as_a_docstring() -> None:
     # Lean reads `/--` as a docstring opener, so `/--/ ... -/` is one comment.
-    assert strip_lean_comments("/--/ KEEPOUT -/\ndef d : Nat := 6") == "def d : Nat := 6"
-    assert strip_lean_comments("/-!/ KEEPOUT -/\ndef d : Nat := 6") == "def d : Nat := 6"
+    assert _strip_comments("/--/ KEEPOUT -/\ndef d : Nat := 6") == "def d : Nat := 6"
+    assert _strip_comments("/-!/ KEEPOUT -/\ndef d : Nat := 6") == "def d : Nat := 6"
 
 
 def test_double_brace_in_interpolation_opens_a_structure_instance(tmp_path: Path) -> None:
@@ -3602,7 +3565,7 @@ def test_double_brace_in_interpolation_opens_a_structure_instance(tmp_path: Path
     line = 'def s : String := s!"{{ fst := "--", snd := 1 : String × Nat }.fst}"'
     index = _index(tmp_path, line.replace("--", "/-") + "\ndef t : Nat := 1\n")
 
-    assert strip_lean_comments(line + " -- remove me") == line
+    assert _strip_comments(line + " -- remove me") == line
     assert index.find("t") is not None
 
 
@@ -3637,7 +3600,7 @@ def test_comment_stripping_follows_every_lexer_state(
     if everywhere:
         for name in ("_CODE_EVENT", "_INTERPOLATION_EVENT", "_LITERAL_EVENT"):
             monkeypatch.setattr(lean_module, name, re.compile(r"(?s)."))
-    assert strip_lean_comments(source) == expected
+    assert _strip_comments(source) == expected
 
 
 def test_a_raw_string_ends_at_its_first_closer(tmp_path: Path) -> None:

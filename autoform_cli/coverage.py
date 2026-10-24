@@ -4,6 +4,15 @@ The contract is one Markdown table in ``coverage/README.md``. Because it is the
 only place a project states what its roadmap is supposed to cover, every rule
 here is written to fail closed: anything that does not visibly render, and any
 evidence that says nothing, is rejected rather than quietly accepted.
+
+The edge cases the CLI reference leaves out: a closing fence carries nothing
+but its marker; a table, row or cell hidden by its own or an ancestor's
+``hidden`` attribute is not published, and hiding is read from HTML, not CSS,
+so a stylesheet class or inline ``display: none`` still counts as published; a
+row whose removal would change the rest of the page is refused; a link missing
+its closing parenthesis does not count; and fragments are checked against the
+heading IDs Python-Markdown produces with the extensions the generated
+``mkdocs.yml`` enables.
 """
 
 from __future__ import annotations

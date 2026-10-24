@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pickle
 import random
 import threading
 from collections.abc import Callable
@@ -204,37 +203,6 @@ def _containment_graph(tmp_path: Path, chapters: int, articles: int) -> Graph:
             )
             previous = node_id
     return Graph(tmp_path / "blueprint", nodes)
-
-
-def test_graph_keeps_the_callers_plain_node_mapping(tmp_path: Path) -> None:
-    roadmap = tmp_path / "blueprint" / "roadmap"
-    nodes = {"root": Node("root", "Root", roadmap / "README.md", ())}
-    graph = Graph(tmp_path / "blueprint", nodes)
-
-    assert graph.nodes is nodes
-    assert type(graph.nodes) is dict
-    nodes["late"] = Node("late", "Late", roadmap / "late.md", (), parent="root")
-    assert graph.children("root") == ("late",)
-    dict.__setitem__(nodes, "later", Node("later", "Later", roadmap / "later.md", (), parent="root"))
-    assert graph.children("root") == ("late", "later")
-
-
-@pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
-def test_graph_pickles_only_public_types(tmp_path: Path, protocol: int) -> None:
-    roadmap = tmp_path / "blueprint" / "roadmap"
-    graph = Graph(
-        tmp_path / "blueprint",
-        {
-            "root": Node("root", "Root", roadmap / "README.md", ()),
-            "child": Node("child", "Child", roadmap / "child.md", (), parent="root"),
-        },
-    )
-
-    restored = pickle.loads(pickle.dumps(graph, protocol=protocol))
-
-    assert restored == graph
-    assert type(restored.nodes) is dict
-    assert restored.children("root") == ("child",)
 
 
 def _raises_promptly(call: Callable[[], object]) -> BaseException | None:

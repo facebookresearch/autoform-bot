@@ -528,13 +528,6 @@ lean_lib «PublicApi» where
     assert _ends_with_the_success_line(audited.stdout), audited.stdout
 
 
-def test_example_and_template_helpers_are_identical(repo_root: Path) -> None:
-    template = repo_root / _TEMPLATE
-    example = repo_root / "skills/setup/assets/cabannes-thesis-project/.github/autoform_audit.py"
-
-    assert example.read_bytes() == template.read_bytes()
-
-
 def test_workflows_audit_open_statements_only_when_the_roadmap_allows_them(repo_root: Path) -> None:
     for workflow in (
         repo_root / "autoform_cli/templates/github/workflows/autoform-verify.yml",

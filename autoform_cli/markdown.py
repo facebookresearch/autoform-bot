@@ -22,6 +22,20 @@ checker that guesses at anchors both rejects valid fragments and accepts
 fragments that never appear on the published page. ``tests/test_markdown.py``
 holds a differential test that compares this module against Python-Markdown
 itself, so the two cannot drift apart unnoticed.
+
+Fences and comments are read differently for an article alone and on a page.
+A fence closes only on a bare fence line; for the graph and the audit, a later
+bare line of the same character and at least the opener's length closes it,
+and a fence that never closes is read as plain text, so it hides no heading or
+dependency link. On a chapter page, where ``pymdownx.superfences`` asks for the
+opener's exact length and indent, an unclosed fence can pair with a later
+article's closing fence and hide everything between them, which is why
+``check`` warns about one and the site shows that page as typed. The page can
+also pair an unclosed backtick fence line with a later backtick run in the same
+paragraph and show the text between as inline code; a link there is no link on
+the page but is still read as a dependency. An HTML comment that never closes
+hides every later heading and dependency link, and the part of the article it
+opens in (statement or section) keeps the rest.
 """
 
 from __future__ import annotations
@@ -45,7 +59,9 @@ from pymdownx.superfences import fence_div_format
 
 #: The class pymdownx.arithmatex gives each formula it finds in the site's
 #: Markdown. The page's MathJax reads these elements and no other text, so a
-#: title or the navigation shows its TeX as typed.
+#: title or the navigation shows its TeX as typed, but for the titles and
+#: summaries the dependency explorer draws in its rail and details, which it
+#: marks with this class.
 FORMULA_CLASS = "arithmatex"
 
 #: The Markdown extensions the generated `mkdocs.yml` enables, and their

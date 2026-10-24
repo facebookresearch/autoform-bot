@@ -39,7 +39,7 @@ jobs:
           version: "0.12.1"
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-      - run: uv sync --extra dev --extra repl
+      - run: uv sync --locked --extra dev --extra repl
       - run: uv run ruff check autoform_cli servers tests
       - run: uv run pytest -q
       - run: make check-example
@@ -48,6 +48,15 @@ jobs:
     name: WebKit integrated book and explorer regressions
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # Playwright's image for the pinned playwright==1.62.0 carries WebKit and its
+    # system libraries, so the job does not fetch them from an Ubuntu mirror;
+    # that apt step alone has taken over 8 minutes and timed the job out.
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.62.0-noble@sha256:aa81288e738725378becba5b3e06cb0f3a7f012a610e87e8d767a090ea3f740d
+    # In a container, run steps default to sh; keep bash, as on the host jobs.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -57,15 +66,28 @@ jobs:
           enable-cache: true
       - name: Install locked browser test environment
         run: uv sync --frozen --extra dev --extra browser
-      - name: Install WebKit and Linux system dependencies
-        run: uv run --frozen --extra browser playwright install --with-deps webkit
+      # The explorer's typesetting runs the real MathJax, served in place of
+      # the CDN from the same checked tarball as the MathJax job's.
+      - name: Install pinned MathJax 3.2.2
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=15s 2m curl -sSfL \
+            https://registry.npmjs.org/mathjax/-/mathjax-3.2.2.tgz -o mathjax.tgz
+          echo "1b9c0a1c44df864e915690558e72adb9cc5203360daefd385084ced3b6c64c09  mathjax.tgz" \
+            | sha256sum --check --strict
+          mkdir mathjax
+          tar xzf mathjax.tgz -C mathjax
+          echo "AUTOFORM_MATHJAX_DIR=$PWD/mathjax/package" >> "$GITHUB_ENV"
+          echo "AUTOFORM_MATHJAX_ES5=$PWD/mathjax/package/es5" >> "$GITHUB_ENV"
       - name: Run integrated book, explorer and genuine MathJax regressions
         run: >-
           uv run --frozen --extra dev --extra browser pytest -q
           tests/test_dag_viewer_browser.py tests/test_integrated_explorer_browser.py
           tests/test_integrated_workspace_browser.py tests/test_integrated_continuity_browser.py
+          tests/test_scoped_overview_browser.py
         env:
           AUTOFORM_REQUIRE_BROWSER_TESTS: "1"
+          AUTOFORM_REQUIRE_MATHJAX_TESTS: "1"
           AUTOFORM_UI_SCREENSHOT_DIR: ${{ runner.temp }}/autoform-ui-evidence
       - name: Preserve browser UI screenshots and diagnostics
         if: always()

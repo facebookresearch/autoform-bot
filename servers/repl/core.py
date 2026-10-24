@@ -3,6 +3,13 @@
 LeanRepl.run_disposable checks the submitted header with Lean's parser,
 runs the call as the only frame of a fresh REPL process, and retires that
 process before returning.
+
+The header check runs Lean's own header parser (``parse_header.lean``, which
+the REPL also uses) as one extra short Lean process per call. Allowlisted
+imports need plain, nonempty canonical module components: a name that stays
+quoted or path-like after Lean parses it is refused rather than reduced to a
+misleading allowlisted root. Execution names the package-qualified
+``@repl/repl`` target, so a project target cannot shadow it.
 """
 
 from __future__ import annotations

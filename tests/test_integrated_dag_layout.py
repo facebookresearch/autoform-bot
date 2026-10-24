@@ -168,6 +168,104 @@ def test_directed_cycles_disconnected_and_skipping_edges_keep_clear_routes(direc
 
 
 @pytest.mark.parametrize("direction", ["lr", "tb"])
+def test_sixty_one_isolates_pack_in_two_dimensions_without_changing_connected_ranks(direction: str) -> None:
+    fixture = _graph(65, [(0, 1, 2, 0), (0, 2, 0, 3), (1, 3, 5, 7), (2, 3, 11, 0)])
+    for node in fixture["nodes"]:
+        node.update(area="One authored topic", scope="One authored scope")
+    _run(f"""
+      const direction={json.dumps(direction)},before=JSON.stringify(fixture),began=performance.now();
+      const scene=layoutGraph(fixture.nodes,fixture.edges,direction,1.4);
+      assert(performance.now()-began<1000,'Disconnected packing exceeded the unchanged one-second layout budget');
+      const packed=check(fixture,direction,scene);
+      const connected={{nodes:fixture.nodes.slice(0,4),edges:fixture.edges}},alone=check(connected,direction);
+      const isolated=Array.from(packed.nodes.values()).filter(box=>!connected.nodes.some(node=>node.id===box.id));
+      assert.equal(isolated.length,61);assert(isolated.every(box=>box.rank===0));
+      assert(new Set(isolated.map(box=>Math.round(box.x))).size>=5,'Unlinked topics still occupy one column');
+      assert(new Set(isolated.map(box=>Math.round(box.y))).size>=5,'Unlinked topics still occupy one row');
+      assert(packed.bounds.w/packed.bounds.h>.5&&packed.bounds.w/packed.bounds.h<3,
+        'The bounded component pack must not fit an arbitrarily tall or wide strip');
+      assert.deepEqual(connected.nodes.map(node=>packed.nodes.get(node.id).rank),[0,1,1,2]);
+      const anchor=packed.nodes.get('N000'),originalAnchor=alone.nodes.get('N000');
+      const dx=anchor.x-originalAnchor.x,dy=anchor.y-originalAnchor.y;
+      connected.nodes.forEach(node=>{{
+        const actual=packed.nodes.get(node.id),original=alone.nodes.get(node.id);
+        assert(Math.abs(actual.x-original.x-dx)<1e-7&&Math.abs(actual.y-original.y-dy)<1e-7,
+          'Unrelated topics changed a connected component instead of only translating it');
+        assert.equal(actual.rank,original.rank);
+      }});
+      alone.routes.forEach((route,index)=>{{
+        const actual=packed.routes[index];assert.equal(actual.points.length,route.points.length);
+        actual.points.forEach((point,at)=>assert(Math.abs(point.x-route.points[at].x-dx)<1e-7&&Math.abs(point.y-route.points[at].y-dy)<1e-7));
+        assert.deepEqual(actual.radii,route.radii);assert.equal(actual.arrow.dx,route.arrow.dx);assert.equal(actual.arrow.dy,route.arrow.dy);
+        assert(Math.abs(actual.arrow.x-route.arrow.x-dx)<1e-7&&Math.abs(actual.arrow.y-route.arrow.y-dy)<1e-7);
+      }});
+      assert.equal(JSON.stringify(fixture),before);
+    """, fixture)
+
+
+@pytest.mark.parametrize("direction", ["lr", "tb"])
+def test_stage_aspect_packs_weak_components_without_redefining_sccs_or_shared_routes(direction: str) -> None:
+    fixture = _graph(24, [(0, 1, 2, 3), (1, 0, 5, 7), (1, 2, 11, 13), (3, 3, 17, 19),
+                          (0, 1, 23, 29)])
+    _run(f"""
+      const direction={json.dumps(direction)};
+      const tall=check(fixture,direction,layoutGraph(fixture.nodes,fixture.edges,direction,.5));
+      const wide=check(fixture,direction,layoutGraph(fixture.nodes,fixture.edges,direction,2));
+      assert(wide.bounds.w/wide.bounds.h>tall.bounds.w/tall.bounds.h,
+        'The explicit physical stage aspect must influence disconnected packing');
+      assert.equal(wide.nodes.get('N000').cluster,wide.nodes.get('N001').cluster);
+      assert.notEqual(wide.nodes.get('N001').cluster,wide.nodes.get('N002').cluster);
+      assert.equal(wide.nodes.get('N002').rank,1);assert.equal(wide.nodes.get('N003').rank,0);
+      assert.equal(wide.routes.length,10,'Packing must retain duplicate and self-loop typed dependencies');
+      const duplicates=wide.routes.filter(route=>route.source==='N000'&&route.target==='N001'&&route.kind==='statement');
+      assert.equal(duplicates.length,2);assert.strictEqual(duplicates[0].bounds,duplicates[1].bounds,
+        'Packing must retain the existing bounded route-geometry cache');
+      const shuffled={{nodes:fixture.nodes.slice().reverse(),edges:fixture.edges.slice().reverse()}};
+      assert.equal(normal(wide),normal(check(shuffled,direction,layoutGraph(shuffled.nodes,shuffled.edges,direction,2))),
+        'Component placement must not depend on input ordering');
+      const connected={{nodes:fixture.nodes.slice(0,3),edges:fixture.edges.filter(edge=>edge.source!=='N003')}};
+      assert.equal(normal(layoutGraph(connected.nodes,connected.edges,direction,.5)),
+        normal(layoutGraph(connected.nodes,connected.edges,direction,2)),
+        'Stage aspect cannot rearrange a single connected mathematical graph');
+      const defaultScene=layoutGraph(fixture.nodes,fixture.edges,direction);
+      [0,-1,Infinity,NaN,'2',()=>assert.fail('An obsolete label callback was invoked')].forEach(aspect=>
+        assert.equal(normal(defaultScene),normal(layoutGraph(fixture.nodes,fixture.edges,direction,aspect))));
+    """, fixture)
+
+
+def test_component_pack_retains_valid_sparse_shared_escape_envelopes() -> None:
+    # This captured LR geometry genuinely reuses escapes. The same graph in TB
+    # has clear local routes instead, covered by the independent orientation tests.
+    direction = "lr"
+    fixture = json.loads(_FIXTURE.read_text(encoding="utf-8"))
+    _run(f"""
+      const direction={json.dumps(direction)},base=check(fixture,direction);
+      const originalParts=base.routes.flatMap(route=>route.parts||[]);
+      assert(originalParts.length>new Set(originalParts).size,
+        'The existing valid sparse fixture must genuinely exercise shared obstacle escapes');
+      const extended={{nodes:fixture.nodes.concat([{{id:'fixture:unlinked',width:208,height:100}}]),edges:fixture.edges}};
+      const scene=check(extended,direction);assert.equal(scene.routes.length,33);
+      base.routes.forEach((route,index)=>{{
+        const actual=scene.routes[index],from=base.nodes.get(route.source),to=scene.nodes.get(route.source);
+        const dx=to.x-from.x,dy=to.y-from.y;
+        assert.equal(actual.points.length,route.points.length);
+        actual.points.forEach((point,at)=>assert(Math.abs(point.x-route.points[at].x-dx)<1e-7&&Math.abs(point.y-route.points[at].y-dy)<1e-7,
+          'Component packing changed a valid route instead of translating its complete envelope'));
+        if(route.parts) {{
+          assert(actual.parts);assert.equal(actual.parts.length,route.parts.length);
+          route.parts.forEach((part,at)=>assert.deepEqual(actual.parts[at].radii,part.radii));
+        }}
+      }});
+      const sharedParts=scene.routes.flatMap(route=>route.parts||[]);
+      assert(sharedParts.length>new Set(sharedParts).size,'Packing discarded the existing shared escape cache');
+      const shuffled={{nodes:extended.nodes.slice().reverse(),edges:extended.edges.slice().reverse()}};
+      const replay=check(shuffled,direction);
+      assert.equal(normal(scene),normal(replay));
+      scene.routes.forEach((route,index)=>assert.deepEqual(route.parts,replay.routes[index].parts));
+    """, fixture)
+
+
+@pytest.mark.parametrize("direction", ["lr", "tb"])
 def test_the_reviewed_four_node_cycle_keeps_every_real_lane_and_valid_geometry(direction: str) -> None:
     fixture = {
         "nodes": [{"id": f"A{number}", "width": 208, "height": 100} for number in range(4)],
@@ -232,7 +330,7 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
       eval(constants);
       const start=productionSource.indexOf('  function mount('),end=productionSource.indexOf('    function globalListen(',start);
       assert(start>=0&&end>start,'The real cold-mount boundary must exist');
-      const helpers=['safeHref','graphAt','useIndex','updateProjection','neighborhood','neighborIds','regionProjection',
+      const helpers=['scopeOverviewProjection','safeHref','graphAt','useIndex','updateProjection','neighborhood','neighborIds','regionProjection',
         'geometry','compactRegions'].map(original).join('\n');
       const seams=`
         function buildShell() {events.push('shell');family='sans-serif';dom$stage={clientWidth:900};
@@ -313,7 +411,7 @@ def test_renderer_geometry_cache_changes_only_for_captured_geometry_inputs() -> 
     _run("""
       var navigation={},mapAllowed=true,atlas=false,ui$area=null,ui$orientation='lr',family='sans-serif';
       var dom$stage={clientWidth:760},dom$ctx={font:'12px sans-serif',measureText:text=>({width:text.length*8})};
-      var data=fixture,scene,sceneData,sceneDirection,sceneCompact,sceneFamily,calls=0;
+      var data=fixture,scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,calls=0;
       const actual=layoutGraph;layoutGraph=function(...args){calls++;return actual(...args);};
       const first=geometry();assert.strictEqual(geometry(),first);assert.equal(calls,1);
       var ui$transform={x:41,y:-73,scale:1.2},ui$selectedStatuses=new Set(['planned']);

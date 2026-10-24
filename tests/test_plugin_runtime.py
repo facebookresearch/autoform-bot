@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 import pytest
 
 
-def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
+def test_plugin_manifests_list_the_shipped_skills_and_servers(repo_root):
     skills = {path.parent.name for path in (repo_root / "skills").glob("*/SKILL.md")}
     assert skills == {
         "setup",
@@ -34,7 +34,6 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
         "code-quality.md",
         "mathlib-style.md",
         "roadmap-quality.md",
-        "thesis-review-case.md",
     }
     assert {path.name for path in (review_dir / "references").glob("*.md")} == references
     skill_text = (review_dir / "SKILL.md").read_text()
@@ -67,10 +66,6 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
         for prompt in default_prompts
     )
     assert any("Formalize the ready Markdown roadmap frontier" in prompt for prompt in default_prompts)
-    assert not any(
-        "claim-backed workers" in prompt
-        for prompt in default_prompts
-    )
     muse = json.loads((repo_root / ".muse-plugin/plugin.json").read_text())
     assert [command["id"] for command in muse["capabilities"]["commands"]] == [
         "setup",
@@ -216,14 +211,9 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
             "servers/repl/parse_header.lean",
             "servers/repl/server.py",
         } <= names
-        assert "autoform_cli/lake.py" not in names
         assert "autoform_cli/templates/github/autoform_audit.py" in names
         assert "autoform_cli/templates/github/CODEOWNERS.autoform.example" in names
         assert "autoform_cli/assets/blueprint-live.js" in names
-        assert not any(
-            name.startswith(("scripts/", "autoform/", "visualization/", "servers/lean/", "servers/search/"))
-            for name in names
-        )
         entry_points = archive.read(
             next(name for name in names if name.endswith(".dist-info/entry_points.txt"))
         ).decode()

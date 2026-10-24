@@ -81,11 +81,11 @@ from autoform_cli.skeleton import (
     path_of,
     render_probe,
     run_probe,
-    source_excerpt,
     stale_build_said,
     write_packets,
     write_skeleton_report,
 )
+from tests.conftest import _lean_toolchain_available
 from tests.undecodable_json import UNDECODABLE_JSON
 
 _FIXTURE = Path(__file__).resolve().parent / "fixtures" / "skeleton-project"
@@ -2977,19 +2977,9 @@ def test_report_round_trips_through_json_deterministically(tmp_path: Path) -> No
 def test_public_skeleton_compatibility_helpers(tmp_path: Path) -> None:
     report = _fake_report(tmp_path)
     node = report.nodes[0]
-    declaration = node.declarations[0]
 
     assert report.declarations(node.node_id) == node.declarations
     assert report.declarations("missing") == ()
-    assert not declaration.defines
-    assert replace(declaration, kind="def").defines
-    assert not replace(declaration, kind="axiom").defines
-
-    project = tmp_path / "project"
-    excerpt = source_excerpt(declaration, project)
-    assert excerpt is not None and excerpt.endswith("  sorry")
-    assert source_excerpt(replace(declaration, path="../outside.lean"), project) is None
-    assert source_excerpt(replace(declaration, end_line=10_000), project) is None
 
 
 def test_report_states_shared_material_once(tmp_path: Path) -> None:
@@ -3592,28 +3582,6 @@ def test_cli_refuses_a_symlink_report_without_publishing_packets(
 # --------------------------------------------------------------------------- #
 # The real probe
 # --------------------------------------------------------------------------- #
-
-
-def _lean_toolchain_available() -> bool:
-    """Whether the fixture can be built here without downloading a toolchain."""
-
-    def unavailable(reason: str) -> bool:
-        if os.environ.get("AUTOFORM_REQUIRE_REAL_LEAN_TESTS") == "1":
-            raise RuntimeError(f"real Lean tests are required but unavailable: {reason}")
-        return False
-
-    if shutil.which("lake") is None:
-        return unavailable("lake is not on PATH")
-    elan = shutil.which("elan")
-    if elan is None:
-        return True
-    pinned = (_FIXTURE / "lean-toolchain").read_text(encoding="utf-8").strip()
-    try:
-        listed = subprocess.run([elan, "toolchain", "list"], capture_output=True, text=True, timeout=30, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return unavailable("elan toolchain discovery failed")
-    available = any(line.split()[:1] == [pinned] for line in listed.stdout.splitlines())
-    return available or unavailable(f"{pinned} is not installed")
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")

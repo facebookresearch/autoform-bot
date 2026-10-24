@@ -11,6 +11,13 @@ traversal, advisory locking, directory sync, or atomic no-replace rename fail
 closed. A private creation bundle adds generated production-module roots, and
 its release identity is cross-checked with the public catalog and its complete
 Lake manifest before any filesystem state is created.
+
+Exactly one of several concurrent creators of the same target wins. The
+published tree has modes 0755 for directories and executables and 0644 for
+other files, whatever the umask. The generated ``lakefile.toml`` turns on Lake's
+artifact cache with ``restoreAllArtifacts`` so each module's ``.olean`` is
+restored into ``.lake/build``, where Autoform's probes load it. Workflow pins
+are inferred as ``scaffold.plugin_pin`` describes.
 """
 
 from __future__ import annotations

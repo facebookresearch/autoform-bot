@@ -7,6 +7,20 @@ packets, and the project TeX macros the statement uses. Read-backs remain
 separate committed testimony. The approval hash combines one article's
 evidence with its current, strictly validated read-backs, so changing either
 side invalidates the approval.
+
+``review check`` judges one state of the blueprint. It reads the articles, the
+sources they cite, and the cards before Lean runs, and cuts every passage it
+compares from those bytes. When the extraction ends, the extraction must have
+seen the same articles and sources and the cards must be unchanged, and every
+statement compared is cut from its article read once more, which must still
+have the bytes read first. An edit that breaks any of these comparisons is
+``review-snapshot-changed``. They are comparisons, not a lock: a change
+restored between them goes unseen, and an edit after the last does not affect
+a verdict already reached. ``tex-macros.json`` is read once, after Lean, and
+compared with nothing. ``render --review`` judges the cards and the
+``tex-macros.json`` it captured, the bytes ``publication.json`` hashes, and
+fails the same way when an article or cited passage it publishes changes
+between the capture and the end of the extraction.
 """
 
 from __future__ import annotations

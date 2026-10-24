@@ -232,7 +232,12 @@ def shown_as_typed(text: str, *, page: bool = True) -> str:
     as typed: every character escaped in one preformatted block, under a note
     that says why, so none of it becomes markup, a link, or a formula. The
     header that stands for a page's frontmatter is dropped first; with
-    ``page``, the result is a whole page under a header of its own."""
+    ``page``, the result is a whole page under a header of its own.
+
+    Render keeps the title the page's H1 gives, in its header and in the
+    navigation, and a statement shown as typed stays in its section with the
+    chapter's other statements. A flagged landing page shows only its title
+    and opening sentence, as text, above the dashboard."""
 
     note = (
         '<p class="bp-as-typed-note">autoform render shows this text as typed: it holds markup the site does '

@@ -5,11 +5,37 @@ from __future__ import annotations
 import errno
 import os
 import shutil
+import subprocess
 import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+
+
+_SKELETON_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "skeleton-project"
+
+
+def _lean_toolchain_available() -> bool:
+    """Whether a project pinned like the skeleton fixture builds here without a download."""
+
+    def unavailable(reason: str) -> bool:
+        if os.environ.get("AUTOFORM_REQUIRE_REAL_LEAN_TESTS") == "1":
+            raise RuntimeError(f"real Lean tests are required but unavailable: {reason}")
+        return False
+
+    if shutil.which("lake") is None:
+        return unavailable("lake is not on PATH")
+    elan = shutil.which("elan")
+    if elan is None:
+        return True
+    pinned = (_SKELETON_FIXTURE / "lean-toolchain").read_text(encoding="utf-8").strip()
+    try:
+        listed = subprocess.run([elan, "toolchain", "list"], capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return unavailable("elan toolchain discovery failed")
+    available = any(line.split()[:1] == [pinned] for line in listed.stdout.splitlines())
+    return available or unavailable(f"{pinned} is not installed")
 
 
 @pytest.fixture

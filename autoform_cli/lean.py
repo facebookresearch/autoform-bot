@@ -9,6 +9,36 @@ The scanner is a lexical pass, not an elaborator. It tracks ``namespace`` and
 comment nesting and stops at ``#exit``, which is enough for declarations
 written in the ordinary way, and deliberately reports nothing it cannot see
 rather than guessing.
+
+Indexing reads the whole Lean root or nothing (the user-facing rules are in
+``autoform_cli/reference/validation-and-audit.md``). Besides ``.lean`` files,
+the walk reads only ``manifest.json``, to recognize skeleton and review packet
+output folders, and ``publication.json``, to recognize rendered sites; every
+command skips the same folders, so ``render`` and the other commands index the
+same files. ``render`` marks the site it is writing before it copies any file
+into it, so a command that indexes during a render skips it too. ``mkdocs
+build`` empties ``site/`` and then copies files in name order, so ``site/`` can
+hold copies before its ``publication.json``, which is why a command that
+indexed during the build must run again. A capture that sees Lean inputs
+change is retried; folders the walk skips and files other than ``.lean``
+sources may change during a capture.
+
+The command may follow ``@[...]`` attribute lists and the modifiers
+``public``, ``private``, ``protected``, ``noncomputable``, ``partial``,
+``unsafe``, ``scoped``, and ``local``. ``alias b := a`` records ``b``, and
+``alias ⟨mp, mpr⟩ := a_iff`` each of its names that is not ``_``; the ``:=``
+must be on the alias's line, and the target on that line or the next nonblank
+one.
+
+A name declared more than once selects its one declaration that is neither
+``private`` nor a wanted command, since every other module sees the public
+one. The rule sees only indexed declarations: a public one behind an unindexed
+prefix such as ``open X in``, or written ``«main»`` where the article writes
+``main``, leaves a private one as the name's only declaration. In a file that
+starts with ``module``, a declaration outside a ``public section`` and without
+``public`` is private to Lean but public to the index, so such a name may be
+reported as defined more than once where Lean accepts it, or selected where
+Lean binds it nowhere outside its file.
 """
 
 from __future__ import annotations
@@ -495,20 +525,6 @@ def _lasting_root_failure(root: str | Path) -> str | None:
     if not stat.S_ISDIR(metadata.st_mode):
         return "directory tree cannot be inspected safely: directory root is not a directory"
     return None
-
-
-def project_source_revision(
-    root: str | Path,
-    *,
-    exclude_roots: Iterable[str | Path] = (),
-    limits: TreeCaptureLimits = TreeCaptureLimits(),
-) -> str:
-    """Hash the exact Lean source set consumed by :func:`index_project`."""
-    return snapshot_project_sources(
-        root,
-        exclude_roots=exclude_roots,
-        limits=limits,
-    ).revision
 
 
 def open_project_sources(
@@ -1100,14 +1116,6 @@ def _without_lean_comments(text: str, *, mask_literals: bool = False) -> str:
     return "".join(out)
 
 
-def strip_lean_comments(text: str) -> str:
-    """Remove every line and block comment, docstrings included, from Lean source."""
-
-    return "\n".join(
-        line.rstrip() for line in _without_lean_comments(text).splitlines() if line.strip()
-    )
-
-
 _DECLARATION_NAME = re.compile(r"(?:«[^»]*(?:»|$)|[^\s,«])+")
 
 
@@ -1448,10 +1456,8 @@ __all__ = [
     "detect_repository_url",
     "index_failure_message",
     "index_project",
-    "project_source_revision",
     "repository_top_level",
     "resolve_lean_root",
     "snapshot_project_sources",
-    "strip_lean_comments",
     "verify_repository_snapshot",
 ]

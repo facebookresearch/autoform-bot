@@ -3,6 +3,25 @@
 Wraps Lean 4 language server processes and provides hover information
 independently from the REPL pool. Diagnostics come from
 ``servers/batch_diagnostics.py``; this module only formats them.
+
+Closing a project's Lean server first lets Lean stop its file workers, then
+terminates the server's process group. Each server starts with a random token
+in its environment, which its file workers and their ``lake setup-file`` and
+``lean`` builds inherit; every process that carries it is terminated next,
+including workers orphaned when the server died first and any daemon one of
+them started, and the close is retried until none is left. A process whose
+environment the runtime cannot read is never signalled and does not hold up the
+close, and a process started without the token, for example by a program that
+clears its children's environment, is not found.
+
+A hover stops waiting for Lean five seconds before its budget ends, or a
+quarter of the budget early if that is less, and spends the rest closing its
+file, which makes Lean answer it. A hover that runs out therefore keeps the
+server, unless the file's worker, or a build it started, still runs after the
+close: then the server restarts, which stops it. It also restarts when the
+deadline cuts a reply off mid-frame, the close fails, or Lean leaves the closed
+file unanswered. A hover that Lean answers with an error keeps the server on
+the same terms.
 """
 
 from __future__ import annotations

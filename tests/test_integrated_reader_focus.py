@@ -51,7 +51,7 @@ var host = {classList: {contains: name => hostClasses.has(name),
   toggle(name, enabled) { if (enabled) hostClasses.add(name); else hostClasses.delete(name); }},
   closest() { return {querySelector() {return null;}}; }};
 var ui$selected, ui$requestedNode = 'A', ui$mode = 'graph', ui$direction = 'both';
-var ui$selectedStatuses = new Set(['fully_proved']), ui$showIsolated = true, ui$query = 'saved query', ui$area = null;
+var ui$selectedStatuses = new Set(['fully_proved']), ui$showIsolated = true, ui$query = 'saved query', ui$area = null, ui$overviewGroup = null, ui$scopeOverview = false;
 var ui$transform = {x: 20, y: 30, scale: 1}, ui$listLimit = 100, ui$relationIds = null, ui$outlineLimit = 120;
 var ui$filtersTouched = false, ui$activeDirty = true, ui$reading = true, ui$overviewOnly = false;
 var byId = new Map(['A','B'].map(id => [id, {id, title: id, kind: 'node', result: true,
@@ -225,4 +225,48 @@ def test_article_commit_closes_transient_status_menu_without_losing_keyboard_foc
       assert.equal(dom$filterPopover.hidden,false); assert.equal(document.activeElement,input);
       dom$search.focus({}); const searchFocuses=dom$search.focuses.length; setFilters(false);
       assert.equal(document.activeElement,dom$search); assert.equal(dom$search.focuses.length,searchFocuses);
+    """)
+
+
+def test_group_history_keeps_derived_selection_reading_focus_and_saved_camera() -> None:
+    _run(r"""
+      ui$overviewGroup='area:Authored geometry';ui$scopeOverview=true;
+      dom$readingBody.focus({});dom$readingBody.scrollTop=89;
+      ui$transform={x:145,y:-78,scale:1.1};
+      const saved=captureState();assert.equal(saved.overviewGroup,'area:Authored geometry');
+      assert.equal(saved.focus,'reading');
+      ui$overviewGroup=null;ui$scopeOverview=false;ui$transform={x:0,y:0,scale:.9};
+      const restored=bundle('A',saved),ready=applyRoute(restored);await frame();await ready;
+      const pending=restoreState(saved,restored);await frame();await pending;
+      assert.equal(ui$overviewGroup,saved.overviewGroup);assert.deepEqual(ui$transform,saved.camera);
+      assert.equal(dom$readingBody.scrollTop,89);assert.equal(document.activeElement,dom$readingBody);
+      // An actual article navigation clears derived group intent, not its authored math.
+      const next=bundle('B',null,true),nextReady=applyRoute(next);await frame();await nextReady;
+      assert.equal(ui$overviewGroup,null);assert.equal(document.activeElement,next.heading);
+      assert(next.target.classList.contains('bp-reading-current'));
+    """)
+
+
+def test_large_scope_landing_never_overrides_explicit_reading_or_saved_sheet_intent() -> None:
+    _run(r"""
+      const project=updateProjection;
+      updateProjection=function(){project();ui$scopeOverview=true;};
+      byId.get('A').result=false;
+      const landing=bundle('A',null,false);landing.anchor=null;
+      const landingReady=applyRoute(landing);
+      assert.equal(host.classList.contains('bp-dag-sheet-open'),false);
+      await frame();await landingReady;
+      for(const intent of ['reading','anchor']) {
+        const incoming=bundle('A',null,intent==='reading'?'reading':false);
+        if(intent==='reading')incoming.anchor=null;
+        const ready=applyRoute(incoming);
+        assert.equal(host.classList.contains('bp-dag-sheet-open'),true,
+          'A derived overview must not hide an explicitly requested mathematical reading');
+        await frame();await ready;
+      }
+      const saved={readingOpen:false},incoming=bundle('A',saved,'reading');
+      const ready=applyRoute(incoming);
+      assert.equal(host.classList.contains('bp-dag-sheet-open'),false,
+        'History must retain the saved reading-sheet state');
+      await frame();await ready;
     """)

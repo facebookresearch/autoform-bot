@@ -479,7 +479,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
       };
       // Supply the renderer's actual private lexical collaborators; executed source stays verbatim.
       let ui$selected=null,ui$filtersTouched,ui$area,ui$requestedNode,ui$selectedStatuses,ui$showIsolated,
-        ui$mode,ui$listLimit,ui$relationIds,ui$direction,ui$query,ui$transform,ui$activeDirty,ui$reading,ui$overviewOnly,ui$outlineLimit;
+        ui$mode,ui$listLimit,ui$relationIds,ui$direction,ui$query,ui$transform,ui$activeDirty,ui$reading,ui$overviewOnly,ui$overviewGroup,ui$scopeOverview,ui$outlineLimit;
       const dom$readingBody=refs.$readingBody,dom$search=refs.$search,dom$error=refs.$error,
         dom$breadcrumb=refs.$breadcrumb,dom$navigation=refs.$navigation,dom$inventoryScroll=refs.$inventoryScroll;
       let dom$outlineToggle;

@@ -2,8 +2,7 @@
 
 Follow these rules when a [Formalize](../SKILL.md) run uses claims. They replace
 asking the lead before editing beyond what a worker holds and before an import
-edit lands, because a refused acquire or a recheck conflict gives the same
-answer. The [claim contract](../../../autoform_cli/README.md#claim-contract)
+edit lands. The [claim contract](../../../autoform_cli/reference/claims-and-revisions.md#claim-contract)
 defines the board.
 
 ## Worker IDs and the board
@@ -26,32 +25,30 @@ leases expire after 25 minutes, and immediately before integrating.
 
 ## Import edits
 
-Compare the import-impact report's claim keys with the JSON from
-`autoform claim list --worker-id WORKER` given its `claim_targets` and
-`affected_claim_targets`, which lists only those claims: another owner's live
-affected claim is
-a conflict, and malformed evidence is unverifiable. An expired valid claim is
-not active. Before the edit, atomically acquire the required article and module
-`claim_targets`; an already-held same-worker article claim is upgraded, not
-released first. Recheck affected keys after acquisition and before integration.
-These checks are best-effort coordination, not a lock on downstream articles.
-Before repairing any article that actually needs changes, listed as affected or
-not, atomically acquire the full held set plus its targets. On a refused
-import-claim acquisition or a recheck conflict, release the complete currently
-held import set before waiting or reporting, unless handing off an existing
-verified candidate as described below. Renew, hand off, and release the full
-import claim set together.
+Compare the import-impact report's claim keys with `autoform claim list`, as the
+[CLI reference](../../../autoform_cli/README.md#commands) describes: another
+owner's live affected claim is a conflict, malformed evidence is unverifiable,
+and an expired valid claim is not active. Before the edit, atomically acquire
+the required article and module `claim_targets`; an already-held same-worker
+article claim is upgraded, not released first. Recheck affected keys after
+acquisition and before integration; these checks are best-effort coordination,
+not a lock on downstream articles. Before repairing any article that actually
+needs changes, listed as affected or not, atomically acquire the full held set
+plus its targets. On a refused import-claim acquisition or a recheck conflict,
+release the complete currently held import set before waiting or reporting,
+unless handing off an existing verified candidate as described below. Renew,
+hand off, and release the full import claim set together.
 
 ## Integration and handoff
 
 Renew the complete claim set before integrating, and if a revision's claim set
 grew, acquire the whole larger set in one command under the [no-hold-and-wait
-rule](../../../autoform_cli/README.md#claim-contract) before repairing the new
+rule](../../../autoform_cli/reference/claims-and-revisions.md#claim-contract) before repairing the new
 targets. Keep the complete acquired set until every checkout on the claim board
 can see the verified commit: on the shared branch and, for an `origin` board,
 pushed, since other clones read their frontier from the remote. For a handoff,
-keep the set and also report it and the worker ID instead of making the leaf
-look free. The integrator renews, integrates, and releases a handed-off set with
+keep the set and report it with the worker ID instead of making the leaf look
+free. The integrator renews, integrates, and releases a handed-off set with
 `--worker-id` set to the reported ID; if the lease has lapsed, it acquires the
 complete set under its own ID and, before integrating, repeats Formalize's
 pre-edit reload of `work context`. Release the complete set once the result is

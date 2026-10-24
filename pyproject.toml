@@ -42,7 +42,6 @@ dev = [
     "mkdocs>=1.6,<2",
     "mkdocs-material>=9.5,<10",
     "mkdocs-literate-nav>=0.6,<1",
-    "pymdown-extensions>=11.0.1,<12",
     "pytest>=7.0",
     "ruff>=0.4",
 ]

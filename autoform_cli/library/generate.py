@@ -11,7 +11,13 @@ two modules both generate, is no warning. A name whose first module leaves it
 on ``sorry`` or declares it as an axiom is left out and counted with the
 others, with a warning naming that module and the others, since one of them
 may hold a whole proof. If such a name's docstring comes from
-``@[inherit_doc]``, the record has none.
+``@[inherit_doc]``, the record has none. A wanted name is private to its
+module, so each module's copy is indexed.
+
+Only the source directories of the indexed ``lean_lib`` targets are read, and
+a target's ``globs`` select its modules as Lake does (see ``_glob``).
+``--check`` finds changed, new and missing source files by reading files,
+before it runs Lean.
 """
 
 from __future__ import annotations

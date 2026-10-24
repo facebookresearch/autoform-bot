@@ -22,17 +22,27 @@ check fails other than as stale, the error keeps the first 20 lines of Lake's
 output and counts the rest. Each name is probed in the module whose source the
 lexical index finds it in; a name with one public declaration beside private
 ones is probed in the public one's module. An error the probe meets while
-reading one declaration leaves only that declaration unresolved. A reason
+reading one declaration leaves only that declaration unresolved. A probe fails
+on its own with a nonzero exit, a signal, a timeout, or malformed or ambiguous
+records. A reason
 quotes at most 2,000 characters of Lean's output, shows the probe's temporary
 directory as ``<scratch>`` and project paths relative to the project, and so
-reads the same on every run.
+reads the same on every run. A declaration's packet reads as it does to a
+file that imports its module: it has the module's global notation, instances,
+and attributes, including any the module declares after the declaration, but
+not its ``local notation``, local instances, or the ``open`` and
+``set_option`` commands in effect at the declaration. The output and material
+limits apply to a whole probe, while a declaration that resolves has the same
+hash under any selection.
 
 Folding. Only companions that Lean's environment records as generated are
 folded onto their parent; an internal-looking name alone is not proof of
 provenance. Rangeless internal-detail declarations, such as ``f._unary``,
 ``f._f``, and ``S.x._default``, are bound by their elaborated material and
 marked ``-- source not shown`` rather than passed off as their parent's source.
-``partial def`` is detected from the environment, not the source text.
+A structure appears once, as its ``structure`` block. ``partial def`` is
+detected from the environment, not the source text; it is refused because its
+kernel face is an opaque constant.
 
 Report. Declarations in one project share most of what they trust, so the
 report states each boundary module's identity once, in ``boundary_modules``,
@@ -43,7 +53,12 @@ declares under it. A report therefore grows with the number of root modules
 times the material they share. The probe states each elaborated subterm of 256
 bytes or more once, since proof terms repeat large subterms; the report keeps
 each material's full text. Two probes that disagree about one module's files
-stop the command.
+stop the command. The report identifies the blueprint by a hash of every
+article's bytes and of the passage each article cites; a report whose
+selection, articles, and unresolved declarations disagree can be neither built
+nor loaded. Review evidence needs a report that selects every article and whose
+targets are the blueprint's ``lean:`` names. It quotes each trusted
+definition's source and records theorem dependencies by elaborated signature.
 
 Resources. Probes run one per CPU available to the process, at most eight; on
 Python 3.13 and later ``PYTHON_CPU_COUNT`` sets that count. Each probe's
@@ -51,7 +66,18 @@ budget is its own rather than a share of one deadline, so its result does not
 depend on which probes ran before it, and an extraction can run for one probe
 budget per round of parallel probes. The parsed records, at most 512 Mi
 characters of semantic material per probed module, stay in memory until the
-report is built.
+report is built. The timeout and output cap bound the direct batch command; on
+POSIX, Autoform also terminates the process group of every probe on every
+failure and on interruption.
+
+Hashes. The drift hash takes macro expansion, synthesized instance bodies,
+types, and definition bodies, but not local source spelling or comments; proof
+axioms, toolchain changes, and unrelated edits in an external module or its
+imports may also rotate it. It compares reports across builds. For the
+statement hash the probe closes over the statement first and then over the
+axioms' types; the statement's trusted declarations are those the root's
+``depends`` reach, and the packet, which shows only them, has no ``-- axioms:``
+line. A spelling-only edit changes only the packet.
 
 Drift hash boundary. The compiled identities are every part a module-system
 build writes for each module of the transitive external boundary. Only modules
@@ -60,7 +86,39 @@ stay outside the boundary; a dependency module named ``Lake.Foo`` is external
 like any other. Compiler-generated matcher and recursor bodies stay in the hash
 although they are folded out of the reading list.
 
-Comment stripping. A source is parsed with the tokens of a file that imports
+Packets. Every item's signature is also printed raw, bypassing project
+notation, unexpanders, and custom delaborators, so an ``infixl " + " =>
+HMul.hMul`` cannot make a product read as a sum in any signature. A
+definition's body, a definition root's own source included, is shown as
+written, where such notation still applies; for those, and for structures and
+generated companions, only the canonical kernel material states the meaning
+without notation. A theorem's statement as written is cut before a ``:=``
+value or a structure-style ``where`` value by Lean's parser, with its enclosing
+namespaces and the file's opened namespaces in scope; a proof Lean cannot
+parse does not stop the cut. Its comments are found by parsing the statement
+alone with ``:= sorry`` as its value, so editing only the proof changes neither
+the statement shown nor what is stripped from it, unless it makes an
+equation-style form parse or stop parsing outside its file. The printed
+signature shows binders that ``variable`` and ``include`` inject and the type
+every cast lands in; the written form shows what the pretty-printer elides.
+
+Outputs. ``--packets``, ``--passages``, and ``--output`` replace their trees
+through temporary files, hard links, and atomic renames, so a concurrent change
+detected before commit aborts publication instead of being overwritten.
+Combined, they are staged together and a failed commit restores the previous
+set: failure atomicity, not simultaneous visibility, since each rename is
+atomic on its own.
+
+Passages. A ``## Sources`` link with a ``#L<start>-L<end>`` fragment that names
+a regular Markdown file in the blueprint, in any letter case, is a note; any
+other such local link is a locator, whatever its suffix, and external URLs are
+skipped. A first local locator names no text when it points outside the
+blueprint; names an invalid path, a symlink loop, a link that cannot be read,
+or a missing, unreadable, oversized or non-regular file; or names non-UTF-8
+text or no lines of its file.
+
+Comment stripping. Lean's parser locates comments, parsing each source in its
+root module's environment. A source is parsed with the tokens of a file that imports
 its root module and the scoped notation of the namespaces the declaration sits
 in and the file opens above it, but not the file's ``local`` notation. Source
 with a known non-builtin token containing ``--`` or ``/-`` is withheld unless
@@ -277,12 +335,6 @@ class DeclarationSkeleton(TrustedDeclaration):
     #: Hashes and packet text, each computed once: a report states them
     #: several times, and each fingerprint encodes the whole trusted closure.
     _cache: dict[str, str] = dataclass_field(default_factory=dict, init=False, repr=False, compare=False)
-
-    @property
-    def defines(self) -> bool:
-        """Whether the root is a definition rather than a proposition."""
-
-        return self.kind not in {"theorem", "axiom"}
 
     @property
     def declaration_lines(self) -> int:
@@ -3289,25 +3341,6 @@ def _dependency_order(items: list[TrustedDeclaration]) -> list[TrustedDeclaratio
 # --------------------------------------------------------------------------- #
 
 
-def source_excerpt(
-    item: TrustedDeclaration | DeclarationSkeleton, lean_root: Path
-) -> str | None:
-    """Return the source lines of ``item``, or ``None`` when they cannot be read."""
-
-    if item.path is None or item.start_line is None or item.end_line is None:
-        return None
-    root = lean_root.resolve()
-    candidate = (root / item.path).resolve()
-    try:
-        candidate.relative_to(root)
-        lines = candidate.read_text(encoding="utf-8").split("\n")
-    except (ValueError, OSError, UnicodeError):
-        return None
-    if item.start_line < 1 or item.end_line > len(lines) or item.end_line < item.start_line:
-        return None
-    return "\n".join(lines[item.start_line - 1 : item.end_line])
-
-
 def format_report(report: SkeletonReport, *, lean_root: Path | None = None) -> str:
     """Render the report as the text a reviewer reads.
 
@@ -3911,7 +3944,6 @@ __all__ = [
     "run_probe",
     "select_lean_targets",
     "snapshot_inputs",
-    "source_excerpt",
     "source_passage",
     "validate_managed_output",
     "write_packets",

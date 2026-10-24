@@ -199,9 +199,9 @@ def test_cache_observation_ignores_staleness_invalidity_and_validation(tmp_path,
         is_valid=is_valid,
         start_sweeper=False,
     )
-    with cache.lease(str(project)) as resource:
+    with cache.lease_resolved(project.resolve()) as resource:
         pass
-    cache.invalidate(str(project), resource)
+    cache.invalidate_resolved(project.resolve(), resource)
     (project / "lakefile.toml").write_text('[package]\nname = "changed"\n')
     monkeypatch.setattr(
         lean_runtime_module,
@@ -242,7 +242,7 @@ def test_cache_observation_does_not_refresh_ttl_and_pins_idle_eviction(tmp_path)
         start_sweeper=False,
         clock=lambda: clock["now"],
     )
-    with cache.lease(str(project)):
+    with cache.lease_resolved(project.resolve()):
         pass
     clock["now"] = 10.0
 
@@ -275,7 +275,7 @@ def test_cache_close_waits_for_an_active_observation(tmp_path):
         idle_seconds=1800,
         start_sweeper=False,
     )
-    with cache.lease(str(project)):
+    with cache.lease_resolved(project.resolve()):
         pass
 
     def close_cache():
@@ -324,14 +324,14 @@ def test_invalid_pool_replacement_waits_for_active_observation(tmp_path):
         idle_seconds=1800,
         start_sweeper=False,
     )
-    with cache.lease(str(project)) as first:
+    with cache.lease_resolved(project.resolve()) as first:
         pass
-    cache.invalidate(str(project), first)
+    cache.invalidate_resolved(project.resolve(), first)
 
     def replace():
         lease_attempted.set()
         try:
-            with cache.lease(str(project)) as resource:
+            with cache.lease_resolved(project.resolve()) as resource:
                 assert resource is resources[1]
         except BaseException as error:
             errors.append(error)
@@ -376,7 +376,7 @@ def test_invalidation_retires_after_a_concurrent_observer_releases(tmp_path):
         except BaseException as error:
             errors.append(error)
 
-    with cache.lease(str(project)) as first:
+    with cache.lease_resolved(project.resolve()) as first:
         thread = threading.Thread(target=observe)
         thread.start()
         assert observer_started.wait(timeout=1)
@@ -429,7 +429,7 @@ def test_cache_observation_reports_warming_without_waiting_or_creating(tmp_path)
 
     def create():
         try:
-            with cache.lease(str(project)):
+            with cache.lease_resolved(project.resolve()):
                 pass
         except BaseException as error:
             errors.append(error)
@@ -679,10 +679,10 @@ def test_lru_limit_never_evicts_an_active_project(tmp_path):
 
     def use_second():
         second_attempted.set()
-        with cache.lease(str(second)) as resource:
+        with cache.lease_resolved(second.resolve()) as resource:
             assert resource == second.resolve()
 
-    with cache.lease(str(first)) as resource:
+    with cache.lease_resolved(first.resolve()) as resource:
         assert resource == first.resolve()
         thread = threading.Thread(target=use_second)
         thread.start()
@@ -710,11 +710,11 @@ def test_project_slot_admission_stops_before_the_response_budget(tmp_path):
         start_sweeper=False,
     )
 
-    with cache.lease(str(first)):
+    with cache.lease_resolved(first.resolve()):
         started = time.monotonic()
         with pytest.raises(ProjectResourceBusyError, match="response budget"):
-            with cache.lease(
-                str(second),
+            with cache.lease_resolved(
+                second.resolve(),
                 acquisition_timeout=0.05,
                 creation_budget=0.02,
             ):
@@ -749,8 +749,8 @@ def test_project_startup_that_misses_its_budget_is_discarded(tmp_path):
     )
 
     with pytest.raises(ProjectResourceBusyError, match="startup exceeded"):
-        with cache.lease(
-            str(project),
+        with cache.lease_resolved(
+            project.resolve(),
             acquisition_timeout=10.0,
             creation_budget=1.0,
         ):
@@ -787,7 +787,7 @@ def test_idle_ttl_never_closes_an_active_resource(tmp_path):
         clock=lambda: clock["now"],
     )
 
-    with cache.lease(str(project)):
+    with cache.lease_resolved(project.resolve()):
         clock["now"] = 20
         assert cache.evict_idle() == 0
         assert closed == []
@@ -821,7 +821,7 @@ def test_idle_retirement_reserves_the_root_until_cleanup_finishes(tmp_path):
         idle_seconds=0.01,
         start_sweeper=False,
     )
-    with cache.lease(str(project)) as first:
+    with cache.lease_resolved(project.resolve()) as first:
         pass
     time.sleep(0.02)
 
@@ -831,12 +831,12 @@ def test_idle_retirement_reserves_the_root_until_cleanup_finishes(tmp_path):
     with cache.observe(str(project)) as (resource, state):
         assert resource is None and state == "retiring"
     with pytest.raises(ProjectResourceBusyError, match="shared Lean project slot"):
-        with cache.lease(str(project), acquisition_timeout=0.05):
+        with cache.lease_resolved(project.resolve(), acquisition_timeout=0.05):
             pytest.fail("a replacement overlapped its retiring predecessor")
     assert created == [first]
 
     release_close.set()
-    with cache.lease(str(project), acquisition_timeout=1.0) as second:
+    with cache.lease_resolved(project.resolve(), acquisition_timeout=1.0) as second:
         assert second is not first
     assert created == [first, second]
     cache.close()
@@ -865,19 +865,19 @@ def test_retiring_resource_counts_against_capacity_for_other_roots(tmp_path):
         idle_seconds=0.01,
         start_sweeper=False,
     )
-    with cache.lease(str(first)):
+    with cache.lease_resolved(first.resolve()):
         pass
     time.sleep(0.02)
     assert cache.evict_idle() == 1
     assert close_started.wait(timeout=1)
 
     with pytest.raises(ProjectResourceBusyError, match="shared Lean project slot"):
-        with cache.lease(str(second), acquisition_timeout=0.05):
+        with cache.lease_resolved(second.resolve(), acquisition_timeout=0.05):
             pytest.fail("a retiring slot was treated as free capacity")
     assert created == [first.resolve()]
 
     release_close.set()
-    with cache.lease(str(second), acquisition_timeout=1.0):
+    with cache.lease_resolved(second.resolve(), acquisition_timeout=1.0):
         pass
     assert created == [first.resolve(), second.resolve()]
     cache.close()
@@ -906,12 +906,12 @@ def test_lru_retirement_never_blocks_the_request_thread_past_its_deadline(tmp_pa
         idle_seconds=1800,
         start_sweeper=False,
     )
-    with cache.lease(str(first)):
+    with cache.lease_resolved(first.resolve()):
         pass
 
     started = time.monotonic()
     with pytest.raises(ProjectResourceBusyError, match="shared Lean project slot"):
-        with cache.lease(str(second), acquisition_timeout=0.05):
+        with cache.lease_resolved(second.resolve(), acquisition_timeout=0.05):
             pytest.fail("LRU cleanup ran synchronously or freed capacity early")
     # A synchronous close would block on release_close for its full 2s.
     assert time.monotonic() - started < 1.5
@@ -919,7 +919,7 @@ def test_lru_retirement_never_blocks_the_request_thread_past_its_deadline(tmp_pa
     assert created == [first.resolve()]
 
     release_close.set()
-    with cache.lease(str(second), acquisition_timeout=1.0):
+    with cache.lease_resolved(second.resolve(), acquisition_timeout=1.0):
         pass
     assert created == [first.resolve(), second.resolve()]
     cache.close()
@@ -946,13 +946,13 @@ def test_lru_waiter_retires_one_victim_while_its_cleanup_is_slow(tmp_path):
         idle_seconds=1800,
         start_sweeper=False,
     )
-    with cache.lease(str(first)):
+    with cache.lease_resolved(first.resolve()):
         pass
-    with cache.lease(str(second)):
+    with cache.lease_resolved(second.resolve()):
         pass
 
     def acquire_third():
-        with cache.lease(str(third), acquisition_timeout=5.0):
+        with cache.lease_resolved(third.resolve(), acquisition_timeout=5.0):
             admitted.set()
 
     waiter = threading.Thread(target=acquire_third, daemon=True)
@@ -961,7 +961,7 @@ def test_lru_waiter_retires_one_victim_while_its_cleanup_is_slow(tmp_path):
         assert close_started.wait(timeout=1)
         # Wake the waiter while its victim is still retiring: once through
         # another lease's release, then through its own 0.5s poll.
-        with cache.lease(str(second), acquisition_timeout=1.0):
+        with cache.lease_resolved(second.resolve(), acquisition_timeout=1.0):
             pass
         time.sleep(0.6)
         assert [entry["project_dir"] for entry in cache.stats()["resident"]] == [
@@ -998,17 +998,17 @@ def test_lru_waiter_lets_an_idle_retirement_in_flight_free_its_slot(tmp_path):
         start_sweeper=False,
         clock=lambda: clock["now"],
     )
-    with cache.lease(str(first)):
+    with cache.lease_resolved(first.resolve()):
         pass
     clock["now"] = 5.0
-    with cache.lease(str(second)):
+    with cache.lease_resolved(second.resolve()):
         pass
     clock["now"] = 12.0
     assert cache.evict_idle() == 1
     assert close_started.wait(timeout=1)
 
     def acquire_third():
-        with cache.lease(str(third), acquisition_timeout=5.0):
+        with cache.lease_resolved(third.resolve(), acquisition_timeout=5.0):
             admitted.set()
 
     waiter = threading.Thread(target=acquire_third, daemon=True)
@@ -1094,7 +1094,7 @@ def test_failed_retirement_retries_without_parallel_reapers(tmp_path):
         start_sweeper=False,
         clock=lambda: clock["now"],
     )
-    with cache.lease(str(project)):
+    with cache.lease_resolved(project.resolve()):
         pass
     clock["now"] = 2.0
     assert cache.evict_idle() == 1
@@ -1133,7 +1133,7 @@ def test_retirement_pool_can_drain_every_occupied_slot_in_parallel(tmp_path):
         clock=lambda: clock["now"],
     )
     for project in projects:
-        with cache.lease(str(project)):
+        with cache.lease_resolved(project.resolve()):
             pass
     clock["now"] = 2.0
 
@@ -1168,14 +1168,14 @@ def test_late_startup_moves_directly_to_retirement(tmp_path):
         start_sweeper=False,
     )
     with pytest.raises(ProjectResourceBusyError, match="startup exceeded"):
-        with cache.lease(str(project), acquisition_timeout=0.5):
+        with cache.lease_resolved(project.resolve(), acquisition_timeout=0.5):
             pytest.fail("late startup entered a request")
     assert close_started.wait(timeout=1)
     assert cache.stats()["retiring"] == [str(project.resolve())]
     with cache.observe(str(project)) as (resource, state):
         assert resource is None and state == "retiring"
     with pytest.raises(ProjectResourceBusyError):
-        with cache.lease(str(project), acquisition_timeout=0.05):
+        with cache.lease_resolved(project.resolve(), acquisition_timeout=0.05):
             pytest.fail("late-start cleanup overlapped a replacement")
     assert len(created) == 1
 
@@ -1329,7 +1329,7 @@ def test_partial_lsp_startup_transfers_cleanup_without_masking_the_error(
         assert services.lsp_projects.stats()["retiring"] == [str(project.resolve())]
 
         with pytest.raises(ProjectResourceBusyError):
-            with services.lsp_projects.lease(str(project), acquisition_timeout=0.05):
+            with services.lsp_projects.lease_resolved(project.resolve(), acquisition_timeout=0.05):
                 pytest.fail("partial LSP cleanup released project capacity early")
     finally:
         release_cleanup.set()
@@ -1356,7 +1356,7 @@ def test_cache_close_waits_for_retirement_before_returning(tmp_path):
         idle_seconds=1800,
         start_sweeper=False,
     )
-    with cache.lease(str(project)):
+    with cache.lease_resolved(project.resolve()):
         pass
 
     thread = threading.Thread(target=lambda: (cache.close(), close_finished.set()), daemon=True)
@@ -2159,7 +2159,7 @@ def test_failed_lsp_request_returns_while_verified_cleanup_runs(tmp_path):
         assert services.lsp_projects.stats()["retiring"] == [str(project.resolve())]
 
         with pytest.raises(ProjectResourceBusyError):
-            with services.lsp_projects.lease(str(project), acquisition_timeout=0.05):
+            with services.lsp_projects.lease_resolved(project.resolve(), acquisition_timeout=0.05):
                 pytest.fail("replacement overlapped LSP cleanup")
     finally:
         release_close.set()
