@@ -520,12 +520,16 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
     playwright.expect(page.locator(".bp-reading-pane > .bp-dag-inspector-inner")).to_be_visible()
     assert _settled_reading_scroll(reading) == pytest.approx(reading_scroll, abs=1)
-    handle.click()
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    # A phone's taps go half, full, then peek, so closing may take two.
+    _peek_reader(page, handle)
     _zoom_group(page, key)
     focused = _focus_graph_node(page, consumer.groups[key][0]["id"])
     playwright.expect(page.locator(".bp-dag-breadcrumb")).to_contain_text(_AREAS[0])
-    playwright.expect(page.locator(".bp-dag-breadcrumb").get_by_role("link", name=_SCOPE_TITLE, exact=True)).to_have_count(1)
+    if width <= 720:
+        # A phone's trail shows only first / current: the scope crumb is there but hidden, and Areas or Back return to the scope.
+        playwright.expect(page.locator(".bp-dag-breadcrumb a", has_text=_SCOPE_TITLE)).to_have_count(1)
+    else:
+        playwright.expect(page.locator(".bp-dag-breadcrumb").get_by_role("link", name=_SCOPE_TITLE, exact=True)).to_have_count(1)
     expanded_camera = _geometry(focused)["camera"]
     page.get_by_role("button", name=re.compile(r"^(Areas|Regions)$")).click()
     _committed(page)
@@ -604,6 +608,11 @@ def test_exact_lean_search_precedes_groups_and_keeps_complete_math_source_and_sc
     playwright.expect(source_link).to_have_count(1)
     source_url = urlsplit(urljoin(page.url, source_link.get_attribute("href")))
     assert source_url.path.endswith("/sources/identity-notes.html") and source_url.fragment == "elementary"
+    if width <= 720:
+        # A phone reader opens at half under the map; read the formula's source at full, as a reader would, so MathJax's menu
+        # opens with room rather than at the screen's bottom edge.
+        handle.click()
+        playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-sheet-full\b"))
     formula = card.locator("mjx-container").last
     formula.scroll_into_view_if_needed()
     assert "".join(_math_source(page, formula).split()) == "".join(_TEX[-1].split())
