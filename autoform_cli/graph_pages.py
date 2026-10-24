@@ -13,7 +13,7 @@ from __future__ import annotations
 import html
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePath
 from urllib.parse import quote
 
 from . import dag_viewer
@@ -39,6 +39,7 @@ NodeLinks = Callable[[Path, Iterable[str]], Mapping[str, str]]
 #: The project explorer's payload and the search index, relative to the site root.
 PROJECT_PAYLOAD = "dependencies.json"
 SEARCH_INDEX = "dependencies/index.json"
+WIKI_LINKS = "dependencies/wiki-links.json"
 
 
 def book_contents(graph: Graph, groups: Collection[str]) -> Path:
@@ -50,7 +51,7 @@ def book_contents(graph: Graph, groups: Collection[str]) -> Path:
     return Path("roadmap/README.md" if "roadmap" in graph.nodes or "roadmap" in groups else "README.md")
 
 
-def graph_page_paths(graph: Graph) -> tuple[str, ...]:
+def graph_page_paths(graph: Graph, *, wiki_links: bool = False) -> tuple[str, ...]:
     """Every file :func:`write_graph_pages` writes for ``graph``, relative to
     the site's root: each page, the payload beside it, and the search index."""
 
@@ -58,6 +59,8 @@ def graph_page_paths(graph: Graph) -> tuple[str, ...]:
     project_page, full_page, chapter_pages, scope_pages = _pages(graph, root, group_nodes(graph))
     pages = {project_page, full_page, *chapter_pages.values(), *scope_pages.values()}
     files = {*pages, *(page.with_suffix(".json") for page in pages), root / SEARCH_INDEX}
+    if wiki_links:
+        files.add(root / WIKI_LINKS)
     return tuple(sorted(path.relative_to(root).as_posix() for path in files))
 
 
@@ -124,6 +127,9 @@ def write_graph_pages(
     node_links: NodeLinks,
     book_targets: Mapping[str, tuple[Path, str]] | None = None,
     contexts_out: dict[str, tuple[Path, str]] | None = None,
+    captured_sources: Mapping[str, bytes] | None = None,
+    source_paths: Mapping[str, str | PurePath] | None = None,
+    warnings_out: list[str] | None = None,
 ) -> tuple[Path, ...]:
     """Write project, chapter, nested-scope, and shared full-explorer pages.
 
@@ -133,6 +139,9 @@ def write_graph_pages(
     pages are compatibility entrances to canonical full-text book routes.
     ``contexts_out`` receives the same reader-context map used for this index;
     it is transient publication data, not another authored graph or cache.
+    ``captured_sources`` opts into a separate authored-reference layer from
+    already captured bytes and blueprint-relative ``source_paths``. The index
+    and formal dependencies are unchanged; no authored file is reopened here.
     """
     destination = Path(destination).resolve()
     groups = group_nodes(graph)
@@ -178,9 +187,20 @@ def write_graph_pages(
             context_links[node.id] = _published_link(payload, search_index) + f"#node={quote(node.id, safe='')}"
             continue
         context_links[node.id] = _published_link(scope_pages[node.id], search_index)
+    index_digests: list[str] = []
     dag_viewer.write_search_index(
         search_index, complete, context_links=context_links, metadata=metadata, include_relations=True,
+        sha256_out=index_digests if captured_sources is not None else None,
     )
+    if captured_sources is not None:
+        references = dag_viewer.extract_wiki_links(
+            complete, captured_sources=captured_sources, source_paths=source_paths, metadata=metadata,
+        )
+        written.append(
+            dag_viewer.write_wiki_links(
+                destination / WIKI_LINKS, references, index_sha256=index_digests[0], warnings_out=warnings_out,
+            )
+        )
 
     project = project_view(graph, statuses)
     project_item_count = sum(node.item_count for node in project.nodes)

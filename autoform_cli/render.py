@@ -761,7 +761,7 @@ def _site_paths(graph: Graph) -> tuple[str, ...]:
                 STRUCTURE_PAGE,
                 "SUMMARY.md",
                 *(_group_page(group).as_posix() for group in _group_nodes(graph)),
-                *graph_pages.graph_page_paths(graph),
+                *graph_pages.graph_page_paths(graph, wiki_links=True),
                 *_ASSETS,
             }
         )
@@ -1150,8 +1150,11 @@ def _render_pages(
         node_links=lambda page, node_ids: _node_links(targets, page, node_ids),
         book_targets=targets,
         contexts_out=contexts,
+        captured_sources={node_id: files[node.path] for node_id, node in graph.nodes.items() if node.path in files},
+        source_paths={node_id: node.path.relative_to(blueprint) for node_id, node in graph.nodes.items()},
+        warnings_out=report.warnings,
     )
-    report.pages += len(generated_graph_pages)
+    report.pages += sum(path != destination / graph_pages.WIKI_LINKS for path in generated_graph_pages)
 
     # These are the final safe pages, including generated theorem cards and
     # their exact anchors. Never reread an authored article to build the reader.
