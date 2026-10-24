@@ -563,6 +563,19 @@ def _load_search_index(page: object, entries: int) -> object:
     return search
 
 
+def _browse_contents(page: object, action: str) -> None:
+    """Choose an inventory through the visible Browse control and its native popover."""
+    toggle = page.get_by_role("button", name="Browse statements or source texts", exact=True)
+    popover = page.locator(".bp-dag-browse-popover")
+    playwright.expect(popover).to_be_hidden()
+    toggle.click()
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "true")
+    playwright.expect(popover).to_be_visible()
+    popover.get_by_role("button", name=action, exact=True).click()
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
+    playwright.expect(popover).to_be_hidden()
+
+
 def test_mobile_node_interaction_and_selected_sheet_collapse(mobile_page: object, explorer_consumer: _ExplorerConsumer) -> None:
     page = mobile_page
     _open_consumer(page, explorer_consumer, "chapter/foundation")
@@ -679,7 +692,7 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     playwright.expect(page.locator(".bp-reading-body")).to_contain_text("continuity, deformation, and invariants")
     assert len(explorer_consumer.graphs["atlas"]["nodes"]) == 30
     # Source inventories keep their honest authored role, never a proof-status summary.
-    page.get_by_role("button", name="Sources", exact=True).click()
+    _browse_contents(page, "Source texts")
     row = page.locator(".bp-dag-inventory-row", has_text="Library inventory")
     row.click()
     _consumer_ready(page, explorer_consumer, "atlas/library")
@@ -765,7 +778,7 @@ def test_oversized_flat_scope_defaults_to_contents(desktop_page: object, explore
     page.set_viewport_size({"width": 1440, "height": 900})
     _open_consumer(page, explorer_consumer, "flat")
     playwright.expect(page.locator(".bp-dag-inventory")).to_be_visible()
-    playwright.expect(page.get_by_role("button", name="Map · too many items")).to_be_disabled()
+    playwright.expect(page.get_by_role("button", name="Back to map", exact=True)).to_be_disabled()
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("100 of 1,000")
     playwright.expect(page.locator(".bp-dag-inventory-row")).to_have_count(100)
     playwright.expect(page.locator(".bp-dag-node")).to_have_count(0)
@@ -832,7 +845,7 @@ def test_phone_selection_opens_full_reading_and_returns_to_a_reachable_selected_
 def test_mobile_contents_pagination_stays_above_the_collapsed_sheet(mobile_page: object, explorer_consumer: _ExplorerConsumer) -> None:
     page = mobile_page
     _open_consumer(page, explorer_consumer, "flat")
-    page.get_by_role("button", name="Results", exact=True).click()
+    _browse_contents(page, "Statements in this topic")
     _close_phone_reading(page)
     more = page.locator(".bp-dag-inventory > .bp-dag-load-more")
     more.scroll_into_view_if_needed()
@@ -904,7 +917,7 @@ def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_con
     playwright.expect(results).to_be_hidden()
     search.press("ArrowDown")
     playwright.expect(result).to_be_focused()
-    page.get_by_role("button", name="Results", exact=True).focus()
+    page.get_by_role("button", name="Browse statements or source texts", exact=True).focus()
     playwright.expect(results).to_be_hidden()
     search.fill("Target theorem")
     page.evaluate("window.__consumerDocument=document")
@@ -957,7 +970,7 @@ def test_a_contents_query_lists_only_this_scope(desktop_page: object, explorer_c
     page = desktop_page
     _open_consumer(page, explorer_consumer)
     search = _load_search_index(page, len(explorer_consumer.records))
-    page.get_by_role("button", name="Results", exact=True).click()
+    _browse_contents(page, "Statements in this topic")
     search.fill("theorem")
     playwright.expect(page.locator(".bp-dag-inventory-title")).to_have_text(["Target theorem"])
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 result · search the whole roadmap")
@@ -1476,7 +1489,7 @@ def test_contents_start_right_of_the_open_details(desktop_page: object, site_url
         box = item.bounding_box()
         assert box is not None and box["x"] + box["width"] <= reader["x"] + 1
     _assert_hit(page, row)
-    page.get_by_role("button", name="Map", exact=True).click()
+    page.get_by_role("button", name="Back to map", exact=True).click()
     playwright.expect(inventory).to_be_hidden()
     _reading_card(page, "algebra/result")
     playwright.expect(page.locator(".bp-reading-pane")).to_be_visible()
@@ -2276,7 +2289,7 @@ def test_the_rail_counts_in_words_that_agree_with_their_numbers(
     """Count wording now belongs to the canonical Results view, not a duplicate rail overview."""
     page = desktop_page
     _open_consumer(page, explorer_consumer, name)
-    page.get_by_role("button", name="Results", exact=True).click()
+    _browse_contents(page, "Statements in this topic")
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text(counts)
     graph = explorer_consumer.graphs[name]
     assert len(graph["nodes"]) == (4 if name == "mixed" else 1_000)

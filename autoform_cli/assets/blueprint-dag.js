@@ -564,7 +564,7 @@
       ui$area = null, ui$overviewGroup = null, ui$scopeOverview = false, ui$overviewOnly = false, ui$filtersTouched = false, ui$relationIds = null,
       ui$requestedNode = firstBundle && firstBundle.nodeId || null, ui$outlineLimit = 120;
     if (!mapAllowed) ui$mode = "list";
-    var dom$announcement, dom$body, dom$breadcrumb, dom$canvas, dom$ctx, dom$density, dom$edgeFieldset, dom$empty,
+    var dom$announcement, dom$body, dom$breadcrumb, dom$browse, dom$browseToggle, dom$browsePopover, dom$canvas, dom$ctx, dom$density, dom$edgeFieldset, dom$empty,
       dom$error, dom$filterPopover, dom$filterSummary, dom$filters, dom$fit, dom$graphMode, dom$hiddenButton,
       dom$homeLink, dom$inspector, dom$inspectorInner, dom$inventory, dom$inventoryList, dom$inventoryRows,
       dom$inventoryScroll, dom$inventorySummary, dom$isolated, dom$listMode, dom$loadMore, dom$mapContext, dom$mapKey,
@@ -650,7 +650,7 @@
       restoration++; restoring = false; clearTimeout(checkpointTimer); currentBundle = bundle; contextGraph = bundle.graph; ui$area = null; ui$overviewGroup = null; ui$requestedNode = bundle.nodeId || null;
       document.title = bundle.title; dom$error.hidden = true;
       ui$filtersTouched = false; ui$relationIds = null;
-      ui$query = ""; dom$search.value = ""; closeSearch(); setFilters(false);
+      ui$query = ""; dom$search.value = ""; closeSearch(); setFilters(false); setBrowse(false);
       ui$reading = Boolean(bundle.readingSource);
       if (ui$reading && dom$readingBody) {
         dom$readingBody.replaceChildren(bundle.readingSource);
@@ -707,8 +707,8 @@
       while (pending && !seen.has(pending.id)) {
         seen.add(pending.id);
         if (["collection", "transparent"].indexOf(pending.navigation) < 0) entries.unshift({label: pending.title,
-          url: pending.id === bundle.scope && (!record || record.id === pending.id) && !ui$overviewGroup ? null : pending.route || pending.url,
-          _overviewParent: pending.id === bundle.scope && Boolean(ui$overviewGroup)});
+          url: pending.id === bundle.scope && (!record || record.id === pending.id) && !ui$overviewGroup && !ui$area ? null : pending.route || pending.url,
+          _overviewParent: pending.id === bundle.scope && Boolean(ui$overviewGroup || ui$area)});
         pending = records.get(semanticParent(pending));
       }
       if (record && record.scope !== record.id) entries.push({label: record.title});
@@ -938,13 +938,19 @@
       dom$filterPopover.appendChild(fieldset); dom$filterPopover.appendChild(edges);
       dom$filters.appendChild(dom$filterSummary); dom$filters.appendChild(dom$filterPopover); toolbar.appendChild(dom$filters);
 
-      var modes = element("div", "bp-dag-modes"); modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "Explorer view");
-      dom$graphMode = button("bp-dag-mode-button", mapAllowed ? "Map" : "Map · too many items");
-      dom$graphMode.disabled = !mapAllowed; dom$listMode = button("bp-dag-mode-button", "Results");
-      modes.appendChild(dom$graphMode); modes.appendChild(dom$listMode); toolbar.appendChild(modes);
-      dom$sourcesMode = button("bp-dag-mode-button", "Sources");
-      dom$regionsMode = button("bp-dag-mode-button", "Regions");
-      modes.appendChild(dom$sourcesMode); modes.appendChild(dom$regionsMode);
+      dom$graphMode = button("bp-dag-button", "Back to map"); dom$graphMode.hidden = true;
+      dom$graphMode.disabled = !mapAllowed; toolbar.appendChild(dom$graphMode);
+      dom$browse = element("div", "bp-dag-browse");
+      dom$browseToggle = button("bp-dag-button", "Browse", "Browse statements or source texts");
+      dom$browseToggle.setAttribute("aria-expanded", "false");
+      dom$browsePopover = element("div", "bp-dag-browse-popover"); dom$browsePopover.hidden = true;
+      dom$browsePopover.id = "bp-dag-browse-" + instance;
+      dom$browsePopover.setAttribute("role", "group"); dom$browsePopover.setAttribute("aria-label", "Browse library contents");
+      dom$browseToggle.setAttribute("aria-controls", dom$browsePopover.id);
+      dom$listMode = button("bp-dag-button", "Statements in this topic");
+      dom$sourcesMode = button("bp-dag-button", "Source texts");
+      dom$browsePopover.appendChild(dom$listMode); dom$browsePopover.appendChild(dom$sourcesMode);
+      dom$browse.appendChild(dom$browseToggle); dom$browse.appendChild(dom$browsePopover); toolbar.appendChild(dom$browse);
 
       var zoomGroup = element("div", "bp-dag-zoom"); zoomGroup.setAttribute("role", "group"); zoomGroup.setAttribute("aria-label", "Zoom controls");
       dom$zoomOut = button("bp-dag-button", "−", "Zoom out"); dom$zoomIn = button("bp-dag-button", "+", "Zoom in");
@@ -1021,7 +1027,7 @@
             if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
                 new URL(href).origin !== window.location.origin) return;
             event.preventDefault();
-            if (entry._overviewParent && ui$scopeOverview && ui$overviewGroup) setMode("regions", true);
+            if (entry._overviewParent && (ui$scopeOverview && ui$overviewGroup || ui$area)) setMode("regions", true);
             else navigation.navigate(href, {history: "push", focus: true, mapFirst: true});
           });
           item.appendChild(link);
@@ -1065,9 +1071,17 @@
       dom$filters.addEventListener("keydown", function (event) {
         if (event.key === "Escape" && !dom$filterPopover.hidden) { event.preventDefault(); setFilters(false); dom$filterSummary.focus(); }
       });
+      dom$browseToggle.addEventListener("click", function () { setBrowse(dom$browsePopover.hidden); });
+      dom$browse.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && !dom$browsePopover.hidden) { event.preventDefault(); setBrowse(false); }
+      });
       globalListen(document, "pointerdown", function (event) {
         if (!dom$filters.contains(event.target)) setFilters(false);
+        if (!dom$browse.contains(event.target)) setBrowse(false, false);
         if (!dom$searchWrap.contains(event.target)) closeSearch();
+      });
+      dom$browse.addEventListener("focusout", function (event) {
+        if (event.relatedTarget && !dom$browse.contains(event.relatedTarget)) setBrowse(false, false);
       });
       dom$searchWrap.addEventListener("focusout", function (event) {
         if (event.relatedTarget && !dom$searchWrap.contains(event.relatedTarget)) closeSearch();
@@ -1077,8 +1091,8 @@
         writeLocation("replace"); refresh(true);
       });
       dom$graphMode.addEventListener("click", function () { setMode("graph", true); });
-      dom$listMode.addEventListener("click", function () { ui$relationIds = null; setMode("list", true); });
-      if (dom$sourcesMode) dom$sourcesMode.addEventListener("click", function () { setMode("sources", true); });
+      dom$listMode.addEventListener("click", function () { setBrowse(false); ui$relationIds = null; setMode("list", true); });
+      if (dom$sourcesMode) dom$sourcesMode.addEventListener("click", function () { setBrowse(false); setMode("sources", true); });
       if (dom$regionsMode) dom$regionsMode.addEventListener("click", function () { setMode("regions", true); });
       dom$zoomIn.addEventListener("click", function () { zoomAt(1.24, dom$stage.clientWidth / 2, dom$stage.clientHeight / 2); });
       dom$zoomOut.addEventListener("click", function () { zoomAt(.8, dom$stage.clientWidth / 2, dom$stage.clientHeight / 2); });
@@ -1224,10 +1238,8 @@
       var enabled = ui$selectedStatuses.size;
       dom$filterSummary.textContent = (enabled === presentStatuses.length ? "Status" : "Status · " + enabled) +
         (ui$showIsolated ? "" : " · edges only");
-      dom$graphMode.setAttribute("aria-pressed", String(ui$mode === "graph"));
-      dom$listMode.setAttribute("aria-pressed", String(ui$mode === "list"));
-      if (dom$sourcesMode) dom$sourcesMode.setAttribute("aria-pressed", String(ui$mode === "sources"));
-      if (dom$regionsMode) dom$regionsMode.setAttribute("aria-pressed", String(ui$mode === "graph" && !ui$area && !ui$overviewGroup && data.nodes.some(function (node) { return node._region; })));
+      dom$graphMode.hidden = ui$mode === "graph";
+      dom$listMode.textContent = currentBundle && currentBundle.scope === "roadmap" ? "All statements" : "Statements in this topic";
       dom$stage.hidden = ui$mode !== "graph"; dom$inventory.hidden = ui$mode === "graph";
       dom$graphMode.disabled = !ui$mapAllowed;
       if (navigation) dom$inventory.querySelector("h2").textContent = ui$mode === "sources" ? "Source tracks" : "Results";
@@ -1686,6 +1698,11 @@
       if (!open && dom$filterPopover.contains(document.activeElement)) dom$filterSummary.focus({preventScroll: true});
       dom$filterPopover.hidden = !open; dom$filterSummary.setAttribute("aria-expanded", String(open));
     }
+    function setBrowse(open, returnFocus) {
+      if (!dom$browsePopover) return;
+      if (!open && returnFocus !== false && dom$browsePopover.contains(document.activeElement)) dom$browseToggle.focus({preventScroll: true});
+      dom$browsePopover.hidden = !open; dom$browseToggle.setAttribute("aria-expanded", String(open));
+    }
     function closeSearch() { dom$searchResults.hidden = true; }
     function openResults() {
       if (dom$searchResults.hidden && ui$query) renderSearch();
@@ -1773,13 +1790,13 @@
     }
     function setMode(mode, updateHistory) {
       if (mode === "graph" && !ui$mapAllowed) return;
-      var overviewNavigation = mode === "regions" && ui$scopeOverview && Boolean(ui$overviewGroup);
+      var overviewNavigation = mode === "regions" && Boolean(ui$scopeOverview && ui$overviewGroup || ui$area);
       if (overviewNavigation && updateHistory) navigation.checkpoint();
       if (mode !== "list") ui$relationIds = null;
       if (mode === "regions" && ui$scopeOverview) {
         ui$overviewGroup = null; ui$requestedNode = null; ui$selected = null; ui$direction = "both";
         updateProjection(); setSheet(false, null); mode = "graph"; fit();
-      } else if (mode === "regions" && navigation && currentBundle && currentBundle.scope !== "roadmap" && records.has("roadmap")) {
+      } else if (mode === "regions" && !ui$area && navigation && currentBundle && currentBundle.scope !== "roadmap" && records.has("roadmap")) {
         navigation.navigateNode("roadmap", {history: "push", focus: false}); return;
       }
       if (mode === "regions") { ui$area = null; ui$requestedNode = null; updateProjection(); mode = "graph"; fit(); }

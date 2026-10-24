@@ -291,6 +291,19 @@ def _frames(page: object) -> None:
     page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
 
 
+def _browse_contents(page: object, action: str) -> None:
+    """Choose the real statement or source inventory through Browse."""
+    toggle = page.get_by_role("button", name="Browse statements or source texts", exact=True)
+    popover = page.locator(".bp-dag-browse-popover")
+    playwright.expect(popover).to_be_hidden()
+    toggle.click()
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "true")
+    playwright.expect(popover).to_be_visible()
+    popover.get_by_role("button", name=action, exact=True).click()
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
+    playwright.expect(popover).to_be_hidden()
+
+
 def _focus_graph_node(page: object, target_id: str) -> object:
     """Reach a map control with real keys, without relying on grid coordinates."""
     handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
@@ -763,17 +776,17 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
     titles = {_focus_graph_region(page, area).locator(".bp-dag-node-title").inner_text() for area in _AREAS}
     assert titles == set(_AREAS)
     assert page.locator('.bp-dag-node[data-autoform-node-id="scope:appendix-a"]').count() == 0
-    page.get_by_role("button", name="Sources", exact=True).click()
+    _browse_contents(page, "Source texts")
     playwright.expect(page.locator(".bp-dag-inventory-head h2")).to_have_text("Source tracks")
     titles = page.locator(".bp-dag-inventory-title").all_text_contents()
     assert sorted(titles) == sorted(_SOURCE_TITLES)
     assert site.records["source-notes"]["title"] not in titles
-    page.get_by_role("button", name="Results", exact=True).click()
+    _browse_contents(page, "All statements")
     playwright.expect(page.locator(".bp-dag-inventory-head h2")).to_have_text("Results")
     assert _TARGET_TITLE in page.locator(".bp-dag-inventory-title").all_text_contents()
     assert not set(_SOURCE_TITLES).intersection(page.locator(".bp-dag-inventory-title").all_text_contents())
     assert "Reading note" not in page.locator(".bp-dag-inventory-title").all_text_contents()
-    page.get_by_role("button", name="Regions", exact=True).click()
+    page.get_by_role("button", name="Back to map", exact=True).click()
     _focus_graph_region(page, "Geometry").click()
     notes = _focus_graph_node(page, "scope:source-notes")
     playwright.expect(notes).to_be_focused()
@@ -781,18 +794,44 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
     assert page.url == site.route("roadmap")
 
 
-def test_zero_edge_native_article_keeps_focal_node_surrounding_context_and_complete_math(
+def test_zero_edge_native_article_keeps_solo_focal_node_closed_topic_links_and_complete_math(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:
     page, site = workspace_page, workspace_site
     _open(page, site, workspace_runtime, _ISOLATED)
     node = _selected(page, _ISOLATED)
     assert "no dependency edges" in node.get_attribute("aria-label")
-    assert page.locator(".bp-dag-node").count() > 1
+    playwright.expect(page.locator(".bp-dag-node")).to_have_count(1)
+    details = page.locator(".bp-reading-related-topics")
+    playwright.expect(details).to_have_count(1)
+    assert details.get_attribute("open") is None
+    owner = site.records[_ISOLATED]["scope"]
+    topic_peers = [record["id"] for record in site.records.values()
+                   if record["id"] != _ISOLATED and record.get("scope") == owner
+                   and (record.get("result") is True or record.get("catalog") == "module")
+                   and record.get("navigation") not in {"collection", "transparent", "source"}]
+    assert _TARGET in topic_peers[:5], "The real published peer preview must contain the connected target"
+    playwright.expect(details.locator("summary")).to_have_text(f"More in {site.records[owner]['title']}")
+    peer = details.get_by_role("link", name=_TARGET_TITLE, exact=True)
+    playwright.expect(peer).to_have_attribute("href", site.route(_TARGET))
+    assert peer.get_attribute("aria-label") is None
     card = _full_math(page, _ISOLATED, 2)
     assert "independent statement" in card.inner_text()
     assert page.url == site.route(_ISOLATED)
     assert page.locator(".bp-dag-empty").is_hidden()
+    details.locator("summary").click()
+    playwright.expect(peer).to_be_visible()
+    peer.click()
+    page.wait_for_url(site.route(_TARGET))
+    _selected(page, _TARGET)
+    _full_math(page)
+    assert page.evaluate("() => document === __workspaceDocument") is True
+    page.go_back()
+    page.wait_for_url(site.route(_ISOLATED))
+    _selected(page, _ISOLATED)
+    playwright.expect(page.locator(".bp-dag-node")).to_have_count(1)
+    _full_math(page, _ISOLATED, 2)
+    assert page.evaluate("() => document === __workspaceDocument") is True
 
 
 def test_real_result_flag_drives_document_title_leaf_breadcrumb_and_result_count(
@@ -806,7 +845,7 @@ def test_real_result_flag_drives_document_title_leaf_breadcrumb_and_result_count
     _selected(page, _TARGET)
     assert page.title() == site.records[_TARGET]["title"]
     playwright.expect(page.locator(".bp-dag-breadcrumb li").last).to_have_text(_TARGET_TITLE)
-    page.get_by_role("button", name="Results", exact=True).click()
+    _browse_contents(page, "Statements in this topic")
     enabled = set(page.locator(".bp-dag-filter-popover input[value]:checked").evaluate_all("inputs => inputs.map(input => input.value)"))
     expected = sum(record.get("result") is True and record.get("scope") == site.records[_TARGET]["scope"]
                    and record.get("status") in enabled
@@ -840,8 +879,8 @@ def test_zero_count_authored_region_is_visible_and_does_not_invent_one_item(
     region = _focus_graph_region(page, "Unstarted mathematics")
     assert ", 0 items" in region.get_attribute("aria-label")
     assert ", 1 item" not in region.get_attribute("aria-label")
-    page.get_by_role("button", name="Results", exact=True).click()
-    page.get_by_role("button", name="Regions", exact=True).click()
+    _browse_contents(page, "All statements")
+    page.get_by_role("button", name="Back to map", exact=True).click()
     _focus_graph_region(page, "Unstarted mathematics")
 
 
@@ -856,13 +895,22 @@ def test_authored_cross_topic_proof_dependency_has_a_real_captured_area_edge(
     assert _pixels(page)["painted"] > 0
 
 
-def test_isolated_focal_context_keeps_connected_peers_and_their_real_edge(
+def test_isolated_topic_link_opens_connected_result_and_its_real_edge(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:
     page, site = workspace_page, workspace_site
     _observe_dependency_routes(page)
     _open(page, site, workspace_runtime, _ISOLATED)
     _selected(page, _ISOLATED)
+    playwright.expect(page.locator(".bp-dag-node")).to_have_count(1)
+    details = page.locator(".bp-reading-related-topics")
+    assert details.get_attribute("open") is None
+    details.locator("summary").click()
+    peer = details.get_by_role("link", name=_TARGET_TITLE, exact=True)
+    playwright.expect(peer).to_have_attribute("href", site.route(_TARGET))
+    peer.click()
+    page.wait_for_url(site.route(_TARGET))
+    _selected(page, _TARGET)
     _focus_graph_node(page, _BASE)
     base = page.locator(f'.bp-dag-node[data-autoform-node-id="{_BASE}"]')
     main = page.locator(f'.bp-dag-node[data-autoform-node-id="{_TARGET}"]')
@@ -876,7 +924,7 @@ def test_isolated_focal_context_keeps_connected_peers_and_their_real_edge(
     _frames(page)
     playwright.expect(base).to_be_visible()
     playwright.expect(main).to_be_visible()
-    _selected(page, _ISOLATED)
+    _selected(page, _TARGET)
     assert page.evaluate("""([source, target]) => {
       const a = document.querySelector(source).getBoundingClientRect(), b = document.querySelector(target).getBoundingClientRect();
       const canvas = document.querySelector('.bp-dag-canvas'), bounds = canvas.getBoundingClientRect();
@@ -903,6 +951,11 @@ def test_isolated_focal_context_keeps_connected_peers_and_their_real_edge(
         return Array.from(canvas.getContext('2d').getImageData(x-3,y-3,7,7).data).some((value,index)=>index%4===3&&value>0);
       });
     }""", [f'.bp-dag-node[data-autoform-node-id="{_BASE}"]', f'.bp-dag-node[data-autoform-node-id="{_TARGET}"]']) is True
+    page.go_back()
+    page.wait_for_url(site.route(_ISOLATED))
+    _selected(page, _ISOLATED)
+    playwright.expect(page.locator(".bp-dag-node")).to_have_count(1)
+    _full_math(page, _ISOLATED, 2)
 
 
 def test_native_reader_and_library_links_remain_soft_navigation(

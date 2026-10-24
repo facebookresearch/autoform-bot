@@ -76,12 +76,153 @@ function click(link,options={}) {
 function snapshot() {return JSON.stringify({nodes:sharedIndex.nodes,relations:sharedIndex.relations,contextGraph});}
 """
 
+_CONTROL_PEERS = r"""
+// Shell elements, observers and the mode-dispatch boundary are peers. The
+// constructed toolbar, Browse events and control synchronization are production.
+class Element {
+  constructor(tag) {
+    this.tagName=tag.toUpperCase();this.children=[];this.listeners=new Map();this.attrs=new Map();
+    this.dataset={};this.hidden=false;this.text='';this.focuses=[];
+    this.classList={toggle(){}};this.style={setProperty(){}};
+  }
+  get textContent() {return this.text+this.children.map(child=>child.textContent).join('');}
+  set textContent(value) {this.text=String(value);this.children=[];}
+  setAttribute(name,value) {this.attrs.set(name,String(value));}
+  getAttribute(name) {return this.attrs.has(name)?this.attrs.get(name):null;}
+  appendChild(child) {child.parentElement=this;this.children.push(child);return child;}
+  insertBefore(child,before) {child.parentElement=this;this.children.splice(this.children.indexOf(before),0,child);}
+  replaceChildren(...children) {this.children=[];this.text='';children.forEach(child=>this.appendChild(child));}
+  contains(node) {return node===this||this.children.some(child=>child.contains(node));}
+  addEventListener(type,callback) {
+    const callbacks=this.listeners.get(type)||[];callbacks.push(callback);this.listeners.set(type,callbacks);
+  }
+  all() {return this.children.flatMap(child=>[child,...child.all()]);}
+  querySelector(tag) {return this.all().find(child=>child.tagName===tag.toUpperCase())||null;}
+  getContext() {return {font:''};}
+  focus(options) {this.focuses.push(options);document.activeElement=this;}
+}
+const document=new Element('document');document.body=new Element('body');document.activeElement=document.body;
+document.createElement=tag=>new Element(tag);
+document.createTextNode=text=>{const node=new Element('text');node.textContent=text;return node;};
+const window=new Element('window'),host=new Element('div'),records=new Map(),modes=[],observers=[];
+const navigation={bindReader(){}};
+var currentBundle={nodeId:'chapter',scope:'chapter',title:'Authored topic',url:'https://example.test/chapter/'};
+var instance=1,trail=[],view={},family,data={title:'Authored topic',nodes:[],edges:[]};
+var mapAllowed=true,ui$mapAllowed=true,ui$mode='graph',ui$selectedStatuses=new Set(['planned']),ui$showIsolated=true;
+var presentStatuses=['planned'],ui$relationIds=new Set(['F']),ui$overviewGroup=null,ui$area=null;
+function getComputedStyle() {return {fontFamily:'sans-serif'};}
+function globalListen(target,type,callback) {target.addEventListener(type,callback);}
+class MutationObserver {observe(){}}
+function trailList() {return new Element('ol');}
+function renderStatusFields(){}function renderNavigation(){}function calculateActive(){}
+function compactRegions(){return false;}function syncNavigationSelection(){}
+function ensureGlobalSearch(){}function fit(){}function revealAll(){}function openResults(){}
+function pointerDown(){}function pointerMove(){}function pointerUp(){}function resize(){}
+function syncSheetAccessibility(){}function schedule(){}function remember(){}
+function closeSearch(){}function setFilters(){}
+function setMode(mode,push) {
+  assert.equal(dom$browsePopover.hidden,true,'Browse choices must close before mode dispatch');
+  modes.push({mode,push});ui$mode=mode;syncControls();
+}
+function emit(target,type,settings={}) {
+  const event=Object.assign({target,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;}},settings);
+  (target.listeners.get(type)||[]).forEach(callback=>callback(event));return event;
+}
+buildShell();bindEvents();syncControls();
+"""
+
 
 def _run(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
     script += "vm.runInContext(production+" + json.dumps(_PEERS + "\n" + body) + ",context,{timeout:2000});\n"
     result = subprocess.run([_NODE, "-e", script], text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-6000:]
+
+
+def _run_controls(body: str) -> None:
+    script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
+    script += "const controls=['element','button','safeHref','buildShell','bindEvents','setBrowse','syncControls','currentOverviewGroup'].map(original).join('\\n');\n"
+    script += "const start=source.indexOf('    var dom$announcement,');assert(start>=0);\n"
+    script += "const domDeclarations=source.slice(start,source.indexOf(';',start)+1);\n"
+    program = _CONTROL_PEERS + "\n" + body
+    script += "vm.runInContext(constants+'\\n'+domDeclarations+'\\n'+controls+" + json.dumps(program)
+    script += ",context,{timeout:2000});\n"
+    result = subprocess.run([_NODE, "-e", script], text=True, capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-6000:]
+
+
+def test_toolbar_keeps_browse_choices_nested_and_back_visible_only_outside_the_graph() -> None:
+    _run_controls(r"""
+      const toolbar=host.all().find(node=>node.getAttribute('aria-label')==='Dependency explorer controls');
+      assert(toolbar);assert.equal(dom$browsePopover.hidden,true);
+      assert.equal(dom$browseToggle.getAttribute('aria-expanded'),'false');
+      assert.equal(dom$browseToggle.getAttribute('aria-controls'),dom$browsePopover.id);
+      assert.equal(dom$browsePopover.getAttribute('aria-label'),'Browse library contents');
+      assert.strictEqual(dom$listMode.parentElement,dom$browsePopover);
+      assert.strictEqual(dom$sourcesMode.parentElement,dom$browsePopover);
+      assert.equal(dom$sourcesMode.textContent,'Source texts');
+      assert.equal(dom$listMode.textContent,'Statements in this topic');
+      assert.equal(dom$regionsMode,undefined);
+      assert(!toolbar.all().some(node=>node.tagName==='BUTTON'&&['Map','Results','Sources','Regions'].includes(node.textContent)));
+      assert.equal(dom$graphMode.textContent,'Back to map');assert.equal(dom$graphMode.hidden,true);
+      assert.equal(dom$stage.hidden,false);assert.equal(dom$inventory.hidden,true);
+      currentBundle.scope='roadmap';ui$mode='list';ui$mapAllowed=false;syncControls();
+      assert.equal(dom$listMode.textContent,'All statements');assert.equal(dom$graphMode.hidden,false);
+      assert.equal(dom$graphMode.disabled,true);assert.equal(dom$stage.hidden,true);assert.equal(dom$inventory.hidden,false);
+      ui$mapAllowed=true;ui$mode='sources';syncControls();
+      assert.equal(dom$graphMode.disabled,false);assert.equal(dom$graphMode.hidden,false);
+      assert.equal(dom$inventory.querySelector('h2').textContent,'Source tracks');
+      ui$mode='graph';syncControls();assert.equal(dom$graphMode.hidden,true);
+    """)
+
+
+def test_browse_toggle_and_escape_close_with_focus_return_from_the_actual_menu() -> None:
+    _run_controls(r"""
+      dom$browseToggle.focus({});emit(dom$browseToggle,'click');
+      assert.equal(dom$browsePopover.hidden,false);assert.equal(dom$browseToggle.getAttribute('aria-expanded'),'true');
+      assert.equal(document.activeElement,dom$browseToggle,'Opening Browse must not steal focus');
+      dom$listMode.focus({});const escaped=emit(dom$browse,'keydown',{target:dom$listMode,key:'Escape'});
+      assert.equal(escaped.defaultPrevented,true);assert.equal(dom$browsePopover.hidden,true);
+      assert.equal(dom$browseToggle.getAttribute('aria-expanded'),'false');assert.equal(document.activeElement,dom$browseToggle);
+      assert.deepEqual(dom$browseToggle.focuses.at(-1),{preventScroll:true});
+      const before=dom$browseToggle.focuses.length;
+      assert.equal(emit(dom$browse,'keydown',{key:'Escape'}).defaultPrevented,false);
+      assert.equal(dom$browseToggle.focuses.length,before);
+      emit(dom$browseToggle,'click');assert.equal(dom$browsePopover.hidden,false);
+      emit(dom$browseToggle,'click');assert.equal(dom$browsePopover.hidden,true);
+    """)
+
+
+def test_browse_choices_close_before_native_mode_dispatch_and_clear_statement_relations() -> None:
+    _run_controls(r"""
+      emit(dom$browseToggle,'click');dom$listMode.focus({});emit(dom$listMode,'click');
+      assert.equal(dom$browsePopover.hidden,true);assert.equal(document.activeElement,dom$browseToggle);
+      assert.equal(ui$relationIds,null);assert.deepEqual(modes,[{mode:'list',push:true}]);
+      assert.equal(dom$graphMode.hidden,false);
+      emit(dom$browseToggle,'click');dom$sourcesMode.focus({});emit(dom$sourcesMode,'click');
+      assert.equal(dom$browsePopover.hidden,true);assert.equal(document.activeElement,dom$browseToggle);
+      assert.deepEqual(modes.at(-1),{mode:'sources',push:true});
+      emit(dom$graphMode,'click');assert.deepEqual(modes.at(-1),{mode:'graph',push:true});
+      assert.equal(dom$graphMode.hidden,true);
+    """)
+
+
+def test_passive_browse_closes_preserve_the_focus_destination() -> None:
+    _run_controls(r"""
+      const outside=new Element('button');
+      emit(dom$browseToggle,'click');dom$listMode.focus({});
+      const before=dom$browseToggle.focuses.length;
+      emit(document,'pointerdown',{target:outside});
+      assert.equal(dom$browsePopover.hidden,true);assert.equal(dom$browseToggle.getAttribute('aria-expanded'),'false');
+      assert.equal(document.activeElement,dom$listMode,'Outside pointerdown precedes the native focus destination');
+      assert.equal(dom$browseToggle.focuses.length,before);
+      emit(dom$browseToggle,'click');dom$listMode.focus({});
+      emit(dom$browse,'focusout',{target:dom$listMode,relatedTarget:dom$sourcesMode});
+      assert.equal(dom$browsePopover.hidden,false,'Moving between Browse choices must keep the disclosure open');
+      outside.focus({});emit(dom$browse,'focusout',{target:dom$listMode,relatedTarget:outside});
+      assert.equal(dom$browsePopover.hidden,true);assert.equal(document.activeElement,outside);
+      assert.equal(dom$browseToggle.focuses.length,before);
+    """)
 
 
 def test_leaf_peers_use_exact_scope_and_keep_catalog_status_without_source_or_note_leakage() -> None:

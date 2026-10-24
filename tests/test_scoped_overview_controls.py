@@ -68,7 +68,7 @@ function clickPeer(link,settings={}) {
 }
 const host=peer(),dom$body=peer(),dom$sheetHandle=peer('button'),dom$breadcrumb=peer('nav');
 const dom$mapContext=peer(),dom$mapKey=peer(),dom$isolated=peer('input'),dom$filterSummary=peer('button');
-const dom$graphMode=peer('button'),dom$listMode=peer('button'),dom$sourcesMode=peer('button'),dom$regionsMode=peer('button');
+const dom$graphMode=peer('button'),dom$listMode=peer('button'),dom$sourcesMode=peer('button');
 const dom$stage=Object.assign(peer(),{clientWidth:900,clientHeight:700}),dom$inventory=peer(),inventoryHeading=peer('h2');
 dom$inventory.querySelector=selector=>{assert.equal(selector,'h2');return inventoryHeading;};
 const dom$hiddenButton=peer(),dom$empty=peer(),dom$searchResults=peer();
@@ -163,18 +163,18 @@ def test_group_activation_focuses_an_eligible_member_and_keeps_canonical_navigat
     """)
 
 
-def test_group_context_and_regions_control_identify_the_current_plane() -> None:
+def test_group_context_and_parent_return_identify_the_current_plane() -> None:
     _run(r"""
-      assert.equal(dom$mapContext.textContent,'Large scope');assert.equal(dom$regionsMode.getAttribute('aria-pressed'),'true');
+      assert.equal(dom$mapContext.textContent,'Large scope');assert.equal(dom$graphMode.hidden,true);
       activateNode(areaNode('Authored area A'));flushFrames();
       assert.equal(currentOverviewGroup().area,'Authored area A');
       assert.deepEqual(labels(),['Library','Large scope','Authored area A']);
       assert.equal(dom$breadcrumb.children[0].children.at(-1).getAttribute('aria-current'),'page');
       assert.equal(dom$mapContext.textContent,'Authored area A');
-      assert.equal(dom$regionsMode.getAttribute('aria-pressed'),'false');assert.equal(dom$graphMode.getAttribute('aria-pressed'),'true');
+      assert.equal(dom$stage.hidden,false);assert.equal(dom$inventory.hidden,true);assert.equal(dom$graphMode.hidden,true);
       setMode('regions',true);
       assert.equal(ui$overviewGroup,null);assert.deepEqual(labels(),['Library','Large scope']);
-      assert.equal(dom$mapContext.textContent,'Large scope');assert.equal(dom$regionsMode.getAttribute('aria-pressed'),'true');
+      assert.equal(dom$mapContext.textContent,'Large scope');assert.equal(dom$graphMode.hidden,true);
       assert(effects.some(event=>event.kind==='checkpoint'&&event.method==='replace'&&event.group==='area:Authored area A'));
       assert(effects.some(event=>event.kind==='checkpoint'&&event.method==='push'&&event.group===null),
         'Returning to this scope overview must preserve the expanded group as a Back destination');
@@ -192,7 +192,7 @@ def test_unassigned_group_uses_a_structural_label_not_an_invented_area() -> None
       assert.equal(dom$mapContext.textContent,'Unassigned topics');
       assert.deepEqual(labels(),['Library','Large scope','Unassigned topics']);
       assert.equal(document.activeElement.dataset.autoformNodeId,'n01');
-      assert.equal(dom$regionsMode.getAttribute('aria-pressed'),'false');
+      assert.equal(dom$graphMode.hidden,true);
     """)
 
 
@@ -202,7 +202,7 @@ def test_zoom_out_returns_to_overview_without_changing_members_or_source_rows() 
       ui$transform.scale=.9;zoomAt(.8,450,350);
       assert.equal(ui$overviewGroup,null);assert.equal(ui$scopeOverview,true);
       assert.deepEqual(labels(),['Library','Large scope']);assert.equal(dom$mapContext.textContent,'Large scope');
-      assert.equal(dom$regionsMode.getAttribute('aria-pressed'),'true');
+      assert.equal(dom$graphMode.hidden,true);
       assert.equal(data._scopeOverview.groups.flatMap(group=>group.members).length,42);
       assert.equal(JSON.stringify(contextGraph),before);
       assert.equal(effects.filter(event=>event.kind==='checkpoint'&&event.method==='push').length,2);
@@ -287,7 +287,7 @@ def test_actual_overview_parent_breadcrumb_returns_locally_and_preserves_modifie
       }
       const event=clickPeer(link);assert.equal(event.defaultPrevented,true);
       assert.equal(ui$overviewGroup,null);assert.deepEqual(labels(),['Library','Large scope']);
-      assert.equal(dom$mapContext.textContent,'Large scope');assert.equal(dom$regionsMode.getAttribute('aria-pressed'),'true');
+      assert.equal(dom$mapContext.textContent,'Large scope');assert.equal(dom$graphMode.hidden,true);
       assert(!effects.some(event=>event.kind==='navigate'||event.kind==='navigate-url'));
       assert(effects.some(event=>event.kind==='checkpoint'&&event.method==='push'&&event.group==='area:Authored area A'));
       const returning=effects.slice(untouched).filter(event=>event.kind==='checkpoint');
@@ -295,6 +295,48 @@ def test_actual_overview_parent_breadcrumb_returns_locally_and_preserves_modifie
         'The parent breadcrumb must save its expanded plane before pushing this local overview');
       assert.equal(window.location.href,'https://example.test/roadmap/chapter/index.html');
       assert.equal(JSON.stringify(contextGraph),before);
+    """)
+
+
+def test_actual_atlas_parent_breadcrumb_returns_to_its_own_scope_and_preserves_native_modifiers() -> None:
+    _run(r"""
+      contextGraph=structuredClone(contextGraph);contextGraph.view.presentation='atlas';
+      contextGraph.nodes=[...contextGraph.nodes.slice(0,7),...contextGraph.nodes.slice(21,28)];
+      navigation.checkpoint=function(method) {
+        effects.push({kind:'checkpoint',method:method||'replace',area:ui$area,scope:currentBundle.scope});
+      };
+      for(const scope of [chapterId,'roadmap']) {
+        const owner=records.get(scope);window.location.href=owner.route;
+        currentBundle={nodeId:scope,scope,title:owner.title,graph:contextGraph};
+        contextGraph.title=owner.title;contextGraph.view.scope=scope;
+        ui$requestedNode=scope;ui$overviewGroup=null;ui$area='Authored area A';
+        updateProjection();syncControls();effects.length=0;
+        assert.equal(ui$scopeOverview,false);assert.equal(ui$area,'Authored area A');
+        const before=JSON.stringify({contextGraph,records:Array.from(records.values()),relations:sharedIndex.relations});
+        const parent=dom$breadcrumb.children[0].children.find(item=>item.title===owner.title),link=parent.children[0];
+        assert.equal(link.tagName,'A');assert.equal(link.textContent,owner.title);assert.equal(link.href,owner.route);
+        assert.deepEqual(labels(),scope===chapterId?['Library','Large scope','Authored area A']:['Library','Authored area A']);
+        for(const settings of [{metaKey:true},{ctrlKey:true},{shiftKey:true},{altKey:true},{button:1},{button:2},{defaultPrevented:true}]) {
+          const event=clickPeer(link,settings);assert.equal(event.defaultPrevented,Boolean(settings.defaultPrevented));
+          assert.equal(ui$area,'Authored area A');assert.equal(effects.length,0);
+        }
+        assert.equal(clickPeer(link).defaultPrevented,true);
+        assert.equal(ui$area,null);assert.equal(ui$scopeOverview,false);assert.equal(ui$mode,'graph');
+        assert.equal(currentBundle.scope,scope);assert.equal(window.location.href,owner.route);
+        assert.deepEqual(labels(),scope===chapterId?['Library','Large scope']:['Library']);
+        assert.equal(dom$mapContext.textContent,owner.title);assert.equal(dom$graphMode.hidden,true);
+        assert(!effects.some(event=>event.kind==='navigate'||event.kind==='navigate-url'),
+          'The authored-area parent must collapse locally, including in a non-root scope');
+        assert.deepEqual(effects.filter(event=>event.kind==='checkpoint'),[
+          {kind:'checkpoint',method:'replace',area:'Authored area A',scope},
+          {kind:'checkpoint',method:'push',area:null,scope}
+        ],'Back must retain the expanded area before its own scope overview is pushed');
+        assert.deepEqual(data.nodes.map(node=>[node._region,node.member_count]),[
+          ['Authored area A',7],['Authored area B',7]
+        ]);
+        assert.equal(contextGraph.nodes.length,14);
+        assert.equal(JSON.stringify({contextGraph,records:Array.from(records.values()),relations:sharedIndex.relations}),before);
+      }
     """)
 
 

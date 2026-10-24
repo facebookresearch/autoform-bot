@@ -47,6 +47,8 @@ var dom$inventoryRows = new Map();
 var dom$error = new Element('div'), dom$breadcrumb = new Element('nav');
 var dom$filterPopover = new Element('div'), dom$filterSummary = new Element('button');
 dom$filterPopover.hidden = true;
+var dom$browsePopover = new Element('div'), dom$browseToggle = new Element('button');
+dom$browsePopover.hidden = true;
 var hostClasses = new Set(['bp-dag-sheet-open']);
 var host = {classList: {contains: name => hostClasses.has(name),
   toggle(name, enabled) { if (enabled) hostClasses.add(name); else hostClasses.delete(name); }},
@@ -108,7 +110,7 @@ function bundle(id, snapshot, focus = true) {
 def _run(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
     script += "\nObject.assign(sandbox, {clearTimeout});\n"
-    script += "const callbacks=['captureState','applyRoute','restoreState','setFilters'].map(original).join('\\n');\n"
+    script += "const callbacks=['captureState','applyRoute','restoreState','setFilters','setBrowse'].map(original).join('\\n');\n"
     program = '"use strict";\n' + _ENVIRONMENT
     script += "const pending=vm.runInContext(" + json.dumps(program) + "+constants[0]+callbacks+"
     script += json.dumps("\n(async()=>{\n" + body + "\n})()") + ",sandbox,{timeout:5000,filename:CLIENT});\n"
@@ -214,6 +216,22 @@ def test_article_commit_closes_transient_status_menu_without_losing_keyboard_foc
       assert.equal(dom$filterPopover.hidden,false); assert.equal(document.activeElement,input);
       dom$search.focus({}); const searchFocuses=dom$search.focuses.length; setFilters(false);
       assert.equal(document.activeElement,dom$search); assert.equal(dom$search.focuses.length,searchFocuses);
+    """)
+
+
+def test_article_commit_closes_browse_and_returns_focus_before_requested_reading_focus() -> None:
+    _run(r"""
+      const choice=new Element('button');dom$browsePopover.replaceChildren(choice);
+      setBrowse(true);choice.focus({});
+      const incoming=bundle('A',null,false),ready=applyRoute(incoming);
+      assert.equal(dom$browsePopover.hidden,true);assert.equal(dom$browseToggle.attrs['aria-expanded'],'false');
+      assert.equal(document.activeElement,dom$browseToggle);assert.equal(dom$browseToggle.focuses.at(-1).preventScroll,true);
+      await frame();await ready;assert.equal(document.activeElement,dom$browseToggle);
+      setBrowse(true);choice.focus({});
+      const selected=bundle('B',null,true),selectedReady=applyRoute(selected);
+      assert.equal(dom$browsePopover.hidden,true);assert.equal(document.activeElement,dom$browseToggle);
+      await frame();await selectedReady;
+      assert.equal(document.activeElement,selected.heading);assert.equal(selected.heading.focuses.at(-1).preventScroll,true);
     """)
 
 

@@ -75,6 +75,9 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-zoom .bp-dag-button:hover, .bp-dag-modes .bp-dag-mode-button:not([aria-pressed=true], :disabled):hover { background: var(--dag-panel); color: var(--dag-fg); }
 .bp-dag-mode-button[aria-pressed=true], .bp-dag-pivot[aria-pressed=true] { border-color: var(--dag-link); background: color-mix(in srgb, var(--dag-link) 10%, var(--dag-bg)); color: var(--dag-link); }
 .bp-dag-filters { position: relative; flex: none; }
+.bp-dag-browse { position: relative; flex: none; }
+.bp-dag-browse-popover { position: absolute; z-index: 18; top: calc(100% + 6px); right: 0; display: grid; gap: 5px; width: 220px; max-width: calc(100vw - 32px); padding: 10px; border: 1px solid var(--dag-overlay-border); border-radius: var(--dag-radius-panel); background: var(--dag-bg); box-shadow: var(--dag-e2); }
+.bp-dag-browse-popover .bp-dag-button { text-align: left; }
 .bp-dag-filter-summary { display: flex; align-items: center; white-space: nowrap; }
 .bp-dag-filter-popover { position: absolute; z-index: 18; top: calc(100% + 6px); right: 0; width: 240px; max-height: 368px; overflow: auto; padding: 10px; border: 1px solid var(--dag-overlay-border); border-radius: var(--dag-radius-panel); background: var(--dag-bg); box-shadow: var(--dag-e2); }
 .bp-dag-filter-popover fieldset { display: grid; gap: 3px; margin: 0; padding: 0; border: 0; }
