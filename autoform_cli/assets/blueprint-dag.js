@@ -1284,7 +1284,20 @@
         (dom$stage.clientWidth - width * ui$transform.scale) / 2 - minX * ui$transform.scale;
       ui$transform.y = ui$readableCrop ? top - minY * ui$transform.scale :
         (dom$stage.clientHeight + top - bottom - height * ui$transform.scale) / 2 - minY * ui$transform.scale;
-      if (ui$readableCrop && navigation) center(ui$selected || nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; }) || nodes[0], readableFloor);
+      if (ui$readableCrop && navigation) {
+        var anchor = ui$selected || nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; });
+        if (anchor || !data._scopeOverview) center(anchor || nodes[0], readableFloor);
+        else {
+          var free = freeArea(), start = (free.top || 0) + 12, end = (free.top || 0) + free.band - 12;
+          var usable = nodes.some(function (node) { var box = screen(node);
+            return box.x >= free.left + 12 && box.x + box.w <= free.right - 12 && box.y >= start && box.y + box.h <= end;
+          });
+          // Keep useful padded coverage; a first external boundary is not an
+          // instruction to push the mathematical overview off the viewport.
+          if (!usable) center(nodes.find(function (node) { return node._overviewGroup; }) ||
+            nodes.find(function (node) { return node.kind !== "boundary"; }) || nodes[0], readableFloor);
+        }
+      }
       schedule(); remember();
     }
     // Open details cover part of the map; this is the larger part they leave, in stage pixels.

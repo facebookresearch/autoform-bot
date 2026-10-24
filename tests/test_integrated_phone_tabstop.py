@@ -133,3 +133,53 @@ def test_ordinary_scope_fit_ignores_distant_detours_without_losing_routes_or_rea
       assert.equal(JSON.stringify(current.routes),routes,'Framing must not delete the real dependencies');
       data.nodes.forEach(node=>assert(contained(node),'Fit frames the useful card bounds'));
     """)
+
+
+_SCOPED_CROP = r"""
+dom$stage={clientWidth:1336,clientHeight:812};ui$orientation='lr';sheetLayout=()=>false;atlas=false;
+data={_scopeOverview:{},nodes:[{id:'boundary:Data',kind:'boundary',status:'planned',width:196,height:100,_index:0}].concat(
+  Array.from({length:9},(_,index)=>({id:'group:'+index,_overviewGroup:'area:'+index,area:'Area '+index,
+    kind:'scope',status:'planned',width:264,height:148,_index:index+1}))),edges:[]};
+data.nodes.slice(1).forEach((node,index)=>data.edges.push({source:data.nodes[index].id,target:node.id,statement:1,proof:1}));
+ui$active=data.nodes;ui$activeIds=new Set(data.nodes.map(node=>node.id));byId=new Map(data.nodes.map(node=>[node.id,node]));
+function usable(node){const box=screen(node),free=freeArea();return box.x>=free.left+12&&box.x+box.w<=free.right-12&&
+  box.y>=(free.top||0)+12&&box.y+box.h<=(free.top||0)+free.band-12;}
+"""
+
+
+def test_unselected_scoped_crop_keeps_padding_and_more_real_cards_than_first_boundary_centering() -> None:
+    _run(_SCOPED_CROP + r"""
+      const real=geometry(),before=JSON.stringify(real.routes),boxes=Array.from(real.nodes.values());
+      const minX=Math.min(...boxes.map(box=>box.x)),minY=Math.min(...boxes.map(box=>box.y));
+      fit();assert(ui$readableCrop);assert.equal(ui$transform.scale,.9);
+      assert(Math.abs(ui$transform.x-(36-minX*.9))<1e-8);assert(Math.abs(ui$transform.y-(56-minY*.9))<1e-8);
+      const padded=data.nodes.filter(usable).length;assert(padded>0&&padded<data.nodes.length);
+      center(data.nodes[0],.9);const historical=data.nodes.filter(usable).length;
+      assert(padded>historical,'Useful crop coverage must beat centering the first external boundary');
+      assert.equal(JSON.stringify(real.routes),before,'Framing must not change authoritative routes');
+    """)
+
+
+def test_scoped_crop_preserves_explicit_selected_and_area_member_centering() -> None:
+    _run(_SCOPED_CROP + r"""
+      ui$selected=data.nodes[0];fit();let box=screen(ui$selected);
+      assert(Math.abs(box.x+box.w/2-dom$stage.clientWidth/2)<1e-8);
+      assert(Math.abs(box.y+box.h/2-dom$stage.clientHeight/2)<1e-8);
+      ui$selected=null;ui$area=data.nodes[2].area;fit();box=screen(data.nodes[2]);
+      assert(Math.abs(box.x+box.w/2-dom$stage.clientWidth/2)<1e-8);
+      assert(Math.abs(box.y+box.h/2-dom$stage.clientHeight/2)<1e-8);
+    """)
+
+
+def test_scoped_crop_without_any_usable_card_falls_back_to_a_local_group_not_boundary() -> None:
+    _run(_SCOPED_CROP + r"""
+      dom$stage={clientWidth:390,clientHeight:560};data.nodes=data.nodes.slice(0,3);ui$active=data.nodes;
+      // These explicit geometry peers exercise a sparse top-left void. Fit,
+      // screen/freeArea and centering are still the actual production bodies.
+      const boxes=new Map([[data.nodes[0].id,{x:1000,y:0,w:196,h:100}],
+        [data.nodes[1].id,{x:0,y:1000,w:264,h:148}],[data.nodes[2].id,{x:1000,y:1000,w:264,h:148}]]);
+      world=node=>boxes.get(node.id);fit();assert(ui$readableCrop);
+      assert(usable(data.nodes[1]),'Fallback must expose the local mathematical group');
+      const box=screen(data.nodes[1]);assert(Math.abs(box.x+box.w/2-dom$stage.clientWidth/2)<1e-8);
+      assert(!usable(data.nodes[0]),'The first boundary must not displace the fallback group');
+    """)
