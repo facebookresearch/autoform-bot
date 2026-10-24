@@ -21,6 +21,9 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePath
 from urllib.parse import quote, unquote, urlsplit
 
+from markdown.extensions.attr_list import AttrListTreeprocessor
+from markdown.inlinepatterns import BACKTICK_RE
+from markdown.blockprocessors import HashHeaderProcessor
 from pymdownx.arithmatex import (
     RE_BRACKET_BLOCK,
     RE_BRACKET_INLINE,
@@ -42,7 +45,8 @@ WIKI_LINKS_SCHEMA = "autoform-wiki-links/v1"
 MAX_WIKI_LINK_BYTES = 32 * 1024 * 1024
 _WIKI_BLOCK_MATH = re.compile(f"(?:{RE_DOLLAR_BLOCK}|{RE_BRACKET_BLOCK}|{RE_TEX_BLOCK})", re.DOTALL)
 _WIKI_INLINE_MATH = re.compile(f"(?:{RE_SMART_DOLLAR_INLINE}|{RE_BRACKET_INLINE})", re.DOTALL)
-_WIKI_INLINE_CODE = re.compile(markdown.INLINE_CODE.pattern, re.DOTALL)
+_WIKI_INLINE_CODE = re.compile(BACKTICK_RE, re.DOTALL)
+_WIKI_HEADING = HashHeaderProcessor.RE
 #: Where the site publishes the viewer, relative to its root.
 SCRIPT_PATH = "javascripts/blueprint-dag.js"
 #: One cached stylesheet for the integrated book and map.
@@ -520,13 +524,27 @@ def _wiki_lines(body: str) -> list[str] | None:
     if markdown.first_unclosed_fence(lines) is not None:
         return None
     masked = "\n".join(markdown.content_lines("\n".join(lines)))
+    for line in masked.splitlines():
+        heading = _WIKI_HEADING.match(line)
+        if heading and AttrListTreeprocessor.HEADER_RE.search(heading.group("header")):
+            # The site applies these attributes and publishes the article as
+            # typed text. Captured-source callers cannot claim live links.
+            return None
+    cuts = [0, *(match.end() for match in re.finditer(r"\n[ \t]*\n", masked)), len(masked)]
 
     def blank(match: re.Match[str]) -> str:
         return re.sub(r"[^\n]", " ", match.group())
 
-    masked = _WIKI_INLINE_CODE.sub(blank, masked)
+    def inline(pattern: re.Pattern[str], text: str) -> str:
+        # Inline spans can contain line breaks, but cannot join separate
+        # Markdown paragraphs. Keep the original boundaries after masking.
+        return "".join(pattern.sub(blank, text[start:end]) for start, end in zip(cuts, cuts[1:]))
+
+    masked = inline(_WIKI_INLINE_CODE, masked)
     masked = _WIKI_BLOCK_MATH.sub(blank, masked)
-    masked = _WIKI_INLINE_MATH.sub(blank, masked)
+    masked = inline(_WIKI_INLINE_MATH, masked)
+    # Escaped ticks are text, not delimiters for link_targets' simpler mask.
+    masked = re.sub(r"\\`", blank, masked)
     if html_names(masked) or re.search(r"\$\$|\\\[|\\begin\{", masked):
         # Raw HTML changes how surrounding Markdown is read; unclosed display
         # math similarly has no safe range. Do not pretend to read either one.
@@ -540,6 +558,7 @@ def extract_wiki_links(
     captured_sources: Mapping[str, bytes] | None = None,
     source_paths: Mapping[str, str | PurePath] | None = None,
     metadata: Mapping[str, Mapping[str, object]] | None = None,
+    unavailable_source_ids: Iterable[str] = (),
 ) -> WikiLinks:
     """Read ordinary Markdown links from supplied captured article bytes.
 
@@ -552,6 +571,8 @@ def extract_wiki_links(
     This first layer reads Markdown links, not raw-HTML anchors. Unsupported
     HTML, unclosed code fences or unclosed display math is reported as an
     unavailable source for outbound extraction, not an unpublished target.
+    ``unavailable_source_ids`` carries the publisher's existing source omissions
+    without parsing an article again; their valid incoming targets remain live.
     """
     identifiers = tuple(node.id for node in view.nodes)
     positions = {node_id: position for position, node_id in enumerate(identifiers)}
@@ -617,6 +638,7 @@ def extract_wiki_links(
 
     references: set[tuple[int, int]] = set()
     invalid_targets: set[int] = set()
+    omitted_sources = frozenset(unavailable_source_ids)
     reference_bytes = 2
     for source_id in paths:
         if owners[paths[source_id]] is None:
@@ -628,6 +650,9 @@ def extract_wiki_links(
             unavailable.add(positions[source_id])
             invalid_targets.add(positions[source_id])
             continue
+        if source_id in omitted_sources:
+            unavailable.add(positions[source_id])
+            continue
         lines = _wiki_lines(body)
         if lines is None:
             unavailable.add(positions[source_id])
@@ -635,10 +660,10 @@ def extract_wiki_links(
         definitions = markdown.link_definitions(lines)
         excluded = False
         for line in lines:
-            heading = markdown.HEADING.match(line)
+            heading = _WIKI_HEADING.match(line)
             if heading is not None:
-                if len(heading.group(1)) <= 2:
-                    excluded = heading.group(2).strip().casefold() in {
+                if len(heading.group("level")) <= 2:
+                    excluded = heading.group("header").strip().casefold() in {
                         "sources", "depends on", "proof depends on",
                     }
                 continue

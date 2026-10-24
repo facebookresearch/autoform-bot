@@ -284,6 +284,14 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-reading-wiki-notice { margin: 8px 0; color: var(--dag-muted); }
 .bp-reading-wiki-more { justify-self: start; border: 0; padding: 2px 0; background: transparent; color: var(--dag-link); font: inherit; cursor: pointer; }
 .bp-reading-wiki-more:focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) { position: static; margin: 8px 0 0; padding: 0; border: 0; border-top: 1px solid var(--dag-border); border-radius: 0; background: transparent; color: var(--dag-fg); box-shadow: none; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary { position: static; display: list-item; margin: 0; padding: 8px 0; border: 0; background: transparent; color: var(--dag-muted); font: inherit; font-weight: 600; list-style: disclosure-closed inside; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics)[open] > summary { list-style-type: disclosure-open; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary::before,
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary::after { display: none; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary::-webkit-details-marker { display: inline; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary::marker { display: inline; content: normal; color: var(--dag-muted); }
+.bp-reading-wiki-list a, .bp-reading-topic-list a { overflow-wrap: anywhere; line-height: 1.5; }
 .bp-dag-integrated .bp-dag-node-title { display: -webkit-box; font-size: 17px; line-height: 1.25; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; }
 .bp-dag-integrated .bp-dag-node-meta { font-size: 14px; }
 .bp-dag-integrated.bp-dag-atlas .bp-dag-node-title { font-size: 18px; -webkit-line-clamp: 2; }

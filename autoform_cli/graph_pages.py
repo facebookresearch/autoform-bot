@@ -129,6 +129,7 @@ def write_graph_pages(
     contexts_out: dict[str, tuple[Path, str]] | None = None,
     captured_sources: Mapping[str, bytes] | None = None,
     source_paths: Mapping[str, str | PurePath] | None = None,
+    unavailable_source_ids: Iterable[str] = (),
     warnings_out: list[str] | None = None,
 ) -> tuple[Path, ...]:
     """Write project, chapter, nested-scope, and shared full-explorer pages.
@@ -142,6 +143,8 @@ def write_graph_pages(
     ``captured_sources`` opts into a separate authored-reference layer from
     already captured bytes and blueprint-relative ``source_paths``. The index
     and formal dependencies are unchanged; no authored file is reopened here.
+    ``unavailable_source_ids`` forwards already found publication omissions,
+    preserving the published articles as possible incoming reference targets.
     """
     destination = Path(destination).resolve()
     groups = group_nodes(graph)
@@ -195,6 +198,7 @@ def write_graph_pages(
     if captured_sources is not None:
         references = dag_viewer.extract_wiki_links(
             complete, captured_sources=captured_sources, source_paths=source_paths, metadata=metadata,
+            unavailable_source_ids=unavailable_source_ids,
         )
         written.append(
             dag_viewer.write_wiki_links(

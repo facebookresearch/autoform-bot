@@ -5,14 +5,17 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
+import html5lib
 
-from autoform_cli import dag_viewer, graph_pages, render
+from autoform_cli import dag_viewer, graph_pages, markdown, render
 from autoform_cli.graph import load_graph
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
 from autoform_cli.status import derive
+from autoform_cli.publishable import publishable_article
 
 
 def _view(*names: str, edges: tuple[ViewEdge, ...] = ()) -> GraphView:
@@ -30,6 +33,100 @@ def _inputs(*names: str):
     sources = {name: f"# {name}\n\nA mathematical statement.\n".encode() for name in names}
     metadata = {name: {"route": f"../roadmap/{name}.html", "parent": None} for name in names}
     return paths, sources, metadata
+
+
+def _converted_links(body: str) -> list[str]:
+    converted = markdown.site_converter().convert(body)
+    return [link.get("href") for link in ET.fromstring("<div>" + converted + "</div>").iter("a")]
+
+
+@pytest.mark.parametrize(("opening", "closing"), [("`", "`"), ("$", "$"), (r"\(", r"\)")])
+def test_unmatched_inline_delimiters_in_different_paragraphs_keep_real_site_links(opening: str, closing: str) -> None:
+    view = _view("a", "b")
+    paths, sources, metadata = _inputs("a", "b")
+    body = f"# A\n\n{opening}start\n\n[B](b.md)\n\nend{closing}\n"
+    assert _converted_links(body) == ["b.md"]
+    sources["a"] = body.encode()
+    assert dag_viewer.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == dag_viewer.WikiLinks(((0, 1),))
+
+
+@pytest.mark.parametrize(("opening", "closing"), [("`", "`"), ("$", "$"), (r"\(", r"\)")])
+def test_valid_multiline_inline_spans_within_a_paragraph_keep_the_site_code_and_math_masks(opening: str, closing: str) -> None:
+    view = _view("a", "b", "c")
+    paths, sources, metadata = _inputs("a", "b", "c")
+    body = f"# A\n\n{opening}start\n[B](b.md)\nend{closing}\n\n[C](c.md)\n"
+    assert _converted_links(body) == ["c.md"]
+    sources["a"] = body.encode()
+    assert dag_viewer.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == dag_viewer.WikiLinks(((0, 2),))
+
+
+@pytest.mark.parametrize("span", [r"\`left [B](b.md) right\`", r"\`literal\` before [B](b.md) after \`literal\`"])
+def test_escaped_inline_ticks_are_literal_and_keep_real_site_links(span: str) -> None:
+    view = _view("a", "b")
+    paths, sources, metadata = _inputs("a", "b")
+    body = "# A\n\n" + span + "\n"
+    assert _converted_links(body) == ["b.md"]
+    sources["a"] = body.encode()
+    assert dag_viewer.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == dag_viewer.WikiLinks(((0, 1),))
+
+
+def test_even_backslash_prefix_leaves_a_real_code_span_masked_as_the_site_reads_it() -> None:
+    view = _view("a", "b")
+    paths, sources, metadata = _inputs("a", "b")
+    body = "# A\n\n" + r"\\`left [B](b.md) right`" + "\n"
+    assert _converted_links(body) == []
+    sources["a"] = body.encode()
+    assert dag_viewer.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == dag_viewer.WikiLinks(())
+
+
+@pytest.mark.parametrize("heading", ["##Sources", "##Depends on", "##Proof depends on"])
+def test_actual_hash_headings_without_spaces_still_exclude_provenance_and_formal_references(heading: str) -> None:
+    view = _view("a", "b", "c")
+    paths, sources, metadata = _inputs("a", "b", "c")
+    body = f"# A\n\n{heading}\n\n[C](c.md)\n\n## Exposition\n\n[B](b.md)\n"
+    assert _converted_links(body) == ["c.md", "b.md"]
+    assert "<h2" in markdown.site_converter().convert(body)
+    sources["a"] = body.encode()
+    assert dag_viewer.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == dag_viewer.WikiLinks(((0, 1),))
+
+
+@pytest.mark.parametrize("heading", ["## Sources {#sources}", "##Sources {#sources}", "## Sources {.note} ##"])
+def test_applied_heading_attributes_mark_only_outgoing_data_unavailable_and_keep_published_incoming(heading: str) -> None:
+    view = _view("a", "b", "c")
+    paths, sources, metadata = _inputs("a", "b", "c")
+    body = f"# B\n\n{heading}\n\n[C](c.md).\n"
+    assert _converted_links(body) == ["c.md"]
+    assert publishable_article(body)[1]
+    sources["a"] = b"# A\n\n[B](b.md).\n"
+    sources["b"] = body.encode()
+    assert dag_viewer.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == dag_viewer.WikiLinks(((0, 1),), (1,))
+
+
+def test_optional_source_omissions_keep_capture_api_compatibility_and_known_incoming_targets() -> None:
+    view = _view("a", "b", edges=(ViewEdge("a", "b", 2, 3),))
+    paths, sources, metadata = _inputs("a", "b")
+    sources["a"] = b"# A\n\n[B](b.md).\n"
+    sources["b"] = b"# B\n\n[A](a.md). [Unsafe](javascript:alert(1)).\n"
+    assert publishable_article(sources["b"].decode())[1]
+    before = copy.deepcopy((view, paths, sources, metadata))
+    arguments = dict(captured_sources=sources, source_paths=paths, metadata=metadata)
+    baseline = dag_viewer.extract_wiki_links(view, **arguments)
+    assert baseline == dag_viewer.WikiLinks(((0, 1), (1, 0)))
+    assert dag_viewer.extract_wiki_links(view, **arguments, unavailable_source_ids=()) == baseline
+    assert dag_viewer.extract_wiki_links(view, **arguments, unavailable_source_ids=("b",)) == dag_viewer.WikiLinks(((0, 1),), (1,))
+    assert (view, paths, sources, metadata) == before
 
 
 def test_authored_inline_reference_and_encoded_fragment_links_keep_exact_index_order() -> None:
@@ -287,6 +384,84 @@ def _blueprint(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return blueprint
+
+
+def test_graph_page_source_omission_flags_change_only_the_optional_layer(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path)
+    path = blueprint / "roadmap/b.md"
+    path.write_text(path.read_text().replace("A proposition.", "A proposition. [A](a.md) [Unsafe](javascript:alert(1))."))
+    graph = load_graph(blueprint)
+    statuses = derive(graph)
+    sources = {node_id: node.path.read_bytes() for node_id, node in graph.nodes.items()}
+    paths = {node_id: node.path.relative_to(blueprint) for node_id, node in graph.nodes.items()}
+    args = dict(node_links=lambda _page, names: {name: f"../roadmap/README.html#{name}" for name in names},
+                book_targets={}, captured_sources=sources, source_paths=paths)
+    baseline, omitted = tmp_path / "baseline", tmp_path / "omitted"
+    graph_pages.write_graph_pages(graph, statuses, baseline, **args)
+    graph_pages.write_graph_pages(graph, statuses, omitted, **args, unavailable_source_ids=("b",))
+    assert (baseline / graph_pages.SEARCH_INDEX).read_bytes() == (omitted / graph_pages.SEARCH_INDEX).read_bytes()
+    original = json.loads((baseline / graph_pages.WIKI_LINKS).read_bytes())
+    changed = json.loads((omitted / graph_pages.WIKI_LINKS).read_bytes())
+    index = json.loads((omitted / graph_pages.SEARCH_INDEX).read_bytes())
+    ids = [node["id"] for node in index["nodes"]]
+    assert [[ids[a], ids[b]] for a, b in original["references"]] == [["a", "b"], ["b", "a"]]
+    assert [[ids[a], ids[b]] for a, b in changed["references"]] == [["a", "b"]]
+    assert changed["unavailable_sources"] == [ids.index("b")]
+    assert changed["availability"] == "partial" and original["availability"] == "complete"
+    for relative in graph_pages.graph_page_paths(graph):
+        assert (baseline / relative).read_bytes() == (omitted / relative).read_bytes()
+
+
+@pytest.mark.parametrize("unsupported", [
+    "## Sources {#private}\n\n[A](a.md).",
+    "[Unsafe](javascript:alert(1)).",
+    "```{.lean #private}\nexample\n```",
+])
+def test_real_render_forwards_publication_findings_without_reparsing_or_reopening_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unsupported: str,
+) -> None:
+    blueprint = _blueprint(tmp_path)
+    coverage = blueprint / "coverage/README.md"
+    coverage.parent.mkdir()
+    coverage.write_text("# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+                        "| Project scope | MAPPED | Source audit pending |\n", encoding="utf-8")
+    path = blueprint / "roadmap/b.md"
+    original = path.read_text()
+    path.write_text(original.replace("A proposition.", f"AUTHORED_LINK_MARKER [A](a.md).\n\n{unsupported}"), encoding="utf-8")
+    extractor = dag_viewer.extract_wiki_links
+    found: list[tuple[str, ...]] = []
+
+    def retained_only(*args, **kwargs):
+        found.append(tuple(sorted(kwargs["unavailable_source_ids"])))
+        with monkeypatch.context() as guarded:
+            def forbidden(*_args, **_kwargs):
+                raise AssertionError("wiki extraction must reuse captured publication findings without rereading paths or parsing publication")
+            guarded.setattr(Path, "read_bytes", forbidden)
+            guarded.setattr(Path, "read_text", forbidden)
+            guarded.setattr(render, "publishable_article", forbidden)
+            return extractor(*args, **kwargs)
+
+    monkeypatch.setattr(dag_viewer, "extract_wiki_links", retained_only)
+    output = tmp_path / "site-src"
+    report = render.render_site(blueprint, output)
+    assert found == [("b",)]
+    assert any("b:" in warning and "shows it as typed" in warning for warning in report.warnings)
+    index_bytes = (output / graph_pages.SEARCH_INDEX).read_bytes()
+    index = json.loads(index_bytes)
+    ids = [node["id"] for node in index["nodes"]]
+    layer = json.loads((output / graph_pages.WIKI_LINKS).read_bytes())
+    assert layer["index_sha256"] == hashlib.sha256(index_bytes).hexdigest()
+    assert layer["availability"] == "partial" and layer["unavailable_sources"] == [ids.index("b")]
+    assert [[ids[a], ids[b]] for a, b in layer["references"]] == [["a", "b"]]
+    assert index["relations"] == [[ids.index("a"), ids.index("b"), 1, 0]]
+    assert {node["id"]: node["status"] for node in index["nodes"] if node["id"] in {"a", "b"}} == {"a": "can_state", "b": "planned"}
+    converted = markdown.site_converter().convert((output / "roadmap/README.md").read_text())
+    tree = html5lib.parseFragment(converted)
+    card = next(node for node in tree.iter() if node.get("data-autoform-node-id") == "b"
+                and "bp-thmwrapper" in node.get("class", "").split())
+    typed = next(node for node in card.iter() if node.tag == "{http://www.w3.org/1999/xhtml}pre")
+    assert "AUTHORED_LINK_MARKER [A](" in "".join(typed.itertext())
+    assert not list(typed.iter("{http://www.w3.org/1999/xhtml}a"))
 
 
 def test_graph_pages_opt_in_is_registered_and_no_capture_callers_keep_original_index(tmp_path: Path) -> None:

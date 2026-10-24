@@ -1056,6 +1056,11 @@ def test_verified_concept_links_have_native_direction_navigation_back_and_known_
     assert delivered.value.status == 200 and delivered.value.json() == site.wiki_layer
     playwright.expect(disclosure).to_have_count(1)
     assert disclosure.get_attribute("open") is None
+    assert disclosure.locator("summary").evaluate("""summary =>
+      getComputedStyle(summary).display === 'list-item' &&
+      getComputedStyle(summary, '::-webkit-details-marker').display !== 'none' &&
+      getComputedStyle(summary, '::marker').display !== 'none'
+    """), "A compact native disclosure must retain its visible expansion marker"
     disclosure.locator("summary").click()
     parts = disclosure.locator(".bp-reading-wiki-related")
     playwright.expect(parts).to_have_count(2)

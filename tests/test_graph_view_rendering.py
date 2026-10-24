@@ -610,7 +610,15 @@ def test_explorer_head_is_one_row_where_the_rail_always_shows() -> None:
     script = _viewer_source()
     assert ".bp-dag-integrated .bp-dag-head { display: block; padding: 0; }" in style
     assert ".bp-dag-integrated .bp-dag-context { display: flex;" in style
-    assert ".bp-dag-integrated .bp-dag-breadcrumb { display: block; visibility: visible !important; }" in style
+    breadcrumb = next(rule for rule in style.splitlines() if rule.startswith(".bp-dag-integrated .bp-dag-breadcrumb {"))
+    declarations = {
+        name.strip(): value.strip()
+        for part in breadcrumb.split("{", 1)[1].rstrip(" }").split(";") if part.strip()
+        for name, _, value in (part.partition(":"),)
+    }
+    assert declarations["display"] == "block"
+    assert declarations["visibility"] == "visible !important"
+    assert declarations["max-width"] == "none", "The integrated context must not inherit the legacy 32% breadcrumb limit"
     assert ".bp-dag-integrated .bp-dag-toolbar { display: flex;" in style
     assert "context.insertBefore(bookLink, crumbs)" in script
     assert "placeBook" not in script and "head.insertBefore(bookLink" not in script

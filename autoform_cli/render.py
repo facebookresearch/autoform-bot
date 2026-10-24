@@ -493,6 +493,8 @@ class _Publication:
     warnings: list[str]
     #: The pages shown as typed, by where they are published.
     typed: frozenset[Path]
+    #: Captured articles whose outgoing links are not published as live links.
+    unavailable_source_ids: frozenset[str] = frozenset()
 
 
 def _publication(
@@ -546,6 +548,7 @@ def _publication(
     chapters = {page: group for group, page in group_pages.items()}
     warnings: list[str] = []
     typed: set[Path] = set()
+    unavailable_source_ids: set[str] = set()
     # Render writes its own file where a vault's copy of one of these would go.
     written_over = set(_site_paths(graph))
     # A link to a file the site leaves out keeps only its text, so the strict
@@ -628,6 +631,8 @@ def _publication(
             continue
         leaf = (node.formalizable or node.catalog is not None) and node_id not in containers
         text, found = published(captured.decode("utf-8"), node.path, targets[node_id][0], whole=not leaf)
+        if found:
+            unavailable_source_ids.add(node_id)
         # Narrative articles remain book pages. Formalizable leaves and module
         # catalogs are consolidated into their containing article with stable anchors.
         if leaf:
@@ -687,7 +692,10 @@ def _publication(
         warnings.append(f"{TEX_MACROS}: is a directory, so the site has no project macros; make it a JSON file")
     script, script_warnings = mathjax_script(snapshot.get(blueprint / MATHJAX_SCRIPT), snapshot.get(blueprint / TEX_MACROS))
     warnings.extend(script_warnings)
-    return _Publication(groups, targets, node_sources, files, statements, script, warnings, frozenset(typed))
+    return _Publication(
+        groups, targets, node_sources, files, statements, script, warnings, frozenset(typed),
+        frozenset(unavailable_source_ids),
+    )
 
 
 def _is_utf8(data: bytes) -> bool:
@@ -1152,6 +1160,7 @@ def _render_pages(
         contexts_out=contexts,
         captured_sources={node_id: files[node.path] for node_id, node in graph.nodes.items() if node.path in files},
         source_paths={node_id: node.path.relative_to(blueprint) for node_id, node in graph.nodes.items()},
+        unavailable_source_ids=site.unavailable_source_ids,
         warnings_out=report.warnings,
     )
     report.pages += sum(path != destination / graph_pages.WIKI_LINKS for path in generated_graph_pages)
