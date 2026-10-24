@@ -291,13 +291,22 @@ def _frames(page: object) -> None:
     page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
 
 
+def _peek_reader(page: object, handle: object) -> None:
+    """Tap the reader's handle down to its peek: a phone cycles half, full and peek, so two taps at most, then it must be closed."""
+    for _ in range(2):
+        if handle.get_attribute("aria-expanded") != "true":
+            break
+        handle.click()
+        _frames(page)
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+
+
 def _focus_graph_node(page: object, target_id: str) -> object:
     """Reach a map control with real keys, without relying on grid coordinates."""
     handle = page.get_by_role("button", name=re.compile(r", reading$"))
     # A phone's taps cycle half, full and peek, so the map is clear once the reader is closed.
-    while page.viewport_size["width"] <= 720 and handle.get_attribute("aria-expanded") == "true":
-        handle.click()
-        _frames(page)
+    if page.viewport_size["width"] <= 720:
+        _peek_reader(page, handle)
     pending: list[tuple[str, ...]] = [()]
     visited: set[str] = set()
     while pending and len(visited) <= 32:
@@ -504,11 +513,12 @@ def test_empty_authored_overview_opens_on_the_map_and_restores_its_reading_and_c
     assert inner.get_attribute("inert") is None and inner.get_attribute("aria-hidden") is None
     playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Mathematical map")
     playwright.expect(handle).to_be_visible()
-    playwright.expect(handle).to_have_attribute("title", "Close reading")
     if width <= 720:
-        # A phone reader opens at half; the next tap covers the map and the one after returns to the peek.
+        # A phone reader opens at half; the next tap covers the map and the one after returns to the peek, as the title says.
+        playwright.expect(handle).to_have_attribute("title", "Expand reading")
         handle.click()
         playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-sheet-full\b"))
+    playwright.expect(handle).to_have_attribute("title", "Close reading")
     handle.click()
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     _frames(page)
@@ -1047,10 +1057,7 @@ def test_rich_workspace_region_and_full_reader_screenshots(
     _frames(page)
     assert _pixels(page)["painted"] > 0
     if width <= 720:
-        handle = page.get_by_role("button", name=re.compile(r", reading$"))
-        while handle.get_attribute("aria-expanded") == "true":
-            handle.click()
-            _frames(page)
+        _peek_reader(page, page.get_by_role("button", name=re.compile(r", reading$")))
     page.evaluate("() => document.fonts.ready")
     output = os.environ.get("AUTOFORM_UI_SCREENSHOT_DIR")
     directory = Path(output) if output else None

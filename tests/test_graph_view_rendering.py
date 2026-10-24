@@ -444,11 +444,12 @@ def test_resting_a_mouse_on_a_card_previews_its_neighbours_without_selecting_it(
     script = _viewer_source()
     start = script.index('["pointerenter", "focus", "pointerleave", "blur"].forEach')
     hover = script[start:script.index('control.addEventListener("keydown"', start)]
-    # A mouse waits 120 ms; keyboard focus and leaving act on the next tick, and a touch, which has no hover, sets nothing.
+    # A mouse waits 120 ms on entering and on leaving, so crossing the gap to the next card hands over without the map flashing back;
+    # keyboard focus and blur act on the next tick, and a touch, which has no hover, sets nothing.
     # Focus the explorer moves itself after a click is not keyboard focus, so it previews nothing.
     assert "clearTimeout(hoverTimer);" in hover
     assert ('if (index - 1 ? index || event.pointerType !== "touch" : control.matches(":focus-visible")) hoverTimer = setTimeout('
-            'function () { state.hovered = index < 2 && node; schedule(); }, index ? 0 : 120);') in hover
+            'function () { state.hovered = index < 2 && node; schedule(); }, index % 2 ? 0 : 120);') in hover
     # A hovered card that leaves the map (zoom, filter, a new projection, a late timer) gets no pointerleave, so the redraw drops it.
     assert "if (state.hovered && !overlays.has(state.hovered.id)) { state.hovered = null; schedule(); }" in script
     # The preview only draws: no selection, URL or history change.
@@ -594,7 +595,9 @@ def test_details_close_in_their_corner_and_space_the_status_from_the_link() -> N
         assert declaration in close.group(1)
     assert ".bp-dag-sheet-open .bp-reading-body h1 { padding-right: 32px; }" in style
     assert "titleWrap" not in script
-    assert 'refs.sheetHandle.title = opened ? "Close reading" : "Open reading";' in script
+    # The title says what a tap does next: on a phone at half that is the full reader, not a close.
+    assert ('refs.sheetHandle.title = !opened ? "Open reading" : navigation && sheetLayout() && !host.classList.contains("bp-dag-sheet-full") ?'
+            ' "Expand reading" : "Close reading";') in script
     assert 'refs.sheetHandle.setAttribute("aria-expanded", String(Boolean(open)))' in script
     assert 'element("span", "bp-dag-status-pill",' not in script
     assert 'element("article", "bp-reading-body md-typeset")' in script
@@ -603,7 +606,7 @@ def test_details_close_in_their_corner_and_space_the_status_from_the_link() -> N
 
 def test_details_drop_instructions_and_label_paths_compactly() -> None:
     """The drawer explained its own controls, invented a summary for topics without one and titled its pivots."""
-    script = _viewer_source()
+    script, style = _viewer_source(), dag_viewer._STYLE
 
     for gone in (
         "keyboard-accessible",
@@ -626,8 +629,10 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
     assert "var weights = state.selected && relationCounts(data.edges, state.selected.id);" in script
     assert '[["used by ", weights.before], ["uses ", weights.after]]' in script
     assert 'if (control.getAttribute("aria-label") !== named.join(", ")) control.setAttribute("aria-label", named.join(", "));' in script
-    # Cards name a neighbour by the list it sits in.
-    assert 'relation === "prerequisite" ? "Uses" : relation === "dependent" ? "Used by" : ""' in script
+    # A neighbour's badge reads in its own direction, as its accessible name does: "Used by <selection>" or "Uses <selection>".
+    assert 'relation ? (relation === "prerequisite" ? "Used by " : "Uses ") + state.selected.title : ""' in script
+    badge = next(line for line in style.splitlines() if line.startswith(".bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=dependent] .bp-dag-node-relation {"))
+    assert "text-overflow: ellipsis; white-space: nowrap;" in badge
     assert '"Prerequisite"' not in script and '"Dependent"' not in script
 
 
@@ -770,10 +775,14 @@ def test_explorer_head_switches_materials_palette_from_the_trail_row() -> None:
     assert 'var schemes = document.querySelector("[data-md-component=palette]");' in script
     assert '"Switch light or dark theme"' in script and "flip.title = themeLabel; context.appendChild(flip);" in script
     # It clicks Material's own toggle, the one unhidden label, which steps to the next entry of a two- or three-entry palette.
-    assert 'schemes.querySelector("label:not([hidden])").click();' in script
+    # A palette list without toggle keys draws the form but no label, so it gets no switch, and a missing label is never clicked.
+    assert 'if (schemes && schemes.querySelector("label")) {' in script
+    assert 'var next = schemes.querySelector("label:not([hidden])"); if (next) next.click();' in script
     assert ":checked)" not in script
     rule = next(line for line in style.splitlines() if line.startswith(".bp-dag-viewer .bp-dag-theme {"))
     assert "width: 32px; min-height: 32px;" in rule and "border: 0;" in rule
+    coarse = style.split("@media (pointer: coarse) {\n", 1)[1].split("\n}", 1)[0]
+    assert ".bp-dag-viewer .bp-dag-theme { width: 44px; min-height: 44px; }" in coarse
 
 
 def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_under_status() -> None:
@@ -789,8 +798,8 @@ def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_und
         "border: 1px solid var(--dag-border);"
     ) in style
     assert ".bp-dag-zoom .bp-dag-button, .bp-dag-modes .bp-dag-mode-button { min-height: 30px; padding: 4px 10px; border: 0;" in style
-    # Zoom leaves with the map, and a finger, which pinches, keeps only a 44px Fit.
-    assert ".bp-dag-viewer:has(.bp-dag-stage[hidden]) .bp-dag-zoom { display: none; }" in style
+    # Zoom leaves with the map but keeps its place, so a finger's 44px Fit does not change the row's height between views.
+    assert ".bp-dag-viewer:has(.bp-dag-stage[hidden]) .bp-dag-zoom { visibility: hidden; }" in style
     coarse = style.split("@media (pointer: coarse) {\n", 1)[1].split("\n}", 1)[0]
     assert ".bp-dag-zoom .bp-dag-button:not(:last-child) { display: none; }" in coarse
     assert ".bp-dag-zoom .bp-dag-button { min-width: 44px; min-height: 44px; }" in coarse
@@ -837,6 +846,10 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     tablet = style.split("@media (max-width: 1100px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
     # Two rows, Topics and search on the first; search no longer takes a row of its own.
     assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: calc(100% - 96px); }" in tablet
+    # The second row never wraps: the filter grows from 100px into its free space and truncates its summary instead.
+    assert ("@media (min-width: 721px) and (max-width: 1100px) {\n"
+            "  .bp-dag-integrated .bp-dag-filters { flex: 1 1 100px; min-width: 0; max-width: max-content; }\n"
+            "  .bp-dag-integrated .bp-dag-filter-summary { display: block; max-width: 100%; overflow: hidden; line-height: 22px; text-overflow: ellipsis; }") in style
     # Topics sat a few px above the control beside it.
     assert ".bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; align-items: center; }" in tablet
     phones = style.split("@media (max-width: 720px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]

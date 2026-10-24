@@ -698,11 +698,12 @@
       head.appendChild(context);
       // The explorer hides Material's header and its sun or moon, so this clicks that toggle: the one label Material leaves
       // unhidden, which points at the next palette entry, so a three-entry automatic palette steps on as Material's own does.
+      // A palette list without toggle keys draws the form but no label, so it gets no switch.
       var schemes = document.querySelector("[data-md-component=palette]");
-      if (schemes) {
+      if (schemes && schemes.querySelector("label")) {
         var themeLabel = "Switch light or dark theme", flip = button("bp-dag-button bp-dag-theme", "◐", themeLabel);
         flip.title = themeLabel; context.appendChild(flip);
-        flip.onclick = function () { schemes.querySelector("label:not([hidden])").click(); };
+        flip.onclick = function () { var next = schemes.querySelector("label:not([hidden])"); if (next) next.click(); };
       }
 
       var toolbar = element("div", "bp-dag-toolbar");
@@ -1369,7 +1370,7 @@
         });
         if (control.getAttribute("aria-label") !== named.join(", ")) control.setAttribute("aria-label", named.join(", "));
         var relationLabel = control.querySelector(".bp-dag-node-relation");
-        if (relationLabel) relationLabel.textContent = relation === "prerequisite" ? "Uses" : relation === "dependent" ? "Used by" : "";
+        if (relationLabel) relationLabel.textContent = relation ? (relation === "prerequisite" ? "Used by " : "Uses ") + ui$selected.title : "";
         control.dataset.subdued = String(Boolean(spotlight && !spotlight.nodes.has(node.id)));
         control.tabIndex = node.id === tabId ? 0 : -1;
       });
@@ -1411,11 +1412,11 @@
       // A drag or pinch that began on the card is not a tap; a keyboard click has no detail and always opens it.
       control.addEventListener("click", function (event) { event.stopPropagation(); if (!ui$moved || !event.detail) activateNode(node); });
       // Resting a mouse on a card for 120 ms, or focusing it from the keyboard, previews its neighbours without selecting it; touch has no hover.
-      // Moving straight onto another card hands over after its delay instead of flashing the whole map back.
+      // Leaving waits as long, so a mouse crossing the gap to another card hands over after its delay instead of flashing the whole map back.
       ["pointerenter", "focus", "pointerleave", "blur"].forEach(function (type, index) {
         control.addEventListener(type, function (event) {
           clearTimeout(hoverTimer);
-          if (index - 1 ? index || event.pointerType !== "touch" : control.matches(":focus-visible")) hoverTimer = setTimeout(function () { ui$hovered = index < 2 && node; schedule(); }, index ? 0 : 120);
+          if (index - 1 ? index || event.pointerType !== "touch" : control.matches(":focus-visible")) hoverTimer = setTimeout(function () { ui$hovered = index < 2 && node; schedule(); }, index % 2 ? 0 : 120);
         });
       });
       control.addEventListener("keydown", function (event) {
@@ -1628,7 +1629,7 @@
         record = records.get(currentBundle && currentBundle.nodeId || ui$requestedNode || (ui$selected && ui$selected.id));
       dom$sheetHandle.replaceChildren(close ? "×" : record && record.status ? swatch(record.status) : "", close ? "" : title);
       dom$sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");
-      dom$sheetHandle.title = opened ? "Close reading" : "Open reading";
+      dom$sheetHandle.title = !opened ? "Open reading" : navigation && sheetLayout() && !host.classList.contains("bp-dag-sheet-full") ? "Expand reading" : "Close reading";
       if (collapsed) {
         if (dom$inspectorInner.contains(document.activeElement)) dom$sheetHandle.focus();
         dom$inspectorInner.setAttribute("inert", ""); dom$inspectorInner.setAttribute("aria-hidden", "true");

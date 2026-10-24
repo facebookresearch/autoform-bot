@@ -1020,6 +1020,44 @@ def test_resting_the_mouse_on_a_card_previews_its_neighbours_without_selecting_i
     playwright.expect(foundation).to_have_attribute("data-subdued", "false")
 
 
+def test_moving_the_mouse_to_the_next_card_hands_the_preview_over_without_a_flash(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """Leaving a card cleared its preview on the next tick, so crossing the gap to the next card flashed the whole map back."""
+    page = desktop_page
+    page.set_viewport_size({"width": 1440, "height": 900})
+    _open_consumer(page, explorer_consumer, "star")
+    # Every chapter of the star depends on chapter 0 alone, so under two neighbouring leaves' previews every other leaf stays faded.
+    leaves = page.evaluate("""() => [...document.querySelectorAll('.bp-dag-node')].map(node => {
+        const box = node.getBoundingClientRect(), stage = node.closest('.bp-dag-stage').getBoundingClientRect();
+        return {id: node.dataset.autoformNodeId, x: box.left, y: box.top, w: box.width, h: box.height,
+                whole: box.left >= stage.left && box.right <= stage.right && box.top >= stage.top && box.bottom <= stage.bottom};
+      }).filter(card => card.whole && !card.id.endsWith('/chapter-00'))""")
+    leaves.sort(key=lambda card: (round(card["x"]), card["y"]))
+    pairs = [(a, b) for a, b in zip(leaves, leaves[1:]) if abs(a["x"] - b["x"]) < 1]
+    assert pairs and len(leaves) > 2, leaves
+    first, second = pairs[0]
+    outside = [card["id"] for card in leaves if card["id"] not in (first["id"], second["id"])]
+    card = page.locator(f'.bp-dag-node[data-autoform-node-id="{first["id"]}"]')
+    _assert_hit(page, card)
+    _assert_hit(page, page.locator(f'.bp-dag-node[data-autoform-node-id="{second["id"]}"]'))
+    card.hover()
+    playwright.expect(page.locator(f'.bp-dag-node[data-autoform-node-id="{outside[0]}"]')).to_have_attribute("data-subdued", "true")
+    page.evaluate("""ids => {
+      window.__lit = new Set();
+      window.__watch = new MutationObserver(records => records.forEach(record => {
+        if (record.target.dataset.subdued === "false") window.__lit.add(record.target.dataset.autoformNodeId);
+      }));
+      ids.forEach(id => window.__watch.observe(document.querySelector(`.bp-dag-node[data-autoform-node-id="${id}"]`),
+        {attributes: true, attributeFilter: ["data-subdued"]}));
+    }""", outside)
+    page.mouse.move(second["x"] + second["w"] / 2, second["y"] + second["h"] / 2, steps=8)
+    # The first leaf fades once the second's preview takes over.
+    playwright.expect(card).to_have_attribute("data-subdued", "true")
+    lit = page.evaluate("() => { window.__watch.disconnect(); return [...window.__lit]; }")
+    assert lit == [], f"Cards outside both neighbourhoods lit while the mouse crossed the gap: {lit}"
+
+
 def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
     page = desktop_page
     _open_consumer(page, explorer_consumer)
@@ -1523,6 +1561,7 @@ def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_pag
     assert box is not None
     assert 0 <= box["x"] and box["x"] + box["width"] <= viewport["width"]
     assert box["y"] + box["height"] <= viewport["height"]
+    assert box["width"] >= viewport["width"] - 24 - 1  # min(576px, 100vw - 24px)
     _assert_hit(page, page.locator(".bp-dag-result").first)
     # Where the results reach the half-open reader, they paint over it.
     assert page.evaluate(
@@ -1720,6 +1759,9 @@ def test_the_toolbars_popovers_paint_over_the_open_details(desktop_page: object,
         search.fill("Result")
         playwright.expect(page.locator(".bp-dag-search-results")).to_be_visible()
         assert _paints_over_the_details(page, ".bp-dag-result", ".bp-dag-search-results") is True
+        # Results read at least 576px wide whatever the box beside them, and stay on screen.
+        box = page.locator(".bp-dag-search-results").bounding_box()
+        assert box is not None and box["width"] >= 576 - 1 and box["x"] + box["width"] <= width + 1
 
 
 def test_a_short_phones_explorer_keeps_its_sheet_handle_on_screen(mobile_page: object, site_url: str) -> None:
@@ -2486,7 +2528,7 @@ def test_the_toolbar_counts_only_what_it_hides_and_shows_it_on_request(
     playwright.expect(_reading_card(page, "chapter/target")).to_contain_text("Final sentence of the complete target statement.")
 
 
-@pytest.mark.parametrize("width", (800, 1000))
+@pytest.mark.parametrize("width", (721, 800, 1000))
 def test_a_filter_never_adds_a_tablet_toolbar_row(desktop_page: object, explorer_consumer: _ExplorerConsumer, width: int) -> None:
     """The "Show N filtered out" link wrapped onto a row of its own at 1000px and pushed the map down."""
     page = desktop_page
@@ -2496,6 +2538,9 @@ def test_a_filter_never_adds_a_tablet_toolbar_row(desktop_page: object, explorer
     before = toolbar.bounding_box(), stage.bounding_box()
     page.locator(".bp-dag-filter-summary").click()
     page.locator('.bp-dag-filter-popover input[value="can_prove"]').uncheck()
+    # The longest summary, "Filter: 5 of 6 statuses · linked only", gives way to the link rather than wrap it.
+    page.get_by_role("checkbox", name="Show unlinked", exact=True).uncheck()
+    playwright.expect(page.locator(".bp-dag-filter-summary")).to_have_text(re.compile(r"linked only$"))
     playwright.expect(page.locator(".bp-dag-hidden-button")).to_be_visible()
     assert (toolbar.bounding_box()["height"], stage.bounding_box()["y"]) == (before[0]["height"], before[1]["y"])
 

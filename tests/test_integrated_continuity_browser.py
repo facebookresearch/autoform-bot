@@ -33,6 +33,7 @@ from tests.test_integrated_workspace_browser import (
     _focus_graph_region,
     _full_math,
     _open,
+    _peek_reader,
     _pixels,
     _search,
     _selected,
@@ -455,8 +456,7 @@ def test_phone_reader_opens_at_half_covers_the_body_at_full_and_peeks_with_reada
     documents = _documents(page)
     _open(page, site, workspace_runtime)
     handle = page.get_by_role("button", name=re.compile(r", reading$"))
-    while handle.get_attribute("aria-expanded") == "true":
-        handle.click()
+    _peek_reader(page, handle)
     _frames(page)
     page.get_by_role("button", name="Fit shown nodes", exact=True).click()
     _frames(page)
@@ -551,9 +551,8 @@ def test_five_authored_dependency_areas_remain_readable_reachable_and_keep_nativ
     assert all(authored_areas[edge["source"]] != authored_areas[edge["target"]] for edge in site.root_graph["edges"])
     documents = _documents(page)
     _open(page, site, workspace_runtime)
-    handle = page.get_by_role("button", name=re.compile(r", reading$"))
-    while width <= 720 and handle.get_attribute("aria-expanded") == "true":
-        handle.click()
+    if width <= 720:
+        _peek_reader(page, page.get_by_role("button", name=re.compile(r", reading$")))
     _frames(page)
     page.get_by_role("button", name="Fit shown nodes", exact=True).click()
     page.evaluate("() => document.fonts.ready")
@@ -575,6 +574,8 @@ def test_five_authored_dependency_areas_remain_readable_reachable_and_keep_nativ
       const matrix = new DOMMatrix(getComputedStyle(node).transform), scale = Math.hypot(matrix.a, matrix.b);
       return {left:box.left,right:box.right,top:box.top,bottom:box.bottom,width:box.width,
         title:title.textContent,meta:meta.textContent,aria:node.getAttribute('aria-label'),
+        shown:[...meta.children].filter(span => getComputedStyle(span).display !== 'none').map(span => span.textContent).join(''),
+        summary:sample ? sample.textContent : null,
         titlePixels:parseFloat(getComputedStyle(title).fontSize)*scale,
         metaPixels:parseFloat(getComputedStyle(meta).fontSize)*scale,
         titleFits:title.scrollWidth<=title.clientWidth+1,
@@ -591,7 +592,10 @@ def test_five_authored_dependency_areas_remain_readable_reachable_and_keep_nativ
         assert node["meta"] == "3 topics · 0 of 3 fully proved" and ", 0 of 3 fully proved" in node["aria"]
         assert node["titleFits"] and node["hit"]
         if stage["width"] <= 620:
-            assert not node["sampleVisible"]
+            assert not node["sampleVisible"] and node["shown"] == node["meta"]
+        else:
+            # The summary leads with the topic count, so the meta shows only the fully proved count, whole.
+            assert node["sampleVisible"] and node["summary"].startswith("3 topics: ") and node["shown"] == "0 of 3 fully proved"
         assert node["left"] >= stage["x"] - 1 and node["right"] <= stage["x"] + stage["width"] + 1
         assert (node["left"] + node["right"]) / 2 == pytest.approx(stage["x"] + stage["width"] / 2, abs=2)
         assert node["top"] >= context["y"] + context["height"] + 8
