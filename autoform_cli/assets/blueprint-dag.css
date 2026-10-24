@@ -303,6 +303,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-map-key .bp-map-key-proof::before { border-top-style: dashed; }
 /* The pan note sits a line above the map key, which shares its bottom edge. */
 .bp-dag-integrated .bp-dag-density { bottom: 36px; }
+/* Text over the map keeps a halo of the map's colour, so it stays readable where a cropped view puts a card under it. */
+.bp-dag-integrated :is(.bp-dag-density, .bp-map-context, .bp-map-key) { text-shadow: 0 0 3px var(--dag-map), 0 0 6px var(--dag-map); }
 .bp-dag-compact-regions :is(.bp-dag-canvas, .bp-dag-node-layer) { clip-path: inset(52px 0 44px); }
 .bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-core { padding: 10px 14px; }
 .bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: 4px; font-size: 14px; }

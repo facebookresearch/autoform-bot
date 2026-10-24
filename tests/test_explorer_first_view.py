@@ -162,15 +162,16 @@ def test_a_phone_map_that_fits_at_the_floor_shows_its_unlinked_cards_too() -> No
     assert narrow["hidden"] is False and narrow["note"].endswith("for all 3.")
 
 
-def test_a_long_chain_opens_centred_on_its_first_card() -> None:
-    """A long chain cannot open readable, so the camera centres its first card and the note says the rest is off screen."""
+def test_a_long_chain_opens_at_its_leading_edge() -> None:
+    """A long chain cannot open readable. Centring its first card left half the stage empty; the view now starts at the chain's
+    leading edge, readable, and the note says the rest is off screen."""
     ids = [f"step-{index}" for index in range(33)]
     view = _view(ids, list(zip(ids, ids[1:])))
     width, height = 1152, 847
     result = _first_view(view, width, height)
     boxes = result["boxes"]
     assert result["scale"] == pytest.approx(0.9)
-    assert _centred(boxes["step-0"], width, height)
+    assert boxes["step-0"]["x"] == pytest.approx(36) and _inside(boxes["step-0"], width, height)
     assert result["hidden"] is False and result["note"].endswith("for all 33.")
 
 

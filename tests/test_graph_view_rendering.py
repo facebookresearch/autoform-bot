@@ -765,10 +765,11 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     assert ".bp-dag-density { bottom: 68px; }" in phones
     assert not any(word in density for word in ("border", "shadow", "background", "blur"))
     # In the workspace it sits a line above the map key. With a phone reader open, the band above it is small and the handle names
-    # the page, so the map header and the note leave instead of sitting on cards; neither draws a halo or a box.
+    # the page, so the map header and the note leave instead of sitting on cards.
     assert ".bp-dag-integrated .bp-dag-density { bottom: 36px; }" in style
     assert ".bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-compact-regions) :is(.bp-map-context, .bp-dag-density) { display: none; }" in style
-    assert "text-shadow" not in style
+    # Over a card in a cropped view the header, note and key keep a two-layer halo of the map's colour, still with no box.
+    assert ".bp-dag-integrated :is(.bp-dag-density, .bp-map-context, .bp-map-key) { text-shadow: 0 0 3px var(--dag-map), 0 0 6px var(--dag-map); }" in style
 
 
 def test_explorer_head_switches_materials_palette_from_the_trail_row() -> None:
@@ -839,7 +840,9 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     """Map and Areas both read as pressed at the root, a deep trail sat in a third of an empty row, and tablets had three rows."""
     script, style = _viewer_source(), dag_viewer._STYLE
     # Areas stays: inside an area it is the way back to the overview, whose root crumb is then not a link.
-    assert 'var areas = state.mode === "graph" && !state.area && !state.overviewGroup && data.nodes.some(function (node) { return node._region; });' in script
+    # Elsewhere Areas leaves for the root, so a book's own area map reads as Map; a scope overview's Areas resets in place.
+    assert ('var areas = state.mode === "graph" && !state.area && !state.overviewGroup && (state.scopeOverview || !currentBundle || currentBundle.scope === "roadmap") &&\n'
+            '        data.nodes.some(function (node) { return node._region; });') in script
     assert 'pressed(refs.graphMode, state.mode === "graph" && !areas);' in script
     assert 'if (refs.regionsMode) pressed(refs.regionsMode, areas);' in script
     assert 'refs.graphMode.setAttribute("aria-pressed", String(state.mode === "graph"));' not in script

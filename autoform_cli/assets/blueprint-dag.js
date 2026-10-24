@@ -622,7 +622,7 @@
       ui$direction = saved.direction || "both"; ui$query = saved.query || ""; dom$search.value = ui$query;
       host.classList.toggle("bp-dag-outline-open", Boolean(saved.outlineOpen));
       if (dom$outlineToggle) dom$outlineToggle.setAttribute("aria-expanded", String(Boolean(saved.outlineOpen)));
-      ui$activeDirty = true; setSheet(saved.readingOpen !== false, ui$selected); refresh(false); resize();
+      ui$activeDirty = true; setSheet(saved.readingOpen !== false && 1, ui$selected); refresh(false); resize();
       if (saved.camera) ui$transform = Object.assign({}, saved.camera);
       return readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || ticket !== restoration || (isCurrent && !isCurrent())) { if (ticket === restoration) restoring = false; resolve(); return; }
@@ -686,7 +686,7 @@
       host.classList.toggle("bp-dag-overview-only", ui$overviewOnly);
       var mapRequested = Boolean(bundle.mapFirst && (ui$scopeOverview || ui$overviewOnly) && !bundle.anchor && !(record && record.result));
       var readingRequested = Boolean(bundle.focus && !mapRequested || bundle.anchor || record && record.result);
-      setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false : readingRequested ||
+      setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false && 1 : readingRequested ||
         !ui$scopeOverview && !ui$overviewOnly && (!sheetLayout() || Boolean(bundle.nodeId)), ui$selected);
       refresh(true); firstResize = true; resize();
       if (ui$selected && mapAllowed) centerIfHidden(ui$selected);
@@ -1223,8 +1223,10 @@
       var enabled = ui$selectedStatuses.size;
       dom$filterSummary.textContent = "Filter: " + (enabled === presentStatuses.length ? "all" : enabled + " of " + presentStatuses.length) +
         " statuses" + (ui$showIsolated ? "" : " · linked only");
-      // The areas overview is the map at the root, so Map gives way to Areas there and one view reads as pressed.
-      var areas = ui$mode === "graph" && !ui$area && !ui$overviewGroup && data.nodes.some(function (node) { return node._region; });
+      // The areas overview is the map at the root, so Map gives way to Areas there and one view reads as pressed. Elsewhere Areas
+      // leaves for the root, so a book's own area map reads as Map; a scope overview's Areas resets in place, so it reads as Areas.
+      var areas = ui$mode === "graph" && !ui$area && !ui$overviewGroup && (ui$scopeOverview || !currentBundle || currentBundle.scope === "roadmap") &&
+        data.nodes.some(function (node) { return node._region; });
       pressed(dom$graphMode, ui$mode === "graph" && !areas);
       pressed(dom$listMode, ui$mode === "list");
       if (dom$sourcesMode) pressed(dom$sourcesMode, ui$mode === "sources");
@@ -1311,10 +1313,19 @@
       var linked = all.filter(function (node) { return !node.isolated; }), box = frame(all);
       if ((box.wide || box.tall) && linked.length) box = frame(linked);
       var scale = ui$transform.scale = box.scale;
-      // A map that fits, if only once the padding gives way, is centred whole; a real crop centres the selection or a first card.
+      // A map that fits, if only once the padding gives way, is centred whole. A real crop centres the selection or a requested
+      // area's first card; with nothing to centre on, a phone's compact overview centres its first area, and any other map starts
+      // each cropped axis at the graph's leading edge rather than leaving half the stage empty around one card.
       ui$transform.x = (stageW - box.w * scale) / 2 - box.x * scale;
       ui$transform.y = (shown + top - bottom - box.h * scale) / 2 - box.y * scale;
-      if (box.wide || box.tall || compact && box.fitted < readableFloor) center(ui$selected || box.nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; }) || box.nodes[0], readableFloor);
+      var target = ui$selected || box.nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; });
+      if (box.wide || box.tall || compact && box.fitted < readableFloor) {
+        if (target || compact) center(target || box.nodes[0], readableFloor);
+        else {
+          if (box.wide) ui$transform.x = side - box.x * scale;
+          if (box.tall) ui$transform.y = top - box.y * scale;
+        }
+      }
       schedule(); remember();
       function frame(nodes) {
         var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;

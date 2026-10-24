@@ -1059,6 +1059,70 @@ def test_moving_the_mouse_to_the_next_card_hands_the_preview_over_without_a_flas
     assert lit == [], f"Cards outside both neighbourhoods lit while the mouse crossed the gap: {lit}"
 
 
+_CARDS_INSIDE_STAGE = """() => { const stage = document.querySelector('.bp-dag-stage').getBoundingClientRect();
+  return [...document.querySelectorAll('.bp-dag-node')].map(node => { const box = node.getBoundingClientRect();
+    return {id: node.dataset.autoformNodeId, top: box.top - stage.top, left: box.left - stage.left, inside: box.top >= stage.top - 1 &&
+      box.bottom <= stage.bottom + 1 && box.left >= stage.left - 1 && box.right <= stage.right + 1}; }); }"""
+
+
+@pytest.mark.parametrize(("width", "height"), ((1440, 900), (1920, 1080)))
+def test_a_map_that_fits_opens_whole(desktop_page: object, explorer_consumer: _ExplorerConsumer, width: int, height: int) -> None:
+    """A frame scaled to fill the band exactly read as taller than it by a rounding error, so at 1920x1080 a map that fits
+    opened cropped around one card, with the pan note asking for a drag."""
+    page = desktop_page
+    page.set_viewport_size({"width": width, "height": height})
+    _open_consumer(page, explorer_consumer, "topics")
+    _paint_frame(page)
+    cards = page.evaluate(_CARDS_INSIDE_STAGE)
+    assert cards and all(card["inside"] for card in cards), cards
+    playwright.expect(page.locator(".bp-dag-density")).to_be_hidden()
+
+
+def test_a_crop_with_nothing_selected_starts_at_the_maps_leading_edge(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
+    """A crop with nothing selected centred its first card, leaving half the stage empty; a 33-chapter chain opened with chapter 0
+    mid-stage and nothing to its left."""
+    page = desktop_page
+    page.set_viewport_size({"width": 1440, "height": 900})
+    _open_consumer(page, explorer_consumer, "chain")
+    _paint_frame(page)
+    playwright.expect(page.locator(".bp-dag-density")).to_be_visible()
+    cards = page.evaluate(_CARDS_INSIDE_STAGE)
+    assert min(card["left"] for card in cards) == pytest.approx(36, abs=2), cards
+
+
+def test_a_books_own_area_map_reads_as_map_since_areas_leaves_for_the_root(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """Areas read as pressed on a book's area map, but pressing it left for the library root."""
+    page = desktop_page
+    page.set_viewport_size({"width": 1440, "height": 900})
+    _open_consumer(page, explorer_consumer, "atlas")
+    pressed = page.get_by_role("group", name="Explorer view", exact=True).locator('[aria-pressed="true"]')
+    playwright.expect(pressed).to_have_count(1)
+    playwright.expect(pressed).to_have_text("Map")
+
+
+def test_back_restores_a_phone_reader_at_half_rather_than_carrying_full_over(
+    mobile_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """History keeps only whether the reader was open, so Back restored it with the page's current position: full leaked onto
+    an entry that was left at half."""
+    page = mobile_page
+    _open_consumer(page, explorer_consumer, "chapter/middle")
+    host, handle = page.locator(".bp-dag-viewer"), page.locator(".bp-dag-sheet-handle")
+    playwright.expect(host).to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
+    _open_dependency(_reading_card(page, "chapter/middle"), "Foundation").click()
+    _consumer_ready(page, explorer_consumer, "chapter/foundation")
+    playwright.expect(handle).to_have_attribute("title", "Expand reading")
+    handle.click()
+    playwright.expect(host).to_have_class(re.compile(r"\bbp-dag-sheet-full\b"))
+    page.go_back()
+    _consumer_ready(page, explorer_consumer, "chapter/middle")
+    playwright.expect(host).to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
+    playwright.expect(host).not_to_have_class(re.compile(r"\bbp-dag-sheet-full\b"))
+    playwright.expect(handle).to_have_attribute("title", "Expand reading")
+
+
 def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
     page = desktop_page
     _open_consumer(page, explorer_consumer)
