@@ -402,9 +402,14 @@ def test_the_explorer_s_titles_and_summaries_are_typeset_as_articles_are(tmp_pat
         '<p class="bp-dag-summary arithmatex">By \\ref{thm:a}, which is no formula, $q$ holds.</p>'
         "</div></aside></body></html>"
     )
-    # An article formula whose hidden assistive copy holds a pair of dollar signs.
+    # An article formula whose hidden assistive copy holds a pair of dollar
+    # signs, and a card formula whose copy holds an environment.
     first = _FIRST_PAGE.replace(
         '<p id="a1">', '<p id="a1"><span class="arithmatex">\\(\\text{costs \\$5 and \\$6}\\)</span> '
+    ).replace(
+        '<div class="bp-readback-body"><span class="bp-card-formula">\\(e',
+        '<div class="bp-readback-body"><span class="bp-card-formula">\\(\\text{see \\begin{cases}a\\end{cases}}\\)</span> '
+        '<span class="bp-card-formula">\\(e',
     )
 
     report = _node_report(
@@ -432,6 +437,8 @@ def test_the_explorer_s_titles_and_summaries_are_typeset_as_articles_are(tmp_pat
     skip = {"[+]": ["mjx-container"]}
     assert page["requested"] == {"skipHtmlTags": skip}
     assert link["requested"] == {"enableMenu": False, "renderActions": {"explorable": []}, "skipHtmlTags": skip}
+    # The cards were typeset by the first pass, their hidden copies included.
+    assert [document["card"] for document in explorer[2:]] == ["c1", "c2"]
     assert all(document["math"] == [] for document in explorer[2:])
     # MathJax's own document, which a call to MathJax.typesetPromise would use, holds nothing.
     assert report["startup"] == 0
