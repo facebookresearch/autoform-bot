@@ -600,7 +600,7 @@ def test_details_close_in_their_corner_and_space_the_status_from_the_link() -> N
 
 def test_details_drop_instructions_and_label_paths_compactly() -> None:
     """The drawer explained its own controls, invented a summary for topics without one and titled its pivots."""
-    script, style = _viewer_source(), dag_viewer._STYLE
+    script = _viewer_source()
 
     for gone in (
         "keyboard-accessible",
@@ -723,8 +723,8 @@ def test_explorer_head_is_one_row_where_the_rail_always_shows() -> None:
     assert "placeBook" not in script and "head.insertBefore(bookLink" not in script
     narrow = style.split("@media (max-width: 1100px) {\n", 2)[2].split("\n}", 1)[0]
     assert ".bp-dag-integrated .bp-dag-toolbar { flex-wrap: wrap; }" in narrow
-    # Topics, search, filter, views and zoom share one row on a tablet, so the filter menu anchors to its button's left.
-    assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: 240px; }" in narrow
+    # The filter starts the second row on a tablet, or sits mid-row from 1000px, so its menu anchors to its button's left.
+    assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: calc(100% - 96px); }" in narrow
     assert ".bp-dag-integrated .bp-dag-filter-popover { left: 0; right: auto;" in narrow
     # The existing vertical compensation remains atomic with both class changes.
     sheet = script.split("function setSheet(open, selected) {", 1)[1].split("\n    function ", 1)[0]
@@ -830,7 +830,9 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li { min-width: 4em; }" in style
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:has(.bp-dag-sr-only) { flex: none; min-width: 0; }" in style
     tablet = style.split("@media (max-width: 1100px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
-    assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: 240px; }" in tablet and "100%" not in tablet
+    # Two rows below 1000px and one from there; search no longer takes a row of its own.
+    assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: calc(100% - 96px); }" in tablet
+    assert "@media (min-width: 1000px) and (max-width: 1100px) { .bp-dag-integrated .bp-dag-search-wrap { flex-basis: 160px; } }" in style
     # Topics was a few px above Status in the same row.
     assert ".bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; align-items: center; }" in tablet
     phones = style.split("@media (max-width: 720px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]

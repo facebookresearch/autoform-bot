@@ -2486,6 +2486,20 @@ def test_the_toolbar_counts_only_what_it_hides_and_shows_it_on_request(
     playwright.expect(_reading_card(page, "chapter/target")).to_contain_text("Final sentence of the complete target statement.")
 
 
+@pytest.mark.parametrize("width", (800, 1000))
+def test_a_filter_never_adds_a_tablet_toolbar_row(desktop_page: object, explorer_consumer: _ExplorerConsumer, width: int) -> None:
+    """The "Show N filtered out" link wrapped onto a row of its own at 1000px and pushed the map down."""
+    page = desktop_page
+    page.set_viewport_size({"width": width, "height": 900})
+    _open_consumer(page, explorer_consumer)
+    toolbar, stage = page.locator(".bp-dag-toolbar"), page.locator(".bp-dag-stage")
+    before = toolbar.bounding_box(), stage.bounding_box()
+    page.locator(".bp-dag-filter-summary").click()
+    page.locator('.bp-dag-filter-popover input[value="can_prove"]').uncheck()
+    playwright.expect(page.locator(".bp-dag-hidden-button")).to_be_visible()
+    assert (toolbar.bounding_box()["height"], stage.bounding_box()["y"]) == (before[0]["height"], before[1]["y"])
+
+
 def test_a_click_that_opens_details_over_its_card_pans_it_clear(desktop_page: object, site_url: str) -> None:
     """Explicit graph activation keeps its focal theorem visible beside the persistent full reading pane."""
     page = desktop_page
