@@ -104,6 +104,7 @@ function setup(extra = {}) {
     onCommit(bundle){commits.push(bundle); if(extra.commit) return extra.commit(bundle);},onError(error){errors.push(error);},
     captureState(){return structuredClone(state);}, restoreState(saved,bundle){state=structuredClone(saved);restored.push(saved);
       if(extra.restore) return extra.restore(saved,bundle);},
+    onIndex:extra.onIndex,
     htmlEntries:extra.htmlEntries || 8,jsonEntries:16,cacheBytes:extra.cacheBytes});
   return {nav,win,commits,errors,restored,fetches,contents,reply,initial,listeners,
     state(value){state=value;},getState(){return state;}};
@@ -326,6 +327,84 @@ def test_compact_index_endpoints_round_trip_and_invalid_offsets_fail_closed() ->
         assert.equal(invalid.errors[0].message,'Invalid search relation endpoint');
         assert.equal(invalid.win.location.href,rootSpec.route);
         invalid.nav.dispose();
+      }
+    """)
+
+
+def test_large_index_yields_and_commits_only_after_all_rows_validate() -> None:
+    _run(r"""
+      const payload=index();
+      for(let n=0;n<1024;n++) payload.nodes.push({id:'leaf-'+n,title:'Leaf '+n,route:'../roadmap/leaf-'+n+'.html'});
+      const before=JSON.stringify(payload),published=[];
+      const app=setup({onIndex(index){published.push(index);}});
+      const key=absolute('dependencies/index.json'); app.contents.set(key,payload);
+      const nativeTimer=global.setTimeout; let yields=0;
+      global.setTimeout=(callback,delay,...args)=>{
+        if(delay===0){yields++;assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);}
+        return nativeTimer(callback,delay,...args);
+      };
+      try {
+        const first=app.nav.loadIndex(),second=app.nav.loadIndex(); assert.strictEqual(first,second);
+        const result=await first; assert.strictEqual(await second,result);
+        assert(yields>=2); assert.equal(published.length,1); assert.strictEqual(app.nav.getIndex(),result);
+        assert.equal(result.nodes.length,payload.nodes.length); assert.equal(JSON.stringify(payload),before);
+        assert.deepEqual(result.relations,[['a','b',1,0]]);
+        assert.equal(app.fetches.filter(url=>url===key).length,1);
+      } finally {global.setTimeout=nativeTimer;app.nav.dispose();}
+
+      // A failure after earlier batches must not expose a partial index or poison retry.
+      const rejected=[],invalid=setup({onIndex(index){rejected.push(index);}}),broken=structuredClone(payload);
+      broken.nodes.at(-1).id=broken.nodes[0].id; invalid.contents.set(key,broken);
+      await assert.rejects(invalid.nav.loadIndex(),/Invalid search node/);
+      assert.equal(invalid.nav.getIndex(),null);assert.equal(rejected.length,0);
+      invalid.contents.set(key,payload);const recovered=await invalid.nav.loadIndex();
+      assert.equal(recovered.nodes.length,payload.nodes.length);assert.equal(rejected.length,1);
+      assert.equal(invalid.fetches.filter(url=>url===key).length,2);invalid.nav.dispose();
+    """)
+
+
+def test_disposal_during_index_batch_never_commits_or_reports_a_partial_index() -> None:
+    _run(r"""
+      const payload=index();for(let n=0;n<600;n++) payload.nodes.push({id:'leaf-'+n,title:'Leaf '+n});
+      const published=[],app=setup({onIndex(index){published.push(index);}});
+      app.contents.set(absolute('dependencies/index.json'),payload);
+      const nativeTimer=global.setTimeout;let yielded=false;
+      global.setTimeout=(callback,delay,...args)=>{
+        if(delay===0){yielded=true;assert.equal(app.nav.getIndex(),null);app.nav.dispose();}
+        return nativeTimer(callback,delay,...args);
+      };
+      try {await assert.rejects(app.nav.loadIndex(),error=>error.name==='AbortError');}
+      finally {global.setTimeout=nativeTimer;app.nav.dispose();}
+      assert(yielded);assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+      assert.equal(app.errors.length,0);assert.equal(app.win.location.href,rootSpec.route);
+    """)
+
+
+def test_relation_only_batches_yield_validate_late_rows_and_honor_disposal() -> None:
+    _run(r"""
+      for(const kind of ['valid','invalid','disposed']) {
+        const payload=index();payload.relations=Array.from({length:2050},()=>[1,2,1,0]);
+        if(kind==='invalid') payload.relations.at(-1)[1]='missing';
+        const published=[],app=setup({onIndex(index){published.push(index);}});
+        app.contents.set(absolute('dependencies/index.json'),payload);
+        const nativeTimer=global.setTimeout;let yields=0;
+        global.setTimeout=(callback,delay,...args)=>{
+          if(delay===0){yields++;assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+            if(kind==='disposed') app.nav.dispose();}
+          return nativeTimer(callback,delay,...args);
+        };
+        try {
+          if(kind==='valid') {
+            const result=await app.nav.loadIndex();assert(yields>=2);assert.equal(published.length,1);
+            assert.equal(result.relations.length,2050);
+            assert(result.relations.every(row=>JSON.stringify(row)===JSON.stringify(['a','b',1,0])));
+          } else {
+            await assert.rejects(app.nav.loadIndex(),error=>kind==='disposed' ? error.name==='AbortError' :
+              error.message==='Invalid search relation endpoint');
+            assert(yields>=(kind==='disposed'?1:2));assert.equal(app.nav.getIndex(),null);
+            assert.equal(published.length,0);assert.equal(app.errors.length,kind==='disposed'?0:1);
+          }
+        } finally {global.setTimeout=nativeTimer;app.nav.dispose();}
       }
     """)
 

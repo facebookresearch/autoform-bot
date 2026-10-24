@@ -177,32 +177,42 @@
       try { return resolvedGraph(JSON.parse(loaded.text), loaded.url); }
       catch (error) { cacheDelete(jsonCache, resource(url)); throw error; }
     }
-    function normalizeIndex(payload, base) {
+    async function normalizeIndex(payload, base) {
       if (!payload || payload.schema !== INDEX_SCHEMA || !Array.isArray(payload.nodes)) throw new Error("Unsupported search index");
-      var ids = new Map(), byRoute = new Map();
-      var nodes = payload.nodes.map(function (node, position) {
+      var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [];
+      async function yieldIndex() {
+        await new Promise(function (resolve) { setTimeout(resolve, 0); });
+        if (disposed) throw abortError();
+      }
+      for (var position = 0; position < payload.nodes.length; position++) {
+        var node = payload.nodes[position];
         if (!node || typeof node.id !== "string" || typeof node.title !== "string" || ids.has(node.id))
           throw new Error("Invalid search node");
         var copy = Object.assign({}, node, {_index: position, url: link(node.url, base, true), route: link(node.route, base),
           data_url: link(node.data_url, base)});
         ids.set(copy.id, copy);
-        if (copy.route) byRoute.set(copy.route, copy);
-        return copy;
-      });
+        if (copy.route) { byRoute.set(copy.route, copy); knownDocuments.add(resource(copy.route)); }
+        nodes.push(copy);
+        if ((position + 1) % 512 === 0) await yieldIndex();
+      }
       var relations;
       if (payload.relations !== undefined) {
         if (!Array.isArray(payload.relations)) throw new Error("Invalid search relations");
-        relations = payload.relations.map(function (row) {
+        relations = [];
+        for (var edge = 0; edge < payload.relations.length; edge++) {
+          var row = payload.relations[edge];
           if (!Array.isArray(row) || row.length !== 4) throw new Error("Invalid search relation");
           var from = typeof row[0] === "string" ? row[0] : Number.isSafeInteger(row[0]) && nodes[row[0]] && nodes[row[0]].id;
           var to = typeof row[1] === "string" ? row[1] : Number.isSafeInteger(row[1]) && nodes[row[1]] && nodes[row[1]].id;
           if (!ids.has(from) || !ids.has(to) || !Number.isSafeInteger(row[2]) || !Number.isSafeInteger(row[3]) ||
               row[2] < 0 || row[3] < 0 || row[2] + row[3] === 0) throw new Error("Invalid search relation endpoint");
-          return [from, to, row[2], row[3]];
-        });
+          relations.push([from, to, row[2], row[3]]);
+          if ((edge + 1) % 1024 === 0) await yieldIndex();
+        }
       }
+      if (disposed) throw abortError();
       indexed = ids; routes = byRoute;
-      byRoute.forEach(function (_node, route) { documents.add(resource(route)); });
+      knownDocuments.forEach(function (route) { documents.add(route); });
       return Object.assign({}, payload, {nodes: nodes, relations: relations, url: base});
     }
     function loadIndex() {
@@ -211,9 +221,11 @@
       if (disposed) return Promise.reject(abortError());
       if (!catalogueURL) return Promise.resolve(null);
       indexController = new AbortController();
-      indexPromise = fetchText(catalogueURL, "json", indexController.signal).then(function (loaded) {
+      indexPromise = fetchText(catalogueURL, "json", indexController.signal).then(async function (loaded) {
         if (disposed) throw abortError();
-        index = normalizeIndex(JSON.parse(loaded.text), loaded.url);
+        var normalized = await normalizeIndex(JSON.parse(loaded.text), loaded.url);
+        if (disposed) throw abortError();
+        index = normalized;
         if (typeof options.onIndex === "function") {
           try { options.onIndex(index); } catch (error) { report(error, catalogueURL); }
         }
