@@ -28,6 +28,9 @@ date when the release is tagged.
 - **Render.** An article's page lists its `mathlib_declaration` names in a
   Mathlib row, as text without a link, so a `mathlib: true` article names the
   declaration it restates (#388).
+- **Check and render.** One reused converter reads every page, and each linked
+  path is resolved once per run, so `check` uses about a fifth less CPU on an
+  1,806-article vault; neither command's output changes (#415).
 - **Builds.** `project new` turns on Lake's artifact cache with
   `enableArtifactCache` and `restoreAllArtifacts`, so checkouts and worktrees
   on one toolchain reuse each other's builds; Setup offers the same two lines

@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote
@@ -19,7 +20,7 @@ from autoform_cli.__main__ import main
 from autoform_cli.graph import load_graph
 from autoform_cli.markdown import published_page, site_converter, statement_and_notes
 from autoform_cli.mathjax import NEUTRALISED, mathjax_script
-from autoform_cli.publishable import publishable_article, shown_as_typed
+from autoform_cli.publishable import _rendered_article, _site_converter, publishable_article, shown_as_typed
 from autoform_cli.render import _GENERATED_FILES, PublicationError, _site_paths, render_site
 from autoform_cli.scaffold import scaffold_project
 from tests.test_render import _project
@@ -1626,3 +1627,52 @@ def _contrast(one: str, other: str) -> float:
 
     lighter, darker = sorted((luminance(one), luminance(other)), reverse=True)
     return (lighter + 0.05) / (darker + 0.05)
+
+
+#: Texts that leave something behind in a converter (link definitions, a fence
+#: left open, an attribute list, raw HTML, a conversion that runs out of stack),
+#: and texts that would read differently after one.
+_READ_IN_ANY_ORDER = (
+    "[evil]: javascript:alert(1)\n[ok]: https://example.org\n\nSee [evil] and [ok].\n",
+    "Uses [evil] and [ok][].\n",
+    "```{.lean #frag .extra data-x=1}\ntheorem foo\n",
+    "",
+    "- " * 1000 + "x\n",
+    "Intro paragraph.\n\n- item\n\n    continued <b>bold</b> in the item\n",
+    "First paragraph.\n\nSecond paragraph.\n\n- item\n\n    continued in the item\n\n- tight\n- list\n",
+    "# Top\n\nA remark.\n{: .bp-mark }\n",
+    '<div class="bp-thmcontent" markdown="1">\n\nText with <b>bold</b> and $a<b$.\n\n</div>\n',
+    "```python\nx = 1\n```\n\ntext <span>raw</span> &amp; &#169; &D; here\n",
+)
+
+
+def _read(text: str) -> object:
+    try:
+        return _rendered_article(text)
+    except RecursionError:
+        return RecursionError
+
+
+def test_a_text_reads_the_same_whatever_was_read_before_it() -> None:
+    """One converter reads every text, so nothing a text leaves in it, such as
+    a link definition, an open fence or a conversion that ran out of stack, may
+    change how the next text reads."""
+
+    alone = {}
+    for text in _READ_IN_ANY_ORDER:
+        _site_converter.cache_clear()
+        alone[text] = _read(text)
+    for before in _READ_IN_ANY_ORDER:
+        for text in _READ_IN_ANY_ORDER:
+            _site_converter.cache_clear()
+            _read(before)
+            assert _read(text) == alone[text], (before[:40], text[:40])
+
+
+def test_a_page_reads_the_same_after_more_pages_than_the_recursion_limit() -> None:
+    """The converter's hooks are installed once: installed again for every
+    text, they would stack until a page read as nested too deep."""
+
+    first = publishable_article("Text <b>x</b>.\n")
+    for _ in range(sys.getrecursionlimit() + 100):
+        assert publishable_article("Text <b>x</b>.\n") == first
