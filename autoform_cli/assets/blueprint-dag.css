@@ -38,6 +38,8 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-breadcrumb [aria-current=page] { color: var(--dag-fg); font-weight: 600; }
 @media (min-width: 681px) and (max-width: 1100px) { .bp-dag-viewer:has(.bp-dag-navigation-path) .bp-dag-breadcrumb { visibility: hidden; } }
 .bp-dag-book { flex: none; color: var(--dag-link); font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+/* Material's own sun or moon sits in the header this page hides, so the trail row ends in a quiet stand-in. */
+.bp-dag-viewer .bp-dag-theme { flex: none; width: 32px; min-height: 32px; margin-left: 8px; padding: 0; border: 0; background: transparent; color: var(--dag-muted); font-size: 16px; line-height: 1; }
 .bp-dag-swatch { flex: none; width: 11px; height: 11px; border: 2px solid var(--dag-swatch-light-stroke); border-radius: 50%; background: var(--dag-swatch-light-fill); }
 [data-md-color-scheme=slate] .bp-dag-swatch { border-color: var(--dag-swatch-dark-stroke); background: var(--dag-swatch-dark-fill); }
 .bp-dag-toolbar { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 4px 16px 12px; font-size: 13px; }
@@ -59,19 +61,23 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-search-wrap:focus-within::after { display: none; }
 .bp-dag-search-wrap:has(.bp-dag-search:not(:placeholder-shown))::after { display: none; }
 .bp-dag-search:focus { border-color: var(--dag-link); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dag-link) 18%, transparent); }
-.bp-dag-search-results { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; right: 0; max-height: min(432px, 60vh); overflow: auto; padding: 6px; border: 1px solid var(--dag-overlay-border); border-radius: var(--dag-radius-panel); background: var(--dag-bg); box-shadow: var(--dag-e2); }
+.bp-dag-search-results { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; right: 0; max-height: min(432px, 60vh); overflow: auto; padding: 6px; border: 1px solid var(--dag-overlay-border); border-radius: var(--dag-radius-panel); background: var(--dag-bg); box-shadow: var(--dag-e2); min-width: min(576px, calc(100vw - 24px)); }
 .bp-dag-viewer.bp-dag-viewer :is(.bp-dag-results, .bp-dag-relation-list, .bp-dag-inventory-list) { display: block; margin: 0; padding: 0; list-style: none; }
 .bp-dag-viewer.bp-dag-viewer :is(.bp-dag-results, .bp-dag-relation-list, .bp-dag-inventory-list) > li { margin: 0; }
 .bp-dag-result { display: flex; align-items: baseline; width: 100%; gap: 10px; padding: 8px 9px; border: 0; border-radius: var(--dag-radius-row); background: transparent; color: var(--dag-fg); text-align: left; cursor: pointer; }
 .bp-dag-result:hover, .bp-dag-result:focus-visible { background: color-mix(in srgb, var(--dag-link) 9%, transparent); }
-.bp-dag-result:focus-visible, .bp-dag-inventory-row:focus-visible { outline: 3px solid color-mix(in srgb, var(--dag-link) 52%, transparent); outline-offset: -3px; }
 .bp-dag-result-title, .bp-dag-inventory-title { flex: 1 1 auto; min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-result-meta, .bp-dag-inventory-meta { min-width: 0; overflow: hidden; color: var(--dag-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-button, .bp-dag-filter-summary, .bp-dag-mode-button, .bp-dag-hidden-button, .bp-dag-whole-search, .bp-dag-load-more { min-height: 36px; padding: 6px 10px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-weight: 600; cursor: pointer; }
 .bp-dag-button:hover, .bp-dag-filter-summary:hover, .bp-dag-mode-button:hover, .bp-dag-load-more:hover { border-color: var(--dag-link); color: var(--dag-link); }
-.bp-dag-button:focus-visible, .bp-dag-filter-summary:focus-visible, .bp-dag-mode-button:focus-visible, .bp-dag-pivot:focus-visible, .bp-dag-node:focus-visible, .bp-dag-sheet-handle:focus-visible { outline: 3px solid color-mix(in srgb, var(--dag-link) 45%, transparent); outline-offset: 2px; }
+/* One solid ring for every control, 3.9:1 or more on every surface; rows draw it inside, where the rail or list would clip it, and cards outside their selection ring. */
+.bp-dag-viewer :is(button, a, [tabindex]):focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }
+.bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body):focus-visible { outline-offset: -2px; }
+.bp-dag-viewer .bp-dag-node:focus-visible { outline-offset: 4px; }
 .bp-dag-zoom, .bp-dag-modes { display: inline-flex; flex: none; gap: 2px; padding: 2px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); background: var(--dag-bg); }
 .bp-dag-zoom .bp-dag-button, .bp-dag-modes .bp-dag-mode-button { min-height: 30px; padding: 4px 10px; border: 0; border-radius: var(--dag-radius-row); background: transparent; color: var(--dag-muted); }
+/* The zoom buttons act on the map, so they leave with it in the list and sources views; their place stays, so the row keeps its height. */
+.bp-dag-viewer:has(.bp-dag-stage[hidden]) .bp-dag-zoom { visibility: hidden; }
 .bp-dag-zoom .bp-dag-button:hover, .bp-dag-modes .bp-dag-mode-button:not([aria-pressed=true], :disabled):hover { background: var(--dag-panel); color: var(--dag-fg); }
 .bp-dag-mode-button[aria-pressed=true], .bp-dag-pivot[aria-pressed=true] { border-color: var(--dag-link); background: color-mix(in srgb, var(--dag-link) 10%, var(--dag-bg)); color: var(--dag-link); }
 .bp-dag-filters { position: relative; flex: none; }
@@ -80,7 +86,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-filter-popover fieldset { display: grid; gap: 3px; margin: 0; padding: 0; border: 0; }
 .bp-dag-filter-popover fieldset + fieldset { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--dag-border); }
 .bp-dag-filter-popover legend { margin-bottom: 6px; }
-.bp-dag-filter-popover legend, .bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-group h2 { color: var(--dag-muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; line-height: 1.3; text-transform: uppercase; }
+.bp-dag-filter-popover legend, .bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-group h2 { color: var(--dag-muted); font-size: 12px; font-weight: 600; letter-spacing: normal; line-height: 1.3; }
 .bp-dag-check { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 3px 5px; border-radius: var(--dag-radius-row); }
 .bp-dag-check:hover { background: var(--dag-panel); }
 .bp-dag-check input { accent-color: var(--dag-link); }
@@ -103,7 +109,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-list > li { margin: 0; }
 .bp-dag-navigation-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; width: 100%; gap: 8px; min-height: 36px; padding: 7px 8px; border: 1px solid transparent; border-radius: var(--dag-radius-row); background: transparent; color: var(--dag-fg) !important; font: inherit; font-size: 13px; line-height: 1.25; text-align: left; text-decoration: none !important; cursor: pointer; }
 .bp-dag-navigation-link > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bp-dag-navigation-link:hover, .bp-dag-navigation-link:focus-visible { border-color: var(--dag-border); background: var(--dag-panel); }
+.bp-dag-navigation-link:hover { border-color: var(--dag-border); background: var(--dag-panel); }
 .bp-dag-navigation-link[aria-current=true] { border-color: color-mix(in srgb, var(--dag-link) 38%, var(--dag-border)); background: color-mix(in srgb, var(--dag-link) 9%, var(--dag-bg)); color: var(--dag-link) !important; }
 .bp-dag-navigation-meta { color: var(--dag-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .bp-dag-navigation-more { width: 100%; margin-top: 7px; border: 0; background: transparent; color: var(--dag-link); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
@@ -113,23 +119,29 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-canvas, .bp-dag-node-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
 .bp-dag-canvas { display: block; min-height: 0; touch-action: auto; background: transparent; }
 .bp-dag-node-layer { overflow: hidden; pointer-events: none; }
-.bp-dag-node { position: absolute; top: 0; left: 0; display: grid; align-content: center; width: 196px; height: 56px; padding: 6px 10px; overflow: hidden; border: 1.5px solid var(--dag-node-stroke); border-radius: var(--dag-radius-control); background: var(--dag-node-fill); color: var(--dag-node-text); box-shadow: var(--dag-e1); text-align: left; transform-origin: 0 0; pointer-events: auto; cursor: pointer; will-change: transform; }
-.bp-dag-node-title { overflow: hidden; font-size: 14px; font-weight: 600; line-height: 1.18; text-overflow: ellipsis; white-space: nowrap; }
-.bp-dag-node-meta { overflow: hidden; color: color-mix(in srgb, var(--dag-node-text) 95%, var(--dag-node-fill)); font-size: 12px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
-.bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-link), var(--dag-e1); }
-.bp-dag-node[data-subdued=true] { opacity: .42; }
+.bp-dag-node { position: absolute; top: 0; left: 0; display: grid; align-content: center; width: 196px; height: 56px; padding: 6px 10px; overflow: hidden; border: 1.5px solid var(--dag-node-stroke); border-radius: var(--dag-radius-control); background: var(--dag-node-fill); color: var(--dag-node-text); box-shadow: var(--dag-e1); text-align: left; transform-origin: 0 0; pointer-events: auto; cursor: pointer; will-change: transform; transition: opacity .15s ease; }
+.bp-dag-node-title { overflow: hidden; color: var(--dag-fg); font-size: 14px; font-weight: 600; line-height: 1.18; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dag-node-meta { display: flex; overflow: hidden; color: color-mix(in srgb, var(--dag-node-text) 95%, var(--dag-node-fill)); font-size: 12px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+/* A kind word or topic count leads the status or count; the lead truncates first, so the status stays whole. */
+.bp-dag-node-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.bp-dag-node-meta > span + span { flex: none; }
+/* Selection is a neutral ring past a gap in the map colour, since blue marks cards that are ready to state or prove. Subdued cards lose colour before legibility, fading in briefly under a hover preview or a selection; only opacity animates, since an animated filter on every card stalled WebKit. */
+.bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-map), 0 0 0 4px var(--dag-fg), var(--dag-e1); }
+.bp-dag-node[data-subdued=true] { opacity: .62; filter: saturate(.25); }
 .bp-dag-node[data-kind=scope] { border-radius: var(--dag-radius-panel); }
 .bp-dag-node[data-kind=boundary] { border-style: dashed; }
-.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] { display: block; padding: 3px; border: 0; border-radius: var(--dag-radius-panel); background: var(--dag-status-ring, var(--dag-node-stroke)); text-align: left; }
-.bp-dag-node-core { display: grid; align-content: center; width: 100%; height: 100%; padding: 12px 16px; border-radius: calc(var(--dag-radius-panel) - 3px); background: var(--dag-node-fill); color: var(--dag-node-text); }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] { display: block; padding: 0; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-panel); background: var(--dag-node-fill); text-align: left; }
+.bp-dag-node-core { display: grid; align-content: center; width: 100%; height: 100%; padding: 12px 16px; color: var(--dag-node-text); }
+/* Topic and region cards are laid out at a fixed height that a two-line title can fill, so their status bar sits in the bottom padding. */
+.bp-dag-node-core::after { content: ""; position: absolute; right: 16px; bottom: 6px; left: 16px; height: 4px; border-radius: 2px; background: var(--dag-status-ring, var(--dag-border)); }
 .bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] .bp-dag-node-title { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: 7px; white-space: normal; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: 7px; }
 .bp-dag-viewer.bp-dag-atlas .bp-dag-node-title { font-size: 17px; }
 .bp-dag-node-relation { display: none; }
 .bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=prerequisite],
 .bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=dependent] { box-shadow: 0 0 0 2px color-mix(in srgb, var(--dag-link) 40%, transparent), var(--dag-e1); }
 .bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=prerequisite] .bp-dag-node-relation,
-.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=dependent] .bp-dag-node-relation { display: block; margin-top: 6px; opacity: .75; font-size: 12px; font-weight: 600; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=dependent] .bp-dag-node-relation { display: block; margin-top: 6px; overflow: hidden; opacity: .75; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-density { position: absolute; z-index: 4; left: 16px; bottom: 12px; max-width: calc(100% - 32px); color: var(--dag-muted); font-size: 12px; pointer-events: none; }
 .bp-dag-empty { position: absolute; z-index: 4; top: 50%; left: 50%; padding: 9px 13px; border: 1px solid var(--dag-border); border-radius: 999px; background: var(--dag-bg); color: var(--dag-muted); box-shadow: var(--dag-e1); font-size: 13px; transform: translate(-50%, -50%); pointer-events: none; }
 .bp-dag-inventory { position: absolute; inset: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; background: var(--dag-bg); font-size: 13px; }
@@ -225,9 +237,15 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
   .bp-dag-viewer.bp-dag-viewer .bp-dag-inspector-header h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .bp-dag-density { bottom: 68px; }
 }
+/* A finger pinches to zoom, so it keeps only Fit, at a full touch size. */
+@media (pointer: coarse) {
+  .bp-dag-zoom .bp-dag-button:not(:last-child) { display: none; }
+  .bp-dag-zoom .bp-dag-button { min-width: 44px; min-height: 44px; }
+  .bp-dag-viewer .bp-dag-theme { width: 44px; min-height: 44px; }
+}
 @media (prefers-reduced-motion: reduce) {
   .bp-dag-inspector { transition: none; }
-  .bp-dag-node { will-change: auto; }
+  .bp-dag-node { will-change: auto; transition: none; }
 }
 
 /* One book and map workspace. The source remains readable until enhancement succeeds. */
@@ -237,7 +255,11 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-integrated .bp-dag-body { grid-template-columns: var(--dag-navigation-width) minmax(0, 1fr) minmax(360px, 39%); }
 .bp-dag-integrated .bp-dag-head { display: block; padding: 0; }
 .bp-dag-integrated .bp-dag-context { display: flex; padding: 10px 16px 0; }
-.bp-dag-integrated .bp-dag-breadcrumb { display: block; visibility: visible !important; }
+/* The trail has the row to itself: each crumb keeps a few letters, the "…" its glyph, and a parent at most 24ch. */
+.bp-dag-integrated .bp-dag-breadcrumb { display: block; flex: 1 1 auto; max-width: none; visibility: visible !important; }
+.bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li { min-width: 4em; }
+.bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:has(.bp-dag-sr-only) { flex: none; min-width: 0; }
+.bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :last-child) { max-width: 24ch; }
 .bp-dag-integrated .bp-dag-book { grid-area: auto; margin: 0 18px 0 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 .bp-dag-integrated .bp-dag-toolbar { display: flex; padding: 10px 16px; }
 .bp-dag-integrated .bp-dag-search-wrap { max-width: none; }
@@ -247,36 +269,43 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-outline-child { margin-left: 14px !important; border-left: 1px solid var(--dag-border); }
 .bp-outline-label { margin: 0 7px 10px !important; font-size: 12px !important; color: var(--dag-muted); font-weight: 600; }
 .bp-dag-integrated .bp-reading-pane { position: relative; inset: auto; width: auto; max-width: none; height: 100%; max-height: none; min-width: 0; min-height: 0; visibility: visible; opacity: 1; transform: none; transition: none; border: 0; border-left: 1px solid var(--dag-border); border-radius: 0; box-shadow: none; overflow: hidden; }
-.bp-dag-integrated .bp-dag-inspector-inner { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; padding: 0; height: 100%; overflow: hidden; }
-.bp-reading-context:empty, .bp-reading-neighbors:empty { display: none; }
+.bp-dag-integrated .bp-dag-inspector-inner { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: 0; padding: 0; height: 100%; overflow: hidden; }
+.bp-reading-context:empty { display: none; }
 .bp-reading-context { grid-row: 1; min-width: 0; padding: 10px 22px; border-bottom: 1px solid var(--dag-border); overflow-wrap: anywhere; }
 .bp-reading-around { color: var(--dag-link); font-size: 13px; text-decoration: none; }
-.bp-reading-body { grid-row: 2; min-width: 0; min-height: 0; overflow: auto; padding: 24px 26px 60px; font-size: 17px; line-height: 1.65; scroll-padding-top: 24px; }
+.bp-reading-body { grid-row: 2; min-width: 0; min-height: 0; overflow: auto; padding: 24px 26px 60px; font-size: 16px; line-height: 1.6; scroll-padding-top: 24px; }
 .bp-reading-source { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .bp-reading-body h1 { margin: 0 0 22px !important; color: var(--dag-fg); font-size: 22px !important; font-weight: 700; line-height: 1.35; }
 .bp-reading-body h2 { font-size: 22px; line-height: 1.4; }
 .bp-reading-body h3 { font-size: 17px; line-height: 1.4; }
+/* The book sizes notes, totals and labels in rem for Material's body size; beside the pane's 16px statement they would outrank it, so they step down here. */
+.bp-reading-body :is(.bp-thmnotes, .bp-meta, .bp-progress-states), .bp-reading-body details.bp-dependencies { font-size: 14px; }
+.bp-reading-body :is(.bp-thmnotes h6, .bp-key, .bp-mark, .bp-progress-kicker, .bp-book-nav-direction, .bp-next-kicker, .bp-hero-kicker) { font-size: 12px; }
+.bp-reading-body :is(.bp-progress-total, .bp-book-nav-title, .bp-next-title) { font-size: 16px; }
+/* The status rule and the bold head already mark a theorem, so the workspace sets its statement upright. */
+.bp-dag-integrated .theorem-style-plain > .bp-thmcontent { font-style: normal; }
 .bp-reading-body pre, .bp-reading-body table { max-width: 100%; overflow: auto; }
 .bp-reading-body img, .bp-reading-body svg { max-width: 100%; }
 .bp-reading-body .bp-node { border-radius: 8px; }
-.bp-reading-current { outline: 2px solid color-mix(in srgb, var(--dag-link) 45%, transparent); outline-offset: 5px; }
-.bp-reading-neighbors { grid-row: 3; padding: 12px 22px; max-height: 192px; overflow: auto; border-top: 1px solid var(--dag-border); background: var(--dag-panel); }
-.bp-reading-links { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.bp-reading-related { display: grid; align-content: start; gap: 5px; min-width: 0; font-size: 12px; }
-.bp-reading-related strong { color: var(--dag-muted); font-weight: 600; }
-.bp-reading-related a { color: var(--dag-link); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The current statement takes the contents row's tint and left bar inside the column; an offset outline ran past it. */
+.bp-reading-current { padding: 10px 12px 10px 15px; border-radius: 8px; background: color-mix(in srgb, var(--dag-link) 7%, transparent); box-shadow: inset 3px 0 0 var(--dag-fg); }
 .bp-dag-integrated .bp-dag-node-title { display: -webkit-box; font-size: 17px; line-height: 1.25; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; }
 .bp-dag-integrated .bp-dag-node-meta { font-size: 14px; }
 .bp-dag-integrated.bp-dag-atlas .bp-dag-node-title { font-size: 18px; -webkit-line-clamp: 2; }
 .bp-dag-node-summary { display: -webkit-box; margin-top: 6px; overflow: hidden; font-size: 12px; line-height: 1.3; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+/* "6 topics · 2,070 of 2,485 fully proved" overflowed an area card and cut the topic count to "6 to…"; while the summary shows, it carries the count. */
+.bp-dag-viewer:not(.bp-dag-compact-regions) .bp-dag-node:has(.bp-dag-node-summary) .bp-dag-node-meta > span:not(:last-child) { display: none; }
 .bp-dag-integrated .bp-dag-node[data-kind=scope] .bp-dag-node-core { padding: 12px 16px; }
-.bp-map-context { position: absolute; z-index: 4; top: 20px; left: 22px; right: 22px; overflow: hidden; color: var(--dag-fg); font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.bp-map-context { position: absolute; z-index: 4; top: 20px; left: 22px; right: 22px; display: flex; gap: .3em; overflow: hidden; color: var(--dag-fg); font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.bp-map-context > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .bp-map-key { position: absolute; z-index: 4; right: 20px; bottom: 14px; display: flex; gap: 14px; color: var(--dag-muted); font-size: 11px; pointer-events: none; }
 .bp-map-key span::before { content: ""; display: inline-block; width: 22px; margin: 0 6px 3px 0; border-top: 2px solid currentColor; }
 .bp-map-key .bp-map-key-proof::before { border-top-style: dashed; }
+/* The pan note sits a line above the map key, which shares its bottom edge. */
+.bp-dag-integrated .bp-dag-density { bottom: 36px; }
 .bp-dag-compact-regions :is(.bp-dag-canvas, .bp-dag-node-layer) { clip-path: inset(52px 0 44px); }
 .bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-core { padding: 10px 14px; }
-.bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: 4px; font-size: 14px; white-space: nowrap; }
+.bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: 4px; font-size: 14px; }
 .bp-dag-compact-regions .bp-dag-node .bp-dag-node-summary { display: none; }
 .bp-dag-compact-regions .bp-map-context { top: 8px; left: 18px; right: 18px; line-height: 1.4; }
 .bp-dag-compact-regions .bp-map-key { line-height: 1.2; }
@@ -287,10 +316,11 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-integrated .bp-dag-inventory-meta { font-size: 12px; color: var(--dag-muted); }
 .bp-result-summary { grid-column: 1 / -1; font-size: 13px; color: var(--dag-muted); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .bp-dag-outline-toggle { display: none; }
+.bp-reading-map { display: none; }
 @media (min-width: 721px) {
   .bp-dag-integrated:is(.bp-dag-area-expanded, .bp-dag-overview-only):not(.bp-dag-sheet-open) .bp-dag-body { grid-template-columns: var(--dag-navigation-width) minmax(0, 1fr) 48px; }
   .bp-dag-integrated:is(.bp-dag-area-expanded, .bp-dag-overview-only):not(.bp-dag-sheet-open) .bp-dag-inspector-inner { display: none; }
-  .bp-dag-integrated:is(.bp-dag-area-expanded, .bp-dag-overview-only):not(.bp-dag-sheet-open) .bp-dag-sheet-handle { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 14px 10px; border: 0; background: var(--dag-panel); color: var(--dag-fg); font: inherit; font-size: 13px; font-weight: 600; writing-mode: vertical-rl; cursor: pointer; }
+  .bp-dag-integrated:is(.bp-dag-area-expanded, .bp-dag-overview-only):not(.bp-dag-sheet-open) .bp-dag-sheet-handle { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 100%; padding: 14px 10px; border: 0; background: var(--dag-panel); color: var(--dag-fg); font: inherit; font-size: 13px; font-weight: 600; writing-mode: vertical-rl; cursor: pointer; }
   .bp-dag-integrated:is(.bp-dag-area-expanded, .bp-dag-overview-only).bp-dag-sheet-open .bp-dag-sheet-handle { display: block; position: absolute; z-index: 2; top: 12px; right: 12px; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--dag-radius-control); background: var(--dag-panel); color: var(--dag-fg); font: inherit; font-size: 22px; line-height: 1; cursor: pointer; }
   .bp-dag-integrated:is(.bp-dag-area-expanded, .bp-dag-overview-only).bp-dag-sheet-open .bp-reading-body h1 { padding-right: 32px; }
 }
@@ -298,25 +328,42 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated .bp-dag-body { grid-template-columns: minmax(0, 1fr) minmax(340px, 43%); }
   .bp-dag-integrated:is(.bp-dag-area-expanded, .bp-dag-overview-only):not(.bp-dag-sheet-open) .bp-dag-body { grid-template-columns: minmax(0, 1fr) 48px; }
   .bp-dag-integrated .bp-dag-navigation { display: none; }
-  .bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; }
+  .bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; align-items: center; }
   .bp-dag-integrated.bp-dag-outline-open .bp-dag-navigation { display: block; position: absolute; z-index: 18; inset: 0 auto 0 0; width: 264px; box-shadow: var(--dag-e2); }
   .bp-dag-integrated .bp-dag-toolbar { flex-wrap: wrap; }
-  .bp-dag-integrated .bp-dag-search-wrap { flex-basis: 100%; }
+  /* Topics and search take the first row, and filter, views, zoom and "Show N filtered out" the second, so a filter never adds a row and moves the map, and the search box keeps room for its placeholder. */
+  .bp-dag-integrated .bp-dag-search-wrap { flex-basis: calc(100% - 96px); }
   .bp-dag-integrated .bp-dag-filter-popover { left: 0; right: auto; max-width: calc(100dvw - 24px); }
+}
+/* A tablet's filter grows from 100px to its whole summary in the second row's free space, and cuts the summary short rather than push "Show N filtered out" onto a third row. */
+@media (min-width: 721px) and (max-width: 1100px) {
+  .bp-dag-integrated .bp-dag-filters { flex: 1 1 100px; min-width: 0; max-width: max-content; }
+  .bp-dag-integrated .bp-dag-filter-summary { display: block; max-width: 100%; overflow: hidden; line-height: 22px; text-overflow: ellipsis; }
 }
 @media (max-width: 720px) {
   .bp-dag-integrated .bp-dag-body { display: block; }
-  .bp-dag-integrated .bp-dag-main { position: absolute; inset: 0 0 48px; }
-  .bp-dag-integrated .bp-reading-pane { position: absolute; z-index: 12; inset: 0; height: 100%; border: 0; transform: translateY(calc(100% - 48px)); transition: transform .16s ease; }
+  .bp-dag-integrated .bp-dag-main { position: absolute; inset: 0 0 56px; }
+  /* The reader peeks 56px, opens to half with the map's top 45% above it (freeArea() uses the same 45%), or covers the map. */
+  .bp-dag-integrated .bp-reading-pane { position: absolute; z-index: 12; inset: 0; height: 100%; border: 0; transform: translateY(calc(100% - 56px)); transition: transform .16s ease; }
   .bp-dag-viewer.bp-dag-integrated .bp-reading-pane { max-height: none; max-width: none; }
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-sheet-open .bp-reading-pane { transform: none; }
-  .bp-dag-integrated .bp-dag-sheet-handle { display: block; height: 48px; min-height: 48px; padding: 12px 20px; background: var(--dag-bg); border-bottom: 1px solid var(--dag-border); border-radius: 0; }
-  .bp-dag-integrated .bp-dag-inspector-inner { height: calc(100% - 48px); }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-sheet-open .bp-reading-pane { transform: translateY(45%); }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-sheet-full .bp-reading-pane { transform: none; }
+  .bp-dag-integrated .bp-dag-sheet-handle { display: block; width: 100%; height: 56px; min-height: 56px; padding: 16px 20px 12px; overflow: hidden; border: 0; border-bottom: 1px solid var(--dag-border); border-radius: 0; background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 13px; font-weight: 600; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; touch-action: none; }
+  .bp-dag-integrated .bp-dag-sheet-handle .bp-dag-swatch { display: inline-block; margin: 0 8px -1px 0; }
+  .bp-dag-integrated .bp-dag-inspector-inner { height: calc(100% - 56px); }
+  /* At half the reader ends at the screen's bottom, so its last lines can still be scrolled into view. */
+  .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-sheet-full) .bp-dag-inspector-inner { height: calc(55% - 56px); }
+  .bp-dag-integrated.bp-dag-sheet-full .bp-dag-toolbar { display: none; }
+  /* With the reader open the map keeps only the band above it, and the handle already names the page, so the map header and the pan note leave rather than sit on cards. */
+  .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-compact-regions) :is(.bp-map-context, .bp-dag-density) { display: none; }
+  .bp-dag-integrated.bp-dag-sheet-full .bp-reading-map { display: block; position: absolute; z-index: 3; bottom: 16px; left: 50%; padding: 10px 24px; border: 1px solid var(--dag-overlay-border); border-radius: 999px; background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 14px; font-weight: 600; box-shadow: var(--dag-e2); transform: translateX(-50%); cursor: pointer; }
   .bp-dag-integrated .bp-reading-body { padding: 20px 22px 60px; }
-  .bp-dag-integrated .bp-reading-neighbors { max-height: 136px; }
   .bp-dag-integrated .bp-dag-context { padding-inline: 12px; }
   .bp-dag-integrated .bp-dag-toolbar { padding-inline: 12px; gap: 6px; }
   .bp-dag-integrated .bp-dag-breadcrumb { min-width: 0; flex: 1; }
+  /* A phone keeps first / current; Topics and the reader's "← parent" link reach the steps between. */
+  .bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :last-child) { display: none; }
+  .bp-dag-integrated .bp-dag-search-wrap { flex-basis: 100%; }
   .bp-dag-integrated .bp-dag-book { margin-right: 10px; max-width: 150px; }
 }
 @media (prefers-reduced-motion: reduce) { .bp-dag-integrated .bp-reading-pane { transition: none; } }

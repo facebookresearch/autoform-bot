@@ -34,10 +34,12 @@ function original(name) {
 }
 const constants = source.match(/\bvar NODE_W =[^;]+;/);
 assert(constants, 'Production map constants missing');
+const kinds = source.match(/\bvar KINDS =[^;]+;/);
+assert(kinds, 'Production kind words missing');
 const functions = [
   'element', 'button', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
   'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'calculateActive',
-  'statusLabel', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory'
+  'statusLabel', 'finished', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');
 const sandbox = {assert, URL, fixtureText}; vm.createContext(sandbox);
@@ -68,6 +70,7 @@ var records, navigation, calls;
 var ui$active, ui$activeDirty, ui$activeIds, ui$selected, ui$direction, ui$selectedStatuses, ui$showIsolated;
 var ui$query, ui$relationIds, ui$mode, ui$listLimit;
 var plural = (count, one, many) => count.toLocaleString() + ' ' + (count === 1 ? one : many);
+var num = (value) => value.toLocaleString();
 function leaf(id) {
   return {id, title: id, kind: 'node', status: 'planned', result: true,
     scope: 'chapter', parent: 'chapter', route: '../roadmap/chapter/index.html#' + encodeURIComponent(id)};
@@ -103,7 +106,7 @@ function configure(indexNodes, context, relations = []) {
 def _run(body: str, *, fixture: object = None) -> None:
     program = "var fixture = JSON.parse(fixtureText);\n" + _ENVIRONMENT + "\n"
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
-    script += "vm.runInContext(" + json.dumps('"use strict";\n') + "+constants[0]+"
+    script += "vm.runInContext(" + json.dumps('"use strict";\n') + "+constants[0]+kinds[0]+"
     script += json.dumps(program) + "+functions+" + json.dumps(body)
     script += ", sandbox, {timeout: 5000, filename: CLIENT});"
     result = subprocess.run([_NODE, "-e", script], input=json.dumps(fixture), text=True, capture_output=True, timeout=15)
@@ -127,6 +130,30 @@ def test_an_isolated_focal_result_does_not_make_connected_context_peers_isolated
       ui$showIsolated = false; ui$activeDirty = true; calculateActive();
       assert.deepEqual(ui$active.map(node => node.id).sort(), ['A', 'B']);
       assert(data.edges.every(edge => ui$activeIds.has(edge.source) && ui$activeIds.has(edge.target)));
+    """)
+
+
+def test_cards_lead_with_the_books_kind_word_and_topics_keep_their_count() -> None:
+    _run(r"""
+      palette = {planned: {label: 'planned'}, can_state: {label: 'ready to state'}}; atlas = false;
+      const card = node => makeNodeControl(node), meta = node => card(node).children[1].textContent;
+      assert.equal(meta(viewNode('D', {declaration: 'def', status: 'can_state'})), 'Definition · ready to state');
+      assert.equal(meta(viewNode('L', {declaration: 'Lemma'})), 'Lemma · planned');
+      // The book captions an unlisted declaration "Node", so the card adds no word; inherited names are not kinds.
+      assert.equal(meta(viewNode('O', {declaration: 'noncomputable def'})), 'planned');
+      assert.equal(meta(viewNode('C', {declaration: 'constructor'})), 'planned');
+      assert.equal(meta(viewNode('S', {kind: 'scope', declaration: 'theorem', member_count: 2})), '0 of 1 fully proved');
+      assert(card(viewNode('T', {declaration: 'theorem'})).getAttribute('aria-label').endsWith(', Theorem · planned'));
+      // A title that already names its kind, as ATLAS's do, gets no second kind word.
+      assert.equal(meta(viewNode('Theorem (Crystallographic Restriction)', {declaration: 'theorem'})), 'planned');
+      // The kind word, the separator and the status are separate spans, so only the kind truncates, and an area card can drop the first two.
+      assert.deepEqual(card(viewNode('K', {declaration: 'theorem'})).children[1].children.map(span => span.textContent), ['Theorem', ' · ', 'planned']);
+      // A topic counts its fully proved targets; module inventories are neutral and stay out of the total.
+      palette = {planned: {label: 'planned'}, fully_proved: {label: 'fully proved'}, inventory_checked: {label: 'inventory checked', neutral: true}};
+      const mixed = {kind: 'scope', member_count: 85, status_counts: [['fully_proved', 80], ['inventory_checked', 5]]};
+      assert.equal(meta(viewNode('M', mixed)), '80 of 80 fully proved');
+      assert.equal(meta(viewNode('I', {kind: 'scope', member_count: 5, status_counts: [['inventory_checked', 5]]})), '5 articles');
+      assert.equal(meta(viewNode('R', Object.assign({}, mixed, {_region: 'Algebra', _topics: 2}))), '2 topics · 80 of 80 fully proved');
     """)
 
 
@@ -271,3 +298,25 @@ def test_an_oversized_module_scope_keeps_its_real_math_articles_navigable_withou
       ui$mode = 'sources';
       assert.deepEqual(inventoryNodes().map(node => node.id), ['catalogs/source']);
     """, fixture={"index": {**index, "relations": _decoded_relations(index)}, "context": context, "count": count})
+
+
+def test_a_deep_trail_keeps_first_parent_and_current_and_names_what_the_ellipsis_hides() -> None:
+    _run(r"""
+      const crumb = (label, url) => ({label, url});
+      const trail = [crumb('ATLAS roadmap', 'https://example.test/math/roadmap/index.html'),
+        crumb('Algebra', 'https://example.test/math/roadmap/algebra/index.html'),
+        crumb('MIT RES.18-011', 'https://example.test/math/roadmap/mit/index.html'),
+        crumb('Crystallographic Restriction', 'https://example.test/math/roadmap/crystal/index.html'),
+        crumb('Theorem (Crystallographic Restriction)')];
+      const items = trailList(trail).children;
+      assert.deepEqual(items.map(item => item.title), ['ATLAS roadmap', 'Algebra / MIT RES.18-011',
+        'Crystallographic Restriction', 'Theorem (Crystallographic Restriction)']);
+      assert.equal(items[1].text, '…');
+      assert.equal(items[1].children[0].className, 'bp-dag-sr-only', 'Screen readers hear the hidden ancestors');
+      assert.equal(items[1].children[0].textContent, 'Algebra / MIT RES.18-011');
+      assert.equal(items[1].getAttribute('aria-current'), null);
+      assert.equal(items[3].getAttribute('aria-current'), 'page');
+      assert.equal(items[2].children[0].href, trail[3].url);
+      // Three entries fit.
+      assert.deepEqual(trailList(trail.slice(2)).children.map(item => item.title), trail.slice(2).map(entry => entry.label));
+    """)

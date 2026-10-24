@@ -29,13 +29,13 @@ function original(name) {
   assert.fail('Production function did not parse: '+name);
 }
 const context={assert,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};vm.createContext(context);
-const helpers=['drawRoute','relationCounts'].map(original).join('\n');
+const helpers=['drawRoute','drawPill','relationCounts','edgeStyle','pill'].map(original).join('\n');
 """
 
 _CANVAS = r"""
 class Canvas {
   constructor() {
-    this.strokes=[];this.fills=[];this.commands=[];this.dash=[];this.stack=[];
+    this.strokes=[];this.fills=[];this.texts=[];this.commands=[];this.dash=[];this.stack=[];
     this.globalAlpha=.8;this.lineWidth=9;this.strokeStyle='#111111';this.fillStyle='#222222';
     this.lineCap='butt';this.lineJoin='miter';this.font='17px serif';
   }
@@ -51,10 +51,12 @@ class Canvas {
   setLineDash(dash) {this.dash=dash.slice();}
   stroke() {this.strokes.push({...this.state(),commands:this.commands.slice()});}
   fill() {this.fills.push({...this.state(),commands:this.commands.slice()});}
-  fillText() {assert.fail('Numeric weights must not be painted');}
+  fillText(text,x,y) {if(!fixture.lit)assert.fail('Numeric weights must not be painted at rest');this.texts.push({text,x,y,font:this.font,fill:this.fillStyle});}
   fillRect() {assert.fail('No numeric label backgrounds');}
-  measureText() {assert.fail('Painter must not recompute label geometry');}
+  measureText(text) {return {width:text.length*7};}
 }
+var family='sans-serif';
+function rounded(ctx) {ctx.beginPath();}
 var ui$transform={x:0,y:0,scale:fixture.scale||1};
 var dom$stage={clientWidth:800,clientHeight:700};
 var window={matchMedia(){return {matches:!!fixture.reduced};}};
@@ -95,10 +97,10 @@ def test_stroke_strength_scales_in_world_space_and_preserves_typed_counts(scale:
     _run(r"""
       const ctx=new Canvas(),initial=ctx.state(),weak=route([{x:100,y:200},{x:600,y:200}],1);
       const strong=route(weak.points,1000),before=JSON.stringify(strong);
-      drawRoute(ctx,weak,true);const first=ctx.strokes[0];ctx.strokes=[];ctx.fills=[];
-      drawRoute(ctx,strong,false);const main=ctx.strokes[0];
+      drawRoute(ctx,weak,-1);const first=ctx.strokes[0];ctx.strokes=[];ctx.fills=[];
+      drawRoute(ctx,strong,-1);const main=ctx.strokes[0];
       assert.equal(main.lineWidth,strong.strength*fixture.scale);assert(main.lineWidth>first.lineWidth);
-      assert(main.lineWidth<=4.8*fixture.scale);assert.equal(main.strokeStyle,'#64748b');
+      assert(main.lineWidth<=4.8*fixture.scale);assert.equal(main.strokeStyle,'#8A8D91');
       assert.deepEqual(main.dash,fixture.kind==='proof'?[6*fixture.scale,4*fixture.scale]:[]);
       assert.equal(ctx.fills.length,1,'Every edge retains its terminal arrow');
       assert.equal(JSON.stringify(strong),before);assert.deepEqual(ctx.state(),initial);
@@ -111,7 +113,7 @@ def test_static_terminal_arrow_and_single_chevron_retain_actual_direction(dx: in
     _run(r"""
       const dx=fixture.dx,dy=fixture.dy,center={x:400,y:350};
       const path=[{x:center.x-dx*200,y:center.y-dy*200},{x:center.x+dx*200,y:center.y+dy*200}];
-      const input=route(path),ctx=new Canvas();drawRoute(ctx,input,true);
+      const input=route(path),ctx=new Canvas();drawRoute(ctx,input,-1);
       assert.equal(ctx.strokes.length,2,'One path and one restrained static cue');assert.equal(ctx.fills.length,1);
       const arrow=triangle(ctx.fills[0]),tip=arrow[0],wings=arrow.slice(1);
       assert.deepEqual(tip,[path[1].x,path[1].y]);
@@ -123,7 +125,7 @@ def test_static_terminal_arrow_and_single_chevron_retain_actual_direction(dx: in
 def test_chevron_follows_the_visible_middle_segment_not_the_terminal_tangent() -> None:
     _run(r"""
       const input=route([{x:100,y:100},{x:160,y:100},{x:160,y:600},{x:220,y:600}]),ctx=new Canvas();
-      drawRoute(ctx,input,true);direction(triangle(ctx.strokes[1]),0,1,1);
+      drawRoute(ctx,input,-1);direction(triangle(ctx.strokes[1]),0,1,1);
       assert.equal(input.arrow.dx,1);assert.equal(input.arrow.dy,0);
       assert.deepEqual(triangle(ctx.fills[0])[0],[220,600]);
     """)
@@ -131,7 +133,7 @@ def test_chevron_follows_the_visible_middle_segment_not_the_terminal_tangent() -
 
 def test_long_offscreen_connections_place_only_one_cue_inside_the_current_view() -> None:
     _run(r"""
-      const input=route([{x:-500,y:300},{x:1500,y:300}]),ctx=new Canvas();drawRoute(ctx,input,true);
+      const input=route([{x:-500,y:300},{x:1500,y:300}]),ctx=new Canvas();drawRoute(ctx,input,-1);
       const cue=triangle(ctx.strokes[1])[1];assert(cue[0]>=12&&cue[0]<=788&&cue[1]>=12&&cue[1]<=688);
       assert.equal(ctx.strokes.length,2);assert.equal(ctx.fills.length,1);
     """)
@@ -141,14 +143,64 @@ def test_long_offscreen_connections_place_only_one_cue_inside_the_current_view()
 def test_cues_reuse_neutral_theme_colors_and_cached_geometry_without_ambient_animation(dark: bool) -> None:
     _run(r"""
       const input=route([{x:100,y:300},{x:600,y:300}]),ctx=new Canvas();
-      input.parts=[];drawRoute(ctx,input,true);
+      input.parts=[];drawRoute(ctx,input,-1);
       const segments=drawRoute.$flowSegments.get(input.parts);assert(segments);
       ui$transform.x=40;window.matchMedia=()=>({matches:true});document.hidden=true;
-      drawRoute(ctx,input,true);assert.strictEqual(drawRoute.$flowSegments.get(input.parts),segments);
-      const color=fixture.dark?'#a8b0bb':'#64748b';
+      drawRoute(ctx,input,-1);assert.strictEqual(drawRoute.$flowSegments.get(input.parts),segments);
+      const color=fixture.dark?'#A8B0BB':'#8A8D91';
       assert(ctx.strokes.every(paint=>paint.strokeStyle===color));assert(ctx.fills.every(paint=>paint.fillStyle===color));
       assert.equal(input.count,12);assert.equal(input.source,'original-source');assert.equal(input.target,'original-target');
     """, {"dark": dark})
+
+
+@pytest.mark.parametrize("dark", [False, True])
+def test_only_a_lit_link_names_its_count_in_words_in_its_two_colours(dark: bool) -> None:
+    _run(r"""
+      const lit={1:fixture.dark?'#2D88FF':'#0064E0',2:fixture.dark?'#E4E6EB':'#1C1E21'};
+      [1,2].forEach(role=>{
+        const input=route([{x:100,y:300},{x:600,y:300}]),ctx=new Canvas(),label=drawRoute(ctx,input,role,0);
+        // The route hands its pill back, so draw() can paint every pill after the last route is stroked.
+        assert.equal(ctx.texts.length,0);assert.equal(ctx.strokes.length,1);assert.equal(label.role,role);drawPill(ctx,label,[]);
+        assert.equal(ctx.strokes[0].strokeStyle,lit[role]);assert.equal(ctx.strokes[0].lineWidth,input.strength+1);
+        assert.equal(ctx.texts.length,1);assert.equal(ctx.texts[0].text,'12 links');assert.equal(ctx.texts[0].fill,lit[role]);
+        assert.equal(ctx.texts[0].font,'600 13px sans-serif');
+        // The pill takes the cue's place, on the visible straight portion; the terminal arrow remains.
+        assert(ctx.texts[0].x>100&&ctx.texts[0].x<600);assert.equal(ctx.strokes.length,2,'The path and the pill outline, no chevron');
+        assert.equal(ctx.fills[0].fillStyle,lit[role]);assert.equal(triangle(ctx.fills[0]).length,3);
+        assert.equal(ctx.fills[1].fillStyle,fixture.dark?'#18191a':'#f0f2f5');
+      });
+      const stacked=[-1,1].map(stack=>{const ctx=new Canvas();drawPill(ctx,drawRoute(ctx,route([{x:100,y:300},{x:600,y:300}]),1,stack),[]);return ctx.texts[0].y;});
+      assert(stacked[1]-stacked[0]>=20);
+      const single=new Canvas();assert.equal(drawRoute(single,route([{x:100,y:300},{x:600,y:300}],1),1,0),null);assert.equal(single.texts.length,0);
+      const faded=new Canvas();assert.equal(drawRoute(faded,route([{x:100,y:300},{x:600,y:300}]),0,0),null);
+      assert.equal(faded.texts.length,0);assert.equal(faded.strokes[0].globalAlpha,.08);
+      // A route with no straight part long enough for the cue still names a lit count, halfway along; at rest it shows no chevron.
+      const short=new Canvas(),shortLabel=drawRoute(short,route([{x:100,y:300},{x:170,y:300}]),1,0);
+      assert.deepEqual(shortLabel.spots,[{x:135,y:300}]);drawPill(short,shortLabel,[]);
+      assert.equal(short.texts.length,1);assert.equal(short.texts[0].x,135);
+      const resting=new Canvas();drawRoute(resting,route([{x:100,y:300},{x:170,y:300}]),-1,0);assert.equal(resting.strokes.length,1);
+      // The pill takes the route's first spot clear of every card, and the longest spot when none is clear.
+      const bent=route([{x:100,y:100},{x:100,y:600},{x:500,y:600}]),card={x:60,y:300,w:80,h:100};
+      const first=new Canvas(),spots=drawRoute(first,bent,1,0).spots;assert.equal(spots[0].x,100);assert.equal(spots[1].y,600);
+      drawPill(first,{count:12,role:1,scale:1,spots},[card]);assert.equal(first.texts[0].y,600+4.5);
+      const blocked=new Canvas();drawPill(blocked,{count:12,role:1,scale:1,spots},[card,{x:200,y:560,w:200,h:80}]);
+      assert.equal(blocked.texts[0].x,100);
+      // A phone's open reader leaves the map only the band above it, so the pill sits in the visible part of the link.
+      const banded=drawRoute(new Canvas(),route([{x:300,y:100},{x:300,y:650}]),1,0,315).spots[0];
+      assert(banded.y<=303&&banded.y>=12,'Pill under the reader: '+banded.y);
+    """, {"dark": dark, "lit": True})
+
+
+@pytest.mark.parametrize("scale", [.6, 1, 2])
+def test_proof_dashes_keep_butt_caps_so_lit_gaps_stay_open(scale: float) -> None:
+    _run(r"""
+      [[-1,1],[1,1],[2,3],[1,12]].forEach(([role,count])=>{
+        fixture.kind='proof';const dashed=new Canvas();drawRoute(dashed,route([{x:100,y:300},{x:600,y:300}],count),role,0);
+        const stroke=dashed.strokes[0];assert.equal(stroke.lineCap,'butt');assert.deepEqual(stroke.dash,[6*fixture.scale,4*fixture.scale]);
+        fixture.kind='statement';const solid=new Canvas();drawRoute(solid,route([{x:100,y:300},{x:600,y:300}],count),role,0);
+        assert.equal(solid.strokes[0].lineCap,'round');
+      });
+    """, {"scale": scale, "lit": True})
 
 
 @pytest.mark.parametrize("arrays", [False, True])

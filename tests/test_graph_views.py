@@ -208,7 +208,7 @@ def test_status_rings_count_only_leaves_that_declare_something(tmp_path: Path) -
 
 
 def test_a_scope_header_counts_the_items_its_status_rows_list(tmp_path: Path) -> None:
-    """The explorer heads a scope's status rows with "N items in this scope".
+    """The explorer heads a scope's status rows with "N articles in this topic".
 
     N is the payload's member_count, so it is the sum of those rows: a prose
     leaf is in neither, and a checked catalog is one item in its inventory row.

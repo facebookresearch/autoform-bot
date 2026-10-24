@@ -237,7 +237,7 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
       const seams=`
         function buildShell() {events.push('shell');family='sans-serif';dom$stage={clientWidth:900};
           dom$ctx={font:'11px sans-serif',measureText:text=>({width:String(text).length*8})};
-          dom$search={};dom$breadcrumb={replaceChildren(){}};}
+          dom$search={removeAttribute(){}};dom$breadcrumb={replaceChildren(){}};}
         function bindEvents() {events.push('bind');}
         function sheetLayout() {return false;} function renderNavigation() {} function renderReaderContext() {}
         function renderInventory() {} function refresh() {} function routeTrail() {return [];} function trailList() {return [];}
@@ -322,6 +322,57 @@ def test_renderer_geometry_cache_changes_only_for_captured_geometry_inputs() -> 
       data=JSON.parse(JSON.stringify(fixture));geometry();assert.equal(calls,3);
       mapAllowed=false;assert.equal(geometry(),null);assert.equal(calls,3);
     """, _graph(4, [(0, 1, 3, 1), (1, 2, 0, 5)]))
+
+
+def test_lit_links_take_two_accents_and_name_their_count_in_words_only_when_lit() -> None:
+    """Execute the production edge roles, styles, painter and count pill on routes from the bounded engine."""
+    _run(r"""
+      ['edgeRole','edgeStyle','pill','drawRoute','drawPill'].forEach(name=>(0,eval)(original(name)));
+      var dark=false,family='sans-serif',isDark=()=>dark,rounded=(ctx,...box)=>ctx.calls.push(['box',...box]);
+      var ui$transform={x:0,y:300,scale:1},dom$stage={clientWidth:1600,clientHeight:900};
+      const fake=()=>({calls:[],setLineDash(dash){this.calls.push(['dash',dash]);},measureText(text){return {width:text.length*7*parseFloat(this.font.split(' ')[1])/13};},
+        save(){},restore(){},beginPath(){},moveTo(){},lineTo(){},quadraticCurveTo(){},closePath(){},
+        fill(){this.calls.push(['fill',this.fillStyle]);},stroke(){this.calls.push(['stroke',this.strokeStyle,this.lineWidth]);},
+        fillText(text,x,y){this.calls.push(['text',text,this.font,this.fillStyle,x,y]);}});
+      const spotlight={before:new Set(['a','s']),after:new Set(['s','d']),nodes:new Set(['a','s','d'])};
+      assert.deepEqual([edgeRole(null,'a','d'),edgeRole(spotlight,'a','s'),edgeRole(spotlight,'s','d'),edgeRole(spotlight,'a','d')],[-1,1,2,0]);
+      const styles=()=>[-1,0,1,2].map(role=>{const ctx=fake();edgeStyle(ctx,role);
+        assert.equal(ctx.fillStyle,ctx.strokeStyle);return [ctx.globalAlpha,ctx.lineWidth,ctx.strokeStyle];});
+      assert.deepEqual(styles(),[[1,1.5,'#8A8D91'],[.08,1.5,'#8A8D91'],[1,2.5,'#0064E0'],[1,2.5,'#1C1E21']]);
+      dark=true;assert.deepEqual(styles().map(style=>style[2]),['#A8B0BB','#A8B0BB','#2D88FF','#E4E6EB']);dark=false;
+      // Only the painter dashes a proof route, scaled with the map; the style sets no dash.
+      const plain=fake();edgeStyle(plain,-1);assert.deepEqual(plain.calls,[]);
+      // The engine reserves no label boxes; the painter finds the pill's place on the route itself.
+      const result=layoutGraph([{id:'a',width:200,height:100},{id:'b',width:200,height:100},{id:'c',width:200,height:100}],
+        [{source:'a',target:'b',statement:29,proof:3},{source:'b',target:'c',statement:1,proof:0}],'lr');
+      assert(result.routes.every(route=>route.label===null));
+      const pair=result.routes.filter(route=>route.source==='a'),single=result.routes.find(route=>route.source==='b');
+      for(const scale of [1,.6]) {
+        ui$transform.scale=scale;
+        pair.forEach(route=>[-1,0].forEach(role=>{
+          const ctx=fake();assert.equal(drawRoute(ctx,route,role,route.kind==='proof'?1:-1),null);
+          assert(!ctx.calls.some(call=>call[0]==='text'),'A link at rest or faded names no count');
+          assert.equal(ctx.calls.find(call=>call[0]==='stroke')[2],route.strength*scale);
+        }));
+        const lit=pair.map(route=>{const ctx=fake();drawPill(ctx,drawRoute(ctx,route,1,route.kind==='proof'?1:-1),[]);
+          assert.equal(ctx.calls.find(call=>call[0]==='stroke')[2],(route.strength+1)*scale);
+          const texts=ctx.calls.filter(call=>call[0]==='text');assert.equal(texts.length,1);
+          assert.deepEqual(texts[0].slice(1,4),[route.count+' links','600 '+13*scale+'px sans-serif','#0064E0']);return texts[0];});
+        assert(Math.abs(lit[0][5]-lit[1][5])>=20*scale,'Statement and proof pills stack apart');
+        const ctx=fake();assert.equal(drawRoute(ctx,single,2,0),null);
+        assert(!ctx.calls.some(call=>call[0]==='text'),'A single link needs no count');
+        assert.equal(ctx.calls.find(call=>call[0]==='stroke')[1],'#1C1E21');
+      }
+      // An unlinked card beside the source leaves the route no straight part long enough for the cue; its lit count still shows.
+      ui$transform.scale=1;
+      for(const width of [208,232,264]) for(const height of [100,116,148]) {
+        const scene=layoutGraph(['a','b','c'].map(id=>({id,width,height})),[{source:'a',target:'b',statement:12,proof:0}],'lr');
+        const ctx=fake(),label=drawRoute(ctx,scene.routes[0],1,0);
+        assert(label&&label.spots.length,'A lit count lost its pill at '+width+'x'+height);
+        drawPill(ctx,label,Array.from(scene.nodes.values()).map(box=>({x:box.x,y:box.y+300,w:box.w,h:box.h})));
+        assert.deepEqual(ctx.calls.filter(call=>call[0]==='text').map(call=>call[1]),['12 links']);
+      }
+    """, {})
 
 
 def test_oversized_draw_does_not_dereference_unavailable_geometry() -> None:

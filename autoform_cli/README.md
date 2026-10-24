@@ -172,7 +172,7 @@ A completed catalog may assert `statement: formalized` and `proof: formalized`
 when the complete module has been checked. It contributes to the neutral
 inventory metric and graph status while remaining a readable page in the vault
 and a section of its parent chapter on the site, but its own entry stays
-outside the mathematical `Scoped roadmap` completion percentage. Like any
+outside the mathematical `Fully proved` completion percentage. Like any
 prerequisite, a catalog linked under `## Depends on` or `## Proof depends on`
 holds its dependents back until its whole-module assertion is recorded, so a
 dependent that needs one result links the declaration article that expounds it.
@@ -588,7 +588,7 @@ Module inventory counts are reported separately from formalization-target
 completion. The target denominator, readiness count, declaration-kind totals,
 and the progress-state breakdowns in the book and in `autoform check` use
 non-container articles carrying `declaration`; a `catalog: module` record
-counts toward none of them. A scope's status ring and item count, and the
+counts toward none of them. A scope's status bar and item count, and the
 legend beside each dependency map, also count a leaf marked `not_ready` that
 declares nothing yet, so deferred work holds its scope open. All three also
 count every catalog, under a neutral status: `inventory checked` once the
@@ -1578,6 +1578,25 @@ What an existing repository meets when it moves to this version:
     Mermaid from the CDN keeps working, and may drop that line once CI's
     `AUTOFORM_REF` includes this change: a render pinned before it needs the
     line to draw any diagram.
+14. A new project's site opens in the reader's own light or dark setting, with
+    Material's sun or moon to switch it, and the explorer's head carries the
+    same switch. Setup leaves an existing `mkdocs.yml` alone, so an existing
+    site stays dark until the `palette:` and `scheme: slate` lines under
+    `theme:` are replaced with the scaffolded pair:
+
+    ```yaml
+      palette:
+        - media: "(prefers-color-scheme: light)"
+          scheme: default
+          toggle:
+            icon: material/weather-night
+            name: Use dark theme
+        - media: "(prefers-color-scheme: dark)"
+          scheme: slate
+          toggle:
+            icon: material/weather-sunny
+            name: Use light theme
+    ```
 
 ## Validation
 
