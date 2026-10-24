@@ -17,55 +17,43 @@ make check-example  # validate, render, and build the bundled example site
 CI (`.github/workflows/tests.yml`) runs the same four steps on Python 3.10 and
 3.13 for every pull request, for pushes to `main`, and for pushes to `scratch/`
 branches, which run CI on a branch with no pull request; a newer commit on a
-pull request cancels the older run. Five more jobs run beside it. `WebKit
+pull request cancels the older run. Six more jobs run beside it. `WebKit
 integrated book and explorer regressions` installs the `browser` extra and WebKit and
 runs the graph, integrated navigation and genuine MathJax browser suites with `AUTOFORM_REQUIRE_BROWSER_TESTS=1`,
 so a missing browser fails the job instead of skipping its tests; locally they
 skip without the extra, and `make test-browser` installs both and runs them as
-CI does. `real Lean
-(fixture toolchain)` builds and audits a project from the bundled Mathlib
-release and runs
-the real-Lean suites other than the skeleton suite, which `real Lean skeleton
-suite` runs with one `tests/test_project_inspect.py` test. Another job runs the
-inspection, bounded-subprocess, and transactional-output tests on Windows, and
-the last builds
-`tests/fixtures/repl-smoke` and runs `tests/test_real_repl.py` against the
-pinned upstream REPL, also checking the header parser on the oldest Lean release
-Autoform supports. Locally, tests that need Lean skip when
-`lake` is not on `PATH`. Those in `tests/test_skeleton.py`, `test_impact.py`,
-`test_contract.py`, `test_lake_artifact_audit.py`, `test_lsp_protocol.py` and
-`test_batch_diagnostics.py` also skip when elan is installed but the
-toolchain pinned in `tests/fixtures/skeleton-project/lean-toolchain` is
-missing; only the real-Lake test in `tests/test_project_inspect.py` lets elan
-download it. The `tests/test_library_generate.py`
-ones that run Lean build a fixture that clones Batteries from GitHub, so they
-run only when `AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS=1` is set, as their CI job
-does; a missing toolchain or a failed download then fails them. Run
+CI does. The `MathJax read-back cards (Node)` tests skip locally unless `node`
+is on `PATH` and `AUTOFORM_MATHJAX_DIR` names an unpacked MathJax 3.2.2 package;
+`AUTOFORM_REQUIRE_MATHJAX_TESTS=1`, which CI sets, makes that a failure. Run
+`npm ci --ignore-scripts` for their pinned development-only JSDOM document
+bridge; it verifies real TeX inputs, not browser layout. Consumers need neither
+Node nor JSDOM. The
+other jobs, which build and audit a project from the bundled Mathlib release,
+run the real-Lean suites, run the inspection, subprocess, and publication tests
+on Windows, and run `tests/test_real_repl.py` against the pinned upstream REPL,
+are listed with the tests each runs in
+[`tests.yml`](.github/workflows/tests.yml). Locally, tests that need Lean skip
+when `lake` is not on `PATH`, and most also skip when elan is installed but the
+toolchain pinned in `tests/fixtures/skeleton-project/lean-toolchain` is missing;
+only the real-Lake test in `tests/test_project_inspect.py` lets elan download
+it. `AUTOFORM_REQUIRE_REAL_LEAN_TESTS=1`, which CI sets, makes a missing
+toolchain a failure instead. The `tests/test_library_generate.py` tests that run
+Lean clone Batteries from GitHub, so they run only with
+`AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS=1`, and then a missing toolchain or a
+failed download fails them. Run
 `lake build` in `skills/setup/assets/cabannes-thesis-project` when you change
 the example's Lean sources or declarations.
 
-The book and explorer share a vanilla-JavaScript client. Its readable sources
-are `autoform_cli/assets/blueprint-navigation.js` and `blueprint-dag.js`; their
-styles are in `blueprint-dag.css`. When changing either script, install Node
-22.23.2 and run `make build-explorer`, then `make check-explorer` and
-`make test-browser`. Pinned development-only esbuild and Terser write
-`blueprint-explorer.min.js` with an exact source digest. CI checks its bytes and
-the 132 KB JavaScript response budget. Main's former graph script budget was
-66,000 bytes; this response also includes integrated reading, navigation and
-bounded weighted relaxation and shared obstacle-avoiding routes; graph-node,
-payload, search, request and cache limits are unchanged. Only explicitly `$`-prefixed private properties may
-be renamed; renderer-private scene and DOM references use local variables.
-Graph/index fields, route attributes, renderer callbacks and history
-snapshot fields keep their names. Python publication ships the compiled client;
-projects consuming Autoform do not need Node or a separate application build.
-The readable book/map sources are fingerprinted together. A missing, corrupt or
-stale compiled client fails publication; raw development sources are never a
-publication fallback. The bounded scene has no vendor layout dependency.
-Consumers require no Node, new script tag or runtime CDN dependency.
-The shared stylesheet is a separate
-cached response, not part of the JavaScript byte budget.
-Compression never renames public properties, assumes getters are pure, enables
-unsafe transforms, or drops console calls.
+The book and explorer share the readable `autoform_cli/assets/blueprint-navigation.js`
+and `blueprint-dag.js`, with `blueprint-dag.css`. After script edits, use Node
+22.23.2 and run `make build-explorer`, `make check-explorer`, and `make test-browser`.
+Pinned development-only esbuild/Terser produce `blueprint-explorer.min.js`;
+publication checks its exact source digest and fails if the asset is stale or missing.
+The combined JS response stays below 132 KB (the former graph-only budget was
+66,000 bytes); CSS is a separate response and consumer projects need no Node build.
+Compression may rename only explicitly private properties, never graph/index,
+route or history fields; it enables no unsafe transforms, getter assumptions,
+or dropped console calls. The bounded scene has no vendor layout dependency.
 
 The verify workflow's kernel-trust probe is Lean, kept in
 `autoform_cli/probes/audit_probe.lean`. Projects get one self-contained helper,

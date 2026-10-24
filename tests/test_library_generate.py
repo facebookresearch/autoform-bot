@@ -991,7 +991,7 @@ _REQUIRED = os.environ.get("AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS") == "1"
 # then a missing toolchain or a failed download is a failure, never a skip.
 real_library = pytest.mark.skipif(
     not _REQUIRED,
-    reason="set AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS=1 to run: needs lake, Lean 4.34.1 and a clone of Batteries from GitHub",
+    reason="set AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS=1 to run: needs lake, the fixture's toolchain and a clone of Batteries from GitHub",
 )
 
 
@@ -1338,7 +1338,7 @@ def test_the_generated_index_is_searched_from_a_consumer(built: Path, tmp_path: 
         subprocess.run([*git, *command], check=True)
     revision = subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
     (consumer / "lake-manifest.json").write_text(manifest([entry("fix", rev=revision)]), encoding="utf-8")
-    (consumer / "lean-toolchain").write_text("leanprover/lean4:v4.34.1\n", encoding="utf-8")
+    shutil.copyfile(_FIXTURE / "lean-toolchain", consumer / "lean-toolchain")
     (consumer / "blueprint" / "roadmap").mkdir(parents=True)
     (consumer / "blueprint" / "roadmap" / "README.md").write_text("---\n---\n\n# Roadmap\n\nNothing yet.\n", encoding="utf-8")
 

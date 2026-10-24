@@ -224,9 +224,9 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
         nodes:scopes.map(node=>({...node,id:'scope:'+node.id,member_count:1,status_counts:[['planned',1]],
           layout:{width:232,height:116}})),edges:[{source:'scope:scope-0',target:'scope:scope-6',statement:2,proof:1}],
         view:{presentation:'atlas',breadcrumbs:[]},regions:[],present_statuses:['planned']};
-      const firstBundle={nodeId:fixture.entry,graph:payload,dataURL:'https://example.test/dependencies.json'};
+      const firstBundle={nodeId:fixture.entry,graph:payload,readingSource:{},dataURL:'https://example.test/dependencies.json'};
       const navigation={getIndex(){events.push('index');return index;}};
-      const host={querySelector(){return null;},classList:{remove(){},toggle(){}}};
+      const host={querySelector(){return null;},classList:{add(){},remove(){},toggle(){}}};
       const window={location:{href:'https://example.test/roadmap/index.html',origin:'https://example.test'}};
       const constants=productionSource.slice(productionSource.indexOf('  var NODE_W ='),productionSource.indexOf('  var clients ='));
       eval(constants);
@@ -238,10 +238,10 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
         function buildShell() {events.push('shell');family='sans-serif';dom$stage={clientWidth:900};
           dom$ctx={font:'11px sans-serif',measureText:text=>({width:String(text).length*8})};
           dom$search={removeAttribute(){}};dom$breadcrumb={replaceChildren(){}};}
-        function markIntro() {} function bindEvents() {events.push('bind');}
+        function bindEvents() {events.push('bind');}
         function sheetLayout() {return false;} function renderNavigation() {} function renderReaderContext() {}
         function renderInventory() {} function refresh() {} function routeTrail() {return [];} function trailList() {return [];}
-        function centerIfHidden() {} function redirectLegacyFocus() {events.push('legacy');}
+        function centerIfHidden() {}
         function applyRoute(bundle) {assert.strictEqual(bundle,firstBundle);events.push('route');return Promise.resolve();}
         function record(phase) {
           assert.strictEqual(sharedIndex,index,"Cold layout must use the router's validated index");
@@ -251,15 +251,53 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
           assert.equal(normal(current),normal(verified),'Cold layout must run the production engine and clear-route oracle');
           events.push({phase,nodes:current.nodes.size,lanes:current.routes.length});
         }
-        function fit() {record('fit');} function applyLocation() {record('location');} function resize() {record('resize');}
+        function fit() {record('fit');} function resize() {record('resize');}
       `;
       const bootstrap=eval('('+productionSource.slice(start,end)+'\nreturn ui$requestedNode;\n'+helpers+'\n'+seams+'})');
       assert.equal(bootstrap(host,payload,1,firstBundle,navigation),fixture.entry);
       const phase=name=>events.findIndex(event=>typeof event==='string'?event===name:event.phase===name);
       assert(phase('shell')<phase('bind')&&phase('bind')<phase('index')&&phase('index')<phase('fit'));
-      assert(phase('fit')<phase('location')&&phase('location')<phase('resize')&&phase('resize')<phase('route'));
+      assert(phase('fit')<phase('resize')&&phase('resize')<phase('route'));
       assert(events.filter(event=>event==='index').length===1);
+      assert.throws(()=>bootstrap(host,payload,1,firstBundle,null),/complete mathematical page and navigation/);
+      assert.throws(()=>bootstrap(host,payload,1,null,navigation),/complete mathematical page and navigation/);
+      assert.throws(()=>bootstrap(host,payload,1,{graph:payload},navigation),/complete mathematical page and navigation/);
     """, {"entry": entry})
+
+
+def test_bare_or_navigationless_hosts_do_not_start_an_interactive_client() -> None:
+    """Execute production boot gating: unsupported hosts keep their linked static DOM."""
+    _run("""
+      const effects=[],window={AutoformNavigation:{create(){effects.push('create');}}};
+      const host={getAttribute(){return null;},closest(){return null;},
+        setAttribute(){effects.push('ready');},classList:{add(){effects.push('enhancing');}}};
+      eval(original('start'));start(host);
+      assert.deepEqual(effects,[],'A bare graph host must neither fetch nor replace its fallback');
+      window.AutoformNavigation=null;host.closest=()=>({});start(host);
+      assert.deepEqual(effects,[],'An unavailable router must preserve the complete static reading page');
+    """, {})
+
+
+def test_cold_mount_measures_full_page_framing_and_error_restores_native_reading() -> None:
+    """Run real boot ordering over tiny DOM/router seams; browser containment remains independent."""
+    _run("""
+      const events=[],bodyClasses=new Set(),hostClasses=new Set(),loading={hidden:true,classList:{add(){}}};
+      const classes=set=>({add(name){set.add(name);},remove(name){set.delete(name);},contains(name){return set.has(name);}});
+      const document={body:{classList:classes(bodyClasses)}};
+      function host(){const attributes=new Map();return {isConnected:true,
+        getAttribute(name){return attributes.get(name)||null;},setAttribute(name,value){attributes.set(name,value);},closest(){return {};},
+        querySelector(){return loading;},classList:classes(hostClasses)};}
+      const clients=new Map();let fail=false,options,hostSequence=0;
+      const window={AutoformNavigation:{create(value){options=value;return {
+        start(){try{options.onCommit({graph:{},readingSource:{}});}catch(error){options.onError(error);}},dispose(){}};}}};
+      function mount(){assert(bodyClasses.has('bp-dag-app-page'),'Initial geometry must see the actual full-page viewport');
+        events.push('layout');if(fail)throw Error('controlled mount failure');return {ready:Promise.resolve()};}
+      eval(original('start'));start(host());
+      assert.deepEqual(events,['layout']);assert(bodyClasses.has('bp-dag-app-page'));
+      fail=true;clients.clear();bodyClasses.clear();start(host());
+      assert.deepEqual(events,['layout','layout']);assert(!bodyClasses.has('bp-dag-app-page'));
+      assert(!hostClasses.has('bp-dag-enhancing'));assert(loading.textContent.includes('complete mathematical page remains readable'));
+    """, {})
 
 
 def test_layout_replays_deterministically_after_input_permutation() -> None:
@@ -298,11 +336,12 @@ def test_lit_links_take_two_accents_and_name_their_count_in_words_only_when_lit(
         fillText(text,x,y){this.calls.push(['text',text,this.font,this.fillStyle,x,y]);}});
       const spotlight={before:new Set(['a','s']),after:new Set(['s','d']),nodes:new Set(['a','s','d'])};
       assert.deepEqual([edgeRole(null,'a','d'),edgeRole(spotlight,'a','s'),edgeRole(spotlight,'s','d'),edgeRole(spotlight,'a','d')],[-1,1,2,0]);
-      const styles=()=>[-1,0,1,2].map(role=>{const ctx=fake();edgeStyle(ctx,role,role===0);
+      const styles=()=>[-1,0,1,2].map(role=>{const ctx=fake();edgeStyle(ctx,role);
         assert.equal(ctx.fillStyle,ctx.strokeStyle);return [ctx.globalAlpha,ctx.lineWidth,ctx.strokeStyle];});
       assert.deepEqual(styles(),[[1,1.5,'#8A8D91'],[.08,1.5,'#8A8D91'],[1,2.5,'#0064E0'],[1,2.5,'#1C1E21']]);
       dark=true;assert.deepEqual(styles().map(style=>style[2]),['#A8B0BB','#A8B0BB','#2D88FF','#E4E6EB']);dark=false;
-      const dashed=fake();edgeStyle(dashed,-1,true);assert.deepEqual(dashed.calls,[['dash',[6,4]]]);
+      // Only the painter dashes a proof route, scaled with the map; the style sets no dash.
+      const plain=fake();edgeStyle(plain,-1);assert.deepEqual(plain.calls,[]);
       // The engine reserves no label boxes; the painter finds the pill's place on the route itself.
       const result=layoutGraph([{id:'a',width:200,height:100},{id:'b',width:200,height:100},{id:'c',width:200,height:100}],
         [{source:'a',target:'b',statement:29,proof:3},{source:'b',target:'c',statement:1,proof:0}],'lr');
@@ -357,6 +396,30 @@ def test_small_variable_rectangles_keep_ports_on_their_real_boundaries(direction
     _run(f"check(fixture,{json.dumps(direction)});", fixture)
 
 
+@pytest.mark.parametrize("direction", ["lr", "tb"])
+def test_cyclic_links_face_their_actual_target_without_perimeter_detours(direction: str) -> None:
+    """Direction comes from the real endpoints, not a DAG order a cycle cannot have."""
+    fixture = _graph(2, [(0, 1, 2, 3), (1, 0, 5, 7)])
+    _run(f"""
+      const direction={json.dumps(direction)},scene=check(fixture,direction);
+      scene.routes.forEach(route=>{{
+        assert(!route.detoured,'Two connected cards need no whole-scene return corridor');
+        const a=scene.nodes.get(route.source),b=scene.nodes.get(route.target),first=route.points[0],tip=route.points.at(-1);
+        const dx=b.x+b.w/2-a.x-a.w/2,dy=b.y+b.h/2-a.y-a.h/2;
+        assert(first.x>=a.x&&first.x<=a.x+a.w&&first.y>=a.y&&first.y<=a.y+a.h);
+        assert(Math.min(Math.abs(first.x-a.x),Math.abs(first.x-a.x-a.w),Math.abs(first.y-a.y),Math.abs(first.y-a.y-a.h))<1e-7,
+          'The route must leave a real source boundary');
+        const departure=route.points[1];
+        assert((departure.x-first.x)*dx+(departure.y-first.y)*dy>0,'Source approach must face its actual target');
+        assert(route.arrow.dx*dx+route.arrow.dy*dy>0,'Target approach must flow towards its actual target');
+        const travelled=route.points.slice(1).reduce((sum,point,index)=>sum+Math.hypot(point.x-route.points[index].x,point.y-route.points[index].y),0);
+        const direct=Math.abs(first.x-tip.x)+Math.abs(first.y-tip.y);
+        assert(travelled<=direct+96,'A clear cyclic link should not take a scenic route');
+      }});
+      assert.equal(scene.routes.length,4);assert.equal(scene.clusters.length,1);
+    """, fixture)
+
+
 def test_weighted_relaxation_is_finite_deterministic_and_not_driven_by_label_measurement() -> None:
     _run("""
       const first=check(fixture,'lr'),again=check(fixture,'lr');assert.equal(normal(first),normal(again));
@@ -367,6 +430,17 @@ def test_weighted_relaxation_is_finite_deterministic_and_not_driven_by_label_mea
       assert(changed.routes[0].strength>first.routes[0].strength);
       assert(changed.routes.every(route=>route.label===null));
     """, _graph(2, [(0, 1, 1, 0)]))
+
+
+def test_large_library_aggregates_keep_distinct_ordered_flow_weights() -> None:
+    _run("""
+      const scene=check(fixture,'lr'),routes=scene.routes.slice().sort((a,b)=>a.count-b.count);
+      assert.deepEqual(routes.map(route=>route.count),[100,200,10000]);
+      routes.forEach(route=>assert(Number.isFinite(route.strength)&&route.strength>1&&route.strength<=4.8));
+      assert(routes[1].strength-routes[0].strength>.15,'Distinct library aggregates should not saturate to identical line weights');
+      assert(routes[2].strength-routes[1].strength>.75,'The dominant dependency flow should stand out at a glance');
+      assert(routes.every(route=>route.label===null));
+    """, _graph(4, [(0, 1, 100, 0), (0, 2, 200, 0), (0, 3, 10000, 0)]))
 
 
 def test_authoritative_ids_cannot_collide_with_engine_object_prototypes() -> None:

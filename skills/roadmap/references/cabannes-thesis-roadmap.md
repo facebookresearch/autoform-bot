@@ -17,20 +17,18 @@ The example stays intentionally small:
 - seven DAG nodes decompose one representative “Infimum Loss” slice and its
   supporting full-supervision construction.
 
-This is a structural example, not a completion fixture. Its `MAPPED` rows are
-unfinished, so the current vault is not a valid finish state for a complete
-Roadmap invocation over the thesis. Use it to inspect article shape, source
-links, coverage, and dependencies without copying its partial stopping point.
+This is a structural example, not a completion fixture. Only one of its six
+chapter clusters has pull-request-sized nodes; comparison, consistency,
+learning-rate results, and the other chapters still need source inspection and
+decomposition. Its `MAPPED` rows are unfinished, so the vault is not a valid
+finish state for a complete Roadmap invocation over the thesis. Use it to
+inspect article shape, source links, coverage, and dependencies without copying
+its partial stopping point.
 
 These nodes happen to map one-to-one to main public artifacts. That is not a
 format restriction: a node may carry several supporting definitions or
 statements when one unique main result makes the whole node a coherent pull
 request and review unit.
-
-This asymmetry is deliberate. The six chapter entries are candidate roadmap
-clusters, while only one cluster has pull-request-sized nodes. The example is not a
-completed whole-thesis plan: comparison, consistency, learning-rate results,
-and the other chapters still need source inspection and decomposition.
 
 The detailed slice uses labels verified in `infimum/core.tex` from the public
 [arXiv e-print source](https://export.arxiv.org/e-print/2209.11629):

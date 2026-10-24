@@ -33,15 +33,13 @@ other refusal is handled as the skill says for any refusal.
 
 ## Queries
 
-Library declarations are found mostly by name: many have no docstring. Run one
+Library declarations are found mostly by name: many have no docstring, and a
+hit must contain every query word, never matched against its signature. Run one
 or two distinctive words, or a Lean name, as a search of its own for a library,
-in addition to the blueprint query of a few words. A hit must contain every word
-of the query, matched against its names, docstring, module header and
-`mentions` (never its signature or statement), so a longer query misses a
-declaration that lacks one of its words. Before deciding that a library has no
-such result, run each distinctive word, and the Lean name the result would
-likely have, as a query of its own, retry with other usual names, and search by
-the words of the result, since a library names it differently.
+in addition to the blueprint query of a few words. Before deciding that a
+library has no such result, run each distinctive word, and the Lean name the
+result would likely have, as a query of its own, retry with other usual names,
+and search by the words of the result, since a library names it differently.
 
 ## A complete hit
 
@@ -84,18 +82,13 @@ and tell the user that the library lists it as wanted.
 
 ## Differences, module files, and build cost
 
-A hit from a library whose `differences` are not empty may still be used: add
-the import and build the focused target, and let the build decide. The text
-output shows the differences as `differs:` lines under the library's name; the
-JSON output has them in `differences`. If the build fails, report the
-differences to the user. A different Lean release is the difference most likely
-to matter.
+A hit from a library whose `differences` are not empty (`differs:` lines in the
+text output) may still be used: add the import and build the focused target,
+and let the build decide. If the build fails, report the differences to the
+user; a different Lean release is the one most likely to matter.
 
-A hit with `module_system: false` cannot be imported by a Lean module file. Use
-it only from a file that is not one. The text output does not show this field;
-read the hit's `module_system` in the JSON output, which the
-[library search reference](../../../autoform_cli/README.md#searching-a-library-the-project-depends-on)
-documents.
+A hit with `module_system: false`, shown only in the JSON output, cannot be
+imported by a Lean module file. Use it only from a file that is not one.
 
 Each worktree compiles the library modules it imports, and everything they
 import, unless the library ships a build cache. Say so to the user when the

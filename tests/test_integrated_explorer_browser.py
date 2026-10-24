@@ -446,17 +446,29 @@ def test_loaded_wrong_version_leaves_complete_math_as_typed(
     reader_page: object, reader_site: str, pinned_runtime: _PinnedRuntime,
 ) -> None:
     page = reader_page
-    page.add_init_script("""(() => {
-      let current;
-      Object.defineProperty(window, 'MathJax', {configurable: true, get: () => current, set: value => {
-        current = value; let version = value.version;
-        Object.defineProperty(value, 'version', {configurable: true,
-          get: () => version === undefined ? undefined : '0.0.0', set: value => { version = value; }});
-      }});
-    })();""")
     _routes(page, reader_site, pinned_runtime)
+
+    def inject_wrong_version(route: object) -> None:
+        response = route.fetch()
+        # Fault injection only: let the verified 3.2.2 bundle initialize
+        # normally through the protected global setter, then falsify the
+        # genuine engine's version immediately before the generated check.
+        fault = """\n(() => {
+          const originalReady = window.MathJax.startup.pageReady;
+          window.MathJax.startup.pageReady = function () {
+            if (window.MathJax.version !== '3.2.2') throw new Error('Expected the genuine pinned engine before fault injection');
+            window.__wrongVersionInjected = true;
+            window.MathJax.version = '0.0.0';
+            return originalReady.apply(this, arguments);
+          };
+        })();"""
+        route.fulfill(body=response.text() + fault, content_type="application/javascript")
+
+    page.route(f"{reader_site}/javascripts/mathjax.js", inject_wrong_version)
     page.goto(f"{reader_site}/{_ALGEBRA}")
     page.wait_for_function("() => window.MathJax && MathJax.version === '0.0.0'")
+    assert page.evaluate("() => window.__wrongVersionInjected") is True
+    assert page.evaluate("() => Object.getOwnPropertyDescriptor(window, 'MathJax').configurable") is False
     _bridge(page)
     assert page.evaluate("() => __readerStart.then(Boolean)") is True
     assert page.evaluate("() => __readerMath") is False

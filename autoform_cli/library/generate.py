@@ -1,4 +1,18 @@
-"""Generate the index a Lean library publishes, from its built environment and its sources."""
+"""Generate the index a Lean library publishes, from its built environment and its sources.
+
+Lean imports two modules that state one theorem the same way and keeps one
+copy. Such a name is indexed once, under the first of its modules in name
+order, with the line, statement, docstring and status of that module's
+declaration: which copy Lean keeps depends on the order it loads the modules
+in, and the index must not. Each such name is a warning naming the module it is
+indexed under and the others, and the summary line counts them; ``--check``
+does not mention them. A name that is not indexed, such as an equation lemma
+two modules both generate, is no warning. A name whose first module leaves it
+on ``sorry`` or declares it as an axiom is left out and counted with the
+others, with a warning naming that module and the others, since one of them
+may hold a whole proof. If such a name's docstring comes from
+``@[inherit_doc]``, the record has none.
+"""
 
 from __future__ import annotations
 
@@ -39,7 +53,8 @@ from .verify import CheckoutPins, _sources, checkout_pins
 LIBRARY_MARKER = "AUTOFORM_LIBRARY "
 #: Raised by any change, here or in the probe, that can alter the bytes of an index.
 PROBE_REVISION = 1
-#: The Lean releases the probe has been run on; its use of Lean internals is checked on each.
+#: The Lean releases the probe has been run on, its use of Lean internals checked when each was added.
+#: CI runs the real-library tests only on the release tests/fixtures/library-project pins.
 VERIFIED_TOOLCHAINS = ("leanprover/lean4:v4.34.1", "leanprover/lean4:v4.35.0")
 _LABEL = "library index probe"
 _DUPLICATE = re.compile(r"import (\S+) failed, environment already contains '([^']+)' from (\S+)")

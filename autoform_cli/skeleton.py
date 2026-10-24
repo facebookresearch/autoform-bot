@@ -5,8 +5,76 @@ declaration says what the blueprint claims: its statement and, transitively,
 every project definition that statement rests on. Proofs are the kernel's
 problem. The closure comes from elaborated terms, read back from a small probe
 run with ``lake env lean``, never from source text. The output is deterministic
-and path-free, and nothing here writes into the vault. The rationale is in the
-``autoform skeleton`` section of ``autoform_cli/README.md``.
+and path-free, and nothing here writes into the vault. The user-facing contract
+is the ``autoform skeleton`` section of ``autoform_cli/README.md``; the
+mechanics below are what it leaves out.
+
+Probe. For each module that declares a selected target, the probe imports that
+module and the helper module ``autoform-skeleton-helper`` (compiled with the
+project's toolchain and no project module in scope, its constants all in the
+``AutoformSkeleton`` namespace) and makes one fully qualified call, with no
+``open`` or ``set_option``. It sets exactly two printing options,
+``pp.funBinderTypes`` and ``pp.coercions.types``, so a reader sees what each
+binder ranges over and where each cast lands. A lexical closure would miss what
+``open``, notation, implicit instances, and auto-bound variables bring in, and
+every miss would silently shrink the trusted surface. When the Lake freshness
+check fails other than as stale, the error keeps the first 20 lines of Lake's
+output and counts the rest. Each name is probed in the module whose source the
+lexical index finds it in; a name with one public declaration beside private
+ones is probed in the public one's module. An error the probe meets while
+reading one declaration leaves only that declaration unresolved. A reason
+quotes at most 2,000 characters of Lean's output, shows the probe's temporary
+directory as ``<scratch>`` and project paths relative to the project, and so
+reads the same on every run.
+
+Folding. Only companions that Lean's environment records as generated are
+folded onto their parent; an internal-looking name alone is not proof of
+provenance. Rangeless internal-detail declarations, such as ``f._unary``,
+``f._f``, and ``S.x._default``, are bound by their elaborated material and
+marked ``-- source not shown`` rather than passed off as their parent's source.
+``partial def`` is detected from the environment, not the source text.
+
+Report. Declarations in one project share most of what they trust, so the
+report states each boundary module's identity once, in ``boundary_modules``,
+and each trusted declaration's and external constant's semantic material once
+per root module that reaches it, in ``trusted`` and ``semantics``, keyed by
+root module, then name: a name means what the root module's environment
+declares under it. A report therefore grows with the number of root modules
+times the material they share. The probe states each elaborated subterm of 256
+bytes or more once, since proof terms repeat large subterms; the report keeps
+each material's full text. Two probes that disagree about one module's files
+stop the command.
+
+Resources. Probes run one per CPU available to the process, at most eight; on
+Python 3.13 and later ``PYTHON_CPU_COUNT`` sets that count. Each probe's
+budget is its own rather than a share of one deadline, so its result does not
+depend on which probes ran before it, and an extraction can run for one probe
+budget per round of parallel probes. The parsed records, at most 512 Mi
+characters of semantic material per probed module, stay in memory until the
+report is built.
+
+Drift hash boundary. The compiled identities are every part a module-system
+build writes for each module of the transitive external boundary. Only modules
+whose ``.olean`` lies in the toolchain's own ``lib/lean`` count as core and
+stay outside the boundary; a dependency module named ``Lake.Foo`` is external
+like any other. Compiler-generated matcher and recursor bodies stay in the hash
+although they are folded out of the reading list.
+
+Comment stripping. A source is parsed with the tokens of a file that imports
+its root module and the scoped notation of the namespaces the declaration sits
+in and the file opens above it, but not the file's ``local`` notation. Source
+with a known non-builtin token containing ``--`` or ``/-`` is withheld unless
+that token was globally active through an import of the source's own module,
+since the probe cannot reconstruct when a same-module token was declared or
+where a scoped token was active. What the probe cannot see, and so can get
+wrong (showing code as a comment or a comment as code): a ``local`` token; a
+token without ``--`` or ``/-`` that still moves where a comment or a string
+starts (with ``++"`` a token, ``x ++" -- y "`` holds a comment, and without it
+a string), when the probe has it and the file did not have it there, as for one
+declared later in the same module, or the reverse, as for a scoped token the
+file activated in a way the probe does not reconstruct; and, under the module
+system, a token that only a private import's imports declare, which Lean does
+not load for the file.
 """
 
 from __future__ import annotations
@@ -32,6 +100,7 @@ import warnings
 from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, fields
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
@@ -80,6 +149,9 @@ _SHADOWED_CORE_MODULE = re.compile(
 #: The impact probe's refusal of a loaded or glob-built module the source
 #: inventory lacks; the project is built, so the refusal gets no `lake build` hint.
 _UNCAPTURED_ROOT_MODULE = re.compile(r"the impact probe (?:loaded|found) root-package module .*")
+#: A module Lake reports built whose .olean is missing, as when its artifact
+#: cache is enabled without restoring artifacts into .lake/build.
+_MISSING_OBJECT_FILE = re.compile(r"object file '[^']*' of module (\S+) does not exist")
 
 #: Bounds each probe process; extraction runs one per root module.
 DEFAULT_PROBE_TIMEOUT = 600.0
@@ -137,6 +209,9 @@ class _ProbeEnvironmentError(SkeletonError):
 #: Shown when no source can be attributed and parsed safely. The signatures
 #: and canonical kernel material above it still state the meaning.
 _NOT_SHOWN = "-- source not shown: no reliable standalone source is available"
+
+#: A report's ``trusted``, ``semantics``, and ``boundary_modules`` tables.
+_Tables = tuple[dict[str, dict[str, object]], dict[str, dict[str, object]], dict[str, object]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +274,9 @@ class DeclarationSkeleton(TrustedDeclaration):
     statement: str | None = None
     #: UTF-8 byte ranges of the comments in ``statement``.
     statement_comments: tuple[tuple[int, int], ...] = ()
+    #: Hashes and packet text, each computed once: a report states them
+    #: several times, and each fingerprint encodes the whole trusted closure.
+    _cache: dict[str, str] = dataclass_field(default_factory=dict, init=False, repr=False, compare=False)
 
     @property
     def defines(self) -> bool:
@@ -247,8 +325,10 @@ class DeclarationSkeleton(TrustedDeclaration):
     def hash(self) -> str:
         """Fingerprint the probe's canonical elaborated meaning and trust boundary."""
 
-        modules = {module for module, _, _ in self.boundary_modules}
-        return self._fingerprint(self.trusted, self.assumed, modules, axioms=True)
+        if "hash" not in self._cache:
+            modules = {module for module, _, _ in self.boundary_modules}
+            self._cache["hash"] = self._fingerprint(self.trusted, self.assumed, modules, axioms=True)
+        return self._cache["hash"]
 
     @property
     def statement_hash(self) -> str:
@@ -256,9 +336,11 @@ class DeclarationSkeleton(TrustedDeclaration):
         and what only they reach. Unlike :attr:`hash`, editing only a theorem's
         proof, ``sorry`` to a proof included, leaves it unchanged."""
 
-        return self._fingerprint(
-            self.statement_trusted, self.statement_assumed, set(self.statement_boundary_modules), axioms=False
-        )
+        if "statement_hash" not in self._cache:
+            self._cache["statement_hash"] = self._fingerprint(
+                self.statement_trusted, self.statement_assumed, set(self.statement_boundary_modules), axioms=False
+            )
+        return self._cache["statement_hash"]
 
     def _fingerprint(
         self, trusted: tuple[TrustedDeclaration, ...], assumed: tuple[str, ...], modules: set[str], *, axioms: bool
@@ -284,7 +366,9 @@ class DeclarationSkeleton(TrustedDeclaration):
     def evidence_hash(self) -> str:
         """Fingerprint the exact proof-free text presented to a reviewer."""
 
-        return _sha256_id(self.blind_text().encode("utf-8"))
+        if "evidence_hash" not in self._cache:
+            self._cache["evidence_hash"] = _sha256_id(self.blind_text().encode("utf-8"))
+        return self._cache["evidence_hash"]
 
     def blind_text(self) -> str:
         """The skeleton with every comment removed, for an auditor who must not see intent.
@@ -299,6 +383,11 @@ class DeclarationSkeleton(TrustedDeclaration):
         unless it decides whether an equation-style statement can be cut at all.
         """
 
+        if "packet" not in self._cache:
+            self._cache["packet"] = self._packet()
+        return self._cache["packet"]
+
+    def _packet(self) -> str:
         lines = [
             f"-- {self.kind} {self.name}",
             f"-- assumed from libraries: {', '.join(self.statement_assumed) or 'none'}",
@@ -340,7 +429,7 @@ class DeclarationSkeleton(TrustedDeclaration):
         shown = {
             item.name: getattr(self, item.name)
             for item in fields(self)
-            if not item.name.endswith("_semantics")
+            if item.init and not item.name.endswith("_semantics")
         }
         shown.update(
             {
@@ -379,6 +468,7 @@ class NodeSkeleton:
     #: article then has no hash, since one over the rest would miss changes
     #: to the missing declaration.
     complete: bool = True
+    _cache: dict[str, str] = dataclass_field(default_factory=dict, init=False, repr=False, compare=False)
 
     def blind_text(self) -> str:
         """The article's declarations as one blind packet, for a faithfulness judge.
@@ -409,7 +499,9 @@ class NodeSkeleton:
     def evidence_hash(self) -> str:
         """Fingerprint the exact joint packet presented to a reviewer."""
 
-        return _sha256_id(self.blind_text().encode("utf-8"))
+        if "evidence_hash" not in self._cache:
+            self._cache["evidence_hash"] = _sha256_id(self.blind_text().encode("utf-8"))
+        return self._cache["evidence_hash"]
 
     @property
     def review_hash(self) -> str | None:
@@ -470,6 +562,8 @@ class SkeletonReport:
     unresolved: tuple[UnresolvedTarget, ...]
     schema: str = SKELETON_SCHEMA
     semantic_schema: str = SEMANTIC_SCHEMA
+    #: The shared tables, built once when the report is checked.
+    _tables: _Tables = dataclass_field(init=False, repr=False, compare=False)
 
     @property
     def clean(self) -> bool:
@@ -492,7 +586,7 @@ class SkeletonReport:
         issue = self._incoherence()
         if issue is not None:
             raise SkeletonError([f"skeleton report {issue}"])
-        self._shared_tables()
+        object.__setattr__(self, "_tables", self._shared_tables())
 
     def _incoherence(self) -> str | None:
         """Why the selection, articles, and unresolved targets disagree, if they do.
@@ -534,9 +628,7 @@ class SkeletonReport:
             return "contains mismatched unresolved declarations"
         return None
 
-    def _shared_tables(
-        self,
-    ) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]], dict[str, object]]:
+    def _shared_tables(self) -> _Tables:
         """The ``trusted``, ``semantics``, and ``boundary_modules`` tables.
 
         Each shared item is stated once and named by every declaration that
@@ -573,7 +665,11 @@ class SkeletonReport:
         return trusted, semantics, modules
 
     def as_dict(self) -> dict[str, object]:
-        trusted, semantics, modules = self._shared_tables()
+        # Fresh tables, so a caller's edit to the record cannot reach the report.
+        return self._record(self._shared_tables())
+
+    def _record(self, tables: _Tables) -> dict[str, object]:
+        trusted, semantics, modules = tables
         return {
             "blueprint_hash": self.blueprint_hash,
             "boundary_modules": modules,
@@ -596,7 +692,7 @@ class SkeletonReport:
         }
 
     def to_json(self) -> str:
-        return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return json.dumps(self._record(self._tables), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _share(table: dict[str, object], name: str, value: object, *, table_name: str) -> None:
@@ -1019,13 +1115,24 @@ def _graph_snapshot(graph: Graph) -> tuple[tuple[str, str, str], ...]:
     )
 
 
-def _blueprint_hash(graph: Graph) -> str:
-    """Identify the exact, path-independent blueprint snapshot behind a report."""
+def _blueprint_hash(graph: Graph, passages: dict[str, tuple[str | None, str | None, str]]) -> str:
+    """Identify the exact, path-independent blueprint snapshot behind a report:
+    every article, and the passage each cites or why it has none."""
 
     material = json.dumps(
-        _graph_snapshot(graph), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        [(*row, *passages[row[0]]) for row in _graph_snapshot(graph)],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
     )
     return _sha256_id(material.encode("utf-8"))
+
+
+def blueprint_hash(graph: Graph) -> str:
+    """The blueprint hash of ``graph`` as it is now: its articles, and each
+    article's cited passage, read once for this call."""
+
+    return _blueprint_hash(graph, _source_passages(graph))
 
 
 def _remember_descendants(
@@ -1969,6 +2076,15 @@ def run_probe(
         uncaptured = _UNCAPTURED_ROOT_MODULE.search(raw)
         if uncaptured:
             raise SkeletonError([uncaptured.group()])
+        missing = _MISSING_OBJECT_FILE.search(raw)
+        if missing:
+            raise SkeletonError(
+                [
+                    f"the {label} found no .olean for {missing.group(1)}; if Lake's artifact cache "
+                    "is enabled, set `restoreAllArtifacts = true` in the lakefile, otherwise run `lake build`"
+                    f"\n{detail}"
+                ]
+            )
         if result.returncode < 0:
             # Most likely the out-of-memory killer, which leaves no output to explain it.
             raise SkeletonError([f"the {label} was killed by signal {-result.returncode}\n{detail}".rstrip()])
@@ -2636,16 +2752,9 @@ def extract_skeletons(
     report = extract_graph_skeletons(
         graph, lean_root=root, libraries=libraries, index=index, runner=runner, node_ids=node_ids, probing=probing
     )
-    current_graph = check_inputs_unchanged(graph, root, index, inputs, activity=activity)
-    for node in report.nodes:
-        current = current_graph.nodes.get(node.node_id)
-        if current is None or source_passage(current, current_graph.blueprint_dir) != (
-            node.passage,
-            node.passage_locator,
-        ):
-            raise SkeletonError(
-                [f"{node.node_id}: source passage changed while skeletons were being extracted; retry after the project is idle"]
-            )
+    current = check_inputs_unchanged(graph, root, index, inputs, activity=activity)
+    if _blueprint_hash(current, _source_passages(current)) != report.blueprint_hash:
+        raise SkeletonError([f"source passage changed while {activity}; retry after the project is idle"])
     return report
 
 
@@ -2773,15 +2882,11 @@ def extract_graph_skeletons(
     """
 
     targets, selected, selection = select_lean_targets(graph, node_ids)
-    passages: dict[str, tuple[str | None, str | None]] = {}
+    # Every article's passage, so the blueprint hash does not depend on the selection.
+    passages = _source_passages(graph)
     # An article whose cited passage cannot be found cannot be judged for
     # faithfulness, so its declarations are unresolved rather than shown alone.
-    broken_passages: dict[str, str] = {}
-    for node, _ in selected:
-        passage_issues: list[str] = []
-        passages[node.id] = source_passage(node, graph.blueprint_dir, issues=passage_issues)
-        if passage_issues:
-            broken_passages[node.id] = "; ".join(passage_issues)
+    broken_passages = {node.id: passages[node.id][2] for node, _ in selected if passages[node.id][2]}
 
     # Lean prints signatures, and parses sources, with the notation, tokens,
     # and attributes its imports bring into scope, so each root module gets its
@@ -2883,7 +2988,7 @@ def extract_graph_skeletons(
                     snapshot_started_ns=snapshot_started_ns,
                 )
             )
-        passage, locator = passages[node.id]
+        passage, locator, _ = passages[node.id]
         nodes.append(
             NodeSkeleton(
                 node_id=node.id,
@@ -2895,7 +3000,7 @@ def extract_graph_skeletons(
             )
         )
     return SkeletonReport(
-        blueprint_hash=_blueprint_hash(graph),
+        blueprint_hash=_blueprint_hash(graph, passages),
         targets=tuple((node.id, names) for node, names in targets),
         selection=selection,
         selected_nodes=tuple(node.id for node, _ in selected),
@@ -2921,7 +3026,9 @@ def _statement(value: object) -> str | None:
     return _TRAILING_VALUE.sub("", value).rstrip()
 
 
-def source_passage(node: Node, blueprint: Path, *, issues: list[str] | None = None) -> tuple[str | None, str | None]:
+def source_passage(
+    node: Node, blueprint: Path, *, issues: list[str] | None = None, files: dict[Path, bytes | str] | None = None
+) -> tuple[str | None, str | None]:
     """Return the passage an article cites through a line locator, and the locator.
 
     A ``## Sources`` link to a non-Markdown file inside the blueprint with a
@@ -2930,7 +3037,9 @@ def source_passage(node: Node, blueprint: Path, *, issues: list[str] | None = No
     passages, and are ignored here, but a link that names no regular file in
     the blueprint is reported whatever its suffix, as check reports it. When
     the first locator names no text there is no passage, and the reason is
-    appended to ``issues`` if given.
+    appended to ``issues`` if given. ``files`` keeps each file read, or why it
+    could not be, so passages cut with one ``files`` come from one read of each
+    file.
     """
 
     def broken(target: str, why: str) -> tuple[None, None]:
@@ -2938,6 +3047,7 @@ def source_passage(node: Node, blueprint: Path, *, issues: list[str] | None = No
             issues.append(f"source locator {target} {why}")
         return None, None
 
+    files = {} if files is None else files
     for target in node.sources:
         try:
             parsed = urlsplit(target)
@@ -2982,19 +3092,21 @@ def source_passage(node: Node, blueprint: Path, *, issues: list[str] | None = No
             os.close(os.open(candidate, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)))
         except OSError:
             return broken(target, "names a file that cannot be read")
+        if candidate not in files:
+            files[candidate] = _read_cited_source(candidate)
+        content = files[candidate]
+        if isinstance(content, str):
+            return broken(target, content)
         try:
-            captured = _read_snapshot_file(candidate)
-            if captured is None:
-                return broken(target, "names a missing file")
             # Lines are what an editor or `sed` counts: newline-separated. Python's
             # `splitlines` also breaks on form feeds, which `pdftotext` writes
             # between pages, and every locator into such a file would then drift
             # by one line per page.
-            lines = captured[0].decode("utf-8").split("\n")
-            if lines and lines[-1] == "":
-                lines.pop()
-        except (ValueError, UnicodeError):
+            lines = content.decode("utf-8").split("\n")
+        except UnicodeError:
             return broken(target, "names a file that is not readable UTF-8 text")
+        if lines and lines[-1] == "":
+            lines.pop()
         try:
             start = int(match.group(1))
             end = int(match.group(2) or start)
@@ -3006,6 +3118,31 @@ def source_passage(node: Node, blueprint: Path, *, issues: list[str] | None = No
         relative = candidate.relative_to(blueprint.resolve()).as_posix()
         return "\n".join(lines[start - 1 : end]), f"{relative}#L{start}-L{end}"
     return None, None
+
+
+def _read_cited_source(path: Path) -> bytes | str:
+    """The bytes of a cited source, or why it has none, in words without its path."""
+
+    if os.path.lexists(path) and not os.path.isfile(path):
+        return "names something other than a regular file"
+    try:
+        captured = _read_snapshot_file(path)
+    except SkeletonError:
+        return "names a file that cannot be read"
+    return "names a missing file" if captured is None else captured[0]
+
+
+def _source_passages(graph: Graph) -> dict[str, tuple[str | None, str | None, str]]:
+    """Every article's cited passage, its locator, and why it has none ("" when nothing is wrong),
+    all cut from one read of each cited file."""
+
+    files: dict[Path, bytes | str] = {}
+    passages: dict[str, tuple[str | None, str | None, str]] = {}
+    for node in graph.nodes.values():
+        issues: list[str] = []
+        passage, locator = source_passage(node, graph.blueprint_dir, issues=issues, files=files)
+        passages[node.id] = (passage, locator, "; ".join(issues))
+    return passages
 
 
 def _article_path(node: Node, graph: Graph) -> str:
@@ -3245,7 +3382,9 @@ def _output_identity(path: Path) -> tuple[int, int, str] | None:
     return metadata.st_dev, metadata.st_ino, digest.hexdigest()
 
 
-def _validate_managed_output(path: Path, *, kind: str) -> tuple[int, int, str] | None:
+def _validate_managed_output(path: Path, *, kind: str, schema: str | None = None) -> tuple[int, int, str] | None:
+    """Validate an output tree against its exact producer schema."""
+
     identity = _output_identity(path)
     if identity is None:
         return identity
@@ -3258,18 +3397,22 @@ def _validate_managed_output(path: Path, *, kind: str) -> tuple[int, int, str] |
         raise SkeletonError([f"cannot inspect skeleton output {path}: {exc}"]) from exc
     manifest = path / PACKET_MANIFEST
     try:
-        payload = json.loads(manifest.read_text(encoding="utf-8")) if manifest.is_file() else None
+        readable = manifest.is_file() and not manifest.is_symlink()
+        payload = json.loads(manifest.read_text(encoding="utf-8")) if readable else None
     except (OSError, RecursionError, ValueError):
         payload = None
     if not (
         isinstance(payload, dict)
         and payload.get("kind") == kind
         and isinstance(payload.get("schema"), str)
-        and (kind, payload.get("schema")) in MANAGED_OUTPUT_SCHEMAS
+        and (kind, payload.get("schema")) in (MANAGED_OUTPUT_SCHEMAS if schema is None else ((kind, schema),))
         and isinstance(payload.get(kind), list)
     ):
         raise SkeletonError([f"refusing to overwrite non-Autoform packet output: {path}"])
     return identity
+
+
+validate_managed_output = _validate_managed_output
 
 
 def _safe_node_path(node_id: str) -> Path:
@@ -3309,24 +3452,44 @@ def declaration_filename(name: str, *, suffix: str = ".lean") -> str:
     return f"{encoded}--{digest}{suffix}"
 
 
-def _stage_output(destination: Path, content: str | None = None) -> Path:
-    """Create a same-directory stage, a directory or a file of ``content``, with the old mode."""
+def _stage_output(destination: Path, content: str | None = None, *, stages: list[Path] | None = None) -> Path:
+    """Create a same-directory stage, a directory or a file of ``content``, with the old mode.
+
+    With ``stages``, the stage is registered there before it is created, so
+    whoever owns ``stages`` removes it however this call or a later step ends.
+    Without, a stage this call cannot finish is removed before the error leaves.
+    """
 
     destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing = not destination.is_symlink() and (
+            destination.is_dir() if content is None else destination.is_file()
+        )
+        mode = stat.S_IMODE(destination.stat().st_mode) if existing else None
+    except OSError as exc:
+        raise SkeletonError([f"cannot inspect skeleton output {destination}: {exc}"]) from exc
     stage = destination.with_name(f".{destination.name}.autoform-stage-{secrets.token_hex(8)}")
-    # Created exclusively before the cleanup below owns it, so a name collision never removes a foreign path.
-    stream = stage.mkdir() if content is None else stage.open("x", encoding="utf-8")
+    if stages is not None:
+        stages.append(stage)
+    try:
+        stream = stage.mkdir() if content is None else stage.open("x", encoding="utf-8")
+    except FileExistsError:
+        # Never created here, so the owner of ``stages`` must not remove a foreign path.
+        if stages is not None:
+            stages.remove(stage)
+        raise
     try:
         if stream is not None:
             with stream:
                 stream.write(content)
                 stream.flush()
                 os.fsync(stream.fileno())
-        if not destination.is_symlink() and (destination.is_dir() if content is None else destination.is_file()):
-            stage.chmod(stat.S_IMODE(destination.stat().st_mode))
+        if mode is not None:
+            stage.chmod(mode)
     except BaseException:
-        with contextlib.suppress(OSError):
-            _remove_output(stage)
+        if stages is None:
+            with contextlib.suppress(OSError):
+                _remove_output(stage)
         raise
     return stage
 
@@ -3571,13 +3734,14 @@ def write_packets(
     passages: str | Path | None = None,
     report_path: str | Path | None = None,
 ) -> list[Path]:
-    """Write one blind packet per skeleton for independent auditors.
+    """Write one comment-stripped packet per skeleton.
 
-    Each packet holds only what the auditor may see: the comment-stripped
-    skeleton. Nothing names the article, the source, or the intent. The
-    manifest beside the packets maps each file back to its article and hash so
-    testimony about a packet can be filed and checked, without the auditor
-    reading it.
+    Each packet holds only what an auditor may see: the comment-stripped
+    skeleton. Nothing in it names the article, the source, or the intent, but
+    its file name, under the article's path, names the article and the
+    declaration, so a blind auditor is given the packets ``review prepare``
+    writes instead, named by the hash of their bytes. The manifest beside the
+    packets maps each file back to its article and hashes.
 
     With ``passages``, the source passage each article cites is written to a
     second directory, one ``passage.txt`` per article. A faithfulness judge
@@ -3729,6 +3893,7 @@ __all__ = [
     "SkeletonError",
     "SkeletonReport",
     "TrustedDeclaration",
+    "blueprint_hash",
     "check_configuration_unchanged",
     "check_inputs_unchanged",
     "declaration_filename",
@@ -3748,6 +3913,7 @@ __all__ = [
     "snapshot_inputs",
     "source_excerpt",
     "source_passage",
+    "validate_managed_output",
     "write_packets",
     "write_skeleton_report",
 ]

@@ -18,12 +18,10 @@ syntax or CLI usage is needed, and the
 [worked example](references/cabannes-thesis-roadmap.md) only when a concrete
 source-to-DAG pattern would help.
 
-There is no `autoform` on `PATH` in a Lean project. Run every `autoform`
-command, from the Lean project root, as
-`uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform` followed by its arguments,
-where `<AUTOFORM_PLUGIN_ROOT>` is the absolute plugin root: the directory that
-holds this skill's `skills/` folder, along with `pyproject.toml` and
-`autoform_cli/`. Give a subagent that root and this prefix with its task.
+There is no `autoform` on `PATH`. Run it from the Lean project root as
+`uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform`, where the root is the
+absolute plugin directory holding `skills/` and `pyproject.toml`; give a
+subagent that prefix.
 
 ## Own the whole pass
 
@@ -97,43 +95,48 @@ attribution that the available sources do not support. Read
 Zulip work.
 
 Before adding a formalizable article, run `autoform search` over the blueprint
-for its result and for each intermediate result its proof proves or cites, by a
-few distinctive words of each statement and by a Lean name when one is known;
-the [search contract](../../autoform_cli/README.md#search-contract) says what
-is matched. Bound a listing with search's limit, never by dropping lines (as
-`| head` does), since that drops later hits and the library listings, which
-print last. Read each hit's statement, or a library hit's signature, and the
-counts the output opens with; a line ending in `...` is shortened, and the
-JSON output has it whole. Narrow a query whose count shows the limit cut it
-short. Matching is literal, so a
-result is new only when retries with fewer words, and under other usual names
-for its objects, also show no article
-stating it. Search the project's usable shared libraries in the same call: run
-`autoform library list .` once, and pass each package it reports as usable to
-every search as `--library NAME --lean-root .`, even while the blueprint is
-empty, since a library may already prove the result. The
-[library search rules](../formalize/references/library-search.md) give the
-details.
+for its result and for each intermediate result its proof proves or cites; the
+[search contract](../../autoform_cli/README.md#search-contract) says what is
+matched.
+
+- Search by a few distinctive words of each statement, and by a Lean name when
+  one is known. Matching is literal, so a result is new only when retries with
+  fewer words, and under other usual names for its objects, also show no
+  article stating it.
+- Bound a listing with search's limit, never by dropping lines (as `| head`
+  does), since that drops later hits and the library listings, which print
+  last. Read each hit's statement, or a library hit's signature, and the counts
+  the output opens with; narrow a query whose count shows the limit cut it
+  short. A line ending in `...` is shortened; the JSON output has it whole.
+- Run `autoform library list .` once, and pass each package it reports as
+  usable to every search as `--library NAME --lean-root .`, even while the
+  blueprint is empty, since a library may already prove the result. The
+  [library search rules](../formalize/references/library-search.md) give the
+  details.
+
 If a library already proves a result, reuse that proof instead of proving the
-result again: the result keeps its article. If a proof needs a library result
+result again: the result keeps its article. Its `## Proof depends on` then lists
+only the articles that proof uses, usually none; write the source's own route in
+its proof sketch, since linking each step would block the article on results its
+proof never needs. If a proof needs a library result
 that has no article yet, add an article for it, proved from the library, and
 link it under `## Proof depends on`. Whenever an article reuses a shared
 library declaration, name it in its implementation note, not in the article,
 and leave `lean:` unset until the project declares the result, which Formalize
 does from the library declaration. `lean:` names only a declaration in the
 project's own Lean files, since `autoform check --lean-root` resolves no other.
-A refusal (exit 2) is not an empty result: resolve what it reports without
-adding the article, and search again, except that a refusal naming a library is
-handled as the library search rules say. A dependency link to a page not yet
-written causes one, so search for a batch of articles before writing the first,
-for each one's result and the intermediate results its proof proves or cites.
-When another formalizable article already states the result, link to it from
-each article that needs it, under `## Depends on` or `## Proof depends on`, and
-from the coverage row, instead of adding a node. A hit that is more general, a
-special case, or only similar does not replace the result: add the article,
-depending on the hit where it is used. Search reads only the checkout it is
-given, so the owner of global consistency repeats it for what parallel agents
-added.
+
+- A refusal (exit 2) is not an empty result: resolve what it reports without
+  adding the article, and search again; a refusal naming a library is handled
+  as the library search rules say. A dependency link to a page not yet written
+  causes one, so search for a whole batch of articles before writing the first.
+- When another formalizable article already states the result, link to it from
+  each article that needs it, under `## Depends on` or `## Proof depends on`,
+  and from the coverage row, instead of adding a node. A hit that is more
+  general, a special case, or only similar does not replace the result: add the
+  article, depending on the hit where it is used.
+- Search reads only the checkout it is given, so the owner of global
+  consistency repeats it for what parallel agents added.
 
 Enumerate the entire adopted boundary in `blueprint/coverage/README.md`.
 `MAPPED` is unfinished, `DECOMPOSED` links source-grounded declaration
@@ -151,10 +154,7 @@ into fictional future work. Ground each statement and proof sketch in the
 source. Put genuine statement prerequisites under `## Depends on` and
 proof-only prerequisites under `## Proof depends on`.
 Never delete or reverse a genuine article edge to make a chapter-level or
-scope-level projection acyclic. When the project's CI pins an older
-`AUTOFORM_REF`, its `autoform check` still rejects such a cycle as a
-`rolled-up dependency cycle`: leave out the edge that closes it until the pin
-moves, and report the old pin and that edge.
+scope-level projection acyclic.
 Assign durable `article_id` metadata to new articles; run
 `autoform migrate article-ids blueprint --write` after creating the pages to
 add deterministic IDs.
@@ -162,26 +162,23 @@ Articles hold only frontmatter and informal mathematics; put Lean-side findings
 such as Mathlib gaps, prior art, and candidate declaration names in
 `blueprint/.implementation-notes/<article_id>.md`, never a transcript, a secret,
 or a machine-local path; Finish records a shared library declaration that does
-not apply on the source's page instead. The hidden per-article file
-stays out of the mathematical wiki and remains valid when the article moves.
-Never link it from an article. Delete it when the article is proved or marked
-`mathlib: true`; delete a container's note when every formalizable descendant,
-and every leaf marked `not_ready` beneath it, is proved and there is at least
-one; a module catalog never counts. To move an article, move its file, which
-keeps its `article_id` line and
-so its note; a page written afresh must take that line in the same edit that
-deletes the old page. When a commit deletes or merges an article,
-move anything still useful from its note into a surviving article's note and
-delete the note in that commit; an orphaned note blocks every command that loads
-the graph, and any worker may repair one the same way, or by restoring the
-`article_id` line of an article that still exists but lost it.
+not apply on the source's page instead. Never link a note from an article.
+Delete a note once `autoform audit` reports it as stale; the
+[format reference](../../autoform_cli/README.md#articles-and-containment) says
+when that is and how to repair an orphaned note. To move an article, move its
+file, which keeps its `article_id` line and so its note; a page written afresh
+must take that line in the same edit that deletes the old page. When a commit
+deletes or merges an article, move anything still useful from its note into a
+surviving article's note and delete the note in that commit.
 
-Before revising a formalizable leaf, acquire the `claim_target` that `autoform
-work context` reports for it, passing your own `--worker-id`; renew it while
-editing and release it once the committed revision is on the branch Formalize
-works from. A refused acquire means another agent owns the article: leave it and
-report it. Claims write refs to the board's remote, which is outward-facing, so
-make sure the request covers them. When a revision changes a statement whose
+Claims are optional; use them when [Formalize](../formalize/SKILL.md) would.
+When the project uses them, acquire the `claim_target` that `autoform work
+context` reports for a formalizable leaf before revising it, passing your own
+`--worker-id`; renew it while editing and release it once the committed revision
+is on the branch Formalize works from. A refused acquire means another agent
+owns the article: leave it and report it. Claims write refs to the board's
+remote, which is outward-facing, so make sure the request covers them. When a
+revision changes a statement whose
 article has `lean:`, retract it: replace `statement: formalized` with
 `statement: retracted`, remove `proof: formalized`, and keep `lean:`, which
 Formalize needs to run `autoform work impact`; an article without `lean:` just
@@ -194,15 +191,13 @@ new commit. When the revision lands later through a pull request, report the
 revised articles that had no `lean:` on that branch at your last update, and
 list them in the pull request's description if you open it, so whoever merges it
 retracts any that have gained `lean:` by then.
-When the project's CI pins an `AUTOFORM_REF`
-older than the marker, its `autoform check` rejects `statement: retracted`:
-remove `statement` and `proof` and keep `lean:` until the pin moves, and report
-the old pin. Under the open policy a retracted theorem stays
+Under the open policy a retracted theorem stays
 an open statement, so whatever rests on it stays conditionally proved. Retract
 only that article and the dependents whose Markdown text the revision rewrites,
-claiming them all in one acquire; the Lean-side impact decides every other
-dependent. For a Lean revision requested in Human Review, record the decision in
-the article's `blueprint/.implementation-notes/<article_id>.md` and retract the
+claiming them all in one acquire when the project uses claims; the Lean-side
+impact decides every other dependent. For a Lean revision requested in Human
+Review, record the decision in the article's
+`blueprint/.implementation-notes/<article_id>.md` and retract the
 article the same way, so it returns to the frontier as a statement phase flagged
 as a revision, and leave the Lean change to Formalize, which follows the
 [revision contract](../../autoform_cli/README.md#revision-contract); this skill
@@ -231,10 +226,7 @@ Review.
 Use `catalog: module` only as a source inventory for one existing Lean module.
 It may accompany exposition, but names, signatures, status tables, and imports
 do not replace reader-facing mathematical prose. A catalog leaf omits
-`declaration` and is never dispatchable proof work. When the project's CI pins
-an `AUTOFORM_REF` older than catalogs, its `autoform check` rejects `catalog:`
-and `area:`, and its `render` rejects `INVENTORIED`: move the pin, or report
-it, before adding catalogs, areas, or `INVENTORIED` rows.
+`declaration` and is never dispatchable proof work.
 
 For a `catalog: module` leaf, assertion keys describe the whole tracked module:
 set `statement: formalized` only when all inventoried public declarations
@@ -253,6 +245,14 @@ prerequisite, a catalog linked under `## Depends on` or `## Proof depends on`
 holds its dependents back until its whole-module assertion is recorded, so a
 dependent that needs one result links the declaration article that expounds it.
 
+When the project's CI pins an older `AUTOFORM_REF`, it rejects the keys and
+markers that ref predates, such as `catalog:`, `area:`, `INVENTORIED` and
+`statement: retracted`, and still rejects a rolled-up dependency cycle that
+newer refs allow. Move the pin, or report it, before relying on one. Until it
+moves, leave out the edge that closes such a cycle, and
+retract by removing `statement` and `proof` and keeping `lean:`; report the old
+pin and each change it held back.
+
 For a large source, divide independent sections among available agents while
 retaining one owner for global coverage, status semantics, and dependency
 consistency. Reconcile every affected source and milestone page, the coverage
@@ -264,18 +264,12 @@ After the final edit, use the CLI reference to run `autoform check` with
 `--lean-root .` and `autoform audit`, refresh the dependency summary with
 `autoform-visualize`, and resolve every finding introduced by this work or
 inside the adopted boundary. A `check` warning that a shared library
-declaration's docstring cites one of the blueprint's sources usually means a
-library search was skipped. Reuse the declaration as the library search rules
-say, and name it in the implementation note of each article that uses it. If it
-does not apply, or no article concerns it, name it on the source's page under
-`blueprint/sources/` with the reason; that record outlasts the implementation
-notes, which audit asks to delete once their article is proved. It covers every
-article that reaches the source, including ones added later, so give a reason
-that holds for each, and revisit it when the adopted boundary changes. A warning
-about a module's docstring is a library hit for each declaration it counts:
-naming the module on the source's page records them all, and importing the
-module, or naming one of them, silences the rest, so review the module when its
-warning first appears. Report unrelated
+declaration's docstring, or its module's, cites one of the blueprint's sources
+usually means a library search was skipped: reuse or record the declaration as
+the [CLI reference](../../autoform_cli/README.md#commands) says for that
+warning, give a recorded reason that holds for every article that reaches the
+source, revisit it when the adopted boundary changes, and review a module when
+its warning first appears. Report unrelated
 pre-existing findings instead of silently widening scope. A
 `catalog-unbounded-limit` or `catalog-unscoped-limit` warning describes
 existing Lean code and never fails the audit: report it, and change that code

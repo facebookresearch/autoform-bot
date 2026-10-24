@@ -104,6 +104,7 @@ function setup(extra = {}) {
     onCommit(bundle){commits.push(bundle); if(extra.commit) return extra.commit(bundle);},onError(error){errors.push(error);},
     captureState(){return structuredClone(state);}, restoreState(saved,bundle){state=structuredClone(saved);restored.push(saved);
       if(extra.restore) return extra.restore(saved,bundle);},
+    onIndex:extra.onIndex,
     htmlEntries:extra.htmlEntries || 8,jsonEntries:16,cacheBytes:extra.cacheBytes});
   return {nav,win,commits,errors,restored,fetches,contents,reply,initial,listeners,
     state(value){state=value;},getState(){return state;}};
@@ -311,6 +312,103 @@ def test_indexed_legacy_relations_and_bounded_html_cache_remain_compatible() -> 
     """)
 
 
+def test_compact_index_endpoints_round_trip_and_invalid_offsets_fail_closed() -> None:
+    _run(r"""
+      const app=setup(),compact=index(); compact.relations=[[0,1,1,0],['a',2,0,3]];
+      app.contents.set(absolute('dependencies/index.json'),compact);
+      await app.nav.start();
+      assert.deepEqual(app.nav.getIndex().relations,[['roadmap','a',1,0],['a','b',0,3]]);
+      assert.equal(app.errors.length,0); app.nav.dispose();
+      for(const row of [[-1,1,1,0],[3,1,1,0],[true,1,1,0],[.5,1,1,0],[0,1,-1,0],[0,1,0,0]]) {
+        const invalid=setup(),payload=index(); payload.relations=[row];
+        invalid.contents.set(absolute('dependencies/index.json'),payload);
+        await invalid.nav.start();
+        assert.equal(invalid.nav.getIndex(),null); assert.equal(invalid.errors.length,1);
+        assert.equal(invalid.errors[0].message,'Invalid search relation endpoint');
+        assert.equal(invalid.win.location.href,rootSpec.route);
+        invalid.nav.dispose();
+      }
+    """)
+
+
+def test_large_index_yields_and_commits_only_after_all_rows_validate() -> None:
+    _run(r"""
+      const payload=index();
+      for(let n=0;n<1024;n++) payload.nodes.push({id:'leaf-'+n,title:'Leaf '+n,route:'../roadmap/leaf-'+n+'.html'});
+      const before=JSON.stringify(payload),published=[];
+      const app=setup({onIndex(index){published.push(index);}});
+      const key=absolute('dependencies/index.json'); app.contents.set(key,payload);
+      const nativeTimer=global.setTimeout; let yields=0;
+      global.setTimeout=(callback,delay,...args)=>{
+        if(delay===0){yields++;assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);}
+        return nativeTimer(callback,delay,...args);
+      };
+      try {
+        const first=app.nav.loadIndex(),second=app.nav.loadIndex(); assert.strictEqual(first,second);
+        const result=await first; assert.strictEqual(await second,result);
+        assert(yields>=2); assert.equal(published.length,1); assert.strictEqual(app.nav.getIndex(),result);
+        assert.equal(result.nodes.length,payload.nodes.length); assert.equal(JSON.stringify(payload),before);
+        assert.deepEqual(result.relations,[['a','b',1,0]]);
+        assert.equal(app.fetches.filter(url=>url===key).length,1);
+      } finally {global.setTimeout=nativeTimer;app.nav.dispose();}
+
+      // A failure after earlier batches must not expose a partial index or poison retry.
+      const rejected=[],invalid=setup({onIndex(index){rejected.push(index);}}),broken=structuredClone(payload);
+      broken.nodes.at(-1).id=broken.nodes[0].id; invalid.contents.set(key,broken);
+      await assert.rejects(invalid.nav.loadIndex(),/Invalid search node/);
+      assert.equal(invalid.nav.getIndex(),null);assert.equal(rejected.length,0);
+      invalid.contents.set(key,payload);const recovered=await invalid.nav.loadIndex();
+      assert.equal(recovered.nodes.length,payload.nodes.length);assert.equal(rejected.length,1);
+      assert.equal(invalid.fetches.filter(url=>url===key).length,2);invalid.nav.dispose();
+    """)
+
+
+def test_disposal_during_index_batch_never_commits_or_reports_a_partial_index() -> None:
+    _run(r"""
+      const payload=index();for(let n=0;n<600;n++) payload.nodes.push({id:'leaf-'+n,title:'Leaf '+n});
+      const published=[],app=setup({onIndex(index){published.push(index);}});
+      app.contents.set(absolute('dependencies/index.json'),payload);
+      const nativeTimer=global.setTimeout;let yielded=false;
+      global.setTimeout=(callback,delay,...args)=>{
+        if(delay===0){yielded=true;assert.equal(app.nav.getIndex(),null);app.nav.dispose();}
+        return nativeTimer(callback,delay,...args);
+      };
+      try {await assert.rejects(app.nav.loadIndex(),error=>error.name==='AbortError');}
+      finally {global.setTimeout=nativeTimer;app.nav.dispose();}
+      assert(yielded);assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+      assert.equal(app.errors.length,0);assert.equal(app.win.location.href,rootSpec.route);
+    """)
+
+
+def test_relation_only_batches_yield_validate_late_rows_and_honor_disposal() -> None:
+    _run(r"""
+      for(const kind of ['valid','invalid','disposed']) {
+        const payload=index();payload.relations=Array.from({length:2050},()=>[1,2,1,0]);
+        if(kind==='invalid') payload.relations.at(-1)[1]='missing';
+        const published=[],app=setup({onIndex(index){published.push(index);}});
+        app.contents.set(absolute('dependencies/index.json'),payload);
+        const nativeTimer=global.setTimeout;let yields=0;
+        global.setTimeout=(callback,delay,...args)=>{
+          if(delay===0){yields++;assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+            if(kind==='disposed') app.nav.dispose();}
+          return nativeTimer(callback,delay,...args);
+        };
+        try {
+          if(kind==='valid') {
+            const result=await app.nav.loadIndex();assert(yields>=2);assert.equal(published.length,1);
+            assert.equal(result.relations.length,2050);
+            assert(result.relations.every(row=>JSON.stringify(row)===JSON.stringify(['a','b',1,0])));
+          } else {
+            await assert.rejects(app.nav.loadIndex(),error=>kind==='disposed' ? error.name==='AbortError' :
+              error.message==='Invalid search relation endpoint');
+            assert(yields>=(kind==='disposed'?1:2));assert.equal(app.nav.getIndex(),null);
+            assert.equal(published.length,0);assert.equal(app.errors.length,kind==='disposed'?0:1);
+          }
+        } finally {global.setTimeout=nativeTimer;app.nav.dispose();}
+      }
+    """)
+
+
 def test_reader_intercepts_only_plain_site_navigation_and_disposes_listener() -> None:
     _run(r"""
       const app=setup(); await app.nav.start(); const bundle=await app.nav.navigateNode('a');
@@ -365,7 +463,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
         assert(following); return viewer.slice(start+4,start+4+following.index).trim();
       }
       const hooks={},app=setup(hooks),calls=[];
-      let alive=true,readingReady=Promise.resolve(),restoration=0,currentBundle,contextGraph,trail,firstResize,
+      let alive=true,readingReady=Promise.resolve(),restoration=0,currentBundle,contextGraph,data,trail,firstResize,
         restoring=false,checkpointTimer;
       let release,mathReady; function deferMath() { mathReady=new Promise(resolve=>{release=resolve;}); }
       const window=app.win,document=app.initial.doc,host=app.initial.host;
@@ -381,13 +479,13 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
       };
       // Supply the renderer's actual private lexical collaborators; executed source stays verbatim.
       let ui$selected=null,ui$filtersTouched,ui$area,ui$requestedNode,ui$selectedStatuses,ui$showIsolated,
-        ui$mode,ui$listLimit,ui$relationIds,ui$direction,ui$query,ui$transform,ui$activeDirty,ui$reading;
+        ui$mode,ui$listLimit,ui$relationIds,ui$direction,ui$query,ui$transform,ui$activeDirty,ui$reading,ui$overviewOnly,ui$outlineLimit;
       const dom$readingBody=refs.$readingBody,dom$search=refs.$search,dom$error=refs.$error,
         dom$breadcrumb=refs.$breadcrumb,dom$navigation=refs.$navigation,dom$inventoryScroll=refs.$inventoryScroll;
       let dom$outlineToggle;
-      const records=new Map(),byId=new Map(),overlays=new Map(),navigation=app.nav;
+      const records=new Map(),byId=new Map(),overlays=new Map(),dom$inventoryRows=new Map(),navigation=app.nav;
       const mapAllowed=true,presentStatuses=['planned'],palette={planned:{}},LIST_PAGE=100;
-      const updateProjection=()=>{},closeSearch=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
+      const updateProjection=()=>{data=contextGraph;},closeSearch=()=>{},setFilters=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
       const resize=()=>{},center=()=>{},centerIfHidden=()=>{},showError=()=>{},trailList=()=>[],routeTrail=()=>[],sheetLayout=()=>false;
       const requestAnimationFrame=callback=>setImmediate(callback);
       const applyRoute=eval('('+callback('applyRoute')+')');
@@ -416,4 +514,45 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
       assert.equal(refs.$navigation.scrollTop,0); assert.equal(refs.$inventoryScroll.scrollTop,0);
       assert.equal(app.win.location.href,aSpec.route+'#latest-section');
       assert.equal(app.commits.length,commits); assert.equal(app.fetches.length,requests); app.nav.dispose();
+    """)
+
+
+def test_results_restoration_renders_saved_page_before_restoring_scroll_and_focus() -> None:
+    _run(r"""
+      // Execute both production callbacks: a stub refresh would miss its page reset.
+      // DOM collaborators only record ordering; the native browser test covers clipping/hit testing.
+      const viewer=fs.readFileSync(CLIENT.replace(/blueprint-navigation\.js$/,'blueprint-dag.js'),'utf8');
+      function callback(name) {
+        const start=viewer.indexOf('    function '+name+'('); assert(start>=0);
+        const following=/\n    function [A-Za-z_$][A-Za-z0-9_$]*\(/.exec(viewer.slice(start+4));
+        assert(following); return viewer.slice(start+4,start+4+following.index).trim();
+      }
+      const calls=[],LIST_PAGE=100,presentStatuses=['planned'],mapAllowed=false;
+      let alive=true,restoration=0,restoring=false,checkpointTimer,readingReady=Promise.resolve();
+      let ui$filtersTouched,ui$area,ui$requestedNode,ui$selected,ui$selectedStatuses,ui$showIsolated,
+        ui$mode='list',ui$listLimit=100,ui$relationIds,ui$outlineLimit,ui$direction,ui$query,ui$activeDirty,ui$transform;
+      const host={classList:{toggle(){}}},byId=new Map(),overlays=new Map();
+      let dom$inventoryRows=new Map(),dom$outlineToggle;
+      const dom$search={value:''},dom$navigation={scrollTop:0},dom$readingBody={scrollTop:0},dom$inventoryScroll={scrollTop:0};
+      const updateProjection=()=>{},renderNavigation=()=>{},setSheet=()=>{},resize=()=>{};
+      const syncControls=()=>{},renderInspector=()=>{},schedule=()=>{};
+      function renderInventory(resetScroll) {
+        calls.push(['render',ui$listLimit,resetScroll]); dom$inventoryRows=new Map();
+        for(let i=0;i<ui$listLimit;i++) dom$inventoryRows.set('result-'+i,{focus(options){
+          calls.push(['focus',i,dom$inventoryScroll.scrollTop,options]);
+        }});
+        if(resetScroll) dom$inventoryScroll.scrollTop=0;
+      }
+      const requestAnimationFrame=callback=>setImmediate(callback);
+      const refresh=eval('('+callback('refresh')+')'),restoreState=eval('('+callback('restoreState')+')');
+      const saved={mode:'list',listLimit:200,inventoryScroll:1800,outlineScroll:37,readingScroll:71,
+        focus:'result-150',camera:{x:12,y:24,scale:1.2},readingOpen:false};
+      await restoreState(saved,{isCurrent:()=>true});
+      assert.deepEqual(calls,[['render',200,false],['focus',150,1800,{preventScroll:true}]]);
+      assert.equal(ui$listLimit,200); assert.equal(dom$inventoryScroll.scrollTop,1800);
+      assert.equal(dom$navigation.scrollTop,37); assert.equal(dom$readingBody.scrollTop,71);
+      assert.deepEqual(ui$transform,saved.camera); assert.equal(restoring,false);
+      // A new filter/query still deliberately starts a fresh first page.
+      refresh(true); assert.equal(ui$listLimit,100); assert.equal(dom$inventoryScroll.scrollTop,0);
+      assert.deepEqual(calls.at(-1),['render',100,true]);
     """)

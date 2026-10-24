@@ -54,7 +54,7 @@ def _positions(view: GraphView) -> dict[str, dict[str, int]]:
             connected.update((edge.source, edge.target))
 
     # Isolates are inventory, not dependency topology. Rank only the connected
-    # graph, then park the isolates in a separate stable grid below it, which
+    # graph, then park the isolates in a separate stable grid beside it, which
     # the reader can hide.
     node_ids = [node_id for node_id in all_node_ids if node_id in connected]
     order_index = {node_id: index for index, node_id in enumerate(node_ids)}
@@ -116,16 +116,14 @@ def _positions(view: GraphView) -> dict[str, dict[str, int]]:
             result[node_id] = _cell(column, row)
 
     isolated = [node_id for node_id in all_node_ids if node_id not in connected]
-    isolate_base = max((position["row"] for position in result.values()), default=-2) + 2
+    isolate_base = max((position["column"] for position in result.values()), default=-2) + 2
     # One tall column of isolates made a project of 30 chapters fit as
-    # unreadable specks, so they fill a widescreen grid, at least as wide as
-    # the ranked DAG, in rows under it. Beside it they pushed a short chain
-    # into a corner of the first view.
+    # unreadable specks, so they fill a widescreen grid beside the ranked DAG.
     cell_aspect = (_NODE_HEIGHT + _ROW_GAP) / (_NODE_WIDTH + _COLUMN_GAP)
-    isolate_columns = max(len(by_rank), 1, math.ceil(math.sqrt(len(isolated) * cell_aspect * (16 / 9))))
+    isolate_columns = max(1, math.ceil(math.sqrt(len(isolated) * cell_aspect * (16 / 9))))
     for slot, node_id in enumerate(isolated):
-        column = slot % isolate_columns
-        row = isolate_base + slot // isolate_columns
+        column = isolate_base + slot % isolate_columns
+        row = slot // isolate_columns
         result[node_id] = _cell(column, row)
     return result
 
@@ -395,8 +393,10 @@ def write_search_index(
     """Write the global search index and optional derived reading/navigation data.
 
     Existing search fields retain their meanings. Integrated publication can
-    add canonical book routes, authored containment, and compact dependencies;
-    these are projections of the captured graph, never a second graph store.
+    add canonical book routes, authored containment, and compact dependencies.
+    Relations reference positions in the emitted node array; the reader also
+    accepts older string endpoints. This retains every typed edge without
+    repeating long article identifiers in the transport.
     """
     nodes: list[dict[str, object]] = []
     for node in view.nodes:
@@ -427,8 +427,9 @@ def write_search_index(
         nodes.append(entry)
     payload: dict[str, object] = {"nodes": nodes, "schema": SEARCH_SCHEMA}
     if include_relations:
+        positions = {node.id: position for position, node in enumerate(view.nodes)}
         payload["relations"] = [
-            [edge.source, edge.target, edge.statement_count, edge.proof_count]
+            [positions[edge.source], positions[edge.target], edge.statement_count, edge.proof_count]
             for edge in view.edges
         ]
     return _write_json(path, payload)

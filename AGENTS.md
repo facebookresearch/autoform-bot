@@ -31,12 +31,9 @@ workflow and cross-file maintenance.
   files under `blueprint/.implementation-notes/`; they are not mathematics or
   graph state. Rendered sites, the vault's dependency summary, dashboards, and
   runtime projections are derived views, not another durable scheduler or graph.
-- In consumer formalization work, Lean imports are allowed. Follow Formalize's
-  `autoform work import-impact` policy: baseline the affected articles and
-  repeat that evidence after rebuilding, check them for active conflicts, and
-  expand ownership only for validated downstream changes; when using claims,
-  also claim the article/module and check reported claim keys. Never replace
-  that evidence boundary with a blanket import ban.
+- In consumer formalization work, Lean imports are allowed;
+  [Formalize](skills/formalize/SKILL.md#import-edits) owns that policy. Never
+  replace it with a blanket import ban.
 - Public CLI and JSON shapes are contracts. Lean server work requires an
   explicit project root, bounded time and output, verified descendant cleanup,
   and no retry after dispatch with an unknown outcome. A project root is not an
@@ -67,9 +64,10 @@ The [CLI reference](autoform_cli/README.md) gives each command's exact rules.
 | --- | --- | --- |
 | `check` | invalid graph or `## Sources` structure; a `lean:` name missing or ambiguous under `--lean-root` | what work and search omit, byte-order marks, container declarations, library declarations citing the blueprint's sources |
 | `audit` | any finding; reporting findings is its job | none |
-| `render` | an input it refuses to publish (a symlink, a special or sensitive file), an output that overlaps the source, unresolved names under `--require-declarations` | unresolved names otherwise, omitted repository links |
+| `render` | an input it refuses to publish (a symlink, a special or sensitive file), an output that overlaps the source, unresolved names under `--require-declarations`, a review it cannot derive or trust under `--review` | unresolved names otherwise, omitted repository links, a card formula shown as typed |
 | `skeleton` | a stale or missing build, an unresolved or refused declaration | none; its report is trust evidence |
+| `review` | `prepare`, `record`: evidence or input it cannot derive, read, or trust, testimony the read-back rules refuse, a card conflict (2); `check`: any finding, reporting them is its job (1), and evidence it cannot derive or a blueprint changed during the run (2) | `record`: each formula a site would show as typed |
 | `work`, `search` | invalid usage (2); bytes changed since the graph loaded; a refused library; under `--module-scope import-closure`, a file outside the captured sources that may import the closure | none; they leave out values they cannot represent, which `check` warns about |
 | `library index` | a missing or stale build (2); a stale index under `--check` (1) | none |
 | `project`, `doctor` | an inspection or catalog error, a failed diagnosis | a release pairing it cannot resolve |
-| `init` | an existing entry that differs from one it manages, without `--force` | the entries it left alone |
+| `init` | an input or target it cannot use safely: a case or Unicode variant of a path it manages (even with `--force`), a link or unusable root `.gitignore` in the way, a directory it cannot list, an invalid option or pinned Autoform tree | the existing entries it left alone; CI it skips when there is no Autoform ref to pin |

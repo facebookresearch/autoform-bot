@@ -8,12 +8,10 @@ description: >-
 
 # Formalize the Markdown roadmap
 
-There is no `autoform` on `PATH` in a Lean project. Run every `autoform`
-command, from the Lean project, as
-`uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform` followed by its arguments,
-where `<AUTOFORM_PLUGIN_ROOT>` is the absolute plugin root: the directory that
-holds this skill's `skills/` folder, along with `pyproject.toml` and
-`autoform_cli/`. Give a subagent that root and this prefix with its task.
+There is no `autoform` on `PATH`. Run it from the Lean project as
+`uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform`, where the root is the
+absolute plugin directory holding `skills/` and `pyproject.toml`; give a
+subagent that prefix.
 
 Treat `blueprint/roadmap/**/*.md` as the sole durable work graph. The
 [CLI reference](../../autoform_cli/README.md#commands) documents the commands.
@@ -26,11 +24,9 @@ author ready, running, retrying, failed, or blocked scheduler states. If `work
 list` refuses because unfinished leaves lack `article_id`, run `autoform
 migrate article-ids <PROJECT>/blueprint --write`, validate, and commit that
 change before starting work. If a command refuses because an
-implementation note names no roadmap article, find out why. When an article
-that still exists lost its `article_id` line, restore the line. When the
-article was deleted or merged, often by a parallel branch that Git merged
-without a conflict, move anything still useful into the surviving article's
-note, delete the orphan, and commit. Any worker may make this repair.
+implementation note names no roadmap article, any worker may repair it as the
+[format reference](../../autoform_cli/README.md#articles-and-containment) says,
+and commit.
 
 For a direct formalization request, use a compatible native persistent Goal
 when available and complete one useful frontier pass. Native subagents may work
@@ -49,7 +45,11 @@ first build or Lean tool call, so the worktrees unpack from a full cache instead
 of downloading into it together. If the rerun fails too, ask the user before
 creating worktrees, since each would then fetch or build Mathlib on its own.
 Builds take no claim, so workers on one machine may build at the same time:
-dispatch no more at once than its memory can build for.
+dispatch no more at once than its memory can build for. When the lakefile sets
+`enableArtifactCache` and `restoreAllArtifacts`, as `project new` writes it, a
+worktree can reuse the modules another checkout already built from the same
+sources and dependencies instead of rebuilding them; if it lacks them, Setup
+offers to add them.
 
 Claims are optional. Within one run the lead keeps its workers apart, so the run
 needs none: no two workers, the lead included, hold the same target at once. A
@@ -134,21 +134,22 @@ except as the open-statement policy below allows.
 Before stating an article's result and before adding a helper, also run
 `autoform search` over the blueprint of `<PROJECT>` and its usable shared
 libraries for it, as the
-[search contract](../../autoform_cli/README.md#search-contract) describes; the
+[search contract](../../autoform_cli/README.md#search-contract) describes. The
 [library search rules](references/library-search.md) say how to use a library
-hit. Read each hit's statement; the search before stating an article's result
-finds that article itself, which is not a duplicate. Matching is literal, so no
-article states the helper only when retries with fewer words, and under other
-usual names, also show none. A refusal (exit 2) is not an empty result. A
-refusal that names a library: rerun without that library and continue, and
-report that library as not searched, so its answer is unknown. Any other
-refusal: retry one that asks for it, otherwise add no helper and report it as
-the leaf's blocker. Use the declaration of a blueprint hit that states the
-helper only when the selected article's dependencies reach that hit's article,
-and as the open-statement policy below allows. A hit they do not reach is a
-missing prerequisite; never restate a hit as a helper. A library hit needed as
-a helper is used directly; one that states the article's own result is handled
-as the library search rules say.
+hit and what to do with a refusal that names a library.
+
+- Read each hit's statement; the search before stating an article's result
+  finds that article itself, which is not a duplicate.
+- Matching is literal, so no article states the helper only when retries with
+  fewer words, and under other usual names, also show none.
+- A refusal (exit 2) is not an empty result. Retry one that asks for it. A
+  refusal that does not name a library otherwise blocks the leaf: add no helper
+  and report it as the blocker. One that names a library follows the
+  [library rules](references/library-search.md).
+- Use the declaration of a blueprint hit that states the helper only when the
+  selected article's dependencies reach that hit's article, and as the
+  open-statement policy below allows. A hit they do not reach is a missing
+  prerequisite; never restate a hit as a helper.
 
 `roadmap/README.md` sets the project's policy. Under the default strict policy,
 project CI rejects `sorry`: the statement phase writes the declaration and, for
@@ -186,10 +187,10 @@ theorems as findings. Once the proof is complete and its focused build passes,
 also run Batteries' linter: `#lint only unusedArguments in <Module>` after
 `import <Module>`, where `<Module>` declares the article's theorems, and act
 only on its findings for those theorems. From its release for Lean v4.32.0 it
-does not report an argument whose name starts with `_` or any unnamed argument
-other than an instance, such as the antecedent of `p → q` or the hypothesis in
-`∀ n > 0`; its releases for Lean v4.30.0 and v4.31.0 check no theorem at all.
-A finding means the proof never uses that argument.
+skips an argument named with a leading `_` and an unnamed one other than an
+instance, such as the antecedent of `p → q`; its releases for Lean v4.30.0 and
+v4.31.0 check no theorem at all, so a clean run there is not evidence. A
+finding means the proof never uses that argument.
 If the statement assumes something
 the source derives, such as a supremum the source obtains from boundedness,
 restate it to conclude what the source concludes. If a section `variable`
@@ -216,11 +217,10 @@ mathematics. Write notes only in the selected article's
 prior art, friction, partial progress, and, after a useful failed route,
 distilled reusable evidence (the remaining goal, checked lemmas, and next
 route), never a transcript or retry counter, and never a secret or machine-local
-path. The durable ID keeps the note with an article when its roadmap path moves,
-and one file per article avoids cross-worker merge hotspots. Move still-useful
-notes already in the article there and drop the rest. Delete the file once the
-article is proved; an empty file fails `autoform check`. Never link the hidden
-note from an article, because publication omits it. A missing prerequisite, an
+path. Move still-useful notes already in the article there and drop the rest.
+Delete the file once the article is proved; an empty file fails `autoform
+check`. Never link the hidden note from an article, because publication omits
+it. A missing prerequisite, an
 incorrect decomposition, a change another article needs beyond an import repair,
 or a proof recorded without its statement returns to Roadmap instead of silently
 changing the DAG. So does a `check` warning that a shared library declaration's
@@ -241,13 +241,24 @@ pre-existing findings instead of fixing them. A `catalog-unbounded-limit` or
 the audit: report it, and change that code only when the user asks, rebuilding
 before anything is recorded.
 
+If `<PROJECT>/blueprint/.autoform-review` exists, project CI also runs the
+statement-review gate: `autoform review check` fails on a formalized statement
+until it has current read-backs and `review_approved` holds its current review
+hash. Human Review files the read-backs and copies that hash only when a person
+approves; never write either yourself. Hand each newly formalized statement,
+and each article whose read-backs or approval the result made stale (an import
+edit's repairs included), to Human Review; until that review lands, the gate
+stays red wherever the result is integrated.
+
 Commit the verified result in its worktree and rebase onto or merge the current
 shared branch. On the result, run the default `lake build` and `autoform audit`,
 delete every note the audit now reports as stale in a follow-up commit, confirm
 that dependency readiness is unchanged, and confirm that the selected article
 differs from its starting `article_revision` only by this worker's edits; if
-integration changed the candidate, repeat the review, check, and audit. For an
-import edit, also re-run `autoform work import-impact` on the result; if
+integration changed the candidate, repeat the review, check, and audit. With the
+review marker, then run `autoform review check` with `--lean-root`, which needs
+that build because it extracts every Lean-mapped article, and report its
+findings for every article they name. For an import edit, also re-run `autoform work import-impact` on the result; if
 integration brought in a change to an article it lists as affected, that changed
 the candidate too, so capture a fresh baseline of that article on the shared
 branch. In a run without claims, send the lead that report's

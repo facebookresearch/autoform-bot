@@ -104,3 +104,39 @@ def test_full_visibility_preference_keeps_selection_and_never_refits_a_saved_cam
       document.activeElement=overlays.get('region:Geometry');paint();
       assert.equal(tabstop().dataset.autoformNodeId,'region:Geometry');assert.equal(JSON.stringify(ui$transform),camera);
     """)
+
+
+_DESKTOP_OVERVIEW = r"""
+dom$stage={clientWidth:1336,clientHeight:812};ui$orientation='lr';sheetLayout=()=>false;
+data={nodes:['A','B','C','D','E'].map((area,index)=>({id:'region:'+area,_region:area,area,
+  kind:'scope',status:'planned',width:264,height:148,_index:index})),edges:[]};
+data.nodes.forEach((node,index)=>data.edges.push({source:node.id,target:data.nodes[(index+1)%5].id,statement:3,proof:0}));
+ui$active=data.nodes;ui$activeIds=new Set(data.nodes.map(node=>node.id));byId=new Map(data.nodes.map(node=>[node.id,node]));
+const current=geometry();
+// A route's conservative bounds may include an outside return corridor.
+// Keep the real production card geometry and readable camera, not a fake renderer.
+current.routes.forEach(route=>route.bounds={x:-5000,y:-5000,w:10000,h:10000});
+"""
+
+
+def test_small_authored_desktop_overview_fits_its_cards_not_peripheral_route_bounds() -> None:
+    _run(_DESKTOP_OVERVIEW + """
+      fit();paint();assert(!String(dom$density.textContent||'').startsWith('Showing part of the map'),
+        'All five authored areas should fit after the empty reader yields its width');
+      assert(ui$transform.scale>=.9,'Do not trade legibility for a repository-wide fit');
+      data.nodes.forEach(node=>{const box=screen(node);
+        assert(box.x>=36-1e-6&&box.x+box.w<=dom$stage.clientWidth-36+1e-6);
+        assert(box.y>=36-1e-6&&box.y+box.h<=dom$stage.clientHeight-36+1e-6);
+      });
+    """)
+
+
+def test_ordinary_scope_fit_keeps_peripheral_routes_and_the_readable_floor() -> None:
+    _run(_DESKTOP_OVERVIEW + """
+      data.nodes.forEach(node=>delete node._region);
+      fit();assert.equal(ui$transform.scale,.9,'A large scope must stay readable, not shrink to fit the repository');
+      // Its real route bounds do not fit at the floor, so the camera centres a card rather than the whole bounds.
+      const first=screen(data.nodes[0]);
+      assert(Math.abs(first.x+first.w/2-dom$stage.clientWidth/2)<1e-6&&Math.abs(first.y+first.h/2-dom$stage.clientHeight/2)<1e-6,
+        'Normal scope geometry must still account for its real route bounds');
+    """)

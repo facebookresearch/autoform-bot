@@ -11,7 +11,7 @@ import pytest
 
 from autoform_cli.dag_viewer import MAX_MAP_NODES
 from autoform_cli import graph_pages, render
-from tests.test_integrated_publication import _project, _write
+from tests.test_integrated_publication import _decoded_relations, _project, _write
 
 _NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated projection tests")
@@ -297,7 +297,7 @@ def test_an_oversized_module_scope_keeps_its_real_math_articles_navigable_withou
       assert(last.route && last.route.includes('/roadmap/catalogs/index.html#'));
       ui$mode = 'sources';
       assert.deepEqual(inventoryNodes().map(node => node.id), ['catalogs/source']);
-    """, fixture={"index": index, "context": context, "count": count})
+    """, fixture={"index": {**index, "relations": _decoded_relations(index)}, "context": context, "count": count})
 
 
 def test_a_deep_trail_keeps_first_parent_and_current_and_names_what_the_ellipsis_hides() -> None:
@@ -317,7 +317,6 @@ def test_a_deep_trail_keeps_first_parent_and_current_and_names_what_the_ellipsis
       assert.equal(items[1].getAttribute('aria-current'), null);
       assert.equal(items[3].getAttribute('aria-current'), 'page');
       assert.equal(items[2].children[0].href, trail[3].url);
-      // Three entries fit, and the rail's ancestor path is never shortened.
+      // Three entries fit.
       assert.deepEqual(trailList(trail.slice(2)).children.map(item => item.title), trail.slice(2).map(entry => entry.label));
-      assert.equal(trailList(trail, 'bp-dag-navigation-path').children.length, 5);
     """)
