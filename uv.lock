@@ -121,7 +121,6 @@ dev = [
     { name = "mkdocs" },
     { name = "mkdocs-literate-nav" },
     { name = "mkdocs-material" },
-    { name = "pymdown-extensions" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -137,7 +136,6 @@ requires-dist = [
     { name = "playwright", marker = "extra == 'browser'", specifier = "==1.62.0" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "pymdown-extensions", specifier = "==11.0.1" },
-    { name = "pymdown-extensions", marker = "extra == 'dev'", specifier = ">=11.0.1,<12" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
     { name = "tomli", specifier = ">=2.3.1,<2.4" },

@@ -419,7 +419,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=_positive_seconds,
         default=120.0,
         metavar="SECONDS",
-        help="time limit for the whole listing (default: 120)",
+        help="deadline for the listing's Git commands (default: 120)",
     )
     claim_cleanup = claim_subparsers.add_parser("cleanup")
     _add_claim_board_arguments(claim_cleanup)

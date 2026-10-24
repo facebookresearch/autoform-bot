@@ -376,23 +376,6 @@ class ProjectResourceCache(Generic[T]):
             raise
 
     @contextmanager
-    def lease(
-        self,
-        project_dir: str,
-        *,
-        acquisition_timeout: float | None = None,
-        creation_budget: float = 0.0,
-    ) -> Iterator[T]:
-        """Keep a project resource alive for the complete operation."""
-        root = resolve_lean_project_dir(project_dir)
-        with self.lease_resolved(
-            root,
-            acquisition_timeout=acquisition_timeout,
-            creation_budget=creation_budget,
-        ) as resource:
-            yield resource
-
-    @contextmanager
     def lease_resolved(
         self,
         root: Path,
@@ -471,11 +454,6 @@ class ProjectResourceCache(Generic[T]):
                 "creating": sorted(str(root) for root in self._creating),
                 "retiring": sorted(str(root) for root in self._retiring),
             }
-
-    def invalidate(self, project_dir: str, resource: T) -> None:
-        """Arrange to replace a failed resource after its active calls finish."""
-        root = resolve_lean_project_dir(project_dir)
-        self.invalidate_resolved(root, resource)
 
     def invalidate_resolved(self, root: Path, resource: T) -> None:
         """Invalidate a lease by its retained root without pathname re-resolution."""

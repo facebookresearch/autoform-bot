@@ -527,20 +527,6 @@ def _lasting_root_failure(root: str | Path) -> str | None:
     return None
 
 
-def project_source_revision(
-    root: str | Path,
-    *,
-    exclude_roots: Iterable[str | Path] = (),
-    limits: TreeCaptureLimits = TreeCaptureLimits(),
-) -> str:
-    """Hash the exact Lean source set consumed by :func:`index_project`."""
-    return snapshot_project_sources(
-        root,
-        exclude_roots=exclude_roots,
-        limits=limits,
-    ).revision
-
-
 def open_project_sources(
     root: str | Path,
     *,
@@ -1130,14 +1116,6 @@ def _without_lean_comments(text: str, *, mask_literals: bool = False) -> str:
     return "".join(out)
 
 
-def strip_lean_comments(text: str) -> str:
-    """Remove every line and block comment, docstrings included, from Lean source."""
-
-    return "\n".join(
-        line.rstrip() for line in _without_lean_comments(text).splitlines() if line.strip()
-    )
-
-
 _DECLARATION_NAME = re.compile(r"(?:«[^»]*(?:»|$)|[^\s,«])+")
 
 
@@ -1478,10 +1456,8 @@ __all__ = [
     "detect_repository_url",
     "index_failure_message",
     "index_project",
-    "project_source_revision",
     "repository_top_level",
     "resolve_lean_root",
     "snapshot_project_sources",
-    "strip_lean_comments",
     "verify_repository_snapshot",
 ]

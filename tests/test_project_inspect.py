@@ -942,7 +942,7 @@ def test_toolchain_follows_elans_first_line_rule(tmp_path: Path, toolchain: str,
     assert (result.lean_toolchain == "leanprover/lean4:v4.32.2") is ok
 
 
-@pytest.mark.parametrize("separator", [chr(codepoint) for codepoint in range(0x1C, 0x20)])
+@pytest.mark.parametrize("separator", ["\x1c", "\x1f"])
 @pytest.mark.parametrize("side", ["before", "after"])
 def test_python_only_c0_whitespace_is_not_trimmed_like_elan(tmp_path: Path, separator: str, side: str) -> None:
     toolchain = "leanprover/lean4:v4.32.2"

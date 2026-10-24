@@ -21,10 +21,10 @@ date when the release is tagged.
   `--timeout` (120 seconds by default) bounds a listing, a slow step is named on
   stderr, and a failure goes to stderr labelled `timeout:`, `contention:` or
   `transport:` with nothing on stdout. Git no longer waits for a terminal
-  password prompt in claim commands, and a listing that runs out of time or is
-  interrupted no longer leaves its transport running. Formalize treats a
-  labelled `claim list` failure as an unreadable board, not as a board without
-  claims (#432).
+  password prompt in claim commands, and a `claim list` or `claim cleanup`
+  listing that runs out of time or is interrupted no longer leaves its
+  transport running. Formalize treats a labelled `claim list` failure as an
+  unreadable board, not as a board without claims (#432).
 - **Render.** An article's page lists its `mathlib_declaration` names in a
   Mathlib row, as text without a link, so a `mathlib: true` article names the
   declaration it restates (#388).
@@ -43,6 +43,16 @@ date when the release is tagged.
   explorer's own MathJax calls had typeset nothing on a generated site. Map
   cards, the Contents list, search and the explorer's head still show a title
   as typed (#455).
+
+### Fixed
+
+- **Claims.** `autoform dashboard` runs its claim listing's Git in the
+  dashboard's process group again, so Ctrl+C or a signal to that group stops
+  Git along with the dashboard (#447). On macOS and Windows, a listing shows
+  both of two claims whose keys, or folders in them, differ only in case,
+  including with Apple's Git, which stored one key's name holding the other's
+  lease (#452). The claim contract now says what `--timeout` bounds and which
+  listings run Git apart from their caller (#448).
 
 ## 0.6.0 (2026-10-22)
 

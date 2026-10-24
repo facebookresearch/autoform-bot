@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli import claims
+from autoform_cli.__main__ import main
 
 
 def _git(*args: str, cwd: Path | None = None, input_text: str | None = None) -> str:
@@ -183,6 +184,12 @@ def _plant_lease(repo: Path, key: str, **changes: object) -> str:
     return _plant_message(repo, key, json.dumps(lease))
 
 
+def _holds(board: claims.ClaimBoard, key: str) -> bool:
+    """Whether *board*'s worker owns the live lease at *key*."""
+    lease = board.read(key)
+    return lease is not None and lease["owner"] == board.worker_id and not board.expired(lease)
+
+
 def test_acquire_read_list_and_release_round_trip(tmp_path: Path, board_repo: Path) -> None:
     board = _board(tmp_path, board_repo, "worker-a")
 
@@ -193,7 +200,7 @@ def test_acquire_read_list_and_release_round_trip(tmp_path: Path, board_repo: Pa
     assert lease["owner"] == "worker-a"
     assert lease["resource"] == "author/node"
     assert lease["note"] == "proof"
-    assert board.holds("author/node")
+    assert _holds(board, "author/node")
 
     listed = board.list()
     assert [(item["_key"], item["_expired"]) for item in listed] == [("author/node", False)]
@@ -246,7 +253,7 @@ def test_expired_lease_can_be_taken_over(tmp_path: Path, board_repo: Path, monke
 
     assert first.acquire("expired", ttl=10)
     monkeypatch.setattr(claims.time, "time", lambda: now + 11)
-    assert not first.holds("expired")
+    assert not _holds(first, "expired")
     assert second.acquire("expired", ttl=60)
     assert second.read("expired")["owner"] == "worker-b"
 
@@ -260,7 +267,6 @@ def test_malformed_lease_is_unverifiable_and_not_takeover_eligible(tmp_path: Pat
         lambda: board.renew("malformed"),
         lambda: board.release("malformed"),
         lambda: board.acquire("malformed", ttl=600),
-        lambda: board.acquire("malformed", ttl=600, steal=True),
     ):
         with pytest.raises(claims.MalformedLeaseError):
             operation()
@@ -324,10 +330,10 @@ def test_single_key_operations_read_only_the_exact_claim_ref(tmp_path: Path, boa
 
     assert board.read("k") is None
     assert board.acquire("k", ttl=600)
-    assert board.holds("k")
+    assert _holds(board, "k")
     assert board.renew("k", ttl=600)
     assert board.release("k")
-    assert peer.holds("a/refs/autoform-claims/k")
+    assert _holds(peer, "a/refs/autoform-claims/k")
 
 
 @pytest.mark.parametrize("now", [float("nan"), float("inf"), float("-inf")])
@@ -422,82 +428,6 @@ def test_transport_failure_raises_without_local_fallback(tmp_path: Path) -> None
     assert not (board.scratch / claims.CLAIM_REF_PREFIX / "key").exists()
 
 
-def test_heartbeat_verifies_ownership_immediately_on_entry() -> None:
-    class LostBoard:
-        def renew(self, key: str, ttl: int | float) -> bool:
-            return False
-
-    heartbeat = claims.Heartbeat(LostBoard(), "key", interval=1, ttl=30)  # type: ignore[arg-type]
-    with pytest.raises(claims.ClaimTransportError, match="lost before"):
-        with heartbeat:
-            pytest.fail("unowned work must not enter the protected context")
-
-    assert heartbeat.lost.is_set()
-    assert heartbeat._thread is None
-
-
-def test_heartbeat_rejects_interval_that_can_outlive_lease() -> None:
-    with pytest.raises(ValueError, match="shorter than"):
-        claims.Heartbeat(object(), "key", interval=30, ttl=30)  # type: ignore[arg-type]
-
-
-@pytest.mark.parametrize(
-    ("interval", "ttl", "message"),
-    [
-        (float("nan"), 30, "heartbeat interval must be a finite positive number"),
-        (float("inf"), 30, "heartbeat interval must be a finite positive number"),
-        (1, float("nan"), "claim TTL must be a finite positive number"),
-        (1, float("inf"), "claim TTL must be a finite positive number"),
-        (1, float("-inf"), "claim TTL must be a finite positive number"),
-    ],
-)
-def test_heartbeat_rejects_nonfinite_timing(interval: float, ttl: float, message: str) -> None:
-    with pytest.raises(ValueError, match=message):
-        claims.Heartbeat(object(), "key", interval=interval, ttl=ttl)  # type: ignore[arg-type]
-
-
-def test_heartbeat_marks_ownership_lost_on_transport_failure() -> None:
-    attempted = threading.Event()
-
-    class FailingBoard:
-        calls = 0
-
-        def renew(self, key: str, ttl: int | float) -> bool:
-            self.calls += 1
-            if self.calls == 1:
-                return True
-            attempted.set()
-            raise claims.ClaimTransportError("board unavailable")
-
-    heartbeat = claims.Heartbeat(FailingBoard(), "key", interval=0.01, ttl=30)  # type: ignore[arg-type]
-    with heartbeat:
-        assert attempted.wait(timeout=2)
-        assert heartbeat.lost.wait(timeout=2)
-
-    assert isinstance(heartbeat.error, claims.ClaimTransportError)
-
-
-def test_heartbeat_marks_ownership_lost_when_renew_is_refused() -> None:
-    attempted = threading.Event()
-
-    class LostBoard:
-        calls = 0
-
-        def renew(self, key: str, ttl: int | float) -> bool:
-            self.calls += 1
-            if self.calls == 1:
-                return True
-            attempted.set()
-            return False
-
-    heartbeat = claims.Heartbeat(LostBoard(), "key", interval=0.01, ttl=30)  # type: ignore[arg-type]
-    with heartbeat:
-        assert attempted.wait(timeout=2)
-        assert heartbeat.lost.wait(timeout=2)
-
-    assert heartbeat.error is None
-
-
 @pytest.mark.parametrize(
     "changes",
     [
@@ -522,7 +452,7 @@ def test_schema_resource_or_required_field_mismatch_is_malformed(
     board = _board(tmp_path, board_repo, "worker-a")
 
     with pytest.raises(claims.MalformedLeaseError):
-        board.holds("wrong")
+        board.read("wrong")
     with pytest.raises(claims.MalformedLeaseError):
         board.renew("wrong")
     with pytest.raises(claims.MalformedLeaseError):
@@ -907,6 +837,94 @@ def test_list_lists_claim_keys_that_differ_only_in_case_on_any_filesystem(
     assert reader._git(["for-each-ref", "refs/"]).stdout == ""
 
 
+def test_list_on_a_case_insensitive_scratch_lists_both_keys_when_git_keeps_one_ref_silently(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    oids = _plant_packed_leases(board_repo, ["lean/Foo", "lean/foo"])
+    reader = _board(tmp_path, board_repo, "worker-b")
+    git = reader._git
+
+    def keeps_one_ref_without_a_word(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        proc = git(args, **kwargs)
+        if args[0] == "fetch" and "--stdin" not in args and proc.returncode == 0:
+            # What Apple's Git 2.50 leaves on a case-insensitive filesystem: exit 0, one ref, the other's lease.
+            namespace = args[-1].rpartition(":")[2].removesuffix("*")
+            git(["update-ref", f"{namespace}lean/Foo", oids["lean/foo"]])
+            if f"{namespace}lean/foo" in git(["for-each-ref", "--format=%(refname)", namespace]).stdout.split():
+                git(["update-ref", "-d", f"{namespace}lean/foo"])
+        return proc
+
+    monkeypatch.setattr(reader, "_git", keeps_one_ref_without_a_word)
+    monkeypatch.setattr(reader, "_scratch_ignores_case", lambda: True)
+
+    assert [(item["_key"], item["_oid"], item["_malformed"]) for item in reader.list()] == [
+        ("lean/Foo", oids["lean/Foo"], False),
+        ("lean/foo", oids["lean/foo"], False),
+    ]
+    assert git(["for-each-ref", "refs/"]).stdout == ""
+
+
+def test_scratch_ignores_case_as_its_filesystem_does(tmp_path: Path) -> None:
+    board = _scratch_board(tmp_path)
+    (tmp_path / "Probe").touch()
+
+    assert board._scratch_ignores_case() is (tmp_path / "probe").exists()
+
+
+@pytest.mark.parametrize(
+    ("keys", "collide"),
+    [
+        (["lean/Foo", "lean/foo"], True),
+        (["Lean/Foo", "lean/Bar"], True),
+        (["lean/Foo", "lean/foo/bar"], True),
+        (["lean/foo", "lean/bar", "other"], False),
+        (["lean/foo"], False),
+    ],
+)
+def test_keys_collide_ignoring_case_when_they_or_their_folders_differ_only_in_case(
+    keys: list[str], collide: bool
+) -> None:
+    assert claims._collide_ignoring_case(keys) is collide
+
+
+@pytest.mark.parametrize("ignores_case", [False, True])
+def test_list_names_the_claims_after_its_fetch_only_on_a_case_insensitive_scratch(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch, ignores_case: bool
+) -> None:
+    owner = _board(tmp_path, board_repo, "worker-a")
+    assert owner.acquire_many(["a", "b"], ttl=600)
+    reader = _board(tmp_path, board_repo, "worker-b")
+    monkeypatch.setattr(reader, "_scratch_ignores_case", lambda: ignores_case)
+    calls = _counting(reader, monkeypatch)
+
+    assert [lease["_key"] for lease in reader.list()] == ["a", "b"]
+
+    commands = [args[0] for args, _ in calls if args[0] in {"fetch", "ls-remote"}]
+    # Without colliding keys the fetch's result stands: no second fetch by name.
+    assert commands == (["fetch", "ls-remote"] if ignores_case else ["fetch"])
+
+
+def test_list_that_cannot_name_the_claims_after_its_fetch_leaves_no_refs(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = _board(tmp_path, board_repo, "worker-a")
+    assert owner.acquire("a", ttl=600)
+    reader = _board(tmp_path, board_repo, "worker-b")
+    git = reader._git
+
+    def unreachable_after_the_fetch(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[0] == "ls-remote":
+            raise claims.ClaimTransportError("git ls-remote failed against claim board: gone")
+        return git(args, **kwargs)
+
+    monkeypatch.setattr(reader, "_git", unreachable_after_the_fetch)
+    monkeypatch.setattr(reader, "_scratch_ignores_case", lambda: True)
+
+    with pytest.raises(claims.ClaimTransportError, match="gone"):
+        reader.list()
+    assert git(["for-each-ref", "refs/"]).stdout == ""
+
+
 def test_list_of_keys_that_differ_only_in_case_drops_a_claim_released_after_naming_it(
     tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1003,7 +1021,7 @@ def test_acquire_many_takes_over_an_expired_key(tmp_path: Path, board_repo: Path
         lease = board.read(key)
         assert lease["owner"] == "worker-a"
         assert lease["note"] == "revision"
-        assert board.holds(key)
+        assert _holds(board, key)
 
 
 def test_acquire_many_changes_no_ref_when_one_lease_goes_stale_before_the_push(
@@ -1028,7 +1046,7 @@ def test_acquire_many_changes_no_ref_when_one_lease_goes_stale_before_the_push(
     assert result == claims.ClaimBatchResult(False, ("contested",), "changed concurrently")
     assert _refs(board_repo) == observed["refs"]
     assert claims.CLAIM_REF_PREFIX + "free" not in observed["refs"]
-    assert peer.holds("contested")
+    assert _holds(peer, "contested")
 
 
 def test_acquire_many_changes_no_ref_when_the_remote_aborts_the_transaction(
@@ -1150,13 +1168,12 @@ def test_release_many_deletes_no_ref_when_one_lease_goes_stale_before_the_push(
     tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     board = _board(tmp_path, board_repo, "worker-a")
-    peer = _board(tmp_path, board_repo, "worker-b")
     assert board.acquire_many(["kept", "stolen"], ttl=600)
     push = board._cas_push_refs
     observed: dict[str, dict[str, str]] = {}
 
     def peer_steals_first(updates: Sequence[tuple[str, str | None, str]], *, atomic: bool = False):
-        assert peer.acquire("stolen", ttl=600, steal=True)
+        _plant_lease(board_repo, "stolen")
         observed["refs"] = _refs(board_repo)
         return push(updates, atomic=atomic)
 
@@ -1165,7 +1182,7 @@ def test_release_many_deletes_no_ref_when_one_lease_goes_stale_before_the_push(
 
     assert result == claims.ClaimBatchResult(False, ("stolen",), "changed concurrently")
     assert _refs(board_repo) == observed["refs"]
-    assert board.holds("kept")
+    assert _holds(board, "kept")
 
 
 @pytest.mark.parametrize("method", ["acquire_many", "renew_many", "release_many"])
@@ -1346,7 +1363,7 @@ def test_once_the_operator_deletes_a_stale_ref_lock_the_claim_proceeds(
     lock.unlink()
 
     assert board.acquire("node", ttl=600)
-    assert board.holds("node")
+    assert _holds(board, "node")
 
 
 @pytest.mark.parametrize("change", ["create", "update", "delete", "delete-packed", "batch"])
@@ -1515,8 +1532,6 @@ def test_a_stale_ref_lock_never_lets_a_takeover_replace_a_lease(
     assert not board.acquire("live", ttl=600)
     with pytest.raises(claims.ClaimRefLockedError):
         board.acquire("expired", ttl=600)
-    with pytest.raises(claims.ClaimRefLockedError):
-        board.acquire("live", ttl=600, steal=True)
 
     assert _refs(board_repo) == before
 
@@ -2208,6 +2223,60 @@ def test_git_shares_its_callers_process_group_unless_isolated(tmp_path: Path) ->
     assert int(board._git(probe, isolated=True).stdout) != os.getpgrp()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
+def test_git_off_the_main_thread_shares_its_callers_process_group_even_isolated(tmp_path: Path) -> None:
+    board = _scratch_board(tmp_path)
+    probe = _alias("pgid", "ps -o pgid= -p $$")
+    groups: list[int] = []
+    worker = threading.Thread(target=lambda: groups.append(int(board._git(probe, isolated=True).stdout)), daemon=True)
+    worker.start()
+    worker.join(timeout=30)
+
+    assert groups == [os.getpgrp()]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups and signals are POSIX")
+@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+def test_git_ends_with_its_caller_when_a_worker_thread_runs_it(tmp_path: Path, signum: int) -> None:
+    # As in `autoform dashboard`, whose request threads list claims.
+    pid_file = tmp_path / "pid"
+    script = (
+        "import pathlib, threading\n"
+        "from autoform_cli import claims\n"
+        f"board = claims.ClaimBoard(pathlib.Path({str(tmp_path / 'unused.git')!r}), 'w', "
+        f"pathlib.Path({str(tmp_path / 'scratch')!r}))\n"
+        "board._ensure_scratch()\n"
+        f"run = lambda: board._git({_alias('spawn', f'echo $$ > {pid_file}; exec sleep 30')!r}, isolated=True)\n"
+        "worker = threading.Thread(target=run, daemon=True)\n"
+        "worker.start()\n"
+        "worker.join()\n"
+    )
+    caller = subprocess.Popen(
+        [sys.executable, "-c", script],
+        cwd=Path(claims.__file__).parents[1],
+        start_new_session=True,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        started_by = time.monotonic() + 10
+        while not (pid_file.exists() and pid_file.read_text().strip()):
+            assert time.monotonic() < started_by, "git never started its command"
+            time.sleep(0.05)
+
+        os.killpg(caller.pid, signum)
+
+        assert caller.wait(timeout=10) != 0
+        _assert_gone(int(pid_file.read_text()))
+    except BaseException:
+        # A failed run leaves the caller, or git and its command in their own session.
+        with contextlib.suppress(OSError):
+            os.killpg(caller.pid, signal.SIGKILL)
+        with contextlib.suppress(OSError, ValueError):
+            os.kill(int(pid_file.read_text()), signal.SIGKILL)
+        caller.wait(timeout=10)
+        raise
+
+
 def test_list_runs_every_git_command_isolated_except_cleanup(
     tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2309,3 +2378,283 @@ def test_list_of_targets_reads_only_them_on_a_board_of_thousands(
     assert len(str(fetch["input_text"]).splitlines()) == 2
     assert len(calls) <= 6
     assert time.monotonic() - started < 15
+
+
+def _args(repo: Path, scratch: Path, *command: str) -> list[str]:
+    return [
+        "claim",
+        *command,
+        "--repo",
+        str(repo),
+        "--worker-id",
+        "worker-a",
+        "--scratch",
+        str(scratch),
+    ]
+
+
+def test_claim_cli_acquire_renew_list_release_round_trip(tmp_path: Path, board_repo: Path, capsys) -> None:
+    scratch = tmp_path / "scratch"
+    node_id = "chapter/main theorem"
+
+    assert main(_args(board_repo, scratch, "acquire", node_id, "--ttl", "600")) == 0
+    assert "acquired chapter/main theorem" in capsys.readouterr().out
+    assert main(_args(board_repo, scratch, "renew", node_id, "--ttl", "600")) == 0
+    assert "renewed chapter/main theorem" in capsys.readouterr().out
+    assert main(_args(board_repo, scratch, "list")) == 0
+    leases = json.loads(capsys.readouterr().out)
+    assert leases[0]["_key"] == claims.author_claim_key(node_id)
+    assert leases[0]["owner"] == "worker-a"
+    assert main(_args(board_repo, scratch, "release", node_id)) == 0
+    assert "released chapter/main theorem" in capsys.readouterr().out
+
+
+def test_claim_cli_refuses_live_peer_and_requires_identity(tmp_path: Path, board_repo: Path, capsys) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    assert main(_args(board_repo, first, "acquire", "node")) == 0
+    capsys.readouterr()
+
+    peer = [
+        "claim",
+        "acquire",
+        "node",
+        "--repo",
+        str(board_repo),
+        "--worker-id",
+        "worker-b",
+        "--scratch",
+        str(second),
+    ]
+    assert main(peer) == 1
+    assert "ownership is held or unverifiable" in capsys.readouterr().out
+
+    assert main(["claim", "list", "--repo", str(board_repo), "--scratch", str(second)]) == 1
+    assert "--worker-id" in capsys.readouterr().err
+
+
+def test_claim_cli_transport_failure_is_nonzero(tmp_path: Path, capsys) -> None:
+    missing = tmp_path / "missing" / "claims.git"
+    assert main(_args(missing, tmp_path / "scratch", "acquire", "node")) == 1
+    assert "error:" in capsys.readouterr().out
+
+
+def test_claim_cli_refuses_malformed_remote_lease(tmp_path: Path, board_repo: Path, capsys) -> None:
+    node_id = "node"
+    _plant_message(board_repo, claims.author_claim_key(node_id), "not json")
+
+    assert main(_args(board_repo, tmp_path / "scratch", "acquire", node_id)) == 1
+    assert "invalid lease JSON" in capsys.readouterr().out
+
+
+def _claim_refs(repo: Path) -> list[str]:
+    return sorted(_git("for-each-ref", "--format=%(refname)", claims.CLAIM_REF_PREFIX, cwd=repo).split())
+
+
+def _peer_args(repo: Path, scratch: Path, *command: str) -> list[str]:
+    return ["claim", *command, "--repo", str(repo), "--worker-id", "worker-b", "--scratch", str(scratch)]
+
+
+def test_claim_cli_single_node_output_is_unchanged(tmp_path: Path, board_repo: Path, capsys, monkeypatch) -> None:
+    def batch_path(*args: object, **kwargs: object) -> None:
+        raise AssertionError("one target must take the single-key path")
+
+    for name in ("acquire_many", "renew_many", "release_many"):
+        monkeypatch.setattr(claims.ClaimBoard, name, batch_path)
+    scratch = tmp_path / "scratch"
+    key = claims.author_claim_key("node")
+
+    assert main(_args(board_repo, scratch, "acquire", "node", "--ttl", "600")) == 0
+    assert capsys.readouterr().out == f"acquired node ({key})\n"
+    assert main(_args(board_repo, scratch, "renew", "node", "--ttl", "600")) == 0
+    assert capsys.readouterr().out == f"renewed node ({key})\n"
+    assert main(_peer_args(board_repo, tmp_path / "peer", "acquire", "node")) == 1
+    assert capsys.readouterr().out == "error: could not acquire node; ownership is held or unverifiable\n"
+    assert main(_args(board_repo, scratch, "release", "node")) == 0
+    assert capsys.readouterr().out == f"released node ({key})\n"
+
+
+def test_claim_cli_multi_node_round_trip_prints_one_line_per_target(tmp_path: Path, board_repo: Path, capsys) -> None:
+    scratch = tmp_path / "scratch"
+    nodes = ["chapter/main theorem", "chapter/helper"]
+
+    def expected(past_tense: str) -> str:
+        return "".join(f"{past_tense} {node} ({claims.author_claim_key(node)})\n" for node in nodes)
+
+    assert main(_args(board_repo, scratch, "acquire", *nodes, "--ttl", "600", "--note", "revision")) == 0
+    assert capsys.readouterr().out == expected("acquired")
+    assert main(_args(board_repo, scratch, "renew", *nodes, "--ttl", "600")) == 0
+    assert capsys.readouterr().out == expected("renewed")
+    assert main(_args(board_repo, scratch, "list")) == 0
+    leases = json.loads(capsys.readouterr().out)
+    assert sorted(lease["_key"] for lease in leases) == sorted(claims.author_claim_key(node) for node in nodes)
+    assert {(lease["owner"], lease["note"]) for lease in leases} == {("worker-a", "revision")}
+    assert main(_args(board_repo, scratch, "release", *nodes)) == 0
+    assert capsys.readouterr().out == expected("released")
+    assert _claim_refs(board_repo) == []
+
+
+def test_claim_cli_multi_node_failure_changes_no_claim(tmp_path: Path, board_repo: Path, capsys) -> None:
+    scratch = tmp_path / "scratch"
+    assert main(_peer_args(board_repo, tmp_path / "peer", "acquire", "b")) == 0
+    capsys.readouterr()
+
+    assert main(_args(board_repo, scratch, "acquire", "a", "b", "c")) == 1
+    captured = capsys.readouterr()
+    assert captured.out == "error: could not acquire a, b, c; no claim was acquired: held by another worker: b\n"
+    assert captured.err == ""
+    assert _claim_refs(board_repo) == [claims.CLAIM_REF_PREFIX + claims.author_claim_key("b")]
+
+    assert main(_args(board_repo, scratch, "acquire", "a")) == 0
+    capsys.readouterr()
+    assert main(_args(board_repo, scratch, "renew", "a", "b")) == 1
+    assert capsys.readouterr().out == (
+        "error: could not renew a, b; no claim was renewed: not held by this worker: b\n"
+    )
+    assert main(_args(board_repo, scratch, "release", "a", "b")) == 1
+    assert capsys.readouterr().out == (
+        "error: could not release a, b; no claim was released: not held by this worker: b\n"
+    )
+    assert _claim_refs(board_repo) == sorted(
+        claims.CLAIM_REF_PREFIX + claims.author_claim_key(node) for node in ("a", "b")
+    )
+
+
+def test_claim_cli_multi_node_names_a_malformed_claim(tmp_path: Path, board_repo: Path, capsys) -> None:
+    _plant_message(board_repo, claims.author_claim_key("b"), "not json")
+
+    assert main(_args(board_repo, tmp_path / "scratch", "acquire", "a", "b")) == 1
+    assert capsys.readouterr().out == "error: could not acquire a, b; no claim was acquired: malformed lease: b\n"
+    assert _claim_refs(board_repo) == [claims.CLAIM_REF_PREFIX + claims.author_claim_key("b")]
+
+
+def test_claim_cli_rejects_duplicate_targets_before_touching_the_board(
+    tmp_path: Path, board_repo: Path, capsys
+) -> None:
+    scratch = tmp_path / "scratch"
+
+    assert main(_args(board_repo, scratch, "acquire", "a", "b", "a")) == 2
+    captured = capsys.readouterr()
+    assert captured.err == "error: duplicate claim target: a\n"
+    assert captured.out == ""
+    assert _claim_refs(board_repo) == []
+    assert not scratch.exists()
+
+
+def test_claim_cli_multi_node_transport_failure_is_nonzero(tmp_path: Path, capsys) -> None:
+    missing = tmp_path / "missing" / "claims.git"
+    assert main(_args(missing, tmp_path / "scratch", "acquire", "a", "b")) == 1
+    assert capsys.readouterr().out.startswith("error: ")
+
+
+def test_claim_cli_names_a_stale_ref_lock_and_list_and_cleanup_warn_about_it(
+    tmp_path: Path, board_repo: Path, capsys, monkeypatch
+) -> None:
+    monkeypatch.setattr(claims, "_LOCK_GRACE_S", 0.1)
+    scratch = tmp_path / "scratch"
+    ref = claims.CLAIM_REF_PREFIX + claims.author_claim_key("a")
+    lock = _plant_ref_lock(board_repo, ref)
+    described = f"Git lock file {lock.resolve()} (modified 2023-11-14T22:13:20Z) blocks updates of {ref}"
+
+    assert main(_args(board_repo, scratch, "acquire", "a")) == 1
+    assert capsys.readouterr().out == (
+        f"error: {described}. Git leaves a lock file behind when a process stops while updating a ref; "
+        "if no Git process is using the claim board, delete it and retry\n"
+    )
+
+    for command, stdout in (("list", "[]\n"), ("cleanup", "removed 0 expired claim(s)\n")):
+        assert main(_args(board_repo, scratch, command)) == 0
+        captured = capsys.readouterr()
+        assert captured.out == stdout
+        assert captured.err == f"warning: {described}; if no Git process is using the claim board, delete it\n"
+    assert lock.exists()
+
+
+def test_claim_cli_lists_only_the_named_targets(tmp_path: Path, board_repo: Path, capsys) -> None:
+    scratch = tmp_path / "scratch"
+    assert main(_args(board_repo, scratch, "acquire", "node-a", "node-b")) == 0
+    capsys.readouterr()
+
+    assert main(_args(board_repo, scratch, "list", "node-b", "node-absent")) == 0
+    captured = capsys.readouterr()
+
+    assert [lease["_key"] for lease in json.loads(captured.out)] == [claims.author_claim_key("node-b")]
+    assert captured.err == ""
+
+
+def test_claim_cli_list_refuses_a_duplicate_target(tmp_path: Path, board_repo: Path, capsys) -> None:
+    assert main(_args(board_repo, tmp_path / "scratch", "list", "node-a", "node-a")) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "error: duplicate claim target: node-a\n"
+
+
+def test_claim_cli_list_labels_a_timeout(tmp_path: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.ext.allow")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "always")
+    args = ["claim", "list", "--repo", "ext::sleep 30", "--worker-id", "worker-a"]
+
+    assert main([*args, "--scratch", str(tmp_path / "scratch"), "--timeout", "1"]) == 1
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+    assert captured.err == (
+        "error: timeout: no answer from the claim board within 1s while fetching the claim board\n"
+    )
+
+
+def test_claim_cli_list_labels_a_transport_failure(tmp_path: Path, capsys) -> None:
+    missing = tmp_path / "missing" / "claims.git"
+
+    assert main(_args(missing, tmp_path / "scratch", "list")) == 1
+    captured = capsys.readouterr()
+
+    assert captured.out == ""
+    assert captured.err.startswith("error: transport: ")
+
+
+def test_claim_cli_list_labels_contention(tmp_path: Path, board_repo: Path, capsys, monkeypatch) -> None:
+    def contended(self: claims.ClaimBoard, *args: object, **kwargs: object) -> list[dict[str, object]]:
+        raise claims.ClaimContentionError("the claim board refused 3 fetches because claim refs kept moving")
+
+    monkeypatch.setattr(claims.ClaimBoard, "list", contended)
+
+    assert main(_args(board_repo, tmp_path / "scratch", "list")) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "error: contention: the claim board refused 3 fetches because claim refs kept moving\n"
+    )
+
+
+def test_claim_cli_list_names_a_slow_step_on_stderr(tmp_path: Path, board_repo: Path, capsys, monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    def slow(self: claims.ClaimBoard, keys: object = None, *, timeout: object = None, progress=None) -> list[object]:
+        seen.update(keys=keys, timeout=timeout)
+        progress("fetching 1 claim refs")
+        return []
+
+    monkeypatch.setattr(claims.ClaimBoard, "list", slow)
+
+    assert main([*_args(board_repo, tmp_path / "scratch", "list", "node-a"), "--timeout", "7"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == "[]\n"
+    assert captured.err == "claim list: fetching 1 claim refs...\n"
+    assert seen == {"keys": [claims.author_claim_key("node-a")], "timeout": 7.0}
+
+
+def test_claim_cli_list_without_targets_passes_none_and_the_default_timeout(
+    tmp_path: Path, board_repo: Path, capsys, monkeypatch
+) -> None:
+    seen: dict[str, object] = {}
+
+    def record(self: claims.ClaimBoard, keys: object = None, *, timeout: object = None, progress=None) -> list[object]:
+        seen.update(keys=keys, timeout=timeout)
+        return []
+
+    monkeypatch.setattr(claims.ClaimBoard, "list", record)
+
+    assert main(_args(board_repo, tmp_path / "scratch", "list")) == 0
+    assert seen == {"keys": None, "timeout": 120.0}
