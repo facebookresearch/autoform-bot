@@ -10,6 +10,7 @@ from autoform_cli.graph import Graph, Node, load_graph
 from autoform_cli.graph_views import project_view
 from autoform_cli.render import render_site
 from autoform_cli.status import derive
+from tests.test_integrated_publication import _decoded_relations
 
 
 def _render(blueprint: Path, output: Path) -> None:
@@ -119,7 +120,7 @@ def test_render_publishes_dependencies_between_the_roadmap_root_and_a_chapter(
         "Chapter result",
     }
     leaf = "chapter/result"
-    assert search_index["relations"] == [[leaf, "roadmap", 1, 0] if root_depends_on_chapter else ["roadmap", leaf, 1, 0]]
+    assert _decoded_relations(search_index) == [[leaf, "roadmap", 1, 0] if root_depends_on_chapter else ["roadmap", leaf, 1, 0]]
     records = {node["id"]: node for node in search_index["nodes"]}
     assert records[leaf]["route"] == "../roadmap/chapter/index.html#result"
     assert records[leaf]["result"] is True and records["roadmap"]["result"] is False

@@ -505,7 +505,7 @@
       restoration++; restoring = false; clearTimeout(checkpointTimer); currentBundle = bundle; contextGraph = bundle.graph; ui$area = null; ui$requestedNode = bundle.nodeId || null;
       document.title = bundle.title; dom$error.hidden = true;
       ui$filtersTouched = false; ui$relationIds = null;
-      ui$query = ""; dom$search.value = ""; closeSearch();
+      ui$query = ""; dom$search.value = ""; closeSearch(); setFilters(false);
       ui$reading = Boolean(bundle.readingSource);
       if (ui$reading && dom$readingBody) {
         dom$readingBody.replaceChildren(bundle.readingSource);
@@ -1424,7 +1424,10 @@
       if (next) { event.preventDefault(); next.focus(); }
       else if (event.key === "ArrowUp") { event.preventDefault(); dom$search.focus(); }
     }
-    function setFilters(open) { dom$filterPopover.hidden = !open; dom$filterSummary.setAttribute("aria-expanded", String(open)); }
+    function setFilters(open) {
+      if (!open && dom$filterPopover.contains(document.activeElement)) dom$filterSummary.focus({preventScroll: true});
+      dom$filterPopover.hidden = !open; dom$filterSummary.setAttribute("aria-expanded", String(open));
+    }
     function closeSearch() { dom$searchResults.hidden = true; }
     function openResults() {
       if (dom$searchResults.hidden && ui$query) renderSearch();

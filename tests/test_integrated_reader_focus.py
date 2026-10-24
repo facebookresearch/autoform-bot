@@ -44,6 +44,8 @@ var dom$search = new Element('input'), dom$readingBody = new Element('article');
 var dom$navigation = new Element('aside'), dom$inventoryScroll = new Element('div'), dom$outlineToggle = new Element('button');
 var dom$inventoryRows = new Map();
 var dom$error = new Element('div'), dom$breadcrumb = new Element('nav');
+var dom$filterPopover = new Element('div'), dom$filterSummary = new Element('button');
+dom$filterPopover.hidden = true;
 var hostClasses = new Set(['bp-dag-sheet-open']);
 var host = {classList: {contains: name => hostClasses.has(name),
   toggle(name, enabled) { if (enabled) hostClasses.add(name); else hostClasses.delete(name); }},
@@ -105,7 +107,7 @@ function bundle(id, snapshot, focus = true) {
 def _run(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
     script += "\nObject.assign(sandbox, {clearTimeout});\n"
-    script += "const callbacks=['captureState','applyRoute','restoreState'].map(original).join('\\n');\n"
+    script += "const callbacks=['captureState','applyRoute','restoreState','setFilters'].map(original).join('\\n');\n"
     program = '"use strict";\n' + _ENVIRONMENT
     script += "const pending=vm.runInContext(" + json.dumps(program) + "+constants[0]+callbacks+"
     script += json.dumps("\n(async()=>{\n" + body + "\n})()") + ",sandbox,{timeout:5000,filename:CLIENT});\n"
@@ -185,4 +187,30 @@ def test_stale_restore_ticket_cannot_reapply_old_reading_focus_or_scroll() -> No
       math.resolve(true); await frame(); await newReady;
       assert.equal(document.activeElement, dom$search);
       assert.equal(newer.heading.focuses.length, 0);
+    """)
+
+
+def test_article_commit_closes_transient_status_menu_without_losing_keyboard_focus() -> None:
+    _run(r"""
+      const input=new Element('input'); dom$filterPopover.replaceChildren(input);
+      setFilters(true); input.focus({});
+      assert.equal(dom$filterPopover.hidden,false);
+      const incoming=bundle('A',null,false),ready=applyRoute(incoming);
+      assert.equal(dom$filterPopover.hidden,true);
+      assert.equal(dom$filterSummary.attrs['aria-expanded'],'false');
+      assert.equal(document.activeElement,dom$filterSummary);
+      assert.equal(dom$filterSummary.focuses.at(-1).preventScroll,true);
+      await frame(); await ready;
+      assert.equal(document.activeElement,dom$filterSummary);
+      setFilters(true); input.focus({});
+      const selected=bundle('B',null,true),selectedReady=applyRoute(selected);
+      assert.equal(document.activeElement,dom$filterSummary);
+      await frame(); await selectedReady;
+      assert.equal(document.activeElement,selected.heading);
+      assert.equal(selected.heading.focuses.at(-1).preventScroll,true);
+      // Reopening/filtering does not shift a user's input focus or invent history state.
+      setFilters(true); input.focus({}); setFilters(true);
+      assert.equal(dom$filterPopover.hidden,false); assert.equal(document.activeElement,input);
+      dom$search.focus({}); const searchFocuses=dom$search.focuses.length; setFilters(false);
+      assert.equal(document.activeElement,dom$search); assert.equal(dom$search.focuses.length,searchFocuses);
     """)

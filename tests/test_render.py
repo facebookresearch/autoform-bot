@@ -49,6 +49,7 @@ from autoform_cli.render import (
     render_site,
 )
 from autoform_cli.status import INVENTORY_STATES, STATES, derive
+from tests.test_integrated_publication import _decoded_relations
 from tests.test_lean_sources import _git_commit
 
 
@@ -199,7 +200,7 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert records["roadmap"]["scope"] == "roadmap"
     assert records["top"]["route"] == "../roadmap/index.html#top"
     assert records["top"]["parent"] == records["top"]["scope"] == "roadmap"
-    assert search_index["relations"] == [["base", "top", 1, 0]]
+    assert _decoded_relations(search_index) == [["base", "top", 1, 0]]
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
     assert chapter.count('class="bp-reading-source"') == chapter.count('class="bp-dag-viewer"') == 1
     assert "This chapter develops the base object before the main result." in chapter

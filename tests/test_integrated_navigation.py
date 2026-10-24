@@ -311,6 +311,25 @@ def test_indexed_legacy_relations_and_bounded_html_cache_remain_compatible() -> 
     """)
 
 
+def test_compact_index_endpoints_round_trip_and_invalid_offsets_fail_closed() -> None:
+    _run(r"""
+      const app=setup(),compact=index(); compact.relations=[[0,1,1,0],['a',2,0,3]];
+      app.contents.set(absolute('dependencies/index.json'),compact);
+      await app.nav.start();
+      assert.deepEqual(app.nav.getIndex().relations,[['roadmap','a',1,0],['a','b',0,3]]);
+      assert.equal(app.errors.length,0); app.nav.dispose();
+      for(const row of [[-1,1,1,0],[3,1,1,0],[true,1,1,0],[.5,1,1,0],[0,1,-1,0],[0,1,0,0]]) {
+        const invalid=setup(),payload=index(); payload.relations=[row];
+        invalid.contents.set(absolute('dependencies/index.json'),payload);
+        await invalid.nav.start();
+        assert.equal(invalid.nav.getIndex(),null); assert.equal(invalid.errors.length,1);
+        assert.equal(invalid.errors[0].message,'Invalid search relation endpoint');
+        assert.equal(invalid.win.location.href,rootSpec.route);
+        invalid.nav.dispose();
+      }
+    """)
+
+
 def test_reader_intercepts_only_plain_site_navigation_and_disposes_listener() -> None:
     _run(r"""
       const app=setup(); await app.nav.start(); const bundle=await app.nav.navigateNode('a');
@@ -387,7 +406,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
       let dom$outlineToggle;
       const records=new Map(),byId=new Map(),overlays=new Map(),dom$inventoryRows=new Map(),navigation=app.nav;
       const mapAllowed=true,presentStatuses=['planned'],palette={planned:{}},LIST_PAGE=100;
-      const updateProjection=()=>{data=contextGraph;},closeSearch=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
+      const updateProjection=()=>{data=contextGraph;},closeSearch=()=>{},setFilters=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
       const resize=()=>{},center=()=>{},centerIfHidden=()=>{},showError=()=>{},trailList=()=>[],routeTrail=()=>[],sheetLayout=()=>false;
       const requestAnimationFrame=callback=>setImmediate(callback);
       const applyRoute=eval('('+callback('applyRoute')+')');

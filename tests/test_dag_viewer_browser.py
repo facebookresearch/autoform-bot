@@ -18,6 +18,7 @@ import pytest
 from autoform_cli import dag_viewer
 from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
+from tests.test_integrated_publication import _decoded_relations
 
 # CI sets this, so a missing browser fails the job instead of skipping every case.
 _REQUIRED = os.environ.get("AUTOFORM_REQUIRE_BROWSER_TESTS") == "1"
@@ -488,7 +489,7 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
     render_site(project / "blueprint", project / "site-src")
     build(load_config(config_file=str(project / "mkdocs.yml")))
     index = json.loads((project / "site/dependencies/index.json").read_text(encoding="utf-8"))
-    assert sum(edge[0] == "topology/result" for edge in index["relations"]) == 55
+    assert sum(edge[0] == "topology/result" for edge in _decoded_relations(index)) == 55
     with _served(project / "site") as url:
         yield url
 
@@ -681,7 +682,16 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
     row = page.locator(".bp-dag-inventory-row", has_text="Library inventory")
     row.click()
     _consumer_ready(page, explorer_consumer, "atlas/library")
-    page.locator(".bp-reading-body").get_by_role("link", name="Inspected module", exact=True).click()
+    # The publisher inlines this inventory into its source chapter. Activate
+    # its existing native permalink, not a fictitious standalone index link.
+    inventory = _reading_card(page, "atlas/library/module")
+    permalink = inventory.locator("a.bp-permalink")
+    playwright.expect(permalink).to_have_count(1)
+    assert urljoin(page.url, permalink.get_attribute("href")) == explorer_consumer.route("atlas/library/module")
+    permalink.scroll_into_view_if_needed()
+    permalink.hover()
+    _assert_hit(page, permalink)
+    permalink.click()
     _consumer_ready(page, explorer_consumer, "atlas/library/module")
     playwright.expect(page.locator(".bp-reading-body")).to_contain_text("not a mathematical proof")
     assert page.locator(".bp-dag-distribution,.bp-dag-status-pill").count() == 0
@@ -2105,16 +2115,21 @@ def test_edges_group_and_status_summary_follow_checkbox_and_history_state(
     page = desktop_page
     _open_consumer(page, explorer_consumer)
     summary = page.locator(".bp-dag-filter-summary")
+    popover = page.locator(".bp-dag-filter-popover")
     summary.click()
     edges = page.locator(".bp-dag-filter-popover fieldset.bp-dag-isolated")
     playwright.expect(edges).to_be_visible()
     isolates = edges.get_by_role("checkbox", name="Include items without edges", exact=True)
     isolates.uncheck()
+    playwright.expect(popover).to_be_visible()  # A filter checkpoint keeps its menu open.
     playwright.expect(summary).to_have_text("Status · edges only")
     search = _load_search_index(page, len(explorer_consumer.records))
     search.fill("Middle lemma")
     search.press("Enter")
     _consumer_selected(page, explorer_consumer, "chapter/middle")
+    playwright.expect(popover).to_be_hidden()
+    playwright.expect(summary).to_have_attribute("aria-expanded", "false")
+    playwright.expect(page.locator(".bp-reading-body h1")).to_be_focused()
     # The focal neighborhood has no isolates. That context hides the actual
     # Edges fieldset; it does not pretend that the earlier chapter filter still applies.
     playwright.expect(edges).to_be_hidden()
@@ -2122,14 +2137,19 @@ def test_edges_group_and_status_summary_follow_checkbox_and_history_state(
     playwright.expect(summary).to_have_text("Status")
     page.go_back()
     _consumer_ready(page, explorer_consumer)
+    playwright.expect(popover).to_be_hidden()
+    playwright.expect(summary).to_have_attribute("aria-expanded", "false")
     summary.click()
     playwright.expect(isolates).not_to_be_checked()
     playwright.expect(summary).to_have_text("Status · edges only")
     page.go_forward()
     _consumer_selected(page, explorer_consumer, "chapter/middle")
+    playwright.expect(popover).to_be_hidden()
     playwright.expect(summary).to_have_text("Status")
     page.go_back()
     _consumer_ready(page, explorer_consumer)
+    playwright.expect(popover).to_be_hidden()
+    playwright.expect(summary).to_have_attribute("aria-expanded", "false")
     summary.click()
     enabled = len({node["status"] for node in explorer_consumer.records.values()})
     target_status = explorer_consumer.records["chapter/target"]["status"]
