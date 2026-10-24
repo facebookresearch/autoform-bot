@@ -10,12 +10,10 @@ description: >-
 
 # Judge Autoform work as an agent
 
-There is no `autoform` on `PATH` in a Lean project. Run every `autoform`
-command, from the project under review, as
-`uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform` followed by its arguments,
-where `<AUTOFORM_PLUGIN_ROOT>` is the absolute plugin root: the directory that
-holds this skill's `skills/` folder, along with `pyproject.toml` and
-`autoform_cli/`. Give a subagent that root and this prefix with its task.
+There is no `autoform` on `PATH`. Run it from the project under review as
+`uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform`, where the root is the
+absolute plugin directory holding `skills/` and `pyproject.toml`; give a
+subagent that prefix.
 
 Select the rubric from the artifact under review.
 
@@ -49,11 +47,11 @@ A read-back judge must not regenerate or inspect that evidence; its coordinator
 does so before dispatch.
 Treat a stale-build refusal as insufficient evidence; never approve a current
 source excerpt paired with an older compiled declaration. Record the skeleton
-hash as a drift checksum for the elaborated declaration and trust context, and
-the evidence hash for the exact packet that was read. For a
-source-faithfulness verdict, record the article review hash that binds the joint
-packet to the cited passage, its locator, and the skeleton hash. These hashes
-are provenance evidence, not reviewer authentication or an approval key.
+hash, the evidence hash of the packet that was read, and, for a
+source-faithfulness verdict, the article review hash; the
+[CLI reference](../../autoform_cli/README.md#commands) says what each binds.
+These hashes are provenance evidence, not reviewer authentication or an
+approval key.
 A read-back verdict also copies its raw read-back hashes as specified by its
 rubric.
 Candidate code runs during extraction and can forge process output, so treat

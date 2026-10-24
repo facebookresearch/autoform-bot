@@ -15,13 +15,10 @@ existing Autoform vault and site configuration; hand missing infrastructure to
 Setup. Keep the Markdown vault as the source of truth and regenerate only
 derived review views.
 
-There is no `autoform` on `PATH` in a Lean project. Run every `autoform` and
-`autoform-visualize` command, from `<PROJECT>`, as
-`uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform` followed by its arguments
-(with `autoform-visualize` in place of `autoform` for the dependency summary),
-where `<AUTOFORM_PLUGIN_ROOT>` is the absolute plugin root: the directory that holds
-this skill's `skills/` folder, along with `pyproject.toml` and `autoform_cli/`.
-Give a subagent that root and this prefix with its task.
+There is no `autoform` on `PATH`. Run it from `<PROJECT>` as
+`uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform`, and `autoform-visualize`
+the same way, where the root is the absolute plugin directory holding `skills/`
+and `pyproject.toml`; give a subagent that prefix.
 
 Regenerate the review views from `<PROJECT>`: validate the blueprint, refresh
 the dependency summary with `autoform-visualize` so the vault shows current
@@ -67,13 +64,14 @@ records the decision and retracts the affected article so Formalize takes it up
 under the [revision contract](../../autoform_cli/README.md#revision-contract),
 and autonomous rubric scoring to Agent Review.
 
-Treat the landing page's `Fully proved` percentage as completion among
-formalizable leaf targets only. Module catalogs are non-dispatchable source
-inventories reported by a separate neutral metric. Completion includes every
-dependency recursively and requires proofs for theorems and bodies for definitions. A
+Treat the landing page's `Fully proved` percentage as the share of
+formalizable leaf targets that are fully proved, as the
+[derived status](../../autoform_cli/README.md#assertions-and-derived-status)
+defines it; catalogs have their own neutral metric. Never read it as
+whole-source completion. A
 target marked `mathlib: true` follows the authored status contract; the marker
 is an author assertion, not audit verification that the declaration is in
-Mathlib. Treat the percentage never as whole-source completion. Read the
+Mathlib. Read the
 declared source coverage in its linked coverage contract before making scope
 claims. A statement-only theorem remains incomplete whether it is
 blocked or ready to prove. In a project that allows open statements, a

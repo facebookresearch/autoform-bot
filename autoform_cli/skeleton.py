@@ -5,8 +5,76 @@ declaration says what the blueprint claims: its statement and, transitively,
 every project definition that statement rests on. Proofs are the kernel's
 problem. The closure comes from elaborated terms, read back from a small probe
 run with ``lake env lean``, never from source text. The output is deterministic
-and path-free, and nothing here writes into the vault. The rationale is in the
-``autoform skeleton`` section of ``autoform_cli/README.md``.
+and path-free, and nothing here writes into the vault. The user-facing contract
+is the ``autoform skeleton`` section of ``autoform_cli/README.md``; the
+mechanics below are what it leaves out.
+
+Probe. For each module that declares a selected target, the probe imports that
+module and the helper module ``autoform-skeleton-helper`` (compiled with the
+project's toolchain and no project module in scope, its constants all in the
+``AutoformSkeleton`` namespace) and makes one fully qualified call, with no
+``open`` or ``set_option``. It sets exactly two printing options,
+``pp.funBinderTypes`` and ``pp.coercions.types``, so a reader sees what each
+binder ranges over and where each cast lands. A lexical closure would miss what
+``open``, notation, implicit instances, and auto-bound variables bring in, and
+every miss would silently shrink the trusted surface. When the Lake freshness
+check fails other than as stale, the error keeps the first 20 lines of Lake's
+output and counts the rest. Each name is probed in the module whose source the
+lexical index finds it in; a name with one public declaration beside private
+ones is probed in the public one's module. An error the probe meets while
+reading one declaration leaves only that declaration unresolved. A reason
+quotes at most 2,000 characters of Lean's output, shows the probe's temporary
+directory as ``<scratch>`` and project paths relative to the project, and so
+reads the same on every run.
+
+Folding. Only companions that Lean's environment records as generated are
+folded onto their parent; an internal-looking name alone is not proof of
+provenance. Rangeless internal-detail declarations, such as ``f._unary``,
+``f._f``, and ``S.x._default``, are bound by their elaborated material and
+marked ``-- source not shown`` rather than passed off as their parent's source.
+``partial def`` is detected from the environment, not the source text.
+
+Report. Declarations in one project share most of what they trust, so the
+report states each boundary module's identity once, in ``boundary_modules``,
+and each trusted declaration's and external constant's semantic material once
+per root module that reaches it, in ``trusted`` and ``semantics``, keyed by
+root module, then name: a name means what the root module's environment
+declares under it. A report therefore grows with the number of root modules
+times the material they share. The probe states each elaborated subterm of 256
+bytes or more once, since proof terms repeat large subterms; the report keeps
+each material's full text. Two probes that disagree about one module's files
+stop the command.
+
+Resources. Probes run one per CPU available to the process, at most eight; on
+Python 3.13 and later ``PYTHON_CPU_COUNT`` sets that count. Each probe's
+budget is its own rather than a share of one deadline, so its result does not
+depend on which probes ran before it, and an extraction can run for one probe
+budget per round of parallel probes. The parsed records, at most 512 Mi
+characters of semantic material per probed module, stay in memory until the
+report is built.
+
+Drift hash boundary. The compiled identities are every part a module-system
+build writes for each module of the transitive external boundary. Only modules
+whose ``.olean`` lies in the toolchain's own ``lib/lean`` count as core and
+stay outside the boundary; a dependency module named ``Lake.Foo`` is external
+like any other. Compiler-generated matcher and recursor bodies stay in the hash
+although they are folded out of the reading list.
+
+Comment stripping. A source is parsed with the tokens of a file that imports
+its root module and the scoped notation of the namespaces the declaration sits
+in and the file opens above it, but not the file's ``local`` notation. Source
+with a known non-builtin token containing ``--`` or ``/-`` is withheld unless
+that token was globally active through an import of the source's own module,
+since the probe cannot reconstruct when a same-module token was declared or
+where a scoped token was active. What the probe cannot see, and so can get
+wrong (showing code as a comment or a comment as code): a ``local`` token; a
+token without ``--`` or ``/-`` that still moves where a comment or a string
+starts (with ``++"`` a token, ``x ++" -- y "`` holds a comment, and without it
+a string), when the probe has it and the file did not have it there, as for one
+declared later in the same module, or the reverse, as for a scoped token the
+file activated in a way the probe does not reconstruct; and, under the module
+system, a token that only a private import's imports declare, which Lean does
+not load for the file.
 """
 
 from __future__ import annotations
@@ -32,6 +100,7 @@ import warnings
 from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, fields
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
@@ -141,6 +210,9 @@ class _ProbeEnvironmentError(SkeletonError):
 #: and canonical kernel material above it still state the meaning.
 _NOT_SHOWN = "-- source not shown: no reliable standalone source is available"
 
+#: A report's ``trusted``, ``semantics``, and ``boundary_modules`` tables.
+_Tables = tuple[dict[str, dict[str, object]], dict[str, dict[str, object]], dict[str, object]]
+
 
 @dataclass(frozen=True, slots=True)
 class TrustedDeclaration:
@@ -202,6 +274,9 @@ class DeclarationSkeleton(TrustedDeclaration):
     statement: str | None = None
     #: UTF-8 byte ranges of the comments in ``statement``.
     statement_comments: tuple[tuple[int, int], ...] = ()
+    #: Hashes and packet text, each computed once: a report states them
+    #: several times, and each fingerprint encodes the whole trusted closure.
+    _cache: dict[str, str] = dataclass_field(default_factory=dict, init=False, repr=False, compare=False)
 
     @property
     def defines(self) -> bool:
@@ -250,8 +325,10 @@ class DeclarationSkeleton(TrustedDeclaration):
     def hash(self) -> str:
         """Fingerprint the probe's canonical elaborated meaning and trust boundary."""
 
-        modules = {module for module, _, _ in self.boundary_modules}
-        return self._fingerprint(self.trusted, self.assumed, modules, axioms=True)
+        if "hash" not in self._cache:
+            modules = {module for module, _, _ in self.boundary_modules}
+            self._cache["hash"] = self._fingerprint(self.trusted, self.assumed, modules, axioms=True)
+        return self._cache["hash"]
 
     @property
     def statement_hash(self) -> str:
@@ -259,9 +336,11 @@ class DeclarationSkeleton(TrustedDeclaration):
         and what only they reach. Unlike :attr:`hash`, editing only a theorem's
         proof, ``sorry`` to a proof included, leaves it unchanged."""
 
-        return self._fingerprint(
-            self.statement_trusted, self.statement_assumed, set(self.statement_boundary_modules), axioms=False
-        )
+        if "statement_hash" not in self._cache:
+            self._cache["statement_hash"] = self._fingerprint(
+                self.statement_trusted, self.statement_assumed, set(self.statement_boundary_modules), axioms=False
+            )
+        return self._cache["statement_hash"]
 
     def _fingerprint(
         self, trusted: tuple[TrustedDeclaration, ...], assumed: tuple[str, ...], modules: set[str], *, axioms: bool
@@ -287,7 +366,9 @@ class DeclarationSkeleton(TrustedDeclaration):
     def evidence_hash(self) -> str:
         """Fingerprint the exact proof-free text presented to a reviewer."""
 
-        return _sha256_id(self.blind_text().encode("utf-8"))
+        if "evidence_hash" not in self._cache:
+            self._cache["evidence_hash"] = _sha256_id(self.blind_text().encode("utf-8"))
+        return self._cache["evidence_hash"]
 
     def blind_text(self) -> str:
         """The skeleton with every comment removed, for an auditor who must not see intent.
@@ -302,6 +383,11 @@ class DeclarationSkeleton(TrustedDeclaration):
         unless it decides whether an equation-style statement can be cut at all.
         """
 
+        if "packet" not in self._cache:
+            self._cache["packet"] = self._packet()
+        return self._cache["packet"]
+
+    def _packet(self) -> str:
         lines = [
             f"-- {self.kind} {self.name}",
             f"-- assumed from libraries: {', '.join(self.statement_assumed) or 'none'}",
@@ -343,7 +429,7 @@ class DeclarationSkeleton(TrustedDeclaration):
         shown = {
             item.name: getattr(self, item.name)
             for item in fields(self)
-            if not item.name.endswith("_semantics")
+            if item.init and not item.name.endswith("_semantics")
         }
         shown.update(
             {
@@ -382,6 +468,7 @@ class NodeSkeleton:
     #: article then has no hash, since one over the rest would miss changes
     #: to the missing declaration.
     complete: bool = True
+    _cache: dict[str, str] = dataclass_field(default_factory=dict, init=False, repr=False, compare=False)
 
     def blind_text(self) -> str:
         """The article's declarations as one blind packet, for a faithfulness judge.
@@ -412,7 +499,9 @@ class NodeSkeleton:
     def evidence_hash(self) -> str:
         """Fingerprint the exact joint packet presented to a reviewer."""
 
-        return _sha256_id(self.blind_text().encode("utf-8"))
+        if "evidence_hash" not in self._cache:
+            self._cache["evidence_hash"] = _sha256_id(self.blind_text().encode("utf-8"))
+        return self._cache["evidence_hash"]
 
     @property
     def review_hash(self) -> str | None:
@@ -473,6 +562,8 @@ class SkeletonReport:
     unresolved: tuple[UnresolvedTarget, ...]
     schema: str = SKELETON_SCHEMA
     semantic_schema: str = SEMANTIC_SCHEMA
+    #: The shared tables, built once when the report is checked.
+    _tables: _Tables = dataclass_field(init=False, repr=False, compare=False)
 
     @property
     def clean(self) -> bool:
@@ -495,7 +586,7 @@ class SkeletonReport:
         issue = self._incoherence()
         if issue is not None:
             raise SkeletonError([f"skeleton report {issue}"])
-        self._shared_tables()
+        object.__setattr__(self, "_tables", self._shared_tables())
 
     def _incoherence(self) -> str | None:
         """Why the selection, articles, and unresolved targets disagree, if they do.
@@ -537,9 +628,7 @@ class SkeletonReport:
             return "contains mismatched unresolved declarations"
         return None
 
-    def _shared_tables(
-        self,
-    ) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]], dict[str, object]]:
+    def _shared_tables(self) -> _Tables:
         """The ``trusted``, ``semantics``, and ``boundary_modules`` tables.
 
         Each shared item is stated once and named by every declaration that
@@ -576,7 +665,11 @@ class SkeletonReport:
         return trusted, semantics, modules
 
     def as_dict(self) -> dict[str, object]:
-        trusted, semantics, modules = self._shared_tables()
+        # Fresh tables, so a caller's edit to the record cannot reach the report.
+        return self._record(self._shared_tables())
+
+    def _record(self, tables: _Tables) -> dict[str, object]:
+        trusted, semantics, modules = tables
         return {
             "blueprint_hash": self.blueprint_hash,
             "boundary_modules": modules,
@@ -599,7 +692,7 @@ class SkeletonReport:
         }
 
     def to_json(self) -> str:
-        return json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return json.dumps(self._record(self._tables), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _share(table: dict[str, object], name: str, value: object, *, table_name: str) -> None:

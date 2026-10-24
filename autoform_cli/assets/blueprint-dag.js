@@ -49,10 +49,12 @@
       host: host,
       onCommit: function (bundle) {
         if (!host.isConnected) { navigation.dispose(); return; }
+        // Cold layout must measure the actual full-page shell, not Material's
+        // old content column. The error path below restores native reading.
+        document.body.classList.add("bp-dag-app-page");
         var ready;
         if (!client) { client = mount(host, bundle.graph, instance, bundle, navigation); clients.set(host, client); ready = client.ready; }
         else ready = client.applyRoute(bundle);
-        document.body.classList.add("bp-dag-app-page");
         if (index) client.useIndex(index);
         return ready;
       },
@@ -472,7 +474,7 @@
       ui$direction = saved.direction || "both"; ui$query = saved.query || ""; dom$search.value = ui$query;
       host.classList.toggle("bp-dag-outline-open", Boolean(saved.outlineOpen));
       if (dom$outlineToggle) dom$outlineToggle.setAttribute("aria-expanded", String(Boolean(saved.outlineOpen)));
-      ui$activeDirty = true; setSheet(saved.readingOpen !== false, ui$selected); refresh(true); resize();
+      ui$activeDirty = true; setSheet(saved.readingOpen !== false, ui$selected); refresh(false); resize();
       if (saved.camera) ui$transform = Object.assign({}, saved.camera);
       return readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || ticket !== restoration || (isCurrent && !isCurrent())) { if (ticket === restoration) restoring = false; resolve(); return; }
@@ -506,7 +508,7 @@
       restoration++; restoring = false; clearTimeout(checkpointTimer); currentBundle = bundle; contextGraph = bundle.graph; ui$area = null; ui$requestedNode = bundle.nodeId || null;
       document.title = bundle.title; dom$error.hidden = true;
       ui$filtersTouched = false; ui$relationIds = null;
-      ui$query = ""; dom$search.value = ""; closeSearch();
+      ui$query = ""; dom$search.value = ""; closeSearch(); setFilters(false);
       ui$reading = Boolean(bundle.readingSource);
       if (ui$reading && dom$readingBody) {
         dom$readingBody.replaceChildren(bundle.readingSource);
@@ -1449,7 +1451,10 @@
       if (next) { event.preventDefault(); next.focus(); }
       else if (event.key === "ArrowUp") { event.preventDefault(); dom$search.focus(); }
     }
-    function setFilters(open) { dom$filterPopover.hidden = !open; dom$filterSummary.setAttribute("aria-expanded", String(open)); }
+    function setFilters(open) {
+      if (!open && dom$filterPopover.contains(document.activeElement)) dom$filterSummary.focus({preventScroll: true});
+      dom$filterPopover.hidden = !open; dom$filterSummary.setAttribute("aria-expanded", String(open));
+    }
     function closeSearch() { dom$searchResults.hidden = true; }
     function openResults() {
       if (dom$searchResults.hidden && ui$query) renderSearch();

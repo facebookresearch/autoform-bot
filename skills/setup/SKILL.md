@@ -71,48 +71,33 @@ user's agreement, remove that write access with `chmod g-w,o-w`.
 Autoform's library catalog,
 `$AUTOFORM_PLUGIN_ROOT/autoform_cli/project/libraries.json`, lists shared Lean
 libraries that `project new --library <NAME>` adds, already required and locked.
-Offer a library only when Setup creates a new project with `project new`, and
-only when its entry has `offered: true`; never when inspecting, repairing, or
-running `init` on an existing repository. Ask in the single round of questions,
-and state the cost in the question: the project moves from the recommended
-release to the library's `release`, its first build needs network access and
-downloads the library and its dependencies (about 270 MB for ATLAS), and the
-library modules the project imports are built locally. A yes may come as the
-answer or in the setup request itself, such as "set up … with ATLAS"; a request
-that names a catalog library uses it even when the entry is not offered, as long
-as it names no other repository or revision for it. A request that does is a
-library outside the catalog, below. Without a yes, add no library, including in
-a headless run.
+Offer only entries with `offered: true`, and only when Setup creates a new
+project, never when inspecting, repairing, or running `init`. Ask in the single
+round of questions and state the cost: the project moves to the library's
+`release`, its first build downloads the library and its dependencies (about 270
+MB for ATLAS), and the library modules it imports build locally. A yes may come
+in the request itself; a request that names a catalog library uses it even when
+the entry is not offered, unless it names another repository or revision, which
+makes it a library outside the catalog. Without a yes, add no library, including
+in a headless run.
 
-On a yes, run the `project new` command above with `--library <NAME>` and no
-version flags; `<NAME>` is the entry's `name` exactly, such as `atlas`.
-`--library` selects the library's release and writes its `[[require]]` and a
-complete `lake-manifest.json`, so the project needs no `lake update`; it refuses
-`--release`, `--lean-toolchain`, and `--mathlib-rev`. Validate as below; the
-REPL require and `lake update repl` follow as for any project. Then run
-`autoform library list` on the project, as the
+On a yes, run `project new` with `--library <NAME>`, the entry's `name`, and no
+version flags, then validate as below. Run `autoform library list` on the
+project, as the
 [CLI reference](../../autoform_cli/README.md#searching-a-library-the-project-depends-on)
-shows. When it lists the library as usable, report the entry's `git` and pinned
-commit; otherwise report its reason and do not claim the library works. If
-fetching fails, for example without network access or because the commit is
-unreachable, report the error, say that the project builds once the fetch
-succeeds, and give the retry command: resume the validation sequence from the
-step that failed, starting with `lake update repl` when the REPL require was
-added, then `lake exe cache get` and `lake build`. Never run a bare
+shows: report the entry's `git` and pinned commit when it lists the library as
+usable, otherwise its reason, without claiming the library works. If a fetch
+fails, report the error and that the project builds once the fetch succeeds,
+and give the retry: resume validation from the failed step. Never run a bare
 `lake update` in such a project.
 
-When the user says the project will depend on a Lean library outside the
-catalog, create the project on that library's Lean and Mathlib: Lake builds a
-dependency with the project's own Lean and Mathlib, not the versions the
-library pins, so a project on another pair builds the library against the wrong
-Mathlib. Read the library's `lean-toolchain` and the Mathlib `rev` its
-`lake-manifest.json` locks, at the revision the user plans to require; a
-read-only fetch of those two files is allowed. Pass both, as `--lean-toolchain`
-and `--mathlib-rev`; `project new` then uses a listed release when the pair is
-one. If either file cannot be read or the revision is unknown, ask the user
-instead of guessing. Say which pair you chose and why in the setup report.
-Adding the `require` stays the user's decision; do not add it or fetch the
-library into the project.
+For a library outside the catalog, create the project on the Lean toolchain and
+Mathlib `rev` that the library's `lean-toolchain` and `lake-manifest.json` lock
+at the revision the user plans to require, since Lake builds a dependency with
+the project's own Lean and Mathlib; a read-only fetch of those two files is
+allowed. Pass them as `--lean-toolchain` and `--mathlib-rev`, ask the user when
+either is unknown, and report the pair and why. Adding the `require` stays the
+user's decision; do not add it or fetch the library into the project.
 
 `project new` writes the requested `lean-toolchain` and Mathlib revision (by
 default the recommended, locked catalog pair), the Lean shell, and the complete
@@ -155,8 +140,8 @@ override, both workflows, and ignore rules. Do not hand-build any of it and do
 not copy the bundled example: the layout is fixed, and a chapter written as a
 sibling file instead of `<chapter>/README.md` still validates while publishing
 a book with no chapters. `init` preserves existing files, appending only missing
-Autoform rules through a retained bounded regular root `.gitignore` file, so it
-is also the repair path; it reports what it left alone. See the
+Autoform rules to the root `.gitignore`, so it is also the repair path; it
+reports what it left alone. See the
 [CLI reference](../../autoform_cli/README.md#commands) for its flags.
 
 The site's MathJax configuration is not part of the vault: `autoform render`
@@ -165,20 +150,12 @@ writes `javascripts/mathjax.js` on every build. Put the project's notation in
 definitions; a definition written in an article shows in red on the site, and
 `autoform check` warns about it.
 
-`init` pins the generated workflows to the Autoform commit that ran it, using a
-safe remote only when a cached remote-tracking ref contains that commit. It
-prefers Autoform's canonical repository, then `origin`, then `upstream`, then a
-unique remaining source from the Autoform checkout it runs from or the
-marketplace checkout an installed plugin was copied from. It infers that pin
-only when tracked files are clean and the retained bounded, regular, link-free
-required template snapshot and scaffold renderer match the pinned commit in
-path, bytes, and executable-bit classification; an installed copy must also
-match its marketplace checkout. All identity and tree reads ignore local Git
-replacement objects. On any mismatch or when no remote has that local
-containment evidence, `init` writes no CI rather than guess a source or ref:
-guessing produced projects whose first push failed with nothing in the workflow
-to explain why. When it reports that, find the commit the plugin was installed
-from and pass
+`init` pins the generated workflows to the Autoform commit that ran it only
+when it can verify that commit locally, as the
+[CLI reference](../../autoform_cli/README.md#commands) describes. Otherwise it
+writes no CI rather than guess a source or ref: guessing produced projects
+whose first push failed with nothing in the workflow to explain why. When it
+reports that, find the commit the plugin was installed from and pass
 `--autoform-ref <40-char-sha>`, or say plainly that CI was not configured.
 Never invent a ref. It must be a full 40-character commit sha: `init` refuses a
 branch, a tag, or an abbreviated sha, because CI would silently reinstall a

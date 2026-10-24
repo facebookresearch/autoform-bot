@@ -11,7 +11,7 @@ import pytest
 
 from autoform_cli.dag_viewer import MAX_MAP_NODES
 from autoform_cli import graph_pages, render
-from tests.test_integrated_publication import _project, _write
+from tests.test_integrated_publication import _decoded_relations, _project, _write
 
 _NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated projection tests")
@@ -296,4 +296,4 @@ def test_an_oversized_module_scope_keeps_its_real_math_articles_navigable_withou
       assert(last.route && last.route.includes('/roadmap/catalogs/index.html#'));
       ui$mode = 'sources';
       assert.deepEqual(inventoryNodes().map(node => node.id), ['catalogs/source']);
-    """, fixture={"index": index, "context": context, "count": count})
+    """, fixture={"index": {**index, "relations": _decoded_relations(index)}, "context": context, "count": count})

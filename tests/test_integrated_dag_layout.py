@@ -278,6 +278,28 @@ def test_bare_or_navigationless_hosts_do_not_start_an_interactive_client() -> No
     """, {})
 
 
+def test_cold_mount_measures_full_page_framing_and_error_restores_native_reading() -> None:
+    """Run real boot ordering over tiny DOM/router seams; browser containment remains independent."""
+    _run("""
+      const events=[],bodyClasses=new Set(),hostClasses=new Set(),loading={hidden:true,classList:{add(){}}};
+      const classes=set=>({add(name){set.add(name);},remove(name){set.delete(name);},contains(name){return set.has(name);}});
+      const document={body:{classList:classes(bodyClasses)}};
+      function host(){const attributes=new Map();return {isConnected:true,
+        getAttribute(name){return attributes.get(name)||null;},setAttribute(name,value){attributes.set(name,value);},closest(){return {};},
+        querySelector(){return loading;},classList:classes(hostClasses)};}
+      const clients=new Map();let fail=false,options,hostSequence=0;
+      const window={AutoformNavigation:{create(value){options=value;return {
+        start(){try{options.onCommit({graph:{},readingSource:{}});}catch(error){options.onError(error);}},dispose(){}};}}};
+      function mount(){assert(bodyClasses.has('bp-dag-app-page'),'Initial geometry must see the actual full-page viewport');
+        events.push('layout');if(fail)throw Error('controlled mount failure');return {ready:Promise.resolve()};}
+      eval(original('start'));start(host());
+      assert.deepEqual(events,['layout']);assert(bodyClasses.has('bp-dag-app-page'));
+      fail=true;clients.clear();bodyClasses.clear();start(host());
+      assert.deepEqual(events,['layout','layout']);assert(!bodyClasses.has('bp-dag-app-page'));
+      assert(!hostClasses.has('bp-dag-enhancing'));assert(loading.textContent.includes('complete mathematical page remains readable'));
+    """, {})
+
+
 def test_layout_replays_deterministically_after_input_permutation() -> None:
     fixture = json.loads(_FIXTURE.read_text(encoding="utf-8"))
     _run("""

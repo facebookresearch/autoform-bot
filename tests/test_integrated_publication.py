@@ -16,6 +16,33 @@ from autoform_cli.markdown import site_converter
 from autoform_cli.status import derive
 
 
+def _decoded_relations(index: dict) -> list[list[object]]:
+    """Read either supported endpoint form without changing IDs or typed counts."""
+    identifiers = [node["id"] for node in index["nodes"]]
+    known = set(identifiers)
+    assert len(known) == len(identifiers) and all(type(name) is str for name in identifiers)
+    rows = index.get("relations", [])
+    assert type(rows) is list
+    decoded = []
+    for row in rows:
+        assert type(row) is list and len(row) == 4
+        endpoints = []
+        for endpoint in row[:2]:
+            if type(endpoint) is int:
+                assert 0 <= endpoint < len(identifiers)
+                name = identifiers[endpoint]
+            else:
+                assert type(endpoint) is str
+                name = endpoint
+            assert name in known
+            endpoints.append(name)
+        statement, proof = row[2:]
+        assert type(statement) is int and type(proof) is int
+        assert statement >= 0 and proof >= 0 and statement + proof > 0
+        decoded.append([*endpoints, statement, proof])
+    return decoded
+
+
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -122,7 +149,7 @@ def test_routes_preserve_encoded_book_anchors_and_real_scope_metadata(tmp_path: 
     assert records[topic]["navigation"] == "module"
     assert records[group]["scope"] == group and records[group]["navigation"] == "transparent"
     assert all(records[node_id]["result"] is False for node_id in ("roadmap", topic, group, f"{topic}/note"))
-    assert index["relations"] == [[f"{group}/base", f"{group}/main", 1, 0]]
+    assert _decoded_relations(index) == [[f"{group}/base", f"{group}/main", 1, 0]]
     for record in records.values():
         assert (index_path.parent / unquote(record["data_url"])).resolve().is_file()
     alias = _tree(output / "dependencies/scopes" / f"{group}.md")

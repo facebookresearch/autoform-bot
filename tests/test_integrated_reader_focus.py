@@ -42,7 +42,10 @@ var document = {body: new Element('body'), activeElement: null, title: '',
 document.activeElement = document.body;
 var dom$search = new Element('input'), dom$readingBody = new Element('article');
 var dom$navigation = new Element('aside'), dom$inventoryScroll = new Element('div'), dom$outlineToggle = new Element('button');
+var dom$inventoryRows = new Map();
 var dom$error = new Element('div'), dom$breadcrumb = new Element('nav');
+var dom$filterPopover = new Element('div'), dom$filterSummary = new Element('button');
+dom$filterPopover.hidden = true;
 var hostClasses = new Set(['bp-dag-sheet-open']);
 var host = {classList: {contains: name => hostClasses.has(name),
   toggle(name, enabled) { if (enabled) hostClasses.add(name); else hostClasses.delete(name); }},
@@ -50,20 +53,22 @@ var host = {classList: {contains: name => hostClasses.has(name),
 var ui$selected, ui$requestedNode = 'A', ui$mode = 'graph', ui$direction = 'both';
 var ui$selectedStatuses = new Set(['fully_proved']), ui$showIsolated = true, ui$query = 'saved query', ui$area = null;
 var ui$transform = {x: 20, y: 30, scale: 1}, ui$listLimit = 100, ui$relationIds = null, ui$outlineLimit = 120;
-var ui$filtersTouched = false, ui$activeDirty = true, ui$reading = true;
-var byId = new Map(['A','B'].map(id => [id, {id, status: 'fully_proved'}]));
+var ui$filtersTouched = false, ui$activeDirty = true, ui$reading = true, ui$overviewOnly = false;
+var byId = new Map(['A','B'].map(id => [id, {id, title: id, kind: 'node', result: true,
+  scope: 'chapter', parent: 'chapter', status: 'fully_proved'}]));
+var records = new Map(byId);
 var overlays = new Map(['A','B'].map(id => {
   const node = new Element('button'); node.dataset.autoformNodeId = id; return [id, node];
 }));
 ui$selected = byId.get('A');
 var alive = true, restoration = 0, restoring = false, checkpointTimer = 0, currentVersion = 1;
 var readingReady = Promise.resolve(true), mathPass = Promise.resolve(true), mathRoots = [], frames = [];
-var contextGraph, currentBundle, trail, firstResize = false, mapAllowed = true;
+var data, contextGraph, currentBundle, trail, firstResize = false, mapAllowed = true;
 var palette = {fully_proved: {}, planned: {}}, presentStatuses = ['fully_proved', 'planned'];
 var navigation = {loadIndex() { return Promise.resolve(null); }};
 var window = {AutoformMath: {refresh(root) {mathRoots.push(root); return mathPass;}}};
 function requestAnimationFrame(callback) {frames.push(callback); return frames.length;}
-function updateProjection() {ui$selected = byId.get(ui$requestedNode) || null;}
+function updateProjection() {data = contextGraph; ui$selected = byId.get(ui$requestedNode) || null;}
 function setSheet(open) {host.classList.toggle('bp-dag-sheet-open', open);}
 function sheetLayout() {return false;}
 function closeSearch() {}
@@ -89,8 +94,12 @@ function bundle(id, snapshot, focus = true) {
   const heading = new Element('h1'), target = new Element('article', 'main'), source = new Element('div');
   target.dataset.autoformNodeId = id; source.replaceChildren(heading, target);
   const version = currentVersion;
-  return {nodeId: id, anchor: 'main', title: 'Complete ' + id, readingSource: source,
-    graph: {title: 'Scope ' + id}, snapshot, focus, isCurrent: () => currentVersion === version, heading, target};
+  // A normal two-result scope is not an authored-area navigation overview.
+  // This seam supplies graph context only; callbacks remain verbatim production source.
+  return {nodeId: id, scope: 'chapter', anchor: 'main', title: 'Complete ' + id, readingSource: source,
+    graph: {schema: 'autoform-dag-view/v2', title: 'Scope ' + id, nodes: Array.from(byId.values()), edges: [],
+      palette, view: {kind: 'chapter', presentation: 'dag'}},
+    snapshot, focus, isCurrent: () => currentVersion === version, heading, target};
 }
 """
 
@@ -98,7 +107,7 @@ function bundle(id, snapshot, focus = true) {
 def _run(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
     script += "\nObject.assign(sandbox, {clearTimeout});\n"
-    script += "const callbacks=['captureState','applyRoute','restoreState'].map(original).join('\\n');\n"
+    script += "const callbacks=['captureState','applyRoute','restoreState','setFilters'].map(original).join('\\n');\n"
     program = '"use strict";\n' + _ENVIRONMENT
     script += "const pending=vm.runInContext(" + json.dumps(program) + "+constants[0]+callbacks+"
     script += json.dumps("\n(async()=>{\n" + body + "\n})()") + ",sandbox,{timeout:5000,filename:CLIENT});\n"
@@ -178,4 +187,30 @@ def test_stale_restore_ticket_cannot_reapply_old_reading_focus_or_scroll() -> No
       math.resolve(true); await frame(); await newReady;
       assert.equal(document.activeElement, dom$search);
       assert.equal(newer.heading.focuses.length, 0);
+    """)
+
+
+def test_article_commit_closes_transient_status_menu_without_losing_keyboard_focus() -> None:
+    _run(r"""
+      const input=new Element('input'); dom$filterPopover.replaceChildren(input);
+      setFilters(true); input.focus({});
+      assert.equal(dom$filterPopover.hidden,false);
+      const incoming=bundle('A',null,false),ready=applyRoute(incoming);
+      assert.equal(dom$filterPopover.hidden,true);
+      assert.equal(dom$filterSummary.attrs['aria-expanded'],'false');
+      assert.equal(document.activeElement,dom$filterSummary);
+      assert.equal(dom$filterSummary.focuses.at(-1).preventScroll,true);
+      await frame(); await ready;
+      assert.equal(document.activeElement,dom$filterSummary);
+      setFilters(true); input.focus({});
+      const selected=bundle('B',null,true),selectedReady=applyRoute(selected);
+      assert.equal(document.activeElement,dom$filterSummary);
+      await frame(); await selectedReady;
+      assert.equal(document.activeElement,selected.heading);
+      assert.equal(selected.heading.focuses.at(-1).preventScroll,true);
+      // Reopening/filtering does not shift a user's input focus or invent history state.
+      setFilters(true); input.focus({}); setFilters(true);
+      assert.equal(dom$filterPopover.hidden,false); assert.equal(document.activeElement,input);
+      dom$search.focus({}); const searchFocuses=dom$search.focuses.length; setFilters(false);
+      assert.equal(document.activeElement,dom$search); assert.equal(dom$search.focuses.length,searchFocuses);
     """)

@@ -1,4 +1,18 @@
-"""Generate the index a Lean library publishes, from its built environment and its sources."""
+"""Generate the index a Lean library publishes, from its built environment and its sources.
+
+Lean imports two modules that state one theorem the same way and keeps one
+copy. Such a name is indexed once, under the first of its modules in name
+order, with the line, statement, docstring and status of that module's
+declaration: which copy Lean keeps depends on the order it loads the modules
+in, and the index must not. Each such name is a warning naming the module it is
+indexed under and the others, and the summary line counts them; ``--check``
+does not mention them. A name that is not indexed, such as an equation lemma
+two modules both generate, is no warning. A name whose first module leaves it
+on ``sorry`` or declares it as an axiom is left out and counted with the
+others, with a warning naming that module and the others, since one of them
+may hold a whole proof. If such a name's docstring comes from
+``@[inherit_doc]``, the record has none.
+"""
 
 from __future__ import annotations
 

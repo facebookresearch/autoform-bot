@@ -231,10 +231,13 @@ def navigation_overview_site(tmp_path_factory: pytest.TempPathFactory) -> Iterat
                 "A complete mathematical statement follows.\n\n- [Proposed identity](result.md)\n"
             ))
             previous = f"topic-{(number - 1) % len(areas)}-0"
+            # Different theorem leaves induce a cyclic area aggregation; the
+            # authored theorem graph itself must remain an acyclic blueprint.
+            prerequisites = f"- [Previous identity](../{previous}/result.md)" if part else "No prerequisites."
             _write(blueprint / f"roadmap/{topic}/result.md", (
                 "---\ndeclaration: theorem\nnot_ready: true\n---\n\n# Proposed identity\n\n"
                 "The equality $0=0$ is an unverified fixture target, not a claim of a Lean proof.\n\n"
-                f"## Depends on\n\n- [Previous identity](../{previous}/result.md)\n"
+                f"## Depends on\n\n{prerequisites}\n"
             ))
     render_site(blueprint, project / "site-src")
     configuration = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
@@ -246,7 +249,7 @@ def navigation_overview_site(tmp_path_factory: pytest.TempPathFactory) -> Iterat
     index = json.loads((project / "site/dependencies/index.json").read_text(encoding="utf-8"))
     records = {record["id"]: record for record in index["nodes"]}
     graph = json.loads((project / "site/dependencies.json").read_text(encoding="utf-8"))
-    assert len(graph["nodes"]) == 15 and len(_area_edges(graph)) == 15
+    assert len(graph["nodes"]) == 15 and len(_area_edges(graph)) == 10
     with _served(project / "site") as url:
         yield _WorkspaceSite(url, records, graph)
 
@@ -473,7 +476,10 @@ def test_empty_authored_overview_opens_on_the_map_and_restores_its_reading_and_c
     page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
     _open(page, site, workspace_runtime)
     page.locator(".bp-dag-overview-only").wait_for()
-    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    # The same retained control is visible on the collapsible overview, but a
+    # wide theorem reader intentionally hides it. Inspect that state by DOM,
+    # while keeping native click/visibility assertions on the overview itself.
+    handle = page.locator('.bp-reading-pane > button[aria-label="Toggle mathematical reading"]')
     inner = page.locator(".bp-reading-pane .bp-dag-inspector-inner")
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     playwright.expect(inner).to_have_attribute("inert", "")

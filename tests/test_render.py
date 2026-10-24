@@ -50,6 +50,7 @@ from autoform_cli.render import (
     render_site,
 )
 from autoform_cli.status import INVENTORY_STATES, STATES, derive
+from tests.test_integrated_publication import _decoded_relations
 from tests.test_lean_sources import _git_commit
 
 
@@ -200,7 +201,7 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert records["roadmap"]["scope"] == "roadmap"
     assert records["top"]["route"] == "../roadmap/index.html#top"
     assert records["top"]["parent"] == records["top"]["scope"] == "roadmap"
-    assert search_index["relations"] == [["base", "top", 1, 0]]
+    assert _decoded_relations(search_index) == [["base", "top", 1, 0]]
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
     assert chapter.count('class="bp-reading-source"') == chapter.count('class="bp-dag-viewer"') == 1
     assert "This chapter develops the base object before the main result." in chapter
@@ -853,12 +854,12 @@ def test_a_mathlib_article_shows_its_mathlib_declarations_as_text(tmp_path: Path
     upstream = project / "blueprint/roadmap/upstream.md"
     upstream.write_text(article.format(names=""), encoding="utf-8")
     without = render_site(project / "blueprint", tmp_path / "without", lean_root=project)
-    upstream.write_text(article.format(names="mathlib_declaration: add_comm, «a&b»\n"), encoding="utf-8")
+    upstream.write_text(article.format(names="mathlib_declaration: add_comm, «a<b&c»\n"), encoding="utf-8")
     shown = render_site(project / "blueprint", tmp_path / "shown", lean_root=project)
 
     row = (
         '<div class="bp-row"><span class="bp-key">Mathlib</span>'
-        '<span class="bp-value"><code>add_comm</code> · <code>«a&amp;b»</code></span></div>'
+        '<span class="bp-value"><code>add_comm</code> · <code>«a&lt;b&amp;c»</code></span></div>'
     )
     page = (tmp_path / "shown/roadmap/README.md").read_text(encoding="utf-8")
     assert page.count(row) == 1
@@ -3313,6 +3314,8 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(
     for variable in ("GITHUB_REPOSITORY", "GITHUB_SERVER_URL", "GITHUB_SHA"):
         monkeypatch.delenv(variable, raising=False)
     project = _conditional_project(tmp_path, "allowed")
+    # Not mathlib: true, yet its Mathlib name is shown too.
+    _edit(project / "blueprint/roadmap/top.md", "discussion: 42\n", "discussion: 42\nmathlib_declaration: add_comm\n")
 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
@@ -3327,9 +3330,9 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(
     ) in top
     # Only the conditional proof carries the row; the open statement assumes nothing.
     assert page.count('<span class="bp-key">Assumes</span>') == 1
-    # The row follows the implementation row and precedes Discussion.
+    # The row follows the Lean and Mathlib rows and precedes Discussion.
     meta = top[top.index('<div class="bp-meta">'):top.index('<details class="bp-dependencies">')]
-    assert re.findall(r'<span class="bp-key">([^<]+)</span>', meta) == ["Lean", "Assumes", "Discussion"]
+    assert re.findall(r'<span class="bp-key">([^<]+)</span>', meta) == ["Lean", "Mathlib", "Assumes", "Discussion"]
 
     css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
     # The dot is a few pixels wide, so a finished state fills it with the stroke rather than the pale card tint.

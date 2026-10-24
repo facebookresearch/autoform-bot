@@ -393,8 +393,10 @@ def write_search_index(
     """Write the global search index and optional derived reading/navigation data.
 
     Existing search fields retain their meanings. Integrated publication can
-    add canonical book routes, authored containment, and compact dependencies;
-    these are projections of the captured graph, never a second graph store.
+    add canonical book routes, authored containment, and compact dependencies.
+    Relations reference positions in the emitted node array; the reader also
+    accepts older string endpoints. This retains every typed edge without
+    repeating long article identifiers in the transport.
     """
     nodes: list[dict[str, object]] = []
     for node in view.nodes:
@@ -425,8 +427,9 @@ def write_search_index(
         nodes.append(entry)
     payload: dict[str, object] = {"nodes": nodes, "schema": SEARCH_SCHEMA}
     if include_relations:
+        positions = {node.id: position for position, node in enumerate(view.nodes)}
         payload["relations"] = [
-            [edge.source, edge.target, edge.statement_count, edge.proof_count]
+            [positions[edge.source], positions[edge.target], edge.statement_count, edge.proof_count]
             for edge in view.edges
         ]
     return _write_json(path, payload)
