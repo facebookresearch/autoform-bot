@@ -55,7 +55,8 @@ def mathjax_package(*, node: bool = True) -> Path:
 # the next page as Material's instant navigation shows it, "new" or "old":
 # whether mkdocs.yml also lists the bundle, after the script, and "after" when
 # a project script listed after it assigns the configuration Material's
-# documentation gives, and "explorer" when the next page is instead what the
+# documentation gives, or "version" when the bundle is another MathJax release,
+# and "explorer" when the next page is instead what the
 # dependency explorer draws into the first, after which it asks for a pass.
 # The bundle's menu needs a browser, so each document gets one with what the
 # script uses of it.
@@ -89,6 +90,7 @@ MathJax.startup.document = fs.readFileSync(firstPath, "utf8");
 let docs = [];
 let first = null;
 MathJax.startup.ready = () => {
+  if (override === "version") MathJax.version = "3.2.1";
   const original = MathJax._.mathjax.mathjax.document;
   MathJax._.mathjax.mathjax.document = function (root, options) {
     const doc = original.call(this, root, options);
@@ -246,6 +248,88 @@ def test_the_rendered_configuration_typesets_each_card_alone(tmp_path: Path, pro
     # The next page, shown in place, gets new inputs again.
     assert [document["card"] for document in second] == [None, "c3"]
     assert _LEQ in second[0]["math"][0]["mml"] and _LEQ in second[1]["math"][0]["mml"]
+
+
+def test_another_mathjax_release_leaves_every_formula_as_typed(tmp_path: Path) -> None:
+    """The script is written for one MathJax release. Under another, which a
+    site that lists a bundle of its own can load, it typesets nothing and says
+    why."""
+
+    report = _node_report(tmp_path, _node_script(tmp_path), "new", override="version")
+
+    assert report["errors"] == [
+        "autoform: this page loaded MathJax 3.2.1, but javascripts/mathjax.js was written for 3.2.2; formulas "
+        "are left as typed. Load MathJax only through javascripts/mathjax.js in mkdocs.yml."
+    ]
+    assert report["passes"] == []
+
+
+# A MathJax that mkdocs.yml lists before javascripts/mathjax.js: loaded when
+# the script runs, and started afterwards with its own configuration. Reports
+# how many formulas it typeset. argv: the script, or "none" for a page without
+# it, and the page.
+_LOADED_FIRST_HARNESS = r"""
+"use strict";
+const fs = require("fs");
+const path = require("path");
+const [scriptPath, pagePath] = process.argv.slice(2);
+const report = {errors: [], math: null};
+global.window = globalThis;
+console.error = (...args) => report.errors.push(args.map(String).join(" "));
+const main = require(path.join(process.env.AUTOFORM_MATHJAX_DIR, "es5", "node-main.js"));
+const loaded = window.MathJax;
+global.document = {readyState: "complete", head: {appendChild: () => {}}, createElement: () => ({}),
+  addEventListener: () => {}};
+if (scriptPath !== "none") (0, eval)(fs.readFileSync(scriptPath, "utf8"));
+delete global.document;
+loaded.config.startup.document = fs.readFileSync(pagePath, "utf8");
+loaded.config.loader.load.push("input/tex", "output/chtml");
+main.init({}).then(() => {
+  report.math = Array.from(loaded.startup.document.math).length;
+}).catch((error) => {
+  report.errors.push("harness: " + error.stack);
+}).finally(() => {
+  process.stdout.write(JSON.stringify(report));
+});
+"""
+
+
+def test_a_mathjax_listed_before_the_script_typesets_nothing(tmp_path: Path) -> None:
+    """A bundle listed in mkdocs.yml before javascripts/mathjax.js starts
+    without the site's configuration and would typeset every formula on the
+    page with its own, a card's too. The script stops it instead, and says
+    why."""
+
+    files = {
+        "harness.js": _LOADED_FIRST_HARNESS,
+        "mathjax.js": _node_script(tmp_path),
+        "page.html": '<html><body><p><span class="arithmatex">\\(a \\leq b\\)</span> \\(c\\)</p></body></html>',
+    }
+    for name, text in files.items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
+
+    def run(script: str) -> dict:
+        done = subprocess.run(
+            [NODE, "harness.js", script, "page.html"],
+            cwd=tmp_path,
+            env=dict(os.environ, AUTOFORM_MATHJAX_DIR=str(mathjax_package())),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        assert done.returncode == 0, done.stderr
+        return json.loads(done.stdout)
+
+    assert run("mathjax.js") == {
+        "errors": [
+            "autoform: MathJax was loaded before javascripts/mathjax.js; formulas are left as typed. Load MathJax "
+            "only through javascripts/mathjax.js in mkdocs.yml."
+        ],
+        "math": 0,
+    }
+    # The same MathJax without the script typesets both formulas.
+    assert run("none") == {"errors": [], "math": 2}
 
 
 def test_no_class_makes_an_input_read_more_of_a_card(tmp_path: Path) -> None:
