@@ -73,7 +73,7 @@ def _run(body: str) -> None:
 
 def test_initial_phone_tabstop_is_inside_the_real_compact_free_area_after_fit() -> None:
     _run("""
-      fit();paint();assert(dom$density.textContent.startsWith('Showing part of the map'),'The real three-area scene must exercise readable cropping');
+      fit();paint();assert(dom$density.textContent.startsWith('Drag to see more'),'The real three-area scene must exercise readable cropping');
       const cropped=byId.get('region:Geometry'),box=screen(cropped);
       assert(box.y+box.h/2<52,'The old top-left candidate lies in the actual clipped header band');
       const selected=tabstop();assert(selected);assert(contained(byId.get(selected.dataset.autoformNodeId)),
@@ -121,7 +121,7 @@ current.routes.forEach(route=>route.bounds={x:-5000,y:-5000,w:10000,h:10000});
 
 def test_small_authored_desktop_overview_fits_its_cards_not_peripheral_route_bounds() -> None:
     _run(_DESKTOP_OVERVIEW + """
-      fit();paint();assert(!String(dom$density.textContent||'').startsWith('Showing part of the map'),
+      fit();paint();assert(!String(dom$density.textContent||'').startsWith('Drag to see more'),
         'All five authored areas should fit after the empty reader yields its width');
       assert(ui$transform.scale>=.9,'Do not trade legibility for a repository-wide fit');
       data.nodes.forEach(node=>{const box=screen(node);

@@ -1380,7 +1380,7 @@
         var box = screen(node); return box.x < 0 || box.y < 0 || box.x + box.w > dom$stage.clientWidth || box.y + box.h > bottom;
       }), tiny = visible.length && ui$transform.scale < .34;
       dom$density.hidden = !cropped && !tiny;
-      dom$density.textContent = cropped ? "Showing part of the map. Drag to see more, or open Results for all " + ui$active.length + "." :
+      dom$density.textContent = cropped ? "Drag to see more, or open Results for all " + ui$active.length + "." :
         tiny ? "Zoom in to reveal " + visible.length + " node labels" : "";
       // A removed card gets no pointerleave or blur, and a late timer can name one from the previous projection.
       if (ui$hovered && !overlays.has(ui$hovered.id)) { ui$hovered = null; schedule(); }

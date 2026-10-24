@@ -745,7 +745,7 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     # A card under a phone's open reader is off screen too; the fit uses the same bound.
     assert "var bottom = mapHeight();\n      var cropped" in script and "box.y + box.h > bottom;" in note
     assert "var shown = mapHeight();" in script
-    assert 'cropped ? "Showing part of the map. Drag to see more, or open Results for all "' in note
+    assert 'cropped ? "Drag to see more, or open Results for all "' in note
     assert '"Zoom in to reveal "' in note and "readableCrop" not in script and "Pan or " not in script
     density = next(rule for rule in style.splitlines() if rule.startswith(".bp-dag-density {"))
     assert "left: 16px; bottom: 12px;" in density and "pointer-events: none;" in density
@@ -756,6 +756,8 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     # In the workspace it sits a line above the map key, and under the map header while the phone reader covers the bottom.
     assert ".bp-dag-integrated .bp-dag-density { bottom: 36px; }" in style
     assert ".bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-compact-regions) .bp-dag-density { top: 44px; bottom: auto; }" in style
+    # Under the phone reader's map header it often crosses cards, so it and the header keep a halo of the map's colour, still with no box.
+    assert ".bp-dag-integrated :is(.bp-dag-density, .bp-map-context) { text-shadow: 0 0 2px var(--dag-map)," in style
 
 
 def test_explorer_head_switches_materials_palette_from_the_trail_row() -> None:

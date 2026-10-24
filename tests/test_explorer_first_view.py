@@ -128,7 +128,7 @@ def test_a_dense_chapter_frames_its_linked_cards_and_says_part_of_it_is_hidden()
     assert not _inside(boxes["auxiliary-0"], width, height)
     # Cards really are off screen, so the note says so and names the way to all of them.
     assert result["hidden"] is False
-    assert result["note"] == "Showing part of the map. Drag to see more, or open Results for all 63."
+    assert result["note"] == "Drag to see more, or open Results for all 63."
 
 
 @pytest.mark.parametrize(("width", "scale"), ((900, None), (800, 0.9)))

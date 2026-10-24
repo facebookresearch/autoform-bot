@@ -628,7 +628,7 @@ def test_connected_project_maps_open_at_readable_scale(
     box = node.bounding_box()
     assert box is not None and box["height"] >= 44
     density = page.locator(".bp-dag-density")
-    playwright.expect(density).to_have_text("Showing part of the map. Drag to see more, or open Results for all 33.")
+    playwright.expect(density).to_have_text("Drag to see more, or open Results for all 33.")
     # The note is plain text at the map's bottom-left, a line above the map key, not a bubble over the map.
     assert density.evaluate(
         "element => ['borderTopStyle','boxShadow','pointerEvents'].map(name => getComputedStyle(element)[name])"
@@ -642,7 +642,7 @@ def test_connected_project_maps_open_at_readable_scale(
     page.set_viewport_size({"width": 390, "height": 844})
     _close_phone_reading(page)
     _paint_frame(page)
-    playwright.expect(density).to_have_text("Showing part of the map. Drag to see more, or open Results for all 33.")
+    playwright.expect(density).to_have_text("Drag to see more, or open Results for all 33.")
     note, sheet = density.bounding_box(), page.locator(".bp-dag-sheet-handle").bounding_box()
     assert note is not None and sheet is not None and note["y"] + note["height"] <= sheet["y"] - 8
     _assert_hit(page, page.locator('.bp-dag-node[tabindex="0"]'))
