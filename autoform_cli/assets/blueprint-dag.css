@@ -302,8 +302,6 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-map-key .bp-map-key-proof::before { border-top-style: dashed; }
 /* The pan note sits a line above the map key, which shares its bottom edge. */
 .bp-dag-integrated .bp-dag-density { bottom: 36px; }
-/* Text over the map keeps a halo of the map's colour, so it stays readable where it crosses a card or a link. */
-.bp-dag-integrated :is(.bp-dag-density, .bp-map-context) { text-shadow: 0 0 2px var(--dag-map), 0 0 4px var(--dag-map), 0 0 6px var(--dag-map); }
 .bp-dag-compact-regions :is(.bp-dag-canvas, .bp-dag-node-layer) { clip-path: inset(52px 0 44px); }
 .bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-core { padding: 10px 14px; }
 .bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: 4px; font-size: 14px; }
@@ -350,8 +348,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   /* At half the reader ends at the screen's bottom, so its last lines can still be scrolled into view. */
   .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-sheet-full) .bp-dag-inspector-inner { height: calc(55% - 56px); }
   .bp-dag-integrated.bp-dag-sheet-full .bp-dag-toolbar { display: none; }
-  /* The open reader covers the stage's lower half, and the note with it, so the note moves under the map header. */
-  .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-compact-regions) .bp-dag-density { top: 44px; bottom: auto; }
+  /* With the reader open the map keeps only the band above it, and the handle already names the page, so the map header and the pan note leave rather than sit on cards. */
+  .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-compact-regions) :is(.bp-map-context, .bp-dag-density) { display: none; }
   .bp-dag-integrated.bp-dag-sheet-full .bp-reading-map { display: block; position: absolute; z-index: 3; bottom: 16px; left: 50%; padding: 10px 24px; border: 1px solid var(--dag-overlay-border); border-radius: 999px; background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 14px; font-weight: 600; box-shadow: var(--dag-e2); transform: translateX(-50%); cursor: pointer; }
   .bp-dag-integrated .bp-reading-body { padding: 20px 22px 60px; }
   .bp-dag-integrated .bp-dag-context { padding-inline: 12px; }

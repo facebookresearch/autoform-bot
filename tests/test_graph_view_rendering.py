@@ -756,11 +756,11 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     phones = style.split("@media (max-width: 680px) {\n", 1)[1].split("\n}", 1)[0]
     assert ".bp-dag-density { bottom: 68px; }" in phones
     assert not any(word in density for word in ("border", "shadow", "background", "blur"))
-    # In the workspace it sits a line above the map key, and under the map header while the phone reader covers the bottom.
+    # In the workspace it sits a line above the map key. With a phone reader open, the band above it is small and the handle names
+    # the page, so the map header and the note leave instead of sitting on cards; neither draws a halo or a box.
     assert ".bp-dag-integrated .bp-dag-density { bottom: 36px; }" in style
-    assert ".bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-compact-regions) .bp-dag-density { top: 44px; bottom: auto; }" in style
-    # Under the phone reader's map header it often crosses cards, so it and the header keep a halo of the map's colour, still with no box.
-    assert ".bp-dag-integrated :is(.bp-dag-density, .bp-map-context) { text-shadow: 0 0 2px var(--dag-map)," in style
+    assert ".bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-compact-regions) :is(.bp-map-context, .bp-dag-density) { display: none; }" in style
+    assert "text-shadow" not in style
 
 
 def test_explorer_head_switches_materials_palette_from_the_trail_row() -> None:
