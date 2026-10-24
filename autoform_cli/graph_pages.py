@@ -1,10 +1,10 @@
-"""Publish scalable dependency-explorer projections beside the textbook.
+"""Publish scalable graph data for the integrated mathematical book.
 
 One Markdown DAG supports several reading scales: chapters collapsed into a
 project overview, declarations within one chapter with external chapters
 collapsed to boundaries, and nested scopes. A search index over every article
 jumps to the smallest scope that holds it. Every projection uses the same
-explorer, links back to the same book anchors, and never becomes another
+explorer, links to the same book anchors, and never becomes another
 source of graph state.
 """
 
@@ -87,18 +87,52 @@ def _pages(
     return project_page, full_page, chapter_pages, scope_pages
 
 
+def publication_contexts(graph: Graph, destination: str | Path) -> dict[str, tuple[Path, str]]:
+    """The existing payload and containing graph scope for each published node.
+
+    Containers identify their own scope; other articles identify their actual
+    parent. Authored roles remain available for the client to skip wrappers.
+    Paths locate publication artifacts, never mathematical areas.
+    """
+    destination = Path(destination).resolve()
+    return _publication_contexts(graph, destination, _pages(graph, destination, group_nodes(graph)))
+
+
+def _publication_contexts(
+    graph: Graph,
+    destination: Path,
+    pages: tuple[Path, Path, Mapping[str, Path], Mapping[str, Path]],
+) -> dict[str, tuple[Path, str]]:
+    """Derive reader contexts from already planned publication paths."""
+    project, full, chapters, scopes = pages
+    known = {project, full, *chapters.values(), *scopes.values()}
+    result: dict[str, tuple[Path, str]] = {}
+    for node in graph.nodes.values():
+        payload = scopes.get(node.id) or scope_page_path(destination, node.id, parent=node.parent)
+        if payload not in known:
+            payload = scopes.get(node.parent or "roadmap", project)
+        scope = node.id if node.id in scopes else node.parent or "roadmap"
+        result[node.id] = (payload.with_suffix(".json"), scope)
+    return result
+
+
 def write_graph_pages(
     graph: Graph,
     statuses: dict[str, NodeStatus],
     destination: str | Path,
     *,
     node_links: NodeLinks,
+    book_targets: Mapping[str, tuple[Path, str]] | None = None,
+    contexts_out: dict[str, tuple[Path, str]] | None = None,
 ) -> tuple[Path, ...]:
     """Write project, chapter, nested-scope, and shared full-explorer pages.
 
     ``node_links`` resolves theorem ids to their published textbook anchors for
     each generated page.  Keeping that callback in the site renderer avoids
-    duplicating its URL and chapter-anchor policy here.
+    duplicating its URL and chapter-anchor policy here. With ``book_targets``,
+    pages are compatibility entrances to canonical full-text book routes.
+    ``contexts_out`` receives the same reader-context map used for this index;
+    it is transient publication data, not another authored graph or cache.
     """
     destination = Path(destination).resolve()
     groups = group_nodes(graph)
@@ -111,16 +145,42 @@ def write_graph_pages(
     written: list[Path] = []
 
     complete = full_view(graph, statuses)
+    contexts = _publication_contexts(
+        graph, destination, (project_page, full_page, chapter_pages, scope_pages),
+    )
+    if contexts_out is not None:
+        contexts_out.update(contexts)
     context_links: dict[str, str] = {}
+    metadata: dict[str, dict[str, object]] = {}
+    # One bounded whole-index request, not one whole-graph request per page.
+    # These exact links come from the renderer's captured publication targets.
+    routes = node_links(search_index, tuple(graph.nodes)) if book_targets is not None else {}
     for node in complete.nodes:
+        payload, scope = contexts[node.id]
+        original = graph.nodes[node.id]
+        metadata[node.id] = {
+            # A concrete authored declaration is a result before it has Lean
+            # code. Organization, provenance and inventory are not results.
+            "result": (
+                original.formalizable and original.catalog is None
+                and node.id not in containers and original.navigation != "source"
+            ),
+            "scope": scope,
+            "data_url": _search_index_link(payload, search_index),
+            "parent": original.parent,
+            "navigation": original.navigation,
+            "area": original.area,
+        }
+        if node.id in routes:
+            metadata[node.id]["route"] = routes[node.id]
         if node.id not in scope_pages:
             # The book's statement links the same page, so search and the book agree.
-            context_links[node.id] = scope_page_href(
-                destination, node.id, search_index, parent=graph.nodes[node.id].parent
-            )
+            context_links[node.id] = _published_link(payload, search_index) + f"#node={quote(node.id, safe='')}"
             continue
         context_links[node.id] = _published_link(scope_pages[node.id], search_index)
-    dag_viewer.write_search_index(search_index, complete, context_links=context_links)
+    dag_viewer.write_search_index(
+        search_index, complete, context_links=context_links, metadata=metadata, include_relations=True,
+    )
 
     project = project_view(graph, statuses)
     project_item_count = sum(node.item_count for node in project.nodes)
@@ -130,6 +190,16 @@ def write_graph_pages(
     # A chapter links its own page. The root's own articles are drawn on
     # their Top level page, not the project's.
     scope_targets = {**scope_pages, **chapter_pages}
+    if book_targets is not None:
+        scope_targets = {
+            scope: book_targets.get(scope, (book_root, ""))[0]
+            for scope in scope_targets
+        }
+
+    def canonical(scope: str | None = None) -> Path | None:
+        if book_targets is None:
+            return None
+        return book_targets.get(scope or "roadmap", (book_root, ""))[0]
 
     def view_links(view: GraphView, page: Path) -> dict[str, str]:
         """Link *view* from *page*: articles to the book, scopes and boundaries to their explorers."""
@@ -157,6 +227,7 @@ def write_graph_pages(
                 ("Book", _published_link(book_root, project_page)),
                 (root_title, None),
             ),
+            canonical=canonical(),
         )
     )
 
@@ -201,10 +272,11 @@ def write_graph_pages(
                     graph,
                     group,
                     page=chapter_page,
-                    scope_pages=scope_pages,
-                    project_page=project_page,
+                    scope_pages=scope_targets,
+                    project_page=canonical() or project_page,
                     book_root=book_root,
                 ),
+                canonical=canonical(group),
             )
         )
 
@@ -239,10 +311,11 @@ def write_graph_pages(
                     graph,
                     scope,
                     page=scope_page,
-                    scope_pages=scope_pages,
-                    project_page=project_page,
+                    scope_pages=scope_targets,
+                    project_page=canonical() or project_page,
                     book_root=book_root,
                 ),
+                canonical=canonical(scope),
             )
         )
     # Keep the old full route as a compatibility shell, but never fit every
@@ -274,6 +347,7 @@ def write_graph_pages(
                 (root_title, _published_link(project_page, full_page)),
                 ("Explorer", None),
             ),
+            canonical=canonical(),
         )
     )
 
@@ -321,6 +395,7 @@ def _write_page(
     breadcrumbs: tuple[tuple[str, str | None], ...],
     navigation: str = "",
     searchable: bool = True,
+    canonical: Path | None = None,
 ) -> Path:
     # Every projection is one payload and one explorer host, so readers get one
     # interaction model and no second renderer can drift from it. The explorer
@@ -338,6 +413,7 @@ def _write_page(
     explorer = dag_viewer.render_container(
         quote(payload.name),
         script_href=_viewer_script_link(page, site_root),
+        style_href=relative_link(site_root / dag_viewer.STYLE_PATH, page, ".css"),
         fallback_links=(
             (node.title, links[node.id])
             for node in view.nodes[:50]
@@ -345,12 +421,14 @@ def _write_page(
         ),
         fallback_total=len(view.nodes),
         search_href=search_href,
+        page_href=_published_link(canonical, page) if canonical is not None else None,
+        scope=view.scope or "roadmap",
     )
     sections = [
         "---",
         "kind: graph",
         f"graph_view: {view.kind}",
-        *(() if searchable else ("search:", "  exclude: true")),
+        *(() if searchable and canonical is None else ("search:", "  exclude: true")),
         "hide:",
         "  - navigation",
         "  - toc",
@@ -361,12 +439,21 @@ def _write_page(
         # theme reads back as characters in <title>, so it is named here.
         sections.append(header_title(rendered_visible_text(heading)))
     sections.extend(["---", "", f"# {title_text(heading)}", ""])
-    if navigation:
+    if navigation and canonical is None:
         sections.extend([navigation, ""])
     # The legend rides on the lead sentence rather than sitting under the
     # explorer: it answers a question the reader asks once, not on every page.
     tip = render_legend_tip(statuses, _view_inventories(view))
-    sections.extend([f"{lead} {tip}".rstrip(), "", explorer, ""])
+    if canonical is not None:
+        href = _published_link(canonical, page)
+        reading = (
+            '<div class="bp-reading-source" markdown="1">\n\n'
+            'This compatibility route opens the same mathematical page and its graph.\n\n'
+            f'<a href="{html.escape(href, quote=True)}">Continue to the mathematical page</a>\n\n</div>'
+        )
+        sections.extend(['<div class="bp-explorer-page" markdown="1">', "", reading, "", explorer, "", "</div>", ""])
+    else:
+        sections.extend([f"{lead} {tip}".rstrip(), "", explorer, ""])
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text("\n".join(sections).rstrip() + "\n", encoding="utf-8")
     return page
@@ -558,6 +645,7 @@ __all__ = [
     "PROJECT_PAYLOAD",
     "SEARCH_INDEX",
     "graph_page_paths",
+    "publication_contexts",
     "render_legend",
     "render_legend_tip",
     "scope_page_href",

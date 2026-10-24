@@ -97,16 +97,16 @@ describes.
 
 ## Blueprint model
 
-Autoform keeps the roadmap and dependency graph as Markdown under
-`blueprint/`; publication graphs and pages are derived. See the
+Autoform keeps the roadmap and dependency graph as Markdown under `blueprint/`.
+Its publication is one full-page mathematical reader and dependency map with
+authored areas and global search; graphs and pages are derived. See the
 [blueprint format and CLI reference](autoform_cli/README.md), or browse the
 [Cabannes thesis example](skills/setup/assets/cabannes-thesis-project/README.md).
 
 ## Development
 
-Clone with `git clone https://github.com/facebookresearch/autoform-bot.git`,
-then follow [CONTRIBUTING.md](CONTRIBUTING.md) to set up, lint, and test.
-[`servers/README.md`](servers/README.md) covers the Lean servers.
+Clone with `git clone https://github.com/facebookresearch/autoform-bot.git`, then
+follow [CONTRIBUTING.md](CONTRIBUTING.md); [`servers/README.md`](servers/README.md) covers Lean servers.
 
 ## License
 
