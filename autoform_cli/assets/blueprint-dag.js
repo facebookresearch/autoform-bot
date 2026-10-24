@@ -1314,19 +1314,31 @@
       if ((box.wide || box.tall) && linked.length) box = frame(linked);
       var scale = ui$transform.scale = box.scale;
       // A map that fits, if only once the padding gives way, is centred whole. A real crop centres the selection or a requested
-      // area's first card; with nothing to centre on, a phone's compact overview centres its first area, and any other map starts
-      // each cropped axis at the graph's leading edge rather than leaving half the stage empty around one card.
+      // area's first card. With nothing to centre on, any map but a phone's compact overview starts each cropped axis at the graph's
+      // leading edge rather than leaving half the stage empty around one card; a scope overview keeps whatever useful local card
+      // that leaves in view, since an external boundary first in line is no reason to push the overview off the viewport.
       ui$transform.x = (stageW - box.w * scale) / 2 - box.x * scale;
       ui$transform.y = (shown + top - bottom - box.h * scale) / 2 - box.y * scale;
       var target = ui$selected || box.nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; });
       if (box.wide || box.tall || compact && box.fitted < readableFloor) {
-        if (target || compact) center(target || box.nodes[0], readableFloor);
+        if (target) center(target, readableFloor);
         else {
-          if (box.wide) ui$transform.x = side - box.x * scale;
-          if (box.tall) ui$transform.y = top - box.y * scale;
+          if (!compact && box.wide) ui$transform.x = side - box.x * scale;
+          if (!compact && box.tall) ui$transform.y = top - box.y * scale;
+          if (data._scopeOverview) {
+            if (!usableLocal()) center(all.find(function (node) { return node._overviewGroup; }) ||
+              all.find(function (node) { return node.kind !== "boundary"; }) || all[0], readableFloor);
+          } else if (compact) center(box.nodes[0], readableFloor);
         }
       }
       schedule(); remember();
+      function usableLocal() {
+        var free = freeArea(), start = (free.top || 0) + 12, end = (free.top || 0) + free.band - 12;
+        return all.some(function (node) {
+          if (node.kind === "boundary") return false; var cell = screen(node);
+          return cell.x >= free.left + 12 && cell.x + cell.w <= free.right - 12 && cell.y >= start && cell.y + cell.h <= end;
+        });
+      }
       function frame(nodes) {
         var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         nodes.forEach(function (node) {
@@ -1930,7 +1942,7 @@
       return nodes.filter(function (node) { return ui$selectedStatuses.has(node.status); });
     }
     function renderInventory(resetScroll) {
-      if (!dom$inventoryList) return;
+      if (!dom$inventoryList || ui$mode === "graph") return;
       var nodes = inventoryNodes(), visible = nodes.slice(0, ui$listLimit); dom$inventoryList.textContent = "";
       var articles = nodes.some(function (node) { return node.catalog === "module"; });
       if (navigation && ui$mode !== "sources") dom$inventory.querySelector("h2").textContent = articles ? "Results & articles" : "Results";

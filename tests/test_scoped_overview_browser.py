@@ -292,6 +292,9 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
 
 
 def _committed(page: object) -> None:
+    # The actual router removes aria-busy when a transaction completes; it
+    # never writes a synthetic "false" attribute on the published host.
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-dag-ready", "true")
     playwright.expect(page.locator(".bp-dag-viewer")).not_to_have_attribute("aria-busy", "true")
     _frames(page)
 
@@ -376,7 +379,10 @@ def _focus_group(page: object, key: str) -> object:
         active = page.locator(".bp-dag-node:focus")
         if active.get_attribute("data-overview-group") == key:
             assert _geometry(active)["hit"] is True
-            return active
+            # Keep this observed control's identity; a background pan clears
+            # focus, so returning the dynamic :focus selector would lose it.
+            identifier = active.get_attribute("data-autoform-node-id")
+            return page.locator(f'.bp-dag-node[data-autoform-node-id="{identifier}"]')
         identifier = active.get_attribute("data-autoform-node-id")
         if identifier not in seen:
             seen.add(identifier)
@@ -396,6 +402,24 @@ def _pan(page: object) -> None:
     page.mouse.move(point["x"] + 18, point["y"] + 12, steps=5)
     page.mouse.up()
     _frames(page)
+
+
+def _settled_reading_scroll(reading: object) -> float:
+    """Observe native scrolling until its actual position is stable, without setting it."""
+    return reading.evaluate("""node => new Promise((resolve, reject) => {
+      let previous = node.scrollTop, stableSince = performance.now(), frame = 0;
+      const timeout = setTimeout(() => {
+        cancelAnimationFrame(frame);
+        reject(new Error('Native reader scroll did not stabilize within five seconds'));
+      }, 5000);
+      function sample(now) {
+        const actual = node.scrollTop;
+        if (actual !== previous) { previous = actual; stableSince = now; }
+        if (now - stableSince >= 200) { clearTimeout(timeout); resolve(actual); return; }
+        frame = requestAnimationFrame(sample);
+      }
+      frame = requestAnimationFrame(sample);
+    })""")
 
 
 def _zoom_group(page: object, key: str) -> None:
@@ -464,8 +488,7 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     reading = page.locator(".bp-reading-body")
     reading.hover()
     page.mouse.wheel(0, 360)
-    _frames(page)
-    reading_scroll = reading.evaluate("node => node.scrollTop")
+    reading_scroll = _settled_reading_scroll(reading)
     assert reading_scroll > 0
     # A phone's taps cycle half, full and the peek, so closing can take two.
     _peek_reader(page, handle)
@@ -490,7 +513,14 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     playwright.expect(restored).to_be_focused()
     assert _geometry(restored)["camera"] == pytest.approx(saved["camera"], abs=.5)
     assert source.locator("h1").text_content() == source_title
-    assert reading.evaluate("node => node.scrollTop") == pytest.approx(reading_scroll, abs=1)
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    # A collapsed wide reader is display:none; inspect retention only after
+    # the user natively reopens the actual scrollable mathematical source.
+    handle.click()
+    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    playwright.expect(page.locator(".bp-reading-pane > .bp-dag-inspector-inner")).to_be_visible()
+    assert _settled_reading_scroll(reading) == pytest.approx(reading_scroll, abs=1)
+    handle.click()
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     _zoom_group(page, key)
     focused = _focus_graph_node(page, consumer.groups[key][0]["id"])
@@ -615,7 +645,7 @@ def test_native_scope_reading_links_open_full_math_and_restore_closed_group_hist
         playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_SCOPE_TITLE)
         _committed(page)
         playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-        inner = page.locator(".bp-reading-pane .bp-dag-inspector-inner")
+        inner = page.locator(".bp-reading-pane > .bp-dag-inspector-inner")
         assert inner.get_attribute("inert") is None and inner.get_attribute("aria-hidden") is None
         source = _native_scope_math(page)
         if anchor:

@@ -79,6 +79,18 @@ const dom = new JSDOM(fs.readFileSync(firstPath, "utf8"), {
 const nativeWindow = dom.window;
 global.window = nativeWindow;
 global.document = nativeWindow.document;
+// The real menu component uses the browser's storage global. Bind the genuine
+// origin-scoped JSDOM object; missing capabilities must not be hidden in logs.
+global.localStorage = nativeWindow.localStorage;
+assert.strictEqual(global.localStorage, nativeWindow.localStorage);
+// Pinned MenuStore tests HTMLElement; ContextMenu tests Event/MouseEvent.
+// Use only these required native interfaces, not a blanket window export or
+// substitute predicates that would hide an unsupported DOM bridge.
+for (const name of ["HTMLElement", "Event", "MouseEvent"]) {
+  assert.strictEqual(typeof nativeWindow[name], "function", "Missing native DOM interface: " + name);
+  global[name] = nativeWindow[name];
+  assert.strictEqual(global[name], nativeWindow[name]);
+}
 // Real CSS inheritance, not synthetic layout getters. Node does not prove
 // browser geometry; it still gives the engine finite inherited font metrics.
 document.documentElement.style.fontSize = "16px";
@@ -114,6 +126,56 @@ function describe() {
     enableMenu: doc.options.enableMenu,
     math: Array.from(doc.math).map(item => ({tex: item.math, mml: MathJax.startup.toMML(item.root)}))
   }));
+}
+
+function glyphStyles() {
+  // Adaptive CHTML adds insertRule() entries without changing textContent.
+  // Require a connected stylesheet's actual glyph/font ::before content.
+  const elements=Array.from(document.querySelectorAll('style,link[rel="stylesheet"]'));
+  const sheets=Array.from(document.styleSheets), sources=[], rules=[];
+  assert(elements.length<=32 && sheets.length<=32,'Stylesheet scan bound exceeded');
+  let count=0;
+  function scan(list,source,depth=0) {
+    assert(depth<=8,'Stylesheet nesting bound exceeded');
+    for(const rule of Array.from(list)) {
+      assert(++count<=10000,'CSS rule scan bound exceeded');
+      const content=rule.style&&rule.style.getPropertyValue('content').trim();
+      if(rule.selectorText && content && !['none','normal','""',"''"].includes(content)) {
+        for(const selector of rule.selectorText.split(',').map(value=>value.trim())) {
+          if(selector.endsWith('::before')) rules.push({source,selector,elementSelector:selector.slice(0,-8),content});
+        }
+      }
+      if(rule.cssRules) scan(rule.cssRules,source,depth+1);
+    }
+  }
+  sheets.forEach((sheet,index)=>{
+    const element=elements.find(node=>node.sheet===sheet);
+    assert(element&&element.isConnected,'Stylesheet has no connected DOM source');
+    sources.push({index,id:element.id,href:sheet.href||null,connected:element.isConnected,
+      disabled:!!sheet.disabled,cssRules:sheet.cssRules.length});
+    if(!sheet.disabled) scan(sheet.cssRules,index);
+  });
+  const nodes=Array.from(document.querySelectorAll('mjx-c')), variants=new Map();
+  assert(nodes.length<=2000,'Glyph scan bound exceeded');
+  nodes.forEach(node=>{
+    const classes=Array.from(node.classList), glyph=classes.find(name=>/^mjx-c[0-9A-F]+$/.test(name));
+    const font=classes.find(name=>name.startsWith('TEX-'));
+    if(!glyph) {
+      // CHTML deliberately inserts classless helper parts for stretched
+      // delimiters. They are not direct hex/font glyphs covered by this oracle.
+      assert(node.isConnected&&node.parentElement&&['MJX-BEG','MJX-EXT','MJX-MID','MJX-END'].includes(node.parentElement.tagName),
+        'Unrecognized classless CHTML glyph helper');
+      return;
+    }
+    // The default CHTML font deliberately has no TEX-* class. Preserve that
+    // actual identity; only a real explicit variant requires a font selector.
+    assert(node.isConnected&&glyph,'Live glyph lacks its actual glyph identity');
+    const key=classes.join(' ');if(variants.has(key))return;
+    const covering=rules.filter(rule=>rule.selector.includes('.'+glyph)&&(!font||rule.selector.includes('.'+font))&&node.matches(rule.elementSelector));
+    variants.set(key,{glyph,font,classes,rules:covering});
+  });
+  return {sources,variants:Array.from(variants.values()),
+    missing:Array.from(variants.values()).filter(glyph=>!glyph.rules.length).map(glyph=>glyph.glyph)};
 }
 
 (async () => {
@@ -186,9 +248,8 @@ function describe() {
   report.passes.push(describe());
   assert.strictEqual(document.querySelectorAll("[data-autoform-math-stage]").length, 0);
   report.startup = Array.from(MathJax.startup.document.math).length;
-  const sheet = MathJax.startup.adaptor.textContent(MathJax.startup.output.chtmlStyles);
-  const glyphs = new Set(Array.from(document.body.innerHTML.matchAll(/class="(mjx-c[0-9A-F]+)/g), match => match[1]));
-  report.unstyled = Array.from(glyphs).filter(glyph => !sheet.includes("." + glyph));
+  report.glyphStyles = glyphStyles();
+  report.unstyled = report.glyphStyles.missing;
   report.controls = Array.from(document.querySelectorAll("a, button")).filter(control => control.querySelector("mjx-container")).map(control => ({
     tag: control.tagName, tabstops: control.querySelectorAll("[tabindex]").length,
     applications: control.querySelectorAll('[role="application"]').length
