@@ -39,29 +39,11 @@ publication. Projection fails with `the article changed after the graph was
 loaded` when an article's bytes no longer match the digest recorded at load.
 The `runtime` module docstring describes the projection for Python consumers.
 
-## Wiki reference layer
-
-Rendering from captured article bytes also writes the optional derived asset
-`dependencies/wiki-links.json`, schema `autoform-wiki-links/v1`. Its `references`
-are ordinary authored Markdown links between published mathematical articles,
-not statement or proof prerequisites. Source tracks, code and TeX literals,
-provenance sections, and ancestor/descendant placement links are excluded.
-Unsupported HTML or unclosed code/math blocks make outbound extraction
-explicitly partial; known incoming links to a published article remain valid.
-
-Reference endpoints are offsets in the unchanged search-index node array.
-`index_sha256` binds them to that exact index's UTF-8 bytes; readers must verify
-the digest before using them. `availability`, `unavailable_sources`, and an
-optional `reason` distinguish a genuinely empty layer from unavailable data.
-The separate asset has a 32 MiB limit. An oversized layer is explicitly omitted
-with a warning, never silently truncated. Neither wiki references nor their
-availability change the formal DAG, readiness, proof status, or index bytes.
-
 ## Publication contract
 
 `autoform render` publishes the book, derived progress, and one dependency
 explorer as bounded project, chapter, and nested-scope projections. Rendering
-never reads a `graph.json` or an operational queue. Hidden files and
+never reads a `graph.json` or an operational queue; [wiki references](wiki-links.md) are also derived. Hidden files and
 directories, including `.implementation-notes`, are omitted; the vault's
 implementation notes are read in place only to validate them. A `.autoform`
 directory and symlinks, credentials, logs, provider state, and agent/task state

@@ -27,7 +27,7 @@ import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
 import autoform_cli.render as render_module
 from autoform_cli import _directory_binding as directory_binding_module
-from autoform_cli import graph_pages
+from autoform_cli import dag_viewer, graph_pages
 from autoform_cli.__main__ import main
 from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.audit import audit_blueprint
@@ -480,11 +480,15 @@ def test_every_explorer_breadcrumb_reaches_a_published_page(tmp_path: Path) -> N
         """Check that every explorer's crumbs are published, and say where its Book crumb leads."""
         payloads = [out / "dependencies.json", *(out / "dependencies").rglob("*.json")]
         payloads.remove(out / "dependencies/index.json")
+        decoded = {payload: json.loads(payload.read_text(encoding="utf-8")) for payload in payloads}
+        assert all(data.get("schema") in {dag_viewer.SCHEMA, dag_viewer.WIKI_LINKS_SCHEMA} for data in decoded.values())
+        assert decoded[out / graph_pages.WIKI_LINKS]["schema"] == dag_viewer.WIKI_LINKS_SCHEMA
+        payloads = [payload for payload, data in decoded.items() if data["schema"] == dag_viewer.SCHEMA]
         assert out / "dependencies/scopes/algebra/groups.json" in payloads
         crumbs = [
             (payload, crumb["label"], crumb["url"])
             for payload in payloads
-            for crumb in json.loads(payload.read_text(encoding="utf-8"))["view"]["breadcrumbs"]
+            for crumb in decoded[payload]["view"]["breadcrumbs"]
             if crumb["url"] is not None
         ]
         assert sum(label == "Book" for _payload, label, _url in crumbs) == len(payloads)
