@@ -40,7 +40,7 @@
     host.classList.add("bp-dag-enhancing");
     var loading = host.querySelector(".bp-dag-loading"); if (loading) loading.hidden = false;
     var instance = ++hostSequence;
-    var client = null, index = null;
+    var client = null, index = null, ui$wikiLinks = null;
     var navigation = window.AutoformNavigation.create({
       host: host,
       onCommit: function (bundle) {
@@ -52,9 +52,14 @@
         if (!client) { client = mount(host, bundle.graph, instance, bundle, navigation); clients.set(host, client); ready = client.ready; }
         else ready = client.applyRoute(bundle);
         if (index) client.useIndex(index);
+        if (ui$wikiLinks) client.useWikiLinks(ui$wikiLinks);
         return ready;
       },
       onIndex: function (loaded) { index = loaded; if (client) client.useIndex(loaded); },
+      onWikiLinks: function (loaded) {
+        if (!host.isConnected) { navigation.dispose(); return; }
+        ui$wikiLinks = loaded; if (client) client.useWikiLinks(loaded);
+      },
       captureState: function () { return client ? client.captureState() : {}; },
       restoreState: function (snapshot, bundle) { if (client) return client.restoreState(snapshot, bundle); },
       onError: function (error) {
@@ -502,6 +507,8 @@
     if (!data || data.schema !== "autoform-dag-view/v2" || !data.palette ||
         !Array.isArray(data.nodes) || !Array.isArray(data.edges)) throw new Error("unsupported graph payload");
     var contextGraph = data, sharedIndex = null, records = new Map(), currentBundle = firstBundle;
+    var ui$wikiLinks = null, ui$wikiBefore = new Map(), ui$wikiAfter = new Map(), ui$wikiUnavailable = new Set(), ui$wikiRequested = false;
+    var ui$wikiGeneration = 0, ui$wikiPending = null, ui$wikiWork = null, ui$wikiRendered = null, ui$wikiNode = null;
     var alive = true, cleanup = [], observers = [], frame = 0, readingReady = Promise.resolve(), restoration = 0, checkpointTimer = 0, restoring = false;
     host.textContent = "";
     host.classList.remove("bp-dag-enhancing");
@@ -643,6 +650,52 @@
       if (currentBundle) { updateProjection(); dom$breadcrumb.replaceChildren(trailList(routeTrail(currentBundle))); }
       renderNavigation(); renderReaderContext(); renderInventory(false); refresh(false);
       if (ui$requestedNode) { fit(); centerIfHidden(ui$selected); }
+      requestWikiLinks();
+    }
+    function requestWikiLinks() {
+      if (!alive || !sharedIndex || ui$wikiRequested) return;
+      ui$wikiRequested = true;
+      function unavailable() { return useWikiLinks({availability: "unavailable", references: [], unavailable_sources: []}); }
+      try {
+        if (typeof navigation.getWikiLinks === "function") useWikiLinks(navigation.getWikiLinks());
+        if (typeof navigation.loadWikiLinks !== "function") { unavailable(); return; }
+        Promise.resolve(navigation.loadWikiLinks()).then(function (loaded) { return loaded ? useWikiLinks(loaded) : null; }).catch(unavailable);
+      } catch (_error) { unavailable(); }
+    }
+    function useWikiLinks(loaded) {
+      if (!alive || !loaded) return;
+      if (ui$wikiPending === loaded) return ui$wikiWork;
+      var ticket = ++ui$wikiGeneration;
+      if (ui$wikiLinks === loaded) { ui$wikiPending = null; ui$wikiWork = null; return; }
+      ui$wikiPending = loaded;
+      var before = new Map(), after = new Map(), unavailable = new Set(), ui$wikiPosition = 0;
+      var references = ["complete", "partial"].indexOf(loaded.availability) >= 0 ? loaded.references || [] : [];
+      var sources = loaded.unavailable_sources || [], total = references.length + sources.length;
+      function build() {
+        if (!alive || ticket !== ui$wikiGeneration) return;
+        var end = Math.min(total, ui$wikiPosition + 1024);
+        for (; ui$wikiPosition < end; ui$wikiPosition++) {
+          if (ui$wikiPosition >= references.length) {
+            var id = sources[ui$wikiPosition - references.length]; if (records.has(id)) unavailable.add(id); continue;
+          }
+          var pair = references[ui$wikiPosition], source = pair[0], target = pair[1];
+          if (source === target || !records.has(source) || !records.has(target)) continue;
+          if (!after.has(source)) after.set(source, new Set());
+          if (!before.has(target)) before.set(target, new Set());
+          after.get(source).add(target); before.get(target).add(source);
+        }
+        if (ui$wikiPosition < total) return new Promise(function (resolve) { setTimeout(resolve, 0); }).then(build);
+        if (!alive || ticket !== ui$wikiGeneration) return;
+        ui$wikiLinks = loaded; ui$wikiBefore = before; ui$wikiAfter = after; ui$wikiUnavailable = unavailable;
+        ui$wikiPending = null; ui$wikiWork = null; renderWikiContext();
+      }
+      ui$wikiWork = build(); return ui$wikiWork;
+    }
+    function wikiNeighbors(id) {
+      var availability = ui$wikiLinks && ui$wikiLinks.availability || "unavailable", known = records.has(id);
+      return {before: Array.from(ui$wikiBefore.get(id) || []), after: Array.from(ui$wikiAfter.get(id) || []), availability: availability,
+        outgoingAvailable: known && (availability === "complete" || availability === "partial" && !ui$wikiUnavailable.has(id)),
+        incomingComplete: known && availability === "complete"};
     }
     function applyRoute(bundle) {
       var isCurrent = bundle.isCurrent;
@@ -830,9 +883,11 @@
       }
       if (navigation.declutterReader) navigation.declutterReader(dom$readingBody, shown.map(function (node) { return node.id; }));
     }
-    function renderReaderContext() {
+    function renderReaderContext(retainedWiki) {
       if (!dom$readingContext) return;
-      dom$readingContext.replaceChildren(); dom$readingNeighbors.replaceChildren();
+      dom$readingContext.replaceChildren();
+      if (retainedWiki) Array.from(dom$readingNeighbors.children).forEach(function (child) { if (child !== retainedWiki) child.remove(); });
+      else dom$readingNeighbors.replaceChildren();
       var node = ui$selected, record = records.get(currentBundle && currentBundle.nodeId || ui$requestedNode || (node && node.id)), scope = record && records.get(record.scope);
       if (scope && record.id !== scope.id) {
         var around = element("a", "bp-reading-around", "← " + scope.title); around.href = scope.route || scope.url;
@@ -861,7 +916,9 @@
           more.addEventListener("click", function () { ui$relationIds = pair[1]; setMode("list", true); }); group.appendChild(more); }
         row.appendChild(group);
       });
-      if (links.before.length || links.after.length) dom$readingNeighbors.appendChild(row);
+      if (links.before.length || links.after.length) {
+        if (retainedWiki) dom$readingNeighbors.insertBefore(row, retainedWiki); else dom$readingNeighbors.appendChild(row);
+      }
       var peers = topicPeers(record ? record.id : node.id);
       if (peers && peers.nodes.length) {
         var more = element("details", "bp-reading-related-topics");
@@ -1805,7 +1862,56 @@
       if (updateHistory) writeLocation(overviewNavigation ? "push" : "replace");
     }
 
-    function renderInspector() { renderReaderContext(); }
+    function renderWikiContext() {
+      if (!dom$readingNeighbors) return;
+      var previous = dom$readingNeighbors.querySelector(".bp-reading-wiki-links");
+      var node = ui$selected, id = currentBundle && currentBundle.nodeId || ui$requestedNode || node && recordId(node);
+      if (previous && ui$wikiRendered === ui$wikiLinks && ui$wikiNode === id) return;
+      var opened = previous && previous.open && ui$wikiNode === id; if (previous) previous.remove();
+      ui$wikiRendered = ui$wikiLinks; ui$wikiNode = id;
+      if (!ui$wikiLinks || !records.has(id)) return;
+      var links = wikiNeighbors(id);
+      if (links.availability === "complete" && !links.before.length && !links.after.length) return;
+      var disclosure = element("details", "bp-reading-wiki-links");
+      if (opened) disclosure.open = true;
+      disclosure.appendChild(element("summary", "", "Concept links"));
+      if (links.availability !== "complete") disclosure.appendChild(element("p", "bp-reading-wiki-notice",
+        links.availability === "partial" ? "Some pages could not be read. Concept links and backlinks may be incomplete." :
+          "Concept links are unavailable for this publication."));
+      [["Links to other concepts", links.after, links.outgoingAvailable], ["Linked from", links.before, links.incomingComplete]].forEach(function (pair) {
+        var count = pair[2] ? String(pair[1].length) : pair[1].length ? pair[1].length + " known" :
+          pair[0] === "Linked from" && links.availability === "partial" ? "unknown" : "unavailable";
+        var group = element("div", "bp-reading-wiki-related");
+        group.appendChild(element("strong", "", pair[0] + " · " + count));
+        if (pair[0] === "Links to other concepts" && links.availability === "partial" && !links.outgoingAvailable)
+          group.appendChild(element("p", "bp-reading-wiki-notice", "Links from this page could not be read completely."));
+        var list = element("ul", "bp-reading-wiki-list"), ui$wikiLimit = 0;
+        var more = button("bp-reading-wiki-more", "");
+        function appendLinks() {
+          var limit = Math.min(pair[1].length, ui$wikiLimit + (ui$wikiLimit ? 20 : 5));
+          pair[1].slice(ui$wikiLimit, limit).forEach(function (relatedId) {
+            var related = records.get(relatedId), item = element("li"), link = element("a", "", related.title);
+            link.href = related.route || related.url;
+            link.addEventListener("click", function (event) {
+              if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+              event.preventDefault(); navigation.navigateNode(relatedId, {history: "push", focus: "reading"});
+            });
+            item.appendChild(link); list.appendChild(item);
+          });
+          ui$wikiLimit = limit; more.hidden = limit >= pair[1].length;
+          more.textContent = "Show " + Math.min(20, pair[1].length - limit) + " more links";
+        }
+        appendLinks(); more.addEventListener("click", appendLinks);
+        group.appendChild(list); group.appendChild(more); disclosure.appendChild(group);
+      });
+      var peers = dom$readingNeighbors.querySelector(".bp-reading-related-topics");
+      if (peers) dom$readingNeighbors.insertBefore(disclosure, peers); else dom$readingNeighbors.appendChild(disclosure);
+    }
+    function renderInspector() {
+      var node = ui$selected, id = currentBundle && currentBundle.nodeId || ui$requestedNode || node && recordId(node);
+      var previous = dom$readingNeighbors && dom$readingNeighbors.querySelector(".bp-reading-wiki-links");
+      renderReaderContext(previous && ui$wikiNode === id ? previous : null); renderWikiContext();
+    }
 
     function inventoryNodes() {
       var query = ui$query.toLocaleLowerCase();
@@ -1858,7 +1964,7 @@
     }
 
     syncControls();
-    return {ready: readingReady, applyRoute: applyRoute, useIndex: useIndex, captureState: captureState, restoreState: restoreState, showError: showError,
+    return {ready: readingReady, applyRoute: applyRoute, useIndex: useIndex, useWikiLinks: useWikiLinks, captureState: captureState, restoreState: restoreState, showError: showError,
       dispose: function () { alive = false; clearTimeout(checkpointTimer); cancelAnimationFrame(frame); cleanup.forEach(function (close) { close(); });
         observers.forEach(function (observer) { observer.disconnect(); }); if (navigation) navigation.dispose(); }};
   }

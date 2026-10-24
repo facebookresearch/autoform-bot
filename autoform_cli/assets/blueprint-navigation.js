@@ -7,12 +7,15 @@
  * declutterReader(root, representedScopeIds) hides duplicated pure child-scope indexes only in the
  * enhanced reader clone, after the renderer has supplied its actual semantic-outline coverage.
  * readerIsOverview(root) conservatively recognizes that owned, navigation-only reading projection.
+ * loadWikiLinks()/getWikiLinks() expose a lazy optional, exact-index-SHA-bound hyperlink layer;
+ * onWikiLinks receives canonical IDs and honest coverage, never mathematical dependencies.
  */
 (function () {
   "use strict";
   if (window.AutoformNavigation) return;
 
   var HISTORY_KEY = "autoformNavigation", GRAPH_SCHEMA = "autoform-dag-view/v2", INDEX_SCHEMA = "autoform-dag-search/v1";
+  var WIKI_SCHEMA = "autoform-wiki-links/v1", WIKI_LIMIT = 32 * 1024 * 1024;
 
   function create(options) {
     options = options || {};
@@ -23,6 +26,7 @@
     var source = initialPage && initialPage.querySelector(".bp-reading-source") || doc.querySelector(".bp-reading-source");
     var initialSource = source && source.cloneNode(true);
     var catalogueURL = link(attribute(host, initialPage, "data-catalog-src"), initialURL);
+    var wikiURL = catalogueURL && link("wiki-links.json", catalogueURL);
     var initialDataURL = link(attribute(host, initialPage, "data-graph-src"), initialURL);
     var initialCanonical = link(attribute(host, initialPage, "data-page-href"), initialURL) || initialURL;
     var initialScope = attribute(host, initialPage, "data-scope-id") || null;
@@ -32,6 +36,7 @@
     var scrollChecked = false, scrollOwned = false;
     var snapshots = new Map(), keySequence = 0, keySeed = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
     var index = null, indexPromise = null, indexController = null, indexed = new Map(), routes = new Map(), documents = new Set();
+    var indexDigest = null, wikiLinks = null, wikiPromise = null, wikiController = null, wikiGeneration = 0;
     var bound = new Map(), htmlCache = new Map(), jsonCache = new Map(), cacheBytes = 0;
     var decluttered = new WeakMap();
     var timeout = bounded(options.timeout, 15000, 1000, 60000);
@@ -108,10 +113,29 @@
         cacheBytes -= victim.get(id).bytes; victim.delete(id);
       }
     }
-    async function fetchText(value, type, parentSignal) {
+    function digestUnavailable() { return null; }
+    function digestHex(buffer) {
+      try {
+        var bytes = new Uint8Array(buffer);
+        return bytes.byteLength === 32 ? Array.from(bytes).map(function (byte) { return byte.toString(16).padStart(2, "0"); }).join("") : null;
+      } catch (_error) { return null; }
+    }
+    function captureIndexDigest(bytes) {
+      // Hash the existing exact input before decoding; retain no JS byte buffers
+      // or closure over them. Native WebCrypto's one input copy is bounded.
+      try {
+        var subtle = win.crypto && win.crypto.subtle;
+        if (!subtle || typeof subtle.digest !== "function" || bytes.byteLength > WIKI_LIMIT) return Promise.resolve(null);
+        return subtle.digest("SHA-256", bytes).then(digestHex, digestUnavailable);
+      } catch (_error) { return Promise.resolve(null); }
+    }
+    async function fetchText(value, type, parentSignal, maximum) {
       var href = link(value, initialURL); if (!href) throw new Error("Refusing an external data request");
       var key = resource(href), cache = type === "html" ? htmlCache : jsonCache;
-      var cached = cacheGet(cache, key); if (cached) return cached;
+      var limit = type === "html" ? htmlLimit : jsonLimit;
+      if (Number.isSafeInteger(maximum)) limit = Math.min(limit, maximum);
+      var cached = cacheGet(cache, key);
+      if (cached) { if (cached.bytes > limit) throw new Error("Published data is too large"); return cached; }
       var controller = new AbortController(), expired = false;
       function abort() { controller.abort(); }
       if (parentSignal) {
@@ -119,13 +143,12 @@
         parentSignal.addEventListener("abort", abort, {once: true});
       }
       var timer = setTimeout(function () { expired = true; controller.abort(); }, timeout);
-      var limit = type === "html" ? htmlLimit : jsonLimit;
       try {
         var response = await (options.fetch || win.fetch.bind(win))(key, {credentials: "same-origin", signal: controller.signal});
         if (!response.ok) throw new Error("HTTP " + response.status);
         var responseURL = link(response.url || key, key); if (!responseURL) throw new Error("Data redirected outside this site");
         if (Number(response.headers.get("content-length")) > limit) throw new Error("Published data is too large");
-        var text, length;
+        var text, length, digest = null, isCatalogue = type === "json" && catalogueURL && key === resource(catalogueURL);
         if (response.body && response.body.getReader) {
           var reader = response.body.getReader(), chunks = [], total = 0;
           while (true) {
@@ -136,13 +159,21 @@
           }
           var bytes = new Uint8Array(total), offset = 0;
           chunks.forEach(function (part) { bytes.set(part, offset); offset += part.byteLength; });
+          if (isCatalogue) digest = captureIndexDigest(bytes);
           text = new TextDecoder("utf-8", {fatal: true}).decode(bytes); length = total;
+          bytes = null; chunks = null;
+        } else if (isCatalogue && typeof response.arrayBuffer === "function") {
+          var raw = new Uint8Array(await response.arrayBuffer());
+          if (raw.byteLength > limit) throw new Error("Published data is too large");
+          digest = captureIndexDigest(raw);
+          text = new TextDecoder("utf-8", {fatal: true}).decode(raw); length = raw.byteLength; raw = null;
         } else {
+          // Older text-only peers remain readable, but cannot prove byte identity.
           text = await response.text(); length = new TextEncoder().encode(text).byteLength;
           if (length > limit) throw new Error("Published data is too large");
         }
         if (parentSignal && parentSignal.aborted) throw abortError();
-        var entry = {text: text, url: responseURL, bytes: length};
+        var entry = {text: text, url: responseURL, bytes: length, indexDigest: digest};
         cachePut(cache, key, entry, type === "html" ? htmlEntries : jsonEntries); return entry;
       } catch (error) {
         if (expired) throw new Error("Published data request timed out");
@@ -225,7 +256,7 @@
         if (disposed) throw abortError();
         var normalized = await normalizeIndex(JSON.parse(loaded.text), loaded.url);
         if (disposed) throw abortError();
-        index = normalized;
+        index = normalized; indexDigest = loaded.indexDigest;
         if (typeof options.onIndex === "function") {
           try { options.onIndex(index); } catch (error) { report(error, catalogueURL); }
         }
@@ -235,6 +266,75 @@
         if (!disposed) report(error, catalogueURL); throw error;
       }).finally(function () { indexController = null; });
       return indexPromise;
+    }
+    function unavailableWiki(reason, digest) {
+      return {schema: WIKI_SCHEMA, index_sha256: digest || null, availability: "unavailable",
+        references: [], unavailable_sources: [], reason: reason};
+    }
+    async function normalizeWikiLinks(payload, digest, ids, signal) {
+      function invalid() { return unavailableWiki("invalid_layer", digest); }
+      if (!payload || payload.schema !== WIKI_SCHEMA || typeof payload.index_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(payload.index_sha256) ||
+          ["complete", "partial", "unavailable"].indexOf(payload.availability) < 0 ||
+          !Array.isArray(payload.references) || !Array.isArray(payload.unavailable_sources) ||
+          payload.reason !== undefined && typeof payload.reason !== "string") return invalid();
+      if (payload.index_sha256 !== digest) return unavailableWiki("stale_index", digest);
+      if (payload.availability === "complete" && payload.unavailable_sources.length) return invalid();
+      function offset(value) { return Number.isSafeInteger(value) && value >= 0 && value < ids.length; }
+      async function pause() { await waitFor(new Promise(function (resolve) { setTimeout(resolve, 0); }), signal); }
+      // Only this parser-owned sidecar is normalized, never the index or its
+      // formal relations. Reuse its arrays instead of retaining another copy.
+      for (var position = 0; position < payload.references.length; position++) {
+        var row = payload.references[position];
+        if (!Array.isArray(row) || row.length !== 2 || !offset(row[0]) || !offset(row[1])) return invalid();
+        row[0] = ids[row[0]]; row[1] = ids[row[1]];
+        if ((position + 1) % 1024 === 0) await pause();
+      }
+      for (var source = 0; source < payload.unavailable_sources.length; source++) {
+        if (!offset(payload.unavailable_sources[source])) return invalid();
+        payload.unavailable_sources[source] = ids[payload.unavailable_sources[source]];
+        if ((source + 1) % 512 === 0) await pause();
+      }
+      if (signal.aborted || disposed) throw abortError();
+      var normalized = {schema: WIKI_SCHEMA, index_sha256: digest, availability: payload.availability,
+        references: payload.references, unavailable_sources: payload.unavailable_sources};
+      // Coverage remains public; arbitrary publisher/provider error text does not.
+      if (payload.availability !== "complete") normalized.reason = payload.availability === "partial" ? "partial_sources" : "source_unavailable";
+      return normalized;
+    }
+    function loadWikiLinks() {
+      if (disposed) return Promise.resolve(null);
+      if (wikiLinks && wikiLinks.availability !== "unavailable") return Promise.resolve(wikiLinks);
+      if (wikiPromise) return wikiPromise;
+      var generation = ++wikiGeneration, controller = wikiController = new AbortController(), digest = null, expired = false;
+      var timer = setTimeout(function () { expired = true; controller.abort(); }, timeout);
+      function finish(value) {
+        if (disposed || generation !== wikiGeneration) return null;
+        if (value.availability === "unavailable" && wikiURL) cacheDelete(jsonCache, resource(wikiURL));
+        wikiLinks = value;
+        if (typeof options.onWikiLinks === "function") {
+          try { options.onWikiLinks(value); } catch (_ignored) { /* Optional observers cannot disable mathematical navigation. */ }
+        }
+        return disposed || generation !== wikiGeneration ? null : value;
+      }
+      wikiPromise = (async function () {
+        var loadedIndex = await waitFor(loadIndex(), controller.signal);
+        if (!loadedIndex || !wikiURL) return finish(unavailableWiki("index_unavailable"));
+        digest = await waitFor(indexDigest || Promise.resolve(null), controller.signal);
+        if (!digest) return finish(unavailableWiki("index_unverified"));
+        var loaded = await waitFor(fetchText(wikiURL, "json", controller.signal, WIKI_LIMIT), controller.signal), payload;
+        try { payload = JSON.parse(loaded.text); } catch (_error) { return finish(unavailableWiki("invalid_layer", digest)); }
+        // Map insertion order is the original validated offset identity, even
+        // if a view reorders the public nodes array after receiving the index.
+        var normalized = await normalizeWikiLinks(payload, digest, Array.from(indexed.keys()), controller.signal);
+        if (loadedIndex !== index) return null;
+        return finish(normalized);
+      })().catch(function () {
+        return finish(unavailableWiki(expired ? "request_timed_out" : "request_unavailable", digest));
+      }).finally(function () {
+        clearTimeout(timer);
+        if (generation === wikiGeneration) { wikiPromise = null; wikiController = null; }
+      });
+      return wikiPromise;
     }
     function indexedNode(id) {
       return indexed.get(id) || typeof id === "string" && indexed.get(id.replace(/^(?:scope|boundary):/, "")) || null;
@@ -649,6 +749,7 @@
     function dispose() {
       if (disposed) return;
       disposed = true; epoch++;
+      wikiGeneration++; if (wikiController) wikiController.abort();
       host.removeAttribute("aria-busy");
       if (active) active.abort(); if (indexController) indexController.abort();
       if (scrollOwned && win.history.scrollRestoration === "manual") win.history.scrollRestoration = "auto";
@@ -659,9 +760,11 @@
       }); bound.clear();
       htmlCache.clear(); jsonCache.clear(); cacheBytes = 0; index = null; indexed.clear(); routes.clear(); documents.clear();
       snapshots.clear(); currentKey = null; current = null; initialSource = null; source = null; indexPromise = null; started = null;
+      indexDigest = null; wikiLinks = null; wikiPromise = null; wikiController = null;
       decluttered = new WeakMap();
     }
-    return {start: start, navigate: navigate, navigateNode: navigateNode, loadIndex: loadIndex,
+    return {start: start, navigate: navigate, navigateNode: navigateNode, loadIndex: loadIndex, loadWikiLinks: loadWikiLinks,
+      getWikiLinks: function () { return wikiLinks; },
       getIndex: function () { return index; }, bindReader: bindReader, declutterReader: declutterReader, readerIsOverview: readerIsOverview,
       checkpoint: checkpoint, dispose: dispose};
   }
