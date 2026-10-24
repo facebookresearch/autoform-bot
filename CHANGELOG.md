@@ -11,6 +11,11 @@ date when the release is tagged.
 
 ### Changed
 
+- **Dependency explorer.** A bare `\ref` in a summary shows as typed rather
+  than as `???`; a pass that adds to a page no longer reads MathJax's output,
+  so no hidden duplicate formula lands in its assistive copy; the rail's and
+  details' rows keep their whole focus rings; and a typeset distribution label
+  stays together (#468).
 - **Docs.** The CLI reference's contracts moved to `autoform_cli/reference/`
   (validation and audit, search, open statements, claims and revisions,
   runtime and publication). The reference, skills and contributor docs keep
