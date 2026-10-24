@@ -1402,9 +1402,10 @@
       content.appendChild(element("span", "bp-dag-node-title", node.title));
       // The kind word or topic count gives way first, so the status or count the line is there to show stays whole.
       var line = content.appendChild(element("span", "bp-dag-node-meta"));
-      if (lead) line.appendChild(element("span", "", lead));
-      line.appendChild(element("span", "", (lead ? " · " : "") + tail));
-      if (node._region && node.summary) content.appendChild(element("span", "bp-dag-node-summary", node.summary));
+      if (lead) { line.appendChild(element("span", "", lead)); line.appendChild(element("span", "", " · ")); }
+      line.appendChild(element("span", "", tail));
+      // An area's summary leads with its topic count, which the stylesheet then drops from the meta.
+      if (node._region && node.summary) content.appendChild(element("span", "bp-dag-node-summary", lead + ": " + node.summary));
       content.appendChild(element("span", "bp-dag-node-relation", ""));
       if (content !== control) control.appendChild(content);
       // A drag or pinch that began on the card is not a tap; a keyboard click has no detail and always opens it.

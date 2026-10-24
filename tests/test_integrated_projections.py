@@ -146,8 +146,8 @@ def test_cards_lead_with_the_books_kind_word_and_topics_keep_their_count() -> No
       assert(card(viewNode('T', {declaration: 'theorem'})).getAttribute('aria-label').endsWith(', Theorem · planned'));
       // A title that already names its kind, as ATLAS's do, gets no second kind word.
       assert.equal(meta(viewNode('Theorem (Crystallographic Restriction)', {declaration: 'theorem'})), 'planned');
-      // The kind word and the status are separate spans, so only the kind truncates.
-      assert.deepEqual(card(viewNode('K', {declaration: 'theorem'})).children[1].children.map(span => span.textContent), ['Theorem', ' · planned']);
+      // The kind word, the separator and the status are separate spans, so only the kind truncates, and an area card can drop the first two.
+      assert.deepEqual(card(viewNode('K', {declaration: 'theorem'})).children[1].children.map(span => span.textContent), ['Theorem', ' · ', 'planned']);
       // A topic counts its fully proved targets; module inventories are neutral and stay out of the total.
       palette = {planned: {label: 'planned'}, fully_proved: {label: 'fully proved'}, inventory_checked: {label: 'inventory checked', neutral: true}};
       const mixed = {kind: 'scope', member_count: 85, status_counts: [['fully_proved', 80], ['inventory_checked', 5]]};

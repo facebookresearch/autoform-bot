@@ -574,7 +574,10 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
 
     assert 'var lead = node._region ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, tail = scopeMeta || statusLabel(node.status);' in script
     assert 'var meta = node._region || !lead ? tail : lead + " · " + tail;' in script
-    assert 'line.appendChild(element("span", "", (lead ? " · " : "") + tail));' in script
+    assert 'if (lead) { line.appendChild(element("span", "", lead)); line.appendChild(element("span", "", " · ")); }' in script
+    # An area card's summary takes the topic count, and the meta keeps "2,070 of 2,485 fully proved" whole beside it.
+    assert 'element("span", "bp-dag-node-summary", lead + ": " + node.summary)' in script
+    assert ".bp-dag-viewer:not(.bp-dag-compact-regions) .bp-dag-node:has(.bp-dag-node-summary) .bp-dag-node-meta > span:not(:last-child) { display: none; }" in dag_viewer._STYLE
     assert 'element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (node.area ? " · " + node.area : ""))' in script
     assert 'element("span", "bp-dag-result-meta", match.node.area || statusLabel(match.node.status))' in script
     for gone in ("bp-dag-node-id", "bp-dag-inventory-id", "bp-dag-result-id"):
