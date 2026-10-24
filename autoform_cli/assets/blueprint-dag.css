@@ -265,6 +265,10 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-reading-related { display: grid; align-content: start; gap: 5px; min-width: 0; font-size: 12px; }
 .bp-reading-related strong { color: var(--dag-muted); font-weight: 600; }
 .bp-reading-related a { color: var(--dag-link); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-reading-related-topics { margin-top: 8px; font-size: 12px; color: var(--dag-muted); }
+.bp-reading-related-topics summary { cursor: pointer; font-weight: 600; }
+.bp-reading-topic-list { display: grid; gap: 5px; margin: 8px 0; padding: 0; list-style: none; }
+.bp-reading-related-topics a { color: var(--dag-link); }
 .bp-dag-integrated .bp-dag-node-title { display: -webkit-box; font-size: 17px; line-height: 1.25; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; }
 .bp-dag-integrated .bp-dag-node-meta { font-size: 14px; }
 .bp-dag-integrated.bp-dag-atlas .bp-dag-node-title { font-size: 18px; -webkit-line-clamp: 2; }

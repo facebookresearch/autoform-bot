@@ -26,7 +26,7 @@ function original(name) {
   assert.fail('Unparseable actual callback: '+name);
 }
 const names=['element','button','statusLabel','searchScore','rankMatches','inventoryNodes','renderInventory',
-  'setMode','refresh','restoreState','writeLocation','neighborIds','relationCounts','renderReaderContext'];
+  'setMode','refresh','restoreState','writeLocation','neighborIds','relationCounts','renderReaderContext','topicPeers','semanticParent'];
 const constants=['NODE_W','plural'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;

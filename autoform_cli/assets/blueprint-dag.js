@@ -732,7 +732,6 @@
       var links = neighborIds(id), noEdges = !links.before.length && !links.after.length;
       var candidates = Array.from(new Set(links.before.concat(links.after))).filter(function (key) { return key !== id && records.has(key); });
       var contextNodes = new Map(); contextGraph.nodes.forEach(function (node) { contextNodes.set(recordId(node), node); });
-      if (noEdges) candidates = contextGraph.nodes.filter(function (node) { return node.map !== false && recordId(node) !== id; }).slice(0, 7).map(recordId);
       var ids = [id].concat(candidates.slice(0, MAX_MAP_NODES - 1)), known = new Set(ids);
       var nodes = ids.map(function (key) {
         var original = records.get(key) || contextNodes.get(key);
@@ -863,6 +862,45 @@
         row.appendChild(group);
       });
       if (links.before.length || links.after.length) dom$readingNeighbors.appendChild(row);
+      var peers = topicPeers(record ? record.id : node.id);
+      if (peers && peers.nodes.length) {
+        var more = element("details", "bp-reading-related-topics");
+        more.appendChild(element("summary", "", peers.title));
+        var list = element("ul", "bp-reading-topic-list");
+        peers.nodes.slice(0, 5).forEach(function (peer) {
+          var item = element("li"), link = element("a", "", peer.title); link.href = peer.route || peer.url;
+          link.addEventListener("click", function (event) {
+            if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault(); navigation.navigateNode(peer.id, {history: "push", focus: "reading"});
+          });
+          item.appendChild(link); list.appendChild(item);
+        });
+        more.appendChild(list);
+        if (peers.nodes.length > 5) {
+          var browse = element("a", "bp-reading-topic-browse", "Browse " + peers.owner.title);
+          browse.href = peers.owner.route || peers.owner.url;
+          browse.addEventListener("click", function (event) {
+            if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault(); navigation.navigateNode(peers.owner.id, {history: "push", focus: "reading"});
+          });
+          more.appendChild(browse);
+        }
+        dom$readingNeighbors.appendChild(more);
+      }
+    }
+
+    // Structural navigation is not a mathematical dependency or wiki backlink.
+    function topicPeers(id) {
+      var focus = records.get(id); if (!focus || !sharedIndex) return null;
+      var scoped = focus.scope === focus.id;
+      var owner = records.get(scoped ? semanticParent(focus) : focus.scope);
+      if (!owner || scoped && owner.id === "roadmap") return null;
+      var peers = sharedIndex.nodes.filter(function (peer) {
+        if (peer.id === id || ["collection", "transparent", "source"].indexOf(peer.navigation) >= 0) return false;
+        return scoped ? peer.kind === "scope" && peer.scope === peer.id && peer.result !== true && semanticParent(peer) === owner.id :
+          (peer.result === true || peer.catalog === "module") && peer.scope === focus.scope;
+      });
+      return {owner: owner, title: (scoped ? "Other topics in " : "More in ") + owner.title, nodes: peers};
     }
 
     function buildShell() {

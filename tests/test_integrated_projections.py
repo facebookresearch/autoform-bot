@@ -110,23 +110,44 @@ def _run(body: str, *, fixture: object = None) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_an_isolated_focal_result_does_not_make_connected_context_peers_isolated() -> None:
+def test_an_isolated_focal_result_has_no_arbitrary_dependency_peers_and_keeps_the_inventory() -> None:
     _run(r"""
       const input = [leaf('T'), leaf('A'), leaf('B')];
       const authored = {source: 'A', target: 'B', statement: 1, proof: 0};
       configure(input, graph(input.map(node => viewNode(node.id)), [authored]), [['A', 'B', 1, 0]]);
+      const before = JSON.stringify({input, contextGraph, sharedIndex});
       const projected = neighborhood('T');
-      assert.deepEqual(projected.edges, [authored]);
+      assert.deepEqual(projected.nodes.map(node => node.id), ['T']);
+      assert.deepEqual(projected.edges, []);
       adoptGraph(projected);
       assert.equal(byId.get('T').isolated, true);
+      assert(makeNodeControl(byId.get('T')).getAttribute('aria-label').includes('no dependency edges'));
+      ui$selected = byId.get('T'); ui$showIsolated = false; ui$activeDirty = true; calculateActive();
+      assert.deepEqual(ui$active.map(node => node.id), ['T'], 'The explicitly selected isolated article remains reachable');
+      currentBundle.scope = 'chapter'; ui$mode = 'list';
+      assert.deepEqual(inventoryNodes().map(node => node.id).sort(), ['A', 'B', 'T']);
+      assert.equal(JSON.stringify({input, contextGraph, sharedIndex}), before);
+    """)
+
+
+def test_a_real_connected_neighborhood_keeps_exact_edges_and_connected_controls() -> None:
+    _run(r"""
+      const input = [leaf('T'), leaf('A'), leaf('B')];
+      const authored = {source: 'A', target: 'B', statement: 1, proof: 0};
+      configure(input, graph(input.map(node => viewNode(node.id)), [authored]), [['A', 'B', 1, 0]]);
+      const before = JSON.stringify({input, contextGraph, sharedIndex});
+      const projected = neighborhood('A');
+      assert.deepEqual(projected.nodes.map(node => node.id).sort(), ['A', 'B']);
+      assert.deepEqual(projected.edges, [authored]);
+      adoptGraph(projected);
       for (const id of ['A', 'B']) {
         assert.equal(byId.get(id).isolated, false, id + ' has a real retained dependency');
         assert(!makeNodeControl(byId.get(id)).getAttribute('aria-label').includes('no dependency edges'));
       }
-      assert(makeNodeControl(byId.get('T')).getAttribute('aria-label').includes('no dependency edges'));
       ui$showIsolated = false; ui$activeDirty = true; calculateActive();
       assert.deepEqual(ui$active.map(node => node.id).sort(), ['A', 'B']);
       assert(data.edges.every(edge => ui$activeIds.has(edge.source) && ui$activeIds.has(edge.target)));
+      assert.equal(JSON.stringify({input, contextGraph, sharedIndex}), before);
     """)
 
 
