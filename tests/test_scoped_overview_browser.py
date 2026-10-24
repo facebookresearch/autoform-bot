@@ -372,7 +372,7 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
         assert box["title"] == ("Unassigned topics" if key == "unassigned" else key[5:])
         assert box["meta"] == "9 topics · 9 items"
         assert box["scale"] >= .9 - 1e-6 and box["width"] >= 180 and box["height"] >= 90
-        assert box["titlePx"] >= 15 and box["metaPx"] >= 10
+        assert box["titlePx"] >= 15 and box["metaPx"] >= 12
         assert box["hit"] is True
         assert box["y"] >= box["stage"]["y"] + 36
         assert box["y"] + box["height"] <= box["stage"]["y"] + box["stage"]["height"] - 32
@@ -412,6 +412,18 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     _zoom_group(page, key)
     focused = _focus_graph_node(page, consumer.groups[key][0]["id"])
+    playwright.expect(page.locator(".bp-dag-breadcrumb")).to_contain_text(_AREAS[0])
+    playwright.expect(page.locator(".bp-dag-breadcrumb").get_by_role("link", name=_SCOPE_TITLE, exact=True)).to_have_count(1)
+    expanded_camera = _geometry(focused)["camera"]
+    page.get_by_role("button", name=re.compile(r"^(Areas|Regions)$")).click()
+    _committed(page)
+    _focus_group(page, key)
+    page.go_back()
+    _committed(page)
+    playwright.expect(_group(page, key)).to_have_count(0)
+    playwright.expect(page.locator(".bp-dag-breadcrumb")).to_contain_text(_AREAS[0])
+    focused = page.locator(f'.bp-dag-node[data-autoform-node-id="{consumer.groups[key][0]["id"]}"]')
+    assert _geometry(focused)["camera"] == pytest.approx(expanded_camera, abs=.5)
     bounds = focused.bounding_box()
     page.mouse.move(bounds["x"] + bounds["width"] / 2, bounds["y"] + bounds["height"] / 2)
     page.keyboard.down("Control")
