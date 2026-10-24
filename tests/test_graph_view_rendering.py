@@ -381,6 +381,12 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert script.count("typeset();") == 3
     # A formula keeps its letters' case under the rail's group headings, which are set in capitals.
     assert ".bp-dag-viewer mjx-container { text-transform: none; }" in dag_viewer._STYLE
+    # A distribution label is flex, so its text is one span; the handle is marked only for a node's title;
+    # search rows and the head's trail show titles as typed.
+    assert 'name.appendChild(element("span", TEX, row[0]));' in script
+    assert "refs.sheetHandle.classList.toggle(TEX, !!state.selected);" in script
+    assert 'choose.appendChild(element("span", "bp-dag-result-title", match.node.title));' in script
+    assert 'crumbs.appendChild(trailList(trail.length ? trail : [{label: data.title || "Dependencies"}]));' in script
     assert 'refs.announcement.setAttribute("aria-live", "polite")' in script
     assert "control.dataset.autoformNodeId = node.id" in script
     assert "new ResizeObserver(resize)" in script

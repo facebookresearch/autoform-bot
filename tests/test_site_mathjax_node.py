@@ -93,7 +93,12 @@ MathJax.startup.ready = () => {
   if (override === "version") MathJax.version = "3.2.1";
   const original = MathJax._.mathjax.mathjax.document;
   MathJax._.mathjax.mathjax.document = function (root, options) {
+    // What the script asked of the document, before MathJax drops what Node lacks, such as the menu.
+    const requested = JSON.parse(JSON.stringify({
+      enableMenu: options.enableMenu, renderActions: options.renderActions, skipHtmlTags: options.skipHtmlTags,
+    }));
     const doc = original.call(this, root, options);
+    doc.requested = requested;
     doc.menu = new Menu();
     if (first === null) first = doc;
     else docs.push(doc);
@@ -127,6 +132,7 @@ function describe() {
   return docs.map((doc) => ({
     card: cardOf(doc),
     packages: doc.inputJax[0].parseOptions.options.packages.slice(),
+    requested: doc.requested,
     math: Array.from(doc.math).map((item) => ({tex: item.math, mml: MathJax.startup.toMML(item.root)})),
   }));
 }
@@ -393,10 +399,17 @@ def test_the_explorer_s_titles_and_summaries_are_typeset_as_articles_are(tmp_pat
         '<a class="bp-dag-navigation-link" href="#base"><span class="arithmatex">Order of $g^k$</span></a>'
         '<button class="bp-dag-sheet-handle arithmatex">Handle $h_1$</button>'
         '<button class="bp-dag-relation-button arithmatex">Relation $r^2$</button>'
+        '<p class="bp-dag-summary arithmatex">By \\ref{thm:a}, which is no formula, $q$ holds.</p>'
         "</div></aside></body></html>"
     )
+    # An article formula whose hidden assistive copy holds a pair of dollar signs.
+    first = _FIRST_PAGE.replace(
+        '<p id="a1">', '<p id="a1"><span class="arithmatex">\\(\\text{costs \\$5 and \\$6}\\)</span> '
+    )
 
-    report = _node_report(tmp_path, _node_script(tmp_path, json.dumps(_MACROS)), "new", second=drawn, then="explorer")
+    report = _node_report(
+        tmp_path, _node_script(tmp_path, json.dumps(_MACROS)), "new", first=first, second=drawn, then="explorer"
+    )
 
     assert report["errors"] == []
     assert report["early"] == "undefined"
@@ -409,10 +422,16 @@ def test_the_explorer_s_titles_and_summaries_are_typeset_as_articles_are(tmp_pat
     # control inside the control.
     page, link = explorer[:2]
     assert page["card"] is None and page["packages"] == _PAGE_PACKAGES
-    assert [math["tex"] for math in page["math"]] == ["\\mathbb{Z}/n", "C_n \\cong \\RR", "\\varphi(n)"]
+    # A bare \\ref is no formula, and MathJax's output, the assistive copy
+    # included, is not read again.
+    assert [math["tex"] for math in page["math"]] == ["\\mathbb{Z}/n", "C_n \\cong \\RR", "\\varphi(n)", "q"]
     assert "merror" not in page["math"][1]["mml"] and 'mathcolor="red"' not in page["math"][1]["mml"]
     assert link["card"] is None and link["packages"] == _PAGE_PACKAGES
     assert sorted(math["tex"] for math in link["math"]) == ["g^k", "h_1", "r^2", "t_0"]
+    # The control's document has neither MathJax's menu nor its accessibility explorer.
+    skip = {"[+]": ["mjx-container"]}
+    assert page["requested"] == {"skipHtmlTags": skip}
+    assert link["requested"] == {"enableMenu": False, "renderActions": {"explorable": []}, "skipHtmlTags": skip}
     assert all(document["math"] == [] for document in explorer[2:])
     # MathJax's own document, which a call to MathJax.typesetPromise would use, holds nothing.
     assert report["startup"] == 0

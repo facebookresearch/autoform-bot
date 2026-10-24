@@ -1593,8 +1593,9 @@ def test_every_formula_paints_inside_its_own_band(tmp_path: Path) -> None:
     # to nothing.
     assert "max-width: none !important" in rules["mjx-container > svg"]
     # Across, ink stops at the edge of the block an article formula is in; a
-    # card's blocks are left to scroll with it.
-    block = rules[":is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *)"]
+    # card's blocks are left to scroll with it, and the explorer's, in panels
+    # that scroll, keep the focus rings of their rows whole.
+    block = rules[":is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *, .bp-dag-viewer *)"]
     assert "overflow-x: clip" in block and "overflow-y" not in block
     card = rules[".bp-readback"]
     assert "overflow-x: auto" in card

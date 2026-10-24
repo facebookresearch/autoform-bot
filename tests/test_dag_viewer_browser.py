@@ -2225,8 +2225,11 @@ def test_the_explorer_typesets_the_math_it_draws_in_its_rail_and_details(desktop
         playwright.expect(page.locator(f"{control} mjx-container").first).to_be_attached()
         assert page.locator(f"{control} [tabindex]").count() == 0, control
     assert page.locator('.bp-dag-navigation-title mjx-container[tabindex="0"]').count() == 1
-    # Map cards are not typeset, and MathJax's own document, which MathJax.typesetPromise reads, holds nothing.
+    # Map cards and the head's trail, which repeats the rail's, show titles as typed, and MathJax's own
+    # document, which MathJax.typesetPromise reads, holds nothing.
     assert page.locator(".bp-dag-node mjx-container").count() == 0
+    assert page.locator(".bp-dag-breadcrumb mjx-container").count() == 0
+    assert "Roadmap over $\\mathbb{N}$" in page.locator(".bp-dag-breadcrumb").inner_text()
     assert page.evaluate("Array.from(MathJax.startup.document.math).length") == 0
 
 
