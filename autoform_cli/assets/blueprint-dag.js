@@ -470,7 +470,7 @@
       ui$direction = saved.direction || "both"; ui$query = saved.query || ""; dom$search.value = ui$query;
       host.classList.toggle("bp-dag-outline-open", Boolean(saved.outlineOpen));
       if (dom$outlineToggle) dom$outlineToggle.setAttribute("aria-expanded", String(Boolean(saved.outlineOpen)));
-      ui$activeDirty = true; setSheet(saved.readingOpen !== false, ui$selected); refresh(true); resize();
+      ui$activeDirty = true; setSheet(saved.readingOpen !== false, ui$selected); refresh(false); resize();
       if (saved.camera) ui$transform = Object.assign({}, saved.camera);
       return readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || ticket !== restoration || (isCurrent && !isCurrent())) { if (ticket === restoration) restoring = false; resolve(); return; }

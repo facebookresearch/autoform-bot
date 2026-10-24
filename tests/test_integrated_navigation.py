@@ -417,3 +417,44 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
       assert.equal(app.win.location.href,aSpec.route+'#latest-section');
       assert.equal(app.commits.length,commits); assert.equal(app.fetches.length,requests); app.nav.dispose();
     """)
+
+
+def test_results_restoration_renders_saved_page_before_restoring_scroll_and_focus() -> None:
+    _run(r"""
+      // Execute both production callbacks: a stub refresh would miss its page reset.
+      // DOM collaborators only record ordering; the native browser test covers clipping/hit testing.
+      const viewer=fs.readFileSync(CLIENT.replace(/blueprint-navigation\.js$/,'blueprint-dag.js'),'utf8');
+      function callback(name) {
+        const start=viewer.indexOf('    function '+name+'('); assert(start>=0);
+        const following=/\n    function [A-Za-z_$][A-Za-z0-9_$]*\(/.exec(viewer.slice(start+4));
+        assert(following); return viewer.slice(start+4,start+4+following.index).trim();
+      }
+      const calls=[],LIST_PAGE=100,presentStatuses=['planned'],mapAllowed=false;
+      let alive=true,restoration=0,restoring=false,checkpointTimer,readingReady=Promise.resolve();
+      let ui$filtersTouched,ui$area,ui$requestedNode,ui$selected,ui$selectedStatuses,ui$showIsolated,
+        ui$mode='list',ui$listLimit=100,ui$relationIds,ui$outlineLimit,ui$direction,ui$query,ui$activeDirty,ui$transform;
+      const host={classList:{toggle(){}}},byId=new Map(),overlays=new Map();
+      let dom$inventoryRows=new Map(),dom$outlineToggle;
+      const dom$search={value:''},dom$navigation={scrollTop:0},dom$readingBody={scrollTop:0},dom$inventoryScroll={scrollTop:0};
+      const updateProjection=()=>{},renderNavigation=()=>{},setSheet=()=>{},resize=()=>{};
+      const syncControls=()=>{},renderInspector=()=>{},schedule=()=>{};
+      function renderInventory(resetScroll) {
+        calls.push(['render',ui$listLimit,resetScroll]); dom$inventoryRows=new Map();
+        for(let i=0;i<ui$listLimit;i++) dom$inventoryRows.set('result-'+i,{focus(options){
+          calls.push(['focus',i,dom$inventoryScroll.scrollTop,options]);
+        }});
+        if(resetScroll) dom$inventoryScroll.scrollTop=0;
+      }
+      const requestAnimationFrame=callback=>setImmediate(callback);
+      const refresh=eval('('+callback('refresh')+')'),restoreState=eval('('+callback('restoreState')+')');
+      const saved={mode:'list',listLimit:200,inventoryScroll:1800,outlineScroll:37,readingScroll:71,
+        focus:'result-150',camera:{x:12,y:24,scale:1.2},readingOpen:false};
+      await restoreState(saved,{isCurrent:()=>true});
+      assert.deepEqual(calls,[['render',200,false],['focus',150,1800,{preventScroll:true}]]);
+      assert.equal(ui$listLimit,200); assert.equal(dom$inventoryScroll.scrollTop,1800);
+      assert.equal(dom$navigation.scrollTop,37); assert.equal(dom$readingBody.scrollTop,71);
+      assert.deepEqual(ui$transform,saved.camera); assert.equal(restoring,false);
+      // A new filter/query still deliberately starts a fresh first page.
+      refresh(true); assert.equal(ui$listLimit,100); assert.equal(dom$inventoryScroll.scrollTop,0);
+      assert.deepEqual(calls.at(-1),['render',100,true]);
+    """)

@@ -475,7 +475,10 @@ def test_empty_authored_overview_opens_on_the_map_and_restores_its_reading_and_c
     page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
     _open(page, site, workspace_runtime)
     page.locator(".bp-dag-overview-only").wait_for()
-    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    # The same retained control is visible on the collapsible overview, but a
+    # wide theorem reader intentionally hides it. Inspect that state by DOM,
+    # while keeping native click/visibility assertions on the overview itself.
+    handle = page.locator('.bp-reading-pane > button[aria-label="Toggle mathematical reading"]')
     inner = page.locator(".bp-reading-pane .bp-dag-inspector-inner")
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     playwright.expect(inner).to_have_attribute("inert", "")
