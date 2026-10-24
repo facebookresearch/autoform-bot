@@ -20,10 +20,9 @@ outward-facing: make sure the request covers it before the first claim.
 ## Acquire and renew
 
 Acquire the exact `claim_target` returned by `work context` before editing. A
-failed acquire or renewal means ownership is unproven: stop writing. Leases
-expire after 25 minutes, so run `autoform claim renew` about every five minutes
-and immediately before integrating; renew, not acquire, is the check that a
-claim is still held.
+failed acquire or renewal means ownership is unproven: stop writing. Confirm a
+claim with `autoform claim renew`, not acquire: about every five minutes, since
+leases expire after 25 minutes, and immediately before integrating.
 
 ## Import edits
 

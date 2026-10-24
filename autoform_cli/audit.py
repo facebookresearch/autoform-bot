@@ -66,7 +66,13 @@ _MAX_MODULE_CHILDREN = MAX_MAP_NODES
 #: an absolute floor and a large multiple of this project's own median. The
 #: multiple self-calibrates -- a project whose nodes are routinely long is
 #: measured against itself, and a project with too few finished nodes to have a
-#: meaningful median cannot clear the multiple at all.
+#: meaningful median cannot clear the multiple at all. Every measurement is in
+#: the finding's reason, so ``--json`` over a finished project is the
+#: calibration corpus for the threshold. Nothing authored in an article
+#: predicts size: on the 43 finished nodes of phulin/finite-flat, prose length
+#: correlates with realized Lean length at r = -0.03 and prerequisite count at
+#: r = 0.25, and its largest node is 1344 lines of Lean behind 66 words of
+#: prose, so pre-formalization size estimates were rejected.
 _NODE_SIZE_FLOOR = 200
 _NODE_SIZE_MULTIPLE = 4
 

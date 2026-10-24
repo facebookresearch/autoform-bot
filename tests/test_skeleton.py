@@ -2910,6 +2910,50 @@ def test_report_is_identical_across_checkout_roots(tmp_path: Path) -> None:
     assert first.to_json() == second.to_json()
 
 
+def test_report_bytes_are_pinned(tmp_path: Path) -> None:
+    # Serialization changes must keep every byte, and so every hash, a reader recorded.
+    digest = hashlib.sha256(_fake_report(tmp_path).to_json().encode()).hexdigest()
+
+    assert digest == "a28525d38295df4e9848c3d1334528a29478678f269272e487d8de98ec41b8e3"
+
+
+def test_report_serialization_fingerprints_each_declaration_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = _fake_report(tmp_path)
+    calls: dict[str, int] = {"_fingerprint": 0, "_packet": 0, "_shared_tables": 0}
+    for owner, name in (
+        (DeclarationSkeleton, "_fingerprint"),
+        (DeclarationSkeleton, "_packet"),
+        (SkeletonReport, "_shared_tables"),
+    ):
+        original = getattr(owner, name)
+
+        def counted(*args: object, _original: Callable[..., object] = original, _name: str = name, **kwargs: object):
+            calls[_name] += 1
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(owner, name, counted)
+
+    report.to_json()
+    report.to_json()
+
+    # One meaning hash and one statement hash, one packet, and the tables built at construction.
+    assert calls == {"_fingerprint": 2, "_packet": 1, "_shared_tables": 0}
+
+
+def test_report_record_edits_do_not_reach_the_report(tmp_path: Path) -> None:
+    report = _fake_report(tmp_path)
+    expected = report.to_json()
+
+    data = report.as_dict()
+    for table in ("trusted", "semantics", "boundary_modules"):
+        data[table].clear()
+
+    assert report.to_json() == expected
+    assert report.as_dict() == json.loads(expected)
+
+
 def test_report_round_trips_through_json_deterministically(tmp_path: Path) -> None:
     report = _fake_report(tmp_path)
 
