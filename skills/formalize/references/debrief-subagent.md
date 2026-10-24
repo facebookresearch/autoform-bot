@@ -3,7 +3,7 @@
 Once an attempt is over and its claim released or handed off, the agent that
 worked it runs `autoform debrief subagent form <ARTICLE> <PROJECT> --phase
 statement|proof` from the checkout where the result is visible (see the
-[CLI reference](../../../autoform_cli/README.md#commands)). Pass `--note` with
+[CLI reference](../../../autoform_cli/README.md#debrief)). Pass `--note` with
 the reason when the attempt did not succeed. If the command says subagent
 debriefs are disabled, stop: there is nothing to do.
 

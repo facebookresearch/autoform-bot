@@ -1,8 +1,8 @@
 # AutoformBot
 
-A plugin for Claude Code and Codex that helps turn mathematical papers and
-notes into Lean 4 formalizations: plan the work, write proofs, and review
-progress from your coding assistant.
+A plugin for Claude Code, Codex, and Muse Code that helps turn mathematical
+papers and notes into Lean 4 formalizations: plan the work, write proofs, and
+review progress from your coding assistant.
 
 ## Installation
 
@@ -30,7 +30,7 @@ muse plugins marketplace add autoform 'https://github.com/facebookresearch/autof
 muse plugins install autoform@autoform
 ```
 
-These commands install release 0.6.0.
+These commands install release 0.6.0 ([changelog](CHANGELOG.md)).
 
 - Claude Code before 2.1.71 takes `'facebookresearch/autoform-bot#v0.6.0'`
   instead of the `@v0.6.0` form, quoted for shells that read `#`.
@@ -67,7 +67,9 @@ an accessible path):
 
 Setup changes local files by default. Creating or pushing a remote repository,
 enabling GitHub Pages, and publishing blueprint content require an explicit
-request; content published through Pages is public.
+request; content published through Pages is public. Each Setup, Roadmap, and
+Formalize run ends with a debrief that drafts an AutoformBot issue under
+`.git/autoform/` for you to review and send; `AUTOFORM_DEBRIEF=0` turns it off.
 
 ## Run several sessions
 

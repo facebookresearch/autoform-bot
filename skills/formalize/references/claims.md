@@ -26,7 +26,7 @@ leases expire after 25 minutes, and immediately before integrating.
 ## Import edits
 
 Compare the import-impact report's claim keys with `autoform claim list`, as the
-[CLI reference](../../../autoform_cli/README.md#commands) describes: another
+[CLI reference](../../../autoform_cli/README.md#work-import-impact) describes: another
 owner's live affected claim is a conflict, malformed evidence is unverifiable,
 and an expired valid claim is not active. Before the edit, atomically acquire
 the required article and module `claim_targets`; an already-held same-worker

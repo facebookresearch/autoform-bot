@@ -1,8 +1,10 @@
 # Lean servers
 
-Autoform's four Lean tools require an absolute `project_dir`, so the plugin
-directory is never mistaken for the user's Lean project. Mathlib and community
-search are not server tools; use host-native tools for them.
+Autoform's four Lean tools, the REPL's `run_lean_code` and `get_repl_status`
+and the LSP's `lean_diagnostic_messages` and `lean_hover`, require an absolute
+`project_dir`, so the plugin directory is never mistaken for the user's Lean
+project. Mathlib and community search are not server tools; use host-native
+tools for them.
 
 ## Shared runtime
 
@@ -10,29 +12,9 @@ Plugin hosts start the two stdio MCP adapters automatically. The first Lean
 tool call starts one detached runtime per AutoformBot installation, Unix user,
 and compute node, which owns one REPL slot pool and LSP session per active Lean
 project. It outlives the session that started it, starts again on the next tool
-call after a crash, and is replaced gracefully by an in-place upgrade.
-
-LSP sessions stay warm; each public REPL call gets a fresh child, and no
-process-owned environment or proof-state handle survives the response. Before
-that child starts, Lean's own header parser, run by the selected Lake
-toolchain, reads the submitted source. Every import it reports must have one of
-the allowlisted roots `Mathlib`, `Aesop`, `Batteries`, or `LeanSearchClient` (a
-plain `Init` import is ignored); quoted or path-like module names are refused,
-and a rejected or unrecognized parser response fails closed. Code with other
-imports, such as the project's own modules, is checked as a saved file with
-`lean_diagnostic_messages` instead. The allowlist is a policy check, not a
-sandbox: each call runs with the runtime user's privileges, and `Init` alone
-provides file and process IO, for example `#eval IO.Process.run`.
-
-REPL children and LSP processes start lazily, and a tool call stays pending
-while Lean starts, so no `/repl-start`, `/lsp-start`, or model-side sleep is
-needed. A REPL call whose header does not start with `module` or `prelude`
-imports Mathlib, so it takes at least as long as `import Mathlib` on the node.
-The REPL `timeout` is one total budget for waiting for an idle slot, the header
-check, child startup, imports, and the submitted code; admitting the project
-counts against `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` instead. A `warm` REPL
-project means its slot pool is cached, not that a REPL subprocess remains
-resident.
+call after a crash, and is replaced gracefully by an in-place upgrade. REPL
+children and LSP processes start lazily, and a tool call stays pending while
+Lean starts, so no `/repl-start`, `/lsp-start`, or model-side sleep is needed.
 
 ```bash
 uv run autoform-lean-runtime start
@@ -42,6 +24,29 @@ uv run autoform-lean-runtime stop
 
 `stop` is graceful: it returns once admitted tool calls and Lean children have
 shut down, so a later `start` replaces the runtime cleanly.
+
+## REPL tools
+
+`run_lean_code` runs code in a fresh REPL child for each call, so no
+process-owned environment or proof-state handle survives the response; LSP
+sessions, by contrast, stay warm. Before that child starts, Lean's own header
+parser, run by the selected Lake toolchain, reads the submitted source. Every
+import it reports must have one of the allowlisted roots `Mathlib`, `Aesop`,
+`Batteries`, or `LeanSearchClient` (a plain `Init` import is ignored); quoted or
+path-like module names are refused, and a rejected or unrecognized parser
+response fails closed. Code with other imports, such as the project's own
+modules, is checked as a saved file with `lean_diagnostic_messages` instead.
+The allowlist is a policy check, not a sandbox: each call runs with the runtime
+user's privileges, and `Init` alone provides file and process IO, for example
+`#eval IO.Process.run`.
+
+A REPL call whose header does not start with `module` or `prelude` imports
+Mathlib, so it takes at least as long as `import Mathlib` on the node. The REPL
+`timeout` is one total budget for waiting for an idle slot, the header check,
+child startup, imports, and the submitted code; admitting the project counts
+against `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` instead. `get_repl_status` reports a
+project as `cold`, `warming`, `warm`, or `retiring`; `warm` means its slot pool
+is cached, not that a REPL subprocess remains resident.
 
 ## LSP tools
 

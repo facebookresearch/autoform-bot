@@ -9,9 +9,9 @@ from pathlib import Path
 
 # Cut prose before raising a budget, and say why in the change that raises it.
 BUDGETS = {
-    "AGENTS.md": 55,
+    "AGENTS.md": 56,
     "CONTRIBUTING.md": 82,
-    "README.md": 113,
+    "README.md": 115,
     "autoform_cli/README.md": 1131,
     "autoform_cli/project/README.md": 114,
     "autoform_cli/reference/claims-and-revisions.md": 157,
@@ -19,13 +19,13 @@ BUDGETS = {
     "autoform_cli/reference/runtime-and-publication.md": 117,
     "autoform_cli/reference/search.md": 162,
     "autoform_cli/reference/validation-and-audit.md": 227,
-    "servers/README.md": 114,
+    "servers/README.md": 119,
     "skills/agent-review/SKILL.md": 61,
     "skills/debrief-orchestrator/SKILL.md": 44,
     "skills/develop-plugin/SKILL.md": 32,
     "skills/formalize/SKILL.md": 241,
     "skills/human-review/SKILL.md": 107,
-    "skills/roadmap/SKILL.md": 232,
+    "skills/roadmap/SKILL.md": 244,
     "skills/setup/SKILL.md": 161,
 }
 # All skills/*/references/*.md together, so a new reference file cannot dodge a budget.

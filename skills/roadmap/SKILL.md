@@ -83,6 +83,8 @@ not invent a statement, motivation, proof narrative, dependency, citation, or
 historical attribution the sources do not support. Read [Setup's Zulip
 workflow](../setup/references/zulip.md) only for requested Zulip work.
 
+### Search before adding
+
 Before adding a formalizable article, search the pinned Mathlib checkout, and
 run `autoform search` over the blueprint and every usable shared library for its
 result and for each intermediate result its proof proves or cites, as the
@@ -105,6 +107,8 @@ result and for each intermediate result its proof proves or cites, as the
 - Search reads only the checkout it is given, so the owner of global consistency
   repeats it for what parallel agents added.
 
+### Coverage and milestones
+
 Enumerate the entire adopted boundary in `blueprint/coverage/README.md`, with
 the dispositions the
 [CLI reference](../../autoform_cli/README.md#audit-and-coverage) defines.
@@ -123,6 +127,8 @@ delete or reverse a genuine article edge to make a chapter-level or scope-level
 projection acyclic. After creating pages, run `autoform migrate article-ids
 blueprint --write` to give new articles a durable `article_id`.
 
+### Articles and implementation notes
+
 Articles hold only frontmatter and informal mathematics. Put Lean-side findings
 such as Mathlib gaps, prior art, and candidate declaration names in
 `blueprint/.implementation-notes/<article_id>.md`, never a transcript, a secret,
@@ -134,6 +140,8 @@ repair an orphan. Move an article by moving its file; a page written afresh
 takes the old page's `article_id` line in the same edit. A commit that deletes
 or merges an article moves what is still useful from its note into a surviving
 article's note and deletes the note.
+
+### Claims and revisions
 
 Claims are optional; use them when [Formalize](../formalize/SKILL.md) would.
 When the project uses them, acquire the `claim_target` that `autoform work
@@ -158,6 +166,8 @@ lands later through a pull request, report the revised articles that had no
 `lean:` on that branch at your last update, and list them in the pull request's
 description if you open it, so whoever merges it retracts any that have gained
 `lean:` by then.
+
+### Statuses and catalogs
 
 `open_statements` in `roadmap/README.md` is a project policy; absent means
 strict, and [open
@@ -195,6 +205,8 @@ moves, omit the edge that closes such a cycle, retract by removing `statement`
 and `proof` but keeping `lean:`, and report the old pin and each change it held
 back.
 
+### Large sources
+
 For a large source, divide independent sections among available agents while
 retaining one owner for global coverage, status semantics, and dependency
 consistency. Reconcile every affected source and milestone page, the coverage
@@ -208,7 +220,7 @@ every finding introduced by this work or inside the adopted boundary. A `check`
 warning that a shared library declaration's docstring, or its module's, cites
 one of the blueprint's sources usually means a library search was skipped:
 reuse or record the declaration as the [CLI
-reference](../../autoform_cli/README.md#commands) says, with a reason that
+reference](../../autoform_cli/README.md#check) says, with a reason that
 holds for every article reaching the source, revisited when the boundary
 changes; review a module when its warning first appears. Report unrelated
 pre-existing findings instead of widening scope. A `catalog-unbounded-limit` or
