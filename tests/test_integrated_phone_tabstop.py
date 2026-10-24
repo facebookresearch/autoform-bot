@@ -183,3 +183,14 @@ def test_scoped_crop_without_any_usable_card_falls_back_to_a_local_group_not_bou
       const box=screen(data.nodes[1]);assert(Math.abs(box.x+box.w/2-dom$stage.clientWidth/2)<1e-8);
       assert(!usable(data.nodes[0]),'The first boundary must not displace the fallback group');
     """)
+
+
+def test_scoped_crop_with_only_a_usable_boundary_still_frames_a_local_group() -> None:
+    _run(_SCOPED_CROP + r"""
+      dom$stage={clientWidth:390,clientHeight:560};data.nodes=data.nodes.slice(0,2);ui$active=data.nodes;
+      const boxes=new Map([[data.nodes[0].id,{x:0,y:0,w:196,h:100}],
+        [data.nodes[1].id,{x:1000,y:1000,w:264,h:148}]]);
+      world=node=>boxes.get(node.id);fit();assert(ui$readableCrop);
+      assert(usable(data.nodes[1]),'A fully contained external boundary is not a usable local overview');
+      const box=screen(data.nodes[1]);assert(Math.abs(box.x+box.w/2-dom$stage.clientWidth/2)<1e-8);
+    """)

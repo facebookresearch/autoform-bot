@@ -1289,10 +1289,10 @@
         if (anchor || !data._scopeOverview) center(anchor || nodes[0], readableFloor);
         else {
           var free = freeArea(), start = (free.top || 0) + 12, end = (free.top || 0) + free.band - 12;
-          var usable = nodes.some(function (node) { var box = screen(node);
+          var usable = nodes.some(function (node) { if (node.kind === "boundary") return false; var box = screen(node);
             return box.x >= free.left + 12 && box.x + box.w <= free.right - 12 && box.y >= start && box.y + box.h <= end;
           });
-          // Keep useful padded coverage; a first external boundary is not an
+          // Keep useful local coverage; a first external boundary is not an
           // instruction to push the mathematical overview off the viewport.
           if (!usable) center(nodes.find(function (node) { return node._overviewGroup; }) ||
             nodes.find(function (node) { return node.kind !== "boundary"; }) || nodes[0], readableFloor);
