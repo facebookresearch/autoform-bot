@@ -240,7 +240,10 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-integrated .bp-dag-body { grid-template-columns: var(--dag-navigation-width) minmax(0, 1fr) minmax(360px, 39%); }
 .bp-dag-integrated .bp-dag-head { display: block; padding: 0; }
 .bp-dag-integrated .bp-dag-context { display: flex; padding: 10px 16px 0; }
-.bp-dag-integrated .bp-dag-breadcrumb { display: block; visibility: visible !important; }
+.bp-dag-integrated .bp-dag-breadcrumb { display: block; max-width: none; visibility: visible !important; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li:has(> a) { display: flex; align-items: center; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li > a { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li::before { flex: none; }
 .bp-dag-integrated .bp-dag-book { grid-area: auto; margin: 0 18px 0 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 .bp-dag-integrated .bp-dag-toolbar { display: flex; padding: 10px 16px; }
 .bp-dag-integrated .bp-dag-search-wrap { max-width: none; }

@@ -13,7 +13,7 @@ import json
 import os
 import re
 import shutil
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlsplit
@@ -48,6 +48,8 @@ class _WorkspaceSite:
     url: str
     records: dict[str, dict]
     root_graph: dict
+    wiki_layer: dict | None = None
+    wiki_pairs: frozenset[tuple[str, str]] = frozenset()
 
     def route(self, node_id: str) -> str:
         return urljoin(self.url + "/dependencies/index.json", self.records[node_id]["route"])
@@ -180,8 +182,16 @@ def workspace_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Worksp
     ]
     build(configuration)
     index_path = project / "site/dependencies/index.json"
-    index = json.loads(index_path.read_text(encoding="utf-8"))
+    index_bytes = index_path.read_bytes()
+    index = json.loads(index_bytes)
     records = {record["id"]: record for record in index["nodes"]}
+    wiki_layer = json.loads((index_path.parent / "wiki-links.json").read_bytes())
+    assert wiki_layer["schema"] == "autoform-wiki-links/v1"
+    assert wiki_layer["index_sha256"] == hashlib.sha256(index_bytes).hexdigest()
+    assert wiki_layer["availability"] == "complete" and wiki_layer["unavailable_sources"] == []
+    identifiers = [record["id"] for record in index["nodes"]]
+    wiki_pairs = frozenset((identifiers[source], identifiers[target]) for source, target in wiki_layer["references"])
+    assert wiki_pairs == {(_TARGET, _OTHER), (_TARGET, _ISOLATED), (_ISOLATED, _TARGET)}
     root_path = index_path.parent / unquote(urlsplit(records["roadmap"]["data_url"]).path)
     root_graph = json.loads(root_path.read_text(encoding="utf-8"))
     exported = os.environ.get("AUTOFORM_UI_SITE_EXPORT_DIR")
@@ -205,7 +215,7 @@ def workspace_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Worksp
         }
         (destination / "ci-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
     with _served(project / "site") as url:
-        yield _WorkspaceSite(url, records, root_graph)
+        yield _WorkspaceSite(url, records, root_graph, wiki_layer, wiki_pairs)
 
 
 @pytest.fixture(scope="module")
@@ -389,8 +399,15 @@ def _observe_dependency_routes(page: object) -> None:
     })();""")
 
 
-def _open(page: object, site: _WorkspaceSite, runtime: _PinnedRuntime, node_id: str = "roadmap") -> None:
+def _open(
+    page: object, site: _WorkspaceSite, runtime: _PinnedRuntime, node_id: str = "roadmap",
+    *, wiki_route: Callable[[object], None] | None = None,
+) -> None:
     _routes(page, site.url, runtime, graph_client=True)
+    if wiki_route is not None:
+        # Register after the normal catch-all, retaining the real server's
+        # renderer-produced asset for a delayed-response or transport-fault test.
+        page.route(site.url + "/dependencies/wiki-links.json", wiki_route)
     page.goto(site.route(node_id))
     page.locator(".bp-dag-integrated .bp-dag-stage").wait_for()
     playwright.expect(page.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
@@ -909,6 +926,12 @@ def test_isolated_topic_link_opens_connected_result_and_its_real_edge(
     owner = site.records[_ISOLATED]["scope"]
     parent = page.locator(".bp-dag-breadcrumb").get_by_role("link", name=site.records[owner]["title"], exact=True)
     playwright.expect(parent).to_have_attribute("href", site.route(owner))
+    assert parent.evaluate("""link => {
+      const own = link.getBoundingClientRect(), crumb = link.closest('li').getBoundingClientRect();
+      const hit = document.elementFromPoint(own.x + own.width / 2, own.y + own.height / 2);
+      return own.width > 0 && own.left >= crumb.left - 1 && own.right <= crumb.right + 1 &&
+        (hit === link || link.contains(hit));
+    }"""), "A truncated breadcrumb must retain its own unobscured pointer target"
     parent.click()
     page.wait_for_url(site.route(owner))
     playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-dag-ready", "true")
@@ -1004,6 +1027,188 @@ def test_native_reader_and_library_links_remain_soft_navigation(
     page.wait_for_url(site.route("roadmap"))
     playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_LIBRARY)
     assert documents == [site.route(_TARGET).split("#", 1)[0]]
+    assert page.evaluate("() => document === __workspaceDocument") is True
+
+
+def test_verified_concept_links_have_native_direction_navigation_back_and_known_empty_coverage(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    page, site = workspace_page, workspace_site
+    assert site.wiki_layer and site.wiki_layer["availability"] == "complete"
+    assert site.wiki_pairs == {(_TARGET, _OTHER), (_TARGET, _ISOLATED), (_ISOLATED, _TARGET)}
+    wiki_url = site.url + "/dependencies/wiki-links.json"
+    held: list[object] = []
+    documents: list[str] = []
+    requests: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    page.on("request", lambda request: requests.append(request.url) if request.url == wiki_url else None)
+    with page.expect_request(wiki_url) as requested:
+        _open(page, site, workspace_runtime, _TARGET, wiki_route=lambda route: held.append(route))
+    assert requested.value.url == wiki_url and len(held) == 1
+    _selected(page, _TARGET)
+    card = _full_math(page)
+    playwright.expect(card).to_contain_text(_LAST_SENTENCE)
+    disclosure = page.locator(".bp-reading-wiki-links")
+    # Until the real response is released, do not invent zero counts or links.
+    playwright.expect(disclosure).to_have_count(0)
+    with page.expect_response(wiki_url) as delivered:
+        held[0].continue_()
+    assert delivered.value.status == 200 and delivered.value.json() == site.wiki_layer
+    playwright.expect(disclosure).to_have_count(1)
+    assert disclosure.get_attribute("open") is None
+    disclosure.locator("summary").click()
+    parts = disclosure.locator(".bp-reading-wiki-related")
+    playwright.expect(parts).to_have_count(2)
+    outgoing, incoming = parts.nth(0), parts.nth(1)
+    playwright.expect(outgoing.locator("strong")).to_have_text("Links to other concepts · 2")
+    playwright.expect(incoming.locator("strong")).to_have_text("Linked from · 1")
+    playwright.expect(outgoing.get_by_role("link")).to_have_count(2)
+    assert {link.get_attribute("href") for link in outgoing.get_by_role("link").all()} == {
+        site.route(_OTHER), site.route(_ISOLATED),
+    }
+    playwright.expect(incoming.get_by_role("link")).to_have_count(1)
+    playwright.expect(incoming.get_by_role("link", name=site.records[_ISOLATED]["title"], exact=True)).to_have_attribute(
+        "href", site.route(_ISOLATED),
+    )
+    playwright.expect(disclosure.locator(".bp-reading-wiki-notice")).to_have_count(0)
+    outgoing.get_by_role("link", name=site.records[_OTHER]["title"], exact=True).click()
+    page.wait_for_url(site.route(_OTHER))
+    _selected(page, _OTHER)
+    _full_math(page, _OTHER, 1)
+    assert disclosure.get_attribute("open") is None
+    disclosure.locator("summary").click()
+    parts = disclosure.locator(".bp-reading-wiki-related")
+    playwright.expect(parts.nth(0).locator("strong")).to_have_text("Links to other concepts · 0")
+    playwright.expect(parts.nth(0).get_by_role("link")).to_have_count(0)
+    playwright.expect(parts.nth(1).locator("strong")).to_have_text("Linked from · 1")
+    playwright.expect(parts.nth(1).get_by_role("link", name=_TARGET_TITLE, exact=True)).to_have_attribute(
+        "href", site.route(_TARGET),
+    )
+    page.go_back()
+    page.wait_for_url(site.route(_TARGET))
+    _selected(page, _TARGET)
+    playwright.expect(_full_math(page)).to_contain_text(_LAST_SENTENCE)
+    # This real definition has formal dependents, but no authored concept links.
+    # The already-verified layer makes its empty disclosure genuinely known.
+    assert not any(_BASE in pair for pair in site.wiki_pairs)
+    base = page.locator(f'.bp-reading-body .bp-thmwrapper[data-autoform-node-id="{_BASE}"]')
+    permalink = base.get_by_role("link", name="#", exact=True)
+    playwright.expect(permalink).to_have_attribute("href", site.route(_BASE))
+    permalink.click()
+    page.wait_for_url(site.route(_BASE))
+    _selected(page, _BASE)
+    playwright.expect(_full_math(page, _BASE, 0)).to_contain_text("The base value is zero.")
+    playwright.expect(disclosure).to_have_count(0)
+    playwright.expect(page.locator(".bp-reading-wiki-notice")).to_have_count(0)
+    page.go_back()
+    page.wait_for_url(site.route(_TARGET))
+    _selected(page, _TARGET)
+    _full_math(page)
+    assert requests == [wiki_url]
+    assert documents == [site.route(_TARGET).split("#", 1)[0]]
+    assert page.evaluate("() => document === __workspaceDocument") is True
+
+
+def test_failed_optional_concept_transport_stays_unknown_without_breaking_math_or_navigation(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    page, site = workspace_page, workspace_site
+    assert site.wiki_layer and site.wiki_pairs
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    # Fail only the optional HTTP request; do not substitute graph JSON or a
+    # fabricated sidecar, change the actual reader, or bypass digest validation.
+    _open(page, site, workspace_runtime, _TARGET, wiki_route=lambda route: route.abort())
+    _selected(page, _TARGET)
+    card = _full_math(page)
+    playwright.expect(card).to_contain_text(_LAST_SENTENCE)
+    disclosure = page.locator(".bp-reading-wiki-links")
+    playwright.expect(disclosure).to_have_count(1)
+    assert disclosure.get_attribute("open") is None
+    disclosure.locator("summary").click()
+    playwright.expect(disclosure.locator(".bp-reading-wiki-notice")).to_have_text(
+        "Concept links are unavailable for this publication.",
+    )
+    parts = disclosure.locator(".bp-reading-wiki-related")
+    playwright.expect(parts.nth(0).locator("strong")).to_have_text("Links to other concepts · unavailable")
+    playwright.expect(parts.nth(1).locator("strong")).to_have_text("Linked from · unavailable")
+    playwright.expect(disclosure.get_by_role("link")).to_have_count(0)
+    playwright.expect(page.locator(".bp-dag-error")).to_be_hidden()
+    card.get_by_role("link", name="Read the counterpart identity", exact=True).click()
+    page.wait_for_url(site.route(_OTHER))
+    _selected(page, _OTHER)
+    _full_math(page, _OTHER, 1)
+    page.go_back()
+    page.wait_for_url(site.route(_TARGET))
+    _selected(page, _TARGET)
+    playwright.expect(_full_math(page)).to_contain_text(_LAST_SENTENCE)
+    assert documents == [site.route(_TARGET).split("#", 1)[0]]
+    assert page.evaluate("() => document === __workspaceDocument") is True
+
+
+def test_graph_first_browse_is_contextual_keyboard_closable_and_returns_to_the_same_scope_map(
+    workspace_page: object, navigation_overview_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    page, site = workspace_page, navigation_overview_site
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _open(page, site, workspace_runtime)
+    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    stage = page.locator(".bp-dag-stage")
+    playwright.expect(stage).to_be_visible()
+    toggle = page.get_by_role("button", name="Browse statements or source texts", exact=True)
+    popover = page.locator(".bp-dag-browse-popover")
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
+    playwright.expect(popover).to_be_hidden()
+    toggle.focus()
+    toggle.press("Enter")
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "true")
+    playwright.expect(popover).to_be_visible()
+    root_action = popover.get_by_role("button", name="All statements", exact=True)
+    playwright.expect(root_action).to_be_visible()
+    playwright.expect(popover.get_by_role("button", name="Source texts", exact=True)).to_be_visible()
+    playwright.expect(popover.get_by_role("button", name="Statements in this topic", exact=True)).to_have_count(0)
+    root_action.focus()
+    root_action.press("Escape")
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
+    playwright.expect(popover).to_be_hidden()
+    playwright.expect(toggle).to_be_focused()
+    toggle.click()
+    playwright.expect(popover).to_be_visible()
+    page.locator(".bp-dag-breadcrumb li").last.click()
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
+    playwright.expect(popover).to_be_hidden()
+    assert page.url == site.route("roadmap")
+    scope = next(record for record in site.records.values()
+                 if record.get("scope") == record["id"] and record.get("area") == "Geometry")
+    _search(page, scope["title"], scope["id"])
+    page.wait_for_url(site.route(scope["id"]))
+    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(scope["title"])
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
+    toggle.click()
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "true")
+    playwright.expect(popover).to_be_visible()
+    playwright.expect(popover.get_by_role("button", name="All statements", exact=True)).to_have_count(0)
+    popover.get_by_role("button", name="Statements in this topic", exact=True).click()
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
+    playwright.expect(popover).to_be_hidden()
+    playwright.expect(stage).to_be_hidden()
+    expected = {record["id"] for record in site.records.values()
+                if record.get("result") is True and record.get("scope") == scope["id"]}
+    assert len(expected) == 1
+    rows = page.locator(".bp-dag-inventory-row")
+    playwright.expect(rows).to_have_count(1)
+    assert set(rows.evaluate_all("nodes => nodes.map(node => node.dataset.inventoryNodeId)")) == expected
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 result")
+    assert page.url == site.route(scope["id"])
+    page.get_by_role("button", name="Back to map", exact=True).click()
+    playwright.expect(stage).to_be_visible()
+    playwright.expect(page.locator(".bp-dag-inventory")).to_be_hidden()
+    _focus_graph_node(page, next(iter(expected)))
+    playwright.expect(page.locator(".bp-dag-breadcrumb li").last).to_have_text(scope["title"])
+    assert page.url == site.route(scope["id"]), "Returning to the map must not widen this topic to the library"
+    assert documents == [site.route("roadmap")]
     assert page.evaluate("() => document === __workspaceDocument") is True
 
 
