@@ -127,16 +127,24 @@ function describe() {
   const configuration = nativeWindow.MathJax;
   report.base = configuration.loader.paths.mathjax;
   report.load = configuration.loader.load.slice();
-  configuration.loader.load.push("input/tex", "input/mml", "output/chtml", "a11y/assistive-mml");
+  // Node's core/safe handler has no MenuMathDocumentMixin. Load the real
+  // pinned component, which registers MenuHandler at startup just as the
+  // browser bundle does; never supply synthetic menu options or handlers.
+  configuration.loader.load.push("input/tex", "input/mml", "output/chtml", "a11y/assistive-mml", "ui/menu");
   configuration.startup.document = document;
   configuration.startup.ready = () => {
     // node-main preloads LiteDOM even with a native document present. Select
     // its official browser HTML adaptor before defaultReady creates the real
     // startup document; retain MathJax's TeX/output/safe handler constructors.
     MathJax.startup.useAdaptor("browserAdaptor", true);
+    assert.strictEqual(typeof MathJax._.ui.menu.MenuHandler.MenuHandler, "function",
+      "The real pinned MenuHandler component must be loaded");
     const original = MathJax._.mathjax.mathjax.document;
     MathJax._.mathjax.mathjax.document = function (root, options) {
       const doc = original.call(this, root, options);
+      assert.strictEqual(typeof doc.addMenu, "function", "The native handler needs the real menu mixin");
+      assert(doc.menu instanceof MathJax._.ui.menu.Menu.Menu, "A genuine document menu must own its handlers");
+      assert.strictEqual(typeof doc.options.enableMenu, "boolean", "Menu options must come from the real mixin");
       if (initialDocument === null) initialDocument = doc;
       else docs.push(doc);
       return doc;
@@ -160,6 +168,7 @@ function describe() {
   shown();
   assert.strictEqual(await nativeWindow.AutoformMath.refresh(document), true);
   report.passes.push(describe());
+  report.initialTabstops = document.querySelectorAll('mjx-container[tabindex="0"]').length;
   assert.strictEqual(document.querySelectorAll("[data-autoform-math-stage]").length, 0);
 
   docs = [];
@@ -366,7 +375,9 @@ def test_an_existing_rendered_formula_moved_into_a_control_loses_its_inner_tabst
     """Trusted retained source permits a real ownership transition, without cloning rendered handlers."""
     report = _node_report(tmp_path, _node_script(tmp_path, json.dumps(_MACROS)), "new", then="promote")
     assert report["errors"] == []
-    controlled, = report["passes"][1]
+    page, controlled = report["passes"][1]
+    assert page["math"] == [] and page["packages"] == _PAGE_PACKAGES
+    assert page["enableMenu"] is True and report["initialTabstops"] > 0
     assert controlled["enableMenu"] is False
     assert [math["tex"] for math in controlled["math"]] == ["a \\leq b"]
     assert report["controls"] == [{"tag": "BUTTON", "tabstops": 0, "applications": 0}]

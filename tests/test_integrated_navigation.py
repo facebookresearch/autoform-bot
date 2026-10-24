@@ -111,6 +111,16 @@ function setup(extra = {}) {
 }
 async function until(predicate) { for(let n=0;n<100;n++) {if(predicate()) return; await new Promise(resolve=>setImmediate(resolve));}
   throw new Error('Controller did not settle'); }
+function addLargeScope(app) {
+  const spec={title:'Large scope',route:absolute('roadmap/large.html'),data:'../dependencies/large.json',scope:'large'};
+  const catalog=index();catalog.nodes.push({id:'large',title:'Large scope',kind:'scope',result:false,
+    url:'../roadmap/large.html',route:'../roadmap/large.html',data_url:'large.json',scope:'large',summary:'Only a summary'});
+  app.contents.set(absolute('dependencies/index.json'),catalog);app.contents.set(spec.route,spec);
+  app.contents.set(absolute('dependencies/large.json'),{...graph,title:'Large scope',edges:[],
+    nodes:Array.from({length:42},(_,n)=>({id:'large-'+n,title:'Scope item '+n,kind:'node',status:'planned',
+      area:n<21?'Authored area A':'Authored area B',member_count:1,status_counts:[['planned',1]]}))});
+  return spec;
+}
 """
 
 
@@ -139,6 +149,49 @@ def test_canonical_node_navigation_keeps_complete_ssr_and_rebases_reading() -> N
       assert.deepEqual(app.nav.getIndex().relations,[['a','b',1,0]]);
       const length=app.win.history.length; await app.nav.navigateNode('a'); assert.equal(app.win.history.length,length);
       app.nav.dispose();
+    """)
+
+
+def test_scope_map_first_transport_is_independent_of_explicit_reading_focus() -> None:
+    _run(r"""
+      const app=setup(),spec=addLargeScope(app);await app.nav.start();
+      const mapped=await app.nav.navigateNode('large',{history:'push',focus:'reading',mapFirst:true});
+      assert.equal(mapped.url,spec.route);assert.equal(mapped.nodeId,'large');assert.equal(mapped.scope,'large');
+      assert.equal(mapped.focus,true);assert.equal(mapped.mapFirst,true);assert.equal(mapped.graph.nodes.length,42);
+      assert(mapped.readingSource.textContent.includes('Complete source statement and proof.'));
+      assert(!mapped.readingSource.textContent.includes('Only a summary'));
+      assert.equal(mapped.readingSource.getAttribute('data-autoform-math-source'),'\(L \neq 0\)');
+      const reading=await app.nav.navigateNode('large',{focus:true,mapFirst:false});
+      assert.equal(reading.focus,true);assert.equal(reading.mapFirst,false);assert.equal(reading.url,spec.route);
+      const result=await app.nav.navigateNode('b');assert.equal(result.focus,true);assert.equal(result.mapFirst,false);
+      const strict=await app.nav.navigateNode('large',{focus:true,mapFirst:1});
+      assert.equal(strict.mapFirst,false,'A truthy non-boolean cannot acquire map-first intent');
+      assert.equal(strict.focus,true);assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+def test_reading_links_to_large_scopes_request_reading_focus_and_leave_external_links_native() -> None:
+    _run(r"""
+      const app=setup(),spec=addLargeScope(app);await app.nav.start();
+      const opened=await app.nav.navigateNode('a'),root=opened.readingSource;
+      const scopeLink=new Element('a',{href:spec.route},[],'Large scope');root.children.push(scopeLink);scopeLink.parent=root;
+      app.nav.bindReader(root);const listener=root.listeners.get('click');
+      const event=(target,extra={})=>Object.assign({target,button:0,defaultPrevented:false,
+        preventDefault(){this.defaultPrevented=true;},stopPropagation(){this.stopped=true;}},extra);
+      const requests=app.fetches.length,commits=app.commits.length;
+      for(const settings of [{metaKey:true},{ctrlKey:true},{shiftKey:true},{altKey:true},{button:1}]) {
+        const modified=event(scopeLink,settings);listener(modified);assert.equal(modified.defaultPrevented,false);
+      }
+      const external=root.querySelectorAll('a').find(link=>link.href==='https://outside.test/paper.pdf');
+      assert(external);const outside=event(external);listener(outside);assert.equal(outside.defaultPrevented,false);
+      assert.equal(app.fetches.length,requests);assert.equal(app.commits.length,commits);
+      const ordinary=event(scopeLink);listener(ordinary);assert.equal(ordinary.defaultPrevented,true);assert.equal(ordinary.stopped,true);
+      await until(()=>app.commits.at(-1).nodeId==='large');const bundle=app.commits.at(-1);
+      assert.equal(bundle.focus,true,'A scope reading link must not inherit an overview-default focus=false');
+      assert.equal(bundle.mapFirst,false);assert.equal(bundle.url,spec.route);assert.equal(bundle.graph.nodes.length,42);
+      assert(bundle.readingSource.textContent.includes('Complete source statement and proof.'));
+      assert.equal(bundle.readingSource.getAttribute('data-autoform-math-source'),'\(L \neq 0\)');
+      assert.equal(app.errors.length,0);app.nav.dispose();assert.equal(root.listeners.has('click'),false);
     """)
 
 

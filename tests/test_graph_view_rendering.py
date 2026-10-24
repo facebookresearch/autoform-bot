@@ -483,7 +483,7 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
     script = _viewer_source()
     style = dag_viewer.render_container("graph.json")
 
-    assert 'element("span", "bp-dag-node-meta", node._region ? plural(node._topics, "topic", "topics")' in script
+    assert 'element("span", "bp-dag-node-meta", (node._region || node._overviewGroup) ? plural(node._topics, "topic", "topics")' in script
     assert ': scopeMeta || statusLabel(node.status))' in script
     assert 'element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (node.area ? " · " + node.area : ""))' in script
     assert 'element("span", "bp-dag-result-meta", match.node.area || statusLabel(match.node.status))' in script
@@ -536,7 +536,8 @@ def test_a_click_pans_its_node_clear_of_the_details_it_opens() -> None:
     """Every other way of choosing a node placed it beside the drawer; a click left it under the drawer."""
     script = _viewer_source()
 
-    assert 'navigation.navigateNode(recordId(node), {history: "push", focus: "reading"})' in script
+    assert 'settings = {history: "push", focus: "reading"}' in script
+    assert 'navigation.navigateNode(id, settings)' in script
     assert "if (state.selected && mapAllowed) centerIfHidden(state.selected)" in script
     center = script.split("function center(", 1)[1].split("\n    function ", 1)[0]
     assert "free = freeArea()" in center

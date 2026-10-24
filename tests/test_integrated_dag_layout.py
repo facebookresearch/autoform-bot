@@ -330,7 +330,7 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
       eval(constants);
       const start=productionSource.indexOf('  function mount('),end=productionSource.indexOf('    function globalListen(',start);
       assert(start>=0&&end>start,'The real cold-mount boundary must exist');
-      const helpers=['safeHref','graphAt','useIndex','updateProjection','neighborhood','neighborIds','regionProjection',
+      const helpers=['scopeOverviewProjection','safeHref','graphAt','useIndex','updateProjection','neighborhood','neighborIds','regionProjection',
         'geometry','compactRegions'].map(original).join('\n');
       const seams=`
         function buildShell() {events.push('shell');family='sans-serif';dom$stage={clientWidth:900};

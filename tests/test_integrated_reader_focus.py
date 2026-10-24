@@ -42,6 +42,7 @@ var document = {body: new Element('body'), activeElement: null, title: '',
 document.activeElement = document.body;
 var dom$search = new Element('input'), dom$readingBody = new Element('article');
 var dom$navigation = new Element('aside'), dom$inventoryScroll = new Element('div'), dom$outlineToggle = new Element('button');
+var dom$nodeLayer = null;
 var dom$inventoryRows = new Map();
 var dom$error = new Element('div'), dom$breadcrumb = new Element('nav');
 var dom$filterPopover = new Element('div'), dom$filterSummary = new Element('button');
@@ -252,9 +253,47 @@ def test_large_scope_landing_never_overrides_explicit_reading_or_saved_sheet_int
           'A derived overview must not hide an explicitly requested mathematical reading');
         await frame();await ready;
       }
+      dom$nodeLayer={querySelector(selector){
+        assert.equal(selector,'.bp-dag-node[tabindex="0"]');return overlays.get('A');
+      }};
+      const graphEntry=bundle('A',null,true);graphEntry.anchor=null;graphEntry.mapFirst=true;
+      const graphReady=applyRoute(graphEntry);
+      assert.equal(host.classList.contains('bp-dag-sheet-open'),false);
+      await frame();await graphReady;
+      assert.equal(graphEntry.heading.focuses.length,0,'Map exploration cannot focus an inert reader');
+      assert.equal(document.activeElement,overlays.get('A'));
+      const anchorEntry=bundle('A',null,true);anchorEntry.mapFirst=true;
+      const anchorReady=applyRoute(anchorEntry);
+      assert.equal(host.classList.contains('bp-dag-sheet-open'),true,'An explicit heading wins over map preference');
+      await frame();await anchorReady;
       const saved={readingOpen:false},incoming=bundle('A',saved,'reading');
       const ready=applyRoute(incoming);
       assert.equal(host.classList.contains('bp-dag-sheet-open'),false,
         'History must retain the saved reading-sheet state');
       await frame();await ready;
+    """)
+
+
+def test_map_intent_on_a_small_pure_overview_never_focuses_the_inert_reader() -> None:
+    _run(r"""
+      byId.get('A').result=false;
+      navigation.readerIsOverview=()=>true;
+      dom$nodeLayer={querySelector(selector){
+        assert.equal(selector,'.bp-dag-node[tabindex="0"]');return overlays.get('A');
+      }};
+      const incoming=bundle('A',null,true);incoming.anchor=null;incoming.mapFirst=true;
+      incoming.graph.nodes=incoming.graph.nodes.map(node=>({...node,_region:'Authored overview area'}));
+      const ready=applyRoute(incoming);
+      assert.equal(ui$scopeOverview,false,'This case must exercise the small pure-overview branch');
+      assert.equal(ui$overviewOnly,true);
+      assert.equal(host.classList.contains('bp-dag-sheet-open'),false);
+      await frame();await ready;
+      assert.equal(incoming.heading.focuses.length,0);assert.equal(document.activeElement,overlays.get('A'));
+      const reading=bundle('A',null,true);reading.anchor=null;
+      reading.graph.nodes=incoming.graph.nodes;
+      const readingReady=applyRoute(reading);
+      assert.equal(ui$overviewOnly,false,'Explicit reading intent still opens the source');
+      assert.equal(host.classList.contains('bp-dag-sheet-open'),true);
+      await frame();await readingReady;
+      assert.equal(document.activeElement,reading.heading);
     """)

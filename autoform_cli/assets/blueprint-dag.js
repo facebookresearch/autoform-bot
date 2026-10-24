@@ -676,9 +676,10 @@
       renderNavigation();
       var record = records.get(bundle.nodeId);
       ui$overviewOnly = Boolean(mapAllowed && data.nodes.length && data.nodes.every(function (node) { return node._region; }) &&
-        !bundle.focus && !bundle.anchor && !(record && record.result) && navigation.readerIsOverview && navigation.readerIsOverview(dom$readingBody));
+        (!bundle.focus || bundle.mapFirst) && !bundle.anchor && !(record && record.result) && navigation.readerIsOverview && navigation.readerIsOverview(dom$readingBody));
       host.classList.toggle("bp-dag-overview-only", ui$overviewOnly);
-      var readingRequested = Boolean(bundle.focus || bundle.anchor || record && record.result);
+      var mapRequested = Boolean(bundle.mapFirst && (ui$scopeOverview || ui$overviewOnly) && !bundle.anchor && !(record && record.result));
+      var readingRequested = Boolean(bundle.focus && !mapRequested || bundle.anchor || record && record.result);
       setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false : readingRequested ||
         !ui$scopeOverview && !ui$overviewOnly && (!sheetLayout() || Boolean(bundle.nodeId)), ui$selected);
       refresh(true); firstResize = true; resize();
@@ -691,8 +692,10 @@
           target.classList.add("bp-reading-current");
           if (!bundle.snapshot) dom$readingBody.scrollTop += target.getBoundingClientRect().top - dom$readingBody.getBoundingClientRect().top - 24;
         }
-        if (bundle.focus && dom$readingBody && !bundle.snapshot) {
+        if (bundle.focus && !mapRequested && dom$readingBody && !bundle.snapshot) {
           var heading = dom$readingBody.querySelector("h1"); if (heading) { heading.tabIndex = -1; heading.focus({preventScroll: true}); }
+        } else if (bundle.focus && mapRequested && !bundle.snapshot) {
+          var control = dom$nodeLayer.querySelector('.bp-dag-node[tabindex="0"]'); if (control) control.focus({preventScroll: true});
         }
         resolve();
       }); }); });
@@ -704,7 +707,8 @@
       while (pending && !seen.has(pending.id)) {
         seen.add(pending.id);
         if (["collection", "transparent"].indexOf(pending.navigation) < 0) entries.unshift({label: pending.title,
-          url: pending.id === bundle.scope && (!record || record.id === pending.id) && !ui$overviewGroup ? null : pending.route || pending.url});
+          url: pending.id === bundle.scope && (!record || record.id === pending.id) && !ui$overviewGroup ? null : pending.route || pending.url,
+          _overviewParent: pending.id === bundle.scope && Boolean(ui$overviewGroup)});
         pending = records.get(semanticParent(pending));
       }
       if (record && record.scope !== record.id) entries.push({label: record.title});
@@ -781,7 +785,6 @@
       host.classList.toggle("bp-dag-scope-overview", ui$scopeOverview);
       host.classList.toggle("bp-dag-area-expanded", Boolean(navigation && ui$area));
       adoptGraph(projected); ui$mapAllowed = mapAllowed; ui$activeDirty = true; ui$spotlight = null;
-      if (dom$breadcrumb && currentBundle) { trail = routeTrail(currentBundle); dom$breadcrumb.replaceChildren(trailList(trail)); }
       overlays.forEach(function (control) { control.remove(); }); overlays.clear();
       ui$selected = byId.get(ui$requestedNode) || null;
       if (!ui$filtersTouched) ui$selectedStatuses = new Set(presentStatuses);
@@ -974,7 +977,17 @@
       entries.forEach(function (entry, index) {
         var item = element("li"), href = safeHref(entry.url);
         item.title = entry.label;
-        if (href) { var link = element("a", "", entry.label); link.href = href; link.title = entry.label; item.appendChild(link); }
+        if (href) {
+          var link = element("a", "", entry.label); link.href = href; link.title = entry.label;
+          link.addEventListener("click", function (event) {
+            if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
+                new URL(href).origin !== window.location.origin) return;
+            event.preventDefault();
+            if (entry._overviewParent && ui$scopeOverview && ui$overviewGroup) setMode("regions", true);
+            else navigation.navigate(href, {history: "push", focus: true, mapFirst: true});
+          });
+          item.appendChild(link);
+        }
         else { item.textContent = entry.label; if (!className && index === entries.length - 1) item.setAttribute("aria-current", "page"); }
         list.appendChild(item);
       });
@@ -1644,7 +1657,9 @@
         refresh(true); firstResize = true; resize(); writeLocation("push");
         if (keyboard && ui$active.length) focusNodeControl(ui$active.find(function (item) { return item.area === ui$area && !item._region; }) || ui$active[0]); return;
       }
-      navigation.navigateNode(recordId(node), {history: "push", focus: "reading"}); closeSearch();
+      var id = recordId(node), record = records.get(id), settings = {history: "push", focus: "reading"};
+      if (record && record.scope === record.id && !record.result) settings.mapFirst = true;
+      navigation.navigateNode(id, settings); closeSearch();
     }
     function focusNodeControl(node) {
       requestAnimationFrame(function () { requestAnimationFrame(function () {
