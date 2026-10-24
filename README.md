@@ -107,6 +107,20 @@ The browser publication presents large roadmaps as a full-page mathematics
 atlas: authored areas and bounded hierarchy preserve readable context, while
 dependency edges remain distinct from containment and repository provenance.
 
+## Search and reuse
+
+Before adding a result to a roadmap, or a lemma to a Lean project, agents
+search the blueprint and any shared Lean library the project depends on, such
+as [ATLAS](https://github.com/facebookresearch/atlas-lean), so that a result
+that already exists is reused rather than proved again. A library's search
+index is used only after it has been checked against the exact library version
+the project builds with.
+
+The paper
+[*Search Before You Prove: Verified Retrieval and Reuse of Shared Lean Libraries in Multi-Agent Autoformalization*](docs/papers/search-and-reuse/search-and-reuse.pdf)
+explains the design and its trade-offs, and evaluates it on ATLAS's published
+index.
+
 ## Development
 
 ```bash
