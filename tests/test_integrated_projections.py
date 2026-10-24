@@ -36,7 +36,7 @@ const constants = source.match(/\bvar NODE_W =[^;]+;/);
 assert(constants, 'Production map constants missing');
 const functions = [
   'element', 'button', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
-  'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'calculateActive',
+  'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'matchesStatus', 'calculateActive',
   'statusLabel', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');

@@ -41,7 +41,7 @@ class Control {
   remove() {this.removed=true;}
 }
 var navigation={},mapAllowed=true,atlas=true,ui$area=null,ui$orientation='tb',family='sans-serif';
-var scene,sceneData,sceneDirection,sceneCompact,sceneFamily;
+var scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect;
 var dom$stage={clientWidth:390,clientHeight:560},dom$ctx={},dom$inspector;
 var host={classList:{contains(){return false;}}};
 var ui$transform={x:0,y:0,scale:1},ui$selected=null,ui$readableCrop=false;
@@ -124,9 +124,12 @@ def test_small_authored_desktop_overview_fits_its_cards_not_peripheral_route_bou
     """)
 
 
-def test_ordinary_scope_fit_keeps_peripheral_routes_and_the_readable_floor() -> None:
+def test_ordinary_scope_fit_ignores_distant_detours_without_losing_routes_or_readability() -> None:
     _run(_DESKTOP_OVERVIEW + """
       data.nodes.forEach(node=>delete node._region);
-      fit();assert.equal(ui$readableCrop,true,'Normal scope geometry must still account for its real route bounds');
-      assert.equal(ui$transform.scale,.9,'A large scope must stay readable, not shrink to fit the repository');
+      const routes=JSON.stringify(current.routes);
+      fit();assert.equal(ui$readableCrop,false,'Distant return corridors must not shrink a readable local map');
+      assert(ui$transform.scale>=.9,'Cards stay readable');
+      assert.equal(JSON.stringify(current.routes),routes,'Framing must not delete the real dependencies');
+      data.nodes.forEach(node=>assert(contained(node),'Fit frames the useful card bounds'));
     """)
