@@ -457,9 +457,10 @@ def test_resting_a_mouse_on_a_card_previews_its_neighbours_without_selecting_it(
     # Any map previews the direct neighbours; a selection keeps its own spotlight.
     assert "var spotlight = (atlas || !state.selected) && subject ? atlasSpotlight(subject) : pathSpotlight();" in script
     assert "return state.spotlight || (state.spotlight = spotlightOf(collect(state.selected.id, prerequisites), collect(state.selected.id, dependents)));" in script
-    # The cards fade briefly, and not at all for a reader who asks for reduced motion.
+    # The cards fade briefly, and not at all for a reader who asks for reduced motion. Only opacity animates: with the saturate
+    # filter animated on every card as well, a stress run of previews never finished in WebKit, and full runs lost pages to crashes.
     style = dag_viewer._STYLE
-    assert "will-change: transform; transition: opacity .15s ease, filter .15s ease; }" in style
+    assert "will-change: transform; transition: opacity .15s ease; }" in style and "filter .15s" not in style
     reduced = style[style.index("@media (prefers-reduced-motion: reduce) {"):]
     assert ".bp-dag-node { will-change: auto; transition: none; }" in reduced[:reduced.index("\n}")]
 
