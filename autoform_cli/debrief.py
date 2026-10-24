@@ -23,6 +23,10 @@ Configuration (environment):
     every worktree of a checkout shares and Git never tracks, else to
     ``$XDG_STATE_HOME/autoform/debriefs/<project>-<hash>``.
 
+Records are bounded and normalised to the form's schema, and created
+exclusively without following symbolic links, so a record is complete or
+absent and never overwritten.
+
 Store layout (see :mod:`autoform_cli.debrief_store` for the file discipline)::
 
     records/<attempt_id>.json   one DebriefRecord per attempt, schema_version 1

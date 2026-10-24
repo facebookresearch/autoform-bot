@@ -14,11 +14,11 @@ description: >-
 
 Setup prepares the Lean toolchain, an empty blueprint vault, ignore rules,
 MkDocs, CI, and optionally publication. It does not scope sources, choose
-theorems, write roadmap nodes, or prove results; Roadmap owns that work.
+theorems, write roadmap nodes, or prove results; Roadmap owns that planning.
 
 Inspect before writing and preserve existing Lean, Markdown, workflow, and
 ignore files. Resolve `AUTOFORM_PLUGIN_ROOT` from the loaded plugin and inspect
-an existing project through the supported read-only entrypoint:
+an existing project read-only:
 
 ```bash
 AUTOFORM_PLUGIN_ROOT="<loaded-plugin-root>"
@@ -29,19 +29,13 @@ uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project inspect "$PROJECT" --j
 Infer safe local defaults from the request and repository. If a material choice
 is missing, ask once for the run type (new, repair, or inspect), UpperCamelCase
 package name, target directory, and whether publication is wanted. Without
-explicit publication approval, make no remote changes. Setup prepares the shell
-and stops before
-mathematical planning.
+explicit publication approval, make no remote changes.
 
-Read the repo-shaped [Cabannes thesis project](assets/cabannes-thesis-project/README.md)
-as a concrete setup example. Reuse its structure selectively: rename the Lean
-package, keep the recommended release from `autoform project versions` unless
-the user needs another Lean version, update branch and immutable workflow pins,
-and merge rather than overwrite. Its populated
-thesis notes illustrate later skills; Setup does not reproduce that mathematics.
+The [Cabannes thesis project](assets/cabannes-thesis-project/README.md) shows a
+finished project. Read it, but do not copy it: `project new` and `init` write
+the layout, and its thesis notes illustrate later skills.
 
-For a new repository, require a target directory that does not already exist,
-then create the complete local project atomically:
+For a new repository, create the project in an absent target directory:
 
 ```bash
 AUTOFORM_PLUGIN_ROOT="<loaded-plugin-root>"
@@ -50,148 +44,90 @@ PACKAGE="<UpperCamelCaseName>"
 uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project new "$TARGET" --package "$PACKAGE"
 ```
 
-Without version flags `project new` uses the recommended release from
-`autoform project versions`: a tested Lean/Mathlib pair whose resolved
-`lake-manifest.json` is bundled. Pass `--release <RELEASE_ID>` for another
-listed pair. If the user needs a different Lean version, pass
-`--lean-toolchain <vX.Y.Z>`; `--mathlib-rev <REV>` overrides the default Mathlib
-tag of the same name, and the toolchain must match the `lean-toolchain` of that
-Mathlib revision. A pair equal to a listed release, by Mathlib tag or commit,
-gets that release's bundled lock. Any other pair is created without
-`lake-manifest.json` and with a warning: run `lake update` in it, which needs
-network access and downloads the Mathlib build cache, then commit the manifest
-it writes. Autoform needs Lean v4.27.0 or newer, and `project new` also warns
-below that.
-Every component of the target parent must be a real directory, not a symlink;
-on macOS use `/private/tmp`, not the `/tmp` alias. The parent must not be group-
-or world-writable unless it is a sticky directory owned by the user or root. If
-`project new` reports `project-parent-unsafe`, choose another parent or, with the
-user's agreement, remove that write access with `chmod g-w,o-w`.
+The [CLI reference](../../autoform_cli/README.md#commands) gives `project new`'s
+version flags, what it writes, and its error codes. Keep the recommended
+release from `autoform project versions` unless the user needs another Lean
+version (at least v4.27.0). On macOS use `/private/tmp`, not the `/tmp` alias.
+On `project-parent-unsafe`, choose another parent or, with the user's
+agreement, run `chmod g-w,o-w` on it.
 
 Autoform's library catalog,
 `$AUTOFORM_PLUGIN_ROOT/autoform_cli/project/libraries.json`, lists shared Lean
-libraries that `project new --library <NAME>` adds, already required and locked.
-Offer only entries with `offered: true`, and only when Setup creates a new
-project, never when inspecting, repairing, or running `init`. Ask in the single
-round of questions and state the cost: the project moves to the library's
-`release`, its first build downloads the library and its dependencies (about 270
-MB for ATLAS), and the library modules it imports build locally. A yes may come
-in the request itself; a request that names a catalog library uses it even when
-the entry is not offered, unless it names another repository or revision, which
-makes it a library outside the catalog. Without a yes, add no library, including
-in a headless run.
+libraries that `project new --library <NAME>` adds, required and locked. Offer
+only entries with `offered: true`, and only for a new project (never inspect,
+repair, or `init`). Ask in the single round of questions and state
+the cost: the project moves to the library's `release`, its first build
+downloads the library and its dependencies (about 270 MB for ATLAS), and the
+modules it imports build locally. A yes may come in the request itself; a
+request naming a catalog library uses it even when it is not offered, unless it
+names another repository or revision, which makes it a library outside the
+catalog. Without a yes, add no library, including in a headless run.
 
-On a yes, run `project new` with `--library <NAME>`, the entry's `name`, and no
-version flags, then validate as below. Run `autoform library list` on the
-project, as the
-[CLI reference](../../autoform_cli/README.md#searching-a-library-the-project-depends-on)
-shows: report the entry's `git` and pinned commit when it lists the library as
+On a yes, pass `--library <NAME>` with no version flags, validate as below,
+and run `autoform library list` on the project, as the
+[CLI reference](../../autoform_cli/reference/search.md#searching-a-library-the-project-depends-on)
+shows: report the entry's `git` and pinned commit if it lists the library as
 usable, otherwise its reason, without claiming the library works. If a fetch
-fails, report the error and that the project builds once the fetch succeeds,
-and give the retry: resume validation from the failed step. Never run a bare
-`lake update` in such a project.
+fails, report the error and that the project builds once a retry from the failed
+validation step succeeds. Never run a bare `lake update` in such a project.
 
-For a library outside the catalog, create the project on the Lean toolchain and
-Mathlib `rev` that the library's `lean-toolchain` and `lake-manifest.json` lock
-at the revision the user plans to require, since Lake builds a dependency with
-the project's own Lean and Mathlib; a read-only fetch of those two files is
-allowed. Pass them as `--lean-toolchain` and `--mathlib-rev`, ask the user when
-either is unknown, and report the pair and why. Adding the `require` stays the
-user's decision; do not add it or fetch the library into the project.
+For a library outside the catalog, pass `--lean-toolchain` and `--mathlib-rev`
+set to what the library's `lean-toolchain` and `lake-manifest.json` lock at the
+revision the user plans to require; a read-only fetch of those two files is
+allowed. Ask when either is unknown, and report the pair and why. Do not add the
+`require` or fetch the library into the project; the user decides that.
 
-`project new` writes the requested `lean-toolchain` and Mathlib revision (by
-default the recommended, locked catalog pair), the Lean shell, and the complete
-Autoform vault, site, ignore rules, and pinnable CI without running Lake, Lean,
-or network operations; no later `init` is needed. It never overwrites an
-existing target and fails closed on platforms without the required POSIX
-filesystem operations, including Windows.
-It pins generated workflows exactly as `init` does, described below, and omits
-them when there is no commit to pin;
-invoke `init` later through the same plugin-root launcher, passing the target
-and `--autoform-ref <40-char-sha>`. Do not invent workflow sources or revisions,
-and do not copy the populated example as a project generator.
-
-For an incomplete existing repository, preserve its authored configuration and
-run `autoform init` through the same `uv run --project "$AUTOFORM_PLUGIN_ROOT"`
-prefix only for the Autoform vault/site repair overlay.
+`project new` writes the complete Autoform vault, site, ignore rules, and CI, so
+no later `init` is needed. The rules ignore the derived `site/`, `site-src/`,
+`.autoform-publication-*/`, and `blueprint/dependencies.md`. For an incomplete
+existing repository, run `autoform init` through the same
+`uv run --project "$AUTOFORM_PLUGIN_ROOT"` prefix: it writes the whole vault,
+keeps existing files, and reports what it left alone. Do not hand-build any of
+the vault. Without `--autoform-ref`, both write CI only when they can verify the
+Autoform commit that ran them; otherwise find the commit the plugin was
+installed from and run `init` on the target with `--autoform-ref <40-char-sha>`,
+or report that CI was not configured. Never invent a ref or workflow source;
+`init` refuses a branch, a tag, or an abbreviated sha.
 
 Neither `project new` nor `init` adds the Lean REPL that the REPL tool runs.
-Declare `leanprover-community/repl` at an immutable revision: the commit of the
-upstream tag that names the project's Lean version or, failing that, its
-`vX.Y.0` release, as the bundled example pins the commit of tag `v4.32.0` for
-v4.32.2. `git ls-remote --tags https://github.com/leanprover-community/repl.git`
-lists the tags; if neither exists, ask the user instead of guessing.
-Name the require `repl`, as that example does: the runtime runs
-`lake exe @repl/repl`, which finds the package only under its require name.
-Then run `lake update repl` so an existing manifest locks it without moving
-Mathlib, commit the manifest, and verify `lake build @repl/repl`.
+Require `leanprover-community/repl` under the name `repl` at the commit of the
+upstream tag naming the project's Lean version or, failing that, its `vX.Y.0`
+release, as the bundled example pins the commit of tag `v4.32.0` for v4.32.2.
+If neither tag exists in
+`git ls-remote --tags https://github.com/leanprover-community/repl.git`, ask
+the user instead of guessing. Then run `lake update repl` so an existing
+manifest locks it without moving Mathlib, and commit the manifest.
 
-`project new` turns on Lake's artifact cache with `enableArtifactCache = true`
-and `restoreAllArtifacts = true` in `lakefile.toml`, so checkouts and worktrees
-on the same toolchain reuse each other's builds instead of rebuilding them.
-For an existing project whose lakefile lacks them, offer to add both; a
-`lakefile.lean` takes them in its `package` declaration. Never enable the cache
-without `restoreAllArtifacts`: Autoform's probes load each module's `.olean`
-from `.lake/build`, where only a restore puts it.
+For an existing project whose lakefile lacks Lake's artifact cache, offer to add
+`enableArtifactCache = true` and `restoreAllArtifacts = true`; a `lakefile.lean`
+takes them in its `package` declaration. Never enable the cache without
+`restoreAllArtifacts`.
 
-`autoform init` is the whole vault: `blueprint/` with its landing page,
-`roadmap/README.md`, `coverage/`, and `sources/`, plus `mkdocs.yml`, the theme
-override, both workflows, and ignore rules. Do not hand-build any of it and do
-not copy the bundled example: the layout is fixed, and a chapter written as a
-sibling file instead of `<chapter>/README.md` still validates while publishing
-a book with no chapters. `init` preserves existing files, appending only missing
-Autoform rules to the root `.gitignore`, so it is also the repair path; it
-reports what it left alone. See the
-[CLI reference](../../autoform_cli/README.md#commands) for its flags.
+Put the project's notation in `blueprint/tex-macros.json` as MathJax
+`tex.macros` definitions, never in articles.
 
-The site's MathJax configuration is not part of the vault: `autoform render`
-writes `javascripts/mathjax.js` on every build. Put the project's notation in
-`blueprint/tex-macros.json`, an object from macro names to MathJax `tex.macros`
-definitions; a definition written in an article shows in red on the site, and
-`autoform check` warns about it.
-
-`init` pins the generated workflows to the Autoform commit that ran it only
-when it can verify that commit locally, as the
-[CLI reference](../../autoform_cli/README.md#commands) describes. Otherwise it
-writes no CI rather than guess a source or ref: guessing produced projects
-whose first push failed with nothing in the workflow to explain why. When it
-reports that, find the commit the plugin was installed from and pass
-`--autoform-ref <40-char-sha>`, or say plainly that CI was not configured.
-Never invent a ref. It must be a full 40-character commit sha: `init` refuses a
-branch, a tag, or an abbreviated sha, because CI would silently reinstall a
-different Autoform later and break a project that was passing.
-
-The two workflows it writes are `autoform-verify.yml`, which validates the
-Markdown DAG, builds Lean, rejects unfinished or unsafe proofs, audits theorem
-axioms on pull requests, and runs the statement-review gate where the project
-has opted in with `blueprint/.autoform-review` (`init` never writes that
-marker; see the CLI reference), and `blueprint-pages.yml`, which validates the
-DAG and its `lean:` declarations, renders the blueprint, builds MkDocs, and
-deploys GitHub Pages only for a commit `autoform verify` passed on main. Pass
-`--autoform-ref` to pin them at an immutable commit.
-It also writes `.github/CODEOWNERS.autoform.example`. GitHub does not read it,
-so it cannot mask active owners. Do not guess owners or activate it silently.
-With names the user gives, merge its rules into the first CODEOWNERS file
-GitHub reads, then require code-owner review, dismiss stale approvals, and
-audit bypasses. Report that new rules cannot protect their own activation
-unless equivalent coverage already exists on the pull request's base branch.
+The [CLI reference](../../autoform_cli/README.md#commands) says what the two
+generated workflows check and when Pages deploys. `init` also writes
+`.github/CODEOWNERS.autoform.example`, which GitHub does not read; the
+[template](../../autoform_cli/templates/github/CODEOWNERS.autoform.example)
+says how to activate it. Do not guess owners; activate it only with names the
+user gives, never silently. Report that new rules cannot protect their own
+activation unless equivalent coverage already exists on the pull request's base
+branch.
 
 After it runs, fill in what only a human or a source can supply: the project
 description in `blueprint/README.md`, the coverage contract, and a verified
-`repo_url`. That URL is the *formalization project's own* repository, never
-AutoformBot's: Material renders it as the repository link in the site header,
-and pointing it at the plugin sends every reader to the wrong project. Pass
-`--repository-url` to `autoform init`, or leave the key out until the remote
-exists rather than guessing it. When a deployed site exists, feature its verified canonical URL in
-the root `README.md`, never an inferred or pending one.
+`repo_url`, the formalization project's own repository, never AutoformBot's.
+Pass `--repository-url` to `autoform init` only once the remote exists. When a
+deployed site exists, feature its verified canonical URL in the root
+`README.md`, never an inferred or pending one.
 
 Adding workflow files is a local repository edit. Creating a remote, pushing,
 or enabling Pages are separate outward-facing actions; perform them only when
 the user requests them. Pin third-party Actions and the Autoform CLI source to
 immutable commits.
 
-Validate the prepared repository before reporting it ready. Build Lean first,
-then run the publication sequence:
+Validate the prepared repository before reporting it ready. Build Lean first:
 
 ```bash
 lake update          # only when the project has no lake-manifest.json
@@ -201,32 +137,25 @@ lake build
 lake build @repl/repl
 ```
 
-Then validate, visualize, render, and strict-build the site, keeping
-`--require-declarations` so a named Lean declaration that does not exist fails
-here rather than in CI. The exact invocations, including how to resolve
-`<AUTOFORM_PLUGIN_ROOT>`, are in the [CLI reference](../../autoform_cli/README.md#commands);
-do not restate them here.
+Then run the publication sequence in the
+[CLI reference](../../autoform_cli/README.md#commands), keeping
+`--require-declarations`.
 
-`render` writes a derived tree; the vault stays the source of truth. Ignore
-`site-src/`, `site/`, `.autoform-publication-*/`, and `blueprint/dependencies.md`.
-
-Publication is opt-in because files under `blueprint/` become public site
-content, together with derived progress, graph pages, and a path-free
-publication manifest. Show that boundary, confirm the exact repository and
+Publication is opt-in: files under `blueprint/` become public site content,
+with derived progress, graph pages, and a path-free publication manifest. Show
+that boundary, confirm the exact repository and
 visibility, default to private, and warn that private Pages may require a paid
-GitHub plan. Rendering rejects symlinks and operational or sensitive files.
-When approved, prepare the commit, remote, Pages source, and push; otherwise
-leave the workflow inert.
-If credentials, hosting, or repository settings block publication, report the
-minimal owner action required.
+GitHub plan. When approved, prepare the commit, remote, Pages source, and push;
+otherwise leave the workflow inert. If credentials, hosting, or repository
+settings block publication, report the minimal owner action required.
 
 Zulip synchronization is a separate opt-in outward-facing action. When the user
-asks to discover community context or announce and coordinate the project, read
-and follow [the shared Zulip workflow](references/zulip.md). Do not infer consent
+asks to discover community context or announce and coordinate the project,
+follow [the shared Zulip workflow](references/zulip.md). Do not infer consent
 to post from repository setup, roadmap work, or permission to search.
 
 Before reporting, follow [Debrief Orchestrator](../debrief-orchestrator/SKILL.md)
 with `--skill setup`. Report the Lean toolchain, vault path, CI and Pages files,
 validation results, the publication decision, and any one-time GitHub setting
-the user must still apply. State explicitly that no sources were scoped, roadmap nodes created, or
-proofs started, then hand the repository to Roadmap.
+the user must still apply. State that no sources were scoped, roadmap nodes
+created, or proofs started, then hand the repository to Roadmap.

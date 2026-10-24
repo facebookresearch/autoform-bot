@@ -116,9 +116,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     init.add_argument(
         "--autoform-ref",
         default="",
-        help="immutable ref the workflows pin (default: this checkout's HEAD commit)",
+        help=(
+            "full 40-character Autoform commit the workflows pin, not a branch, tag or short sha "
+            "(default: this checkout's HEAD commit; none when --autoform-source is given)"
+        ),
     )
-    init.add_argument("--force", action="store_true", help="overwrite files that already exist")
+    init.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite files that already exist; a case or Unicode variant of a managed path is still refused",
+    )
     init.add_argument("--json", action="store_true", help="write stable machine-readable output")
 
     check = subparsers.add_parser("check", help="validate a Markdown blueprint")
@@ -181,14 +188,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     project_new.add_argument(
         "--lean-toolchain",
         help=(
-            "Lean release tag such as v4.30.0; a pair the catalog does not list is written "
-            "without lake-manifest.json, so run 'lake update' in the project"
+            "Lean release tag such as v4.30.0, not with --release; below v4.27.0 it warns. A pair the catalog "
+            "does not list is written without lake-manifest.json, so run 'lake update' in the project"
         ),
     )
     project_new.add_argument(
         "--mathlib-rev",
         help=(
-            "Mathlib tag, branch, or commit to require with --lean-toolchain "
+            "Mathlib tag, branch, or commit to require with --lean-toolchain, not with --release "
             "(default: the same tag as the toolchain)"
         ),
     )
@@ -308,8 +315,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         choices=(MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE),
         default=MODULE_IMPORT_SCOPE,
         metavar="SCOPE",
-        help=f"{MODULE_IMPORT_SCOPE} (default) loads every root library; {IMPORT_CLOSURE_SCOPE} loads only "
-        "files that may import MODULE, reports affected modules exactly and over-reports articles",
+        help=f"{MODULE_IMPORT_SCOPE} (default) loads every root library; {IMPORT_CLOSURE_SCOPE} loads, and needs "
+        "built, only files that may import MODULE: affected_modules stay exact, affected_articles may over-report",
     )
     search = subparsers.add_parser(
         "search", help="find articles by title, Lean name, or statement text before adding one"
@@ -382,7 +389,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--check", action="store_true", help="write nothing; exit 1 when the index at the root is not current"
     )
     library_index.add_argument(
-        "--timeout", type=_positive_seconds, default=None, metavar="SECONDS", help="time limit for the Lean probe"
+        "--timeout",
+        type=_positive_seconds,
+        default=None,
+        metavar="SECONDS",
+        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g})",
     )
 
     claim = subparsers.add_parser("claim", help="coordinate temporary node ownership through Git refs")
@@ -392,9 +403,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         command.add_argument("node_id", nargs="+", help="claim target(s); several change all-or-nothing")
         _add_claim_board_arguments(command)
         if operation in {"acquire", "renew"}:
-            command.add_argument("--ttl", type=int, default=CLAIM_TTL_S)
+            command.add_argument(
+                "--ttl",
+                type=int,
+                default=CLAIM_TTL_S,
+                help=f"seconds from now until the lease expires (default {CLAIM_TTL_S})",
+            )
         if operation == "acquire":
-            command.add_argument("--note", default="")
+            command.add_argument("--note", default="", help="free text stored in the lease; renew keeps it")
     claim_list = claim_subparsers.add_parser("list")
     claim_list.add_argument("node_id", nargs="*", help="list only these claim targets")
     _add_claim_board_arguments(claim_list)
@@ -514,8 +530,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="write the blind packets of every Lean-mapped article and their manifest",
     )
     review_prepare.add_argument("blueprint_dir")
-    review_prepare.add_argument("--lean-root", type=Path, required=True)
-    review_prepare.add_argument("--packets", type=Path, required=True, metavar="DIR")
+    review_prepare.add_argument("--lean-root", type=Path, required=True, help="the built Lean project")
+    review_prepare.add_argument(
+        "--packets", type=Path, required=True, metavar="DIR", help="directory to write the blind packets to"
+    )
     _add_probe_timeout_argument(review_prepare)
 
     review_record = review_subparsers.add_parser(
@@ -523,11 +541,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="validate and file testimony about one packet `review prepare` wrote",
     )
     review_record.add_argument("blueprint_dir")
-    review_record.add_argument("--packets", type=Path, required=True, metavar="DIR")
-    review_record.add_argument("--article-id", required=True, metavar="AF_ID")
-    review_record.add_argument("--declaration", required=True, metavar="LEAN_NAME")
-    review_record.add_argument("--testimony", type=Path, required=True)
-    review_record.add_argument("--model", required=True)
+    review_record.add_argument(
+        "--packets", type=Path, required=True, metavar="DIR", help="blind packet directory from review prepare"
+    )
+    review_record.add_argument("--article-id", required=True, metavar="AF_ID", help="the article's article_id")
+    review_record.add_argument(
+        "--declaration", required=True, metavar="LEAN_NAME", help="the declaration whose packet was read back"
+    )
+    review_record.add_argument(
+        "--testimony", type=Path, required=True, help="the read-back file, at most 32 KiB and 500 lines"
+    )
+    review_record.add_argument(
+        "--model", required=True, help="label of the reviewing model; recorded, not authenticated"
+    )
     review_record.add_argument(
         "--expected-card-hash",
         help="replace an existing different card only if its current content has this hash",
@@ -538,7 +564,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="check evidence freshness, read-backs, and human approvals",
     )
     review_check.add_argument("blueprint_dir")
-    review_check.add_argument("--lean-root", type=Path, required=True)
+    review_check.add_argument("--lean-root", type=Path, required=True, help="the built Lean project")
     review_check.add_argument("--json", action="store_true", help="write stable machine-readable output")
     _add_probe_timeout_argument(review_check)
 

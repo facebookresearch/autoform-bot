@@ -10,10 +10,20 @@ with Autoform, accumulated 901 raised ``maxHeartbeats`` settings, 497 of them
 file- or section-wide and 9 of them ``0`` (autoform-bot issue #260).
 
 Like the declaration index, this is a lexical pass over comment-free source
-lines. It tracks ``namespace``/``section``/``mutual``/``end`` nesting and
-reads commands at the declaration's own indentation, so a more deeply
-indented ``set_option`` is part of the proof above it. That is enough for
-code written in the ordinary way, and it reports nothing it cannot see.
+lines. It tracks ``namespace``/``section``/``mutual``/``end`` nesting,
+including ``noncomputable section`` and the module system's ``@[expose] public
+section``, and reads commands at the declaration's own indentation, so a more
+deeply indented ``set_option`` is part of the proof above it. That is enough
+for code written in the ordinary way, and it reports nothing it cannot see.
+
+The audit reports a file- or section-wide raise for the reason Mathlib's
+``linter.style.setOption`` rejects unscoped heartbeat limits, and accepts a
+raise put on the declaration itself with ``set_option ... in``, which is
+Mathlib practice. A catalog inventories code that already exists, so its
+limits are warnings, not findings; its message reads, for example, ``2 of 40
+catalogued declarations have no maxHeartbeats limit (Inv.alpha at Inv.lean:1
+and 1 more); existing code: change it only on request, and a finite limit
+must pass a rebuild``, and an alias listed beside its target counts once.
 """
 
 from __future__ import annotations

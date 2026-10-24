@@ -7,6 +7,24 @@ names sit in between, and whether the Markdown roadmap records those
 dependencies. The answer is read from the elaborated environment by a Lean
 probe rather than from source text, so uses that only automation such as
 ``simp`` introduces are seen too.
+
+A Markdown path reaches the revised declarations when it ends at the revised
+article, at an article that names one of them, or, when none names it, at one
+of its owners; missing dependency paths are counted the same way. Project
+locality is an exact inventory of regular repository source modules, never a
+namespace-prefix guess. Lake builds every module an ``M.*`` or ``M.+`` glob
+finds even when nothing imports it, so the probe refuses such a module it did
+not load instead of silently leaving out what the module uses.
+
+``work impact`` snapshots and rereads the roadmap around the probe. It retains
+one bound Lean source generation, derives the module inventory and locations
+from that generation's captured bytes, then recaptures through the same binding
+and refuses any content or source-identity change. ``work import-impact`` takes
+the loaded module graph from Lean and binds every node to its captured root
+source and configured root-package artifact, so a dependency cannot shadow it.
+Under ``--module-scope import-closure`` a file is a candidate when its text
+contains every component of a candidate's name, repeated until no new file
+matches (:func:`import_closure`), and Lean loads what the candidates import.
 """
 
 from __future__ import annotations

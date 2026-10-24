@@ -3,6 +3,13 @@
 The index comes from another repository. It is used only when the checkout is
 at the locked commit, its sources and pin files are the ones the index was
 generated from, and the index as a whole is one generation.
+
+Only each module's ``name``, ``source_file`` and ``sha256`` and the header's
+toolchain, dependencies and source directories are checked. An edit to the
+index file that leaves those alone is not detected: a declaration record, a
+module's ``module_doc`` or ``module_system``, or the header's ``generator``,
+``probe`` or ``package``. Neither is a package replaced with
+``lake --packages=``.
 """
 
 from __future__ import annotations

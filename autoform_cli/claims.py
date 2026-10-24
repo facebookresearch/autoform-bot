@@ -3,7 +3,27 @@
 Each claim is stored under ``refs/autoform-claims/`` and points to an orphan
 commit whose message is the lease JSON. Mutations use an exact observed object
 ID as a compare-and-swap precondition, so concurrent claimants cannot silently
-overwrite one another.
+overwrite one another. The user-facing contract is the claim contract in
+``autoform_cli/reference/claims-and-revisions.md``.
+
+``claim list`` copies the whole board with one fetch and reads every lease at
+once, so its cost hardly grows with the number of claims. Git can read the refs
+it advertises one by one, which is why a listing is not a consistent snapshot.
+A peer's renewal during a listing changes nothing, except that a server
+speaking Git's older stateless HTTP protocol may refuse the fetch, which is then
+repeated up to three times. A board with claim keys that differ only in case,
+which a case-insensitive scratch cannot store under their names, is listed with
+one more command that names its claims first. ``claim list TARGET...`` names
+the targets' refs and fetches only those, so changes to other claims never make
+it retry and no other claim's lease is copied, and a target released meanwhile
+has the targets named again, never the whole board; over a network its cost
+still grows with the board's list of refs.
+
+``claim list`` runs Git in its own process group, without a controlling
+terminal on Linux and macOS so ``ssh`` cannot prompt, and stops a Git command
+that runs out of time or is interrupted together with everything it started.
+The other claim commands run Git in the caller's process group, so a
+terminal's interrupt reaches Git, which then removes the ref lock it holds.
 """
 
 from __future__ import annotations

@@ -764,7 +764,8 @@ def test_the_bundled_example_answers_a_reuse_question(repo_root: Path) -> None:
 
 
 def test_the_reference_search_examples_run(repo_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    reference = (repo_root / "autoform_cli/README.md").read_text(encoding="utf-8")
+    pages = [repo_root / "autoform_cli/README.md", *sorted((repo_root / "autoform_cli/reference").glob("*.md"))]
+    reference = "\n".join(page.read_text(encoding="utf-8") for page in pages)
     examples = [
         shlex.split(line)[1:]
         for block in re.findall(r"```bash\n(.*?)```", reference, re.DOTALL)

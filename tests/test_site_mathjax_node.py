@@ -34,13 +34,13 @@ NODE = shutil.which("node")
 _ROOT = Path(__file__).resolve().parents[1]
 
 
-def mathjax_package() -> Path:
+def mathjax_package(*, node: bool = True) -> Path:
     """The MathJax package root ``AUTOFORM_MATHJAX_DIR`` names, after checking
-    that Node.js is installed and the package is MathJax 3.2.2."""
+    that the package is MathJax 3.2.2 and, for Node tests, its DOM bridge exists."""
 
     # CI sets AUTOFORM_REQUIRE_MATHJAX_TESTS, so a missing Node or package fails there instead of skipping.
     unavailable = pytest.fail if os.environ.get("AUTOFORM_REQUIRE_MATHJAX_TESTS") == "1" else pytest.skip
-    if NODE is None:
+    if node and NODE is None:
         unavailable("Node.js is not on PATH")
     setting = os.environ.get("AUTOFORM_MATHJAX_DIR", "")
     if not setting:
@@ -54,7 +54,7 @@ def mathjax_package() -> Path:
     if version != MATHJAX_VERSION:
         pytest.fail(f"AUTOFORM_MATHJAX_DIR={setting} is MathJax {version}, not {MATHJAX_VERSION}")
     bridge = _ROOT / "node_modules/jsdom/package.json"
-    if not bridge.is_file() or json.loads(bridge.read_text(encoding="utf-8")).get("version") != "26.1.0":
+    if node and (not bridge.is_file() or json.loads(bridge.read_text(encoding="utf-8")).get("version") != "26.1.0"):
         pytest.fail("The native DOM test bridge requires locked jsdom 26.1.0; run npm ci --ignore-scripts")
     return root
 
@@ -71,8 +71,8 @@ _HARNESS = r"""
 const fs = require("fs"), path = require("path"), assert = require("assert");
 const {webcrypto} = require("crypto");
 const {JSDOM} = require(path.join(process.env.AUTOFORM_DOM_BRIDGE_DIR, "jsdom"));
-const [scriptPath, firstPath, secondPath, project, override] = process.argv.slice(2);
-const report = {injected: [], errors: [], passes: [], version: null, base: null, load: null};
+const [scriptPath, firstPath, secondPath, project, override, then] = process.argv.slice(2);
+const report = {injected: [], errors: [], passes: [], version: null, base: null, load: null, early: null};
 const dom = new JSDOM(fs.readFileSync(firstPath, "utf8"), {
   url: "https://blueprint.example.invalid/", runScripts: "outside-only", pretendToBeVisual: true
 });
@@ -111,6 +111,7 @@ function describe() {
   return docs.map(doc => ({
     card: cardOf(doc),
     packages: doc.inputJax[0].parseOptions.options.packages.slice(),
+    enableMenu: doc.options.enableMenu,
     math: Array.from(doc.math).map(item => ({tex: item.math, mml: MathJax.startup.toMML(item.root)}))
   }));
 }
@@ -122,6 +123,7 @@ function describe() {
     await new Promise(resolve => nativeWindow.addEventListener("load", resolve, {once: true}));
   }
   (0, eval)(fs.readFileSync(scriptPath, "utf8"));
+  const early = then === "append" ? nativeWindow.AutoformMath.refresh(document) : null;
   const configuration = nativeWindow.MathJax;
   report.base = configuration.loader.paths.mathjax;
   report.load = configuration.loader.load.slice();
@@ -148,6 +150,7 @@ function describe() {
   const main = require(path.join(process.env.AUTOFORM_MATHJAX_DIR, "es5", "node-main.js"));
   await main.init({});
   await MathJax.startup.promise;
+  if (early) report.early = await early;
   report.version = MathJax.version;
   assert.strictEqual(MathJax.startup.adaptor.document, document, "MathJax must use the genuine native DOM");
   assert.strictEqual(MathJax.config, configuration, "The generated configuration must survive actual engine initialization");
@@ -161,11 +164,26 @@ function describe() {
 
   docs = [];
   const next = new nativeWindow.DOMParser().parseFromString(fs.readFileSync(secondPath, "utf8"), "text/html");
-  document.body.replaceChildren(...Array.from(next.body.childNodes));
-  shown();
-  assert.strictEqual(await nativeWindow.AutoformMath.refresh(document), true);
+  if (then === "promote") {
+    const button = document.createElement("button");
+    button.appendChild(document.querySelector(".arithmatex"));
+    document.body.appendChild(button);
+    assert.strictEqual(await nativeWindow.AutoformMath.refresh(button), true);
+  } else {
+    if (then === "append") document.body.append(...Array.from(next.body.childNodes));
+    else { document.body.replaceChildren(...Array.from(next.body.childNodes)); shown(); }
+    assert.strictEqual(await nativeWindow.AutoformMath.refresh(document), true);
+  }
   report.passes.push(describe());
   assert.strictEqual(document.querySelectorAll("[data-autoform-math-stage]").length, 0);
+  report.startup = Array.from(MathJax.startup.document.math).length;
+  const sheet = MathJax.startup.adaptor.textContent(MathJax.startup.output.chtmlStyles);
+  const glyphs = new Set(Array.from(document.body.innerHTML.matchAll(/class="(mjx-c[0-9A-F]+)/g), match => match[1]));
+  report.unstyled = Array.from(glyphs).filter(glyph => !sheet.includes("." + glyph));
+  report.controls = Array.from(document.querySelectorAll("a, button")).filter(control => control.querySelector("mjx-container")).map(control => ({
+    tag: control.tagName, tabstops: control.querySelectorAll("[tabindex]").length,
+    applications: control.querySelectorAll('[role="application"]').length
+  }));
 })().catch(error => {
   report.errors.push("harness: " + error.stack);
 }).finally(() => {
@@ -196,7 +214,13 @@ _OVERRIDDEN = (
 
 
 def _node_report(
-    tmp_path: Path, script: str, project: str, first: str = _FIRST_PAGE, second: str = _SECOND_PAGE, override: str = "none"
+    tmp_path: Path,
+    script: str,
+    project: str,
+    first: str = _FIRST_PAGE,
+    second: str = _SECOND_PAGE,
+    override: str = "none",
+    then: str = "page",
 ) -> dict:
     """Run the harness on ``script`` and the two pages, and decode the JSON it prints."""
 
@@ -204,7 +228,7 @@ def _node_report(
     for name, text in files.items():
         (tmp_path / name).write_text(text, encoding="utf-8")
     done = subprocess.run(
-        [NODE, "harness.js", "mathjax.js", "first.html", "second.html", project, override],
+        [NODE, "harness.js", "mathjax.js", "first.html", "second.html", project, override, then],
         cwd=tmp_path,
         env=dict(os.environ, AUTOFORM_MATHJAX_DIR=str(mathjax_package()), AUTOFORM_DOM_BRIDGE_DIR=str(_ROOT / "node_modules")),
         capture_output=True,
@@ -305,3 +329,63 @@ def test_no_card_formula_gives_its_output_a_class_style_id_or_link(tmp_path: Pat
     assert card["card"] == "c1"
     assert len(card["math"]) == 1
     assert "<mi>x</mi>" in card["math"][0]["mml"], card["math"][0]["mml"]
+
+
+def test_scoped_marked_controls_keep_their_keys_and_earlier_glyph_styles(tmp_path: Path) -> None:
+    """The current scoped API, not a retired viewer event, typesets native controls with real MathJax."""
+    drawn = (
+        '<html><head></head><body><section><h1 class="arithmatex">Groups $\\mathbb{Z}/n$</h1>'
+        '<p class="arithmatex">Cyclic groups $C_n \\cong \\RR$ have \\(\\varphi(n)\\) generators.</p>'
+        '<p>Unmarked $x$ stays text.</p>'
+        '<a class="arithmatex" href="#up">Up to $t_0$</a>'
+        '<a href="#base"><span class="arithmatex">Order of $g^k$</span></a>'
+        '<button class="arithmatex">Handle $h_1$</button>'
+        '<button><span class="arithmatex">Relation $r^2$</span></button>'
+        '</section></body></html>'
+    )
+    report = _node_report(tmp_path, _node_script(tmp_path, json.dumps(_MACROS)), "new", second=drawn, then="append")
+
+    assert report["errors"] == [] and report["early"] is True
+    assert [document["card"] for document in report["passes"][0]] == [None, "c1", "c2"]
+    page, controls = report["passes"][1]
+    assert page["packages"] == controls["packages"] == _PAGE_PACKAGES
+    assert [math["tex"] for math in page["math"]] == ["\\mathbb{Z}/n", "C_n \\cong \\RR", "\\varphi(n)"]
+    assert sorted(math["tex"] for math in controls["math"]) == ["g^k", "h_1", "r^2", "t_0"]
+    assert controls["enableMenu"] is False
+    assert report["controls"] == [
+        {"tag": "A", "tabstops": 0, "applications": 0},
+        {"tag": "A", "tabstops": 0, "applications": 0},
+        {"tag": "BUTTON", "tabstops": 0, "applications": 0},
+        {"tag": "BUTTON", "tabstops": 0, "applications": 0},
+    ]
+    assert report["startup"] == 0 and report["unstyled"] == []
+    assert "merror" not in page["math"][1]["mml"] and 'mathcolor="red"' not in page["math"][1]["mml"]
+
+
+def test_an_existing_rendered_formula_moved_into_a_control_loses_its_inner_tabstop(tmp_path: Path) -> None:
+    """Trusted retained source permits a real ownership transition, without cloning rendered handlers."""
+    report = _node_report(tmp_path, _node_script(tmp_path, json.dumps(_MACROS)), "new", then="promote")
+    assert report["errors"] == []
+    controlled, = report["passes"][1]
+    assert controlled["enableMenu"] is False
+    assert [math["tex"] for math in controlled["math"]] == ["a \\leq b"]
+    assert report["controls"] == [{"tag": "BUTTON", "tabstops": 0, "applications": 0}]
+    assert report["startup"] == 0 and report["unstyled"] == []
+
+
+def test_a_control_inside_a_readback_card_keeps_the_cards_restricted_input(tmp_path: Path) -> None:
+    drawn = (
+        '<html><head></head><body><div class="bp-readback bp-readback-current" id="c3">'
+        '<a href="#card"><span class="bp-card-formula">\\(\\boldsymbol{x} \\RR\\)</span></a>'
+        '</div></body></html>'
+    )
+    report = _node_report(tmp_path, _node_script(tmp_path, json.dumps(_MACROS)), "new", second=drawn, then="append")
+    assert report["errors"] == []
+    page, card = report["passes"][1]
+    assert page["math"] == []
+    assert card["card"] == "c3" and card["packages"] == _CARD_PACKAGES
+    assert card["enableMenu"] is False
+    for command in ("\\boldsymbol", "\\RR"):
+        assert f'<mtext mathcolor="red">{command}</mtext>' in card["math"][0]["mml"]
+    assert report["controls"] == [{"tag": "A", "tabstops": 0, "applications": 0}]
+    assert report["startup"] == 0 and report["unstyled"] == []

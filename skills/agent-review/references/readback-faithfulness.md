@@ -1,34 +1,32 @@
 # Read-back faithfulness rubric
 
 Judge whether an independent read-back asserts the same mathematics as the
-source passage. The judge sees English evidence, not Lean. This is the blind
-half of [faithfulness](faithfulness.md): that rubric compares Lean with the
-source; this one compares testimony about Lean with the source.
+source passage. The judge sees English testimony, never Lean;
+[faithfulness](faithfulness.md) compares the Lean itself with the source.
 
 ## Roles and artifacts
 
 Keep the three roles separate.
 
 1. A **trusted coordinator** builds the exact candidate and runs skeleton
-   extraction once with its report, packets, and passages. Extraction produces
-   Lean packets, source passages, and their manifests. It does not produce a
-   read-back or a verdict.
+   extraction once, producing Lean packets, source passages, and their
+   manifests, but no read-back or verdict.
 2. A **blind auditor** receives one declaration packet and no article, source,
    locator, or statement of intent. The auditor returns a nonempty plain-text
    account, with TeX formulas between dollar signs, of what that packet
    literally asserts. This returned text is the read-back artifact.
-3. A **faithfulness judge** receives the source passage, the raw read-back text
-   for every declaration in the article, and the opaque provenance projection
-   below. The judge must not receive a packet, Lean name, article path, or
-   candidate checkout.
+3. A **faithfulness judge** receives only the opaque item below, the raw source
+   passage, and the raw read-back text for every declaration in the article,
+   labelled `d1`, `d2`, and so on. The judge must not receive a packet, Lean
+   name, article path, or candidate checkout.
 
-The coordinator, not either reviewing agent, supplies the evidence, taken from
-the verified review bundle and its read-back cards. The judge only returns its
-JSON and never writes into the reviewed repository. The coordinator maps the
-packet manifest's `node_id` to that blueprint node's `article_id`; an absent or
-duplicate identity stops dispatch. Hash the read-back text as its card records
-it, in UTF-8 with `\n` line ends and no line break at either end; do not render
-or otherwise normalize it before hashing.
+The coordinator supplies all evidence, from the verified review bundle and its
+read-back cards; the judge only returns its JSON and never writes into the
+reviewed repository. The coordinator maps the packet manifest's `node_id` to
+that blueprint node's `article_id`; an absent or duplicate identity stops
+dispatch. Hash the read-back text as its card records it, in UTF-8 with `\n`
+line ends and no line break at either end; do not render or otherwise normalize
+it before hashing.
 
 Before dispatching the judge, build one opaque item:
 
@@ -61,20 +59,14 @@ recorded hash. A missing source passage, duplicate or unordered declaration, or
 disagreeing record makes the item unavailable; do not ask the judge to repair
 it.
 
-The declaration and article skeleton hashes bind elaborated meaning and trust
-context. The packet hash binds the exact declaration packet seen by its auditor.
-The article packet hash binds the joint packet. The article review hash also
-binds that joint packet to the cited passage and locator. None of those hashes
-binds the read-back, so the read-back hash is required. These are drift
+The skeleton hashes bind elaborated meaning and trust context; the packet hash
+and article packet hash bind the declaration packet its auditor saw and the
+joint packet; the article review hash also binds the joint packet to the cited
+passage and locator (see the [CLI reference](../../../autoform_cli/README.md#skeleton-hashes)).
+None binds the read-back, so the read-back hash is required. These are drift
 checksums, not reviewer authentication or an approval key.
 
 ## Evidence boundary
-
-The judge receives exactly three kinds of input:
-
-1. the opaque item JSON;
-2. the cited source passage as raw text;
-3. each declaration's raw read-back text, labelled only `d1`, `d2`, and so on.
 
 Do not open other files, resolve a declaration name, or search the repository.
 Judge all read-backs for one item together: one source theorem may be split
@@ -87,19 +79,12 @@ rather than carding around hidden content.
 
 ## Procedure
 
-1. Copy the item's provenance fields into the verdict without changing them.
-2. Card the passage: objects and kinds, numbered hypotheses, conclusion, and
+1. Card the passage: objects and kinds, numbered hypotheses, conclusion, and
    quantifier order. Mark a hypothesis implicit only when the passage actually
    relies on it.
-3. Card the combined read-backs in the same form.
-4. List every discrepancy with exactly one category from the table. The worst
-   category determines the decision; implication in one direction is not
-   equivalence.
-
-A read-back is expected to spell out binders, conventions, and degenerate
-behavior already determined by the same claim. That is `elaboration`. Extending
-the domain, removing a hypothesis, strengthening a conclusion, or adding a
-nonredundant assumption changes the claim and is not elaboration.
+2. Card the combined read-backs in the same form.
+3. List every discrepancy with exactly one category from the table;
+   implication in one direction is not equivalence.
 
 ## Categories and decisions
 
@@ -122,12 +107,11 @@ nonredundant assumption changes the claim and is not elaboration.
 | `unreadable` | `disagrees` | The text cannot be carded as supplied, including content hidden from rendered output. |
 | `evidence-missing` | `unknown` | The passage, a read-back, or required provenance is absent or malformed. |
 
-Use `elaboration` for an added assumption only when it is plainly redundant or
+Spelling out binders, conventions, and degenerate behavior the claim already
+determines is `elaboration`. Use it for an added assumption only when it is
+plainly redundant or
 an implementation-level restatement and the detail line says why it changes no
-mathematical instance. Otherwise use `hypothesis-added`. Use
-`equivalent-reformulation`, not `elaboration`, when equivalence itself needs an
-argument. There is no special pass for a missing hypothesis that generalizes
-the source: substantive strengthening is `hypothesis-missing` and disagrees.
+mathematical instance; otherwise use `hypothesis-added`.
 
 An item takes the worst decision among its discrepancies:
 `disagrees` outranks `unknown`, which outranks `review`, which outranks `agrees`.
@@ -180,11 +164,8 @@ the declaration order verbatim from the input item. Use `null` for
 
 ## Review escalation
 
-For `equivalent-reformulation`, state the proposed equivalence in words and
-hand it to a reviewer allowed to inspect Lean. That reviewer may prove the
-equivalence or reject it. Do not use `review` for a partial result, a stronger
-result, or a claim described only as "roughly" or "essentially" the same.
-
-A wide source locator is an article defect, not an auditor defect. If the
-passage contains several claims and the read-backs cover only one, record
-`scope`; the remedy is to narrow the citation or formalize the rest.
+A `review` decision hands the stated equivalence to a reviewer allowed to
+inspect Lean, who proves or rejects it. Do not use `review` for a partial
+result, a stronger result, or a claim described only as "roughly" or
+"essentially" the same. A `scope` discrepancy from a wide source locator is an
+article defect: narrow the citation or formalize the rest.

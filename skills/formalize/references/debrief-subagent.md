@@ -12,5 +12,5 @@ answer with `autoform debrief subagent record` using the same arguments plus
 `--worker-id` (the same ID as on your claim commands) and `--answer FILE` or
 standard input. If `record` rejects the answer, correct it and resubmit.
 
-A subagent debriefs before reporting, because only it witnessed the searches and
-dead ends; the lead must not answer on its behalf.
+Only the subagent witnessed its searches and dead ends, so the lead must not
+answer on its behalf.

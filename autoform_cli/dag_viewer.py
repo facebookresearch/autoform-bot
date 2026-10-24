@@ -541,11 +541,10 @@ def viewer_script() -> str:
 # a button and popover because Material styles details and summary as an
 # admonition. The head stacks above the details drawer and the bottom sheet so
 # that neither of its popovers paints under them. Fixed-pixel controls avoid
-# Material's changing rem scale. The legacy drawer leaves room for readable
-# nodes and hides the covered rail from the tab order; the integrated reader
-# instead shares a responsive pane with one semantic topic rail. Phones keep
+# Material's changing rem scale. The integrated reader shares a responsive
+# pane with one semantic topic rail. Phones keep
 # the same Reading handle, and authored region browsing gives the map that
-# pane's width. Both clients preserve one accessible page heading.
+# pane's width. The integrated client preserves one accessible page heading.
 def _asset_text(name: str) -> str:
     """Read packaged, project-neutral viewer assets once per process."""
     return Path(__file__).with_name("assets").joinpath(name).read_text(encoding="utf-8")

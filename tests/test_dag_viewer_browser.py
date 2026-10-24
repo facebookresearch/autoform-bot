@@ -467,7 +467,8 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
             encoding="utf-8",
         )
         (folder / "base.md").write_text(
-            "---\ndeclaration: def\n---\n\n# Base\n\nThe base value is $0$.\n\n## Depends on\n\nNo prerequisites.\n",
+            "---\ndeclaration: def\n---\n\n# Base\n\nThe base value is $0$. "
+            "Navigate to [Result $y^2$](result.md).\n\n## Depends on\n\nNo prerequisites.\n",
             encoding="utf-8",
         )
         notations = ", ".join("$" + expression + "$" for expression in expressions)
@@ -1778,6 +1779,58 @@ def test_the_explorer_typesets_the_math_it_draws_in_its_rail_and_details(
     assert page.evaluate("() => document === __mathReaderDocument")
     # The chapter-card fragment selects the initial statement in the client;
     # HTTP document requests never include URL fragments.
+    assert documents == [urlsplit(first)._replace(fragment="").geturl()]
+
+
+@pytest.mark.parametrize("explorer", [False, True])
+def test_marked_reader_link_math_does_not_steal_native_navigation_keys(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object, explorer: bool
+) -> None:
+    """Published Markdown creates the control; the pinned menu's saved accessibility setting is genuine."""
+    from tests.test_integrated_explorer_browser import _math_source, _routes
+
+    page, site_url = desktop_page, marked_math_site_url
+    if explorer:
+        page.add_init_script("localStorage.setItem('MathJax-Menu-Settings', JSON.stringify({explorer: true}))")
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _routes(page, site_url, marked_math_runtime, graph_client=True)
+    first = _site_route(page, site_url, "algebra/base")
+    page.goto(first)
+    _ready_site(page)
+    page.evaluate("() => window.__controlMathDocument = document")
+    assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-reading-body'))") is True
+    card = _reading_card(page, "algebra/base")
+    playwright.expect(card.locator("mjx-container")).to_have_count(2)
+    outside = card.locator("mjx-container").first
+    assert _math_source(page, outside) == "0"
+    if explorer:
+        playwright.expect(outside).to_have_attribute("role", "application")
+    else:
+        playwright.expect(outside).to_have_attribute("tabindex", "0")
+    link = card.locator("a:has(mjx-container)")
+    playwright.expect(link).to_have_count(1)
+    control_math = link.locator("mjx-container")
+    playwright.expect(control_math).to_have_count(1)
+    playwright.expect(link.locator(".arithmatex")).to_have_attribute("data-autoform-math-source", r"\(y^2\)")
+    playwright.expect(control_math.locator("mjx-msup")).to_have_count(1)
+    assert control_math.locator("mjx-c").evaluate_all(
+        "glyphs => glyphs.length >= 2 && glyphs.every(glyph => "
+        "!['none', 'normal', ''].includes(getComputedStyle(glyph, '::before').content))"
+    )
+    assert link.locator("[tabindex], [role=application]").count() == 0
+    playwright.expect(card.locator("mjx-merror, merror")).to_have_count(0)
+    _assert_hit(page, link)
+    # This formula deliberately has no source-menu control; the ordinary
+    # formula above still passed genuine menu readback through _math_source.
+    control_math.click(button="right")
+    playwright.expect(page.get_by_role("menu")).to_have_count(0)
+    page.keyboard.press("Escape")
+    link.focus()
+    page.keyboard.press("Enter")
+    page.wait_for_url(_site_route(page, site_url, "algebra/result"))
+    playwright.expect(_reading_card(page, "algebra/result").locator("mjx-container")).to_have_count(5)
+    assert page.evaluate("() => document === __controlMathDocument")
     assert documents == [urlsplit(first)._replace(fragment="").geturl()]
 
 

@@ -17,17 +17,7 @@ Keep Cabannes-specific facts in examples; keep plugin and formalization roots
 distinct. Agents can infer routine details; keep shared agent entrypoints concise
 and link on-demand references.
 
-For each Lean/Mathlib release, regenerate `production_module_roots` from Lake
-package configs. Update the private creation bundle, catalog identity, and
-complete `lake update` manifest together; run `lake build`.
-A direct-Mathlib-only manifest is invalid.
-
-Retain descriptors for source indexes, revisions, and links: repeated pathname
-reads are not a generation boundary (Windows render omits code links).
-Read bounded outputs before descendants, keep each marker schema in its owning
-feature, and require links to match the blob at the stable detected commit.
-
-For claims/views/mirrors/pins/releases/explorers, read
+For claims/views/source evidence/mirrors/pins/releases/explorers, read
 [repository contracts](references/repository-contracts.md).
 
 Run:
@@ -40,6 +30,3 @@ make check-example
 
 Validate skills and manifests with skill-creator and plugin-creator. Test
 cachebuster/reinstall discovery only in a new thread.
-
-Treat rewritten private declaration safety as fail-closed evidence: correlate
-the official user name to its lexical declaration by source coordinates.

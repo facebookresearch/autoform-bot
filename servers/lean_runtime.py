@@ -3,6 +3,17 @@
 This is an internal runtime rather than a third MCP server.  The public
 ``autoform-repl`` and ``autoform-lsp`` stdio servers proxy their four tools to
 this process through a private Unix-domain socket.
+
+The first tool call starts the runtime race-safely: the bootstrap and lifetime
+locks are installation-wide, so two plugin versions cannot launch parallel
+runtimes. The socket name carries a fingerprint of the runtime's code
+(``lean_client.BUILD_ID``), so an in-place upgrade gracefully replaces the
+older build.
+
+Cleanup that fails within a response budget transfers to a retained background
+reaper (``ProjectResourceCache._reaper_loop``), which may keep going past that
+budget rather than allow an overlapping replacement of the project's Lean
+processes.
 """
 
 from __future__ import annotations

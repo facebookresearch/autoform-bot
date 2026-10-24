@@ -46,5 +46,4 @@ coercion, and meaning-changing attribute; proof-only helpers need only be classi
 | 0 | Unrelated or vacuous statement, hollow model, or trivial replacement of the source result. |
 
 Hard ceilings: a wrong domain/type, missing conclusion, nonredundant hypothesis change, or content
-hidden in an orphan class scores at most 2. Score 3 is reserved for differences that do not alter
-the mathematics. Pass at 4; reject at 2 or below.
+hidden in an orphan class scores at most 2. Pass at 4; reject at 2 or below.

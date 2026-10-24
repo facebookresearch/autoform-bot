@@ -34,7 +34,6 @@ def test_main_plugin_surface_excludes_deicyde_orchestration(repo_root):
         "code-quality.md",
         "mathlib-style.md",
         "roadmap-quality.md",
-        "thesis-review-case.md",
     }
     assert {path.name for path in (review_dir / "references").glob("*.md")} == references
     skill_text = (review_dir / "SKILL.md").read_text()

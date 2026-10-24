@@ -1,5 +1,59 @@
 #!/usr/bin/env python3
-"""Build a kernel-trust probe from the root package's packed ILean artifacts."""
+"""Build a kernel-trust probe from the root package's packed ILean artifacts.
+
+The CI audit's user-facing contract, its status lines and its error messages
+are in Autoform's open-statements reference. What follows is how the probe this
+script writes reaches its verdict.
+
+A ``sorry`` is accepted only inside the proof of a theorem an open article's
+``lean:`` names. Lean-generated auxiliaries count as helpers, so a ``sorry``
+in them fails: a ``where`` clause becomes ``T.aux``, well-founded recursion
+over two or more arguments moves the ``decreasing_by`` proof into
+``T._unary``, and structural recursion through a ``mutual`` block compiles
+the bodies into ``T._f``. Recursion can move a ``sorry`` case into such an
+auxiliary, which is why the whole proof must be ``sorry``.
+
+Both audits replay every root-package declaration through the kernel on top of
+a fresh import of the modules outside the root package, because the build's
+``.olean`` files can hold anything and a root ``run_cmd`` can add a
+declaration with kernel checking off. The replay runs only once every other
+check has passed: replaying a declaration that reaches ``Lean.reduceBool`` or
+``Lean.reduceNat`` runs compiled project code, and the axiom check rejects
+every such declaration first, since both depend on ``Lean.trustCompiler``.
+
+For every computable recursive definition, structural, well-founded, or
+``partial``, Lean adds a partial copy ``NAME._unsafe_rec`` for the compiler to
+run. The audits skip these copies: the kernel refuses a safe declaration that
+refers to one, and the kernel replay skips them too, so it refuses such a
+declaration added with kernel checking off. A ``lean:`` name that is one is
+still refused.
+
+The probe's header imports only the toolchain's Lean. It loads the
+root-package modules as data, with the toolchain's library first on the search
+path and no environment extensions, so no ``initialize`` block runs and no
+project instance, macro, or elaborator applies to the probe's own code. It
+finds each declaration's axioms by walking types and values itself, not from
+the axiom tables the ``.olean`` files store, and counts a name no module
+declares as an axiom, which fails. The walk takes a mutual inductive block as
+one node, so each type and constructor of the block gets the axioms of the
+whole block. The probe imports the toolchain's ``Init`` along with the build,
+so a core name the build declares itself, such as ``propext``, cannot pass the
+axiom allowlist, which compares names: a differing declaration fails to load,
+and an identical copy of a theorem or of a Prop-valued axiom is merged with the
+toolchain's own constant. Lean lets a theorem stand in for another module's
+axiom of the same name and type, which the module system relies on, so a
+theorem restating an axiom such as ``Lean.trustCompiler``, whose type is
+``True``, is refused. A root module whose first component names an entry of
+the toolchain's library, such as ``Lean.Hack``, would be looked up there,
+where it fails to load or a toolchain module of the same name stands in for
+it, so it is refused. Lean loads a module from the first search-path entry
+that holds its first component, and Lake lists dependency libraries before the
+root package's, so a dependency library that also provides a root module's
+first component could stand in for the root package's files; that is refused
+too. ``LEAN_ABORT_ON_PANIC=1`` makes a panic stop the probe instead of letting
+it continue with a default value, and the workflow requires the success line
+as the last line, so a probe that stops early fails even when it exits 0.
+"""
 
 from __future__ import annotations
 

@@ -388,6 +388,7 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     # Only the publisher's controlled formula service refreshes mathematics;
     # navigation clones the complete reading source rather than graph summaries.
     assert "typesetPromise" not in script
+    assert "autoform:typeset" not in script and "FORMULA_CLASS_JSON" not in script
     assert "window.AutoformMath.refresh(refs.readingBody)" in script
     assert "refs.readingBody.replaceChildren(bundle.readingSource)" in script
     assert "navigation.bindReader(refs.readingBody)" in script

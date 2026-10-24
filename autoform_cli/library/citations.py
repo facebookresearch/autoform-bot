@@ -5,6 +5,20 @@ proves part of it. ``autoform check --lean-root`` names each such declaration,
 or its module, that no implementation note, source page or project Lean file
 names, so a skipped library search shows up. The warnings never change the exit
 status.
+
+Identifiers match across their usual forms: versions; ``abs``, ``pdf``,
+``html``, ``e-print`` and ``src`` URLs, with or without a trailing slash;
+old-style identifiers such as ``math.AG/0210149``; arXiv's own DOIs;
+``https://doi.org/`` and ``dx.doi.org`` links, percent-encoded or not, up to a
+query or fragment; and the labels ``arXiv:``, ``arXiv``, ``doi:`` and ``DOI``,
+with the label or the identifier in backticks, emphasis or a table cell. A bare
+number cites nothing. Link text is not read, and a linked page over 4 MiB is
+skipped. A last-component match counts any identifier with that component in a
+project Lean file, comments and strings included, so a generic one such as
+``symm`` can hide a warning. A Lean file that imports a module names it; one
+that imports only an umbrella module above it does not. A library's sources are
+hashed, to verify its index, only when one of its declarations cites a reached
+source.
 """
 
 from __future__ import annotations
