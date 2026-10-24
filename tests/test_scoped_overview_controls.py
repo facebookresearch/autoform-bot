@@ -46,12 +46,13 @@ const effects=[],frames=[];
 // Only DOM/state boundaries are peers; graph projection and callbacks below
 // are the extracted production functions, not copies or rewritten algorithms.
 function peer(tag='div') {
-  const attributes=new Map(),classes=new Set();
-  return {tagName:tag.toUpperCase(),dataset:{},children:[],offsetTop:0,hidden:false,
+  const attributes=new Map(),classes=new Set(),listeners=new Map();
+  return {tagName:tag.toUpperCase(),dataset:{},children:[],offsetTop:0,hidden:false,listeners,
     classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);},
       contains(name){return classes.has(name);}},
     setAttribute(name,value){attributes.set(name,String(value));},
     getAttribute(name){return attributes.get(name)||null;},removeAttribute(name){attributes.delete(name);},
+    addEventListener(type,callback){const callbacks=listeners.get(type)||[];callbacks.push(callback);listeners.set(type,callbacks);},
     appendChild(child){this.children.push(child);return child;},replaceChildren(...children){this.children=children;},
     remove(){this.removed=true;},
     focus(){document.activeElement=this;effects.push({kind:'focus',id:this.dataset.autoformNodeId||'reading'});}};
@@ -60,6 +61,11 @@ const document={activeElement:null,createElement:peer};
 const window={location:{href:'https://example.test/roadmap/chapter/index.html',origin:'https://example.test'}};
 function requestAnimationFrame(callback){frames.push(callback);return frames.length;}
 function flushFrames(){let turns=0;while(frames.length){assert(++turns<32,'Unbounded control frame chain');frames.shift()();}}
+function clickPeer(link,settings={}) {
+  const event=Object.assign({target:link,button:0,defaultPrevented:false,
+    preventDefault(){this.defaultPrevented=true;}},settings);
+  (link.listeners.get('click')||[]).forEach(callback=>callback(event));return event;
+}
 const host=peer(),dom$body=peer(),dom$sheetHandle=peer('button'),dom$breadcrumb=peer('nav');
 const dom$mapContext=peer(),dom$mapKey=peer(),dom$isolated=peer('input'),dom$filterSummary=peer('button');
 const dom$graphMode=peer('button'),dom$listMode=peer('button'),dom$sourcesMode=peer('button'),dom$regionsMode=peer('button');
@@ -90,7 +96,8 @@ var ui$selectedStatuses=new Set(['fully_proved']),ui$filtersTouched=true,ui$show
 var ui$mode='graph',ui$mapAllowed=true,ui$listLimit=100,ui$relationIds=null,ui$transform={x:0,y:0,scale:.9};
 var firstResize=false,trail=[],overlays=new Map();
 const navigation={checkpoint(method){effects.push({kind:'checkpoint',method:method||'replace',group:ui$overviewGroup});},
-  navigateNode(id,options){effects.push({kind:'navigate',id,options});}};
+  navigateNode(id,options){effects.push({kind:'navigate',id,options});},
+  navigate(url,options){effects.push({kind:'navigate-url',url,options});}};
 // Observer/painter/reading boundaries are explicit peers, not native geometry.
 function schedule(){effects.push({kind:'paint-request'});}
 function remember(){effects.push({kind:'remember'});}
@@ -256,4 +263,54 @@ def test_clean_active_replays_do_not_rescan_original_rows_or_replace_flow_cache(
       assert.notStrictEqual(data._scopeOverview._flows,flows);
       assert.deepEqual(data._scopeOverview._flows[0],{statement:2,proof:3});
       assert.equal(data._scopeOverview._flowRange,range);
+    """)
+
+
+def test_authored_scope_entry_requests_map_first_without_changing_result_reading_intent() -> None:
+    _run(r"""
+      const scope={id:'scope:'+chapterId,kind:'scope',title:'Large scope'};
+      activateNode(scope);
+      assert.deepEqual(effects.at(-1),{kind:'navigate',id:chapterId,
+        options:{history:'push',focus:'reading',mapFirst:true}});
+      records.get(chapterId).result=true;activateNode(scope);
+      assert.deepEqual(effects.at(-1),{kind:'navigate',id:chapterId,options:{history:'push',focus:'reading'}});
+      activateNode(nodes[1]);
+      assert.deepEqual(effects.at(-1),{kind:'navigate',id:'n01',options:{history:'push',focus:'reading'}});
+    """)
+
+
+def test_actual_overview_parent_breadcrumb_returns_locally_and_preserves_modified_clicks() -> None:
+    _run(r"""
+      const before=JSON.stringify(contextGraph);activateNode(areaNode('Authored area A'));flushFrames();
+      const item=dom$breadcrumb.children[0].children.find(item=>item.title==='Large scope'),link=item.children[0];
+      assert.equal(link.tagName,'A');assert.equal(link.href,window.location.href);
+      const untouched=effects.length;
+      for(const settings of [{metaKey:true},{ctrlKey:true},{shiftKey:true},{altKey:true},{button:1},{defaultPrevented:true}]) {
+        const event=clickPeer(link,settings);assert.equal(event.defaultPrevented,Boolean(settings.defaultPrevented));
+        assert.equal(ui$overviewGroup,'area:Authored area A');assert.equal(effects.length,untouched);
+      }
+      const event=clickPeer(link);assert.equal(event.defaultPrevented,true);
+      assert.equal(ui$overviewGroup,null);assert.deepEqual(labels(),['Library','Large scope']);
+      assert.equal(context(),'Large scope');assert.equal(dom$regionsMode.getAttribute('aria-pressed'),'true');
+      assert(!effects.some(event=>event.kind==='navigate'||event.kind==='navigate-url'));
+      assert(effects.some(event=>event.kind==='checkpoint'&&event.method==='push'&&event.group==='area:Authored area A'));
+      const returning=effects.slice(untouched).filter(event=>event.kind==='checkpoint');
+      assert.deepEqual(returning.map(event=>[event.method,event.group]),[['replace','area:Authored area A'],['push',null]],
+        'The parent breadcrumb must save its expanded plane before pushing this local overview');
+      assert.equal(window.location.href,'https://example.test/roadmap/chapter/index.html');
+      assert.equal(JSON.stringify(contextGraph),before);
+    """)
+
+
+def test_internal_breadcrumb_soft_navigation_and_off_origin_text_policy() -> None:
+    _run(r"""
+      const link=dom$breadcrumb.children[0].children[0].children[0];
+      assert.equal(link.href,records.get('roadmap').route);
+      const event=clickPeer(link);assert.equal(event.defaultPrevented,true);
+      assert.deepEqual(effects.at(-1),{kind:'navigate-url',url:records.get('roadmap').route,
+        options:{history:'push',focus:true,mapFirst:true}});
+      const external=trailList([{label:'External source',url:'https://outside.test/book'}]);
+      assert.equal(external.children[0].textContent,'External source');assert.equal(external.children[0].children.length,0,
+        'Existing off-origin breadcrumb safety keeps a text entry, not a fabricated native anchor');
+      assert.equal(external.children[0].listeners.size,0);
     """)

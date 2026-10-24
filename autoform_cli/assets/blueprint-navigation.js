@@ -351,6 +351,7 @@
         return {url: target.href, documentURL: page.documentURL, title: selected.node && selected.node.result ? selected.node.title : page.title || graph && graph.title || "Mathematics",
           scope: page.scope || selected.node && selected.node.scope || null, readingSource: copyFragment(page.readingSource, page.documentURL),
           graph: graph, dataURL: dataURL, nodeId: selected.nodeId, anchor: selected.anchor, focus: selected.focus,
+          mapFirst: navigation.mapFirst === true,
           parameters: choice.parameters, snapshot: navigation.snapshot || null, reason: navigation.reason || "navigate",
           isCurrent: function () { return alive(request); }};
       }
@@ -607,7 +608,7 @@
         // Ordinary in-article section anchors stay native; article permalinks change the graph as well.
         if (current && resource(href) === resource(current.url) && new URL(href).hash && !routes.has(href) &&
             !legacyHash(new URL(href).hash.slice(1))) return;
-        event.preventDefault(); event.stopPropagation(); navigate(href);
+        event.preventDefault(); event.stopPropagation(); navigate(href, {focus: true});
       }
       root.addEventListener("click", click, true); bound.set(root, click);
     }

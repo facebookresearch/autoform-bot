@@ -54,6 +54,7 @@ _TEX = (r"0=0", r"n\in\mathbb{N}", r"\frac{0}{2}=0", r"\sum_{k=1}^{n}0=0")
 _SCOPE_TEX = (r"0=0", r"\frac{0}{2}=0", r"\sum_{j=1}^{n}0=0")
 _HEADING = "retained-identity-notes"
 _END = "The complete statement ends with this retained mathematical explanation."
+_SCOPE_END = "This final workshop exposition is retained before the complete identity notes."
 _SOURCE_END = "The elementary identity source remains available in full."
 _VIEWPORTS = [(1600, 900), (1000, 900), (390, 844)]
 
@@ -73,7 +74,9 @@ def _model() -> list[tuple[str, str, str]]:
     order = [*range(25), 72]
     pairs = [(order[i], order[i - lag]) for lag in range(1, len(order)) for i in range(lag, len(order))]
     edges = [(_item(a), _item(b), "statement") for a, b in pairs[:60]]
-    edges += [(_item(a), _item(b), "proof") for a, b in pairs[:56]]
+    # A proof-only prerequisite is not also a statement prerequisite. The
+    # publisher correctly retains the statement kind for an overlapping pair.
+    edges += [(_item(a), _item(b), "proof") for a, b in pairs[60:116]]
     return edges + [
         (_item(0), "inputs/base-statement", "statement"),
         (_item(1), "inputs/base-proof", "proof"),
@@ -146,6 +149,7 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
             "Its explanatory prose remains available even when the default graph uses derived area groups."
             for n in range(8)
         )
+        + "\n\n" + _SCOPE_END
         + "\n\n## Retained identity notes\n\nScope identity statement. The elementary equations "
         + ", ".join(f"${tex}$" for tex in _SCOPE_TEX)
         + " are retained with their complete mathematical explanation.\n\n"
@@ -198,7 +202,10 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
         + "\n".join(f"theorem zero_{n:02d} : (0 : Nat) = 0 := by sorry" for n in range(81))
         + "\nend ScopedFixture\n"
     ))
-    render_site(blueprint, project / "site-src", lean_root=project, require_declarations=True)
+    rendered = render_site(blueprint, project / "site-src", lean_root=project)
+    # The same exact-name gate as the CLI's --require-declarations, not a
+    # nonexistent Python API flag or a claim of Lean-kernel verification.
+    assert not rendered.unresolved and not rendered.unchecked
     config = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
     config["extra_javascript"] = [entry for entry in config["extra_javascript"]
                                   if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE]
@@ -220,6 +227,54 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
         owners[node["id"]] = key
     assert set(groups) == {*("area:" + area for area in _AREAS), "unassigned"}
     assert all(len(members) == 9 for members in groups.values())
+    # Identify represented records through the actual published permalinks,
+    # rather than manufacture a scope:/boundary: namespace from fixture paths.
+    routes = {}
+    for identifier, record in records.items():
+        route = urljoin(index_path.as_uri(), record["route"])
+        assert route not in routes, (identifier, routes.get(route))
+        routes[route] = identifier
+    represented = {}
+    for node in graph["nodes"]:
+        route = urljoin(graph_path.as_uri(), node["url"])
+        assert route in routes, (node["id"], node["url"])
+        original = routes[route]
+        assert original not in represented, original
+        represented[original] = node["id"]
+
+    def endpoint(identifier: str) -> str:
+        seen = set()
+        while identifier not in represented:
+            assert identifier not in seen and identifier in records, identifier
+            seen.add(identifier)
+            identifier = records[identifier]["parent"]
+        return represented[identifier]
+
+    # The authoring tuples are dependent -> prerequisite; published flow is
+    # prerequisite -> dependent, so upstream/downstream is checked explicitly.
+    expected_edges = Counter((endpoint(target), endpoint(source), kind) for source, target, kind in edges)
+    actual_edges = Counter()
+    neighbors = {node["id"]: set() for node in local}
+    for edge in graph["edges"]:
+        for kind in ("statement", "proof"):
+            assert type(edge[kind]) is int and edge[kind] >= 0
+            actual_edges[(edge["source"], edge["target"], kind)] += edge[kind]
+        if edge["source"] in neighbors and edge["target"] in neighbors:
+            neighbors[edge["source"]].add(edge["target"])
+            neighbors[edge["target"]].add(edge["source"])
+    assert actual_edges == expected_edges
+    unseen, components = set(neighbors), []
+    while unseen:
+        pending, size = [min(unseen)], 0
+        while pending:
+            node = pending.pop()
+            if node in unseen:
+                unseen.remove(node)
+                size += 1
+                pending.extend(neighbors[node] & unseen)
+        components.append(size)
+    assert sorted(components) == [1] * 55 + [26]
+    assert len(components) == 56
     totals = {part: {"statement": 0, "proof": 0} for part in ("internal", "cross_group", "outside")}
     for edge in graph["edges"]:
         part = "outside" if edge["source"] not in owners or edge["target"] not in owners else (
@@ -262,6 +317,19 @@ def _native_scope_math(page: object) -> object:
         "nodes => nodes.map(node => node.getAttribute('data-autoform-math-source').trim())"
     ) == [r"\(" + tex + r"\)" for tex in _SCOPE_TEX]
     assert len(source.text_content()) > 420
+    playwright.expect(source).to_contain_text(_SCOPE_END)
+    cards = source.locator(".bp-thmwrapper[data-autoform-node-id]")
+    playwright.expect(cards).to_have_count(9)
+    assert set(cards.evaluate_all("nodes => nodes.map(node => node.dataset.autoformNodeId)")) == {
+        _item(number) for number in range(72, 81)
+    }
+    for number in range(72, 81):
+        card = source.locator(f'.bp-thmwrapper[data-autoform-node-id="{_item(number)}"]')
+        playwright.expect(card).to_have_count(1)
+        playwright.expect(card).to_contain_text(_END)
+        playwright.expect(card.locator(".arithmatex")).to_have_count(len(_TEX))
+        playwright.expect(card.locator("mjx-container")).to_have_count(len(_TEX))
+        assert card.locator("mjx-merror, merror").count() == 0
     return source
 
 
@@ -285,11 +353,23 @@ def _focus_group(page: object, key: str) -> object:
     # Do not expose the renderer or invent a view-group id from its serial.
     pending: list[tuple[str, ...]] = [()]
     seen: set[str] = set()
+    page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+    _frames(page)
+    start_id = page.locator(".bp-dag-node").evaluate_all("""nodes => {
+      for(const node of nodes) {
+        const r=node.getBoundingClientRect(),s=node.closest('.bp-dag-stage').getBoundingClientRect();
+        if(r.width>0&&r.height>0&&r.left>=s.left&&r.right<=s.right&&r.top>=s.top&&r.bottom<=s.bottom&&
+           node.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)))return node.dataset.autoformNodeId;
+      } return null;
+    }""")
+    assert start_id is not None, "A fitted large scope must contain a real usable starting card"
     while pending and len(seen) <= 32:
         path = pending.pop(0)
         page.get_by_role("button", name="Fit shown nodes", exact=True).click()
         _frames(page)
-        page.locator('.bp-dag-node[tabindex="0"]').first.focus()
+        start = page.locator(f'.bp-dag-node[data-autoform-node-id="{start_id}"]')
+        playwright.expect(start).to_be_visible()
+        start.focus()
         for direction in path:
             page.keyboard.press(direction)
             _frames(page)
@@ -420,6 +500,21 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     page.get_by_role("button", name=re.compile(r"^(Areas|Regions)$")).click()
     _committed(page)
     _focus_group(page, key)
+    page.go_back()
+    _committed(page)
+    playwright.expect(_group(page, key)).to_have_count(0)
+    playwright.expect(page.locator(".bp-dag-breadcrumb")).to_contain_text(_AREAS[0])
+    focused = page.locator(f'.bp-dag-node[data-autoform-node-id="{consumer.groups[key][0]["id"]}"]')
+    assert _geometry(focused)["camera"] == pytest.approx(expanded_camera, abs=.5)
+    parent = page.locator(".bp-dag-breadcrumb").get_by_role("link", name=_SCOPE_TITLE, exact=True)
+    parent.focus()
+    parent.press("Enter")
+    _committed(page)
+    assert page.url == consumer.site.route(_SCOPE), "The group parent is this local scope, not the whole library"
+    playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(1)
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    _focus_group(page, key)
+    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id*="remote"]')).to_have_count(0)
     page.go_back()
     _committed(page)
     playwright.expect(_group(page, key)).to_have_count(0)

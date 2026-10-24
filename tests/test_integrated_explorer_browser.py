@@ -66,6 +66,14 @@ def _served(directory: Path) -> Iterator[str]:
         server.server_close()
 
 
+# Actual JSON assets shipped by the pinned 3.2.2 package, not arbitrary JSON
+# under the CDN. Saved accessibility-explorer settings load base plus locale.
+_SRE_MATHMAPS = frozenset(
+    "sre/mathmaps/" + locale + ".json"
+    for locale in ("base", "ca", "da", "de", "en", "es", "fr", "hi", "it", "nb", "nemeth", "nn", "sv")
+)
+
+
 class _PinnedRuntime:
     """A small cached local mirror of exactly the generated config's es5 URLs.
 
@@ -83,7 +91,7 @@ class _PinnedRuntime:
         assert url.startswith(MATHJAX_BASE + "/"), url
         relative = unquote(urlsplit(url).path[len(urlsplit(MATHJAX_BASE).path) + 1:])
         assert relative and all(part not in {"", ".", ".."} for part in relative.split("/")), relative
-        assert relative.endswith((".js", ".woff", ".woff2")), relative
+        assert relative.endswith((".js", ".woff", ".woff2")) or relative in _SRE_MATHMAPS, relative
         if relative not in self.files:
             path = self.root / relative if self.root else None
             if path is not None:
@@ -99,7 +107,10 @@ class _PinnedRuntime:
 
     def serve(self, route: object) -> None:
         url = route.request.url
-        content_type = "application/javascript" if urlsplit(url).path.endswith(".js") else "font/woff"
+        suffix = unquote(urlsplit(url).path)
+        content_type = "application/json" if suffix.endswith(".json") else (
+            "application/javascript" if suffix.endswith(".js") else "font/woff"
+        )
         route.fulfill(body=self.payload(url), content_type=content_type)
 
 

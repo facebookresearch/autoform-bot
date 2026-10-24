@@ -61,10 +61,11 @@ def test_generated_site_docs_describe_one_multiscale_explorer(repo_root: Path) -
         for relative in ("autoform_cli/README.md", "skills/human-review/SKILL.md")
     )
 
-    assert "one full-viewport reading/map workspace" in cli
+    assert "one full-page client" in cli
     assert "Authored Mermaid remains supported in the vault and book" in cli
-    assert "Their JSON projections and layout-free `dependencies/index.json` use the same shared client" in cli
-    assert "`autoform-dag-view/v2` and `autoform-dag-search/v1`" in cli
+    assert "The index `dependencies/index.json`" in cli
+    assert "other `dependencies/` payloads are internal to this viewer; their schemas may change" in cli
+    assert "legacy `#node=<id>`, view and filter links remain aliases, not a second viewer" in cli
     assert "Every generated site route uses the same" in review
 
 

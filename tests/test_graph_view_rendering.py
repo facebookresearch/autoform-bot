@@ -642,7 +642,8 @@ def test_a_click_pans_its_node_clear_of_the_details_it_opens() -> None:
     """Every other way of choosing a node placed it beside the drawer; a click left it under the drawer."""
     script = _viewer_source()
 
-    assert 'navigation.navigateNode(recordId(node), {history: "push", focus: "reading"})' in script
+    assert 'settings = {history: "push", focus: "reading"}' in script
+    assert 'navigation.navigateNode(id, settings)' in script
     assert "if (state.selected && mapAllowed) centerIfHidden(state.selected)" in script
     center = script.split("function center(", 1)[1].split("\n    function ", 1)[0]
     assert "free = freeArea()" in center
