@@ -201,7 +201,8 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert records["roadmap"]["route"] == "../roadmap/index.html"
     assert records["roadmap"]["scope"] == "roadmap"
     assert records["top"]["route"] == "../roadmap/index.html#top"
-    assert records["top"]["parent"] == records["top"]["scope"] == "roadmap"
+    assert records["top"]["scope"] == "roadmap" and type(records["top"]["parent"]) is int
+    assert search_index["nodes"][records["top"]["parent"]]["id"] == "roadmap"
     assert _decoded_relations(search_index) == [["base", "top", 1, 0]]
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
     assert chapter.count('class="bp-reading-source"') == chapter.count('class="bp-dag-viewer"') == 1

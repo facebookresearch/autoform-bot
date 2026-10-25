@@ -1927,8 +1927,9 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     page.keyboard.press("Escape")
     # BrowserContext uses the same genuine pinned router for a native
     # Control-click popup; no navigation callback or payload is substituted.
+    # WebKit reports modified native tabs at context level without a Page popup.
     _routes(page.context, site_url, marked_math_runtime, graph_client=True)
-    with page.expect_popup() as opened:
+    with page.context.expect_page() as opened:
         ancestor.click(modifiers=["Control"])
     popup = opened.value
     try:

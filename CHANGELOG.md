@@ -73,7 +73,8 @@ date when the release is tagged.
   including on CRLF checkouts, without requiring Node in consumer projects (#442).
 - **Large wiki catalogues.** Validation yields to visible page frames, with
   a bounded fallback for hidden or stalled tabs, rather than relying only on
-  timer tasks. Every node and relation still validates before publication (#442).
+  timer tasks. Parent references use the same compact node offsets as relations;
+  the client restores their exact IDs before publication. No content is dropped (#442).
 - **Wiki reading links.** The integrated explorer retains #455's title math
   in its outline, breadcrumbs and related-reading controls, using safe MathJax
   service and project macros. Code stays literal, canonical links keep focus

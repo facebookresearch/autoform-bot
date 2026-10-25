@@ -24,7 +24,7 @@ filesystem-derived taxonomy, or workspace/schema exception belongs here.
 bounded same-origin fetches, coalesced index loading, exact-byte digests, request
 epochs/aborts, caches and the versioned history namespace. Index batches yield
 to visible frames with a timer fallback; validation publishes no partial index.
-Wiki offsets are usable only against their exact index SHA; unavailable is not zero.
+Parents/relations decode index offsets to IDs; wiki links bind the exact wire SHA. Unavailable is not zero.
 Fetched HTML must come from a compatible publishable producer. Fragment copying,
 active-tag removal and URL rebasing are defense in depth, not a generic sanitizer.
 

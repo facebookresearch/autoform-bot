@@ -313,12 +313,13 @@ def write_search_index(
 
     Existing search fields retain their meanings. Integrated publication can
     add canonical book routes, authored containment, and compact dependencies.
-    Relations reference positions in the emitted node array; the reader also
-    accepts older string endpoints. This retains every typed edge without
-    repeating long article identifiers in the transport.
+    Parents and relations can reference positions in the emitted node array;
+    the reader also accepts older string endpoints. This retains containment
+    and every typed edge without repeating long article identifiers.
     ``sha256_out`` optionally receives the exact emitted bytes' digest without
     rereading any source or changing the index's wire representation.
     """
+    positions = {node.id: position for position, node in enumerate(view.nodes)}
     nodes: list[dict[str, object]] = []
     for node in view.nodes:
         entry: dict[str, object] = {
@@ -344,6 +345,8 @@ def write_search_index(
             details = metadata.get(node.id, {})
             for key in ("route", "scope", "data_url", "parent", "navigation", "area"):
                 value = details.get(key)
+                if key == "parent" and isinstance(value, str):
+                    value = positions.get(value, value)
                 if value is not None:
                     entry[key] = value
             if type(details.get("result")) is bool:
@@ -351,7 +354,6 @@ def write_search_index(
         nodes.append(entry)
     payload: dict[str, object] = {"nodes": nodes, "schema": SEARCH_SCHEMA}
     if include_relations:
-        positions = {node.id: position for position, node in enumerate(view.nodes)}
         payload["relations"] = [
             [positions[edge.source], positions[edge.target], edge.statement_count, edge.proof_count]
             for edge in view.edges

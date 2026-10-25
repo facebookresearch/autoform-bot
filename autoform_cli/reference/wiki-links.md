@@ -8,7 +8,7 @@ provenance sections, and ancestor/descendant placement links are excluded.
 Unsupported HTML/code/math or publication-as-literal omissions make outgoing
 links unavailable, not zero. Known incoming links remain valid; inline spans stay within paragraphs.
 
-Wire endpoints are offsets in the unchanged search-index node array.
+Wire endpoints use the published node array, like compact parent/dependency references restored to IDs on load.
 `index_sha256` binds them to that exact index's UTF-8 bytes; readers must verify
 the digest before using them. `availability`, `unavailable_sources`, and an
 optional `reason` distinguish a genuinely empty layer from unavailable data.

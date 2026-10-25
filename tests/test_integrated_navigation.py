@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from autoform_cli import dag_viewer
+from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
 
 _NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated navigation tests")
@@ -162,6 +167,167 @@ def _run(body: str) -> None:
     script += "(async()=>{\n" + body + "\n})().then(()=>{testBodyComplete=true;},error=>{testBodyComplete=true;console.error(error);process.exitCode=1;});"
     result = subprocess.run([_NODE, "-e", script], text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.fixture
+def parent_wires(tmp_path: Path):
+    title = r"Groups $\mathbb{Z}/n$ and `$literal$`"
+    summary = "Every integer retains its authored hypotheses.\n\n" + "Complete mathematical prose, not a preview. " * 18
+    definitions = (
+        ("a", "node", "proved", "topic", "topic"),
+        ("b", "node", "conditional", "topic", "outside-unpublished"),
+        ("roadmap", "scope", "planned", "roadmap", None),
+        ("0", "node", "stated", "roadmap", "roadmap"),
+        ("topic", "scope", "proved", "roadmap", "roadmap"),
+        ("self", "scope", "mathlib", "self", "self"),
+        ("orphan", "node", "planned", "roadmap", None),
+        ("zero-offset-child", "node", "defined", "a", "a"),
+        ("literal-zero-child", "node", "planned", "0", "0"),
+        ("scope:authored", "scope", "planned", "topic", "topic"),
+    )
+    nodes = tuple(
+        ViewNode(node_id, title if position == 0 else node_id, kind, (node_id,), ((status, 1),),
+                 status_key=status, summary=summary if position == 0 else None,
+                 lean="Authored.groups Authored.quotient" if position == 0 else None)
+        for position, (node_id, kind, status, _scope, _parent) in enumerate(definitions)
+    )
+    view = GraphView("full", "Authored mathematics", nodes, (ViewEdge("a", "b", 2, 3), ViewEdge("0", "a", 0, 1)))
+    metadata = {
+        node_id: {"route": f"../roadmap/{node_id}.html#canonical-{position}", "scope": scope, "parent": parent,
+                  "data_url": f"scopes/{node_id}.json", "result": kind == "node"}
+        for position, (node_id, kind, _status, scope, parent) in enumerate(definitions)
+    }
+    metadata["topic"].update(area="Authored algebra", navigation="collection")
+    links = {node.id: f"scopes/{node.id}.html#node={node.id}" for node in nodes}
+    legacy_nodes = []
+    for node in nodes:
+        entry = {"id": node.id, "kind": node.kind, "status": node.status_key, "title": node.title, "url": links[node.id]}
+        entry.update({key: value for key, value in metadata[node.id].items() if value is not None})
+        if node.summary:
+            entry.update(summary=node.summary, lean=node.lean)
+        legacy_nodes.append(entry)
+    legacy_nodes[0]["reading_title"] = {
+        "format": "inline-parts-v1", "source": title,
+        "parts": [["text", "Groups "], ["math", r"\(\mathbb{Z}/n\)"], ["text", " and "], ["code", "$literal$"]],
+    }
+    legacy = {"schema": "autoform-dag-search/v1", "nodes": legacy_nodes, "relations": [[0, 1, 2, 3], [3, 0, 0, 1]]}
+    before = copy.deepcopy(metadata)
+    digests: list[str] = []
+    output = tmp_path / "index.json"
+    dag_viewer.write_search_index(output, view, context_links=links, metadata=metadata,
+                                 include_relations=True, sha256_out=digests)
+    raw = output.read_bytes()
+    assert metadata == before
+    return view, legacy, json.loads(raw), raw, digests[0], metadata, links
+
+
+def test_published_parent_offsets_preserve_all_other_index_fields_and_exact_byte_receipt(parent_wires, tmp_path: Path) -> None:
+    view, legacy, compact, raw, digest, metadata, links = parent_wires
+    expected = copy.deepcopy(legacy)
+    for position, parent in ((0, 4), (3, 2), (4, 2), (5, 5), (7, 0), (8, 3), (9, 4)):
+        expected["nodes"][position]["parent"] = parent
+    assert compact == expected
+    assert "parent" not in compact["nodes"][2] and "parent" not in compact["nodes"][6]
+    assert compact["nodes"][1]["parent"] == "outside-unpublished"
+    assert compact["nodes"][0]["summary"] == view.nodes[0].summary
+    assert len(compact["nodes"][0]["summary"]) > 512
+    assert digest == hashlib.sha256(raw).hexdigest()
+    assert raw.endswith(b"\n")
+    duplicate = tmp_path / "without-receipt.json"
+    dag_viewer.write_search_index(duplicate, view, context_links=links, metadata=metadata, include_relations=True)
+    assert duplicate.read_bytes() == raw
+
+
+def test_coalesced_parent_offset_index_matches_legacy_and_wiki_binds_received_not_restored_bytes(parent_wires) -> None:
+    _view, legacy, _compact, raw, digest, _metadata, _links = parent_wires
+    legacy_text = json.dumps(legacy, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    _run("const compactText=" + json.dumps(raw.decode()) + ";\nconst legacyText=" + json.dumps(legacy_text)
+         + ";\nconst receivedDigest=" + json.dumps(digest) + ";\n" + r"""
+      const {webcrypto}=require('node:crypto'),key=absolute('dependencies/index.json');
+      const bytes=new TextEncoder().encode(compactText),before=bytes.slice(),published=[];
+      let release,requested;const arrived=new Promise(resolve=>requested=resolve),gate=new Promise(resolve=>release=resolve);
+      const app=setup({onIndex(value){published.push(value);},fetch(url){
+        if(url!==key)return;
+        requested();return gate.then(()=>({ok:true,status:200,url,headers:{get(){return null;}},
+          arrayBuffer:async()=>bytes.slice().buffer,text:async()=>{throw new Error('Do not reserialize received index bytes');}}));
+      }});app.win.crypto=webcrypto;
+      const first=app.nav.loadIndex(),second=app.nav.loadIndex();assert.strictEqual(first,second);
+      await arrived;assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+      release();const normalized=await first;assert.strictEqual(await second,normalized);
+      assert.equal(published.length,1);assert.strictEqual(published[0],normalized);assert.strictEqual(app.nav.getIndex(),normalized);
+      assert.strictEqual(await app.nav.loadIndex(),normalized);
+      assert.equal(app.fetches.filter(url=>url===key).length,1);
+
+      const full=setup();full.contents.set(key,JSON.parse(legacyText));const fullIndex=await full.nav.loadIndex();
+      assert.deepEqual(normalized,fullIndex,'Only transport parents differ; the complete published index must remain equivalent');
+      assert.deepEqual(normalized.nodes.map(node=>node.id),['a','b','roadmap','0','topic','self','orphan',
+        'zero-offset-child','literal-zero-child','scope:authored']);
+      assert.deepEqual(normalized.nodes.map(node=>node._index),[0,1,2,3,4,5,6,7,8,9]);
+      assert.equal(normalized.nodes[0].route,absolute('roadmap/a.html#canonical-0'));
+      assert.equal(normalized.nodes[0].data_url,absolute('dependencies/scopes/a.json'));
+      assert.deepEqual(normalized.relations,[['a','b',2,3],['0','a',0,1]]);
+      assert.equal(normalized.nodes[0].parent,'topic');assert.equal(normalized.nodes[7].parent,'a');
+      assert.equal(normalized.nodes[8].parent,'0');assert.equal(normalized.nodes[5].parent,'self');
+      assert(!Object.hasOwn(normalized.nodes[6],'parent'),'An uncontained leaf may have a fallback roadmap scope, not a parent');
+
+      async function sha(value){return Buffer.from(await webcrypto.subtle.digest('SHA-256',value)).toString('hex');}
+      assert.equal(await sha(bytes),receivedDigest);const legacyDigest=await sha(new TextEncoder().encode(legacyText));
+      assert.notEqual(legacyDigest,receivedDigest,'Lossless normalization does not make distinct transport bytes interchangeable');
+      const wikiURL=absolute('dependencies/wiki-links.json'),layer={schema:'autoform-wiki-links/v1',
+        index_sha256:legacyDigest,availability:'partial',references:[[0,1],[8,9]],unavailable_sources:[6]};
+      app.contents.set(wikiURL,layer);const mathBefore=JSON.stringify(normalized);
+      const stale=await app.nav.loadWikiLinks();assert.equal(stale.availability,'unavailable');assert.equal(stale.reason,'stale_index');
+      layer.index_sha256=receivedDigest;const wiki=await app.nav.loadWikiLinks();
+      assert.equal(wiki.availability,'partial');assert.equal(wiki.index_sha256,receivedDigest);
+      assert.deepEqual(wiki.references,[['a','b'],['literal-zero-child','scope:authored']]);
+      assert.deepEqual(wiki.unavailable_sources,['orphan']);assert.equal(JSON.stringify(normalized),mathBefore);
+      assert.deepEqual(bytes,before);assert.equal(app.errors.length,0);assert.equal(full.errors.length,0);
+      assert.equal(published.length,1);assert.equal(app.fetches.filter(url=>url===key).length,1);
+      app.nav.dispose();full.nav.dispose();
+    """)
+
+
+def test_parent_offsets_do_not_reinterpret_literal_ids_null_or_missing_legacy_containment() -> None:
+    _run(r"""
+      const payload=index();payload.nodes.push(
+        {id:'0',title:'Literal zero',scope:'roadmap',parent:null},
+        {id:'ordinal-zero',title:'Ordinal zero',parent:0},
+        {id:'literal-zero',title:'Literal zero parent',parent:'0'},
+        {id:'forward',title:'Forward parent',parent:7},
+        {id:'future',title:'Future parent',scope:'future',parent:'future'},
+        {id:'uncontained',title:'Uncontained article',scope:'roadmap'},
+        {id:'unknown-parent',title:'Unknown parent',scope:'roadmap',parent:'unpublished'},
+        {id:'boolean-parent',title:'Legacy nonnumeric parent',parent:false});
+      const before=JSON.stringify(payload),published=[],app=setup({onIndex(value){published.push(value);}});
+      app.contents.set(absolute('dependencies/index.json'),payload);const value=await app.nav.loadIndex();
+      const byId=new Map(value.nodes.map(node=>[node.id,node]));
+      assert.strictEqual(byId.get('0').parent,null);assert.equal(byId.get('ordinal-zero').parent,'roadmap');
+      assert.equal(byId.get('literal-zero').parent,'0');assert.equal(byId.get('forward').parent,'future');
+      assert.equal(byId.get('future').parent,'future');assert.equal(byId.get('unknown-parent').parent,'unpublished');
+      assert.strictEqual(byId.get('boolean-parent').parent,false);
+      assert(!Object.hasOwn(byId.get('uncontained'),'parent'));assert(!Object.hasOwn(byId.get('a'),'parent'));
+      assert(!Object.hasOwn(byId.get('roadmap'),'parent'));assert.equal(JSON.stringify(payload),before);
+      assert.equal(published.length,1);assert.strictEqual(published[0],value);assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+@pytest.mark.parametrize("bad_parent", (-1, 0.5, 516, 9007199254740992))
+def test_invalid_late_parent_offset_never_publishes_partial_index_and_coalesced_retry_recovers(bad_parent: int | float) -> None:
+    _run("const badParent=" + json.dumps(bad_parent) + ";\n" + r"""
+      const payload=index();for(let n=0;n<513;n++)payload.nodes.push({id:'parent-'+n,title:'Parent '+n,parent:0});
+      payload.nodes.at(-1).parent=badParent;const before=JSON.stringify(payload),published=[];
+      const app=setup({onIndex(value){published.push(value);}}),key=absolute('dependencies/index.json');
+      app.contents.set(key,payload);const first=app.nav.loadIndex(),second=app.nav.loadIndex();assert.strictEqual(first,second);
+      await assert.rejects(first,error=>error.message==='Invalid search parent endpoint');
+      assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+      assert.equal(app.errors.length,1);assert.equal(app.errors[0].url,key);assert.equal(JSON.stringify(payload),before);
+      assert.equal(app.fetches.filter(url=>url===key).length,1);assert.equal(app.win.location.href,rootSpec.route);
+      const corrected=structuredClone(payload);corrected.nodes.at(-1).parent=0;app.contents.set(key,corrected);
+      const retry=app.nav.loadIndex();assert.strictEqual(app.nav.loadIndex(),retry);const recovered=await retry;
+      assert.equal(recovered.nodes.length,516);assert.equal(recovered.nodes.at(-1).parent,'roadmap');
+      assert.equal(published.length,1);assert.strictEqual(published[0],recovered);assert.strictEqual(app.nav.getIndex(),recovered);
+      assert.deepEqual(recovered.relations,[['a','b',1,0]]);assert.equal(app.fetches.filter(url=>url===key).length,2);app.nav.dispose();
+    """)
 
 
 def test_visible_index_batches_await_real_window_frame_boundaries_before_publication() -> None:

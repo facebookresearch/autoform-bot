@@ -236,6 +236,13 @@
           throw new Error("Invalid search node");
         var copy = Object.assign({}, node, {_index: position, url: link(node.url, base, true), route: link(node.route, base),
           data_url: link(node.data_url, base)});
+        // Parent offsets use the same node order as compact relation endpoints.
+        // Decode before publication; absent and legacy string parents stay intact.
+        if (typeof node.parent === "number") {
+          var parent = Number.isSafeInteger(node.parent) && node.parent >= 0 && payload.nodes[node.parent];
+          if (!parent || typeof parent.id !== "string") throw new Error("Invalid search parent endpoint");
+          copy.parent = parent.id;
+        }
         ids.set(copy.id, copy);
         if (copy.route) { byRoute.set(copy.route, copy); knownDocuments.add(resource(copy.route)); }
         nodes.push(copy);
