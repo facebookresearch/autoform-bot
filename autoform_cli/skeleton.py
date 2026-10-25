@@ -55,10 +55,10 @@ Review evidence needs a report that selects every article and whose targets are
 the blueprint's ``lean:`` names. It quotes each trusted definition's source and
 records theorem dependencies by elaborated signature.
 
-Resources. ``lean_probe`` runs the probes, and its docstring states their CPU,
-time, output, and process bounds. The parsed records, at most 512 Mi
-characters of semantic material per probed module, stay in memory until the
-report is built.
+Resources. ``lean_probe`` runs the probes. Its docstring states their CPU,
+time, output, and process bounds and how a failure reason reads. The parsed
+records, at most 512 Mi characters of semantic material per probed module,
+stay in memory until the report is built.
 
 Hashes. The drift hash takes macro expansion, synthesized instance bodies,
 types, and definition bodies, but not local source spelling or comments; proof
@@ -147,6 +147,7 @@ from dataclasses import field as dataclass_field
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
+from . import lean_probe
 from ._fs import resolved_path
 from ._tree_snapshot import _normalized_name
 from .graph import Graph, GraphValidationError, Node, load_graph
@@ -164,7 +165,6 @@ from .lean import (
 from .lean_probe import (
     DEFAULT_PROBE_TIMEOUT,
     PROBE_MARKER,
-    SNAPSHOT_FILE_LIMIT,
     LeanLibrary,
     SkeletonError,
     build_probe_helper,
@@ -791,7 +791,7 @@ def evidence_hash_of(packet: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# The probe
+# Probe records
 # --------------------------------------------------------------------------- #
 
 _FOUND_RECORD_FIELDS = frozenset(
@@ -1712,8 +1712,8 @@ def source_passage(
         # letter case, is a note, whose fragment names a heading.
         if candidate.suffix.casefold() == ".md":
             continue
-        if metadata.st_size > SNAPSHOT_FILE_LIMIT:
-            return broken(target, f"names a file over the {SNAPSHOT_FILE_LIMIT}-byte limit")
+        if metadata.st_size > lean_probe.SNAPSHOT_FILE_LIMIT:
+            return broken(target, f"names a file over the {lean_probe.SNAPSHOT_FILE_LIMIT}-byte limit")
         try:
             # Opening it tests readability; `os.access` ignores Windows ACLs.
             os.close(os.open(candidate, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)))

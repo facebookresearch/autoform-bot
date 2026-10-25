@@ -1,27 +1,30 @@
 """Run Lean probes in a built Lake project.
 
-Skeleton extraction runs Lean through this module: it reads each ``lean_lib``
-target's layout from the Lake configuration, renders the probe and builds its
-helper module, runs commands with bounded time, output, and descendant
-lifetime, runs a probe with ``lake env lean`` after Lake's freshness check, and
-runs one probe per root module in a bounded pool. ``impact`` and
-``library.generate`` run their own probes through ``run_probe``. Nothing here
-parses the blueprint; ``skeleton`` reads its cited sources through
-``read_snapshot_file``.
+No other ``autoform_cli`` module starts Lake or Lean. This one imports nothing
+from ``autoform_cli``, so any module can import it without a cycle.
+``lean_libraries`` reads each ``lean_lib`` target's layout from the Lake
+configuration, through ``read_snapshot_file``. ``run_probe`` runs one probe
+with ``lake env lean`` after Lake's freshness check; ``impact`` and
+``library.generate`` call it directly. For ``skeleton``, this module renders
+one probe per root module, checks freshness once, builds the probe's helper
+module, and runs the probes in a bounded pool.
 
 Resources. Probes run one per CPU available to the process, at most eight; on
 Python 3.13 and later ``PYTHON_CPU_COUNT`` sets that count. Each probe's
 budget is its own rather than a share of one deadline, so its result does not
 depend on which probes ran before it, and an extraction can run for one probe
-budget per round of parallel probes. The timeout and output cap bound the
-direct batch command; on POSIX, Autoform also terminates the process group of
-every probe on every failure and on interruption.
+budget per round of parallel probes. Every command has a timeout and an output
+cap. On a failure or an interruption, Autoform terminates the command, its
+process group on POSIX, and every descendant it found. A command that exits
+while a descendant it can find still runs fails.
 
 Failure reasons. When the Lake freshness check fails other than as stale, the
 error keeps the first 20 lines of Lake's output and counts the rest. A reason
 quotes at most 2,000 characters of Lean's output, shows the probe's temporary
 directory as ``<scratch>`` and project paths relative to the project, and so
-reads the same on every run.
+reads the same on every run. The impact probe's refusal of a root-package
+module the source inventory lacks is the exception: it is quoted alone, as
+Lean printed it.
 """
 
 from __future__ import annotations
@@ -33,8 +36,8 @@ import os
 import re
 import secrets
 import shlex
-import signal
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
@@ -113,6 +116,11 @@ class _ProbeEnvironmentError(SkeletonError):
     """Every probe would fail alike, so the pool stops instead of isolating it."""
 
 
+# --------------------------------------------------------------------------- #
+# Snapshot reads
+# --------------------------------------------------------------------------- #
+
+
 def _read_snapshot_pass(
     path: Path, *, keep_content: bool
 ) -> tuple[bytes, tuple[int, str]] | None:
@@ -174,6 +182,11 @@ def read_snapshot_file(path: Path) -> tuple[bytes, tuple[int, str]] | None:
     if captured_fingerprint != verified_fingerprint:
         raise SkeletonError([f"skeleton input changed while it was read: {path}"])
     return captured
+
+
+# --------------------------------------------------------------------------- #
+# Bounded commands
+# --------------------------------------------------------------------------- #
 
 
 def _remember_descendants(

@@ -36,8 +36,7 @@ from autoform_cli.impact import (
     revision_impact,
 )
 from autoform_cli.lean import snapshot_project_sources
-from autoform_cli.lean_probe import LeanLibrary, lean_libraries
-from autoform_cli.skeleton import SkeletonError
+from autoform_cli.lean_probe import LeanLibrary, SkeletonError, lean_libraries
 from autoform_cli.work import work_context
 from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
 

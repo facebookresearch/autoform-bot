@@ -2395,7 +2395,6 @@ def test_extraction_reports_a_locator_over_the_size_limit_without_stopping(tmp_p
     article = blueprint / "roadmap" / "basics" / "determined.md"
     _replace_source(article, "## Depends on", "## Sources\n\n- [book](../../sources/book.tex#L1-L1)\n\n## Depends on")
     # Above the project's own small input files, below the cited source.
-    monkeypatch.setattr("autoform_cli.skeleton.SNAPSHOT_FILE_LIMIT", 4096)
     monkeypatch.setattr("autoform_cli.lean_probe.SNAPSHOT_FILE_LIMIT", 4096)
 
     report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())

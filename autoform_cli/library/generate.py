@@ -132,7 +132,7 @@ def render_library_probe(modules: Sequence[str]) -> str:
     names = sorted(set(modules))
     if not names:
         raise GenerateError("the indexed libraries hold no Lean module")
-    template = (Path(skeleton.__file__).parent / "probes" / "library_probe.lean").read_text(encoding="utf-8")
+    template = (Path(__file__).parent.parent / "probes" / "library_probe.lean").read_text(encoding="utf-8")
     return template.format(
         imports="\n".join(f"import {module}" for module in names),
         marker=LIBRARY_MARKER,
