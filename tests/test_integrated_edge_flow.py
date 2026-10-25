@@ -29,7 +29,7 @@ function original(name) {
   assert.fail('Production function did not parse: '+name);
 }
 const context={assert,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};vm.createContext(context);
-const helpers=['drawRoute','drawPill','relationCounts','edgeStyle','pill'].map(original).join('\n');
+const helpers=['drawRoute','drawPill','relationCounts','edgeStyle','edgeRole','pill'].map(original).join('\n');
 """
 
 _CANVAS = r"""
@@ -190,6 +190,28 @@ def test_only_a_lit_link_names_its_count_in_words_in_its_two_colours(dark: bool)
       assert(banded.y<=303&&banded.y>=12,'Pill under the reader: '+banded.y);
     """, {"dark": dark, "lit": True})
 
+
+
+def test_pills_keep_clear_of_each_other_and_a_cycle_still_colours_by_direction() -> None:
+    _run(r"""
+      // On ATLAS's roadmap three count pills stacked on one trunk and hid the middle one.
+      const pills=[],ctx=new Canvas(),trunk=[{x:100,y:300},{x:700,y:300}];
+      const labels=[12,30,7].map(count=>drawRoute(ctx,route(trunk,count),1,0));
+      labels.sort((a,b)=>b.count-a.count).forEach(label=>drawPill(ctx,label,[],pills));
+      assert.deepEqual(ctx.texts.map(text=>text.text),['30 links','12 links','7 links']);
+      for(let i=0;i<pills.length;i++) for(let j=i+1;j<pills.length;j++) {
+        const a=pills[i],b=pills[j];
+        assert(a.x+a.w<=b.x||b.x+b.w<=a.x||a.y+a.h<=b.y||b.y+b.h<=a.y,'Pills overlap: '+JSON.stringify([a,b]));
+      }
+      // A route too short to slide along leaves its pill out rather than printing it over another.
+      const short=new Canvas(),taken=[{x:105,y:290,w:60,h:20}],label=drawRoute(short,route([{x:100,y:300},{x:170,y:300}]),1,0);
+      drawPill(short,label,[],taken);assert.equal(short.texts.length,0);
+      // Areas that depend on each other lit every link blue; a previewed card's links follow their own direction.
+      const spotlight={subject:'A',before:new Set(['A','B']),after:new Set(['A','B']),nodes:new Set(['A','B'])};
+      assert.equal(edgeRole(spotlight,'B','A'),1);assert.equal(edgeRole(spotlight,'A','B'),2);
+      // Without a previewed card the path rule stands.
+      assert.equal(edgeRole({before:new Set(['A','B']),after:new Set(['A']),nodes:new Set(['A','B'])},'A','B'),1);
+    """, {"dark": False, "lit": True})
 
 @pytest.mark.parametrize("scale", [.6, 1, 2])
 def test_proof_dashes_keep_butt_caps_so_lit_gaps_stay_open(scale: float) -> None:

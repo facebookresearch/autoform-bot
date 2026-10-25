@@ -1978,20 +1978,24 @@
           var label = drawRoute(ctx, painted, edgeRole(spotlight, route.source, route.target), edge.statement && edge.proof ? route.kind === "proof" ? 1 : -1 : 0, bottom);
           if (label) labels.push(label);
       });
-      var cards = visible.map(screen);
-      labels.forEach(function (label) { drawPill(ctx, label, cards); });
+      var cards = visible.map(screen), pills = [];
+      // Larger counts choose their spots first.
+      labels.sort(function (a, b) { return b.count - a.count; }).forEach(function (label) { drawPill(ctx, label, cards, pills); });
       visible.forEach(function (node) { drawPlate(ctx, node, screen(node), !spotlight || spotlight.nodes.has(node.id)); });
       updateOverlays(visible, spotlight);
     }
     function atlasSpotlight(node) {
-      return spotlightOf(new Set([node.id].concat(prerequisites.get(node.id) || [])), new Set([node.id].concat(dependents.get(node.id) || [])));
+      var spot = spotlightOf(new Set([node.id].concat(prerequisites.get(node.id) || [])), new Set([node.id].concat(dependents.get(node.id) || [])));
+      spot.subject = node.id; return spot;
     }
     function spotlightOf(before, after) {
       var nodes = new Set(before); after.forEach(function (id) { nodes.add(id); });
       return {after: after, before: before, nodes: nodes};
     }
     // -1 is a link at rest; under a selection 1 is on its prerequisite chain, 2 among its dependents, and 0 fades.
+    // A link into a previewed card is a prerequisite and one out of it a dependent, even when the neighbour is both, as in a cycle of areas.
     function edgeRole(spotlight, source, target) {
+      if (spotlight && spotlight.subject) { if (target === spotlight.subject && spotlight.before.has(source)) return 1; if (source === spotlight.subject && spotlight.after.has(target)) return 2; }
       return !spotlight ? -1 : spotlight.before.has(source) && spotlight.before.has(target) ? 1 : spotlight.after.has(source) && spotlight.after.has(target) ? 2 : 0;
     }
     // At rest a link is a full grey line; a selection draws its prerequisites in the link blue and its dependents in the text colour.
@@ -2092,7 +2096,10 @@
           });
         }
         ctx.restore();
-        return {count: route.count, role: role, scale: scale, spots: spots.map(function (spot) { return {x: spot.x, y: spot.y + (stack || 0) * 11 * scale}; })};
+        // A pair linked in both kinds starts its two pills 11px apart, and drawPill moves the second clear of the first; each spot keeps its segment's run to slide along.
+        return {count: route.count, role: role, scale: scale, spots: spots.map(function (spot) {
+          var at = {x: spot.x, y: spot.y + (stack || 0) * 11 * scale}; if (spot.dx !== undefined) { at.dx = spot.dx; at.dy = spot.dy; at.length = spot.length; } return at;
+        })};
       }
       if (cue) {
         ctx.lineWidth = Math.min(1.6, route.strength) * scale;
@@ -2102,15 +2109,24 @@
       ctx.restore(); return null;
     }
     // Pills paint after every route, so no later stroke crosses one; each takes its route's first spot clear of the cards.
-    function drawPill(ctx, label, cards) {
+    // A pill takes the first spot clear of the cards and of the pills already painted, sliding along its segment a pill at a time;
+    // with no room left beside the pills it is left out rather than printed over one.
+    function drawPill(ctx, label, cards, pills) {
       var scale = label.scale, h = 20 * scale; ctx.save(); edgeStyle(ctx, label.role);
       ctx.font = "600 " + 13 * scale + "px " + family; var w = ctx.measureText(label.count + " links").width + 12 * scale;
-      var spot = label.spots.find(function (spot) {
-        return cards.every(function (box) {
+      var candidates = label.spots.slice();
+      label.spots.forEach(function (spot) {
+        for (var step = 1; spot.dx !== undefined && step * (w + 6) * 2 <= spot.length; step++) [1, -1].forEach(function (side) {
+          candidates.push({x: spot.x + side * step * (w + 6) * spot.dx, y: spot.y + side * step * (w + 6) * spot.dy});
+        });
+      });
+      var apart = function (boxes) { return function (spot) {
+        return boxes.every(function (box) {
           return spot.x + w / 2 + 4 < box.x || spot.x - w / 2 - 4 > box.x + box.w || spot.y + h / 2 + 4 < box.y || spot.y - h / 2 - 4 > box.y + box.h;
         });
-      }) || label.spots[0];
-      if (spot) pill(ctx, label.count, spot.x, spot.y, scale);
+      }; };
+      var spot = candidates.find(apart(cards.concat(pills || []))) || candidates.find(apart(pills || []));
+      if (spot) { pill(ctx, label.count, spot.x, spot.y, scale); if (pills) pills.push({x: spot.x - w / 2, y: spot.y - h / 2, w: w, h: h}); }
       ctx.restore();
     }
 

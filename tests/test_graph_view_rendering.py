@@ -493,7 +493,8 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert 'var text = count + " links"' in script and '"×" + ' not in script
     assert "if (route.count > 1 && role > 0) {" in script
     # Pills paint after every route is stroked and before the plates, so no later route crosses one.
-    paint = "labels.forEach(function (label) { drawPill(ctx, label, cards); });"
+    # Larger counts choose their spots first, and each pill keeps clear of those already painted.
+    paint = "labels.sort(function (a, b) { return b.count - a.count; }).forEach(function (label) { drawPill(ctx, label, cards, pills); });"
     assert script.index("current.routes.forEach(function (route) {") < script.index(paint) < script.index("visible.forEach(function (node) { drawPlate(")
     assert "ctx.setLineDash([6 * scale, 4 * scale])" in script and "setLineDash([5, 5])" not in script
     # Ranking matches exact names before prefixes, and statement text last.
@@ -1054,8 +1055,8 @@ def test_explorer_labels_use_the_site_family_and_remain_readable_at_initial_scal
     painter = script.split("function drawRoute(", 1)[1].split("function drawPill(", 1)[0]
     assert "fillText" not in painter and "measureText" not in painter and "pill(" not in painter
     # Only a lit link names its count, on a pill in the site family; the .9 initial floor gives 11.7px.
-    assert "spots: spots.map(function (spot) { return {x: spot.x, y: spot.y + (stack || 0) * 11 * scale}; })" in painter
-    assert "if (spot) pill(ctx, label.count, spot.x, spot.y, scale);" in script
+    assert "var at = {x: spot.x, y: spot.y + (stack || 0) * 11 * scale};" in painter
+    assert "if (spot) { pill(ctx, label.count, spot.x, spot.y, scale);" in script
     assert 'ctx.font = "600 " + 13 * scale + "px " + family;' in script
     assert 'readableFloor = .9;' in script
 
