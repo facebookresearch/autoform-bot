@@ -1167,9 +1167,15 @@ def test_the_rail_hero_keeps_two_figures_a_counts_line_and_the_coverage_link(tmp
         "# Zeta\n\nWe prove $\\zeta(7) < 2$ is irrational. Later prose.\n",
         'We prove <span class="arithmatex">\\(\\zeta(7) &lt; 2\\)</span> is irrational.',
     ),
+    ("# T\n\nWe prove Theorem A. Then we stop.\n", "We prove Theorem A."),
+    ("# T\n\nWe cite Luis H. Gallardo. Then we stop.\n", "We cite Luis H. Gallardo."),
+    (
+        "# T\n\nWe study *the $p$-adic numbers* in `$x$`. Then we stop.\n",
+        'We study <em>the <span class="arithmatex">\\(p\\)</span>-adic numbers</em> in <code>$x$</code>.',
+    ),
 ])
 def test_the_hero_lead_is_the_whole_first_sentence_as_readable_html(readme: str, lead: str) -> None:
-    """The README's raw Markdown link brackets and formulas never reach the hero, and abbreviations do not end it."""
+    """The README's raw Markdown link brackets and formulas never reach the hero, and abbreviations and initials do not end it."""
     assert render_module._lead_sentence(readme) == lead
 
 

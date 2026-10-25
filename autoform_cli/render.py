@@ -2379,31 +2379,41 @@ def _lead_sentence(body: str) -> str:
             continue
         # A link keeps its words only: its target is relative to blueprint/.
         text = re.sub(r"(?<!!)\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)", r"\1", line.replace("\n", " "))
-        formulas = [match for match in _INLINE_MATH.finditer(text) if match.group(3) or match.group(6)]
+        # Display math reads as inline math in a one-line lead.
+        text = re.sub(r"(?<!\\)\$\$(.+?)\$\$", r"$\1$", text.replace("\0", ""))
+        code = [match.span() for match in INLINE_CODE.finditer(text)]
+        formulas = [
+            match
+            for match in _INLINE_MATH.finditer(text)
+            if (match.group(3) or match.group(6)) and not any(a <= match.start() < b for a, b in code)
+        ]
+        kept = [*code, *(match.span() for match in formulas)]
         sentence = text
-        for stop in re.finditer(r"\.\s+(?=[A-Z])", text):
+        for stop in re.finditer(r"\.\s+(?![a-z])", text):
             before = text[: stop.start()]
-            word = (before.split() or [""])[-1].lstrip("(").lower()
+            words = [word.lstrip("(") for word in before.split()] or [""]
             if (
-                word in _LEAD_ABBREVIATIONS
-                or (len(word) == 1 and word.isalpha())
-                or any(match.start() <= stop.start() < match.end() for match in formulas)
+                words[-1].lower() in _LEAD_ABBREVIATIONS
+                or _is_initial(words[-1], words[-2] if len(words) > 1 else "")
+                or any(a <= stop.start() < b for a, b in kept)
             ):
                 continue
             sentence = before
             break
         sentence = sentence.rstrip(".")
         # The hero is raw HTML, so Markdown never runs over it and a title in
-        # *emphasis* would otherwise show its asterisks. Escaping first means
-        # the substitutions below can only ever produce these tags, and a
+        # *emphasis* would otherwise show its asterisks. Formulas wait behind
+        # placeholders so emphasis around one still pairs up; escaping first
+        # means the substitutions can only ever produce these tags, and a
         # formula becomes the span the page's MathJax already typesets.
-        shown, start = [], 0
+        pieces, spans, start = [], [], 0
         for match in (match for match in formulas if match.end() <= len(sentence)):
-            shown.append(_lead_text(sentence[start : match.start()]))
+            pieces += [sentence[start : match.start()], f"\0{len(spans)}\0"]
             formula = html.escape(match.group(3) or match.group(6))
-            shown.append(f'<span class="{FORMULA_CLASS}">\\({formula}\\)</span>')
+            spans.append(f'<span class="{FORMULA_CLASS}">\\({formula}\\)</span>')
             start = match.end()
-        return "".join(shown) + _lead_text(sentence[start:]) + "."
+        shown = _lead_text("".join(pieces) + sentence[start:])
+        return re.sub("\0(\\d+)\0", lambda match: spans[int(match.group(1))], shown) + "."
     return ""
 
 
@@ -2416,7 +2426,24 @@ def _lead_text(text: str) -> str:
 
 
 #: Words whose period does not end the hero's sentence.
-_LEAD_ABBREVIATIONS = frozenset({"i.e", "e.g", "cf", "ch", "thm"})
+_LEAD_ABBREVIATIONS = frozenset({"i.e", "e.g", "cf", "ch", "thm", "al", "prop", "sec", "eq", "fig"})
+#: Words a single capital names rather than abbreviates, as in "Theorem A.".
+_LEAD_LABELS = frozenset(
+    {"theorem", "lemma", "proposition", "corollary", "conjecture", "definition", "chapter", "part",
+     "section", "appendix", "case", "step", "example", "exercise", "figure", "table", "problem"}
+)
+
+
+def _is_initial(word: str, previous: str) -> bool:
+    """Whether ``word`` is a name's initial, as in "Luis H. Gallardo", so its
+    period does not end the sentence. A capital after a lowercase word or a
+    label ("the group G.", "Theorem A.") ends one."""
+    previous = previous.rstrip(".")
+    return (
+        len(word) == 1
+        and word.isupper()
+        and (not previous or (previous[:1].isupper() and previous.lower() not in _LEAD_LABELS))
+    )
 
 
 def _render_overview_summary(
