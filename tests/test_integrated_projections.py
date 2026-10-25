@@ -37,7 +37,7 @@ assert(constants, 'Production map constants missing');
 const kinds = source.match(/\bvar KINDS =[^;]+;/);
 assert(kinds, 'Production kind words missing');
 const functions = [
-  'element', 'button', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
+  'element', 'readingLabel', 'button', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
   'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'matchesStatus', 'calculateActive',
   'statusLabel', 'finished', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList'
 ].map(original).join('\n');
@@ -293,6 +293,11 @@ def test_an_oversized_module_scope_keeps_its_real_math_articles_navigable_withou
     assert book.count('class="bp-reading-source"') == 1
     assert not (output / "roadmap/catalogs/module-120.md").exists()
 
+    # Isolated projection callbacks receive canonical IDs from navigation,
+    # not the publisher's wire offsets; retain an independent fixture decoder.
+    nodes = [{**node, "parent": index["nodes"][node["parent"]]["id"]}
+             if type(node.get("parent")) is int else node for node in index["nodes"]]
+    assert all(node["parent"] == "catalogs" for node in nodes if node["id"] in module_ids)
     _run(r"""
       configure(fixture.index.nodes, fixture.context, fixture.index.relations);
       currentBundle.scope = 'catalogs'; adoptGraph(contextGraph);
@@ -318,7 +323,7 @@ def test_an_oversized_module_scope_keeps_its_real_math_articles_navigable_withou
       assert(last.route && last.route.includes('/roadmap/catalogs/index.html#'));
       ui$mode = 'sources';
       assert.deepEqual(inventoryNodes().map(node => node.id), ['catalogs/source']);
-    """, fixture={"index": {**index, "relations": _decoded_relations(index)}, "context": context, "count": count})
+    """, fixture={"index": {**index, "nodes": nodes, "relations": _decoded_relations(index)}, "context": context, "count": count})
 
 
 def test_a_deep_trail_keeps_first_parent_and_current_and_names_what_the_ellipsis_hides() -> None:

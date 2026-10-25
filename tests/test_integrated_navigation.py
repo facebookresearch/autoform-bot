@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from autoform_cli import dag_viewer
+from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
 
 _NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated navigation tests")
@@ -157,9 +162,172 @@ function assertPaintIndex(app,result,published) {
 
 def _run(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _HARNESS
-    script += "\n(async()=>{\n" + body + "\n})().catch(error=>{console.error(error);process.exitCode=1;});"
+    script += "\nlet testBodyComplete=false;\n"
+    script += "process.once('beforeExit',()=>{if(!testBodyComplete){console.error('Navigation test body did not complete');process.exitCode=1;}});\n"
+    script += "(async()=>{\n" + body + "\n})().then(()=>{testBodyComplete=true;},error=>{testBodyComplete=true;console.error(error);process.exitCode=1;});"
     result = subprocess.run([_NODE, "-e", script], text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.fixture
+def parent_wires(tmp_path: Path):
+    title = r"Groups $\mathbb{Z}/n$ and `$literal$`"
+    summary = "Every integer retains its authored hypotheses.\n\n" + "Complete mathematical prose, not a preview. " * 18
+    definitions = (
+        ("a", "node", "proved", "topic", "topic"),
+        ("b", "node", "conditional", "topic", "outside-unpublished"),
+        ("roadmap", "scope", "planned", "roadmap", None),
+        ("0", "node", "stated", "roadmap", "roadmap"),
+        ("topic", "scope", "proved", "roadmap", "roadmap"),
+        ("self", "scope", "mathlib", "self", "self"),
+        ("orphan", "node", "planned", "roadmap", None),
+        ("zero-offset-child", "node", "defined", "a", "a"),
+        ("literal-zero-child", "node", "planned", "0", "0"),
+        ("scope:authored", "scope", "planned", "topic", "topic"),
+    )
+    nodes = tuple(
+        ViewNode(node_id, title if position == 0 else node_id, kind, (node_id,), ((status, 1),),
+                 status_key=status, summary=summary if position == 0 else None,
+                 lean="Authored.groups Authored.quotient" if position == 0 else None)
+        for position, (node_id, kind, status, _scope, _parent) in enumerate(definitions)
+    )
+    view = GraphView("full", "Authored mathematics", nodes, (ViewEdge("a", "b", 2, 3), ViewEdge("0", "a", 0, 1)))
+    metadata = {
+        node_id: {"route": f"../roadmap/{node_id}.html#canonical-{position}", "scope": scope, "parent": parent,
+                  "data_url": f"scopes/{node_id}.json", "result": kind == "node"}
+        for position, (node_id, kind, _status, scope, parent) in enumerate(definitions)
+    }
+    metadata["topic"].update(area="Authored algebra", navigation="collection")
+    links = {node.id: f"scopes/{node.id}.html#node={node.id}" for node in nodes}
+    legacy_nodes = []
+    for node in nodes:
+        entry = {"id": node.id, "kind": node.kind, "status": node.status_key, "title": node.title, "url": links[node.id]}
+        entry.update({key: value for key, value in metadata[node.id].items() if value is not None})
+        if node.summary:
+            entry.update(summary=node.summary, lean=node.lean)
+        legacy_nodes.append(entry)
+    legacy_nodes[0]["reading_title"] = {
+        "format": "inline-parts-v1", "source": title,
+        "parts": [["text", "Groups "], ["math", r"\(\mathbb{Z}/n\)"], ["text", " and "], ["code", "$literal$"]],
+    }
+    legacy = {"schema": "autoform-dag-search/v1", "nodes": legacy_nodes, "relations": [[0, 1, 2, 3], [3, 0, 0, 1]]}
+    before = copy.deepcopy(metadata)
+    digests: list[str] = []
+    output = tmp_path / "index.json"
+    dag_viewer.write_search_index(output, view, context_links=links, metadata=metadata,
+                                 include_relations=True, sha256_out=digests)
+    raw = output.read_bytes()
+    assert metadata == before
+    return view, legacy, json.loads(raw), raw, digests[0], metadata, links
+
+
+def test_published_parent_offsets_preserve_all_other_index_fields_and_exact_byte_receipt(parent_wires, tmp_path: Path) -> None:
+    view, legacy, compact, raw, digest, metadata, links = parent_wires
+    expected = copy.deepcopy(legacy)
+    for position, parent in ((0, 4), (3, 2), (4, 2), (5, 5), (7, 0), (8, 3), (9, 4)):
+        expected["nodes"][position]["parent"] = parent
+    assert compact == expected
+    assert "parent" not in compact["nodes"][2] and "parent" not in compact["nodes"][6]
+    assert compact["nodes"][1]["parent"] == "outside-unpublished"
+    assert compact["nodes"][0]["summary"] == view.nodes[0].summary
+    assert len(compact["nodes"][0]["summary"]) > 512
+    assert digest == hashlib.sha256(raw).hexdigest()
+    assert raw.endswith(b"\n")
+    duplicate = tmp_path / "without-receipt.json"
+    dag_viewer.write_search_index(duplicate, view, context_links=links, metadata=metadata, include_relations=True)
+    assert duplicate.read_bytes() == raw
+
+
+def test_coalesced_parent_offset_index_matches_legacy_and_wiki_binds_received_not_restored_bytes(parent_wires) -> None:
+    _view, legacy, _compact, raw, digest, _metadata, _links = parent_wires
+    legacy_text = json.dumps(legacy, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    _run("const compactText=" + json.dumps(raw.decode()) + ";\nconst legacyText=" + json.dumps(legacy_text)
+         + ";\nconst receivedDigest=" + json.dumps(digest) + ";\n" + r"""
+      const {webcrypto}=require('node:crypto'),key=absolute('dependencies/index.json');
+      const bytes=new TextEncoder().encode(compactText),before=bytes.slice(),published=[];
+      let release,requested;const arrived=new Promise(resolve=>requested=resolve),gate=new Promise(resolve=>release=resolve);
+      const app=setup({onIndex(value){published.push(value);},fetch(url){
+        if(url!==key)return;
+        requested();return gate.then(()=>({ok:true,status:200,url,headers:{get(){return null;}},
+          arrayBuffer:async()=>bytes.slice().buffer,text:async()=>{throw new Error('Do not reserialize received index bytes');}}));
+      }});app.win.crypto=webcrypto;
+      const first=app.nav.loadIndex(),second=app.nav.loadIndex();assert.strictEqual(first,second);
+      await arrived;assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+      release();const normalized=await first;assert.strictEqual(await second,normalized);
+      assert.equal(published.length,1);assert.strictEqual(published[0],normalized);assert.strictEqual(app.nav.getIndex(),normalized);
+      assert.strictEqual(await app.nav.loadIndex(),normalized);
+      assert.equal(app.fetches.filter(url=>url===key).length,1);
+
+      const full=setup();full.contents.set(key,JSON.parse(legacyText));const fullIndex=await full.nav.loadIndex();
+      assert.deepEqual(normalized,fullIndex,'Only transport parents differ; the complete published index must remain equivalent');
+      assert.deepEqual(normalized.nodes.map(node=>node.id),['a','b','roadmap','0','topic','self','orphan',
+        'zero-offset-child','literal-zero-child','scope:authored']);
+      assert.deepEqual(normalized.nodes.map(node=>node._index),[0,1,2,3,4,5,6,7,8,9]);
+      assert.equal(normalized.nodes[0].route,absolute('roadmap/a.html#canonical-0'));
+      assert.equal(normalized.nodes[0].data_url,absolute('dependencies/scopes/a.json'));
+      assert.deepEqual(normalized.relations,[['a','b',2,3],['0','a',0,1]]);
+      assert.equal(normalized.nodes[0].parent,'topic');assert.equal(normalized.nodes[7].parent,'a');
+      assert.equal(normalized.nodes[8].parent,'0');assert.equal(normalized.nodes[5].parent,'self');
+      assert(!Object.hasOwn(normalized.nodes[6],'parent'),'An uncontained leaf may have a fallback roadmap scope, not a parent');
+
+      async function sha(value){return Buffer.from(await webcrypto.subtle.digest('SHA-256',value)).toString('hex');}
+      assert.equal(await sha(bytes),receivedDigest);const legacyDigest=await sha(new TextEncoder().encode(legacyText));
+      assert.notEqual(legacyDigest,receivedDigest,'Lossless normalization does not make distinct transport bytes interchangeable');
+      const wikiURL=absolute('dependencies/wiki-links.json'),layer={schema:'autoform-wiki-links/v1',
+        index_sha256:legacyDigest,availability:'partial',references:[[0,1],[8,9]],unavailable_sources:[6]};
+      app.contents.set(wikiURL,layer);const mathBefore=JSON.stringify(normalized);
+      const stale=await app.nav.loadWikiLinks();assert.equal(stale.availability,'unavailable');assert.equal(stale.reason,'stale_index');
+      layer.index_sha256=receivedDigest;const wiki=await app.nav.loadWikiLinks();
+      assert.equal(wiki.availability,'partial');assert.equal(wiki.index_sha256,receivedDigest);
+      assert.deepEqual(wiki.references,[['a','b'],['literal-zero-child','scope:authored']]);
+      assert.deepEqual(wiki.unavailable_sources,['orphan']);assert.equal(JSON.stringify(normalized),mathBefore);
+      assert.deepEqual(bytes,before);assert.equal(app.errors.length,0);assert.equal(full.errors.length,0);
+      assert.equal(published.length,1);assert.equal(app.fetches.filter(url=>url===key).length,1);
+      app.nav.dispose();full.nav.dispose();
+    """)
+
+
+def test_parent_offsets_do_not_reinterpret_literal_ids_null_or_missing_legacy_containment() -> None:
+    _run(r"""
+      const payload=index();payload.nodes.push(
+        {id:'0',title:'Literal zero',scope:'roadmap',parent:null},
+        {id:'ordinal-zero',title:'Ordinal zero',parent:0},
+        {id:'literal-zero',title:'Literal zero parent',parent:'0'},
+        {id:'forward',title:'Forward parent',parent:7},
+        {id:'future',title:'Future parent',scope:'future',parent:'future'},
+        {id:'uncontained',title:'Uncontained article',scope:'roadmap'},
+        {id:'unknown-parent',title:'Unknown parent',scope:'roadmap',parent:'unpublished'},
+        {id:'boolean-parent',title:'Legacy nonnumeric parent',parent:false});
+      const before=JSON.stringify(payload),published=[],app=setup({onIndex(value){published.push(value);}});
+      app.contents.set(absolute('dependencies/index.json'),payload);const value=await app.nav.loadIndex();
+      const byId=new Map(value.nodes.map(node=>[node.id,node]));
+      assert.strictEqual(byId.get('0').parent,null);assert.equal(byId.get('ordinal-zero').parent,'roadmap');
+      assert.equal(byId.get('literal-zero').parent,'0');assert.equal(byId.get('forward').parent,'future');
+      assert.equal(byId.get('future').parent,'future');assert.equal(byId.get('unknown-parent').parent,'unpublished');
+      assert.strictEqual(byId.get('boolean-parent').parent,false);
+      assert(!Object.hasOwn(byId.get('uncontained'),'parent'));assert(!Object.hasOwn(byId.get('a'),'parent'));
+      assert(!Object.hasOwn(byId.get('roadmap'),'parent'));assert.equal(JSON.stringify(payload),before);
+      assert.equal(published.length,1);assert.strictEqual(published[0],value);assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+@pytest.mark.parametrize("bad_parent", (-1, 0.5, 516, 9007199254740992))
+def test_invalid_late_parent_offset_never_publishes_partial_index_and_coalesced_retry_recovers(bad_parent: int | float) -> None:
+    _run("const badParent=" + json.dumps(bad_parent) + ";\n" + r"""
+      const payload=index();for(let n=0;n<513;n++)payload.nodes.push({id:'parent-'+n,title:'Parent '+n,parent:0});
+      payload.nodes.at(-1).parent=badParent;const before=JSON.stringify(payload),published=[];
+      const app=setup({onIndex(value){published.push(value);}}),key=absolute('dependencies/index.json');
+      app.contents.set(key,payload);const first=app.nav.loadIndex(),second=app.nav.loadIndex();assert.strictEqual(first,second);
+      await assert.rejects(first,error=>error.message==='Invalid search parent endpoint');
+      assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+      assert.equal(app.errors.length,1);assert.equal(app.errors[0].url,key);assert.equal(JSON.stringify(payload),before);
+      assert.equal(app.fetches.filter(url=>url===key).length,1);assert.equal(app.win.location.href,rootSpec.route);
+      const corrected=structuredClone(payload);corrected.nodes.at(-1).parent=0;app.contents.set(key,corrected);
+      const retry=app.nav.loadIndex();assert.strictEqual(app.nav.loadIndex(),retry);const recovered=await retry;
+      assert.equal(recovered.nodes.length,516);assert.equal(recovered.nodes.at(-1).parent,'roadmap');
+      assert.equal(published.length,1);assert.strictEqual(published[0],recovered);assert.strictEqual(app.nav.getIndex(),recovered);
+      assert.deepEqual(recovered.relations,[['a','b',1,0]]);assert.equal(app.fetches.filter(url=>url===key).length,2);app.nav.dispose();
+    """)
 
 
 def test_visible_index_batches_await_real_window_frame_boundaries_before_publication() -> None:
@@ -648,6 +816,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
       const updateProjection=()=>{data=contextGraph;},closeSearch=()=>{},setFilters=()=>{},setBrowse=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
       const resize=()=>{},center=()=>{},centerIfHidden=()=>{},showError=()=>{},trailList=()=>[],routeTrail=()=>[],sheetLayout=()=>false;
       const requestAnimationFrame=callback=>setImmediate(callback);
+      const snapshotForRoute=eval('('+callback('snapshotForRoute')+')');
       const applyRoute=eval('('+callback('applyRoute')+')');
       const restoreState=eval('('+callback('restoreState')+')');
       hooks.commit=bundle=>bundle.nodeId==='a' ? applyRoute(bundle) : undefined;
@@ -663,7 +832,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
 
       // A later native entry with no snapshot must also cancel an older pending scroll/focus restore.
       deferMath(); const rereading=applyRoute(mounted);
-      app.win.history.pushState({autoformNavigation:{version:1,snapshot:{focus:'search',readingScroll:71,
+      app.win.history.pushState({autoformNavigation:{version:1,url:aSpec.route+'#older-section',key:'older-native-entry',snapshot:{focus:'search',readingScroll:71,
         outlineScroll:37,inventoryScroll:29}}},'',aSpec.route+'#older-section');
       app.listeners.get('popstate')(); assert(restorePending);
       const restorationGuard=mounted.isCurrent;
@@ -691,7 +860,7 @@ def test_results_restoration_renders_saved_page_before_restoring_scroll_and_focu
       let alive=true,restoration=0,restoring=false,checkpointTimer,readingReady=Promise.resolve();
       let ui$filtersTouched,ui$area,ui$requestedNode,ui$selected,ui$selectedStatuses,ui$showIsolated,
         ui$mode='list',ui$listLimit=100,ui$relationIds,ui$outlineLimit,ui$direction,ui$query,ui$activeDirty,ui$transform;
-      const host={classList:{toggle(){}}},byId=new Map(),overlays=new Map();
+      const host={classList:{toggle(){}}},records=new Map(),byId=new Map(),overlays=new Map();
       let dom$inventoryRows=new Map(),dom$outlineToggle;
       const dom$search={value:''},dom$navigation={scrollTop:0},dom$readingBody={scrollTop:0},dom$inventoryScroll={scrollTop:0};
       const updateProjection=()=>{},renderNavigation=()=>{},setSheet=()=>{},resize=()=>{};
@@ -704,6 +873,7 @@ def test_results_restoration_renders_saved_page_before_restoring_scroll_and_focu
         if(resetScroll) dom$inventoryScroll.scrollTop=0;
       }
       const requestAnimationFrame=callback=>setImmediate(callback);
+      const snapshotForRoute=eval('('+callback('snapshotForRoute')+')');
       const refresh=eval('('+callback('refresh')+')'),restoreState=eval('('+callback('restoreState')+')');
       const saved={mode:'list',listLimit:200,inventoryScroll:1800,outlineScroll:37,readingScroll:71,
         focus:'result-150',camera:{x:12,y:24,scale:1.2},readingOpen:false};
@@ -715,4 +885,372 @@ def test_results_restoration_renders_saved_page_before_restoring_scroll_and_focu
       // A new filter/query still deliberately starts a fresh first page.
       refresh(true); assert.equal(ui$listLimit,100); assert.equal(dom$inventoryScroll.scrollTop,0);
       assert.deepEqual(calls.at(-1),['render',100,true]);
+    """)
+
+
+def test_navigation_runner_rejects_an_unresolved_async_body_instead_of_passing_without_assertions() -> None:
+    with pytest.raises(AssertionError, match="Navigation test body did not complete"):
+        _run("await new Promise(()=>{}); assert.fail('Unreachable assertion');")
+
+
+@pytest.mark.parametrize("kind", ["http_redirect", "declared_alias"])
+def test_indexed_canonical_contradiction_preserves_current_source_and_can_retry_corrected_html(kind: str) -> None:
+    _run("const kind=" + json.dumps(kind) + ";\n" + r"""
+      let contradictory=true;
+      const app=setup({fetch(url,_settings,reply){
+        if(kind==='http_redirect'&&contradictory&&url===bSpec.route)return reply(aSpec,aSpec.route);
+      }});
+      await app.nav.start();await app.nav.navigateNode('a');
+      if(kind==='declared_alias')app.contents.set(bSpec.route,{...bSpec,route:aSpec.route,title:'Contradictory canonical notice'});
+      const state={mode:'graph',requestedNode:'a',readingScroll:91,camera:{x:12,y:24,scale:1.2}};
+      app.state(state);const before={url:app.win.location.href,length:app.win.history.length,commits:app.commits.length,
+        source:app.commits.at(-1).readingSource,index:app.nav.getIndex()};
+      assert.equal(await app.nav.navigateNode('b'),null);
+      assert.equal(app.win.location.href,before.url);assert.equal(app.win.history.length,before.length);
+      assert.equal(app.commits.length,before.commits);assert.strictEqual(app.commits.at(-1).readingSource,before.source);
+      assert.deepEqual(app.getState(),state);assert.strictEqual(app.nav.getIndex(),before.index);
+      assert.equal(app.errors.length,1);assert.equal(app.errors[0].url,bSpec.route+'#theorem-b');
+      assert.equal(app.initial.host.getAttribute('aria-busy'),null);
+      assert.equal(app.fetches.filter(url=>url===bSpec.route).length,1);
+      contradictory=false;app.contents.set(bSpec.route,bSpec);
+      const corrected=await app.nav.navigateNode('b');assert(corrected);
+      assert.equal(corrected.url,bSpec.route+'#theorem-b');assert.equal(corrected.nodeId,'b');
+      assert.equal(corrected.documentURL,bSpec.route);assert.equal(corrected.scope,'b');
+      assert.equal(corrected.readingSource.querySelector('h1').textContent,bSpec.title);
+      assert(corrected.readingSource.textContent.includes('Complete source statement and proof.'));
+      assert.equal(app.fetches.filter(url=>url===bSpec.route).length,2,'Contradictory HTML cannot survive in the cache');
+      assert.equal(app.errors.length,1);assert.equal(app.win.history.length,before.length+1);
+      assert.equal(app.win.history.state.material,'preserved');app.nav.dispose();
+    """)
+
+
+def test_start_ignores_a_versioned_snapshot_carried_from_another_article_url() -> None:
+    _run(r"""
+      const url=bSpec.route+'#theorem-b',app=setup({initial:bSpec,url});
+      const valid={mode:'graph',requestedNode:'b',readingScroll:17};app.state(valid);
+      app.win.history.replaceState({material:'preserved',autoformNavigation:{version:1,url:aSpec.route+'#theorem-a',
+        key:'foreign-a',snapshot:{mode:'graph',requestedNode:'a',readingScroll:91}}},'',url);
+      const opened=await app.nav.start();assert(opened);
+      assert.equal(opened.url,url);assert.equal(opened.nodeId,'b');assert.equal(opened.snapshot,null);
+      assert.equal(opened.readingSource.querySelector('h1').textContent,bSpec.title);
+      assert.deepEqual(app.restored,[]);assert.deepEqual(app.getState(),valid);
+      assert.notEqual(app.win.history.state.autoformNavigation.key,'foreign-a');
+      assert.equal(app.win.history.state.autoformNavigation.url,url);
+      assert.deepEqual(app.win.history.state.autoformNavigation.snapshot,valid);
+      assert.equal(app.win.history.state.material,'preserved');assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+def test_popstate_ignores_foreign_url_snapshot_and_keeps_the_destination_article_identity() -> None:
+    _run(r"""
+      let app;app=setup({commit(bundle){app.state({mode:'graph',requestedNode:bundle.nodeId,readingScroll:0});}});
+      await app.nav.start();await app.nav.navigateNode('a');
+      const url=bSpec.route+'#theorem-b',commits=app.commits.length;
+      app.win.history.pushState({material:'preserved',autoformNavigation:{version:1,url:aSpec.route+'#theorem-a',
+        key:'foreign-a',snapshot:{mode:'graph',requestedNode:'a',readingScroll:91}}},'',url);
+      app.listeners.get('popstate')();
+      await until(()=>app.commits.length===commits+1&&app.initial.host.getAttribute('aria-busy')===null);
+      const opened=app.commits.at(-1);assert.equal(opened.nodeId,'b');assert.equal(opened.url,url);
+      assert.equal(opened.snapshot,null);assert.equal(opened.readingSource.querySelector('h1').textContent,bSpec.title);
+      assert.deepEqual(app.restored,[]);assert.equal(app.getState().requestedNode,'b');
+      assert.notEqual(app.win.history.state.autoformNavigation.key,'foreign-a');
+      assert.equal(app.win.history.state.autoformNavigation.url,url);
+      assert.equal(app.win.history.state.autoformNavigation.snapshot.requestedNode,'b');
+      assert.equal(app.win.history.state.material,'preserved');assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+def test_postcommit_renderer_failure_reports_verified_canonical_url_and_can_retry_without_a_new_entry() -> None:
+    _run(r"""
+      let app,rejectOnce=true;
+      app=setup({commit(bundle){
+        if(bundle.nodeId==='a'&&rejectOnce){rejectOnce=false;throw new Error('Renderer rejected the committed article');}
+        app.state({mode:'graph',requestedNode:bundle.nodeId,readingScroll:0});
+      }});
+      await app.nav.start();const length=app.win.history.length;
+      const alias=absolute('dependencies/scopes/a.html#node=a'),canonical=aSpec.route+'#theorem-a';
+      assert.equal(await app.nav.navigate(alias,{focus:true}),null);
+      assert.equal(app.win.location.href,canonical);assert.equal(app.win.history.length,length+1);
+      assert.equal(app.commits.at(-1).nodeId,'a');assert.equal(app.errors.length,1);
+      assert.equal(app.errors[0].url,canonical);assert.notEqual(app.errors[0].url,alias);
+      const failedHistory=structuredClone(app.win.history.state);
+      assert.equal(failedHistory.autoformNavigation.snapshot,null);
+      app.state({mode:'graph',requestedNode:'roadmap',readingScroll:999});
+      assert.equal(app.nav.checkpoint(),null);assert.equal(app.nav.checkpoint('push'),null);
+      assert.deepEqual(app.win.history.state,failedHistory);assert.equal(app.win.history.length,length+1);
+      const recovered=await app.nav.navigateNode('a');assert(recovered);
+      assert.equal(recovered.url,canonical);assert.equal(recovered.nodeId,'a');
+      assert.equal(recovered.readingSource.querySelector('h1').textContent,aSpec.title);
+      assert.equal(app.getState().requestedNode,'a');assert.equal(app.win.history.length,length+1);
+      assert.equal(app.win.history.state.autoformNavigation.snapshot.requestedNode,'a');
+      assert.equal(app.errors.length,1);assert.equal(app.win.history.state.material,'preserved');app.nav.dispose();
+    """)
+
+
+@pytest.mark.parametrize("phase", ["commit", "restore"])
+def test_failed_committed_view_cannot_cache_previous_article_state_for_back_then_forward(phase: str) -> None:
+    _run("const phase=" + json.dumps(phase) + ";\n" + r"""
+      let app,rejectOnce=true;const restorations=[];
+      app=setup({commit(bundle){
+        if(phase==='commit'&&bundle.nodeId==='b'&&rejectOnce){rejectOnce=false;throw new Error('Renderer rejected B');}
+        app.state({mode:'graph',requestedNode:bundle.nodeId,readingScroll:0});
+      },restore(saved,bundle){
+        restorations.push({nodeId:bundle.nodeId,saved:structuredClone(saved)});
+        if(phase==='restore'&&bundle.nodeId==='b'&&rejectOnce){rejectOnce=false;throw new Error('Restoration rejected B');}
+      }});
+      await app.nav.start();await app.nav.navigateNode('a');
+      const oldA={mode:'graph',requestedNode:'a',readingScroll:91};app.state(oldA);
+      const url=bSpec.route+'#theorem-b';
+      if(phase==='commit')assert.equal(await app.nav.navigateNode('b'),null);
+      else {
+        app.win.history.pushState({material:'preserved',autoformNavigation:{version:1,url,key:'failed-b',snapshot:oldA}},'',url);
+        app.listeners.get('popstate')();await until(()=>app.errors.length===1&&app.initial.host.getAttribute('aria-busy')===null);
+      }
+      assert.equal(app.win.location.href,url);assert.equal(app.errors.length,1);assert.equal(app.errors[0].url,url);
+      assert.equal(app.win.history.state.autoformNavigation.snapshot,null);
+      const failedHistory=structuredClone(app.win.history.state),length=app.win.history.length;
+      app.state(oldA);assert.equal(app.nav.checkpoint(),null);assert.equal(app.nav.checkpoint('push'),null);
+      assert.deepEqual(app.win.history.state,failedHistory);assert.equal(app.win.history.length,length);
+      app.win.history.back();
+      await until(()=>app.commits.at(-1).nodeId==='a'&&app.initial.host.getAttribute('aria-busy')===null);
+      const count=app.commits.length;app.win.history.forward();
+      await until(()=>app.commits.length===count+1&&app.initial.host.getAttribute('aria-busy')===null);
+      const recovered=app.commits.at(-1);assert.equal(recovered.nodeId,'b');assert.equal(recovered.url,url);
+      assert.equal(recovered.readingSource.querySelector('h1').textContent,bSpec.title);
+      assert.equal(recovered.snapshot,null);assert.equal(app.getState().requestedNode,'b');
+      assert.equal(app.win.history.state.autoformNavigation.snapshot.requestedNode,'b');
+      assert.equal(app.errors.length,1);assert.equal(app.win.history.length,length);
+      const restoredB=restorations.filter(entry=>entry.nodeId==='b');
+      assert.equal(restoredB.length,phase==='restore'?1:0,'Recovery must not reuse the failed B snapshot');
+      if(phase==='restore')assert.deepEqual(restoredB[0].saved,oldA);
+      assert.equal(app.win.history.state.material,'preserved');app.nav.dispose();
+    """)
+
+
+def test_failed_current_view_cannot_take_the_native_section_shortcut_with_previous_reading_dom() -> None:
+    _run(r"""
+      let app,rejectOnce=true;app=setup({commit(bundle){
+        if(bundle.nodeId==='b'&&rejectOnce){rejectOnce=false;throw new Error('Renderer rejected B');}
+        app.state({mode:'graph',requestedNode:bundle.nodeId,readingScroll:0});
+      }});
+      await app.nav.start();await app.nav.navigateNode('a');assert.equal(await app.nav.navigateNode('b'),null);
+      const count=app.commits.length,section=bSpec.route+'#appendix';
+      app.win.history.pushState({},'',section);app.listeners.get('popstate')();
+      await until(()=>app.commits.length===count+1&&app.initial.host.getAttribute('aria-busy')===null);
+      assert.equal(app.commits.at(-1).url,section);
+      assert.equal(app.commits.at(-1).readingSource.querySelector('h1').textContent,bSpec.title);
+      assert.equal(app.errors.length,1);assert.equal(app.win.location.href,section);app.nav.dispose();
+    """)
+
+
+def test_valid_pending_renderer_readiness_still_allows_current_view_checkpoints() -> None:
+    _run(r"""
+      let app,release,waiting=false;app=setup({commit(bundle){
+        app.state({mode:'graph',requestedNode:bundle.nodeId,readingScroll:0});
+        if(bundle.nodeId==='b'){waiting=true;return new Promise(resolve=>{release=resolve;});}
+      }});
+      await app.nav.start();await app.nav.navigateNode('a');const length=app.win.history.length;
+      const pending=app.nav.navigateNode('b');await until(()=>waiting);
+      const edited={mode:'graph',requestedNode:'b',readingScroll:71,camera:{x:11,y:23,scale:1.4}};
+      app.state(edited);assert.deepEqual(app.nav.checkpoint(),edited);
+      const firstKey=app.win.history.state.autoformNavigation.key;
+      assert.deepEqual(app.nav.checkpoint('push'),edited);assert.equal(app.win.history.length,length+2);
+      const pushedKey=app.win.history.state.autoformNavigation.key;assert.notEqual(pushedKey,firstKey);
+      assert.equal(app.win.location.href,bSpec.route+'#theorem-b');
+      release();const opened=await pending;assert(opened);assert.equal(opened.nodeId,'b');
+      assert.equal(app.win.history.state.autoformNavigation.key,pushedKey);
+      assert.deepEqual(app.win.history.state.autoformNavigation.snapshot,edited);assert.deepEqual(app.getState(),edited);
+      assert.equal(app.errors.length,0);assert.equal(app.win.history.state.material,'preserved');app.nav.dispose();
+    """)
+
+
+def test_failed_history_clear_distrusts_surviving_browser_snapshot_but_keeps_future_private_checkpoints() -> None:
+    _run(r"""
+      let app,rejectOnce=true,clearFails=true;const restorations=[];
+      app=setup({commit(bundle){app.state({mode:'graph',requestedNode:bundle.nodeId,readingScroll:0});},
+        restore(saved,bundle){
+          restorations.push({nodeId:bundle.nodeId,saved:structuredClone(saved)});
+          if(bundle.nodeId==='b'&&rejectOnce){rejectOnce=false;throw new Error('Restoration rejected B');}
+        }});
+      await app.nav.start();await app.nav.navigateNode('a');
+      const url=bSpec.route+'#theorem-b',oldA={mode:'graph',requestedNode:'a',readingScroll:91};
+      const replace=app.win.history.replaceState;
+      app.win.history.replaceState=(state,title,target)=>{
+        if(clearFails&&target===url&&state.autoformNavigation&&state.autoformNavigation.snapshot===null){
+          clearFails=false;throw new Error('History refused the failed-view snapshot clear');
+        }
+        return replace(state,title,target);
+      };
+      app.win.history.pushState({material:'preserved',autoformNavigation:{version:1,url,key:'failed-b',snapshot:oldA}},'',url);
+      app.listeners.get('popstate')();
+      await until(()=>app.errors.length===1&&app.initial.host.getAttribute('aria-busy')===null);
+      assert.equal(clearFails,false,'The actual failed-view clearing path must encounter the injected exception');
+      assert.deepEqual(app.win.history.state.autoformNavigation.snapshot,oldA,'Browser state really survived the failed write');
+      assert.equal(app.errors[0].url,url);assert.equal(app.win.location.href,url);assert.equal(app.nav.checkpoint(),null);
+      const length=app.win.history.length;
+      app.win.history.back();
+      await until(()=>app.commits.at(-1).nodeId==='a'&&app.initial.host.getAttribute('aria-busy')===null);
+      const count=app.commits.length;app.win.history.forward();
+      await until(()=>app.commits.length===count+1&&app.initial.host.getAttribute('aria-busy')===null);
+      const recovered=app.commits.at(-1);assert.equal(recovered.nodeId,'b');assert.equal(recovered.url,url);
+      assert.equal(recovered.snapshot,null);assert.equal(app.getState().requestedNode,'b');
+      assert.equal(recovered.readingSource.querySelector('h1').textContent,bSpec.title);
+      assert.equal(restorations.filter(entry=>entry.nodeId==='b').length,1,'The rejected B restore must not recur');
+      assert.deepEqual(restorations.find(entry=>entry.nodeId==='b').saved,oldA);
+      const edited={mode:'graph',requestedNode:'b',readingScroll:73,camera:{x:15,y:29,scale:1.3}};
+      app.state(edited);assert.deepEqual(app.nav.checkpoint(),edited);
+      app.win.history.back();
+      await until(()=>app.commits.at(-1).nodeId==='a'&&app.initial.host.getAttribute('aria-busy')===null);
+      const again=app.commits.length;app.win.history.forward();
+      await until(()=>app.commits.length===again+1&&app.initial.host.getAttribute('aria-busy')===null);
+      assert.equal(app.commits.at(-1).nodeId,'b');assert.deepEqual(app.commits.at(-1).snapshot,edited);
+      assert.deepEqual(app.getState(),edited,'Fresh private snapshots still work after browser fallback is disabled');
+      assert.equal(app.errors.length,1);assert.equal(app.win.history.length,length);
+      assert.equal(app.win.history.state.material,'preserved');assert.equal(app.win.location.href,url);app.nav.dispose();
+    """)
+
+
+def test_renderer_failure_after_pending_checkpoint_push_cannot_restore_a_under_either_b_entry() -> None:
+    _run(r"""
+      let app,waiting=false,rejectPending,holdOnce=true;
+      app=setup({commit(bundle){
+        if(bundle.nodeId==='b'&&holdOnce){
+          holdOnce=false;waiting=true;return new Promise((_resolve,reject)=>{rejectPending=reject;});
+        }
+        app.state({mode:'graph',requestedNode:bundle.nodeId,readingScroll:0});
+      }});
+      await app.nav.start();await app.nav.navigateNode('a');
+      const oldA={mode:'graph',requestedNode:'a',readingScroll:91};app.state(oldA);
+      const length=app.win.history.length,pending=app.nav.navigateNode('b');await until(()=>waiting);
+      const url=bSpec.route+'#theorem-b';assert.equal(app.win.location.href,url);
+      const originalKey=app.win.history.state.autoformNavigation.key;
+      assert.deepEqual(app.nav.checkpoint(),oldA);
+      assert.deepEqual(app.nav.checkpoint('push'),oldA);
+      const pushedKey=app.win.history.state.autoformNavigation.key;
+      assert.notEqual(pushedKey,originalKey);assert.equal(app.win.history.length,length+2);
+      rejectPending(new Error('Delayed renderer rejected B'));assert.equal(await pending,null);
+      assert.equal(app.win.location.href,url);assert.equal(app.errors.length,1);assert.equal(app.errors[0].url,url);
+      assert.equal(app.win.history.state.autoformNavigation.key,pushedKey);
+      assert.equal(app.win.history.state.autoformNavigation.snapshot,null);assert.equal(app.nav.checkpoint(),null);
+      const count=app.commits.length;app.win.history.back();
+      await until(()=>app.commits.length===count+1&&app.initial.host.getAttribute('aria-busy')===null);
+      const first=app.commits.at(-1);assert.equal(first.nodeId,'b');assert.equal(first.url,url);
+      assert.equal(first.snapshot,null,'The older pending-checkpoint entry must not supply A state');
+      assert.equal(app.getState().requestedNode,'b');assert.deepEqual(app.restored,[]);
+      assert.equal(app.win.history.state.autoformNavigation.key,originalKey);
+      assert.equal(first.readingSource.querySelector('h1').textContent,bSpec.title);
+      const again=app.commits.length;app.win.history.forward();
+      await until(()=>app.commits.length===again+1&&app.initial.host.getAttribute('aria-busy')===null);
+      const second=app.commits.at(-1);assert.equal(second.nodeId,'b');assert.equal(second.url,url);
+      assert.equal(second.snapshot,null);assert.equal(app.getState().requestedNode,'b');assert.deepEqual(app.restored,[]);
+      assert.equal(app.win.history.state.autoformNavigation.key,pushedKey);
+      assert.equal(second.readingSource.querySelector('h1').textContent,bSpec.title);
+      assert.equal(app.errors.length,1);assert.equal(app.win.history.length,length+2);
+      assert.equal(app.win.history.state.material,'preserved');assert.equal(app.win.location.href,url);app.nav.dispose();
+    """)
+
+
+@pytest.mark.parametrize("phase", ["sync", "async"])
+def test_native_section_restore_failure_quarantines_its_snapshot_and_recovers_on_back_forward(phase: str) -> None:
+    _run("const phase=" + json.dumps(phase) + ";\n" + r"""
+      let app,failOnce=true;const section=aSpec.route+'#appendix',restorations=[];
+      app=setup({commit(bundle){app.state({requestedNode:bundle.nodeId,readingScroll:0});},
+        restore(saved,bundle){
+          restorations.push({url:bundle.url,saved:structuredClone(saved)});
+          if(bundle.url===section&&failOnce){
+            failOnce=false;app.state({requestedNode:'b',readingScroll:999});
+            const error=new Error('Native section restoration rejected');
+            if(phase==='sync')throw error;
+            return Promise.reject(error);
+          }
+        }});
+      await app.nav.start();await app.nav.navigateNode('a');
+      const saved={requestedNode:'a',readingScroll:71},commits=app.commits.length;
+      app.state(saved);app.win.history.pushState({material:'preserved',autoformNavigation:{version:1,
+        url:section,key:'native-section',snapshot:saved}},'',section);
+      assert.doesNotThrow(()=>app.listeners.get('popstate')());
+      await until(()=>app.errors.length===1&&app.initial.host.getAttribute('aria-busy')===null);
+      assert.equal(app.commits.length,commits,'Failure must occur in the actual native-section shortcut');
+      assert.equal(app.errors[0].url,section);assert.equal(app.win.location.href,section);
+      assert.equal(app.win.history.state.autoformNavigation.key,'native-section');
+      assert.equal(app.win.history.state.autoformNavigation.snapshot,null);
+      assert.equal(app.win.history.state.material,'preserved');
+      const failedHistory=structuredClone(app.win.history.state),length=app.win.history.length;
+      assert.equal(app.nav.checkpoint(),null);assert.equal(app.nav.checkpoint('push'),null);
+      assert.deepEqual(app.win.history.state,failedHistory);assert.equal(app.win.history.length,length);
+      app.win.history.back();
+      await until(()=>app.commits.length===commits+1&&app.initial.host.getAttribute('aria-busy')===null);
+      assert.equal(app.commits.at(-1).nodeId,'a');assert.equal(app.getState().requestedNode,'a');
+      const recovered=app.commits.length;app.win.history.forward();
+      await until(()=>app.win.location.href===section&&app.initial.host.getAttribute('aria-busy')===null);
+      await new Promise(resolve=>setImmediate(resolve));
+      assert.equal(app.commits.length,recovered,'Healthy ordinary section navigation must stay native');
+      assert.equal(restorations.filter(entry=>entry.url===section).length,1,'Rejected snapshot must not be restored twice');
+      assert.deepEqual(restorations.find(entry=>entry.url===section).saved,saved);
+      assert.equal(app.getState().requestedNode,'a');assert.notEqual(app.getState().readingScroll,999);
+      assert.equal(app.win.history.state.autoformNavigation.snapshot,null);assert.equal(app.errors.length,1);
+      assert.equal(app.win.history.length,length);assert.equal(app.win.history.state.material,'preserved');app.nav.dispose();
+    """)
+
+
+@pytest.mark.parametrize("phase", ["reentrant_sync", "late_async"])
+def test_late_native_section_restore_rejection_cannot_quarantine_a_newer_committed_article(phase: str) -> None:
+    _run("const phase=" + json.dumps(phase) + ";\n" + r"""
+      let app,rejectRestore,newer;const section=aSpec.route+'#appendix';
+      app=setup({commit(bundle){app.state({requestedNode:bundle.nodeId,readingScroll:0});},
+        restore(_saved,bundle){if(bundle.url===section){
+          if(phase==='reentrant_sync'){newer=app.nav.navigateNode('b');throw new Error('Superseded native restore threw');}
+          return new Promise((_resolve,reject)=>{rejectRestore=reject;});
+        }}});
+      await app.nav.start();await app.nav.navigateNode('a');
+      app.win.history.pushState({material:'preserved',autoformNavigation:{version:1,url:section,
+        key:'pending-native-section',snapshot:{requestedNode:'a',readingScroll:71}}},'',section);
+      assert.doesNotThrow(()=>app.listeners.get('popstate')());
+      if(phase==='late_async'){assert.equal(typeof rejectRestore,'function');newer=app.nav.navigateNode('b');}
+      const opened=await newer;assert(opened);
+      if(phase==='late_async')rejectRestore(new Error('Stale native section restore rejected'));
+      await new Promise(resolve=>setImmediate(resolve));
+      assert.equal(app.win.location.href,bSpec.route+'#theorem-b');assert.equal(app.getState().requestedNode,'b');
+      assert.equal(app.errors.length,0);assert.equal(app.initial.host.getAttribute('aria-busy'),null);
+      const edited={requestedNode:'b',readingScroll:83};app.state(edited);
+      assert.deepEqual(app.nav.checkpoint(),edited,'Stale rejection must not mark the current B renderer failed');
+      assert.deepEqual(app.win.history.state.autoformNavigation.snapshot,edited);
+      assert.equal(app.win.history.state.material,'preserved');app.nav.dispose();
+    """)
+
+
+def test_rejected_popstate_history_preparation_reports_canonical_url_and_distrusts_surviving_snapshot() -> None:
+    _run(r"""
+      let app,rejectOnce=true;const section=aSpec.route+'#appendix',restorations=[];
+      app=setup({commit(bundle){app.state({requestedNode:bundle.nodeId,readingScroll:0});},
+        restore(saved,bundle){restorations.push({url:bundle.url,saved:structuredClone(saved)});}});
+      await app.nav.start();await app.nav.navigateNode('a');
+      const saved={requestedNode:'a',readingScroll:71},commits=app.commits.length;app.state(saved);
+      app.win.history.pushState({material:'preserved',autoformNavigation:{version:1,url:section,
+        key:'history-preparation-failed',snapshot:saved}},'',section);
+      const replace=app.win.history.replaceState;
+      app.win.history.replaceState=(state,title,url)=>{
+        if(url===section&&rejectOnce){rejectOnce=false;throw new Error('History rejected native section preparation');}
+        return replace(state,title,url);
+      };
+      assert.doesNotThrow(()=>app.listeners.get('popstate')());
+      assert.equal(rejectOnce,false);assert.equal(app.errors.length,1);assert.equal(app.errors[0].url,section);
+      assert.equal(app.win.location.href,section);assert.equal(app.commits.length,commits);
+      assert.deepEqual(app.getState(),saved);assert.deepEqual(app.restored,[]);
+      assert.deepEqual(app.win.history.state.autoformNavigation.snapshot,saved,'The refused write really left browser state intact');
+      assert.equal(app.nav.checkpoint(),null);assert.equal(app.win.history.state.material,'preserved');
+      const length=app.win.history.length;app.win.history.back();
+      await until(()=>app.commits.length===commits+1&&app.initial.host.getAttribute('aria-busy')===null);
+      const returned=app.commits.length;app.win.history.forward();
+      await until(()=>app.win.location.href===section&&app.initial.host.getAttribute('aria-busy')===null);
+      await new Promise(resolve=>setImmediate(resolve));
+      assert.equal(app.commits.length,returned);assert.equal(app.getState().requestedNode,'a');
+      assert.equal(restorations.filter(entry=>entry.url===section).length,0,'Uncleared browser snapshot must remain quarantined');
+      assert.equal(app.win.history.state.autoformNavigation.snapshot,null);assert.equal(app.errors.length,1);
+      const fresh={requestedNode:'a',readingScroll:93};app.state(fresh);assert.deepEqual(app.nav.checkpoint(),fresh);
+      app.win.history.back();await until(()=>app.commits.length===returned+1&&app.initial.host.getAttribute('aria-busy')===null);
+      app.win.history.forward();await until(()=>app.getState().readingScroll===93);
+      assert.deepEqual(app.getState(),fresh,'Fresh private section snapshots remain valid after quarantine');
+      assert.equal(app.win.location.href,section);assert.equal(app.win.history.length,length);
+      assert.equal(app.win.history.state.material,'preserved');app.nav.dispose();
     """)

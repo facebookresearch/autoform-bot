@@ -1759,7 +1759,8 @@ def reader_declutter_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
     records = {record["id"]: record for record in index["nodes"]}
     for node_id in ("alpha", "beta"):
         assert records[node_id]["kind"] == "scope" and records[node_id]["scope"] == node_id
-        assert records[node_id]["parent"] == "roadmap"
+        assert type(records[node_id]["parent"]) is int
+        assert index["nodes"][records[node_id]["parent"]]["id"] == "roadmap"
     published_root = index_path.parent / unquote(urlsplit(records["roadmap"]["route"]).path)
     tree = html5lib.parse(published_root.read_text(encoding="utf-8"), treebuilder="etree", namespaceHTMLElements=False)
     reading = next(element for element in tree.iter() if "bp-reading-source" in element.get("class", "").split())

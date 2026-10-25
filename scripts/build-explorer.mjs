@@ -6,6 +6,12 @@ import { fileURLToPath } from "node:url";
 import { transform, version } from "esbuild";
 import { minify } from "terser";
 
+function sourceText(bytes) {
+  // Match Python's UTF-8 text capture on LF and Windows CRLF checkouts.
+  // Preserve a BOM; normalize line endings, not any source token or spelling.
+  return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes).replace(/\r\n?/g, "\n");
+}
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const destination = resolve(root, "autoform_cli/assets/blueprint-explorer.min.js");
 const args = process.argv.slice(2);
@@ -16,13 +22,12 @@ if (args.length > 1 || (args.length && args[0] !== "--check")) {
   if (version !== "0.28.2") throw new Error("The explorer compiler must be esbuild 0.28.2");
   const terserPackage = JSON.parse(await readFile(resolve(root, "node_modules/terser/package.json"), "utf8"));
   if (terserPackage.version !== "5.51.2") throw new Error("The explorer compressor must be Terser 5.51.2");
-  // Capture all inputs before compiling, exactly as Python concatenates them.
+  // Capture both inputs before compiling; fingerprint their canonical LF text.
   const navigation = await readFile(resolve(root, "autoform_cli/assets/blueprint-navigation.js"));
   const viewer = await readFile(resolve(root, "autoform_cli/assets/blueprint-dag.js"));
-  const bytes = Buffer.concat([navigation, Buffer.from("\n", "utf8"), viewer]);
-  new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  const digest = createHash("sha256").update(bytes).digest("hex");
-  const compiled = await transform(bytes.toString("utf8"), {
+  const source = [navigation, viewer].map(sourceText).join("\n");
+  const digest = createHash("sha256").update(source, "utf8").digest("hex");
+  const compiled = await transform(source, {
     loader: "js",
     sourcefile: "blueprint-explorer.js",
     format: "iife",
@@ -31,7 +36,7 @@ if (args.length > 1 || (args.length && args[0] !== "--check")) {
     minifyIdentifiers: true,
     minifySyntax: true,
     minifyWhitespace: true,
-    // Only explicitly private DOM refs use $ names; public payload/router fields stay intact.
+    // Only explicitly private scene properties use $ names; payload/router fields stay intact.
     mangleProps: /^\$/,
     legalComments: "none",
     sourcemap: false,
@@ -57,7 +62,7 @@ if (args.length > 1 || (args.length && args[0] !== "--check")) {
     try { existing = await readFile(destination); } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
-    if (!existing || !existing.equals(output)) {
+    if (!existing || !Buffer.from(sourceText(existing), "utf8").equals(output)) {
       console.error("Explorer bundle is stale or missing. Run npm run build:explorer.");
       process.exitCode = 1;
     } else {

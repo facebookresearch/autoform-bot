@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from .catalog import canonical_git_url
 
 _TARGET_KINDS = ("lean_lib", "lean_exe", "input_file", "input_dir")  # the kinds lakefile.toml declares
-_MATHLIB_NAME = (("str", "mathlib"),)
+MATHLIB_NAME = (("str", "mathlib"),)
 _LAKE_VERSION = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)(?:-[^ \t\r\n]+)?")  # Lake's StdVer
 _URL_CREDENTIALS = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@")
 _URL_QUERY_OR_FRAGMENT = re.compile(r"([?#]).*", re.S)
@@ -22,7 +22,7 @@ _LEAN_ID_BEGIN_ESCAPE = "«"
 _LEAN_ID_END_ESCAPE = "»"
 
 
-class _JsonInteger(str):
+class JsonInteger(str):
     """A JSON integer kept as bounded input text instead of materialized as a Python bigint."""
 
 
@@ -41,7 +41,7 @@ class LakeProject:
 
 
 @dataclass(frozen=True, slots=True)
-class _Requirements:
+class Requirements:
     """lakefile.toml's require entries, as Lake resolves them against the root manifest.
 
     ``mathlib`` is the direct Mathlib requirement Lake keeps, if Lake resolves it from the manifest.
@@ -59,7 +59,7 @@ class _Requirements:
 
 
 @dataclass(frozen=True, slots=True)
-class _LockedPackages:
+class LockedPackages:
     """The package names a manifest or package-overrides file records, and its Mathlib entry.
 
     ``raw_url`` is that entry's Git URL before redaction. Only the staleness check reads it; it is never reported.
@@ -99,7 +99,7 @@ class MathlibLock:
         )
 
 
-def _lakefile_problem(config: dict) -> str | None:
+def lakefile_problem(config: dict) -> str | None:
     """Why Lake would refuse the fields Autoform reads, if it would."""
 
     if not _is_name(config.get("name")):
@@ -115,7 +115,7 @@ def _lakefile_problem(config: dict) -> str | None:
             return problem
     # Lake's decodeTargetDecls keeps one name map for every target kind, so a
     # reported lean_lib or lean_exe also clashes with an input target.
-    targets = [_canonical_toml_name(entry["name"]) for key in _TARGET_KINDS for entry in config.get(key, [])]
+    targets = [canonical_toml_name(entry["name"]) for key in _TARGET_KINDS for entry in config.get(key, [])]
     if len(set(targets)) != len(targets):
         return "two targets share a name"
     return None
@@ -270,18 +270,18 @@ def _lake_whitespace(character: str) -> bool:
     return character in " \t\r\n"
 
 
-def _validate_manifest_root(payload: dict[str, object]) -> None:
+def validate_manifest_root(payload: dict[str, object]) -> None:
     """Validate every field decoded by ``Lake.Manifest.fromJson?`` in 4.32."""
 
     name = payload.get("name")
     if name is not None and (type(name) is not str or _canonical_manifest_name(name) is None):
         raise ValueError("name")
-    _json_default(payload, "lakeDir", ".lake", str)
-    _json_default(payload, "fixedToolchain", False, bool)
-    _json_default(payload, "packagesDir", None, str)
+    json_default(payload, "lakeDir", ".lake", str)
+    json_default(payload, "fixedToolchain", False, bool)
+    json_default(payload, "packagesDir", None, str)
 
 
-def _decode_package_entry(entry: object, source: str) -> tuple[tuple[tuple[str, str], ...], MathlibLock]:
+def decode_package_entry(entry: object, source: str) -> tuple[tuple[tuple[str, str], ...], MathlibLock]:
     """Mirror ``Lake.PackageEntry.fromJson?`` for the current manifest layout."""
 
     if type(entry) is not dict:
@@ -289,10 +289,10 @@ def _decode_package_entry(entry: object, source: str) -> tuple[tuple[tuple[str, 
     name = _canonical_manifest_name(_json_required(entry, "name", str))
     if name is None:
         raise ValueError("package name")
-    _json_default(entry, "scope", "", str)
+    json_default(entry, "scope", "", str)
     inherited = _json_required(entry, "inherited", bool)
-    config_file = _json_default(entry, "configFile", "lakefile", str)
-    manifest_file = _json_default(entry, "manifestFile", "lake-manifest.json", str)
+    config_file = json_default(entry, "configFile", "lakefile", str)
+    manifest_file = json_default(entry, "manifestFile", "lake-manifest.json", str)
     package_type = _json_required(entry, "type", str)
     common = {
         "source": source,
@@ -307,9 +307,9 @@ def _decode_package_entry(entry: object, source: str) -> tuple[tuple[tuple[str, 
     return name, MathlibLock(
         "git",
         url=_redact(_json_required(entry, "url", str)),
-        input_rev=_json_default(entry, "inputRev", None, str),
+        input_rev=json_default(entry, "inputRev", None, str),
         rev=_json_required(entry, "rev", str),
-        sub_dir=_json_default(entry, "subDir", None, str),
+        sub_dir=json_default(entry, "subDir", None, str),
         **common,
     )
 
@@ -320,7 +320,7 @@ def _json_required(mapping: dict[str, object], key: str, expected: type):
     return mapping[key]
 
 
-def _json_default(mapping: dict[str, object], key: str, default, expected: type):
+def json_default(mapping: dict[str, object], key: str, default, expected: type):
     value = mapping.get(key)
     if value is None:
         return default
@@ -329,20 +329,10 @@ def _json_default(mapping: dict[str, object], key: str, default, expected: type)
     return value
 
 
-# Unused here; the library locator (#204) imports it.
-def _json_optional(mapping: dict[str, object], key: str, expected: type):
-    value = mapping.get(key)
-    if value is None:
-        return None
-    if type(value) is not expected:
-        raise ValueError(key)
-    return value
-
-
-def _manifest_layout(version: object) -> str | None:
+def manifest_layout(version: object) -> str | None:
     """Lake reads versions from 0.5.0 through any 1.x; versions before 0.7 are legacy."""
 
-    if isinstance(version, _JsonInteger):
+    if isinstance(version, JsonInteger):
         numeric_version = _normalize_unsigned_decimal(version)
         if numeric_version is None or _decimal_less_than(numeric_version, "5"):
             return None
@@ -373,11 +363,7 @@ def _decimal_less_than(left: str, right: str) -> bool:
     return (len(left), left) < (len(right), right)
 
 
-def _reject_json_constant(constant: str) -> None:
-    raise ValueError(f"Lake's JSON parser rejects {constant}")
-
-
-def _is_stale(requirement: dict, locked: MathlibLock, locked_url: str | None) -> bool:
+def is_stale(requirement: dict, locked: MathlibLock, locked_url: str | None) -> bool:
     """Whether lakefile.toml asks for a different Mathlib source than the lock records.
 
     ``locked_url`` is the lock's Git URL before redaction, so credentials, a query or a fragment take part in the
@@ -451,7 +437,7 @@ def _canonical_manifest_name(value: str) -> tuple[tuple[str, str], ...] | None:
     return _split_lean_name(value)
 
 
-def _canonical_toml_name(value: str) -> tuple[tuple[str, str], ...]:
+def canonical_toml_name(value: str) -> tuple[tuple[str, str], ...]:
     """Return Lake's Name, including TOML's simple-name fallback."""
 
     parts = _split_lean_name(value)

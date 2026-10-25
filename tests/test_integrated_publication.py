@@ -143,7 +143,8 @@ def test_routes_preserve_encoded_book_anchors_and_real_scope_metadata(tmp_path: 
     assert theorem["route"] == "../roadmap/Analysis%20%25%20caf%C3%A9/part-01/index.html#main"
     assert theorem["url"].startswith("scopes/Analysis%20%25%20caf%C3%A9/part-01.html#node=")
     assert theorem["data_url"] == "scopes/Analysis%20%25%20caf%C3%A9/part-01.json"
-    assert theorem["scope"] == group and theorem["parent"] == group
+    assert theorem["scope"] == group and type(theorem["parent"]) is int
+    assert index["nodes"][theorem["parent"]]["id"] == group
     assert "area" not in theorem  # No area guessed from the directory name.
     assert records[topic]["scope"] == topic and records[topic]["area"] == "Analysis"
     assert records[topic]["navigation"] == "module"
@@ -226,7 +227,8 @@ def test_emitted_result_ids_and_book_anchors_preserve_reserved_looking_prefixes(
         record, card = records[node_id], cards[node_id]
         assert record["id"] == node_id and record["result"] is True
         assert record["route"] == "../roadmap/index.html#" + card.get("id")
-        assert record["scope"] == record["parent"] == "roadmap"
+        assert record["scope"] == "roadmap" and type(record["parent"]) is int
+        assert index["nodes"][record["parent"]]["id"] == "roadmap"
         assert unquote(urlsplit(record["url"]).fragment) == "node=" + node_id
         assert f"The distinct statement belonging to {node_id}." in "".join(card.itertext())
 

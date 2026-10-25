@@ -102,7 +102,7 @@ def test_version_names_the_installed_release_and_the_checkout_commit(
         return installed
 
     monkeypatch.setattr(importlib.metadata, "version", version)
-    monkeypatch.setattr(debrief_orchestrator, "_git", lambda root, *arguments: commit)
+    monkeypatch.setattr(debrief_orchestrator, "git", lambda root, *arguments: commit)
     with pytest.raises(SystemExit) as exited:
         main(["--version"])
 

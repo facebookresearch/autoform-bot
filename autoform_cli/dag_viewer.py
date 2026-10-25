@@ -1,6 +1,6 @@
 """Static payloads and the prebuilt Autoform graph explorer.
 
-Publication supplies the authoritative topology and fallback coordinates. The
+Publication supplies the authoritative topology and card dimensions. The
 integrated browser caches deterministic dependency-driven geometry per bounded
 projection, paints its routes on Canvas and places ordinary DOM controls over
 visible nodes, keeping the graph navigable rather than bitmap-only.
@@ -9,7 +9,6 @@ visible nodes, keeping the graph navigable rather than bitmap-only.
 from __future__ import annotations
 
 import hashlib
-import heapq
 import html
 import json
 import math
@@ -62,103 +61,17 @@ _PALETTE_KEYS = frozenset(state.key for state in _ALL_STATES)
 _CATALOG_LEAN_NAMES = 8
 _NODE_WIDTH = 196
 _NODE_HEIGHT = 56
-_COLUMN_GAP = 116
-_ROW_GAP = 24
 
 
-def _positions(view: GraphView) -> dict[str, dict[str, int]]:
-    """Return stable coordinates without a browser force layout."""
-    if uses_atlas(view):
-        return _atlas_positions(view)
-    all_node_ids = [node.id for node in view.nodes]
-    connected: set[str] = set()
-    for edge in view.edges:
-        if edge.source != edge.target:
-            connected.update((edge.source, edge.target))
-
-    # Isolates are inventory, not dependency topology. Rank only the connected
-    # graph, then park the isolates in a separate stable grid beside it, which
-    # the reader can hide.
-    node_ids = [node_id for node_id in all_node_ids if node_id in connected]
-    order_index = {node_id: index for index, node_id in enumerate(node_ids)}
-    outgoing: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
-    incoming: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
-    indegree = {node_id: 0 for node_id in node_ids}
-    for edge in view.edges:
-        if edge.source == edge.target:
-            continue
-        outgoing[edge.source].append(edge.target)
-        incoming[edge.target].append(edge.source)
-        indegree[edge.target] += 1
-
-    ready = [(order_index[node_id], node_id) for node_id in node_ids if indegree[node_id] == 0]
-    heapq.heapify(ready)
-    ranks = {node_id: 0 for node_id in node_ids}
-    placed: set[str] = set()
-    while ready:
-        _, node_id = heapq.heappop(ready)
-        if node_id in placed:
-            continue
-        placed.add(node_id)
-        for target in sorted(outgoing[node_id], key=order_index.__getitem__):
-            ranks[target] = max(ranks[target], ranks[node_id] + 1)
-            indegree[target] -= 1
-            if indegree[target] == 0:
-                heapq.heappush(ready, (order_index[target], target))
-
-    # Fine graphs are acyclic, but a collapsed chapter projection can contain
-    # a cycle. Place that remainder in stable source order rather than failing
-    # or handing layout to a non-deterministic force simulation.
-    for node_id in node_ids:
-        if node_id in placed:
-            continue
-        earlier = [ranks[source] for source in incoming[node_id] if order_index[source] < order_index[node_id]]
-        ranks[node_id] = max(earlier, default=-1) + 1
-
-    by_rank: dict[int, list[str]] = defaultdict(list)
-    for node_id in node_ids:
-        by_rank[ranks[node_id]].append(node_id)
-
-    prior_slots: dict[str, int] = {}
-    for rank in sorted(by_rank):
-        candidates = by_rank[rank]
-        if rank:
-            candidates.sort(
-                key=lambda node_id: (
-                    sum(prior_slots[source] for source in incoming[node_id] if source in prior_slots)
-                    / max(1, sum(source in prior_slots for source in incoming[node_id])),
-                    order_index[node_id],
-                )
-            )
-        for slot, node_id in enumerate(candidates):
-            prior_slots[node_id] = slot
-
-    result: dict[str, dict[str, int]] = {}
-    for column, rank in enumerate(sorted(by_rank)):
-        for row, node_id in enumerate(by_rank[rank]):
-            result[node_id] = _cell(column, row)
-
-    isolated = [node_id for node_id in all_node_ids if node_id not in connected]
-    isolate_base = max((position["column"] for position in result.values()), default=-2) + 2
-    # One tall column of isolates made a project of 30 chapters fit as
-    # unreadable specks, so they fill a widescreen grid beside the ranked DAG.
-    cell_aspect = (_NODE_HEIGHT + _ROW_GAP) / (_NODE_WIDTH + _COLUMN_GAP)
-    isolate_columns = max(1, math.ceil(math.sqrt(len(isolated) * cell_aspect * (16 / 9))))
-    for slot, node_id in enumerate(isolated):
-        column = isolate_base + slot % isolate_columns
-        row = slot // isolate_columns
-        result[node_id] = _cell(column, row)
-    return result
-
-
-def _cell(column: int, row: int) -> dict[str, int]:
+def _dimensions(view: GraphView) -> dict[str, dict[str, int]]:
+    """Keep card sizing; the one browser engine owns every position and route."""
+    atlas = uses_atlas(view)
     return {
-        "column": column,
-        "height": _NODE_HEIGHT,
-        "row": row,
-        "width": _NODE_WIDTH,
-        "x": column * (_NODE_WIDTH + _COLUMN_GAP),
-        "y": row * (_NODE_HEIGHT + _ROW_GAP),
+        node.id: {
+            "width": 232 if atlas else _NODE_WIDTH,
+            "height": max(88, min(116, round(84 + 4 * math.log2(max(1, node.item_count) + 1)))) if atlas else _NODE_HEIGHT,
+        }
+        for node in view.nodes
     }
 
 
@@ -191,94 +104,11 @@ def uses_atlas(view: GraphView) -> bool:
     )
 
 
-def _atlas_positions(view: GraphView) -> dict[str, dict[str, int]]:
-    """Pack readable topic cards inside authored mathematical regions.
-
-    The project view is an information architecture before it is a dependency
-    diagram.  A stable card width keeps titles readable, while a small height
-    variation still communicates relative scope without turning text into
-    labels inside tiny bubbles.
-    """
-    card_width = 232
-    gap = 16
-    region_header = 42
-
-    def card_height(node: ViewNode) -> int:
-        count = max(1, node.item_count)
-        return max(88, min(116, round(84 + 4 * math.log2(count + 1))))
-
-    by_area: dict[str, list[ViewNode]] = defaultdict(list)
-    for node in view.nodes:
-        by_area[node.area or ""].append(node)
-
-    blocks: list[tuple[str, dict[str, dict[str, int]], int, int]] = []
-    for area, members in sorted(by_area.items(), key=lambda item: (not item[0], item[0].casefold())):
-        members.sort(key=lambda node: (-node.item_count, node.title.casefold(), node.id))
-        heights = {node.id: card_height(node) for node in members}
-        columns = min(3, max(1, math.ceil(math.sqrt(len(members)))))
-        local: dict[str, dict[str, int]] = {}
-        y = region_header if area else 0
-        rows = [members[offset : offset + columns] for offset in range(0, len(members), columns)]
-        for row, entries in enumerate(rows):
-            row_height = max((heights[node.id] for node in entries), default=88)
-            for column, node in enumerate(entries):
-                height = heights[node.id]
-                x = column * (card_width + gap)
-                local[node.id] = {
-                    "column": column,
-                    "height": height,
-                    "row": row,
-                    "width": card_width,
-                    "x": x,
-                    "y": y + (row_height - height) // 2,
-                }
-            y += row_height + gap
-        widest = columns * card_width + max(0, columns - 1) * gap
-        blocks.append((area, local, widest, max(region_header + 88, y - gap)))
-
-    total_block_area = sum((width + gap * 2) * (height + gap * 2) for _, _, width, height in blocks)
-    atlas_width = max(1_500, round(math.sqrt(total_block_area * 3.2)))
-    result: dict[str, dict[str, int]] = {}
-    block_x = block_y = block_row_height = 0
-    for _area, local, width, height in blocks:
-        if block_x and block_x + width > atlas_width:
-            block_x = 0
-            block_y += block_row_height + gap * 2
-            block_row_height = 0
-        for node_id, position in local.items():
-            shifted = dict(position)
-            shifted["x"] += block_x
-            shifted["y"] += block_y
-            # An atlas places cards by x and y; column and row only keep the DAG's layout keys.
-            shifted["column"] = shifted["x"]
-            result[node_id] = shifted
-        block_x += width + gap * 2
-        block_row_height = max(block_row_height, height)
-    return result
-
-
-def _atlas_regions(view: GraphView, positions: Mapping[str, Mapping[str, int]]) -> list[dict[str, object]]:
-    """Frame each area's cards with 12 px of padding.
-
-    Each frame also holds a 34 px label band above its cards, inside the 42 px
-    region_header that _atlas_positions leaves for it.
-    """
-    regions: list[dict[str, object]] = []
+def _atlas_regions(view: GraphView) -> list[dict[str, object]]:
+    """Count only authored areas; the browser owns their geometry too."""
     # Areas that differ only in case would otherwise keep the set's hash-seeded order.
     areas = sorted({node.area for node in view.nodes if node.area}, key=lambda area: (area.casefold(), area))
-    for area in areas:
-        members = [node for node in view.nodes if node.area == area]
-        region: dict[str, object] = {"count": len(members), "label": area}
-        regions.append(region)
-        # A view too large for the map has no layout, but its overview still counts each region.
-        if not positions:
-            continue
-        min_x = min(positions[node.id]["x"] for node in members)
-        min_y = min(positions[node.id]["y"] for node in members) - 34
-        max_x = max(positions[node.id]["x"] + positions[node.id]["width"] for node in members)
-        max_y = max(positions[node.id]["y"] + positions[node.id]["height"] for node in members)
-        region.update(height=max_y - min_y + 24, width=max_x - min_x + 24, x=min_x - 12, y=min_y - 12)
-    return regions
+    return [{"count": sum(node.area == area for node in view.nodes), "label": area} for area in areas]
 
 
 def _palette() -> dict[str, dict[str, object]]:
@@ -347,7 +177,7 @@ def write_payload(
         raise ValueError("dependency view edge names an unknown node")
     map_view = drawn_view(view)
     map_ids = frozenset(node.id for node in map_view.nodes)
-    positions = _positions(map_view) if len(map_view.nodes) <= MAX_MAP_NODES else {}
+    dimensions = _dimensions(map_view) if len(map_view.nodes) <= MAX_MAP_NODES else {}
     degrees: dict[str, int] = {node.id: 0 for node in view.nodes}
     for edge in map_view.edges:
         degrees[edge.source] += 1
@@ -365,7 +195,7 @@ def write_payload(
             "internal_dependency_count": node.internal_dependency_count,
             "isolated": degrees[node.id] == 0,
             "kind": node.kind,
-            **({"layout": positions[node.id]} if node.id in positions else {}),
+            **({"layout": dimensions[node.id]} if node.id in dimensions else {}),
             "lean": node.lean,
             # The items the status counts add up to, so a scope's
             # "N items" header agrees with the rows beneath it.
@@ -392,20 +222,23 @@ def write_payload(
     ordered_statuses = [
         state.key for state in _ALL_STATES if state.key in present_statuses
     ]
+    trail: list[dict[str, object]] = []
+    for label, url in breadcrumbs:
+        crumb: dict[str, object] = {"label": label, "url": url}
+        if (reading := _reading_label(label)) is not None:
+            crumb["reading_title"] = reading
+        trail.append(crumb)
     payload = {
         "edge_count": sum(edge.dependency_count for edge in map_view.edges),
         "edges": edges,
         "nodes": nodes,
         "palette": _palette(),
         "present_statuses": ordered_statuses,
-        "regions": _atlas_regions(map_view, positions) if uses_atlas(view) else [],
+        "regions": _atlas_regions(map_view) if uses_atlas(view) else [],
         "schema": SCHEMA,
         "title": view.title,
         "view": {
-            "breadcrumbs": [
-                {"label": label, "url": url}
-                for label, url in breadcrumbs
-            ],
+            "breadcrumbs": trail,
             "book": book,
             "presentation": "atlas" if uses_atlas(view) else "dag",
             "summary": view.summary,
@@ -480,12 +313,13 @@ def write_search_index(
 
     Existing search fields retain their meanings. Integrated publication can
     add canonical book routes, authored containment, and compact dependencies.
-    Relations reference positions in the emitted node array; the reader also
-    accepts older string endpoints. This retains every typed edge without
-    repeating long article identifiers in the transport.
+    Parents and relations can reference positions in the emitted node array;
+    the reader also accepts older string endpoints. This retains containment
+    and every typed edge without repeating long article identifiers.
     ``sha256_out`` optionally receives the exact emitted bytes' digest without
     rereading any source or changing the index's wire representation.
     """
+    positions = {node.id: position for position, node in enumerate(view.nodes)}
     nodes: list[dict[str, object]] = []
     for node in view.nodes:
         entry: dict[str, object] = {
@@ -511,6 +345,8 @@ def write_search_index(
             details = metadata.get(node.id, {})
             for key in ("route", "scope", "data_url", "parent", "navigation", "area"):
                 value = details.get(key)
+                if key == "parent" and isinstance(value, str):
+                    value = positions.get(value, value)
                 if value is not None:
                     entry[key] = value
             if type(details.get("result")) is bool:
@@ -518,7 +354,6 @@ def write_search_index(
         nodes.append(entry)
     payload: dict[str, object] = {"nodes": nodes, "schema": SEARCH_SCHEMA}
     if include_relations:
-        positions = {node.id: position for position, node in enumerate(view.nodes)}
         payload["relations"] = [
             [positions[edge.source], positions[edge.target], edge.statement_count, edge.proof_count]
             for edge in view.edges
@@ -607,6 +442,44 @@ def _wiki_lines(body: str) -> list[str] | None:
         # math similarly has no safe range. Do not pretend to read either one.
         return None
     return masked.splitlines()
+
+
+def _wiki_targets(lines: list[str]) -> list[str] | None:
+    """Read links and section boundaries through the site's actual converter.
+
+    The existing masks remove code/math, and raw HTML stays unsupported. ATX
+    and Setext headings then share one interpretation, including nested blocks
+    and formatted section names; a bibliography cannot become a concept edge.
+    """
+    tree = markdown.render_tree("\n".join(lines), allow_html=False)
+    body = tree.find("body") if tree is not None else None
+    if body is None:
+        return None
+    headings = {f"h{level}" for level in range(1, 7)}
+    if any(element.tag in headings and set(element.attrib) - {"id"} for element in body.iter()):
+        return None
+    targets: list[str] = []
+
+    def read(parent: object) -> None:
+        excluded = False
+        for element in parent:
+            if element.tag in headings:
+                if element.tag in {"h1", "h2"}:
+                    excluded = "".join(element.itertext()).strip().casefold() in {
+                        "sources", "references", "bibliography", "depends on", "proof depends on",
+                    }
+                continue
+            if excluded or element.tag in {"code", "pre", "img"}:
+                continue
+            if element.tag == "a":
+                target = element.get("href")
+                if target and not any(child.tag == "img" for child in element.iter()):
+                    targets.append(target)
+            else:
+                read(element)
+
+    read(body)
+    return targets
 
 
 def extract_wiki_links(
@@ -714,46 +587,38 @@ def extract_wiki_links(
         if lines is None:
             unavailable.add(positions[source_id])
             continue
-        definitions = markdown.link_definitions(lines)
-        excluded = False
-        for line in lines:
-            heading = _WIKI_HEADING.match(line)
-            if heading is not None:
-                if len(heading.group("level")) <= 2:
-                    excluded = heading.group("header").strip().casefold() in {
-                        "sources", "depends on", "proof depends on",
-                    }
+        targets = _wiki_targets(lines)
+        if targets is None:
+            unavailable.add(positions[source_id])
+            continue
+        for target in targets:
+            if "\\" in target or any(ord(character) < 32 or ord(character) == 127 for character in target):
                 continue
-            if excluded:
+            try:
+                located = urlsplit(target)
+                decoded = unquote(located.path, errors="strict")
+            except (ValueError, UnicodeError):
                 continue
-            for target in markdown.link_targets(line, definitions):
-                if "\\" in target or any(ord(character) < 32 or ord(character) == 127 for character in target):
-                    continue
-                try:
-                    located = urlsplit(target)
-                    decoded = unquote(located.path, errors="strict")
-                except (ValueError, UnicodeError):
-                    continue
-                if not decoded or located.scheme or located.netloc or decoded.startswith("/"):
-                    continue
-                path = _wiki_path(posixpath.join(posixpath.dirname(paths[source_id]), decoded))
-                target_id = owners.get(path) if path is not None else None
-                if target_id is None or target_id == source_id:
-                    continue
-                source_interval, target_interval = intervals[source_id], intervals[target_id]
-                if (
-                    source_interval[0] <= target_interval[0] < source_interval[1]
-                    or target_interval[0] <= source_interval[0] < target_interval[1]
-                ):
-                    continue
-                pair = (positions[source_id], positions[target_id])
-                if pair not in references:
-                    reference_bytes += len(str(pair[0])) + len(str(pair[1])) + 3 + bool(references)
-                    if reference_bytes > MAX_WIKI_LINK_BYTES:
-                        return WikiLinks(
-                            (), (), f"wiki reference layer exceeds {MAX_WIKI_LINK_BYTES} bytes; no references were published",
-                        )
-                    references.add(pair)
+            if not decoded or located.scheme or located.netloc or decoded.startswith("/"):
+                continue
+            path = _wiki_path(posixpath.join(posixpath.dirname(paths[source_id]), decoded))
+            target_id = owners.get(path) if path is not None else None
+            if target_id is None or target_id == source_id:
+                continue
+            source_interval, target_interval = intervals[source_id], intervals[target_id]
+            if (
+                source_interval[0] <= target_interval[0] < source_interval[1]
+                or target_interval[0] <= source_interval[0] < target_interval[1]
+            ):
+                continue
+            pair = (positions[source_id], positions[target_id])
+            if pair not in references:
+                reference_bytes += len(str(pair[0])) + len(str(pair[1])) + 3 + bool(references)
+                if reference_bytes > MAX_WIKI_LINK_BYTES:
+                    return WikiLinks(
+                        (), (), f"wiki reference layer exceeds {MAX_WIKI_LINK_BYTES} bytes; no references were published",
+                    )
+                references.add(pair)
     return WikiLinks(
         tuple(sorted(pair for pair in references if pair[1] not in invalid_targets)),
         tuple(sorted(unavailable)),
@@ -809,9 +674,9 @@ def render_container(
 ) -> str:
     """Return a self-contained, progressively enhanced explorer host.
 
-    ``intro`` is trusted HTML, one ``.bp-dag-intro`` element, that the
-    explorer shows in place of its own title: at the top of its hierarchy
-    rail, or in its details sheet where phones hide the rail.
+    ``intro`` is trusted, renderer-supplied HTML for the pre-enhancement and
+    linked fallback. The enhanced reader uses its complete authored source,
+    not this intro or a graph-node summary.
     """
     href = html.escape(quote(data_href, safe="/%"), quote=True)
     search = html.escape(quote(search_href, safe="/%"), quote=True) if search_href else ""
@@ -878,8 +743,9 @@ def viewer_script() -> str:
     """Return only a prebuilt browser runtime matching its packaged sources.
 
     The checked-in bundle is built from readable shared modules with a pinned
-    development compiler; consumers never need Node. Its fingerprint must match
-    those packaged sources. A missing, corrupt or stale bundle fails publication
+    development compiler; consumers never need Node. Its fingerprint matches
+    UTF-8/LF source text, independent of checkout line endings. A missing,
+    corrupt or stale bundle fails publication
     instead of bypassing the runtime budget with a raw development client.
     """
     built = Path(__file__).with_name("assets") / "blueprint-explorer.min.js"

@@ -30,7 +30,7 @@ class Element {
   }
   byId(id) { return this.id === id ? this : this.children.map(child => child.byId(id)).find(Boolean) || null; }
   getBoundingClientRect() {
-    const top = this.id === 'main' ? 400 - dom$readingBody.scrollTop : 100;
+    const top = this.id === 'main' || this.dataset.autoformNodeId ? 400 - dom$readingBody.scrollTop : 100;
     return {top, bottom: top + 40, left: 0, right: 640, width: 640, height: 40};
   }
   focus(settings) { this.focuses.push(settings); document.activeElement = this; }
@@ -110,13 +110,139 @@ function bundle(id, snapshot, focus = true) {
 def _run(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
     script += "\nObject.assign(sandbox, {clearTimeout});\n"
-    script += "const callbacks=['captureState','applyRoute','restoreState','setFilters','setBrowse'].map(original).join('\\n');\n"
+    script += "const callbacks=['captureState','snapshotForRoute','applyRoute','restoreState','setFilters','setBrowse'].map(original).join('\\n');\n"
+    script += "let testBodyComplete=false;\n"
+    script += "process.once('beforeExit',()=>{if(!testBodyComplete){"
+    script += "console.error('Reader callback test body did not complete');process.exitCode=1;}});\n"
     program = '"use strict";\n' + _ENVIRONMENT
     script += "const pending=vm.runInContext(" + json.dumps(program) + "+constants[0]+callbacks+"
     script += json.dumps("\n(async()=>{\n" + body + "\n})()") + ",sandbox,{timeout:5000,filename:CLIENT});\n"
-    script += "Promise.resolve(pending).catch(error=>{console.error(error);process.exitCode=1;});"
+    script += "Promise.resolve(pending).then(()=>{testBodyComplete=true;},error=>{"
+    script += "testBodyComplete=true;console.error(error);process.exitCode=1;});"
     result = subprocess.run([_NODE, "-e", script], input="null", text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_reader_runner_rejects_an_unfinished_async_test_body() -> None:
+    with pytest.raises(AssertionError, match="Reader callback test body did not complete"):
+        _run("await new Promise(() => {}); assert.fail('This assertion must never run');")
+
+
+@pytest.mark.parametrize("resource", ["document", "query", "canonical_fragment"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_foreign_resource_snapshot_cannot_override_the_new_article(resource: str, legacy: bool) -> None:
+    _run("const resource=" + json.dumps(resource) + ",legacy=" + json.dumps(legacy) + ";\n" + r"""
+      const routeA = resource === 'canonical_fragment' ? './chapter.html#A' :
+        resource === 'query' ? './chapter.html?edition=1#main' : '/book/a.html#main';
+      const routeB = resource === 'query' ? 'https://example.test/book/chapter.html?edition=2#main' :
+        resource === 'canonical_fragment' ? 'https://example.test/book/chapter.html#B' :
+        'https://example.test/book/b.html#main';
+      records.get('A').route = routeA;
+      // Ordinary sections exercise the resource check; only the theorem case
+      // exactly matches B's canonical route and exercises destination identity.
+      records.get('B').route = resource === 'canonical_fragment' ? routeB : routeB.replace('#main', '#statement-b');
+      const saved = {node: 'A', requestedNode: 'A', mode: 'sources', direction: 'prerequisites',
+        statuses: ['fully_proved'], isolates: false, query: 'old A query', area: 'old A area',
+        overviewGroup: 'old A group', readingOpen: false, focus: 'A',
+        camera: {x: 145, y: -78, scale: 1.1}, readingScroll: 211, outlineScroll: 44,
+        inventoryScroll: 9, listLimit: 200, relationIds: ['A'], outlineOpen: true, outlineLimit: 240};
+      if (legacy) delete saved.requestedNode;
+      const incoming = bundle('B', saved, true); incoming.url = routeB;
+      if (resource === 'canonical_fragment') { incoming.anchor = 'B'; incoming.target.id = 'B'; }
+      const savedBefore = JSON.stringify(saved), source = incoming.readingSource;
+      assert.equal(snapshotForRoute(saved, incoming), null);
+      const ready = applyRoute(incoming);
+      assert.notEqual(currentBundle, incoming, 'The rejected snapshot must be removed from a cloned bundle');
+      assert.equal(currentBundle.snapshot, null); assert.equal(incoming.snapshot, saved);
+      assert.equal(hostClasses.has('bp-dag-sheet-open'), true, 'The foreign closed sheet must not hide B');
+      assert.equal(hostClasses.has('bp-dag-outline-open'), false);
+      assert.equal(ui$requestedNode, 'B'); assert.equal(ui$selected.id, 'B');
+      assert.equal(ui$mode, 'graph'); assert.equal(ui$direction, 'both');
+      assert.equal(ui$query, ''); assert.equal(ui$area, null); assert.equal(ui$overviewGroup, null);
+      assert.equal(ui$relationIds, null); assert.equal(ui$showIsolated, true);
+      assert.deepEqual(Array.from(ui$selectedStatuses), presentStatuses);
+      assert.deepEqual(ui$transform, {x: 20, y: 30, scale: 1});
+      await frame(); await ready;
+      assert.equal(dom$readingBody.children[0], source);
+      assert.equal(incoming.target.dataset.autoformNodeId, 'B');
+      assert.equal(document.title, 'Complete B');
+      assert(incoming.target.classList.contains('bp-reading-current'));
+      assert.equal(document.activeElement, incoming.heading);
+      assert.equal(incoming.heading.focuses.length, 1);
+      assert.equal(incoming.heading.focuses[0].preventScroll, true);
+      assert.equal(dom$readingBody.scrollTop, 276, 'The real native-anchor calculation must run for B');
+      assert.equal(dom$navigation.scrollTop, 0); assert.equal(dom$inventoryScroll.scrollTop, 0);
+      assert.equal(overlays.get('A').focuses.length, 0);
+      const current = captureState(), ticket = restoration;
+      await restoreState(saved, incoming);
+      assert.deepEqual(captureState(), current, 'Direct restoration must reject the entire foreign snapshot');
+      assert.equal(restoration, ticket); assert.equal(frames.length, 0); assert.equal(restoring, false);
+      assert.equal(document.activeElement, incoming.heading);
+      assert.equal(dom$readingBody.children[0], source);
+      assert.equal(JSON.stringify(saved), savedBefore, 'Validation must not mutate history state');
+      assert.deepEqual(mathRoots, [dom$readingBody]);
+    """)
+
+
+def test_same_document_section_snapshot_preserves_requested_node_and_reader_intent() -> None:
+    _run(r"""
+      records.get('A').route = './chapter.html?edition=1#statement-a';
+      records.get('B').route = './chapter.html?edition=1#statement-b';
+      const owned = new Element('a'); dom$readingBody.replaceChildren(owned); owned.focus({});
+      dom$readingBody.scrollTop = 211; dom$navigation.scrollTop = 44; dom$inventoryScroll.scrollTop = 9;
+      ui$transform = {x: 145, y: -78, scale: 1.1};
+      const saved = captureState(), savedBefore = JSON.stringify(saved);
+      assert.equal(saved.requestedNode, 'A'); assert.equal(saved.focus, 'reading');
+      const incoming = bundle('A', saved, true);
+      incoming.url = 'https://example.test/book/chapter.html?edition=1#appendix';
+      incoming.anchor = 'appendix'; incoming.target.id = 'appendix';
+      assert.equal(snapshotForRoute(saved, incoming), saved, 'Native sections share a resource despite different fragments');
+      assert.equal(snapshotForRoute(saved, Object.assign({}, incoming, {nodeId: 'B'})), saved,
+        'A known sibling destination must not reject an ordinary, noncanonical native section');
+      const ready = applyRoute(incoming); await frame(); await ready;
+      assert.equal(currentBundle, incoming); assert.equal(currentBundle.snapshot, saved);
+      assert(incoming.target.classList.contains('bp-reading-current'));
+      assert.equal(dom$readingBody.scrollTop, 0, 'A valid snapshot must suppress the new native-anchor jump');
+      assert.equal(incoming.heading.focuses.length, 0);
+      const restored = restoreState(saved, incoming); await frame(); await restored;
+      assert.equal(ui$requestedNode, 'A'); assert.equal(ui$selected.id, 'A');
+      assert.equal(document.activeElement, dom$readingBody);
+      assert.equal(dom$readingBody.focuses.at(-1).preventScroll, true);
+      assert.equal(dom$readingBody.scrollTop, 211);
+      assert.equal(dom$navigation.scrollTop, 44); assert.equal(dom$inventoryScroll.scrollTop, 9);
+      assert.deepEqual(ui$transform, saved.camera);
+      assert.equal(JSON.stringify(saved), savedBefore);
+    """)
+
+
+@pytest.mark.parametrize("requested", [None, "legacy-missing"])
+def test_null_or_unknown_requested_snapshot_keeps_legacy_restoration(requested: str | None) -> None:
+    _run("const requested=" + json.dumps(requested) + ";\n" + r"""
+      records.get('A').route = '/book/a.html#main'; records.get('B').route = '/book/b.html#main';
+      const saved = {node: null, requestedNode: requested, mode: 'list', direction: 'both',
+        statuses: ['fully_proved'], readingOpen: false, focus: 'search',
+        camera: {x: -90, y: 70, scale: 0.8}, readingScroll: 89, outlineScroll: 44,
+        inventoryScroll: 9, listLimit: 200};
+      const incoming = bundle('B', saved, true); incoming.url = 'https://example.test/book/b.html#main';
+      assert.equal(snapshotForRoute(null, incoming), null);
+      assert.equal(snapshotForRoute(saved, incoming), saved, 'Unknown owner identity is not proof of a mismatch');
+      if (requested === null) {
+        const explicitNull = Object.assign({}, saved, {node: 'A'});
+        assert.equal(snapshotForRoute(explicitNull, incoming), explicitNull, 'Explicit null must not fall back to saved.node');
+      }
+      const ready = applyRoute(incoming); await frame(); await ready;
+      assert.equal(currentBundle, incoming); assert.equal(hostClasses.has('bp-dag-sheet-open'), false);
+      assert.equal(incoming.heading.focuses.length, 0); assert.equal(dom$readingBody.scrollTop, 0);
+      const restored = restoreState(saved, incoming); await frame(); await restored;
+      assert.equal(ui$requestedNode, requested); assert.equal(ui$selected, null);
+      assert.equal(ui$mode, 'list'); assert.equal(ui$listLimit, 200);
+      assert.equal(hostClasses.has('bp-dag-sheet-open'), false);
+      assert.equal(document.activeElement, dom$search); assert.equal(dom$search.focuses.at(-1).preventScroll, true);
+      assert.equal(dom$readingBody.scrollTop, 89);
+      assert.equal(dom$navigation.scrollTop, 44); assert.equal(dom$inventoryScroll.scrollTop, 9);
+      assert.deepEqual(ui$transform, saved.camera);
+      assert.equal(dom$readingBody.children[0], incoming.readingSource);
+    """)
 
 
 @pytest.mark.parametrize("owned_tag", ["a", "h1"])

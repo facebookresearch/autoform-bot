@@ -10,14 +10,14 @@ from pathlib import Path
 from ..search import (
     SearchError,
     SearchResult,
-    _lean_name,
-    _normalize,
-    _rank_key,
-    _ranks,
-    _typed_words,
-    _unquoted,
-    _words,
+    field_ranks,
+    lean_name,
+    normalize,
+    query_words,
+    rank_key,
     search_blueprint,
+    typed_words,
+    unquoted,
 )
 from .index import INDEX_SCHEMA, IndexDeclaration, LibraryIndex, shorten
 from .locate import canonical_name, read_workspace
@@ -146,8 +146,8 @@ def search_with_libraries(
         project_or_blueprint, query, lean_root=lean_root, states=states, declarations=declarations, limit=limit
     )
     workspace = read_workspace(lean_root)
-    words = _words(query)
-    typed = _typed_words(query, words)
+    words = query_words(query)
+    typed = typed_words(query, words)
     results: list[LibraryResult] = []
     for name, index_path in libraries:
         verified = load_library(workspace, name, index_path)
@@ -182,30 +182,30 @@ def match_index(
 
     modules = {module.name: module for module in index.modules}
     # A header is shared by every declaration of its module, so it is folded once.
-    headers = {module.name: _normalize(module.module_doc or "") for module in index.modules}
+    headers = {module.name: normalize(module.module_doc or "") for module in index.modules}
     matches: list[tuple[int, bool, int, bool, bool, str, str, tuple[int, ...]]] = []
     for declaration in index.declarations:
-        name = _normalize(declaration.name)
+        name = normalize(declaration.name)
         fields = {
-            "lean": _normalize(declaration.name.rpartition(".")[2]),
-            "docstring": _normalize(declaration.docstring or ""),
+            "lean": normalize(declaration.name.rpartition(".")[2]),
+            "docstring": normalize(declaration.docstring or ""),
             "module_doc": headers[declaration.module],
             # The name also without ``_root_.`` and quoting marks, so a namespace
             # that a quoted component spells is found here.
-            "qualified_names": "\n".join(dict.fromkeys([name, _unquoted(name), _normalize(declaration.module)])),
-            "mentions": _normalize("\n".join(declaration.mentions)),
+            "qualified_names": "\n".join(dict.fromkeys([name, unquoted(name), normalize(declaration.module)])),
+            "mentions": normalize("\n".join(declaration.mentions)),
             "kind": declaration.kind,
             # Not a field of its own: the name between a dot and a newline, which
             # no name holds, so a term is looked up as the whole name or as its
             # last components.
-            "lean_names": f".{_lean_name(name)}\n",
+            "lean_names": f".{lean_name(name)}\n",
         }
-        ranks = _ranks(terms, fields, LIBRARY_FIELDS)
+        ranks = field_ranks(terms, fields, LIBRARY_FIELDS)
         if ranks is None:
             continue
         matches.append(
             (
-                *_rank_key(ranks, words, fields, LIBRARY_FIELDS, typed, (declaration.name,)),
+                *rank_key(ranks, words, fields, LIBRARY_FIELDS, typed, (declaration.name,)),
                 declaration.status == "wanted",
                 declaration.name,
                 declaration.module,

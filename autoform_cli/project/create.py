@@ -35,7 +35,7 @@ from importlib.resources import files
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-from ..claims import _reject_json_constant, _strict_json_object
+from .._strict_json import reject_json_constant, strict_json_object
 from ..graph import _parse_node
 from ..scaffold import (
     ScaffoldError,
@@ -956,7 +956,7 @@ def _safe_relative(value: object) -> bool:
 def _load_strict_json(data: bytes) -> object:
     """Parse JSON, rejecting duplicate keys and NaN or Infinity."""
 
-    return json.loads(data, object_pairs_hook=_strict_json_object, parse_constant=_reject_json_constant)
+    return json.loads(data, object_pairs_hook=strict_json_object, parse_constant=reject_json_constant)
 
 
 def _lake_manifest(package: str, bundle: _ReleaseBundle) -> bytes:

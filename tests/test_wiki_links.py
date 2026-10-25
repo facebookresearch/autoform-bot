@@ -100,6 +100,47 @@ def test_actual_hash_headings_without_spaces_still_exclude_provenance_and_formal
     ) == dag_viewer.WikiLinks(((0, 1),))
 
 
+@pytest.mark.parametrize("heading", [
+    "Sources\n-------", "**Sources**\n-------", "Depends on\n----------", "Proof depends on\n----------------",
+    "## **Sources**", "## References", "**References**\n----------", "## Bibliography", "Bibliography\n------------",
+])
+def test_published_section_semantics_keep_setext_and_formatted_provenance_out_of_wiki_links(heading: str) -> None:
+    view = _view("a", "b", "c", edges=(ViewEdge("a", "b", 2, 3),))
+    paths, sources, metadata = _inputs("a", "b", "c")
+    body = f"# A\n\n{heading}\n\n[C](c.md)\n\n## Exposition\n\n[B](b.md)\n"
+    tree = markdown.render_tree(body)
+    assert tree is not None and list(tree.iter("h2"))
+    assert _converted_links(body) == ["c.md", "b.md"]
+    sources["a"] = body.encode()
+    before = copy.deepcopy((view, sources, paths, metadata))
+    assert dag_viewer.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == dag_viewer.WikiLinks(((0, 1),))
+    assert (view, sources, paths, metadata) == before
+
+
+def test_nested_setext_provenance_does_not_hide_unquoted_mathematical_references() -> None:
+    view = _view("a", "b", "c")
+    paths, sources, metadata = _inputs("a", "b", "c")
+    body = "# A\n\n> Sources\n> -------\n>\n> [C](c.md)\n\nSee [B](b.md).\n"
+    assert _converted_links(body) == ["c.md", "b.md"]
+    sources["a"] = body.encode()
+    assert dag_viewer.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == dag_viewer.WikiLinks(((0, 1),))
+
+
+def test_setext_heading_attributes_keep_valid_incoming_links_but_mark_outbound_extraction_unavailable() -> None:
+    view = _view("a", "b", "c")
+    paths, sources, metadata = _inputs("a", "b", "c")
+    sources["a"] = b"# A\n\n[B](b.md).\n"
+    sources["b"] = b"# B\n\nSources {.note}\n-------\n\n[C](c.md).\n"
+    assert publishable_article(sources["b"].decode())[1]
+    assert dag_viewer.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == dag_viewer.WikiLinks(((0, 1),), (1,))
+
+
 @pytest.mark.parametrize("heading", ["## Sources {#sources}", "##Sources {#sources}", "## Sources {.note} ##"])
 def test_applied_heading_attributes_mark_only_outgoing_data_unavailable_and_keep_published_incoming(heading: str) -> None:
     view = _view("a", "b", "c")

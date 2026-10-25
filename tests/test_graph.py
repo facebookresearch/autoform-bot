@@ -20,6 +20,7 @@ from autoform_cli.graph import (
 from autoform_cli.graph_views import project_view
 from autoform_cli.runtime import RuntimeProjectionError, load_runtime_graph
 from autoform_cli.status import derive
+from tests.blueprint_fixture import _ensure_chapter
 
 
 def _node_text(body: str, **metadata: str) -> str:
@@ -32,25 +33,6 @@ def _roadmap_page(blueprint: Path, relative: str, body: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
     return path
-
-
-def _ensure_chapter(blueprint: Path, relative: str) -> None:
-    """Give a chapter directory its chapter page, as every real vault has.
-
-    Containment comes from nested `README.md` articles, so a directory without
-    one is refused at load. Fixtures that only happen to nest are not trying to
-    model that fault; the tests that are do it explicitly.
-    """
-    parts = Path(relative).parts
-    if len(parts) < 2:
-        return
-    chapter = blueprint / "roadmap" / parts[0]
-    page = chapter / "README.md"
-    if not page.exists():
-        chapter.mkdir(parents=True, exist_ok=True)
-        page.write_text(
-            "---\n---\n\n# " + parts[0].replace("-", " ").title() + "\n", encoding="utf-8"
-        )
 
 
 def _node(blueprint: Path, relative: str, body: str, **metadata: str) -> Path:
@@ -1251,6 +1233,25 @@ def test_a_published_page_may_not_link_into_an_unpublished_folder(tmp_path: Path
         f"base: links to {target!r}, in an unpublished folder render omits"
         for target in ("drafts/README.md", "drafts/idea.md", "drafts/idea.md#idea")
     )
+
+
+def test_a_dependency_after_a_fence_that_never_closes_is_left_to_render(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The graph reads the fence as text and keeps the edge, but the check for
+    # links into unpublished folders reads it on to the end of the file and
+    # names nothing. Check warns about a fence left open at the margin, and
+    # render refuses the dependency, so the site never links into the folder (#201).
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "drafts/README.md", "# Drafts\n", published="false")
+    _node(blueprint, "drafts/idea.md", "# Idea\n")
+    _node(blueprint, "base.md", "# Base\n\n## Depends on\n\n```lean\nexample : True := trivial\n\n- [Idea](drafts/idea.md)\n")
+
+    assert load_graph(blueprint).nodes["base"].dependencies == ("drafts/idea",)
+    assert main(["check", str(blueprint)]) == 0
+    assert "code fence is not closed" in capsys.readouterr().out
+    assert main(["render", str(blueprint), "--output", str(tmp_path / "site-src")]) == 1
+    assert "base: dependency target does not exist: 'drafts/idea.md'" in capsys.readouterr().out
 
 
 def test_check_rejects_a_sources_link_to_a_generated_view(

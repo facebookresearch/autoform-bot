@@ -51,7 +51,7 @@ from .library.locate import LibraryError, WorkspaceError
 from .library.search import LibraryResult, library_argument, search_with_libraries
 from .markdown import local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
-from .readback import Readback, load_readbacks, prepare_readback, publish_readback, typesetting_warnings
+from .readback import Readback, load_readbacks, prepare_readback, publish_readback
 from .render import SOURCES_DIR, PublicationError, publication_issues, render_site
 from .review import (
     ReviewBundle,
@@ -76,6 +76,7 @@ from .skeleton import (
     write_packets,
     write_skeleton_report,
 )
+from .testimony import typesetting_warnings
 from .work import WORK_SCHEMA, WorkError, assumption_contract, list_ready_work, work_context
 
 

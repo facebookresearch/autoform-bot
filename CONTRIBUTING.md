@@ -33,9 +33,11 @@ each `AUTOFORM_REQUIRE_*` variable below, so it fails where a local run skips:
 
 `autoform_cli/assets/` holds the book/map's shared JS and CSS.
 With Node 22.23.2, run `make build-explorer`, `make check-explorer`, and browser tests.
-Pinned esbuild/Terser emit one JS response below 132 KB; publication checks its exact
-source digest. Consumers need no Node. Compression renames only private properties,
-never graph/index/route/history fields, and uses no unsafe transforms or dropped logs.
+Pinned esbuild/Terser emit one JS response below 132 KB; publication checks the
+UTF-8/LF source fingerprint. CRLF checkouts work too. Consumers need no Node.
+Compression renames only private properties, never graph/index/route/history
+fields, and uses no unsafe transforms or dropped logs.
+See [explorer ownership and failure boundaries](docs/explorer-design.md) before changing the client.
 
 The kernel probe `autoform_cli/probes/audit_probe.lean` is copied verbatim to
 `.github/autoform_audit.py`; after editing it, run `python3 scripts/sync_audit_probe.py`

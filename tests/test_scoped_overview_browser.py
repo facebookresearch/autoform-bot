@@ -247,7 +247,8 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
         while identifier not in represented:
             assert identifier not in seen and identifier in records, identifier
             seen.add(identifier)
-            identifier = records[identifier]["parent"]
+            parent = records[identifier]["parent"]
+            identifier = index["nodes"][parent]["id"] if type(parent) is int else parent
         return represented[identifier]
 
     # The authoring tuples are dependent -> prerequisite; published flow is

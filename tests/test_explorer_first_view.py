@@ -67,10 +67,10 @@ process.stdout.write(vm.runInContext(constants + setup + functions + '\n' + run,
 
 def _first_view(view: GraphView, width: int, height: int) -> dict:
     payload_nodes = []
-    positions = dag_viewer._positions(view)
+    dimensions = dag_viewer._dimensions(view)
     linked = {endpoint for edge in view.edges for endpoint in (edge.source, edge.target)}
     for node in view.nodes:
-        payload_nodes.append({"id": node.id, "isolated": node.id not in linked, "layout": positions[node.id]})
+        payload_nodes.append({"id": node.id, "isolated": node.id not in linked, "layout": dimensions[node.id]})
     edges = [{"source": edge.source, "target": edge.target, "statement": edge.statement_count, "proof": 0} for edge in view.edges]
     script = _HARNESS.replace("CLIENT", json.dumps(str(_CLIENT)), 1)
     completed = subprocess.run(

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlsplit
 
+from ._fs import resolved_path
 from .markdown import (
     INLINE_CODE,
     Content,
@@ -37,7 +38,6 @@ from .markdown import (
     local_target_issue,
     published_tables,
     rendered_visible_text,
-    resolved_path,
 )
 from .markdown import has_substance as _has_substance
 from .markdown import is_placeholder as _is_placeholder

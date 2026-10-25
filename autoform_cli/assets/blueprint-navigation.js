@@ -1,7 +1,8 @@
 /* Shared book/explorer navigation. Reading HTML is published by Autoform, not made from graph summaries.
  * create({host,onCommit,captureState,restoreState,onIndex,onError}) keeps one renderer-owned shell.
  * onCommit receives a detached readingSource, canonical url, resolved graph/dataURL, nodeId/anchor,
- * scope/title, snapshot, reason and isCurrent(). No math engine is owned or called here.
+ * scope/title, snapshot, reason and isCurrent(), after URL/history commit. A renderer failure
+ * is reported without promising DOM rollback. No math engine is owned or called here.
  * checkpoint() replaces only autoformNavigation:{version:1,url,key,snapshot}; checkpoint('push') records
  * a deliberate view/filter action without changing the canonical permalink. Snapshot fields are opaque.
  * declutterReader(root, representedScopeIds) hides duplicated pure child-scope indexes only in the
@@ -32,8 +33,8 @@
     var initialScope = attribute(host, initialPage, "data-scope-id") || null;
     var initialTitle = source && source.getAttribute("data-page-title") ||
       initialPage && initialPage.getAttribute("data-page-title") || doc.title || "Mathematics";
-    var disposed = false, started = null, epoch = 0, active = null, current = null, currentKey = null;
-    var scrollChecked = false, scrollOwned = false;
+    var disposed = false, started = null, epoch = 0, active = null, current = null, currentKey = null, currentFailed = false;
+    var scrollChecked = false, scrollOwned = false, historySnapshotsTrusted = true;
     var snapshots = new Map(), keySequence = 0, keySeed = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
     var index = null, indexPromise = null, indexController = null, indexed = new Map(), routes = new Map(), documents = new Set();
     var indexDigest = null, wikiLinks = null, wikiPromise = null, wikiController = null, wikiGeneration = 0;
@@ -235,6 +236,13 @@
           throw new Error("Invalid search node");
         var copy = Object.assign({}, node, {_index: position, url: link(node.url, base, true), route: link(node.route, base),
           data_url: link(node.data_url, base)});
+        // Parent offsets use the same node order as compact relation endpoints.
+        // Decode before publication; absent and legacy string parents stay intact.
+        if (typeof node.parent === "number") {
+          var parent = Number.isSafeInteger(node.parent) && node.parent >= 0 && payload.nodes[node.parent];
+          if (!parent || typeof parent.id !== "string") throw new Error("Invalid search parent endpoint");
+          copy.parent = parent.id;
+        }
         ids.set(copy.id, copy);
         if (copy.route) { byRoute.set(copy.route, copy); knownDocuments.add(resource(copy.route)); }
         nodes.push(copy);
@@ -442,6 +450,10 @@
         }
         // Alias shells may contain only a reading notice: fetch the declared canonical page first.
         if (resource(page.url) !== resource(page.documentURL)) { canonical = page.url; continue; }
+        if (page.readingSource && choice.node && choice.node.route && resource(page.url) !== resource(choice.node.route)) {
+          cacheDelete(htmlCache, resource(canonical)); cacheDelete(htmlCache, resource(choice.node.route));
+          throw new Error("Published reading route contradicts the requested article");
+        }
         dataURL = page.dataURL || choice.node && choice.node.data_url;
         graph = dataURL ? (options.initialGraph && key === resource(initialURL) ?
           resolvedGraph(JSON.parse(JSON.stringify(options.initialGraph)), dataURL) : await graphAt(dataURL, request)) : null;
@@ -502,7 +514,7 @@
       cachePut(snapshots, key, {snapshot: copyState(snapshot), bytes: bytes}, 32);
     }
     function outgoing() {
-      if (!current) return null;
+      if (!current || currentFailed) return null;
       var snapshot = capture(); remember(currentKey, snapshot); return snapshot;
     }
     function historyState(snapshot, url, key) {
@@ -513,14 +525,14 @@
       return typeof options.captureState === "function" ? options.captureState() : null;
     }
     function saveCurrent() {
-      if (!current || current.url !== win.location.href) return;
+      if (!current || currentFailed || current.url !== win.location.href) return;
       try { win.history.replaceState(historyState(outgoing(), current.url, currentKey), "", current.url); }
       catch (error) { report(error, current.url); }
     }
     // Snapshots are renderer-owned data. The router owns only the versioned
     // autoformNavigation history namespace and never changes the permalink here.
     function checkpoint(method) {
-      if (disposed || !current || current.url !== win.location.href) return null;
+      if (disposed || !current || currentFailed || current.url !== win.location.href) return null;
       var mode = method === "push" ? "pushState" : "replaceState";
       try {
         var snapshot = capture(), key = method === "push" ? newKey() : currentKey;
@@ -542,18 +554,37 @@
         // Replace an old explorer alias, never add an entry during a history restoration.
         win.history.replaceState(historyState(bundle.snapshot, bundle.url, key), "", bundle.url);
       }
-      current = bundle; currentKey = key;
+      current = bundle; currentKey = key; currentFailed = false;
       if (!scrollChecked) {
         scrollChecked = true;
         if (win.history.scrollRestoration === "auto") { win.history.scrollRestoration = "manual"; scrollOwned = true; }
       }
-      await options.onCommit(bundle); assertAlive(request);
-      bound.forEach(function (listener, root) {
-        if (root.isConnected === false) { root.removeEventListener("click", listener, true); bound.delete(root); }
-      });
-      if (bundle.reason === "start") initialSource = null;
-      if (bundle.snapshot && typeof options.restoreState === "function") await options.restoreState(bundle.snapshot, bundle);
-      assertAlive(request); saveCurrent(); return bundle;
+      // onCommit reconciles a committed route with the renderer; it may have
+      // already moved the reader before failing. Do not promise a rollback.
+      try {
+        await options.onCommit(bundle); assertAlive(request);
+        bound.forEach(function (listener, root) {
+          if (root.isConnected === false) { root.removeEventListener("click", listener, true); bound.delete(root); }
+        });
+        initialSource = null; source = null;
+        if (bundle.snapshot && typeof options.restoreState === "function") await options.restoreState(bundle.snapshot, bundle);
+        assertAlive(request); saveCurrent(); return bundle;
+      }
+      catch (error) { throw rendererFailure(error, bundle, request, key); }
+    }
+    function rendererFailure(error, bundle, request, key) {
+      if (!alive(request) || current !== bundle) return error;
+      // A rejected renderer cannot supply an opaque snapshot for this URL.
+      // Keep the committed canonical route, but never poison Back/Forward.
+      currentFailed = true;
+      snapshots.forEach(function (_entry, id) { cacheDelete(snapshots, id); });
+      // Failed pending checkpoints may occupy earlier browser entries.
+      // If those cannot be invalidated, use only fresh private snapshots.
+      if (currentKey !== key) historySnapshotsTrusted = false;
+      try { win.history.replaceState(historyState(null, bundle.url, currentKey), "", bundle.url); }
+      catch (_ignored) { historySnapshotsTrusted = false; }
+      var failure = new Error(error && error.message || String(error));
+      failure.url = bundle.url; return failure;
     }
     async function run(url, navigation, initial) {
       if (disposed) return null;
@@ -732,10 +763,12 @@
       // entry. Capture it by its stored key; never rewrite the destination URL to save that state.
       try { outgoing(); } catch (error) { report(error, current && current.url); }
       var entry = entryState(), key = entryKey(entry, win.location.href);
-      var cached = cacheGet(snapshots, key), snapshot = cached ? copyState(cached.snapshot) : entry && entry.snapshot;
-      win.history.replaceState(historyState(snapshot, win.location.href, key), "", win.location.href);
+      var cached = cacheGet(snapshots, key), snapshot = cached ? copyState(cached.snapshot) :
+        historySnapshotsTrusted && entry && entry.url === win.location.href ? entry.snapshot : null;
+      try { win.history.replaceState(historyState(snapshot, win.location.href, key), "", win.location.href); }
+      catch (error) { historySnapshotsTrusted = false; report(error, win.location.href); return; }
       var url = new URL(win.location.href);
-      if (current && resource(current.url) === resource(url.href) && url.hash && !routes.has(url.href) &&
+      if (current && !currentFailed && resource(current.url) === resource(url.href) && url.hash && !routes.has(url.href) &&
           !legacyHash(url.hash.slice(1))) {
         // Native section anchors scroll the existing reading DOM. They must
         // not discard the selected theorem or replace its full reading pane.
@@ -744,7 +777,13 @@
         currentKey = key; current.url = url.href; current.anchor = anchor; current.isCurrent = function () { return alive(request); };
         host.removeAttribute("aria-busy");
         if (snapshot && typeof options.restoreState === "function") {
-          Promise.resolve(options.restoreState(snapshot, current)).catch(function (error) { report(error, url.href); });
+          var bundle = current;
+          try {
+            Promise.resolve(options.restoreState(snapshot, bundle)).catch(function (error) {
+              if (alive(request) && current === bundle) report(rendererFailure(error, bundle, request, key), url.href);
+            });
+          }
+          catch (error) { if (alive(request) && current === bundle) report(rendererFailure(error, bundle, request, key), url.href); }
         }
         return;
       }
@@ -757,7 +796,7 @@
       if (source) bindReader(source);
       var entry = entryState();
       started = run(initialURL, {history: "replace", entryKey: entryKey(entry, initialURL),
-        snapshot: entry && entry.snapshot, reason: "start"}, true);
+        snapshot: historySnapshotsTrusted && entry && entry.url === initialURL ? entry.snapshot : null, reason: "start"}, true);
       return started;
     }
     function dispose() {

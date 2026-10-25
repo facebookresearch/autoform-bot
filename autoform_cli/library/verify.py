@@ -21,7 +21,7 @@ from pathlib import Path, PurePosixPath
 
 from .._tree_snapshot import TreeCaptureLimits, TreeSelection, TreeSnapshotError, bind_directory_tree
 from ..project import _snapshot
-from ..project._snapshot import _MANIFEST
+from ..project._snapshot import MANIFEST
 from ..project.catalog import canonical_lean_toolchain
 from .index import (
     INDEX_FILE,
@@ -93,12 +93,12 @@ def checkout_pins(root: Path) -> CheckoutPins:
 
     for relative in TREE_FILES:
         _require_plain_file(root, relative)
-    pins = _snapshot._capture_decision_snapshot(root)
+    pins = _snapshot.capture_decision_snapshot(root)
     for relative in TREE_FILES:
         # Only a file that is not there is absent; one that cannot be read must not leave the digest.
         if pins.file(relative).state not in ("missing", "regular"):
             raise PinError(f"its {relative} cannot be read (it is over 1 MiB or unreadable)")
-    decoded = locked_packages(pins, _MANIFEST)
+    decoded = locked_packages(pins, MANIFEST)
     payload, packages = decoded if decoded is not None else ({}, ())
     name = payload.get("name")
     return CheckoutPins(
@@ -184,12 +184,12 @@ def _load_library(
     except PinError as error:
         raise refuse(str(error)) from None
     except WorkspaceError:
-        raise refuse(f"its {_MANIFEST} is not a Lake manifest Autoform reads") from None
+        raise refuse(f"its {MANIFEST} is not a Lake manifest Autoform reads") from None
     if pins.lean_toolchain != index.header.lean_toolchain:
         generated, pins_to = shorten(index.header.lean_toolchain), shorten(pins.lean_toolchain or "nothing")
         raise refuse(f"its index was generated for {generated}, but the checkout pins {pins_to}")
     if pins.dependencies != index.header.dependencies:
-        raise refuse(f"its index does not list the dependencies its {_MANIFEST} locks")
+        raise refuse(f"its index does not list the dependencies its {MANIFEST} locks")
 
     found = _sources(root, index.header.source_dirs, refuse)
     expected = {module.source_file: module.sha256 for module in index.modules}

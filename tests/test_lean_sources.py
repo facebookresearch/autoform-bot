@@ -15,8 +15,10 @@ from pathlib import Path
 import pytest
 
 from autoform_cli import _directory_binding as directory_binding_module
+from autoform_cli import _repository as repository_module
 from autoform_cli import _tree_snapshot as tree_snapshot_module
 from autoform_cli import lean as lean_module
+from autoform_cli._repository import detect_ref, detect_repository_url, repository_top_level, verify_repository_snapshot
 from autoform_cli._tree_snapshot import (
     BoundDirectoryTree,
     TreeCaptureLimits,
@@ -29,13 +31,9 @@ from autoform_cli.lean import (
     Alias,
     SourceLinker,
     declaration_names,
-    detect_ref,
-    detect_repository_url,
     index_project,
     open_project_sources,
-    repository_top_level,
     snapshot_project_sources,
-    verify_repository_snapshot,
 )
 from autoform_cli.skeleton import _output_identity, _replace_outputs
 
@@ -3764,12 +3762,12 @@ def test_tree_lookup_matches_the_spelling_git_committed_only_when_asked_to(
     def ls_tree(command, **_kwargs):
         return subprocess.CompletedProcess(command, 0, f"100644 blob {oid}\t{committed}\0".encode(), b"")
 
-    monkeypatch.setattr(lean_module.subprocess, "run", ls_tree)
+    monkeypatch.setattr(repository_module.subprocess, "run", ls_tree)
     spellings: dict[str, str] = {}
 
-    assert lean_module._git_tree_oids(tmp_path, "c" * 40, (on_disk,), spellings) == {on_disk: oid}
+    assert repository_module._git_tree_oids(tmp_path, "c" * 40, (on_disk,), spellings) == {on_disk: oid}
     assert spellings == {on_disk: committed}
-    assert lean_module._git_tree_oids(tmp_path, "c" * 40, (on_disk,)) == {committed: oid}
+    assert repository_module._git_tree_oids(tmp_path, "c" * 40, (on_disk,)) == {committed: oid}
 
 
 def test_permalink_names_the_spelling_git_committed(tmp_path: Path) -> None:
@@ -3890,7 +3888,7 @@ def test_snapshot_attestation_names_why_it_failed(tmp_path: Path, monkeypatch: p
     ) is None
     assert reasons == [f"Scratch.lean is not a file in commit {commit[:12]}"]
 
-    monkeypatch.setattr(lean_module, "repository_top_level", lambda root: None)
+    monkeypatch.setattr(repository_module, "repository_top_level", lambda root: None)
     reasons.clear()
     assert verify_repository_snapshot(
         tmp_path, commit, ((untracked, untracked.read_bytes()),), reasons=reasons
@@ -3922,15 +3920,15 @@ def test_repository_top_level_compares_git_s_path_with_the_root_s_spelling(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # macOS Git prints a decomposed name composed.
-    monkeypatch.setattr(lean_module, "_git", lambda root, *arguments: "true\nTh\u00e9/")
+    monkeypatch.setattr(repository_module, "git", lambda root, *arguments: "true\nTh\u00e9/")
     assert repository_top_level(tmp_path / "The\u0301") == tmp_path
     assert repository_top_level(tmp_path / "other") is None
 
     # U+212B ANGSTROM SIGN, which NFC replaces on both sides.
-    monkeypatch.setattr(lean_module, "_git", lambda root, *arguments: "true\n\u212b/")
+    monkeypatch.setattr(repository_module, "git", lambda root, *arguments: "true\n\u212b/")
     assert repository_top_level(tmp_path / "\u212b") == tmp_path
 
-    monkeypatch.setattr(lean_module, "_git", lambda root, *arguments: "true\na/b/v1/")
+    monkeypatch.setattr(repository_module, "git", lambda root, *arguments: "true\na/b/v1/")
     assert repository_top_level(Path("/v1")) is None
 
 
@@ -3940,7 +3938,7 @@ def test_repository_top_level_is_unknown_when_git_prints_a_name_that_is_not_utf_
     def undecodable(root: Path, *arguments: str) -> str:
         raise UnicodeDecodeError("utf-8", b"caf\xe9/", 3, 4, "invalid continuation byte")
 
-    monkeypatch.setattr(lean_module, "_git", undecodable)
+    monkeypatch.setattr(repository_module, "git", undecodable)
 
     assert repository_top_level(tmp_path) is None
 

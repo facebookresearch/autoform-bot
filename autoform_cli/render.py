@@ -60,6 +60,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 from markdown.treeprocessors import Treeprocessor
 
 from . import dag_viewer, graph_pages, graph_views, status
+from ._repository import detect_ref, detect_repository_url, repository_top_level, verify_repository_snapshot
 from ._tree_snapshot import (
     TreeChangedError,
     TreeSelection,
@@ -98,13 +99,9 @@ from .lean import (
     SourceIndex,
     SourceLinker,
     declaration_names,
-    detect_ref,
-    detect_repository_url,
     index_failure_message,
-    repository_top_level,
     resolve_lean_root,
     snapshot_project_sources,
-    verify_repository_snapshot,
 )
 from .markdown import (
     _BRACKET_ESCAPE,
@@ -133,19 +130,12 @@ from .markdown import (
     title_text,
     yaml_string,
 )
+from .markdown import HEADING as _HEADING
 from .markdown import content_lines as _content_lines
 from .markdown import outside_fences as _outside_fences
 from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, TEX_MACROS, mathjax_script, project_macros
 from .publishable import publishable_article, shown_as_typed
-from .readback import (
-    READBACKS_DIR,
-    Readback,
-    formula_problems,
-    load_readbacks,
-    readback_for,
-    split_testimony,
-    typesetting_warnings,
-)
+from .readback import READBACKS_DIR, Readback, load_readbacks, readback_for
 from .review import (
     ReviewArticle,
     ReviewError,
@@ -157,8 +147,8 @@ from .review import (
 )
 from .skeleton import NodeSkeleton, SkeletonReport, _plural, source_passage
 from .status import is_definition
+from .testimony import formula_problems, split_testimony, typesetting_warnings
 
-_HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 # Links are matched in a line masked by _link_mask, where brackets in code such
 # as ``[0,1]^n`` and in math such as ``$(0,1]$`` are blanks. Any other bracket in
 # a label must be paired, so an earlier "[1]" or "[x]" on the line stays text.
@@ -3461,8 +3451,8 @@ def _readback_block(card: Readback | None, errors: tuple[str, ...]) -> str:
 
     The testimony is shown as typed, with line ends kept as character
     references. A current card's formulas are the pieces
-    :func:`~autoform_cli.readback.split_testimony` finds: each that
-    :func:`~autoform_cli.readback.formula_problems` accepts is marked for the
+    :func:`~autoform_cli.testimony.split_testimony` finds: each that
+    :func:`~autoform_cli.testimony.formula_problems` accepts is marked for the
     card's own TeX input, and any other is shown as typed, dollar signs and
     all. An invalid card's are all left as typed.
     """

@@ -119,3 +119,36 @@ class TestLspServer:
         assert required["lean_diagnostic_messages"] == {"project_dir", "file_path"}
         assert required["lean_hover"] == {"project_dir", "file_path", "line", "character"}
         assert set(required) == {"lean_diagnostic_messages", "lean_hover"}
+
+
+def test_the_runtime_fingerprint_covers_every_module_the_daemon_runs(repo_root):
+    """A live daemon is replaced only when a file in `_RUNTIME_SOURCES` changes, so every
+    servers module the daemon imports must be listed, apart from servers/__init__.py,
+    which the fingerprint reads too, and package files that hold only a docstring."""
+    import ast
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = (
+        "import json, sys\n"
+        "import servers.lean_runtime\n"
+        "from servers.lean_client import _RUNTIME_SOURCES\n"
+        "loaded = [m.__file__ for m in list(sys.modules.values()) if m.__name__.split('.')[0] == 'servers']\n"
+        "print(json.dumps([sorted(loaded), [str(p) for p in _RUNTIME_SOURCES]]))\n"
+    )
+    result = subprocess.run([sys.executable, "-c", script], cwd=repo_root, capture_output=True, text=True, check=True)
+    loaded, sources = json.loads(result.stdout)
+    fingerprinted = {Path(path).resolve() for path in sources} | {(repo_root / "servers" / "__init__.py").resolve()}
+
+    def docstring_only(path: Path) -> bool:
+        body = ast.parse(path.read_text(encoding="utf-8")).body
+        return all(isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) for node in body)
+
+    missing = [
+        path
+        for path in (Path(name).resolve() for name in loaded)
+        if path not in fingerprinted and not (path.name == "__init__.py" and docstring_only(path))
+    ]
+    assert not missing, f"add these to _RUNTIME_SOURCES in servers/lean_client.py: {missing}"

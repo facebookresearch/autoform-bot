@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from servers.repl.core import (
+from servers._process import (
     _inherit_clean_env,
     _kill_subprocesses,
     _wait_for_live_process_group_exit,

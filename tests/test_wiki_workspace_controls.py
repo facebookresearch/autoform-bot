@@ -90,6 +90,7 @@ class Element {
   set textContent(value) {this.text=String(value);this.children=[];}
   setAttribute(name,value) {this.attrs.set(name,String(value));}
   getAttribute(name) {return this.attrs.has(name)?this.attrs.get(name):null;}
+  removeAttribute(name) {this.attrs.delete(name);}
   appendChild(child) {child.parentElement=this;this.children.push(child);return child;}
   insertBefore(child,before) {child.parentElement=this;this.children.splice(this.children.indexOf(before),0,child);}
   // As the DOM does, a string argument becomes a text node.
@@ -109,7 +110,7 @@ document.createElement=tag=>new Element(tag);
 document.createTextNode=text=>{const node=new Element('text');node.textContent=text;return node;};
 const window=new Element('window'),host=new Element('div'),records=new Map(),modes=[],observers=[];
 const navigation={bindReader(){}};
-var currentBundle={nodeId:'chapter',scope:'chapter',title:'Authored topic',url:'https://example.test/chapter/'};
+var currentBundle={nodeId:'chapter',scope:'chapter',title:'Authored topic',url:'https://example.test/chapter/',graph:{view:{}}};
 var instance=1,trail=[],view={},family,data={title:'Authored topic',nodes:[],edges:[]};
 var mapAllowed=true,ui$mapAllowed=true,ui$mode='graph',ui$selectedStatuses=new Set(['planned']),ui$showIsolated=true;
 var presentStatuses=['planned'],ui$relationIds=new Set(['F']),ui$overviewGroup=null,ui$area=null;
@@ -145,7 +146,8 @@ def _run(body: str) -> None:
 
 def _run_controls(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
-    script += "const controls=['element','button','safeHref','buildShell','bindEvents','setBrowse','syncControls','currentOverviewGroup'].map(original).join('\\n');\n"
+    script += "const controls=['element','button','safeHref','buildShell','bindEvents','setBrowse','syncControls','currentOverviewGroup',"
+    script += "'renderBreadcrumb','routeTrail','semanticParent','refreshReadingLabels'].map(original).join('\\n');\n"
     script += "const start=source.indexOf('    var dom$announcement,');assert(start>=0);\n"
     script += "const domDeclarations=source.slice(start,source.indexOf(';',start)+1);\n"
     program = _CONTROL_PEERS + "\n" + body
@@ -166,21 +168,21 @@ def test_toolbar_keeps_browse_choices_nested_and_back_visible_only_outside_the_g
       assert.strictEqual(dom$sourcesMode.parentElement,dom$browsePopover);
       assert.equal(dom$sourcesMode.textContent,'Source texts');
       assert.equal(dom$listMode.textContent,'Statements in this topic');
-      assert.equal(dom$regionsMode,undefined);
+      assert.equal(typeof dom$regionsMode,'undefined');
       assert(!toolbar.all().some(node=>node.tagName==='BUTTON'&&['Map','Results','Sources','Regions','Areas'].includes(node.textContent)));
       assert.equal(dom$graphMode.textContent,'Back to map');assert.equal(dom$graphMode.hidden,true);
       // Browse marks only the list on screen, so on the map no control reads as pressed and in a list exactly one does.
-      const pressed=()=>toolbar.all().filter(node=>node.getAttribute('aria-pressed')==='true');
-      assert.deepEqual(pressed(),[]);
+      const pressedNow=()=>toolbar.all().filter(node=>node.getAttribute('aria-pressed')==='true');
+      assert.deepEqual(pressedNow(),[]);
       assert.equal(dom$stage.hidden,false);assert.equal(dom$inventory.hidden,true);
       currentBundle.scope='roadmap';ui$mode='list';ui$mapAllowed=false;syncControls();
       assert.equal(dom$listMode.textContent,'All statements');assert.equal(dom$graphMode.hidden,false);
-      assert.deepEqual(pressed(),[dom$listMode]);
+      assert.deepEqual(pressedNow(),[dom$listMode]);
       assert.equal(dom$graphMode.disabled,true);assert.equal(dom$stage.hidden,true);assert.equal(dom$inventory.hidden,false);
       ui$mapAllowed=true;ui$mode='sources';syncControls();
       assert.equal(dom$graphMode.disabled,false);assert.equal(dom$graphMode.hidden,false);
-      assert.equal(dom$inventory.querySelector('h2').textContent,'Source tracks');assert.deepEqual(pressed(),[dom$sourcesMode]);
-      ui$mode='graph';syncControls();assert.equal(dom$graphMode.hidden,true);assert.deepEqual(pressed(),[]);
+      assert.equal(dom$inventory.querySelector('h2').textContent,'Source tracks');assert.deepEqual(pressedNow(),[dom$sourcesMode]);
+      ui$mode='graph';syncControls();assert.equal(dom$graphMode.hidden,true);assert.deepEqual(pressedNow(),[]);
     """)
 
 

@@ -7,7 +7,11 @@ declaration types rather than relying on memory.
 
 - Search the pinned Mathlib checkout before introducing new lemmas, and prefer a short proof using a
   verified existing theorem over recreating library mathematics.
-- Namespaces describe mathematics, never chapters, task IDs, or theorem numbers.
+- Use `snake_case` for theorems, `UpperCamelCase` for types and classes, and `lowerCamelCase` for
+  terms, with established suffixes such as `_iff` and `_of_`. Namespaces describe mathematics,
+  never chapters, task IDs, or theorem numbers.
+- Use `simp only [...]` for nonterminal simplification, and document a public declaration whose
+  purpose is not obvious.
 - Use the weakest sufficient typeclasses (`Semiring` before `Ring`, `Preorder` before
   `LinearOrder`) and `Finite` before `Fintype` when enumeration is unnecessary. Remove unused
   hypotheses.

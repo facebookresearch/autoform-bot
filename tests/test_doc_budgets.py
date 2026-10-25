@@ -11,6 +11,7 @@ from pathlib import Path
 BUDGETS = {
     "AGENTS.md": 59,
     "CONTRIBUTING.md": 87,
+    "docs/explorer-design.md": 65,  # Internal architecture and failure contracts, not another user guide.
     "README.md": 120,
     "autoform_cli/README.md": 1188,
     "autoform_cli/project/README.md": 120,

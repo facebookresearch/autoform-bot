@@ -165,6 +165,7 @@ from urllib.parse import quote, unquote, urlsplit
 import psutil
 import tomli
 
+from ._fs import resolved_path
 from ._tree_snapshot import _normalized_name
 from .graph import Graph, GraphValidationError, Node, load_graph
 from .lean import (
@@ -178,7 +179,6 @@ from .lean import (
     index_project,
     resolve_lean_root,
 )
-from .markdown import resolved_path
 
 SKELETON_SCHEMA = "autoform-skeleton/v5"
 SEMANTIC_SCHEMA = "autoform-lean-expr/v4"

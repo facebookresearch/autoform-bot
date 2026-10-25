@@ -16,7 +16,7 @@ from autoform_cli import __main__ as cli
 from autoform_cli import debrief
 from autoform_cli import debrief_orchestrator as orchestrator
 from autoform_cli import debrief_store as store
-from tests.test_work import _article, _edit, _project
+from tests.work_fixture import _article, _edit, _project
 
 PROVE = "af_000000000000000000000003"
 ANSWER = json.dumps({"nothing_to_report": True})

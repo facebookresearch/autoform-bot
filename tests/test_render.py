@@ -23,18 +23,20 @@ import pytest
 import html5lib
 from mkdocs.utils.meta import get_data
 
+import autoform_cli._repository as repository_module
 import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
 import autoform_cli.render as render_module
 from autoform_cli import _directory_binding as directory_binding_module
 from autoform_cli import dag_viewer, graph_pages
 from autoform_cli.__main__ import main
+from autoform_cli._repository import _normalize_remote
 from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS
 from autoform_cli.dashboard import publication_bound_live_state
 from autoform_cli.graph import GraphValidationError, atlas_omissions, load_graph
-from autoform_cli.lean import LeanSourceError, _normalize_remote
+from autoform_cli.lean import LeanSourceError
 from autoform_cli.markdown import site_converter
 from autoform_cli.render import (
     PUBLICATION_MANIFEST,
@@ -200,7 +202,8 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert records["roadmap"]["route"] == "../roadmap/index.html"
     assert records["roadmap"]["scope"] == "roadmap"
     assert records["top"]["route"] == "../roadmap/index.html#top"
-    assert records["top"]["parent"] == records["top"]["scope"] == "roadmap"
+    assert records["top"]["scope"] == "roadmap" and type(records["top"]["parent"]) is int
+    assert search_index["nodes"][records["top"]["parent"]]["id"] == "roadmap"
     assert _decoded_relations(search_index) == [["base", "top", 1, 0]]
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
     assert chapter.count('class="bp-reading-source"') == chapter.count('class="bp-dag-viewer"') == 1
@@ -4503,7 +4506,7 @@ def _print_composed_names(monkeypatch: pytest.MonkeyPatch) -> None:
             completed.stdout = completed.stdout.replace("e\u0301", "\u00e9")
         return completed
 
-    monkeypatch.setattr(lean_module.subprocess, "run", composed)
+    monkeypatch.setattr(repository_module.subprocess, "run", composed)
 
 
 def test_decomposed_file_names_link_to_the_spelling_git_committed(

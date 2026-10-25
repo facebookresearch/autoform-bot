@@ -724,6 +724,24 @@ def test_ignores_fenced_tables_and_accepts_escaped_pipes(tmp_path: Path) -> None
     assert summary.entries[0].evidence == "Case A | Case B"
 
 
+def test_a_fence_that_never_closes_keeps_the_table_below_it_out_of_the_contract(tmp_path: Path) -> None:
+    # Left open at the margin, the fence makes the site show the page as typed,
+    # so the rows below it never render as a table (#201).
+    blueprint = tmp_path / "blueprint"
+    path = blueprint / "coverage/README.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "# Coverage\n\n```markdown\nexample\n\n"
+        "| Area | Coverage | Evidence |\n| --- | --- | --- |\n| Main theorem | OUT | Not in scope |\n",
+        encoding="utf-8",
+    )
+
+    summary, issues = load_coverage(blueprint)
+
+    assert summary is None
+    assert issues
+
+
 def test_rejects_placeholder_and_unresolved_decomposed_evidence(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     source = blueprint / "sources" / "README.md"

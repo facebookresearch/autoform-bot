@@ -56,9 +56,9 @@ scripts and logo inside them), and two blueprint paths that differ only in case
 or Unicode form. A blueprint file at exactly `dependencies.json` or
 `javascripts/blueprint-dag.js` is left out of the site with a warning.
 
-The search index optionally carries `reading_title` (`inline-parts-v1`):
-captured title bytes and publisher-derived text, code and marked TeX parts.
-Only reading controls typeset these parts with the project's macros; map,
+The search index and graph breadcrumbs may carry `reading_title` (`inline-parts-v1`):
+captured title text and publisher-derived text, code and marked TeX parts.
+Only reading controls and breadcrumbs typeset these parts with the project's macros; map,
 inventory and search labels retain the title as typed. Unsupported labels
 stay literal. The original title, relations and status are unchanged.
 

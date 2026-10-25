@@ -21,7 +21,7 @@ from autoform_cli.library.search import (
 )
 from autoform_cli.search import SEARCH_SCHEMA, SearchError, search_blueprint
 from tests.library_fixture import MATHLIB_REV, REV, declaration, entry, make_library, manifest
-from tests.test_search import _project
+from tests.search_fixture import _project
 
 _DOCS = {"Lib.Convex": "Hahn-Banach separation in locally convex spaces."}
 

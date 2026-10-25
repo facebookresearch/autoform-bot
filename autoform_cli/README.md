@@ -19,7 +19,9 @@ The H1 is the article's title. Container prose is the exposition; a standalone
 list item linking to a formalizable leaf places the leaf there in the published
 chapter. Unplaced leaves appear under “Additional formalization targets”,
 unplaced module catalogs under “Module inventories”. Keep the root article a
-short preface and table of contents, not an inventory of every milestone.
+short preface and table of contents, not an inventory of every milestone: large
+inventories belong in coverage, and a detailed container introduces its
+mathematics in prose and places statements under meaningful section headings.
 
 Frontmatter records checked facts:
 
@@ -60,14 +62,14 @@ the same character, length and indent: on a chapter page an unclosed fence can
 pair with a later article's fence and hide what lies between, so `check` warns,
 the site shows that page as typed (see
 [Validation](reference/validation-and-audit.md#validation)), and the audit
-reports `unclosed-code-fence`. For the graph and the audit, an unclosed fence is
-plain text that hides no heading or link, and a later bare line of its character
-at least as long closes it. On the page, an unclosed backtick fence can pair
-with a later backtick run in its paragraph as inline code; a link there is still
-a dependency. An HTML comment that never closes, even one opened in inline code
-or an indented code block, hides every later heading and dependency link: the
-graph loses those edges, one opened in the statement puts the rest of the
-article in the theorem box, and nothing reports it.
+reports `unclosed-code-fence`. For headings, dependency and source links, an
+unclosed fence is plain text, even where the page pairs its backticks with a
+later run as inline code, and a later bare line of its character at least as
+long closes it. Coverage files and the unpublished-folder link check read it as
+open to the end of the file. An HTML comment that never closes, even one opened
+in inline code or an indented code block, hides every later heading and
+dependency link: the graph loses those edges, one opened in the statement puts
+the rest of the article in the theorem box, and nothing reports it.
 
 `## Depends on` lists what the article needs to be *stated*;
 `## Proof depends on` lists what only its *proof* needs. Links under them are
@@ -239,7 +241,10 @@ a debrief records the same string.
 ### init
 
 Create a new project's vault, site configuration, and CI. Existing files are
-left alone, so the same command repairs a project:
+left alone, so the same command repairs a project. `--force` instead overwrites
+every file `init` manages with its template, `blueprint/roadmap/README.md`,
+`blueprint/coverage/README.md`, `README.md` and `mkdocs.yml` included, and
+replaces a root `.gitignore` rather than adding to it:
 
 ```bash
 autoform init . --title "Finite Flat Group Schemes" \
@@ -376,20 +381,21 @@ push to `main`, with code links rendered at that commit by `--ref`. A failed
 verification deploys nothing, so the last verified site stays up. Pull requests
 and manual runs build the site but never deploy, and cannot cancel a waiting
 deploy. To redeploy, re-run the Pages run that the newest successful verify run
-on `main` started; re-running an older one deploys the older commit. A project
-scaffolded before this rule deploys every push;
-[Upgrading](../CHANGELOG.md#upgrading-from-050) says how to switch. No pin has
-to move: every `AUTOFORM_REF` since 0.5.0 has `render --ref`.
+on `main` started; re-running an older one deploys the older commit. Deleting or
+renaming that workflow, or disabling it in the repository's Actions settings,
+stops every deploy, with no error. A project scaffolded before this rule deploys
+every push; [Upgrading](../CHANGELOG.md#upgrading-from-050) says how to switch.
+No pin has to move: every `AUTOFORM_REF` since 0.5.0 has `render --ref`.
 
-Pages gates on `check` and `render`, and runs `audit` after `check` only as a
-report, with `continue-on-error`: the log lists every finding, or
-`OK: roadmap audit passed`. An invalid coverage contract fails `render` before
-it writes anything, but `MAPPED` rows (each an audit `declared-coverage-gap`;
-a new project lists the template's row) and coverage-role issues, which
-`render` prints as warnings, still publish. A project scaffolded before the
-report step can add, after `check`, a `continue-on-error: true` step running
-`autoform audit blueprint --lean-root .` from the same `uvx --from` source. To
-block merges on findings, run `autoform audit` in CI without it.
+Pages gates on `check` and `render`, and runs `audit` after `check` and
+`site check` after the MkDocs build only as reports, with `continue-on-error`:
+`audit` logs every finding, or `OK: roadmap audit passed`. An invalid coverage
+contract fails `render` before it writes anything, but `MAPPED` rows (each an
+audit `declared-coverage-gap`; a new project lists the template's row) and
+coverage-role issues, which `render` prints as warnings, still publish. A
+project scaffolded before a report step can add it by hand, with
+`continue-on-error: true` and the same `uvx --from` source (for `site check`,
+from 0.6.0). To block merges on findings, run `autoform audit` in CI without it.
 
 ### check
 
@@ -421,7 +427,7 @@ full or by its last name component. Declarations citing a source only through
 their module docstring share one warning, silenced by naming the module, or in
 full a citing declaration; importing the module names it, importing only an
 umbrella module above it does not. A module catalog, or a container whose scope
-is all proved, reaches nothing; a bare number cites nothing; and a
+holds a target and is all proved, reaches nothing; a bare number cites nothing; and a
 last-component match counts any identifier, comments and strings included, so a
 generic one such as `symm` can hide the warning. Reuse such a declaration and
 name it in the note of each article using it; when it does not apply, name it,
@@ -644,7 +650,7 @@ invisible or reordering characters, combining marks stacked over the lines
 around or with nothing to sit on, showing no letter or digit, or exceeding
 32 KiB or 500 lines; a write also refuses code points unassigned in its
 Python's Unicode data. A formula never invalidates testimony: one
-`readback.formula_problems` cannot typeset is shown as typed, and render warns
+`testimony.formula_problems` cannot typeset is shown as typed, and render warns
 without changing its exit status.
 
 A card file holds at most 4 MiB, and its frontmatter is read from its first 32
@@ -1066,8 +1072,8 @@ schema and when render replaces an earlier site.
 copies, and writes `SUMMARY.md`, `structure.md`, `publication.json`,
 `dependencies.md`, `dependencies.json`, the `dependencies/` pages, and the
 chapter pages it consolidates; a vault copy of one of these is not published. A
-directory at any of these paths, or a file where one of their folders goes,
-stops `render` with its path before anything is written, and `check` warns about
+directory holding a file at any of these paths, or a file where one of their
+folders goes, stops `render` with its path before anything is written, and `check` warns about
 it. The stale root `dependencies.html`, `graph.html`, and `progress.md` are kept
 out of the site. A `tex-macros.json` directory that holds files leaves the site
 without project macros, with a warning.
@@ -1107,10 +1113,11 @@ do nothing, however a formula or macro reaches them. A macro may not take one of
 their names; `check` and `render` warn about a macro they leave out, judging the
 copy of `tex-macros.json` that `render` reads once and publishes. Each read-back
 card has its own TeX input with only base, ams, and noundefined. Only renderer-marked
-formulas, such as `$...$` in Markdown, are typeset. A link or button's formula gets
-no MathJax tab stop, menu or accessibility explorer. Refreshes use fresh inputs
-and retain earlier glyph styles; graph labels, a heading's title, a `discussion:`
-value, home-page lead, navigation and table of contents show as typed. A formula paints only within
+formulas, such as `$...$` in Markdown, are typeset. Formulas in links, controls and
+navigation get no extra MathJax tab stop, menu or accessibility explorer. Refreshes
+retain earlier glyph styles; graph labels, metadata titles, `discussion:` values,
+home-page leads and Material navigation/ToC stay typed. Explorer reading links and
+breadcrumbs typeset publisher-derived title parts with project macros. A formula paints only within
 its own line and block, and an inline formula wider than its paragraph is cut at
 its edge, so write one that wide as a display, which scrolls.
 

@@ -5,9 +5,7 @@
 for the one command that follows. A raised limit costs nothing to write and
 hides slow automation, so a library accumulates them: a file-wide raise covers
 every later declaration whether or not it needs one, and ``0`` removes the
-limit, letting elaboration run indefinitely instead of failing. ATLAS v1, built
-with Autoform, accumulated 901 raised ``maxHeartbeats`` settings, 497 of them
-file- or section-wide and 9 of them ``0`` (autoform-bot issue #260).
+limit, letting elaboration run indefinitely instead of failing.
 
 Like the declaration index, this is a lexical pass over comment-free source
 lines. It tracks ``namespace``/``section``/``mutual``/``end`` nesting,

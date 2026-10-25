@@ -38,9 +38,7 @@ from autoform_cli.impact import (
 from autoform_cli.lean import snapshot_project_sources
 from autoform_cli.skeleton import LeanLibrary, SkeletonError, lean_libraries
 from autoform_cli.work import work_context
-from tests.conftest import _lean_toolchain_available
-
-_SKELETON_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "skeleton-project"
+from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
 
 
 # --------------------------------------------------------------------------- #

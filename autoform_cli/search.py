@@ -163,15 +163,15 @@ def search_blueprint(
     blueprint again, so a hit describes the Markdown as it is now.
     """
 
-    words = _words(query)
+    words = query_words(query)
     if not words:
         raise SearchError("search query has no terms")
     terms = tuple(dict.fromkeys(_stem(word) for word in words))
-    typed = _typed_words(query, words)
+    typed = typed_words(query, words)
     if limit < 1:
         raise SearchError("search limit must be a positive integer")
     wanted_states = tuple(sorted(set(states)))
-    wanted_declarations = tuple(sorted({_normalize(declaration) for declaration in declarations}))
+    wanted_declarations = tuple(sorted({normalize(declaration) for declaration in declarations}))
     if "" in wanted_declarations:
         raise SearchError("search declaration kind is empty")
 
@@ -191,7 +191,7 @@ def search_blueprint(
     # the CLI names the unused kind.
     unused = tuple(kind for kind in wanted_declarations if not any(_declares(node, (kind,)) for node in runtime.nodes))
     if unused and len(unused) == len(wanted_declarations):
-        in_use = sorted({_normalize(node.declaration) for node in runtime.nodes if node.declaration})
+        in_use = sorted({normalize(node.declaration) for node in runtime.nodes if node.declaration})
         raise SearchError(
             f"no article declares kind {', '.join(unused)}; this blueprint uses: {', '.join(in_use) or 'none'}"
         )
@@ -201,7 +201,7 @@ def search_blueprint(
     for node in runtime.nodes:
         for dependency in node.dependencies:
             used_by[dependency].append(node.id)
-        title = _normalize(node.title)
+        title = normalize(node.title)
         title_count[title] = title_count.get(title, 0) + 1
 
     matches: list[tuple[int, bool, int, bool, SearchHit]] = []
@@ -213,7 +213,7 @@ def search_blueprint(
         revision, text = _article(graph.nodes[node.id].path, node)
         parts = article_parts(text)
         fields = _fields(node, nodes, root, parts)
-        ranks = _ranks(terms, fields)
+        ranks = field_ranks(terms, fields)
         if ranks is None:
             continue
         dependents = sorted(used_by[node.id])
@@ -235,9 +235,9 @@ def search_blueprint(
             used_by=tuple(dependents[:_USED_BY_LIMIT]),
             used_by_count=len(dependents),
             matched_fields=tuple(_FIELDS[rank] for rank in sorted(set(ranks))),
-            shared_title=title_count[_normalize(node.title)] > 1,
+            shared_title=title_count[normalize(node.title)] > 1,
         )
-        matches.append((*_rank_key(ranks, words, fields, _FIELDS, typed, _names(node)), hit))
+        matches.append((*rank_key(ranks, words, fields, _FIELDS, typed, _names(node)), hit))
 
     # The best field first, and within it the articles holding the words as
     # typed. Among equals, the article whose worst-placed term sits in a
@@ -265,7 +265,7 @@ def statement_preview(hit: SearchHit) -> str:
     return prose if len(prose) <= 200 else prose[:197].rstrip() + "..."
 
 
-def _normalize(text: str) -> str:
+def normalize(text: str) -> str:
     """Fold ``text`` so spellings a reader takes for the same string compare equal.
 
     Case, width, ligatures, accents, typographic dashes and quotes, and
@@ -287,7 +287,7 @@ def _normalize(text: str) -> str:
     return " ".join(plain.casefold().split())
 
 
-def _ranks(terms: tuple[str, ...], fields: dict[str, str], order: tuple[str, ...] = _FIELDS) -> list[int] | None:
+def field_ranks(terms: tuple[str, ...], fields: dict[str, str], order: tuple[str, ...] = _FIELDS) -> list[int] | None:
     """Return each term's best field in ``order``, or ``None`` when a term occurs in none."""
 
     ranks: list[int] = []
@@ -295,7 +295,7 @@ def _ranks(terms: tuple[str, ...], fields: dict[str, str], order: tuple[str, ...
         rank = next((rank for rank, name in enumerate(order) if term in fields[name]), None)
         # A declaration's whole name, or its last components, names the
         # declaration as its last component does. A namespace alone does not.
-        if f".{_lean_name(term)}\n" in fields["lean_names"]:
+        if f".{lean_name(term)}\n" in fields["lean_names"]:
             rank = min(order.index("lean"), len(order) if rank is None else rank)
         if rank is None:
             return None
@@ -303,7 +303,7 @@ def _ranks(terms: tuple[str, ...], fields: dict[str, str], order: tuple[str, ...
     return ranks
 
 
-def _rank_key(
+def rank_key(
     ranks: list[int],
     words: tuple[str, ...],
     fields: dict[str, str],
@@ -318,26 +318,26 @@ def _rank_key(
     of ``names`` exactly.
     """
 
-    return min(ranks), _ranks(words, fields, order) is None, max(ranks), not _spells_a_name(typed, names)
+    return min(ranks), field_ranks(words, fields, order) is None, max(ranks), not _spells_a_name(typed, names)
 
 
-def _lean_name(name: str) -> str:
+def lean_name(name: str) -> str:
     """Return a folded Lean name as a query term spells it.
 
     ``_root_.`` and the quoting marks leave it the same name. A term has lost
     the prime, ``?`` or ``!`` a name ends with, so the name loses it as well.
     """
 
-    return _unquoted(name).rstrip(_QUOTING)
+    return unquoted(name).rstrip(_QUOTING)
 
 
-def _unquoted(name: str) -> str:
+def unquoted(name: str) -> str:
     """Return a Lean name without ``_root_.`` and its quoting marks, its ending kept."""
 
     return name.removeprefix("_root_.").replace("\u00ab", "").replace("\u00bb", "")
 
 
-def _typed_words(query: str, words: tuple[str, ...]) -> frozenset[str]:
+def typed_words(query: str, words: tuple[str, ...]) -> frozenset[str]:
     """Return the words of ``query`` as typed, for the exact-name key.
 
     A term has lost the prime, ``?`` or ``!`` that can end a Lean name; the
@@ -345,7 +345,7 @@ def _typed_words(query: str, words: tuple[str, ...]) -> frozenset[str]:
     word the terms dropped, one not in ``words``, names nothing here either.
     """
 
-    return frozenset(_unquoted(_as_typed(word)) for word in _normalize(query).split() if _bare(word) in words)
+    return frozenset(unquoted(_as_typed(word)) for word in normalize(query).split() if _bare(word) in words)
 
 
 def _as_typed(word: str) -> str:
@@ -371,19 +371,19 @@ def _spells_a_name(words: frozenset[str], names: Sequence[str]) -> bool:
     """Whether one of ``words`` spells one of ``names``, or its last components, ignoring case."""
 
     for name in names:
-        components = _unquoted(_normalize(name)).split(".")
+        components = unquoted(normalize(name)).split(".")
         if any(".".join(components[index:]) in words for index in range(len(components))):
             return True
     return False
 
 
-def _words(query: str) -> tuple[str, ...]:
+def query_words(query: str) -> tuple[str, ...]:
     """Split a query into the distinct words an article must contain."""
 
     if any(unicodedata.category(character) == "Cs" for character in query):
         raise SearchError("search query is not valid Unicode text")
     words: list[str] = []
-    for word in _normalize(query).split():
+    for word in normalize(query).split():
         word = _bare(word)
         if word:
             words.append(word)
@@ -464,7 +464,7 @@ def _stem(word: str) -> str:
 def _declares(node: RuntimeNode, kinds: tuple[str, ...]) -> bool:
     """Whether ``node`` declares one of ``kinds``, with or without leading modifiers."""
 
-    declaration = _normalize(node.declaration or "")
+    declaration = normalize(node.declaration or "")
     return any(declaration == kind or declaration.endswith(f" {kind}") for kind in kinds)
 
 
@@ -507,18 +507,18 @@ def _fields(
         parent = nodes[parent].parent
     names = _names(node)
     return {
-        "title": _normalize(_title(node.title)),
-        "lean": _normalize("\n".join(name.rpartition(".")[2] for name in names)),
-        "node_id": _normalize(node.id.rpartition("/")[2]),
-        "statement_text": _normalize(visible_prose(parts.statement)),
-        "ancestors": _normalize("\n".join(ancestors)),
+        "title": normalize(_title(node.title)),
+        "lean": normalize("\n".join(name.rpartition(".")[2] for name in names)),
+        "node_id": normalize(node.id.rpartition("/")[2]),
+        "statement_text": normalize(visible_prose(parts.statement)),
+        "ancestors": normalize("\n".join(ancestors)),
         # The names also without ``_root_.`` and quoting marks, so a namespace
         # that a quoted component spells is found here.
-        "qualified_names": _normalize("\n".join(dict.fromkeys([node.id, *names, *map(_unquoted, names)]))),
+        "qualified_names": normalize("\n".join(dict.fromkeys([node.id, *names, *map(unquoted, names)]))),
         # Not a field of its own: each name between a dot and a newline, which
         # no name holds, so that a term is looked up as a whole name or as its
         # last components.
-        "lean_names": "".join(f".{_lean_name(_normalize(name))}\n" for name in names),
+        "lean_names": "".join(f".{lean_name(normalize(name))}\n" for name in names),
     }
 
 
