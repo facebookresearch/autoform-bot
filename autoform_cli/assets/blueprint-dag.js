@@ -2595,6 +2595,12 @@
       // The list says "statements", as Browse and the dashboard do.
       if (navigation && ui$mode !== "sources") dom$inventory.querySelector("h2").textContent = articles ? "Statements & articles" : "Statements";
       dom$inventoryRows = new Map();
+      // A page too big for a map says so in words: a disabled button's tooltip never shows on a touch screen.
+      if (navigation && !mapAllowed && ui$mode === "list") {
+        var topics = data.nodes.filter(function (node) { return node.kind === "scope"; }).length;
+        dom$inventoryList.appendChild(element("li", "bp-dag-inventory-note", topics > 1 ? (currentBundle && currentBundle.title || "This page") + " has " +
+          num(topics) + " topics, too many to draw as one map. Open one from Topics, or search." : "Too many statements to draw as one map. Search to find one."));
+      }
       visible.forEach(function (node) {
         var item = element("li"), row = button("bp-dag-inventory-row", "");
         row.dataset.inventoryNodeId = node.id;

@@ -375,11 +375,13 @@ def test_an_oversized_module_scope_keeps_its_real_math_articles_navigable_withou
       renderInventory(true);
       assert.equal(dom$inventory.querySelector('h2').textContent, 'Statements & articles');
       assert.equal(dom$inventorySummary.textContent, '100 of ' + fixture.count);
-      assert.equal(dom$inventoryList.children.length, 100);
+      // The list says in words why there is no map, ahead of its 100 rows.
+      assert.equal(dom$inventoryList.children[0].textContent, 'Too many statements to draw as one map. Search to find one.');
+      assert.equal(dom$inventoryList.children.length, 101);
       assert.equal(dom$loadMore.hidden, false);
       ui$listLimit = fixture.count; renderInventory(true);
       assert.equal(dom$inventorySummary.textContent, fixture.count + ' articles');
-      assert.equal(dom$inventoryList.children.length, fixture.count);
+      assert.equal(dom$inventoryList.children.length, fixture.count + 1);
       assert.equal(dom$loadMore.hidden, true);
       const last = articles.at(-1);
       dom$inventoryRows.get(last.id).listeners.click();
