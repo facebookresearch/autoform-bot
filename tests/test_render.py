@@ -3,7 +3,6 @@ from __future__ import annotations
 import dataclasses
 import errno
 import hashlib
-import html
 import json
 import logging
 import os
@@ -875,6 +874,7 @@ def test_the_wide_hero_bar_takes_the_fully_proved_colour(tmp_path: Path) -> None
 def test_the_ready_figure_links_the_list_of_exactly_what_it_counts(tmp_path: Path) -> None:
     """The figure opens the explorer's list filtered to the states it counts."""
     project = _project(tmp_path)
+    _edit(project / "blueprint/README.md", "# Overview\n", "# Overview\n\nA short claim.\n")
     roadmap = project / "blueprint/roadmap"
     (roadmap / "next.md").write_text(
         "---\ndeclaration: theorem\n---\n\n# Next\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
@@ -889,10 +889,17 @@ def test_the_ready_figure_links_the_list_of_exactly_what_it_counts(tmp_path: Pat
     index = json.loads((tmp_path / "out/dependencies/index.json").read_text(encoding="utf-8"))
     ready = [r["id"] for r in index["nodes"] if r.get("result") and r["status"] in {"can_prove", "can_state"}]
     assert ready == ["next"]
-    link = re.search(r'<a class="bp-figure bp-figure-link" href="([^"]+)"><div class="bp-figure-value">([^<]+)</div>', overview)
-    assert link is not None
-    assert html.unescape(link.group(1)) == "roadmap/index.html#view=list&status=can_state,can_prove"
-    assert int(link.group(2).replace(",", "")) == len(ready)
+    # Through the site's own Markdown, the links come out whole and add no paragraphs.
+    page = html5lib.parse(
+        site_converter().convert(overview.split("\n---\n", 1)[1]), treebuilder="etree", namespaceHTMLElements=False
+    )
+    hero = next(el for el in page.iter() if el.get("class") == "bp-hero")
+    assert not [el for el in hero.iter() if el.tag == "p" and not el.get("class")]
+    assert [el.get("class") for el in hero.iter() if el.tag in {"p", "a"}][:2] == ["bp-hero-lead", "bp-intro-book"]
+    [link] = [el for el in hero.iter() if "bp-figure-link" in (el.get("class") or "").split()]
+    assert [child.get("class") for child in link] == ["bp-figure-value", "bp-figure-label", "bp-figure-note"]
+    assert link.get("href") == "roadmap/index.html#view=list&status=can_state,can_prove"
+    assert int(link[0].text.replace(",", "")) == len(ready)
 
 
 def test_completion_requires_every_dependency_to_be_fully_proved(tmp_path: Path) -> None:
@@ -1311,7 +1318,7 @@ def test_the_rail_hero_keeps_two_figures_and_the_coverage_counts_and_hides_nothi
     intro = overview.split('class="bp-landing-intro"', 1)[1].split('class="bp-dag-viewer"', 1)[0]
     # Two figures, the coverage counts beside their link, and no markup the stylesheet would hide.
     figures = intro.split('class="bp-hero-figures">', 1)[1]
-    assert re.findall(r'<div class="bp-figure-label">([^<]+)</div>', figures) == ["Fully proved", "Ready to start"]
+    assert re.findall(r'class="bp-figure-label">([^<]+)<', figures) == ["Fully proved", "Ready to start"]
     assert intro.index("bp-hero-figures") < intro.index("bp-hero-coverage-counts") < intro.index("bp-hero-coverage-link")
     for hidden in ("bp-hero-kicker", "bp-hero-bar", "bp-hero-counts"):
         assert hidden not in intro

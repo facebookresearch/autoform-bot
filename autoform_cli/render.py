@@ -2340,12 +2340,16 @@ def _render_hero(
         )
 
     def figure(label: str, value: str, note: str, neutral: bool) -> str:
+        # A link is inline, and Markdown's HTML pass breaks blocks inside one
+        # apart, so the linked figure is built from spans the stylesheet stacks.
+        link = label == "Ready to start" and ready_href
+        tag = "span" if link else "div"
         inner = (
-            (f'<div class="bp-figure-value">{value}</div>' if value else "")
-            + f'<div class="bp-figure-label">{html.escape(label)}</div>'
-            + (f'<div class="bp-figure-note">{html.escape(note)}</div>' if note else "")
+            (f'<{tag} class="bp-figure-value">{value}</{tag}>' if value else "")
+            + f'<{tag} class="bp-figure-label">{html.escape(label)}</{tag}>'
+            + (f'<{tag} class="bp-figure-note">{html.escape(note)}</{tag}>' if note else "")
         )
-        if label == "Ready to start" and ready_href:
+        if link:
             return f'<a class="bp-figure bp-figure-link" href="{html.escape(ready_href, quote=True)}">{inner}</a>'
         return f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">{inner}</div>'
 
@@ -2366,8 +2370,9 @@ def _render_hero(
         + ("" if rail else '<div class="bp-hero-kicker">Formalization blueprint</div>')
         + f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
         + (f'<p class="bp-hero-lead">{lead}</p>' if lead else "")
+        # In its own block: Markdown breaks an inline link between blocks apart.
         + (
-            f'<a class="bp-intro-book" href="{html.escape(book_href, quote=True)}">Start reading</a>'
+            f'<div><a class="bp-intro-book" href="{html.escape(book_href, quote=True)}">Start reading</a></div>'
             if book_href
             else ""
         )
@@ -4030,6 +4035,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
    colours and shows it is a link by underlining its label. */
 .md-typeset a.bp-figure-link,
 .md-typeset a.bp-figure-link:is(:visited, :hover, :focus-visible) {{ color: var(--bp-fg); text-decoration: none; }}
+.bp-figure-link > span {{ display: block; }}
 .md-typeset a.bp-figure-link:is(:hover, :focus-visible) .bp-figure-label {{ text-decoration: underline; }}
 
 .bp-hero-bar {{
