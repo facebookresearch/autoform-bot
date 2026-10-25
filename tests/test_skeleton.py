@@ -39,7 +39,7 @@ from autoform_cli.lean_probe import (
     _PROCESS_TERMINATION_GRACE,
     _CommandTimedOut,
     _ProbeEnvironmentError,
-    build_probe_helper,
+    _build_probe_helper,
     _join_readers,
     lean_libraries,
     module_of,
@@ -278,12 +278,12 @@ def _fake_default_probe(monkeypatch, probe) -> list[tuple[str, ...]]:
 
     checks: list[tuple[str, ...]] = []
     monkeypatch.setattr(
-        "autoform_cli.skeleton.check_build_freshness", lambda root, modules, **kwargs: checks.append(modules)
+        "autoform_cli.lean_probe._check_build_freshness", lambda root, modules, **kwargs: checks.append(modules)
     )
     monkeypatch.setattr(
-        "autoform_cli.skeleton.build_probe_helper", lambda root, directory, **kwargs: directory
+        "autoform_cli.lean_probe._build_probe_helper", lambda root, directory, **kwargs: directory
     )
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda program, root, **kwargs: probe(program, root))
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", lambda program, root, **kwargs: probe(program, root))
     return checks
 
 
@@ -1125,7 +1125,7 @@ def test_a_signal_after_the_last_probe_is_delivered_before_the_report_is_built(t
 
     _fake_default_probe(monkeypatch, probe)
     monkeypatch.setattr(
-        "autoform_cli.skeleton.build_probe_helper", lambda root, directory, **kwargs: scratch.append(directory) or directory
+        "autoform_cli.lean_probe._build_probe_helper", lambda root, directory, **kwargs: scratch.append(directory) or directory
     )
     monkeypatch.setattr("autoform_cli.skeleton._declaration", lambda *args, **kwargs: built.append(args))
     previous = signal.signal(signal.SIGTERM, deliver)
@@ -2856,7 +2856,7 @@ def test_a_helper_build_that_times_out_states_its_budget_once(tmp_path: Path, mo
     monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", stall)
 
     with pytest.raises(_ProbeEnvironmentError) as caught:
-        build_probe_helper(tmp_path, tmp_path / "helper", timeout=5)
+        _build_probe_helper(tmp_path, tmp_path / "helper", timeout=5)
     assert caught.value.issues == (
         "building the skeleton probe helpers timed out after 5 seconds; "
         "rerun with --timeout <seconds> for large projects",
@@ -3143,9 +3143,9 @@ def test_cli_sets_the_probe_timeout(tmp_path: Path, capsys, monkeypatch) -> None
         calls.append(kwargs)
         return directory
 
-    monkeypatch.setattr("autoform_cli.skeleton.check_build_freshness", lambda root, modules, **kwargs: None)
-    monkeypatch.setattr("autoform_cli.skeleton.build_probe_helper", fake_build_helper)
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", fake_run_probe)
+    monkeypatch.setattr("autoform_cli.lean_probe._check_build_freshness", lambda root, modules, **kwargs: None)
+    monkeypatch.setattr("autoform_cli.lean_probe._build_probe_helper", fake_build_helper)
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", fake_run_probe)
     command = ["skeleton", str(blueprint), "--lean-root", str(project), "--json"]
     assert main([*command, "--timeout", "1800"]) == 0
     # The timeout bounds the helper build and the probe; Lake's freshness check

@@ -141,7 +141,7 @@ import sys
 import tempfile
 import time
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, fields
 from dataclasses import field as dataclass_field
 from pathlib import Path
@@ -167,8 +167,6 @@ from .lean_probe import (
     PROBE_MARKER,
     LeanLibrary,
     SkeletonError,
-    build_probe_helper,
-    check_build_freshness,
     lean_libraries,
     lean_name_parts,
     module_of,
@@ -176,8 +174,6 @@ from .lean_probe import (
     read_snapshot_file,
     render_probe,
     run_module_probes,
-    run_probe,
-    signal_guard,
     stable_paths,
 )
 
@@ -1359,22 +1355,7 @@ def extract_skeletons(
         raise SkeletonError([index_failure_message(error)]) from error
     probing: Callable[[tuple[str, ...]], contextlib.AbstractContextManager[object]] | None = None
     if runner is None:
-        probe_timeout = DEFAULT_PROBE_TIMEOUT if timeout is None else timeout
-        helper: Path | None = None
-
-        @contextlib.contextmanager
-        def probing(modules: tuple[str, ...]) -> Iterator[None]:
-            nonlocal helper
-            # The guard encloses the scratch directory, so the commands inside
-            # reuse it and a termination signal is re-delivered once the directory
-            # is gone, before any boundary module is hashed.
-            with signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
-                check_build_freshness(root, modules)
-                helper = build_probe_helper(root, Path(scratch), timeout=probe_timeout)
-                yield
-
-        def runner(probe: str, lean_root: Path) -> str:
-            return run_probe(probe, lean_root, timeout=probe_timeout, check_freshness=False, helper=helper)
+        probing, runner = lean_probe.default_runner(root, timeout=DEFAULT_PROBE_TIMEOUT if timeout is None else timeout)
 
     report = extract_graph_skeletons(
         graph, lean_root=root, libraries=libraries, index=index, runner=runner, node_ids=node_ids, probing=probing

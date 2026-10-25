@@ -5,9 +5,10 @@ from ``autoform_cli``, so any module can import it without a cycle.
 ``lean_libraries`` reads each ``lean_lib`` target's layout from the Lake
 configuration, through ``read_snapshot_file``. ``run_probe`` runs one probe
 with ``lake env lean`` after Lake's freshness check; ``impact`` and
-``library.generate`` call it directly. For ``skeleton``, this module renders
-one probe per root module, checks freshness once, builds the probe's helper
-module, and runs the probes in a bounded pool.
+``library.generate`` call it directly. For ``skeleton``, ``render_probe``
+renders one probe per root module, ``default_runner`` checks freshness once and
+builds the probe's helper module, and ``run_module_probes`` runs the probes in
+a bounded pool.
 
 Resources. Probes run one per CPU available to the process, at most eight; on
 Python 3.13 and later ``PYTHON_CPU_COUNT`` sets that count. Each probe's
@@ -43,7 +44,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
@@ -437,7 +438,7 @@ class _SignalGuard:
         return False
 
 
-def signal_guard() -> contextlib.AbstractContextManager[_SignalGuard]:
+def _signal_guard() -> contextlib.AbstractContextManager[_SignalGuard]:
     """Guard signals in the main POSIX thread; reuse an enclosing guard."""
 
     if os.name != "posix" or threading.current_thread() is not threading.main_thread():
@@ -450,7 +451,7 @@ def signal_guard() -> contextlib.AbstractContextManager[_SignalGuard]:
 def _run_bounded_command(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
     """Run one command with bounded output, time, and descendant lifetime."""
 
-    with signal_guard() as guard:
+    with _signal_guard() as guard:
         try:
             return _run_registered_command(command, guard=guard, **options)  # type: ignore[arg-type]
         finally:
@@ -684,7 +685,7 @@ def _translate_lakefile(root: Path) -> bytes:
     lake = shutil.which("lake")
     if lake is None:
         raise SkeletonError(["lake is not on PATH, so lakefile.lean cannot be evaluated"])
-    with signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
+    with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
         target = Path(scratch) / "lakefile.toml"
         result = _run_bounded_command(
             [lake, "translate-config", "toml", str(target)],
@@ -802,7 +803,7 @@ def _probe_template() -> str:
 
 
 def _render_probe_helper() -> str:
-    """Render the helper module every probe imports; see ``build_probe_helper``."""
+    """Render the helper module every probe imports; see ``_build_probe_helper``."""
 
     return _probe_template().format(
         core_roots=", ".join(_lean_name(name) for name in _CORE_MODULE_ROOTS),
@@ -988,7 +989,7 @@ def _lake_executable(lean_root: Path, label: str = "skeleton probe") -> str:
     return lake
 
 
-def check_build_freshness(
+def _check_build_freshness(
     lean_root: Path, modules: tuple[str, ...], *, timeout: float = DEFAULT_FRESHNESS_TIMEOUT
 ) -> None:
     """Run the Lake freshness check once over every module about to be probed."""
@@ -1002,7 +1003,7 @@ def _probe_environment() -> dict[str, str]:
     return env
 
 
-def build_probe_helper(lean_root: Path, directory: Path, *, timeout: float) -> Path:
+def _build_probe_helper(lean_root: Path, directory: Path, *, timeout: float) -> Path:
     """Compile the probe's helpers into ``directory`` and return it.
 
     The helpers are elaborated with the project's toolchain and no project
@@ -1068,7 +1069,7 @@ def run_probe(
     ``freshness_timeout`` bounds the Lake freshness check that runs first and
     ``timeout`` the probe itself; neither spends the other's budget. Extraction
     checks freshness once for all its probes and passes ``check_freshness=False``.
-    ``helper`` is the directory ``build_probe_helper`` put the helpers in;
+    ``helper`` is the directory ``_build_probe_helper`` put the helpers in;
     without one, a probe that imports them gets its own within ``timeout``.
     ``label`` names the probe in failure messages.
     """
@@ -1079,10 +1080,10 @@ def run_probe(
         _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout, label=label)
     deadline = time.monotonic() + timeout
     env = _probe_environment()
-    with signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
+    with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
         if f"import «{_PROBE_HELPER_MODULE}»" in probe.splitlines():
             if helper is None:
-                helper = build_probe_helper(
+                helper = _build_probe_helper(
                     lean_root, Path(scratch) / "helper", timeout=max(0.0, deadline - time.monotonic())
                 )
             if not (helper / f"{_PROBE_HELPER_MODULE}.olean").is_file():
@@ -1134,6 +1135,37 @@ def run_probe(
             raise SkeletonError([f"the {label} was killed by signal {-result.returncode}\n{detail}".rstrip()])
         raise SkeletonError([f"the {label} failed; is the project built with `lake build`?\n{detail}"])
     return output or result.stdout
+
+
+def default_runner(
+    root: Path, *, timeout: float
+) -> tuple[Callable[[tuple[str, ...]], contextlib.AbstractContextManager[object]], Callable[[str, Path], str]]:
+    """Return ``(probing, runner)``, the probe runner extraction uses by default.
+
+    ``probing(modules)`` holds the signal guard and one scratch directory while
+    ``modules`` are probed: it runs the Lake freshness check once over them,
+    within its own default timeout, and builds the probe's helpers there within
+    ``timeout``. ``runner`` then runs each probe with those helpers and no
+    second freshness check, within a ``timeout`` of its own.
+    """
+
+    helper: Path | None = None
+
+    @contextlib.contextmanager
+    def probing(modules: tuple[str, ...]) -> Iterator[None]:
+        nonlocal helper
+        # The guard encloses the scratch directory, so the commands inside
+        # reuse it and a termination signal is re-delivered once the directory
+        # is gone, before any boundary module is hashed.
+        with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
+            _check_build_freshness(root, modules)
+            helper = _build_probe_helper(root, Path(scratch), timeout=timeout)
+            yield
+
+    def runner(probe: str, lean_root: Path) -> str:
+        return run_probe(probe, lean_root, timeout=timeout, check_freshness=False, helper=helper)
+
+    return probing, runner
 
 
 def _read_probe_records(records: Path, label: str) -> str:
@@ -1188,7 +1220,7 @@ def run_module_probes(modules: list[str], probe: Callable[[str], object]) -> dic
 
     results: dict[str, object] = {}
     pool = ThreadPoolExecutor(max_workers=_probe_workers(len(modules)), thread_name_prefix="autoform-probe")
-    with signal_guard() as guard:
+    with _signal_guard() as guard:
         try:
             futures = {pool.submit(run, module): module for module in modules}
             pending = set(futures)
@@ -1221,8 +1253,7 @@ __all__ = [
     "STALE_BUILD",
     "LeanLibrary",
     "SkeletonError",
-    "build_probe_helper",
-    "check_build_freshness",
+    "default_runner",
     "lean_libraries",
     "lean_name_components",
     "lean_name_parts",
@@ -1233,7 +1264,6 @@ __all__ = [
     "render_probe",
     "run_module_probes",
     "run_probe",
-    "signal_guard",
     "stable_paths",
     "stale_build_said",
 ]
