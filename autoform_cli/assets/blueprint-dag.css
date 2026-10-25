@@ -343,6 +343,9 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-integrated :is(.bp-dag-density, .bp-map-context, .bp-map-key) { text-shadow: 0 0 3px var(--dag-map), 0 0 6px var(--dag-map); }
 .bp-map-key .bp-map-key-wiki::before { border-top-style: dotted; }
 .bp-map-key .bp-map-key-coverage::before { display: none; }
+/* A quiet area overview at rest draws no links, so its key says how to light them instead of naming line kinds it does not draw. */
+.bp-dag-links-resting .bp-map-key > span { display: none; }
+.bp-dag-links-resting .bp-map-key::before { content: "Point at or focus an area to see its links"; }
 .bp-dag-compact-regions :is(.bp-dag-canvas, .bp-dag-node-layer) { clip-path: inset(52px 0 44px); }
 .bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-core { padding: 10px 14px; }
 .bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: 4px; font-size: 14px; }

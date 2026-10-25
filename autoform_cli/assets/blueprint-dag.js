@@ -1716,12 +1716,12 @@
         ["statement", "proof"].forEach(function (kind) {
           if (data.edges.some(function (edge) { return edge[kind]; })) dom$mapKey.appendChild(element("span", "bp-map-key-" + kind, kind === "proof" ? "Proof dependency" : "Statement dependency"));
         });
+        // One entry says what the dotted lines are and how many of them this map draws; a map that draws none says nothing about their coverage.
         if (data.$wikiEdges && data.$wikiEdges.length) {
           var local = sceneData === data && scene && scene.$wikiRoutes;
-          dom$mapKey.appendChild(element("span", "bp-map-key-wiki", local && local.omitted ? "Local concept links" : "Concept links"));
-          if (local && local.omitted) dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "All links in articles"));
+          dom$mapKey.appendChild(element("span", "bp-map-key-wiki", (local && local.omitted ? "Concept links: " + num(local.total - local.omitted) + " of " +
+            num(local.total) + " on this map" : "Concept links") + (ui$wikiView && ui$wikiView.availability === "partial" ? ", some pages unread" : "")));
         }
-        if (ui$wikiView && ui$wikiView.availability === "partial") dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Partial link coverage"));
         if (ui$wikiView && ui$wikiView.availability === "unavailable") dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Concept links unavailable"));
         if (data.$wikiEdges && data.$wikiEdges.some(function (edge) { return !wikiOwnerVisible(byId.get(edge.source), ui$selectedStatuses) || !wikiOwnerVisible(byId.get(edge.target), ui$selectedStatuses); }))
           dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Concept links hidden by filter"));
@@ -1910,6 +1910,8 @@
       // The area overview stays quiet until a card is selected, hovered or focused; then only its own links show.
       // The compact overview (phones and most tablets) keeps every link: a tap there opens an area and nothing hovers, so nothing could light one.
       var quiet = !compactRegions() && data.nodes.every(function (node) { return node._region || node._overviewGroup; }), subject = ui$selected || ui$hovered;
+      // At rest a quiet overview draws no links, so its key says how to light them instead of naming line kinds it does not draw.
+      host.classList.toggle("bp-dag-links-resting", Boolean(quiet && !subject && data.edges.length));
       // A hovered card previews its direct neighbours on any map; a selection keeps its own spotlight.
       var spotlight = (atlas || !ui$selected) && subject ? atlasSpotlight(subject) : pathSpotlight();
       var bottom = mapHeight(), labels = [];
@@ -2134,13 +2136,12 @@
         control.tabIndex = node.id === tabId ? 0 : -1;
       });
       // The note asks for a drag only while a shown card's real box reaches past the stage or under a phone's open reader,
-      // and for a zoom only while labels are too small.
-      var bottom = mapHeight();
-      var cropped = ui$active.some(function (node) {
-        var box = screen(node); return box.x < 0 || box.y < 0 || box.x + box.w > dom$stage.clientWidth || box.y + box.h > bottom;
-      }), tiny = visible.length && ui$transform.scale < .34;
+      // and for a zoom only while labels are too small. It counts cards, which Browse does not list, so it names no Browse total.
+      var bottom = mapHeight(), whole = ui$active.filter(function (node) {
+        var box = screen(node); return box.x >= 0 && box.y >= 0 && box.x + box.w <= dom$stage.clientWidth && box.y + box.h <= bottom;
+      }).length, cropped = whole < ui$active.length, tiny = visible.length && ui$transform.scale < .34;
       dom$density.hidden = !cropped && !tiny;
-      dom$density.textContent = cropped ? "Drag to see more, or use Browse for all " + ui$active.length + "." :
+      dom$density.textContent = cropped ? "Drag to see more: " + num(whole) + " of " + num(ui$active.length) + " cards in view." :
         tiny ? "Zoom in to reveal " + visible.length + " node labels" : "";
       // A removed card gets no pointerleave or blur, and a late timer can name one from the previous projection.
       if (ui$hovered && !overlays.has(ui$hovered.id)) { ui$hovered = null; schedule(); }

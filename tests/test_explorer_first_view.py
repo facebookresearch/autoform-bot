@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -129,7 +130,8 @@ def test_a_dense_chapter_frames_its_linked_cards_and_says_part_of_it_is_hidden()
     assert not _inside(boxes["auxiliary-0"], width, height)
     # Cards really are off screen, so the note says so and names the way to all of them.
     assert result["hidden"] is False
-    assert result["note"] == "Drag to see more, or use Browse for all 63."
+    # It counts the cards in view against all of them, and promises no Browse total, since Browse lists statements, not cards.
+    assert re.fullmatch(r"Drag to see more: \d+ of 63 cards in view\.", result["note"])
 
 
 @pytest.mark.parametrize(("width", "scale"), ((900, None), (740, 0.9)))
@@ -160,7 +162,7 @@ def test_a_phone_map_that_fits_at_the_floor_shows_its_unlinked_cards_too() -> No
     narrow = _first_view(view, 390, 560)
     assert _inside(narrow["boxes"]["a"], 390, 560) and _inside(narrow["boxes"]["b"], 390, 560)
     assert not _inside(narrow["boxes"]["loose"], 390, 560)
-    assert narrow["hidden"] is False and narrow["note"].endswith("for all 3.")
+    assert narrow["hidden"] is False and narrow["note"] == "Drag to see more: 2 of 3 cards in view."
 
 
 def test_a_long_chain_opens_at_its_leading_edge() -> None:
@@ -173,7 +175,7 @@ def test_a_long_chain_opens_at_its_leading_edge() -> None:
     boxes = result["boxes"]
     assert result["scale"] == pytest.approx(0.9)
     assert boxes["step-0"]["x"] == pytest.approx(36) and _inside(boxes["step-0"], width, height)
-    assert result["hidden"] is False and result["note"].endswith("for all 33.")
+    assert result["hidden"] is False and re.fullmatch(r"Drag to see more: \d+ of 33 cards in view\.", result["note"])
 
 
 def test_the_workspace_map_starts_below_its_title() -> None:

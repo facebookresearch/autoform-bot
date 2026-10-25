@@ -279,7 +279,7 @@ _DRAW_CALLBACKS = _CALLBACKS + (
     "scopeOverviewFlow", "rounded", "wikiOwnerVisible",
 )
 _DRAW_PEERS = _PEERS + _CANVAS_PEERS + r"""
-const dom$ctx=new Canvas(),painted=[],flows=[];let overlayUpdates=0;var ui$hovered=null;
+const dom$ctx=new Canvas(),painted=[],flows=[];let overlayUpdates=0;var ui$hovered=null,host={classList:{toggle(){}}};
 function calculateActive(){}function pathSpotlight(){return null;}function mapHeight(){return dom$stage.clientHeight;}
 function drawPlate(){}function updateOverlays(){overlayUpdates++;}
 const actualDrawRoute=drawRoute;drawRoute=function(ctx,route,...rest){

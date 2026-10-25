@@ -843,13 +843,14 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     assert "bp-dag-guide" not in script and "bp-dag-guide" not in style
     assert "dependency neighborhood" not in script
     # The density note stays, only while a shown card's real box leaves the stage or labels are hidden by zoom, as plain text.
-    note = script.split("var cropped = state.active.some(function (node) {", 1)[1].split("\n    function ", 1)[0]
-    assert "var box = screen(node); return box.x < 0 || box.y < 0 || box.x + box.w > refs.stage.clientWidth" in note
+    note = script.split("var bottom = mapHeight(), whole = state.active.filter(function (node) {", 1)[1].split("\n    function ", 1)[0]
+    assert "var box = screen(node); return box.x >= 0 && box.y >= 0 && box.x + box.w <= refs.stage.clientWidth" in note
     # A card under a phone's open reader is off screen too; the fit uses the same bound.
-    assert "var bottom = mapHeight();\n      var cropped" in script and "box.y + box.h > bottom;" in note
+    assert "box.y + box.h <= bottom;" in note and "cropped = whole < state.active.length" in note
     assert "var shown = mapHeight();" in script
-    assert 'cropped ? "Drag to see more, or use Browse for all "' in note
-    assert '"Zoom in to reveal "' in note and "readableCrop" not in script and "Pan or " not in script
+    # It counts cards, which Browse does not list, so it names no Browse total.
+    assert 'cropped ? "Drag to see more: " + num(whole) + " of " + num(state.active.length) + " cards in view."' in note
+    assert '"Zoom in to reveal "' in note and "readableCrop" not in script and "Pan or " not in script and "use Browse for all" not in script
     density = next(rule for rule in style.splitlines() if rule.startswith(".bp-dag-density {"))
     assert "left: 16px; bottom: 12px;" in density and "pointer-events: none;" in density
     # On phones it clears the collapsed sheet's 52px peek and 8px inset by 8px.
