@@ -31,13 +31,14 @@ function original(name) {
 }
 const constants = source.slice(source.indexOf('  var NODE_W ='), source.indexOf('  var clients =')) +
   source.slice(source.indexOf('  var clamp ='), source.indexOf('  function element('));
-const functions = ['layoutGraph', 'geometry', 'compactRegions', 'world', 'screen', 'inViewport', 'fit', 'mapHeight', 'freeArea',
+const functions = ['layoutGraph', 'wikiRoutes', 'geometry', 'compactRegions', 'world', 'screen', 'inViewport', 'fit', 'mapHeight', 'freeArea',
   'center', 'updateOverlays'].map(original).join('\n');
 const fixture = JSON.parse(fs.readFileSync(0, 'utf8'));
 const sandbox = {assert, fixture}; vm.createContext(sandbox);
 const setup = String.raw`
 var navigation = {}, mapAllowed = true, atlas = false, family = 'sans-serif', data, byId, ui$active, ui$activeIds;
 var ui$selected = null, ui$orientation = 'lr', ui$area = null, ui$hovered = null, scene, sceneData, sceneDirection, sceneCompact, sceneFamily;
+var sceneAspect, sceneWiki, restoring = false;
 var ui$transform = {x: 0, y: 0, scale: 1}, overlays = new Map(), document = {activeElement: null};
 var host = {classList: {contains() { return false; }}}, prerequisites = new Map(), dependents = new Map();
 var dom$stage = {clientWidth: fixture.width, clientHeight: fixture.height}, dom$density = {hidden: true, textContent: ''}, dom$inspector = {};
@@ -128,7 +129,7 @@ def test_a_dense_chapter_frames_its_linked_cards_and_says_part_of_it_is_hidden()
     assert not _inside(boxes["auxiliary-0"], width, height)
     # Cards really are off screen, so the note says so and names the way to all of them.
     assert result["hidden"] is False
-    assert result["note"] == "Drag to see more, or open Results for all 63."
+    assert result["note"] == "Drag to see more, or use Browse for all 63."
 
 
 @pytest.mark.parametrize(("width", "scale"), ((900, None), (740, 0.9)))

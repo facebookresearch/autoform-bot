@@ -33,10 +33,10 @@ function original(name) {
   }
   assert.fail('Production function did not parse: '+name);
 }
-const context={assert,structuredClone,URL,performance,productionSource:source,original,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
+const context={assert,structuredClone,URL,performance,restoring:false,productionSource:source,original,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
 vm.createContext(context);
 vm.runInContext(source.match(/var NODE_W =[^;]+;/)[0],context);
-const functions=['layoutGraph','geometry','compactRegions'].map(original).join('\n');
+const functions=['layoutGraph','wikiRoutes','geometry','compactRegions'].map(original).join('\n');
 """
 
 _ORACLE = r"""
@@ -330,7 +330,7 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
       eval(constants);
       const start=productionSource.indexOf('  function mount('),end=productionSource.indexOf('    function globalListen(',start);
       assert(start>=0&&end>start,'The real cold-mount boundary must exist');
-      const helpers=['scopeOverviewProjection','safeHref','graphAt','useIndex','updateProjection','neighborhood','neighborIds','regionProjection',
+      const helpers=['scopeOverviewProjection','safeHref','graphAt','useIndex','requestWikiLinks','useWikiLinks','updateProjection','neighborhood','neighborIds','regionProjection',
         'geometry','compactRegions'].map(original).join('\n');
       const seams=`
         function buildShell() {events.push('shell');family='sans-serif';dom$stage={clientWidth:900};
@@ -338,9 +338,14 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
           dom$search={removeAttribute(){}};dom$breadcrumb={replaceChildren(){}};}
         function bindEvents() {events.push('bind');}
         function sheetLayout() {return false;} function renderNavigation() {} function renderReaderContext() {}
+        function renderWikiContext() {events.push('optional-wiki');}
+        function projectWikiView() {}
         function renderInventory() {} function refresh() {} function routeTrail() {return [];} function trailList() {return [];}
         function centerIfHidden() {}
-        function applyRoute(bundle) {assert.strictEqual(bundle,firstBundle);events.push('route');return Promise.resolve();}
+        function applyRoute(bundle) {
+          assert.strictEqual(bundle,firstBundle);assert.equal(ui$wikiRequested,true);
+          assert.equal(ui$wikiLinks.availability,'unavailable');events.push('route');return Promise.resolve();
+        }
         function record(phase) {
           assert.strictEqual(sharedIndex,index,"Cold layout must use the router's validated index");
           assert.equal(ui$requestedNode,fixture.entry,'First fit must retain the canonical requested route');
@@ -355,6 +360,7 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
       assert.equal(bootstrap(host,payload,1,firstBundle,navigation),fixture.entry);
       const phase=name=>events.findIndex(event=>typeof event==='string'?event===name:event.phase===name);
       assert(phase('shell')<phase('bind')&&phase('bind')<phase('index')&&phase('index')<phase('fit'));
+      assert(phase('fit')<phase('optional-wiki'),'Optional references must not delay the first mathematical fit');
       assert(phase('fit')<phase('resize')&&phase('resize')<phase('route'));
       assert(events.filter(event=>event==='index').length===1);
       assert.throws(()=>bootstrap(host,payload,1,firstBundle,null),/complete mathematical page and navigation/);
@@ -411,7 +417,7 @@ def test_renderer_geometry_cache_changes_only_for_captured_geometry_inputs() -> 
     _run("""
       var navigation={},mapAllowed=true,atlas=false,ui$area=null,ui$orientation='lr',family='sans-serif';
       var dom$stage={clientWidth:760},dom$ctx={font:'12px sans-serif',measureText:text=>({width:text.length*8})};
-      var data=fixture,scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,calls=0;
+      var data=fixture,scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,sceneWiki,calls=0;
       const actual=layoutGraph;layoutGraph=function(...args){calls++;return actual(...args);};
       const first=geometry();assert.strictEqual(geometry(),first);assert.equal(calls,1);
       var ui$transform={x:41,y:-73,scale:1.2},ui$selectedStatuses=new Set(['planned']);

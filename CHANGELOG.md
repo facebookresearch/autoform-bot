@@ -11,12 +11,18 @@ date when the release is tagged.
 
 ### Changed
 
+- **Wiki map.** Authored concept links cluster intact formal developments,
+  with distinct dotted associations and bounded local corridors. Proof edges,
+  ranks, status and full reading pages remain unchanged (#442).
 - **Docs.** The CLI reference's contracts moved to `autoform_cli/reference/`
   (validation and audit, search, open statements, claims and revisions,
   runtime and publication). The reference, skills and contributor docs keep
   only the rules users and agents act on; internals moved to module
   docstrings, and upgrade notes to this file. `tests/test_doc_budgets.py`
   fails when one of these docs grows past its line budget (#458).
+- **Listings.** The Codex and Muse listings name the plugin AutoformBot, and
+  Codex shows the Roadmap, Setup and Develop Plugin skills under those short
+  names (#463).
 - **Claims.** `claim list TARGET...` fetches and reads only those claims.
   `--timeout` (120 seconds by default) bounds a listing, a slow step is named on
   stderr, and a failure goes to stderr labelled `timeout:`, `contention:` or
@@ -28,6 +34,9 @@ date when the release is tagged.
 - **Render.** An article's page lists its `mathlib_declaration` names in a
   Mathlib row, as text without a link, so a `mathlib: true` article names the
   declaration it restates (#388).
+- **Check and render.** One reused converter reads every page, and each linked
+  path is resolved once per run, so `check` uses about a fifth less CPU on an
+  1,806-article vault; neither command's output changes (#415).
 - **Builds.** `project new` turns on Lake's artifact cache with
   `enableArtifactCache` and `restoreAllArtifacts`, so checkouts and worktrees
   on one toolchain reuse each other's builds; Setup offers the same two lines
@@ -65,6 +74,13 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Large wiki catalogues.** Validation yields to visible page frames, with
+  a bounded fallback for hidden or stalled tabs, rather than relying only on
+  timer tasks. Every node and relation still validates before publication (#442).
+- **Wiki reading links.** The integrated explorer retains #455's title math
+  in its outline and related-reading controls, using the site's safe MathJax
+  service and project macros. Code stays literal, canonical links keep focus
+  and native modifiers, and graph labels remain as typed (#442).
 - **Claims.** `autoform dashboard` runs its claim listing's Git in the
   dashboard's process group again, so Ctrl+C or a signal to that group stops
   Git along with the dashboard (#447). On macOS and Windows, a listing shows

@@ -390,6 +390,10 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert "typesetPromise" not in script
     assert "autoform:typeset" not in script and "FORMULA_CLASS_JSON" not in script
     assert "window.AutoformMath.refresh(refs.readingBody)" in script
+    assert "function readingLabel(" in script
+    assert "refreshReadingLabels(refs.navigationInner)" in script
+    assert "refreshReadingLabels(refs.readingNeighbors)" in script
+    assert 'part[0] === "math" ? "arithmatex" : ""' in script
     assert "refs.readingBody.replaceChildren(bundle.readingSource)" in script
     assert "navigation.bindReader(refs.readingBody)" in script
     # All enhancement enters through the canonical complete-reader router.
@@ -608,6 +612,8 @@ def test_details_close_in_their_corner_and_space_the_status_from_the_link() -> N
 
 def test_details_drop_instructions_and_label_paths_compactly() -> None:
     """The drawer explained its own controls, invented a summary for topics without one and titled its pivots."""
+    from tests.test_wiki_workspace_controls import _run
+
     script, style = _viewer_source(), dag_viewer._STYLE
 
     for gone in (
@@ -624,8 +630,17 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
     ):
         assert gone not in script, gone
     assert '", no dependency edges in this view"' in script
-    # A result's relations show once, in the statement's own disclosure: the reader has no second strip of links.
-    assert "readingNeighbors" not in script and "bp-reading-links" not in script
+    # A result's relations show once, in the statement's own disclosure: no strip under the reader repeats them,
+    # which keeps only the topic's other pages and its concept links.
+    assert "bp-reading-links" not in script and '[["Prerequisites", links.before], ["Used by", links.after]]' not in script
+    _run(r"""
+      const base=record('B','chapter',{title:'Actual prerequisite'});
+      configure([focus,base],[['B','F',2,3]]);renderReaderContext();
+      assert.equal(marked(dom$readingNeighbors,'bp-reading-links'),undefined,
+        'The statement lists its own relations, so the reader must not repeat them');
+      assert.deepEqual(dom$readingNeighbors.children.map(child=>child.className),['bp-reading-related-topics']);
+      assert(links(dom$readingNeighbors).every(link=>link.getAttribute('aria-label')===null),'Topic links cannot claim dependency weights');
+    """)
     assert "function appendRelations(" not in script and "bp-dag-pivots" not in script
     # A card linked to the selection names the per-kind weights in its accessible name, which the map draws only as a width.
     assert "var weights = state.selected && relationCounts(data.edges, state.selected.id);" in script
@@ -729,6 +744,15 @@ def test_explorer_head_is_one_row_where_the_rail_always_shows() -> None:
     assert ".bp-dag-integrated .bp-dag-head { display: block; padding: 0; }" in style
     assert ".bp-dag-integrated .bp-dag-context { display: flex;" in style
     assert ".bp-dag-integrated .bp-dag-breadcrumb { display: block; flex: 1 1 auto; max-width: none; visibility: visible !important; }" in style
+    breadcrumb = next(rule for rule in style.splitlines() if rule.startswith(".bp-dag-integrated .bp-dag-breadcrumb {"))
+    declarations = {
+        name.strip(): value.strip()
+        for part in breadcrumb.split("{", 1)[1].rstrip(" }").split(";") if part.strip()
+        for name, _, value in (part.partition(":"),)
+    }
+    assert declarations["display"] == "block"
+    assert declarations["visibility"] == "visible !important"
+    assert declarations["max-width"] == "none", "The integrated context must not inherit the legacy 32% breadcrumb limit"
     assert ".bp-dag-integrated .bp-dag-toolbar { display: flex;" in style
     assert "context.insertBefore(bookLink, crumbs)" in script
     assert "placeBook" not in script and "head.insertBefore(bookLink" not in script
@@ -756,7 +780,7 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     # A card under a phone's open reader is off screen too; the fit uses the same bound.
     assert "var bottom = mapHeight();\n      var cropped" in script and "box.y + box.h > bottom;" in note
     assert "var shown = mapHeight();" in script
-    assert 'cropped ? "Drag to see more, or open Results for all "' in note
+    assert 'cropped ? "Drag to see more, or use Browse for all "' in note
     assert '"Zoom in to reveal "' in note and "readableCrop" not in script and "Pan or " not in script
     density = next(rule for rule in style.splitlines() if rule.startswith(".bp-dag-density {"))
     assert "left: 16px; bottom: 12px;" in density and "pointer-events: none;" in density
@@ -796,12 +820,10 @@ def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_und
     assert 'refs.hiddenButton.textContent = "Show " + hidden + " filtered out"; refs.hiddenButton.hidden = !hidden;' in script
     assert '"Show unlinked"' in script and "without edges" not in script
     assert "refs.filterPopover.append(fieldset, edges);" in script
-    # Map | Contents and the zoom buttons are borderless ghost buttons inside one 1px group each.
-    assert (
-        ".bp-dag-zoom, .bp-dag-modes { display: inline-flex; flex: none; gap: 2px; padding: 2px; "
-        "border: 1px solid var(--dag-border);"
-    ) in style
-    assert ".bp-dag-zoom .bp-dag-button, .bp-dag-modes .bp-dag-mode-button { min-height: 30px; padding: 4px 10px; border: 0;" in style
+    # The zoom buttons are borderless ghost buttons inside one 1px group; the four-way view switch it matched is gone.
+    assert ".bp-dag-zoom { display: inline-flex; flex: none; gap: 2px; padding: 2px; border: 1px solid var(--dag-border);" in style
+    assert ".bp-dag-zoom .bp-dag-button { min-height: 30px; padding: 4px 10px; border: 0;" in style
+    assert "bp-dag-modes" not in style and "bp-dag-mode-button" not in style and "bp-dag-mode-button" not in script
     # Zoom leaves with the map but keeps its place, so a finger's 44px Fit does not change the row's height between views.
     assert ".bp-dag-viewer:has(.bp-dag-stage[hidden]) .bp-dag-zoom { visibility: hidden; }" in style
     coarse = style.split("@media (pointer: coarse) {\n", 1)[1].split("\n}", 1)[0]
@@ -825,9 +847,15 @@ def test_explorer_toolbar_copy_says_what_it_searches_and_filters() -> None:
     ) in script
     assert 'button("bp-dag-filter-summary", "Filter: all statuses")' in script
     assert 'element("legend", "", "Links")' in script and '"Edges"' not in script
-    assert 'button("bp-dag-mode-button", "Areas")' in script and '"Regions"' not in script
+    # #442's Back to map and Browse replace the Map / Results / Sources / Areas switch, in its own words.
+    assert 'button("bp-dag-button", "Back to map")' in script and 'button("bp-dag-button", "Browse", "Browse statements or source texts")' in script
+    assert '"Regions"' not in script and '"Areas"' not in script
+    # A disabled Back to map looks unavailable, never lights up on hover, and says why.
+    assert 'else refs.graphMode.title = "Too many statements to draw as a map";' in script
+    style = dag_viewer._STYLE
+    assert ".bp-dag-button:not(:disabled):hover, .bp-dag-filter-summary:hover" in style
+    assert ".bp-dag-button:disabled { opacity: .45; cursor: default; }" in style
     assert '"Nothing matches these filters."' in script and "No nodes match" not in script
-    assert 'mapAllowed ? "Map" : "Map (too large)"' in script
     # The router loads the index before the shell mounts, so only a retry after a failed load is
     # ever in flight: ensureGlobalSearch marks it, and either outcome or the mounted index clears it.
     assert script.count('refs.search.setAttribute("aria-busy", "true")') == 1
@@ -837,15 +865,21 @@ def test_explorer_toolbar_copy_says_what_it_searches_and_filters() -> None:
 
 
 def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> None:
-    """Map and Areas both read as pressed at the root, a deep trail sat in a third of an empty row, and tablets had three rows."""
+    """Two views read as pressed at once, a deep trail sat in a third of an empty row, and tablets had three rows."""
     script, style = _viewer_source(), dag_viewer._STYLE
-    # Areas stays: inside an area it is the way back to the overview, whose root crumb is then not a link.
-    # Elsewhere Areas leaves for the root, so a book's own area map reads as Map; a scope overview's Areas resets in place.
-    assert ('var areas = state.mode === "graph" && !state.area && !state.overviewGroup && (state.scopeOverview || !currentBundle || currentBundle.scope === "roadmap") &&\n'
-            '        data.nodes.some(function (node) { return node._region; });') in script
-    assert 'pressed(refs.graphMode, state.mode === "graph" && !areas);' in script
-    assert 'if (refs.regionsMode) pressed(refs.regionsMode, areas);' in script
-    assert 'refs.graphMode.setAttribute("aria-pressed", String(state.mode === "graph"));' not in script
+    # Back to map shows only away from the map, and Browse marks the list on screen, so at most one control reads as pressed.
+    assert 'refs.graphMode.hidden = state.mode === "graph";' in script
+    assert 'pressed(refs.listMode, state.mode === "list");' in script
+    assert 'if (refs.sourcesMode) pressed(refs.sourcesMode, state.mode === "sources");' in script
+    assert script.count("pressed(refs.") == 2 and 'var areas = state.mode === "graph"' not in script
+    # The closed Browse toggle carries the pressed look while a list or the sources replace the map.
+    assert (".bp-dag-browse-popover .bp-dag-button[aria-pressed=true], .bp-dag-pivot[aria-pressed=true], "
+            ".bp-dag-viewer:has(.bp-dag-stage[hidden]) .bp-dag-browse > .bp-dag-button { border-color: var(--dag-link);") in style
+    # A phone hangs the Browse menu from the toolbar, since Browse can wrap to the start of a row.
+    phone = style.split("@media (max-width: 720px) {\n  .bp-dag-integrated .bp-dag-body", 1)[1].split("\n}", 1)[0]
+    assert ".bp-dag-integrated .bp-dag-toolbar { position: relative; }" in phone
+    assert ".bp-dag-integrated .bp-dag-browse { position: static; }" in phone
+    assert ".bp-dag-integrated .bp-dag-browse-popover { left: 12px; right: 12px; width: auto; max-width: none; }" in phone
     assert ".bp-dag-integrated .bp-dag-breadcrumb { display: block; flex: 1 1 auto; max-width: none;" in style
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li { min-width: 4em; }" in style
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:has(.bp-dag-sr-only) { flex: none; min-width: 0; }" in style
@@ -1089,8 +1123,11 @@ def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> 
     assert ".bp-map-context > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }" in dag_viewer._STYLE
     assert '" → Result → "' not in script
     assert 'var relations = target.querySelector(".bp-dependencies"); if (relations) relations.open = true;' in script
-    for gone in ("bp-reading-neighbors", "bp-reading-links", "bp-reading-related"):
-        assert gone not in script and gone not in dag_viewer._STYLE, gone
+    # What stays under the reader is #442's topic pages and concept links, never a second relations strip.
+    for gone in ("bp-reading-links", '"bp-reading-related"'):
+        assert gone not in script, gone
+    for gone in (".bp-reading-links", ".bp-reading-related {", ".bp-reading-related a", ".bp-reading-related strong"):
+        assert gone not in dag_viewer._STYLE, gone
 
 
 def test_small_status_marks_fill_finished_states_with_the_stroke() -> None:

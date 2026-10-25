@@ -13,18 +13,41 @@ import heapq
 import html
 import json
 import math
-from dataclasses import replace
+import posixpath
+import re
+from functools import lru_cache
+from dataclasses import dataclass, replace
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from pathlib import Path
-from urllib.parse import quote, urlsplit
+from pathlib import Path, PurePath
+from urllib.parse import quote, unquote, urlsplit
 
+from markdown.extensions.attr_list import AttrListTreeprocessor
+from markdown.inlinepatterns import BACKTICK_RE
+from markdown.blockprocessors import HashHeaderProcessor
+from pymdownx.arithmatex import (
+    RE_BRACKET_BLOCK,
+    RE_BRACKET_INLINE,
+    RE_DOLLAR_BLOCK,
+    RE_SMART_DOLLAR_INLINE,
+    RE_TEX_BLOCK,
+)
+
+from . import markdown
 from .graph_views import FLATTENED_ROLES, INVENTORY_STATUSES, GraphView, ViewNode
 from .lean import declaration_names
+from .publishable import html_names
 from .status import INVENTORY_STATES, MEANINGS, STATES
 
 SCHEMA = "autoform-dag-view/v2"
 SEARCH_SCHEMA = "autoform-dag-search/v1"
+WIKI_LINKS_SCHEMA = "autoform-wiki-links/v1"
+#: A separate optional reference layer must fit the reader's unchanged data limit.
+MAX_WIKI_LINK_BYTES = 32 * 1024 * 1024
+_WIKI_BLOCK_MATH = re.compile(f"(?:{RE_DOLLAR_BLOCK}|{RE_BRACKET_BLOCK}|{RE_TEX_BLOCK})", re.DOTALL)
+_WIKI_INLINE_MATH = re.compile(f"(?:{RE_SMART_DOLLAR_INLINE}|{RE_BRACKET_INLINE})", re.DOTALL)
+_WIKI_INLINE_CODE = re.compile(BACKTICK_RE, re.DOTALL)
+_WIKI_HEADING = HashHeaderProcessor.RE
 #: Where the site publishes the viewer, relative to its root.
 SCRIPT_PATH = "javascripts/blueprint-dag.js"
 #: One cached stylesheet for the integrated book and map.
@@ -282,10 +305,19 @@ def _display_status(node: ViewNode) -> str:
     return key if key in _PALETTE_KEYS else "planned"
 
 
-def _write_json(path: Path, payload: Mapping[str, object]) -> Path:
+def _json_text(payload: Mapping[str, object]) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+
+
+def _write_json(
+    path: Path, payload: Mapping[str, object], *, sha256_out: list[str] | None = None,
+) -> Path:
+    text = _json_text(payload)
+    if sha256_out is not None:
+        sha256_out.append(hashlib.sha256(text.encode("utf-8")).hexdigest())
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        text,
         encoding="utf-8",
         newline="\n",
     )
@@ -382,6 +414,59 @@ def write_payload(
     return _write_json(path, payload)
 
 
+@lru_cache(maxsize=4096)
+def _reading_label(text: str) -> dict[str, object] | None:
+    """Safe, derived inline text/code/math parts for reading-only controls.
+
+    Read the same captured label through the site's converter, never a source
+    pathname. HTML, links, images and attributes are not a label transport.
+    Plain labels keep their existing wire bytes and require no conversion.
+    """
+    if len(text) > 16_384 or not re.search(r"\$|\\\(|\\\[", text):
+        return None
+    tree = markdown.render_tree(text, allow_html=False)
+    if tree is None:
+        return None
+    body = tree.find("body")
+    if body is None:
+        return None
+    parts: list[list[str]] = []
+    has_math = False
+
+    def append(kind: str, value: str | None) -> None:
+        if not value:
+            return
+        if kind == "text" and parts and parts[-1][0] == kind:
+            parts[-1][1] += value
+        else:
+            parts.append([kind, value])
+
+    def read(element: object) -> bool:
+        nonlocal has_math
+        tag = element.tag
+        if tag in {"span", "div"} and element.attrib == {"class": markdown.FORMULA_CLASS}:
+            if len(element) or not element.text:
+                return False
+            has_math = True
+            append("math", element.text)
+            return True
+        if tag == "code" and not element.attrib:
+            append("code", "".join(element.itertext()))
+            return True
+        if tag not in {"body", "p", "em", "strong"} or element.attrib:
+            return False
+        append("text", element.text)
+        for child in element:
+            if not read(child):
+                return False
+            append("text", child.tail)
+        return True
+
+    if not read(body) or not has_math or len(parts) > 256:
+        return None
+    return {"format": "inline-parts-v1", "source": text, "parts": parts}
+
+
 def write_search_index(
     path: Path,
     view: GraphView,
@@ -389,6 +474,7 @@ def write_search_index(
     context_links: Mapping[str, str],
     metadata: Mapping[str, Mapping[str, object]] | None = None,
     include_relations: bool = False,
+    sha256_out: list[str] | None = None,
 ) -> Path:
     """Write the global search index and optional derived reading/navigation data.
 
@@ -397,6 +483,8 @@ def write_search_index(
     Relations reference positions in the emitted node array; the reader also
     accepts older string endpoints. This retains every typed edge without
     repeating long article identifiers in the transport.
+    ``sha256_out`` optionally receives the exact emitted bytes' digest without
+    rereading any source or changing the index's wire representation.
     """
     nodes: list[dict[str, object]] = []
     for node in view.nodes:
@@ -412,6 +500,9 @@ def write_search_index(
             entry["lean"] = node.lean
         if node.summary:
             entry["summary"] = node.summary
+        label = _reading_label(node.title)
+        if label is not None:
+            entry["reading_title"] = label
         # Preserve authored module articles without calling their inventories
         # concrete declarations or inferring proof progress from them.
         if node.catalog == "module":
@@ -432,6 +523,275 @@ def write_search_index(
             [positions[edge.source], positions[edge.target], edge.statement_count, edge.proof_count]
             for edge in view.edges
         ]
+    return _write_json(path, payload, sha256_out=sha256_out)
+
+
+@dataclass(frozen=True, slots=True)
+class WikiLinks:
+    """Derived ordinary article references, never formal prerequisites.
+
+    Endpoints are positions in the unchanged global index. Missing captures
+    are distinguished from articles which contain no eligible references.
+    """
+
+    references: tuple[tuple[int, int], ...]
+    unavailable_sources: tuple[int, ...] = ()
+    reason: str | None = None
+
+
+def _wiki_path(value: str | PurePath) -> str | None:
+    """Normalize a captured blueprint-relative name lexically, never on disk."""
+    raw = value.as_posix() if isinstance(value, PurePath) else value
+    if not isinstance(raw, str) or not raw or raw.startswith("/") or "\\" in raw:
+        return None
+    if any(ord(character) < 32 or ord(character) == 127 for character in raw):
+        return None
+    normalized = posixpath.normpath(raw)
+    parts = normalized.split("/")
+    if parts[0] != "roadmap" or any(part.startswith(".") for part in parts):
+        return None
+    if PurePath(normalized).suffix.lower() not in markdown.PAGE_SUFFIXES:
+        return None
+    return normalized
+
+
+def _wiki_route(value: object) -> bool:
+    """Only renderer-supplied published local routes establish a target."""
+    if not isinstance(value, str) or not value or "\\" in value:
+        return False
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        return False
+    try:
+        located = urlsplit(value)
+        path = unquote(located.path, errors="strict")
+    except (ValueError, UnicodeError):
+        return False
+    return bool(
+        path and not located.scheme and not located.netloc and not path.startswith("/")
+        and "\\" not in path
+        and not any(part.startswith(".") and part not in {".", ".."} for part in path.split("/"))
+        and not any(ord(character) < 32 or ord(character) == 127 for character in path)
+    )
+
+
+def _wiki_lines(body: str) -> list[str] | None:
+    """Use the site's Markdown/TeX masks; leave unsupported HTML unavailable."""
+    lines = body.splitlines()
+    lines = lines[markdown.frontmatter_end(lines):]
+    if markdown.first_unclosed_fence(lines) is not None:
+        return None
+    masked = "\n".join(markdown.content_lines("\n".join(lines)))
+    for line in masked.splitlines():
+        heading = _WIKI_HEADING.match(line)
+        if heading and AttrListTreeprocessor.HEADER_RE.search(heading.group("header")):
+            # The site applies these attributes and publishes the article as
+            # typed text. Captured-source callers cannot claim live links.
+            return None
+    cuts = [0, *(match.end() for match in re.finditer(r"\n[ \t]*\n", masked)), len(masked)]
+
+    def blank(match: re.Match[str]) -> str:
+        return re.sub(r"[^\n]", " ", match.group())
+
+    def inline(pattern: re.Pattern[str], text: str) -> str:
+        # Inline spans can contain line breaks, but cannot join separate
+        # Markdown paragraphs. Keep the original boundaries after masking.
+        return "".join(pattern.sub(blank, text[start:end]) for start, end in zip(cuts, cuts[1:]))
+
+    masked = inline(_WIKI_INLINE_CODE, masked)
+    masked = _WIKI_BLOCK_MATH.sub(blank, masked)
+    masked = inline(_WIKI_INLINE_MATH, masked)
+    # Escaped ticks are text, not delimiters for link_targets' simpler mask.
+    masked = re.sub(r"\\`", blank, masked)
+    if html_names(masked) or re.search(r"\$\$|\\\[|\\begin\{", masked):
+        # Raw HTML changes how surrounding Markdown is read; unclosed display
+        # math similarly has no safe range. Do not pretend to read either one.
+        return None
+    return masked.splitlines()
+
+
+def extract_wiki_links(
+    view: GraphView,
+    *,
+    captured_sources: Mapping[str, bytes] | None = None,
+    source_paths: Mapping[str, str | PurePath] | None = None,
+    metadata: Mapping[str, Mapping[str, object]] | None = None,
+    unavailable_source_ids: Iterable[str] = (),
+) -> WikiLinks:
+    """Read ordinary Markdown links from supplied captured article bytes.
+
+    No authored path is opened, no title/heading/import becomes a reference,
+    and no generated navigation is consulted. Source tracks (including their
+    descendants), hidden/unpublished targets, structural wrappers, self-links
+    and authored ancestor/descendant placement are not wiki relationships.
+    Explicit relative Markdown file targets may include percent escapes and
+    fragments; these identify the article, not an invented heading node.
+    This first layer reads Markdown links, not raw-HTML anchors. Unsupported
+    HTML, unclosed code fences or unclosed display math is reported as an
+    unavailable source for outbound extraction, not an unpublished target.
+    ``unavailable_source_ids`` carries the publisher's existing source omissions
+    without parsing an article again; their valid incoming targets remain live.
+    """
+    identifiers = tuple(node.id for node in view.nodes)
+    positions = {node_id: position for position, node_id in enumerate(identifiers)}
+    if len(positions) != len(identifiers):
+        raise ValueError("wiki reference index has duplicate node ids")
+    details = metadata or {}
+    roles = {node.id: details.get(node.id, {}).get("navigation", node.navigation) for node in view.nodes}
+    children: dict[str, list[str]] = defaultdict(list)
+    roots: list[str] = []
+    for node_id in identifiers:
+        parent = details.get(node_id, {}).get("parent")
+        if isinstance(parent, str) and parent in positions:
+            children[parent].append(node_id)
+        else:
+            roots.append(node_id)
+
+    # Linear tree intervals give placement checks without ancestor sets or
+    # repeated path traversal. A malformed cyclic component remains unavailable.
+    intervals: dict[str, tuple[int, int]] = {}
+    starts: dict[str, int] = {}
+    source_tracks: set[str] = set()
+    clock = 0
+    for root in roots:
+        pending = [(root, False, False)]
+        while pending:
+            node_id, closing, inherited_source = pending.pop()
+            if closing:
+                intervals[node_id] = (starts[node_id], clock)
+                continue
+            starts[node_id] = clock
+            clock += 1
+            source_track = inherited_source or roles[node_id] == "source"
+            if source_track:
+                source_tracks.add(node_id)
+            pending.append((node_id, True, source_track))
+            pending.extend((child, False, source_track) for child in reversed(children[node_id]))
+
+    candidates = tuple(
+        node.id for node in view.nodes
+        if node.kind != "boundary" and node.id not in source_tracks
+        and roles[node.id] not in FLATTENED_ROLES | {"source"}
+    )
+    if captured_sources is None or source_paths is None or metadata is None:
+        return WikiLinks(
+            (), tuple(positions[node_id] for node_id in candidates),
+            "captured article sources and publication paths were not supplied",
+        )
+
+    unavailable: set[int] = set()
+    paths: dict[str, str] = {}
+    owners: dict[str, str | None] = {}
+    for node_id in candidates:
+        path = _wiki_path(source_paths.get(node_id, ""))
+        captured = captured_sources.get(node_id)
+        if path is None or not _wiki_route(details.get(node_id, {}).get("route")) or node_id not in intervals:
+            unavailable.add(positions[node_id])
+            continue
+        if not isinstance(captured, bytes):
+            unavailable.add(positions[node_id])
+            continue
+        paths[node_id] = path
+        owners[path] = node_id if path not in owners else None
+
+    references: set[tuple[int, int]] = set()
+    invalid_targets: set[int] = set()
+    omitted_sources = frozenset(unavailable_source_ids)
+    reference_bytes = 2
+    for source_id in paths:
+        if owners[paths[source_id]] is None:
+            unavailable.add(positions[source_id])
+            continue
+        try:
+            body = captured_sources[source_id].decode("utf-8").removeprefix("\ufeff")
+        except UnicodeError:
+            unavailable.add(positions[source_id])
+            invalid_targets.add(positions[source_id])
+            continue
+        if source_id in omitted_sources:
+            unavailable.add(positions[source_id])
+            continue
+        lines = _wiki_lines(body)
+        if lines is None:
+            unavailable.add(positions[source_id])
+            continue
+        definitions = markdown.link_definitions(lines)
+        excluded = False
+        for line in lines:
+            heading = _WIKI_HEADING.match(line)
+            if heading is not None:
+                if len(heading.group("level")) <= 2:
+                    excluded = heading.group("header").strip().casefold() in {
+                        "sources", "depends on", "proof depends on",
+                    }
+                continue
+            if excluded:
+                continue
+            for target in markdown.link_targets(line, definitions):
+                if "\\" in target or any(ord(character) < 32 or ord(character) == 127 for character in target):
+                    continue
+                try:
+                    located = urlsplit(target)
+                    decoded = unquote(located.path, errors="strict")
+                except (ValueError, UnicodeError):
+                    continue
+                if not decoded or located.scheme or located.netloc or decoded.startswith("/"):
+                    continue
+                path = _wiki_path(posixpath.join(posixpath.dirname(paths[source_id]), decoded))
+                target_id = owners.get(path) if path is not None else None
+                if target_id is None or target_id == source_id:
+                    continue
+                source_interval, target_interval = intervals[source_id], intervals[target_id]
+                if (
+                    source_interval[0] <= target_interval[0] < source_interval[1]
+                    or target_interval[0] <= source_interval[0] < target_interval[1]
+                ):
+                    continue
+                pair = (positions[source_id], positions[target_id])
+                if pair not in references:
+                    reference_bytes += len(str(pair[0])) + len(str(pair[1])) + 3 + bool(references)
+                    if reference_bytes > MAX_WIKI_LINK_BYTES:
+                        return WikiLinks(
+                            (), (), f"wiki reference layer exceeds {MAX_WIKI_LINK_BYTES} bytes; no references were published",
+                        )
+                    references.add(pair)
+    return WikiLinks(
+        tuple(sorted(pair for pair in references if pair[1] not in invalid_targets)),
+        tuple(sorted(unavailable)),
+    )
+
+
+def write_wiki_links(
+    path: Path,
+    links: WikiLinks,
+    *,
+    index_sha256: str,
+    warnings_out: list[str] | None = None,
+) -> Path:
+    """Publish a SHA-bound optional layer, explicitly omitting an oversized one.
+
+    The search index and its dependencies remain byte-for-byte unchanged. A
+    reader must verify its exact index digest before using these offsets.
+    """
+    if len(index_sha256) != 64 or any(character not in "0123456789abcdef" for character in index_sha256):
+        raise ValueError("wiki references require the exact search index SHA-256")
+    payload: dict[str, object] = {
+        "schema": WIKI_LINKS_SCHEMA,
+        "index_sha256": index_sha256,
+        "availability": "partial" if links.unavailable_sources else "complete",
+        "references": links.references,
+        "unavailable_sources": links.unavailable_sources,
+    }
+    if links.unavailable_sources:
+        payload["reason"] = "some captured article sources or publication routes were unavailable or unsupported"
+    if links.reason is not None:
+        payload.update(availability="unavailable", reason=links.reason)
+    if len(_json_text(payload).encode("utf-8")) > MAX_WIKI_LINK_BYTES:
+        reason = f"wiki reference layer exceeds {MAX_WIKI_LINK_BYTES} bytes; no references were published"
+        payload.update(availability="unavailable", reason=reason, references=(), unavailable_sources=())
+        if warnings_out is not None:
+            warnings_out.append(reason)
+    elif links.reason is not None and warnings_out is not None:
+        warnings_out.append(f"wiki reference layer unavailable: {links.reason}")
     return _write_json(path, payload)
 
 

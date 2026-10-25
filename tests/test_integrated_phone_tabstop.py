@@ -31,7 +31,7 @@ function original(name) {
 const context={assert};vm.createContext(context);
 const constants=source.slice(source.indexOf('  var NODE_W ='),source.indexOf('  var clients ='))+
   source.slice(source.indexOf('  var clamp ='),source.indexOf('  function element('));
-const functions=['layoutGraph','geometry','compactRegions','world','screen','inViewport','fit','mapHeight','freeArea','center','updateOverlays','relationCounts','weightWords'].map(original).join('\n');
+const functions=['layoutGraph','wikiRoutes','geometry','compactRegions','world','screen','inViewport','fit','mapHeight','freeArea','center','updateOverlays','relationCounts','weightWords'].map(original).join('\n');
 """
 
 _ENVIRONMENT = r"""
@@ -42,8 +42,8 @@ class Control {
   setAttribute(name,value) {this[name]=String(value);}
   remove() {this.removed=true;}
 }
-var navigation={},mapAllowed=true,atlas=true,ui$area=null,ui$orientation='tb',family='sans-serif';
-var scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect;
+var navigation={},mapAllowed=true,atlas=true,ui$area=null,ui$orientation='tb',family='sans-serif',restoring=false;
+var scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,sceneWiki;
 var dom$stage={clientWidth:390,clientHeight:560},dom$ctx={},dom$inspector;
 var host={classList:{contains(){return false;}}};
 var ui$transform={x:0,y:0,scale:1},ui$selected=null,ui$hovered=null;

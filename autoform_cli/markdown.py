@@ -370,7 +370,7 @@ def render_html(text: str) -> str:
         raise
 
 
-def render_tree(text: str) -> object | None:
+def render_tree(text: str, *, allow_html: bool = True) -> object | None:
     """Render ``text`` and parse the result the way a browser would.
 
     HTML5 tree construction is the point, not tokenising. Browsers repair
@@ -383,6 +383,11 @@ def render_tree(text: str) -> object | None:
 
     try:
         rendered = render_html(text)
+        # Raw HTML is stashed by the converter; generated inline math and
+        # escaped code are not. A reading-only label can reject authored tags
+        # without mistaking a TeX inequality or a code literal for markup.
+        if not allow_html and _converter().htmlStash.rawHtmlBlocks:
+            return None
     except Exception:
         return None
     try:

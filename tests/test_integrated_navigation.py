@@ -124,11 +124,118 @@ function addLargeScope(app) {
 """
 
 
+_PAINT_PEERS = r"""
+function paintCatalogue(app) {
+  const nodes=Array.from({length:1025},(_,n)=>({id:'paint-'+n,title:'Paint item '+n,kind:'node',scope:'roadmap',
+    route:'../roadmap/paint-'+n+'.html',status:'planned'}));
+  const payload={schema:'autoform-dag-search/v1',nodes,relations:[[0,1024,2,3],[512,0,0,1]]};
+  app.contents.set(absolute('dependencies/index.json'),payload);return payload;
+}
+function controlledPaint(app) {
+  const nativeTimer=global.setTimeout,nativeClear=global.clearTimeout;
+  const frames=new Map(),requested=[],cancelled=[],timers=new Map();let serial=0;
+  app.initial.doc.visibilityState='visible';
+  app.win.requestAnimationFrame=callback=>{const id=serial++;frames.set(id,callback);requested.push(id);return id;};
+  app.win.cancelAnimationFrame=id=>{cancelled.push(id);frames.delete(id);};
+  global.setTimeout=(callback,delay,...args)=>{
+    if(delay!==50)return nativeTimer(callback,delay,...args);
+    const token={controlledPaintTimer:true};timers.set(token,()=>callback(...args));return token;
+  };
+  global.clearTimeout=token=>{if(timers.has(token))timers.delete(token);else nativeClear(token);};
+  return {frames,requested,cancelled,timers,
+    release(id){const callback=frames.get(id);assert(callback,'The real normalizer must request this frame');frames.delete(id);callback(16);},
+    restore(){global.setTimeout=nativeTimer;global.clearTimeout=nativeClear;frames.clear();timers.clear();}};
+}
+function assertPaintIndex(app,result,published) {
+  assert.equal(result.nodes.length,1025);assert.deepEqual(result.nodes.map(node=>node.id),Array.from({length:1025},(_,n)=>'paint-'+n));
+  assert.deepEqual(result.relations,[['paint-0','paint-1024',2,3],['paint-512','paint-0',0,1]]);
+  assert.equal(published.length,1);assert.strictEqual(published[0],result);assert.strictEqual(app.nav.getIndex(),result);
+  assert.equal(app.fetches.filter(url=>url===absolute('dependencies/index.json')).length,1);assert.equal(app.errors.length,0);
+}
+"""
+
+
 def _run(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _HARNESS
     script += "\n(async()=>{\n" + body + "\n})().catch(error=>{console.error(error);process.exitCode=1;});"
     result = subprocess.run([_NODE, "-e", script], text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_visible_index_batches_await_real_window_frame_boundaries_before_publication() -> None:
+    _run(_PAINT_PEERS + r"""
+      const published=[],app=setup({onIndex(value){published.push(value);}});paintCatalogue(app);
+      const paint=controlledPaint(app);
+      try {
+        const pending=app.nav.loadIndex();assert.strictEqual(app.nav.loadIndex(),pending);
+        await until(()=>paint.frames.size===1);
+        assert.deepEqual(paint.requested,[0]);assert.equal(paint.timers.size,1);
+        assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+        await new Promise(resolve=>setImmediate(resolve));
+        assert.deepEqual(paint.requested,[0],'The next batch must wait for the first actual frame callback');
+        paint.release(0);await until(()=>paint.frames.size===1);
+        assert.deepEqual(paint.requested,[0,1]);assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+        await new Promise(resolve=>setImmediate(resolve));
+        assert.deepEqual(paint.requested,[0,1],'Publication must still wait for the second frame');
+        paint.release(1);const result=await pending;assertPaintIndex(app,result,published);
+        assert.equal(paint.frames.size,0);assert.equal(paint.timers.size,0);assert.deepEqual(paint.cancelled,[0,1]);
+      } finally {app.nav.dispose();paint.restore();}
+    """)
+
+
+@pytest.mark.parametrize("kind", ("absent", "stalled"))
+def test_index_frame_fallback_completes_with_absent_or_stalled_window_frames(kind: str) -> None:
+    _run(_PAINT_PEERS + "const kind=" + json.dumps(kind) + ";\n" + r"""
+      const published=[],app=setup({onIndex(value){published.push(value);}});paintCatalogue(app);
+      app.initial.doc.visibilityState='visible';const callbacks=[],cancelled=[],delays=[];
+      if(kind==='stalled') {
+        app.win.requestAnimationFrame=callback=>{callbacks.push(callback);return callbacks.length-1;};
+        app.win.cancelAnimationFrame=id=>cancelled.push(id);
+      }
+      const nativeTimer=global.setTimeout;let fallbackFired=0;
+      global.setTimeout=(callback,delay,...args)=>{
+        if(delay===0||delay===50)delays.push(delay);
+        return nativeTimer(()=>{if(delay===50)fallbackFired++;callback(...args);},delay);
+      };
+      try {
+        const result=await app.nav.loadIndex();assertPaintIndex(app,result,published);
+        assert.deepEqual(delays,kind==='stalled'?[50,50]:[0,0]);
+        assert.equal(fallbackFired,kind==='stalled'?2:0);
+        if(kind==='stalled') {
+          assert.deepEqual(cancelled,[0,1]);callbacks.forEach(callback=>callback(20));
+          await new Promise(resolve=>setImmediate(resolve));assert.equal(published.length,1);
+          assert.strictEqual(app.nav.getIndex(),result,'Late cancelled frames must not republish or replace the index');
+        }
+      } finally {app.nav.dispose();global.setTimeout=nativeTimer;}
+    """)
+
+
+def test_hidden_index_batches_never_depend_on_window_animation_frames() -> None:
+    _run(_PAINT_PEERS + r"""
+      const published=[],app=setup({onIndex(value){published.push(value);}});paintCatalogue(app);
+      app.initial.doc.visibilityState='hidden';
+      app.win.requestAnimationFrame=()=>{throw new Error('A hidden document must not wait for a paint');};
+      app.win.cancelAnimationFrame=()=>{throw new Error('A hidden document has no paint handle');};
+      const nativeTimer=global.setTimeout,delays=[];
+      global.setTimeout=(callback,delay,...args)=>{if(delay===0||delay===50)delays.push(delay);return nativeTimer(callback,delay,...args);};
+      try {const result=await app.nav.loadIndex();assertPaintIndex(app,result,published);assert.deepEqual(delays,[0,0]);}
+      finally {app.nav.dispose();global.setTimeout=nativeTimer;}
+    """)
+
+
+def test_disposal_while_index_frame_is_pending_never_exposes_a_partial_index() -> None:
+    _run(_PAINT_PEERS + r"""
+      const published=[],app=setup({onIndex(value){published.push(value);}});paintCatalogue(app);
+      const paint=controlledPaint(app);
+      try {
+        const pending=app.nav.loadIndex();await until(()=>paint.frames.size===1);
+        assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+        app.nav.dispose();paint.release(0);
+        await assert.rejects(pending,error=>error.name==='AbortError');
+        assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);assert.equal(app.errors.length,0);
+        assert.deepEqual(paint.requested,[0]);assert.equal(paint.frames.size,0);assert.equal(paint.timers.size,0);
+      } finally {app.nav.dispose();paint.restore();}
+    """)
 
 
 def test_canonical_node_navigation_keeps_complete_ssr_and_rebases_reading() -> None:
@@ -538,7 +645,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
       let dom$outlineToggle;
       const records=new Map(),byId=new Map(),overlays=new Map(),dom$inventoryRows=new Map(),navigation=app.nav;
       const mapAllowed=true,presentStatuses=['planned'],palette={planned:{}},LIST_PAGE=100;
-      const updateProjection=()=>{data=contextGraph;},closeSearch=()=>{},setFilters=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
+      const updateProjection=()=>{data=contextGraph;},closeSearch=()=>{},setFilters=()=>{},setBrowse=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
       const resize=()=>{},center=()=>{},centerIfHidden=()=>{},showError=()=>{},trailList=()=>[],routeTrail=()=>[],sheetLayout=()=>false;
       const requestAnimationFrame=callback=>setImmediate(callback);
       const applyRoute=eval('('+callback('applyRoute')+')');

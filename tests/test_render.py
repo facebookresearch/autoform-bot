@@ -27,7 +27,7 @@ import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
 import autoform_cli.render as render_module
 from autoform_cli import _directory_binding as directory_binding_module
-from autoform_cli import graph_pages
+from autoform_cli import dag_viewer, graph_pages
 from autoform_cli.__main__ import main
 from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.audit import audit_blueprint
@@ -481,11 +481,15 @@ def test_every_explorer_breadcrumb_reaches_a_published_page(tmp_path: Path) -> N
         """Check that every explorer's crumbs are published, and say where its Book crumb leads."""
         payloads = [out / "dependencies.json", *(out / "dependencies").rglob("*.json")]
         payloads.remove(out / "dependencies/index.json")
+        decoded = {payload: json.loads(payload.read_text(encoding="utf-8")) for payload in payloads}
+        assert all(data.get("schema") in {dag_viewer.SCHEMA, dag_viewer.WIKI_LINKS_SCHEMA} for data in decoded.values())
+        assert decoded[out / graph_pages.WIKI_LINKS]["schema"] == dag_viewer.WIKI_LINKS_SCHEMA
+        payloads = [payload for payload, data in decoded.items() if data["schema"] == dag_viewer.SCHEMA]
         assert out / "dependencies/scopes/algebra/groups.json" in payloads
         crumbs = [
             (payload, crumb["label"], crumb["url"])
             for payload in payloads
-            for crumb in json.loads(payload.read_text(encoding="utf-8"))["view"]["breadcrumbs"]
+            for crumb in decoded[payload]["view"]["breadcrumbs"]
             if crumb["url"] is not None
         ]
         assert sum(label == "Book" for _payload, label, _url in crumbs) == len(payloads)
@@ -3074,6 +3078,31 @@ def test_node_links_resolve_each_target_page_once(tmp_path: Path, monkeypatch: p
     assert sorted(calls) == [chapter, other]
     # Once to compare it with the current page, once inside relative_link.
     assert resolved.count(chapter) <= 2
+
+
+def test_the_same_link_from_two_folders_reaches_each_folders_file(tmp_path: Path) -> None:
+    """Render resolves each linked path once for the whole site, so a link two
+    leaves write alike must still lead from each to its own folder's file."""
+
+    project = _project(tmp_path)
+    roadmap = project / "blueprint" / "roadmap"
+    _edit(roadmap / "README.md", "- [Top](top.md)\n", "- [Top](top.md)\n- [Chapter](ch/README.md)\n")
+    chapter = roadmap / "ch"
+    chapter.mkdir()
+    (chapter / "README.md").write_text("# Chapter\n\n- [One](one/leaf.md)\n- [Two](two/leaf.md)\n", encoding="utf-8")
+    for folder in ("one", "two"):
+        (chapter / folder / "figures").mkdir(parents=True)
+        (chapter / folder / "figures" / "plot.md").write_text(f"# Plot {folder}\n\nA plot.\n", encoding="utf-8")
+        (chapter / folder / "leaf.md").write_text(
+            f"---\ndeclaration: theorem\n---\n\n# Leaf {folder}\n\nSee [the plot](figures/plot.md).\n",
+            encoding="utf-8",
+        )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    page = (tmp_path / "out/roadmap/ch/README.md").read_text(encoding="utf-8")
+    assert "[the plot](one/figures/plot.md)" in page
+    assert "[the plot](two/figures/plot.md)" in page
 
 
 def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

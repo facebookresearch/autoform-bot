@@ -30,6 +30,32 @@
     return node;
   }
 
+  // Only publisher-derived label parts enter reading controls. Never parse
+  // provider HTML, replace an interactive link, or alter graph-card geometry.
+  function readingLabel(tag, className, text, label, prefix) {
+    prefix = prefix || "";
+    var root = element(tag, className, prefix + text);
+    if (!label || label.format !== "inline-parts-v1" || label.source !== text || !Array.isArray(label.parts) || label.parts.length > 256 || text.length > 16384) return root;
+    var valid = label.parts.every(function (part) {
+      return Array.isArray(part) && part.length === 2 && ["text", "code", "math"].indexOf(part[0]) >= 0 && typeof part[1] === "string" &&
+        (part[0] !== "math" || /^\\\([\s\S]*\\\)$|^\\\[[\s\S]*\\\]$/.test(part[1]));
+    });
+    if (!valid || !label.parts.some(function (part) { return part[0] === "math"; }) ||
+        label.parts.reduce(function (size, part) { return size + part[1].length; }, 0) > 32768) return root;
+    root.textContent = "";
+    if (prefix) root.appendChild(document.createTextNode(prefix));
+    label.parts.forEach(function (part) {
+      if (part[0] === "text") root.appendChild(document.createTextNode(part[1]));
+      else root.appendChild(element(part[0] === "code" ? "code" : "span", part[0] === "math" ? "arithmatex" : "", part[1]));
+    });
+    return root;
+  }
+
+  function refreshReadingLabels(root) {
+    if (root && window.AutoformMath && typeof window.AutoformMath.refresh === "function")
+      Promise.resolve(window.AutoformMath.refresh(root)).catch(function () {});
+  }
+
   function safeHref(value) {
     if (!value || /[\u0000-\u001f]/.test(value)) return null;
     try {
@@ -46,7 +72,7 @@
     host.classList.add("bp-dag-enhancing");
     var loading = host.querySelector(".bp-dag-loading"); if (loading) loading.hidden = false;
     var instance = ++hostSequence;
-    var client = null, index = null;
+    var client = null, index = null, ui$wikiLinks = null;
     var navigation = window.AutoformNavigation.create({
       host: host,
       onCommit: function (bundle) {
@@ -58,9 +84,14 @@
         if (!client) { client = mount(host, bundle.graph, instance, bundle, navigation); clients.set(host, client); ready = client.ready; }
         else ready = client.applyRoute(bundle);
         if (index) client.useIndex(index);
+        if (ui$wikiLinks) client.useWikiLinks(ui$wikiLinks);
         return ready;
       },
       onIndex: function (loaded) { index = loaded; if (client) client.useIndex(loaded); },
+      onWikiLinks: function (loaded) {
+        if (!host.isConnected) { navigation.dispose(); return; }
+        ui$wikiLinks = loaded; if (client) client.useWikiLinks(loaded);
+      },
       captureState: function () { return client ? client.captureState() : {}; },
       restoreState: function (snapshot, bundle) { if (client) return client.restoreState(snapshot, bundle); },
       onError: function (error) {
@@ -101,8 +132,105 @@
     return {before: before, after: after};
   }
 
+  // Pure projection onto a complete, bounded display view. Optional endpoints
+  // map canonical IDs to existing display IDs (including region replacements).
+  // The Promise yields during large scans; callers cache it and guard publication.
+  function projectWikiLinks(view, records, state, endpoints) {
+    var availability = state && state.availability, empty = {availability: "unavailable", edges: [], unavailableOwners: []};
+    if (!state || state.schema !== "autoform-wiki-links/v1" || ["complete", "partial"].indexOf(availability) < 0 ||
+        !Array.isArray(state.references) || !Array.isArray(state.unavailable_sources) ||
+        availability === "complete" && state.unavailable_sources.length || !view || !Array.isArray(view.nodes) ||
+        view.nodes.length > MAX_MAP_NODES) return Promise.resolve(empty);
+    var visible = new Map(), owners = new Map(), eligible = new Set(), ambiguous = new Set(), membership = 0;
+    function wrapper(record) { return ["source", "collection", "transparent"].indexOf(record.navigation) >= 0; }
+    function canonical(node) {
+      if (node._overviewGroup || node._region) return null;
+      // Match recordId: literal scope:/boundary: names survive by identity or
+      // _recordId; only actual display prefixes are removed once.
+      var id = node._recordId || (records.get(node.id) === node || ["scope", "boundary"].indexOf(node.kind) < 0 ?
+        node.id : node.id.replace(/^(scope|boundary):/, ""));
+      return records.has(id) ? id : null;
+    }
+    function assign(id, owner) {
+      if (!id || wrapper(records.get(id))) return;
+      if (owners.has(id) && owners.get(id) !== owner) ambiguous.add(id);
+      else owners.set(id, owner);
+    }
+    for (var i = 0; i < view.nodes.length; i++) {
+      var node = view.nodes[i];
+      if (!node || typeof node.id !== "string" || visible.has(node.id)) return Promise.resolve(empty);
+      visible.set(node.id, node);
+      var id = canonical(node); assign(id, node.id);
+      if (id && !wrapper(records.get(id)) || node._region && !node._overviewGroup) eligible.add(node.id);
+    }
+    var groups = view._scopeOverview && view._scopeOverview.groups || [];
+    if (!Array.isArray(groups) || groups.length > MAX_MAP_NODES) return Promise.resolve(empty);
+    for (var g = 0; g < groups.length; g++) {
+      var group = groups[g], shown = visible.get(group.id);
+      if (!shown || shown._overviewGroup !== group.key) continue;
+      if (!Array.isArray(group.members) || (membership += group.members.length) > MAX_MAP_NODES) return Promise.resolve(empty);
+      eligible.add(group.id);
+      group.members.forEach(function (member) { assign(canonical(member), group.id); });
+    }
+    var memo = new Map();
+    async function resolve(id) {
+      if (memo.has(id)) return memo.get(id).owner;
+      var chain = [], seen = new Set(), pending = id, suffix = {safe: true, owner: null};
+      while (pending !== null && pending !== undefined) {
+        if (memo.has(pending)) { suffix = memo.get(pending); break; }
+        var record = records.get(pending);
+        if (!record || seen.has(pending)) { suffix = {safe: false, owner: null}; break; }
+        seen.add(pending); chain.push(record);
+        if (record.navigation === "source" || ambiguous.has(pending)) { suffix = {safe: false, owner: null}; break; }
+        pending = record.parent;
+        if (chain.length % 1024 === 0) await new Promise(function (done) { setTimeout(done, 0); });
+      }
+      for (var position = chain.length - 1; position >= 0; position--) {
+        var current = chain[position], owner = owners.get(current.id), safe = suffix.safe;
+        if (!wrapper(current) && endpoints && endpoints.has(current.id)) {
+          owner = endpoints.get(current.id);
+          if (!eligible.has(owner)) safe = false;
+        }
+        suffix = {safe: safe, owner: safe ? !wrapper(current) && owner || suffix.owner : null};
+        memo.set(current.id, suffix);
+        if ((chain.length - position) % 1024 === 0 && position)
+          await new Promise(function (done) { setTimeout(done, 0); });
+      }
+      return suffix.owner;
+    }
+    return (async function () {
+      var references = state.references, missing = state.unavailable_sources, edges = new Map(), pairs = new Map(), unknown = new Set();
+      for (var row = 0; row < references.length + missing.length; row++) {
+        if (row >= references.length) {
+          var missingId = missing[row - references.length], missingRecord = records.get(missingId);
+          if (missingRecord && !wrapper(missingRecord)) { var unavailable = await resolve(missingId); if (unavailable) unknown.add(unavailable); }
+        } else {
+          var pair = references[row], source = pair && records.get(pair[0]), target = pair && records.get(pair[1]);
+          if (Array.isArray(pair) && pair.length === 2 && source && target && !wrapper(source) && !wrapper(target)) {
+            var from = await resolve(pair[0]), to = await resolve(pair[1]);
+            if (from && to && from !== to) {
+              var targets = pairs.get(pair[0]);
+              if (!targets || !targets.has(pair[1])) {
+                if (!targets) { targets = new Set(); pairs.set(pair[0], targets); }
+                targets.add(pair[1]);
+                var key = JSON.stringify([from, to]), edge = edges.get(key);
+                if (edge) edge.count++;
+                else edges.set(key, {source: from, target: to, count: 1});
+              }
+            }
+          }
+        }
+        if ((row + 1) % 1024 === 0 && row + 1 < references.length + missing.length)
+          await new Promise(function (done) { setTimeout(done, 0); });
+      }
+      return {availability: availability, edges: Array.from(edges.values()).sort(function (a, b) {
+        return a.source < b.source ? -1 : a.source > b.source ? 1 : a.target < b.target ? -1 : a.target > b.target ? 1 : 0;
+      }), unavailableOwners: Array.from(unknown).sort()};
+    })();
+  }
+
   // Deterministic, bounded scene geometry; public graph data remains untouched.
-  function layoutGraph(nodes, edges, direction, stageAspect) {
+  function layoutGraph(nodes, edges, direction, stageAspect, wikiEdges) {
     var boxes = new Map(), routes = [], work = {ticks: 0, pairs: 0, moves: 0, candidates: 0, escapes: 0};
     if (nodes.length > MAX_MAP_NODES) return null;
     if (!nodes.length) return {nodes: boxes, routes: routes, clusters: [], work: work, bounds: {x: 0, y: 0, w: 1, h: 1}};
@@ -136,6 +264,26 @@
       if (island === undefined) { island = islands.length; islandIds.set(key, island); islands.push({key: node.id, members: [], components: [], links: 0}); }
       node.island = island; islands[island].members.push(index);
     });
+    // Ordinary article links are affinities, not directed mathematical edges.
+    // Coalesce duplicate observations without changing the formal adjacency.
+    var associations = new Map(), familyParents = islands.map(function (_island, index) { return index; });
+    function familyRoot(index) { while (familyParents[index] !== index) { familyParents[index] = familyParents[familyParents[index]]; index = familyParents[index]; } return index; }
+    (Array.isArray(wikiEdges) && wikiEdges.length <= nodes.length * nodes.length ? wikiEdges : []).forEach(function (edge) {
+      if (!edge || !Number.isFinite(edge.count) || edge.count <= 0) return;
+      var a = ids.get(edge.source), b = ids.get(edge.target); if (a === undefined || b === undefined || a === b) return;
+      var first = Math.min(a, b), last = Math.max(a, b), key = first + ":" + last;
+      var found = associations.get(key);
+      if (!found) { found = {a: first, b: last, forward: 0, backward: 0}; associations.set(key, found); }
+      var kind = a === first ? "forward" : "backward";
+      found[kind] = Math.max(found[kind], Math.min(Number.MAX_SAFE_INTEGER / 2, edge.count));
+    });
+    var wiki = Array.from(associations.values()).sort(function (a, b) { return a.a - b.a || a.b - b.b; });
+    wiki.forEach(function (link) {
+      link.count = link.forward + link.backward;
+      var a = vertices[link.a].island, b = vertices[link.b].island;
+      if (a !== b) familyParents[familyRoot(b)] = familyRoot(a);
+    });
+    var wikiFamilies = [], wikiWork = {ticks: 0, pairs: 0, moves: 0};
     var sequence = 0, stack = [], components = [], visitIndex = [], low = [], onStack = [], componentOf = [];
     function visit(index) {
       visitIndex[index] = low[index] = sequence++; stack.push(index); onStack[index] = true;
@@ -398,6 +546,88 @@
         island.shift = {x: x - island.packing.x, y: y - island.packing.y};
         x += island.packing.w + spacing; rowHeight = Math.max(rowHeight, island.packing.h);
       });
+      if (wiki.some(function (link) { return vertices[link.a].island !== vertices[link.b].island; })) {
+        // Relax complete formal route envelopes, never individual proof cards.
+        // Families follow actual weak wiki connectivity and receive no invented labels.
+        var families = new Map(), islandSprings = new Map();
+        islands.forEach(function (island, index) {
+          var key = familyRoot(index), family = families.get(key);
+          if (!family) { family = {key: island.key, islands: [], springs: []}; families.set(key, family); }
+          family.islands.push({index: index, key: island.key, w: island.packing.w, h: island.packing.h, x: 0, y: 0, degree: 0});
+        });
+        wiki.forEach(function (link) {
+          var a = vertices[link.a].island, b = vertices[link.b].island; if (a === b) return;
+          var key = Math.min(a, b) + ":" + Math.max(a, b), found = islandSprings.get(key);
+          if (found) found.count = Math.min(Number.MAX_SAFE_INTEGER, found.count + link.count);
+          else islandSprings.set(key, {a: Math.min(a, b), b: Math.max(a, b), count: link.count});
+        });
+        islandSprings.forEach(function (link) { families.get(familyRoot(link.a)).springs.push(link); });
+        families.forEach(function (family) {
+          var members = family.islands, lookup = new Map(members.map(function (member) { return [member.index, member]; }));
+          family.springs.sort(function (a, b) { return a.a - b.a || a.b - b.b; });
+          family.springs.forEach(function (link) { lookup.get(link.a).degree++; lookup.get(link.b).degree++; });
+          members.sort(function (a, b) { return b.degree - a.degree || (a.key < b.key ? -1 : 1); });
+          var unit = members.reduce(function (largest, member) { return Math.max(largest, member.w, member.h); }, 0) + spacing;
+          var placed = [], position = 0;
+          members.forEach(function (member) {
+            if (members.length === 2) {
+              member.x = placed.length ? placed[0].w + spacing : 0;
+              member.y = placed.length ? (placed[0].h - member.h) / 2 : 0;
+              placed.push(member); return;
+            }
+            var clear = false;
+            for (var attempt = 0; attempt < 32 && !clear; attempt++) {
+              var radius = unit * Math.sqrt(position) * .85, angle = position++ * 2.399963229728653;
+              member.x = Math.cos(angle) * radius - member.w / 2; member.y = Math.sin(angle) * radius - member.h / 2;
+              clear = !placed.some(function (other) { return overlap(member, other, spacing); });
+            }
+            if (!clear) member.x = Math.max.apply(null, placed.map(function (other) { return other.x + other.w; })) + spacing;
+            placed.push(member);
+          });
+          if (members.length > 1) for (var tick = 0; tick < 32; tick++) {
+            var forces = new Map(members.map(function (member) { return [member.index, {x: 0, y: 0}]; }));
+            family.springs.forEach(function (link) {
+              var a = lookup.get(link.a), b = lookup.get(link.b), dx = b.x + b.w / 2 - a.x - a.w / 2, dy = b.y + b.h / 2 - a.y - a.h / 2;
+              var distance = Math.max(1, Math.hypot(dx, dy));
+              var wanted = (Math.hypot(a.w, a.h) + Math.hypot(b.w, b.h)) / 2 + spacing;
+              var strength = Math.min(2, 1 + Math.log1p(link.count) / 12) * (distance - wanted) / distance * .12;
+              forces.get(link.a).x += dx * strength / Math.max(1, a.degree); forces.get(link.a).y += dy * strength / Math.max(1, a.degree);
+              forces.get(link.b).x -= dx * strength / Math.max(1, b.degree); forces.get(link.b).y -= dy * strength / Math.max(1, b.degree);
+            });
+            members.forEach(function (a, index) { members.slice(index + 1).forEach(function (b) {
+              wikiWork.pairs++;
+              var dx = b.x + b.w / 2 - a.x - a.w / 2, dy = b.y + b.h / 2 - a.y - a.h / 2, square = Math.max(1, dx * dx + dy * dy);
+              var push = Math.min(3, 16000 / square), length = Math.sqrt(square);
+              forces.get(a.index).x -= dx / length * push; forces.get(a.index).y -= dy / length * push;
+              forces.get(b.index).x += dx / length * push; forces.get(b.index).y += dy / length * push;
+            }); });
+            members.forEach(function (member) {
+              var force = forces.get(member.index), dx = Math.max(-20, Math.min(20, force.x)), dy = Math.max(-20, Math.min(20, force.y));
+              [[dx, dy], [0, dy], [dx, 0]].some(function (move) {
+                var candidate = {x: member.x + move[0], y: member.y + move[1], w: member.w, h: member.h};
+                var clear = members.every(function (other) { wikiWork.moves++; return other === member || !overlap(candidate, other, spacing); });
+                if (clear) { member.x = candidate.x; member.y = candidate.y; } return clear;
+              });
+            });
+            wikiWork.ticks++;
+          }
+          family.bounds = bounds(members.reduce(function (all, member) { return all.concat([{x: member.x, y: member.y}, {x: member.x + member.w, y: member.y + member.h}]); }, []));
+        });
+        var familyArea = 0, familyWidth = 0;
+        families.forEach(function (family) { familyArea += (family.bounds.w + spacing * 2) * (family.bounds.h + spacing * 2); familyWidth = Math.max(familyWidth, family.bounds.w); });
+        var familyGap = spacing * 2 + 64;
+        var targetWidth = Math.max(familyWidth, Math.sqrt(familyArea * aspect)), fx = 0, fy = 0, shelf = 0;
+        Array.from(families.values()).sort(function (a, b) { return b.islands.length - a.islands.length || b.bounds.h - a.bounds.h || (a.key < b.key ? -1 : 1); }).forEach(function (family) {
+          if (fx && fx + family.bounds.w > targetWidth) { fx = 0; fy += shelf + familyGap; shelf = 0; }
+          family.islands.forEach(function (member) {
+            var island = islands[member.index];
+            island.shift = {x: fx + member.x - family.bounds.x - island.packing.x, y: fy + member.y - family.bounds.y - island.packing.y};
+          });
+          wikiFamilies.push({island_count: family.islands.length, members: family.islands.reduce(function (all, member) { return all.concat(islands[member.index].members.map(function (index) { return vertices[index].id; })); }, []).sort(),
+            bounds: {x: fx, y: fy, w: family.bounds.w, h: family.bounds.h}});
+          fx += family.bounds.w + familyGap; shelf = Math.max(shelf, family.bounds.h);
+        });
+      }
       // Cached escapes/reversed paths share point, bound and arrow objects.
       // Translate each object once so packing cannot distort a typed route.
       var translated = new WeakSet();
@@ -425,7 +655,82 @@
     }
     var all = Array.from(boxes.values()).reduce(function (points, box) { return points.concat([{x: box.x, y: box.y}, {x: box.x + box.w, y: box.y + box.h}]); }, []);
     routes.forEach(function (route) { all.push({x: route.bounds.x, y: route.bounds.y}, {x: route.bounds.x + route.bounds.w, y: route.bounds.y + route.bounds.h}); });
-    return {nodes: boxes, routes: routes, clusters: components.map(function (component) { return {id: component.key, rank: component.rank, members: component.members.map(function (index) { return vertices[index].id; })}; }), work: work, bounds: bounds(all)};
+    return {nodes: boxes, routes: routes, clusters: components.map(function (component) { return {id: component.key, rank: component.rank, members: component.members.map(function (index) { return vertices[index].id; })}; }),
+      $wikiFamilies: wikiFamilies, $wikiEdges: wiki.map(function (link) { return {source: vertices[link.a].id, target: vertices[link.b].id, count: link.count}; }),
+      $wikiWork: wikiWork, work: work, bounds: bounds(all)};
+  }
+
+  // Soft article associations use settled geometry, never the proof's ports or
+  // rank solver. Keep a bounded local backbone; all links remain in the reader.
+  function wikiRoutes(scene) {
+    var boxes = scene.nodes, ordered = Array.from(boxes.values()), links = scene.$wikiEdges || [], paths = [], hidden = 0;
+    var work = {attempts: 0, pairs: 0, obstacles: 0};
+    var counts = new Map();
+    function hits(a, b, box, padding) {
+      var enter = 0, leave = 1;
+      for (var axis of ["x", "y"]) {
+        var low = box[axis] - padding, high = box[axis] + box[axis === "x" ? "w" : "h"] + padding;
+        var delta = b[axis] - a[axis];
+        if (Math.abs(delta) < 1e-9) { if (a[axis] <= low || a[axis] >= high) return false; continue; }
+        var first = (low - a[axis]) / delta, last = (high - a[axis]) / delta;
+        enter = Math.max(enter, Math.min(first, last)); leave = Math.min(leave, Math.max(first, last));
+        if (enter >= leave - 1e-9) return false;
+      }
+      return leave > 1e-7 && enter < 1 - 1e-7;
+    }
+    function clear(a, b, source, target) { work.pairs++; return ordered.every(function (box) { work.obstacles++; return !hits(a, b, box, box.id === source || box.id === target ? 0 : 16); }); }
+    function boundary(box, other) {
+      var x = box.x + box.w / 2, y = box.y + box.h / 2, dx = other.x + other.w / 2 - x, dy = other.y + other.h / 2 - y;
+      var scale = Math.min(Math.abs(dx) > 1e-9 ? box.w / 2 / Math.abs(dx) : Infinity, Math.abs(dy) > 1e-9 ? box.h / 2 / Math.abs(dy) : Infinity);
+      var at = {x: x + dx * scale, y: y + dy * scale};
+      // Pin the normal coordinate rather than accumulating floating-point
+      // error just inside the card, which would make a real stroke clip it.
+      if (Math.abs(dx) / box.w >= Math.abs(dy) / box.h) at.x = dx < 0 ? box.x : box.x + box.w;
+      else at.y = dy < 0 ? box.y : box.y + box.h;
+      return at;
+    }
+    links.slice().sort(function (a, b) { return b.count - a.count || (a.source < b.source ? -1 : a.source > b.source ? 1 : a.target < b.target ? -1 : 1); }).forEach(function (link) {
+      if ((counts.get(link.source) || 0) >= 4 || (counts.get(link.target) || 0) >= 4) { hidden++; return; }
+      if (work.attempts >= ordered.length * 2) { hidden++; return; }
+      work.attempts++;
+      var source = boxes.get(link.source), target = boxes.get(link.target); if (!source || !target) return;
+      var from = boundary(source, target), to = boundary(target, source), direct = Math.hypot(to.x - from.x, to.y - from.y), route;
+      if (clear(from, to, source.id, target.id)) route = [from, to];
+      else {
+        var points = [from, to], margin = Math.min(320, direct / 2 + 48);
+        var nearby = ordered.filter(function (box) { return box.id !== source.id && box.id !== target.id &&
+          box.x <= Math.max(from.x, to.x) + margin && box.x + box.w >= Math.min(from.x, to.x) - margin &&
+          box.y <= Math.max(from.y, to.y) + margin && box.y + box.h >= Math.min(from.y, to.y) - margin; });
+        if (nearby.length > 8) { hidden++; return; }
+        nearby.forEach(function (box) {
+          points.push({x: box.x - 20, y: box.y - 20}, {x: box.x + box.w + 20, y: box.y - 20},
+            {x: box.x - 20, y: box.y + box.h + 20}, {x: box.x + box.w + 20, y: box.y + box.h + 20});
+        });
+        var distance = points.map(function () { return Infinity; }), before = [], visited = new Set(); distance[0] = 0;
+        // Dijkstra over at most 32 nearby corners. Only local segments are candidates,
+        // preventing an optional association from circling the entire library.
+        for (var step = 0; step < points.length; step++) {
+          var next = -1;
+          for (var i = 0; i < points.length; i++) if (!visited.has(i) && (next < 0 || distance[i] < distance[next])) next = i;
+          if (next < 0 || !Number.isFinite(distance[next]) || distance[next] > direct * 1.8 + 96) break;
+          if (next === 1) { route = []; for (var at = 1; at !== undefined; at = before[at]) route.unshift(points[at]); break; }
+          visited.add(next);
+          for (var candidate = 0; candidate < points.length; candidate++) {
+            if (visited.has(candidate)) continue;
+            var length = Math.hypot(points[candidate].x - points[next].x, points[candidate].y - points[next].y);
+            if (distance[next] + length >= distance[candidate] || distance[next] + length > direct * 1.8 + 96) continue;
+            if (clear(points[next], points[candidate], source.id, target.id)) { distance[candidate] = distance[next] + length; before[candidate] = next; }
+          }
+        }
+      }
+      if (!route) { hidden++; return; }
+      counts.set(source.id, (counts.get(source.id) || 0) + 1); counts.set(target.id, (counts.get(target.id) || 0) + 1);
+      var left = Math.min.apply(null, route.map(function (at) { return at.x; })), top = Math.min.apply(null, route.map(function (at) { return at.y; }));
+      paths.push({source: source.id, target: target.id, kind: "wiki", count: link.count, points: route, radii: route.map(function () { return 0; }),
+        strength: 1 + Math.min(2, Math.log2(1 + link.count) / 3), bounds: {x: left, y: top,
+          w: Math.max.apply(null, route.map(function (at) { return at.x; })) - left, h: Math.max.apply(null, route.map(function (at) { return at.y; })) - top}});
+    });
+    return {routes: paths, omitted: hidden, total: links.length, work: work};
   }
 
   // A derived overview of a large local scope, not a new mathematical graph.
@@ -503,16 +808,23 @@
     return Object.assign({}, route, {count: count, strength: 1.2 + 1.6 * size / (size + 4) + 2 * size / flowRange});
   }
 
+  function wikiOwnerVisible(node, statuses) {
+    return Boolean(node && (!node.status_counts || node.status_counts.every(function (pair) { return !pair[1] || statuses.has(pair[0]); })));
+  }
+
   function mount(host, data, instance, firstBundle, navigation) {
     if (!navigation || !firstBundle || !firstBundle.readingSource) throw new Error("A complete mathematical page and navigation are required");
     if (!data || data.schema !== "autoform-dag-view/v2" || !data.palette ||
         !Array.isArray(data.nodes) || !Array.isArray(data.edges)) throw new Error("unsupported graph payload");
     var contextGraph = data, sharedIndex = null, records = new Map(), currentBundle = firstBundle;
+    var ui$wikiLinks = null, ui$wikiBefore = new Map(), ui$wikiAfter = new Map(), ui$wikiUnavailable = new Set(), ui$wikiRequested = false;
+    var ui$wikiGeneration = 0, ui$wikiPending = null, ui$wikiWork = null, ui$wikiRendered = null, ui$wikiNode = null;
+    var ui$wikiView = null, ui$wikiProjectionTicket = 0, ui$wikiProjectionCache = new WeakMap();
     var alive = true, cleanup = [], observers = [], frame = 0, readingReady = Promise.resolve(), restoration = 0, checkpointTimer = 0, restoring = false;
     host.textContent = "";
     host.classList.remove("bp-dag-enhancing");
     var view, atlas, palette, byId, prerequisites, dependents, statusCounts, presentStatuses;
-    var mapAllowed, scene, sceneData, sceneDirection, sceneCompact, sceneFamily, sceneAspect;
+    var mapAllowed, scene, sceneData, sceneDirection, sceneCompact, sceneFamily, sceneAspect, sceneWiki;
     function recordId(node) {
       if (node._overviewGroup) return null;
       return node._recordId || (records.get(node.id) === node || ["scope", "boundary"].indexOf(node.kind) < 0 ? node.id : node.id.replace(/^(scope|boundary):/, ""));
@@ -571,12 +883,12 @@
       ui$hovered = null,
       ui$requestedNode = firstBundle && firstBundle.nodeId || null, ui$outlineLimit = 120;
     if (!mapAllowed) ui$mode = "list";
-    var dom$announcement, dom$body, dom$breadcrumb, dom$canvas, dom$ctx, dom$density, dom$edgeFieldset, dom$empty,
+    var dom$announcement, dom$body, dom$breadcrumb, dom$browse, dom$browseToggle, dom$browsePopover, dom$canvas, dom$ctx, dom$density, dom$edgeFieldset, dom$empty,
       dom$error, dom$filterPopover, dom$filterSummary, dom$filters, dom$fit, dom$graphMode, dom$hiddenButton,
       dom$homeLink, dom$inspector, dom$inspectorInner, dom$inventory, dom$inventoryList, dom$inventoryRows,
       dom$inventoryScroll, dom$inventorySummary, dom$isolated, dom$listMode, dom$loadMore, dom$mapContext, dom$mapKey,
       dom$navigation, dom$navigationInner, dom$navigationNodes, dom$nodeLayer, dom$outlineToggle, dom$pageHeading,
-      dom$readingBody, dom$readingContext, dom$regionsMode, dom$search, dom$searchResults,
+      dom$readingBody, dom$readingContext, dom$readingNeighbors, dom$regionsMode, dom$search, dom$searchResults,
       dom$searchWrap, dom$sheetHandle, dom$sourcesMode, dom$stage, dom$statusFieldset, dom$statusInputs,
       dom$wholeSearch, dom$zoomIn, dom$zoomOut;
     var overlays = new Map(), scheduled = false, firstResize = true, family, hoverTimer;
@@ -649,6 +961,87 @@
       if (currentBundle) { updateProjection(); dom$breadcrumb.replaceChildren(trailList(routeTrail(currentBundle))); }
       renderNavigation(); renderReaderContext(); renderInventory(false); refresh(false);
       if (ui$requestedNode) { fit(); centerIfHidden(ui$selected); }
+      requestWikiLinks();
+    }
+    function requestWikiLinks() {
+      if (!alive || !sharedIndex || ui$wikiRequested) return;
+      ui$wikiRequested = true;
+      function unavailable() { return useWikiLinks({availability: "unavailable", references: [], unavailable_sources: []}); }
+      try {
+        if (typeof navigation.getWikiLinks === "function") useWikiLinks(navigation.getWikiLinks());
+        if (typeof navigation.loadWikiLinks !== "function") { unavailable(); return; }
+        Promise.resolve(navigation.loadWikiLinks()).then(function (loaded) { return loaded ? useWikiLinks(loaded) : null; }).catch(unavailable);
+      } catch (_error) { unavailable(); }
+    }
+    function useWikiLinks(loaded) {
+      if (!alive || !loaded) return;
+      if (ui$wikiPending === loaded) return ui$wikiWork;
+      var ticket = ++ui$wikiGeneration;
+      if (ui$wikiLinks === loaded) { ui$wikiPending = null; ui$wikiWork = null; return; }
+      ui$wikiPending = loaded;
+      var before = new Map(), after = new Map(), unavailable = new Set(), ui$wikiPosition = 0;
+      var references = ["complete", "partial"].indexOf(loaded.availability) >= 0 ? loaded.references || [] : [];
+      var sources = loaded.unavailable_sources || [], total = references.length + sources.length;
+      function build() {
+        if (!alive || ticket !== ui$wikiGeneration) return;
+        var end = Math.min(total, ui$wikiPosition + 1024);
+        for (; ui$wikiPosition < end; ui$wikiPosition++) {
+          if (ui$wikiPosition >= references.length) {
+            var id = sources[ui$wikiPosition - references.length]; if (records.has(id)) unavailable.add(id); continue;
+          }
+          var pair = references[ui$wikiPosition], source = pair[0], target = pair[1];
+          if (source === target || !records.has(source) || !records.has(target)) continue;
+          if (!after.has(source)) after.set(source, new Set());
+          if (!before.has(target)) before.set(target, new Set());
+          after.get(source).add(target); before.get(target).add(source);
+        }
+        if (ui$wikiPosition < total) return new Promise(function (resolve) { setTimeout(resolve, 0); }).then(build);
+        if (!alive || ticket !== ui$wikiGeneration) return;
+        ui$wikiLinks = loaded; ui$wikiBefore = before; ui$wikiAfter = after; ui$wikiUnavailable = unavailable;
+        ui$wikiPending = null; ui$wikiWork = null; renderWikiContext(); projectWikiView();
+      }
+      ui$wikiWork = build(); return ui$wikiWork;
+    }
+    function wikiNeighbors(id) {
+      var availability = ui$wikiLinks && ui$wikiLinks.availability || "unavailable", known = records.has(id);
+      return {before: Array.from(ui$wikiBefore.get(id) || []), after: Array.from(ui$wikiAfter.get(id) || []), availability: availability,
+        outgoingAvailable: known && (availability === "complete" || availability === "partial" && !ui$wikiUnavailable.has(id)),
+        incomingComplete: known && availability === "complete"};
+    }
+    function projectWikiView() {
+      if (!alive || !sharedIndex || !ui$wikiLinks || !data || !mapAllowed) return;
+      var ticket = ++ui$wikiProjectionTicket, captured = data, layer = ui$wikiLinks, index = sharedIndex;
+      var cached = ui$wikiProjectionCache.get(contextGraph), key = JSON.stringify([ui$requestedNode, ui$area, ui$overviewGroup]);
+      if (!cached || cached.layer !== layer || cached.index !== index) {
+        cached = {layer: layer, index: index, views: new Map()}; ui$wikiProjectionCache.set(contextGraph, cached);
+      }
+      var pending = cached.views.get(key);
+      if (!pending) {
+        pending = projectWikiLinks(captured, records, layer, captured.$wikiOwners);
+        if (cached.views.size >= 12) cached.views.delete(cached.views.keys().next().value);
+        cached.views.set(key, pending);
+      }
+      function publish(projected) {
+        if (!alive || ticket !== ui$wikiProjectionTicket || captured !== data || layer !== ui$wikiLinks || index !== sharedIndex) return;
+        ui$wikiView = projected;
+        var before = data.$wikiEdges || [], after = projected.edges;
+        if (JSON.stringify(before) === JSON.stringify(after)) { syncControls(); return; }
+        // Keep the selected/keyboard-focus card fixed on screen when optional
+        // associations arrive. The mathematical page and its focus stay intact.
+        var painting = ui$mode === "graph" && dom$stage.clientWidth && dom$stage.clientHeight;
+        var id = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.autoformNodeId;
+        var anchor = painting && (byId.get(id) || ui$selected || ui$active.find(function (node) { return inViewport(screen(node), 0); }));
+        var box = anchor && scene && scene.nodes.get(anchor.id), previous = box && {x: box.x, y: box.y, w: box.w, h: box.h};
+        data.$wikiEdges = after;
+        if (painting) geometry();
+        var moved = previous && scene && scene.nodes.get(anchor.id);
+        if (moved && !restoring && id !== anchor.id) {
+          ui$transform.x += (previous.x + previous.w / 2 - moved.x - moved.w / 2) * ui$transform.scale;
+          ui$transform.y += (previous.y + previous.h / 2 - moved.y - moved.h / 2) * ui$transform.scale;
+        }
+        syncControls(); schedule();
+      }
+      Promise.resolve(pending).then(publish).catch(function () { publish({availability: "unavailable", edges: [], unavailableOwners: []}); });
     }
     function applyRoute(bundle) {
       var isCurrent = bundle.isCurrent;
@@ -656,7 +1049,7 @@
       restoration++; restoring = false; clearTimeout(checkpointTimer); currentBundle = bundle; contextGraph = bundle.graph; ui$area = null; ui$overviewGroup = null; ui$requestedNode = bundle.nodeId || null;
       document.title = bundle.title; dom$error.hidden = true;
       ui$filtersTouched = false; ui$relationIds = null;
-      ui$query = ""; dom$search.value = ""; closeSearch(); setFilters(false);
+      ui$query = ""; dom$search.value = ""; closeSearch(); setFilters(false); setBrowse(false);
       ui$reading = Boolean(bundle.readingSource);
       if (ui$reading && dom$readingBody) {
         dom$readingBody.replaceChildren(bundle.readingSource);
@@ -715,8 +1108,8 @@
       while (pending && !seen.has(pending.id)) {
         seen.add(pending.id);
         if (["collection", "transparent"].indexOf(pending.navigation) < 0) entries.unshift({label: pending.title,
-          url: pending.id === bundle.scope && (!record || record.id === pending.id) && !ui$overviewGroup ? null : pending.route || pending.url,
-          _overviewParent: pending.id === bundle.scope && Boolean(ui$overviewGroup)});
+          url: pending.id === bundle.scope && (!record || record.id === pending.id) && !ui$overviewGroup && !ui$area ? null : pending.route || pending.url,
+          _overviewParent: pending.id === bundle.scope && Boolean(ui$overviewGroup || ui$area)});
         pending = records.get(semanticParent(pending));
       }
       if (record && record.scope !== record.id) entries.push({label: record.title});
@@ -740,7 +1133,6 @@
       var links = neighborIds(id), noEdges = !links.before.length && !links.after.length;
       var candidates = Array.from(new Set(links.before.concat(links.after))).filter(function (key) { return key !== id && records.has(key); });
       var contextNodes = new Map(); contextGraph.nodes.forEach(function (node) { contextNodes.set(recordId(node), node); });
-      if (noEdges) candidates = contextGraph.nodes.filter(function (node) { return node.map !== false && recordId(node) !== id; }).slice(0, 7).map(recordId);
       var ids = [id].concat(candidates.slice(0, MAX_MAP_NODES - 1)), known = new Set(ids);
       var nodes = ids.map(function (key) {
         var original = records.get(key) || contextNodes.get(key);
@@ -764,10 +1156,13 @@
         groups.get(node.area).push(node); owners.set(node.id, node.area);
       });
       if (groups.size < 2 || payload.nodes.length < 12) return payload;
-      var nodes = [], links = new Map(), replacements = new Map();
+      var nodes = [], links = new Map(), replacements = new Map(), reserved = new Set(records.keys()), serial = 0;
+      payload.nodes.forEach(function (node) { reserved.add(node.id); });
       groups.forEach(function (members, area) {
         if (area === selectedArea) { members.forEach(function (node) { replacements.set(node.id, node.id); nodes.push(node); }); return; }
         var key = "region:" + area, counts = new Map();
+        if (reserved.has(key)) do { key = "view-region:" + serial++; } while (reserved.has(key));
+        reserved.add(key);
         members.forEach(function (node) { replacements.set(node.id, key); (node.status_counts || []).forEach(function (pair) {
           counts.set(pair[0], (counts.get(pair[0]) || 0) + pair[1]);
         }); });
@@ -782,9 +1177,12 @@
         var key = a + "\n" + b, found = links.get(key) || {source: a, target: b, statement: 0, proof: 0};
         found.statement += edge.statement || 0; found.proof += edge.proof || 0; links.set(key, found);
       });
-      return Object.assign({}, payload, {nodes: nodes, edges: Array.from(links.values()), regions: []});
+      var wikiOwners = new Map();
+      payload.nodes.forEach(function (node) { var owner = replacements.get(node.id), id = recordId(node); if (owner && id) wikiOwners.set(id, owner); });
+      return Object.assign({}, payload, {nodes: nodes, edges: Array.from(links.values()), regions: [], $wikiOwners: wikiOwners});
     }
     function updateProjection() {
+      ui$wikiProjectionTicket++; ui$wikiView = null;
       var focus = neighborhood(ui$requestedNode), eligible = contextGraph.nodes.filter(mapNode), known = new Set(eligible.map(function (node) { return node.id; }));
       var overview = !focus && scopeOverviewProjection(Object.assign({}, contextGraph, {nodes: eligible,
         edges: contextGraph.edges.filter(function (edge) { return known.has(edge.source) && known.has(edge.target); })}), ui$overviewGroup, records.keys());
@@ -799,6 +1197,7 @@
       if (ui$selected && !ui$selectedStatuses.has(ui$selected.status)) ui$selected = null;
       if (dom$statusFieldset) renderStatusFields();
       if (dom$breadcrumb && currentBundle) dom$breadcrumb.replaceChildren(trailList(routeTrail(currentBundle)));
+      projectWikiView();
     }
     function semanticParent(node) {
       var parent = records.get(node.parent), seen = new Set();
@@ -822,7 +1221,7 @@
       var list = element("ul", "bp-dag-navigation-list");
       shown.forEach(function (node) {
         if (root && node.id === root.id) return;
-        var item = element("li"), link = element("a", "bp-dag-navigation-link", node.title);
+        var item = element("li"), link = readingLabel("a", "bp-dag-navigation-link", node.title, node.reading_title);
         link.href = node.route || node.url; link.title = node.title; link.dataset.navigationNodeId = node.id;
         if (node.id === key) link.setAttribute("aria-current", "page");
         if (chain.has(semanticParent(node)) && root && semanticParent(node) !== root.id) item.className = "bp-outline-child";
@@ -839,16 +1238,60 @@
       }
       if (navigation.declutterReader) navigation.declutterReader(dom$readingBody, shown.map(function (node) { return node.id; }));
     }
-    function renderReaderContext() {
+    function renderReaderContext(retainedWiki) {
       if (!dom$readingContext) return;
       dom$readingContext.replaceChildren();
+      if (retainedWiki) Array.from(dom$readingNeighbors.children).forEach(function (child) { if (child !== retainedWiki) child.remove(); });
+      else dom$readingNeighbors.replaceChildren();
       var node = ui$selected, record = records.get(currentBundle && currentBundle.nodeId || ui$requestedNode || (node && node.id)), scope = record && records.get(record.scope);
       if (scope && record.id !== scope.id) {
-        var around = element("a", "bp-reading-around", "← " + scope.title); around.href = scope.route || scope.url;
-        around.addEventListener("click", function (event) { if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+        var around = readingLabel("a", "bp-reading-around", scope.title, scope.reading_title, "← "); around.href = scope.route || scope.url;
+        around.addEventListener("click", function (event) { if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
           event.preventDefault(); navigation.navigateNode(scope.id, {history: "push"}); }); dom$readingContext.appendChild(around);
       }
       syncSheetAccessibility();
+      if (!record && !node) return;
+      // A result's relations show once, in the statement's own Uses / Used by lists; the reader adds only its topic's other pages.
+      var peers = topicPeers(record ? record.id : node.id);
+      if (peers && peers.nodes.length) {
+        var more = element("details", "bp-reading-related-topics");
+        more.appendChild(readingLabel("summary", "", peers.owner.title, peers.owner.reading_title,
+          peers.title.slice(0, peers.title.length - peers.owner.title.length)));
+        var list = element("ul", "bp-reading-topic-list");
+        peers.nodes.slice(0, 5).forEach(function (peer) {
+          var item = element("li"), link = readingLabel("a", "", peer.title, peer.reading_title); link.href = peer.route || peer.url;
+          link.addEventListener("click", function (event) {
+            if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault(); navigation.navigateNode(peer.id, {history: "push", focus: "reading"});
+          });
+          item.appendChild(link); list.appendChild(item);
+        });
+        more.appendChild(list);
+        if (peers.nodes.length > 5) {
+          var browse = readingLabel("a", "bp-reading-topic-browse", peers.owner.title, peers.owner.reading_title, "Browse ");
+          browse.href = peers.owner.route || peers.owner.url;
+          browse.addEventListener("click", function (event) {
+            if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault(); navigation.navigateNode(peers.owner.id, {history: "push", focus: "reading"});
+          });
+          more.appendChild(browse);
+        }
+        dom$readingNeighbors.appendChild(more);
+      }
+    }
+
+    // Structural navigation is not a mathematical dependency or wiki backlink.
+    function topicPeers(id) {
+      var focus = records.get(id); if (!focus || !sharedIndex) return null;
+      var scoped = focus.scope === focus.id;
+      var owner = records.get(scoped ? semanticParent(focus) : focus.scope);
+      if (!owner || scoped && owner.id === "roadmap") return null;
+      var peers = sharedIndex.nodes.filter(function (peer) {
+        if (peer.id === id || ["collection", "transparent", "source"].indexOf(peer.navigation) >= 0) return false;
+        return scoped ? peer.kind === "scope" && peer.scope === peer.id && peer.result !== true && semanticParent(peer) === owner.id :
+          (peer.result === true || peer.catalog === "module") && peer.scope === focus.scope;
+      });
+      return {owner: owner, title: (scoped ? "Other topics in " : "More in ") + owner.title, nodes: peers};
     }
 
     function buildShell() {
@@ -895,12 +1338,19 @@
       dom$filterPopover.append(fieldset, edges);
       dom$filters.append(dom$filterSummary, dom$filterPopover); toolbar.appendChild(dom$filters);
 
-      var modes = element("div", "bp-dag-modes"); modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "Explorer view");
-      dom$graphMode = button("bp-dag-mode-button", mapAllowed ? "Map" : "Map (too large)");
-      dom$graphMode.disabled = !mapAllowed; dom$listMode = button("bp-dag-mode-button", "Results");
-      dom$sourcesMode = button("bp-dag-mode-button", "Sources");
-      dom$regionsMode = button("bp-dag-mode-button", "Areas");
-      modes.append(dom$graphMode, dom$listMode, dom$sourcesMode, dom$regionsMode); toolbar.appendChild(modes);
+      dom$graphMode = button("bp-dag-button", "Back to map"); dom$graphMode.hidden = true;
+      dom$graphMode.disabled = !mapAllowed; toolbar.appendChild(dom$graphMode);
+      dom$browse = element("div", "bp-dag-browse");
+      dom$browseToggle = button("bp-dag-button", "Browse", "Browse statements or source texts");
+      dom$browseToggle.setAttribute("aria-expanded", "false");
+      dom$browsePopover = element("div", "bp-dag-browse-popover"); dom$browsePopover.hidden = true;
+      dom$browsePopover.id = "bp-dag-browse-" + instance;
+      dom$browsePopover.setAttribute("role", "group"); dom$browsePopover.setAttribute("aria-label", "Browse library contents");
+      dom$browseToggle.setAttribute("aria-controls", dom$browsePopover.id);
+      dom$listMode = button("bp-dag-button", "Statements in this topic");
+      dom$sourcesMode = button("bp-dag-button", "Source texts");
+      dom$browsePopover.appendChild(dom$listMode); dom$browsePopover.appendChild(dom$sourcesMode);
+      dom$browse.appendChild(dom$browseToggle); dom$browse.appendChild(dom$browsePopover); toolbar.appendChild(dom$browse);
 
       var zoomGroup = element("div", "bp-dag-zoom"); zoomGroup.setAttribute("role", "group"); zoomGroup.setAttribute("aria-label", "Zoom controls");
       dom$zoomOut = button("bp-dag-button", "−", "Zoom out"); dom$zoomIn = button("bp-dag-button", "+", "Zoom in");
@@ -954,6 +1404,8 @@
       dom$readingBody = element("article", "bp-reading-body md-typeset");
       dom$inspectorInner.appendChild(dom$readingContext);
       dom$inspectorInner.appendChild(dom$readingBody);
+      dom$readingNeighbors = element("section", "bp-reading-neighbors");
+      dom$inspectorInner.appendChild(dom$readingNeighbors);
       navigation.bindReader(dom$readingBody);
       // A full phone reader hides the toolbar, so a pill at the bottom drops it back to its peek.
       var mapButton = button("bp-reading-map", "Map", "Show the map"); dom$inspector.appendChild(mapButton);
@@ -979,7 +1431,7 @@
             if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
                 new URL(href).origin !== window.location.origin) return;
             event.preventDefault();
-            if (entry._overviewParent && ui$scopeOverview && ui$overviewGroup) setMode("regions", true);
+            if (entry._overviewParent && (ui$scopeOverview && ui$overviewGroup || ui$area)) setMode("regions", true);
             else navigation.navigate(href, {history: "push", focus: true, mapFirst: true});
           });
           item.appendChild(link);
@@ -994,6 +1446,7 @@
       if (!dom$navigationInner) return;
       dom$navigationInner.replaceChildren(); dom$navigationNodes = new Map();
       if (sharedIndex) renderOutline();
+      refreshReadingLabels(dom$navigationInner);
     }
 
     function syncNavigationSelection() {
@@ -1024,9 +1477,17 @@
       dom$filters.addEventListener("keydown", function (event) {
         if (event.key === "Escape" && !dom$filterPopover.hidden) { event.preventDefault(); setFilters(false); dom$filterSummary.focus(); }
       });
+      dom$browseToggle.addEventListener("click", function () { setBrowse(dom$browsePopover.hidden); });
+      dom$browse.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" && !dom$browsePopover.hidden) { event.preventDefault(); setBrowse(false); }
+      });
       globalListen(document, "pointerdown", function (event) {
         if (!dom$filters.contains(event.target)) setFilters(false);
+        if (!dom$browse.contains(event.target)) setBrowse(false, false);
         if (!dom$searchWrap.contains(event.target)) closeSearch();
+      });
+      dom$browse.addEventListener("focusout", function (event) {
+        if (event.relatedTarget && !dom$browse.contains(event.relatedTarget)) setBrowse(false, false);
       });
       dom$searchWrap.addEventListener("focusout", function (event) {
         if (event.relatedTarget && !dom$searchWrap.contains(event.relatedTarget)) closeSearch();
@@ -1036,8 +1497,8 @@
         writeLocation("replace"); refresh(true);
       });
       dom$graphMode.addEventListener("click", function () { setMode("graph", true); });
-      dom$listMode.addEventListener("click", function () { ui$relationIds = null; setMode("list", true); });
-      if (dom$sourcesMode) dom$sourcesMode.addEventListener("click", function () { setMode("sources", true); });
+      dom$listMode.addEventListener("click", function () { setBrowse(false); ui$relationIds = null; setMode("list", true); });
+      if (dom$sourcesMode) dom$sourcesMode.addEventListener("click", function () { setBrowse(false); setMode("sources", true); });
       if (dom$regionsMode) dom$regionsMode.addEventListener("click", function () { setMode("regions", true); });
       dom$zoomIn.addEventListener("click", function () { zoomAt(1.24, dom$stage.clientWidth / 2, dom$stage.clientHeight / 2); });
       dom$zoomOut.addEventListener("click", function () { zoomAt(.8, dom$stage.clientWidth / 2, dom$stage.clientHeight / 2); });
@@ -1177,16 +1638,17 @@
       if (!mapAllowed) return null;
       var compact = compactRegions(), aspect = dom$stage.clientWidth / Math.max(1, dom$stage.clientHeight);
       aspect = Math.round((Number.isFinite(aspect) && aspect > 0 ? clamp(aspect, .25, 4) : 1.4) * 10) / 10;
-      if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family || sceneAspect !== aspect) {
+      if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family || sceneAspect !== aspect || sceneWiki !== data.$wikiEdges) {
         var anchor = typeof document !== "undefined" && document.activeElement && document.activeElement.dataset &&
-          document.activeElement.dataset.autoformNodeId, previous = sceneData === data && scene && scene.nodes.get(anchor);
+          document.activeElement.dataset.autoformNodeId, previous = !restoring && sceneData === data && scene && scene.nodes.get(anchor);
         scene = layoutGraph(data.nodes.map(function (node) { return {id: node.id, width: compact ? 312 : node.width,
           height: compact ? 96 : Math.max(node.height, node._region ? 148 : 100), area: node.area, scope: node.scope}; }), data.edges, ui$orientation,
-          aspect);
+          aspect, data.$wikiEdges);
+        scene.$wikiRoutes = wikiRoutes(scene);
         var moved = previous && scene.nodes.get(anchor);
         if (moved) { ui$transform.x += (previous.x + previous.w / 2 - moved.x - moved.w / 2) * ui$transform.scale;
           ui$transform.y += (previous.y + previous.h / 2 - moved.y - moved.h / 2) * ui$transform.scale; }
-        sceneData = data; sceneDirection = ui$orientation; sceneCompact = compact; sceneFamily = family; sceneAspect = aspect;
+        sceneData = data; sceneDirection = ui$orientation; sceneCompact = compact; sceneFamily = family; sceneAspect = aspect; sceneWiki = data.$wikiEdges;
       }
       return scene;
     }
@@ -1216,6 +1678,15 @@
         ["statement", "proof"].forEach(function (kind) {
           if (data.edges.some(function (edge) { return edge[kind]; })) dom$mapKey.appendChild(element("span", "bp-map-key-" + kind, kind === "proof" ? "Proof dependency" : "Statement dependency"));
         });
+        if (data.$wikiEdges && data.$wikiEdges.length) {
+          var local = sceneData === data && scene && scene.$wikiRoutes;
+          dom$mapKey.appendChild(element("span", "bp-map-key-wiki", local && local.omitted ? "Local concept links" : "Concept links"));
+          if (local && local.omitted) dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "All links in articles"));
+        }
+        if (ui$wikiView && ui$wikiView.availability === "partial") dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Partial link coverage"));
+        if (ui$wikiView && ui$wikiView.availability === "unavailable") dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Concept links unavailable"));
+        if (data.$wikiEdges && data.$wikiEdges.some(function (edge) { return !wikiOwnerVisible(byId.get(edge.source), ui$selectedStatuses) || !wikiOwnerVisible(byId.get(edge.target), ui$selectedStatuses); }))
+          dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Concept links hidden by filter"));
       }
       syncNavigationSelection();
       dom$isolated.checked = ui$showIsolated;
@@ -1223,16 +1694,15 @@
       var enabled = ui$selectedStatuses.size;
       dom$filterSummary.textContent = "Filter: " + (enabled === presentStatuses.length ? "all" : enabled + " of " + presentStatuses.length) +
         " statuses" + (ui$showIsolated ? "" : " · linked only");
-      // The areas overview is the map at the root, so Map gives way to Areas there and one view reads as pressed. Elsewhere Areas
-      // leaves for the root, so a book's own area map reads as Map; a scope overview's Areas resets in place, so it reads as Areas.
-      var areas = ui$mode === "graph" && !ui$area && !ui$overviewGroup && (ui$scopeOverview || !currentBundle || currentBundle.scope === "roadmap") &&
-        data.nodes.some(function (node) { return node._region; });
-      pressed(dom$graphMode, ui$mode === "graph" && !areas);
+      dom$graphMode.hidden = ui$mode === "graph";
+      dom$listMode.textContent = currentBundle && currentBundle.scope === "roadmap" ? "All statements" : "Statements in this topic";
+      // Browse marks the list on screen, so at most one of its choices reads as pressed; on the map neither does.
       pressed(dom$listMode, ui$mode === "list");
       if (dom$sourcesMode) pressed(dom$sourcesMode, ui$mode === "sources");
-      if (dom$regionsMode) pressed(dom$regionsMode, areas);
       dom$stage.hidden = ui$mode !== "graph"; dom$inventory.hidden = ui$mode === "graph";
       dom$graphMode.disabled = !ui$mapAllowed;
+      // A disabled Back to map says why the map is unavailable.
+      if (ui$mapAllowed) dom$graphMode.removeAttribute("title"); else dom$graphMode.title = "Too many statements to draw as a map";
       if (navigation) dom$inventory.querySelector("h2").textContent = ui$mode === "sources" ? "Source tracks" : "Results";
     }
 
@@ -1405,6 +1875,23 @@
       // A hovered card previews its direct neighbours on any map; a selection keeps its own spotlight.
       var spotlight = (atlas || !ui$selected) && subject ? atlasSpotlight(subject) : pathSpotlight();
       var bottom = mapHeight(), labels = [];
+      (current.$wikiFamilies || []).forEach(function (family) {
+        if (family.island_count < 2 || family.members.some(function (id) { return !ui$activeIds.has(id) || !wikiOwnerVisible(byId.get(id), ui$selectedStatuses); })) return;
+        var box = family.bounds;
+        var area = {x: box.x * ui$transform.scale + ui$transform.x - 20, y: box.y * ui$transform.scale + ui$transform.y - 20,
+          w: box.w * ui$transform.scale + 40, h: box.h * ui$transform.scale + 40};
+        if (!inViewport(area, 0)) return;
+        ctx.save(); ctx.fillStyle = isDark() ? "#84a7bd" : "#63879b"; ctx.globalAlpha = .035;
+        rounded(ctx, area.x, area.y, area.w, area.h, 24); ctx.fill(); ctx.restore();
+      });
+      // Concept links follow the dependency links' rule: a quiet overview shows only its subject's, and a preview or selection fades the rest.
+      if (current.$wikiRoutes) current.$wikiRoutes.routes.forEach(function (route) {
+        if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target)) return;
+        if (!wikiOwnerVisible(byId.get(route.source), ui$selectedStatuses) || !wikiOwnerVisible(byId.get(route.target), ui$selectedStatuses)) return;
+        var touches = subject && (route.source === subject.id || route.target === subject.id);
+        if (quiet && !touches) return;
+        drawRoute(ctx, route, !subject || touches ? -1 : 0);
+      });
       current.routes.forEach(function (route) {
           if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target) ||
             quiet && !(subject && (route.source === subject.id || route.target === subject.id))) return;
@@ -1483,6 +1970,7 @@
       // Round caps would close a lit proof link's 4px gaps, so its dashes keep butt ends.
       ctx.lineCap = route.kind === "proof" ? "butt" : "round"; ctx.lineJoin = "round";
       if (route.kind === "proof") ctx.setLineDash([6 * scale, 4 * scale]);
+      if (route.kind === "wiki") { ctx.globalAlpha = role ? .38 : .1; ctx.strokeStyle = isDark() ? "#84a7bd" : "#63879b"; ctx.setLineDash([1.5 * scale, 5 * scale]); }
       ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
       for (var index = 1; index < points.length - 1; index++) {
         var point = points[index], before = points[index - 1], after = points[index + 1], radius = route.radii[index] * scale;
@@ -1493,6 +1981,7 @@
       }
       var tip = points[points.length - 1], arrow = route.arrow;
       ctx.lineTo(tip.x, tip.y); ctx.stroke(); ctx.setLineDash([]);
+      if (route.kind === "wiki") { ctx.restore(); return; }
       ctx.beginPath(); ctx.moveTo(tip.x, tip.y);
       ctx.lineTo(tip.x - (arrow.dx * 10 - arrow.dy * 5) * scale, tip.y - (arrow.dy * 10 + arrow.dx * 5) * scale);
       ctx.lineTo(tip.x - (arrow.dx * 10 + arrow.dy * 5) * scale, tip.y - (arrow.dy * 10 - arrow.dx * 5) * scale);
@@ -1613,7 +2102,7 @@
         var box = screen(node); return box.x < 0 || box.y < 0 || box.x + box.w > dom$stage.clientWidth || box.y + box.h > bottom;
       }), tiny = visible.length && ui$transform.scale < .34;
       dom$density.hidden = !cropped && !tiny;
-      dom$density.textContent = cropped ? "Drag to see more, or open Results for all " + ui$active.length + "." :
+      dom$density.textContent = cropped ? "Drag to see more, or use Browse for all " + ui$active.length + "." :
         tiny ? "Zoom in to reveal " + visible.length + " node labels" : "";
       // A removed card gets no pointerleave or blur, and a late timer can name one from the previous projection.
       if (ui$hovered && !overlays.has(ui$hovered.id)) { ui$hovered = null; schedule(); }
@@ -1810,6 +2299,11 @@
       if (!open && dom$filterPopover.contains(document.activeElement)) dom$filterSummary.focus({preventScroll: true});
       dom$filterPopover.hidden = !open; dom$filterSummary.setAttribute("aria-expanded", String(open));
     }
+    function setBrowse(open, returnFocus) {
+      if (!dom$browsePopover) return;
+      if (!open && returnFocus !== false && dom$browsePopover.contains(document.activeElement)) dom$browseToggle.focus({preventScroll: true});
+      dom$browsePopover.hidden = !open; dom$browseToggle.setAttribute("aria-expanded", String(open));
+    }
     function closeSearch() { dom$searchResults.hidden = true; }
     function openResults() {
       if (dom$searchResults.hidden && ui$query) renderSearch();
@@ -1904,13 +2398,13 @@
     }
     function setMode(mode, updateHistory) {
       if (mode === "graph" && !ui$mapAllowed) return;
-      var overviewNavigation = mode === "regions" && ui$scopeOverview && Boolean(ui$overviewGroup);
+      var overviewNavigation = mode === "regions" && Boolean(ui$scopeOverview && ui$overviewGroup || ui$area);
       if (overviewNavigation && updateHistory) navigation.checkpoint();
       if (mode !== "list") ui$relationIds = null;
       if (mode === "regions" && ui$scopeOverview) {
         ui$overviewGroup = null; ui$requestedNode = null; ui$selected = null; ui$direction = "both";
         updateProjection(); setSheet(false, null); mode = "graph"; fit();
-      } else if (mode === "regions" && navigation && currentBundle && currentBundle.scope !== "roadmap" && records.has("roadmap")) {
+      } else if (mode === "regions" && !ui$area && navigation && currentBundle && currentBundle.scope !== "roadmap" && records.has("roadmap")) {
         navigation.navigateNode("roadmap", {history: "push", focus: false}); return;
       }
       if (mode === "regions") { ui$area = null; ui$requestedNode = null; updateProjection(); mode = "graph"; fit(); }
@@ -1919,7 +2413,59 @@
       if (updateHistory) writeLocation(overviewNavigation ? "push" : "replace");
     }
 
-    function renderInspector() { renderReaderContext(); }
+    function renderWikiContext() {
+      if (!dom$readingNeighbors) return;
+      var previous = dom$readingNeighbors.querySelector(".bp-reading-wiki-links");
+      var node = ui$selected, id = currentBundle && currentBundle.nodeId || ui$requestedNode || node && recordId(node);
+      if (previous && ui$wikiRendered === ui$wikiLinks && ui$wikiNode === id) return;
+      var opened = previous && previous.open && ui$wikiNode === id; if (previous) previous.remove();
+      ui$wikiRendered = ui$wikiLinks; ui$wikiNode = id;
+      if (!ui$wikiLinks || !records.has(id)) return;
+      var links = wikiNeighbors(id);
+      if (links.availability === "complete" && !links.before.length && !links.after.length) return;
+      var disclosure = element("details", "bp-reading-wiki-links");
+      if (opened) disclosure.open = true;
+      disclosure.appendChild(element("summary", "", "Concept links"));
+      if (links.availability !== "complete") disclosure.appendChild(element("p", "bp-reading-wiki-notice",
+        links.availability === "partial" ? "Some pages could not be read. Concept links and backlinks may be incomplete." :
+          "Concept links are unavailable for this publication."));
+      [["Links to other concepts", links.after, links.outgoingAvailable], ["Linked from", links.before, links.incomingComplete]].forEach(function (pair) {
+        var count = pair[2] ? String(pair[1].length) : pair[1].length ? pair[1].length + " known" :
+          pair[0] === "Linked from" && links.availability === "partial" ? "unknown" : "unavailable";
+        var group = element("div", "bp-reading-wiki-related");
+        group.appendChild(element("strong", "", pair[0] + " · " + count));
+        if (pair[0] === "Links to other concepts" && links.availability === "partial" && !links.outgoingAvailable)
+          group.appendChild(element("p", "bp-reading-wiki-notice", "Links from this page could not be read completely."));
+        var list = element("ul", "bp-reading-wiki-list"), ui$wikiLimit = 0;
+        var more = button("bp-reading-wiki-more", "");
+        function appendLinks() {
+          var limit = Math.min(pair[1].length, ui$wikiLimit + (ui$wikiLimit ? 20 : 5));
+          pair[1].slice(ui$wikiLimit, limit).forEach(function (relatedId) {
+            var related = records.get(relatedId), item = element("li"), link = readingLabel("a", "", related.title, related.reading_title);
+            link.href = related.route || related.url;
+            link.addEventListener("click", function (event) {
+              if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+              event.preventDefault(); navigation.navigateNode(relatedId, {history: "push", focus: "reading"});
+            });
+            item.appendChild(link); list.appendChild(item);
+          });
+          ui$wikiLimit = limit; more.hidden = limit >= pair[1].length;
+          more.textContent = "Show " + Math.min(20, pair[1].length - limit) + " more links";
+          refreshReadingLabels(list);
+        }
+        appendLinks(); more.addEventListener("click", appendLinks);
+        group.appendChild(list); group.appendChild(more); disclosure.appendChild(group);
+      });
+      var peers = dom$readingNeighbors.querySelector(".bp-reading-related-topics");
+      if (peers) dom$readingNeighbors.insertBefore(disclosure, peers); else dom$readingNeighbors.appendChild(disclosure);
+      refreshReadingLabels(dom$readingNeighbors);
+    }
+    function renderInspector() {
+      var node = ui$selected, id = currentBundle && currentBundle.nodeId || ui$requestedNode || node && recordId(node);
+      var previous = dom$readingNeighbors && dom$readingNeighbors.querySelector(".bp-reading-wiki-links");
+      renderReaderContext(previous && ui$wikiNode === id ? previous : null); renderWikiContext();
+      refreshReadingLabels(dom$readingContext); refreshReadingLabels(dom$readingNeighbors);
+    }
     function weightWords(counts) {
       return [counts.statement && plural(counts.statement, "statement dependency", "statement dependencies"),
         counts.proof && plural(counts.proof, "proof dependency", "proof dependencies")].filter(Boolean).join(", ");
@@ -1976,8 +2522,8 @@
     }
 
     syncControls();
-    return {ready: readingReady, applyRoute: applyRoute, useIndex: useIndex, captureState: captureState, restoreState: restoreState, showError: showError,
-      dispose: function () { alive = false; clearTimeout(checkpointTimer); cancelAnimationFrame(frame); cleanup.forEach(function (close) { close(); });
+    return {ready: readingReady, applyRoute: applyRoute, useIndex: useIndex, useWikiLinks: useWikiLinks, captureState: captureState, restoreState: restoreState, showError: showError,
+      dispose: function () { alive = false; ui$wikiProjectionTicket++; ui$wikiProjectionCache = new WeakMap(); clearTimeout(checkpointTimer); cancelAnimationFrame(frame); cleanup.forEach(function (close) { close(); });
         observers.forEach(function (observer) { observer.disconnect(); }); if (navigation) navigation.dispose(); }};
   }
 

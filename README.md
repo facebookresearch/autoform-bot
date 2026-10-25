@@ -1,8 +1,8 @@
 # AutoformBot
 
-A plugin for Claude Code and Codex that helps turn mathematical papers and
-notes into Lean 4 formalizations: plan the work, write proofs, and review
-progress from your coding assistant.
+A plugin for Claude Code, Codex, and Muse Code that helps turn mathematical
+papers and notes into Lean 4 formalizations: plan the work, write proofs, and
+review progress from your coding assistant.
 
 ## Installation
 
@@ -30,7 +30,7 @@ muse plugins marketplace add autoform 'https://github.com/facebookresearch/autof
 muse plugins install autoform@autoform
 ```
 
-These commands install release 0.6.0.
+These commands install release 0.6.0 ([changelog](CHANGELOG.md)).
 
 - Claude Code before 2.1.71 takes `'facebookresearch/autoform-bot#v0.6.0'`
   instead of the `@v0.6.0` form, quoted for shells that read `#`.
@@ -41,13 +41,12 @@ These commands install release 0.6.0.
 - To follow `main` instead, drop the `@v0.6.0` or `#v0.6.0` suffix, and give
   Codex `--ref main`.
 
-After installing, start a new session in the repository you want to inspect or
-set up.
+After installing, start a new session in the repository to inspect or set up.
 
 ## Quick start
 
-Use these skills from your agent window; you need not learn or run Autoform's
-commands:
+Use these skills from your agent window (in Muse Code, as commands of the same
+names); you need not learn or run Autoform's CLI:
 
 | Task | Claude Code | Codex |
 | --- | --- | --- |
@@ -67,7 +66,9 @@ an accessible path):
 
 Setup changes local files by default. Creating or pushing a remote repository,
 enabling GitHub Pages, and publishing blueprint content require an explicit
-request; content published through Pages is public.
+request; content published through Pages is public. Each Setup, Roadmap, and
+Formalize run includes a debrief, and a run that hit AutoformBot friction
+drafts an issue, usually in `.git/autoform/`; `AUTOFORM_DEBRIEF=0` turns it off.
 
 ## Run several sessions
 
