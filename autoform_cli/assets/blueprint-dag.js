@@ -1221,6 +1221,16 @@
       renderBreadcrumb();
       projectWikiView();
     }
+    // Where a result or topic lives: the nearest topics above it, short of the root or of the page a list belongs to,
+    // so rows that share a title, such as ATLAS's 93 "Conjecture"s, tell themselves apart.
+    function placeOf(node, stop) {
+      var record = records.get(recordId(node)) || node, names = [], seen = new Set();
+      var pending = records.get(record.scope === record.id ? semanticParent(record) : record.scope);
+      while (pending && pending.id !== stop && !seen.has(pending.id) && semanticParent(pending)) {
+        seen.add(pending.id); names.unshift(pending.title); pending = records.get(semanticParent(pending));
+      }
+      return names.slice(-2).join(" › ");
+    }
     function semanticParent(node) {
       var parent = records.get(node.parent), seen = new Set();
       while (parent && ["collection", "transparent"].indexOf(parent.navigation) >= 0 && !seen.has(parent.id)) {
@@ -2315,14 +2325,16 @@
       matches.slice(0, ui$searchLimit).forEach(function (match) {
         var item = element("li"), choose = button("bp-dag-result", ""); choose.dataset.resultId = match.node.id;
         choose.appendChild(element("span", "bp-dag-result-title", match.node.title));
-        choose.appendChild(element("span", "bp-dag-result-meta", match.node.area || statusLabel(match.node.status)));
+        choose.appendChild(element("span", "bp-dag-result-meta", statusLabel(match.node.status)));
+        var place = placeOf(match.node), topic = (records.get(recordId(match.node)) || match.node).scope === match.node.id;
+        if (place || topic) choose.appendChild(element("span", "bp-dag-result-place", topic ? "Topic" + (place ? " in " + place : "") : place));
         choose.addEventListener("click", function () { activateNode(match.node, true); }); item.appendChild(choose); list.appendChild(item);
         choose.addEventListener("keydown", searchResultKeydown);
       });
       dom$searchResults.appendChild(list);
       if (matches.length > ui$searchLimit) {
         var remaining = matches.length - ui$searchLimit, increment = Math.min(SEARCH_PAGE, remaining);
-        var more = button("bp-dag-load-more", "Show " + increment + " more of " + remaining);
+        var more = button("bp-dag-load-more", "Show " + num(increment) + " more of " + num(matches.length));
         more.addEventListener("click", function () {
           var previous = ui$searchLimit;
           ui$searchLimit = Math.min(matches.length, ui$searchLimit + SEARCH_PAGE); renderSearch();
@@ -2553,7 +2565,8 @@
         if (ui$selected && node.id === ui$selected.id) row.setAttribute("aria-current", "true");
         dom$inventoryRows.set(node.id, row);
         row.appendChild(element("span", "bp-dag-inventory-title", node.title));
-        row.appendChild(element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (node.area ? " · " + node.area : "")));
+        var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;
+        row.appendChild(element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (where ? " · " + where : "")));
         if (navigation && node.summary) row.appendChild(element("span", "bp-result-summary", node.summary));
         row.addEventListener("click", function () { activateNode(node, true); }); item.appendChild(row); dom$inventoryList.appendChild(item);
       });

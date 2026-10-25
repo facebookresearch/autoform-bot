@@ -649,8 +649,11 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
     # An area card's summary takes the topic count, and the meta keeps "2,070 of 2,485 fully proved" whole beside it.
     assert 'element("span", "bp-dag-node-summary", lead + ": " + node.summary)' in script
     assert ".bp-dag-viewer:not(.bp-dag-compact-regions) .bp-dag-node:has(.bp-dag-node-summary) .bp-dag-node-meta > span:not(:last-child) { display: none; }" in dag_viewer._STYLE
-    assert 'element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (node.area ? " · " + node.area : ""))' in script
-    assert 'element("span", "bp-dag-result-meta", match.node.area || statusLabel(match.node.status))' in script
+    # A row keeps its status and says where it lives, below the list's own page or the root, or else its area.
+    assert 'element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (where ? " · " + where : ""))' in script
+    assert 'var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;' in script
+    assert 'element("span", "bp-dag-result-meta", statusLabel(match.node.status))' in script
+    assert 'element("span", "bp-dag-result-place", topic ? "Topic" + (place ? " in " + place : "") : place)' in script
     for gone in ("bp-dag-node-id", "bp-dag-inventory-id", "bp-dag-result-id"):
         assert gone not in script and gone not in style
 

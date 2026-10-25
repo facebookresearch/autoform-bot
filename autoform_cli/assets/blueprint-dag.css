@@ -70,6 +70,9 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-result:hover, .bp-dag-result:focus-visible { background: color-mix(in srgb, var(--dag-link) 9%, transparent); }
 .bp-dag-result-title, .bp-dag-inventory-title { flex: 1 1 auto; min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-result-meta, .bp-dag-inventory-meta { min-width: 0; overflow: hidden; color: var(--dag-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+/* A result's place takes a line of its own under its title and status. */
+.bp-dag-result { flex-wrap: wrap; row-gap: 2px; }
+.bp-dag-result-place { flex: 1 0 100%; min-width: 0; overflow: hidden; color: var(--dag-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button, .bp-dag-whole-search, .bp-dag-load-more { min-height: 36px; padding: 6px 10px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-weight: 600; cursor: pointer; }
 .bp-dag-button:not(:disabled):hover, .bp-dag-filter-summary:hover, .bp-dag-load-more:hover { border-color: var(--dag-link); color: var(--dag-link); }
 /* Back to map stays in place when the map is too large to draw, so it reads as unavailable rather than as a live control. */

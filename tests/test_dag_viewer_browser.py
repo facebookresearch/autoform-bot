@@ -1338,7 +1338,8 @@ def test_paginated_search_and_arrow_navigation_restore_focus(desktop_page: objec
     search = _load_search_index(page)
     search.fill("Auxiliary result")
     more = page.locator(".bp-dag-search-results .bp-dag-load-more")
-    playwright.expect(more).to_have_text("Show 48 more of 48")
+    # The count after "of" is every match, not the remainder.
+    playwright.expect(more).to_have_text("Show 48 more of 98")
     more.focus()
     more.press("Enter")
     playwright.expect(page.locator(".bp-dag-result").nth(12)).to_be_focused()

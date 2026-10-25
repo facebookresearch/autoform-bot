@@ -39,7 +39,8 @@ assert(kinds, 'Production kind words missing');
 const functions = [
   'element', 'readingLabel', 'button', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
   'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'matchesStatus', 'calculateActive',
-  'statusLabel', 'finished', 'boundaryMeta', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList'
+  'statusLabel', 'finished', 'boundaryMeta', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
+  'semanticParent', 'placeOf'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');
 const sandbox = {assert, URL, fixtureText}; vm.createContext(sandbox);
@@ -201,6 +202,29 @@ def test_a_boundary_card_says_how_it_touches_the_page_and_counts_only_its_linked
       assert(card('boundary:user').getAttribute('aria-label').endsWith(', 7 results build on this, 4 of 7 fully proved'));
       assert(card('boundary:both').getAttribute('aria-label').endsWith(', 1 result, both ways, 0 of 1 fully proved'));
       assert.equal(meta('L'), 'planned');
+    """)
+
+
+def test_a_row_says_where_its_result_or_topic_lives() -> None:
+    _run(r"""
+      // ATLAS has 93 results titled "Conjecture", and a search showed them as identical rows.
+      const root = scope('roadmap', {parent: undefined}), area = scope('algebra', {title: 'Algebra'}),
+        shelf = scope('algebra/ext', {title: 'MathlibExt', parent: 'algebra', navigation: 'collection'}),
+        topic = scope('algebra/ext/ring', {title: 'Ring', parent: 'algebra/ext'}),
+        deep = scope('algebra/ext/ring/ideal', {title: 'Ideal', parent: 'algebra/ext/ring'});
+      const result = Object.assign(leaf('Conjecture'), {id: 'algebra/ext/ring/ideal/conjecture', scope: 'algebra/ext/ring/ideal', parent: 'algebra/ext/ring/ideal'});
+      configure([root, area, shelf, topic, deep, result], graph([]));
+      // The two nearest topics under the root, and a topic says it is one.
+      assert.equal(placeOf(result), 'Ring › Ideal');
+      assert.equal(placeOf(topic), 'Algebra');
+      assert.equal(placeOf(area), '');
+      // A collection's own page counts as a place for what lives on it.
+      const onShelf = Object.assign(leaf('Lemma'), {id: 'algebra/ext/lemma', scope: 'algebra/ext', parent: 'algebra/ext'});
+      configure([root, area, shelf, topic, deep, result, onShelf], graph([]));
+      assert.equal(placeOf(onShelf), 'Algebra › MathlibExt');
+      // A list stops at its own page, so rows in it name only what lies below.
+      assert.equal(placeOf(result, 'algebra/ext/ring'), 'Ideal');
+      assert.equal(placeOf(result, 'algebra/ext/ring/ideal'), '');
     """)
 
 def test_zero_count_authored_regions_keep_zero_and_remain_visible_under_normal_filters() -> None:
