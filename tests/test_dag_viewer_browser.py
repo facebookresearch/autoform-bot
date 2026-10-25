@@ -2936,6 +2936,18 @@ def test_a_filter_never_adds_a_tablet_toolbar_row(desktop_page: object, explorer
     assert max(row) - min(row) < 2, row
 
 
+
+def test_a_phone_toolbar_keeps_its_controls_on_one_row_under_search(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
+    """At 390px "Filter: all statuses" pushed zoom onto a third row, and the map lost that row's height."""
+    page = desktop_page
+    page.set_viewport_size({"width": 390, "height": 844})
+    _open_consumer(page, explorer_consumer)
+    rows = page.evaluate("""() => new Set([...document.querySelector('.bp-dag-toolbar').children]
+      .filter(child => child.getClientRects().length && getComputedStyle(child).visibility !== 'hidden')
+      .map(child => Math.round(child.getBoundingClientRect().top))).size""")
+    assert rows == 2
+    playwright.expect(page.locator(".bp-dag-filter-summary")).to_have_text("Filter: all statuses")
+
 def test_a_click_that_opens_details_over_its_card_pans_it_clear(desktop_page: object, site_url: str) -> None:
     """Explicit graph activation keeps its focal theorem visible beside the persistent full reading pane."""
     page = desktop_page

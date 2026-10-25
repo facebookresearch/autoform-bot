@@ -954,8 +954,8 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     tablet = style.split("@media (max-width: 1100px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
     # Two rows, Topics and search on the first; search no longer takes a row of its own.
     assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: calc(100% - 96px); }" in tablet
-    # The second row never wraps: the filter grows from 100px into its free space and truncates its summary instead.
-    assert ("@media (min-width: 721px) and (max-width: 1100px) {\n"
+    # The second row never wraps, on a tablet or a phone: the filter grows from 100px into its free space and truncates its summary instead.
+    assert ("@media (max-width: 1100px) {\n"
             "  .bp-dag-integrated .bp-dag-filters { flex: 1 1 100px; min-width: 0; max-width: max-content; }\n"
             "  .bp-dag-integrated .bp-dag-filter-summary { display: block; max-width: 100%; overflow: hidden; line-height: 22px; text-overflow: ellipsis; }") in style
     # Topics sat a few px above the control beside it.

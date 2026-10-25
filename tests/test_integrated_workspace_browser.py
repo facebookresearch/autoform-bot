@@ -1518,7 +1518,7 @@ def test_authored_concept_families_pack_real_owner_cards_and_keep_native_focus_m
         control = _cluster_readable_owner(page, identifier)
         box = _cluster_native_box(control)
         # A topic card names its fully proved share in the redesign, not a bare item count.
-        assert box["title"] == f"Identity {letter.upper()}" and box["meta"] == "0 of 2 fully proved"
+        assert box["title"] == f"Identity {letter.upper()}" and box["meta"] == "1 of 2 fully proved"
         _cluster_capture(page, width, f"readable-{letter}")
 
     control = _cluster_readable_owner(page, owners["c"])

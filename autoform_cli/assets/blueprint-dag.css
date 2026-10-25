@@ -371,8 +371,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated .bp-dag-search-wrap { flex-basis: calc(100% - 96px); }
   .bp-dag-integrated .bp-dag-filter-popover { left: 0; right: auto; max-width: calc(100dvw - 24px); }
 }
-/* A tablet's filter grows from 100px to its whole summary in the second row's free space, and cuts the summary short rather than push "Show N filtered out" onto a third row. */
-@media (min-width: 721px) and (max-width: 1100px) {
+/* A tablet's or phone's filter grows from 100px to its whole summary in the second row's free space, and cuts the summary short rather than push zoom or "Show N filtered out" onto a third row. */
+@media (max-width: 1100px) {
   .bp-dag-integrated .bp-dag-filters { flex: 1 1 100px; min-width: 0; max-width: max-content; }
   .bp-dag-integrated .bp-dag-filter-summary { display: block; max-width: 100%; overflow: hidden; line-height: 22px; text-overflow: ellipsis; }
 }
@@ -398,7 +398,6 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated .bp-dag-context { padding-inline: 12px; }
   .bp-dag-integrated .bp-dag-toolbar { padding-inline: 12px; gap: 6px; }
   .bp-dag-integrated .bp-dag-breadcrumb { min-width: 0; flex: 1; }
-  /* A phone keeps first / current; Topics and the reader's "← parent" link reach the steps between. */
   /* A phone's trail keeps the first crumb, the parent and the current page; the parent is how an overview group returns in place. */
   .bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :nth-last-child(-n+2)) { display: none; }
   .bp-dag-integrated .bp-dag-search-wrap { flex-basis: 100%; }
