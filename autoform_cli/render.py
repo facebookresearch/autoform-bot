@@ -2279,7 +2279,7 @@ def _coverage_summary(coverage: CoverageSummary) -> str:
 
     counts = coverage.counts
     return " · ".join(
-        f"{counts[disposition]} {disposition.casefold()}"
+        f"{counts[disposition]:,} {disposition.casefold()}"
         for disposition in _COVERAGE_SUMMARY_ORDER
         if counts[disposition]
     )
@@ -2301,10 +2301,9 @@ def _render_hero(
     The dashboard this replaces was a paragraph of counts in a bordered box.
     The same numbers set as figures answer "how far along is this?" before the
     reader has finished the title, which is the only question the top of a
-    blueprint has to answer. In the explorer's narrow rail (*rail*) the
-    stylesheet keeps only the first two figures, so the topic and inventory
-    counts also come as one plain line under them. With *ready_href* the
-    ready figure links the list of what it counts.
+    blueprint has to answer. The explorer's narrow rail (*rail*) gets the
+    two progress figures only, and module inventories as one plain line under
+    them. With *ready_href* the ready figure links the list of what it counts.
     """
     leaves = _countable(graph)
     selected = {node_id: statuses[node_id] for node_id in leaves}
@@ -2318,30 +2317,32 @@ def _render_hero(
     total = len(leaves)
     inventory_count = len(_module_inventories(graph))
     share = _completion_percentage(done, total)
-    article_label = "article" if total == 1 else "articles"
+    statement_label = "statement" if total == 1 else "statements"
 
     # The labels reuse the status words, so the share reads as the fully
     # proved status it counts and the second figure as "ready to state or
-    # prove"; each note says in plain words what the number counts.
-    figures = [
-        ("Fully proved", f"{share}%", f"{done} of {total} {article_label}", False),
-        ("Ready to start", str(actionable), "nothing they need is blocked", False)
-        if actionable
-        else ("Nothing is ready right now", "", "", False),
-    ]
+    # prove"; each note says in plain words what the number counts. With no
+    # statements, or all of them fully proved, one sentence says so instead.
+    figures: list[tuple[str, str, str, bool]] = []
+    if done < total:
+        figures.append(("Fully proved", f"{share}%", f"{done:,} of {total:,} {statement_label}", False))
+        figures.append(
+            ("Ready to start", f"{actionable:,}", "nothing they need is blocked", False)
+            if actionable
+            else ("Nothing is ready right now", "", "", False)
+        )
     # The figure counts every catalog, checked or not; a project without
-    # catalogs has no inventory to report.
-    if inventory_count:
+    # catalogs has no inventory to report. The rail counts it in words.
+    if inventory_count and not rail:
         figures.append(
             (
                 "Module inventories",
-                str(inventory_count),
+                f"{inventory_count:,}",
                 "existing Lean modules inventoried",
                 True,
             )
         )
-    chapters = len(graph_views.group_nodes(graph))
-    figures.append(("Topics", str(chapters), "top-level parts of the book", False))
+
     def figure(label: str, value: str, note: str, neutral: bool) -> str:
         inner = (
             (f'<div class="bp-figure-value">{value}</div>' if value else "")
@@ -2352,11 +2353,9 @@ def _render_hero(
             return f'<a class="bp-figure bp-figure-link" href="{html.escape(ready_href, quote=True)}">{inner}</a>'
         return f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">{inner}</div>'
 
+    sentence = "No statements yet." if not total else "Every statement is fully proved." if done == total else ""
     stats = "".join(figure(*entry) for entry in figures)
-    counts = [f"{chapters} {'topic' if chapters == 1 else 'topics'}"]
-    if inventory_count:
-        counts.append(f"{inventory_count} module {'inventory' if inventory_count == 1 else 'inventories'}")
-    counts_line = f'<p class="bp-hero-counts">{" · ".join(counts)}</p>' if rail else ""
+    inventories = f"{inventory_count:,} module {'inventory' if inventory_count == 1 else 'inventories'}"
     coverage_line = (
         '<div class="bp-hero-coverage">'
         '<span class="bp-hero-coverage-label">Declared source coverage:</span> '
@@ -2369,13 +2368,18 @@ def _render_hero(
     return (
         '<div class="bp-hero">'
         '<div class="bp-hero-rule"></div>'
-        '<div class="bp-hero-kicker">Formalization blueprint</div>'
-        f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
+        + ("" if rail else '<div class="bp-hero-kicker">Formalization blueprint</div>')
+        + f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
         + (f'<p class="bp-hero-lead">{lead}</p>' if lead else "")
-        + f'<div class="bp-hero-figures">{stats}</div>'
-        + counts_line
-        + f'<div class="bp-hero-bar" aria-hidden="true">'
-        f'<span style="width: {share}%"></span></div>'
+        + (f'<p class="bp-hero-status">{sentence}</p>' if sentence else "")
+        + (f'<div class="bp-hero-figures">{stats}</div>' if stats else "")
+        + (f'<p class="bp-hero-counts">{inventories}</p>' if rail and inventory_count else "")
+        # The bar repeats the share for the wide hero; with no share to show it goes.
+        + (
+            f'<div class="bp-hero-bar" aria-hidden="true"><span style="width: {share}%"></span></div>'
+            if not rail and not sentence
+            else ""
+        )
         + coverage_line
         + "</div>"
     )
@@ -4069,18 +4073,10 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
    a doubled class; the explorer's own rules stay in its script. The narrow
    hero keeps the gradient rule as its one accent and two plain figures,
    the share fully proved and what is ready to start, each with its
-   one-line note; the topic and inventory counts become one muted line,
-   and coverage its link. */
+   one-line note; module inventories become one muted line under them. */
 .bp-landing-intro.bp-landing-intro {{ margin: 0 6px 18px; font-size: 13px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero {{ margin: 0; }}
 .bp-landing-intro.bp-landing-intro .bp-hero-rule {{ width: 56px; height: 3px; }}
-.bp-landing-intro.bp-landing-intro :is(
-  .bp-hero-kicker,
-  .bp-figure:nth-child(n + 3),
-  .bp-hero-bar,
-  .bp-hero-coverage-label,
-  .bp-hero-coverage-counts
-) {{ display: none; }}
 .bp-landing-intro.bp-landing-intro .bp-next-kicker {{
   font-size: 12px;
   font-weight: 500;
