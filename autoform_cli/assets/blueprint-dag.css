@@ -102,6 +102,11 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-check:hover { background: var(--dag-panel); }
 .bp-dag-check input { accent-color: var(--dag-link); }
 .bp-dag-check-count { margin-left: auto; color: var(--dag-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.bp-dag-check-text { display: grid; gap: 1px; min-width: 0; }
+.bp-dag-check-meaning { color: var(--dag-muted); font-size: 11.5px; line-height: 1.3; }
+.bp-dag-filter-popover:has(.bp-dag-check-meaning) { width: 300px; }
+.bp-dag-check:has(.bp-dag-check-meaning) { align-items: flex-start; }
+.bp-dag-check:has(.bp-dag-check-meaning) :is(input, .bp-dag-swatch) { margin-top: 3px; }
 .bp-dag-hidden-button, .bp-dag-whole-search { min-height: 26px; margin: 0; padding: 1px 3px; border: 0; background: transparent; color: var(--dag-link); }
 .bp-dag-hidden-button { flex: none; margin-left: auto; white-space: nowrap; }
 .bp-dag-hidden-button:hover { text-decoration: underline; }

@@ -2911,6 +2911,9 @@ def test_semantic_outline_and_status_controls_do_not_repeat_leaf_summary_rows(
         expected = sum(node["status"] == status for node in explorer_consumer.records.values())
         row = filters.locator("label").filter(has=page.locator(f'input[value="{status}"]'))
         playwright.expect(row.locator(".bp-dag-check-count")).to_have_text(str(expected))
+        # The filter doubles as the legend, so each status says what it means.
+        meaning = explorer_consumer.graphs["chapter"]["palette"][status]["meaning"]
+        playwright.expect(row.locator(".bp-dag-check-meaning")).to_have_text(meaning)
 
 
 def test_the_toolbar_counts_only_what_it_hides_and_shows_it_on_request(

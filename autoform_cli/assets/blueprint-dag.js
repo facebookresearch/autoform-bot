@@ -1626,7 +1626,10 @@
         var label = element("label", "bp-dag-check"), input = element("input");
         input.type = "checkbox"; input.checked = ui$selectedStatuses.has(key); input.value = key;
         input.addEventListener("change", onStatusChange); dom$statusInputs.set(key, input);
-        label.appendChild(input); label.appendChild(swatch(key)); label.appendChild(document.createTextNode(statusLabel(key)));
+        // The filter doubles as the legend: each status says what it means, in the palette's own words.
+        var text = element("span", "bp-dag-check-text", statusLabel(key)), meaning = (palette[key] || {}).meaning;
+        if (meaning) text.appendChild(element("span", "bp-dag-check-meaning", meaning));
+        label.appendChild(input); label.appendChild(swatch(key)); label.appendChild(text);
         label.appendChild(element("span", "bp-dag-check-count", String(statusCounts.get(key) || 0))); dom$statusFieldset.appendChild(label);
       });
       dom$edgeFieldset.hidden = !data.nodes.some(function (node) { return node.isolated; }) || data.nodes.every(function (node) { return node.isolated; });
@@ -2325,7 +2328,7 @@
       matches.slice(0, ui$searchLimit).forEach(function (match) {
         var item = element("li"), choose = button("bp-dag-result", ""); choose.dataset.resultId = match.node.id;
         choose.appendChild(element("span", "bp-dag-result-title", match.node.title));
-        choose.appendChild(element("span", "bp-dag-result-meta", statusLabel(match.node.status)));
+        choose.appendChild(element("span", "bp-dag-result-meta", statusLabel(match.node.status))).title = (palette[match.node.status] || {}).meaning || "";
         var place = placeOf(match.node), topic = (records.get(recordId(match.node)) || match.node).scope === match.node.id;
         if (place || topic) choose.appendChild(element("span", "bp-dag-result-place", topic ? "Topic" + (place ? " in " + place : "") : place));
         choose.addEventListener("click", function () { activateNode(match.node, true); }); item.appendChild(choose); list.appendChild(item);
@@ -2567,7 +2570,7 @@
         dom$inventoryRows.set(node.id, row);
         row.appendChild(element("span", "bp-dag-inventory-title", node.title));
         var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;
-        row.appendChild(element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (where ? " · " + where : "")));
+        row.appendChild(element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (where ? " · " + where : ""))).title = (palette[node.status] || {}).meaning || "";
         if (navigation && node.summary) row.appendChild(element("span", "bp-result-summary", node.summary));
         row.addEventListener("click", function () { activateNode(node, true); }); item.appendChild(row); dom$inventoryList.appendChild(item);
       });
