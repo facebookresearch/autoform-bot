@@ -475,7 +475,7 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     for key in consumer.groups:
         control = _focus_group(page, key)
         box = _geometry(control)
-        assert box["title"] == ("Unassigned topics" if key == "unassigned" else key[5:])
+        assert box["title"] == ("Other topics" if key == "unassigned" else key[5:])
         # An area card counts its fully proved targets; every fixture target is not ready.
         assert box["meta"] == "9 topics · 0 of 9 fully proved"
         assert box["scale"] >= .9 - 1e-6 and box["width"] >= 180 and box["height"] >= 90

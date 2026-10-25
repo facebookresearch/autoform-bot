@@ -767,7 +767,7 @@
         if (node.member_count === undefined) unknown = true; else items += node.member_count;
         internal += node.internal_dependency_count || 0;
       });
-      projected.push({id: group.id, kind: "scope", title: group.area || "Unassigned topics", area: group.area || undefined,
+      projected.push({id: group.id, kind: "scope", title: group.area || "Other topics", area: group.area || undefined,
         _region: group.area || undefined, _overviewGroup: group.key, _topics: group.members.length,
         _unknownCount: unknown, member_count: items, status_counts: Array.from(counts.entries()),
         status: group.area ? group.members[0].status : "inventory_pending", internal_dependency_count: internal,
@@ -1137,7 +1137,7 @@
       if (record && record.scope !== record.id) entries.push({label: record.title, reading_title: record.reading_title});
       if (ui$area) entries.push({label: ui$area});
       var group = currentOverviewGroup();
-      if (group) entries.push({label: group.area || "Unassigned topics"});
+      if (group) entries.push({label: group.area || "Other topics"});
       return entries;
     }
     function currentOverviewGroup() {
@@ -1710,7 +1710,7 @@
       if (navigation) {
         var record = records.get(currentBundle && currentBundle.nodeId), links = record && record.result && neighborIds(record.id), group = currentOverviewGroup();
         // A long title gives way before the counts after it.
-        dom$mapContext.replaceChildren(element("span", "", links ? record.title : group ? group.area || "Unassigned topics" : ui$area || currentBundle && currentBundle.title || data.title),
+        dom$mapContext.replaceChildren(element("span", "", links ? record.title : group ? group.area || "Other topics" : ui$area || currentBundle && currentBundle.title || data.title),
           links ? " · uses " + links.before.length + " · used by " + links.after.length : "");
         dom$mapKey.replaceChildren();
         ["statement", "proof"].forEach(function (kind) {
@@ -2168,7 +2168,7 @@
       // ATLAS titles such as "Theorem (Crystallographic Restriction)" already name their kind, so the meta does not repeat it.
       var kind = KINDS.get((node.declaration || "").toLowerCase());
       if (kind && (node.title || "").indexOf(kind) === 0) kind = "";
-      // A scope overview's group card is an area card, including its unassigned-topics bucket.
+      // A scope overview's group card is an area card, including its bucket of topics with no area.
       var area = node._region || node._overviewGroup;
       var lead = area ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, tail = scopeMeta || statusLabel(node.status);
       var meta = area || !lead ? tail : lead + " · " + tail;

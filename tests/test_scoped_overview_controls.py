@@ -197,8 +197,8 @@ def test_unassigned_group_uses_a_structural_label_not_an_invented_area() -> None
       dom$stage.clientWidth=390;assert(compactRegions());dom$stage.clientWidth=900;
       activateNode(group);flushFrames();
       assert.equal(ui$overviewGroup,'unassigned');assert.equal(currentOverviewGroup().area,null);
-      assert.equal(context(),'Unassigned topics');
-      assert.deepEqual(labels(),['Library','Large scope','Unassigned topics']);
+      assert.equal(context(),'Other topics');
+      assert.deepEqual(labels(),['Library','Large scope','Other topics']);
       assert.equal(document.activeElement.dataset.autoformNodeId,'n01');
       assert.equal(dom$graphMode.hidden,true);
     """)
