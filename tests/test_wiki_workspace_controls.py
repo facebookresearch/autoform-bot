@@ -186,6 +186,22 @@ def test_toolbar_keeps_browse_choices_nested_and_back_visible_only_outside_the_g
     """)
 
 
+
+def test_a_collection_page_ends_its_own_trail_and_never_stands_between_crumbs() -> None:
+    _run_controls(r"""
+      const add=(id,parent,extra={})=>records.set(id,Object.assign({id,scope:id,parent,title:id.toUpperCase(),
+        route:'https://example.test/'+id+'/index.html'},extra));
+      add('roadmap',null);add('area','roadmap');add('shelf','area',{navigation:'collection'});add('topic','shelf');
+      add('shelf/thm','shelf',{scope:'shelf',result:true});
+      const crumbs=(nodeId,scope)=>routeTrail({nodeId,scope,graph:{view:{}}}).map(entry=>[entry.label,entry.url||null]);
+      // Dynamics/MathlibExt's trail ended at Dynamics while its header said MathlibExt.
+      assert.deepEqual(crumbs('shelf','shelf'),[['ROADMAP','https://example.test/roadmap/index.html'],
+        ['AREA','https://example.test/area/index.html'],['SHELF',null]]);
+      assert.deepEqual(crumbs('shelf/thm','shelf'),[['ROADMAP','https://example.test/roadmap/index.html'],
+        ['AREA','https://example.test/area/index.html'],['SHELF','https://example.test/shelf/index.html'],['SHELF/THM',null]]);
+      assert.deepEqual(crumbs('topic','topic').map(entry=>entry[0]),['ROADMAP','AREA','TOPIC'],'A topic inside a collection skips it');
+    """)
+
 def test_browse_toggle_and_escape_close_with_focus_return_from_the_actual_menu() -> None:
     _run_controls(r"""
       dom$browseToggle.focus({});emit(dom$browseToggle,'click');

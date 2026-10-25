@@ -1127,7 +1127,9 @@
       if (!pending) entries = bundle.graph.view && bundle.graph.view.breadcrumbs || [];
       while (pending && !seen.has(pending.id)) {
         seen.add(pending.id);
-        if (["collection", "transparent"].indexOf(pending.navigation) < 0) entries.unshift({label: pending.title, reading_title: pending.reading_title,
+        // A collection never stands between crumbs, but its own page ends the trail with it, as the map header does.
+        var own = pending.id === bundle.scope && pending.navigation === "collection";
+        if (own || ["collection", "transparent"].indexOf(pending.navigation) < 0) entries.unshift({label: pending.title, reading_title: pending.reading_title,
           url: pending.id === bundle.scope && (!record || record.id === pending.id) && !ui$overviewGroup && !ui$area ? null : pending.route || pending.url,
           _overviewParent: pending.id === bundle.scope && Boolean(ui$overviewGroup || ui$area)});
         pending = records.get(semanticParent(pending));
