@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 import html5lib
@@ -882,13 +882,19 @@ def test_the_ready_figure_links_the_list_of_exactly_what_it_counts(tmp_path: Pat
     (roadmap / "later.md").write_text(
         "---\ndeclaration: theorem\n---\n\n# Later\n\n## Depends on\n\n- [Next](next.md)\n", encoding="utf-8"
     )
+    # A stated theorem on proved ground is ready to prove, so both ready states are counted.
+    (project / "Project" / "Formal.lean").write_text(
+        "namespace Project\n\ntheorem formal : True := trivial\n\nend Project\n", encoding="utf-8"
+    )
+    (roadmap / "formal.md").write_text(
+        "---\ndeclaration: theorem\nstatement: formalized\nlean: Project.formal\n---\n\n# Formal\n\n"
+        "## Depends on\n\n- [Top](top.md)\n",
+        encoding="utf-8",
+    )
 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    index = json.loads((tmp_path / "out/dependencies/index.json").read_text(encoding="utf-8"))
-    ready = [r["id"] for r in index["nodes"] if r.get("result") and r["status"] in {"can_prove", "can_state"}]
-    assert ready == ["next"]
     # Through the site's own Markdown, the links come out whole and add no paragraphs.
     page = html5lib.parse(
         site_converter().convert(overview.split("\n---\n", 1)[1]), treebuilder="etree", namespaceHTMLElements=False
@@ -899,6 +905,12 @@ def test_the_ready_figure_links_the_list_of_exactly_what_it_counts(tmp_path: Pat
     [link] = [el for el in hero.iter() if "bp-figure-link" in (el.get("class") or "").split()]
     assert [child.get("class") for child in link] == ["bp-figure-value", "bp-figure-label", "bp-figure-note"]
     assert link.get("href") == "roadmap/index.html#view=list&status=can_state,can_prove"
+    # The list the link asks for, rebuilt as the explorer filters it, is what the figure counts.
+    states = set(parse_qs(urlsplit(link.get("href")).fragment)["status"][0].split(","))
+    index = json.loads((tmp_path / "out/dependencies/index.json").read_text(encoding="utf-8"))
+    ready = sorted(r["id"] for r in index["nodes"] if r.get("result") and r["status"] in states)
+    assert ready == ["formal", "next"]
+    assert {r["status"] for r in index["nodes"] if r["id"] in ready} == {"can_prove", "can_state"}
     assert int(link[0].text.replace(",", "")) == len(ready)
 
 
