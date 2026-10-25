@@ -14,6 +14,8 @@ date when the release is tagged.
 - **Wiki map.** Authored concept links cluster intact formal developments,
   with distinct dotted associations and bounded local corridors. Proof edges,
   ranks, status and full reading pages remain unchanged (#442).
+  Publication keeps card dimensions and authored region counts; the one
+  browser engine owns positions and routes, without an unused Python grid.
 - **Docs.** The CLI reference's contracts moved to `autoform_cli/reference/`
   (validation and audit, search, open statements, claims and revisions,
   runtime and publication). The reference, skills and contributor docs keep
@@ -55,11 +57,19 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Wiki references.** Section boundaries come from the site's converter, so
+  Setext and formatted Sources headings cannot turn provenance into concept
+  links. Formal dependencies, statuses and captured article bytes are unchanged (#442).
+- **Explorer navigation.** Contradictory canonical reading routes are refused
+  before changing the reader. Failed rendering cannot poison history snapshots,
+  and foreign-URL state is not restored. Failures offer a safe native article link (#442).
+- **Explorer builds.** Compiler and publisher share a UTF-8/LF source fingerprint,
+  including on CRLF checkouts, without requiring Node in consumer projects (#442).
 - **Large wiki catalogues.** Validation yields to visible page frames, with
   a bounded fallback for hidden or stalled tabs, rather than relying only on
   timer tasks. Every node and relation still validates before publication (#442).
 - **Wiki reading links.** The integrated explorer retains #455's title math
-  in its outline and related-reading controls, using the site's safe MathJax
+  in its outline, breadcrumbs and related-reading controls, using safe MathJax
   service and project macros. Code stays literal, canonical links keep focus
   and native modifiers, and graph labels remain as typed (#442).
 - **Claims.** `autoform dashboard` runs its claim listing's Git in the

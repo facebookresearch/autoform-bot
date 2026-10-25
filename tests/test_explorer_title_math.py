@@ -88,6 +88,24 @@ def test_optional_reading_title_keeps_plain_index_bytes_relations_and_statuses(t
     assert view.edges == (ViewEdge("a", "b", 2, 3),)
 
 
+def test_publisher_breadcrumb_parts_preserve_plain_bytes_titles_urls_and_math_source(tmp_path: Path) -> None:
+    view = GraphView(kind="full", title="Plain trail", nodes=(), edges=())
+    empty, plain, marked = (tmp_path / name for name in ("empty.json", "plain.json", "marked.json"))
+    dag_viewer.write_payload(empty, view, links={})
+    dag_viewer.write_payload(plain, view, links={}, breadcrumbs=(("Library", "library.html"), ("Plain trail", None)))
+    assert plain.read_bytes() == empty.read_bytes().replace(
+        b'"breadcrumbs":[]', b'"breadcrumbs":[{"label":"Library","url":"library.html"},{"label":"Plain trail","url":null}]',
+    )
+    dag_viewer.write_payload(marked, view, links={}, breadcrumbs=((_SUMMARY, "chapter.html"), (_TITLE, None)))
+    expected = json.loads(empty.read_bytes())
+    expected["view"]["breadcrumbs"] = [
+        {"label": _SUMMARY, "url": "chapter.html", "reading_title": dag_viewer._reading_label(_SUMMARY)},
+        {"label": _TITLE, "url": None, "reading_title": dag_viewer._reading_label(_TITLE)},
+    ]
+    assert json.loads(marked.read_bytes()) == expected
+    assert view.title == "Plain trail" and view.nodes == () and view.edges == ()
+
+
 def _fixture() -> dict:
     def node(node_id: str, title: str, parent: str | None, *, scope: bool = False) -> dict:
         result = {"id": node_id, "title": title, "parent": parent,
@@ -121,23 +139,39 @@ _BOOT = r"""
   const pluralStart=source.indexOf('  var plural ='),pluralLine=source.slice(pluralStart,source.indexOf('\n',pluralStart));
   var plural=eval('(function(){'+pluralLine+';return plural;})()');
   var element=original('element'),button=original('button'),readingLabel=original('readingLabel');
+  var safeHref=original('safeHref'),graphAt=original('graphAt');
   var refreshReadingLabels=original('refreshReadingLabels'),semanticParent=original('semanticParent');
+  var routeTrail=original('routeTrail'),currentOverviewGroup=original('currentOverviewGroup');
+  var trailList=original('trailList'),renderBreadcrumb=original('renderBreadcrumb');
+  var showError=original('showError');
   var neighborIds=original('neighborIds'),relationCounts=original('relationCounts'),topicPeers=original('topicPeers');
   var renderOutline=original('renderOutline'),renderNavigation=original('renderNavigation');
   var renderReaderContext=original('renderReaderContext'),renderWikiContext=original('renderWikiContext'),renderInspector=original('renderInspector');
   var records=new Map(fixture.nodes.map(node=>[node.id,node])),sharedIndex={nodes:fixture.nodes,relations:[['A','F',2,3],['F','B',0,4]]};
   var currentBundle={nodeId:'F',scope:'chapter'},ui$selected=null,ui$requestedNode='F',ui$outlineLimit=120;
+  var ui$overviewGroup=null,ui$scopeOverview=false,ui$area=null,data={};
   var ui$wikiLinks=null,ui$wikiRendered=null,ui$wikiNode=null;
   var dom$navigationInner=element('div','fixture-outline'),dom$navigationNodes=new Map();
   var dom$readingContext=element('div','fixture-context'),dom$readingNeighbors=element('div','fixture-neighbors');
   var dom$readingBody=element('article','fixture-body'),dom$homeLink=element('a','fixture-home');
+  var dom$error=element('div','fixture-error'),dom$announcement=element('div','fixture-announcement');dom$error.hidden=true;
+  var dom$breadcrumb=element('nav','bp-dag-breadcrumb');dom$breadcrumb.setAttribute('aria-label','Explorer context');
   var root=element('section','fixture-labels');root.id='explorer-title-proof';
+  root.appendChild(dom$breadcrumb);
   root.appendChild(dom$navigationInner);root.appendChild(dom$readingContext);root.appendChild(dom$readingNeighbors);
   root.appendChild(dom$readingBody);root.appendChild(dom$homeLink);document.body.appendChild(root);
+  root.appendChild(dom$error);root.appendChild(dom$announcement);
   const calls=[],observations=[];
-  var navigation={navigateNode(id,options){calls.push({id,options});},declutterReader(){}};
+  var navigation={navigateNode(id,options){calls.push({id,options});},navigate(url,options){calls.push({url,options});},declutterReader(){}};
   function check(condition,message) {if(!condition)throw Error('Reading-label proof: '+message);}
   function remember(){}function setMode(){throw Error('Reading-label proof should not change display mode');}
+  function renderFor(bundle){const previous=currentBundle;try{currentBundle=bundle;renderBreadcrumb();}finally{currentBundle=previous;}}
+  const canonicalTrail={nodeId:'C',scope:'chapter',graph:{view:{}}},unchangedRecords=JSON.stringify(fixture.nodes);
+  const trailEntries=routeTrail(canonicalTrail),refreshStart=(window.__titleRefreshScopes||[]).length;
+  renderFor(canonicalTrail);
+  if(window.__titleRefreshScopes)check(window.__titleRefreshScopes.length===refreshStart+1&&
+    window.__titleRefreshScopes.at(-1)===dom$breadcrumb,'Breadcrumb replacement did not refresh only its own subtree');
+  check(JSON.stringify(fixture.nodes)===unchangedRecords,'Breadcrumb rendering mutated canonical records or label parts');
   renderNavigation();renderInspector();
   const summary=readingLabel('p','fixture-summary',fixture.summary.text,fixture.summary.label);root.appendChild(summary);
   const unsupported=readingLabel('a','fixture-unsupported',fixture.unsupported,null);unsupported.href='https://blueprint.example.invalid/fallback.html';root.appendChild(unsupported);
@@ -145,7 +179,9 @@ _BOOT = r"""
   const outline=dom$navigationInner.querySelector('[data-navigation-node-id="chapter"]');
   const related=dom$readingNeighbors.querySelector('.bp-reading-links a');
   const ownerSummary=dom$readingNeighbors.querySelector('.bp-reading-related-topics summary');
-  const originals=[outline,related],hrefs=originals.map(link=>link.href);
+  const ancestor=dom$breadcrumb.querySelector('a[href="https://blueprint.example.invalid/chapter.html"]');
+  const currentCrumb=dom$breadcrumb.querySelector('[aria-current="page"]');
+  const originals=[outline,related,ancestor],hrefs=originals.map(link=>link.href);
   outline.focus();
   function exercise(link) {
     const count=calls.length;
@@ -165,13 +201,22 @@ _BOOT = r"""
     check(originals.every((link,n)=>link.isConnected&&link.href===hrefs[n]),'Canonical anchor or href was replaced');
     check(!outline.classList.contains('arithmatex')&&!related.classList.contains('arithmatex'),'An interactive anchor itself was marked');
     check(ownerSummary&&ownerSummary.isConnected&&!ownerSummary.classList.contains('arithmatex'),'The native owner summary was replaced or itself marked');
+    check(ancestor&&!ancestor.classList.contains('arithmatex'),'A breadcrumb anchor itself was marked');
+    check(currentCrumb&&currentCrumb.isConnected&&!currentCrumb.classList.contains('arithmatex')&&
+      !currentCrumb.querySelector('a,button,summary')&&!currentCrumb.hasAttribute('tabindex'),'The current crumb became an interactive control or was replaced');
+    check(currentCrumb.querySelector('code').textContent==='$literal$','Current breadcrumb code was interpreted as math');
     check(root.querySelector('code').textContent==='$literal$','Code-literal TeX changed');
     check(unsupported.textContent===fixture.unsupported&&!unsupported.querySelector('.arithmatex'),'Unsupported label did not stay literal');
   }
-  window.__explorerTitleProof={root,outline,related,summary,ownerSummary,calls,observations,readingLabel,markupProof,exercise,
+  window.__explorerTitleProof={root,outline,related,summary,ownerSummary,ancestor,currentCrumb,breadcrumb:dom$breadcrumb,
+    trailEntries,renderFor,graphAt,showError,error:dom$error,announcement:dom$announcement,
+    calls,observations,readingLabel,markupProof,exercise,
     checkRendered(){markupProof();check(document.activeElement===outline,'Actual typesetting moved anchor focus');
       check(outline.querySelector('mjx-container')&&related.querySelector('mjx-container')&&summary.querySelector('mjx-container')&&ownerSummary.querySelector('mjx-container'),
         'Actual outline, related title, or owner/paragraph summary has no MathJax glyph output');
+      check(ancestor.querySelector('mjx-container')&&currentCrumb.querySelector('mjx-container'),
+        'Actual linked ancestor or current breadcrumb has no real MathJax glyph output');
+      check(!dom$breadcrumb.querySelector('[tabindex],[role="application"]'),'Breadcrumb math acquired a menu tabstop or control keys');
       check(!root.querySelector('code mjx-container'),'Code-literal TeX was typeset');
       check(!outline.querySelector('[tabindex]')&&!related.querySelector('[tabindex]'),'Formula took an inner control tabstop');
       check(!outline.querySelector('[role="application"]')&&!related.querySelector('[role="application"]'),'Formula took control keys');
@@ -182,11 +227,14 @@ _BOOT = r"""
 """
 
 
-def _boot() -> str:
-    return "var source=" + json.dumps(_CLIENT.read_text(encoding="utf-8")) + ";\nvar fixture=" + json.dumps(_fixture()) + ";\n" + _BOOT
+def _boot(fallback: dict | None = None) -> str:
+    fixture = _fixture()
+    if fallback is not None:
+        fixture["fallback"] = fallback
+    return "var source=" + json.dumps(_CLIENT.read_text(encoding="utf-8")) + ";\nvar fixture=" + json.dumps(fixture) + ";\n" + _BOOT
 
 
-def _dom_script(body: str) -> None:
+def _dom_script(body: str, fallback: dict | None = None) -> None:
     unavailable = pytest.fail if os.environ.get("AUTOFORM_REQUIRE_MATHJAX_TESTS") == "1" else pytest.skip
     if _NODE is None:
         unavailable("Node is required for connected reading-label DOM checks")
@@ -195,7 +243,7 @@ def _dom_script(body: str) -> None:
         unavailable("Locked jsdom 26.1.0 is required for connected reading-label DOM checks")
     script = "const {JSDOM}=require(" + json.dumps(str(bridge.parent)) + ");\n"
     script += "const dom=new JSDOM('<html><body></body></html>',{url:'https://blueprint.example.invalid/',runScripts:'outside-only',pretendToBeVisual:true});\n"
-    script += "const window=dom.window,document=window.document;\n" + _boot() + "\n" + body + "\ndom.window.close();\n"
+    script += "const window=dom.window,document=window.document;\n" + _boot(fallback) + "\n" + body + "\ndom.window.close();\n"
     result = subprocess.run([_NODE], input=script, text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-6000:]
 
@@ -206,11 +254,34 @@ def test_actual_reading_renderers_mark_inner_math_without_replacing_canonical_co
       if(!proof.outline.querySelector('.arithmatex')||!proof.related.querySelector('.arithmatex'))throw Error('Production title marking absent');
       if(!proof.summary.querySelector('.arithmatex'))throw Error('Production summary marking absent');
       if(!proof.ownerSummary.querySelector('.arithmatex'))throw Error('Actual More-in owner summary marking absent');
+      if(!proof.ancestor.querySelector('.arithmatex')||!proof.currentCrumb.querySelector('.arithmatex'))throw Error('Actual breadcrumb title marking absent');
+      if(proof.trailEntries[1].reading_title.source!=='Groups $\\mathbb{Z}/n$'||
+        proof.trailEntries.at(-1).reading_title.source!==fixture.summary.text)throw Error('Canonical breadcrumb metadata/source changed');
       if(proof.outline.href!=='https://blueprint.example.invalid/chapter.html'||proof.related.href!=='https://blueprint.example.invalid/A.html')throw Error('Canonical href changed');
       proof.exercise(proof.outline);
       if(proof.calls[0].id!=='chapter')throw Error('Outline navigation did not keep its canonical scope');
       proof.calls.length=0;
+      proof.exercise(proof.ancestor);
+      if(proof.calls[0].url!=='https://blueprint.example.invalid/chapter.html'||
+        JSON.stringify(proof.calls[0].options)!==JSON.stringify({history:'push',focus:true,mapFirst:true}))throw Error('Native breadcrumb route options changed');
     """)
+
+
+def test_actual_graph_fallback_breadcrumbs_keep_published_parts_and_canonical_urls(tmp_path: Path) -> None:
+    path = tmp_path / "fallback.json"
+    dag_viewer.write_payload(path, GraphView(kind="full", title="Fallback", nodes=(), edges=()), links={},
+                             breadcrumbs=((_SUMMARY, "chapter.html"), (_TITLE, None)))
+    _dom_script(r"""
+      const proof=window.__explorerTitleProof,before=JSON.stringify(fixture.fallback);
+      const graph=proof.graphAt(fixture.fallback,'https://blueprint.example.invalid/graph.json');
+      if(JSON.stringify(graph.view.breadcrumbs.map(crumb=>crumb.reading_title))!==
+        JSON.stringify(fixture.fallback.view.breadcrumbs.map(crumb=>crumb.reading_title)))throw Error('graphAt dropped published reading parts');
+      proof.renderFor({nodeId:'absent',scope:'absent',graph});
+      const link=proof.breadcrumb.querySelector('a'),current=proof.breadcrumb.querySelector('[aria-current="page"]');
+      if(link.href!=='https://blueprint.example.invalid/chapter.html'||!link.querySelector('.arithmatex')||
+        link.querySelector('code').textContent!=='$literal$'||!current.querySelector('.arithmatex'))throw Error('Actual fallback breadcrumb rendering failed');
+      if(JSON.stringify(fixture.fallback)!==before)throw Error('Fallback projection mutated original graph payload');
+    """, json.loads(path.read_bytes()))
 
 
 def test_invalid_reading_metadata_keeps_literal_provider_text_and_prefix() -> None:
@@ -230,6 +301,45 @@ def test_invalid_reading_metadata_keeps_literal_provider_text_and_prefix() -> No
     """)
 
 
+def test_failed_view_error_offers_only_safe_plain_native_canonical_navigation() -> None:
+    _dom_script(r"""
+      const proof=window.__explorerTitleProof,failed=fixture.nodes.find(node=>node.id==='B').route;
+      const message='<img src=x onerror="window.__errorPwned=1"> <script>bad()</script> $not_error_math$';
+      const recordsBefore=JSON.stringify(fixture.nodes),body=proof.root.querySelector('.fixture-body');
+      const original=document.createTextNode(fixture.summary.text);body.appendChild(original);
+      const bodyBefore=body.innerHTML;
+      proof.showError({url:failed,message});
+      const link=proof.error.querySelector('a');
+      if(proof.error.hidden||!link||link.href!==failed||!link.textContent.trim()||link.childElementCount)
+        throw Error('Failed view did not offer a plain canonical fallback');
+      if(link.target!=='_blank'||!link.relList.contains('noopener')||
+        (link.getAttribute('aria-label')||link.textContent)!=='Open complete article in a new tab')
+        throw Error('Fallback did not disclose and guarantee a fresh, isolated native tab');
+      if(!proof.error.textContent.includes(message)||!proof.announcement.textContent.includes(message)||
+        proof.error.querySelector('img,script,iframe,.arithmatex,mjx-container')||window.__errorPwned)
+        throw Error('Error/provider text became active HTML or math');
+      if(/current view.*unchanged/i.test(proof.error.textContent+' '+proof.announcement.textContent))
+        throw Error('Renderer failure falsely promised that the previous view was unchanged');
+      const count=proof.calls.length;
+      for(const setting of [{button:0},{ctrlKey:true},{metaKey:true},{shiftKey:true},{altKey:true},{button:1}]) {
+        // Observe the genuine callback/default state before shielding JSDOM's
+        // unsupported document navigation; do not supply an SPA callback.
+        link.addEventListener('click',event=>{proof.observations.push(event.defaultPrevented);event.preventDefault();},{once:true});
+        link.dispatchEvent(new window.MouseEvent('click',{bubbles:true,cancelable:true,...setting}));
+        if(proof.observations.at(-1)!==false||proof.calls.length!==count)throw Error('Fallback was intercepted as SPA navigation');
+      }
+      const unsafe=[null,undefined,false,17,[],{toString(){window.__fallbackURLCoerced=true;return failed;}},
+        'https://evil.example.invalid/B.html','//evil.example.invalid/B.html',
+        'https://user:secret@blueprint.example.invalid/B.html','https://:secret@blueprint.example.invalid/B.html',
+        'javascript:bad()','data:text/html,bad','file:///B.html',
+        ...['\x00','\x1f','\t','\n','\r','\x7f'].map(control=>failed+control)];
+      for(const url of unsafe){proof.showError({url,message});if(proof.error.querySelector('a'))throw Error('Unsafe fallback href was emitted');}
+      if(window.__fallbackURLCoerced||JSON.stringify(fixture.nodes)!==recordsBefore||
+        body.firstChild!==original||body.innerHTML!==bodyBefore)throw Error('Failure rendering coerced input or mutated mathematical source');
+      proof.markupProof();
+    """)
+
+
 def test_actual_safe_mathjax_typesets_outline_related_and_summary_with_project_macros(tmp_path: Path) -> None:
     mathjax_package()
     script, warnings = mathjax_script(None, json.dumps({"ZZ": r"\mathbb{Z}"}).encode())
@@ -240,7 +350,8 @@ def test_actual_safe_mathjax_typesets_outline_related_and_summary_with_project_m
     wrapper = r"""
       (function(){
         const actual=window.AutoformMath.refresh;
-        window.AutoformMath.refresh=function(root){return actual(root).then(value=>{
+        window.__titleRefreshScopes=[];
+        window.AutoformMath.refresh=function(root){window.__titleRefreshScopes.push(root);return actual(root).then(value=>{
           if(window.__explorerTitleProof)window.__explorerTitleProof.checkRendered();return value;
         });};
       })();
@@ -248,7 +359,13 @@ def test_actual_safe_mathjax_typesets_outline_related_and_summary_with_project_m
     after = r"""
       window.AutoformMath.refresh(document).then(()=>{
         const proof=window.__explorerTitleProof;proof.checkRendered();proof.exercise(proof.outline);
-        proof.exercise(proof.related);
+        proof.exercise(proof.related);proof.exercise(proof.ancestor);
+        const count=window.__titleRefreshScopes.length;
+        proof.showError({url:fixture.nodes.find(node=>node.id==='B').route,message:'Failure $not_error_math$ <script>bad()</script>'});
+        if(window.__titleRefreshScopes.length!==count||proof.error.querySelector('.arithmatex,mjx-container,script'))
+          throw Error('Error fallback added a math pass or interpreted provider text');
+        const link=proof.error.querySelector('a');
+        if(link.target!=='_blank'||!link.relList.contains('noopener'))throw Error('Native error recovery reused the failed document');
       }).catch(error=>window.console.error('reading-label real output proof failed',error.stack));
     """
     script += wrapper + _boot() + after

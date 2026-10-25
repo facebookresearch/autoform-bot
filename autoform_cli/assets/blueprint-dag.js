@@ -51,10 +51,10 @@
   }
 
   function safeHref(value) {
-    if (!value || /[\u0000-\u001f]/.test(value)) return null;
+    if (typeof value !== "string" || !value || /[\u0000-\u001f\u007f]/.test(value)) return null;
     try {
       var url = new URL(value, window.location.href);
-      return /^(https?:)$/.test(url.protocol) && url.origin === window.location.origin ? value : null;
+      return /^(https?:)$/.test(url.protocol) && url.origin === window.location.origin && !url.username && !url.password ? value : null;
     } catch (_error) { return null; }
   }
 
@@ -105,7 +105,7 @@
         !Array.isArray(payload.nodes) || !Array.isArray(payload.edges)) throw new Error("unsupported graph payload");
     var link = function (value) { try { return value ? safeHref(new URL(value, base || location.href).href) : null; } catch (_error) { return null; } };
     var view = Object.assign({}, payload.view || {}); view.book = link(view.book);
-    view.breadcrumbs = (view.breadcrumbs || []).map(function (entry) { return {label: entry.label, url: link(entry.url)}; });
+    view.breadcrumbs = (view.breadcrumbs || []).map(function (entry) { return Object.assign({}, entry, {url: link(entry.url)}); });
     return Object.assign({}, payload, {view: view, edges: payload.edges.slice(), nodes: payload.nodes.map(function (node) {
       return Object.assign({}, node, {url: link(node.url)});
     })});
@@ -881,11 +881,10 @@
       dom$homeLink, dom$inspector, dom$inspectorInner, dom$inventory, dom$inventoryList, dom$inventoryRows,
       dom$inventoryScroll, dom$inventorySummary, dom$isolated, dom$listMode, dom$loadMore, dom$mapContext, dom$mapKey,
       dom$navigation, dom$navigationInner, dom$navigationNodes, dom$nodeLayer, dom$outlineToggle, dom$pageHeading,
-      dom$readingBody, dom$readingContext, dom$readingNeighbors, dom$regionsMode, dom$search, dom$searchResults,
+      dom$readingBody, dom$readingContext, dom$readingNeighbors, dom$search, dom$searchResults,
       dom$searchWrap, dom$sheetHandle, dom$sourcesMode, dom$stage, dom$statusFieldset, dom$statusInputs,
       dom$wholeSearch, dom$zoomIn, dom$zoomOut;
     var overlays = new Map(), scheduled = false, firstResize = true, family;
-    var trail = Array.isArray(view.breadcrumbs) ? view.breadcrumbs : [];
     host.classList.add("bp-dag-integrated");
 
     buildShell();
@@ -913,7 +912,21 @@
         inventoryScroll: dom$inventoryScroll.scrollTop, listLimit: ui$listLimit, relationIds: ui$relationIds,
         outlineOpen: host.classList.contains("bp-dag-outline-open"), outlineLimit: ui$outlineLimit};
     }
+    function snapshotForRoute(saved, bundle) {
+      if (!saved || !bundle || !bundle.url) return saved;
+      var id = saved.requestedNode === undefined ? saved.node : saved.requestedNode, record = records.get(id);
+      if (record && record.route) {
+        var expected = new URL(record.route, bundle.url), actual = new URL(bundle.url);
+        var destination = records.get(bundle.nodeId);
+        if (destination && destination.id !== record.id && destination.route &&
+            new URL(destination.route, bundle.url).href === actual.href) return null;
+        expected.hash = ""; actual.hash = "";
+        if (expected.href !== actual.href) return null;
+      }
+      return saved;
+    }
     function restoreState(saved, bundle) {
+      saved = snapshotForRoute(saved, bundle);
       if (!saved) return;
       var ticket = ++restoration, isCurrent = bundle && bundle.isCurrent; restoring = true; clearTimeout(checkpointTimer);
       ui$filtersTouched = true; ui$area = saved.area || null; ui$overviewGroup = saved.overviewGroup || null;
@@ -943,7 +956,14 @@
     }
     function showError(error) {
       dom$announcement.textContent = "The requested view could not be loaded. " + (error.message || error);
-      dom$error.textContent = "Could not open this view. " + (error.message || error) + " Your current page is unchanged.";
+      dom$error.textContent = "Could not open this view. " + (error.message || error);
+      var href = safeHref(error.url);
+      if (href) {
+        dom$error.appendChild(document.createTextNode(" "));
+        var fallback = element("a", "", "Open complete article in a new tab"); fallback.href = href;
+        fallback.target = "_blank"; fallback.rel = "noopener";
+        dom$error.appendChild(fallback);
+      }
       dom$error.hidden = false;
     }
     function useIndex(index) {
@@ -952,7 +972,7 @@
       index.nodes.forEach(function (node, i) { node._index = i; records.set(node.id, node); });
       ui$searchNodes = index.nodes; ui$searchCacheQuery = null;
       dom$search.placeholder = "Search " + index.nodes.length.toLocaleString() + " roadmap entries";
-      if (currentBundle) { updateProjection(); dom$breadcrumb.replaceChildren(trailList(routeTrail(currentBundle))); }
+      if (currentBundle) updateProjection();
       renderNavigation(); renderReaderContext(); renderInventory(false); refresh(false);
       if (ui$requestedNode) { fit(); centerIfHidden(ui$selected); }
       requestWikiLinks();
@@ -1038,6 +1058,8 @@
       Promise.resolve(pending).then(publish).catch(function () { publish({availability: "unavailable", edges: [], unavailableOwners: []}); });
     }
     function applyRoute(bundle) {
+      var snapshot = snapshotForRoute(bundle.snapshot, bundle);
+      if (snapshot !== bundle.snapshot) bundle = Object.assign({}, bundle, {snapshot: snapshot});
       var isCurrent = bundle.isCurrent;
       if (!alive || (isCurrent && !isCurrent())) return;
       restoration++; restoring = false; clearTimeout(checkpointTimer); currentBundle = bundle; contextGraph = bundle.graph; ui$area = null; ui$overviewGroup = null; ui$requestedNode = bundle.nodeId || null;
@@ -1054,8 +1076,6 @@
         readingReady = window.AutoformMath ? Promise.resolve(window.AutoformMath.refresh(dom$readingBody)) : Promise.resolve();
       }
       updateProjection();
-      trail = routeTrail(bundle);
-      dom$breadcrumb.replaceChildren(trailList(trail));
       ui$mode = mapAllowed ? "graph" : "list"; ui$direction = "both";
       ui$selectedStatuses = new Set(presentStatuses); ui$showIsolated = true; ui$activeDirty = true;
       var legacy = bundle.parameters || {};
@@ -1099,12 +1119,12 @@
       if (!pending) entries = bundle.graph.view && bundle.graph.view.breadcrumbs || [];
       while (pending && !seen.has(pending.id)) {
         seen.add(pending.id);
-        if (["collection", "transparent"].indexOf(pending.navigation) < 0) entries.unshift({label: pending.title,
+        if (["collection", "transparent"].indexOf(pending.navigation) < 0) entries.unshift({label: pending.title, reading_title: pending.reading_title,
           url: pending.id === bundle.scope && (!record || record.id === pending.id) && !ui$overviewGroup && !ui$area ? null : pending.route || pending.url,
           _overviewParent: pending.id === bundle.scope && Boolean(ui$overviewGroup || ui$area)});
         pending = records.get(semanticParent(pending));
       }
-      if (record && record.scope !== record.id) entries.push({label: record.title});
+      if (record && record.scope !== record.id) entries.push({label: record.title, reading_title: record.reading_title});
       if (ui$area) entries.push({label: ui$area});
       var group = currentOverviewGroup();
       if (group) entries.push({label: group.area || "Unassigned topics"});
@@ -1188,7 +1208,7 @@
       if (!ui$filtersTouched) ui$selectedStatuses = new Set(presentStatuses);
       if (ui$selected && !ui$selectedStatuses.has(ui$selected.status)) ui$selected = null;
       if (dom$statusFieldset) renderStatusFields();
-      if (dom$breadcrumb && currentBundle) dom$breadcrumb.replaceChildren(trailList(routeTrail(currentBundle)));
+      renderBreadcrumb();
       projectWikiView();
     }
     function semanticParent(node) {
@@ -1313,7 +1333,7 @@
       var context = element("div", "bp-dag-context");
       var crumbs = dom$breadcrumb = element("nav", "bp-dag-breadcrumb");
       crumbs.setAttribute("aria-label", "Explorer context");
-      crumbs.appendChild(trailList(trail.length ? trail : [{label: data.title || "Dependencies"}])); context.appendChild(crumbs);
+      renderBreadcrumb(); context.appendChild(crumbs);
       head.appendChild(context);
 
       var toolbar = element("div", "bp-dag-toolbar");
@@ -1424,10 +1444,10 @@
     function trailList(entries, className) {
       var list = element("ol", className);
       entries.forEach(function (entry, index) {
-        var item = element("li"), href = safeHref(entry.url);
+        var href = safeHref(entry.url), item = href ? element("li") : readingLabel("li", "", entry.label, entry.reading_title);
         item.title = entry.label;
         if (href) {
-          var link = element("a", "", entry.label); link.href = href; link.title = entry.label;
+          var link = readingLabel("a", "", entry.label, entry.reading_title); link.href = href; link.title = entry.label;
           link.addEventListener("click", function (event) {
             if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
                 new URL(href).origin !== window.location.origin) return;
@@ -1437,10 +1457,16 @@
           });
           item.appendChild(link);
         }
-        else { item.textContent = entry.label; if (!className && index === entries.length - 1) item.setAttribute("aria-current", "page"); }
+        else if (!className && index === entries.length - 1) item.setAttribute("aria-current", "page");
         list.appendChild(item);
       });
       return list;
+    }
+    function renderBreadcrumb() {
+      if (!dom$breadcrumb || !currentBundle) return;
+      var entries = routeTrail(currentBundle);
+      dom$breadcrumb.replaceChildren(trailList(entries.length ? entries : [{label: data.title || "Dependencies"}]));
+      refreshReadingLabels(dom$breadcrumb);
     }
     function renderNavigation() {
       if (!dom$navigationInner) return;
@@ -1499,7 +1525,6 @@
       dom$graphMode.addEventListener("click", function () { setMode("graph", true); });
       dom$listMode.addEventListener("click", function () { setBrowse(false); ui$relationIds = null; setMode("list", true); });
       if (dom$sourcesMode) dom$sourcesMode.addEventListener("click", function () { setBrowse(false); setMode("sources", true); });
-      if (dom$regionsMode) dom$regionsMode.addEventListener("click", function () { setMode("regions", true); });
       dom$zoomIn.addEventListener("click", function () { zoomAt(1.24, dom$stage.clientWidth / 2, dom$stage.clientHeight / 2); });
       dom$zoomOut.addEventListener("click", function () { zoomAt(.8, dom$stage.clientWidth / 2, dom$stage.clientHeight / 2); });
       dom$fit.addEventListener("click", fit); dom$hiddenButton.addEventListener("click", revealAll);

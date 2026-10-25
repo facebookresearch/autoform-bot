@@ -1840,12 +1840,15 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     related = page.locator(".bp-reading-links a").filter(has_text="Groups")
     around = page.locator(".bp-reading-around")
     summary = page.locator(".bp-reading-related-topics summary")
+    ancestor = page.locator(".bp-dag-breadcrumb a").filter(has=page.locator(".arithmatex"))
     playwright.expect(outline).to_have_attribute("href", scope_route)
     playwright.expect(related).to_have_attribute("href", foundation_route)
+    playwright.expect(ancestor).to_have_attribute("href", scope_route)
     page.evaluate("""() => {
       window.__titleMathDocument=document;window.__titleMathClicks=0;
       window.__titleMathControls=[document.querySelector('[data-navigation-node-id="algebra"]'),
-        document.querySelector('.bp-reading-links a'),document.querySelector('.bp-reading-related-topics summary')];
+        document.querySelector('.bp-reading-links a'),document.querySelector('.bp-reading-related-topics summary'),
+        document.querySelector('.bp-dag-breadcrumb a:has(.arithmatex)')];
       __titleMathControls[1].addEventListener('click',()=>__titleMathClicks++);
     }""")
     outline.focus()
@@ -1854,8 +1857,9 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     assert outline.evaluate("node=>node===__titleMathControls[0]")
     assert related.evaluate("node=>node===__titleMathControls[1]")
     assert summary.evaluate("node=>node===__titleMathControls[2]")
+    assert ancestor.evaluate("node=>node===__titleMathControls[3]")
     for control, tex in ((outline, r"\ZZ/n"), (around, r"\ZZ/n"),
-                         (related, r"\mathbb{Z}/n"), (summary, r"\ZZ/n")):
+                         (related, r"\mathbb{Z}/n"), (summary, r"\ZZ/n"), (ancestor, r"\ZZ/n")):
         playwright.expect(control.locator(".arithmatex")).to_have_count(1)
         playwright.expect(control.locator(".arithmatex")).to_have_attribute("data-autoform-math-source", r"\(" + tex + r"\)")
         playwright.expect(control.locator("mjx-container")).to_have_count(1)
@@ -1889,6 +1893,59 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     page.wait_for_url(foundation_route)
     _reading_card(page, "algebra/title-foundation")
     assert page.evaluate("() => __titleMathClicks===1 && document===__titleMathDocument")
+    # The actual authored math-bearing leaf is now the nonlinked current
+    # breadcrumb, and its authored module remains a canonical ancestor link.
+    playwright.expect(page.locator(".bp-reading-wiki-links strong").first).to_have_text("Links to other concepts · 0")
+    ancestor = page.locator(".bp-dag-breadcrumb a").filter(has=page.locator(".arithmatex"))
+    current = page.locator('.bp-dag-breadcrumb li[aria-current="page"]')
+    ancestor.evaluate("node=>window.__titleMathAncestor=node")
+    current.evaluate("node=>window.__titleMathCurrentCrumb=node")
+    _paint_frame(page)
+    geometry = """nodes=>nodes.map(node=>{const box=node.getBoundingClientRect();
+      return [node.getAttribute('data-autoform-node-id'),box.x,box.y,box.width,box.height,
+        node.querySelector('.bp-dag-node-title')?.textContent];}).sort((a,b)=>a[0].localeCompare(b[0]))"""
+    map_before = page.locator(".bp-dag-node").evaluate_all(geometry)
+    ancestor.focus()
+    assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-dag-breadcrumb'))") is True
+    playwright.expect(ancestor).to_be_focused()
+    playwright.expect(ancestor).to_have_attribute("href", scope_route)
+    assert ancestor.evaluate("node=>node===__titleMathAncestor")
+    assert current.evaluate("node=>node===__titleMathCurrentCrumb && !node.hasAttribute('tabindex')")
+    playwright.expect(current.locator("a, button, summary")).to_have_count(0)
+    for crumb, tex in ((ancestor, r"\ZZ/n"), (current, r"\mathbb{Z}/n")):
+        playwright.expect(crumb.locator(".arithmatex")).to_have_attribute("data-autoform-math-source", r"\(" + tex + r"\)")
+        playwright.expect(crumb.locator("mjx-container")).to_have_count(1)
+        playwright.expect(crumb.locator("mjx-c.mjx-c2124")).to_have_count(1)
+        playwright.expect(crumb.locator("code")).to_have_text("$literal$")
+        assert crumb.locator("code .arithmatex, code mjx-container, [tabindex], [role=application]").count() == 0
+        assert crumb.locator("mjx-merror, merror, script, iframe, img").count() == 0
+        assert crumb.evaluate("node=>!node.classList.contains('arithmatex')")
+    assert page.locator(".bp-dag-node").evaluate_all(geometry) == map_before
+    assert page.locator(".bp-dag-node .arithmatex, .bp-dag-node mjx-container").count() == 0
+    ancestor.locator("mjx-container").click(button="right")
+    playwright.expect(page.get_by_role("menu")).to_have_count(0)
+    page.keyboard.press("Escape")
+    # BrowserContext uses the same genuine pinned router for a native
+    # Control-click popup; no navigation callback or payload is substituted.
+    _routes(page.context, site_url, marked_math_runtime, graph_client=True)
+    with page.expect_popup() as opened:
+        ancestor.click(modifiers=["Control"])
+    popup = opened.value
+    try:
+        popup.wait_for_url(scope_route)
+        assert page.url == foundation_route
+        assert page.evaluate("() => document===__titleMathDocument")
+    finally:
+        popup.close()
+    ancestor.focus()
+    _assert_hit(page, ancestor)
+    page.keyboard.press("Enter")
+    page.wait_for_url(scope_route)
+    page.go_back()
+    page.wait_for_url(foundation_route)
+    playwright.expect(current.locator("mjx-container")).to_have_count(1)
+    playwright.expect(page.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
+    assert page.evaluate("() => document===__titleMathDocument")
     page.go_back()
     page.wait_for_url(first)
     playwright.expect(related).to_have_attribute("href", foundation_route)
@@ -1900,6 +1957,72 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     page.wait_for_url(scope_route)
     assert page.evaluate("() => document===__titleMathDocument")
     assert documents == [urlsplit(first)._replace(fragment="").geturl()]
+
+
+def test_failed_reader_reconciliation_opens_current_permalink_in_fresh_native_tab(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
+) -> None:
+    """One real renderer boundary rejects SPA B; a native noopener tab loads B's complete source."""
+    from tests.test_integrated_explorer_browser import _routes
+
+    page, site_url = desktop_page, marked_math_site_url
+    documents: list[str] = []
+    page.context.on("request", lambda request: documents.append(request.url)
+                    if request.resource_type == "document" else None)
+    _routes(page.context, site_url, marked_math_runtime, graph_client=True)
+    first = _site_route(page, site_url, "algebra/result")
+    failed = _site_route(page, site_url, "topology/result")
+    page.goto(first)
+    _ready_site(page)
+    assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-reading-body'))") is True
+    playwright.expect(_reading_card(page, "algebra/result").locator("mjx-container")).to_have_count(5)
+    page.evaluate("""() => {
+      window.__failureDocument=document;window.__failureReading=document.querySelector('.bp-reading-body > .bp-reading-source');
+      window.__readingBoundaryFailure=0;
+      const actual=Element.prototype.replaceChildren;
+      Element.prototype.replaceChildren=function(...nodes){
+        if(this.classList.contains('bp-reading-body')&&!__readingBoundaryFailure){
+          __readingBoundaryFailure++;Element.prototype.replaceChildren=actual;
+          throw new Error('Injected one-shot reading reconciliation failure');
+        }
+        return actual.apply(this,nodes);
+      };
+    }""")
+    page.locator(".bp-dag-search").fill("topology/result")
+    target = page.locator('.bp-dag-result[data-result-id="topology/result"]')
+    playwright.expect(target).to_be_visible()
+    _assert_hit(page, target)
+    target.click()
+    page.wait_for_url(failed)
+    fallback = page.get_by_role("link", name="Open complete article in a new tab", exact=True)
+    playwright.expect(fallback).to_be_visible()
+    playwright.expect(fallback).to_have_attribute("href", failed)
+    playwright.expect(fallback).to_have_attribute("target", "_blank")
+    assert "noopener" in (fallback.get_attribute("rel") or "").split()
+    assert page.evaluate("() => __readingBoundaryFailure===1 && document===__failureDocument && "
+                         "document.querySelector('.bp-reading-body > .bp-reading-source')===__failureReading")
+    assert documents == [urlsplit(first)._replace(fragment="").geturl()]
+    _assert_hit(page, fallback)
+    with page.context.expect_page() as opened:
+        fallback.click()
+    recovered = opened.value
+    try:
+        recovered.wait_for_url(failed)
+        _ready_site(recovered)
+        assert recovered.evaluate("() => window.opener===null && !window.__failureDocument && !window.__readingBoundaryFailure")
+        assert recovered.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-reading-body'))") is True
+        card = _reading_card(recovered, "topology/result")
+        playwright.expect(card.locator(".arithmatex")).to_have_count(5)
+        playwright.expect(card.locator("mjx-container")).to_have_count(5)
+        playwright.expect(card.locator("mjx-merror, merror")).to_have_count(0)
+        playwright.expect(card).to_contain_text("Final sentence of the complete statement.")
+        assert recovered.evaluate("() => MathJax.version==='3.2.2'")
+        assert page.url == failed
+        assert page.evaluate("() => document===__failureDocument && "
+                             "document.querySelector('.bp-reading-body > .bp-reading-source')===__failureReading")
+        assert documents == [urlsplit(first)._replace(fragment="").geturl(), urlsplit(failed)._replace(fragment="").geturl()]
+    finally:
+        recovered.close()
 
 
 @pytest.mark.parametrize("explorer", [False, True])

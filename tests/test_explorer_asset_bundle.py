@@ -20,15 +20,65 @@ _SOURCE_NAMES = ("blueprint-navigation.js", "blueprint-dag.js")
 _BANNER = re.compile(rb"\A/\* autoform-explorer-source-sha256:([0-9a-f]{64}) \*/\n")
 
 
-def test_explorer_bundle_digest_matches_exact_readable_source_bytes() -> None:
-    source = b"\n".join((_ASSETS / name).read_bytes() for name in _SOURCE_NAMES)
-    source.decode("utf-8")
-    bundled = _BUNDLE.read_bytes()
+def test_explorer_bundle_digest_matches_canonical_utf8_lf_source_text() -> None:
+    source = "\n".join((_ASSETS / name).read_text(encoding="utf-8") for name in _SOURCE_NAMES).encode("utf-8")
+    bundled = _BUNDLE.read_text(encoding="utf-8").encode("utf-8")
     banner = _BANNER.match(bundled)
     assert banner is not None, "The shipped explorer lacks its exact source-digest banner"
     assert banner.group(1).decode("ascii") == hashlib.sha256(source).hexdigest(), (
         "The shipped explorer is stale; run npm run build:explorer"
     )
+
+
+def _compiler_fixture(tmp_path: Path) -> tuple[str, Path]:
+    node = shutil.which("node")
+    dependencies = _ROOT / "node_modules"
+    if node is None or not (dependencies / "esbuild/package.json").is_file() or not (dependencies / "terser/package.json").is_file():
+        pytest.skip("The locked development compiler is needed for checkout-portability tests")
+    project = tmp_path / "compiler-project"
+    (project / "scripts").mkdir(parents=True)
+    (project / "autoform_cli/assets").mkdir(parents=True)
+    try:
+        (project / "node_modules").symlink_to(dependencies, target_is_directory=True)
+    except OSError:
+        pytest.skip("A temporary compiler dependency link is unavailable on this platform")
+    shutil.copyfile(_ROOT / "scripts/build-explorer.mjs", project / "scripts/build-explorer.mjs")
+    return node, project
+
+
+@pytest.mark.parametrize("ending,bom", [("\n", False), ("\r\n", False), ("\r", False), ("\r\n", True)])
+def test_real_compiler_and_node_free_publisher_agree_on_checkout_line_endings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str, bom: bool,
+) -> None:
+    node, project = _compiler_fixture(tmp_path)
+    assets = project / "autoform_cli/assets"
+    for name, source in zip(_SOURCE_NAMES, ("// café\nwindow.AutoformNavigation={create(){return null;}};\n", "// map\nwindow.Explorer={route:'article.html'};\n")):
+        data = source.replace("\n", ending).encode("utf-8")
+        (assets / name).write_bytes((b"\xef\xbb\xbf" if bom else b"") + data)
+    compiler = project / "scripts/build-explorer.mjs"
+    result = subprocess.run([node, str(compiler)], capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, result.stdout + result.stderr
+    monkeypatch.setattr(dag_viewer, "__file__", str(project / "autoform_cli/dag_viewer.py"))
+    source = "\n".join(dag_viewer._asset_text(name) for name in _SOURCE_NAMES)
+    monkeypatch.setattr(dag_viewer, "_SCRIPT", source)
+    built = (assets / _BUNDLE.name).read_bytes()
+    assert built.startswith(f"/* autoform-explorer-source-sha256:{hashlib.sha256(source.encode()).hexdigest()} */\n".encode())
+    assert dag_viewer.viewer_script().encode() == built
+    # A checked-in bundle is converted too on an autocrlf checkout. Both
+    # development verification and Node-free publication must still agree.
+    (assets / _BUNDLE.name).write_bytes(built.replace(b"\n", b"\r\n"))
+    checked = subprocess.run([node, str(compiler), "--check"], capture_output=True, text=True, timeout=45)
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert dag_viewer.viewer_script().encode() == built
+
+
+def test_real_compiler_rejects_invalid_utf8_before_writing_a_bundle(tmp_path: Path) -> None:
+    node, project = _compiler_fixture(tmp_path)
+    assets = project / "autoform_cli/assets"
+    (assets / _SOURCE_NAMES[0]).write_bytes(b"\xff")
+    (assets / _SOURCE_NAMES[1]).write_text("window.Explorer={};\n", encoding="utf-8")
+    result = subprocess.run([node, str(project / "scripts/build-explorer.mjs")], capture_output=True, text=True, timeout=45)
+    assert result.returncode != 0 and not (assets / _BUNDLE.name).exists()
 
 
 def test_explorer_bundle_keeps_the_integrated_client_budget_and_has_no_source_maps_or_local_paths() -> None:

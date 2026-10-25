@@ -1107,10 +1107,11 @@ do nothing, however a formula or macro reaches them. A macro may not take one of
 their names; `check` and `render` warn about a macro they leave out, judging the
 copy of `tex-macros.json` that `render` reads once and publishes. Each read-back
 card has its own TeX input with only base, ams, and noundefined. Only renderer-marked
-formulas, such as `$...$` in Markdown, are typeset. A link or button's formula gets
-no MathJax tab stop, menu or accessibility explorer. Refreshes use fresh inputs
-and retain earlier glyph styles; graph labels, a heading's title, a `discussion:`
-value, home-page lead, navigation and table of contents show as typed. A formula paints only within
+formulas, such as `$...$` in Markdown, are typeset. Formulas in links, controls and
+navigation get no extra MathJax tab stop, menu or accessibility explorer. Refreshes
+retain earlier glyph styles; graph labels, metadata titles, `discussion:` values,
+home-page leads and Material navigation/ToC stay typed. Explorer reading links and
+breadcrumbs typeset publisher-derived title parts with project macros. A formula paints only within
 its own line and block, and an inline formula wider than its paragraph is cut at
 its edge, so write one that wide as a display, which scrolls.
 

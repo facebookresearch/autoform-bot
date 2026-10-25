@@ -90,17 +90,6 @@ def _pages(
     return project_page, full_page, chapter_pages, scope_pages
 
 
-def publication_contexts(graph: Graph, destination: str | Path) -> dict[str, tuple[Path, str]]:
-    """The existing payload and containing graph scope for each published node.
-
-    Containers identify their own scope; other articles identify their actual
-    parent. Authored roles remain available for the client to skip wrappers.
-    Paths locate publication artifacts, never mathematical areas.
-    """
-    destination = Path(destination).resolve()
-    return _publication_contexts(graph, destination, _pages(graph, destination, group_nodes(graph)))
-
-
 def _publication_contexts(
     graph: Graph,
     destination: Path,
@@ -669,7 +658,6 @@ __all__ = [
     "PROJECT_PAYLOAD",
     "SEARCH_INDEX",
     "graph_page_paths",
-    "publication_contexts",
     "render_legend",
     "render_legend_tip",
     "scope_page_href",

@@ -55,18 +55,10 @@ def test_root_readme_uses_the_canonical_repository(repo_root: Path) -> None:
     assert "VivienCabannes/autoform-bot" not in readme
 
 
-def test_generated_site_docs_describe_one_multiscale_explorer(repo_root: Path) -> None:
-    cli, review = (
-        " ".join((repo_root / relative).read_text(encoding="utf-8").split())
-        for relative in ("autoform_cli/README.md", "skills/human-review/SKILL.md")
-    )
-
-    assert "one full-page client" in cli
-    assert "Authored Mermaid remains supported in the vault and book" in cli
-    assert "The index `dependencies/index.json`" in cli
+def test_generated_site_docs_keep_internal_view_and_alias_boundaries(repo_root: Path) -> None:
+    cli = " ".join((repo_root / "autoform_cli/README.md").read_text(encoding="utf-8").split())
     assert "other `dependencies/` payloads are internal to this viewer; their schemas may change" in cli
     assert "legacy `#node=<id>`, view and filter links remain aliases, not a second viewer" in cli
-    assert "Every generated site route uses the same" in review
 
 
 def test_integrated_landing_retains_authored_title_with_generated_hide_metadata(tmp_path: Path) -> None:

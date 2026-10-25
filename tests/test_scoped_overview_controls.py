@@ -29,9 +29,9 @@ function original(name) {
   }
   assert.fail('Unparseable production callback: '+name);
 }
-const names=['element','safeHref','graphAt','scopeOverviewProjection','scopeOverviewFlow','recordId','mapNode','adoptGraph',
+const names=['element','readingLabel','refreshReadingLabels','safeHref','graphAt','scopeOverviewProjection','scopeOverviewFlow','recordId','mapNode','adoptGraph',
   'neighborIds','neighborhood','regionProjection','updateProjection','semanticParent','routeTrail',
-  'currentOverviewGroup','trailList','syncNavigationSelection','compactRegions','collect','matchesStatus','calculateActive',
+  'currentOverviewGroup','trailList','renderBreadcrumb','syncNavigationSelection','compactRegions','collect','matchesStatus','calculateActive',
   'syncControls','refresh','activateNode','focusNodeControl','setSheet','writeLocation','setMode','zoomAt','closeSearch'];
 const constants=['NODE_W','SEARCH_PAGE','clamp','plural'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0,'Missing production constant: '+name);
