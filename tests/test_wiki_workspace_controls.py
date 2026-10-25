@@ -123,7 +123,7 @@ function renderStatusFields(){}function renderNavigation(){}function calculateAc
 function compactRegions(){return false;}function syncNavigationSelection(){}
 function ensureGlobalSearch(){}function fit(){}function revealAll(){}function openResults(){}
 function pointerDown(){}function pointerMove(){}function pointerUp(){}function resize(){}
-function syncSheetAccessibility(){}function schedule(){}function remember(){}
+function syncSheetAccessibility(){}function schedule(){}function remember(){}function sheetLayout(){return false;}
 function closeSearch(){}function setFilters(){}
 function setMode(mode,push) {
   assert.equal(dom$browsePopover.hidden,true,'Browse choices must close before mode dispatch');

@@ -1734,7 +1734,7 @@
         if (data.$wikiEdges && data.$wikiEdges.length) {
           var local = sceneData === data && scene && scene.$wikiRoutes;
           dom$mapKey.appendChild(element("span", "bp-map-key-wiki", (local && local.omitted ? "Concept links: " + num(local.total - local.omitted) + " of " +
-            num(local.total) + " on this map" : "Concept links") + (ui$wikiView && ui$wikiView.availability === "partial" ? ", some pages unread" : "")));
+            num(local.total) + (sheetLayout() ? "" : " on this map") : "Concept links") + (ui$wikiView && ui$wikiView.availability === "partial" ? ", some pages unread" : "")));
         }
         if (ui$wikiView && ui$wikiView.availability === "unavailable") dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Concept links unavailable"));
         if (data.$wikiEdges && data.$wikiEdges.some(function (edge) { return !wikiOwnerVisible(byId.get(edge.source), ui$selectedStatuses) || !wikiOwnerVisible(byId.get(edge.target), ui$selectedStatuses); }))

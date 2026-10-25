@@ -418,6 +418,7 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated.bp-dag-sheet-open .bp-dag-stage::before, .bp-dag-integrated.bp-dag-sheet-open .bp-dag-stage::after { display: none; }
   .bp-dag-integrated .bp-map-key { left: 16px; overflow: hidden; white-space: nowrap; }
   .bp-dag-integrated .bp-map-key span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .bp-dag-integrated :is(.bp-map-key-statement, .bp-map-key-proof) { flex: none; }
   .bp-dag-integrated.bp-dag-sheet-full .bp-reading-map { display: block; position: absolute; z-index: 3; bottom: 16px; left: 50%; padding: 10px 24px; border: 1px solid var(--dag-overlay-border); border-radius: 999px; background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 14px; font-weight: 600; box-shadow: var(--dag-e2); transform: translateX(-50%); cursor: pointer; }
   .bp-dag-integrated .bp-reading-body { padding: 20px 22px 60px; }
   .bp-dag-integrated .bp-reading-neighbors { max-height: 136px; }
