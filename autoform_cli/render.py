@@ -2194,6 +2194,8 @@ def _render_landing_page(
     heading = _first_h1(text) or ""
     title = rendered_visible_text(heading) or "Blueprint"
     scopes = graph_views.group_nodes(graph)
+    book = graph_pages.book_contents(graph, scopes) if scopes else None
+    book_href = _as_published(relative_link(destination / book, page, ".html")) if book else None
     hero = _render_hero(
         title,
         body,
@@ -2204,6 +2206,8 @@ def _render_landing_page(
             relative_link(destination / coverage.source_path, page, ".html")
         ),
         rail=bool(scopes),
+        # The explorer's list view, filtered to the states the figure counts.
+        ready_href=f"{book_href}#view=list&status=can_state,can_prove" if book_href else None,
     )
     next_up = _next_target(
         graph,
@@ -2225,14 +2229,13 @@ def _render_landing_page(
         "  - navigation",
         "  - toc",
     ]
-    if scopes:
-        book = graph_pages.book_contents(graph, scopes)
+    if book:
         # Without a roadmap contents page the book starts here.
         book_link = (
             ""
             if book == Path("README.md")
             else '<a class="bp-intro-book" href="'
-            + html.escape(_as_published(relative_link(destination / book, page, ".html")), quote=True)
+            + html.escape(book_href, quote=True)
             + '">Read the book</a>'
         )
         # The shared shell is attached after all full reading content is final.
@@ -2291,6 +2294,7 @@ def _render_hero(
     coverage: CoverageSummary,
     coverage_href: str,
     rail: bool = False,
+    ready_href: str | None = None,
 ) -> str:
     """Open with the project's name, its one-line claim, and where it stands.
 
@@ -2299,7 +2303,8 @@ def _render_hero(
     reader has finished the title, which is the only question the top of a
     blueprint has to answer. In the explorer's narrow rail (*rail*) the
     stylesheet keeps only the first two figures, so the topic and inventory
-    counts also come as one plain line under them.
+    counts also come as one plain line under them. With *ready_href* the
+    ready figure links the list of what it counts.
     """
     leaves = _countable(graph)
     selected = {node_id: statuses[node_id] for node_id in leaves}
@@ -2320,7 +2325,9 @@ def _render_hero(
     # prove"; each note says in plain words what the number counts.
     figures = [
         ("Fully proved", f"{share}%", f"{done} of {total} {article_label}", False),
-        ("Ready to start", str(actionable), "nothing they need is blocked", False),
+        ("Ready to start", str(actionable), "nothing they need is blocked", False)
+        if actionable
+        else ("Nothing is ready right now", "", "", False),
     ]
     # The figure counts every catalog, checked or not; a project without
     # catalogs has no inventory to report.
@@ -2335,13 +2342,17 @@ def _render_hero(
         )
     chapters = len(graph_views.group_nodes(graph))
     figures.append(("Topics", str(chapters), "top-level parts of the book", False))
-    stats = "".join(
-        f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">'
-        f'<div class="bp-figure-value">{value}</div>'
-        f'<div class="bp-figure-label">{html.escape(label)}</div>'
-        f'<div class="bp-figure-note">{html.escape(note)}</div></div>'
-        for label, value, note, neutral in figures
-    )
+    def figure(label: str, value: str, note: str, neutral: bool) -> str:
+        inner = (
+            (f'<div class="bp-figure-value">{value}</div>' if value else "")
+            + f'<div class="bp-figure-label">{html.escape(label)}</div>'
+            + (f'<div class="bp-figure-note">{html.escape(note)}</div>' if note else "")
+        )
+        if label == "Ready to start" and ready_href:
+            return f'<a class="bp-figure bp-figure-link" href="{html.escape(ready_href, quote=True)}">{inner}</a>'
+        return f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">{inner}</div>'
+
+    stats = "".join(figure(*entry) for entry in figures)
     counts = [f"{chapters} {'topic' if chapters == 1 else 'topics'}"]
     if inventory_count:
         counts.append(f"{inventory_count} module {'inventory' if inventory_count == 1 else 'inventories'}")
@@ -4018,6 +4029,11 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   letter-spacing: 0.01em;
 }}
 .bp-figure-note {{ margin-top: 0.15rem; font-size: 0.7rem; color: var(--bp-muted); }}
+/* The ready figure opens the list of what it counts; it keeps the figure's
+   colours and shows it is a link by underlining its label. */
+.md-typeset a.bp-figure-link,
+.md-typeset a.bp-figure-link:is(:visited, :hover, :focus-visible) {{ color: var(--bp-fg); text-decoration: none; }}
+.md-typeset a.bp-figure-link:is(:hover, :focus-visible) .bp-figure-label {{ text-decoration: underline; }}
 
 .bp-hero-bar {{
   margin-top: 1rem;

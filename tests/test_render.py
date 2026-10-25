@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import errno
 import hashlib
+import html
 import json
 import logging
 import os
@@ -795,8 +796,9 @@ def test_overview_carries_the_counts_without_a_separate_progress_page(tmp_path: 
     assert 'class="bp-figure-value"' in overview
     assert '<div class="bp-figure-label">Fully proved</div>' in overview
     assert '<div class="bp-figure-note">2 of 2 articles</div>' in overview
-    assert '<div class="bp-figure-label">Ready to start</div>' in overview
-    assert '<div class="bp-figure-note">nothing they need is blocked</div>' in overview
+    # Everything is proved, so nothing is ready and there is no list to open.
+    assert '<div class="bp-figure"><div class="bp-figure-label">Nothing is ready right now</div></div>' in overview
+    assert "bp-figure-link" not in overview
     assert '<div class="bp-figure-label">Topics</div>' in overview
     # The figures speak the reader's nouns, not the authoring tool's.
     for retired in ("Scoped roadmap", "Ready now", "targets complete", "top-level milestones", "coverage contract</a>"):
@@ -854,6 +856,29 @@ def test_statement_only_theorems_never_count_as_complete(tmp_path: Path) -> None
     render_site(project / "blueprint", tmp_path / "ready", lean_root=project)
     ready = (tmp_path / "ready/README.md").read_text(encoding="utf-8")
     assert '<div class="bp-figure-note">2 of 3 articles</div>' in ready
+
+
+def test_the_ready_figure_links_the_list_of_exactly_what_it_counts(tmp_path: Path) -> None:
+    """The figure opens the explorer's list filtered to the states it counts."""
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "next.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Next\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    )
+    (roadmap / "later.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Later\n\n## Depends on\n\n- [Next](next.md)\n", encoding="utf-8"
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    index = json.loads((tmp_path / "out/dependencies/index.json").read_text(encoding="utf-8"))
+    ready = [r["id"] for r in index["nodes"] if r.get("result") and r["status"] in {"can_prove", "can_state"}]
+    assert ready == ["next"]
+    link = re.search(r'<a class="bp-figure bp-figure-link" href="([^"]+)"><div class="bp-figure-value">([^<]+)</div>', overview)
+    assert link is not None
+    assert html.unescape(link.group(1)) == "roadmap/index.html#view=list&status=can_state,can_prove"
+    assert int(link.group(2).replace(",", "")) == len(ready)
 
 
 def test_completion_requires_every_dependency_to_be_fully_proved(tmp_path: Path) -> None:
@@ -1077,10 +1102,8 @@ def test_partial_module_catalog_is_not_reported_as_dispatchable_work(tmp_path: P
     render_site(project / "blueprint", tmp_path / "out")
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert (
-        '<div class="bp-figure-value">0</div>'
-        '<div class="bp-figure-label">Ready to start</div>'
-    ) in overview
+    assert '<div class="bp-figure-label">Nothing is ready right now</div>' in overview
+    assert "bp-figure-link" not in overview
 
 
 def test_the_module_inventory_figure_counts_inventories_and_hides_at_zero(tmp_path: Path) -> None:
@@ -3083,7 +3106,7 @@ def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path
     assert '<div class="bp-figure-note">0 of 0 articles</div>' in overview
     assert "items settled" not in overview
     assert '<div class="bp-figure-value">0%</div>' in overview
-    assert '<div class="bp-figure-value">0</div>' in overview
+    assert '<div class="bp-figure-label">Nothing is ready right now</div>' in overview
     # The shared shell exists even before any mathematical work is planned.
     # Its empty graph and result index must not invent ready work.
     assert overview.count('class="bp-dag-viewer"') == overview.count('class="bp-reading-source"') == 1
