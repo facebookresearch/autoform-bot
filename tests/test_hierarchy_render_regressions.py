@@ -259,7 +259,7 @@ def test_same_named_leaf_slots_are_scoped_to_their_container(tmp_path: Path) -> 
     for chapter in ("a", "b"):
         rendered = (output / f"roadmap/{chapter}/README.md").read_text(encoding="utf-8")
         assert f"Statement {chapter.upper()}." in rendered
-        assert "Additional formalization targets" not in rendered
+        assert "Other statements" not in rendered
 
 
 def test_render_preserves_fragment_on_container_article_link(tmp_path: Path) -> None:

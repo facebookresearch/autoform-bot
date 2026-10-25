@@ -544,7 +544,7 @@ def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -
     assert "###### Sources" in page
     assert "\n## Sources" not in page
     assert "## Depends on" not in page
-    assert "Additional formalization targets" not in page
+    assert "Other statements" not in page
 
 
 def test_a_one_statement_chapter_leaves_its_status_to_the_card(tmp_path: Path) -> None:
@@ -580,7 +580,7 @@ def test_inline_triple_backticks_do_not_hide_the_chapter_structure(tmp_path: Pat
 
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert page.index('class="bp-progress-overview"') < page.index("## Definitions") < page.index('id="base"')
-    assert "Additional formalization targets" not in page
+    assert "Other statements" not in page
 
 
 def test_unplaced_statements_use_an_explicit_fallback_section(tmp_path: Path) -> None:
@@ -594,8 +594,8 @@ def test_unplaced_statements_use_an_explicit_fallback_section(tmp_path: Path) ->
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
 
-    assert page.index('id="top"') < page.index("## Additional formalization targets")
-    assert page.index("## Additional formalization targets") < page.index('id="base"')
+    assert page.index('id="top"') < page.index("## Other statements")
+    assert page.index("## Other statements") < page.index('id="base"')
 
 
 def test_a_bullet_with_a_bracket_before_its_link_keeps_its_prose(tmp_path: Path) -> None:
@@ -611,7 +611,7 @@ def test_a_bullet_with_a_bracket_before_its_link_keeps_its_prose(tmp_path: Path)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
 
     assert "- [Hartshorne II.3] constructs [Base](#base)\n- [x] [Top](#top)\n" in page
-    assert page.index("## Additional formalization targets") < page.index('id="base"')
+    assert page.index("## Other statements") < page.index('id="base"')
 
 
 def test_a_label_holding_half_open_math_is_still_a_link(tmp_path: Path) -> None:
@@ -638,7 +638,7 @@ def test_a_label_holding_half_open_math_is_still_a_link(tmp_path: Path) -> None:
     page = (tmp_path / "out/roadmap/ch/README.md").read_text(encoding="utf-8")
 
     assert "bp-book-nav" in page
-    assert "Additional formalization targets" not in page
+    assert "Other statements" not in page
     assert "- [Lemma on $(0,1]$](../../sources/paper.md)\n" in page
 
 
@@ -874,7 +874,7 @@ def test_module_catalog_is_separate_from_formalization_progress(
     assert "<strong>2</strong> of 2 fully proved" in chapter
     # No slot places the catalog, and it is no formalization target.
     assert chapter.index("## Module inventories") < chapter.index('id="catalog"')
-    assert "Additional formalization targets" not in chapter
+    assert "Other statements" not in chapter
 
 
 def test_catalog_slot_with_bracketed_inline_code_is_absorbed(
@@ -914,7 +914,7 @@ def test_catalog_slot_with_bracketed_inline_code_is_absorbed(
     assert "A checked inventory with bracketed mathematics in its title." in chapter
     assert chapter.index("## Existing modules") < chapter.index('id="catalog"')
     assert "- [Existing module on" not in chapter
-    assert "## Additional formalization targets" not in chapter
+    assert "## Other statements" not in chapter
     assert "## Module inventories" not in chapter
 
 

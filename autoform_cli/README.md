@@ -17,7 +17,7 @@ directory path, and the root article's is `roadmap`.
 
 The H1 is the article's title. Container prose is the exposition; a standalone
 list item linking to a formalizable leaf places the leaf there in the published
-chapter. Unplaced leaves appear under “Additional formalization targets”,
+chapter. Unplaced leaves appear under “Other statements”,
 unplaced module catalogs under “Module inventories”. Keep the root article a
 short preface and table of contents, not an inventory of every milestone: large
 inventories belong in coverage, and a detailed container introduces its

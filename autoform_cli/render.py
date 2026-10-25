@@ -2891,7 +2891,7 @@ def _render_chapter(
     placed = set(slots.values())
     remaining = [node_id for node_id in node_ids if node_id not in placed]
     # A catalog inventories Lean that already exists, so it is no formalization target.
-    for heading, catalog in (("Additional formalization targets", None), ("Module inventories", "module")):
+    for heading, catalog in (("Other statements", None), ("Module inventories", "module")):
         section = [environments[node_id] for node_id in remaining if graph.nodes[node_id].catalog == catalog]
         if section:
             chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(section)
