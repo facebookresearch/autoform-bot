@@ -106,6 +106,7 @@ from .lean import (
 from .markdown import (
     _BRACKET_ESCAPE,
     _INLINE_MATH,
+    FORMULA_CLASS,
     GENERATED_VIEWS,
     INLINE_CODE,
     NOTES_BOX,
@@ -2377,16 +2378,47 @@ def _lead_sentence(body: str) -> str:
         line = block.strip()
         if not line or line.startswith(("#", "-", "*", "<", "|", ">", "!")):
             continue
-        sentence = line.split(". ")[0].rstrip(".").replace("\n", " ")
+        # A link keeps its words only: its target is relative to blueprint/.
+        text = re.sub(r"(?<!!)\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)", r"\1", line.replace("\n", " "))
+        formulas = [match for match in _INLINE_MATH.finditer(text) if match.group(3) or match.group(6)]
+        sentence = text
+        for stop in re.finditer(r"\.\s+(?=[A-Z])", text):
+            before = text[: stop.start()]
+            word = (before.split() or [""])[-1].lstrip("(").lower()
+            if (
+                word in _LEAD_ABBREVIATIONS
+                or (len(word) == 1 and word.isalpha())
+                or any(match.start() <= stop.start() < match.end() for match in formulas)
+            ):
+                continue
+            sentence = before
+            break
+        sentence = sentence.rstrip(".")
         # The hero is raw HTML, so Markdown never runs over it and a title in
         # *emphasis* would otherwise show its asterisks. Escaping first means
-        # the substitutions below can only ever produce these two tags.
-        safe = html.escape(sentence)
-        safe = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", safe)
-        safe = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", safe)
-        safe = re.sub(r"`([^`]+)`", r"<code>\1</code>", safe)
-        return safe + "."
+        # the substitutions below can only ever produce these tags, and a
+        # formula becomes the span the page's MathJax already typesets.
+        shown, start = [], 0
+        for match in (match for match in formulas if match.end() <= len(sentence)):
+            shown.append(_lead_text(sentence[start : match.start()]))
+            formula = html.escape(match.group(3) or match.group(6))
+            shown.append(f'<span class="{FORMULA_CLASS}">\\({formula}\\)</span>')
+            start = match.end()
+        return "".join(shown) + _lead_text(sentence[start:]) + "."
     return ""
+
+
+def _lead_text(text: str) -> str:
+    """Escaped lead prose with its emphasis and code shown as tags."""
+    safe = html.escape(text)
+    safe = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", safe)
+    safe = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", safe)
+    return re.sub(r"`([^`]+)`", r"<code>\1</code>", safe)
+
+
+#: Words whose period does not end the hero's sentence.
+_LEAD_ABBREVIATIONS = frozenset({"i.e", "e.g", "cf", "ch", "thm"})
+
 
 def _render_overview_summary(
     graph: Graph,

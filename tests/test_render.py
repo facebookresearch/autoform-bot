@@ -1139,6 +1139,22 @@ def test_the_rail_hero_keeps_two_figures_a_counts_line_and_the_coverage_link(tmp
     assert "last-child:nth-child(odd)" not in css
 
 
+@pytest.mark.parametrize(("readme", "lead"), [
+    (
+        "# Zeta\n\nThis formalizes the preprint ([Zenodo 1](https://zenodo.org/records/1)), which claims more. Next.\n",
+        "This formalizes the preprint (Zenodo 1), which claims more.",
+    ),
+    ("# Rings\n\nA ring, i.e. A unital one, is commutative here. Later prose.\n", "A ring, i.e. A unital one, is commutative here."),
+    (
+        "# Zeta\n\nWe prove $\\zeta(7) < 2$ is irrational. Later prose.\n",
+        'We prove <span class="arithmatex">\\(\\zeta(7) &lt; 2\\)</span> is irrational.',
+    ),
+])
+def test_the_hero_lead_is_the_whole_first_sentence_as_readable_html(readme: str, lead: str) -> None:
+    """The README's raw Markdown link brackets and formulas never reach the hero, and abbreviations do not end it."""
+    assert render_module._lead_sentence(readme) == lead
+
+
 def test_the_legends_beside_the_explorer_count_what_its_rings_count(tmp_path: Path) -> None:
     """The legend beside a ring counts what the ring counts.
 

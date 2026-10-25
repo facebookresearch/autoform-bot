@@ -282,7 +282,8 @@ def test_render_preserves_fragment_on_container_article_link(tmp_path: Path) -> 
 
     rendered = (output / "README.md").read_text(encoding="utf-8")
     rendered_chapter = (output / "roadmap/chapter/README.md").read_text(encoding="utf-8")
-    assert "roadmap/chapter/README.md#details" in rendered
+    # The landing page publishes only its hero, whose lead keeps a link's words, not its target.
+    assert '<p class="bp-hero-lead">Details.</p>' in rendered
     assert "[Jump](#details)" in rendered_chapter
     assert "##details" not in rendered_chapter
 
