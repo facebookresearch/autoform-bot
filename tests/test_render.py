@@ -918,8 +918,10 @@ def test_completion_requires_every_dependency_to_be_fully_proved(tmp_path: Path)
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
     assert '<div class="bp-figure-note">0 of 1 statement</div>' in overview
     assert '<div class="bp-figure-value">0%</div>' in overview
-    # Nothing is ready, so the second figure says so and opens no list.
-    assert '<div class="bp-figure"><div class="bp-figure-label">Nothing is ready right now</div></div>' in overview
+    # Nothing is ready, so the second figure is a label alone and opens no list.
+    second = overview.split('class="bp-hero-figures">', 1)[1].split('<div class="bp-figure">')[2]
+    assert re.match(r'<div class="bp-figure-label">[^<]+</div></div></div>', second)
+    assert "Ready to start" not in overview
     assert "bp-figure-link" not in overview
 
 
