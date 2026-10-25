@@ -1278,7 +1278,7 @@ def test_a_contents_query_lists_only_this_scope(desktop_page: object, explorer_c
     _browse_contents(page, "Statements in this topic")
     search.fill("theorem")
     playwright.expect(page.locator(".bp-dag-inventory-title")).to_have_text(["Target theorem"])
-    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 result · search the whole roadmap")
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 statement · search the whole roadmap")
     results = page.locator(".bp-dag-search-results")
     playwright.expect(results).to_be_hidden()
     search.press("ArrowDown")
@@ -1405,7 +1405,7 @@ def test_direct_list_view_has_current_shown_and_hidden_counts(desktop_page: obje
     page.goto(explorer_consumer.url + "/dependencies/chapters/chapter.html#view=list&status=fully_proved")
     _consumer_ready(page, explorer_consumer)
     playwright.expect(page.locator(".bp-dag-inventory")).to_be_visible()
-    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 result")
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 statement")
     playwright.expect(page.locator(".bp-dag-hidden-button")).to_have_text("Show 62 filtered out")
     playwright.expect(page.locator(".bp-dag-inventory-row")).to_have_count(1)
 
@@ -1820,7 +1820,7 @@ def test_contents_start_right_of_the_open_details(desktop_page: object, site_url
     row = inventory.locator('.bp-dag-inventory-row[aria-current="true"]')
     playwright.expect(row).to_contain_text("Result")
     playwright.expect(inventory.locator(".bp-dag-inventory-title")).to_have_text(["Base", "Result"])
-    playwright.expect(inventory.locator(".bp-dag-inventory-summary")).to_have_text("2 results")
+    playwright.expect(inventory.locator(".bp-dag-inventory-summary")).to_have_text("2 statements")
     reader = page.locator(".bp-reading-pane").bounding_box()
     assert reader is not None
     for item in (inventory.locator(".bp-dag-inventory-head h2"), row, row.locator(".bp-dag-inventory-title")):
@@ -2870,7 +2870,7 @@ def test_details_read_as_mathematics_not_as_instructions(desktop_page: object, e
         playwright.expect(_reading_card(page, "chapter/target")).to_contain_text("Final sentence of the complete target statement.")
 
 
-@pytest.mark.parametrize(("name", "counts"), (("mixed", "4 results"), ("flat", "100 of 1,000")))
+@pytest.mark.parametrize(("name", "counts"), (("mixed", "4 statements"), ("flat", "100 of 1,000")))
 def test_the_rail_counts_in_words_that_agree_with_their_numbers(
     desktop_page: object, explorer_consumer: _ExplorerConsumer, name: str, counts: str,
 ) -> None:
@@ -2884,7 +2884,7 @@ def test_the_rail_counts_in_words_that_agree_with_their_numbers(
     assert len(graph["edges"]) == (1 if name == "mixed" else 0)
     if name == "mixed":
         page.locator(".bp-dag-search").fill("mixed/a")
-        playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 result · search the whole roadmap")
+        playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 statement · search the whole roadmap")
     else:
         page.locator(".bp-dag-inventory > .bp-dag-load-more").click()
         playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("200 of 1,000")
@@ -2922,10 +2922,10 @@ def test_the_toolbar_counts_only_what_it_hides_and_shows_it_on_request(
     _consumer_ready(page, explorer_consumer)
     reveal, summary = page.locator(".bp-dag-hidden-button"), page.locator(".bp-dag-inventory-summary")
     playwright.expect(reveal).to_have_text("Show 62 filtered out")
-    playwright.expect(summary).to_have_text("1 result")
+    playwright.expect(summary).to_have_text("1 statement")
     reveal.click()
     playwright.expect(reveal).to_be_hidden()
-    playwright.expect(summary).to_have_text("63 results")
+    playwright.expect(summary).to_have_text("63 statements")
     playwright.expect(page.locator(".bp-dag-inventory-row")).to_have_count(63)
     page.goto(explorer_consumer.url + "/dependencies/chapters/chapter.html#view=list&status=-")
     _consumer_ready(page, explorer_consumer)

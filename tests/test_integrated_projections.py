@@ -358,7 +358,7 @@ def test_an_oversized_module_scope_keeps_its_real_math_articles_navigable_withou
       assert(!articles.some(node => ['catalogs', 'catalogs/note', 'catalogs/source'].includes(node.id)));
       assert(!articles.some(node => node.id.startsWith('chapter/')), 'Scoped inventory must not leak other results');
       renderInventory(true);
-      assert.equal(dom$inventory.querySelector('h2').textContent, 'Results & articles');
+      assert.equal(dom$inventory.querySelector('h2').textContent, 'Statements & articles');
       assert.equal(dom$inventorySummary.textContent, '100 of ' + fixture.count);
       assert.equal(dom$inventoryList.children.length, 100);
       assert.equal(dom$loadMore.hidden, false);

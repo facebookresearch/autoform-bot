@@ -1751,7 +1751,7 @@
       dom$graphMode.disabled = !ui$mapAllowed;
       // A disabled Back to map says why the map is unavailable.
       if (ui$mapAllowed) dom$graphMode.removeAttribute("title"); else dom$graphMode.title = "Too many statements to draw as a map";
-      if (navigation) dom$inventory.querySelector("h2").textContent = ui$mode === "sources" ? "Source tracks" : "Results";
+      if (navigation) dom$inventory.querySelector("h2").textContent = ui$mode === "sources" ? "Source tracks" : "Statements";
     }
 
     function collect(start, adjacency) {
@@ -2557,7 +2557,8 @@
       if (!dom$inventoryList || ui$mode === "graph") return;
       var nodes = inventoryNodes(), visible = nodes.slice(0, ui$listLimit); dom$inventoryList.textContent = "";
       var articles = nodes.some(function (node) { return node.catalog === "module"; });
-      if (navigation && ui$mode !== "sources") dom$inventory.querySelector("h2").textContent = articles ? "Results & articles" : "Results";
+      // The list says "statements", as Browse and the dashboard do.
+      if (navigation && ui$mode !== "sources") dom$inventory.querySelector("h2").textContent = articles ? "Statements & articles" : "Statements";
       dom$inventoryRows = new Map();
       visible.forEach(function (node) {
         var item = element("li"), row = button("bp-dag-inventory-row", "");
@@ -2573,8 +2574,8 @@
       // A count, or "N of M" while a page or a filter shows fewer.
       var shown = visible.length < nodes.length ? visible : nodes, total = nodes;
       dom$inventorySummary.textContent = shown.length < total.length ? num(shown.length) + " of " +
-        num(total.length) : plural(total.length, ui$mode === "sources" ? "source" : articles ? "article" : "result",
-          ui$mode === "sources" ? "sources" : articles ? "articles" : "results");
+        num(total.length) : plural(total.length, ui$mode === "sources" ? "source" : articles ? "article" : "statement",
+          ui$mode === "sources" ? "sources" : articles ? "articles" : "statements");
       if (ui$query && host.getAttribute("data-catalog-src")) {
         dom$inventorySummary.appendChild(document.createTextNode(" · ")); dom$inventorySummary.appendChild(dom$wholeSearch);
       }

@@ -138,7 +138,7 @@ def test_show_all_related_enters_list_with_every_original_result() -> None:
       assert.equal(dom$inventoryRows.size,0);ui$relationIds=results.slice(1,8).map(node=>node.id);setMode('list',true);
       assert.equal(ui$mode,'list');assert.equal(dom$inventory.hidden,false);
       assert.deepEqual(rowIds(),results.slice(1,8).map(node=>node.id));assert.equal(dom$inventoryRows.size,7);
-      assert.equal(dom$inventorySummary.textContent,'7 results');assert.equal(dom$loadMore.hidden,true);
+      assert.equal(dom$inventorySummary.textContent,'7 statements');assert.equal(dom$loadMore.hidden,true);
       assert.deepEqual(ui$relationIds,results.slice(1,8).map(node=>node.id));
     """)
 
@@ -165,9 +165,9 @@ def test_deferred_inventory_still_applies_query_and_status_without_truncating_th
     _run(r"""
       const before=JSON.stringify(indexNodes);ui$query='Result 130';refresh(true);
       assert.equal(dom$inventoryRows.size,0);setMode('list',true);
-      assert.deepEqual(rowIds(),['result-130']);assert.equal(dom$inventorySummary.textContent,'1 result');
+      assert.deepEqual(rowIds(),['result-130']);assert.equal(dom$inventorySummary.textContent,'1 statement');
       ui$query='';ui$selectedStatuses=new Set(['fully_proved']);refresh(true);
-      assert.equal(dom$inventoryRows.size,75);assert.equal(dom$inventorySummary.textContent,'75 results');
+      assert.equal(dom$inventoryRows.size,75);assert.equal(dom$inventorySummary.textContent,'75 statements');
       assert(rowIds().every(id=>records.get(id).status==='fully_proved'));
       assert.equal(sharedIndex.nodes.length,155);assert.equal(JSON.stringify(indexNodes),before);
     """)

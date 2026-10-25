@@ -1040,7 +1040,7 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
     assert sorted(titles) == sorted(_SOURCE_TITLES)
     assert site.records["source-notes"]["title"] not in titles
     _browse_contents(page, "All statements")
-    playwright.expect(page.locator(".bp-dag-inventory-head h2")).to_have_text("Results")
+    playwright.expect(page.locator(".bp-dag-inventory-head h2")).to_have_text("Statements")
     playwright.expect(pressed).to_have_count(1)
     playwright.expect(pressed).to_have_text("All statements")
     assert _TARGET_TITLE in page.locator(".bp-dag-inventory-title").all_text_contents()
@@ -1624,7 +1624,7 @@ def test_graph_first_browse_is_contextual_keyboard_closable_and_returns_to_the_s
     rows = page.locator(".bp-dag-inventory-row")
     playwright.expect(rows).to_have_count(1)
     assert set(rows.evaluate_all("nodes => nodes.map(node => node.dataset.inventoryNodeId)")) == expected
-    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 result")
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 statement")
     assert page.url == site.route(scope["id"])
     page.get_by_role("button", name="Back to map", exact=True).click()
     playwright.expect(stage).to_be_visible()
