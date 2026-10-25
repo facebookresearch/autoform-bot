@@ -980,16 +980,17 @@ def test_long_ancestor_labels_and_full_reading_heading_stay_within_their_panes(
     playwright.expect(heading).to_have_text(_DEEP_TITLE)
     assert heading.evaluate("heading => heading.scrollWidth <= heading.clientWidth + 1") is True
     assert page.locator(".bp-dag-head").evaluate("head => head.scrollWidth <= head.clientWidth + 1") is True
-    # The four-deep trail reads first / … / parent / current; the "…" names the ancestor it hides.
+    # The four-deep trail fits its row, so it shows every crumb, the long ancestor cut short with an ellipsis rather than folded into "…".
     crumbs = page.locator(".bp-dag-breadcrumb li")
     playwright.expect(crumbs).to_have_count(4)
     playwright.expect(crumbs.nth(0)).to_have_text(_LIBRARY)
     playwright.expect(crumbs.nth(1)).to_have_attribute("title", _ANCESTOR)
-    playwright.expect(crumbs.nth(1).locator(".bp-dag-sr-only")).to_have_text(_ANCESTOR)
+    playwright.expect(crumbs.nth(1)).to_have_text(_ANCESTOR)
+    playwright.expect(page.locator(".bp-dag-breadcrumb .bp-dag-sr-only")).to_have_count(0)
     playwright.expect(crumbs.nth(3)).to_have_text(_TARGET_TITLE)
     playwright.expect(crumbs.nth(3)).to_have_attribute("aria-current", "page")
     if width <= 720:
-        # A phone keeps the first crumb, the parent and the current page; the "…" gives way.
+        # A phone keeps the first crumb, the parent and the current page.
         playwright.expect(crumbs.nth(1)).to_be_hidden()
         playwright.expect(crumbs.nth(2)).to_be_visible()
     else:
@@ -1377,7 +1378,8 @@ def test_verified_concept_links_have_native_direction_navigation_back_and_known_
     # The already-verified layer makes its empty disclosure genuinely known.
     assert not any(_BASE in pair for pair in site.wiki_pairs)
     base = page.locator(f'.bp-reading-body .bp-thmwrapper[data-autoform-node-id="{_BASE}"]')
-    permalink = base.get_by_role("link", name="#", exact=True)
+    # The permalink shows "#" and is named for the statement it links to.
+    permalink = base.get_by_role("link", name=re.compile(r"^Link to "))
     playwright.expect(permalink).to_have_attribute("href", site.route(_BASE))
     permalink.click()
     page.wait_for_url(site.route(_BASE))
@@ -1530,7 +1532,7 @@ def test_authored_concept_families_pack_real_owner_cards_and_keep_native_focus_m
     playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Identity C")
     target_card = page.locator(f'.bp-reading-body .bp-thmwrapper[data-autoform-node-id="{target}"]')
     playwright.expect(target_card).to_have_count(1)
-    permalink = target_card.get_by_role("link", name="#", exact=True)
+    permalink = target_card.get_by_role("link", name=re.compile(r"^Link to "))
     playwright.expect(permalink).to_have_attribute("href", site.route(target))
     permalink.click()
     page.wait_for_url(site.route(target))
