@@ -540,6 +540,11 @@ def _cluster_segment_hits(a: list[float], b: list[float], box: dict) -> bool:
 
 def _cluster_readable_owner(page: object, identifier: str) -> object:
     control = _focus_graph_node(page, identifier)
+    observed = control.get_attribute("data-autoform-node-id")
+    assert observed == identifier
+    # The keyboard helper returns :focus. Retain the observed card's identity
+    # before a native canvas pan transfers focus away from that card.
+    control = page.locator(f'.bp-dag-node[data-autoform-node-id="{observed}"]')
     # Keyboard centering and its tabstop paint finish on separate frames.
     # Observe the actual usable control, not a fixed number of rAF callbacks.
     page.wait_for_function("""id => {
@@ -1120,7 +1125,9 @@ def test_isolated_topic_link_opens_connected_result_and_its_real_edge(
     playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-dag-ready", "true")
     playwright.expect(page.locator(".bp-dag-viewer")).not_to_have_attribute("aria-busy", "true")
     _frames(page)
-    playwright.expect(page.locator(f'.bp-dag-node[data-autoform-node-id="{_ISOLATED}"]')).to_be_visible()
+    isolate_control = _focus_graph_node(page, _ISOLATED)
+    playwright.expect(isolate_control).to_be_visible()
+    assert _cluster_native_box(isolate_control)["hit"] is True
     status = page.get_by_role("button", name=re.compile(r"^Status\b"))
     status.click()
     playwright.expect(status).to_have_attribute("aria-expanded", "true")
