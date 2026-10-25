@@ -409,6 +409,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated .bp-dag-toolbar { position: relative; }
   .bp-dag-integrated .bp-dag-browse { position: static; }
   .bp-dag-integrated .bp-dag-browse-popover { left: 12px; right: 12px; width: auto; max-width: none; }
+  /* A list has no map to zoom, and a phone's row has no room to keep the zoom buttons' place beside Back to map. */
+  .bp-dag-viewer.bp-dag-integrated:has(.bp-dag-stage[hidden]) .bp-dag-zoom { display: none; }
   .bp-dag-integrated .bp-dag-book { margin-right: 10px; max-width: 150px; }
 }
 @media (prefers-reduced-motion: reduce) { .bp-dag-integrated .bp-reading-pane { transition: none; } }

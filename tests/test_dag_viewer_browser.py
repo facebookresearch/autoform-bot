@@ -2964,11 +2964,15 @@ def test_a_phone_toolbar_keeps_its_controls_on_one_row_under_search(desktop_page
     page = desktop_page
     page.set_viewport_size({"width": 390, "height": 844})
     _open_consumer(page, explorer_consumer)
-    rows = page.evaluate("""() => new Set([...document.querySelector('.bp-dag-toolbar').children]
-      .filter(child => child.getClientRects().length && getComputedStyle(child).visibility !== 'hidden')
-      .map(child => Math.round(child.getBoundingClientRect().top))).size""")
-    assert rows == 2
+    # A child hidden only by visibility still takes its place in the row, so it counts.
+    rows = """() => new Set([...document.querySelector('.bp-dag-toolbar').children]
+      .filter(child => child.getClientRects().length).map(child => Math.round(child.getBoundingClientRect().top))).size"""
+    assert page.evaluate(rows) == 2
     playwright.expect(page.locator(".bp-dag-filter-summary")).to_have_text("Filter: all statuses")
+    # A list adds Back to map and has no map to zoom, and its controls still fit one row.
+    _browse_contents(page, "Statements in this topic")
+    playwright.expect(page.get_by_role("button", name="Back to map", exact=True)).to_be_visible()
+    assert page.evaluate(rows) == 2
 
 def test_a_click_that_opens_details_over_its_card_pans_it_clear(desktop_page: object, site_url: str) -> None:
     """Explicit graph activation keeps its focal theorem visible beside the persistent full reading pane."""
