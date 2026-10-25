@@ -106,7 +106,7 @@ document.createElement=tag=>new Element(tag);
 document.createTextNode=text=>{const node=new Element('text');node.textContent=text;return node;};
 const window=new Element('window'),host=new Element('div'),records=new Map(),modes=[],observers=[];
 const navigation={bindReader(){}};
-var currentBundle={nodeId:'chapter',scope:'chapter',title:'Authored topic',url:'https://example.test/chapter/'};
+var currentBundle={nodeId:'chapter',scope:'chapter',title:'Authored topic',url:'https://example.test/chapter/',graph:{view:{}}};
 var instance=1,trail=[],view={},family,data={title:'Authored topic',nodes:[],edges:[]};
 var mapAllowed=true,ui$mapAllowed=true,ui$mode='graph',ui$selectedStatuses=new Set(['planned']),ui$showIsolated=true;
 var presentStatuses=['planned'],ui$relationIds=new Set(['F']),ui$overviewGroup=null,ui$area=null;
@@ -142,7 +142,8 @@ def _run(body: str) -> None:
 
 def _run_controls(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
-    script += "const controls=['element','button','safeHref','buildShell','bindEvents','setBrowse','syncControls','currentOverviewGroup'].map(original).join('\\n');\n"
+    script += "const controls=['element','button','safeHref','buildShell','bindEvents','setBrowse','syncControls','currentOverviewGroup',"
+    script += "'renderBreadcrumb','routeTrail','semanticParent','refreshReadingLabels'].map(original).join('\\n');\n"
     script += "const start=source.indexOf('    var dom$announcement,');assert(start>=0);\n"
     script += "const domDeclarations=source.slice(start,source.indexOf(';',start)+1);\n"
     program = _CONTROL_PEERS + "\n" + body
@@ -163,7 +164,7 @@ def test_toolbar_keeps_browse_choices_nested_and_back_visible_only_outside_the_g
       assert.strictEqual(dom$sourcesMode.parentElement,dom$browsePopover);
       assert.equal(dom$sourcesMode.textContent,'Source texts');
       assert.equal(dom$listMode.textContent,'Statements in this topic');
-      assert.equal(dom$regionsMode,undefined);
+      assert.equal(typeof dom$regionsMode,'undefined');
       assert(!toolbar.all().some(node=>node.tagName==='BUTTON'&&['Map','Results','Sources','Regions'].includes(node.textContent)));
       assert.equal(dom$graphMode.textContent,'Back to map');assert.equal(dom$graphMode.hidden,true);
       assert.equal(dom$stage.hidden,false);assert.equal(dom$inventory.hidden,true);
