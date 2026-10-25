@@ -633,7 +633,7 @@ def test_connected_project_maps_open_at_readable_scale(
     box = node.bounding_box()
     assert box is not None and box["height"] >= 44
     density = page.locator(".bp-dag-density")
-    playwright.expect(density).to_have_text("Pan or Results to see all 33 items")
+    playwright.expect(density).to_have_text("Pan or Browse to see all 33 items")
     assert density.evaluate(
         "element => ['borderTopStyle','boxShadow','pointerEvents'].map(name => getComputedStyle(element)[name])"
     ) == ["none", "none", "none"]
@@ -642,7 +642,7 @@ def test_connected_project_maps_open_at_readable_scale(
     page.set_viewport_size({"width": 390, "height": 844})
     _close_phone_reading(page)
     _paint_frame(page)
-    playwright.expect(density).to_have_text("Pan or Results to see all 33 items")
+    playwright.expect(density).to_have_text("Pan or Browse to see all 33 items")
     note, sheet = density.bounding_box(), page.locator(".bp-dag-sheet-handle").bounding_box()
     assert note is not None and sheet is not None and note["y"] + note["height"] <= sheet["y"] - 8
     _assert_hit(page, page.locator('.bp-dag-node[tabindex="0"]'))

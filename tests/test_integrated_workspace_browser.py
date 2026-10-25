@@ -1434,10 +1434,14 @@ def test_authored_concept_families_pack_real_owner_cards_and_keep_native_focus_m
     saved = _cluster_native_box(control)
     control.click()
     topic = f"{_CLUSTER_SCOPE}/c"
+    target, base = topic + "/identity", topic + "/base"
     page.wait_for_url(site.route(topic))
     playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Identity C")
-    page.locator(".bp-reading-body").get_by_role("link", name="Zero identity", exact=True).click()
-    target, base = topic + "/identity", topic + "/base"
+    target_card = page.locator(f'.bp-reading-body .bp-thmwrapper[data-autoform-node-id="{target}"]')
+    playwright.expect(target_card).to_have_count(1)
+    permalink = target_card.get_by_role("link", name="#", exact=True)
+    playwright.expect(permalink).to_have_attribute("href", site.route(target))
+    permalink.click()
     page.wait_for_url(site.route(target))
     _selected(page, target)
     card = _full_math(page, target, 1)
