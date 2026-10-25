@@ -306,14 +306,14 @@ def test_small_and_large_chapters_use_the_same_json_explorer(
     assert payload["edge_count"] == node_count - 1
 
 
-def test_the_structure_compatibility_page_opens_the_mathematical_wiki(tmp_path: Path) -> None:
+def test_the_structure_compatibility_page_opens_the_book(tmp_path: Path) -> None:
     """Hierarchy has one public UI, rather than a second repository-sized tree."""
     _render(tmp_path)
     page = (tmp_path / "out/structure.md").read_text(encoding="utf-8")
     summary = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
 
-    assert "# Browse the roadmap" in page
-    assert "[Open the mathematical wiki](roadmap/README.md)" in page
+    assert "# This page moved" in page
+    assert "[Roadmap](roadmap/README.md)" in page
     assert "bp-tree" not in page and "data-autoform-node-id" not in page
     assert "Browse all mathematics" not in summary
     assert "Vault structure" not in summary
@@ -340,7 +340,7 @@ def test_a_flat_roadmap_gets_the_same_bounded_browse_doorway(tmp_path: Path) -> 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     page = (tmp_path / "out/structure.md").read_text(encoding="utf-8")
-    assert "[Open the mathematical wiki](roadmap/README.md)" in page
+    assert "[Roadmap](roadmap/README.md)" in page
     assert "Result a" not in page
 
 
@@ -1093,7 +1093,7 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
     assert '<a class="bp-ref bp-ref-planned" href="#a">Module 1 (Module A)</a>' in book
     assert "ready to state" not in book
     structure = (out / "structure.md").read_text(encoding="utf-8")
-    assert "[Open the mathematical wiki](roadmap/README.md)" in structure
+    assert "[Roadmap](roadmap/README.md)" in structure
     assert "Module A" not in structure
 
 
@@ -1661,7 +1661,7 @@ def test_a_nested_article_named_like_a_generated_view_is_published(tmp_path: Pat
     assert 'id="progress"' in (out / "roadmap/ch/README.md").read_text(encoding="utf-8")
     assert "Prose named like a generated page." in (out / "roadmap/ch/structure.md").read_text(encoding="utf-8")
     vault_structure = (out / "structure.md").read_text(encoding="utf-8")
-    assert "[Open the mathematical wiki](roadmap/README.md)" in vault_structure
+    assert "[Roadmap](roadmap/README.md)" in vault_structure
     assert 'data-autoform-node-id="ch/progress"' not in vault_structure
 
 

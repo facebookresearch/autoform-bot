@@ -2089,29 +2089,28 @@ def _render_structure_page(
     page: Path,
     entry: Path | None = None,
 ) -> str:
-    """Keep the old structure route as a bounded doorway into the mathematical wiki.
+    """Keep the old structure route as a bounded doorway into the book.
 
     The explorer owns hierarchy now. Republishing every source path as one raw
     HTML tree made this compatibility page larger than the rest of a small
     site, duplicated the explorer, and became unusable on repository-scale books.
     """
-    explorer = relative_link(entry or page.parent / "dependencies.md", page, ".md")
+    target = entry or page.parent / "dependencies.md"
+    explorer = relative_link(target, page, ".md")
+    heading = _page_heading(target.read_text(encoding="utf-8")) if target.is_file() else None
     return "\n".join(
         [
             "---",
-            "title: Browse the roadmap",
+            "title: This page moved",
             "search:",
             "  exclude: true",
             "hide:",
             "  - toc",
             "---",
             "",
-            "# Browse the roadmap",
+            "# This page moved",
             "",
-            "The mathematical wiki presents the authored hierarchy and its mathematical",
-            "relations without flattening the repository into a file listing.",
-            "",
-            f"[Open the mathematical wiki]({explorer})",
+            f"The book starts at [{title_text(heading) if heading else 'its contents'}]({explorer}).",
             "",
         ]
     )
