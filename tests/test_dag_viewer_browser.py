@@ -22,6 +22,8 @@ from tests.test_integrated_publication import _decoded_relations
 
 # CI sets this, so a missing browser fails the job instead of skipping every case.
 _REQUIRED = os.environ.get("AUTOFORM_REQUIRE_BROWSER_TESTS") == "1"
+_TITLE_MATH_SCOPE = r"Groups $\ZZ/n$ and code `$literal$`"
+_TITLE_MATH_FOUNDATION = r"Groups $\mathbb{Z}/n$ and code `$literal$`"
 if _REQUIRED:
     import playwright.sync_api as playwright
 else:
@@ -450,6 +452,9 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
 
     project = tmp_path_factory.mktemp("marked-math-site") / "project"
     scaffold_project(project, title="Marked mathematics fixture")
+    (project / "blueprint/tex-macros.json").write_text(
+        json.dumps({"ZZ": r"\mathbb{Z}"}), encoding="utf-8",
+    )
     roadmap = project / "blueprint/roadmap"
     (roadmap / "README.md").write_text(
         "# Mathematical library\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n",
@@ -460,10 +465,13 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
         folder = roadmap / name
         folder.mkdir()
         links = "- [Base](base.md)\n- [Result](result.md)\n"
+        if name == "algebra":
+            links += "- [Groups](title-foundation.md)\n- [Title-math target](title-target.md)\n"
         if name == "topology":
             links += "".join(f"- [Later {n}](later-{n}.md)\n" for n in range(55))
+        heading = _TITLE_MATH_SCOPE if name == "algebra" else name.title()
         (folder / "README.md").write_text(
-            f"---\nnavigation: module\n---\n\n# {name.title()}\n\n{links}",
+            f"---\nnavigation: module\n---\n\n# {heading}\n\n{links}",
             encoding="utf-8",
         )
         (folder / "base.md").write_text(
@@ -479,6 +487,17 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
             + "\n\nFinal sentence of the complete statement.\n\n## Depends on\n\n- [Base](base.md)\n",
             encoding="utf-8",
         )
+        if name == "algebra":
+            (folder / "title-foundation.md").write_text(
+                "---\ndeclaration: def\n---\n\n# " + _TITLE_MATH_FOUNDATION
+                + "\n\nThis authored group notation retains the identity $0=0$.\n\n"
+                "## Depends on\n\nNo prerequisites.\n", encoding="utf-8",
+            )
+            (folder / "title-target.md").write_text(
+                "---\ndeclaration: theorem\n---\n\n# Title-math target\n\n"
+                "The actual [group notation](title-foundation.md) remains available in the reader.\n\n"
+                "## Depends on\n\n- [Groups](title-foundation.md)\n", encoding="utf-8",
+            )
         if name == "topology":
             for n in range(55):
                 (folder / f"later-{n}.md").write_text(
@@ -491,6 +510,10 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
     build(load_config(config_file=str(project / "mkdocs.yml")))
     index = json.loads((project / "site/dependencies/index.json").read_text(encoding="utf-8"))
     assert sum(edge[0] == "topology/result" for edge in _decoded_relations(index)) == 55
+    records = {node["id"]: node for node in index["nodes"]}
+    for node_id, title in (("algebra", _TITLE_MATH_SCOPE), ("algebra/title-foundation", _TITLE_MATH_FOUNDATION)):
+        assert records[node_id]["title"] == title
+        assert records[node_id]["reading_title"] == dag_viewer._reading_label(title)
     with _served(project / "site") as url:
         yield url
 
@@ -1744,7 +1767,7 @@ def test_slash_inside_the_explorer_opens_its_search_but_an_input_keeps_its_keys(
     playwright.expect(isolates).to_be_focused()
 
 
-def test_the_explorer_typesets_the_math_it_draws_in_its_rail_and_details(
+def test_complete_reader_math_survives_navigation_and_paginated_authored_relations(
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
 ) -> None:
     """Actual marked reader math survives navigation and more-than-50 authored relations with real readback."""
@@ -1792,6 +1815,90 @@ def test_the_explorer_typesets_the_math_it_draws_in_its_rail_and_details(
     assert page.evaluate("() => document === __mathReaderDocument")
     # The chapter-card fragment selects the initial statement in the client;
     # HTTP document requests never include URL fragments.
+    assert documents == [urlsplit(first)._replace(fragment="").geturl()]
+
+
+def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_controls(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
+) -> None:
+    """Real published title parts and pinned CHTML keep code, focus, hrefs and native Enter intact."""
+    from tests.test_integrated_explorer_browser import _routes
+
+    page, site_url = desktop_page, marked_math_site_url
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _routes(page, site_url, marked_math_runtime, graph_client=True)
+    first = _site_route(page, site_url, "algebra/title-target")
+    scope_route = _site_route(page, site_url, "algebra")
+    foundation_route = _site_route(page, site_url, "algebra/title-foundation")
+    page.goto(first)
+    _ready_site(page)
+    # Wait for the actual optional layer's final reader refresh, not a timed
+    # sleep that could race a replacement of otherwise-correct controls.
+    playwright.expect(page.locator(".bp-reading-wiki-links strong").first).to_have_text("Links to other concepts · 1")
+    outline = page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')
+    related = page.locator(".bp-reading-links a").filter(has_text="Groups")
+    around = page.locator(".bp-reading-around")
+    summary = page.locator(".bp-reading-related-topics summary")
+    playwright.expect(outline).to_have_attribute("href", scope_route)
+    playwright.expect(related).to_have_attribute("href", foundation_route)
+    page.evaluate("""() => {
+      window.__titleMathDocument=document;window.__titleMathClicks=0;
+      window.__titleMathControls=[document.querySelector('[data-navigation-node-id="algebra"]'),
+        document.querySelector('.bp-reading-links a'),document.querySelector('.bp-reading-related-topics summary')];
+      __titleMathControls[1].addEventListener('click',()=>__titleMathClicks++);
+    }""")
+    outline.focus()
+    assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-dag-integrated'))") is True
+    assert page.evaluate("() => document.activeElement===__titleMathControls[0] && __titleMathControls.every(node=>node.isConnected)")
+    assert outline.evaluate("node=>node===__titleMathControls[0]")
+    assert related.evaluate("node=>node===__titleMathControls[1]")
+    assert summary.evaluate("node=>node===__titleMathControls[2]")
+    for control, tex in ((outline, r"\ZZ/n"), (around, r"\ZZ/n"),
+                         (related, r"\mathbb{Z}/n"), (summary, r"\ZZ/n")):
+        playwright.expect(control.locator(".arithmatex")).to_have_count(1)
+        playwright.expect(control.locator(".arithmatex")).to_have_attribute("data-autoform-math-source", r"\(" + tex + r"\)")
+        playwright.expect(control.locator("mjx-container")).to_have_count(1)
+        # The pinned engine must expand the project macro to the actual
+        # double-struck Z glyph, not merely emit any nonempty formula shell.
+        playwright.expect(control.locator("mjx-c.mjx-c2124")).to_have_count(1)
+        assert control.locator("mjx-c").evaluate_all(
+            "glyphs=>glyphs.length>=3 && glyphs.every(glyph=>"
+            "!['none','normal',''].includes(getComputedStyle(glyph,'::before').content))"
+        )
+        playwright.expect(control.locator("code")).to_have_text("$literal$")
+        assert control.locator("code .arithmatex, code mjx-container, [tabindex], [role=application]").count() == 0
+        assert control.locator("mjx-merror, merror, script, iframe, img").count() == 0
+        assert control.evaluate("node=>!node.classList.contains('arithmatex')")
+    assert summary.inner_text().startswith("More in Groups ")
+    _assert_hit(page, outline)
+    outline.locator("mjx-container").click(button="right")
+    playwright.expect(page.get_by_role("menu")).to_have_count(0)
+    page.keyboard.press("Escape")
+    summary.focus()
+    page.keyboard.press("Enter")
+    playwright.expect(page.locator(".bp-reading-related-topics")).to_have_attribute("open", "")
+    playwright.expect(summary).to_be_focused()
+    related.focus()
+    assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-reading-neighbors'))") is True
+    playwright.expect(related).to_be_focused()
+    playwright.expect(related).to_have_attribute("href", foundation_route)
+    assert related.evaluate("node=>node===__titleMathControls[1]")
+    _assert_hit(page, related)
+    page.keyboard.press("Enter")
+    page.wait_for_url(foundation_route)
+    _reading_card(page, "algebra/title-foundation")
+    assert page.evaluate("() => __titleMathClicks===1 && document===__titleMathDocument")
+    page.go_back()
+    page.wait_for_url(first)
+    playwright.expect(related).to_have_attribute("href", foundation_route)
+    outline.focus()
+    outline.evaluate("node=>window.__titleMathReturnOutline=node")
+    assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-dag-navigation-inner'))") is True
+    assert outline.evaluate("node=>node===__titleMathReturnOutline && document.activeElement===node")
+    page.keyboard.press("Enter")
+    page.wait_for_url(scope_route)
+    assert page.evaluate("() => document===__titleMathDocument")
     assert documents == [urlsplit(first)._replace(fragment="").geturl()]
 
 

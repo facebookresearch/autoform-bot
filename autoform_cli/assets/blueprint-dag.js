@@ -24,6 +24,32 @@
     return node;
   }
 
+  // Only publisher-derived label parts enter reading controls. Never parse
+  // provider HTML, replace an interactive link, or alter graph-card geometry.
+  function readingLabel(tag, className, text, label, prefix) {
+    prefix = prefix || "";
+    var root = element(tag, className, prefix + text);
+    if (!label || label.format !== "inline-parts-v1" || label.source !== text || !Array.isArray(label.parts) || label.parts.length > 256 || text.length > 16384) return root;
+    var valid = label.parts.every(function (part) {
+      return Array.isArray(part) && part.length === 2 && ["text", "code", "math"].indexOf(part[0]) >= 0 && typeof part[1] === "string" &&
+        (part[0] !== "math" || /^\\\([\s\S]*\\\)$|^\\\[[\s\S]*\\\]$/.test(part[1]));
+    });
+    if (!valid || !label.parts.some(function (part) { return part[0] === "math"; }) ||
+        label.parts.reduce(function (size, part) { return size + part[1].length; }, 0) > 32768) return root;
+    root.textContent = "";
+    if (prefix) root.appendChild(document.createTextNode(prefix));
+    label.parts.forEach(function (part) {
+      if (part[0] === "text") root.appendChild(document.createTextNode(part[1]));
+      else root.appendChild(element(part[0] === "code" ? "code" : "span", part[0] === "math" ? "arithmatex" : "", part[1]));
+    });
+    return root;
+  }
+
+  function refreshReadingLabels(root) {
+    if (root && window.AutoformMath && typeof window.AutoformMath.refresh === "function")
+      Promise.resolve(window.AutoformMath.refresh(root)).catch(function () {});
+  }
+
   function safeHref(value) {
     if (!value || /[\u0000-\u001f]/.test(value)) return null;
     try {
@@ -1187,7 +1213,7 @@
       var list = element("ul", "bp-dag-navigation-list");
       shown.forEach(function (node) {
         if (root && node.id === root.id) return;
-        var item = element("li"), link = element("a", "bp-dag-navigation-link", node.title);
+        var item = element("li"), link = readingLabel("a", "bp-dag-navigation-link", node.title, node.reading_title);
         link.href = node.route || node.url; link.title = node.title; link.dataset.navigationNodeId = node.id;
         if (node.id === key) link.setAttribute("aria-current", "page");
         if (chain.has(semanticParent(node)) && root && semanticParent(node) !== root.id) item.className = "bp-outline-child";
@@ -1211,8 +1237,8 @@
       else dom$readingNeighbors.replaceChildren();
       var node = ui$selected, record = records.get(currentBundle && currentBundle.nodeId || ui$requestedNode || (node && node.id)), scope = record && records.get(record.scope);
       if (scope && record.id !== scope.id) {
-        var around = element("a", "bp-reading-around", "← " + scope.title); around.href = scope.route || scope.url;
-        around.addEventListener("click", function (event) { if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+        var around = readingLabel("a", "bp-reading-around", scope.title, scope.reading_title, "← "); around.href = scope.route || scope.url;
+        around.addEventListener("click", function (event) { if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
           event.preventDefault(); navigation.navigateNode(scope.id, {history: "push"}); }); dom$readingContext.appendChild(around);
       }
       if (!record && !node) return;
@@ -1222,7 +1248,7 @@
       [["Prerequisites", links.before], ["Used by", links.after]].forEach(function (pair) {
         var group = element("div", "bp-reading-related"); group.appendChild(element("strong", "", pair[0] + " · " + pair[1].length));
         pair[1].slice(0, 5).forEach(function (id) { var related = records.get(id); if (!related) return;
-          var link = element("a", "", related.title); link.href = related.route || related.url;
+          var link = readingLabel("a", "", related.title, related.reading_title); link.href = related.route || related.url;
           var counts = (pair[1] === links.before ? weights.before : weights.after).get(id);
           if (counts) {
             var description = [counts.statement && plural(counts.statement, "statement dependency", "statement dependencies"),
@@ -1230,7 +1256,7 @@
             link.title = related.title + " · " + description;
             link.setAttribute("aria-label", link.title);
           }
-          link.addEventListener("click", function (event) { if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+          link.addEventListener("click", function (event) { if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
             event.preventDefault(); navigation.navigateNode(id, {history: "push"}); }); group.appendChild(link);
         });
         if (pair[1].length > 5) { var more = button("bp-dag-hidden-button", "Show all " + pair[1].length);
@@ -1243,10 +1269,11 @@
       var peers = topicPeers(record ? record.id : node.id);
       if (peers && peers.nodes.length) {
         var more = element("details", "bp-reading-related-topics");
-        more.appendChild(element("summary", "", peers.title));
+        more.appendChild(readingLabel("summary", "", peers.owner.title, peers.owner.reading_title,
+          peers.title.slice(0, peers.title.length - peers.owner.title.length)));
         var list = element("ul", "bp-reading-topic-list");
         peers.nodes.slice(0, 5).forEach(function (peer) {
-          var item = element("li"), link = element("a", "", peer.title); link.href = peer.route || peer.url;
+          var item = element("li"), link = readingLabel("a", "", peer.title, peer.reading_title); link.href = peer.route || peer.url;
           link.addEventListener("click", function (event) {
             if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
             event.preventDefault(); navigation.navigateNode(peer.id, {history: "push", focus: "reading"});
@@ -1255,7 +1282,7 @@
         });
         more.appendChild(list);
         if (peers.nodes.length > 5) {
-          var browse = element("a", "bp-reading-topic-browse", "Browse " + peers.owner.title);
+          var browse = readingLabel("a", "bp-reading-topic-browse", peers.owner.title, peers.owner.reading_title, "Browse ");
           browse.href = peers.owner.route || peers.owner.url;
           browse.addEventListener("click", function (event) {
             if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -1419,6 +1446,7 @@
       if (!dom$navigationInner) return;
       dom$navigationInner.replaceChildren(); dom$navigationNodes = new Map();
       if (sharedIndex) renderOutline();
+      refreshReadingLabels(dom$navigationInner);
     }
 
     function syncNavigationSelection() {
@@ -2238,7 +2266,7 @@
         function appendLinks() {
           var limit = Math.min(pair[1].length, ui$wikiLimit + (ui$wikiLimit ? 20 : 5));
           pair[1].slice(ui$wikiLimit, limit).forEach(function (relatedId) {
-            var related = records.get(relatedId), item = element("li"), link = element("a", "", related.title);
+            var related = records.get(relatedId), item = element("li"), link = readingLabel("a", "", related.title, related.reading_title);
             link.href = related.route || related.url;
             link.addEventListener("click", function (event) {
               if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -2248,17 +2276,20 @@
           });
           ui$wikiLimit = limit; more.hidden = limit >= pair[1].length;
           more.textContent = "Show " + Math.min(20, pair[1].length - limit) + " more links";
+          refreshReadingLabels(list);
         }
         appendLinks(); more.addEventListener("click", appendLinks);
         group.appendChild(list); group.appendChild(more); disclosure.appendChild(group);
       });
       var peers = dom$readingNeighbors.querySelector(".bp-reading-related-topics");
       if (peers) dom$readingNeighbors.insertBefore(disclosure, peers); else dom$readingNeighbors.appendChild(disclosure);
+      refreshReadingLabels(dom$readingNeighbors);
     }
     function renderInspector() {
       var node = ui$selected, id = currentBundle && currentBundle.nodeId || ui$requestedNode || node && recordId(node);
       var previous = dom$readingNeighbors && dom$readingNeighbors.querySelector(".bp-reading-wiki-links");
       renderReaderContext(previous && ui$wikiNode === id ? previous : null); renderWikiContext();
+      refreshReadingLabels(dom$readingContext); refreshReadingLabels(dom$readingNeighbors);
     }
 
     function inventoryNodes() {

@@ -55,6 +55,10 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Wiki reading links.** The integrated explorer retains #455's title math
+  in its outline and related-reading controls, using the site's safe MathJax
+  service and project macros. Code stays literal, canonical links keep focus
+  and native modifiers, and graph labels remain as typed (#442).
 - **Claims.** `autoform dashboard` runs its claim listing's Git in the
   dashboard's process group again, so Ctrl+C or a signal to that group stops
   Git along with the dashboard (#447). On macOS and Windows, a listing shows

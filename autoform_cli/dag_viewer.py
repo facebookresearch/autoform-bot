@@ -15,6 +15,7 @@ import json
 import math
 import posixpath
 import re
+from functools import lru_cache
 from dataclasses import dataclass, replace
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
@@ -413,6 +414,59 @@ def write_payload(
     return _write_json(path, payload)
 
 
+@lru_cache(maxsize=4096)
+def _reading_label(text: str) -> dict[str, object] | None:
+    """Safe, derived inline text/code/math parts for reading-only controls.
+
+    Read the same captured label through the site's converter, never a source
+    pathname. HTML, links, images and attributes are not a label transport.
+    Plain labels keep their existing wire bytes and require no conversion.
+    """
+    if len(text) > 16_384 or not re.search(r"\$|\\\(|\\\[", text):
+        return None
+    tree = markdown.render_tree(text, allow_html=False)
+    if tree is None:
+        return None
+    body = tree.find("body")
+    if body is None:
+        return None
+    parts: list[list[str]] = []
+    has_math = False
+
+    def append(kind: str, value: str | None) -> None:
+        if not value:
+            return
+        if kind == "text" and parts and parts[-1][0] == kind:
+            parts[-1][1] += value
+        else:
+            parts.append([kind, value])
+
+    def read(element: object) -> bool:
+        nonlocal has_math
+        tag = element.tag
+        if tag in {"span", "div"} and element.attrib == {"class": markdown.FORMULA_CLASS}:
+            if len(element) or not element.text:
+                return False
+            has_math = True
+            append("math", element.text)
+            return True
+        if tag == "code" and not element.attrib:
+            append("code", "".join(element.itertext()))
+            return True
+        if tag not in {"body", "p", "em", "strong"} or element.attrib:
+            return False
+        append("text", element.text)
+        for child in element:
+            if not read(child):
+                return False
+            append("text", child.tail)
+        return True
+
+    if not read(body) or not has_math or len(parts) > 256:
+        return None
+    return {"format": "inline-parts-v1", "source": text, "parts": parts}
+
+
 def write_search_index(
     path: Path,
     view: GraphView,
@@ -446,6 +500,9 @@ def write_search_index(
             entry["lean"] = node.lean
         if node.summary:
             entry["summary"] = node.summary
+        label = _reading_label(node.title)
+        if label is not None:
+            entry["reading_title"] = label
         # Preserve authored module articles without calling their inventories
         # concrete declarations or inferring proof progress from them.
         if node.catalog == "module":

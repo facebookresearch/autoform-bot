@@ -25,7 +25,7 @@ function original(name) {
   }
   assert.fail('Unparseable production callback: '+name);
 }
-const names=['element','button','recordId','semanticParent','topicPeers','neighborIds','neighborhood',
+const names=['element','readingLabel','button','recordId','semanticParent','topicPeers','neighborIds','neighborhood',
   'relationCounts','renderReaderContext','inventoryNodes'];
 const constants=['NODE_W','plural'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);

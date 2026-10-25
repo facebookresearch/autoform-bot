@@ -390,6 +390,10 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert "typesetPromise" not in script
     assert "autoform:typeset" not in script and "FORMULA_CLASS_JSON" not in script
     assert "window.AutoformMath.refresh(refs.readingBody)" in script
+    assert "function readingLabel(" in script
+    assert "refreshReadingLabels(refs.navigationInner)" in script
+    assert "refreshReadingLabels(refs.readingNeighbors)" in script
+    assert 'part[0] === "math" ? "arithmatex" : ""' in script
     assert "refs.readingBody.replaceChildren(bundle.readingSource)" in script
     assert "navigation.bindReader(refs.readingBody)" in script
     # All enhancement enters through the canonical complete-reader router.

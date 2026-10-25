@@ -12,7 +12,7 @@ import pytest
 _NODE = shutil.which("node")
 _CLIENT = Path(__file__).resolve().parents[1] / "autoform_cli/assets/blueprint-dag.js"
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated wiki projection tests")
-_CALLBACKS = ("element", "button", "recordId", "requestWikiLinks", "useWikiLinks", "wikiNeighbors", "renderWikiContext")
+_CALLBACKS = ("element", "readingLabel", "refreshReadingLabels", "button", "recordId", "requestWikiLinks", "useWikiLinks", "wikiNeighbors", "renderWikiContext")
 
 _LOADER = r"""
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
@@ -78,6 +78,7 @@ function emit(node,type,settings={}) {
 
 _READER_PEERS = _DOM + r"""
 const document={createElement:tag=>new Element(tag)};
+const window={};
 const dom$readingNeighbors=new Element('div'),dom$readingBody=new Element('div');
 const math=new Element('article');math.textContent='Complete authored mathematical page';dom$readingBody.appendChild(math);
 dom$readingBody.scrollTop=137;

@@ -130,8 +130,8 @@ jobs:
           mkdir mathjax
           tar xzf mathjax.tgz -C mathjax
           echo "AUTOFORM_MATHJAX_DIR=$PWD/mathjax/package" >> "$GITHUB_ENV"
-      - name: Typeset read-back cards in Node with the script render writes
-        run: uv run --frozen --extra dev pytest -q tests/test_site_mathjax_node.py
+      - name: Typeset read-back cards and reading titles with the script render writes
+        run: uv run --frozen --extra dev pytest -q tests/test_site_mathjax_node.py tests/test_explorer_title_math.py
         env:
           AUTOFORM_REQUIRE_MATHJAX_TESTS: "1"
 
