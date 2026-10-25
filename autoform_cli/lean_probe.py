@@ -102,7 +102,12 @@ SNAPSHOT_FILE_LIMIT = 64 * 1024 * 1024
 
 
 class SkeletonError(RuntimeError):
-    """A skeleton could not be extracted from the project."""
+    """A probe, or the extraction or output around it, failed; ``issues`` says why.
+
+    This module raises it when a command, a probe or a snapshot read fails;
+    ``skeleton`` when a blueprint, an article selection or a managed output
+    folder does; and ``impact`` when its probe's records are malformed.
+    """
 
     def __init__(self, issues: list[str] | tuple[str, ...]) -> None:
         self.issues = tuple(issues)
@@ -174,7 +179,13 @@ def _read_snapshot_pass(
 
 
 def read_snapshot_file(path: Path) -> tuple[bytes, tuple[int, str]] | None:
-    """Read a bounded regular file twice to reject concurrent content changes."""
+    """Return a regular file's bytes and their (size, SHA-256) fingerprint, or
+    None when the path is missing.
+
+    The file is read twice, and a change between the reads is refused, as is
+    a file that is not regular, one over ``SNAPSHOT_FILE_LIMIT`` bytes, and any
+    other error reaching it, such as a parent that is not a directory.
+    """
 
     captured = _read_snapshot_pass(path, keep_content=True)
     verified = _read_snapshot_pass(path, keep_content=False)
