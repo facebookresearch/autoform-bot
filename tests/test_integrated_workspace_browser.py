@@ -1113,7 +1113,7 @@ def test_real_result_flag_drives_document_title_leaf_breadcrumb_and_result_count
                    and record.get("status") in enabled
                    for record in site.records.values())
     assert expected > 0
-    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text(f"{expected} results")
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text(f"{expected} statements")
 
 
 @pytest.mark.parametrize("node_id", ["scope:authored/main", "boundary:authored/main"])
