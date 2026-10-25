@@ -55,6 +55,9 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Large wiki catalogues.** Validation yields to visible page frames, with
+  a bounded fallback for hidden or stalled tabs, rather than relying only on
+  timer tasks. Every node and relation still validates before publication (#442).
 - **Wiki reading links.** The integrated explorer retains #455's title math
   in its outline and related-reading controls, using the site's safe MathJax
   service and project macros. Code stays literal, canonical links keep focus

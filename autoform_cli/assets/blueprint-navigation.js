@@ -212,7 +212,21 @@
       if (!payload || payload.schema !== INDEX_SCHEMA || !Array.isArray(payload.nodes)) throw new Error("Unsupported search index");
       var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [];
       async function yieldIndex() {
-        await new Promise(function (resolve) { setTimeout(resolve, 0); });
+        // Timer tasks can run back-to-back without a WebKit paint while a
+        // large catalogue is normalized. Give visible readers an actual
+        // frame; hidden/stalled frames retain a bounded timer fallback.
+        await new Promise(function (resolve) {
+          var visible = doc.visibilityState !== "hidden" && typeof win.requestAnimationFrame === "function" &&
+            typeof win.cancelAnimationFrame === "function";
+          var frame = null, timer = setTimeout(done, visible ? 50 : 0), finished = false;
+          function done() {
+            if (finished) return;
+            finished = true; clearTimeout(timer);
+            if (frame !== null) win.cancelAnimationFrame(frame);
+            resolve();
+          }
+          if (visible) frame = win.requestAnimationFrame(done);
+        });
         if (disposed) throw abortError();
       }
       for (var position = 0; position < payload.nodes.length; position++) {
