@@ -1837,9 +1837,21 @@
             if (!usableLocal()) center(all.find(function (node) { return node._overviewGroup; }) ||
               all.find(function (node) { return node.kind !== "boundary"; }) || all[0], readableFloor);
           } else if (compact) center(box.nodes[0], readableFloor);
+          else if (!usableLocal()) lead();
         }
       }
       schedule(); remember();
+      // A deep map's leading corner can be bare, or hold only another topic's card, and Fit gave the same empty view.
+      // Then the page's own first card, in reading order, opens at the leading edge, centred across.
+      function lead() {
+        var tb = ui$orientation === "tb", first = box.nodes.filter(function (node) { return node.kind !== "boundary"; }).sort(function (a, b) {
+          var p = world(a), q = world(b); return tb ? p.y - q.y || p.x - q.x : p.x - q.x || p.y - q.y;
+        })[0];
+        if (!first) return;
+        var cell = world(first), free = freeArea();
+        if (tb) { ui$transform.x = (free.left + free.right) / 2 - (cell.x + cell.w / 2) * scale; ui$transform.y = (free.top || 0) + top - cell.y * scale; }
+        else { ui$transform.x = free.left + side - cell.x * scale; ui$transform.y = (free.top || 0) + free.band / 2 - (cell.y + cell.h / 2) * scale; }
+      }
       function usableLocal() {
         var free = freeArea(), start = (free.top || 0) + 12, end = (free.top || 0) + free.band - 12;
         return all.some(function (node) {

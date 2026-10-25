@@ -178,6 +178,19 @@ def test_a_long_chain_opens_at_its_leading_edge() -> None:
     assert result["hidden"] is False and re.fullmatch(r"Drag to see more: \d+ of 33 cards in view\.", result["note"])
 
 
+@pytest.mark.parametrize(("width", "height"), ((1152, 847), (390, 560)))
+def test_a_deep_map_whose_leading_corner_is_bare_opens_on_its_first_card(width: int, height: int) -> None:
+    """Hatcher's largest chapter opened, and re-fit, on a leading corner crossed by lines with no whole card in it.
+    A short chain into a tall fan leaves that corner bare; the first card in reading order now opens there instead."""
+    chain = [f"c{index}" for index in range(6)]
+    fan = [f"f{index}" for index in range(24)]
+    view = _view([*chain, *fan], [*zip(chain, chain[1:]), *((chain[-1], leaf) for leaf in fan)])
+    result = _first_view(view, width, height)
+    boxes = result["boxes"]
+    assert result["scale"] == pytest.approx(0.9)
+    assert _inside(boxes["c0"], width, height)
+    assert result["hidden"] is False
+
 def test_the_workspace_map_starts_below_its_title() -> None:
     """The map title is drawn from 20px to about 37px, and a height-limited map started at 36px, under it."""
     view = _view(["hub", *(f"leaf-{index}" for index in range(5))], [("hub", f"leaf-{index}") for index in range(5)])
