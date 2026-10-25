@@ -1273,7 +1273,9 @@ def test_the_landing_page_preserves_its_full_reading_hero_in_one_integrated_shel
 
     # The sidebar would hold a single "Home" entry here, so the page drops it.
     front = overview.split("---")[1]
-    assert all(f"  - {part}" in front for part in ("navigation", "toc", "footer"))
+    assert all(f"  - {part}" in front for part in ("navigation", "toc"))
+    # The theme replaces Material's footer block, so hiding it would do nothing.
+    assert "footer" not in front
     assert 'data-graph-src="dependencies.json"' in overview
     assert overview.index('class="bp-reading-source"') < overview.index('class="bp-landing-intro"')
     assert overview.index('class="bp-landing-intro"') < overview.index('class="bp-dag-viewer"')
@@ -1867,6 +1869,11 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     # Colour carries status only, so the sweep is the header's hairline and nothing else.
     assert css.count("var(--bp-sweep)") == 1
     assert '.md-header::after {\n  content: "";\n  display: block;\n  height: 3px;\n  background: var(--bp-sweep);' in css
+    # One rule per theme selector, so no later rule silently overrides an earlier one.
+    for selector in (".md-header", ".md-tabs__link"):
+        assert len(re.findall(rf"(?m)^{re.escape(selector)} \{{", css)) == 1, selector
+    # The reading column's measure does not cap the explorer's reading pane.
+    assert ".bp-reading-body.md-typeset { max-width: none; }" in css
     for state in STATES:
         assert f".bp-{state.key} .bp-mark {{ color: {state.stroke}; }}" in css
         assert f"[data-md-color-scheme=slate] .bp-{state.key} .bp-mark" in css

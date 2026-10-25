@@ -2234,7 +2234,7 @@ def _render_landing_page(
     if book:
         # The shared shell is attached after all full reading content is final.
         reading = f'<div class="bp-landing-intro">{hero}{next_up}</div>'
-        return "\n".join([*front, "  - footer", "---", "", reading]).rstrip() + "\n"
+        return "\n".join([*front, "---", "", reading]).rstrip() + "\n"
     # A roadmap without articles has nothing to explore, so the hero stands
     # over its status breakdown.
     breakdown = graph_pages.render_legend(
@@ -3951,7 +3951,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 
 /* The brand sweep as a hairline under the header ties every page together
    without spending any vertical space on decoration. */
-.md-header {{ box-shadow: none; border-bottom: 1px solid var(--bp-rule); }}
+.md-header {{ box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35); border-bottom: 1px solid var(--bp-rule); }}
 .md-header::after {{
   content: "";
   display: block;
@@ -3965,7 +3965,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 [data-md-color-scheme=slate] .md-nav--primary .md-nav__title[for=__drawer],
 [data-md-color-scheme=slate] .md-nav__source {{ background-color: #242526; }}
 .md-tabs {{ border-bottom: 1px solid var(--bp-rule); }}
-.md-tabs__link {{ font-weight: 600; opacity: 0.72; }}
+.md-tabs__link {{ font-size: 0.72rem; font-weight: 600; opacity: 0.9; margin-top: 0; }}
 .md-tabs__link--active, .md-tabs__link:hover {{ opacity: 1; }}
 
 /* The landing page is a dashboard, not a chapter, so it drops the reading
@@ -3973,6 +3973,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
    stylesheet can tell the two apart without a second page template; where it
    is unsupported the page simply stays at reading width. */
 .md-typeset:has(.bp-landing) {{ max-width: 62rem; }}
+/* The explorer's reading pane sets its own width, so neither measure caps it. */
+.bp-reading-body.md-typeset {{ max-width: none; }}
 
 .bp-hero {{ margin: 0 0 2.5rem; }}
 .bp-hero-kicker {{
@@ -4215,12 +4217,9 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 /* With sticky tabs Material renders them inside <header>, so the title, the
    repository link and the tabs are one bar. These rules only remove the seam
    between the two rows of that bar. */
-.md-header {{ box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35); }}
 .md-tabs {{ background-color: transparent; box-shadow: none; }}
 .md-tabs__list {{ padding-left: 0.2rem; }}
 .md-tabs__item {{ height: 1.9rem; }}
-.md-tabs__link {{ font-size: 0.72rem; opacity: 0.9; margin-top: 0; }}
-.md-tabs__link--active, .md-tabs__link:hover {{ opacity: 1; }}
 
 /* "Next up" is the one card a visitor reads first, so it gets real hierarchy
    and a way into the mathematics rather than three stacked words. */
