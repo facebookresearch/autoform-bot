@@ -3094,6 +3094,29 @@ def test_opening_details_keeps_the_clicked_card_under_the_pointer(desktop_page: 
 
 
 
+
+def test_a_phone_reader_keeps_half_for_the_statement_and_ends_full_clear_of_the_map_pill(mobile_page: object, site_url: str) -> None:
+    """At half the topic and concept-link disclosures took up to 136px of a 327px reader, and at full the Map pill covered their last row."""
+    page = _open_site(mobile_page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
+    handle = page.get_by_role("button", name=re.compile(r", reading$"))
+    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    neighbors = page.locator(".bp-reading-neighbors")
+    playwright.expect(neighbors).to_be_hidden()
+    box, area = handle.bounding_box(), page.locator(".bp-dag-body").bounding_box()
+    assert box is not None and area is not None
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] / 2, area["y"] + 20, steps=6)
+    page.mouse.up()
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-sheet-full\b"))
+    if neighbors.evaluate("node => node.children.length"):
+        playwright.expect(neighbors).to_be_visible()
+        neighbors.evaluate("node => { node.scrollTop = node.scrollHeight; }")
+        _paint_frame(page)
+        last = neighbors.evaluate("node => node.lastElementChild.getBoundingClientRect().bottom")
+        pill = page.get_by_role("button", name="Show the map", exact=True).bounding_box()
+        assert pill is not None and last <= pill["y"]
+
 def test_a_phone_reader_opens_at_half_snaps_where_it_is_dragged_and_maps_back_from_full(
     mobile_page: object, site_url: str,
 ) -> None:

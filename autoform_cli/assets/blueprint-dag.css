@@ -402,6 +402,10 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated.bp-dag-sheet-full .bp-reading-map { display: block; position: absolute; z-index: 3; bottom: 16px; left: 50%; padding: 10px 24px; border: 1px solid var(--dag-overlay-border); border-radius: 999px; background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 14px; font-weight: 600; box-shadow: var(--dag-e2); transform: translateX(-50%); cursor: pointer; }
   .bp-dag-integrated .bp-reading-body { padding: 20px 22px 60px; }
   .bp-dag-integrated .bp-reading-neighbors { max-height: 136px; }
+  /* At half the reader has room for little more than the statement, so its topic and concept-link disclosures wait for full,
+     where they end clear of the Map pill. */
+  .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-sheet-full) .bp-reading-neighbors { display: none; }
+  .bp-dag-integrated.bp-dag-sheet-full .bp-reading-neighbors { max-height: 208px; padding-bottom: 72px; }
   .bp-dag-integrated .bp-dag-context { padding-inline: 12px; }
   .bp-dag-integrated .bp-dag-toolbar { padding-inline: 12px; gap: 6px; }
   .bp-dag-integrated .bp-dag-breadcrumb { min-width: 0; flex: 1; }
