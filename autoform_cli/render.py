@@ -2048,9 +2048,9 @@ def _next_target(
             f'<a href="{html.escape(statement, quote=True)}">{title}</a>' if statement else title
         )
         why = (
-            "Its prerequisites are ready, so the proof can be written now."
+            "Everything it uses is in Lean, so its Lean proof can start."
             if node_status.key == "can_prove"
-            else "Its prerequisites are ready, so the statement can be written down."
+            else "Everything it uses is in Lean, so its Lean statement can be written now."
         )
         actions = [f'<a href="{html.escape(graph_href, quote=True)}">Dependencies</a>']
         if chapter_page is not None:

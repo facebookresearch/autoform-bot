@@ -3210,10 +3210,10 @@ def test_the_strict_policy_shows_the_same_proof_as_proved_with_no_assumptions(tm
 @pytest.mark.parametrize(
     ("dropped", "why"),
     [
-        ("proof: formalized\n", "Its prerequisites are ready, so the proof can be written now."),
+        ("proof: formalized\n", "Everything it uses is in Lean, so its Lean proof can start."),
         (
             "statement: formalized\nproof: formalized\n",
-            "Its prerequisites are ready, so the statement can be written down.",
+            "Everything it uses is in Lean, so its Lean statement can be written now.",
         ),
     ],
 )
