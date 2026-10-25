@@ -3212,6 +3212,8 @@ def _render_environment(
 
     shown = _display_title(node.title, caption)
     title_html = f'<span class="bp-thmtitle">{html.escape(shown)}</span>' if shown else ""
+    # The "#" link's only text is "#", so its name says which statement it links to.
+    permalink_label = " ".join(part for part in ("Link to", caption, number) if part)
 
     lines = [
         f'<div class="bp-thmwrapper {style} bp-{display_key}" '
@@ -3223,7 +3225,8 @@ def _render_environment(
         f"{title_html}"
         f"{code_links}"
         f"{source_link}"
-        f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}">#</a>'
+        f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}" '
+        f'aria-label="{html.escape(permalink_label, quote=True)}">#</a>'
         f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}">'
         f'{mark}<span class="bp-mark-label">{html.escape(display_label)}</span></span>',
         "</div>",
@@ -4233,7 +4236,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   opacity: 0;
   transition: opacity 0.1s ease;
 }}
-.bp-thmwrapper:hover .bp-permalink {{ opacity: 1; }}
+/* A keyboard reaches the permalink too, so focus shows it as hover does. */
+.bp-thmwrapper:hover .bp-permalink, .bp-permalink:focus-visible {{ opacity: 1; }}
 
 /* The status is a pill on its own line under the title, a dot and a word
    tinted with the status colour, as in the explorer's drawer. An empty item

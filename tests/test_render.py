@@ -586,6 +586,8 @@ def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -
     assert 'data-autoform-node-id="base"' in page
     assert 'data-autoform-node-id="top"' in page
     assert '<span class="bp-thmcaption">Definition</span><span class="bp-thmlabel">1</span>' in page
+    # The permalink's only text is "#", so its name says which statement it links to.
+    assert '<a class="bp-permalink" href="#base" aria-label="Link to Definition 1">#</a>' in page
     assert '<span class="bp-thmtitle">Top</span>' in page
     assert "The main result." in page
     assert "1 definition · 1 result" in page
