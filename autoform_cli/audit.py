@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import status
+from ._fs import directory_path as _directory_path
 from .coverage import CoverageSummary, load_coverage, validate_coverage_roles
 from .dag_viewer import MAX_MAP_NODES
 from .elaboration_limits import LimitSetting, limits_by_line, limits_in_force
@@ -50,7 +51,6 @@ from .markdown import _is_hidden_path
 from .markdown import is_placeholder as _is_placeholder
 from .markdown import local_target_issue as _local_target_issue
 from .markdown import markdown_links as _markdown_links
-from .markdown import directory_path as _directory_path
 from .markdown import visible_prose as _visible_prose
 
 #: More siblings than this at one level is a table of contents, not a chapter.

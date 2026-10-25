@@ -14,19 +14,18 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
+from .._strict_json import reject_json_constant
 from ..project import _snapshot
 from ..project._lake_metadata import (
-    _JsonInteger,
-    _canonical_toml_name,
-    _decode_package_entry,
-    _json_default,
-    _json_optional,
-    _manifest_layout,
-    _reject_json_constant,
-    _validate_manifest_root,
+    JsonInteger,
+    canonical_toml_name,
+    decode_package_entry,
+    json_default,
+    manifest_layout,
+    validate_manifest_root,
 )
-from ..project._snapshot import _DecisionSnapshot, _MANIFEST, _OVERRIDES
-from ..project.inspect import _trim_elan_whitespace
+from ..project._snapshot import DecisionSnapshot, MANIFEST, OVERRIDES
+from ..project.inspect import ELAN_WHITESPACE
 from .index import relative_path, shorten
 
 _DEFAULT_PACKAGES_DIR = ".lake/packages"
@@ -89,34 +88,34 @@ def read_workspace(root: str | Path) -> LakeWorkspace:
     if not directory.is_dir():
         raise WorkspaceError("Lean root does not exist or is not a directory")
     for _attempt in range(_SNAPSHOT_ATTEMPTS):
-        snapshot = _snapshot._capture_decision_snapshot(directory)
-        if snapshot.stable and snapshot == _snapshot._capture_decision_snapshot(directory):
+        snapshot = _snapshot.capture_decision_snapshot(directory)
+        if snapshot.stable and snapshot == _snapshot.capture_decision_snapshot(directory):
             return _workspace(directory, snapshot)
     raise WorkspaceError("project configuration changed while it was being read; retry after the project is idle")
 
 
-def _workspace(root: Path, snapshot: _DecisionSnapshot) -> LakeWorkspace:
-    decoded = locked_packages(snapshot, _MANIFEST)
+def _workspace(root: Path, snapshot: DecisionSnapshot) -> LakeWorkspace:
+    decoded = locked_packages(snapshot, MANIFEST)
     if decoded is None:
         raise WorkspaceError("the Lean root has no lake-manifest.json; run `lake update` first")
     payload, packages = decoded
     try:
-        _validate_manifest_root(payload)
-        lake_dir = _json_default(payload, "lakeDir", ".lake", str)
-        packages_dir = _json_optional(payload, "packagesDir", str) or _DEFAULT_PACKAGES_DIR
+        validate_manifest_root(payload)
+        lake_dir = json_default(payload, "lakeDir", ".lake", str)
+        packages_dir = json_default(payload, "packagesDir", None, str) or _DEFAULT_PACKAGES_DIR
     except ValueError:
-        raise WorkspaceError(f"{_MANIFEST} is not a Lake manifest Autoform reads") from None
+        raise WorkspaceError(f"{MANIFEST} is not a Lake manifest Autoform reads") from None
     if lake_dir not in (".lake", "./.lake"):
-        raise WorkspaceError(f"{_MANIFEST} sets lakeDir to {shorten(repr(lake_dir))}; only .lake is supported")
+        raise WorkspaceError(f"{MANIFEST} sets lakeDir to {shorten(repr(lake_dir))}; only .lake is supported")
     try:
         packages_dir.encode("utf-8")
     except UnicodeError:
-        raise WorkspaceError(f"{_MANIFEST} is not a Lake manifest Autoform reads") from None
+        raise WorkspaceError(f"{MANIFEST} is not a Lake manifest Autoform reads") from None
     if relative_path(packages_dir) is None:
         raise WorkspaceError(
-            f"{_MANIFEST} sets packagesDir to {shorten(repr(packages_dir))}, which is not inside the project"
+            f"{MANIFEST} sets packagesDir to {shorten(repr(packages_dir))}, which is not inside the project"
         )
-    overrides = locked_packages(snapshot, _OVERRIDES)
+    overrides = locked_packages(snapshot, OVERRIDES)
     return LakeWorkspace(
         root=root,
         lean_toolchain=toolchain(snapshot),
@@ -127,7 +126,7 @@ def _workspace(root: Path, snapshot: _DecisionSnapshot) -> LakeWorkspace:
 
 
 def locked_packages(
-    snapshot: _DecisionSnapshot, relative: str
+    snapshot: DecisionSnapshot, relative: str
 ) -> tuple[dict[str, object], tuple[LockedPackage, ...]] | None:
     """Decode a Lake manifest or package-overrides file from a snapshot, or ``None`` when there is none."""
 
@@ -137,11 +136,11 @@ def locked_packages(
     try:
         if file.state != "regular" or file.content is None:
             raise ValueError(relative)
-        payload = json.loads(file.content.decode("utf-8"), parse_constant=_reject_json_constant, parse_int=_JsonInteger)
+        payload = json.loads(file.content.decode("utf-8"), parse_constant=reject_json_constant, parse_int=JsonInteger)
         if type(payload) is not dict:
             raise ValueError(relative)
         # A package-overrides file names its version schemaVersion.
-        if _manifest_layout(payload.get("version", payload.get("schemaVersion"))) != "current":
+        if manifest_layout(payload.get("version", payload.get("schemaVersion"))) != "current":
             raise ValueError(relative)
         entries = payload.get("packages")
         entries = [] if entries is None else entries
@@ -150,7 +149,7 @@ def locked_packages(
         # Lake inserts entries into a name map in order, so the last duplicate wins.
         packages: dict[str, LockedPackage] = {}
         for item in entries:
-            name, lock = _decode_package_entry(item, relative)
+            name, lock = decode_package_entry(item, relative)
             spelled = ".".join(text for _kind, text in name)
             # Every path built from these must be encodable, so a lone surrogate makes the manifest unusable.
             spelled.encode("utf-8")
@@ -162,7 +161,7 @@ def locked_packages(
     return payload, tuple(packages[name] for name in sorted(packages))
 
 
-def toolchain(snapshot: _DecisionSnapshot) -> str | None:
+def toolchain(snapshot: DecisionSnapshot) -> str | None:
     """Return the toolchain elan reads from ``lean-toolchain``: its trimmed first line."""
 
     file = snapshot.file("lean-toolchain")
@@ -172,13 +171,13 @@ def toolchain(snapshot: _DecisionSnapshot) -> str | None:
         text = file.content.decode("utf-8")
     except UnicodeError:
         return None
-    return _trim_elan_whitespace(text.split("\n", 1)[0]) or None
+    return text.split("\n", 1)[0].strip(ELAN_WHITESPACE) or None
 
 
 def canonical_name(library: str) -> str:
     """Return ``library`` in the form the manifest lookup compares."""
 
-    return ".".join(text for _kind, text in _canonical_toml_name(library))
+    return ".".join(text for _kind, text in canonical_toml_name(library))
 
 
 def find_package(workspace: LakeWorkspace, library: str) -> LockedPackage:
@@ -188,9 +187,9 @@ def find_package(workspace: LakeWorkspace, library: str) -> LockedPackage:
     package = next((package for package in workspace.packages if package.name == wanted), None)
     if package is None:
         locked = ", ".join(package.name for package in workspace.packages) or "none"
-        raise LibraryError(library, f"it is not a package in {_MANIFEST}; the locked packages are: {shorten(locked)}")
+        raise LibraryError(library, f"it is not a package in {MANIFEST}; the locked packages are: {shorten(locked)}")
     if package.name in workspace.overridden:
-        raise LibraryError(library, f"{_OVERRIDES} replaces it, so the build does not use the locked checkout")
+        raise LibraryError(library, f"{OVERRIDES} replaces it, so the build does not use the locked checkout")
     if package.type != "git":
         raise LibraryError(library, "it is a path dependency, which has no locked revision")
     return package

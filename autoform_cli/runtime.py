@@ -1,14 +1,12 @@
 """Build a versioned, immutable runtime projection of a Markdown roadmap.
 
-The roadmap Markdown remains authoritative.  This module copies the validated
-canonical graph into a stable in-memory contract for read-only consumers; it
-never reads or writes a second graph artifact or any operational state. The
-user-facing rules are the runtime contract in
-``autoform_cli/reference/runtime-and-publication.md``.
+This module copies the validated canonical graph into a stable in-memory
+contract for read-only consumers. The user-facing rules are the runtime
+contract in ``autoform_cli/reference/runtime-and-publication.md``.
 
-The schema ``autoform-runtime/v4`` is versioned and deeply immutable, and its
-declared authority is ``markdown-articles``: the adapter copies hierarchy,
-typed statement and proof dependencies, authored assertions, derived progress,
+The schema ``autoform-runtime/v4`` is deeply immutable, and its declared
+authority is ``markdown-articles``: the adapter copies hierarchy, typed
+statement and proof dependencies, authored assertions, derived progress,
 provenance, and optional local Lean source locations, but provides no
 persistence or write API. ``RuntimeGraph.as_dict()`` and ``to_json()`` are
 deterministic compatibility snapshots for consumers, not an authored or
@@ -22,11 +20,6 @@ non-dispatchable source records. The source revision hashes exact roadmap
 article paths and bytes, excluding timestamps, absolute paths, Git state, and
 operational state. Optional Lean locations come from a local lexical scan and
 do not by themselves establish compilation or proof correctness.
-
-Schema v4 adds a nullable catalog discriminator for module inventories. It
-keeps v3's optional durable ``article_id`` beside the graph's path-derived
-``id``, the project ``open_statements`` policy, ``statement_retracted``
-assertions, and each status's ``assumes`` and ``waiting_on`` fields.
 
 Projection fails when an article's bytes no longer match the digest recorded
 when the graph was loaded, so a source revision never labels node data parsed
@@ -43,9 +36,9 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
+from ._fs import directory_path, resolved_path
 from .graph import Graph, load_graph, roadmap_symlink_issues
 from .lean import LeanSourceError, declaration_names, index_failure_message, index_project, resolve_lean_root
-from .markdown import directory_path, resolved_path
 from .status import derive, is_definition
 
 RUNTIME_SCHEMA = "autoform-runtime/v4"

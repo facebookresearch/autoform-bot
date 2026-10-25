@@ -85,10 +85,8 @@ from autoform_cli.skeleton import (
     write_packets,
     write_skeleton_report,
 )
-from tests.conftest import _lean_toolchain_available
+from tests.conftest import _SKELETON_FIXTURE, _check_lean_toolchain, _lean_toolchain_available
 from tests.undecodable_json import UNDECODABLE_JSON
-
-_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "skeleton-project"
 
 
 # --------------------------------------------------------------------------- #
@@ -124,14 +122,14 @@ def _project(root: Path, *, src_dir: str = ".") -> Path:
 
     project = root / "project"
     project.mkdir()
-    shutil.copy(_FIXTURE / "lean-toolchain", project / "lean-toolchain")
-    lakefile = (_FIXTURE / "lakefile.toml").read_text(encoding="utf-8")
+    shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", project / "lean-toolchain")
+    lakefile = (_SKELETON_FIXTURE / "lakefile.toml").read_text(encoding="utf-8")
     if src_dir != ".":
         lakefile += f'srcDir = "{src_dir}"\n'
     (project / "lakefile.toml").write_text(lakefile, encoding="utf-8")
     source_root = project / src_dir
-    shutil.copytree(_FIXTURE / "Skel", source_root / "Skel")
-    shutil.copy(_FIXTURE / "Skel.lean", source_root / "Skel.lean")
+    shutil.copytree(_SKELETON_FIXTURE / "Skel", source_root / "Skel")
+    shutil.copy(_SKELETON_FIXTURE / "Skel.lean", source_root / "Skel.lean")
     return project
 
 
@@ -1707,7 +1705,7 @@ def _project_with_a_package_source_directory(tmp_path: Path) -> Path:
 
     project = tmp_path / "project"
     project.mkdir()
-    shutil.copy(_FIXTURE / "lean-toolchain", project / "lean-toolchain")
+    shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", project / "lean-toolchain")
     (project / "lakefile.lean").write_text(
         'import Lake\nopen Lake DSL\n\npackage proj where\n  srcDir := "pkgsrc"\n\nlean_lib Proj\n', encoding="utf-8"
     )
@@ -3607,6 +3605,10 @@ def test_required_real_lean_tests_fail_closed(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(shutil, "which", lambda _name: None)
 
     with pytest.raises(RuntimeError, match="lake is not on PATH"):
+        _check_lean_toolchain()
+    # The skipif marks call the cached gate, which must re-raise rather than cache a result.
+    _lean_toolchain_available.cache_clear()
+    with pytest.raises(RuntimeError, match="lake is not on PATH"):
         _lean_toolchain_available()
 
 
@@ -4064,7 +4066,7 @@ def test_two_root_modules_may_see_different_constants_under_one_name(tmp_path: P
     )
     dep = project / "dep"
     dep.mkdir()
-    shutil.copy(_FIXTURE / "lean-toolchain", dep / "lean-toolchain")
+    shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", dep / "lean-toolchain")
     (dep / "lakefile.toml").write_text(
         'name = "dep"\n\n[[lean_lib]]\nname = "Dep"\nroots = ["DepA", "DepB"]\n', encoding="utf-8"
     )
@@ -4735,7 +4737,7 @@ def _project_with_core_named_dependency(tmp_path: Path, module: str) -> Path:
     project = _project(tmp_path)
     dependency = project / "dep"
     (dependency / module.split(".")[0]).mkdir(parents=True)
-    shutil.copy(_FIXTURE / "lean-toolchain", dependency / "lean-toolchain")
+    shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", dependency / "lean-toolchain")
     (dependency / "lakefile.toml").write_text(
         f'name = "dep"\n\n[[lean_lib]]\nname = "Dep"\nroots = ["{module}"]\n', encoding="utf-8"
     )

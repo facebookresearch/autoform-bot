@@ -32,6 +32,7 @@ from . import _directory_binding as directory_binding
 from ._directory_binding import (
     DirectoryChangedError,
     RetainedDirectory,
+    close_quietly,
     lexical_absolute_path,
     open_directory,
 )
@@ -578,7 +579,7 @@ def capture_directory_descriptor(
                     relevant_names.append(name)
                 finally:
                     if child_descriptor is not None:
-                        _close_descriptor(child_descriptor)
+                        close_quietly(child_descriptor)
                 continue
             if not selection.include(relative_path, metadata.st_mode):
                 if selected_only:
@@ -805,13 +806,6 @@ def _valid_name(name: object) -> bool:
 
 def _normalized_name(name: str) -> str:
     return unicodedata.normalize("NFC", name).casefold()
-
-
-def _close_descriptor(descriptor: int) -> None:
-    try:
-        os.close(descriptor)
-    except OSError:
-        pass
 
 
 def _stable_entry_identity(signature: tuple[int, ...]) -> tuple[int, int, int]:
@@ -1051,7 +1045,7 @@ def _require_no_inputs(
                 budget=budget,
             )
     finally:
-        _close_descriptor(child_descriptor)
+        close_quietly(child_descriptor)
 
 
 def _read_file(
@@ -1087,7 +1081,7 @@ def _read_file(
         return data, size
     finally:
         if descriptor is not None:
-            _close_descriptor(descriptor)
+            close_quietly(descriptor)
 
 
 def _read_prefix(stream, length: int) -> bytes:
@@ -1216,7 +1210,7 @@ def _verify_snapshot(
                 raise _TreeChanged(child_relative)
         finally:
             if child_descriptor is not None:
-                _close_descriptor(child_descriptor)
+                close_quietly(child_descriptor)
 
     try:
         verify_directory(root_descriptor, "")
@@ -1396,7 +1390,7 @@ def _read_portable_file(
         return data, size
     finally:
         if descriptor is not None:
-            _close_descriptor(descriptor)
+            close_quietly(descriptor)
 
 
 def _portable_directory_identities(root: Path) -> tuple[tuple[int, int], ...]:

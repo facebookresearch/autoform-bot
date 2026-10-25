@@ -27,8 +27,7 @@ from autoform_cli.lean import declaration_names
 from autoform_cli.runtime import load_runtime_graph
 from autoform_cli.status import STATES, derive
 from autoform_cli.work import WorkError, assumption_contract, list_ready_work
-from tests.test_impact import _lean_toolchain_available
-from tests.test_lake_artifact_audit import (
+from tests.audit_fixture import (
     _TEMPLATE,
     _ends_with_the_success_line,
     _load_helper,
@@ -36,6 +35,7 @@ from tests.test_lake_artifact_audit import (
     _run_probe,
     _write,
 )
+from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
 
 
 _SEEDS = range(30)
@@ -424,7 +424,7 @@ _AUDIT_LINE = re.compile(r"(sorry-free|conditional|open statement \([^)]*\)): (\
 def test_the_site_never_claims_more_than_the_audit_of_a_real_build(repo_root: Path, tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    shutil.copy(repo_root / "tests/fixtures/skeleton-project/lean-toolchain", project / "lean-toolchain")
+    shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", project / "lean-toolchain")
     _write(project / "lakefile.toml", 'name = "Fixture"\ndefaultTargets = ["Fixture"]\n\n[[lean_lib]]\nname = "Fixture"\n')
     _write(project / "Fixture.lean", _CONTRACT_LEAN)
     _write(project / "blueprint/roadmap/README.md", "---\nopen_statements: allowed\n---\n\n# Roadmap\n")

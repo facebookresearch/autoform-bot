@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from servers import _process as process_group
 from servers.repl import core as repl_core
 
 
@@ -204,19 +205,19 @@ def test_process_group_cleanup_escalates_and_reports_timeout(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        repl_core,
+        process_group,
         "_process_group_has_live_members",
         lambda process_group_id: next(live_results),
     )
     monkeypatch.setattr(
-        repl_core,
+        process_group,
         "_wait_for_process",
         lambda candidate, deadline: pytest.fail(
             "the group leader must not be reaped while members remain live"
         ),
     )
     monkeypatch.setattr(
-        repl_core,
+        process_group,
         "_wait_for_live_process_group_exit",
         lambda process_group_id, deadline: next(group_results),
     )
@@ -240,17 +241,17 @@ def test_process_group_cleanup_does_not_signal_an_all_zombie_group(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        repl_core,
+        process_group,
         "_process_group_has_live_members",
         lambda process_group_id: next(live_results),
     )
     monkeypatch.setattr(
-        repl_core,
+        process_group,
         "_wait_for_live_process_group_exit",
         lambda process_group_id, deadline: True,
     )
     monkeypatch.setattr(
-        repl_core,
+        process_group,
         "_wait_for_process",
         lambda candidate, deadline: True,
     )
@@ -265,7 +266,7 @@ def test_process_group_cleanup_refuses_a_pre_reaped_leader_with_live_members(
 ):
     process = SimpleNamespace(returncode=0)
     monkeypatch.setattr(
-        repl_core,
+        process_group,
         "_process_group_has_live_members",
         lambda process_group_id: True,
     )
@@ -1416,7 +1417,7 @@ def test_header_check_reaps_descendants_after_success(tmp_path):
 
     assert _header_modules([sys.executable, "-c", script]) == ["Mathlib"]
     process_ids = json.loads(process_record.read_text())
-    assert not repl_core._process_group_has_live_members(process_ids["group"])
+    assert not process_group._process_group_has_live_members(process_ids["group"])
 
 
 # Answers one frame, then waits for the next as the REPL does.

@@ -13,7 +13,7 @@ workflow and cross-file maintenance.
   checks, or docs and tests that only validate their own planning state.
 - Closing or replacing a proposal that removes duplication is a success. Keep
   reusable insight in the owning skill or an issue; remove an artifact only when
-  authorized.
+  authorized, and otherwise recommend removing it.
 
 ## Repository invariants
 

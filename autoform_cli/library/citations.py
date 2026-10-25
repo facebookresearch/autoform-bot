@@ -32,9 +32,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .. import status
+from .._fs import resolved_path
 from ..graph import IMPLEMENTATION_NOTES_DIR, Graph
 from ..lean import _CONTINUATION_IDENTIFIER, resolve_lean_root, snapshot_project_sources
-from ..markdown import resolved_path
 from ..render import SOURCES_DIR
 from .index import INDEX_FILE, LibraryIndex, LibraryIndexError, parse_index
 from .listing import indexed_packages
@@ -387,7 +387,7 @@ def _lean_names(texts: Iterable[str]) -> tuple[set[str], set[str], set[str]]:
     components: set[str] = set()
     for text in texts:
         for token in _CONTINUATION_IDENTIFIER.findall(text):
-            plain = _unquoted(token)
+            plain = _drop_needless_quotes(token)
             names.update((token, plain))
             parts = plain.split(".")
             prefixes.update(".".join(parts[: end + 1]) for end in range(len(parts)))
@@ -395,7 +395,7 @@ def _lean_names(texts: Iterable[str]) -> tuple[set[str], set[str], set[str]]:
     return names, prefixes, components
 
 
-def _unquoted(name: str) -> str:
+def _drop_needless_quotes(name: str) -> str:
     """``name`` with each ``«x»`` that needs no quotes written as ``x``."""
 
     def plain(part: re.Match[str]) -> str:

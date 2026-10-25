@@ -32,8 +32,9 @@ package name, target directory, and whether publication is wanted. Without
 explicit publication approval, make no remote changes.
 
 The [Cabannes thesis project](assets/cabannes-thesis-project/README.md) shows a
-finished project. Read it, but do not copy it: `project new` and `init` write
-the layout, and its thesis notes illustrate later skills.
+set-up project, its DAG deliberately partial. Read it, but do not copy it:
+`project new` and `init` write the layout, and its thesis notes illustrate later
+skills.
 
 For a new repository, create the project in an absent target directory:
 
@@ -98,16 +99,19 @@ If neither tag exists in
 the user instead of guessing. Then run `lake update repl` so an existing
 manifest locks it without moving Mathlib, and commit the manifest.
 
-For an existing project whose lakefile lacks Lake's artifact cache, offer to add
-`enableArtifactCache = true` and `restoreAllArtifacts = true`; a `lakefile.lean`
-takes them in its `package` declaration. Never enable the cache without
-`restoreAllArtifacts`.
+For an existing project whose lakefile lacks either of
+`enableArtifactCache = true` and `restoreAllArtifacts = true`, offer to add the
+missing one; a `lakefile.lean` takes them in its `package` declaration. Never
+enable the cache without `restoreAllArtifacts`: Autoform's probes load each
+module's `.olean` from `.lake/build`, where only a restore puts it.
 
 Put the project's notation in `blueprint/tex-macros.json` as MathJax
 `tex.macros` definitions, never in articles.
 
-The [CLI reference](../../autoform_cli/README.md#commands) says what the two
-generated workflows check and when Pages deploys. `init` also writes
+The [CLI reference](../../autoform_cli/README.md#publishing-and-the-dashboard)
+says when Pages deploys, and [open
+statements](../../autoform_cli/reference/open-statements.md#open-statements)
+what the generated verify workflow audits. `init` also writes
 `.github/CODEOWNERS.autoform.example`, which GitHub does not read; the
 [template](../../autoform_cli/templates/github/CODEOWNERS.autoform.example)
 says how to activate it. Do not guess owners; activate it only with names the

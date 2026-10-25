@@ -4,15 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.readback import (
+from autoform_cli.readback import load_readbacks
+from autoform_cli.testimony import (
     _MAX_STACKED_MARKS,
     _TEX_MAX_DEPTH,
     _TEX_MAX_LENGTH,
     TESTIMONY_MAX_BYTES,
     TESTIMONY_MAX_LINES,
-    _testimony_errors,
+    errors_in_testimony,
     formula_problems,
-    load_readbacks,
     split_testimony,
     typesetting_warnings,
 )
@@ -70,7 +70,7 @@ def test_dollar_signs_are_taken_in_turn_and_a_backslash_escapes_one(testimony: s
     ],
 )
 def test_plain_text_and_allowlisted_tex_are_accepted_and_typeset(testimony: str) -> None:
-    assert _testimony_errors(testimony) == () and typesetting_warnings(testimony) == ()
+    assert errors_in_testimony(testimony) == () and typesetting_warnings(testimony) == ()
 
 
 _STACKED = "more than 4 combining marks on one character, or more than 2 above or below it, are not allowed"
@@ -115,7 +115,7 @@ _NOTHING_SHOWN = "testimony shows no letter or digit"
 def test_testimony_that_hides_what_it_says_is_refused(testimony: str, reason: str) -> None:
     """A reader must be shown everything the card says, and only that."""
 
-    errors = _testimony_errors(testimony)
+    errors = errors_in_testimony(testimony)
     assert any(reason in error for error in errors), errors
 
 
@@ -183,12 +183,12 @@ def test_a_formula_that_cannot_be_typeset_is_shown_as_typed_not_refused(formula:
     problems = formula_problems(formula)
     assert any(reason in problem for problem in problems), problems
     testimony = f"Then $${formula}$$ holds."
-    assert _testimony_errors(testimony) == ()
+    assert errors_in_testimony(testimony) == ()
     assert typesetting_warnings(testimony)[0].endswith("is shown as typed: " + "; ".join(problems))
 
 
 def test_a_dollar_sign_no_other_closes_is_shown_as_typed_not_refused() -> None:
-    assert _testimony_errors("It costs $5.") == ()
+    assert errors_in_testimony("It costs $5.") == ()
     assert typesetting_warnings("It costs $5.") == (
         "a dollar sign that no other closes is shown as typed: write \\$ for a dollar sign",
     )
@@ -225,7 +225,7 @@ def test_a_message_names_at_most_eight_things_and_cuts_long_names() -> None:
         "U+200C ZERO WIDTH NON-JOINER, U+200D ZERO WIDTH JOINER, U+200E LEFT-TO-RIGHT MARK, "
         "U+200F RIGHT-TO-LEFT MARK, U+2060 WORD JOINER, "
         "U+2061 FUNCTION APPLICATION, U+2062 INVISIBLE TIMES, and 2 more"
-    ) in _testimony_errors(f"Hidden {hidden} here.")
+    ) in errors_in_testimony(f"Hidden {hidden} here.")
     warnings = typesetting_warnings(" ".join(f"$\\cmd{c}$" for c in "abcdefghij") + " $" + "a~" * 50 + "$ hold.")
     assert len(warnings) == 9 and warnings[-1] == "and 3 more formulas are shown as typed"
     assert warnings[0] == "the formula $\\cmda$ is shown as typed: " + _UNLISTED + "\\cmda"
@@ -250,7 +250,7 @@ def test_testimony_at_the_size_limit_is_checked_quickly(testimony: str) -> None:
     """Every card in a pull request is checked before its validity is known."""
 
     started = time.process_time()
-    _testimony_errors(testimony)
+    errors_in_testimony(testimony)
     typesetting_warnings(testimony)
     assert time.process_time() - started < 2
 
@@ -270,7 +270,7 @@ def test_the_read_back_guide_states_the_rules_the_validator_applies() -> None:
     rewrites = [(one[2], other[2]) for one, other in zip(spans, spans[1:]) if guide[one.end() : other.start()] == ", not "]
     assert len(rewrites) >= 2
     for good, bad in rewrites:
-        assert not _testimony_errors(good) and not typesetting_warnings(good) and typesetting_warnings(bad), (good, bad)
+        assert not errors_in_testimony(good) and not typesetting_warnings(good) and typesetting_warnings(bad), (good, bad)
         assert re.sub(r"\W", "", good) == re.sub(r"\W", "", bad), (good, bad)
     shown = re.search(r"shown as typed instead of typeset, including (.*?): MathJax", guide).group(1)
     named = re.findall(r"`(\\[A-Za-z,;]+)`", shown)

@@ -11,9 +11,10 @@ The example is small:
 - the roadmap maps all six mathematical chapters at coarse granularity;
 - two decomposed chapters make the book navigation and cross-chapter DAG
   concrete: “Infimum Loss” contains the source targets, while “Full
-  Supervision” contains two supporting Lean declarations;
-- the coverage page distinguishes mapped, partial, and out-of-scope material;
-- the source page records stable labels from `infimum/core.tex`; and
+  Supervision” contains a supporting Lean definition;
+- the coverage page distinguishes mapped, decomposed, and out-of-scope material;
+- the [source page](../../setup/assets/cabannes-thesis-project/blueprint/sources/thesis.md)
+  records stable labels from `infimum/core.tex`; and
 - seven DAG nodes decompose one representative “Infimum Loss” slice and its
   supporting full-supervision construction.
 
@@ -25,20 +26,20 @@ stopping point to copy. Its nodes happen to map one-to-one to main public
 artifacts; a node may also carry several supporting declarations under one
 unique main result.
 
-The detailed slice uses labels verified in `infimum/core.tex` from the public
-[arXiv e-print source](https://export.arxiv.org/e-print/2209.11629):
+The five source targets and the dependencies their articles list:
 
-| Node | Source label | Prerequisites |
+| Node | Depends on | Proof depends on |
 | --- | --- | --- |
-| Eligibility | `il:def:eligibility` | None |
-| Non-ambiguity | `il:def:non-ambiguity` | None |
-| Infimum loss | `il:thm:infimum-loss` | Eligibility |
-| Non-ambiguity determinism | `il:thm:ambiguity` | Non-ambiguity |
-| Supervision recovery | `il:thm:non-ambiguity` | Infimum loss; Non-ambiguity determinism |
+| Eligibility | None | None |
+| Non-ambiguity | Eligibility | None |
+| Infimum loss | Eligibility | None |
+| Non-ambiguity determinism | Non-ambiguity | None |
+| Supervision recovery | Infimum loss; Full supervision | Non-ambiguity determinism; Full supervision is non-ambiguous |
 
-Two supporting nodes sit in a separate formalization chapter: full supervision
-and the proof that it is non-ambiguous. Grounded in existing Lean declarations,
-they feed the supervision-recovery target without posing as thesis statements.
+Two supporting nodes come from existing Lean declarations: full supervision, in
+a separate formalization chapter, and the proof that it is non-ambiguous, filed
+with the Infimum Loss theorems. They feed the supervision-recovery target
+without posing as thesis statements.
 
 Existing and planned mathematics coexist in one book here: five of the seven
 nodes are already formalized, both supporting declarations and three of the

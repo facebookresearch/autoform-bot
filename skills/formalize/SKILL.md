@@ -160,8 +160,10 @@ sorry-free.
 
 Treat Lean's `unusedVariables` and `unusedSectionVars` warnings on the article's
 theorems as findings. Once the proof is complete and its focused build passes,
-also run Batteries' `#lint only unusedArguments` on the module that declares
-them. Resolve each finding as the [unused-hypothesis
+also run Batteries' `#lint only unusedArguments in <Module>` after
+`import <Module>`, where `<Module>` declares them: without `in` it lints only the
+current file, and its releases for Lean v4.30.0 and v4.31.0 check no theorem, so
+a clean run there is not evidence. Resolve each finding as the [unused-hypothesis
 rules](references/unused-hypotheses.md) say.
 
 After the focused build passes, require an independent Agent Review of every

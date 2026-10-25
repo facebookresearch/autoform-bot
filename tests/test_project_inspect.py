@@ -1413,7 +1413,7 @@ def test_new_nearer_project_root_forces_a_retry(tmp_path: Path, monkeypatch: pyt
     outer = _project(tmp_path)
     inner = outer / "nested"
     inner.mkdir()
-    original = project_snapshot._capture_decision_snapshot
+    original = project_snapshot.capture_decision_snapshot
     inserted = False
 
     def capture_after_inserting_root(root: Path):
@@ -1425,7 +1425,7 @@ def test_new_nearer_project_root_forces_a_retry(tmp_path: Path, monkeypatch: pyt
             _write_manifest(inner, _mathlib())
         return original(root)
 
-    monkeypatch.setattr(project_snapshot, "_capture_decision_snapshot", capture_after_inserting_root)
+    monkeypatch.setattr(project_snapshot, "capture_decision_snapshot", capture_after_inserting_root)
 
     result = inspect_project(inner)
 
@@ -1448,10 +1448,10 @@ def test_suppressed_path_predicate_errors_cannot_hide_a_nearer_root(
     original_is_symlink = Path.is_symlink
 
     def suppressed_exists(path: Path) -> bool:
-        return False if path.parent == inner and path.name in project_snapshot._ROOT_MARKERS else original_exists(path)
+        return False if path.parent == inner and path.name in project_snapshot.ROOT_MARKERS else original_exists(path)
 
     def suppressed_is_symlink(path: Path) -> bool:
-        return False if path.parent == inner and path.name in project_snapshot._ROOT_MARKERS else original_is_symlink(path)
+        return False if path.parent == inner and path.name in project_snapshot.ROOT_MARKERS else original_is_symlink(path)
 
     monkeypatch.setattr(Path, "exists", suppressed_exists)
     monkeypatch.setattr(Path, "is_symlink", suppressed_is_symlink)
@@ -1466,7 +1466,7 @@ def test_suppressed_path_predicate_errors_cannot_hide_a_nearer_root(
 def test_autoform_paths_are_revalidated_with_the_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _project(tmp_path)
     (root / "blueprint").mkdir()
-    original = project_snapshot._capture_decision_snapshot
+    original = project_snapshot.capture_decision_snapshot
     removed = False
 
     def capture_after_removing_blueprint(captured_root: Path):
@@ -1476,7 +1476,7 @@ def test_autoform_paths_are_revalidated_with_the_snapshot(tmp_path: Path, monkey
             (root / "blueprint").rmdir()
         return original(captured_root)
 
-    monkeypatch.setattr(project_snapshot, "_capture_decision_snapshot", capture_after_removing_blueprint)
+    monkeypatch.setattr(project_snapshot, "capture_decision_snapshot", capture_after_removing_blueprint)
 
     result = inspect_project(root)
 

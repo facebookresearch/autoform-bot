@@ -41,15 +41,16 @@ from typing import Any, TypeVar
 
 from fastmcp.server import FastMCP
 
-from servers.lean_client import LeanRuntimeClient
-from servers.repl.core import (
+from servers._process import (
     REPL_ABORT_KILL_SECONDS,
     REPL_ABORT_TERM_SECONDS,
+    _inherit_clean_env,
     _process_group_has_live_members,
     _reap_process,
     _terminate_process_group,
     _wait_for_live_process_group_exit,
 )
+from servers.lean_client import LeanRuntimeClient
 
 logger = getLogger(__name__)
 # Bound at import: tests swap subprocess.Popen for factories, and non-Popen
@@ -196,8 +197,7 @@ class LeanLspSession:
         """Start the language server process."""
         if os.name != "posix":
             raise RuntimeError("Lean LSP transport requires a POSIX platform")
-        env = os.environ.copy()
-        env.pop("PYTHONPATH", None)
+        env = _inherit_clean_env()
         self._token = secrets.token_hex(16)
         env[_SESSION_TOKEN_ENV] = self._token
         process: subprocess.Popen | None = None

@@ -75,20 +75,17 @@ def test_integrated_landing_retains_authored_title_with_generated_hide_metadata(
 
 
 def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -> None:
-    """The example's CI runs its pinned AUTOFORM_REF, 0288506b, which predates catalogs.
+    """The example's CI runs its pinned AUTOFORM_REF, 31a1767b, which predates #378.
 
-    That check rejects `catalog:` and `area:` and that render rejects
-    INVENTORIED, while it ignores atlas.json, and its render draws Mermaid maps
-    through the global Mermaid script, so mkdocs.yml keeps that line. Move the
-    pin, here and in the workflow equivalence test, before relaxing this.
+    That render still draws Mermaid maps through the global Mermaid script, so
+    mkdocs.yml keeps that line, and the example's texts say only what both
+    renders write. That pin has no `review` command either, so the example
+    turns on no statement review. Move the pin, here and in the workflow
+    equivalence test, before relaxing this.
     """
     example = repo_root / _EXAMPLE
-    for page in (example / "blueprint/roadmap").rglob("*.md"):
-        text = page.read_text(encoding="utf-8")
-        frontmatter = text[4:].split("\n---", 1)[0] if text.startswith("---\n") else ""
-        assert not re.search(r"^(?:area|catalog):", frontmatter, re.MULTILINE), page
+    assert not (example / "blueprint/.autoform-review").exists()
     assert "mermaid@11.4.1/dist/mermaid.min.js" in (example / "mkdocs.yml").read_text(encoding="utf-8")
-    assert "INVENTORIED" not in (example / "blueprint/coverage/README.md").read_text(encoding="utf-8")
     assert "dependency maps of the project and each chapter" in " ".join(
         (example / "README.md").read_text(encoding="utf-8").split()
     )
@@ -710,7 +707,7 @@ def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None
 
     substitutions = {
         "{{AUTOFORM_SOURCE_YAML}}": '"https://github.com/facebookresearch/autoform-bot.git"',
-        "{{AUTOFORM_REF_YAML}}": '"0288506b87e2e2f70b7446bf0cf7145006138d74"',
+        "{{AUTOFORM_REF_YAML}}": '"31a1767bf04f28de7c1326db0dc50345a9787cf5"',
     }
     template_dir = repo_root / "autoform_cli/templates/github/workflows"
     example_dir = repo_root / _EXAMPLE / ".github/workflows"

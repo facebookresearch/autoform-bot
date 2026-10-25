@@ -19,7 +19,7 @@ import psutil
 import pytest
 
 from servers.lsp import server as lsp
-from tests.test_impact import _SKELETON_FIXTURE, _lean_toolchain_available
+from tests.lean_fixture import _real_lean_project, _requires_real_lean
 
 
 class _FakeStream:
@@ -967,23 +967,6 @@ def test_close_stops_workers_orphaned_before_close():
             _kill_quietly(child)
         if session.process is not None:
             session.abort()
-
-
-_requires_real_lean = pytest.mark.skipif(
-    not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain"
-)
-
-
-def _real_lean_project(root: Path, main: str, **modules: str) -> Path:
-    (root / "Probe").mkdir(parents=True)
-    (root / "lean-toolchain").write_text(
-        (_SKELETON_FIXTURE / "lean-toolchain").read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    (root / "lakefile.toml").write_text('name = "probe"\n\n[[lean_lib]]\nname = "Probe"\n', encoding="utf-8")
-    (root / "Probe" / "Main.lean").write_text(main, encoding="utf-8")
-    for name, text in modules.items():
-        (root / "Probe" / f"{name}.lean").write_text(text, encoding="utf-8")
-    return root
 
 
 def _command_mentions(process: psutil.Process, text: str) -> bool:

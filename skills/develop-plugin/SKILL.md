@@ -17,7 +17,7 @@ Keep Cabannes-specific facts in examples; keep plugin and formalization roots
 distinct. Agents can infer routine details; keep shared agent entrypoints concise
 and link on-demand references.
 
-For claims/views/source evidence/mirrors/pins/releases/explorers, read
+For local views/source evidence/mirrors/pins/releases/explorers, read
 [repository contracts](references/repository-contracts.md).
 
 Run:

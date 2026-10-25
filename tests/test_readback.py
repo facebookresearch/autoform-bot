@@ -16,7 +16,6 @@ import pytest
 from autoform_cli.readback import (
     READBACK_HEADING,
     SKELETON_HEADING,
-    formula_problems,
     load_readbacks,
     prepare_readback,
     publish_readback,
@@ -25,6 +24,7 @@ from autoform_cli.readback import (
     readback_path,
 )
 from autoform_cli.skeleton import DeclarationSkeleton, TrustedDeclaration, evidence_hash_of
+from autoform_cli.testimony import formula_problems
 from tests.skeleton_fixtures import SEMANTIC as _PROP
 from tests.skeleton_fixtures import declaration as fixture_declaration
 

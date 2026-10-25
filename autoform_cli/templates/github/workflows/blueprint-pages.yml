@@ -113,6 +113,15 @@ jobs:
           --with pymdown-extensions==11.0.1
           mkdocs build --strict
 
+      # Lists internal links and anchors that lead nowhere, which `--strict`
+      # never checks in render's raw HTML, and statement cards the build
+      # dropped. Like the audit, it never fails the build or stops a deploy.
+      - name: Check the built site (report only)
+        continue-on-error: true
+        run: >-
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          autoform site check site --source site-src
+
       - name: Upload Pages artifact
         if: github.event_name == 'workflow_run'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0

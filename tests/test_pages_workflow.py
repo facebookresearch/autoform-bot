@@ -242,3 +242,23 @@ def test_the_audit_runs_after_check_as_a_report(pages: dict) -> None:
     assert audit["name"] == "Audit the roadmap (report only)"
     assert audit["run"] == steps[check_at]["run"].replace("autoform check", "autoform audit")
     assert audit["continue-on-error"] is True and "if" not in audit
+
+
+def test_the_site_check_runs_after_the_build_as_a_report(pages: dict) -> None:
+    """Every build runs ``autoform site check`` right after MkDocs, from the same
+    pinned Autoform, on the site it uploads and the source render wrote. Like
+    the audit, it continues on error, so it never fails the build or stops a
+    deploy (#389)."""
+
+    steps = pages["jobs"]["build"]["steps"]
+    names = [step["name"] for step in steps]
+    site_check = steps[names.index("Build the Markdown site") + 1]
+    check = steps[names.index("Validate the theorem DAG and its declarations")]
+    site = steps[names.index("Upload Pages artifact")]["with"]["path"]
+
+    assert site_check["name"] == "Check the built site (report only)"
+    assert "--output site-src" in steps[names.index("Render the blueprint")]["run"]
+    assert site_check["run"] == check["run"].replace(
+        "autoform check blueprint --lean-root .", f"autoform site check {site} --source site-src"
+    )
+    assert site_check["continue-on-error"] is True and "if" not in site_check

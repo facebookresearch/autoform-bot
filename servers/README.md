@@ -30,8 +30,9 @@ process-owned environment or proof-state handle survives the response. Before
 that child starts, Lean's own header parser, run by the selected Lake
 toolchain, reads the submitted source. Every import it reports must have one of
 the allowlisted roots `Mathlib`, `Aesop`, `Batteries`, or `LeanSearchClient` (a
-plain `Init` import is ignored); quoted or path-like module names are refused,
-and a rejected or unrecognized parser response fails closed. Code with other
+plain `Init` import is ignored); names still quoted or path-like after Lean
+parses them are refused, and a rejected or unrecognized parser response fails
+closed. Code with other
 imports, such as the project's own modules, is checked as a saved file with
 `lean_diagnostic_messages` instead. The allowlist is a policy check, not a
 sandbox: each call runs with the runtime user's privileges, and `Init` alone
@@ -53,7 +54,9 @@ until Lean exits. When `LEAN_LSP_CMD` ends in `serve`, that command runs with
 Unbuilt or stale imports are reported, not built, and Lake names only the first
 modules to build. At most `AUTOFORM_MAX_LEAN_PROJECTS` checks run at once.
 `lean_hover` uses the project's Lean server, which stays warm between calls and
-builds stale imports inside the call.
+builds stale imports inside the call. Closing a server stops its Lean workers by
+a token in their inherited environment, so a `LEAN_LSP_CMD` wrapper that clears
+its children's environment leaks them.
 
 `LEAN_LSP_TIMEOUT` bounds each `lean_diagnostic_messages` call, including
 waiting for a free Lean slot. For `lean_hover` its clock starts once the

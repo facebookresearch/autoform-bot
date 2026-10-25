@@ -8,14 +8,6 @@ writes a draft issue for AutoformBot's tracker, with local paths replaced by
 placeholders, and returns a link that opens it pre-filled. Nothing is sent: the
 user reviews, edits, and submits the issue themselves.
 
-Configuration (environment):
-
-``AUTOFORM_DEBRIEF``
-    On by default. ``0`` / ``false`` / ``no`` / ``off`` makes ``form`` say
-    orchestrator debriefs are disabled, and the agent skips the step.
-``AUTOFORM_DEBRIEF_DIR``
-    The store, shared with subagent debriefs (see :func:`debrief.debrief_root`).
-
 Store layout::
 
     runs/<run_id>.json      one RunRecord per run, schema_version 1
@@ -37,6 +29,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 from . import debrief_store as store
+from ._repository import git
 from .debrief import (
     MAX_ANSWER_BYTES,
     DebriefError,
@@ -50,7 +43,6 @@ from .debrief import (
     parse_answer,
     project_dir,
 )
-from .lean import _git
 
 SCHEMA_VERSION = 1
 DEBRIEF_ENV = "AUTOFORM_DEBRIEF"
@@ -132,7 +124,7 @@ def autoform_version() -> str:
         version = importlib.metadata.version("autoform")
     except importlib.metadata.PackageNotFoundError:
         version = "unknown"
-    commit = _git(Path(__file__).resolve().parent.parent, "rev-parse", "--short=12", "HEAD")
+    commit = git(Path(__file__).resolve().parent.parent, "rev-parse", "--short=12", "HEAD")
     return f"{version} ({commit})" if commit else version
 
 

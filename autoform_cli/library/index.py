@@ -13,6 +13,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
+from .._strict_json import reject_json_constant
+
 #: Provisional until the generator has shown it can produce every field.
 INDEX_SCHEMA = "autoform-library-index/v0"
 INDEX_FILE = "autoform-library-index.jsonl"
@@ -271,11 +273,8 @@ def _record(line: str, number: int) -> dict[str, object]:
             record[key] = value
         return record
 
-    def constant(_name: str) -> None:
-        raise ValueError("constant")
-
     try:
-        record = json.loads(line, object_pairs_hook=unique, parse_constant=constant)
+        record = json.loads(line, object_pairs_hook=unique, parse_constant=reject_json_constant)
     except LibraryIndexError:
         raise
     except (RecursionError, ValueError):

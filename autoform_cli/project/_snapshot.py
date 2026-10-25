@@ -12,10 +12,10 @@ from pathlib import Path
 _MAX_FILE_BYTES = 1024 * 1024
 # Links one lookup may follow (MAXSYMLINKS): 40 on Linux, 32 on macOS and the BSDs.
 _MAX_SYMLINKS = 40 if sys.platform.startswith("linux") else 32
-_ROOT_MARKERS = ("lakefile.lean", "lakefile.toml", "lean-toolchain")
-_MANIFEST = "lake-manifest.json"
-_OVERRIDES = ".lake/package-overrides.json"
-_DECISION_FILES = (*_ROOT_MARKERS, _MANIFEST, _OVERRIDES)
+ROOT_MARKERS = ("lakefile.lean", "lakefile.toml", "lean-toolchain")
+MANIFEST = "lake-manifest.json"
+OVERRIDES = ".lake/package-overrides.json"
+_DECISION_FILES = (*ROOT_MARKERS, MANIFEST, OVERRIDES)
 _WINDOWS_STAT_VIEWS = os.name == "nt"
 
 
@@ -31,7 +31,7 @@ class _FileSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
-class _DecisionSnapshot:
+class DecisionSnapshot:
     """The small set of bytes from which an inspection answer is derived."""
 
     root_identity: tuple[int, ...] | None
@@ -52,7 +52,7 @@ class _DecisionSnapshot:
         return dict(self.files)[relative]
 
 
-def _capture_decision_snapshot(root: Path) -> _DecisionSnapshot:
+def capture_decision_snapshot(root: Path) -> DecisionSnapshot:
     """Read all decision files once; callers re-read and compare the full value.
 
     Decision files and ``.lake`` are read through symlinks, as Lake and elan
@@ -82,7 +82,7 @@ def _capture_decision_snapshot(root: Path) -> _DecisionSnapshot:
         # cannot treat that path as absent: a present non-directory `.lake`
         # makes the override path unreadable.
         if (
-            relative == _OVERRIDES
+            relative == OVERRIDES
             and file.state == "missing"
             and lake_before[0] in {"other", "unreadable"}
         ):
@@ -97,7 +97,7 @@ def _capture_decision_snapshot(root: Path) -> _DecisionSnapshot:
         root_identity = None
     lake_after = _directory_generation(root / ".lake")
     lake_directory = lake_before if lake_before == lake_after else ("changed", None)
-    return _DecisionSnapshot(root_identity, lake_directory, aliases, files)
+    return DecisionSnapshot(root_identity, lake_directory, aliases, files)
 
 
 def _capture_file(root: Path, relative: str) -> _FileSnapshot:
@@ -280,7 +280,7 @@ def _open_resolved(path: Path, flags: int, holder: tuple[int, ...]) -> int | Non
 def _decision_aliases(root: Path) -> tuple[tuple[str, tuple[str, ...]], ...]:
     """Snapshot relevant directory entries so case-only/presence changes retry."""
 
-    top_names = (*_ROOT_MARKERS, _MANIFEST, ".lake")
+    top_names = (*ROOT_MARKERS, MANIFEST, ".lake")
     try:
         top_entries = os.listdir(root)
     except (OSError, TypeError, ValueError):
@@ -293,14 +293,14 @@ def _decision_aliases(root: Path) -> tuple[tuple[str, tuple[str, ...]], ...]:
     if lake_aliases:
         try:
             lake_entries = _list_directory(root / ".lake")
-            override = Path(_OVERRIDES).name
+            override = Path(OVERRIDES).name
             aliases.append(
-                (_OVERRIDES, tuple(sorted(entry for entry in lake_entries if entry.casefold() == override.casefold())))
+                (OVERRIDES, tuple(sorted(entry for entry in lake_entries if entry.casefold() == override.casefold())))
             )
         except (OSError, TypeError, ValueError):
-            aliases.append((_OVERRIDES, ("<unreadable>",)))
+            aliases.append((OVERRIDES, ("<unreadable>",)))
     else:
-        aliases.append((_OVERRIDES, ()))
+        aliases.append((OVERRIDES, ()))
     return tuple(aliases)
 
 
@@ -358,7 +358,7 @@ def _directory_generation(path: Path) -> tuple[str, tuple[int, ...] | None]:
     return "directory", _node_identity(metadata)
 
 
-def _path_present(path: Path) -> bool:
+def path_present(path: Path) -> bool:
     try:
         os.stat(path, follow_symlinks=False)
         return True

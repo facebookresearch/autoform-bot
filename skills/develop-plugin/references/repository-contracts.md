@@ -1,23 +1,20 @@
 # Autoform repository contracts
 
-Read these contracts when changing coordination state, publication surfaces,
-source evidence, generated files, or dependency pins.
+Read these contracts when changing local views, publication surfaces, source
+evidence, generated files, or dependency pins.
 
 ## Knowledge-map publication
 
 Full-viewport knowledge maps draw regions only from authored mathematical areas,
 never from folders or paths, and reading panels from authored prose. Keep
 containment and dependency distinct. Never fit the whole repository. Run
-`make test-browser` for any explorer change: `make test` skips the WebKit
-suite, which CI runs with `AUTOFORM_REQUIRE_BROWSER_TESTS=1`.
+`make test-browser` for any explorer change.
 
-## Coordination and local views
+## Local views
 
-- `refs/autoform-claims/*` is shared cross-machine coordination state. Pushing
-  claim refs is intentional when the user authorizes that outward-facing action.
-- Keep the live dashboard and publication overlay local-only. Loopback services
-  must validate request-level Host and Origin and must not expose secrets or
-  local paths.
+Loopback services such as the live dashboard and publication overlay must
+validate request-level Host and Origin and must not expose secrets or local
+paths.
 
 ## Source evidence
 
@@ -36,15 +33,12 @@ The bundled example mirrors only artifacts with explicit equivalence tests:
 
 - generated workflow templates, after substituting the example's concrete
   Autoform source and ref;
-- `.github/autoform_audit.py` byte-for-byte, which itself carries
-  `autoform_cli/probes/audit_probe.lean` verbatim (`scripts/sync_audit_probe.py`
-  rewrites both copies); and
+- `.github/autoform_audit.py` byte-for-byte; and
 - significant `mkdocs.yml` settings except the example-specific site name and
   repository URL.
 
-Update the template, example, and owning equivalence test together. The root
-`.gitignore` is a scaffold input, not a bundled-example mirror; scaffold tests
-own its required rules.
+Update the template, example, and owning equivalence test together. Scaffold
+tests own the root `.gitignore`'s required rules.
 
 ## Pins and releases
 

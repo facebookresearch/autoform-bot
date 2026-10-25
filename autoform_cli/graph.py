@@ -32,9 +32,9 @@ from .markdown import (
     mask_code_and_comments,
     resolved_path,
 )
+from .markdown import HEADING as _HEADING
 
 
-_HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 #: An inline link or image; its label may hold bracket pairs, as the page reads it.
 _MARKDOWN_LINK_TEXT = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\([^)]*\)")
 #: A full, collapsed or shortcut reference link: ``[text][label]``, ``[label][]`` or ``[label]``.

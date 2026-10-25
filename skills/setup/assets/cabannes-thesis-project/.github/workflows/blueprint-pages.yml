@@ -23,7 +23,7 @@ permissions:
 
 env:
   AUTOFORM_SOURCE: "https://github.com/facebookresearch/autoform-bot.git"
-  AUTOFORM_REF: "0288506b87e2e2f70b7446bf0cf7145006138d74"
+  AUTOFORM_REF: "31a1767bf04f28de7c1326db0dc50345a9787cf5"
 
 # Deploys queue in one group, so none is cancelled by a build that cannot
 # deploy; every other run gets a group of its own. A run deploys under the
@@ -112,6 +112,15 @@ jobs:
           --with markdown==3.10.3
           --with pymdown-extensions==11.0.1
           mkdocs build --strict
+
+      # Lists internal links and anchors that lead nowhere, which `--strict`
+      # never checks in render's raw HTML, and statement cards the build
+      # dropped. Like the audit, it never fails the build or stops a deploy.
+      - name: Check the built site (report only)
+        continue-on-error: true
+        run: >-
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          autoform site check site --source site-src
 
       - name: Upload Pages artifact
         if: github.event_name == 'workflow_run'

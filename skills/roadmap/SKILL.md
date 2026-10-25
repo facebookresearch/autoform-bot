@@ -99,8 +99,10 @@ result and for each intermediate result its proof proves or cites, as the
   and leave `lean:` unset until Formalize declares the result in the project:
   `lean:` names only a declaration in the project's own Lean files.
 - A refusal (exit 2) is not an empty result: resolve what it reports without
-  adding the article, and search again. A dependency link to a page not yet
-  written causes one, so search for a whole batch before writing the first.
+  adding the article, and search again; one that names a library is handled as
+  the search steps say, since you cannot change another repository's index. A
+  dependency link to a page not yet written causes one, so search for a whole
+  batch before writing the first.
 - When another formalizable article already states the result, link to it from
   each article that needs it, under `## Depends on` or `## Proof depends on`,
   and from the coverage row, instead of adding a node.
@@ -145,9 +147,10 @@ article's note and deletes the note.
 
 Claims are optional; use them when [Formalize](../formalize/SKILL.md) would.
 When the project uses them, acquire the `claim_target` that `autoform work
-context` reports for a formalizable leaf before revising it, passing your own
-`--worker-id`; renew it while editing and release it once the committed revision
-is on the branch Formalize works from. A refused acquire means another agent
+context` reports for a formalizable leaf before revising it, in one acquire
+with the dependents the revision will retract, passing your own `--worker-id`;
+renew it while editing and release it once the committed revision is on the
+branch Formalize works from. A refused acquire means another agent
 owns the article: leave it and report it. Claims write refs to the board's
 remote, which is outward-facing, so make sure the request covers them.
 
@@ -155,8 +158,9 @@ When a revision changes a statement, or Human Review requests a Lean revision,
 retract the article as step 6 of the [revision
 contract](../../autoform_cli/reference/claims-and-revisions.md#revision-contract)
 says. An article without `lean:` just loses `statement` and `proof`, a
-Human-Review Lean revision is recorded in the implementation note, and retracted
-dependents are claimed in one acquire when the project uses claims. Formalize
+Human-Review Lean revision is recorded in the implementation note, and a
+dependent found only now means releasing and acquiring the whole set again under
+the no-hold-and-wait rule when the project uses claims. Formalize
 may land `lean:` on the branch it works from after your checkout, with or
 without claims. Before the revision lands on that branch, and so before
 releasing any claim, bring it up to date with that branch by rebase or merge,
