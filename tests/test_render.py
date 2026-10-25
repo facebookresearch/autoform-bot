@@ -3139,6 +3139,22 @@ def test_the_search_index_follows_the_book_order(tmp_path: Path) -> None:
     assert chapters[-1] == "irrationality-proof"
 
 
+def test_statement_numbers_rise_down_each_page_and_across_chapters(tmp_path: Path) -> None:
+    project = _book_order_project(tmp_path)
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    numbers = [
+        int(number)
+        for chapter in ("zeta", "alpha", "irrationality-proof")
+        for number in re.findall(
+            r'class="bp-thmlabel">(\d+)<', (out / "roadmap" / chapter / "README.md").read_text(encoding="utf-8")
+        )
+    ]
+    assert numbers == list(range(1, 7))
+
+
 def test_a_root_article_and_search_share_its_generated_canonical_book_route(tmp_path: Path) -> None:
     """Even without an authored contents page, search opens the generated full
     chapter and exact theorem anchor, not a second explorer-only page."""

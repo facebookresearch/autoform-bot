@@ -1029,7 +1029,6 @@ def _render_pages(
     ]
     coverage_warnings += (f"atlas.json: {omission}" for omission in atlas_omissions(graph, unpublished_nodes))
     statuses = status.derive(graph)
-    numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
     # Sources leave the site only for a directory the verified commit holds.
     sources_base = _sources_base(blueprint, repo_root, linker) if sources else None
@@ -1084,6 +1083,7 @@ def _render_pages(
             targets=targets, typed=site.typed,
         ),
     )
+    numbers = _number_nodes(graph, order)
 
     overview = destination / "README.md"
     # The author's page, as render publishes it when nothing in it is flagged:
@@ -2824,11 +2824,12 @@ def _reaches(path: Path, directory: Path) -> bool:
     return False
 
 
-def _number_nodes(graph: Graph) -> dict[str, str]:
-    """Number nodes per declaration kind in dependency order, as a blueprint does."""
+def _number_nodes(graph: Graph, order: Sequence[str] = ()) -> dict[str, str]:
+    """Number nodes per declaration kind in reading ``order`` (topological
+    without one), so numbers rise down each page and across chapters."""
     counters: dict[str, int] = {}
     numbers: dict[str, str] = {}
-    for node_id in status.topological_order(graph):
+    for node_id in order or status.topological_order(graph):
         label = _declaration_label(graph.nodes[node_id])
         counters[label] = counters.get(label, 0) + 1
         numbers[node_id] = f"{label} {counters[label]}"
