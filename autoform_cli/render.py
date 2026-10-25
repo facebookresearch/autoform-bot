@@ -50,7 +50,7 @@ import sys
 import tempfile
 import time
 import unicodedata
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from html.parser import HTMLParser
@@ -1073,6 +1073,18 @@ def _render_pages(
             target.write_bytes(content)
         report.pages += 1
 
+    # One reading order for Next up, the previous/next strip, SUMMARY.md and
+    # the search index. A chapter with no narrative page is written later.
+    book_pages = _book_page_order(
+        blueprint, destination, graph, planned={page.resolve() for page in group_pages.values()}
+    )
+    order = _reading_order(
+        graph, targets, book_pages, _card_positions(
+            groups, group_pages, graph=graph, blueprint=blueprint, node_sources=node_sources,
+            targets=targets, typed=site.typed,
+        ),
+    )
+
     overview = destination / "README.md"
     # The author's page, as render publishes it when nothing in it is flagged:
     # the hero escapes its title and lead itself, and a page shown as typed has
@@ -1093,6 +1105,7 @@ def _render_pages(
                 page=overview,
                 destination=destination,
                 targets=targets,
+                order=order,
             ),
             encoding="utf-8",
         )
@@ -1128,11 +1141,6 @@ def _render_pages(
         report.linked += linked
         report.unresolved.extend(unresolved)
 
-    book_pages = _book_page_order(
-        blueprint,
-        destination,
-        graph,
-    )
     # The landing page is a dashboard, not chapter one. Previous/next belongs
     # to the book, so the strip starts at the contents page.
     _append_book_navigation([p for p in book_pages if p != overview])
@@ -1162,7 +1170,7 @@ def _render_pages(
         source_paths={node_id: node.path.relative_to(blueprint) for node_id, node in graph.nodes.items()},
         unavailable_source_ids=site.unavailable_source_ids,
         warnings_out=report.warnings,
-        book_order=_reading_order(graph, targets, book_pages),
+        book_order=order,
     )
     report.pages += sum(path != destination / graph_pages.WIKI_LINKS for path in generated_graph_pages)
 
@@ -1896,8 +1904,11 @@ def _group_page(group: str) -> Path:
     )
 
 
-def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
-    """Follow authored container links to recover the book's page order."""
+def _book_page_order(
+    blueprint: Path, destination: Path, graph: Graph, *, planned: Collection[Path] = ()
+) -> list[Path]:
+    """Follow authored container links to recover the book's page order,
+    among the pages already written or ``planned`` (resolved)."""
     ordered: list[Path] = []
     seen_outputs: set[Path] = set()
     visited_sources: set[Path] = set()
@@ -1915,7 +1926,7 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
         except ValueError:
             continue
         output = (destination / relative).resolve()
-        if output.is_file() and output not in seen_outputs:
+        if (output in planned or output.is_file()) and output not in seen_outputs:
             seen_outputs.add(output)
             ordered.append(output)
         if source in visited_sources or not source.is_file():
@@ -1955,10 +1966,16 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
     return ordered
 
 
-def _reading_order(graph: Graph, targets: Mapping[str, tuple[Path, str]], book_pages: list[Path]) -> list[str]:
+def _reading_order(
+    graph: Graph,
+    targets: Mapping[str, tuple[Path, str]],
+    book_pages: list[Path],
+    positions: Mapping[str, int] | None = None,
+) -> list[str]:
     """Every node in the order the book reads it: by the rank of its page in
     ``book_pages``, or its nearest ancestor's when its page is not there,
-    then in dependency order."""
+    then by its card's place on the page (``positions``; a page's own
+    article comes first), then in dependency order."""
     page_rank = {page.resolve(): rank for rank, page in enumerate(book_pages)}
     ranks: dict[str, int] = {}
 
@@ -1976,7 +1993,8 @@ def _reading_order(graph: Graph, targets: Mapping[str, tuple[Path, str]], book_p
         ranks.update(dict.fromkeys(chain, found))
         return found
 
-    return sorted(status.topological_order(graph), key=rank)
+    places = positions or {}
+    return sorted(status.topological_order(graph), key=lambda node_id: (rank(node_id), places.get(node_id, -1)))
 
 
 def _append_book_navigation(pages: list[Path]) -> None:
@@ -2043,19 +2061,20 @@ def _next_target(
     destination: Path,
     group_pages: dict[str, Path] | None = None,
     targets: dict[str, tuple[Path, str]] | None = None,
+    order: Sequence[str] = (),
 ) -> str:
     """Name the result a contributor could pick up right now, with the way in.
 
     A dashboard that only counts is a scoreboard. The useful question on
     arriving is "what is unblocked, and where do I start reading?", which the
-    DAG already answers: the first node in topological order whose
-    prerequisites are met and whose proof is still open. Naming it without
-    linking to it makes the reader hunt, so the card carries the statement, its
-    chapter, and its dependency view.
+    DAG already answers: the first node in reading ``order`` (topological
+    without one) whose prerequisites are met and whose proof is still open.
+    Naming it without linking to it makes the reader hunt, so the card
+    carries the statement, its chapter, and its dependency view.
     """
     containers = _containers(graph)
     links = _anchored_links(targets or {}, page)
-    for node_id in status.topological_order(graph):
+    for node_id in order or status.topological_order(graph):
         node_status = statuses.get(node_id)
         node = graph.nodes[node_id]
         if node_status is None or node_id in containers or not node.formalizable:
@@ -2208,6 +2227,7 @@ def _render_landing_page(
     page: Path,
     destination: Path,
     targets: dict[str, tuple[Path, str]] | None = None,
+    order: Sequence[str] = (),
 ) -> str:
     """The landing page: what this is, how far it has got, and what is next.
 
@@ -2237,6 +2257,7 @@ def _render_landing_page(
         destination=destination,
         group_pages=group_pages,
         targets=targets,
+        order=order,
     )
     front = [
         "---",
@@ -2904,6 +2925,41 @@ def _render_chapter(
         if section:
             chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(section)
     return chapter.rstrip() + "\n", linked, unresolved
+
+
+def _card_positions(
+    groups: Mapping[str, list[str]],
+    group_pages: Mapping[str, Path],
+    *,
+    graph: Graph,
+    blueprint: Path,
+    node_sources: dict[Path, str],
+    targets: dict[str, tuple[Path, str]],
+    typed: Collection[Path],
+) -> dict[str, int]:
+    """Each card's place on its chapter page, as :func:`_render_chapter` lays
+    it out: authored slots first, then the fallback sections in order."""
+    positions: dict[str, int] = {}
+    for group, node_ids in groups.items():
+        page = group_pages[group]
+        slots = (
+            _chapter_layout(
+                group, node_ids, page.read_text(encoding="utf-8"),
+                graph=graph, blueprint=blueprint, node_sources=node_sources, targets=targets,
+            )[1]
+            if page.is_file() and page not in typed
+            else {}
+        )
+        placed = [slots[index] for index in sorted(slots)]
+        taken = set(placed)
+        rest = [node_id for node_id in node_ids if node_id not in taken]
+        cards = [
+            *placed,
+            *(node_id for node_id in rest if graph.nodes[node_id].catalog is None),
+            *(node_id for node_id in rest if graph.nodes[node_id].catalog is not None),
+        ]
+        positions.update((node_id, position) for position, node_id in enumerate(cards))
+    return positions
 
 
 def _chapter_layout(

@@ -3319,6 +3319,17 @@ def test_next_up_links_the_published_statement_and_chapter(
         assert Path(os.path.normpath(out / unquote(href.partition("#")[0]))) in published, href
 
 
+def test_next_up_is_the_first_ready_result_in_book_order(tmp_path: Path) -> None:
+    """Dependency order would pick alpha/first; the book opens with zeta and
+    lists its second result first."""
+    project = _book_order_project(tmp_path)
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    landing = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    assert '<div class="bp-next-target" data-autoform-node-id="zeta/second">' in landing
+
+
 def _statement_box(page: str, node_id: str) -> str:
     start = page.index('<div class="bp-thmcontent"', page.index(f'data-autoform-node-id="{node_id}"'))
     return page[start : page.index("</div>", start)]
