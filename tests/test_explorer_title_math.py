@@ -196,7 +196,7 @@ def _dom_script(body: str) -> None:
     script = "const {JSDOM}=require(" + json.dumps(str(bridge.parent)) + ");\n"
     script += "const dom=new JSDOM('<html><body></body></html>',{url:'https://blueprint.example.invalid/',runScripts:'outside-only',pretendToBeVisual:true});\n"
     script += "const window=dom.window,document=window.document;\n" + _boot() + "\n" + body + "\ndom.window.close();\n"
-    result = subprocess.run([_NODE, "-e", script], text=True, capture_output=True, timeout=10)
+    result = subprocess.run([_NODE], input=script, text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-6000:]
 
 
