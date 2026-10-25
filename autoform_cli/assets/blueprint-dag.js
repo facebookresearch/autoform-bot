@@ -1440,10 +1440,10 @@
       if (dom$ctx.font.indexOf("11px") < 0) family = "sans-serif";
     }
 
-    function trailList(entries, className) {
+    function trailList(entries, className, whole) {
       var list = element("ol", className);
-      // A deep trail keeps its ends, first / … / parent / current, and the "…" names the ancestors it stands for.
-      if (!className && entries.length > 3) entries = [entries[0], {label: "…", hidden: entries.slice(1, -2).map(function (entry) { return entry.label; }).join(" / ")}].concat(entries.slice(-2));
+      // A folded trail keeps its ends, first / … / parent / current, and the "…" names the ancestors it stands for.
+      if (!className && !whole && entries.length > 3) entries = [entries[0], {label: "…", hidden: entries.slice(1, -2).map(function (entry) { return entry.label; }).join(" / ")}].concat(entries.slice(-2));
       entries.forEach(function (entry, index) {
         var href = safeHref(entry.url), item = href ? element("li") : readingLabel("li", "", entry.label, entry.reading_title);
         item.title = entry.hidden || entry.label;
@@ -1466,8 +1466,11 @@
     }
     function renderBreadcrumb() {
       if (!dom$breadcrumb || !currentBundle) return;
-      var entries = routeTrail(currentBundle);
-      dom$breadcrumb.replaceChildren(trailList(entries.length ? entries : [{label: data.title || "Dependencies"}]));
+      var entries = routeTrail(currentBundle); if (!entries.length) entries = [{label: data.title || "Dependencies"}];
+      // A deep trail shows every crumb, which give way to ellipses as the row narrows, and folds its middle into "…" only
+      // when even that cannot fit: a fold that hid the chapter of every Hartshorne result left most of a wide row empty.
+      dom$breadcrumb.replaceChildren(trailList(entries, null, true));
+      if (entries.length > 3 && dom$breadcrumb.scrollWidth > dom$breadcrumb.clientWidth + 1) dom$breadcrumb.replaceChildren(trailList(entries));
       refreshReadingLabels(dom$breadcrumb);
     }
     function renderNavigation() {

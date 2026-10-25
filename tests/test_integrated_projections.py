@@ -370,4 +370,8 @@ def test_a_deep_trail_keeps_first_parent_and_current_and_names_what_the_ellipsis
       assert.equal(items[2].children[0].href, trail[3].url);
       // Three entries fit.
       assert.deepEqual(trailList(trail.slice(2)).children.map(item => item.title), trail.slice(2).map(entry => entry.label));
+      // A trail that fits its row is drawn whole; the fold is only for one that does not.
+      const whole = trailList(trail, null, true).children;
+      assert.deepEqual(whole.map(item => item.title), trail.map(entry => entry.label));
+      assert.equal(whole[4].getAttribute('aria-current'), 'page');
     """)
