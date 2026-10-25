@@ -3739,7 +3739,7 @@ def _dependency_disclosure(
     # The summary counts each direction that has any, so a reader can tell
     # from the closed line whether opening it is worth it.
     uses = len(dict.fromkeys((*node.statement_dependencies, *node.proof_dependencies)))
-    sides = (f"Uses {uses}" if uses else "", f"Used by {len(used_by[node.id])}" if used_by[node.id] else "")
+    sides = (f"Uses {uses:,}" if uses else "", f"Used by {len(used_by[node.id]):,}" if used_by[node.id] else "")
     label = " · ".join(side for side in sides if side)
     body = _render_rows(rows, css_class="bp-dependency-body")
     return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
@@ -3991,8 +3991,10 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
    stylesheet can tell the two apart without a second page template; where it
    is unsupported the page simply stays at reading width. */
 .md-typeset:has(.bp-landing) {{ max-width: 62rem; }}
-/* The explorer's reading pane sets its own width, so neither measure caps it. */
+/* The explorer's reading pane sets its own width. Only running text keeps the
+   reading measure, so tables, code and cards use the whole pane. */
 .bp-reading-body.md-typeset {{ max-width: none; }}
+.bp-reading-body.md-typeset > :is(p, ul, ol, dl, blockquote) {{ max-width: 72ch; }}
 
 .bp-hero {{ margin: 0 0 2.5rem; }}
 .bp-hero-kicker {{
