@@ -2427,44 +2427,30 @@ def _render_overview_summary(
     containers: frozenset[str],
     node_ids: list[str] | None = None,
 ) -> str:
-    """Render the compact, honest progress strip shown at the start of the book."""
+    """Render a chapter's progress as one line, or nothing for a single statement.
+
+    A lone statement's card already shows its status, and the module
+    inventories have their own section, so neither is counted here.
+    """
     candidates = list(node_ids if node_ids is not None else graph.nodes)
-    selected_ids = [
-        node_id
+    selected = {
+        node_id: statuses[node_id]
         for node_id in candidates
         if _is_countable(graph, node_id, containers)
+    }
+    if len(selected) < 2:
+        return ""
+    counts = dict(status.summarize(selected))
+    fully = next(state for state in status.STATES if state.key == "fully_proved")
+    parts = [
+        f'<span class="bp-progress-state"><span class="bp-swatch bp-swatch-{state.key}"></span>'
+        f"<strong>{count}</strong>{f' of {len(selected)}' if state is fully else ''} "
+        f"{html.escape(state.label)}</span>"
+        for state, count in [(fully, counts.pop(fully, 0)), *counts.items()]
     ]
-    inventory_count = len(
-        _module_inventories(graph, containers=containers, node_ids=candidates)
-    )
-    definitions = sum(is_definition(graph.nodes[node_id]) for node_id in selected_ids)
-    results = len(selected_ids) - definitions
-    item_parts = []
-    if definitions:
-        item_parts.append(f"{definitions} definition{'s' if definitions != 1 else ''}")
-    if results:
-        item_parts.append(f"{results} result{'s' if results != 1 else ''}")
-    if inventory_count:
-        item_parts.append(
-            f"{inventory_count} module "
-            f"{'inventory' if inventory_count == 1 else 'inventories'}"
-        )
-    item_summary = " · ".join(item_parts) or "No decomposed definitions or results yet"
-
-    state_parts = []
-    selected_statuses = {node_id: statuses[node_id] for node_id in selected_ids}
-    for state, count in status.summarize(selected_statuses):
-        state_parts.append(
-            f'<span class="bp-progress-state"><span class="bp-swatch '
-            f'bp-swatch-{state.key}"></span><strong>{count}</strong> '
-            f"{html.escape(state.label)}</span>"
-        )
-    states = "".join(state_parts)
     return (
         '<div class="bp-progress-overview">'
-        '<div class="bp-progress-kicker">Formalization progress</div>'
-        f'<div class="bp-progress-total">{item_summary}</div>'
-        f'<div class="bp-progress-states">{states}</div>'
+        f'<div class="bp-progress-states">{"".join(parts)}</div>'
         "</div>"
     )
 

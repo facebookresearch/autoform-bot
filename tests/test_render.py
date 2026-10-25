@@ -539,12 +539,30 @@ def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -
     assert '<span class="bp-thmcaption">Definition</span><span class="bp-thmlabel">1</span>' in page
     assert '<span class="bp-thmtitle">Top</span>' in page
     assert "The main result." in page
-    assert "1 definition · 1 result" in page
+    assert "<strong>2</strong> of 2 fully proved" in page
     # A node's own subheadings must not compete with the chapter's structure.
     assert "###### Sources" in page
     assert "\n## Sources" not in page
     assert "## Depends on" not in page
     assert "Additional formalization targets" not in page
+
+
+def test_a_one_statement_chapter_leaves_its_status_to_the_card(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "base.md").unlink()
+    readme, top = roadmap / "README.md", roadmap / "top.md"
+    readme.write_text(readme.read_text(encoding="utf-8").replace("## Definitions\n\n- [Base](base.md)\n\n", ""), encoding="utf-8")
+    top.write_text(
+        top.read_text(encoding="utf-8").replace("- [Base](base.md)\n", "This node has no prerequisites.\n"),
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    assert 'id="top"' in page
+    assert "bp-progress-overview" not in page
 
 
 def test_inline_triple_backticks_do_not_hide_the_chapter_structure(tmp_path: Path) -> None:
@@ -676,7 +694,7 @@ def test_overview_carries_the_counts_without_a_separate_progress_page(tmp_path: 
     assert 'role="img"' not in overview
     assert "items settled" not in overview
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    assert "1 definition · 1 result" in chapter
+    assert "<strong>2</strong> of 2 fully proved" in chapter
     # Progress stays on the landing page; the only summary link explains scope.
     assert "bp-progress-link" not in overview
     assert not (tmp_path / "out/progress.md").exists()
@@ -853,7 +871,7 @@ def test_module_catalog_is_separate_from_formalization_progress(
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert '<span class="bp-thmcaption">Module</span><span class="bp-thmlabel">1</span>' in chapter
     assert "A checked inventory of an existing Lean module." in chapter
-    assert "1 module inventory" in chapter
+    assert "<strong>2</strong> of 2 fully proved" in chapter
     # No slot places the catalog, and it is no formalization target.
     assert chapter.index("## Module inventories") < chapter.index('id="catalog"')
     assert "Additional formalization targets" not in chapter
