@@ -723,7 +723,7 @@ def render_container(
     )
     inventory = (
         '  <div class="bp-dag-fallback" data-search-exclude>\n'
-        "    <p>The dependency map could not load.</p>\n"
+        "    <p>The dependency explorer could not load.</p>\n"
         + (f'    <ul class="bp-dag-fallback-list">\n{items}\n    </ul>\n' if items else "")
         + (
             f"    <p>Showing {len(fallback)} of {total} linked nodes. "

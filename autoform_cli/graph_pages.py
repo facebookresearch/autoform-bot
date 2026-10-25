@@ -461,7 +461,6 @@ def _write_page(
         href = _published_link(canonical, page)
         reading = (
             '<div class="bp-reading-source" markdown="1">\n\n'
-            'This page moved.\n\n'
             f'<a href="{html.escape(href, quote=True)}">Continue to the mathematical page</a>\n\n</div>'
         )
         sections.extend(['<div class="bp-explorer-page" markdown="1">', "", reading, "", explorer, "", "</div>", ""])
