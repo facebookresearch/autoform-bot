@@ -3041,14 +3041,17 @@ def _render_environment(
     # preconverted, render both with the shared article context: otherwise its
     # consumed definitions would leave the remaining Markdown links unresolved.
     references = {}
-    affected = converted_alone(statement, remainder)
-    if affected:
+    if converted_alone(statement, remainder):
         context = _body_converter()
         context.convert("\n\n".join((statement, remainder)))
         references = context.references
-    statement, remainder = (
-        _protect_markdown_in_html(part, references=references, force=affected) for part in (statement, remainder)
-    )
+        statement, remainder = (
+            _protect_markdown_in_html(part, references=references, force=True) for part in (statement, remainder)
+        )
+        # Only once converted: inside a container, an author's "<" could close it.
+        remainder = _isolate_converted_headings(remainder)
+    else:
+        remainder = _isolate_notes_headings(remainder)
 
     code_links, implementation_rows, linked, unresolved = _lean_presentation(node, linker)
     context_link = _graph_context_link(node, page=page, destination=destination)
@@ -3090,19 +3093,19 @@ def _render_environment(
 
     lines = [
         f'<div class="bp-thmwrapper {style} bp-{display_key}" '
-        f'id="{html.escape(anchor, quote=True)}" '
         f'data-autoform-node-id="{html.escape(node.id, quote=True)}" markdown="1">',
-        '<div class="bp-thmheading">',
-        f'<span class="bp-thmcaption">{html.escape(caption)}</span>'
-        f'<span class="bp-thmlabel">{html.escape(number)}</span>'
+        f'<h4 class="bp-thmheading" id="{html.escape(anchor, quote=True)}">',
+        f'<span class="bp-thmcaption" data-search-exclude>{html.escape(caption)}</span>'
+        f'<span class="bp-thmlabel" data-search-exclude>{html.escape(number)}</span>'
         f'<span class="bp-thmtitle">{html.escape(node.title)}</span>'
         f"{code_links}"
         f"{context_link}"
         f"{source_link}"
-        f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}">#</a>'
-        f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}">'
+        f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}" data-search-exclude>#</a>'
+        f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}" data-search-exclude>'
         f'{mark}<span class="bp-mark-label">{html.escape(display_label)}</span></span>',
-        "</div>",
+        "</h4>",
+        *_search_names(node),
         *boxed(statement, STATEMENT_BOX),
     ]
     if remainder:
@@ -3423,6 +3426,71 @@ def _lean_presentation(
     more = f" and {rest} more, listed in its declaration ledger" if rest else ""
     rows = [("Lean", " · ".join(shown) + more)] if fallback else []
     return code_links, rows, linked, unresolved
+
+
+def _search_names(node: Node) -> list[str]:
+    """The card's exact Lean names, as hidden text the site's search indexes.
+
+    A verified name shows only as its code icon's label, and search reads text,
+    not attributes. A catalog's names stay out: it can list hundreds, and its
+    Lean row already shows the first few.
+    """
+    names = declaration_names(node.lean or "") if node.catalog is None else ()
+    if not names:
+        return []
+    return ['<div class="bp-search-names" hidden>' + " ".join(html.escape(name) for name in names) + "</div>"]
+
+
+#: A heading of a card's notes as the body converter writes it, on a line of its own.
+_CONVERTED_HEADING = re.compile(r"<h([1-6])>(.*)</h\1>")
+
+
+def _isolated_heading(level: int, markdown: str, title: str, words: str) -> str:
+    """A notes heading that starts no search record but keeps its words in its card's.
+
+    MkDocs Material's search starts a record at every heading with an id and
+    ends it with the heading's parent. So the heading gets a parent of its own
+    and is kept out of search, and a hidden copy of its words follows that
+    parent, in the card's record. Material removes the attribute's value from
+    the page; without one, a link check would read it as a data: URL.
+    """
+    return (
+        f'\n\n<div class="bp-notes-heading"{markdown}>\n'
+        f'<h{level} data-search-exclude="1"{markdown}>{title}</h{level}>\n</div>\n\n'
+        f'<div class="bp-search-text" hidden>{words}</div>\n\n'
+    )
+
+
+def _isolate_notes_headings(text: str) -> str:
+    """Isolate each heading of notes the site converts itself, which hold no "<".
+
+    The heading stays Markdown that md_in_html reads in its own element, so it
+    looks, links and takes its id as before. Without a "<", none of the
+    author's text can close a container.
+    """
+
+    def isolate(line: str) -> str:
+        match = _HEADING.match(line)
+        if match is None:
+            return line
+        hashes, title = match.groups()
+        return _isolated_heading(len(hashes), ' markdown="1"', title, html.escape(title, quote=False))
+
+    return _outside_fences(text, isolate) if text else text
+
+
+def _isolate_converted_headings(rendered: str) -> str:
+    """Isolate each heading of notes render converted first, as their HTML."""
+
+    def isolate(line: str) -> str:
+        match = _CONVERTED_HEADING.fullmatch(line)
+        if match is None:
+            return line
+        level, title = match.groups()
+        words = html.escape(html.unescape(re.sub(r"<[^>]*>", "", title)), quote=False)
+        return _isolated_heading(int(level), "", title, words).strip("\n")
+
+    return "\n".join(isolate(line) for line in rendered.split("\n"))
 
 
 def _code_icon() -> str:
@@ -3928,6 +3996,9 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   line-height: 150%;
   color: var(--bp-fg);
 }}
+/* The heading row is an h4, so search gives each card a record of its own;
+   it keeps the look of the div it was, under Material's and the site's h4 rules. */
+.bp-thmwrapper > .bp-thmheading {{ margin: 0; font-size: inherit; letter-spacing: inherit; }}
 .bp-thmlabel {{ margin-left: 0.4rem; margin-right: 0.5rem; }}
 .bp-thmtitle::before {{ content: "("; }}
 .bp-thmtitle::after {{ content: ")"; }}
