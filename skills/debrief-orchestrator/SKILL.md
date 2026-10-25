@@ -21,7 +21,7 @@ task.
 
 Run `autoform debrief orchestrator form <PROJECT> --skill
 setup|roadmap|formalize`, naming the skill that ran (see the
-[CLI reference](../../autoform_cli/README.md#commands)). If it says orchestrator
+[CLI reference](../../autoform_cli/README.md#debrief)). If it says orchestrator
 debriefs are disabled, stop: there is nothing to do.
 
 Otherwise answer the form from your own experience of the run and store the

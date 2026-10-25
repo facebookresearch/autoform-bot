@@ -17,6 +17,9 @@ date when the release is tagged.
   only the rules users and agents act on; internals moved to module
   docstrings, and upgrade notes to this file. `tests/test_doc_budgets.py`
   fails when one of these docs grows past its line budget (#458).
+- **Listings.** The Codex and Muse listings name the plugin AutoformBot, and
+  Codex shows the Roadmap, Setup and Develop Plugin skills under those short
+  names (#463).
 - **Claims.** `claim list TARGET...` fetches and reads only those claims.
   `--timeout` (120 seconds by default) bounds a listing, a slow step is named on
   stderr, and a failure goes to stderr labelled `timeout:`, `contention:` or
@@ -28,6 +31,9 @@ date when the release is tagged.
 - **Render.** An article's page lists its `mathlib_declaration` names in a
   Mathlib row, as text without a link, so a `mathlib: true` article names the
   declaration it restates (#388).
+- **Check and render.** One reused converter reads every page, and each linked
+  path is resolved once per run, so `check` uses about a fifth less CPU on an
+  1,806-article vault; neither command's output changes (#415).
 - **Builds.** `project new` turns on Lake's artifact cache with
   `enableArtifactCache` and `restoreAllArtifacts`, so checkouts and worktrees
   on one toolchain reuse each other's builds; Setup offers the same two lines

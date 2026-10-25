@@ -39,7 +39,8 @@ workflow and cross-file maintenance.
 - The bundled example mirrors only the artifacts listed under
   [generated mirrors](skills/develop-plugin/references/repository-contracts.md#generated-mirrors);
   ignore rules are not among them.
-- Keep release versions synchronized across `pyproject.toml`, `uv.lock`, Claude
+- Note each change worth knowing about under Unreleased in `CHANGELOG.md`, and
+  keep release versions synchronized across `pyproject.toml`, `uv.lock`, Claude
   and Muse manifests, and the semantic base of Codex's cachebuster version.
 
 ## Inform, don't break

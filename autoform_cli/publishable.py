@@ -6,6 +6,7 @@ import html
 import re
 import unicodedata
 from collections import Counter
+from functools import lru_cache
 from html.parser import HTMLParser
 from typing import Iterable
 
@@ -371,55 +372,84 @@ def _rendered_article(
     to a length Python converts first, standing for what they did.
     """
 
-    parser = markdown_renderer.Markdown(extensions=list(SITE_EXTENSIONS), extension_configs=SITE_EXTENSION_CONFIGS)
-    fences = parser.preprocessors["fenced_code_block"]
-    read_fences = fences.run
-    highlighted = 0
-    unclosed: str | None = None
-
-    def counted(lines: list[str]) -> list[str]:
-        nonlocal highlighted, unclosed
-        read = read_fences(lines)
-        # An indented or quoted fence ends at the first line the site puts
-        # after the text, which starts at the margin; one at the margin runs on.
-        if fences.fence is not None and not fences.ws_virtual_len and not fences.quote_level:  # type: ignore[attr-defined]
-            # Every line after the opener is the open fence's content.
-            unclosed = lines[len(lines) - len(fences.code) - 1]  # type: ignore[attr-defined]
-        highlighted = len(parser.htmlStash.rawHtmlBlocks)
-        return read
-
-    fences.run = counted  # type: ignore[method-assign]
-    attribute_lists = parser.treeprocessors["attr_list"]
-    assign = attribute_lists.assign_attrs  # type: ignore[attr-defined]
-    assigned: list[tuple[str, str]] = []
-
-    def recorded(element: object, written: str, *, strict: bool = False) -> str:
-        # A strict list with text it cannot read is left in the text.
-        if not (strict and get_attrs_and_remainder(written)[1]):
-            assigned.append((element.tag, written))  # type: ignore[attr-defined]
-        return assign(element, written, strict=strict)
-
-    attribute_lists.assign_attrs = recorded  # type: ignore[attr-defined]
-    # A fence's braces are an attribute list too: what they set besides the
-    # language lands on the code block's element.
-    read_braces = fences.handle_attrs  # type: ignore[attr-defined]
-
-    def braced(match: re.Match[str]) -> bool:
-        okay = read_braces(match)
-        if okay and (fences.classes or fences.id or fences.attrs):  # type: ignore[attr-defined]
-            assigned.append(("fence", match.group("attrs")))
-        return okay
-
-    fences.handle_attrs = braced  # type: ignore[attr-defined]
-    rendered = parser.convert(_bounded_references(text))
+    converter = _site_converter()
+    parser = converter.parser
+    parser.reset()
+    converter.highlighted, converter.unclosed, converter.assigned = 0, None, []
+    try:
+        rendered = parser.convert(_bounded_references(text))
+    except BaseException:
+        # A conversion that fails midway, as one of a page nested too deep
+        # does, leaves the converter unable to read the next text, and reset
+        # does not repair it.
+        _site_converter.cache_clear()
+        raise
     passed = [
         block if isinstance(block, str) else "<element>"
-        for block in parser.htmlStash.rawHtmlBlocks[highlighted:]
+        for block in parser.htmlStash.rawHtmlBlocks[converter.highlighted :]
         if block != ""
     ]
     return rendered, [
         block for block in passed if not (_LOOSE_HTML_ENTITY.fullmatch(block) and not _live_reference(block))
-    ], assigned, unclosed, [html.unescape(url) for url, _title in parser.references.values()]
+    ], converter.assigned, converter.unclosed, [html.unescape(url) for url, _title in parser.references.values()]
+
+
+class _SiteConverter:
+    """The site's converter, with hooks that record, for the text it is
+    converting, how many blocks its fences stashed, the line that opens a
+    fence the text leaves open at the margin, and each attribute list it
+    applies, for :func:`_rendered_article` to read."""
+
+    def __init__(self) -> None:
+        parser = markdown_renderer.Markdown(extensions=list(SITE_EXTENSIONS), extension_configs=SITE_EXTENSION_CONFIGS)
+        self.parser = parser
+        self.highlighted = 0
+        self.unclosed: str | None = None
+        self.assigned: list[tuple[str, str]] = []
+        fences = parser.preprocessors["fenced_code_block"]
+        read_fences = fences.run
+
+        def counted(lines: list[str]) -> list[str]:
+            read = read_fences(lines)
+            # An indented or quoted fence ends at the first line the site puts
+            # after the text, which starts at the margin; one at the margin runs on.
+            if fences.fence is not None and not fences.ws_virtual_len and not fences.quote_level:  # type: ignore[attr-defined]
+                # Every line after the opener is the open fence's content.
+                self.unclosed = lines[len(lines) - len(fences.code) - 1]  # type: ignore[attr-defined]
+            self.highlighted = len(parser.htmlStash.rawHtmlBlocks)
+            return read
+
+        fences.run = counted  # type: ignore[method-assign]
+        attribute_lists = parser.treeprocessors["attr_list"]
+        assign = attribute_lists.assign_attrs  # type: ignore[attr-defined]
+
+        def recorded(element: object, written: str, *, strict: bool = False) -> str:
+            # A strict list with text it cannot read is left in the text.
+            if not (strict and get_attrs_and_remainder(written)[1]):
+                self.assigned.append((element.tag, written))  # type: ignore[attr-defined]
+            return assign(element, written, strict=strict)
+
+        attribute_lists.assign_attrs = recorded  # type: ignore[attr-defined]
+        # A fence's braces are an attribute list too: what they set besides the
+        # language lands on the code block's element.
+        read_braces = fences.handle_attrs  # type: ignore[attr-defined]
+
+        def braced(match: re.Match[str]) -> bool:
+            okay = read_braces(match)
+            if okay and (fences.classes or fences.id or fences.attrs):  # type: ignore[attr-defined]
+                self.assigned.append(("fence", match.group("attrs")))
+            return okay
+
+        fences.handle_attrs = braced  # type: ignore[attr-defined]
+
+
+@lru_cache(maxsize=1)
+def _site_converter() -> _SiteConverter:
+    """One converter for every text, as :func:`~autoform_cli.markdown.render_html`
+    keeps one; :meth:`~markdown.Markdown.reset` clears what a conversion leaves
+    behind. Texts are converted one at a time, on one thread."""
+
+    return _SiteConverter()
 
 
 class _RenderedText(HTMLParser):

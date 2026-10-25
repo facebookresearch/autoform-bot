@@ -9,9 +9,9 @@
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "AutoForm Bot",
+    "displayName": "AutoformBot",
     "shortDescription": "Lean formalization workflows",
-    "longDescription": "AutoForm separates repository setup, source-grounded roadmap construction, Markdown-native Lean formalization, and review; the Obsidian-compatible vault remains the shared source of truth and publishes through GitHub Pages.",
+    "longDescription": "Autoform separates repository setup, source-grounded roadmap construction, Markdown-native Lean formalization, and review; the Obsidian-compatible vault remains the shared source of truth and publishes through GitHub Pages.",
     "developerName": "Vivien Cabannes",
     "category": "Developer Tools",
     "capabilities": [
