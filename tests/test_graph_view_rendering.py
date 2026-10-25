@@ -639,7 +639,7 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     assert "bp-dag-guide" not in script and "bp-dag-guide" not in style
     assert "dependency neighborhood" not in script
     # The density note stays, only for a readable crop or for labels hidden by zoom, as plain text.
-    assert 'state.readableCrop ? "Pan or Results to see all "' in script and '"Zoom in to reveal "' in script
+    assert 'state.readableCrop ? "Pan or Browse to see all "' in script and '"Zoom in to reveal "' in script
     density = next(rule for rule in style.splitlines() if rule.startswith(".bp-dag-density {"))
     assert "left: 16px; bottom: 12px;" in density and "pointer-events: none;" in density
     # On phones it clears the collapsed sheet's 52px peek and 8px inset by 8px.

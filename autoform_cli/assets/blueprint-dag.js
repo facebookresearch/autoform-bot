@@ -1941,7 +1941,7 @@
         control.tabIndex = node.id === tabId ? 0 : -1;
       });
       dom$density.hidden = !ui$readableCrop && !(visible.length && ui$transform.scale < .34);
-      dom$density.textContent = ui$readableCrop ? "Pan or Results to see all " + ui$active.length + " items" :
+      dom$density.textContent = ui$readableCrop ? "Pan or Browse to see all " + ui$active.length + " items" :
         (visible.length && ui$transform.scale < .34 ? "Zoom in to reveal " + visible.length + " node labels" : "");
     }
     function makeNodeControl(node) {
