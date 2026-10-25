@@ -40,7 +40,7 @@ const functions = [
   'element', 'readingLabel', 'button', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
   'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'matchesStatus', 'calculateActive',
   'statusLabel', 'finished', 'boundaryMeta', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
-  'semanticParent', 'placeOf'
+  'semanticParent', 'placeOf', 'summaryLine', 'refreshReadingLabels'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');
 const sandbox = {assert, URL, fixtureText}; vm.createContext(sandbox);
@@ -225,6 +225,21 @@ def test_a_row_says_where_its_result_or_topic_lives() -> None:
       // A list stops at its own page, so rows in it name only what lies below.
       assert.equal(placeOf(result, 'algebra/ext/ring'), 'Ideal');
       assert.equal(placeOf(result, 'algebra/ext/ring/ideal'), '');
+    """)
+
+
+def test_a_list_row_sets_its_summarys_code_and_tex_instead_of_printing_them() -> None:
+    _run(r"""
+      // Statement lists printed "$u : \mathbb{N} \to \alpha$" and "`mu0`" as typed, after a run-in repeating the title.
+      const line = summaryLine({title: 'Eventually periodic sequences',
+        summary: 'Eventually periodic sequences. A sequence $u : \\mathbb{N} \\to \\alpha$ is eventually periodic, as `mu0` checks, see \\(p\\).'});
+      assert.equal(line.className, 'bp-result-summary');
+      assert.deepEqual(line.children.map(part => [String(part.tagName).toLowerCase(), part.className || '', part.textContent]), [
+        ['span', '', 'A sequence '], ['span', 'arithmatex', '\\(u : \\mathbb{N} \\to \\alpha\\)'], ['span', '', ' is eventually periodic, as '],
+        ['code', '', 'mu0'], ['span', '', ' checks, see '], ['span', 'arithmatex', '\\(p\\)'], ['span', '', '.']]);
+      // A summary that only shares the title's opening words keeps them.
+      assert.equal(summaryLine({title: 'Group', summary: 'Groups act on sets.'}).textContent, 'Groups act on sets.');
+      assert.equal(summaryLine({title: 'Lemma', summary: 'Plain prose.'}).textContent, 'Plain prose.');
     """)
 
 def test_zero_count_authored_regions_keep_zero_and_remain_visible_under_normal_filters() -> None:

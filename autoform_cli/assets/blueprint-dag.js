@@ -2556,6 +2556,21 @@
       var nodes = query ? rankMatches(pool, query).map(function (match) { return match.node; }) : pool;
       return nodes.filter(function (node) { return ui$selectedStatuses.has(node.status); });
     }
+    // A summary keeps its article's inline code and TeX. The list sets them as the reader does instead of printing their source,
+    // and drops a run-in that only repeats the title.
+    function summaryLine(node) {
+      var text = String(node.summary), line = element("span", "bp-result-summary"), title = node.title || "";
+      if (title && text.indexOf(title) === 0 && /^[.:]\s/.test(text.slice(title.length))) text = text.slice(title.length + 1).trim();
+      var pattern = /`([^`\n]+)`|\$([^$\n]+)\$|\\\(([\s\S]+?)\\\)/g, last = 0, match;
+      while ((match = pattern.exec(text))) {
+        if (match.index > last) line.appendChild(element("span", "", text.slice(last, match.index)));
+        line.appendChild(match[1] !== undefined ? element("code", "", match[1]) :
+          element("span", "arithmatex", "\\(" + (match[2] !== undefined ? match[2] : match[3]) + "\\)"));
+        last = pattern.lastIndex;
+      }
+      if (last < text.length) line.appendChild(element("span", "", text.slice(last)));
+      return line;
+    }
     function renderInventory(resetScroll) {
       if (!dom$inventoryList || ui$mode === "graph") return;
       var nodes = inventoryNodes(), visible = nodes.slice(0, ui$listLimit); dom$inventoryList.textContent = "";
@@ -2571,9 +2586,10 @@
         row.appendChild(element("span", "bp-dag-inventory-title", node.title));
         var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;
         row.appendChild(element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (where ? " · " + where : ""))).title = (palette[node.status] || {}).meaning || "";
-        if (navigation && node.summary) row.appendChild(element("span", "bp-result-summary", node.summary));
+        if (navigation && node.summary) row.appendChild(summaryLine(node));
         row.addEventListener("click", function () { activateNode(node, true); }); item.appendChild(row); dom$inventoryList.appendChild(item);
       });
+      if (navigation) refreshReadingLabels(dom$inventoryList);
       // A count, or "N of M" while a page or a filter shows fewer.
       var shown = visible.length < nodes.length ? visible : nodes, total = nodes;
       dom$inventorySummary.textContent = shown.length < total.length ? num(shown.length) + " of " +
