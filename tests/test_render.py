@@ -2914,6 +2914,31 @@ def test_node_links_resolve_each_target_page_once(tmp_path: Path, monkeypatch: p
     assert resolved.count(chapter) <= 2
 
 
+def test_the_same_link_from_two_folders_reaches_each_folders_file(tmp_path: Path) -> None:
+    """Render resolves each linked path once for the whole site, so a link two
+    leaves write alike must still lead from each to its own folder's file."""
+
+    project = _project(tmp_path)
+    roadmap = project / "blueprint" / "roadmap"
+    _edit(roadmap / "README.md", "- [Top](top.md)\n", "- [Top](top.md)\n- [Chapter](ch/README.md)\n")
+    chapter = roadmap / "ch"
+    chapter.mkdir()
+    (chapter / "README.md").write_text("# Chapter\n\n- [One](one/leaf.md)\n- [Two](two/leaf.md)\n", encoding="utf-8")
+    for folder in ("one", "two"):
+        (chapter / folder / "figures").mkdir(parents=True)
+        (chapter / folder / "figures" / "plot.md").write_text(f"# Plot {folder}\n\nA plot.\n", encoding="utf-8")
+        (chapter / folder / "leaf.md").write_text(
+            f"---\ndeclaration: theorem\n---\n\n# Leaf {folder}\n\nSee [the plot](figures/plot.md).\n",
+            encoding="utf-8",
+        )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    page = (tmp_path / "out/roadmap/ch/README.md").read_text(encoding="utf-8")
+    assert "[the plot](one/figures/plot.md)" in page
+    assert "[the plot](two/figures/plot.md)" in page
+
+
 def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A page uses the few node links it contains, so rewriting it should not
     build a link for every node in the graph."""

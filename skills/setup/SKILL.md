@@ -44,7 +44,7 @@ PACKAGE="<UpperCamelCaseName>"
 uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project new "$TARGET" --package "$PACKAGE"
 ```
 
-The [CLI reference](../../autoform_cli/README.md#commands) gives `project new`'s
+The [CLI reference](../../autoform_cli/README.md#project) gives `project new`'s
 version flags, what it writes, and its error codes. Keep the recommended
 release from `autoform project versions` unless the user needs another Lean
 version (at least v4.27.0). On macOS use `/private/tmp`, not the `/tmp` alias.
@@ -138,8 +138,8 @@ lake build @repl/repl
 ```
 
 Then run the publication sequence in the
-[CLI reference](../../autoform_cli/README.md#commands), keeping
-`--require-declarations`.
+[CLI reference](../../autoform_cli/README.md#publishing-and-the-dashboard),
+keeping `--require-declarations`.
 
 Publication is opt-in: files under `blueprint/` become public site content,
 with derived progress, graph pages, and a path-free publication manifest. Show

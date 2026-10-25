@@ -563,6 +563,11 @@ def _publication(
             or (source.suffix.lower() in PAGE_SUFFIXES and not _is_utf8(snapshot[source]))
         )
     )
+    # A chapter's leaves are all published on its page, and pages link the
+    # same files again and again, so each page's links are built, and each
+    # linked path resolved, once for the whole site.
+    page_links: dict[Path, Mapping[str, str]] = {}
+    resolved: dict[str, Path] = {}
 
     def published(text: str, source: Path, page: Path, *, whole: bool = True) -> tuple[str, tuple[str, ...]]:
         """The page ``text`` is published as, or the part of ``page`` it is
@@ -571,6 +576,9 @@ def _publication(
         its lines, so each stretch between is read too, as it sits there. Its
         notation goes straight to the warnings."""
 
+        links = page_links.get(page)
+        if links is None:
+            links = page_links[page] = _anchored_links(targets, page, extension=".md")
         dropped: list[str] = []
         page_text, found, notation = _read_page(
             _rewrite_links(
@@ -585,6 +593,8 @@ def _publication(
                 left_out=left_out,
                 unpublished=unpublished,
                 dropped=dropped,
+                links=links,
+                resolved=resolved,
             )
         )
         group = chapters.get(page) if whole else None
@@ -2576,6 +2586,8 @@ def _rewrite_links(
     left_out: frozenset[Path] = frozenset(),
     unpublished: tuple[Path, ...] = (),
     dropped: list[str] | None = None,
+    links: Mapping[str, str] | None = None,
+    resolved: dict[str, Path] | None = None,
 ) -> str:
     """Resolve a page's relative links against where it is being published.
 
@@ -2588,10 +2600,17 @@ def _rewrite_links(
     The site holds only the blueprint, so an inline link to a file outside it,
     such as a source note's evidence link to a Lean file, keeps its text and
     loses its target instead of dangling.
+
+    A caller rewriting several texts from one capture may share work between
+    them: *links*, which must be :func:`_anchored_links` for this *page*, and
+    *resolved*, each path written so far with what it resolved to.
     """
     # A coverage page can name most of the graph, so one mapping serves the
     # whole text and links each target page it reaches once.
-    links = _anchored_links(targets, page, extension=".md")
+    if links is None:
+        links = _anchored_links(targets, page, extension=".md")
+    if resolved is None:
+        resolved = {}
 
     def moved_target(raw: str) -> str | None:
         """Where *raw* should point once published, or None to leave it alone."""
@@ -2603,7 +2622,13 @@ def _rewrite_links(
         try:
             if not path or urlsplit(path).scheme or path.startswith("/"):
                 return None
-            candidate = (source_dir / unquote(path)).resolve()
+            written = source_dir / unquote(path)
+            # Keyed by the text written: Windows compares paths without
+            # regard to case, and a missing file resolves in the case written.
+            key = str(written)
+            candidate = resolved.get(key)
+            if candidate is None:
+                candidate = resolved[key] = written.resolve()
         except ValueError:
             # An unbalanced IPv6 bracket or a decoded NUL names no file to
             # point at, so the link is published as written, like a URL.
@@ -2669,6 +2694,10 @@ def _rewrite_links(
         return f"<{href}>" if re.search(r"[\s()]", href) else href
 
     def rewrite(line: str) -> str:
+        # A link, an image and a definition each contain a bracket, which
+        # masking never adds, so a line without one has nothing to move.
+        if "[" not in line:
+            return line
         # A reference definition carries the destination for every `[x][label]`
         # on the page. Rewriting only inline links leaves it pointing at the
         # unpublished path and the rendered link dangles.
