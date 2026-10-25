@@ -2336,7 +2336,7 @@ def _render_hero(
     if done < total:
         figures.append(("Fully proved", f"{share}%", f"{done:,} of {total:,} {statement_label}", False))
         figures.append(
-            ("Ready to start", f"{actionable:,}", "nothing they need is blocked", False)
+            ("Ready to start", f"{actionable:,}", "statements you can state or prove now", False)
             if actionable
             else ("Nothing is ready right now", "", "", False)
         )
@@ -4045,11 +4045,16 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-figure-note {{ margin-top: 0.15rem; font-size: 0.7rem; color: var(--bp-muted); }}
 /* The ready figure opens the list of what it counts; it keeps the figure's
-   colours and shows it is a link by underlining its label. */
+   colours, and an arrow after its label shows it is a link, as on
+   "Start reading". Hover or focus underlines the label. */
 .md-typeset a.bp-figure-link,
 .md-typeset a.bp-figure-link:is(:visited, :hover, :focus-visible) {{ color: var(--bp-fg); text-decoration: none; }}
 .bp-figure-link > span {{ display: block; }}
 .md-typeset a.bp-figure-link:is(:hover, :focus-visible) .bp-figure-label {{ text-decoration: underline; }}
+.bp-figure-link .bp-figure-label::after {{ content: " →"; }}
+/* With no figures, or all statements fully proved, this one sentence is the
+   hero's status, so it is set at the claim's size. */
+.md-typeset .bp-hero-status {{ margin: 1rem 0 0; color: var(--bp-fg); font-size: 1.05rem; font-weight: 600; }}
 
 .bp-hero-bar {{
   margin-top: 1rem;
@@ -4107,6 +4112,12 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   color: var(--bp-fg);
   font-size: 16px;
   line-height: 1.5;
+}}
+.bp-landing-intro.bp-landing-intro .bp-hero-status {{
+  margin: 14px 0 0;
+  color: var(--bp-fg);
+  font-size: 16px;
+  font-weight: 600;
 }}
 .bp-landing-intro.bp-landing-intro .bp-hero-figures {{
   grid-template-columns: repeat(2, minmax(0, 1fr));
