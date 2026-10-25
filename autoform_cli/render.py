@@ -2050,7 +2050,7 @@ def _next_target(
         why = (
             "Everything it uses is in Lean, so its Lean proof can start."
             if node_status.key == "can_prove"
-            else "Everything it uses is in Lean, so its Lean statement can be written now."
+            else "Everything its statement uses is in Lean, so its Lean statement can be written now."
         )
         actions = [f'<a href="{html.escape(graph_href, quote=True)}">Dependencies</a>']
         if chapter_page is not None:

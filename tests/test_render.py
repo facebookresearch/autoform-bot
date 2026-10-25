@@ -3231,7 +3231,7 @@ def test_the_strict_policy_shows_the_same_proof_as_proved_with_no_assumptions(tm
         ("proof: formalized\n", "Everything it uses is in Lean, so its Lean proof can start."),
         (
             "statement: formalized\nproof: formalized\n",
-            "Everything it uses is in Lean, so its Lean statement can be written now.",
+            "Everything its statement uses is in Lean, so its Lean statement can be written now.",
         ),
     ],
 )
