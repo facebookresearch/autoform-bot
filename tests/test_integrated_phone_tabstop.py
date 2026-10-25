@@ -162,7 +162,8 @@ def test_unselected_scoped_crop_keeps_padding_and_more_real_cards_than_first_bou
       fit();paint();assert(dom$density.textContent.startsWith('Drag to see more'));assert.equal(ui$transform.scale,.9);
       // The cropped axis starts at the leading edge; the axis that fits stays centred between the 56px title inset and the 44px key.
       assert(Math.abs(ui$transform.x-(36-minX*.9))<1e-8);
-      assert(Math.abs(ui$transform.y-((812+56-44-(maxY-minY)*.9)/2-minY*.9))<1e-8);
+      // fit() keeps 56px at the top for the map header and 56px at the bottom for the foot band under the pan note and key.
+      assert(Math.abs(ui$transform.y-((812+56-56-(maxY-minY)*.9)/2-minY*.9))<1e-8);
       const padded=data.nodes.filter(usable).length;assert(padded>0&&padded<data.nodes.length);
       center(data.nodes[0],.9);const historical=data.nodes.filter(usable).length;
       assert(padded>historical,'Useful crop coverage must beat centering the first external boundary');

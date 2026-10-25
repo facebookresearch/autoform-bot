@@ -104,7 +104,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-check-count { margin-left: auto; color: var(--dag-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .bp-dag-check-text { display: grid; gap: 1px; min-width: 0; }
 .bp-dag-check-meaning { color: var(--dag-muted); font-size: 11.5px; line-height: 1.3; }
-.bp-dag-filter-popover:has(.bp-dag-check-meaning) { width: 300px; }
+.bp-dag-filter-popover:has(.bp-dag-check-meaning) { width: 300px; max-height: min(560px, calc(100dvh - 140px)); }
 .bp-dag-check:has(.bp-dag-check-meaning) { align-items: flex-start; }
 .bp-dag-check:has(.bp-dag-check-meaning) :is(input, .bp-dag-swatch) { margin-top: 3px; }
 .bp-dag-hidden-button, .bp-dag-whole-search { min-height: 26px; margin: 0; padding: 1px 3px; border: 0; background: transparent; color: var(--dag-link); }
@@ -349,6 +349,13 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-integrated .bp-dag-density { bottom: 36px; }
 /* Text over the map keeps a halo of the map's colour, so it stays readable where a cropped view puts a card under it. */
 .bp-dag-integrated :is(.bp-dag-density, .bp-map-context, .bp-map-key) { text-shadow: 0 0 3px var(--dag-map), 0 0 6px var(--dag-map); }
+/* The map header and its foot, the pan note and key, sit on bands in the map's colour that cards and links pass under,
+   rather than printing over them; fit() leaves the cards clear of both. */
+.bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage::before,
+.bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage::after { content: ""; position: absolute; z-index: 3; right: 0; left: 0; background: var(--dag-map); pointer-events: none; }
+.bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage::before { top: 0; height: 44px; }
+.bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage::after { bottom: 0; height: 56px; }
+.bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage:has(.bp-dag-density[hidden])::after { height: 36px; }
 .bp-map-key .bp-map-key-wiki::before { border-top-style: dotted; }
 .bp-map-key .bp-map-key-coverage::before { display: none; }
 /* A quiet area overview at rest draws no links, so its key says how to light them instead of naming line kinds it does not draw. */
@@ -407,6 +414,9 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated.bp-dag-sheet-full .bp-dag-toolbar { display: none; }
   /* With the reader open the map keeps only the band above it, and the handle already names the page, so the map header and the pan note leave rather than sit on cards. */
   .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-compact-regions) :is(.bp-map-context, .bp-dag-density) { display: none; }
+  .bp-dag-integrated.bp-dag-sheet-open .bp-dag-stage::before, .bp-dag-integrated.bp-dag-sheet-open .bp-dag-stage::after { display: none; }
+  .bp-dag-integrated .bp-map-key { left: 16px; overflow: hidden; white-space: nowrap; }
+  .bp-dag-integrated .bp-map-key span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .bp-dag-integrated.bp-dag-sheet-full .bp-reading-map { display: block; position: absolute; z-index: 3; bottom: 16px; left: 50%; padding: 10px 24px; border: 1px solid var(--dag-overlay-border); border-radius: 999px; background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 14px; font-weight: 600; box-shadow: var(--dag-e2); transform: translateX(-50%); cursor: pointer; }
   .bp-dag-integrated .bp-reading-body { padding: 20px 22px 60px; }
   .bp-dag-integrated .bp-reading-neighbors { max-height: 136px; }

@@ -1727,7 +1727,8 @@
           links ? " · uses " + links.before.length + " · used by " + links.after.length : "");
         dom$mapKey.replaceChildren();
         ["statement", "proof"].forEach(function (kind) {
-          if (data.edges.some(function (edge) { return edge[kind]; })) dom$mapKey.appendChild(element("span", "bp-map-key-" + kind, kind === "proof" ? "Proof dependency" : "Statement dependency"));
+          if (data.edges.some(function (edge) { return edge[kind]; })) dom$mapKey.appendChild(element("span", "bp-map-key-" + kind,
+            (kind === "proof" ? "Proof" : "Statement") + (sheetLayout() ? "" : " dependency")));
         });
         // One entry says what the dotted lines are and how many of them this map draws; a map that draws none says nothing about their coverage.
         if (data.$wikiEdges && data.$wikiEdges.length) {
@@ -1827,7 +1828,7 @@
       // Fit a bounded authored-area overview to its cards, not a peripheral
       // return path. Never shrink the repository or relax the readable floor.
       var compact = compactRegions(), pad = 36, side = compact ? 18 : pad,
-        top = compact ? 52 : 56, bottom = 44, stageW = dom$stage.clientWidth;
+        top = compact ? 52 : 56, bottom = compact ? 44 : 56, stageW = dom$stage.clientWidth;
       var shown = mapHeight();
       var readableFloor = .9;
       // Unlinked cards are inventory: when the whole map cannot open readable and whole, the first view frames the linked graph.
