@@ -1162,6 +1162,7 @@ def _render_pages(
         source_paths={node_id: node.path.relative_to(blueprint) for node_id, node in graph.nodes.items()},
         unavailable_source_ids=site.unavailable_source_ids,
         warnings_out=report.warnings,
+        book_order=_reading_order(graph, targets, book_pages),
     )
     report.pages += sum(path != destination / graph_pages.WIKI_LINKS for path in generated_graph_pages)
 
@@ -1952,6 +1953,30 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
         _outside_fences(text, collect)
         pending.extend(reversed(linked_sources))
     return ordered
+
+
+def _reading_order(graph: Graph, targets: Mapping[str, tuple[Path, str]], book_pages: list[Path]) -> list[str]:
+    """Every node in the order the book reads it: by the rank of its page in
+    ``book_pages``, or its nearest ancestor's when its page is not there,
+    then in dependency order."""
+    page_rank = {page.resolve(): rank for rank, page in enumerate(book_pages)}
+    ranks: dict[str, int] = {}
+
+    def rank(node_id: str | None) -> int:
+        chain: list[str] = []
+        while node_id in graph.nodes and node_id not in ranks:
+            target = targets.get(node_id)
+            found = page_rank.get(target[0].resolve()) if target else None
+            if found is not None:
+                ranks[node_id] = found
+                break
+            chain.append(node_id)
+            node_id = graph.nodes[node_id].parent
+        found = ranks.get(node_id, len(page_rank)) if node_id is not None else len(page_rank)
+        ranks.update(dict.fromkeys(chain, found))
+        return found
+
+    return sorted(status.topological_order(graph), key=rank)
 
 
 def _append_book_navigation(pages: list[Path]) -> None:

@@ -3084,6 +3084,61 @@ def test_the_hierarchical_explorer_indexes_nodes_without_a_full_graph(tmp_path: 
     }
 
 
+def _book_order_project(tmp_path: Path) -> Path:
+    """A zeta(7)-shaped book: chapters zeta, alpha, then the irrationality
+    proof, which sorts first but the book reads last. Each chapter lists its
+    second result before its first."""
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text(
+        "---\n---\n\n# Roadmap\n\n## Chapters\n\n"
+        "- [Zeta](zeta/README.md)\n- [Alpha](alpha/README.md)\n- [Irrationality proof](irrationality-proof/README.md)\n",
+        encoding="utf-8",
+    )
+    for name in ("base.md", "top.md"):
+        (roadmap / name).unlink()
+    for chapter, title, depends in (
+        ("zeta", "Zeta", ""),
+        ("alpha", "Alpha", ""),
+        ("irrationality-proof", "Irrationality proof", "- [Zeta](../zeta/first.md)\n- [Alpha](../alpha/first.md)\n"),
+    ):
+        (roadmap / chapter).mkdir()
+        (roadmap / chapter / "README.md").write_text(
+            f"---\n---\n\n# {title}\n\n## Results\n\n- [Second](second.md)\n- [First](first.md)\n",
+            encoding="utf-8",
+        )
+        (roadmap / chapter / "first.md").write_text(
+            f"---\ndeclaration: theorem\n---\n\n# {title} first\n\nA result.\n\n## Depends on\n\n"
+            f"{depends or 'This node has no prerequisites.'}\n",
+            encoding="utf-8",
+        )
+        (roadmap / chapter / "second.md").write_text(
+            f"---\ndeclaration: theorem\n---\n\n# {title} second\n\nAnother result.\n", encoding="utf-8"
+        )
+    return project
+
+
+def test_the_search_index_follows_the_book_order(tmp_path: Path) -> None:
+    project = _book_order_project(tmp_path)
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    index = json.loads((out / "dependencies/index.json").read_text(encoding="utf-8"))
+    ids = [node["id"] for node in index["nodes"]]
+    scopes = list(dict.fromkeys(node["scope"] for node in index["nodes"] if node["scope"] != "roadmap"))
+    assert scopes == ["zeta", "alpha", "irrationality-proof"]
+    # Reordering the nodes keeps every relation on the same two articles.
+    graph = load_graph(project / "blueprint")
+    assert {tuple(row[:2]) for row in _decoded_relations(index)} == {
+        (source, node.id) for node in graph.nodes.values() for source in node.dependencies
+    }
+    summary = (out / "SUMMARY.md").read_text(encoding="utf-8")
+    chapters = re.findall(r"\(roadmap/([^)]+)/README\.md\)", summary)
+    assert chapters == [node_id for node_id in ids if node_id in chapters]
+    assert chapters[-1] == "irrationality-proof"
+
+
 def test_a_root_article_and_search_share_its_generated_canonical_book_route(tmp_path: Path) -> None:
     """Even without an authored contents page, search opens the generated full
     chapter and exact theorem anchor, not a second explorer-only page."""
