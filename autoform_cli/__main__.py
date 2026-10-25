@@ -43,6 +43,7 @@ from .impact import (
     revision_impact,
 )
 from .lean import declaration_names, index_failure_message, index_project
+from .lean_probe import DEFAULT_PROBE_TIMEOUT
 from .library.citations import library_citation_warnings
 from .library.generate import GenerateError, check_index, generate_index, write_index
 from .library.index import INDEX_FILE
@@ -69,7 +70,6 @@ from .scaffold import ScaffoldError, scaffold_project
 from .search import SearchError, search_blueprint, statement_preview
 from .site_check import SiteCheckError, check_site
 from .skeleton import (
-    DEFAULT_PROBE_TIMEOUT,
     SkeletonError,
     extract_skeletons,
     format_report,

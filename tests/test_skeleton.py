@@ -32,55 +32,57 @@ from autoform_cli.lean import (
     index_project,
     snapshot_project_sources,
 )
+from autoform_cli.lean_probe import (
+    PROBE_MARKER,
+    PROBE_OUTPUT_ENV,
+    _PROBE_POOL,
+    _PROCESS_TERMINATION_GRACE,
+    _CommandTimedOut,
+    _ProbeEnvironmentError,
+    build_probe_helper,
+    _join_readers,
+    lean_libraries,
+    module_of,
+    path_of,
+    _probe_modules,
+    _probe_workers,
+    _process_is_alive,
+    _read_probe_records,
+    _remember_tagged_processes,
+    render_probe,
+    _render_probe_helper,
+    _run_bounded_command,
+    run_module_probes,
+    run_probe,
+    stable_paths,
+    stale_build_said,
+    _terminate_process_tree,
+)
 from autoform_cli.skeleton import (
     DeclarationSkeleton,
     NodeSkeleton,
     PACKET_MANIFEST,
-    PROBE_MARKER,
-    PROBE_OUTPUT_ENV,
     SEMANTIC_SCHEMA,
     SKELETON_SCHEMA,
     SkeletonReport,
     TrustedDeclaration,
     SkeletonError,
     UnresolvedTarget,
-    _CommandTimedOut,
-    _PROBE_POOL,
-    _PROCESS_TERMINATION_GRACE,
-    _ProbeEnvironmentError,
-    _build_probe_helper,
     _declaration,
     _install_output,
-    _join_readers,
     _remove_output,
-    _run_module_probes,
     _rename_no_replace,
-    _run_bounded_command,
     _replace_outputs,
-    _stable_paths,
     _stage_output,
-    _terminate_process_tree,
     _hash_module_files,
     _local_safety_issue,
-    _process_is_alive,
-    _remember_tagged_processes,
     _project_control_snapshot,
     _without_comments,
-    _probe_modules,
     _probe_record_issue,
-    _probe_workers,
-    _read_probe_records,
-    _render_probe_helper,
     extract_graph_skeletons,
     extract_skeletons,
     format_report,
-    lean_libraries,
-    module_of,
     parse_probe_output,
-    path_of,
-    render_probe,
-    run_probe,
-    stale_build_said,
     write_packets,
     write_skeleton_report,
 )
@@ -276,10 +278,10 @@ def _fake_default_probe(monkeypatch, probe) -> list[tuple[str, ...]]:
 
     checks: list[tuple[str, ...]] = []
     monkeypatch.setattr(
-        "autoform_cli.skeleton._check_build_freshness", lambda root, modules, **kwargs: checks.append(modules)
+        "autoform_cli.skeleton.check_build_freshness", lambda root, modules, **kwargs: checks.append(modules)
     )
     monkeypatch.setattr(
-        "autoform_cli.skeleton._build_probe_helper", lambda root, directory, **kwargs: directory
+        "autoform_cli.skeleton.build_probe_helper", lambda root, directory, **kwargs: directory
     )
     monkeypatch.setattr("autoform_cli.skeleton.run_probe", lambda program, root, **kwargs: probe(program, root))
     return checks
@@ -386,7 +388,7 @@ def test_probe_refuses_to_render_nothing() -> None:
 @pytest.fixture
 def probe(tmp_path: Path, monkeypatch) -> str:
     (tmp_path / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
+    monkeypatch.setattr("autoform_cli.lean_probe.shutil.which", lambda executable: "/bin/lake")
     return render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
 
 
@@ -397,7 +399,7 @@ def test_probe_refuses_stale_artifacts_before_executing_lean(tmp_path: Path, mon
         calls.append(command)
         return subprocess.CompletedProcess(command, 3, stdout="target is out-of-date", stderr="")
 
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
 
     with pytest.raises(SkeletonError, match=r"run `lake build Skel.Main`"):
         run_probe(probe, tmp_path)
@@ -413,7 +415,7 @@ def test_probe_reports_a_failed_freshness_check_apart_from_stale_artifacts(
             command, 1, stdout="error: permission denied (error code: 13)", stderr=""
         )
 
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
 
     with pytest.raises(SkeletonError, match="must be writable") as refused:
         run_probe(probe, tmp_path)
@@ -430,7 +432,7 @@ def test_a_failed_freshness_check_keeps_only_the_start_of_lake_output(
     def fake_run(command, **kwargs):
         return subprocess.CompletedProcess(command, 1, stdout="", stderr=lake)
 
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
 
     with pytest.raises(SkeletonError) as refused:
         run_probe(probe, tmp_path)
@@ -451,7 +453,7 @@ def test_a_failed_freshness_check_keeps_the_reason_lake_prints_on_stdout(
             command, 1, stdout="error: Skel/Main.olean.hash: permission denied\n", stderr="error: build failed\n"
         )
 
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
 
     with pytest.raises(SkeletonError) as refused:
         run_probe(probe, tmp_path)
@@ -472,7 +474,7 @@ def test_a_stale_build_keeps_the_unbuilt_module_lake_prints_on_stdout_beside_a_w
             stderr="warning: manifest out of date: packages directory changed\n",
         )
 
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
 
     with pytest.raises(SkeletonError) as refused:
         run_probe(probe, tmp_path)
@@ -587,8 +589,8 @@ def test_bounded_command_signals_its_group_only_while_the_leader_is_unreaped(
         )
         killpg(pid, signal_number)
 
-    monkeypatch.setattr("autoform_cli.skeleton.subprocess.Popen", remember)
-    monkeypatch.setattr("autoform_cli.skeleton.os.killpg", checked_killpg)
+    monkeypatch.setattr("autoform_cli.lean_probe.subprocess.Popen", remember)
+    monkeypatch.setattr("autoform_cli.lean_probe.os.killpg", checked_killpg)
     if not waitid:
         monkeypatch.delattr(os, "waitid", raising=False)
     if refusal is None:
@@ -650,7 +652,7 @@ def test_bounded_command_kills_a_child_that_only_its_group_reveals(tmp_path: Pat
         "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
         f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid))"
     )
-    monkeypatch.setattr("autoform_cli.skeleton._remember_descendants", lambda process, descendants: None)
+    monkeypatch.setattr("autoform_cli.lean_probe._remember_descendants", lambda process, descendants: None)
     if not waitid:
         monkeypatch.delattr(os, "waitid", raising=False)
     with pytest.raises(SkeletonError, match="left descendant processes running"):
@@ -681,8 +683,8 @@ def test_bounded_command_defers_a_signal_that_arrives_while_the_leader_is_reaped
     previous = signal.signal(signal.SIGTERM, lambda signum, frame: delivered.append(signum))
     try:
         with monkeypatch.context() as patch:
-            patch.setattr("autoform_cli.skeleton.os.waitpid", signalled_waitpid)
-            patch.setattr("autoform_cli.skeleton.os.killpg", checked_killpg)
+            patch.setattr("autoform_cli.lean_probe.os.waitpid", signalled_waitpid)
+            patch.setattr("autoform_cli.lean_probe.os.killpg", checked_killpg)
             with pytest.raises(SkeletonError, match="interrupted by SIGTERM"):
                 _bounded(tmp_path, "pass")
     finally:
@@ -858,7 +860,7 @@ def test_bounded_command_interruption_kills_the_process(tmp_path: Path, monkeypa
             time.sleep(0.01)
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton.time.monotonic", interrupt_after_start)
+    monkeypatch.setattr("autoform_cli.lean_probe.time.monotonic", interrupt_after_start)
 
     with pytest.raises(KeyboardInterrupt) as interrupted:
         _bounded(tmp_path, program)
@@ -885,7 +887,7 @@ def test_bounded_command_termination_signal_kills_the_process_group(
     tmp_path: Path, signals: tuple[int, ...]
 ) -> None:
     pids = tmp_path / "pids"
-    code = "skeleton._run_bounded_command(sys.argv[1:], cwd=Path.cwd(), timeout=60, context='test command')"
+    code = "lean_probe._run_bounded_command(sys.argv[1:], cwd=Path.cwd(), timeout=60, context='test command')"
     _signal_driver(tmp_path, code, [sys.executable, "-c", _sleeping_probe(pids)], [pids], signals)
 
 
@@ -922,7 +924,7 @@ def _signal_driver(
         "import signal, sys; from pathlib import Path; "
         "signal.signal(signal.SIGHUP, signal.SIG_DFL); "
         "signal.signal(signal.SIGINT, signal.default_int_handler); "
-        "import autoform_cli.skeleton as skeleton; " + code
+        "import autoform_cli.lean_probe as lean_probe; import autoform_cli.skeleton as skeleton; " + code
     )
     cli = subprocess.Popen(
         [sys.executable, "-c", driver, *args],
@@ -964,11 +966,11 @@ def test_probe_pool_interruption_kills_running_probes_and_starts_no_queued_one(
     def probe(module: str) -> object:
         return _bounded(tmp_path, _sleeping_probe(pid_files["AB".index(module)]), timeout=60)
 
-    monkeypatch.setattr("autoform_cli.skeleton._probe_workers", lambda jobs: workers)
-    monkeypatch.setattr("autoform_cli.skeleton.wait", interrupt_once_the_workers_run)
+    monkeypatch.setattr("autoform_cli.lean_probe._probe_workers", lambda jobs: workers)
+    monkeypatch.setattr("autoform_cli.lean_probe.wait", interrupt_once_the_workers_run)
 
     with pytest.raises(KeyboardInterrupt):
-        _run_module_probes(["A", "B"], probe)
+        run_module_probes(["A", "B"], probe)
 
     # The probes sleep for a minute; the pool must stop them, not wait them out.
     assert time.monotonic() - interrupted[0] < 15
@@ -981,9 +983,9 @@ def test_probe_pool_interruption_kills_running_probes_and_starts_no_queued_one(
 def test_probe_pool_termination_signal_kills_every_workers_process_group(tmp_path: Path, signum: int) -> None:
     pid_files = [tmp_path / "a.pids", tmp_path / "b.pids"]
     code = (
-        "skeleton._probe_workers = lambda jobs: jobs; "
+        "lean_probe._probe_workers = lambda jobs: jobs; "
         "programs = dict(zip(('A', 'B'), sys.argv[1:])); "
-        "skeleton._run_module_probes(list(programs), lambda module: skeleton._run_bounded_command("
+        "lean_probe.run_module_probes(list(programs), lambda module: lean_probe._run_bounded_command("
         "[sys.executable, '-c', programs[module]], cwd=Path.cwd(), timeout=60, context='test probe'))"
     )
     _signal_driver(tmp_path, code, [_sleeping_probe(path) for path in pid_files], pid_files, (signum,))
@@ -1018,13 +1020,13 @@ def test_a_signal_during_the_probe_pools_wait_is_handled_outside_it(tmp_path: Pa
     def probe(module: str) -> object:
         return _bounded(tmp_path, _sleeping_probe(pid_file), timeout=60)
 
-    monkeypatch.setattr("autoform_cli.skeleton.wait", signal_inside_wait)
-    monkeypatch.setattr("autoform_cli.skeleton.ThreadPoolExecutor", Pool)
+    monkeypatch.setattr("autoform_cli.lean_probe.wait", signal_inside_wait)
+    monkeypatch.setattr("autoform_cli.lean_probe.ThreadPoolExecutor", Pool)
     before = set(threading.enumerate())
     previous = signal.signal(signal.SIGTERM, lambda signum, frame: received.append(signum))
     try:
         with pytest.raises(SkeletonError, match="interrupted by SIGTERM"):
-            _run_module_probes(["A"], probe)
+            run_module_probes(["A"], probe)
         workers = [thread for thread in threading.enumerate() if thread not in before and thread.is_alive()]
     finally:
         signal.signal(signal.SIGTERM, previous)
@@ -1123,7 +1125,7 @@ def test_a_signal_after_the_last_probe_is_delivered_before_the_report_is_built(t
 
     _fake_default_probe(monkeypatch, probe)
     monkeypatch.setattr(
-        "autoform_cli.skeleton._build_probe_helper", lambda root, directory, **kwargs: scratch.append(directory) or directory
+        "autoform_cli.skeleton.build_probe_helper", lambda root, directory, **kwargs: scratch.append(directory) or directory
     )
     monkeypatch.setattr("autoform_cli.skeleton._declaration", lambda *args, **kwargs: built.append(args))
     previous = signal.signal(signal.SIGTERM, deliver)
@@ -1146,9 +1148,9 @@ def test_a_probe_cancelled_before_its_process_starts_never_starts_it(tmp_path: P
     def popen(*args, **kwargs):
         raise AssertionError("a process started after the pool was cancelled")
 
-    monkeypatch.setattr("autoform_cli.skeleton.subprocess.Popen", popen)
+    monkeypatch.setattr("autoform_cli.lean_probe.subprocess.Popen", popen)
 
-    (result,) = _run_module_probes(["A"], probe).values()
+    (result,) = run_module_probes(["A"], probe).values()
 
     assert isinstance(result, SkeletonError) and result.issues == ("test command was cancelled",)
 
@@ -1227,8 +1229,8 @@ def test_bounded_command_finishes_failure_teardown_when_signalled_during_it(
     survivors = tree
     try:
         with monkeypatch.context() as patch:
-            patch.setattr("autoform_cli.skeleton.time.monotonic", time_out_once_both_run)
-            patch.setattr("autoform_cli.skeleton._terminate_process_tree", signal_then_terminate)
+            patch.setattr("autoform_cli.lean_probe.time.monotonic", time_out_once_both_run)
+            patch.setattr("autoform_cli.lean_probe._terminate_process_tree", signal_then_terminate)
             with pytest.raises(SkeletonError) as failure:
                 _bounded(tmp_path, program, timeout=60)
         deadline = monotonic() + 5
@@ -1258,7 +1260,7 @@ def test_bounded_command_cleanup_reserves_time_and_reuses_final_deadline(
         _join_readers(readers, deadline=deadline)
         return False
 
-    monkeypatch.setattr("autoform_cli.skeleton._join_readers", report_stuck_readers)
+    monkeypatch.setattr("autoform_cli.lean_probe._join_readers", report_stuck_readers)
 
     with pytest.raises(SkeletonError, match="output pipes open"):
         _bounded(tmp_path, "pass")
@@ -1280,8 +1282,8 @@ def test_probe_freshness_and_execution_have_separate_budgets(tmp_path: Path, mon
         return subprocess.CompletedProcess(command, 0, stdout="probe output", stderr="")
 
     times = iter((100.0, 101.0))
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
-    monkeypatch.setattr("autoform_cli.skeleton.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
+    monkeypatch.setattr("autoform_cli.lean_probe.time.monotonic", lambda: next(times))
 
     assert run_probe(probe, tmp_path, timeout=10, freshness_timeout=20, helper=tmp_path) == "probe output"
     assert calls == [20, 9.0]
@@ -1294,8 +1296,8 @@ def test_a_probe_timeout_names_the_flag_that_raises_it(tmp_path: Path, monkeypat
     def slow_probe(command, **kwargs):
         return bounded([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
 
-    monkeypatch.setattr("autoform_cli.skeleton._check_artifacts_fresh", lambda *args, **kwargs: None)
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", slow_probe)
+    monkeypatch.setattr("autoform_cli.lean_probe._check_artifacts_fresh", lambda *args, **kwargs: None)
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", slow_probe)
 
     with pytest.raises(SkeletonError) as caught:
         run_probe(probe, tmp_path, timeout=1, helper=tmp_path)
@@ -1311,16 +1313,16 @@ def test_probe_records_file_is_held_to_the_output_limit(tmp_path: Path, monkeypa
         Path(env[PROBE_OUTPUT_ENV]).write_text("x" * 2048, encoding="utf-8")
         return subprocess.CompletedProcess(command, 0, "", "")
 
-    monkeypatch.setattr("autoform_cli.skeleton._check_artifacts_fresh", lambda *args, **kwargs: None)
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", flooding_probe)
-    monkeypatch.setattr("autoform_cli.skeleton.DEFAULT_PROBE_OUTPUT_LIMIT", 1024)
+    monkeypatch.setattr("autoform_cli.lean_probe._check_artifacts_fresh", lambda *args, **kwargs: None)
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", flooding_probe)
+    monkeypatch.setattr("autoform_cli.lean_probe.DEFAULT_PROBE_OUTPUT_LIMIT", 1024)
 
     with pytest.raises(SkeletonError, match="1024-byte output limit"):
         run_probe(probe, tmp_path, helper=tmp_path)
 
 
 def test_probe_requires_an_existing_lake_manifest(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
+    monkeypatch.setattr("autoform_cli.lean_probe.shutil.which", lambda executable: "/bin/lake")
     probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
 
     with pytest.raises(SkeletonError, match="lake-manifest.json is missing"):
@@ -1649,7 +1651,7 @@ def test_lakefile_lean_wins_when_both_lakefiles_exist(tmp_path: Path, monkeypatc
         translated.append(root)
         return b'name = "fromlean"\n\n[[lean_lib]]\nname = "FromLean"\nsrcDir = "lean-src"\nroots = ["LeanRoot"]\n'
 
-    monkeypatch.setattr("autoform_cli.skeleton._translate_lakefile", translate)
+    monkeypatch.setattr("autoform_cli.lean_probe._translate_lakefile", translate)
 
     (library,) = lean_libraries(project)
 
@@ -1673,7 +1675,7 @@ def test_a_failed_translation_reports_the_error_rather_than_lakes_info_line(tmp_
     stderr = "info: [root]: lakefile.lean and lakefile.toml are both present; using lakefile.lean\n" + error + "\n"
     monkeypatch.setattr(shutil, "which", lambda _name: "lake")
     monkeypatch.setattr(
-        "autoform_cli.skeleton._run_bounded_command",
+        "autoform_cli.lean_probe._run_bounded_command",
         lambda command, **_options: subprocess.CompletedProcess(command, 1, "", stderr),
     )
 
@@ -1699,7 +1701,7 @@ def test_lakefile_lean_libraries_nest_under_the_package_source_directory(tmp_pat
     project = _project_with_a_package_source_directory(tmp_path)
     # lake translate-config writes the package's srcDir as a top-level key.
     monkeypatch.setattr(
-        "autoform_cli.skeleton._translate_lakefile",
+        "autoform_cli.lean_probe._translate_lakefile",
         lambda _root: b'name = "proj"\nsrcDir = "pkgsrc"\n\n[[lean_lib]]\nname = "Proj"\n',
     )
 
@@ -1735,7 +1737,7 @@ def test_lake_configuration_snapshot_uses_content_not_file_identity(
         values[1] += calls
         return os.stat_result(values)
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.fstat", unstable_file_identity)
+    monkeypatch.setattr("autoform_cli.lean_probe.os.fstat", unstable_file_identity)
 
     (library,) = lean_libraries(project)
 
@@ -1768,7 +1770,7 @@ def test_lake_configuration_snapshot_rejects_content_changed_between_reads(
                 lakefile.write_text('name = "Changed"\n', encoding="utf-8")
         return open_file(path, flags, *args)
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.open", change_before_second_read)
+    monkeypatch.setattr("autoform_cli.lean_probe.os.open", change_before_second_read)
 
     with pytest.raises(SkeletonError, match="changed while it was read"):
         lean_libraries(project)
@@ -2393,7 +2395,8 @@ def test_extraction_reports_a_locator_over_the_size_limit_without_stopping(tmp_p
     article = blueprint / "roadmap" / "basics" / "determined.md"
     _replace_source(article, "## Depends on", "## Sources\n\n- [book](../../sources/book.tex#L1-L1)\n\n## Depends on")
     # Above the project's own small input files, below the cited source.
-    monkeypatch.setattr("autoform_cli.skeleton._SNAPSHOT_FILE_LIMIT", 4096)
+    monkeypatch.setattr("autoform_cli.skeleton.SNAPSHOT_FILE_LIMIT", 4096)
+    monkeypatch.setattr("autoform_cli.lean_probe.SNAPSHOT_FILE_LIMIT", 4096)
 
     report = extract_skeletons(blueprint, lean_root=project, runner=lambda p, r: _fake_probe_output())
 
@@ -2625,8 +2628,8 @@ def _fake_lake(monkeypatch, project: Path, answer) -> list[list[str]]:
             calls.append([*command, *modules])
         return answer(modules, command, env)
 
-    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", fake_run)
+    monkeypatch.setattr("autoform_cli.lean_probe.shutil.which", lambda executable: "/bin/lake")
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
     return calls
 
 
@@ -2800,7 +2803,7 @@ def test_a_failed_probes_reason_reads_the_same_on_every_run(tmp_path: Path, monk
 def test_a_stable_reason_leaves_paths_beside_the_project_as_lean_printed_them(tmp_path: Path) -> None:
     root = tmp_path / "proj"
     text = f"{root}/Skel/A.lean:1:0 {root}-old/A.lean {root}ect/A.lean {root}.bak/A.lean {root}: {root}"
-    assert _stable_paths(text, root) == f"Skel/A.lean:1:0 {root}-old/A.lean {root}ect/A.lean {root}.bak/A.lean .: ."
+    assert stable_paths(text, root) == f"Skel/A.lean:1:0 {root}-old/A.lean {root}ect/A.lean {root}.bak/A.lean .: ."
 
 
 @pytest.mark.parametrize("noise", [0, 500], ids=["alone", "past-the-quoted-part"])
@@ -2837,7 +2840,7 @@ def test_environmental_failures_still_abort_a_per_module_extraction(tmp_path: Pa
             return subprocess.CompletedProcess(command, 3, stdout="target is out-of-date", stderr="")
         raise AssertionError("a probe ran after a failed freshness check")
 
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", stale)
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", stale)
 
     with pytest.raises(SkeletonError, match=r"build artifacts are stale; run `lake build Skel.Main Skel.Uses`"):
         extract_skeletons(_two_module_blueprint(tmp_path), lean_root=project)
@@ -2850,11 +2853,11 @@ def test_a_helper_build_that_times_out_states_its_budget_once(tmp_path: Path, mo
     def stall(command, *, timeout, context, **kwargs):
         raise _CommandTimedOut([f"{context} timed out after {timeout:g} seconds"])
 
-    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", stall)
+    monkeypatch.setattr("autoform_cli.lean_probe.shutil.which", lambda executable: "/bin/lake")
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", stall)
 
     with pytest.raises(_ProbeEnvironmentError) as caught:
-        _build_probe_helper(tmp_path, tmp_path / "helper", timeout=5)
+        build_probe_helper(tmp_path, tmp_path / "helper", timeout=5)
     assert caught.value.issues == (
         "building the skeleton probe helpers timed out after 5 seconds; "
         "rerun with --timeout <seconds> for large projects",
@@ -3141,8 +3144,8 @@ def test_cli_sets_the_probe_timeout(tmp_path: Path, capsys, monkeypatch) -> None
         calls.append(kwargs)
         return directory
 
-    monkeypatch.setattr("autoform_cli.skeleton._check_build_freshness", lambda root, modules, **kwargs: None)
-    monkeypatch.setattr("autoform_cli.skeleton._build_probe_helper", fake_build_helper)
+    monkeypatch.setattr("autoform_cli.skeleton.check_build_freshness", lambda root, modules, **kwargs: None)
+    monkeypatch.setattr("autoform_cli.skeleton.build_probe_helper", fake_build_helper)
     monkeypatch.setattr("autoform_cli.skeleton.run_probe", fake_run_probe)
     command = ["skeleton", str(blueprint), "--lean-root", str(project), "--json"]
     assert main([*command, "--timeout", "1800"]) == 0
@@ -3552,7 +3555,7 @@ def test_probe_records_bypass_the_command_capture_and_other_output(tmp_path: Pat
     assert command in probe
     helper = helper.replace(loop_end, f"{leave}{loop_end}")
     probe = probe.replace(command, f"{noise}{command}")
-    monkeypatch.setattr("autoform_cli.skeleton._render_probe_helper", lambda: helper)
+    monkeypatch.setattr("autoform_cli.lean_probe._render_probe_helper", lambda: helper)
 
     records = parse_probe_output(run_probe(probe, project), expected_roots=("Skel.observation_determined",))
 
@@ -3573,8 +3576,8 @@ def test_probe_stops_before_its_records_file_exceeds_the_limit(tmp_path: Path, m
             sizes.append(Path(kwargs["env"][PROBE_OUTPUT_ENV]).stat().st_size)
         return result
 
-    monkeypatch.setattr("autoform_cli.skeleton.DEFAULT_PROBE_OUTPUT_LIMIT", limit)
-    monkeypatch.setattr("autoform_cli.skeleton._run_bounded_command", inspect_records)
+    monkeypatch.setattr("autoform_cli.lean_probe.DEFAULT_PROBE_OUTPUT_LIMIT", limit)
+    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", inspect_records)
     probe = render_probe(
         imports=("Skel.Main",), roots=("Skel.observation_determined",), project_roots=("Skel",)
     )
