@@ -33,7 +33,7 @@ from autoform_cli.__main__ import main
 from autoform_cli._repository import _normalize_remote
 from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.audit import audit_blueprint
-from autoform_cli.coverage import COVERAGE_DISPOSITIONS
+from autoform_cli.coverage import COVERAGE_DISPOSITIONS, COVERAGE_SCHEMA, CoverageEntry, CoverageSummary
 from autoform_cli.dashboard import publication_bound_live_state
 from autoform_cli.graph import GraphValidationError, atlas_omissions, load_graph
 from autoform_cli.lean import LeanSourceError
@@ -802,8 +802,7 @@ def test_overview_carries_the_counts_without_a_separate_progress_page(tmp_path: 
     for retired in ("Scoped roadmap", "Ready now", "targets complete", "top-level milestones", "coverage contract</a>"):
         assert retired not in overview
     assert ">What the sources cover</a>" in overview
-    assert "Declared source coverage:" in overview
-    assert "1 mapped" in overview
+    assert '<span class="bp-hero-coverage-counts">1 source area: 1 not yet split</span>' in overview
     assert 'href="coverage/index.html"' in overview
     assert 'role="img"' not in overview
     assert "items settled" not in overview
@@ -993,6 +992,10 @@ def test_coverage_summary_tracks_every_canonical_disposition() -> None:
     assert set(_COVERAGE_SUMMARY_ORDER) == set(COVERAGE_DISPOSITIONS)
     assert len(_COVERAGE_SUMMARY_ORDER) == len(COVERAGE_DISPOSITIONS)
     assert _COVERAGE_SUMMARY_ORDER[0] == "DECOMPOSED"
+    # Counts carry thousands separators.
+    entries = tuple(CoverageEntry(f"Area {n}", "MAPPED", "Pending", n) for n in range(1234))
+    summary = render_module._coverage_summary(CoverageSummary(COVERAGE_SCHEMA, "README.md", "0" * 64, entries))
+    assert summary.startswith("1,234 ") and " 1,234 " in summary
 
 
 def test_single_target_uses_singular_completion_copy(tmp_path: Path) -> None:

@@ -2268,12 +2268,25 @@ def _completion_percentage(done: int, total: int) -> int:
     return max(1, min(99, round(100 * done / total)))
 
 
+# What each disposition means for a source area, in the reader's words.
+_COVERAGE_WORDS = {
+    "DECOMPOSED": "split into statements",
+    "MAPPED": "not yet split",
+    "INVENTORIED": "inventoried as Lean modules",
+    "DEFERRED": "left for later",
+    "OUT": "out of scope",
+}
+
+
 def _coverage_summary(coverage: CoverageSummary) -> str:
-    """Describe declared source dispositions without inventing a percentage."""
+    """Count the declared source areas by disposition, without a percentage."""
 
     counts = coverage.counts
-    return " · ".join(
-        f"{counts[disposition]:,} {disposition.casefold()}"
+    total = len(coverage.entries)
+    if not total:
+        return ""
+    return f"{total:,} source {'area' if total == 1 else 'areas'}: " + " · ".join(
+        f"{counts[disposition]:,} {_COVERAGE_WORDS[disposition]}"
         for disposition in _COVERAGE_SUMMARY_ORDER
         if counts[disposition]
     )
@@ -2356,11 +2369,11 @@ def _render_hero(
     sentence = "No statements yet." if not total else "Every statement is fully proved." if done == total else ""
     stats = "".join(figure(*entry) for entry in figures)
     inventories = f"{inventory_count:,} module {'inventory' if inventory_count == 1 else 'inventories'}"
+    areas = _coverage_summary(coverage)
     coverage_line = (
         '<div class="bp-hero-coverage">'
-        '<span class="bp-hero-coverage-label">Declared source coverage:</span> '
-        f'<span class="bp-hero-coverage-counts">{html.escape(_coverage_summary(coverage))}</span> '
-        f'<a class="bp-hero-coverage-link" href="{html.escape(coverage_href, quote=True)}">'
+        + (f'<span class="bp-hero-coverage-counts">{html.escape(areas)}</span> ' if areas else "")
+        + f'<a class="bp-hero-coverage-link" href="{html.escape(coverage_href, quote=True)}">'
         "What the sources cover</a>"
         "</div>"
     )
@@ -4057,7 +4070,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-size: 0.72rem;
   color: var(--bp-muted);
 }}
-.bp-hero-coverage-label {{ font-weight: 700; color: var(--bp-fg); }}
 .bp-hero-coverage-link {{
   margin-left: auto;
   font-weight: 600;
