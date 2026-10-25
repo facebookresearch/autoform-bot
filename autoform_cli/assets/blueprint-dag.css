@@ -16,6 +16,8 @@ body.bp-dag-app-page .bp-dag-viewer {
   position: fixed; z-index: 40; inset: 0; width: 100dvw; max-width: none;
   height: 100dvh !important; min-height: 0; margin: 0; border: 0; border-radius: 0; box-shadow: none;
 }
+/* A phone's reader hangs below the viewer on a transform. Unlike hidden, clip leaves the viewer nothing a fragment link can scroll, so the trail and search stay on screen. */
+body.bp-dag-app-page .bp-dag-viewer { overflow: clip; }
 body.bp-dag-app-page { overflow: hidden; }
 [data-md-color-scheme=slate] .bp-dag-viewer { --dag-overlay-border: var(--dag-border); --dag-map: #18191a; --dag-error: #ff7b72; }
 body.bp-dag-app-page .md-header, body.bp-dag-app-page .md-tabs,

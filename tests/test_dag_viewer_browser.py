@@ -896,6 +896,28 @@ def test_phone_selection_opens_the_reader_at_half_and_returns_to_a_reachable_sel
     assert page.evaluate("document===window.__consumerDocument") is True
 
 
+
+def test_a_phone_that_follows_a_link_to_a_statement_keeps_its_trail_and_search_on_screen(
+    mobile_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """The half reader hangs below the viewer, and a statement's anchor scrolled the whole explorer up off its trail and search."""
+    page = mobile_page
+    _open_consumer(page, explorer_consumer)
+    page.goto(explorer_consumer.route("chapter/target"))
+    _consumer_selected(page, explorer_consumer, "chapter/target")
+    page.wait_for_timeout(300)
+    assert page.evaluate("document.querySelector('.bp-dag-viewer').scrollTop") == 0
+    for selector in (".bp-dag-breadcrumb", ".bp-dag-search"):
+        box = page.locator(selector).bounding_box()
+        assert box is not None and box["y"] >= 0, selector
+    # A fresh load of the same link takes the browser's own anchor scroll.
+    page.reload()
+    _consumer_selected(page, explorer_consumer, "chapter/target")
+    page.wait_for_timeout(300)
+    assert page.evaluate("document.querySelector('.bp-dag-viewer').scrollTop") == 0
+    box = page.locator(".bp-dag-search").bounding_box()
+    assert box is not None and box["y"] >= 0
+
 def test_mobile_contents_pagination_stays_above_the_collapsed_sheet(mobile_page: object, explorer_consumer: _ExplorerConsumer) -> None:
     page = mobile_page
     _open_consumer(page, explorer_consumer, "flat")
