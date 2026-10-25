@@ -110,6 +110,7 @@ var currentBundle={nodeId:'chapter',scope:'chapter',title:'Authored topic',url:'
 var instance=1,trail=[],view={},family,data={title:'Authored topic',nodes:[],edges:[]};
 var mapAllowed=true,ui$mapAllowed=true,ui$mode='graph',ui$selectedStatuses=new Set(['planned']),ui$showIsolated=true;
 var presentStatuses=['planned'],ui$relationIds=new Set(['F']),ui$overviewGroup=null,ui$area=null;
+var ui$wikiView=null,sceneData=null,scene=null;
 function getComputedStyle() {return {fontFamily:'sans-serif'};}
 function globalListen(target,type,callback) {target.addEventListener(type,callback);}
 class MutationObserver {observe(){}}

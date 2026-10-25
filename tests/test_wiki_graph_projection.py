@@ -92,6 +92,7 @@ var navigation={},records=new Map(),sharedIndex,currentBundle={nodeId:'F',scope:
 var readingReady=new Promise(()=>{});
 const calls=[];let readerRenders=0;
 function updateProjection() {throw new Error('Wiki reading must not change the graph projection');}
+function projectWikiView() {}
 function node(id,title=id) {
   return Object.freeze({id,title,scope:'chapter',parent:id==='chapter'?'roadmap':'chapter',
     kind:id==='chapter'?'scope':'node',status:'planned',result:id!=='chapter',

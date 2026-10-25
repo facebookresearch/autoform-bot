@@ -301,6 +301,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-map-key { position: absolute; z-index: 4; right: 20px; bottom: 14px; display: flex; gap: 14px; color: var(--dag-muted); font-size: 11px; pointer-events: none; }
 .bp-map-key span::before { content: ""; display: inline-block; width: 22px; margin: 0 6px 3px 0; border-top: 2px solid currentColor; }
 .bp-map-key .bp-map-key-proof::before { border-top-style: dashed; }
+.bp-map-key .bp-map-key-wiki::before { border-top-style: dotted; }
+.bp-map-key .bp-map-key-coverage::before { display: none; }
 .bp-dag-compact-regions :is(.bp-dag-canvas, .bp-dag-node-layer) { clip-path: inset(52px 0 44px); }
 .bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-core { padding: 10px 14px; }
 .bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: 4px; font-size: 14px; white-space: nowrap; }

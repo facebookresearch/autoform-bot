@@ -100,8 +100,105 @@
     return {before: before, after: after};
   }
 
+  // Pure projection onto a complete, bounded display view. Optional endpoints
+  // map canonical IDs to existing display IDs (including region replacements).
+  // The Promise yields during large scans; callers cache it and guard publication.
+  function projectWikiLinks(view, records, state, endpoints) {
+    var availability = state && state.availability, empty = {availability: "unavailable", edges: [], unavailableOwners: []};
+    if (!state || state.schema !== "autoform-wiki-links/v1" || ["complete", "partial"].indexOf(availability) < 0 ||
+        !Array.isArray(state.references) || !Array.isArray(state.unavailable_sources) ||
+        availability === "complete" && state.unavailable_sources.length || !view || !Array.isArray(view.nodes) ||
+        view.nodes.length > MAX_MAP_NODES) return Promise.resolve(empty);
+    var visible = new Map(), owners = new Map(), eligible = new Set(), ambiguous = new Set(), membership = 0;
+    function wrapper(record) { return ["source", "collection", "transparent"].indexOf(record.navigation) >= 0; }
+    function canonical(node) {
+      if (node._overviewGroup || node._region) return null;
+      // Match recordId: literal scope:/boundary: names survive by identity or
+      // _recordId; only actual display prefixes are removed once.
+      var id = node._recordId || (records.get(node.id) === node || ["scope", "boundary"].indexOf(node.kind) < 0 ?
+        node.id : node.id.replace(/^(scope|boundary):/, ""));
+      return records.has(id) ? id : null;
+    }
+    function assign(id, owner) {
+      if (!id || wrapper(records.get(id))) return;
+      if (owners.has(id) && owners.get(id) !== owner) ambiguous.add(id);
+      else owners.set(id, owner);
+    }
+    for (var i = 0; i < view.nodes.length; i++) {
+      var node = view.nodes[i];
+      if (!node || typeof node.id !== "string" || visible.has(node.id)) return Promise.resolve(empty);
+      visible.set(node.id, node);
+      var id = canonical(node); assign(id, node.id);
+      if (id && !wrapper(records.get(id)) || node._region && !node._overviewGroup) eligible.add(node.id);
+    }
+    var groups = view._scopeOverview && view._scopeOverview.groups || [];
+    if (!Array.isArray(groups) || groups.length > MAX_MAP_NODES) return Promise.resolve(empty);
+    for (var g = 0; g < groups.length; g++) {
+      var group = groups[g], shown = visible.get(group.id);
+      if (!shown || shown._overviewGroup !== group.key) continue;
+      if (!Array.isArray(group.members) || (membership += group.members.length) > MAX_MAP_NODES) return Promise.resolve(empty);
+      eligible.add(group.id);
+      group.members.forEach(function (member) { assign(canonical(member), group.id); });
+    }
+    var memo = new Map();
+    async function resolve(id) {
+      if (memo.has(id)) return memo.get(id).owner;
+      var chain = [], seen = new Set(), pending = id, suffix = {safe: true, owner: null};
+      while (pending !== null && pending !== undefined) {
+        if (memo.has(pending)) { suffix = memo.get(pending); break; }
+        var record = records.get(pending);
+        if (!record || seen.has(pending)) { suffix = {safe: false, owner: null}; break; }
+        seen.add(pending); chain.push(record);
+        if (record.navigation === "source" || ambiguous.has(pending)) { suffix = {safe: false, owner: null}; break; }
+        pending = record.parent;
+        if (chain.length % 1024 === 0) await new Promise(function (done) { setTimeout(done, 0); });
+      }
+      for (var position = chain.length - 1; position >= 0; position--) {
+        var current = chain[position], owner = owners.get(current.id), safe = suffix.safe;
+        if (!wrapper(current) && endpoints && endpoints.has(current.id)) {
+          owner = endpoints.get(current.id);
+          if (!eligible.has(owner)) safe = false;
+        }
+        suffix = {safe: safe, owner: safe ? !wrapper(current) && owner || suffix.owner : null};
+        memo.set(current.id, suffix);
+        if ((chain.length - position) % 1024 === 0 && position)
+          await new Promise(function (done) { setTimeout(done, 0); });
+      }
+      return suffix.owner;
+    }
+    return (async function () {
+      var references = state.references, missing = state.unavailable_sources, edges = new Map(), pairs = new Map(), unknown = new Set();
+      for (var row = 0; row < references.length + missing.length; row++) {
+        if (row >= references.length) {
+          var missingId = missing[row - references.length], missingRecord = records.get(missingId);
+          if (missingRecord && !wrapper(missingRecord)) { var unavailable = await resolve(missingId); if (unavailable) unknown.add(unavailable); }
+        } else {
+          var pair = references[row], source = pair && records.get(pair[0]), target = pair && records.get(pair[1]);
+          if (Array.isArray(pair) && pair.length === 2 && source && target && !wrapper(source) && !wrapper(target)) {
+            var from = await resolve(pair[0]), to = await resolve(pair[1]);
+            if (from && to && from !== to) {
+              var targets = pairs.get(pair[0]);
+              if (!targets || !targets.has(pair[1])) {
+                if (!targets) { targets = new Set(); pairs.set(pair[0], targets); }
+                targets.add(pair[1]);
+                var key = JSON.stringify([from, to]), edge = edges.get(key);
+                if (edge) edge.count++;
+                else edges.set(key, {source: from, target: to, count: 1});
+              }
+            }
+          }
+        }
+        if ((row + 1) % 1024 === 0 && row + 1 < references.length + missing.length)
+          await new Promise(function (done) { setTimeout(done, 0); });
+      }
+      return {availability: availability, edges: Array.from(edges.values()).sort(function (a, b) {
+        return a.source < b.source ? -1 : a.source > b.source ? 1 : a.target < b.target ? -1 : a.target > b.target ? 1 : 0;
+      }), unavailableOwners: Array.from(unknown).sort()};
+    })();
+  }
+
   // Deterministic, bounded scene geometry; public graph data remains untouched.
-  function layoutGraph(nodes, edges, direction, stageAspect) {
+  function layoutGraph(nodes, edges, direction, stageAspect, wikiEdges) {
     var boxes = new Map(), routes = [], work = {ticks: 0, pairs: 0, moves: 0, candidates: 0, escapes: 0};
     if (nodes.length > MAX_MAP_NODES) return null;
     if (!nodes.length) return {nodes: boxes, routes: routes, clusters: [], work: work, bounds: {x: 0, y: 0, w: 1, h: 1}};
@@ -135,6 +232,26 @@
       if (island === undefined) { island = islands.length; islandIds.set(key, island); islands.push({key: node.id, members: [], components: [], links: 0}); }
       node.island = island; islands[island].members.push(index);
     });
+    // Ordinary article links are affinities, not directed mathematical edges.
+    // Coalesce duplicate observations without changing the formal adjacency.
+    var associations = new Map(), familyParents = islands.map(function (_island, index) { return index; });
+    function familyRoot(index) { while (familyParents[index] !== index) { familyParents[index] = familyParents[familyParents[index]]; index = familyParents[index]; } return index; }
+    (Array.isArray(wikiEdges) && wikiEdges.length <= nodes.length * nodes.length ? wikiEdges : []).forEach(function (edge) {
+      if (!edge || !Number.isFinite(edge.count) || edge.count <= 0) return;
+      var a = ids.get(edge.source), b = ids.get(edge.target); if (a === undefined || b === undefined || a === b) return;
+      var first = Math.min(a, b), last = Math.max(a, b), key = first + ":" + last;
+      var found = associations.get(key);
+      if (!found) { found = {a: first, b: last, forward: 0, backward: 0}; associations.set(key, found); }
+      var kind = a === first ? "forward" : "backward";
+      found[kind] = Math.max(found[kind], Math.min(Number.MAX_SAFE_INTEGER / 2, edge.count));
+    });
+    var wiki = Array.from(associations.values()).sort(function (a, b) { return a.a - b.a || a.b - b.b; });
+    wiki.forEach(function (link) {
+      link.count = link.forward + link.backward;
+      var a = vertices[link.a].island, b = vertices[link.b].island;
+      if (a !== b) familyParents[familyRoot(b)] = familyRoot(a);
+    });
+    var wikiFamilies = [], wikiWork = {ticks: 0, pairs: 0, moves: 0};
     var sequence = 0, stack = [], components = [], visitIndex = [], low = [], onStack = [], componentOf = [];
     function visit(index) {
       visitIndex[index] = low[index] = sequence++; stack.push(index); onStack[index] = true;
@@ -397,6 +514,88 @@
         island.shift = {x: x - island.packing.x, y: y - island.packing.y};
         x += island.packing.w + spacing; rowHeight = Math.max(rowHeight, island.packing.h);
       });
+      if (wiki.some(function (link) { return vertices[link.a].island !== vertices[link.b].island; })) {
+        // Relax complete formal route envelopes, never individual proof cards.
+        // Families follow actual weak wiki connectivity and receive no invented labels.
+        var families = new Map(), islandSprings = new Map();
+        islands.forEach(function (island, index) {
+          var key = familyRoot(index), family = families.get(key);
+          if (!family) { family = {key: island.key, islands: [], springs: []}; families.set(key, family); }
+          family.islands.push({index: index, key: island.key, w: island.packing.w, h: island.packing.h, x: 0, y: 0, degree: 0});
+        });
+        wiki.forEach(function (link) {
+          var a = vertices[link.a].island, b = vertices[link.b].island; if (a === b) return;
+          var key = Math.min(a, b) + ":" + Math.max(a, b), found = islandSprings.get(key);
+          if (found) found.count = Math.min(Number.MAX_SAFE_INTEGER, found.count + link.count);
+          else islandSprings.set(key, {a: Math.min(a, b), b: Math.max(a, b), count: link.count});
+        });
+        islandSprings.forEach(function (link) { families.get(familyRoot(link.a)).springs.push(link); });
+        families.forEach(function (family) {
+          var members = family.islands, lookup = new Map(members.map(function (member) { return [member.index, member]; }));
+          family.springs.sort(function (a, b) { return a.a - b.a || a.b - b.b; });
+          family.springs.forEach(function (link) { lookup.get(link.a).degree++; lookup.get(link.b).degree++; });
+          members.sort(function (a, b) { return b.degree - a.degree || (a.key < b.key ? -1 : 1); });
+          var unit = members.reduce(function (largest, member) { return Math.max(largest, member.w, member.h); }, 0) + spacing;
+          var placed = [], position = 0;
+          members.forEach(function (member) {
+            if (members.length === 2) {
+              member.x = placed.length ? placed[0].w + spacing : 0;
+              member.y = placed.length ? (placed[0].h - member.h) / 2 : 0;
+              placed.push(member); return;
+            }
+            var clear = false;
+            for (var attempt = 0; attempt < 32 && !clear; attempt++) {
+              var radius = unit * Math.sqrt(position) * .85, angle = position++ * 2.399963229728653;
+              member.x = Math.cos(angle) * radius - member.w / 2; member.y = Math.sin(angle) * radius - member.h / 2;
+              clear = !placed.some(function (other) { return overlap(member, other, spacing); });
+            }
+            if (!clear) member.x = Math.max.apply(null, placed.map(function (other) { return other.x + other.w; })) + spacing;
+            placed.push(member);
+          });
+          if (members.length > 1) for (var tick = 0; tick < 32; tick++) {
+            var forces = new Map(members.map(function (member) { return [member.index, {x: 0, y: 0}]; }));
+            family.springs.forEach(function (link) {
+              var a = lookup.get(link.a), b = lookup.get(link.b), dx = b.x + b.w / 2 - a.x - a.w / 2, dy = b.y + b.h / 2 - a.y - a.h / 2;
+              var distance = Math.max(1, Math.hypot(dx, dy));
+              var wanted = (Math.hypot(a.w, a.h) + Math.hypot(b.w, b.h)) / 2 + spacing;
+              var strength = Math.min(2, 1 + Math.log1p(link.count) / 12) * (distance - wanted) / distance * .12;
+              forces.get(link.a).x += dx * strength / Math.max(1, a.degree); forces.get(link.a).y += dy * strength / Math.max(1, a.degree);
+              forces.get(link.b).x -= dx * strength / Math.max(1, b.degree); forces.get(link.b).y -= dy * strength / Math.max(1, b.degree);
+            });
+            members.forEach(function (a, index) { members.slice(index + 1).forEach(function (b) {
+              wikiWork.pairs++;
+              var dx = b.x + b.w / 2 - a.x - a.w / 2, dy = b.y + b.h / 2 - a.y - a.h / 2, square = Math.max(1, dx * dx + dy * dy);
+              var push = Math.min(3, 16000 / square), length = Math.sqrt(square);
+              forces.get(a.index).x -= dx / length * push; forces.get(a.index).y -= dy / length * push;
+              forces.get(b.index).x += dx / length * push; forces.get(b.index).y += dy / length * push;
+            }); });
+            members.forEach(function (member) {
+              var force = forces.get(member.index), dx = Math.max(-20, Math.min(20, force.x)), dy = Math.max(-20, Math.min(20, force.y));
+              [[dx, dy], [0, dy], [dx, 0]].some(function (move) {
+                var candidate = {x: member.x + move[0], y: member.y + move[1], w: member.w, h: member.h};
+                var clear = members.every(function (other) { wikiWork.moves++; return other === member || !overlap(candidate, other, spacing); });
+                if (clear) { member.x = candidate.x; member.y = candidate.y; } return clear;
+              });
+            });
+            wikiWork.ticks++;
+          }
+          family.bounds = bounds(members.reduce(function (all, member) { return all.concat([{x: member.x, y: member.y}, {x: member.x + member.w, y: member.y + member.h}]); }, []));
+        });
+        var familyArea = 0, familyWidth = 0;
+        families.forEach(function (family) { familyArea += (family.bounds.w + spacing * 2) * (family.bounds.h + spacing * 2); familyWidth = Math.max(familyWidth, family.bounds.w); });
+        var familyGap = spacing * 2 + 64;
+        var targetWidth = Math.max(familyWidth, Math.sqrt(familyArea * aspect)), fx = 0, fy = 0, shelf = 0;
+        Array.from(families.values()).sort(function (a, b) { return b.islands.length - a.islands.length || b.bounds.h - a.bounds.h || (a.key < b.key ? -1 : 1); }).forEach(function (family) {
+          if (fx && fx + family.bounds.w > targetWidth) { fx = 0; fy += shelf + familyGap; shelf = 0; }
+          family.islands.forEach(function (member) {
+            var island = islands[member.index];
+            island.shift = {x: fx + member.x - family.bounds.x - island.packing.x, y: fy + member.y - family.bounds.y - island.packing.y};
+          });
+          wikiFamilies.push({island_count: family.islands.length, members: family.islands.reduce(function (all, member) { return all.concat(islands[member.index].members.map(function (index) { return vertices[index].id; })); }, []).sort(),
+            bounds: {x: fx, y: fy, w: family.bounds.w, h: family.bounds.h}});
+          fx += family.bounds.w + familyGap; shelf = Math.max(shelf, family.bounds.h);
+        });
+      }
       // Cached escapes/reversed paths share point, bound and arrow objects.
       // Translate each object once so packing cannot distort a typed route.
       var translated = new WeakSet();
@@ -424,7 +623,82 @@
     }
     var all = Array.from(boxes.values()).reduce(function (points, box) { return points.concat([{x: box.x, y: box.y}, {x: box.x + box.w, y: box.y + box.h}]); }, []);
     routes.forEach(function (route) { all.push({x: route.bounds.x, y: route.bounds.y}, {x: route.bounds.x + route.bounds.w, y: route.bounds.y + route.bounds.h}); });
-    return {nodes: boxes, routes: routes, clusters: components.map(function (component) { return {id: component.key, rank: component.rank, members: component.members.map(function (index) { return vertices[index].id; })}; }), work: work, bounds: bounds(all)};
+    return {nodes: boxes, routes: routes, clusters: components.map(function (component) { return {id: component.key, rank: component.rank, members: component.members.map(function (index) { return vertices[index].id; })}; }),
+      $wikiFamilies: wikiFamilies, $wikiEdges: wiki.map(function (link) { return {source: vertices[link.a].id, target: vertices[link.b].id, count: link.count}; }),
+      $wikiWork: wikiWork, work: work, bounds: bounds(all)};
+  }
+
+  // Soft article associations use settled geometry, never the proof's ports or
+  // rank solver. Keep a bounded local backbone; all links remain in the reader.
+  function wikiRoutes(scene) {
+    var boxes = scene.nodes, ordered = Array.from(boxes.values()), links = scene.$wikiEdges || [], paths = [], hidden = 0;
+    var work = {attempts: 0, pairs: 0, obstacles: 0};
+    var counts = new Map();
+    function hits(a, b, box, padding) {
+      var enter = 0, leave = 1;
+      for (var axis of ["x", "y"]) {
+        var low = box[axis] - padding, high = box[axis] + box[axis === "x" ? "w" : "h"] + padding;
+        var delta = b[axis] - a[axis];
+        if (Math.abs(delta) < 1e-9) { if (a[axis] <= low || a[axis] >= high) return false; continue; }
+        var first = (low - a[axis]) / delta, last = (high - a[axis]) / delta;
+        enter = Math.max(enter, Math.min(first, last)); leave = Math.min(leave, Math.max(first, last));
+        if (enter >= leave - 1e-9) return false;
+      }
+      return leave > 1e-7 && enter < 1 - 1e-7;
+    }
+    function clear(a, b, source, target) { work.pairs++; return ordered.every(function (box) { work.obstacles++; return !hits(a, b, box, box.id === source || box.id === target ? 0 : 16); }); }
+    function boundary(box, other) {
+      var x = box.x + box.w / 2, y = box.y + box.h / 2, dx = other.x + other.w / 2 - x, dy = other.y + other.h / 2 - y;
+      var scale = Math.min(Math.abs(dx) > 1e-9 ? box.w / 2 / Math.abs(dx) : Infinity, Math.abs(dy) > 1e-9 ? box.h / 2 / Math.abs(dy) : Infinity);
+      var at = {x: x + dx * scale, y: y + dy * scale};
+      // Pin the normal coordinate rather than accumulating floating-point
+      // error just inside the card, which would make a real stroke clip it.
+      if (Math.abs(dx) / box.w >= Math.abs(dy) / box.h) at.x = dx < 0 ? box.x : box.x + box.w;
+      else at.y = dy < 0 ? box.y : box.y + box.h;
+      return at;
+    }
+    links.slice().sort(function (a, b) { return b.count - a.count || (a.source < b.source ? -1 : a.source > b.source ? 1 : a.target < b.target ? -1 : 1); }).forEach(function (link) {
+      if ((counts.get(link.source) || 0) >= 4 || (counts.get(link.target) || 0) >= 4) { hidden++; return; }
+      if (work.attempts >= ordered.length * 2) { hidden++; return; }
+      work.attempts++;
+      var source = boxes.get(link.source), target = boxes.get(link.target); if (!source || !target) return;
+      var from = boundary(source, target), to = boundary(target, source), direct = Math.hypot(to.x - from.x, to.y - from.y), route;
+      if (clear(from, to, source.id, target.id)) route = [from, to];
+      else {
+        var points = [from, to], margin = Math.min(320, direct / 2 + 48);
+        var nearby = ordered.filter(function (box) { return box.id !== source.id && box.id !== target.id &&
+          box.x <= Math.max(from.x, to.x) + margin && box.x + box.w >= Math.min(from.x, to.x) - margin &&
+          box.y <= Math.max(from.y, to.y) + margin && box.y + box.h >= Math.min(from.y, to.y) - margin; });
+        if (nearby.length > 8) { hidden++; return; }
+        nearby.forEach(function (box) {
+          points.push({x: box.x - 20, y: box.y - 20}, {x: box.x + box.w + 20, y: box.y - 20},
+            {x: box.x - 20, y: box.y + box.h + 20}, {x: box.x + box.w + 20, y: box.y + box.h + 20});
+        });
+        var distance = points.map(function () { return Infinity; }), before = [], visited = new Set(); distance[0] = 0;
+        // Dijkstra over at most 32 nearby corners. Only local segments are candidates,
+        // preventing an optional association from circling the entire library.
+        for (var step = 0; step < points.length; step++) {
+          var next = -1;
+          for (var i = 0; i < points.length; i++) if (!visited.has(i) && (next < 0 || distance[i] < distance[next])) next = i;
+          if (next < 0 || !Number.isFinite(distance[next]) || distance[next] > direct * 1.8 + 96) break;
+          if (next === 1) { route = []; for (var at = 1; at !== undefined; at = before[at]) route.unshift(points[at]); break; }
+          visited.add(next);
+          for (var candidate = 0; candidate < points.length; candidate++) {
+            if (visited.has(candidate)) continue;
+            var length = Math.hypot(points[candidate].x - points[next].x, points[candidate].y - points[next].y);
+            if (distance[next] + length >= distance[candidate] || distance[next] + length > direct * 1.8 + 96) continue;
+            if (clear(points[next], points[candidate], source.id, target.id)) { distance[candidate] = distance[next] + length; before[candidate] = next; }
+          }
+        }
+      }
+      if (!route) { hidden++; return; }
+      counts.set(source.id, (counts.get(source.id) || 0) + 1); counts.set(target.id, (counts.get(target.id) || 0) + 1);
+      var left = Math.min.apply(null, route.map(function (at) { return at.x; })), top = Math.min.apply(null, route.map(function (at) { return at.y; }));
+      paths.push({source: source.id, target: target.id, kind: "wiki", count: link.count, points: route, radii: route.map(function () { return 0; }),
+        strength: 1 + Math.min(2, Math.log2(1 + link.count) / 3), bounds: {x: left, y: top,
+          w: Math.max.apply(null, route.map(function (at) { return at.x; })) - left, h: Math.max.apply(null, route.map(function (at) { return at.y; })) - top}});
+    });
+    return {routes: paths, omitted: hidden, total: links.length, work: work};
   }
 
   // A derived overview of a large local scope, not a new mathematical graph.
@@ -502,6 +776,10 @@
     return Object.assign({}, route, {count: count, strength: 1.2 + 1.6 * size / (size + 4) + 2 * size / flowRange});
   }
 
+  function wikiOwnerVisible(node, statuses) {
+    return Boolean(node && (!node.status_counts || node.status_counts.every(function (pair) { return !pair[1] || statuses.has(pair[0]); })));
+  }
+
   function mount(host, data, instance, firstBundle, navigation) {
     if (!navigation || !firstBundle || !firstBundle.readingSource) throw new Error("A complete mathematical page and navigation are required");
     if (!data || data.schema !== "autoform-dag-view/v2" || !data.palette ||
@@ -509,11 +787,12 @@
     var contextGraph = data, sharedIndex = null, records = new Map(), currentBundle = firstBundle;
     var ui$wikiLinks = null, ui$wikiBefore = new Map(), ui$wikiAfter = new Map(), ui$wikiUnavailable = new Set(), ui$wikiRequested = false;
     var ui$wikiGeneration = 0, ui$wikiPending = null, ui$wikiWork = null, ui$wikiRendered = null, ui$wikiNode = null;
+    var ui$wikiView = null, ui$wikiProjectionTicket = 0, ui$wikiProjectionCache = new WeakMap();
     var alive = true, cleanup = [], observers = [], frame = 0, readingReady = Promise.resolve(), restoration = 0, checkpointTimer = 0, restoring = false;
     host.textContent = "";
     host.classList.remove("bp-dag-enhancing");
     var view, atlas, palette, byId, prerequisites, dependents, statusCounts, presentStatuses;
-    var mapAllowed, scene, sceneData, sceneDirection, sceneCompact, sceneFamily, sceneAspect;
+    var mapAllowed, scene, sceneData, sceneDirection, sceneCompact, sceneFamily, sceneAspect, sceneWiki;
     function recordId(node) {
       if (node._overviewGroup) return null;
       return node._recordId || (records.get(node.id) === node || ["scope", "boundary"].indexOf(node.kind) < 0 ? node.id : node.id.replace(/^(scope|boundary):/, ""));
@@ -687,7 +966,7 @@
         if (ui$wikiPosition < total) return new Promise(function (resolve) { setTimeout(resolve, 0); }).then(build);
         if (!alive || ticket !== ui$wikiGeneration) return;
         ui$wikiLinks = loaded; ui$wikiBefore = before; ui$wikiAfter = after; ui$wikiUnavailable = unavailable;
-        ui$wikiPending = null; ui$wikiWork = null; renderWikiContext();
+        ui$wikiPending = null; ui$wikiWork = null; renderWikiContext(); projectWikiView();
       }
       ui$wikiWork = build(); return ui$wikiWork;
     }
@@ -696,6 +975,41 @@
       return {before: Array.from(ui$wikiBefore.get(id) || []), after: Array.from(ui$wikiAfter.get(id) || []), availability: availability,
         outgoingAvailable: known && (availability === "complete" || availability === "partial" && !ui$wikiUnavailable.has(id)),
         incomingComplete: known && availability === "complete"};
+    }
+    function projectWikiView() {
+      if (!alive || !sharedIndex || !ui$wikiLinks || !data || !mapAllowed) return;
+      var ticket = ++ui$wikiProjectionTicket, captured = data, layer = ui$wikiLinks, index = sharedIndex;
+      var cached = ui$wikiProjectionCache.get(contextGraph), key = JSON.stringify([ui$requestedNode, ui$area, ui$overviewGroup]);
+      if (!cached || cached.layer !== layer || cached.index !== index) {
+        cached = {layer: layer, index: index, views: new Map()}; ui$wikiProjectionCache.set(contextGraph, cached);
+      }
+      var pending = cached.views.get(key);
+      if (!pending) {
+        pending = projectWikiLinks(captured, records, layer, captured.$wikiOwners);
+        if (cached.views.size >= 12) cached.views.delete(cached.views.keys().next().value);
+        cached.views.set(key, pending);
+      }
+      function publish(projected) {
+        if (!alive || ticket !== ui$wikiProjectionTicket || captured !== data || layer !== ui$wikiLinks || index !== sharedIndex) return;
+        ui$wikiView = projected;
+        var before = data.$wikiEdges || [], after = projected.edges;
+        if (JSON.stringify(before) === JSON.stringify(after)) { syncControls(); return; }
+        // Keep the selected/keyboard-focus card fixed on screen when optional
+        // associations arrive. The mathematical page and its focus stay intact.
+        var painting = ui$mode === "graph" && dom$stage.clientWidth && dom$stage.clientHeight;
+        var id = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.autoformNodeId;
+        var anchor = painting && (byId.get(id) || ui$selected || ui$active.find(function (node) { return inViewport(screen(node), 0); }));
+        var box = anchor && scene && scene.nodes.get(anchor.id), previous = box && {x: box.x, y: box.y, w: box.w, h: box.h};
+        data.$wikiEdges = after;
+        if (painting) geometry();
+        var moved = previous && scene && scene.nodes.get(anchor.id);
+        if (moved && !restoring && id !== anchor.id) {
+          ui$transform.x += (previous.x + previous.w / 2 - moved.x - moved.w / 2) * ui$transform.scale;
+          ui$transform.y += (previous.y + previous.h / 2 - moved.y - moved.h / 2) * ui$transform.scale;
+        }
+        syncControls(); schedule();
+      }
+      Promise.resolve(pending).then(publish).catch(function () { publish({availability: "unavailable", edges: [], unavailableOwners: []}); });
     }
     function applyRoute(bundle) {
       var isCurrent = bundle.isCurrent;
@@ -808,10 +1122,13 @@
         groups.get(node.area).push(node); owners.set(node.id, node.area);
       });
       if (groups.size < 2 || payload.nodes.length < 12) return payload;
-      var nodes = [], links = new Map(), replacements = new Map();
+      var nodes = [], links = new Map(), replacements = new Map(), reserved = new Set(records.keys()), serial = 0;
+      payload.nodes.forEach(function (node) { reserved.add(node.id); });
       groups.forEach(function (members, area) {
         if (area === selectedArea) { members.forEach(function (node) { replacements.set(node.id, node.id); nodes.push(node); }); return; }
         var key = "region:" + area, counts = new Map();
+        if (reserved.has(key)) do { key = "view-region:" + serial++; } while (reserved.has(key));
+        reserved.add(key);
         members.forEach(function (node) { replacements.set(node.id, key); (node.status_counts || []).forEach(function (pair) {
           counts.set(pair[0], (counts.get(pair[0]) || 0) + pair[1]);
         }); });
@@ -826,9 +1143,12 @@
         var key = a + "\n" + b, found = links.get(key) || {source: a, target: b, statement: 0, proof: 0};
         found.statement += edge.statement || 0; found.proof += edge.proof || 0; links.set(key, found);
       });
-      return Object.assign({}, payload, {nodes: nodes, edges: Array.from(links.values()), regions: []});
+      var wikiOwners = new Map();
+      payload.nodes.forEach(function (node) { var owner = replacements.get(node.id), id = recordId(node); if (owner && id) wikiOwners.set(id, owner); });
+      return Object.assign({}, payload, {nodes: nodes, edges: Array.from(links.values()), regions: [], $wikiOwners: wikiOwners});
     }
     function updateProjection() {
+      ui$wikiProjectionTicket++; ui$wikiView = null;
       var focus = neighborhood(ui$requestedNode), eligible = contextGraph.nodes.filter(mapNode), known = new Set(eligible.map(function (node) { return node.id; }));
       var overview = !focus && scopeOverviewProjection(Object.assign({}, contextGraph, {nodes: eligible,
         edges: contextGraph.edges.filter(function (edge) { return known.has(edge.source) && known.has(edge.target); })}), ui$overviewGroup, records.keys());
@@ -843,6 +1163,7 @@
       if (ui$selected && !ui$selectedStatuses.has(ui$selected.status)) ui$selected = null;
       if (dom$statusFieldset) renderStatusFields();
       if (dom$breadcrumb && currentBundle) dom$breadcrumb.replaceChildren(trailList(routeTrail(currentBundle)));
+      projectWikiView();
     }
     function semanticParent(node) {
       var parent = records.get(node.parent), seen = new Set();
@@ -1251,16 +1572,17 @@
       if (!mapAllowed) return null;
       var compact = compactRegions(), aspect = dom$stage.clientWidth / Math.max(1, dom$stage.clientHeight);
       aspect = Math.round((Number.isFinite(aspect) && aspect > 0 ? clamp(aspect, .25, 4) : 1.4) * 10) / 10;
-      if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family || sceneAspect !== aspect) {
+      if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family || sceneAspect !== aspect || sceneWiki !== data.$wikiEdges) {
         var anchor = typeof document !== "undefined" && document.activeElement && document.activeElement.dataset &&
-          document.activeElement.dataset.autoformNodeId, previous = sceneData === data && scene && scene.nodes.get(anchor);
+          document.activeElement.dataset.autoformNodeId, previous = !restoring && sceneData === data && scene && scene.nodes.get(anchor);
         scene = layoutGraph(data.nodes.map(function (node) { return {id: node.id, width: compact ? 312 : node.width,
           height: compact ? 96 : Math.max(node.height, node._region ? 148 : 100), area: node.area, scope: node.scope}; }), data.edges, ui$orientation,
-          aspect);
+          aspect, data.$wikiEdges);
+        scene.$wikiRoutes = wikiRoutes(scene);
         var moved = previous && scene.nodes.get(anchor);
         if (moved) { ui$transform.x += (previous.x + previous.w / 2 - moved.x - moved.w / 2) * ui$transform.scale;
           ui$transform.y += (previous.y + previous.h / 2 - moved.y - moved.h / 2) * ui$transform.scale; }
-        sceneData = data; sceneDirection = ui$orientation; sceneCompact = compact; sceneFamily = family; sceneAspect = aspect;
+        sceneData = data; sceneDirection = ui$orientation; sceneCompact = compact; sceneFamily = family; sceneAspect = aspect; sceneWiki = data.$wikiEdges;
       }
       return scene;
     }
@@ -1288,6 +1610,15 @@
         ["statement", "proof"].forEach(function (kind) {
           if (data.edges.some(function (edge) { return edge[kind]; })) dom$mapKey.appendChild(element("span", "bp-map-key-" + kind, kind === "proof" ? "Proof dependency" : "Statement dependency"));
         });
+        if (data.$wikiEdges && data.$wikiEdges.length) {
+          var local = sceneData === data && scene && scene.$wikiRoutes;
+          dom$mapKey.appendChild(element("span", "bp-map-key-wiki", local && local.omitted ? "Local concept links" : "Concept links"));
+          if (local && local.omitted) dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "All links in articles"));
+        }
+        if (ui$wikiView && ui$wikiView.availability === "partial") dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Partial link coverage"));
+        if (ui$wikiView && ui$wikiView.availability === "unavailable") dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Concept links unavailable"));
+        if (data.$wikiEdges && data.$wikiEdges.some(function (edge) { return !wikiOwnerVisible(byId.get(edge.source), ui$selectedStatuses) || !wikiOwnerVisible(byId.get(edge.target), ui$selectedStatuses); }))
+          dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Concept links hidden by filter"));
       }
       syncNavigationSelection();
       dom$isolated.checked = ui$showIsolated;
@@ -1450,6 +1781,21 @@
       var current = geometry(); if (!current) return;
       var visible = ui$active.filter(function (node) { return inViewport(screen(node), 80); });
       var spotlight = atlas && ui$selected ? atlasSpotlight() : pathSpotlight();
+      (current.$wikiFamilies || []).forEach(function (family) {
+        if (family.island_count < 2 || family.members.some(function (id) { return !ui$activeIds.has(id) || !wikiOwnerVisible(byId.get(id), ui$selectedStatuses); })) return;
+        var box = family.bounds;
+        var area = {x: box.x * ui$transform.scale + ui$transform.x - 20, y: box.y * ui$transform.scale + ui$transform.y - 20,
+          w: box.w * ui$transform.scale + 40, h: box.h * ui$transform.scale + 40};
+        if (!inViewport(area, 0)) return;
+        ctx.save(); ctx.fillStyle = isDark() ? "#84a7bd" : "#63879b"; ctx.globalAlpha = .035;
+        rounded(ctx, area.x, area.y, area.w, area.h, 24); ctx.fill(); ctx.restore();
+      });
+      if (current.$wikiRoutes) current.$wikiRoutes.routes.forEach(function (route) {
+        if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target)) return;
+        if (!wikiOwnerVisible(byId.get(route.source), ui$selectedStatuses) || !wikiOwnerVisible(byId.get(route.target), ui$selectedStatuses)) return;
+        var highlighted = !ui$selected || route.source === ui$selected.id || route.target === ui$selected.id;
+        drawRoute(ctx, route, highlighted);
+      });
       current.routes.forEach(function (route) {
           if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target)) return;
           if (data._scopeOverview) {
@@ -1505,6 +1851,7 @@
       ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = route.strength * scale;
       ctx.lineCap = "round"; ctx.lineJoin = "round";
       if (route.kind === "proof") ctx.setLineDash([6 * scale, 4 * scale]);
+      if (route.kind === "wiki") { ctx.globalAlpha = highlighted ? .38 : .1; ctx.strokeStyle = isDark() ? "#84a7bd" : "#63879b"; ctx.setLineDash([1.5 * scale, 5 * scale]); }
       ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
       for (var index = 1; index < points.length - 1; index++) {
         var point = points[index], before = points[index - 1], after = points[index + 1], radius = route.radii[index] * scale;
@@ -1515,6 +1862,7 @@
       }
       var tip = points[points.length - 1], arrow = route.arrow;
       ctx.lineTo(tip.x, tip.y); ctx.stroke(); ctx.setLineDash([]);
+      if (route.kind === "wiki") { ctx.restore(); return; }
       ctx.beginPath(); ctx.moveTo(tip.x, tip.y);
       ctx.lineTo(tip.x - (arrow.dx * 8 - arrow.dy * 4) * scale, tip.y - (arrow.dy * 8 + arrow.dx * 4) * scale);
       ctx.lineTo(tip.x - (arrow.dx * 8 + arrow.dy * 4) * scale, tip.y - (arrow.dy * 8 - arrow.dx * 4) * scale);
@@ -1965,7 +2313,7 @@
 
     syncControls();
     return {ready: readingReady, applyRoute: applyRoute, useIndex: useIndex, useWikiLinks: useWikiLinks, captureState: captureState, restoreState: restoreState, showError: showError,
-      dispose: function () { alive = false; clearTimeout(checkpointTimer); cancelAnimationFrame(frame); cleanup.forEach(function (close) { close(); });
+      dispose: function () { alive = false; ui$wikiProjectionTicket++; ui$wikiProjectionCache = new WeakMap(); clearTimeout(checkpointTimer); cancelAnimationFrame(frame); cleanup.forEach(function (close) { close(); });
         observers.forEach(function (observer) { observer.disconnect(); }); if (navigation) navigation.dispose(); }};
   }
 

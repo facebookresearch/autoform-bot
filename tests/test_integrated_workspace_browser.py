@@ -41,6 +41,10 @@ _OTHER_TITLE = "Counterpart zero identity"
 _SOURCE_TITLES = ("Classical source essays", "Contemporary source records")
 _TARGET_TEX = (r"0=0", r"\RR\ni0", r"\frac{0}{2}=0", r"\overline{0}=0", r"\sum_{i=1}^{n}0=0")
 _LAST_SENTENCE = "This final mathematical sentence is retained in the complete reading page."
+_CLUSTER_SCOPE = "wiki-clusters"
+_CLUSTER_LINKS = (("a", "i"), ("i", "c"), ("b", "f"), ("d", "h"))
+_CLUSTER_FAMILIES = (("a", "i", "c"), ("b", "f"), ("d", "h"), ("e",), ("g",))
+_CLUSTER_END = "This complete elementary identity exposition remains present after graph navigation."
 
 
 @dataclass(frozen=True)
@@ -53,6 +57,13 @@ class _WorkspaceSite:
 
     def route(self, node_id: str) -> str:
         return urljoin(self.url + "/dependencies/index.json", self.records[node_id]["route"])
+
+
+@dataclass(frozen=True)
+class _WikiClusterSite:
+    site: _WorkspaceSite
+    owners: dict[str, str]
+    graph: dict
 
 
 def _write(path: Path, content: str) -> None:
@@ -265,6 +276,99 @@ def navigation_overview_site(tmp_path_factory: pytest.TempPathFactory) -> Iterat
 
 
 @pytest.fixture(scope="module")
+def wiki_cluster_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_WikiClusterSite]:
+    """Nine independent base→identity developments with four authored prose links.
+
+    These are deliberately unfinished educational identities, not kernel
+    certification. No cross-topic formal prerequisite is invented for layout.
+    """
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("native-wiki-clusters") / "project"
+    scaffold_project(project, title="Independent elementary concept links")
+    blueprint = project / "blueprint"
+    _write(blueprint / "README.md", "# Elementary comparisons\n\n- [Mathematics](roadmap/README.md)\n")
+    _write(blueprint / "roadmap/README.md", f"# Elementary comparisons\n\n- [Identities]({_CLUSTER_SCOPE}/README.md)\n")
+    _write(blueprint / f"roadmap/{_CLUSTER_SCOPE}/README.md", (
+        "---\nnavigation: module\n---\n\n# Linked zero identities\n\n"
+        "Each development defines its own zero constant and states its own identity. "
+        "Ordinary exposition links compare independent developments; they are not proof prerequisites.\n\n"
+        + "\n".join(f"- [Identity {letter.upper()}]({letter}/README.md)" for letter in "abcdefghi") + "\n"
+    ))
+    declarations = []
+    for letter in "abcdefghi":
+        topic = f"{_CLUSTER_SCOPE}/{letter}"
+        _write(blueprint / f"roadmap/{topic}/README.md", (
+            f"---\nnavigation: module\n---\n\n# Identity {letter.upper()}\n\n"
+            "This development keeps its definition, statement and educational proof obligation in full.\n\n"
+            "- [Zero constant](base.md)\n- [Zero identity](identity.md)\n"
+        ))
+        _write(blueprint / f"roadmap/{topic}/base.md", (
+            f"---\ndeclaration: def\nstatement: formalized\nlean: ClusterFixture.base_{letter}\n---\n\n"
+            f"# Zero constant {letter.upper()}\n\nThe constant $b_{letter}=0$ is defined to be zero.\n\n"
+            "## Depends on\n\nNo prerequisites.\n"
+        ))
+        exposition = "\n\n".join(
+            f"Explanation {number + 1}. The constant in development {letter.upper()} is zero. "
+            "Its identity is stated explicitly and its proof remains an educational obligation. "
+            "This complete explanation is retained independently of any bounded graph preview."
+            for number in range(6)
+        )
+        comparisons = "\n\n".join(
+            f"Compare the independent exposition [Identity {other.upper()}](../{other}/identity.md). "
+            "This ordinary concept link asserts no additional formal prerequisite."
+            for source, other in _CLUSTER_LINKS if source == letter
+        )
+        _write(blueprint / f"roadmap/{topic}/identity.md", (
+            f"---\ndeclaration: theorem\nnot_ready: true\nlean: ClusterFixture.identity_{letter}\n---\n\n"
+            f"# Zero identity {letter.upper()}\n\nThe proposed identity is $b_{letter}=0$.\n\n"
+            + exposition + "\n\n" + _CLUSTER_END + "\n\n" + comparisons
+            + "\n\n## Depends on\n\n- [Zero constant](base.md)\n"
+        ))
+        declarations += [f"def base_{letter} : Nat := 0", f"theorem identity_{letter} : base_{letter} = 0 := by sorry"]
+    _write(project / "ClusterFixture.lean", "namespace ClusterFixture\n" + "\n".join(declarations) + "\nend ClusterFixture\n")
+    rendered = render_site(blueprint, project / "site-src", lean_root=project)
+    assert not rendered.unresolved and not rendered.unchecked
+    config = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
+    config["extra_javascript"] = [entry for entry in config["extra_javascript"]
+                                  if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE]
+    build(config)
+    index_path = project / "site/dependencies/index.json"
+    index_bytes = index_path.read_bytes()
+    index = json.loads(index_bytes)
+    records = {node["id"]: node for node in index["nodes"]}
+    identifiers = [node["id"] for node in index["nodes"]]
+    layer = json.loads((index_path.parent / "wiki-links.json").read_bytes())
+    assert layer["schema"] == "autoform-wiki-links/v1"
+    assert layer["index_sha256"] == hashlib.sha256(index_bytes).hexdigest()
+    assert layer["availability"] == "complete" and layer["unavailable_sources"] == []
+    pairs = frozenset((identifiers[source], identifiers[target]) for source, target in layer["references"])
+    assert pairs == {(f"{_CLUSTER_SCOPE}/{source}/identity", f"{_CLUSTER_SCOPE}/{target}/identity")
+                     for source, target in _CLUSTER_LINKS}
+    formal = {(identifiers[source], identifiers[target], statement, proof)
+              for source, target, statement, proof in index["relations"]}
+    assert formal == {(f"{_CLUSTER_SCOPE}/{letter}/base", f"{_CLUSTER_SCOPE}/{letter}/identity", 1, 0)
+                      for letter in "abcdefghi"}
+    graph_path = index_path.parent / unquote(urlsplit(records[_CLUSTER_SCOPE]["data_url"]).path)
+    graph = json.loads(graph_path.read_bytes())
+    assert len(graph["nodes"]) == 9 and graph["edges"] == []
+    routes = {urljoin(index_path.as_uri(), record["route"]): node_id for node_id, record in records.items()}
+    owners = {}
+    for node in graph["nodes"]:
+        original = routes[urljoin(graph_path.as_uri(), node["url"])]
+        assert original in {f"{_CLUSTER_SCOPE}/{letter}" for letter in "abcdefghi"}
+        letter = original.rsplit("/", 1)[-1]
+        owners[letter] = node["id"]
+        assert node["title"] == f"Identity {letter.upper()}" and node["member_count"] == 2
+        assert dict(node["status_counts"]) == {"fully_proved": 1, "not_ready": 1}
+        assert node["internal_dependency_count"] == 1
+    assert set(owners) == set("abcdefghi")
+    with _served(project / "site") as url:
+        yield _WikiClusterSite(_WorkspaceSite(url, records, graph, layer, pairs), owners, graph)
+
+
+@pytest.fixture(scope="module")
 def workspace_browser() -> Iterator[object]:
     required = os.environ.get("AUTOFORM_REQUIRE_BROWSER_TESTS") == "1"
     with playwright.sync_playwright() as runtime:
@@ -374,7 +478,7 @@ def _observe_dependency_routes(page: object) -> None:
     """Record actual native canvas strokes while leaving every rendering call intact."""
     page.add_init_script("""(() => {
       const prototype=CanvasRenderingContext2D.prototype, paths=new WeakMap();
-      window.__autoformCanvasRoutes=[];
+      window.__autoformCanvasRoutes=[];window.__autoformCanvasClosedFills=[];
       for(const method of ['beginPath','moveTo','lineTo','quadraticCurveTo','bezierCurveTo','closePath']) {
         const original=prototype[method];
         prototype[method]=function(...args) {
@@ -383,20 +487,99 @@ def _observe_dependency_routes(page: object) -> None:
           return original.apply(this,args);
         };
       }
-      const clear=prototype.clearRect, stroke=prototype.stroke;
+      const clear=prototype.clearRect, stroke=prototype.stroke, fill=prototype.fill;
       prototype.clearRect=function(...args) {
-        if(this.canvas.classList.contains('bp-dag-canvas')) window.__autoformCanvasRoutes=[];
+        if(this.canvas.classList.contains('bp-dag-canvas')) {window.__autoformCanvasRoutes=[];window.__autoformCanvasClosedFills=[];}
         return clear.apply(this,args);
       };
       prototype.stroke=function(...args) {
         const path=paths.get(this);
         if(this.canvas.classList.contains('bp-dag-canvas') && path && path.length &&
             !path.some(command=>command.method==='closePath')) {
-          window.__autoformCanvasRoutes.push({commands:path.slice(), dashed:this.getLineDash().length>0});
+          const dashes=this.getLineDash(),ratio=dashes.length>1?dashes[0]/dashes[1]:NaN;
+          const kind=!dashes.length?'statement':Math.abs(ratio-.3)<1e-6?'wiki':Math.abs(ratio-1.5)<1e-6?'proof':'other';
+          window.__autoformCanvasRoutes.push({commands:path.slice(),dashes:dashes.slice(),kind,dashed:kind==='proof'});
         }
         return stroke.apply(this,args);
       };
+      prototype.fill=function(...args) {
+        const path=paths.get(this);
+        if(this.canvas.classList.contains('bp-dag-canvas')&&path&&path.some(command=>command.method==='closePath'))
+          window.__autoformCanvasClosedFills.push(path.slice());
+        return fill.apply(this,args);
+      };
     })();""")
+
+
+def _cluster_native_box(control: object) -> dict:
+    return control.evaluate("""node => {
+      const r=node.getBoundingClientRect(),canvas=node.closest('.bp-dag-stage').querySelector('canvas').getBoundingClientRect();
+      const matrix=new DOMMatrix(getComputedStyle(node).transform),title=node.querySelector('.bp-dag-node-title'),meta=node.querySelector('.bp-dag-node-meta');
+      return {id:node.dataset.autoformNodeId,x:r.x-canvas.x,y:r.y-canvas.y,w:r.width,h:r.height,scale:matrix.a,
+        screen:[r.x,r.y,r.width,r.height],title:title.textContent,meta:meta.textContent,
+        titlePx:parseFloat(getComputedStyle(title).fontSize)*matrix.a,metaPx:parseFloat(getComputedStyle(meta).fontSize)*matrix.a,
+        hit:node.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2))};
+    }""")
+
+
+def _cluster_segment_hits(a: list[float], b: list[float], box: dict) -> bool:
+    """Intersect an observed native straight segment with a card's interior."""
+    enter, leave = 0.0, 1.0
+    for axis, low, extent in ((0, box["x"] + .25, box["w"] - .5), (1, box["y"] + .25, box["h"] - .5)):
+        delta = b[axis] - a[axis]
+        if abs(delta) < 1e-10:
+            if not low < a[axis] < low + extent:
+                return False
+        else:
+            limits = sorted(((low - a[axis]) / delta, (low + extent - a[axis]) / delta))
+            enter, leave = max(enter, limits[0]), min(leave, limits[1])
+        if enter >= leave - 1e-8:
+            return False
+    return leave > 1e-8 and enter < 1 - 1e-8
+
+
+def _cluster_readable_owner(page: object, identifier: str) -> object:
+    control = _focus_graph_node(page, identifier)
+    # Keyboard centering and its tabstop paint finish on separate frames.
+    # Observe the actual usable control, not a fixed number of rAF callbacks.
+    page.wait_for_function("""id => {
+      const node=Array.from(document.querySelectorAll('.bp-dag-node')).find(node=>node.dataset.autoformNodeId===id);
+      if(!node||document.activeElement!==node||node.tabIndex!==0)return false;
+      const r=node.getBoundingClientRect(),s=node.closest('.bp-dag-stage').getBoundingClientRect();
+      return r.left>=s.left+12&&r.right<=s.right-12&&r.top>=s.top+12&&r.bottom<=s.bottom-12&&
+        node.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
+    }""", arg=identifier, timeout=5000)
+    box = _cluster_native_box(control)
+    assert box["scale"] >= .9 - 1e-6 and box["titlePx"] >= 15 and box["metaPx"] >= 12, box
+    assert box["hit"] is True
+    return control
+
+
+def _cluster_pan(page: object) -> None:
+    point = page.locator(".bp-dag-stage").evaluate("""stage => {
+      const r=stage.getBoundingClientRect(),canvas=stage.querySelector('canvas');
+      for(const fx of [.08,.92,.5])for(const fy of [.75,.5,.25]) {
+        const x=r.x+r.width*fx,y=r.y+r.height*fy;
+        if(document.elementFromPoint(x,y)===canvas)return {x,y};
+      } throw new Error('No native canvas background is available for panning');
+    }""")
+    page.mouse.move(point["x"], point["y"])
+    page.mouse.down()
+    page.mouse.move(point["x"] + 18, point["y"] + 12, steps=4)
+    page.mouse.up()
+    _frames(page)
+
+
+def _cluster_capture(page: object, width: int, phase: str, evidence: dict | None = None) -> None:
+    folder = os.environ.get("AUTOFORM_UI_SCREENSHOT_DIR")
+    if folder:
+        directory = Path(folder)
+        directory.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(directory / f"wiki-clusters-{width}-{phase}.png"))
+        if evidence is not None:
+            (directory / f"wiki-clusters-{width}-{phase}.json").write_text(
+                json.dumps(evidence, indent=2) + "\n", encoding="utf-8",
+            )
 
 
 def _open(
@@ -985,7 +1168,7 @@ def test_isolated_topic_link_opens_connected_result_and_its_real_edge(
       const canvas = document.querySelector('.bp-dag-canvas'), bounds = canvas.getBoundingClientRect();
       const at=(point,box)=>point[0]>=box.left-bounds.left-1 && point[0]<=box.right-bounds.left+1 &&
         point[1]>=box.top-bounds.top-1 && point[1]<=box.bottom-bounds.top+1;
-      const route=window.__autoformCanvasRoutes.find(route=>!route.dashed &&
+      const route=window.__autoformCanvasRoutes.find(route=>route.kind==='statement' &&
         at(route.commands[0].args,a) && at(route.commands.at(-1).args,b));
       if(!route) return false;
       const samples=[];let previous=route.commands[0].args;
@@ -1148,6 +1331,137 @@ def test_failed_optional_concept_transport_stays_unknown_without_breaking_math_o
     _selected(page, _TARGET)
     playwright.expect(_full_math(page)).to_contain_text(_LAST_SENTENCE)
     assert documents == [site.route(_TARGET).split("#", 1)[0]]
+    assert page.evaluate("() => document === __workspaceDocument") is True
+
+
+@pytest.mark.parametrize(("width", "height"), [(1600, 900), (1000, 900), (390, 844)])
+def test_authored_concept_families_pack_real_owner_cards_and_keep_native_focus_math_and_back(
+    workspace_page: object, wiki_cluster_site: _WikiClusterSite, workspace_runtime: _PinnedRuntime,
+    width: int, height: int,
+) -> None:
+    page, consumer = workspace_page, wiki_cluster_site
+    site, owners = consumer.site, consumer.owners
+    page.set_viewport_size({"width": width, "height": height})
+    _observe_dependency_routes(page)
+    held: list[object] = []
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    wiki_url = site.url + "/dependencies/wiki-links.json"
+    with page.expect_request(wiki_url):
+        _open(page, site, workspace_runtime, _CLUSTER_SCOPE, wiki_route=lambda route: held.append(route))
+    assert len(held) == 1
+    anchor = _cluster_readable_owner(page, owners["c"])
+    _cluster_pan(page)
+    anchor.focus()
+    _frames(page)
+    before = _cluster_native_box(anchor)
+    assert before["hit"] is True
+    assert page.evaluate("() => window.__autoformCanvasRoutes.length") == 0
+    with page.expect_response(wiki_url) as delivered:
+        held[0].continue_()
+    assert delivered.value.status == 200 and delivered.value.json() == site.wiki_layer
+    page.wait_for_function("() => window.__autoformCanvasRoutes.filter(route=>route.kind==='wiki').length===4", timeout=5000)
+    playwright.expect(anchor).to_be_focused()
+    after = _cluster_native_box(anchor)
+    assert after["screen"] == pytest.approx(before["screen"], abs=.5)
+    assert after["hit"] is True and page.url == site.route(_CLUSTER_SCOPE)
+    _cluster_capture(page, width, "arrival", {"before": before, "after": after, "source_pairs": sorted(site.wiki_pairs)})
+
+    # A deliberate native zoom-out is a geometry measurement, not a claimed
+    # readable all-fit default. Every owner is explored at the .9 floor below.
+    for _ in range(12):
+        if page.locator(".bp-dag-node").count() == 9:
+            break
+        page.get_by_role("button", name="Zoom out", exact=True).click()
+        _frames(page)
+    playwright.expect(page.locator(".bp-dag-node")).to_have_count(9)
+    boxes = {letter: _cluster_native_box(page.locator(f'.bp-dag-node[data-autoform-node-id="{identifier}"]'))
+             for letter, identifier in owners.items()}
+    scale = boxes["a"]["scale"]
+    assert all(box["scale"] == pytest.approx(scale, abs=1e-6) for box in boxes.values())
+    for index, a in enumerate(boxes.values()):
+        for b in list(boxes.values())[index + 1:]:
+            assert a["x"] + a["w"] <= b["x"] + .25 or b["x"] + b["w"] <= a["x"] + .25 or (
+                a["y"] + a["h"] <= b["y"] + .25 or b["y"] + b["h"] <= a["y"] + .25
+            ), (a, b)
+    envelopes = []
+    for family in _CLUSTER_FAMILIES:
+        members = [boxes[letter] for letter in family]
+        envelopes.append({"members": family, "left": min(box["x"] for box in members), "top": min(box["y"] for box in members),
+                          "right": max(box["x"] + box["w"] for box in members), "bottom": max(box["y"] + box["h"] for box in members)})
+    for index, a in enumerate(envelopes):
+        for b in envelopes[index + 1:]:
+            gap = max(a["left"] - b["right"], b["left"] - a["right"], a["top"] - b["bottom"], b["top"] - a["bottom"])
+            assert gap >= 96 * scale - .25, (a, b, scale)
+    routes = page.evaluate("() => window.__autoformCanvasRoutes")
+    assert len(routes) == 4 and {route["kind"] for route in routes} == {"wiki"}
+    assert page.evaluate("""() => window.__autoformCanvasClosedFills.filter(path =>
+      path.map(command=>command.method).join(',')==='moveTo,lineTo,lineTo,closePath').length""") == 0, (
+        "Concept associations must have no arrowheads; rounded family halos are not arrows"
+    )
+    endpoints = set()
+    for route in routes:
+        assert route["dashes"][0] / route["dashes"][1] == pytest.approx(.3, abs=1e-6)
+        points = [command["args"][-2:] for command in route["commands"] if command["method"] in {"moveTo", "lineTo"}]
+        assert len(points) >= 2 and len(points) == len(route["commands"])
+
+        def endpoint(point):
+            found = [letter for letter, box in boxes.items()
+                     if box["x"] - 1 <= point[0] <= box["x"] + box["w"] + 1
+                     and box["y"] - 1 <= point[1] <= box["y"] + box["h"] + 1]
+            assert len(found) == 1, (point, boxes)
+            return found[0]
+
+        pair = frozenset((endpoint(points[0]), endpoint(points[-1])))
+        endpoints.add(pair)
+        for a, b in zip(points, points[1:]):
+            assert all(not _cluster_segment_hits(a, b, box) for box in boxes.values()), (route, a, b)
+    assert endpoints == {frozenset(pair) for pair in _CLUSTER_LINKS}
+    for letter, identifier in owners.items():
+        control = _cluster_readable_owner(page, identifier)
+        box = _cluster_native_box(control)
+        assert box["title"] == f"Identity {letter.upper()}" and box["meta"] == "2 items"
+        _cluster_capture(page, width, f"readable-{letter}")
+
+    control = _cluster_readable_owner(page, owners["c"])
+    saved = _cluster_native_box(control)
+    control.click()
+    topic = f"{_CLUSTER_SCOPE}/c"
+    page.wait_for_url(site.route(topic))
+    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Identity C")
+    page.locator(".bp-reading-body").get_by_role("link", name="Zero identity", exact=True).click()
+    target, base = topic + "/identity", topic + "/base"
+    page.wait_for_url(site.route(target))
+    _selected(page, target)
+    card = _full_math(page, target, 1)
+    playwright.expect(card).to_contain_text(_CLUSTER_END)
+    playwright.expect(card).to_contain_text("ClusterFixture.identity_c")
+    assert len(card.inner_text()) > 420 and site.records[target]["status"] == "not_ready"
+    _focus_graph_node(page, base)
+    _frames(page)
+    formal = page.evaluate("""([source,target]) => {
+      const canvas=document.querySelector('.bp-dag-canvas').getBoundingClientRect();
+      const boxes=[source,target].map(id=>Array.from(document.querySelectorAll('.bp-dag-node')).find(node=>node.dataset.autoformNodeId===id).getBoundingClientRect());
+      const at=(point,box)=>point[0]>=box.left-canvas.left-1&&point[0]<=box.right-canvas.left+1&&
+        point[1]>=box.top-canvas.top-1&&point[1]<=box.bottom-canvas.top+1;
+      return window.__autoformCanvasRoutes.filter(route=>route.kind!=='wiki'&&
+        at(route.commands[0].args,boxes[0])&&at(route.commands.at(-1).args.slice(-2),boxes[1]));
+    }""", [base, target])
+    assert len(formal) == 1 and formal[0]["kind"] == "statement"
+    assert page.evaluate("""() => window.__autoformCanvasClosedFills.filter(path=>
+      path.map(command=>command.method).join(',')==='moveTo,lineTo,lineTo,closePath').length""") >= 1
+    assert _pixels(page)["painted"] > 0
+    page.go_back()
+    page.wait_for_url(site.route(topic))
+    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Identity C")
+    page.go_back()
+    page.wait_for_url(site.route(_CLUSTER_SCOPE))
+    page.wait_for_function("() => window.__autoformCanvasRoutes.filter(route=>route.kind==='wiki').length===4", timeout=5000)
+    restored = page.locator(f'.bp-dag-node[data-autoform-node-id="{owners["c"]}"]')
+    playwright.expect(restored).to_be_focused()
+    assert _cluster_native_box(restored)["screen"] == pytest.approx(saved["screen"], abs=.5)
+    _cluster_capture(page, width, "restored")
+    assert documents == [site.route(_CLUSTER_SCOPE)]
     assert page.evaluate("() => document === __workspaceDocument") is True
 
 

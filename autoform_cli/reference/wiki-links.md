@@ -16,5 +16,5 @@ The separate asset has a 32 MiB limit. An oversized layer is explicitly omitted
 with a warning, never silently truncated. Neither wiki references nor their
 availability change the formal DAG, readiness, proof status, or index bytes.
 
-Navigation's optional `loadWikiLinks()` coalesces requests; `getWikiLinks()` and
-`onWikiLinks(state)` expose verified canonical references or explicit unavailability.
+`loadWikiLinks()` coalesces requests; `getWikiLinks()`/`onWikiLinks(state)` expose verified refs.
+Viewer affinities group intact formal components, never redefine proof edges, ranks or SCCs.

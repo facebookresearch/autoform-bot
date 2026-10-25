@@ -33,10 +33,10 @@ function original(name) {
   }
   assert.fail('Production function did not parse: '+name);
 }
-const context={assert,structuredClone,URL,performance,productionSource:source,original,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
+const context={assert,structuredClone,URL,performance,restoring:false,productionSource:source,original,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
 vm.createContext(context);
 vm.runInContext(source.match(/var NODE_W =[^;]+;/)[0],context);
-const functions=['layoutGraph','geometry','compactRegions'].map(original).join('\n');
+const functions=['layoutGraph','wikiRoutes','geometry','compactRegions'].map(original).join('\n');
 """
 
 _ORACLE = r"""
@@ -339,6 +339,7 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
         function bindEvents() {events.push('bind');}
         function sheetLayout() {return false;} function renderNavigation() {} function renderReaderContext() {}
         function renderWikiContext() {events.push('optional-wiki');}
+        function projectWikiView() {}
         function renderInventory() {} function refresh() {} function routeTrail() {return [];} function trailList() {return [];}
         function centerIfHidden() {}
         function applyRoute(bundle) {
@@ -416,7 +417,7 @@ def test_renderer_geometry_cache_changes_only_for_captured_geometry_inputs() -> 
     _run("""
       var navigation={},mapAllowed=true,atlas=false,ui$area=null,ui$orientation='lr',family='sans-serif';
       var dom$stage={clientWidth:760},dom$ctx={font:'12px sans-serif',measureText:text=>({width:text.length*8})};
-      var data=fixture,scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,calls=0;
+      var data=fixture,scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,sceneWiki,calls=0;
       const actual=layoutGraph;layoutGraph=function(...args){calls++;return actual(...args);};
       const first=geometry();assert.strictEqual(geometry(),first);assert.equal(calls,1);
       var ui$transform={x:41,y:-73,scale:1.2},ui$selectedStatuses=new Set(['planned']);

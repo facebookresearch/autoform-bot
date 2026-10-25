@@ -95,11 +95,13 @@ var ui$selected=null,ui$direction='both',ui$active=[],ui$activeIds=new Set(),ui$
 var ui$selectedStatuses=new Set(['fully_proved']),ui$filtersTouched=true,ui$showIsolated=true;
 var ui$mode='graph',ui$mapAllowed=true,ui$listLimit=100,ui$relationIds=null,ui$transform={x:0,y:0,scale:.9};
 var firstResize=false,trail=[],overlays=new Map();
+var ui$wikiProjectionTicket=0,ui$wikiView=null;
 const navigation={checkpoint(method){effects.push({kind:'checkpoint',method:method||'replace',group:ui$overviewGroup});},
   navigateNode(id,options){effects.push({kind:'navigate',id,options});},
   navigate(url,options){effects.push({kind:'navigate-url',url,options});}};
 // Observer/painter/reading boundaries are explicit peers, not native geometry.
 function schedule(){effects.push({kind:'paint-request'});}
+function projectWikiView() {}
 function remember(){effects.push({kind:'remember'});}
 function renderInspector(){}function renderInventory(){}function syncSheetAccessibility(){}
 function sheetLayout(){return false;}
