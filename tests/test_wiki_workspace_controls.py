@@ -27,7 +27,7 @@ function original(name) {
 }
 const names=['element','readingLabel','button','recordId','semanticParent','topicPeers','neighborIds','neighborhood',
   'relationCounts','renderReaderContext','inventoryNodes'];
-const constants=['NODE_W','plural','pressed'].map(name=>{
+const constants=['NODE_W','plural','num','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
 }).join('\n');
@@ -200,6 +200,19 @@ def test_a_collection_page_ends_its_own_trail_and_never_stands_between_crumbs() 
       assert.deepEqual(crumbs('shelf/thm','shelf'),[['ROADMAP','https://example.test/roadmap/index.html'],
         ['AREA','https://example.test/area/index.html'],['SHELF','https://example.test/shelf/index.html'],['SHELF/THM',null]]);
       assert.deepEqual(crumbs('topic','topic').map(entry=>entry[0]),['ROADMAP','AREA','TOPIC'],'A topic inside a collection skips it');
+    """)
+
+
+def test_the_map_key_names_concept_links_once_and_only_when_the_map_draws_them() -> None:
+    _run_controls(r"""
+      var byId=new Map();function wikiOwnerVisible(){return true;}
+      const key=()=>dom$mapKey.children.map(node=>node.textContent);
+      // "Partial link coverage" printed on maps with no concept links, where it read as missing dependencies.
+      ui$wikiView={availability:'partial'};syncControls();assert.deepEqual(key(),[]);
+      data.$wikiEdges=[{source:'a',target:'b'}];syncControls();assert.deepEqual(key(),['Concept links, some pages unread']);
+      // "Local concept links · All links in articles" read as two kinds of line; one entry now says how many this map draws.
+      sceneData=data;scene={$wikiRoutes:{omitted:28,total:40}};ui$wikiView={availability:'complete'};syncControls();
+      assert.deepEqual(key(),['Concept links: 12 of 40 on this map']);
     """)
 
 def test_browse_toggle_and_escape_close_with_focus_return_from_the_actual_menu() -> None:
