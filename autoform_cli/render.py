@@ -3718,10 +3718,11 @@ def _dependency_disclosure(
     if not rows:
         return ""
 
-    # The summary counts both directions, so a reader can tell from the closed
-    # line whether opening it is worth it.
+    # The summary counts each direction that has any, so a reader can tell
+    # from the closed line whether opening it is worth it.
     uses = len(dict.fromkeys((*node.statement_dependencies, *node.proof_dependencies)))
-    label = f"Uses {uses} · Used by {len(used_by[node.id])}"
+    sides = (f"Uses {uses}" if uses else "", f"Used by {len(used_by[node.id])}" if used_by[node.id] else "")
+    label = " · ".join(side for side in sides if side)
     body = _render_rows(rows, css_class="bp-dependency-body")
     return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
 

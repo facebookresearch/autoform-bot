@@ -286,7 +286,8 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert '<a class="bp-context-link"' not in chapter
     assert 'class="bp-reading-source"' in chapter and 'class="bp-explorer-page"' in chapter
     assert 'data-graph-src="../../dependencies/chapters/infimum-loss.json"' in chapter
-    assert re.search(r'<details class="bp-dependencies"><summary>Uses \d+ · Used by \d+</summary>', chapter)
+    assert re.search(r'<details class="bp-dependencies"><summary>(Uses [1-9]\d*|Used by [1-9]\d*)', chapter)
+    assert "Uses 0" not in chapter and "Used by 0" not in chapter
     assert '<nav class="bp-book-nav" aria-label="Blueprint chapters">' in chapter
     assert (
         'class="bp-book-nav-link bp-book-nav-previous" '

@@ -721,7 +721,7 @@ def test_cross_references_point_at_anchors_on_the_chapter(tmp_path: Path) -> Non
     assert "Open dependency explorer" not in page
     assert 'data-autoform-node-id="top"' in page and 'id="top"' in page
     assert 'class="bp-reading-source"' in page and 'class="bp-dag-viewer"' in page
-    assert '<details class="bp-dependencies"><summary>Uses 1 · Used by 0</summary>' in page
+    assert '<details class="bp-dependencies"><summary>Uses 1</summary>' in page
     assert '<span class="bp-key">Statement uses</span>' in page
     assert 'href="#base">Definition 1 (Base)' in page
     assert 'href="#top">Theorem 1 (Top)' in page
@@ -763,11 +763,13 @@ def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tm
 
     # A prerequisite of both the statement and the proof is counted once, and
     # the rows inside stay as they were.
-    assert '<details class="bp-dependencies"><summary>Uses 2 · Used by 0</summary>' in top
+    assert '<details class="bp-dependencies"><summary>Uses 2</summary>' in top
     rows = top[top.index("bp-dependency-body"):top.index("</details>")]
     keys = re.findall(r'<span class="bp-key">([^<]+)</span>', rows)
     assert keys == ["Statement uses", "Proof uses"]
-    assert page.count("<summary>Uses 0 · Used by 1</summary>") == 2
+    # A side with nothing on it is left out of the summary.
+    assert page.count("<summary>Used by 1</summary>") == 2
+    assert "Uses 0" not in page and "Used by 0" not in page
     assert "<summary>Dependencies</summary>" not in page
 
     # Material draws a details element as a boxed admonition with a pencil
