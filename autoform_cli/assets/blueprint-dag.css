@@ -406,7 +406,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated .bp-dag-toolbar { padding-inline: 12px; gap: 6px; }
   .bp-dag-integrated .bp-dag-breadcrumb { min-width: 0; flex: 1; }
   /* A phone's trail keeps the first crumb, the parent and the current page; the parent is how an overview group returns in place. */
-  .bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :nth-last-child(-n+2)) { display: none; }
+  /* Outranks the flex display a crumb with a link takes, now that middle crumbs are links rather than one "…". */
+  .bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :nth-last-child(-n+2)) { display: none; }
   .bp-dag-integrated .bp-dag-search-wrap { flex-basis: 100%; }
   /* Browse can wrap to the start of a row, where a menu hung from its right edge would open off screen, so a phone hangs it from the toolbar. */
   .bp-dag-integrated .bp-dag-toolbar { position: relative; }
