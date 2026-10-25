@@ -1246,7 +1246,6 @@ def _integrated_page(
         search_href=relative_link(destination / graph_pages.SEARCH_INDEX, page, ".json"),
         page_href=_as_published(relative_link(page, page, ".html")),
         scope=scope,
-        fallback_links=(("Read the mathematical page", "#"),),
     )
     return (
         header + '\n<div class="bp-explorer-page" markdown="1">\n'

@@ -722,9 +722,8 @@ def render_container(
         for label, target in fallback
     )
     inventory = (
-        '  <div class="bp-dag-fallback">\n'
-        "    <p><strong>Dependency explorer fallback.</strong> "
-        "JavaScript is unavailable or the graph data could not be loaded.</p>\n"
+        '  <div class="bp-dag-fallback" data-search-exclude>\n'
+        "    <p>The dependency map could not load.</p>\n"
         + (f'    <ul class="bp-dag-fallback-list">\n{items}\n    </ul>\n' if items else "")
         + (
             f"    <p>Showing {len(fallback)} of {total} linked nodes. "
