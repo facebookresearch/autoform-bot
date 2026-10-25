@@ -2208,6 +2208,8 @@ def _render_landing_page(
         rail=bool(scopes),
         # The explorer's list view, filtered to the states the figure counts.
         ready_href=f"{book_href}#view=list&status=can_state,can_prove" if book_href else None,
+        # Without a roadmap contents page the book starts here.
+        book_href=None if book == Path("README.md") else book_href,
     )
     next_up = _next_target(
         graph,
@@ -2230,16 +2232,8 @@ def _render_landing_page(
         "  - toc",
     ]
     if book:
-        # Without a roadmap contents page the book starts here.
-        book_link = (
-            ""
-            if book == Path("README.md")
-            else '<a class="bp-intro-book" href="'
-            + html.escape(book_href, quote=True)
-            + '">Read the book</a>'
-        )
         # The shared shell is attached after all full reading content is final.
-        reading = f'<div class="bp-landing-intro">{hero}{book_link}{next_up}</div>'
+        reading = f'<div class="bp-landing-intro">{hero}{next_up}</div>'
         return "\n".join([*front, "  - footer", "---", "", reading]).rstrip() + "\n"
     # A roadmap without articles has nothing to explore, so the hero stands
     # over its status breakdown.
@@ -2295,6 +2289,7 @@ def _render_hero(
     coverage_href: str,
     rail: bool = False,
     ready_href: str | None = None,
+    book_href: str | None = None,
 ) -> str:
     """Open with the project's name, its one-line claim, and where it stands.
 
@@ -2303,7 +2298,8 @@ def _render_hero(
     reader has finished the title, which is the only question the top of a
     blueprint has to answer. The explorer's narrow rail (*rail*) gets the
     two progress figures only, and module inventories as one plain line under
-    them. With *ready_href* the ready figure links the list of what it counts.
+    them. With *ready_href* the ready figure links the list of what it counts,
+    and *book_href* puts the way into the book right under the claim.
     """
     leaves = _countable(graph)
     selected = {node_id: statuses[node_id] for node_id in leaves}
@@ -2371,6 +2367,11 @@ def _render_hero(
         + ("" if rail else '<div class="bp-hero-kicker">Formalization blueprint</div>')
         + f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
         + (f'<p class="bp-hero-lead">{lead}</p>' if lead else "")
+        + (
+            f'<a class="bp-intro-book" href="{html.escape(book_href, quote=True)}">Start reading</a>'
+            if book_href
+            else ""
+        )
         + (f'<p class="bp-hero-status">{sentence}</p>' if sentence else "")
         + (f'<div class="bp-hero-figures">{stats}</div>' if stats else "")
         + (f'<p class="bp-hero-counts">{inventories}</p>' if rail and inventory_count else "")
@@ -4066,9 +4067,9 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   text-underline-offset: 0.15em;
 }}
 
-/* On the landing page the hero opens the explorer's hierarchy rail, or its
-   details sheet on phones, so it is set to the rail's width and, like the
-   rail, in px rather than Material's growing rem. Material's typeset rules
+/* On the landing page the hero sits in the explorer's reading pane, or its
+   sheet on phones, so it is set, like the pane's chapters, in px rather
+   than Material's growing rem. Material's typeset rules
    reach the hero's heading, paragraph and links there, so these rules carry
    a doubled class; the explorer's own rules stay in its script. The narrow
    hero keeps the gradient rule as its one accent and two plain figures,
@@ -4094,7 +4095,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-landing-intro.bp-landing-intro .bp-hero-lead {{
   max-width: none;
   margin: 10px 0 0;
-  font-size: 13px;
+  color: var(--bp-fg);
+  font-size: 16px;
   line-height: 1.5;
 }}
 .bp-landing-intro.bp-landing-intro .bp-hero-figures {{
@@ -4120,9 +4122,9 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-landing-intro.bp-landing-intro .bp-hero-coverage-link {{ margin-left: 0; }}
 .bp-landing-intro.bp-landing-intro .bp-intro-book {{
   display: inline-block;
-  margin-top: 14px;
+  margin-top: 10px;
   color: var(--bp-link);
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 600;
   text-decoration: none;
 }}

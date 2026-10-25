@@ -1260,8 +1260,9 @@ def test_the_landing_page_preserves_its_full_reading_hero_in_one_integrated_shel
     assert overview.index('class="bp-reading-source"') < overview.index('class="bp-landing-intro"')
     assert overview.index('class="bp-landing-intro"') < overview.index('class="bp-dag-viewer"')
     intro = overview.split('class="bp-landing-intro"', 1)[1]
-    assert intro.index("bp-hero-title") < intro.index("bp-hero-status") < intro.index("bp-intro-book")
-    assert '<a class="bp-intro-book" href="roadmap/index.html">Read the book</a>' in intro
+    # The way into the book comes straight after the claim, before the progress.
+    assert intro.index("bp-hero-title") < intro.index("bp-intro-book") < intro.index("bp-hero-status")
+    assert '<a class="bp-intro-book" href="roadmap/index.html">Start reading</a>' in intro
     # The hero's title is the page's one heading.
     assert overview.count("<h1") == 1 and "\n# " not in overview
     for retired in ("bp-map", 'class="bp-landing"', "open full-page", "## Status breakdown", "## Contents", "```mermaid"):
