@@ -1634,6 +1634,12 @@
       var entry = palette[node.status] || palette.planned || {};
       return entry[isDark() ? "dark" : "light"] || {fill: "#fff", stroke: "#9ca3af", text: "#374151"};
     }
+    // Another topic's card says how it touches this page and how many of its results it links here, not its own total.
+    function boundaryMeta(node) {
+      var uses = prerequisites && (prerequisites.get(node.id) || []).length, usedBy = dependents && (dependents.get(node.id) || []).length;
+      var count = node.member_count || finished(node)[1], results = plural(count, "result", "results");
+      return uses && usedBy ? results + ", both ways" : usedBy ? results + " needed here" : uses ? "Uses " + results + " here" : plural(count, "linked result", "linked results");
+    }
     // A scope's fully proved results of its targets. Module inventories are neutral and stay out of both counts, as in the hero's figure.
     function finished(node) {
       var done = 0, total = 0;
@@ -2138,7 +2144,7 @@
       // A topic or region names its fully proved share, which its bar cannot: statement formalized shares proved's green.
       var count = finished(node), scopeMeta = node.kind === "scope" ? node._unknownCount ? "Topic" : count[1] ?
         num(count[0]) + " of " + num(count[1]) + " fully proved" : plural(node.member_count || 0, "article", "articles") :
-        node.kind === "boundary" ? "External scope · open" : null;
+        node.kind === "boundary" ? boundaryMeta(node) : null;
       // ATLAS titles such as "Theorem (Crystallographic Restriction)" already name their kind, so the meta does not repeat it.
       var kind = KINDS.get((node.declaration || "").toLowerCase());
       if (kind && (node.title || "").indexOf(kind) === 0) kind = "";
@@ -2146,8 +2152,11 @@
       var area = node._region || node._overviewGroup;
       var lead = area ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, tail = scopeMeta || statusLabel(node.status);
       var meta = area || !lead ? tail : lead + " · " + tail;
+      // A boundary's colour is the only place its linked results' statuses show, so a screen reader hears them as words.
+      var linked = node.kind === "boundary" && count[1] ? ", " + (count[0] === count[1] ? count[1] === 1 ? "fully proved" : "all fully proved" :
+        num(count[0]) + " of " + num(count[1]) + " fully proved") : "";
       control.setAttribute("aria-label", node.title + (node.area ? ", " + node.area : "") + ", " +
-        meta + (node.isolated ? ", no dependency edges in this view" : ""));
+        meta + linked + (node.isolated ? ", no dependency edges in this view" : ""));
       var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : control;
       content.appendChild(element("span", "bp-dag-node-title", node.title));
       // The kind word or topic count gives way first, so the status or count the line is there to show stays whole.
