@@ -1640,7 +1640,9 @@
     function boundaryMeta(node) {
       var uses = prerequisites && (prerequisites.get(node.id) || []).length, usedBy = dependents && (dependents.get(node.id) || []).length;
       var count = node.member_count || finished(node)[1], results = plural(count, "result", "results");
-      return uses && usedBy ? results + ", both ways" : usedBy ? results + " needed here" : uses ? "Uses " + results + " here" : plural(count, "linked result", "linked results");
+      // The count is the other topic's results: those this page needs, or those that build on it.
+      return uses && usedBy ? results + ", both ways" : usedBy ? results + " needed here" : uses ? results + (count === 1 ? " builds" : " build") + " on this" :
+        plural(count, "linked result", "linked results");
     }
     // A scope's fully proved results of its targets. Module inventories are neutral and stay out of both counts, as in the hero's figure.
     function finished(node) {

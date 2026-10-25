@@ -184,19 +184,21 @@ def test_a_boundary_card_says_how_it_touches_the_page_and_counts_only_its_linked
       palette = {planned: {label: 'planned'}, fully_proved: {label: 'fully proved'}}; atlas = false;
       const outside = (id, counts) => viewNode(id, {kind: 'boundary', member_count: counts.reduce((sum, entry) => sum + entry[1], 0), status_counts: counts});
       const nodes = [viewNode('L'), outside('boundary:needed', [['fully_proved', 11]]), outside('boundary:user', [['fully_proved', 4], ['planned', 3]]),
-        outside('boundary:both', [['planned', 1]]), outside('boundary:alone', [['fully_proved', 2]])];
+        outside('boundary:both', [['planned', 1]]), outside('boundary:alone', [['fully_proved', 2]]), outside('boundary:one', [['planned', 1]])];
       const local = graph(nodes, [{source: 'boundary:needed', target: 'L', statement: 1, proof: 0}, {source: 'L', target: 'boundary:user', statement: 1, proof: 0},
-        {source: 'boundary:both', target: 'L', statement: 0, proof: 1}, {source: 'L', target: 'boundary:both', statement: 1, proof: 0}]);
+        {source: 'boundary:both', target: 'L', statement: 0, proof: 1}, {source: 'L', target: 'boundary:both', statement: 1, proof: 0},
+        {source: 'L', target: 'boundary:one', statement: 1, proof: 0}]);
       configure([], local); adoptGraph(local);
       const card = id => makeNodeControl(byId.get(id)), meta = id => card(id).children[1].textContent;
-      // "External scope · open" read as unsolved on a fully proved card; the card now names its role and its links here, not its own total.
+      // "External scope · open" read as unsolved on a fully proved card; the card now names its role and counts its own linked results.
       assert.equal(meta('boundary:needed'), '11 results needed here');
-      assert.equal(meta('boundary:user'), 'Uses 7 results here');
+      assert.equal(meta('boundary:user'), '7 results build on this');
+      assert.equal(meta('boundary:one'), '1 result builds on this');
       assert.equal(meta('boundary:both'), '1 result, both ways');
       assert.equal(meta('boundary:alone'), '2 linked results');
       // Its border colour is the only status mark, so the label says it in words.
       assert(card('boundary:needed').getAttribute('aria-label').endsWith(', 11 results needed here, all fully proved'));
-      assert(card('boundary:user').getAttribute('aria-label').endsWith(', Uses 7 results here, 4 of 7 fully proved'));
+      assert(card('boundary:user').getAttribute('aria-label').endsWith(', 7 results build on this, 4 of 7 fully proved'));
       assert(card('boundary:both').getAttribute('aria-label').endsWith(', 1 result, both ways, 0 of 1 fully proved'));
       assert.equal(meta('L'), 'planned');
     """)
