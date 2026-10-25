@@ -11,6 +11,9 @@ date when the release is tagged.
 
 ### Changed
 
+- **Wiki map.** Authored concept links cluster intact formal developments,
+  with distinct dotted associations and bounded local corridors. Proof edges,
+  ranks, status and full reading pages remain unchanged (#442).
 - **Docs.** The CLI reference's contracts moved to `autoform_cli/reference/`
   (validation and audit, search, open statements, claims and revisions,
   runtime and publication). The reference, skills and contributor docs keep
