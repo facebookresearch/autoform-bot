@@ -2363,7 +2363,6 @@ def _render_hero(
     lead = _lead_sentence(body)
     return (
         '<div class="bp-hero">'
-        '<div class="bp-hero-rule"></div>'
         + ("" if rail else '<div class="bp-hero-kicker">Formalization blueprint</div>')
         + f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
         + (f'<p class="bp-hero-lead">{lead}</p>' if lead else "")
@@ -2375,9 +2374,11 @@ def _render_hero(
         + (f'<p class="bp-hero-status">{sentence}</p>' if sentence else "")
         + (f'<div class="bp-hero-figures">{stats}</div>' if stats else "")
         + (f'<p class="bp-hero-counts">{inventories}</p>' if rail and inventory_count else "")
-        # The bar repeats the share for the wide hero; with no share to show it goes.
+        # The bar repeats the share for the wide hero, in the fully proved
+        # status colour; with no share to show it goes.
         + (
-            f'<div class="bp-hero-bar" aria-hidden="true"><span style="width: {share}%"></span></div>'
+            '<div class="bp-hero-bar" aria-hidden="true">'
+            f'<span class="bp-swatch-fully_proved" style="width: {share}%"></span></div>'
             if not rail and not sentence
             else ""
         )
@@ -3973,12 +3974,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .md-typeset:has(.bp-landing) {{ max-width: 62rem; }}
 
 .bp-hero {{ margin: 0 0 2.5rem; }}
-.bp-hero-rule {{
-  height: 4px;
-  width: 84px;
-  border-radius: 4px;
-  background: var(--bp-sweep);
-}}
 .bp-hero-kicker {{
   margin-top: 1.1rem;
   font-size: 0.68rem;
@@ -4018,15 +4013,9 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-weight: 800;
   line-height: 1;
   letter-spacing: -0.04em;
-  background: var(--bp-sweep);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: var(--bp-fg);
 }}
-.bp-figure-neutral .bp-figure-value {{
-  background: none;
-  color: var(--bp-muted);
-}}
+.bp-figure-neutral .bp-figure-value {{ color: var(--bp-muted); }}
 .bp-figure-label {{
   margin-top: 0.45rem;
   font-size: 0.78rem;
@@ -4048,7 +4037,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   border: 1px solid var(--bp-rule);
   overflow: hidden;
 }}
-.bp-hero-bar > span {{ display: block; height: 100%; background: var(--bp-sweep); }}
+.bp-hero-bar > span {{ display: block; height: 100%; }}
 
 .bp-hero-coverage {{
   display: flex;
@@ -4072,12 +4061,11 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
    than Material's growing rem. Material's typeset rules
    reach the hero's heading, paragraph and links there, so these rules carry
    a doubled class; the explorer's own rules stay in its script. The narrow
-   hero keeps the gradient rule as its one accent and two plain figures,
-   the share fully proved and what is ready to start, each with its
-   one-line note; module inventories become one muted line under them. */
+   hero keeps two plain figures, the share fully proved and what is ready
+   to start, each with its one-line note; module inventories become one
+   muted line under them. */
 .bp-landing-intro.bp-landing-intro {{ margin: 0 6px 18px; font-size: 13px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero {{ margin: 0; }}
-.bp-landing-intro.bp-landing-intro .bp-hero-rule {{ width: 56px; height: 3px; }}
 .bp-landing-intro.bp-landing-intro .bp-next-kicker {{
   font-size: 12px;
   font-weight: 500;
@@ -4105,8 +4093,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-landing-intro.bp-landing-intro .bp-figure {{ padding: 9px 10px; }}
 .bp-landing-intro.bp-landing-intro .bp-figure-value {{
-  background: none;
-  color: var(--bp-fg);
   font-size: 17px;
   font-weight: 700;
 }}

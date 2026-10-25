@@ -854,6 +854,22 @@ def test_statement_only_theorems_never_count_as_complete(tmp_path: Path) -> None
     assert '<div class="bp-figure-note">2 of 3 statements</div>' in ready
 
 
+def test_the_wide_hero_bar_takes_the_fully_proved_colour(tmp_path: Path) -> None:
+    """The bar measures fully proved work, so it is painted as the status is everywhere else."""
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/next.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Next\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    )
+    graph = load_graph(project / "blueprint")
+    coverage, _issues = render_module.load_coverage(project / "blueprint")
+
+    wide = render_module._render_hero("Book", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
+
+    assert '<span class="bp-swatch-fully_proved" style="width: 67%"></span>' in wide
+    css = render_module._stylesheet()
+    assert re.search(r"\.bp-hero-bar > span \{([^}]+)\}", css).group(1).strip() == "display: block; height: 100%;"
+
+
 def test_the_ready_figure_links_the_list_of_exactly_what_it_counts(tmp_path: Path) -> None:
     """The figure opens the explorer's list filtered to the states it counts."""
     project = _project(tmp_path)
@@ -1299,9 +1315,10 @@ def test_the_rail_hero_keeps_two_figures_and_the_coverage_counts_and_hides_nothi
     assert "display: none" not in css.split(".bp-landing-intro.bp-landing-intro {", 1)[1].split(".bp-legend-grid", 1)[0]
     # Each of the two figures keeps its one-line note, so the number says what it counts.
     assert ".bp-landing-intro.bp-landing-intro .bp-figure-note { margin-top: 2px; font-size: 12px; }" in css
-    # The gradient rule is the narrow hero's one accent; its figures are plain.
-    value = css.split(".bp-landing-intro.bp-landing-intro .bp-figure-value {", 1)[1].split("}", 1)[0]
-    assert "background: none;" in value and "color: var(--bp-fg);" in value
+    # Colour carries status only: the figures are set in the text colour, with no gradient to undo.
+    value = css.split("\n.bp-figure-value {", 1)[1].split("}", 1)[0]
+    assert "color: var(--bp-fg);" in value and "--bp-sweep" not in value
+    assert "bp-hero-rule" not in css and "bp-hero-rule" not in intro
     assert ".bp-landing-intro.bp-landing-intro .bp-hero-coverage-link { margin-left: 0; }" in css
     assert "last-child:nth-child(odd)" not in css
 
@@ -1845,7 +1862,9 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     assert live == packaged_live
     # The brand sweep is defined once and reused, rather than pasted per rule.
     assert css.count("--bp-sweep:") == 1
-    assert css.count("var(--bp-sweep)") >= 3
+    # Colour carries status only, so the sweep is the header's hairline and nothing else.
+    assert css.count("var(--bp-sweep)") == 1
+    assert '.md-header::after {\n  content: "";\n  display: block;\n  height: 3px;\n  background: var(--bp-sweep);' in css
     for state in STATES:
         assert f".bp-{state.key} .bp-mark {{ color: {state.stroke}; }}" in css
         assert f"[data-md-color-scheme=slate] .bp-{state.key} .bp-mark" in css
