@@ -2439,13 +2439,10 @@ def _render_overview_summary(
     }
     if len(selected) < 2:
         return ""
-    counts = dict(status.summarize(selected))
-    fully = next(state for state in status.STATES if state.key == "fully_proved")
     parts = [
         f'<span class="bp-progress-state"><span class="bp-swatch bp-swatch-{state.key}"></span>'
-        f"<strong>{count}</strong>{f' of {len(selected)}' if state is fully else ''} "
-        f"{html.escape(state.label)}</span>"
-        for state, count in [(fully, counts.pop(fully, 0)), *counts.items()]
+        f"<strong>{count}</strong> {html.escape(state.label)}</span>"
+        for state, count in status.summarize(selected)
     ]
     return (
         '<div class="bp-progress-overview">'

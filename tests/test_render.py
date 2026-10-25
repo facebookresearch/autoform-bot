@@ -539,7 +539,7 @@ def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -
     assert '<span class="bp-thmcaption">Definition</span><span class="bp-thmlabel">1</span>' in page
     assert '<span class="bp-thmtitle">Top</span>' in page
     assert "The main result." in page
-    assert "<strong>2</strong> of 2 fully proved" in page
+    assert "<strong>2</strong> fully proved" in page
     # A node's own subheadings must not compete with the chapter's structure.
     assert "###### Sources" in page
     assert "\n## Sources" not in page
@@ -694,7 +694,7 @@ def test_overview_carries_the_counts_without_a_separate_progress_page(tmp_path: 
     assert 'role="img"' not in overview
     assert "items settled" not in overview
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    assert "<strong>2</strong> of 2 fully proved" in chapter
+    assert "<strong>2</strong> fully proved" in chapter
     # Progress stays on the landing page; the only summary link explains scope.
     assert "bp-progress-link" not in overview
     assert not (tmp_path / "out/progress.md").exists()
@@ -871,7 +871,7 @@ def test_module_catalog_is_separate_from_formalization_progress(
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert '<span class="bp-thmcaption">Module</span><span class="bp-thmlabel">1</span>' in chapter
     assert "A checked inventory of an existing Lean module." in chapter
-    assert "<strong>2</strong> of 2 fully proved" in chapter
+    assert "<strong>2</strong> fully proved" in chapter
     # No slot places the catalog, and it is no formalization target.
     assert chapter.index("## Module inventories") < chapter.index('id="catalog"')
     assert "Other statements" not in chapter
