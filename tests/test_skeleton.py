@@ -47,6 +47,7 @@ from autoform_cli.lean_probe import (
     _probe_modules,
     _probe_workers,
     _process_is_alive,
+    project_control_snapshot,
     _read_probe_records,
     _remember_tagged_processes,
     render_probe,
@@ -76,7 +77,6 @@ from autoform_cli.skeleton import (
     _stage_output,
     _hash_module_files,
     _local_safety_issue,
-    _project_control_snapshot,
     _without_comments,
     _probe_record_issue,
     extract_graph_skeletons,
@@ -1748,7 +1748,7 @@ def test_project_control_snapshot_retains_only_fingerprints(tmp_path: Path) -> N
     project = _project(tmp_path)
     content = (project / "lakefile.toml").read_bytes()
 
-    snapshot = dict(_project_control_snapshot(project))
+    snapshot = dict(project_control_snapshot(project))
 
     assert snapshot["lakefile.toml"] == (len(content), hashlib.sha256(content).hexdigest())
     assert snapshot["lakefile.lean"] is None

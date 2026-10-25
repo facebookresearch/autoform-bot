@@ -171,6 +171,7 @@ from .lean_probe import (
     lean_name_parts,
     module_of,
     path_of,
+    project_control_snapshot,
     read_snapshot_file,
     render_probe,
     run_module_probes,
@@ -183,12 +184,6 @@ SEMANTIC_SCHEMA = "autoform-lean-expr/v4"
 #: The probe states shared subterms once; this bounds the characters of
 #: semantic material they may expand to in one probe.
 _PROBE_MATERIAL_LIMIT = 512 * 1024 * 1024
-_PROJECT_CONTROL_FILES = (
-    "lakefile.toml",
-    "lakefile.lean",
-    "lean-toolchain",
-    "lake-manifest.json",
-)
 #: Compiled parts that identify a boundary module. Module-system builds also
 #: write the server and private parts next to the `.olean`.
 _MODULE_FILE_KINDS = ("olean", "olean.server", "olean.private")
@@ -728,19 +723,6 @@ def _comment_ranges(value: object, text: str | None, *, context: str) -> tuple[t
     except UnicodeDecodeError as exc:
         raise SkeletonError([f"invalid comment ranges for {context}"]) from exc
     return tuple(ranges)
-
-
-def _snapshot_regular_file(path: Path) -> tuple[int, str] | None:
-    captured = read_snapshot_file(path)
-    return None if captured is None else captured[1]
-
-
-def _project_control_snapshot(root: Path) -> tuple[tuple[str, tuple[int, str] | None], ...]:
-    """Fingerprint the Lake inputs that select the compiled environment."""
-
-    return tuple(
-        (name, _snapshot_regular_file(root / name)) for name in _PROJECT_CONTROL_FILES
-    )
 
 
 def _graph_snapshot(graph: Graph) -> tuple[tuple[str, str, str], ...]:
@@ -1377,13 +1359,13 @@ class InputsSnapshot:
 def snapshot_inputs(graph: Graph, lean_root: Path) -> InputsSnapshot:
     """Record the inputs a Lean run is about, to refuse its answer if they change."""
 
-    return InputsSnapshot(graph=_graph_snapshot(graph), configuration=_project_control_snapshot(lean_root))
+    return InputsSnapshot(graph=_graph_snapshot(graph), configuration=project_control_snapshot(lean_root))
 
 
 def check_configuration_unchanged(lean_root: Path, snapshot: InputsSnapshot, *, activity: str) -> None:
     """Refuse when the Lake configuration changed since ``snapshot``."""
 
-    if _project_control_snapshot(lean_root) != snapshot.configuration:
+    if project_control_snapshot(lean_root) != snapshot.configuration:
         raise SkeletonError(
             [f"Lean project configuration changed while {activity}; retry after the project is idle"]
         )

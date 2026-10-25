@@ -185,6 +185,28 @@ def read_snapshot_file(path: Path) -> tuple[bytes, tuple[int, str]] | None:
     return captured
 
 
+#: The Lake inputs that select the compiled environment.
+_PROJECT_CONTROL_FILES = (
+    "lakefile.toml",
+    "lakefile.lean",
+    "lean-toolchain",
+    "lake-manifest.json",
+)
+
+
+def _snapshot_regular_file(path: Path) -> tuple[int, str] | None:
+    captured = read_snapshot_file(path)
+    return None if captured is None else captured[1]
+
+
+def project_control_snapshot(root: Path) -> tuple[tuple[str, tuple[int, str] | None], ...]:
+    """Fingerprint the Lake inputs that select the compiled environment."""
+
+    return tuple(
+        (name, _snapshot_regular_file(root / name)) for name in _PROJECT_CONTROL_FILES
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Bounded commands
 # --------------------------------------------------------------------------- #
@@ -1260,6 +1282,7 @@ __all__ = [
     "lean_requests",
     "module_of",
     "path_of",
+    "project_control_snapshot",
     "read_snapshot_file",
     "render_probe",
     "run_module_probes",

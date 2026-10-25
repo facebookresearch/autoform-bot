@@ -38,7 +38,7 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import lean_probe, skeleton
+from . import lean_probe
 from ._tree_snapshot import TreeSnapshotError
 from .claims import author_claim_key
 from .lean import IndexedSourceSnapshot, LeanSourceError, bind_project_source_snapshot, resolve_lean_root
@@ -1457,7 +1457,7 @@ def _project_controls(root: Path) -> tuple[tuple[str, tuple[int, str] | None], .
     """Read the Lake inputs that select the environment as one stable snapshot."""
 
     try:
-        return skeleton._project_control_snapshot(root)
+        return lean_probe.project_control_snapshot(root)
     except SkeletonError as exc:
         raise ImpactError(
             "the Lake project controls could not be read consistently; rebuild and rerun the command"
