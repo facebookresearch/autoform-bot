@@ -357,7 +357,7 @@ def _focus_group(page: object, key: str) -> object:
     # Do not expose the renderer or invent a view-group id from its serial.
     pending: list[tuple[str, ...]] = [()]
     seen: set[str] = set()
-    page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+    page.get_by_role("button", name="Fit the map", exact=True).click()
     _frames(page)
     start_id = page.locator(".bp-dag-node").evaluate_all("""nodes => {
       for(const node of nodes) {
@@ -369,7 +369,7 @@ def _focus_group(page: object, key: str) -> object:
     assert start_id is not None, "A fitted large scope must contain a real usable starting card"
     while pending and len(seen) <= 32:
         path = pending.pop(0)
-        page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+        page.get_by_role("button", name="Fit the map", exact=True).click()
         _frames(page)
         start = page.locator(f'.bp-dag-node[data-autoform-node-id="{start_id}"]')
         playwright.expect(start).to_be_visible()
@@ -579,7 +579,7 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(1)
     playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id*="remote"]')).to_have_count(0)
-    page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+    page.get_by_role("button", name="Fit the map", exact=True).click()
     _frames(page)
     assert _geometry(page.locator(".bp-dag-node[data-overview-group]").first)["scale"] >= .9 - 1e-6
     _capture(page, consumer, width, "fit")

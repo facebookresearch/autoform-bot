@@ -40,7 +40,7 @@ const functions = [
   'element', 'readingLabel', 'button', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
   'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'matchesStatus', 'calculateActive',
   'statusLabel', 'finished', 'boundaryMeta', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
-  'semanticParent', 'placeOf', 'summaryLine', 'refreshReadingLabels'
+  'semanticParent', 'placeOf', 'pendingMath', 'summaryLine', 'refreshReadingLabels'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');
 const sandbox = {assert, URL, fixtureText}; vm.createContext(sandbox);
@@ -52,6 +52,7 @@ class Element {
   get textContent() { return this.text + this.children.map(child => child.textContent).join(''); }
   set textContent(value) { this.text = String(value); this.children = []; }
   setAttribute(name, value) { this.attrs[name] = String(value); }
+  removeAttribute(name) { delete this.attrs[name]; }
   getAttribute(name) { return this.attrs[name] === undefined ? null : this.attrs[name]; }
   appendChild(child) { this.children.push(child); return child; }
   querySelector(tag) { return this.children.find(child => child.tagName === tag) || null; }
@@ -74,6 +75,7 @@ var plural = (count, one, many) => count.toLocaleString() + ' ' + (count === 1 ?
 var num = (value) => value.toLocaleString();
 // The list typesets a row's formulas lazily as it scrolls into view; these callbacks run without a browser.
 function typesetRowsInView() {}
+var instance = 1;
 function leaf(id) {
   return {id, title: id, kind: 'node', status: 'planned', result: true,
     scope: 'chapter', parent: 'chapter', route: '../roadmap/chapter/index.html#' + encodeURIComponent(id)};
@@ -127,7 +129,7 @@ def test_an_isolated_focal_result_has_no_arbitrary_dependency_peers_and_keeps_th
       assert.deepEqual(projected.edges, []);
       adoptGraph(projected);
       assert.equal(byId.get('T').isolated, true);
-      assert(makeNodeControl(byId.get('T')).getAttribute('aria-label').includes('no dependency edges'));
+      assert(makeNodeControl(byId.get('T')).getAttribute('aria-label').includes('not linked to anything on this map'));
       ui$selected = byId.get('T'); ui$showIsolated = false; ui$activeDirty = true; calculateActive();
       assert.deepEqual(ui$active.map(node => node.id), ['T'], 'The explicitly selected isolated article remains reachable');
       currentBundle.scope = 'chapter'; ui$mode = 'list';
@@ -148,7 +150,7 @@ def test_a_real_connected_neighborhood_keeps_exact_edges_and_connected_controls(
       adoptGraph(projected);
       for (const id of ['A', 'B']) {
         assert.equal(byId.get(id).isolated, false, id + ' has a real retained dependency');
-        assert(!makeNodeControl(byId.get(id)).getAttribute('aria-label').includes('no dependency edges'));
+        assert(!makeNodeControl(byId.get(id)).getAttribute('aria-label').includes('not linked to anything'));
       }
       ui$showIsolated = false; ui$activeDirty = true; calculateActive();
       assert.deepEqual(ui$active.map(node => node.id).sort(), ['A', 'B']);
@@ -167,7 +169,7 @@ def test_cards_lead_with_the_books_kind_word_and_topics_keep_their_count() -> No
       assert.equal(meta(viewNode('O', {declaration: 'noncomputable def'})), 'planned');
       assert.equal(meta(viewNode('C', {declaration: 'constructor'})), 'planned');
       assert.equal(meta(viewNode('S', {kind: 'scope', declaration: 'theorem', member_count: 2})), '0 of 1 fully proved');
-      assert(card(viewNode('T', {declaration: 'theorem'})).getAttribute('aria-label').endsWith(', Theorem · planned'));
+      assert(card(viewNode('T', {declaration: 'theorem'})).getAttribute('aria-label').endsWith(', Theorem, planned'));
       // A title that already names its kind, as ATLAS's do, gets no second kind word.
       assert.equal(meta(viewNode('Theorem (Crystallographic Restriction)', {declaration: 'theorem'})), 'planned');
       // The kind word, the separator and the status are separate spans, so only the kind truncates, and an area card can drop the first two.

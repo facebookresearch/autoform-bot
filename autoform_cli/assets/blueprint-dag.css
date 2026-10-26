@@ -37,7 +37,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-breadcrumb { min-width: 0; flex: 1; color: var(--dag-muted); font-size: 12px; }
 .bp-dag-viewer.bp-dag-viewer :is(.bp-dag-breadcrumb ol, .bp-dag-navigation-path) { display: flex; align-items: center; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .bp-dag-viewer.bp-dag-viewer :is(.bp-dag-breadcrumb, .bp-dag-navigation-path) li { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-:is(.bp-dag-breadcrumb, .bp-dag-navigation-path) li + li::before { content: "/"; margin-right: 6px; color: var(--dag-border); }
+:is(.bp-dag-breadcrumb, .bp-dag-navigation-path) li + li::before { content: "/"; content: "/" / ""; margin-right: 6px; color: var(--dag-border); }
 :is(.bp-dag-breadcrumb, .bp-dag-navigation-path) li:not(:first-child, [aria-current]) { flex-shrink: 4; }
 .bp-dag-breadcrumb [aria-current=page] { color: var(--dag-fg); font-weight: 600; }
 @media (min-width: 681px) and (max-width: 1100px) { .bp-dag-viewer:has(.bp-dag-navigation-path) .bp-dag-breadcrumb { visibility: hidden; } }

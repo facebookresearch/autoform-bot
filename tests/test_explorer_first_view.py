@@ -47,7 +47,7 @@ var dom$nodeLayer = {appendChild() {}};
 function calculateActive() {} function sheetLayout() { return fixture.width <= 720; } function schedule() {} function remember() {}
 function colors() { return {}; } function statusRing() { return ''; }
 function makeNodeControl(node) { return {style: {setProperty() {}}, dataset: {}, querySelector() { return null; }, remove() {},
-  label: node.title, getAttribute() { return this.label; }, setAttribute(name, value) { this.label = value; }}; }
+  label: node.title, getAttribute() { return this.label; }, setAttribute(name, value) { this.label = value; }, removeAttribute() {}}; }
 `;
 const run = String.raw`data = {nodes: fixture.nodes.map((node, index) => ({id: node.id, title: node.id, isolated: node.isolated, _index: index,
   status: 'planned', width: node.layout.width, height: Math.max(100, node.layout.height)})), edges: fixture.edges};

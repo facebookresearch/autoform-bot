@@ -444,7 +444,7 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert 'refs.stage.setAttribute("role", "region")' in script
     assert 'toolbar.setAttribute("role", "group")' in script
     assert 'refs.navigation = element("aside", "bp-dag-navigation")' in script
-    assert 'refs.navigation.setAttribute("aria-label", "Wiki hierarchy")' in script
+    assert 'refs.navigation.setAttribute("aria-label", "Topics")' in script
     assert 'renderNavigation()' in script
     # Only the publisher's controlled formula service refreshes mathematics;
     # navigation clones the complete reading source rather than graph summaries.
@@ -697,7 +697,7 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
         '"Mathematics knowledge map"',
     ):
         assert gone not in script, gone
-    assert '", no dependency edges in this view"' in script
+    assert '", not linked to anything on this map"' in script
     # A result's relations show once, in the statement's own disclosure: no strip under the reader repeats them,
     # which keeps only the topic's other pages and its concept links.
     assert "bp-reading-links" not in script and '[["Prerequisites", links.before], ["Used by", links.after]]' not in script

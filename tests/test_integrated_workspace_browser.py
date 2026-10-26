@@ -438,7 +438,7 @@ def _focus_graph_node(page: object, target_id: str) -> object:
     visited: set[str] = set()
     while pending and len(visited) <= 32:
         path = pending.pop(0)
-        page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+        page.get_by_role("button", name="Fit the map", exact=True).click()
         _frames(page)
         start = page.locator('.bp-dag-node[tabindex="0"]').first
         before_focus = start.evaluate("""node => {
@@ -1010,7 +1010,7 @@ def test_long_ancestor_labels_and_full_reading_heading_stay_within_their_panes(
         assert max(top for top, _ in second) < min(bottom for _, bottom in second), boxes
         assert min(top for top, _ in second) >= max(bottom for _, bottom in first), boxes
     if width <= 1100:
-        page.get_by_role("button", name="Toggle topic outline", exact=True).click()
+        page.get_by_role("button", name="Topics", exact=True).click()
     outline = page.locator(".bp-dag-navigation")
     playwright.expect(outline).to_be_visible()
     ancestor = outline.locator('[data-navigation-node-id="division-00"]')
@@ -1033,7 +1033,7 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
     assert titles == set(_AREAS)
     assert page.locator('.bp-dag-node[data-autoform-node-id="scope:appendix-a"]').count() == 0
     _browse_contents(page, "Source texts")
-    playwright.expect(page.locator(".bp-dag-inventory-head h2")).to_have_text("Source tracks")
+    playwright.expect(page.locator(".bp-dag-inventory-head h2")).to_have_text("Source texts")
     playwright.expect(pressed).to_have_count(1)
     playwright.expect(pressed).to_have_text("Source texts")
     titles = page.locator(".bp-dag-inventory-title").all_text_contents()
@@ -1679,7 +1679,7 @@ def test_rich_workspace_region_and_full_reader_screenshots(
     _open(page, site, workspace_runtime)
     for area in _AREAS:
         playwright.expect(_focus_graph_region(page, area)).to_be_focused()
-    page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+    page.get_by_role("button", name="Fit the map", exact=True).click()
     _frames(page)
     assert _pixels(page)["painted"] > 0
     if width <= 720:

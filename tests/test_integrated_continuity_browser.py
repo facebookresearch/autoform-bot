@@ -170,7 +170,7 @@ def _continuity_state(page: object) -> dict:
     return {
         **_surface(page),
         "query": page.locator(".bp-dag-search").input_value(),
-        "outline_open": page.get_by_role("button", name="Toggle topic outline", exact=True).get_attribute("aria-expanded"),
+        "outline_open": page.get_by_role("button", name="Topics", exact=True).get_attribute("aria-expanded"),
     }
 
 
@@ -406,7 +406,7 @@ def test_edited_outgoing_entry_and_same_url_entries_restore_their_own_reading_an
     page.mouse.move(stage["x"] + stage["width"] * .88, stage["y"] + stage["height"] * .72)
     page.mouse.wheel(57, 39)
     page.locator(".bp-dag-search").fill(_TARGET_TITLE)
-    page.get_by_role("button", name="Toggle topic outline", exact=True).click()
+    page.get_by_role("button", name="Topics", exact=True).click()
     _frames(page)
     edited = _scroll_and_back(page)
     assert edited["reading"] > 0 and edited["outline"] > 0 and edited["outline_open"] == "true"
@@ -461,7 +461,7 @@ def test_phone_reader_opens_at_half_covers_the_body_at_full_and_peeks_with_reada
     handle = page.get_by_role("button", name=re.compile(r", reading$"))
     _peek_reader(page, handle)
     _frames(page)
-    page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+    page.get_by_role("button", name="Fit the map", exact=True).click()
     _frames(page)
     regions = page.locator('.bp-dag-node[data-autoform-node-id^="region:"]')
     assert regions.count() > 0
@@ -557,7 +557,7 @@ def test_five_authored_dependency_areas_remain_readable_reachable_and_keep_nativ
     if width <= 720:
         _peek_reader(page, page.get_by_role("button", name=re.compile(r", reading$")))
     _frames(page)
-    page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+    page.get_by_role("button", name="Fit the map", exact=True).click()
     page.evaluate("() => document.fonts.ready")
     _frames(page)
     chosen = page.locator(f'.bp-dag-node[data-autoform-node-id="region:{_FIVE_AREAS[0]}"]')

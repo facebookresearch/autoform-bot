@@ -560,7 +560,7 @@ def _focus_consumer_node(page: object, target_id: str) -> object:
     visited: set[str] = set()
     while pending and len(visited) <= 120:
         path = pending.pop(0)
-        page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+        page.get_by_role("button", name="Fit the map", exact=True).click()
         _paint_frame(page)
         page.locator('.bp-dag-node[tabindex="0"]').first.focus()
         for key in path:
@@ -1087,7 +1087,7 @@ def test_resting_the_mouse_on_a_card_previews_its_neighbours_without_selecting_i
         page.mouse.wheel(0, 2000)
     page.keyboard.up("Control")
     playwright.expect(foundation).to_have_count(0)
-    page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+    page.get_by_role("button", name="Fit the map", exact=True).click()
     playwright.expect(target).to_have_attribute("data-subdued", "false")
     playwright.expect(foundation).to_have_attribute("data-subdued", "false")
 
@@ -1384,7 +1384,7 @@ def test_a_late_search_index_keeps_focus_and_leaves_a_closed_panel_closed(deskto
     _release(page, held)
     playwright.expect(search).not_to_have_attribute("aria-busy", "true")
     playwright.expect(page.locator(f'.bp-dag-result[data-result-id="{selected}"]')).to_be_focused()
-    page.get_by_role("button", name="Fit shown nodes", exact=True).focus()
+    page.get_by_role("button", name="Fit the map", exact=True).focus()
     playwright.expect(results).to_be_hidden()
 
     attempts = 0
@@ -1626,7 +1626,7 @@ def test_dashboard_live_activity_follows_the_integrated_landing_and_soft_navigat
     algebra_route = _site_route(page, site_url, "algebra")
     for _ in range(2):
         if width == 390:
-            outline = page.get_by_role("button", name="Toggle topic outline", exact=True)
+            outline = page.get_by_role("button", name="Topics", exact=True)
             if outline.get_attribute("aria-expanded") == "false":
                 outline.click()
         page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]').click()
@@ -1765,11 +1765,11 @@ def test_the_rail_under_the_open_details_leaves_the_tab_order(desktop_page: obje
     _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
     outline = page.locator(".bp-dag-navigation")
     playwright.expect(outline).to_be_hidden()
-    page.get_by_role("button", name="Fit shown nodes").focus()
+    page.get_by_role("button", name="Fit the map").focus()
     for _ in range(8):
         page.keyboard.press("Tab")
         assert not outline.evaluate("rail => rail.contains(document.activeElement)")
-    toggle = page.get_by_role("button", name="Toggle topic outline", exact=True)
+    toggle = page.get_by_role("button", name="Topics", exact=True)
     toggle.click()
     playwright.expect(toggle).to_have_attribute("aria-expanded", "true")
     link = outline.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')

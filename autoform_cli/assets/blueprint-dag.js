@@ -1248,7 +1248,8 @@
       var root = records.get("roadmap") || scopes.find(function (node) { return !semanticParent(node); });
       if (root && dom$homeLink) {
         dom$homeLink.textContent = "Library"; dom$homeLink.href = root.route || root.url;
-        dom$homeLink.title = root.title; dom$homeLink.setAttribute("aria-label", "Open " + root.title);
+        // Its name starts with its visible word, so speech input can say "Library".
+        dom$homeLink.title = root.title; dom$homeLink.setAttribute("aria-label", "Library: " + root.title);
       }
       var visible = scopes.filter(function (node) { var parent = semanticParent(node); return !parent || (root && parent === root.id) || chain.has(parent); });
       var required = new Set(Array.from(chain).slice(0, ui$outlineLimit)), slots = Math.max(0, ui$outlineLimit - required.size);
@@ -1333,7 +1334,7 @@
       var head = element("header", "bp-dag-head");
       var context = element("div", "bp-dag-context");
       var crumbs = dom$breadcrumb = element("nav", "bp-dag-breadcrumb");
-      crumbs.setAttribute("aria-label", "Explorer context");
+      crumbs.setAttribute("aria-label", "Breadcrumb");
       renderBreadcrumb(); context.appendChild(crumbs);
       head.appendChild(context);
       // The explorer hides Material's header and its sun or moon, so this clicks that toggle: the one label Material leaves
@@ -1348,12 +1349,13 @@
 
       var toolbar = element("div", "bp-dag-toolbar");
       toolbar.setAttribute("role", "group"); toolbar.setAttribute("aria-label", "Dependency explorer controls");
-      dom$outlineToggle = button("bp-dag-button bp-dag-outline-toggle", "Topics", "Toggle topic outline");
+      // Its name is its visible word, so speech input can say "Topics"; aria-expanded gives its state.
+      dom$outlineToggle = button("bp-dag-button bp-dag-outline-toggle", "Topics");
       dom$outlineToggle.setAttribute("aria-expanded", "false"); toolbar.appendChild(dom$outlineToggle);
       var searchWrap = dom$searchWrap = element("div", "bp-dag-search-wrap");
       dom$search = element("input", "bp-dag-search");
       dom$search.type = "search"; dom$search.placeholder = "Search titles and Lean names";
-      dom$search.setAttribute("aria-label", "Search all graph nodes");
+      dom$search.setAttribute("aria-label", "Search titles and Lean names");
       dom$search.setAttribute("aria-controls", "bp-dag-search-results-" + instance);
       dom$searchResults = element("div", "bp-dag-search-results"); dom$searchResults.id = "bp-dag-search-results-" + instance;
       dom$searchResults.setAttribute("role", "region"); dom$searchResults.setAttribute("aria-label", "Search results");
@@ -1389,7 +1391,7 @@
 
       var zoomGroup = element("div", "bp-dag-zoom"); zoomGroup.setAttribute("role", "group"); zoomGroup.setAttribute("aria-label", "Zoom controls");
       dom$zoomOut = button("bp-dag-button", "−", "Zoom out"); dom$zoomIn = button("bp-dag-button", "+", "Zoom in");
-      dom$fit = button("bp-dag-button", "Fit", "Fit shown nodes");
+      dom$fit = button("bp-dag-button", "Fit", "Fit the map");
       zoomGroup.append(dom$zoomOut, dom$zoomIn, dom$fit); toolbar.appendChild(zoomGroup);
 
       dom$hiddenButton = button("bp-dag-hidden-button", ""); toolbar.appendChild(dom$hiddenButton);
@@ -1401,25 +1403,28 @@
 
       var body = dom$body = element("div", "bp-dag-body"), main = element("div", "bp-dag-main");
       dom$navigation = element("aside", "bp-dag-navigation");
-      dom$navigation.setAttribute("aria-label", "Wiki hierarchy");
+      dom$navigation.setAttribute("aria-label", "Topics");
       dom$navigationInner = element("div", "bp-dag-navigation-inner");
       dom$navigation.appendChild(dom$navigationInner); body.appendChild(dom$navigation);
       renderNavigation();
       dom$stage = element("section", "bp-dag-stage"); dom$stage.setAttribute("role", "region");
-      dom$stage.setAttribute("aria-label", "Dependency graph. Drag or scroll to pan, " +
-        "use Control or Command plus scroll to zoom, and use arrow keys between node buttons.");
+      // The region says what it is in the page's own word; how to work it is its description, keys first.
+      var help = element("p", "bp-dag-sr-only", "Arrow keys move between cards, Enter opens one, plus and minus zoom, 0 fits the map, " +
+        "and Escape clears the selection. Drag or scroll to pan, and Control or Command with scroll to zoom.");
+      help.id = "bp-dag-map-help-" + instance; dom$stage.setAttribute("aria-label", "Map"); dom$stage.setAttribute("aria-describedby", help.id);
       dom$canvas = element("canvas", "bp-dag-canvas"); dom$canvas.setAttribute("aria-hidden", "true");
       dom$nodeLayer = element("div", "bp-dag-node-layer"); dom$density = element("div", "bp-dag-density"); dom$density.hidden = true;
       dom$mapContext = element("div", "bp-map-context"); dom$mapKey = element("div", "bp-map-key");
       dom$stage.appendChild(dom$mapContext); dom$stage.appendChild(dom$mapKey);
       dom$empty = element("div", "bp-dag-empty", data.nodes.length ? "Nothing matches these filters." :
         "This roadmap has no articles yet."); dom$empty.hidden = true;
-      dom$stage.append(dom$canvas, dom$nodeLayer, dom$density, dom$empty);
+      dom$stage.append(help, dom$canvas, dom$nodeLayer, dom$density, dom$empty);
       main.appendChild(dom$stage);
 
       dom$inventory = element("section", "bp-dag-inventory"); dom$inventory.hidden = true;
-      dom$inventory.setAttribute("aria-label", "Complete node inventory");
-      var inventoryHead = element("div", "bp-dag-inventory-head"); inventoryHead.appendChild(element("h2", "", "Contents"));
+      var inventoryHead = element("div", "bp-dag-inventory-head"), inventoryHeading = inventoryHead.appendChild(element("h2", "", "Contents"));
+      // The list is named by its heading, "Statements" or "Source texts", not a fixed label.
+      inventoryHeading.id = "bp-dag-inventory-heading-" + instance; dom$inventory.setAttribute("aria-labelledby", inventoryHeading.id);
       dom$inventorySummary = element("span", "bp-dag-inventory-summary"); inventoryHead.appendChild(dom$inventorySummary);
       dom$wholeSearch = button("bp-dag-whole-search", "search the whole roadmap");
       dom$inventoryScroll = element("div", "bp-dag-inventory-scroll"); dom$inventoryList = element("ul", "bp-dag-inventory-list");
@@ -1507,6 +1512,7 @@
         ui$query = dom$search.value.trim(); ui$searchLimit = 12; ui$listLimit = LIST_PAGE;
         if (ui$mode === "list") closeSearch(); else renderSearch();
         renderInventory(true); if (ui$query) ensureGlobalSearch();
+        if (ui$mode !== "graph") announceShown();
         remember();
       });
       dom$search.addEventListener("keydown", function (event) {
@@ -1538,7 +1544,7 @@
       });
       dom$isolated.addEventListener("change", function () {
         ui$showIsolated = dom$isolated.checked; ui$activeDirty = true;
-        writeLocation("replace"); refresh(true);
+        writeLocation("replace"); refresh(true); announceShown();
       });
       dom$graphMode.addEventListener("click", function () { setMode("graph", true); });
       dom$listMode.addEventListener("click", function () { setBrowse(false); ui$relationIds = null; setMode("list", true); });
@@ -1630,9 +1636,13 @@
         input.type = "checkbox"; input.checked = ui$selectedStatuses.has(key); input.value = key;
         input.addEventListener("change", onStatusChange); dom$statusInputs.set(key, input);
         // The filter doubles as the legend: each status says what it means, in the palette's own words.
-        var text = element("span", "bp-dag-check-text", statusLabel(key)), meaning = (palette[key] || {}).meaning;
-        if (meaning) text.appendChild(element("span", "bp-dag-check-meaning", meaning));
-        label.appendChild(input); label.appendChild(swatch(key)); label.appendChild(text);
+        var text = element("span", "bp-dag-check-text", statusLabel(key)), meaning = (palette[key] || {}).meaning, mark = swatch(key);
+        // A checkbox is named by its status and count; the meaning is its description, not part of a name heard on every Tab.
+        input.setAttribute("aria-label", statusLabel(key) + ", " + plural(statusCounts.get(key) || 0, "statement", "statements"));
+        if (meaning) { var described = text.appendChild(element("span", "bp-dag-check-meaning", meaning)); described.id = "bp-dag-meaning-" + instance + "-" + key;
+          input.setAttribute("aria-describedby", described.id); }
+        mark.removeAttribute("title"); mark.setAttribute("aria-hidden", "true");
+        label.appendChild(input); label.appendChild(mark); label.appendChild(text);
         label.appendChild(element("span", "bp-dag-check-count", String(statusCounts.get(key) || 0))); dom$statusFieldset.appendChild(label);
       });
       dom$edgeFieldset.hidden = !data.nodes.some(function (node) { return node.isolated; }) || data.nodes.every(function (node) { return node.isolated; });
@@ -1758,7 +1768,7 @@
       dom$graphMode.disabled = !ui$mapAllowed;
       // A disabled Back to map says why the map is unavailable.
       if (ui$mapAllowed) dom$graphMode.removeAttribute("title"); else dom$graphMode.title = "Too many statements to draw as a map";
-      if (navigation) dom$inventory.querySelector("h2").textContent = ui$mode === "sources" ? "Source tracks" : "Statements";
+      if (navigation) dom$inventory.querySelector("h2").textContent = ui$mode === "sources" ? "Source texts" : "Statements";
     }
 
     function collect(start, adjacency) {
@@ -2161,6 +2171,7 @@
         control.style.width = size.w + "px"; control.style.height = size.h + "px";
         control.style.setProperty("--dag-node-fill", color.fill); control.style.setProperty("--dag-node-stroke", color.stroke);
         control.style.setProperty("--dag-node-text", color.text); control.dataset.selected = String(node === ui$selected);
+        if (node === ui$selected) control.setAttribute("aria-current", "page"); else control.removeAttribute("aria-current");
         if (atlas && node.kind === "scope") control.style.setProperty("--dag-status-ring", statusRing(node));
         var relation = "";
         if (atlas && ui$selected && node !== ui$selected) {
@@ -2208,8 +2219,12 @@
       // A boundary's colour is the only place its linked results' statuses show, so a screen reader hears them as words.
       var linked = node.kind === "boundary" && count[1] ? ", " + (count[0] === count[1] ? count[1] === 1 ? "fully proved" : "all fully proved" :
         num(count[0]) + " of " + num(count[1]) + " fully proved") : "";
-      control.setAttribute("aria-label", node.title + (node.area ? ", " + node.area : "") + ", " +
-        meta + linked + (node.isolated ? ", no dependency edges in this view" : ""));
+      // A card is heard in words rather than glyphs: commas for its separators, an area card's topic count and members, and its
+      // area only when that is not its own title.
+      var spoken = area ? [plural(node._topics, "topic", "topics"), tail].concat(node.summary ? ["including " + String(node.summary).split(" · ").join(", ")] : []) :
+        lead ? [lead, tail] : [tail];
+      control.setAttribute("aria-label", [node.title].concat(node.area && node.area !== node.title ? [node.area] : [], spoken).join(", ") + linked +
+        (node.isolated ? ", not linked to anything on this map" : ""));
       var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : control;
       content.appendChild(element("span", "bp-dag-node-title", node.title));
       // The kind word or topic count gives way first, so the status or count the line is there to show stays whole.
@@ -2480,6 +2495,11 @@
       ui$selectedStatuses = new Set(presentStatuses); ui$showIsolated = true; ui$direction = "both";
       ui$activeDirty = true; writeLocation("replace"); refresh(true); fit();
     }
+    // A search or filter that changes the rows or cards says what is left, since the count on screen is not announced.
+    function announceShown() {
+      if (ui$mode !== "graph") dom$announcement.textContent = dom$inventorySummary.firstChild ? dom$inventorySummary.firstChild.textContent : "";
+      else dom$announcement.textContent = !dom$empty.hidden ? dom$empty.textContent : num(ui$active.length) + " of " + num(data.nodes.length) + " cards shown";
+    }
     function onStatusChange() {
       ui$filtersTouched = true;
       ui$selectedStatuses = new Set();
@@ -2489,7 +2509,7 @@
         setSheet(navigation && !sheetLayout() && !ui$overviewOnly && !ui$scopeOverview, null);
         dom$announcement.textContent = "Selection cleared because its status is hidden.";
       }
-      ui$activeDirty = true; writeLocation("replace"); refresh(true);
+      ui$activeDirty = true; writeLocation("replace"); refresh(true); announceShown();
     }
     function setMode(mode, updateHistory) {
       if (mode === "graph" && !ui$mapAllowed) return;
@@ -2584,6 +2604,7 @@
     }
     // A summary keeps its article's inline code and TeX. The list sets them as the reader does instead of printing their source,
     // and drops a run-in that only repeats the title.
+    function pendingMath(source) { var span = element("span", "bp-math-pending", source); span.setAttribute("aria-hidden", "true"); return span; }
     function summaryLine(node) {
       var text = String(node.summary), line = element("span", "bp-result-summary"), title = node.title || "";
       if (title && text.indexOf(title) === 0 && /^[.:]\s/.test(text.slice(title.length))) text = text.slice(title.length + 1).trim();
@@ -2592,7 +2613,7 @@
         if (match.index > last) line.appendChild(element("span", "", text.slice(last, match.index)));
         // A formula waits under its own class, which MathJax does not read, until its row comes near the view.
         line.appendChild(match[1] !== undefined ? element("code", "", match[1]) :
-          element("span", "bp-math-pending", "\\(" + (match[2] !== undefined ? match[2] : match[3]) + "\\)"));
+          pendingMath("\\(" + (match[2] !== undefined ? match[2] : match[3]) + "\\)"));
         last = pattern.lastIndex;
       }
       if (last < text.length) line.appendChild(element("span", "", text.slice(last)));
@@ -2616,7 +2637,7 @@
     function typesetRevealedRows() {
       if (ui$mathBusy || !ui$mathQueue.length || !window.AutoformMath || typeof window.AutoformMath.refresh !== "function") return;
       ui$mathQueue.splice(0, 6).forEach(function (line) {
-        Array.prototype.forEach.call(line.querySelectorAll(".bp-math-pending"), function (span) { span.className = "arithmatex"; });
+        Array.prototype.forEach.call(line.querySelectorAll(".bp-math-pending"), function (span) { span.className = "arithmatex"; span.removeAttribute("aria-hidden"); });
       });
       ui$mathBusy = true;
       Promise.resolve(window.AutoformMath.refresh(dom$inventoryList)).catch(function () {}).then(function () { ui$mathBusy = false; setTimeout(typesetRevealedRows, 0); });
@@ -2639,10 +2660,14 @@
         row.dataset.inventoryNodeId = node.id;
         if (ui$selected && node.id === ui$selected.id) row.setAttribute("aria-current", "true");
         dom$inventoryRows.set(node.id, row);
-        row.appendChild(element("span", "bp-dag-inventory-title", node.title));
+        var rowId = "bp-dag-row-" + instance + "-" + dom$inventoryRows.size;
+        row.appendChild(element("span", "bp-dag-inventory-title", node.title)).id = rowId + "-title";
         var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;
-        row.appendChild(element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (where ? " · " + where : ""))).title = (palette[node.status] || {}).meaning || "";
-        if (navigation && node.summary) row.appendChild(summaryLine(node));
+        var rowMeta = row.appendChild(element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (where ? " · " + where : "")));
+        rowMeta.title = (palette[node.status] || {}).meaning || ""; rowMeta.id = rowId + "-meta";
+        // A row is named by its title and status line; its summary is the description, so a name is not 400 characters long.
+        row.setAttribute("aria-labelledby", rowId + "-title " + rowId + "-meta");
+        if (navigation && node.summary) { var summary = row.appendChild(summaryLine(node)); summary.id = rowId + "-summary"; row.setAttribute("aria-describedby", summary.id); }
         row.addEventListener("click", function () { activateNode(node, true); }); item.appendChild(row); dom$inventoryList.appendChild(item);
       });
       if (navigation) typesetRowsInView();

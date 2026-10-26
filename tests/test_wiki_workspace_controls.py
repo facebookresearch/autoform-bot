@@ -181,7 +181,7 @@ def test_toolbar_keeps_browse_choices_nested_and_back_visible_only_outside_the_g
       assert.equal(dom$graphMode.disabled,true);assert.equal(dom$stage.hidden,true);assert.equal(dom$inventory.hidden,false);
       ui$mapAllowed=true;ui$mode='sources';syncControls();
       assert.equal(dom$graphMode.disabled,false);assert.equal(dom$graphMode.hidden,false);
-      assert.equal(dom$inventory.querySelector('h2').textContent,'Source tracks');assert.deepEqual(pressedNow(),[dom$sourcesMode]);
+      assert.equal(dom$inventory.querySelector('h2').textContent,'Source texts');assert.deepEqual(pressedNow(),[dom$sourcesMode]);
       ui$mode='graph';syncControls();assert.equal(dom$graphMode.hidden,true);assert.deepEqual(pressedNow(),[]);
     """)
 

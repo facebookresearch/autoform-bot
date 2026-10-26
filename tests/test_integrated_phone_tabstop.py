@@ -40,6 +40,7 @@ class Control {
   querySelector() {return null;}
   getAttribute(name) {return this[name]===undefined?null:this[name];}
   setAttribute(name,value) {this[name]=String(value);}
+  removeAttribute(name) {delete this[name];}
   remove() {this.removed=true;}
 }
 var navigation={},mapAllowed=true,atlas=true,ui$area=null,ui$orientation='tb',family='sans-serif',restoring=false;
