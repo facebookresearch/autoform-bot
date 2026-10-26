@@ -21,8 +21,10 @@ date when the release is tagged.
   shrinking their labels. Dense unselected maps show an explicitly counted
   connection backbone; all typed dependencies remain in article lists, and
   selected results restore full routes in their bounded neighborhoods (#442).
-- **Book order.** Statement numbers, Next up and the explorer's outline and
-  search follow the book's reading order, so sites get new statement numbers.
+- **Book order.** Previous/Next, the site nav, statement numbers, Next up and
+  the explorer's outline and search follow one reading order, down the
+  containment tree, so a landing-page shortcut no longer reorders the book and
+  sites get new statement numbers.
 - **Wiki map.** Authored concept links cluster intact formal developments,
   with distinct dotted associations and bounded local corridors. Proof edges,
   ranks, status and full reading pages remain unchanged (#442).
