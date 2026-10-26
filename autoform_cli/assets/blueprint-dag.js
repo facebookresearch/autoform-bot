@@ -1342,7 +1342,13 @@
       // A palette list without toggle keys draws the form but no label, so it gets no switch.
       var schemes = document.querySelector("[data-md-component=palette]");
       if (schemes && schemes.querySelector("label")) {
-        var themeLabel = "Switch light or dark theme", flip = button("bp-dag-button bp-dag-theme", "◐", themeLabel);
+        var themeLabel = "Switch light or dark theme", flip = button("bp-dag-button bp-dag-theme", "", themeLabel), svg = "http://www.w3.org/2000/svg";
+        // A drawn half-disc in the text colour, rather than a half-circle glyph that each fallback font draws at its own size.
+        var icon = document.createElementNS(svg, "svg"); icon.setAttribute("viewBox", "0 0 20 20"); icon.setAttribute("aria-hidden", "true");
+        [["circle", {cx: 10, cy: 10, r: 7.25, fill: "none", stroke: "currentColor", "stroke-width": 1.5}], ["path", {d: "M10 2.75a7.25 7.25 0 0 1 0 14.5z", fill: "currentColor"}]].forEach(function (shape) {
+          var part = document.createElementNS(svg, shape[0]); Object.keys(shape[1]).forEach(function (key) { part.setAttribute(key, shape[1][key]); }); icon.appendChild(part);
+        });
+        flip.appendChild(icon);
         flip.title = themeLabel; context.appendChild(flip);
         flip.onclick = function () { var next = schemes.querySelector("label:not([hidden])"); if (next) next.click(); };
       }

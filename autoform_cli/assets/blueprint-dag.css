@@ -43,7 +43,10 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 @media (min-width: 681px) and (max-width: 1100px) { .bp-dag-viewer:has(.bp-dag-navigation-path) .bp-dag-breadcrumb { visibility: hidden; } }
 .bp-dag-book { flex: none; color: var(--dag-link); font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; }
 /* Material's own sun or moon sits in the header this page hides, so the trail row ends in a quiet stand-in. */
-.bp-dag-viewer .bp-dag-theme { flex: none; width: 32px; min-height: 32px; margin-left: 8px; padding: 0; border: 0; background: transparent; color: var(--dag-muted); font-size: 16px; line-height: 1; }
+.bp-dag-viewer .bp-dag-theme { position: relative; flex: none; width: 32px; min-height: 32px; margin-left: 8px; padding: 0; border: 0; background: transparent; color: var(--dag-muted); font-size: 16px; line-height: 1; }
+.bp-dag-viewer .bp-dag-theme svg { display: block; width: 18px; height: 18px; margin: auto; color: var(--dag-fg); }
+/* The switch draws a 32px box and reaches 44px through its ::after, so on a phone the trail row stays one line high. */
+.bp-dag-viewer .bp-dag-theme::after { content: ""; position: absolute; inset: -6px; }
 .bp-dag-swatch { flex: none; width: 11px; height: 11px; border: 2px solid var(--dag-swatch-light-stroke); border-radius: 50%; background: var(--dag-swatch-light-fill); }
 [data-md-color-scheme=slate] .bp-dag-swatch { border-color: var(--dag-swatch-dark-stroke); background: var(--dag-swatch-dark-fill); }
 .bp-dag-toolbar { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 4px 16px 12px; font-size: 13px; }
@@ -263,7 +266,6 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 @media (pointer: coarse) {
   .bp-dag-zoom .bp-dag-button:not(:last-child) { display: none; }
   .bp-dag-zoom .bp-dag-button { min-width: 44px; min-height: 44px; }
-  .bp-dag-viewer .bp-dag-theme { width: 44px; min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .bp-dag-inspector { transition: none; }

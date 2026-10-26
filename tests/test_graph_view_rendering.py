@@ -883,8 +883,11 @@ def test_explorer_head_switches_materials_palette_from_the_trail_row() -> None:
     assert ":checked)" not in script
     rule = next(line for line in style.splitlines() if line.startswith(".bp-dag-viewer .bp-dag-theme {"))
     assert "width: 32px; min-height: 32px;" in rule and "border: 0;" in rule
+    # A drawn icon, not a glyph each fallback font sizes its own way; touch reaches 44px through ::after, not a taller row.
+    assert ".bp-dag-viewer .bp-dag-theme svg { display: block; width: 18px; height: 18px;" in style
+    assert '.bp-dag-viewer .bp-dag-theme::after { content: ""; position: absolute; inset: -6px; }' in style and "position: relative;" in rule
     coarse = style.split("@media (pointer: coarse) {\n", 1)[1].split("\n}", 1)[0]
-    assert ".bp-dag-viewer .bp-dag-theme { width: 44px; min-height: 44px; }" in coarse
+    assert ".bp-dag-theme" not in coarse and '"◐"' not in script
 
 
 def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_under_status() -> None:
