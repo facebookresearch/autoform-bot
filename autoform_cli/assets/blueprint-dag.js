@@ -1240,7 +1240,7 @@
     var ui$wikiLinks = null, ui$wikiBefore = new Map(), ui$wikiAfter = new Map(), ui$wikiUnavailable = new Set(), ui$wikiRequested = false;
     var ui$wikiGeneration = 0, ui$wikiPending = null, ui$wikiWork = null, ui$wikiRendered = null, ui$wikiNode = null;
     var ui$wikiView = null, ui$wikiProjectionTicket = 0, ui$wikiProjectionCache = new WeakMap();
-    var alive = true, cleanup = [], observers = [], frame = 0, readingReady = Promise.resolve(), restoration = 0, checkpointTimer = 0, restoring = false;
+    var alive = true, cleanup = [], observers = [], frame = 0, resizeFrame = null, readingReady = Promise.resolve(), restoration = 0, checkpointTimer = 0, restoring = false;
     host.textContent = "";
     host.classList.remove("bp-dag-enhancing");
     var view, atlas, palette, byId, prerequisites, dependents, statusCounts, presentStatuses;
@@ -2037,7 +2037,7 @@
           event.preventDefault(); dom$search.focus(); dom$search.select();
         }
       });
-      if (window.ResizeObserver) { var ro = new ResizeObserver(resize); ro.observe(dom$stage); observers.push(ro); }
+      if (window.ResizeObserver) { var ro = new ResizeObserver(queueResize); ro.observe(dom$stage); observers.push(ro); }
       else globalListen(window, "resize", resize);
       globalListen(window, "resize", syncSheetAccessibility);
       if (navigation) [dom$readingBody, dom$navigation, dom$inventoryScroll, dom$shelves].forEach(function (pane) { pane.addEventListener("scroll", remember); });
@@ -2339,6 +2339,14 @@
     function schedule() {
       if (!alive || scheduled || ui$mode !== "graph") return;
       scheduled = true; frame = requestAnimationFrame(function () { scheduled = false; if (alive) draw(); });
+    }
+    function queueResize() {
+      // Canvas/layout writes must not run inside ResizeObserver delivery.
+      if (!alive || resizeFrame !== null) return;
+      resizeFrame = requestAnimationFrame(function () {
+        resizeFrame = null;
+        if (alive) resize();
+      });
     }
     function resize() {
       syncSheetAccessibility();
@@ -2980,7 +2988,8 @@
 
     syncControls();
     return {ready: readingReady, applyRoute: applyRoute, useIndex: useIndex, useWikiLinks: useWikiLinks, captureState: captureState, restoreState: restoreState, showError: showError,
-      dispose: function () { alive = false; ui$wikiProjectionTicket++; ui$wikiProjectionCache = new WeakMap(); clearTimeout(checkpointTimer); cancelAnimationFrame(frame); cleanup.forEach(function (close) { close(); });
+      dispose: function () { alive = false; ui$wikiProjectionTicket++; ui$wikiProjectionCache = new WeakMap(); clearTimeout(checkpointTimer); cancelAnimationFrame(frame);
+        if (resizeFrame !== null) cancelAnimationFrame(resizeFrame); resizeFrame = null; cleanup.forEach(function (close) { close(); });
         observers.forEach(function (observer) { observer.disconnect(); }); if (navigation) navigation.dispose(); }};
   }
 
