@@ -186,7 +186,7 @@ def test_rendered_outline_preserves_depth_current_leaf_and_native_canonical_link
           assert.equal(event.defaultPrevented,Boolean(settings.defaultPrevented));assert.equal(dispatched.length,count);
         }
         assert.equal(emit(link,'click',{button:0}).defaultPrevented,true);
-        assert.deepEqual(dispatched.at(-1),{id,options:{history:'push'}});
+        assert.deepEqual(dispatched.at(-1),{id,options:{history:'push',focus:true}});
       }
       assert.equal(JSON.stringify(sharedIndex),before,'Rendering and selecting the outline must retain every authored field and edge');
     """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
@@ -208,7 +208,7 @@ def test_outline_keeps_actual_current_result_link_without_turning_its_peers_into
       assert.deepEqual(decluttered.at(-1).ids,[topic.id,subtopic.id],
         'The complete selected result is reading, not a duplicated scope index to hide');
       assert.equal(emit(links.at(-1),'click',{button:0}).defaultPrevented,true);
-      assert.deepEqual(dispatched.at(-1),{id:selected.id,options:{history:'push'}});
+      assert.deepEqual(dispatched.at(-1),{id:selected.id,options:{history:'push',focus:true}});
       assert.equal(JSON.stringify(sharedIndex),before);
     """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
 

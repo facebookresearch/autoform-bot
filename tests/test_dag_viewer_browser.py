@@ -845,7 +845,7 @@ def test_choosing_from_contents_keeps_the_readers_place_and_focus(desktop_page: 
     page.evaluate("window.__consumerDocument=document")
     row.press("Enter")
     _consumer_selected(page, explorer_consumer, "flat/item-0150")
-    playwright.expect(page.locator(".bp-reading-body h1")).to_be_focused()
+    playwright.expect(page.locator(".bp-reading-body .bp-reading-current .bp-thmheading")).to_be_focused()
     playwright.expect(_reading_card(page, "flat/item-0150")).to_contain_text("complete reading page")
     page.go_back()
     _consumer_ready(page, explorer_consumer, "flat")
@@ -873,7 +873,7 @@ def test_phone_selection_opens_full_reading_and_returns_to_a_reachable_selected_
     search.fill("Target theorem")
     search.press("Enter")
     node = _consumer_selected(page, explorer_consumer, "chapter/target")
-    playwright.expect(page.locator(".bp-reading-body h1")).to_be_focused()
+    playwright.expect(page.locator(".bp-reading-body .bp-reading-current .bp-thmheading")).to_be_focused()
     sheet, body = page.locator(".bp-reading-pane").bounding_box(), page.locator(".bp-dag-body").bounding_box()
     assert sheet is not None and body is not None
     assert abs(sheet["y"] - body["y"]) < 1 and abs(sheet["height"] - body["height"]) < 1
@@ -969,7 +969,7 @@ def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_con
     page.evaluate("window.__consumerDocument=document")
     search.press("Enter")
     _consumer_selected(page, explorer_consumer, "chapter/target")
-    playwright.expect(page.locator(".bp-reading-body h1")).to_be_focused()
+    playwright.expect(page.locator(".bp-reading-body .bp-reading-current .bp-thmheading")).to_be_focused()
     assert page.url == explorer_consumer.route("chapter/target")
     assert page.evaluate("document===window.__consumerDocument") is True
 
@@ -986,7 +986,7 @@ def test_a_search_result_in_this_view_selects_the_drawn_node(desktop_page: objec
         else:
             page.locator(f'.bp-dag-result[data-result-id="{node_id}"]').click()
         node = _consumer_selected(page, explorer_consumer, node_id)
-        playwright.expect(page.locator(".bp-reading-body h1")).to_be_focused()
+        playwright.expect(page.locator(".bp-reading-body .bp-reading-current .bp-thmheading")).to_be_focused()
         _assert_hit(page, node)
         assert page.locator(".bp-dag-node").count() > 1
         assert page.url == explorer_consumer.route(node_id)
@@ -2483,7 +2483,7 @@ def test_edges_group_and_status_summary_follow_checkbox_and_history_state(
     _consumer_selected(page, explorer_consumer, "chapter/middle")
     playwright.expect(popover).to_be_hidden()
     playwright.expect(summary).to_have_attribute("aria-expanded", "false")
-    playwright.expect(page.locator(".bp-reading-body h1")).to_be_focused()
+    playwright.expect(page.locator(".bp-reading-body .bp-reading-current .bp-thmheading")).to_be_focused()
     # The focal neighborhood has no isolates. That context hides the actual
     # Edges fieldset; it does not pretend that the earlier chapter filter still applies.
     playwright.expect(edges).to_be_hidden()

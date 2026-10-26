@@ -1539,7 +1539,9 @@
           if (!bundle.snapshot) dom$readingBody.scrollTop += target.getBoundingClientRect().top - dom$readingBody.getBoundingClientRect().top - 24;
         }
         if (bundle.focus && !mapRequested && dom$readingBody && !bundle.snapshot) {
-          var heading = dom$readingBody.querySelector("h1"); if (heading) { heading.tabIndex = -1; heading.focus({preventScroll: true}); }
+          var readingTarget = dom$readingBody.querySelector(".bp-reading-current .bp-thmheading") ||
+            dom$readingBody.querySelector(".bp-reading-current") || dom$readingBody.querySelector("h1");
+          if (readingTarget) { readingTarget.tabIndex = -1; readingTarget.focus({preventScroll: true}); }
         } else if (bundle.focus && mapRequested && !bundle.snapshot) {
           var control = dom$nodeLayer.querySelector('.bp-dag-node[tabindex="0"]'); if (control) control.focus({preventScroll: true});
         }
@@ -1703,13 +1705,20 @@
         item.appendChild(link); list.appendChild(item);
         link.addEventListener("click", function (event) {
           if (event.defaultPrevented || event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-          event.preventDefault(); navigation.navigateNode(node.id, {history: "push"});
+          event.preventDefault(); navigation.navigateNode(node.id, {history: "push", focus: true});
         });
       });
       dom$navigationInner.appendChild(element("h2", "bp-outline-label", "Topics")); dom$navigationInner.appendChild(list);
       if (tree.entries.length < tree.total) {
         var more = button("bp-dag-navigation-more", "Show more topics");
-        more.addEventListener("click", function () { ui$outlineLimit += 50; renderNavigation(); remember(); }); dom$navigationInner.appendChild(more);
+        more.addEventListener("click", function () {
+          var retained = new Set(tree.entries.map(function (entry) { return entry.node.id; }));
+          ui$outlineLimit += 50; renderNavigation();
+          var first = Array.from(dom$navigationInner.querySelectorAll("[data-navigation-node-id]")).find(function (link) {
+            return !retained.has(link.dataset.navigationNodeId);
+          }) || dom$navigationInner.querySelector('[aria-current="page"]');
+          if (first) first.focus(); remember();
+        }); dom$navigationInner.appendChild(more);
       }
       if (navigation.declutterReader) navigation.declutterReader(dom$readingBody, tree.entries.filter(function (entry) {
         return !entry.collection && entry.node.scope === entry.node.id;
@@ -1844,7 +1853,8 @@
 
       var zoomGroup = element("div", "bp-dag-zoom"); zoomGroup.setAttribute("role", "group"); zoomGroup.setAttribute("aria-label", "Zoom controls");
       dom$zoomOut = button("bp-dag-button", "−", "Zoom out"); dom$zoomIn = button("bp-dag-button", "+", "Zoom in");
-      dom$fit = button("bp-dag-button", "Fit", "Fit shown nodes");
+      var fitLabel = "Fit shown nodes";
+      dom$fit = button("bp-dag-button bp-dag-fit", "Fit", fitLabel); dom$fit.title = fitLabel;
       zoomGroup.appendChild(dom$zoomOut); zoomGroup.appendChild(dom$zoomIn); zoomGroup.appendChild(dom$fit); toolbar.appendChild(zoomGroup);
 
       dom$hiddenButton = button("bp-dag-hidden-button", ""); toolbar.appendChild(dom$hiddenButton);
@@ -1968,7 +1978,7 @@
       });
       dom$filterSummary.addEventListener("click", function () { setFilters(dom$filterPopover.hidden); });
       dom$filters.addEventListener("keydown", function (event) {
-        if (event.key === "Escape" && !dom$filterPopover.hidden) { event.preventDefault(); setFilters(false); dom$filterSummary.focus(); }
+        if (event.key === "Escape" && !dom$filterPopover.hidden) { event.preventDefault(); setFilters(false); }
       });
       dom$browseToggle.addEventListener("click", function () {
         if (sourceNodes().length) setBrowse(dom$browsePopover.hidden);
@@ -1978,12 +1988,15 @@
         if (event.key === "Escape" && !dom$browsePopover.hidden) { event.preventDefault(); setBrowse(false); }
       });
       globalListen(document, "pointerdown", function (event) {
-        if (!dom$filters.contains(event.target)) setFilters(false);
+        if (!dom$filters.contains(event.target)) setFilters(false, false);
         if (!dom$browse.contains(event.target)) setBrowse(false, false);
         if (!dom$searchWrap.contains(event.target)) closeSearch();
       });
       dom$browse.addEventListener("focusout", function (event) {
         if (event.relatedTarget && !dom$browse.contains(event.relatedTarget)) setBrowse(false, false);
+      });
+      dom$filters.addEventListener("focusout", function (event) {
+        if (!dom$filters.contains(event.relatedTarget)) setFilters(false, false);
       });
       dom$searchWrap.addEventListener("focusout", function (event) {
         if (event.relatedTarget && !dom$searchWrap.contains(event.relatedTarget)) closeSearch();
@@ -1992,7 +2005,7 @@
         ui$showIsolated = dom$isolated.checked; ui$activeDirty = true;
         writeLocation("replace"); refresh(true);
       });
-      dom$graphMode.addEventListener("click", function () { setMode("graph", true); });
+      dom$graphMode.addEventListener("click", function () { setMode("graph", true); if (ui$mode === "graph") focusNodeControl(); });
       dom$listMode.addEventListener("click", function () { setBrowse(false); ui$relationIds = null; setMode("list", true); });
       if (dom$sourcesMode) dom$sourcesMode.addEventListener("click", function () { setBrowse(false); setMode("sources", true); });
       dom$zoomIn.addEventListener("click", function () { zoomAt(1.24, dom$stage.clientWidth / 2, dom$stage.clientHeight / 2); });
@@ -2003,6 +2016,10 @@
       if (dom$outlineToggle) dom$outlineToggle.addEventListener("click", function () {
         var open = !host.classList.contains("bp-dag-outline-open"); host.classList.toggle("bp-dag-outline-open", open);
         dom$outlineToggle.setAttribute("aria-expanded", String(open));
+        if (open) {
+          var current = dom$navigationInner.querySelector('[aria-current="page"]') || dom$navigationInner.querySelector("a");
+          if (current) current.focus();
+        }
         remember();
       });
       dom$sheetHandle.addEventListener("click", function () {
@@ -2017,6 +2034,7 @@
       });
       dom$stage.addEventListener("pointerdown", pointerDown); dom$stage.addEventListener("pointermove", pointerMove);
       dom$stage.addEventListener("pointerup", pointerUp); dom$stage.addEventListener("pointercancel", pointerUp);
+      dom$nodeLayer.addEventListener("scroll", function () { dom$nodeLayer.scrollLeft = 0; dom$nodeLayer.scrollTop = 0; });
       dom$stage.addEventListener("wheel", function (event) {
         var zoom = event.ctrlKey || event.metaKey, pixels = event.deltaMode === 1 ? 25 : 1;
         event.preventDefault();
@@ -2031,9 +2049,11 @@
         else if (event.key === "0") { fit(); event.preventDefault(); }
       });
       globalListen(document, "keydown", function (event) {
+        if (event.defaultPrevented) return;
         var target = event.target, own = target === dom$search;
         if (!own && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || "") || target.isContentEditable)) return;
-        if ((event.key === "/" && !own) || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k")) {
+        if ((event.key === "/" && !own && host.contains(target) && !event.metaKey && !event.ctrlKey && !event.altKey) ||
+            ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k")) {
           event.preventDefault(); dom$search.focus(); dom$search.select();
         }
       });
@@ -2367,8 +2387,9 @@
       var frame = sceneFrame(geometry(), nodes.map(function (node) { return node.id; }), framingViewport(), framingPadding());
       ui$readableCrop = frame.cropped; ui$transform = {x: frame.x, y: frame.y, scale: frame.scale};
       if (dom$fit) {
+        var label = ui$readableCrop ? "Recentre readable local cards" : "Fit shown nodes";
         dom$fit.textContent = ui$readableCrop ? "Recentre" : "Fit";
-        dom$fit.setAttribute("aria-label", ui$readableCrop ? "Recentre readable local cards" : "Fit shown nodes");
+        dom$fit.setAttribute("aria-label", label); dom$fit.title = label;
       }
       if (ui$readableCrop && navigation) {
         var anchor = ui$selected || nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; });
@@ -2408,7 +2429,10 @@
     function zoomAt(factor, x, y) {
       var old = ui$transform.scale, next = clamp(old * factor, MIN_SCALE, 4);
       if (ui$scopeOverview && ui$overviewGroup && factor < 1 && next < .82) {
-        navigation.checkpoint(); ui$overviewGroup = null; updateProjection(); firstResize = true; resize(); writeLocation("push"); return;
+        var collapsed = ui$overviewGroup;
+        navigation.checkpoint(); ui$overviewGroup = null; updateProjection(); firstResize = true; resize(); writeLocation("push");
+        var parent = data.nodes.find(function (node) { return node._overviewGroup === collapsed; });
+        if (parent) focusNodeControl(parent); return;
       }
       if (ui$scopeOverview && !ui$overviewGroup) {
         if (factor > 1 && next >= 1.6) {
@@ -2609,13 +2633,14 @@
       control.addEventListener("click", function (event) { event.stopPropagation(); activateNode(node, false); });
       control.addEventListener("keydown", function (event) {
         if (/^Arrow(Left|Right|Up|Down)$/.test(event.key)) {
+          if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
           var next = nearest(node, event.key);
           if (next) {
             event.preventDefault();
             center(next, .7);
             focusNodeControl(next);
           }
-        } else if (event.key === "Escape") { event.preventDefault(); clearSelection(true); }
+        } else if (event.key === "Escape" && ui$selected) { event.preventDefault(); clearSelection(true); }
       });
       return control;
     }
@@ -2748,8 +2773,8 @@
       if (next) { event.preventDefault(); next.focus(); }
       else if (event.key === "ArrowUp") { event.preventDefault(); dom$search.focus(); }
     }
-    function setFilters(open) {
-      if (!open && dom$filterPopover.contains(document.activeElement)) dom$filterSummary.focus({preventScroll: true});
+    function setFilters(open, returnFocus) {
+      if (!open && returnFocus !== false && dom$filterPopover.contains(document.activeElement)) dom$filterSummary.focus({preventScroll: true});
       dom$filterPopover.hidden = !open; dom$filterSummary.setAttribute("aria-expanded", String(open));
     }
     function setBrowse(open, returnFocus) {
@@ -2785,12 +2810,17 @@
       navigation.navigateNode(id, settings); closeSearch();
     }
     function focusNodeControl(node) {
+      var bundle = currentBundle;
       requestAnimationFrame(function () { requestAnimationFrame(function () {
-        var control = overlays.get(node.id); if (control) control.focus(); else dom$sheetHandle.focus(); remember(); schedule();
+        if (!alive || currentBundle !== bundle || ui$mode !== "graph" || (bundle && bundle.isCurrent && !bundle.isCurrent())) return;
+        var control = node ? overlays.get(node.id) : dom$nodeLayer.querySelector('.bp-dag-node[tabindex="0"]');
+        if (control) control.focus({preventScroll: true}); else (node ? dom$sheetHandle : dom$filterSummary).focus({preventScroll: true});
+        dom$nodeLayer.scrollLeft = 0; dom$nodeLayer.scrollTop = 0; remember(); schedule();
       }); });
     }
 
     function clearSelection(updateHistory, returnFocus) {
+      if (!ui$selected) return;
       if (navigation && updateHistory) navigation.checkpoint();
       var refit = ui$direction !== "both", cleared = ui$selected;
       ui$selected = null; ui$direction = "both"; ui$activeDirty = true; ui$spotlight = null;
@@ -2798,7 +2828,7 @@
       syncNavigationSelection(); renderInspector(); renderInventory(false); if (refit) requestAnimationFrame(fit); else schedule();
       if (updateHistory) writeLocation("push");
       var chosen = returnFocus && cleared && (ui$mode === "list" ? dom$inventoryRows.get(cleared.id) : overlays.get(cleared.id));
-      if (chosen) chosen.focus();
+      if (chosen) chosen.focus({preventScroll: true});
     }
     // From 681px to 1,100px details can open the head's first row; the map shifts back by it, so nothing jumps.
     // Measure both class changes together; callers need no selection-toggle ordering rule.
@@ -2835,6 +2865,7 @@
     function revealAll() {
       ui$selectedStatuses = new Set(presentStatuses); ui$showIsolated = true; ui$direction = "both";
       ui$activeDirty = true; writeLocation("replace"); refresh(true); fit();
+      dom$filterSummary.focus({preventScroll: true});
     }
     function onStatusChange() {
       ui$filtersTouched = true;

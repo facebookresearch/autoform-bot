@@ -24,9 +24,17 @@ class Element {
     this.children = children;
   }
   prepend(child) { this.children.unshift(child); }
-  querySelector(tag) {
-    return this.children.find(child => child.tagName === tag) ||
-      this.children.map(child => child.querySelector(tag)).find(Boolean) || null;
+  querySelector(selector) {
+    const parts = selector.split(' ');
+    if (parts.length === 2) {
+      const parent = this.querySelector(parts[0]); return parent && parent.querySelector(parts[1]);
+    }
+    const matches = node => selector.startsWith('.') ? node.classes.has(selector.slice(1)) : node.tagName === selector;
+    for (const child of this.children) {
+      if (matches(child)) return child;
+      const nested = child.querySelector(selector); if (nested) return nested;
+    }
+    return null;
   }
   byId(id) { return this.id === id ? this : this.children.map(child => child.byId(id)).find(Boolean) || null; }
   getBoundingClientRect() {
@@ -129,6 +137,62 @@ def test_reader_runner_rejects_an_unfinished_async_test_body() -> None:
         _run("await new Promise(() => {}); assert.fail('This assertion must never run');")
 
 
+@pytest.mark.parametrize("destination", ["statement_heading", "statement", "page_heading"])
+def test_requested_reading_focus_uses_the_marked_statement_after_math_and_anchor_scroll(destination: str) -> None:
+    _run("const destination=" + json.dumps(destination) + ";\n" + r"""
+      const math=deferred();mathPass=math.promise;dom$search.focus({});
+      const incoming=bundle('A',null,'reading'),source=incoming.readingSource;
+      const unrelated=new Element('div');unrelated.classList.add('bp-thmheading');source.prepend(unrelated);
+      const statementHeading=new Element('div');statementHeading.classList.add('bp-thmheading');
+      if(destination==='statement_heading')incoming.target.replaceChildren(statementHeading);
+      if(destination==='page_heading')incoming.anchor=null;
+      const ready=applyRoute(incoming);
+      assert.equal(document.activeElement,dom$search,'Reader focus must await actual math readiness');
+      assert.equal(dom$readingBody.scrollTop,0);
+      math.resolve(true);await frame();await ready;
+      const chosen=destination==='statement_heading'?statementHeading:destination==='statement'?incoming.target:incoming.heading;
+      assert.equal(document.activeElement,chosen);assert.equal(chosen.tabIndex,-1);
+      assert.deepEqual(chosen.focuses,[{preventScroll:true}]);
+      assert.equal(unrelated.focuses.length,0,'An earlier statement heading must not steal the selected statement focus');
+      assert.equal(dom$readingBody.scrollTop,destination==='page_heading'?0:276,'Focus must retain the completed anchor scroll');
+      assert.equal(incoming.target.classList.contains('bp-reading-current'),destination!=='page_heading');
+      if(destination!=='page_heading')assert.equal(incoming.heading.focuses.length,0);
+      assert.equal(dom$readingBody.children[0],source);assert.equal(source.querySelector('h1'),incoming.heading);
+      assert.equal(document.title,'Complete A');assert.deepEqual(mathRoots,[dom$readingBody]);
+    """)
+
+
+def test_selected_statement_heading_never_overrides_snapshot_reader_focus_or_scroll() -> None:
+    _run(r"""
+      const owned=new Element('a');dom$readingBody.replaceChildren(owned);owned.focus({});dom$readingBody.scrollTop=211;
+      const saved=captureState(),incoming=bundle('A',saved,'reading');
+      const statementHeading=new Element('div');statementHeading.classList.add('bp-thmheading');incoming.target.replaceChildren(statementHeading);
+      const ready=applyRoute(incoming);await frame();await ready;
+      assert.equal(statementHeading.focuses.length,0);assert.equal(incoming.target.focuses.length,0);assert.equal(incoming.heading.focuses.length,0);
+      assert.equal(dom$readingBody.scrollTop,0,'Snapshot restoration must not take the new anchor jump');
+      const restored=restoreState(saved,incoming);await frame();await restored;
+      assert.equal(document.activeElement,dom$readingBody);assert.equal(dom$readingBody.focuses.at(-1).preventScroll,true);
+      assert.equal(dom$readingBody.scrollTop,211);assert.equal(statementHeading.focuses.length,0);
+      assert.equal(dom$readingBody.children[0],incoming.readingSource);
+    """)
+
+
+def test_stale_math_completion_cannot_focus_an_old_selected_statement_heading() -> None:
+    _run(r"""
+      const oldMath=deferred(),newMath=deferred();mathPass=oldMath.promise;
+      const older=bundle('A',null,'reading'),oldHeading=new Element('div');oldHeading.classList.add('bp-thmheading');older.target.replaceChildren(oldHeading);
+      const oldReady=applyRoute(older);currentVersion=2;mathPass=newMath.promise;
+      const newer=bundle('B',null,false),newHeading=new Element('div');newHeading.classList.add('bp-thmheading');newer.target.replaceChildren(newHeading);
+      const newReady=applyRoute(newer);dom$search.focus({});oldMath.resolve(true);await frame();await oldReady;
+      assert.equal(document.activeElement,dom$search);assert.equal(oldHeading.focuses.length,0);assert.equal(newHeading.focuses.length,0);
+      assert.equal(newer.target.classList.contains('bp-reading-current'),false);assert.equal(dom$readingBody.scrollTop,0);
+      newMath.resolve(true);await frame();await newReady;
+      assert.equal(document.activeElement,dom$search);assert.equal(newHeading.focuses.length,0);
+      assert(newer.target.classList.contains('bp-reading-current'));assert.equal(dom$readingBody.scrollTop,276);
+      assert.equal(dom$readingBody.children[0],newer.readingSource);
+    """)
+
+
 @pytest.mark.parametrize("resource", ["document", "query", "canonical_fragment"])
 @pytest.mark.parametrize("legacy", [False, True])
 def test_foreign_resource_snapshot_cannot_override_the_new_article(resource: str, legacy: bool) -> None:
@@ -168,9 +232,10 @@ def test_foreign_resource_snapshot_cannot_override_the_new_article(resource: str
       assert.equal(incoming.target.dataset.autoformNodeId, 'B');
       assert.equal(document.title, 'Complete B');
       assert(incoming.target.classList.contains('bp-reading-current'));
-      assert.equal(document.activeElement, incoming.heading);
-      assert.equal(incoming.heading.focuses.length, 1);
-      assert.equal(incoming.heading.focuses[0].preventScroll, true);
+      assert.equal(document.activeElement, incoming.target);
+      assert.equal(incoming.target.focuses.length, 1);
+      assert.equal(incoming.target.focuses[0].preventScroll, true);
+      assert.equal(incoming.heading.focuses.length, 0);
       assert.equal(dom$readingBody.scrollTop, 276, 'The real native-anchor calculation must run for B');
       assert.equal(dom$navigation.scrollTop, 0); assert.equal(dom$inventoryScroll.scrollTop, 0);
       assert.equal(overlays.get('A').focuses.length, 0);
@@ -178,7 +243,7 @@ def test_foreign_resource_snapshot_cannot_override_the_new_article(resource: str
       await restoreState(saved, incoming);
       assert.deepEqual(captureState(), current, 'Direct restoration must reject the entire foreign snapshot');
       assert.equal(restoration, ticket); assert.equal(frames.length, 0); assert.equal(restoring, false);
-      assert.equal(document.activeElement, incoming.heading);
+      assert.equal(document.activeElement, incoming.target);
       assert.equal(dom$readingBody.children[0], source);
       assert.equal(JSON.stringify(saved), savedBefore, 'Validation must not mutate history state');
       assert.deepEqual(mathRoots, [dom$readingBody]);
@@ -336,8 +401,9 @@ def test_article_commit_closes_transient_status_menu_without_losing_keyboard_foc
       const selected=bundle('B',null,true),selectedReady=applyRoute(selected);
       assert.equal(document.activeElement,dom$filterSummary);
       await frame(); await selectedReady;
-      assert.equal(document.activeElement,selected.heading);
-      assert.equal(selected.heading.focuses.at(-1).preventScroll,true);
+      assert.equal(document.activeElement,selected.target);
+      assert.equal(selected.target.focuses.at(-1).preventScroll,true);
+      assert.equal(selected.heading.focuses.length,0);
       // Reopening/filtering does not shift a user's input focus or invent history state.
       setFilters(true); input.focus({}); setFilters(true);
       assert.equal(dom$filterPopover.hidden,false); assert.equal(document.activeElement,input);
@@ -358,7 +424,8 @@ def test_article_commit_closes_browse_and_returns_focus_before_requested_reading
       const selected=bundle('B',null,true),selectedReady=applyRoute(selected);
       assert.equal(dom$browsePopover.hidden,true);assert.equal(document.activeElement,dom$browseToggle);
       await frame();await selectedReady;
-      assert.equal(document.activeElement,selected.heading);assert.equal(selected.heading.focuses.at(-1).preventScroll,true);
+      assert.equal(document.activeElement,selected.target);assert.equal(selected.target.focuses.at(-1).preventScroll,true);
+      assert.equal(selected.heading.focuses.length,0);
     """)
 
 
@@ -376,7 +443,8 @@ def test_group_history_keeps_derived_selection_reading_focus_and_saved_camera() 
       assert.equal(dom$readingBody.scrollTop,89);assert.equal(document.activeElement,dom$readingBody);
       // An actual article navigation clears derived group intent, not its authored math.
       const next=bundle('B',null,true),nextReady=applyRoute(next);await frame();await nextReady;
-      assert.equal(ui$overviewGroup,null);assert.equal(document.activeElement,next.heading);
+      assert.equal(ui$overviewGroup,null);assert.equal(document.activeElement,next.target);
+      assert.equal(next.heading.focuses.length,0);
       assert(next.target.classList.contains('bp-reading-current'));
     """)
 
