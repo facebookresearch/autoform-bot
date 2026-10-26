@@ -407,15 +407,34 @@ def _frames(page: object) -> None:
 
 def _browse_contents(page: object, action: str) -> None:
     """Choose the real statement or source inventory through Browse."""
-    toggle = page.get_by_role("button", name="Browse statements or source texts", exact=True)
+    toggle = page.get_by_role("button", name=re.compile(r"^Browse statements(?: or source texts)?$"))
     popover = page.locator(".bp-dag-browse-popover")
     playwright.expect(popover).to_be_hidden()
+    if toggle.get_attribute("aria-controls") is None:
+        assert action in {"All statements", "Statements in this topic"}, "A source-free scope must not offer a source choice"
+        playwright.expect(toggle).to_have_attribute("aria-label", "Browse statements")
+        assert toggle.get_attribute("aria-expanded") is None
+        playwright.expect(popover.get_by_role("button", name="Source texts", exact=True)).to_have_count(0)
+        toggle.click()
+        playwright.expect(page.locator(".bp-dag-inventory")).to_be_visible()
+        playwright.expect(popover).to_be_hidden()
+        return
     toggle.click()
     playwright.expect(toggle).to_have_attribute("aria-expanded", "true")
     playwright.expect(popover).to_be_visible()
     popover.get_by_role("button", name=action, exact=True).click()
     playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
     playwright.expect(popover).to_be_hidden()
+
+
+def _fit_graph(page: object) -> object:
+    """Invoke the actual Fit/Recentre action without assuming every view fits."""
+    control = page.get_by_role("button", name=re.compile(r"^(?:Fit shown nodes|Recentre readable local cards)$"))
+    playwright.expect(control).to_have_count(1)
+    playwright.expect(control).to_be_visible()
+    control.click()
+    _frames(page)
+    return control
 
 
 def _focus_graph_node(page: object, target_id: str) -> object:
@@ -428,8 +447,7 @@ def _focus_graph_node(page: object, target_id: str) -> object:
     visited: set[str] = set()
     while pending and len(visited) <= 32:
         path = pending.pop(0)
-        page.get_by_role("button", name="Fit shown nodes", exact=True).click()
-        _frames(page)
+        _fit_graph(page)
         start = page.locator('.bp-dag-node[tabindex="0"]').first
         before_focus = start.evaluate("""node => {
           const box=node.getBoundingClientRect(),layer=node.closest('.bp-dag-node-layer');
@@ -462,7 +480,7 @@ def _focus_graph_node(page: object, target_id: str) -> object:
             }""")
             diagnostic.update(before_focus=before_focus, keys=list(path))
             assert diagnostic["hit"] is True, json.dumps(diagnostic, indent=2)
-            return active
+            return page.locator(f'.bp-dag-node[data-autoform-node-id={json.dumps(node_id, ensure_ascii=False)}]')
         if node_id in visited:
             continue
         visited.add(node_id)
@@ -1213,8 +1231,10 @@ def test_native_reader_and_library_links_remain_soft_navigation(
     page.locator(".bp-reading-body").get_by_role("link", name="Read the counterpart identity", exact=True).click()
     page.wait_for_url(site.route(_OTHER))
     _selected(page, _OTHER)
-    page.locator(".bp-dag-book").click()
-    page.wait_for_url(site.route("roadmap"))
+    home = page.locator(".bp-dag-book")
+    playwright.expect(home).to_have_attribute("href", site.url + "/index.html")
+    home.click()
+    page.wait_for_url(site.url + "/index.html")
     playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_LIBRARY)
     assert documents == [site.route(_TARGET).split("#", 1)[0]]
     assert page.evaluate("() => document === __workspaceDocument") is True
@@ -1487,10 +1507,61 @@ def test_graph_first_browse_is_contextual_keyboard_closable_and_returns_to_the_s
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     stage = page.locator(".bp-dag-stage")
     playwright.expect(stage).to_be_visible()
+    toggle = page.get_by_role("button", name="Browse statements", exact=True)
+    popover = page.locator(".bp-dag-browse-popover")
+    assert not any(record.get("navigation") == "source" for record in site.records.values())
+    assert toggle.get_attribute("aria-controls") is None and toggle.get_attribute("aria-expanded") is None
+    playwright.expect(popover).to_be_hidden()
+    playwright.expect(popover.get_by_role("button", name="Source texts", exact=True)).to_have_count(0)
+    toggle.focus()
+    toggle.press("Enter")
+    playwright.expect(page.locator(".bp-dag-inventory")).to_be_visible()
+    playwright.expect(popover).to_be_hidden()
+    assert page.url == site.route("roadmap")
+    root_results = {record["id"] for record in site.records.values() if record.get("result") is True}
+    rows = page.locator(".bp-dag-inventory-row")
+    assert set(rows.evaluate_all("nodes => nodes.map(node => node.dataset.inventoryNodeId)")) == root_results
+    page.get_by_role("button", name="Back to map", exact=True).click()
+    playwright.expect(stage).to_be_visible()
+    scope = next(record for record in site.records.values()
+                 if record.get("scope") == record["id"] and record.get("area") == "Geometry")
+    _search(page, scope["title"], scope["id"])
+    page.wait_for_url(site.route(scope["id"]))
+    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(scope["title"])
+    playwright.expect(toggle).to_have_attribute("aria-label", "Browse statements")
+    assert toggle.get_attribute("aria-controls") is None and toggle.get_attribute("aria-expanded") is None
+    toggle.click()
+    playwright.expect(popover).to_be_hidden()
+    playwright.expect(stage).to_be_hidden()
+    expected = {record["id"] for record in site.records.values()
+                if record.get("result") is True and record.get("scope") == scope["id"]}
+    assert len(expected) == 1
+    rows = page.locator(".bp-dag-inventory-row")
+    playwright.expect(rows).to_have_count(1)
+    assert set(rows.evaluate_all("nodes => nodes.map(node => node.dataset.inventoryNodeId)")) == expected
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 result")
+    assert page.url == site.route(scope["id"])
+    page.get_by_role("button", name="Back to map", exact=True).click()
+    playwright.expect(stage).to_be_visible()
+    playwright.expect(page.locator(".bp-dag-inventory")).to_be_hidden()
+    _focus_graph_node(page, next(iter(expected)))
+    playwright.expect(page.locator(".bp-dag-breadcrumb li").last).to_have_text(scope["title"])
+    assert page.url == site.route(scope["id"]), "Returning to the map must not widen this topic to the library"
+    assert documents == [site.route("roadmap")]
+    assert page.evaluate("() => document === __workspaceDocument") is True
+
+
+def test_actual_source_browse_menu_keeps_native_keyboard_close_and_root_navigation(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    page, site = workspace_page, workspace_site
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _open(page, site, workspace_runtime)
+    assert {record["title"] for record in site.records.values() if record.get("navigation") == "source"} == set(_SOURCE_TITLES)
     toggle = page.get_by_role("button", name="Browse statements or source texts", exact=True)
     popover = page.locator(".bp-dag-browse-popover")
     playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
-    playwright.expect(popover).to_be_hidden()
     toggle.focus()
     toggle.press("Enter")
     playwright.expect(toggle).to_have_attribute("aria-expanded", "true")
@@ -1510,34 +1581,6 @@ def test_graph_first_browse_is_contextual_keyboard_closable_and_returns_to_the_s
     playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
     playwright.expect(popover).to_be_hidden()
     assert page.url == site.route("roadmap")
-    scope = next(record for record in site.records.values()
-                 if record.get("scope") == record["id"] and record.get("area") == "Geometry")
-    _search(page, scope["title"], scope["id"])
-    page.wait_for_url(site.route(scope["id"]))
-    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(scope["title"])
-    playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
-    toggle.click()
-    playwright.expect(toggle).to_have_attribute("aria-expanded", "true")
-    playwright.expect(popover).to_be_visible()
-    playwright.expect(popover.get_by_role("button", name="All statements", exact=True)).to_have_count(0)
-    popover.get_by_role("button", name="Statements in this topic", exact=True).click()
-    playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
-    playwright.expect(popover).to_be_hidden()
-    playwright.expect(stage).to_be_hidden()
-    expected = {record["id"] for record in site.records.values()
-                if record.get("result") is True and record.get("scope") == scope["id"]}
-    assert len(expected) == 1
-    rows = page.locator(".bp-dag-inventory-row")
-    playwright.expect(rows).to_have_count(1)
-    assert set(rows.evaluate_all("nodes => nodes.map(node => node.dataset.inventoryNodeId)")) == expected
-    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 result")
-    assert page.url == site.route(scope["id"])
-    page.get_by_role("button", name="Back to map", exact=True).click()
-    playwright.expect(stage).to_be_visible()
-    playwright.expect(page.locator(".bp-dag-inventory")).to_be_hidden()
-    _focus_graph_node(page, next(iter(expected)))
-    playwright.expect(page.locator(".bp-dag-breadcrumb li").last).to_have_text(scope["title"])
-    assert page.url == site.route(scope["id"]), "Returning to the map must not widen this topic to the library"
     assert documents == [site.route("roadmap")]
     assert page.evaluate("() => document === __workspaceDocument") is True
 
@@ -1585,7 +1628,7 @@ def test_rich_workspace_region_and_full_reader_screenshots(
     _open(page, site, workspace_runtime)
     for area in _AREAS:
         playwright.expect(_focus_graph_region(page, area)).to_be_focused()
-    page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+    _fit_graph(page)
     _frames(page)
     assert _pixels(page)["painted"] > 0
     if width <= 720:

@@ -2059,7 +2059,8 @@
         label.appendChild(input); label.appendChild(swatch(key)); label.appendChild(document.createTextNode(statusLabel(key)));
         label.appendChild(element("span", "bp-dag-check-count", String(statusCounts.get(key) || 0))); dom$statusFieldset.appendChild(label);
       });
-      dom$edgeFieldset.hidden = !data.nodes.some(function (node) { return node.isolated; }) || data.nodes.every(function (node) { return node.isolated; });
+      dom$edgeFieldset.hidden = !(data.$shelves && data.$shelves.length) &&
+        (!data.nodes.some(function (node) { return node.isolated; }) || data.nodes.every(function (node) { return node.isolated; }));
     }
     function swatch(key) {
       var entry = palette[key] || palette.planned || {}, mark = element("span", "bp-dag-swatch");
@@ -2155,11 +2156,13 @@
       if (!dom$shelves) return;
       var selected = currentOverviewGroup(), members = selected && new Set(selected.members.map(function (member) { return member.id; }));
       var nativeGroup = selected && (selected.$shelf || !ui$active.some(function (node) { return members.has(node.id); }));
-      var groups = nativeGroup ? [selected] : data.$shelves || [];
-      var visible = ui$mode === "graph" && groups.length > 0;
+      var groups = (nativeGroup ? [selected] : data.$shelves || []).filter(function (group) { return ui$showIsolated || !group.$shelf; });
+      var visible = ui$mode === "graph" && groups.some(function (group) {
+        return group.members.some(function (node) { return matchesStatus(node) && (!ui$query || searchScore(node, ui$query.toLocaleLowerCase())); });
+      });
       dom$shelves.hidden = !visible; host.classList.toggle("bp-dag-has-shelves", visible);
       host.classList.toggle("bp-dag-shelves-only", visible && (nativeGroup || !data.nodes.length));
-      var state = JSON.stringify([ui$mode, ui$overviewGroup, ui$listLimit, Array.from(ui$selectedStatuses), ui$query]);
+      var state = JSON.stringify([ui$mode, ui$overviewGroup, ui$listLimit, Array.from(ui$selectedStatuses), ui$query, ui$showIsolated]);
       if (renderShelves.$data === data && renderShelves.$state === state) return;
       renderShelves.$data = data; renderShelves.$state = state; dom$shelves.replaceChildren();
       if (!visible) return;
@@ -2310,6 +2313,7 @@
         }, 0)));
       }
       var hidden = data.nodes.length - ui$active.length;
+      (data.$shelves || []).forEach(function (group) { group.members.forEach(function (node) { if (!ui$showIsolated || !matchesStatus(node)) hidden++; }); });
       dom$hiddenButton.textContent = "Show " + hidden + " hidden"; dom$hiddenButton.hidden = !hidden;
       dom$empty.hidden = ui$active.length !== 0;
       ui$activeDirty = false;
@@ -2774,11 +2778,13 @@
     // From 681px to 1,100px details can open the head's first row; the map shifts back by it, so nothing jumps.
     // Measure both class changes together; callers need no selection-toggle ordering rule.
     function setSheet(open, selected) {
+      var closed = host.classList.contains("bp-dag-sheet-open") && !open;
       var top = dom$body.offsetTop; host.classList.toggle("bp-dag-sheet-open", Boolean(open));
       host.classList.toggle("bp-dag-has-selection", Boolean(selected));
       ui$transform.y += top - dom$body.offsetTop; schedule();
       dom$sheetHandle.setAttribute("aria-expanded", String(Boolean(open)));
       syncSheetAccessibility();
+      if (closed && selected && !restoring && sheetLayout() && mapAllowed) centerIfHidden(selected);
     }
     function sheetLayout() { return Boolean(window.matchMedia && window.matchMedia("(max-width: 720px)").matches); }
     function syncSheetAccessibility() {

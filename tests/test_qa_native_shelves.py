@@ -123,6 +123,22 @@ def test_shelves_preserve_canonical_anchors_native_modifiers_and_typed_status_sw
     """)
 
 
+def test_isolate_and_status_filters_hide_native_shelves_and_count_every_hidden_member() -> None:
+    _run(r"""
+      const state=fixture(),before=JSON.stringify({contextGraph,index:sharedIndex});
+      assert.equal(dom$shelves.hidden,false);assert.equal(allMemberIds().length,13);
+      ui$showIsolated=false;ui$activeDirty=true;syncControls();
+      assert.equal(dom$shelves.hidden,true);assert.equal(links().length,0);
+      assert.equal(dom$hiddenButton.textContent,'Show 13 hidden');
+      ui$showIsolated=true;ui$selectedStatuses=new Set(['fully_proved']);ui$activeDirty=true;syncControls();
+      assert.equal(dom$shelves.hidden,false);assert.equal(dom$hiddenButton.textContent,'Show 7 hidden');
+      assert(links().every(link=>records.get(link.dataset.shelfNodeId).status==='fully_proved'));
+      ui$selectedStatuses.clear();ui$activeDirty=true;syncControls();
+      assert.equal(dom$shelves.hidden,true);assert.equal(dom$hiddenButton.textContent,'Show 13 hidden');
+      assert.equal(JSON.stringify({contextGraph,index:sharedIndex}),before);
+    """)
+
+
 def test_shelf_cache_retains_link_focus_scroll_and_all_underlying_members() -> None:
     _run(r"""
       const state=fixture(),before=JSON.stringify({contextGraph,index:sharedIndex});

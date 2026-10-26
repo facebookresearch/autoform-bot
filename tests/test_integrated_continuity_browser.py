@@ -28,6 +28,8 @@ from tests.test_integrated_workspace_browser import (
     _TARGET_TITLE,
     _WorkspaceSite,
     _assert_surface,
+    _fit_graph,
+    _focus_graph_node,
     _frames,
     _focus_graph_region,
     _full_math,
@@ -287,6 +289,13 @@ def test_region_graph_first_keeps_native_reading_reopen_and_back_pane_camera(
     camera = focused.evaluate("""node=>{const m=new DOMMatrix(getComputedStyle(node).transform);return [m.a,m.d,m.e,m.f];}""")
     focused.press("Enter")
     page.wait_for_url(site.route(scope_id.removeprefix("scope:")))
+    if width <= 720:
+        # A chapter route opens graph-first on phones even when its map has
+        # concrete mathematical cards. Reading remains an explicit native action.
+        playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+        playwright.expect(inner).to_have_attribute("inert", "")
+        handle.click()
+        _frames(page)
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
     playwright.expect(inner).not_to_have_attribute("inert", "")
     playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(site.records[scope_id.removeprefix("scope:")]["title"])
@@ -322,9 +331,15 @@ def test_arrow_roving_keeps_selection_and_full_reader_until_enter_activates_the_
     first = _selected(page, _TARGET)
     assert _LAST_SENTENCE in _full_math(page).inner_text()
     page.evaluate("() => window.__continuityReader = document.querySelector('.bp-reading-body > .bp-reading-source')")
-    first.focus()
-    page.keyboard.press("ArrowRight")
     peer = page.locator(f'.bp-dag-node[data-autoform-node-id="{_OTHER}"]')
+    first = _focus_graph_node(page, _TARGET)
+    start_box, peer_box = first.bounding_box(), peer.bounding_box()
+    assert start_box and peer_box
+    dx = peer_box["x"] + peer_box["width"] / 2 - start_box["x"] - start_box["width"] / 2
+    dy = peer_box["y"] + peer_box["height"] / 2 - start_box["y"] - start_box["height"] / 2
+    assert abs(dx) + abs(dy) > 1
+    arrow = ("ArrowRight" if dx > 0 else "ArrowLeft") if abs(dx) >= abs(dy) else ("ArrowDown" if dy > 0 else "ArrowUp")
+    page.keyboard.press(arrow)
     playwright.expect(peer).to_be_focused()
     _frames(page)
     playwright.expect(page.locator('.bp-dag-node[tabindex="0"]')).to_have_count(1)
@@ -366,7 +381,12 @@ def test_late_authored_scope_and_ancestry_survive_the_outline_bound_and_explicit
         link = outline.locator(f'[data-navigation-node-id="{node_id}"]')
         playwright.expect(link).to_have_text(site.records[node_id]["title"])
         assert link.get_attribute("href") == site.route(node_id)
-    playwright.expect(outline.locator(f'[data-navigation-node-id="{_LATE_SCOPE}"]')).to_have_attribute("aria-current", "page")
+        assert link.get_attribute("aria-current") is None
+    current = outline.locator(f'[data-navigation-node-id="{_LATE_RESULT}"]')
+    playwright.expect(current).to_have_text(site.records[_LATE_RESULT]["title"])
+    playwright.expect(current).to_have_attribute("href", site.route(_LATE_RESULT))
+    playwright.expect(current).to_have_attribute("aria-current", "page")
+    playwright.expect(outline.locator('[data-navigation-node-id][aria-current="page"]')).to_have_count(1)
     playwright.expect(outline.locator(f'[data-navigation-node-id="{_OMITTED_TOPIC}"]')).to_have_count(0)
     before = links.count()
     reveal = outline.get_by_role("button", name="Show more topics", exact=True)
@@ -375,7 +395,8 @@ def test_late_authored_scope_and_ancestry_survive_the_outline_bound_and_explicit
     omitted = outline.locator(f'[data-navigation-node-id="{_OMITTED_TOPIC}"]')
     playwright.expect(omitted).to_have_text(site.records[_OMITTED_TOPIC]["title"])
     assert before < links.count() <= 170
-    playwright.expect(outline.locator(f'[data-navigation-node-id="{_LATE_SCOPE}"]')).to_have_attribute("aria-current", "page")
+    playwright.expect(current).to_have_attribute("aria-current", "page")
+    playwright.expect(outline.locator('[data-navigation-node-id][aria-current="page"]')).to_have_count(1)
     _selected(page, _LATE_RESULT)
     assert _LATE_END in _full_math(page, _LATE_RESULT, 1).inner_text()
     assert page.url == site.route(_LATE_RESULT)
@@ -459,7 +480,7 @@ def test_phone_reader_uses_the_full_body_with_only_a_handle_peek_and_readable_de
     if handle.get_attribute("aria-expanded") == "true":
         handle.click()
     _frames(page)
-    page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+    _fit_graph(page)
     _frames(page)
     regions = page.locator('.bp-dag-node[data-autoform-node-id^="region:"]')
     assert regions.count() > 0
@@ -538,45 +559,43 @@ def test_five_authored_dependency_areas_remain_readable_reachable_and_keep_nativ
     if width <= 720 and handle.get_attribute("aria-expanded") == "true":
         handle.click()
     _frames(page)
-    page.get_by_role("button", name="Fit shown nodes", exact=True).click()
+    _fit_graph(page)
     page.evaluate("() => document.fonts.ready")
     _frames(page)
-    chosen = page.locator(f'.bp-dag-node[data-autoform-node-id="region:{_FIVE_AREAS[0]}"]')
-    playwright.expect(chosen).to_be_visible()
-    chosen.focus()
+    chosen = _focus_graph_region(page, _FIVE_AREAS[0])
     geometry = []
     stage = page.locator(".bp-dag-stage").bounding_box()
     context = page.locator(".bp-map-context").bounding_box()
     key = page.locator(".bp-map-key").bounding_box()
     assert stage and context and key
-    for index, area in enumerate(_FIVE_AREAS):
-        active = page.locator('.bp-dag-node:focus')
+    for area in _FIVE_AREAS:
+        active = _focus_graph_region(page, area)
+        playwright.expect(active).to_be_focused()
         playwright.expect(active).to_have_attribute("data-autoform-node-id", f"region:{area}")
         geometry.append(active.evaluate("""node => {
       const box = node.getBoundingClientRect(), title = node.querySelector('.bp-dag-node-title');
       const meta = node.querySelector('.bp-dag-node-meta'), sample = node.querySelector('.bp-dag-node-summary');
       const matrix = new DOMMatrix(getComputedStyle(node).transform), scale = Math.hypot(matrix.a, matrix.b);
       return {left:box.left,right:box.right,top:box.top,bottom:box.bottom,width:box.width,
-        title:title.textContent,meta:meta.textContent,aria:node.getAttribute('aria-label'),
+        title:title.textContent,meta:meta.textContent,aria:node.getAttribute('aria-label'),scale,
         titlePixels:parseFloat(getComputedStyle(title).fontSize)*scale,
         metaPixels:parseFloat(getComputedStyle(meta).fontSize)*scale,
         titleFits:title.scrollWidth<=title.clientWidth+1,
         sampleVisible:!!sample && getComputedStyle(sample).display!=='none' && sample.clientHeight>0,
         hit:node.contains(document.elementFromPoint(box.left+box.width/2,box.top+box.height/2))};
     }"""))
-        if index + 1 < len(_FIVE_AREAS):
-            active.press("ArrowDown" if stage["width"] <= 620 else "ArrowRight")
-            _frames(page)
     assert {node["title"] for node in geometry} == set(_FIVE_AREAS)
     assert 280 <= stage["width"] <= width + 1
     for node in geometry:
         assert node["width"] >= 200 and node["titlePixels"] >= 15 and node["metaPixels"] >= 12
+        assert node["scale"] >= .9 - 1e-6
         assert node["meta"] == "3 topics · 3 items" and ", 3 items" in node["aria"]
         assert node["titleFits"] and node["hit"]
         if stage["width"] <= 620:
             assert not node["sampleVisible"]
         assert node["left"] >= stage["x"] - 1 and node["right"] <= stage["x"] + stage["width"] + 1
-        assert (node["left"] + node["right"]) / 2 == pytest.approx(stage["x"] + stage["width"] / 2, abs=2)
+        if stage["width"] <= 620:
+            assert (node["left"] + node["right"]) / 2 == pytest.approx(stage["x"] + stage["width"] / 2, abs=2)
         assert node["top"] >= context["y"] + context["height"] + 8
         assert node["bottom"] <= key["y"] - 8
     assert _pixels(page)["painted"] > 0
@@ -590,9 +609,7 @@ def test_five_authored_dependency_areas_remain_readable_reachable_and_keep_nativ
                   "counts": expected, "regions": geometry, "stage": stage, "context": context, "key": key,
                   "captured_edges": site.root_graph["edges"], "canvas": _pixels(page), "kernel_checked": False}
         (directory / f"five-areas-{width}x{height}.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    for _ in range(len(_FIVE_AREAS) - 1):
-        page.locator('.bp-dag-node:focus').press("ArrowUp" if stage["width"] <= 620 else "ArrowLeft")
-        _frames(page)
+    chosen = _focus_graph_region(page, _FIVE_AREAS[0])
     playwright.expect(chosen).to_be_visible()
     chosen.click()
     playwright.expect(chosen).to_have_count(0)
