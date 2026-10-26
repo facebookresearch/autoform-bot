@@ -248,6 +248,8 @@ def test_show_more_is_local_to_each_direction_and_late_updates_preserve_reader_a
       assert.equal(outgoing.querySelectorAll('a').length,5);assert.equal(incoming.querySelectorAll('a').length,5);
       const more=outgoing.querySelector('button');assert.equal(more.textContent,'Show 20 more links');
       emit(more,'click');assert.equal(outgoing.querySelectorAll('a').length,25);
+      // The button stays below the new links, so focus moves to the first of them.
+      assert.strictEqual(document.activeElement,outgoing.querySelectorAll('a')[5]);
       assert.equal(incoming.querySelectorAll('a').length,5);assert.equal(more.textContent,'Show 2 more links');
       emit(more,'click');assert.equal(outgoing.querySelectorAll('a').length,27);assert.equal(more.hidden,true);
       emit(incoming.querySelector('button'),'click');assert.equal(incoming.querySelectorAll('a').length,25);

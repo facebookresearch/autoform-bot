@@ -549,6 +549,8 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     assert page.url == consumer.site.route(_SCOPE), "The group parent is this local scope, not the whole library"
     playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(1)
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    # The trail is rebuilt under the crumb, so focus goes to the group just left rather than to the page.
+    playwright.expect(_group(page, key)).to_be_focused()
     _focus_group(page, key)
     playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id*="remote"]')).to_have_count(0)
     page.go_back()

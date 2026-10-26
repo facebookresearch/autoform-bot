@@ -840,6 +840,8 @@ def test_choosing_from_contents_keeps_the_readers_place_and_focus(desktop_page: 
     page = desktop_page
     _open_consumer(page, explorer_consumer, "flat")
     page.locator(".bp-dag-inventory > .bp-dag-load-more").click()
+    # Paging moves focus to the first new row rather than leaving it on the button below them.
+    playwright.expect(page.locator(".bp-dag-inventory-row").nth(100)).to_be_focused()
     row = page.locator('.bp-dag-inventory-row[data-inventory-node-id="flat/item-0150"]')
     scroll = page.locator(".bp-dag-inventory-scroll")
     row.scroll_into_view_if_needed()

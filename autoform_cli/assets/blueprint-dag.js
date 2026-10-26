@@ -1283,7 +1283,7 @@
       if (scope && record.id !== scope.id) {
         var around = readingLabel("a", "bp-reading-around", scope.title, scope.reading_title, "← "); around.href = scope.route || scope.url;
         around.addEventListener("click", function (event) { if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-          event.preventDefault(); navigation.navigateNode(scope.id, {history: "push"}); }); dom$readingContext.appendChild(around);
+          event.preventDefault(); navigation.navigateNode(scope.id, {history: "push", focus: "reading"}); }); dom$readingContext.appendChild(around);
       }
       syncSheetAccessibility();
       if (!record && !node) return;
@@ -1477,8 +1477,12 @@
             if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
                 new URL(href).origin !== window.location.origin) return;
             event.preventDefault();
-            if (entry._overviewParent && (ui$scopeOverview && ui$overviewGroup || ui$area)) setMode("regions", true);
-            else navigation.navigate(href, {history: "push", focus: true, mapFirst: true});
+            if (entry._overviewParent && (ui$scopeOverview && ui$overviewGroup || ui$area)) {
+              // The trail is rebuilt under the click, so focus goes to the card of the area or group just left.
+              var left = ui$overviewGroup || ui$area; setMode("regions", true);
+              var back = ui$active.find(function (node) { return node._overviewGroup === left || node._region === left; }) || ui$active[0];
+              if (back) { centerIfHidden(back); focusNodeControl(back); }
+            } else navigation.navigate(href, {history: "push", focus: true, mapFirst: true});
           });
           item.appendChild(link);
         }
@@ -1558,7 +1562,11 @@
       dom$zoomIn.addEventListener("click", function () { zoomAt(1.24, dom$stage.clientWidth / 2, dom$stage.clientHeight / 2); });
       dom$zoomOut.addEventListener("click", function () { zoomAt(.8, dom$stage.clientWidth / 2, dom$stage.clientHeight / 2); });
       dom$fit.addEventListener("click", fit); dom$hiddenButton.addEventListener("click", revealAll);
-      dom$loadMore.addEventListener("click", function () { ui$listLimit += LIST_PAGE; renderInventory(false); });
+      // Paging rebuilds the rows and may hide the button, so focus moves to the first new row, as search's paging does.
+      dom$loadMore.addEventListener("click", function () {
+        var previous = dom$inventoryRows ? dom$inventoryRows.size : 0; ui$listLimit += LIST_PAGE; renderInventory(false);
+        var rows = dom$inventoryList.querySelectorAll(".bp-dag-inventory-row"); if (rows[previous]) rows[previous].focus();
+      });
       dom$wholeSearch.addEventListener("click", openResults);
       if (dom$outlineToggle) dom$outlineToggle.addEventListener("click", function () {
         var open = !host.classList.contains("bp-dag-outline-open"); host.classList.toggle("bp-dag-outline-open", open);
@@ -2584,7 +2592,8 @@
           more.textContent = "Show " + Math.min(20, pair[1].length - limit) + " more links";
           refreshReadingLabels(list);
         }
-        appendLinks(); more.addEventListener("click", appendLinks);
+        appendLinks();
+        more.addEventListener("click", function () { var first = ui$wikiLimit; appendLinks(); var links = list.querySelectorAll("a"); if (links[first]) links[first].focus(); });
         group.appendChild(list); group.appendChild(more); disclosure.appendChild(group);
       });
       var peers = dom$readingNeighbors.querySelector(".bp-reading-related-topics");
