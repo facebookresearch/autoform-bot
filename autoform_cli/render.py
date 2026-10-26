@@ -2467,8 +2467,9 @@ def _render_overview_summary(
     if len(selected) < 2:
         return ""
     parts = [
-        f'<span class="bp-progress-state"><span class="bp-swatch bp-swatch-{state.key}"></span>'
-        f"<strong>{count}</strong> {html.escape(state.label)}</span>"
+        f'<span class="bp-progress-state" title="{html.escape(status.MEANINGS[state.key], quote=True)}">'
+        f'<span class="bp-swatch bp-swatch-{state.key}"></span>'
+        f"<strong>{count:,}</strong> {html.escape(state.label)}</span>"
         for state, count in status.summarize(selected)
     ]
     return (
