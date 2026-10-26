@@ -910,7 +910,11 @@ def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_und
     assert ".bp-dag-viewer:has(.bp-dag-stage[hidden]) .bp-dag-zoom { visibility: hidden; }" in style
     coarse = style.split("@media (pointer: coarse) {\n", 1)[1].split("\n}", 1)[0]
     assert ".bp-dag-zoom .bp-dag-button:not(:last-child) { display: none; }" in coarse
-    assert ".bp-dag-zoom .bp-dag-button { min-width: 44px; min-height: 44px; }" in coarse
+    # Alone, Fit is an ordinary button as tall as its neighbours; in the group's box and muted text it looked disabled.
+    assert ".bp-dag-zoom { padding: 0; border: 0; background: transparent; }" in coarse
+    assert ".bp-dag-zoom .bp-dag-button { min-width: 44px; min-height: 36px; border: 1px solid var(--dag-border);" in coarse and "color: var(--dag-fg); }" in coarse
+    assert "@media (pointer: coarse) and (max-width: 680px) { .bp-dag-zoom .bp-dag-button { min-height: 44px; } }" in style
+    assert ".bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button { min-height: 44px; }" in style
 
 
 def test_explorer_toolbar_copy_says_what_it_searches_and_filters() -> None:

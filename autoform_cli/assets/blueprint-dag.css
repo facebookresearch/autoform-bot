@@ -253,7 +253,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
   .bp-dag-search-wrap::after { display: none; }
   .bp-dag-search { padding-right: 12px; }
   .bp-dag-filter-popover { left: 0; right: auto; max-width: calc(100vw - 16px); }
-  .bp-dag-search, .bp-dag-button, .bp-dag-filter-summary { min-height: 44px; }
+  .bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button { min-height: 44px; }
   .bp-dag-zoom { gap: 0; padding: 0; }
   .bp-dag-zoom .bp-dag-button { min-height: 42px; }
   .bp-dag-body { display: block; }
@@ -271,11 +271,14 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
   .bp-dag-viewer.bp-dag-viewer .bp-dag-inspector-header h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .bp-dag-density { bottom: 68px; }
 }
-/* A finger pinches to zoom, so it keeps only Fit, at a full touch size. */
+/* A finger pinches to zoom, so it keeps only Fit, as an ordinary button as tall as its neighbours: inside the zoom group's box,
+   in its muted text and 2px taller, it looked disabled. */
 @media (pointer: coarse) {
   .bp-dag-zoom .bp-dag-button:not(:last-child) { display: none; }
-  .bp-dag-zoom .bp-dag-button { min-width: 44px; min-height: 44px; }
+  .bp-dag-zoom { padding: 0; border: 0; background: transparent; }
+  .bp-dag-zoom .bp-dag-button { min-width: 44px; min-height: 36px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); background: var(--dag-bg); color: var(--dag-fg); }
 }
+@media (pointer: coarse) and (max-width: 680px) { .bp-dag-zoom .bp-dag-button { min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) {
   .bp-dag-inspector { transition: none; }
   .bp-dag-node { will-change: auto; }
