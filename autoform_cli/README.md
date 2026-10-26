@@ -59,19 +59,20 @@ ends that section and resumes the statement; a later H1 stays in its section.
 Headings deeper than `##`, and a `##` line inside a fenced code block or an HTML
 comment, do not end the statement. Close each fence with its own bare line of
 the same character, length and indent: on a chapter page an unclosed fence can
-pair with a later article's fence and hide what lies between, so the audit
-reports `unclosed-code-fence`, and for a fence left open at the margin `check`
-warns and the site shows that page as typed (see
-[Validation](reference/validation-and-audit.md#validation)). The graph and an
-article's statement and sections read an unclosed fence as plain text, even
-where the page pairs its backticks with a later run as inline code, and a later
-bare line of its character at least as long closes it. Coverage files and the
-unpublished-folder link check read it as open to the end of the file, and so
-does render when it rewrites links, orders the book and places a chapter's
-statements. An HTML comment that never closes, even one opened in inline code or
-an indented code block, hides every later heading and dependency link: the graph
-loses those edges, one opened in the statement puts the rest of the article in
-the theorem box, and nothing reports it.
+pair with a later article's fence and hide what lies between, and coverage, the
+link checks and render's link rewriting take everything after it as code
+(below), so `check` warns, the site shows that page as typed (see
+[Validation](reference/validation-and-audit.md#validation)), and the audit
+reports `unclosed-code-fence`. The graph and an article's statement and sections
+read an unclosed fence as plain text, even where the page pairs its backticks
+with a later run as inline code, and a later bare line of its character at least
+as long closes it. Coverage files and the unpublished-folder link check read it
+as open to the end of the file, and so does render when it rewrites links,
+orders the book and places a chapter's statements. An HTML comment that never
+closes, even one opened in inline code or an indented code block, hides every
+later heading and dependency link: the graph loses those edges, one opened in
+the statement puts the rest of the article in the theorem box, and nothing
+reports it.
 
 `## Depends on` lists what the article needs to be *stated*;
 `## Proof depends on` lists what only its *proof* needs. Links under them are
