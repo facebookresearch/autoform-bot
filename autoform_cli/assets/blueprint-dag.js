@@ -3082,6 +3082,7 @@
     // A phone reader also has a full position: 1 asks for half, 2 for full, and true keeps full if it is there.
     function setSheet(open, selected) {
       var closed = host.classList.contains("bp-dag-sheet-open") && !open;
+      var width = dom$stage.clientWidth, height = dom$stage.clientHeight;
       var top = dom$body.offsetTop; host.classList.toggle("bp-dag-sheet-open", Boolean(open));
       host.classList.toggle("bp-dag-sheet-full", open > 1 || open === true && host.classList.contains("bp-dag-sheet-full"));
       if (scene) scene.$held = host.classList.contains("bp-dag-sheet-full");
@@ -3089,6 +3090,7 @@
       ui$transform.y += top - dom$body.offsetTop; schedule();
       dom$sheetHandle.setAttribute("aria-expanded", String(Boolean(open)));
       syncSheetAccessibility();
+      if (width !== dom$stage.clientWidth || height !== dom$stage.clientHeight) resize();
       if (closed && selected && !restoring && sheetLayout() && mapAllowed) centerIfHidden(selected);
     }
     function sheetLayout() { return Boolean(window.matchMedia && window.matchMedia("(max-width: 720px)").matches); }

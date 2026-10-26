@@ -99,7 +99,8 @@ date when the release is tagged.
   reserve no map space; the closed phone handle anchors to the bottom (#442).
 - **Explorer resizing.** Observer notifications coalesce into one animation
   frame, keeping canvas writes out of observer delivery and cancelling pending
-  resize work when the viewer is disposed (#442).
+  resize work when the viewer is disposed. Reading toggles settle changed stage
+  dimensions before recording the camera, so Back retains the shown view (#442).
 - **Reading and index feedback.** Valid HTML character references keep title
   math without admitting authored HTML. Publication warns when the exact
   UTF-8 search index reaches 95% of the unchanged 32 MiB browser limit; nothing
