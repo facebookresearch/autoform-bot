@@ -2129,6 +2129,12 @@ def _render_summary_nav(
     the second navigation manifest the roadmap skill forbids. mkdocs-literate-nav
     reads this file instead, so the tabs come from the same page order the book
     itself uses.
+
+    A chapter's README nests under the nearest README above its folder, any
+    other page under the nearest README in its own folder or above, and the
+    tree is written depth first in book order. The book order follows links,
+    so a page can come before its chapter, and indenting by folder depth alone
+    then skipped a level, which literate-nav refuses.
     """
     # SUMMARY.md is a navigation manifest, not a searchable content page. A
     # repository-wide book can make this one generated page larger than every
@@ -2142,15 +2148,21 @@ def _render_summary_nav(
         f"- [Home]({overview.relative_to(destination).as_posix()})",
         "- Mathematics",
     ]
-    for page in book_pages:
-        if page == overview:
-            continue
+    pages = [page for page in book_pages if page != overview]
+    folder_pages = {page.parent: page for page in pages if page.name.casefold() == "readme.md"}
+    children: dict[Path | None, list[Path]] = {}
+    for page in pages:
+        folders = page.parent.parents if folder_pages.get(page.parent) == page else [page.parent, *page.parent.parents]
+        parent = next((folder_pages[folder] for folder in folders if folder in folder_pages), None)
+        children.setdefault(parent, []).append(page)
+    stack = [(page, 1) for page in reversed(children.get(None, []))]
+    while stack:
+        page, depth = stack.pop()
         text = page.read_text(encoding="utf-8")
         named = _header_title(text)
         title = name_text(named) if named else title_text(_first_h1(text) or page.parent.name)
-        depth = len(page.relative_to(destination).parts) - 1
-        indent = "    " * max(depth, 1)
-        lines.append(f"{indent}- [{title}]({page.relative_to(destination).as_posix()})")
+        lines.append(f"{'    ' * depth}- [{title}]({page.relative_to(destination).as_posix()})")
+        stack.extend((child, depth + 1) for child in reversed(children.get(page, [])))
     # What counts as done belongs beside the book it qualifies. The landing
     # page used to be the only route to it, which made the page impossible to
     # simplify without stranding it.

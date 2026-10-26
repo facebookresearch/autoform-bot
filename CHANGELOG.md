@@ -93,6 +93,12 @@ date when the release is tagged.
   in its outline, breadcrumbs, paged inventory and related-reading controls, using safe MathJax
   service and project macros. Code stays literal, canonical links keep focus
   and native modifiers, and graph labels remain as typed (#442).
+- **Book navigation.** The generated `SUMMARY.md` nests each book page under
+  its chapter's README, written in book order. A landing page that linked a
+  deep page before its chapters, or a folder with no README in the book, put a
+  page a level too deep, and MkDocs refused the nav with a
+  `LiterateNavParseError`. Where MkDocs accepted the nav, a page could sit
+  under the wrong chapter (#481).
 - **Claims.** `autoform dashboard` runs its claim listing's Git in the
   dashboard's process group again, so Ctrl+C or a signal to that group stops
   Git along with the dashboard (#447). On macOS and Windows, a listing shows
