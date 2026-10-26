@@ -1700,6 +1700,18 @@ def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_pag
     assert 0 <= box["x"] and box["x"] + box["width"] <= viewport["width"]
     assert 0 <= box["y"] and box["y"] + box["height"] <= viewport["height"]
     _assert_hit(page, popover.locator("input").first)
+    # At 320px the legend's 300px width ran past the screen from Filter's place; it hangs from the toolbar instead.
+    page.set_viewport_size({"width": 320, "height": 640})
+    playwright.expect(popover).to_be_visible()
+    narrow = popover.bounding_box()
+    assert narrow is not None and 0 <= narrow["x"] and narrow["x"] + narrow["width"] <= 320
+    _assert_hit(page, popover.locator(".bp-dag-check-count").first)
+    page.set_viewport_size({"width": viewport["width"], "height": viewport["height"]})
+    # Topics follows search on screen as in the tab order: it led the tab order from the row below search.
+    assert page.locator(".bp-dag-toolbar > :is(.bp-dag-search-wrap, .bp-dag-outline-toggle)").evaluate_all(
+        "items => items.map(item => item.className)") == ["bp-dag-search-wrap", "bp-dag-button bp-dag-outline-toggle"]
+    topics, field = page.get_by_role("button", name="Topics", exact=True).bounding_box(), page.locator(".bp-dag-search").bounding_box()
+    assert topics is not None and field is not None and topics["y"] >= field["y"] + field["height"] - 1
     search = _load_search_index(page)
     search.fill("Result")
     results = page.locator(".bp-dag-search-results")

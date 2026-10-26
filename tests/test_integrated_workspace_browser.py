@@ -1000,7 +1000,7 @@ def test_long_ancestor_labels_and_full_reading_heading_stay_within_their_panes(
         trail_box, head_box = page.locator(".bp-dag-breadcrumb").bounding_box(), page.locator(".bp-dag-head").bounding_box()
         assert trail_box is not None and head_box is not None and trail_box["width"] >= head_box["width"] / 2
     if width == 1000:
-        # A tablet gives Topics and search the first row and filter, Browse and zoom the second, rather than three rows.
+        # A tablet gives search and Topics the first row and filter, Browse and zoom the second, rather than three rows.
         boxes = page.locator(".bp-dag-toolbar").evaluate(
             "bar => [...bar.children].filter(child => child.getClientRects().length)"
             ".map(child => { const box = child.getBoundingClientRect(); return [box.top, box.bottom]; })"

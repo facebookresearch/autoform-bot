@@ -1355,9 +1355,10 @@
 
       var toolbar = element("div", "bp-dag-toolbar");
       toolbar.setAttribute("role", "group"); toolbar.setAttribute("aria-label", "Dependency explorer controls");
-      // Its name is its visible word, so speech input can say "Topics"; aria-expanded gives its state.
+      // Its name is its visible word, so speech input can say "Topics"; aria-expanded gives its state. It follows search, which a
+      // phone puts on a row of its own, so the tab order runs along the rows instead of from Topics up to search and back down.
       dom$outlineToggle = button("bp-dag-button bp-dag-outline-toggle", "Topics");
-      dom$outlineToggle.setAttribute("aria-expanded", "false"); toolbar.appendChild(dom$outlineToggle);
+      dom$outlineToggle.setAttribute("aria-expanded", "false");
       var searchWrap = dom$searchWrap = element("div", "bp-dag-search-wrap");
       dom$search = element("input", "bp-dag-search");
       dom$search.type = "search"; dom$search.placeholder = "Search titles and Lean names";
@@ -1366,7 +1367,7 @@
       dom$searchResults = element("div", "bp-dag-search-results"); dom$searchResults.id = "bp-dag-search-results-" + instance;
       dom$searchResults.setAttribute("role", "region"); dom$searchResults.setAttribute("aria-label", "Search results");
       dom$searchResults.hidden = true;
-      searchWrap.append(dom$search, dom$searchResults); toolbar.appendChild(searchWrap);
+      searchWrap.append(dom$search, dom$searchResults); toolbar.append(searchWrap, dom$outlineToggle);
 
       dom$filters = element("div", "bp-dag-filters");
       dom$filterSummary = button("bp-dag-filter-summary", "Filter: all statuses"); dom$filterSummary.setAttribute("aria-expanded", "false");

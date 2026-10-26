@@ -960,13 +960,14 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     # A phone hangs the Browse menu from the toolbar, since Browse can wrap to the start of a row.
     phone = style.split("@media (max-width: 720px) {\n  .bp-dag-integrated .bp-dag-body", 1)[1].split("\n}", 1)[0]
     assert ".bp-dag-integrated .bp-dag-toolbar { position: relative; }" in phone
-    assert ".bp-dag-integrated .bp-dag-browse { position: static; }" in phone
-    assert ".bp-dag-integrated .bp-dag-browse-popover { left: 12px; right: 12px; width: auto; max-width: none; }" in phone
+    assert ".bp-dag-integrated :is(.bp-dag-browse, .bp-dag-filters) { position: static; }" in phone
+    # The filter's 300px legend hangs from the toolbar too: from Filter's place on the second row it ran past a 320px screen.
+    assert ".bp-dag-integrated .bp-dag-browse-popover, .bp-dag-viewer.bp-dag-integrated .bp-dag-filter-popover { left: 12px; right: 12px; width: auto; max-width: none; }" in phone
     assert ".bp-dag-integrated .bp-dag-breadcrumb { display: block; flex: 1 1 auto; max-width: none;" in style
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li { min-width: 4em; }" in style
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:has(.bp-dag-sr-only) { flex: none; min-width: 0; }" in style
     tablet = style.split("@media (max-width: 1100px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
-    # Two rows, Topics and search on the first; search no longer takes a row of its own.
+    # Two rows, search and Topics on the first; search no longer takes a row of its own.
     assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: calc(100% - 96px); }" in tablet
     # The second row never wraps, on a tablet or a phone: the filter grows from 100px into its free space and truncates its summary instead.
     assert ("@media (max-width: 1100px) {\n"
