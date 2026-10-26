@@ -303,6 +303,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-integrated .bp-dag-book { grid-area: auto; margin: 0 18px 0 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 .bp-dag-integrated .bp-dag-toolbar { display: flex; padding: 10px 16px; }
 .bp-dag-integrated .bp-dag-search-wrap { max-width: none; }
+/* The box can span a wide head, but its results stop at 720px, so a row's status stays near its title. */
+.bp-dag-integrated .bp-dag-search-results { max-width: 720px; }
 .bp-dag-integrated .bp-dag-navigation { visibility: visible !important; transition: none; }
 .bp-dag-integrated .bp-dag-navigation-link { display: block; white-space: normal; overflow-wrap: anywhere; }
 .bp-dag-integrated .bp-dag-navigation-link[aria-current=page] { background: var(--dag-panel); color: var(--dag-link) !important; }

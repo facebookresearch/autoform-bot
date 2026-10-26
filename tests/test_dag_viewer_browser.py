@@ -1313,6 +1313,21 @@ def test_a_contents_query_lists_only_this_scope(desktop_page: object, explorer_c
     playwright.expect(results.locator('.bp-dag-result[data-result-id="remote/deep-theorem"]')).to_be_visible()
 
 
+def test_wide_search_results_keep_a_rows_status_near_its_title(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
+    """At 1440px the results panel spanned about 1,080px, putting a row's title and status about 1,000px apart."""
+    page = desktop_page
+    page.set_viewport_size({"width": 1440, "height": 900})
+    _open_consumer(page, explorer_consumer)
+    search = _load_search_index(page)
+    wrap = page.locator(".bp-dag-search-wrap").bounding_box()
+    search.fill("theorem")
+    results = page.locator(".bp-dag-search-results")
+    playwright.expect(results).to_be_visible()
+    box = results.bounding_box()
+    assert wrap is not None and box is not None and wrap["width"] > 760
+    assert box["width"] <= 720 + 1 and abs(box["x"] - wrap["x"]) < 1
+
+
 def test_global_search_jumps_to_the_smallest_context(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
     page = desktop_page
     _open_consumer(page, explorer_consumer)
