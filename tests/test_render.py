@@ -2595,6 +2595,43 @@ def test_reference_style_links_are_rewritten_with_the_inline_ones(tmp_path: Path
     assert "[paper]: ../sources/paper.md" not in chapter
 
 
+@pytest.mark.parametrize("prose", ["[^1]: Grounded in", "[note]: grounded in"])
+def test_a_line_that_only_looks_like_a_definition_keeps_its_words_and_has_its_links_rewritten(
+    tmp_path: Path, prose: str
+) -> None:
+    """Python-Markdown reads `[label]: target` as a definition only when at most
+    a quoted or parenthesized title follows the target, so a footnote-style line
+    with more words is prose. Read as a definition, its first word was taken for
+    a destination and the links after it were left pointing at unpublished
+    pages."""
+    project = _project(tmp_path)
+    sources = project / "blueprint" / "sources"
+    sources.mkdir()
+    (sources / "paper.md").write_text("---\n---\n\n# Paper\n", encoding="utf-8")
+    roadmap = project / "blueprint" / "roadmap" / "README.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8") + f"\n{prose} [Paper](../sources/paper.md).\n\n"
+        '[paper]: ../sources/paper.md "The paper"\n',
+        encoding="utf-8",
+    )
+    ref = _commit_project(project)
+    out = tmp_path / "out"
+
+    render_site(
+        project / "blueprint",
+        out,
+        lean_root=project,
+        repository_url="https://github.com/owner/repo",
+        ref=ref,
+    )
+
+    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
+    paper = f"https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.md"
+    assert f"{prose} [Paper]({paper})." in chapter
+    # A definition with a title is still one, and keeps its title.
+    assert f'[paper]: {paper} "The paper"' in chapter
+
+
 @pytest.mark.parametrize(
     ("repository_url", "definition"),
     [

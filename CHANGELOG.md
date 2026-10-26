@@ -71,6 +71,10 @@ date when the release is tagged.
   including with Apple's Git, which stored one key's name holding the other's
   lease (#452). The claim contract now says what `--timeout` bounds and which
   listings run Git apart from their caller (#448).
+- **Links on chapter pages.** A footnote-style line with more words after its
+  first, such as `[^1]: Grounded in [Paper](../sources/paper.md)`, is prose,
+  as Python-Markdown reads it. Render took it for a link definition, so the
+  links after its first word were left pointing at unpublished pages.
 
 ## 0.6.0 (2026-10-22)
 
