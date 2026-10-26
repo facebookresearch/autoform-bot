@@ -581,8 +581,9 @@ def test_the_phone_reader_peeks_opens_to_half_or_covers_the_map() -> None:
     assert "if (dragged && event.detail) return;" in script
     assert "setSheet(top < height * .225 ? 2 : top < height * .725 - 28 ? 1 : 0, state.selected);" in script
     assert 'var mapButton = button("bp-reading-map", "Map", "Show the map");' in script
-    # The handle names the page with its status, and a chosen node is kept above the half sheet.
-    assert 'refs.sheetHandle.replaceChildren(close ? "×" : record && record.status ? swatch(record.status) : "", close ? "" : title);' in script
+    # The handle names the page, typesetting its TeX, with a status mark only for a statement; a chosen node is kept above the half sheet.
+    assert 'refs.sheetHandle.replaceChildren(close ? "×" : record && record.result && record.status ? swatch(record.status) : "", handleTitle);' in script
+    assert 'readingLabel("span", "bp-dag-sheet-title", title,' in script
     # Its accessible name starts with the title it shows; an open desktop reader over an area or the overview closes with ×.
     assert 'refs.sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");' in script
     assert "Toggle mathematical reading" not in script
@@ -1190,10 +1191,11 @@ def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> 
     assert 'num(count[0]) + " of " + num(count[1]) + " fully proved"' in script
     assert 'element("span", "bp-dag-status-pill",' not in script
     assert '" items in this scope"' not in script and '"Mathematical regions"' not in script
-    # The map names the selected result, and the reader shows its relations once, in the statement's own disclosure.
-    assert 'links ? " · uses " + links.before.length + " · used by " + links.after.length : ""' in script
+    # The map names the selected result, typesetting its TeX; the counts show only on a phone, since the reader beside a desktop
+    # map already says them in the statement's own disclosure.
+    assert 'links && sheetLayout() ? " · uses " + links.before.length + " · used by " + links.after.length : ""' in script
     # The title is its own span, so a long one gives way before the counts.
-    assert 'refs.mapContext.replaceChildren(element("span", "", links ? record.title :' in script
+    assert 'refs.mapContext.replaceChildren(links ? readingLabel("span", "", record.title, record.reading_title) :' in script
     assert ".bp-map-context > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }" in dag_viewer._STYLE
     assert '" → Result → "' not in script
     assert 'var relations = target.querySelector(".bp-dependencies"); if (relations) relations.open = true;' in script

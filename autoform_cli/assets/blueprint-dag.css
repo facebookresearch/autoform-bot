@@ -379,7 +379,7 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-integrated .bp-dag-inventory-meta { font-size: 12px; color: var(--dag-muted); }
 .bp-result-summary { grid-column: 1 / -1; font-size: 13px; color: var(--dag-muted); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 /* A row's formula stays blank, rather than showing its TeX, until it is typeset as the row scrolls near the view. */
-.bp-result-summary :is(.bp-math-pending, .arithmatex:not(:has(mjx-container))) { color: transparent; }
+.bp-dag-inventory-row :is(.bp-math-pending, .arithmatex:not(:has(mjx-container))) { color: transparent; }
 .bp-dag-outline-toggle { display: none; }
 .bp-reading-map { display: none; }
 @media (min-width: 721px) {
@@ -428,6 +428,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated.bp-dag-sheet-full .bp-reading-map { display: block; position: absolute; z-index: 3; bottom: 16px; left: 50%; padding: 10px 24px; border: 1px solid var(--dag-overlay-border); border-radius: 999px; background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 14px; font-weight: 600; box-shadow: var(--dag-e2); transform: translateX(-50%); cursor: pointer; }
   .bp-dag-integrated .bp-reading-body { padding: 20px 22px 60px; }
   .bp-dag-integrated .bp-reading-neighbors { max-height: 136px; }
+  /* Open, the reader shows its heading right under the handle, so the handle keeps only its grabber; its name still says the title. */
+  .bp-dag-integrated.bp-dag-sheet-open .bp-dag-sheet-handle :is(.bp-dag-sheet-title, .bp-dag-swatch) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   /* At half the reader has room for little more than the statement, so its topic and concept-link disclosures wait for full,
      where they end clear of the Map pill. */
   .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-sheet-full) .bp-reading-neighbors { display: none; }

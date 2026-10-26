@@ -1736,8 +1736,11 @@
       if (navigation) {
         var record = records.get(currentBundle && currentBundle.nodeId), links = record && record.result && neighborIds(record.id), group = currentOverviewGroup();
         // A long title gives way before the counts after it.
-        dom$mapContext.replaceChildren(element("span", "", links ? record.title : group ? group.area || "Other topics" : ui$area || currentBundle && currentBundle.title || data.title),
-          links ? " · uses " + links.before.length + " · used by " + links.after.length : "");
+        // The reader beside a desktop map already says "Uses N · Used by M", so the counts show here only on a phone.
+        dom$mapContext.replaceChildren(links ? readingLabel("span", "", record.title, record.reading_title) :
+          element("span", "", group ? group.area || "Other topics" : ui$area || currentBundle && currentBundle.title || data.title),
+          links && sheetLayout() ? " · uses " + links.before.length + " · used by " + links.after.length : "");
+        if (links) refreshReadingLabels(dom$mapContext);
         dom$mapKey.replaceChildren();
         ["statement", "proof"].forEach(function (kind) {
           if (data.edges.some(function (edge) { return edge[kind]; })) dom$mapKey.appendChild(element("span", "bp-map-key-" + kind,
@@ -2362,14 +2365,14 @@
       var matches = searchMatches(), list = element("ul", "bp-dag-results");
       matches.slice(0, ui$searchLimit).forEach(function (match) {
         var item = element("li"), choose = button("bp-dag-result", ""); choose.dataset.resultId = match.node.id;
-        choose.appendChild(element("span", "bp-dag-result-title", match.node.title));
+        choose.appendChild(readingLabel("span", "bp-dag-result-title", match.node.title, (records.get(recordId(match.node)) || match.node).reading_title));
         choose.appendChild(element("span", "bp-dag-result-meta", statusLabel(match.node.status))).title = (palette[match.node.status] || {}).meaning || "";
         var place = placeOf(match.node), topic = (records.get(recordId(match.node)) || match.node).scope === match.node.id;
         if (place || topic) choose.appendChild(element("span", "bp-dag-result-place", topic ? "Topic" + (place ? " in " + place : "") : place));
         choose.addEventListener("click", function () { activateNode(match.node, true); }); item.appendChild(choose); list.appendChild(item);
         choose.addEventListener("keydown", searchResultKeydown);
       });
-      dom$searchResults.appendChild(list);
+      dom$searchResults.appendChild(list); refreshReadingLabels(list);
       if (matches.length > ui$searchLimit) {
         var remaining = matches.length - ui$searchLimit, increment = Math.min(SEARCH_PAGE, remaining);
         var more = button("bp-dag-load-more", "Show " + num(increment) + " more of " + num(matches.length));
@@ -2470,7 +2473,10 @@
       // An open desktop reader over an area or the overview closes with ×.
       var close = opened && !sheetLayout() && (ui$area || ui$overviewOnly || ui$scopeOverview), title = (currentBundle || data).title,
         record = records.get(currentBundle && currentBundle.nodeId || ui$requestedNode || (ui$selected && ui$selected.id));
-      dom$sheetHandle.replaceChildren(close ? "×" : record && record.status ? swatch(record.status) : "", close ? "" : title);
+      // A chapter's own record carries a rollup status, not its results', so only a statement gets a status mark.
+      var handleTitle = close ? "" : readingLabel("span", "bp-dag-sheet-title", title, record && record.title === title ? record.reading_title : null);
+      dom$sheetHandle.replaceChildren(close ? "×" : record && record.result && record.status ? swatch(record.status) : "", handleTitle);
+      if (handleTitle) refreshReadingLabels(dom$sheetHandle);
       dom$sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");
       dom$sheetHandle.title = !opened ? "Open reading" : navigation && sheetLayout() && !host.classList.contains("bp-dag-sheet-full") ? "Expand reading" : "Close reading";
       if (collapsed) {
@@ -2625,7 +2631,7 @@
     function typesetRowsInView() {
       if (ui$mathObserver) ui$mathObserver.disconnect();
       ui$mathQueue = [];
-      var lines = Array.prototype.filter.call(dom$inventoryList.querySelectorAll(".bp-result-summary"), function (line) { return line.querySelector(".bp-math-pending"); });
+      var lines = Array.prototype.filter.call(dom$inventoryList.querySelectorAll(".bp-dag-inventory-row"), function (row) { return row.querySelector(".bp-math-pending"); });
       if (!lines.length) return;
       if (typeof IntersectionObserver !== "function") { ui$mathQueue = lines; setTimeout(typesetRevealedRows, 60); return; }
       var observer = ui$mathObserver = new IntersectionObserver(function (entries) {
@@ -2661,7 +2667,10 @@
         if (ui$selected && node.id === ui$selected.id) row.setAttribute("aria-current", "true");
         dom$inventoryRows.set(node.id, row);
         var rowId = "bp-dag-row-" + instance + "-" + dom$inventoryRows.size;
-        row.appendChild(element("span", "bp-dag-inventory-title", node.title)).id = rowId + "-title";
+        // A title's formulas wait for their row to come into view, as its summary's do.
+        var titleParts = (records.get(recordId(node)) || node).reading_title, rowTitle = row.appendChild(readingLabel("span", "bp-dag-inventory-title", node.title, titleParts));
+        rowTitle.id = rowId + "-title";
+        if (titleParts) Array.prototype.forEach.call(rowTitle.querySelectorAll(".arithmatex"), function (math) { math.replaceWith(pendingMath(math.textContent)); });
         var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;
         var rowMeta = row.appendChild(element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (where ? " · " + where : "")));
         rowMeta.title = (palette[node.status] || {}).meaning || ""; rowMeta.id = rowId + "-meta";

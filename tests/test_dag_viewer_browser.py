@@ -2119,8 +2119,9 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     remote.click()
     page.wait_for_url(_site_route(page, site_url, "topology/result"))
     remote_card = full_math("topology/result", 5)
-    # The map names the selected result, and its own relations open in place of a separate strip.
-    playwright.expect(page.locator(".bp-map-context")).to_have_text("Result · uses 1 · used by 55")
+    # The map names the selected result, and its own relations open in place of a separate strip; on a desktop the
+    # counts are the reader's, said once.
+    playwright.expect(page.locator(".bp-map-context")).to_have_text("Result")
     playwright.expect(page.locator(".bp-reading-links")).to_have_count(0)
     relations = remote_card.locator("details.bp-dependencies")
     playwright.expect(relations).to_have_attribute("open", "")
