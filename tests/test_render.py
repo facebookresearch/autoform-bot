@@ -1260,8 +1260,10 @@ def test_links_naming_a_node_file_follow_it_onto_the_chapter(tmp_path: Path) -> 
 def test_the_book_nav_nests_each_page_under_its_folder_whatever_the_book_order(tmp_path: Path) -> None:
     """The book order follows links, so a landing page that links a deep page
     first put it before its chapters; indented by folder depth alone, it then
-    skipped a level, and MkDocs refused the nav. Each page now nests under the
-    nearest chapter above it, a page beside a chapter's README under that one."""
+    skipped a level, and MkDocs refused the nav. Where it did not, a page sat
+    under whichever page came just before it. Each page now nests under the
+    nearest chapter above it, a page beside a chapter's README under that one,
+    and siblings keep the book order."""
     from mkdocs_literate_nav import parser
 
     project = _project(tmp_path)
@@ -1274,12 +1276,15 @@ def test_the_book_nav_nests_each_page_under_its_folder_whatever_the_book_order(t
     roadmap = blueprint / "roadmap"
     roadmap_readme = roadmap / "README.md"
     roadmap_readme.write_text(
-        roadmap_readme.read_text(encoding="utf-8") + "\n## Chapters\n\n- [Homology](homology/README.md)\n",
+        roadmap_readme.read_text(encoding="utf-8")
+        + "\n## Chapters\n\n- [Homology](homology/README.md)\n- [Cohomology](cohomology/README.md)\n",
         encoding="utf-8",
     )
     (roadmap / "homology").mkdir()
+    # Cohomology is reached before Notes, so by book order alone Notes would sit under it.
     (roadmap / "homology/README.md").write_text(
-        "---\n---\n\n# Homology\n\n- [Notes](notes.md)\n- [Local degree](computations/local-degree/README.md)\n",
+        "---\n---\n\n# Homology\n\n- [Cohomology](../cohomology/README.md)\n"
+        "- [Local degree](computations/local-degree/README.md)\n- [Notes](notes.md)\n",
         encoding="utf-8",
     )
     (roadmap / "homology/notes.md").write_text("---\n---\n\n# Notes\n\nA narrative page.\n", encoding="utf-8")
@@ -1287,16 +1292,19 @@ def test_the_book_nav_nests_each_page_under_its_folder_whatever_the_book_order(t
     (roadmap / "homology/computations/local-degree/README.md").write_text(
         "---\n---\n\n# Local degree\n", encoding="utf-8"
     )
+    (roadmap / "cohomology").mkdir()
+    (roadmap / "cohomology/README.md").write_text("---\n---\n\n# Cohomology\n", encoding="utf-8")
 
     render_site(blueprint, tmp_path / "out", lean_root=project)
 
     nav = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
     book = [line for line in nav.splitlines() if line.startswith("    ")]
-    assert book[:4] == [
+    assert book[:5] == [
         "    - [Roadmap](roadmap/README.md)",
         "        - [Homology](roadmap/homology/README.md)",
         "            - [Local degree](roadmap/homology/computations/local-degree/README.md)",
         "            - [Notes](roadmap/homology/notes.md)",
+        "        - [Cohomology](roadmap/cohomology/README.md)",
     ]
 
     class Globber:
