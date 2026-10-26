@@ -876,7 +876,7 @@
       ui$mode = "graph", ui$moved = false, ui$orientation = "lr", ui$pointers = new Map(), ui$pinch = null,
       ui$query = "", ui$searchLimit = 12, ui$selected = null, ui$searchCache = [], ui$searchCacheQuery = null,
       ui$searchError = null, ui$searchLoading = false, ui$searchNodes = data.nodes, ui$searchPromise = null,
-      ui$spotlight = null, ui$mapAllowed = mapAllowed,
+      ui$spotlight = null, ui$mapAllowed = mapAllowed, ui$mathQueue = [], ui$mathBusy = false, ui$mathObserver = null,
       ui$selectedStatuses = new Set(presentStatuses), ui$showIsolated = true,
       ui$transform = {x: 20, y: 20, scale: 1}, ui$reading = Boolean(firstBundle && firstBundle.readingSource),
       ui$area = null, ui$overviewGroup = null, ui$scopeOverview = false, ui$overviewOnly = false, ui$filtersTouched = false, ui$relationIds = null,
@@ -2581,12 +2581,36 @@
       var pattern = /`([^`\n]+)`|\$([^$\n]+)\$|\\\(([\s\S]+?)\\\)/g, last = 0, match;
       while ((match = pattern.exec(text))) {
         if (match.index > last) line.appendChild(element("span", "", text.slice(last, match.index)));
+        // A formula waits under its own class, which MathJax does not read, until its row comes near the view.
         line.appendChild(match[1] !== undefined ? element("code", "", match[1]) :
-          element("span", "arithmatex", "\\(" + (match[2] !== undefined ? match[2] : match[3]) + "\\)"));
+          element("span", "bp-math-pending", "\\(" + (match[2] !== undefined ? match[2] : match[3]) + "\\)"));
         last = pattern.lastIndex;
       }
       if (last < text.length) line.appendChild(element("span", "", text.slice(last)));
       return line;
+    }
+    // Typesetting a page of 100 summaries at once held the page still for two seconds. A row's formulas become MathJax's
+    // to read only as the row comes near the view, after the list has painted, and a pass reads at most six rows, so a
+    // pass stays short and a scroll costs a pass or two rather than one per row.
+    function typesetRowsInView() {
+      if (ui$mathObserver) ui$mathObserver.disconnect();
+      ui$mathQueue = [];
+      var lines = Array.prototype.filter.call(dom$inventoryList.querySelectorAll(".bp-result-summary"), function (line) { return line.querySelector(".bp-math-pending"); });
+      if (!lines.length) return;
+      if (typeof IntersectionObserver !== "function") { ui$mathQueue = lines; setTimeout(typesetRevealedRows, 60); return; }
+      var observer = ui$mathObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) { if (entry.isIntersecting) { observer.unobserve(entry.target); ui$mathQueue.push(entry.target); } });
+        setTimeout(typesetRevealedRows, 60);
+      }, {root: dom$inventoryScroll, rootMargin: "200px 0px"});
+      lines.forEach(function (line) { observer.observe(line); });
+    }
+    function typesetRevealedRows() {
+      if (ui$mathBusy || !ui$mathQueue.length || !window.AutoformMath || typeof window.AutoformMath.refresh !== "function") return;
+      ui$mathQueue.splice(0, 6).forEach(function (line) {
+        Array.prototype.forEach.call(line.querySelectorAll(".bp-math-pending"), function (span) { span.className = "arithmatex"; });
+      });
+      ui$mathBusy = true;
+      Promise.resolve(window.AutoformMath.refresh(dom$inventoryList)).catch(function () {}).then(function () { ui$mathBusy = false; setTimeout(typesetRevealedRows, 0); });
     }
     function renderInventory(resetScroll) {
       if (!dom$inventoryList || ui$mode === "graph") return;
@@ -2612,7 +2636,7 @@
         if (navigation && node.summary) row.appendChild(summaryLine(node));
         row.addEventListener("click", function () { activateNode(node, true); }); item.appendChild(row); dom$inventoryList.appendChild(item);
       });
-      if (navigation) refreshReadingLabels(dom$inventoryList);
+      if (navigation) typesetRowsInView();
       // A count, or "N of M" while a page or a filter shows fewer.
       var shown = visible.length < nodes.length ? visible : nodes, total = nodes;
       dom$inventorySummary.textContent = shown.length < total.length ? num(shown.length) + " of " +

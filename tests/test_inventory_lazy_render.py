@@ -80,7 +80,7 @@ const mapAllowed=true,presentStatuses=['planned','fully_proved','inventory_pendi
 const palette={planned:{label:'planned'},fully_proved:{label:'fully proved'},inventory_pending:{label:'inventory pending'}};
 const navigation={checkpoint(method){effects.push({kind:'checkpoint',method});},navigateNode(){assert.fail('A list entry changed the canonical route');}};
 function syncControls(){dom$inventory.hidden=ui$mode==='graph';}
-function renderInspector(){}function schedule(){}function sheetLayout(){return false;}function setSheet(){}function refreshReadingLabels(){}
+function renderInspector(){}function schedule(){}function sheetLayout(){return false;}function setSheet(){}function refreshReadingLabels(){}function typesetRowsInView(){}
 function updateProjection(){}function renderNavigation(){}function resize(){}function fit(){}
 function calculateActive(){assert.fail('An available complete index was replaced by a map subset');}
 function activateNode(node){effects.push({kind:'activate',node});}

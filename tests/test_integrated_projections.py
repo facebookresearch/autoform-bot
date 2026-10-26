@@ -72,6 +72,8 @@ var ui$active, ui$activeDirty, ui$activeIds, ui$selected, ui$direction, ui$selec
 var ui$query, ui$relationIds, ui$mode, ui$listLimit;
 var plural = (count, one, many) => count.toLocaleString() + ' ' + (count === 1 ? one : many);
 var num = (value) => value.toLocaleString();
+// The list typesets a row's formulas lazily as it scrolls into view; these callbacks run without a browser.
+function typesetRowsInView() {}
 function leaf(id) {
   return {id, title: id, kind: 'node', status: 'planned', result: true,
     scope: 'chapter', parent: 'chapter', route: '../roadmap/chapter/index.html#' + encodeURIComponent(id)};
@@ -235,8 +237,8 @@ def test_a_list_row_sets_its_summarys_code_and_tex_instead_of_printing_them() ->
         summary: 'Eventually periodic sequences. A sequence $u : \\mathbb{N} \\to \\alpha$ is eventually periodic, as `mu0` checks, see \\(p\\).'});
       assert.equal(line.className, 'bp-result-summary');
       assert.deepEqual(line.children.map(part => [String(part.tagName).toLowerCase(), part.className || '', part.textContent]), [
-        ['span', '', 'A sequence '], ['span', 'arithmatex', '\\(u : \\mathbb{N} \\to \\alpha\\)'], ['span', '', ' is eventually periodic, as '],
-        ['code', '', 'mu0'], ['span', '', ' checks, see '], ['span', 'arithmatex', '\\(p\\)'], ['span', '', '.']]);
+        ['span', '', 'A sequence '], ['span', 'bp-math-pending', '\\(u : \\mathbb{N} \\to \\alpha\\)'], ['span', '', ' is eventually periodic, as '],
+        ['code', '', 'mu0'], ['span', '', ' checks, see '], ['span', 'bp-math-pending', '\\(p\\)'], ['span', '', '.']]);
       // A summary that only shares the title's opening words keeps them.
       assert.equal(summaryLine({title: 'Group', summary: 'Groups act on sets.'}).textContent, 'Groups act on sets.');
       assert.equal(summaryLine({title: 'Lemma', summary: 'Plain prose.'}).textContent, 'Plain prose.');
