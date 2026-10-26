@@ -182,7 +182,7 @@ def write_graph_pages(
     index_digests: list[str] = []
     dag_viewer.write_search_index(
         search_index, complete, context_links=context_links, metadata=metadata, include_relations=True,
-        sha256_out=index_digests if captured_sources is not None else None,
+        sha256_out=index_digests if captured_sources is not None else None, warnings_out=warnings_out,
     )
     if captured_sources is not None:
         references = dag_viewer.extract_wiki_links(

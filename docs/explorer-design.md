@@ -1,15 +1,13 @@
 # Explorer ownership and failure model
 
 The mathematical reader and map share one client. Dependency-page URLs are
-canonical reading aliases, not a second renderer. Payloads and controller hooks
-are internal implementation details, not a public viewer API.
+canonical reading aliases, not a second renderer. Payloads/controller hooks are internal, not a public viewer API.
 
 ## Evidence and publication
 
 Captured `blueprint/roadmap/` Markdown owns articles and the typed, weighted
 formal DAG. Authored containment and areas organize navigation, not prerequisites.
-Optional authored wiki links form a distinct layer: they may associate intact
-formal components, but cannot change ranks, readiness or proof status.
+Optional authored wiki links associate intact formal components, never ranks, readiness or proof status.
 
 [render.py](../autoform_cli/render.py) retains source captures and assembles safe
 reading pages; rereading its private staged pages is not rereading authored input.
@@ -25,6 +23,7 @@ bounded same-origin fetches, coalesced index loading, exact-byte digests, reques
 epochs/aborts, caches and the versioned history namespace. Index batches yield
 to visible frames with a timer fallback; validation publishes no partial index.
 Parents/relations decode index offsets to IDs; wiki links bind the exact wire SHA. Unavailable is not zero.
+Directory aliases preserve statement fragments without weakening exact resource/canonical validation.
 Fetched HTML must come from a compatible publishable producer. Fragment copying,
 active-tag removal and URL rebasing are defense in depth, not a generic sanitizer.
 
@@ -41,8 +40,11 @@ mismatches. A new-tab canonical article provides fresh server-rendered reading.
 [blueprint-dag.js](../autoform_cli/assets/blueprint-dag.js) owns the bounded scene,
 camera, filters and reader state. Canvas paints routes; native DOM controls provide
 readable labels, keyboard focus and hit targets. The 120-node scene bound limits
-geometry, not the complete published index or paged inventory. Fit may crop rather
-than shrink text. Formal arrows and dotted wiki associations remain distinct.
+geometry, not index membership or paged structural shelves. Group before this cap;
+only authored areas name mathematical regions. Collections and real components are structural.
+Fit compares bounded orientations and frames drilled members/local cards, not distant context.
+An unselected connection backbone reduces condensation transitively; its key reports shown/total.
+Canonical weights/SCCs and reader lists stay complete; selected maps restore full bounded-neighborhood routes.
 Server-produced pages contain complete mathematical reading and theorem anchors
 without JavaScript; enhancement uses published fragments, never graph summaries.
 
@@ -56,10 +58,8 @@ code stays literal. Refreshes add no MathJax menus or tab stops inside controls.
 [build-explorer.mjs](../scripts/build-explorer.mjs) fingerprints canonical UTF-8/LF
 development source text. This is distinct from raw captured mathematical inputs,
 the exact-byte index/sidecar binding, and the emitted runtime's byte SHA.
-Pinned development-only compilers produce one prebuilt JS asset below 132 KB;
-consumers need no Node. Unsafe compression, public-field mangling and raw-source
-fallbacks are forbidden; stale or missing bundles fail publication.
+Pinned development-only compilers ship one asset below 132 KB; consumers need no Node.
+Unsafe compression, public-field mangling/raw-source fallbacks are forbidden; stale bundles fail publication.
 
-Source/unit and independent geometry tests check contracts, lifecycle, ranks, conservation and collisions.
-Actual MathJax/Node and WebKit check glyphs, native hits, focus and Back.
+Source/unit and geometry tests check lifecycle, ranks, conservation/collisions; MathJax/WebKit check glyphs, hits/focus and Back.
 Whole-Atlas qualification checks corpus preservation, strict publication and UI timing—not kernel certification.

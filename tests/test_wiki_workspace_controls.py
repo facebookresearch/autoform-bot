@@ -26,12 +26,12 @@ function original(name) {
   assert.fail('Unparseable production callback: '+name);
 }
 const names=['element','readingLabel','button','recordId','semanticParent','topicPeers','neighborIds','neighborhood',
-  'relationCounts','renderReaderContext','inventoryNodes'];
+  'relationCounts','renderReaderContext','inventoryNodes','sourceNodes','inCurrentScope'];
 const constants=['NODE_W','plural'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
 }).join('\n');
-const context={assert};vm.createContext(context);
+const context={assert,URL};vm.createContext(context);
 const production=constants+'\n'+names.map(original).join('\n');
 """
 
@@ -44,6 +44,7 @@ class Element {
   set textContent(value) {this.text=String(value);this.children=[];}
   setAttribute(name,value) {this.attrs.set(name,String(value));}
   getAttribute(name) {return this.attrs.has(name)?this.attrs.get(name):null;}
+  removeAttribute(name) {this.attrs.delete(name);}
   appendChild(child) {this.children.push(child);return child;}
   replaceChildren(...children) {this.children=children;this.text='';}
   addEventListener(type,callback) {this.listeners.set(type,callback);}
@@ -83,13 +84,21 @@ class Element {
   constructor(tag) {
     this.tagName=tag.toUpperCase();this.children=[];this.listeners=new Map();this.attrs=new Map();
     this.dataset={};this.hidden=false;this.text='';this.focuses=[];
-    this.classList={toggle(){}};this.style={setProperty(){}};
+    this.classes=new Set();
+    this.classList={contains:name=>this.classes.has(name),
+      toggle:(name,enabled)=>{if(enabled)this.classes.add(name);else this.classes.delete(name);}};
+    this.style={setProperty(name,value){this[name]=String(value);}};
   }
   get textContent() {return this.text+this.children.map(child=>child.textContent).join('');}
   set textContent(value) {this.text=String(value);this.children=[];}
   setAttribute(name,value) {this.attrs.set(name,String(value));}
   getAttribute(name) {return this.attrs.has(name)?this.attrs.get(name):null;}
+  removeAttribute(name) {this.attrs.delete(name);}
   appendChild(child) {child.parentElement=this;this.children.push(child);return child;}
+  remove() {
+    const parent=this.parentElement;if(!parent)return;
+    parent.children=parent.children.filter(child=>child!==this);this.parentElement=null;
+  }
   insertBefore(child,before) {child.parentElement=this;this.children.splice(this.children.indexOf(before),0,child);}
   replaceChildren(...children) {this.children=[];this.text='';children.forEach(child=>this.appendChild(child));}
   contains(node) {return node===this||this.children.some(child=>child.contains(node));}
@@ -105,7 +114,17 @@ const document=new Element('document');document.body=new Element('body');documen
 document.createElement=tag=>new Element(tag);
 document.createTextNode=text=>{const node=new Element('text');node.textContent=text;return node;};
 const window=new Element('window'),host=new Element('div'),records=new Map(),modes=[],observers=[];
-const navigation={bindReader(){}};
+window.location={href:'https://example.test/chapter/',origin:'https://example.test'};
+const source=Object.assign({id:'chapter/source',scope:'chapter/source',parent:'chapter',kind:'scope',result:false,
+  navigation:'source',title:'Authored source',status:'planned',route:'https://example.test/chapter/source/'});
+var sharedIndex={nodes:[
+  {id:'roadmap',scope:'roadmap',parent:null,kind:'scope',result:false,title:'Authored library',route:'https://example.test/roadmap/'},
+  {id:'chapter',scope:'chapter',parent:'roadmap',kind:'scope',result:false,title:'Authored topic',route:'https://example.test/chapter/'},
+  source],relations:[]};
+sharedIndex.nodes.forEach(node=>records.set(node.id,node));
+var homeURL='https://example.test/index.html',navigationCalls=[];
+const navigation={bindReader(){},getHomeURL(){return homeURL;},
+  navigate(url,options){navigationCalls.push({url,options});}};
 var currentBundle={nodeId:'chapter',scope:'chapter',title:'Authored topic',url:'https://example.test/chapter/',graph:{view:{}}};
 var instance=1,trail=[],view={},family,data={title:'Authored topic',nodes:[],edges:[]};
 var mapAllowed=true,ui$mapAllowed=true,ui$mode='graph',ui$selectedStatuses=new Set(['planned']),ui$showIsolated=true;
@@ -121,6 +140,8 @@ function ensureGlobalSearch(){}function fit(){}function revealAll(){}function op
 function pointerDown(){}function pointerMove(){}function pointerUp(){}function resize(){}
 function syncSheetAccessibility(){}function schedule(){}function remember(){}
 function closeSearch(){}function setFilters(){}
+// Scene/shelf rendering is outside these toolbar-control assertions.
+function geometry(){return {};}function renderShelves(){}
 function setMode(mode,push) {
   assert.equal(dom$browsePopover.hidden,true,'Browse choices must close before mode dispatch');
   modes.push({mode,push});ui$mode=mode;syncControls();
@@ -142,8 +163,8 @@ def _run(body: str) -> None:
 
 def _run_controls(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
-    script += "const controls=['element','button','safeHref','buildShell','bindEvents','setBrowse','syncControls','currentOverviewGroup',"
-    script += "'renderBreadcrumb','routeTrail','semanticParent','refreshReadingLabels'].map(original).join('\\n');\n"
+    script += "const controls=['element','button','readingLabel','safeHref','buildShell','bindEvents','setBrowse','syncControls','currentOverviewGroup',"
+    script += "'renderBreadcrumb','routeTrail','semanticParent','refreshReadingLabels','sourceNodes','inCurrentScope'].map(original).join('\\n');\n"
     script += "const start=source.indexOf('    var dom$announcement,');assert(start>=0);\n"
     script += "const domDeclarations=source.slice(start,source.indexOf(';',start)+1);\n"
     program = _CONTROL_PEERS + "\n" + body
@@ -224,6 +245,157 @@ def test_passive_browse_closes_preserve_the_focus_destination() -> None:
       outside.focus({});emit(dom$browse,'focusout',{target:dom$listMode,relatedTarget:outside});
       assert.equal(dom$browsePopover.hidden,true);assert.equal(document.activeElement,outside);
       assert.equal(dom$browseToggle.focuses.length,before);
+    """)
+
+
+def test_source_pool_uses_authored_descendants_not_scope_defaults_or_path_prefixes() -> None:
+    _run(r"""
+      const collection=record('collection','collection',{parent:'chapter',navigation:'collection'});
+      const transparent=record('pagination','pagination',{parent:'collection',navigation:'transparent'});
+      const direct=record('direct-source','direct-source',{parent:'chapter',navigation:'source',result:false});
+      const nested=record('nested-source','nested-source',{parent:'pagination',navigation:'source',result:false});
+      const other=record('other','other',{parent:'roadmap'});
+      const elsewhere=record('chapter/source-looking-path','chapter',{parent:'other',navigation:'source',result:false});
+      const unknown=record('unknown-source','chapter',{parent:'missing',navigation:'source',result:false});
+      const cycle=record('cycle-source','cycle-source',{parent:'loop',navigation:'source',result:false});
+      const loop=record('loop','loop',{parent:cycle.id});
+      configure([focus,collection,elsewhere,transparent,direct,other,nested,unknown,cycle,loop],[],owner.id);
+      const before=snapshot();
+      const localSources=sourceNodes();assert.deepEqual(localSources.map(node=>node.id),[direct.id,nested.id]);
+      assert.strictEqual(sourceNodes(),localSources,'The same published index/scope must reuse its bounded source selection');
+      ui$mode='sources';assert.deepEqual(inventoryNodes().map(node=>node.id),[direct.id,nested.id]);
+      ui$query='absent query';ui$selectedStatuses.clear();
+      assert.strictEqual(sourceNodes(),localSources);
+      assert.deepEqual(sourceNodes().map(node=>node.id),[direct.id,nested.id],
+        'Source availability is authored content, not a search or status-filter result');
+      currentBundle={nodeId:'roadmap',scope:'roadmap'};
+      assert.deepEqual(sourceNodes().map(node=>node.id),[elsewhere.id,direct.id,nested.id,unknown.id,cycle.id]);
+      assert.equal(snapshot(),before,'Selecting the source pool must not mutate index nodes or typed dependencies');
+    """)
+
+
+def test_deep_source_ancestry_is_memoized_with_linear_record_lookup_work() -> None:
+    _run(r"""
+      const chain=Array.from({length:1000},(_,number)=>record('S'+number,'S'+number,
+        {parent:number?'S'+(number-1):owner.id,navigation:'source',result:false}));
+      const leaves=Array.from({length:16},(_,number)=>record('L'+number,owner.id,{parent:chain.at(-1).id}));
+      configure([...chain].reverse().concat(leaves),[],owner.id);
+      const before=snapshot();let gets=0;
+      records.get=function(id){gets++;return Map.prototype.get.call(this,id);};
+      const selected=sourceNodes();
+      assert.deepEqual(selected.map(node=>node.id),[...chain].reverse().map(node=>node.id));
+      assert(gets<=chain.length+8,'A deep-first source chain must not repeat its full ancestry for every descendant');
+      const afterSources=gets;assert.strictEqual(sourceNodes(),selected);assert.equal(gets,afterSources);
+      ui$mode='list';assert.deepEqual(inventoryNodes().map(node=>node.id),leaves.map(node=>node.id));
+      assert(gets<=chain.length+leaves.length+12,'Inventory and source selection must share the validated ancestry cache');
+      const afterInventory=gets;inventoryNodes();assert.equal(gets,afterInventory);
+      ui$query='irrelevant';ui$selectedStatuses.clear();
+      assert.strictEqual(sourceNodes(),selected);assert.equal(gets,afterInventory);
+      assert.equal(snapshot(),before,'Memoized ancestry must not annotate or rewrite authored index records');
+    """)
+
+
+@pytest.mark.parametrize("failure", ["missing-parent", "cyclic-parent"])
+def test_nonreaching_local_parent_chain_cannot_claim_source_or_result_membership(failure: str) -> None:
+    _run("const failure=" + json.dumps(failure) + ";\n" + r"""
+      const branch=record('branch','branch',{parent:failure==='cyclic-parent'?'loop':'absent-parent'});
+      const source=record('source','source',{parent:branch.id,navigation:'source',result:false});
+      const result=record('result',owner.id,{parent:branch.id}),loop=record('loop','loop',{parent:branch.id});
+      configure([branch,source,result,loop],[],owner.id);
+      const before=snapshot();
+      assert.equal(inCurrentScope(source),false);assert.equal(inCurrentScope(result),false);
+      assert.deepEqual(sourceNodes(),[]);ui$mode='list';assert.deepEqual(inventoryNodes(),[]);
+      assert.equal(snapshot(),before,'A local chain which never reaches the selected scope cannot invent membership');
+    """)
+
+
+@pytest.mark.parametrize("legacy", ["upstream-dangling", "declared-scope-not-indexed"])
+def test_declared_local_scope_membership_preserves_legacy_unknown_upstream_ownership(legacy: str) -> None:
+    _run("const legacy=" + json.dumps(legacy) + ";\n" + r"""
+      const scope=legacy==='declared-scope-not-indexed'?'legacy-scope':owner.id;
+      const source=record('source','source',{parent:scope,navigation:'source',result:false});
+      const theorem=record('theorem',scope,{parent:scope});configure([source,theorem],[],owner.id);
+      currentBundle.scope=scope;if(legacy==='upstream-dangling') owner.parent='unknown-upstream';
+      const before=snapshot();
+      assert.equal(inCurrentScope(source),true);assert.equal(inCurrentScope(theorem),true);
+      assert.deepEqual(sourceNodes().map(node=>node.id),[source.id]);
+      ui$mode='list';assert.deepEqual(inventoryNodes().map(node=>node.id),[theorem.id]);
+      assert.equal(snapshot(),before,'Membership below a declared scope must not rewrite or reject legacy upstream parents');
+    """)
+
+
+def test_empty_source_scope_makes_browse_a_direct_statement_action_not_an_empty_menu() -> None:
+    _run_controls(r"""
+      const before=JSON.stringify(sharedIndex);
+      sharedIndex=Object.assign({},sharedIndex,{nodes:sharedIndex.nodes.filter(node=>node!==source)});records.delete(source.id);
+      syncControls();
+      assert(!dom$sourcesMode||!dom$browsePopover.contains(dom$sourcesMode),
+        'An empty authored source pool must not expose a Source action');
+      assert.equal(dom$browsePopover.hidden,true);
+      assert.equal(dom$browseToggle.getAttribute('aria-controls'),null);
+      assert.equal(dom$browseToggle.getAttribute('aria-expanded'),null);
+      dom$browseToggle.focus({});emit(dom$browseToggle,'click');
+      assert.equal(dom$browsePopover.hidden,true,'A single Statements action must not open an empty disclosure');
+      assert.deepEqual(modes,[{mode:'list',push:true}]);assert.equal(ui$relationIds,null);
+      assert.equal(document.activeElement,dom$browseToggle);
+      sharedIndex=Object.assign({},sharedIndex,{nodes:sharedIndex.nodes.concat(source)});records.set(source.id,source);
+      ui$mode='graph';syncControls();
+      assert(dom$sourcesMode&&dom$browsePopover.contains(dom$sourcesMode)&&!dom$sourcesMode.hidden);
+      emit(dom$browseToggle,'click');assert.equal(dom$browsePopover.hidden,false);
+      assert.deepEqual(modes,[{mode:'list',push:true}],'Adding real sources restores disclosure, not a second dispatch');
+      assert.equal(JSON.stringify(sharedIndex),before);
+    """)
+
+
+def test_losing_scoped_sources_closes_the_owned_menu_and_returns_focus_before_detaching_its_choice() -> None:
+    _run_controls(r"""
+      emit(dom$browseToggle,'click');dom$sourcesMode.focus({});
+      assert.equal(dom$browsePopover.hidden,false);
+      sharedIndex=Object.assign({},sharedIndex,{nodes:sharedIndex.nodes.filter(node=>node!==source)});records.delete(source.id);
+      syncControls();
+      assert.equal(dom$browsePopover.hidden,true);assert.equal(dom$browsePopover.contains(dom$sourcesMode),false);
+      assert.equal(document.activeElement,dom$browseToggle);
+      assert.deepEqual(dom$browseToggle.focuses.at(-1),{preventScroll:true});
+      assert.equal(dom$browseToggle.getAttribute('aria-controls'),null);
+      assert.equal(dom$browseToggle.getAttribute('aria-expanded'),null);
+      assert.deepEqual(modes,[],'Source disappearance is not a user navigation');
+    """)
+
+
+def test_source_free_direct_statement_button_handles_keyboard_generated_click_without_opening_a_menu() -> None:
+    _run_controls(r"""
+      sharedIndex=Object.assign({},sharedIndex,{nodes:sharedIndex.nodes.filter(node=>node!==source)});records.delete(source.id);
+      syncControls();dom$browseToggle.focus({});
+      assert.equal(dom$browseToggle.type,'button');
+      assert.equal(dom$browseToggle.getAttribute('aria-controls'),null);
+      assert.equal(dom$browseToggle.getAttribute('aria-expanded'),null);
+      // Native Enter/Space button activation produces a zero-detail click;
+      // the peer does not pretend to synthesize browser default key handling.
+      emit(dom$browseToggle,'click',{button:0,detail:0});
+      assert.deepEqual(modes,[{mode:'list',push:true}]);assert.equal(ui$relationIds,null);
+      assert.equal(dom$browsePopover.hidden,true);assert.equal(document.activeElement,dom$browseToggle);
+      assert.equal(dom$browsePopover.contains(dom$sourcesMode),false);
+    """)
+
+
+def test_library_control_targets_deployment_home_and_preserves_native_modified_clicks() -> None:
+    _run_controls(r"""
+      homeURL='https://example.test/deployed/project/index.html';
+      sharedIndex=null;records.clear();
+      buildShell();bindEvents();
+      assert.equal(dom$homeLink.href,homeURL,
+        'Library must lead to site home even when the index is unavailable and no outline can retarget it');
+      for(const settings of [{ctrlKey:true},{metaKey:true},{shiftKey:true},{altKey:true},{button:1},{button:2},{defaultPrevented:true}]) {
+        const count=navigationCalls.length,event=emit(dom$homeLink,'click',Object.assign({button:0},settings));
+        assert.equal(event.defaultPrevented,Boolean(settings.defaultPrevented));
+        assert.equal(navigationCalls.length,count);
+      }
+      const event=emit(dom$homeLink,'click',{button:0});assert.equal(event.defaultPrevented,true);
+      assert.equal(navigationCalls.at(-1).url,homeURL);assert.equal(navigationCalls.at(-1).options.history,'push');
+      currentBundle={nodeId:null,scope:'roadmap',title:'Authored library',url:homeURL,graph:{view:{}}};
+      const entries=routeTrail(currentBundle);
+      assert.equal(entries.length,1,'The site home must not pretend to be inside the roadmap trail');
+      assert.equal(entries[0].url,null,'The only home crumb is current, not a link to another view');
     """)
 
 

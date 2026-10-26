@@ -224,9 +224,12 @@ def test_stage_aspect_packs_weak_components_without_redefining_sccs_or_shared_ro
       assert.equal(normal(wide),normal(check(shuffled,direction,layoutGraph(shuffled.nodes,shuffled.edges,direction,2))),
         'Component placement must not depend on input ordering');
       const connected={{nodes:fixture.nodes.slice(0,3),edges:fixture.edges.filter(edge=>edge.source!=='N003')}};
-      assert.equal(normal(layoutGraph(connected.nodes,connected.edges,direction,.5)),
-        normal(layoutGraph(connected.nodes,connected.edges,direction,2)),
-        'Stage aspect cannot rearrange a single connected mathematical graph');
+      const connectedTall=check(connected,direction,layoutGraph(connected.nodes,connected.edges,direction,.5));
+      const connectedWide=check(connected,direction,layoutGraph(connected.nodes,connected.edges,direction,2));
+      assert.deepEqual(connectedTall.clusters,connectedWide.clusters,
+        'Aspect-aware small SCC packing cannot change canonical components or ranks');
+      assert.deepEqual(connectedTall.routes.map(route=>[route.source,route.target,route.kind,route.count]),
+        connectedWide.routes.map(route=>[route.source,route.target,route.kind,route.count]));
       const defaultScene=layoutGraph(fixture.nodes,fixture.edges,direction);
       [0,-1,Infinity,NaN,'2',()=>assert.fail('An obsolete label callback was invoked')].forEach(aspect=>
         assert.equal(normal(defaultScene),normal(layoutGraph(fixture.nodes,fixture.edges,direction,aspect))));
@@ -306,6 +309,46 @@ def test_captured_five_area_root_keeps_all_cross_area_weights_and_clear_routes(d
         assert sum(edge[kind] for edge in fixture["edges"]) == total
         assert sum(edge[kind] for edge in captured["edges"] if owners[edge["source"]] != owners[edge["target"]]) == total
     _run(f"const result=check(fixture,{json.dumps(direction)});assert.equal(result.routes.length,19);", fixture)
+
+
+@pytest.mark.parametrize(("stage_width", "stage_height", "width", "height", "direction"), [
+    (1336, 810.515625, 264, 148, "lr"),
+    (952, 722.328125, 264, 148, "lr"),
+    (570, 722.328125, 312, 96, "tb"),
+    (390, 650.59375, 312, 96, "tb"),
+])
+def test_actual_atlas_five_area_cards_fit_readably_without_changing_sccs_or_weights(
+    stage_width: int, stage_height: float, width: int, height: int, direction: str,
+) -> None:
+    # Exact authored-area graph from the qualified e2a Atlas receipt, not a
+    # synthetic dependency grid. These card-bound checks are not native UI proof.
+    areas = ["Algebra & Number Theory", "Analysis & Probability", "Discrete Mathematics & Computer Science",
+             "Geometry & Topology", "Foundations & Logic"]
+    weights = [(0, 1, 22, 74), (0, 2, 132, 26), (1, 2, 50, 79), (1, 3, 0, 9), (1, 0, 66, 49),
+               (2, 0, 118, 68), (2, 1, 0, 9), (2, 3, 0, 2), (3, 1, 3, 4), (3, 2, 1, 5),
+               (4, 2, 362, 342), (0, 3, 1, 4), (3, 0, 1, 3)]
+    fixture = {
+        "nodes": [{"id": "region:" + area, "area": area, "width": width, "height": height} for area in areas],
+        "edges": [{"source": "region:" + areas[a], "target": "region:" + areas[b], "statement": statement, "proof": proof}
+                  for a, b, statement, proof in weights],
+    }
+    _run(f"""
+      const direction={json.dumps(direction)},stage={{w:{stage_width},h:{stage_height}}};
+      const scene=check(fixture,direction,layoutGraph(fixture.nodes,fixture.edges,direction,stage.w/stage.h));
+      assert.equal(scene.routes.length,23);assert.deepEqual(scene.clusters.map(cluster=>cluster.members.length).sort(),[1,4]);
+      const boxes=Array.from(scene.nodes.values()),left=Math.min(...boxes.map(box=>box.x)),top=Math.min(...boxes.map(box=>box.y));
+      const width=Math.max(...boxes.map(box=>box.x+box.w))-left,height=Math.max(...boxes.map(box=>box.y+box.h))-top;
+      assert(width*.9<=stage.w-24&&height*.9<=stage.h-24,
+        'The actual five-area cards cannot all fit at the unchanged readable floor and containment margin');
+      const x=(stage.w-width*.9)/2-left*.9,y=(stage.h-height*.9)/2-top*.9;
+      boxes.forEach(box=>{{
+        assert(box.x*.9+x>=12&&box.y*.9+y>=12);
+        assert((box.x+box.w)*.9+x<=stage.w-12&&(box.y+box.h)*.9+y<=stage.h-12);
+        assert.equal(box.rank,box.id==='region:Foundations & Logic'?0:1);
+      }});
+      assert.equal(scene.routes.reduce((sum,route)=>sum+(route.kind==='statement'?route.count:0),0),756);
+      assert.equal(scene.routes.reduce((sum,route)=>sum+(route.kind==='proof'?route.count:0),0),674);
+    """, fixture)
 
 
 @pytest.mark.parametrize("entry", ["roadmap", "resultA"])
@@ -470,6 +513,77 @@ def test_cyclic_links_face_their_actual_target_without_perimeter_detours(directi
         assert(travelled<=direct+96,'A clear cyclic link should not take a scenic route');
       }});
       assert.equal(scene.routes.length,4);assert.equal(scene.clusters.length,1);
+    """, fixture)
+
+
+@pytest.mark.parametrize("direction", ["lr", "tb"])
+def test_small_sccs_pack_to_physical_stage_aspect_without_changing_routes_or_dimensions(direction: str) -> None:
+    fixture = {
+        "nodes": [{"id": f"area:{number}", "width": 264, "height": 148} for number in range(4)],
+        "edges": [{"source": f"area:{number}", "target": f"area:{(number + 1) % 4}",
+                   "statement": number + 1, "proof": number + 2} for number in range(4)],
+    }
+    _run(f"""
+      const direction={json.dumps(direction)},before=JSON.stringify(fixture);
+      const tall=check(fixture,direction,layoutGraph(fixture.nodes,fixture.edges,direction,.4));
+      const wide=check(fixture,direction,layoutGraph(fixture.nodes,fixture.edges,direction,2.2));
+      const ratio=scene=>{{const boxes=Array.from(scene.nodes.values());
+        return (Math.max(...boxes.map(box=>box.x+box.w))-Math.min(...boxes.map(box=>box.x)))/
+          (Math.max(...boxes.map(box=>box.y+box.h))-Math.min(...boxes.map(box=>box.y)));}};
+      assert(ratio(wide)>ratio(tall),'A physical wide stage must not inherit the SCC spiral');
+      assert.deepEqual(tall.clusters,wide.clusters);assert.equal(wide.clusters.length,1);
+      assert.equal(wide.clusters[0].members.length,4);assert.equal(wide.clusters[0].rank,0);
+      assert.equal(wide.routes.length,8);assert(wide.routes.every(route=>route.count>0));
+      const defaultScene=check(fixture,direction);
+      assert(defaultScene.bounds.w<=950&&defaultScene.bounds.h<=950,'Four area cards occupy an unnecessarily sprawling envelope');
+      assert.equal(JSON.stringify(fixture),before);
+    """, fixture)
+
+
+@pytest.mark.parametrize("direction", ["lr", "tb"])
+def test_dense_display_backbone_keeps_canonical_ranks_and_reports_every_omitted_pair(direction: str) -> None:
+    fixture = _graph(8, [(source, target, source + 1, target)
+                         for source in range(8) for target in range(source + 1, 8)])
+    _run(f"""
+      const direction={json.dumps(direction)},before=JSON.stringify(fixture);
+      const full=check(fixture,direction),scene=layoutGraph(fixture.nodes,fixture.edges,direction,1.4,undefined,true);
+      assert.equal(JSON.stringify(fixture),before,'Display reduction changed authored source');
+      assert.deepEqual(scene.clusters,full.clusters,'Display reduction changed canonical SCCs or ranks');
+      assert.deepEqual(scene.$display,{{totalPairs:28,shownPairs:7,totalRoutes:56,shownRoutes:7,reduced:true}});
+      const expected=fixture.edges.filter(edge=>Number(edge.target.slice(1))===Number(edge.source.slice(1))+1);
+      assert.deepEqual(scene.routes.map(route=>[route.source,route.target,route.kind,route.count,route.$statement,route.$proof]),
+        expected.map(edge=>[edge.source,edge.target,'statement',edge.statement+edge.proof,edge.statement,edge.proof]));
+      const displayed={{nodes:fixture.nodes,edges:expected.map(edge=>({{source:edge.source,target:edge.target,
+        statement:edge.statement+edge.proof,proof:0}}))}};
+      check(displayed,direction,scene);
+      assert(scene.routes.every(route=>!route.detoured),'A reduced chain still takes whole-island trunk lanes');
+      const shuffled={{nodes:fixture.nodes.slice().reverse(),edges:fixture.edges.slice().reverse()}};
+      assert.equal(normal(scene),normal(layoutGraph(shuffled.nodes,shuffled.edges,direction,1.4,undefined,true)));
+      assert.equal(full.routes.length,56,'Full spotlight mode must retain every typed route');
+    """, fixture)
+
+
+@pytest.mark.parametrize("direction", ["lr", "tb"])
+def test_display_backbone_never_discards_or_redistributes_intra_scc_statement_and_proof_weights(direction: str) -> None:
+    fixture = _graph(5, [(0, 1, 2, 3), (1, 2, 5, 7), (2, 0, 11, 13), (0, 3, 17, 19),
+                         (3, 4, 23, 29), (2, 4, 31, 37), (0, 1, 3, 5)])
+    _run(f"""
+      const direction={json.dumps(direction)},before=JSON.stringify(fixture);
+      const full=check(fixture,direction),scene=layoutGraph(fixture.nodes,fixture.edges,direction,1.4,undefined,true);
+      const expected=[{{source:'N000',target:'N001',statement:5,proof:8}},{{source:'N000',target:'N003',statement:17,proof:19}},
+        {{source:'N001',target:'N002',statement:5,proof:7}},{{source:'N002',target:'N000',statement:11,proof:13}},
+        {{source:'N003',target:'N004',statement:23,proof:29}}];
+      assert.deepEqual(scene.clusters,full.clusters);assert.equal(scene.clusters.filter(cluster=>cluster.members.length===3).length,1);
+      assert.deepEqual(scene.$display,{{totalPairs:6,shownPairs:5,totalRoutes:14,shownRoutes:5,reduced:true}});
+      assert.deepEqual(scene.routes.map(route=>[route.source,route.target,route.$statement,route.$proof]),
+        expected.map(edge=>[edge.source,edge.target,edge.statement,edge.proof]));
+      const internal=scene.routes.filter(route=>Number(route.source.slice(1))<3&&Number(route.target.slice(1))<3);
+      assert.equal(internal.length,3);assert.equal(internal.reduce((sum,route)=>sum+route.$statement,0),21);
+      assert.equal(internal.reduce((sum,route)=>sum+route.$proof,0),28,'Every duplicate intra-SCC proof weight must survive');
+      const displayed={{nodes:fixture.nodes,edges:expected.map(edge=>({{source:edge.source,target:edge.target,
+        statement:edge.statement+edge.proof,proof:0}}))}};
+      check(displayed,direction,scene);assert.equal(full.routes.length,14);
+      assert.equal(JSON.stringify(fixture),before);
     """, fixture)
 
 

@@ -35,9 +35,9 @@ function original(name) {
 const constants = source.match(/\bvar NODE_W =[^;]+;/);
 assert(constants, 'Production map constants missing');
 const functions = [
-  'element', 'button', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
+  'element', 'button', 'readingLabel', 'refreshReadingLabels', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
   'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'matchesStatus', 'calculateActive',
-  'statusLabel', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory'
+  'statusLabel', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'inCurrentScope', 'sourceNodes', 'renderInventory'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');
 const sandbox = {assert, URL, fixtureText}; vm.createContext(sandbox);

@@ -11,6 +11,16 @@ date when the release is tagged.
 
 ### Changed
 
+- **Integrated reading.** The book, theorem search and dependency map share
+  one persistent workspace. The outline follows authored containment, includes
+  root-level pages and labels collections as subheads; Home returns to the site.
+  Large scopes group before the scene cap, with paged structural shelves for
+  topics without local formal links. Empty source choices are hidden (#442).
+- **Map framing.** Small cycles pack to the viewport's aspect, and bounded
+  maps compare both orientations. Fit frames local or drilled cards without
+  shrinking their labels. Dense unselected maps show an explicitly counted
+  connection backbone; all typed dependencies remain in article lists, and
+  selected results restore full routes in their bounded neighborhoods (#442).
 - **Wiki map.** Authored concept links cluster intact formal developments,
   with distinct dotted associations and bounded local corridors. Proof edges,
   ranks, status and full reading pages remain unchanged (#442).
@@ -63,6 +73,10 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Reading and index feedback.** Valid HTML character references keep title
+  math without admitting authored HTML. Publication warns when the exact
+  UTF-8 search index reaches 95% of the unchanged 32 MiB browser limit; nothing
+  is truncated or refused. Directory aliases retain statement fragments (#442).
 - **Wiki references.** Section boundaries come from the site's converter, so
   Setext and formatted Sources headings cannot turn provenance into concept
   links. Formal dependencies, statuses and captured article bytes are unchanged (#442).
@@ -76,7 +90,7 @@ date when the release is tagged.
   timer tasks. Parent references use the same compact node offsets as relations;
   the client restores their exact IDs before publication. No content is dropped (#442).
 - **Wiki reading links.** The integrated explorer retains #455's title math
-  in its outline, breadcrumbs and related-reading controls, using safe MathJax
+  in its outline, breadcrumbs, paged inventory and related-reading controls, using safe MathJax
   service and project macros. Code stays literal, canonical links keep focus
   and native modifiers, and graph labels remain as typed (#442).
 - **Claims.** `autoform dashboard` runs its claim listing's Git in the

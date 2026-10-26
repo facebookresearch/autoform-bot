@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer
+from autoform_cli import dag_viewer, markdown
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
 from autoform_cli.mathjax import mathjax_script
 from tests.test_site_mathjax_node import _node_report, mathjax_package
@@ -20,6 +20,7 @@ _ROOT = Path(__file__).resolve().parents[1]
 _CLIENT = _ROOT / "autoform_cli/assets/blueprint-dag.js"
 _NODE = shutil.which("node")
 _TITLE = r"Groups $\mathbb{Z}/n$"
+_ENTITY_TITLE = r"Groups &amp; rings $\mathbb{Z}/n$"
 _SUMMARY = r"Cyclic **groups** $\ZZ/n$ retain code `$literal$`."
 _CODE_TITLE = r"Notation $x$ and `</div><script>window.__titlePwned=1</script>`."
 
@@ -57,6 +58,51 @@ def test_literal_attribute_like_suffix_stays_text_without_becoming_an_attribute(
         "format": "inline-parts-v1", "source": text,
         "parts": [["text", "Math "], ["math", r"\(x\)"], ["text", " {.untrusted}"]],
     }
+
+
+@pytest.mark.parametrize(("reference", "visible"), [
+    ("&amp;", "&"), ("&#38;", "&"), ("&#x26;", "&"), ("&lt;", "<"),
+    ("&#60;", "<"), ("&NotEqualTilde;", "≂̸"), ("&#x1F600;", "😀"),
+])
+def test_valid_character_references_keep_math_parts_and_exact_title_source(reference: str, visible: str) -> None:
+    text = f"Groups {reference} rings $x$"
+    assert dag_viewer._reading_label(text) == {
+        "format": "inline-parts-v1", "source": text,
+        "parts": [["text", f"Groups {visible} rings "], ["math", r"\(x\)"]],
+    }
+
+
+@pytest.mark.parametrize("text", [
+    "Math $x$ &unknownReference;", "Math $x$ &123;",
+    "Math $x$ <script>&amp;window.__titlePwned=1</script>",
+    'Math $x$ <span title="&amp;">unsafe</span>',
+    'Math $x$ <img src="&amp;" onerror="window.__titlePwned=1">',
+    "Math $x$ [Groups &amp; rings](other.md)", "Math $x$ ![Groups &amp; rings](image.png)",
+    "Math $x$\n{: title='&amp;'}", "Math $x$ <!-- &amp; -->",
+])
+def test_entities_do_not_make_raw_html_links_images_or_attributes_a_label_transport(text: str) -> None:
+    assert dag_viewer._reading_label(text) is None
+
+
+def test_entity_encoded_tags_remain_single_decoded_text_and_code_references_stay_literal() -> None:
+    text = r'Math $x$ &lt;script&gt;window.__titlePwned=1&lt;/script&gt; &amp;lt;b&amp;gt;'
+    label = dag_viewer._reading_label(text)
+    assert label == {
+        "format": "inline-parts-v1", "source": text,
+        "parts": [["text", "Math "], ["math", r"\(x\)"],
+                  ["text", " <script>window.__titlePwned=1</script> &lt;b&gt;"]],
+    }
+    tree = markdown.render_tree(text, allow_html=False)
+    assert tree is not None and all(element.tag not in {"script", "b", "a", "img"} for element in tree.iter())
+    literal = r'Math $x$ `&amp; &lt;script&gt; <script>window.__titlePwned=1</script>`'
+    code = dag_viewer._reading_label(literal)
+    assert code is not None and code["source"] == literal
+    assert [part for part in code["parts"] if part[0] == "code"] == [
+        ["code", "&amp; &lt;script&gt; <script>window.__titlePwned=1</script>"],
+    ]
+    encoded_math = dag_viewer._reading_label("Math &#36;not_math&#36; $x$")
+    assert encoded_math is not None
+    assert encoded_math["parts"] == [["text", "Math $not_math$ "], ["math", r"\(x\)"]]
 
 
 def _view(title: str) -> GraphView:
@@ -119,7 +165,7 @@ def _fixture() -> dict:
     return {"nodes": [
         node("roadmap", "Library", None, scope=True), node("chapter", _TITLE, "roadmap", scope=True),
         node("other-topic", r"Other $\ZZ$", "roadmap", scope=True), node("F", "Focal result", "chapter"),
-        node("A", _TITLE, "chapter"), node("B", r"Custom $\ZZ/n$", "chapter"),
+        node("A", _ENTITY_TITLE, "chapter"), node("B", r"Custom $\ZZ/n$", "chapter"),
         node("C", _SUMMARY, "chapter"), node("D", _CODE_TITLE, "chapter"),
     ], "summary": {"text": _SUMMARY, "label": dag_viewer._reading_label(_SUMMARY)},
         "unsupported": "Raw $x$ <script>window.__titlePwned=1</script>"}
@@ -145,7 +191,7 @@ _BOOT = r"""
   var trailList=original('trailList'),renderBreadcrumb=original('renderBreadcrumb');
   var showError=original('showError');
   var neighborIds=original('neighborIds'),relationCounts=original('relationCounts'),topicPeers=original('topicPeers');
-  var renderOutline=original('renderOutline'),renderNavigation=original('renderNavigation');
+  var outlineProjection=original('outlineProjection'),renderOutline=original('renderOutline'),renderNavigation=original('renderNavigation');
   var renderReaderContext=original('renderReaderContext'),renderWikiContext=original('renderWikiContext'),renderInspector=original('renderInspector');
   var records=new Map(fixture.nodes.map(node=>[node.id,node])),sharedIndex={nodes:fixture.nodes,relations:[['A','F',2,3],['F','B',0,4]]};
   var currentBundle={nodeId:'F',scope:'chapter'},ui$selected=null,ui$requestedNode='F',ui$outlineLimit=120;
@@ -254,6 +300,7 @@ def test_actual_reading_renderers_mark_inner_math_without_replacing_canonical_co
       if(!proof.outline.querySelector('.arithmatex')||!proof.related.querySelector('.arithmatex'))throw Error('Production title marking absent');
       if(!proof.summary.querySelector('.arithmatex'))throw Error('Production summary marking absent');
       if(!proof.ownerSummary.querySelector('.arithmatex'))throw Error('Actual More-in owner summary marking absent');
+      if(!proof.related.textContent.startsWith('Groups & rings '))throw Error('A valid title entity was rejected or decoded more than once');
       if(!proof.ancestor.querySelector('.arithmatex')||!proof.currentCrumb.querySelector('.arithmatex'))throw Error('Actual breadcrumb title marking absent');
       if(proof.trailEntries[1].reading_title.source!=='Groups $\\mathbb{Z}/n$'||
         proof.trailEntries.at(-1).reading_title.source!==fixture.summary.text)throw Error('Canonical breadcrumb metadata/source changed');
@@ -264,6 +311,29 @@ def test_actual_reading_renderers_mark_inner_math_without_replacing_canonical_co
       proof.exercise(proof.ancestor);
       if(proof.calls[0].url!=='https://blueprint.example.invalid/chapter.html'||
         JSON.stringify(proof.calls[0].options)!==JSON.stringify({history:'push',focus:true,mapFirst:true}))throw Error('Native breadcrumb route options changed');
+    """)
+
+
+def test_actual_reading_controls_keep_encoded_tags_and_code_as_text_and_reject_raw_tags() -> None:
+    texts = [
+        r'Math $x$ &lt;script&gt;window.__titlePwned=1&lt;/script&gt; &amp;lt;b&amp;gt;',
+        r'Math $x$ `&amp; &lt;script&gt; <script>window.__titlePwned=1</script>`',
+        r'Math $x$ <script>&amp;window.__titlePwned=1</script>',
+    ]
+    entries = [{"text": text, "label": dag_viewer._reading_label(text)} for text in texts]
+    _dom_script("const entries=" + json.dumps(entries) + r""";
+      const proof=window.__explorerTitleProof;
+      for(const entry of entries) {
+        const control=proof.readingLabel('span','fixture-entity-adversary',entry.text,entry.label);proof.root.appendChild(control);
+        if(control.querySelector('script,img,a,b,iframe,object,style')||window.__titlePwned)
+          throw Error('Entity spelling or a code literal became active provider markup');
+        if(entry.label&&!control.querySelector('.arithmatex'))throw Error('Harmless entities hid a real formula');
+        if(!entry.label&&(control.children.length||control.textContent!==entry.text))throw Error('Raw HTML did not stay literal');
+      }
+      const code=proof.root.querySelector('.fixture-entity-adversary code');
+      if(code.textContent!=='&amp; &lt;script&gt; <script>window.__titlePwned=1</script>')
+        throw Error('A code character reference was decoded or interpreted as markup');
+      proof.markupProof();
     """)
 
 
