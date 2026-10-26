@@ -451,7 +451,7 @@ def test_cold_mount_measures_full_page_framing_and_error_restores_native_reading
       function host(){const attributes=new Map();return {isConnected:true,
         getAttribute(name){return attributes.get(name)||null;},setAttribute(name,value){attributes.set(name,value);},closest(){return {};},
         querySelector(){return loading;},classList:classes(hostClasses)};}
-      const clients=new Map();let fail=false,options,hostSequence=0;
+      const clients=new Map();let fail=false,options;
       const window={AutoformNavigation:{create(value){options=value;return {
         start(){try{options.onCommit({graph:{},readingSource:{}});}catch(error){options.onError(error);}},dispose(){}};}}};
       function mount(){assert(bodyClasses.has('bp-dag-app-page'),'Initial geometry must see the actual full-page viewport');

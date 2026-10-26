@@ -2130,7 +2130,8 @@
         label.appendChild(input); label.appendChild(mark); label.appendChild(text);
         label.appendChild(element("span", "bp-dag-check-count", String(statusCounts.get(key) || 0))); dom$statusFieldset.appendChild(label);
       });
-      dom$edgeFieldset.hidden = !data.nodes.some(function (node) { return node.isolated; }) || data.nodes.every(function (node) { return node.isolated; });
+      dom$edgeFieldset.hidden = !(data.$shelves && data.$shelves.length) &&
+        (!data.nodes.some(function (node) { return node.isolated; }) || data.nodes.every(function (node) { return node.isolated; }));
     }
     function swatch(key) {
       var entry = palette[key] || palette.planned || {}, mark = element("span", "bp-dag-swatch");
@@ -2249,10 +2250,12 @@
       var selected = currentOverviewGroup(), members = selected && new Set(selected.members.map(function (member) { return member.id; }));
       var nativeGroup = selected && (selected.$shelf || !ui$active.some(function (node) { return members.has(node.id); }));
       var groups = nativeGroup ? [selected] : data.$shelves || [];
-      var visible = ui$mode === "graph" && groups.length > 0;
+      var visible = ui$mode === "graph" && groups.some(function (group) {
+        return group.members.some(function (node) { return matchesStatus(node) && matchesIsolation(node) && (!ui$query || searchScore(node, ui$query.toLocaleLowerCase())); });
+      });
       dom$shelves.hidden = !visible; host.classList.toggle("bp-dag-has-shelves", visible);
       host.classList.toggle("bp-dag-shelves-only", visible && (nativeGroup || !data.nodes.length));
-      var state = JSON.stringify([ui$mode, ui$overviewGroup, ui$listLimit, Array.from(ui$selectedStatuses), ui$query]);
+      var state = JSON.stringify([ui$mode, ui$overviewGroup, ui$listLimit, Array.from(ui$selectedStatuses), ui$query, ui$showIsolated]);
       if (renderShelves.$data === data && renderShelves.$state === state) return;
       renderShelves.$data = data; renderShelves.$state = state; dom$shelves.replaceChildren();
       if (!visible) return;
@@ -2261,7 +2264,7 @@
         back.addEventListener("click", function () { setMode("regions", true); }); dom$shelves.appendChild(back);
       } else dom$shelves.appendChild(element("h2", "bp-scope-shelves-heading", "Not on the map"));
       groups.forEach(function (group) {
-        var members = group.members.filter(function (node) { return matchesStatus(node) && (!ui$query || searchScore(node, ui$query.toLocaleLowerCase())); });
+        var members = group.members.filter(function (node) { return matchesStatus(node) && matchesIsolation(node) && (!ui$query || searchScore(node, ui$query.toLocaleLowerCase())); });
         if (!members.length) return;
         var section = element("section", "bp-scope-shelf"), heading = readingLabel("h3", "", group.area || group.title || "Unlinked topics", group.reading_title);
         section.appendChild(heading);
@@ -2378,13 +2381,30 @@
       return (node._region || node._overviewGroup || node.kind === "scope" || node.kind === "boundary") && node.status_counts && node.status_counts.length ?
         node.status_counts.some(function (pair) { return ui$selectedStatuses.has(pair[0]); }) : ui$selectedStatuses.has(node.status);
     }
+    function matchesIsolation(node) {
+      if (ui$showIsolated || node === ui$selected) return true;
+      if (node._overviewGroup || node._region) {
+        var groups = data._scopeOverview && data._scopeOverview.groups || [];
+        var group = groups.find(function (item) { return item.id === node.id || item.key === node._overviewGroup; });
+        var members = group ? group.members : node._region && contextGraph.nodes.filter(function (member) { return member.area === node._region && mapNode(member); });
+        if (members) return members.some(function (member) { return matchesStatus(member) && matchesIsolation(member); });
+      }
+      if (typeof node.isolated === "boolean") return !node.isolated;
+      var cache = matchesIsolation.$cache;
+      if (!cache || cache.graph !== contextGraph) {
+        var endpoints = new Set();
+        contextGraph.edges.forEach(function (edge) { if (edge.statement || edge.proof) { endpoints.add(edge.source); endpoints.add(edge.target); } });
+        cache = {graph: contextGraph, endpoints: endpoints}; matchesIsolation.$cache = cache;
+      }
+      return cache.endpoints.has(node.id);
+    }
     function calculateActive() {
       if (!ui$activeDirty) return;
       var directional = null;
       if (ui$selected && ui$direction === "prerequisites") directional = collect(ui$selected.id, prerequisites);
       if (ui$selected && ui$direction === "dependents") directional = collect(ui$selected.id, dependents);
       ui$active = data.nodes.filter(function (node) {
-        return matchesStatus(node) && (ui$showIsolated || !node.isolated || node === ui$selected) &&
+        return matchesStatus(node) && matchesIsolation(node) &&
           (!directional || directional.has(node.id));
       });
       ui$activeIds = new Set(ui$active.map(function (node) { return node.id; }));
@@ -2405,6 +2425,7 @@
         }, 0)));
       }
       var hidden = data.nodes.length - ui$active.length;
+      (data.$shelves || []).forEach(function (group) { group.members.forEach(function (node) { if (!matchesIsolation(node) || !matchesStatus(node)) hidden++; }); });
       dom$hiddenButton.textContent = "Show " + hidden + " filtered out"; dom$hiddenButton.hidden = !hidden;
       dom$empty.hidden = ui$active.length !== 0;
       ui$activeDirty = false;
@@ -3046,12 +3067,14 @@
     // Measure both class changes together; callers need no selection-toggle ordering rule.
     // A phone reader also has a full position: 1 asks for half, 2 for full, and true keeps full if it is there.
     function setSheet(open, selected) {
+      var closed = host.classList.contains("bp-dag-sheet-open") && !open;
       var top = dom$body.offsetTop; host.classList.toggle("bp-dag-sheet-open", Boolean(open));
       host.classList.toggle("bp-dag-sheet-full", open > 1 || open === true && host.classList.contains("bp-dag-sheet-full"));
       host.classList.toggle("bp-dag-has-selection", Boolean(selected));
       ui$transform.y += top - dom$body.offsetTop; schedule();
       dom$sheetHandle.setAttribute("aria-expanded", String(Boolean(open)));
       syncSheetAccessibility();
+      if (closed && selected && !restoring && sheetLayout() && mapAllowed) centerIfHidden(selected);
     }
     function sheetLayout() { return Boolean(window.matchMedia && window.matchMedia("(max-width: 720px)").matches); }
     function syncSheetAccessibility() {
