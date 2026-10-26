@@ -475,7 +475,7 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   /* A phone's trail keeps the first crumb, the parent and the current page; the parent is how an overview group returns in place. */
   /* Outranks the flex display a crumb with a link takes, now that middle crumbs are links rather than one "…". */
   .bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :nth-last-child(-n+2)) { display: none; }
-  .bp-dag-integrated .bp-dag-search-wrap { flex-basis: 100%; }
+  /* Search and Topics keep the first row, as on a tablet: Topics on the second row pushed a third row once Browse read "Statements". */
   /* Browse can wrap to the start of a row, where a menu hung from its right edge would open off screen, and the filter's 300px
      legend ran past a 320px screen from Filter's place, so a phone hangs both from the toolbar. */
   .bp-dag-integrated .bp-dag-toolbar { position: relative; }

@@ -1733,11 +1733,12 @@ def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_pag
     assert narrow is not None and 0 <= narrow["x"] and narrow["x"] + narrow["width"] <= 320
     _assert_hit(page, popover.locator(".bp-dag-check-count").first)
     page.set_viewport_size({"width": viewport["width"], "height": viewport["height"]})
-    # Topics follows search on screen as in the tab order: it led the tab order from the row below search.
+    # Topics follows search on screen as in the tab order, on the same row: it led the tab order from the row below search.
     assert page.locator(".bp-dag-toolbar > :is(.bp-dag-search-wrap, .bp-dag-outline-toggle)").evaluate_all(
         "items => items.map(item => item.className)") == ["bp-dag-search-wrap", "bp-dag-button bp-dag-outline-toggle"]
     topics, field = page.get_by_role("button", name="Topics", exact=True).bounding_box(), page.locator(".bp-dag-search").bounding_box()
-    assert topics is not None and field is not None and topics["y"] >= field["y"] + field["height"] - 1
+    assert topics is not None and field is not None and topics["x"] > field["x"] + field["width"] - 1
+    assert abs(topics["y"] + topics["height"] / 2 - field["y"] - field["height"] / 2) < 2
     search = _load_search_index(page)
     search.fill("Result")
     results = page.locator(".bp-dag-search-results")
