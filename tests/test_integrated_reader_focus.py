@@ -42,6 +42,7 @@ var document = {body: new Element('body'), activeElement: null, title: '',
 document.activeElement = document.body;
 var dom$search = new Element('input'), dom$readingBody = new Element('article');
 var dom$navigation = new Element('aside'), dom$inventoryScroll = new Element('div'), dom$outlineToggle = new Element('button');
+var dom$shelves = new Element('section'); dom$shelves.hidden = true;
 var dom$nodeLayer = null;
 var dom$inventoryRows = new Map();
 var dom$error = new Element('div'), dom$breadcrumb = new Element('nav');

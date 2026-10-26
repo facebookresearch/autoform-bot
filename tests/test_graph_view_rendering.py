@@ -633,7 +633,17 @@ def test_rail_rows_show_a_status_swatch_and_a_lone_group_no_heading() -> None:
     script = _viewer_source()
 
     assert 'element("h2", "bp-outline-label", "Topics")' in script
-    assert 'node.scope === node.id && ["collection", "transparent", "source"].indexOf(node.navigation) < 0' in script
+    from tests.test_qa_outline_navigation import _PROJECTION_PEERS, _run
+
+    _run(r"""
+      const root=scope('roadmap',null),branch=scope('branch','roadmap'),child=scope('child','branch'),
+        zero=page('chapter-zero','roadmap'),source=scope('source','roadmap',{navigation:'source'});
+      const nodes=[root,child,zero,source,branch],before=JSON.stringify(nodes);
+      const tree=outlineProjection(nodes,'branch','branch',120);
+      assert.deepEqual(tree.entries.map(entry=>entry.node.id),['chapter-zero','branch','child']);
+      assert.equal(tree.entries.find(entry=>entry.node===child).depth,1);
+      assert.strictEqual(tree.root,root);assert.equal(JSON.stringify(nodes),before);
+    """, ["outlineProjection"], _PROJECTION_PEERS)
     assert 'link.title = node.title; link.dataset.navigationNodeId = node.id;' in script
     assert "function renderNavigation() {" in script and "renderOutline()" in script
     assert "bp-dag-navigation-group" not in script
@@ -645,7 +655,8 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
     script = _viewer_source()
     style = dag_viewer.render_container("graph.json")
 
-    assert 'var lead = area ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, said = scopeMeta || statusLabel(node.status);' in script
+    # A bundle of other topics' cards counts them as other topics.
+    assert 'var lead = area ? node.kind === "boundary" ? plural(node._topics, "other topic", "other topics") : plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, said = scopeMeta || statusLabel(node.status);' in script
     # A finished statement keeps a ✓ after its kind rather than the words its fill already says; the label still says them.
     assert 'var done = !area && !scopeMeta && node.status === "fully_proved", tail = done ? "✓" : said;' in script
     assert 'var meta = area || !lead ? tail : lead + (done ? " " : " · ") + tail;' in script
@@ -855,12 +866,11 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     note = script.split("var bottom = mapHeight(), whole = state.active.filter(function (node) {", 1)[1].split("\n    function ", 1)[0]
     # A card under the map's header or foot band is not in view either.
     assert "var box = screen(node); return box.x >= 0 && box.y >= bands.top && box.x + box.w <= refs.stage.clientWidth" in note
-    # A card under a phone's open reader is off screen too; the fit uses the same bound.
+    # A card under a phone's open reader is off screen too; #442's framing uses the same free area.
     assert "box.y + box.h <= bottom - bands.bottom;" in note and "cropped = whole < state.active.length" in note
-    assert "var shown = mapHeight();" in script
     # It counts cards, which Browse does not list, so it names no Browse total.
     assert 'cropped ? "Drag to see more: " + num(whole) + " of " + num(state.active.length) + " cards in view."' in note
-    assert '"Zoom in to reveal "' in note and "readableCrop" not in script and "Pan or " not in script and "use Browse for all" not in script
+    assert '"Zoom in to reveal "' in note and "Pan or " not in script and "use Browse for all" not in script
     density = next(rule for rule in style.splitlines() if rule.startswith(".bp-dag-density {"))
     assert "left: 16px; bottom: 12px;" in density and "pointer-events: none;" in density
     # On phones it clears the collapsed sheet's 52px peek and 8px inset by 8px.
@@ -1074,7 +1084,19 @@ def test_explorer_labels_use_the_site_family_and_remain_readable_at_initial_scal
     assert "var at = {x: spot.x, y: spot.y + (stack || 0) * 11 * scale};" in painter
     assert "if (spot) { pill(ctx, label.count, spot.x, spot.y, scale);" in script
     assert 'ctx.font = "600 " + 13 * scale + "px " + family;' in script
-    assert 'readableFloor = .9;' in script
+    from tests.test_integrated_dag_layout import _run
+
+    _run(r"""
+      eval(productionSource.slice(productionSource.indexOf('  var NODE_W ='),productionSource.indexOf('  var clients =')));
+      eval(productionSource.slice(productionSource.indexOf('  var clamp ='),productionSource.indexOf('  function element(')));
+      const frame=eval('('+original('sceneFrame')+')');
+      const box={x:0,y:0,w:1000,h:100},scene={nodes:new Map([['actual',box]])};
+      const before=JSON.stringify(Array.from(scene.nodes));
+      const measured=frame(scene,['actual'],{left:0,right:800,top:0,height:400},{side:0,top:0,bottom:0});
+      assert.equal(measured.fitted,.8);assert.equal(measured.scale,.9);assert.equal(measured.cropped,true);
+      assert.equal(measured.contained,0,'Readable cropping must not claim an oversized card fits');
+      assert.equal(JSON.stringify(Array.from(scene.nodes)),before);
+    """, {})
 
 
 def _contrast(first: str, second: str) -> float:
@@ -1205,8 +1227,9 @@ def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> 
     height = int(re.search(r"height: (\d+)px;", bar.group(1)).group(1))
     paddings = re.findall(r"\.bp-dag-node-core \{[^}]*?padding: (\d+)px", style)
     assert paddings and bottom + height <= min(map(int, paddings)), paddings
-    assert "conic-gradient" not in script
-    assert '"linear-gradient(90deg," + stops.join(",") + ")"' in script
+    # A card's status shows as a bar; only a shelf's round swatch takes the ring.
+    assert '(round ? "conic-gradient(" : "linear-gradient(90deg,") + stops.join(",") + ")"' in script
+    assert script.count("statusRing(node, true)") == 1
     assert 'stops.push((color.stroke || "#9ca3af") + " " + cursor + "% " + end + "%");' in script
     # Regions merge their topics' counts in the order they meet them; the bar keeps the legend's.
     assert ".sort(function (a, b) { return legendRank(a[0]) - legendRank(b[0]); });" in script
@@ -1230,7 +1253,7 @@ def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> 
     # map already says them in the statement's own disclosure.
     assert 'links && sheetLayout() ? " · uses " + links.before.length + " · used by " + links.after.length : ""' in script
     # The title is its own span, so a long one gives way before the counts.
-    assert 'refs.mapContext.replaceChildren(links ? readingLabel("span", "", record.title, record.reading_title) :' in script
+    assert 'refs.mapContext.replaceChildren(readingLabel("span", "", title, label && label.reading_title),' in script
     assert ".bp-map-context > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }" in dag_viewer._STYLE
     assert '" → Result → "' not in script
     assert 'var relations = target.querySelector(".bp-dependencies"); if (relations) relations.open = true;' in script

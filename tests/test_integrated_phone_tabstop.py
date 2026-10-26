@@ -31,7 +31,7 @@ function original(name) {
 const context={assert};vm.createContext(context);
 const constants=source.slice(source.indexOf('  var NODE_W ='),source.indexOf('  var clients ='))+
   source.slice(source.indexOf('  var clamp ='),source.indexOf('  function element('));
-const functions=['layoutGraph','wikiRoutes','geometry','compactRegions','world','screen','inViewport','fit','mapHeight','freeArea','center','bandInsets','updateOverlays','relationCounts','weightWords'].map(original).join('\n');
+const functions=['layoutGraph','wikiRoutes','geometry','compactRegions','sceneFrame','sceneDetours','framingNodes','framingViewport','framingPadding','currentOverviewGroup','world','screen','inViewport','fit','mapHeight','freeArea','center','bandInsets','updateOverlays','relationCounts','weightWords'].map(original).join('\n');
 """
 
 _ENVIRONMENT = r"""
@@ -44,10 +44,12 @@ class Control {
   remove() {this.removed=true;}
 }
 var navigation={},mapAllowed=true,atlas=true,ui$area=null,ui$orientation='tb',family='sans-serif',restoring=false;
-var scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,sceneWiki;
-var dom$stage={clientWidth:390,clientHeight:560},dom$ctx={},dom$inspector;
+var scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,sceneWiki,sceneReduced;
+// Three cards now fit a normal phone stage. A genuinely short band keeps
+// the readable-crop/tabstop regression active without shrinking text.
+var dom$stage={clientWidth:390,clientHeight:240},dom$ctx={},dom$inspector,dom$fit=null;
 var host={classList:{contains(){return false;}}};
-var ui$transform={x:0,y:0,scale:1},ui$selected=null,ui$hovered=null;
+var ui$transform={x:0,y:0,scale:1},ui$selected=null,ui$hovered=null,ui$readableCrop=false,ui$overviewGroup=null;
 var data={nodes:['Analysis','Geometry','Unstarted mathematics'].map((area,index)=>({id:'region:'+area,
   title:area,_region:area,area,kind:'scope',status:'planned',width:312,height:96,_index:index})),
   edges:[{source:'region:Geometry',target:'region:Analysis',statement:0,proof:1}]};
@@ -76,7 +78,7 @@ def test_initial_phone_tabstop_is_inside_the_real_compact_free_area_after_fit() 
     _run("""
       fit();paint();assert(dom$density.textContent.startsWith('Drag to see more'),'The real three-area scene must exercise readable cropping');
       const cropped=byId.get('region:Geometry'),box=screen(cropped);
-      assert(box.y+box.h/2<52,'The old top-left candidate lies in the actual clipped header band');
+      assert(!contained(cropped),'The culling-margin candidate must exercise a genuinely clipped card');
       const selected=tabstop();assert(selected);assert(contained(byId.get(selected.dataset.autoformNodeId)),
         'Initial tabstop must be fully visible, not merely inside the80px culling margin');
       assert.equal(selected.dataset.autoformNodeId,'region:Analysis');assert.equal(ui$selected,null);
@@ -137,9 +139,10 @@ def test_small_authored_desktop_overview_fits_its_cards_not_peripheral_route_bou
       fit();paint();assert(!String(dom$density.textContent||'').startsWith('Drag to see more'),
         'All five authored areas should fit after the empty reader yields its width');
       assert(ui$transform.scale>=.9,'Do not trade legibility for a repository-wide fit');
+      const viewport=framingViewport(),padding=framingPadding();
       data.nodes.forEach(node=>{const box=screen(node);
-        assert(box.x>=36-1e-6&&box.x+box.w<=dom$stage.clientWidth-36+1e-6);
-        assert(box.y>=36-1e-6&&box.y+box.h<=dom$stage.clientHeight-36+1e-6);
+        assert(box.x>=viewport.left+padding.side-1e-6&&box.x+box.w<=viewport.right-padding.side+1e-6);
+        assert(box.y>=viewport.top+padding.top-1e-6&&box.y+box.h<=viewport.top+viewport.height-padding.bottom+1e-6);
       });
     """)
 
@@ -170,13 +173,10 @@ function usable(node){const box=screen(node),free=freeArea();return box.x>=free.
 
 def test_unselected_scoped_crop_keeps_padding_and_more_real_cards_than_first_boundary_centering() -> None:
     _run(_SCOPED_CROP + r"""
-      const real=geometry(),before=JSON.stringify(real.routes),boxes=Array.from(real.nodes.values());
-      const minX=Math.min(...boxes.map(box=>box.x)),minY=Math.min(...boxes.map(box=>box.y)),maxY=Math.max(...boxes.map(box=>box.y+box.h));
-      fit();paint();assert(dom$density.textContent.startsWith('Drag to see more'));assert.equal(ui$transform.scale,.9);
-      // The cropped axis starts at the leading edge; the axis that fits stays centred between the 56px title inset and the 44px key.
-      assert(Math.abs(ui$transform.x-(36-minX*.9))<1e-8);
-      // fit() keeps 56px at the top for the map header and 56px at the bottom for the foot band under the pan note and key.
-      assert(Math.abs(ui$transform.y-((812+56-56-(maxY-minY)*.9)/2-minY*.9))<1e-8);
+      const real=geometry(),before=JSON.stringify(real.routes);
+      const expected=sceneFrame(real,framingNodes().map(node=>node.id),framingViewport(),framingPadding());
+      fit();assert(ui$readableCrop);assert.equal(ui$transform.scale,.9);
+      assert(Math.abs(ui$transform.x-expected.x)<1e-8);assert(Math.abs(ui$transform.y-expected.y)<1e-8);
       const padded=data.nodes.filter(usable).length;assert(padded>0&&padded<data.nodes.length);
       center(data.nodes[0],.9);const historical=data.nodes.filter(usable).length;
       assert(padded>historical,'Useful crop coverage must beat centering the first external boundary');
@@ -198,11 +198,12 @@ def test_scoped_crop_preserves_explicit_selected_and_area_member_centering() -> 
 def test_scoped_crop_without_any_usable_card_falls_back_to_a_local_group_not_boundary() -> None:
     _run(_SCOPED_CROP + r"""
       dom$stage={clientWidth:390,clientHeight:560};data.nodes=data.nodes.slice(0,3);ui$active=data.nodes;
+      data.edges=data.edges.slice(0,2);
       // These explicit geometry peers exercise a sparse top-left void. Fit,
       // screen/freeArea and centering are still the actual production bodies.
-      const boxes=new Map([[data.nodes[0].id,{x:1000,y:0,w:196,h:100}],
-        [data.nodes[1].id,{x:0,y:1000,w:264,h:148}],[data.nodes[2].id,{x:1000,y:1000,w:264,h:148}]]);
-      world=node=>boxes.get(node.id);fit();paint();assert(dom$density.textContent.startsWith('Drag to see more'));
+      const boxes=new Map([[data.nodes[0].id,{x:2000,y:0,w:196,h:100}],
+        [data.nodes[1].id,{x:0,y:1000,w:264,h:148}],[data.nodes[2].id,{x:1000,y:0,w:264,h:148}]]);
+      geometry=()=>({nodes:boxes,routes:[]});fit();assert(ui$readableCrop);
       assert(usable(data.nodes[1]),'Fallback must expose the local mathematical group');
       const box=screen(data.nodes[1]);assert(Math.abs(box.x+box.w/2-dom$stage.clientWidth/2)<1e-8);
       assert(!usable(data.nodes[0]),'The first boundary must not displace the fallback group');
@@ -212,9 +213,12 @@ def test_scoped_crop_without_any_usable_card_falls_back_to_a_local_group_not_bou
 def test_scoped_crop_with_only_a_usable_boundary_still_frames_a_local_group() -> None:
     _run(_SCOPED_CROP + r"""
       dom$stage={clientWidth:390,clientHeight:560};data.nodes=data.nodes.slice(0,2);ui$active=data.nodes;
+      data.edges=data.edges.slice(0,1);
       const boxes=new Map([[data.nodes[0].id,{x:0,y:0,w:196,h:100}],
         [data.nodes[1].id,{x:1000,y:1000,w:264,h:148}]]);
-      world=node=>boxes.get(node.id);fit();paint();assert(dom$density.textContent.startsWith('Drag to see more'));
+      geometry=()=>({nodes:boxes,routes:[]});fit();assert.equal(ui$readableCrop,false,
+        'One local group fits without shrinking even when its external context is distant');
       assert(usable(data.nodes[1]),'A fully contained external boundary is not a usable local overview');
-      const box=screen(data.nodes[1]);assert(Math.abs(box.x+box.w/2-dom$stage.clientWidth/2)<1e-8);
+      const expected=sceneFrame(geometry(),[data.nodes[1].id],framingViewport(),framingPadding());
+      assert.deepEqual(ui$transform,{x:expected.x,y:expected.y,scale:expected.scale});
     """)

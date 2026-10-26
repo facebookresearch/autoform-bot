@@ -29,10 +29,10 @@ function original(name) {
   }
   assert.fail('Unparseable production callback: '+name);
 }
-const names=['element','readingLabel','refreshReadingLabels','safeHref','graphAt','scopeOverviewProjection','scopeOverviewFlow','recordId','mapNode','adoptGraph',
+const names=['element','readingLabel','refreshReadingLabels','safeHref','graphAt','scopeOverviewProjection','structuralScopeProjection','boundaryContextProjection','expandedGroupShelves','scopeOverviewFlow','recordId','mapNode','adoptGraph',
   'neighborIds','neighborhood','regionProjection','updateProjection','semanticParent','routeTrail',
   'currentOverviewGroup','trailList','renderBreadcrumb','syncNavigationSelection','compactRegions','collect','matchesStatus','calculateActive',
-  'syncControls','refresh','activateNode','focusNodeControl','setSheet','writeLocation','setMode','zoomAt','closeSearch'];
+  'syncControls','refresh','activateNode','focusNodeControl','setSheet','writeLocation','setMode','zoomAt','closeSearch','sourceNodes','inCurrentScope'];
 const constants=['NODE_W','SEARCH_PAGE','clamp','plural','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0,'Missing production constant: '+name);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
@@ -48,6 +48,8 @@ const effects=[],frames=[];
 function peer(tag='div') {
   const attributes=new Map(),classes=new Set(),listeners=new Map();
   return {tagName:tag.toUpperCase(),dataset:{},children:[],offsetTop:0,hidden:false,listeners,
+    get textContent(){return (this.text||'')+this.children.map(child=>child.textContent||'').join('');},
+    set textContent(value){this.text=String(value);this.children=[];},
     classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);},
       contains(name){return classes.has(name);}},
     setAttribute(name,value){attributes.set(name,String(value));},
@@ -57,7 +59,7 @@ function peer(tag='div') {
     remove(){this.removed=true;},
     focus(){document.activeElement=this;effects.push({kind:'focus',id:this.dataset.autoformNodeId||'reading'});}};
 }
-const document={activeElement:null,createElement:peer};
+const document={activeElement:null,createElement:peer,createTextNode(text){const node=peer('#text');node.textContent=text;return node;}};
 const window={location:{href:'https://example.test/roadmap/chapter/index.html',origin:'https://example.test'}};
 function requestAnimationFrame(callback){frames.push(callback);return frames.length;}
 function flushFrames(){let turns=0;while(frames.length){assert(++turns<32,'Unbounded control frame chain');frames.shift()();}}
@@ -81,7 +83,9 @@ const nodes=Array.from({length:42},(_,number)=>({id:number===20?'view-group:0':'
   status_counts:[[number===1||number===21?'fully_proved':'planned',1]],internal_dependency_count:0,
   layout:{width:208,height:100},url:'result-'+number+'.html'}));
 var contextGraph={schema:'autoform-dag-view/v2',title:'Large scope',nodes,
-  edges:[{source:'n00',target:'n22',statement:2,proof:3},{source:'n02',target:'n03',statement:5,proof:7}],
+  // Focus testing needs a genuinely linked eligible member; unlinked members
+  // now belong to native shelves (covered by test_qa_native_shelves.py).
+  edges:[{source:'n00',target:'n22',statement:2,proof:3},{source:'n01',target:'n02',statement:5,proof:7}],
   palette:{planned:{},fully_proved:{},inventory_pending:{}},view:{presentation:'dag',scope:chapterId}};
 var records=new Map(nodes.map(node=>[node.id,Object.assign({},node,{scope:chapterId,parent:chapterId,result:true})]));
 records.set('roadmap',{id:'roadmap',scope:'roadmap',title:'Library',status:'planned',route:'https://example.test/roadmap/index.html'});
@@ -104,6 +108,10 @@ function schedule(){effects.push({kind:'paint-request'});}
 function projectWikiView() {}
 function remember(){effects.push({kind:'remember'});}
 function renderInspector(){}function renderInventory(){}function syncSheetAccessibility(){}
+function renderShelves(){}
+function geometry(){return {$display:{reduced:false}};}
+var dom$shelves=null;
+const dom$browsePopover=peer(),dom$browseToggle=peer();
 function sheetLayout(){return false;}
 function resize(){syncControls();ui$active.forEach(node=>{const control=peer('button');control.dataset.autoformNodeId=node.id;overlays.set(node.id,control);});}
 function fit(){effects.push({kind:'fit'});}

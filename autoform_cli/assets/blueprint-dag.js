@@ -164,11 +164,11 @@
       if (id && !wrapper(records.get(id)) || node._region && !node._overviewGroup) eligible.add(node.id);
     }
     var groups = view._scopeOverview && view._scopeOverview.groups || [];
-    if (!Array.isArray(groups) || groups.length > MAX_MAP_NODES) return Promise.resolve(empty);
+    if (!Array.isArray(groups) || groups.length > records.size) return Promise.resolve(empty);
     for (var g = 0; g < groups.length; g++) {
       var group = groups[g], shown = visible.get(group.id);
       if (!shown || shown._overviewGroup !== group.key) continue;
-      if (!Array.isArray(group.members) || (membership += group.members.length) > MAX_MAP_NODES) return Promise.resolve(empty);
+      if (!Array.isArray(group.members) || (membership += group.members.length) > records.size) return Promise.resolve(empty);
       eligible.add(group.id);
       group.members.forEach(function (member) { assign(canonical(member), group.id); });
     }
@@ -230,11 +230,12 @@
   }
 
   // Deterministic, bounded scene geometry; public graph data remains untouched.
-  function layoutGraph(nodes, edges, direction, stageAspect, wikiEdges) {
+  function layoutGraph(nodes, edges, direction, stageAspect, wikiEdges, reduceDisplay) {
     var boxes = new Map(), routes = [], work = {ticks: 0, pairs: 0, moves: 0, candidates: 0, escapes: 0};
     if (nodes.length > MAX_MAP_NODES) return null;
-    if (!nodes.length) return {nodes: boxes, routes: routes, clusters: [], work: work, bounds: {x: 0, y: 0, w: 1, h: 1}};
+    if (!nodes.length) return {nodes: boxes, routes: routes, clusters: [], $display: {totalPairs: 0, shownPairs: 0, totalRoutes: 0, shownRoutes: 0, reduced: false}, work: work, bounds: {x: 0, y: 0, w: 1, h: 1}};
     var vertical = direction === "tb", gap = 48, ordered = nodes.slice().sort(function (a, b) { return a.id < b.id ? -1 : a.id > b.id ? 1 : 0; });
+    var aspect = Number.isFinite(stageAspect) && stageAspect > 0 ? Math.max(.25, Math.min(4, stageAspect)) : 1.4;
     var ids = new Map(), vertices = ordered.map(function (node, index) {
       ids.set(node.id, index);
       if (!(node.width > 0 && node.height > 0 && Number.isFinite(node.width) && Number.isFinite(node.height))) throw new Error("Invalid dependency card dimensions");
@@ -316,6 +317,46 @@
         });
       }
     });
+    var display = {totalPairs: springs.length, shownPairs: springs.length, totalRoutes: routes.length, shownRoutes: routes.length, reduced: false};
+    var displayLinks = islands.map(function () { return 0; });
+    if (reduceDisplay === true) {
+      // Condensation reachability is computed from every canonical edge. Only
+      // the display backbone is reduced; SCC membership and ranks stay exact.
+      var reachable = components.map(function () { return new Set(); });
+      var kept = components.map(function () { return new Set(); });
+      var componentOrder = components.map(function (_component, index) { return index; }).sort(function (a, b) {
+        return components[b].rank - components[a].rank || (components[a].key < components[b].key ? -1 : 1);
+      });
+      componentOrder.forEach(function (index) {
+        components[index].after.forEach(function (next) {
+          reachable[index].add(next); reachable[next].forEach(function (target) { reachable[index].add(target); });
+        });
+      });
+      components.forEach(function (component, index) {
+        var covered = new Set();
+        Array.from(component.after).sort(function (a, b) {
+          return components[a].rank - components[b].rank || (components[a].key < components[b].key ? -1 : 1);
+        }).forEach(function (next) {
+          if (covered.has(next)) return;
+          kept[index].add(next); covered.add(next);
+          reachable[next].forEach(function (target) { covered.add(target); });
+        });
+      });
+      var pairs = new Map();
+      routes.forEach(function (route) {
+        var a = ids.get(route.source), b = ids.get(route.target), from = componentOf[a], to = componentOf[b];
+        if (from !== to && !kept[from].has(to)) return;
+        var key = a + ":" + b, pair = pairs.get(key);
+        if (!pair) { pair = {source: route.source, target: route.target, edgeIndex: route.edgeIndex, $statement: 0, $proof: 0}; pairs.set(key, pair); }
+        if (route.kind === "statement") pair.$statement += route.count; else pair.$proof += route.count;
+      });
+      routes = Array.from(pairs.values()).map(function (pair) {
+        pair.kind = pair.$statement ? "statement" : "proof"; pair.count = pair.$statement + pair.$proof;
+        displayLinks[vertices[ids.get(pair.source)].island]++; return pair;
+      });
+      display.shownPairs = pairs.size; display.shownRoutes = routes.length;
+      display.reduced = display.shownPairs < display.totalPairs || display.shownRoutes < display.totalRoutes;
+    }
     function overlap(a, b, padding) {
       return a.x < b.x + b.w + padding && a.x + a.w > b.x - padding && a.y < b.y + b.h + padding && a.y + a.h > b.y - padding;
     }
@@ -326,6 +367,30 @@
     }
     components.forEach(function (component) {
       var size = component.members.length, dimension = component.members.reduce(function (largest, index) { return Math.max(largest, vertices[index].w, vertices[index].h); }, 0);
+      if (size <= 6) {
+        // A small mutually dependent component has no internal topological
+        // order. Pack only that component to the physical stage's aspect.
+        var targetAspect = vertical ? 1 / aspect : aspect, best = null;
+        for (var columns = 1; columns <= size; columns++) {
+          var widths = [], heights = [];
+          component.members.forEach(function (index, ordinal) {
+            var column = ordinal % columns, row = Math.floor(ordinal / columns), node = vertices[index];
+            widths[column] = Math.max(widths[column] || 0, node.w); heights[row] = Math.max(heights[row] || 0, node.h);
+          });
+          var width = widths.reduce(function (sum, value) { return sum + value; }, gap * (widths.length - 1));
+          var height = heights.reduce(function (sum, value) { return sum + value; }, gap * (heights.length - 1));
+          var score = Math.abs(Math.log(width / height / targetAspect)) + (columns * heights.length - size) / size * .1;
+          if (!best || score < best.score - 1e-9 || Math.abs(score - best.score) < 1e-9 && width * height < best.w * best.h) {
+            best = {columns: columns, widths: widths, heights: heights, score: score, w: width, h: height};
+          }
+        }
+        component.members.forEach(function (index, ordinal) {
+          var column = ordinal % best.columns, row = Math.floor(ordinal / best.columns), node = vertices[index];
+          node.x = best.widths.slice(0, column).reduce(function (sum, value) { return sum + value + gap; }, 0);
+          node.y = best.heights.slice(0, row).reduce(function (sum, value) { return sum + value + gap; }, 0);
+        });
+        component.w = best.w; component.h = best.h; return;
+      }
       var placed = [], position = 0;
       component.members.forEach(function (index, ordinal) {
         var node = vertices[index], clear = false;
@@ -342,20 +407,21 @@
       placed.forEach(function (node) { node.x -= extent.x; node.y -= extent.y; });
     });
     islands.forEach(function (island) {
-      var ranks = [], primary = 36;
+      var ranks = [], primary = 36, rankGap = island.members.length <= 24 ? gap : 144;
       island.components.forEach(function (index) { var component = components[index]; (ranks[component.rank] || (ranks[component.rank] = [])).push(component); });
       ranks.forEach(function (rank) {
         rank.sort(function (a, b) { return a.key < b.key ? -1 : 1; });
         var width = Math.max.apply(null, rank.map(function (component) { return component.w; }));
         var height = rank.reduce(function (sum, component) { return sum + component.h + 96; }, -96), secondary = -height / 2;
         rank.forEach(function (component) {
+          component.x = primary + (width - component.w) / 2; component.y = secondary;
           component.members.forEach(function (index) {
-            var node = vertices[index]; node.x += primary + (width - component.w) / 2; node.y += secondary;
+            var node = vertices[index]; node.x += component.x; node.y += component.y;
             node.seedX = node.x; node.seedY = node.y; node.cluster = componentOf[index]; node.rank = component.rank;
           });
           secondary += component.h + 96;
         });
-        primary += width + 144;
+        primary += width + rankGap;
       });
     });
     var cohorts = [];
@@ -397,6 +463,12 @@
         [[dx, dy], [0, dy], [dx, 0]].some(function (move) {
           var candidate = {x: Math.max(node.seedX - 64, Math.min(node.seedX + 64, node.x + move[0])),
             y: Math.max(node.seedY - 96, Math.min(node.seedY + 96, node.y + move[1])), w: node.w, h: node.h};
+          var component = components[node.cluster];
+          if (component.members.length > 1 && component.members.length <= 6) {
+            // Do not let relaxation undo a small cycle's aspect-aware packing.
+            candidate.x = Math.max(component.x, Math.min(component.x + component.w - node.w, candidate.x));
+            candidate.y = Math.max(component.y, Math.min(component.y + component.h - node.h, candidate.y));
+          }
           var clear = vertices.every(function (other) { work.moves++; return other === node || other.island !== node.island || !overlap(candidate, other, gap); });
           if (clear) { node.x = candidate.x; node.y = candidate.y; } return clear;
         });
@@ -441,10 +513,13 @@
       });
       return {points: points.map(point), radii: radii, bounds: rectangle(bounds(points))};
     }
-    function clear(points, route) {
+    function clear(points, route, limit) {
       var island = vertices[ids.get(route.source)].island;
       return points.slice(1).every(function (at, index) {
-        return vertices.every(function (node) { work.candidates++; return node.island !== island || !hits(points[index], at, node, node.id === route.source || node.id === route.target ? 0 : 20); });
+        return vertices.every(function (node) {
+          if (work.candidates >= limit) return false;
+          work.candidates++; return node.island !== island || !hits(points[index], at, node, node.id === route.source || node.id === route.target ? 0 : 20);
+        });
       });
     }
     function port(node, side, offset, alongY) {
@@ -485,7 +560,8 @@
     var flowRange = Math.max(4, Math.log2(1 + routes.reduce(function (largest, route) { return Math.max(largest, route.count); }, 0)));
     routes.forEach(function (route) {
       var a = vertices[ids.get(route.source)], b = vertices[ids.get(route.target)], offset = route.kind === "proof" ? 4 : -4;
-      var island = islands[a.island], extent = island.extent, sparse = island.links <= island.members.length * 3;
+      var island = islands[a.island], extent = island.extent, sparse =
+        (reduceDisplay === true ? displayLinks[a.island] : island.links) <= island.members.length * 3;
       // Cyclic aggregations have no global left-to-right order. Use the facing
       // boundaries rather than sending an upstream link around the whole map.
       var dx = b.x + b.w / 2 - a.x - a.w / 2, dy = b.y + b.h / 2 - a.y - a.h / 2;
@@ -498,17 +574,27 @@
       route.flow = {source: a.cluster, target: b.cluster, returning: a.rank >= b.rank};
       var key = ids.get(route.source) + ":" + ids.get(route.target) + ":" + route.kind, saved = paths.get(key);
       if (saved) { Object.assign(route, saved); return; }
-      var primary = alongY ? "y" : "x", secondary = alongY ? "x" : "y", size = alongY ? "w" : "h";
-      var middle = (source.stub[primary] + target.stub[primary]) / 2, above = Math.min(a[secondary], b[secondary]) - 32, below = Math.max(a[secondary] + a[size], b[secondary] + b[size]) + 32;
-      function localPoint(first, second) { return alongY ? {x: second, y: first} : {x: first, y: second}; }
-      var candidates = [
-        [source.at, source.stub, localPoint(middle, source.stub[secondary]), localPoint(middle, target.stub[secondary]), target.stub, target.at],
-        [source.at, source.stub, localPoint(source.stub[primary], above), localPoint(target.stub[primary], above), target.stub, target.at],
-        [source.at, source.stub, localPoint(source.stub[primary], below), localPoint(target.stub[primary], below), target.stub, target.at]
-      ];
+      function localCandidates(axisY) {
+        var side = (axisY ? dy : dx) < 0 ? -1 : 1, from = port(a, side, offset, axisY), to = port(b, -side, offset, axisY);
+        var primary = axisY ? "y" : "x", secondary = axisY ? "x" : "y", size = axisY ? "w" : "h";
+        var middle = (from.stub[primary] + to.stub[primary]) / 2, above = Math.min(a[secondary], b[secondary]) - 32, below = Math.max(a[secondary] + a[size], b[secondary] + b[size]) + 32;
+        function localPoint(first, second) { return axisY ? {x: second, y: first} : {x: first, y: second}; }
+        return [
+          [from.at, from.stub, localPoint(middle, from.stub[secondary]), localPoint(middle, to.stub[secondary]), to.stub, to.at],
+          [from.at, from.stub, localPoint(from.stub[primary], above), localPoint(to.stub[primary], above), to.stub, to.at],
+          [from.at, from.stub, localPoint(from.stub[primary], below), localPoint(to.stub[primary], below), to.stub, to.at]
+        ].map(function (points) { return {points: simplify(points), source: from, target: to}; });
+      }
+      // A blocked dominant-axis corridor is not a reason to circle the island.
+      // Try the other facing axis within the original 15*N obstacle-check cap.
+      var candidates = sparse ? localCandidates(alongY).concat(localCandidates(!alongY)) : [];
+      var candidateLimit = work.candidates + vertices.length * 15;
       function length(points) { return points.slice(1).reduce(function (sum, at, index) { return sum + Math.hypot(at.x - points[index].x, at.y - points[index].y); }, 0); }
-      var chosen = sparse && candidates.sort(function (a, b) { return length(a) - length(b); }).find(function (points) { return clear(points, route); });
-      if (chosen) { var local = section(chosen, false, a.island); route.points = local.points; route.radii = local.radii; route.bounds = local.bounds; }
+      var chosen = candidates.sort(function (a, b) { return length(a.points) - length(b.points); }).find(function (candidate) { return clear(candidate.points, route, candidateLimit); });
+      if (chosen) {
+        source = chosen.source; target = chosen.target;
+        var local = section(chosen.points, false, a.island); route.points = local.points; route.radii = local.radii; route.bounds = local.bounds;
+      }
       else {
         // The bounded shared obstacle escapes run on the scene's primary axis.
         side = dx < 0 ? -1 : 1; source = port(a, side, offset); target = port(b, -side, offset);
@@ -539,7 +625,6 @@
       islands.forEach(function (island) {
         island.packing = bounds(island.points); area += (island.packing.w + spacing) * (island.packing.h + spacing); widest = Math.max(widest, island.packing.w);
       });
-      var aspect = Number.isFinite(stageAspect) && stageAspect > 0 ? Math.max(.25, Math.min(4, stageAspect)) : 1.4;
       var width = Math.max(widest, Math.sqrt(area * aspect)), x = 0, y = 0, rowHeight = 0;
       islands.slice().sort(function (a, b) { return b.packing.h - a.packing.h || b.packing.w - a.packing.w || (a.key < b.key ? -1 : 1); }).forEach(function (island) {
         if (x && x + island.packing.w > width) { x = 0; y += rowHeight + spacing; rowHeight = 0; }
@@ -657,7 +742,7 @@
     routes.forEach(function (route) { all.push({x: route.bounds.x, y: route.bounds.y}, {x: route.bounds.x + route.bounds.w, y: route.bounds.y + route.bounds.h}); });
     return {nodes: boxes, routes: routes, clusters: components.map(function (component) { return {id: component.key, rank: component.rank, members: component.members.map(function (index) { return vertices[index].id; })}; }),
       $wikiFamilies: wikiFamilies, $wikiEdges: wiki.map(function (link) { return {source: vertices[link.a].id, target: vertices[link.b].id, count: link.count}; }),
-      $wikiWork: wikiWork, work: work, bounds: bounds(all)};
+      $wikiWork: wikiWork, $display: display, work: work, bounds: bounds(all)};
   }
 
   // Soft article associations use settled geometry, never the proof's ports or
@@ -733,11 +818,280 @@
     return {routes: paths, omitted: hidden, total: links.length, work: work};
   }
 
+  // Formal links organize developments; authored collection ancestry organizes
+  // the remaining topics as native shelves, never as invented mathematical areas.
+  function structuralScopeProjection(payload, records, currentScope, reservedIds) {
+    if (!payload || !Array.isArray(payload.nodes) || !Array.isArray(payload.edges) || !records || !records.has(currentScope)) return null;
+    var local = [], boundaries = [], all = new Map(), canonical = new Map(), represented = new Set(), ancestry = new Map();
+    function indexedId(node) {
+      var id = node._recordId || (records.get(node.id) === node || ["scope", "boundary"].indexOf(node.kind) < 0 ?
+        node.id : node.id.replace(/^(scope|boundary):/, ""));
+      return records.has(id) ? id : null;
+    }
+    var scope = records.get(currentScope), outer = scope, seen = new Set(), collection = null;
+    while (outer) {
+      if (seen.has(outer.id) || outer.navigation === "source") return null;
+      seen.add(outer.id);
+      if (!collection && outer.navigation === "collection") collection = outer.id;
+      if (outer.parent === outer.id) return null;
+      if (outer.parent === undefined || outer.parent === null) break;
+      outer = records.get(outer.parent); if (!outer) return null;
+    }
+    ancestry.set(currentScope, {collection: collection, topic: null});
+    function owners(id) {
+      var path = [], visited = new Set(), found;
+      while (!ancestry.has(id)) {
+        var record = records.get(id);
+        if (!record || visited.has(id) || record.navigation === "source") return null;
+        visited.add(id); path.push(record); id = record.parent;
+      }
+      found = ancestry.get(id);
+      for (var at = path.length - 1; at >= 0; at--) {
+        var item = path[at];
+        found = {collection: item.navigation === "collection" ? item.id : found.collection,
+          topic: item.scope === item.id && ["collection", "transparent", "source"].indexOf(item.navigation) < 0 ? item.id : found.topic};
+        ancestry.set(item.id, found);
+      }
+      return found;
+    }
+    for (var n = 0; n < payload.nodes.length; n++) {
+      var node = payload.nodes[n];
+      if (!node || typeof node.id !== "string" || all.has(node.id) || node.map === false) return null;
+      var id = indexedId(node); if (!id || represented.has(id)) return null;
+      represented.add(id);
+      all.set(node.id, node); canonical.set(node.id, id);
+      if (node.kind === "boundary") boundaries.push(node);
+      else { if (!owners(id)) return null; local.push(node); }
+    }
+    if (!local.length || local.length <= 12 && payload.nodes.length <= MAX_MAP_NODES) return null;
+    function compare(a, b) {
+      var left = records.get(canonical.get(a.id)), right = records.get(canonical.get(b.id));
+      if (Number.isSafeInteger(left._index) && Number.isSafeInteger(right._index) && left._index !== right._index) return left._index - right._index;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    }
+    local.sort(compare);
+    var positions = new Map(), parents = local.map(function (_node, index) { return index; }), linked = new Set();
+    local.forEach(function (node, index) { positions.set(node.id, index); });
+    function root(index) { while (parents[index] !== index) { parents[index] = parents[parents[index]]; index = parents[index]; } return index; }
+    for (var e = 0; e < payload.edges.length; e++) {
+      var edge = payload.edges[e];
+      if (!edge || !all.has(edge.source) || !all.has(edge.target) ||
+          !Number.isSafeInteger(edge.statement || 0) || !Number.isSafeInteger(edge.proof || 0) || (edge.statement || 0) < 0 || (edge.proof || 0) < 0) return null;
+      if (!(edge.statement || edge.proof) || !positions.has(edge.source) || !positions.has(edge.target)) continue;
+      var a = positions.get(edge.source), b = positions.get(edge.target);
+      linked.add(edge.source); linked.add(edge.target); a = root(a); b = root(b);
+      parents[Math.max(a, b)] = Math.min(a, b);
+    }
+    if (payload.nodes.length <= MAX_MAP_NODES && linked.size === local.length) return null;
+    var components = new Map(), shelves = new Map();
+    local.forEach(function (node, index) {
+      var owner = owners(canonical.get(node.id)).collection, key = linked.has(node.id) ? root(index) : owner;
+      var pool = linked.has(node.id) ? components : shelves, members = pool.get(key) || [];
+      members.push(node); pool.set(key, members);
+    });
+    var linkedGroups = Array.from(components.values()).map(function (members) { return {members: members, owner: null}; });
+    function commonOwner(members, field) {
+      var owner = owners(canonical.get(members[0].id))[field];
+      if (owner && members.every(function (node) { return owners(canonical.get(node.id))[field] === owner; })) return owner;
+      var collection = owners(canonical.get(members[0].id)).collection;
+      return collection && members.every(function (node) { return owners(canonical.get(node.id)).collection === collection; }) ? collection : currentScope;
+    }
+    function coarsen(field) {
+      var combined = new Map();
+      linkedGroups.forEach(function (group) {
+        var owner = commonOwner(group.members, field), found = combined.get(owner) || {owner: owner, members: []};
+        group.members.forEach(function (node) { found.members.push(node); }); combined.set(owner, found);
+      });
+      linkedGroups = Array.from(combined.values());
+    }
+    var oversized = payload.nodes.length > MAX_MAP_NODES, available = MAX_MAP_NODES - Math.min(boundaries.length, 1);
+    if (oversized && linkedGroups.length > available) coarsen("topic");
+    if (oversized && linkedGroups.length > available) coarsen("collection");
+    if (oversized && linkedGroups.length > available) {
+      var combined = []; linkedGroups.forEach(function (group) { group.members.forEach(function (node) { combined.push(node); }); });
+      linkedGroups = [{owner: currentScope, members: combined}];
+    }
+    var used = new Set(reservedIds || []), serial = 0, groups = [], nodes = [], display = new Map(), memberGroups = new Map(), cards = new Map();
+    payload.nodes.forEach(function (node) { used.add(node.id); });
+    function group(members, owner, shelf, boundary) {
+      members.sort(compare);
+      var id;
+      do { id = "view-group:" + serial++; } while (used.has(id) || records.has(id));
+      used.add(id);
+      var record = owner && records.get(owner), key = JSON.stringify([shelf ? "shelf" : boundary ? "boundary" : "linked", owner, members[0].id]);
+      var result = {id: id, key: key, area: null, title: record ? record.title : shelf ? "Unlinked topics" : boundary ? "External scopes" : "Linked development",
+        members: members, edges: [], $owner: owner, $shelf: shelf, $boundary: Boolean(boundary)};
+      if (record && record.reading_title) result.reading_title = record.reading_title;
+      groups.push(result); members.forEach(function (node) { memberGroups.set(node.id, result); }); return result;
+    }
+    function card(group) {
+      var counts = new Map(), items = 0, unknown = false, internal = 0;
+      group.members.forEach(function (node) {
+        (node.status_counts || [[node.status, 1]]).forEach(function (pair) { counts.set(pair[0], (counts.get(pair[0]) || 0) + pair[1]); });
+        if (node.member_count === undefined) unknown = true; else items += node.member_count;
+        internal += node.internal_dependency_count || 0; display.set(node.id, group.id);
+      });
+      var result = {id: group.id, kind: group.$boundary ? "boundary" : "scope", title: group.title, _overviewGroup: group.key,
+        _topics: group.members.length, _unknownCount: unknown, member_count: items, status: group.members[0].status,
+        status_counts: Array.from(counts.entries()), internal_dependency_count: internal, $structural: true, $owner: group.$owner,
+        layout: {width: 264, height: 148}};
+      cards.set(group.id, result); nodes.push(result);
+    }
+    linkedGroups.forEach(function (item) {
+      var result = group(item.members, item.owner, false, false);
+      if (oversized) card(result);
+      else item.members.forEach(function (node) { nodes.push(node); display.set(node.id, node.id); });
+    });
+    Array.from(shelves).sort(function (a, b) { return String(a[0]) < String(b[0]) ? -1 : String(a[0]) > String(b[0]) ? 1 : 0; })
+      .forEach(function (entry) { group(entry[1], entry[0], true, false); });
+    if (boundaries.length && (!nodes.length || oversized && boundaries.length > 1)) {
+      var external = group(boundaries.slice(), null, false, true); if (nodes.length) card(external);
+    } else boundaries.forEach(function (node) { nodes.push(node); display.set(node.id, node.id); });
+    var pairs = new Map();
+    for (var row = 0; row < payload.edges.length; row++) {
+      var original = payload.edges[row], from = display.get(original.source), to = display.get(original.target);
+      if (from && to && (from !== to || from === original.source && to === original.target)) {
+        var pair = JSON.stringify([from, to]), found = pairs.get(pair) || {source: from, target: to, statement: 0, proof: 0, _overviewEdges: []};
+        found.statement += original.statement || 0; found.proof += original.proof || 0;
+        if (!Number.isSafeInteger(found.statement) || !Number.isSafeInteger(found.proof)) return null;
+        found._overviewEdges.push(original); pairs.set(pair, found);
+      } else {
+        var owner = memberGroups.get(original.source) || memberGroups.get(original.target); if (!owner) return null;
+        owner.edges.push(original);
+        if (from && from === to && cards.has(from)) cards.get(from).internal_dependency_count += (original.statement || 0) + (original.proof || 0);
+      }
+    }
+    return Object.assign({}, payload, {nodes: nodes, edges: Array.from(pairs.values()).sort(function (a, b) {
+      return a.source < b.source ? -1 : a.source > b.source ? 1 : a.target < b.target ? -1 : a.target > b.target ? 1 : 0;
+    }), $shelves: groups.filter(function (group) { return group.$shelf; }),
+      _scopeOverview: {groups: groups, selectedGroup: null, originalNodes: payload.nodes.length, $structural: true}});
+  }
+
+  // Context groups derive only from real boundary/local directions. Existing
+  // groups keep their ownership, and canonical edge provenance stays flat.
+  function boundaryContextProjection(payload, reservedIds) {
+    if (!payload || !Array.isArray(payload.nodes) || !Array.isArray(payload.edges)) return null;
+    var candidates = payload.nodes.filter(function (node) { return node && node.kind === "boundary" && !node._overviewGroup; });
+    if (candidates.length < 3) return null;
+    var ids = new Set(), canonical = new Set(), roles = new Map(), locals = new Set(), originals = new Set();
+    for (var i = 0; i < payload.nodes.length; i++) {
+      var node = payload.nodes[i]; if (!node || typeof node.id !== "string" || ids.has(node.id)) return null;
+      ids.add(node.id); if (node.kind !== "boundary") locals.add(node.id);
+    }
+    for (var c = 0; c < candidates.length; c++) {
+      var boundary = candidates[c], id = boundary._recordId === undefined ? boundary.id : boundary._recordId;
+      if (typeof id !== "string" || canonical.has(id)) return null;
+      canonical.add(id); roles.set(boundary.id, 0);
+    }
+    function flatten(rows) {
+      if (!Array.isArray(rows)) return null;
+      var result = [], active = new Set(), stack = [{rows: rows, index: 0, owner: null}];
+      while (stack.length) {
+        var frame = stack[stack.length - 1];
+        if (frame.index === frame.rows.length) { stack.pop(); if (frame.owner) active.delete(frame.owner); continue; }
+        var edge = frame.rows[frame.index++];
+        if (!edge || typeof edge.source !== "string" || typeof edge.target !== "string") return null;
+        if (edge._overviewEdges !== undefined) {
+          if (!Array.isArray(edge._overviewEdges) || !edge._overviewEdges.length || active.has(edge)) return null;
+          active.add(edge); stack.push({rows: edge._overviewEdges, index: 0, owner: edge}); continue;
+        }
+        var statement = edge.statement === undefined ? 0 : edge.statement, proof = edge.proof === undefined ? 0 : edge.proof;
+        if (!Number.isSafeInteger(statement) || !Number.isSafeInteger(proof) || statement < 0 || proof < 0) return null;
+        result.push(edge);
+      }
+      return result;
+    }
+    function remember(edges) {
+      for (var n = 0; n < edges.length; n++) { if (originals.has(edges[n])) return false; originals.add(edges[n]); }
+      return true;
+    }
+    var prior = payload._scopeOverview || {}, oldGroups = prior.groups || [], groups = [], replacements = new Map(), covered = new Set(), members = new Set();
+    if (!Array.isArray(oldGroups)) return null;
+    for (var g = 0; g < oldGroups.length; g++) {
+      var old = oldGroups[g]; if (!old || !Array.isArray(old.members)) return null;
+      var privateEdges = flatten(old.edges || []); if (!privateEdges || !remember(privateEdges)) return null;
+      for (var m = 0; m < old.members.length; m++) {
+        var member = old.members[m]; if (!member || typeof member.id !== "string" || members.has(member.id)) return null;
+        members.add(member.id);
+      }
+      old.members.forEach(function (member) { covered.add(member.id); if (member.kind !== "boundary") locals.add(member.id); });
+      covered.add(old.id);
+      var same = old.edges && old.edges.length === privateEdges.length && old.edges.every(function (edge, index) { return edge === privateEdges[index]; });
+      var kept = same ? old : Object.assign({}, old, {edges: privateEdges}); groups.push(kept); replacements.set(old, kept);
+    }
+    var expanded = [];
+    for (var e = 0; e < payload.edges.length; e++) {
+      var original = payload.edges[e]; if (!original || !ids.has(original.source) || !ids.has(original.target)) return null;
+      var leaves = flatten([original]); if (!leaves || !remember(leaves)) return null;
+      var statement = leaves.reduce(function (sum, edge) { return sum + (edge.statement || 0); }, 0);
+      var proof = leaves.reduce(function (sum, edge) { return sum + (edge.proof || 0); }, 0);
+      if (!Number.isSafeInteger(statement) || !Number.isSafeInteger(proof) || statement !== (original.statement || 0) || proof !== (original.proof || 0)) return null;
+      expanded.push({edge: original, leaves: leaves, statement: statement, proof: proof});
+    }
+    originals.forEach(function (edge) {
+      if (!(edge.statement || edge.proof)) return;
+      if (roles.has(edge.source) && locals.has(edge.target)) roles.set(edge.source, roles.get(edge.source) | 1);
+      if (roles.has(edge.target) && locals.has(edge.source)) roles.set(edge.target, roles.get(edge.target) | 2);
+    });
+    for (var b = 0; b < candidates.length; b++) if (roles.get(candidates[b].id) && members.has(candidates[b].id)) return null;
+    var pools = [[], [], []]; candidates.forEach(function (node) { var role = roles.get(node.id); if (role) pools[role - 1].push(node); });
+    if (!pools.some(function (members) { return members.length; })) return null;
+    var used = new Set(reservedIds || []), serial = 0, owners = new Map(), newGroups = [], proxies = [], cards = new Map();
+    ids.forEach(function (id) { used.add(id); }); groups.forEach(function (group) { used.add(group.id); });
+    function nextId() { var id; do { id = "view-context:" + serial++; } while (used.has(id)); used.add(id); return id; }
+    pools.forEach(function (members, index) {
+      if (!members.length) return;
+      var role = ["needed", "builds", "shared"][index], title = ["Needed here", "Builds on this", "Shared context"][index];
+      var id = nextId(), key = JSON.stringify(["boundary-context", role, members[0].id]), counts = new Map(), count = 0, unknown = false, internal = 0;
+      members.forEach(function (node) {
+        (node.status_counts || [[node.status, 1]]).forEach(function (pair) { counts.set(pair[0], (counts.get(pair[0]) || 0) + pair[1]); });
+        if (node.member_count === undefined || node._unknownCount) unknown = true;
+        if (node.member_count !== undefined) count += node.member_count;
+        internal += node.internal_dependency_count || 0; owners.set(node.id, id); covered.add(node.id);
+      });
+      var group = {id: id, key: key, area: null, title: title, members: members, edges: [], $boundary: true, $contextRole: role};
+      var proxy = {id: id, kind: "boundary", title: title, _overviewGroup: key, _topics: members.length, _unknownCount: unknown,
+        member_count: count, status: members[0].status, status_counts: Array.from(counts.entries()), internal_dependency_count: internal,
+        $contextRole: role, layout: {width: 168, height: 88}};
+      groups.push(group); newGroups.push(group); proxies.push(proxy); cards.set(id, proxy);
+    });
+    var passthrough = payload.nodes.filter(function (node) { return !owners.has(node.id); });
+    var unowned = passthrough.filter(function (node) { return !covered.has(node.id); });
+    if (unowned.length) groups.push({id: nextId(), key: "boundary-context:retained", area: null, members: unowned, edges: [], $passthrough: true});
+    var pairs = new Map();
+    for (var row = 0; row < expanded.length; row++) {
+      var item = expanded[row], from = owners.get(item.edge.source) || item.edge.source, to = owners.get(item.edge.target) || item.edge.target;
+      if (from === to && owners.has(item.edge.source)) {
+        var group = newGroups.find(function (group) { return group.id === from; });
+        item.leaves.forEach(function (edge) { group.edges.push(edge); });
+        cards.get(from).internal_dependency_count += item.statement + item.proof;
+      } else {
+        var pair = JSON.stringify([from, to]), found = pairs.get(pair) || {source: from, target: to, statement: 0, proof: 0, _overviewEdges: []};
+        found.statement += item.statement; found.proof += item.proof;
+        if (!Number.isSafeInteger(found.statement) || !Number.isSafeInteger(found.proof)) return null;
+        item.leaves.forEach(function (edge) { found._overviewEdges.push(edge); }); pairs.set(pair, found);
+      }
+    }
+    var overview = Object.assign({}, prior, {groups: groups});
+    if (overview.originalNodes === undefined) overview.originalNodes = payload.nodes.length;
+    if (overview.selectedGroup === undefined) overview.selectedGroup = null;
+    delete overview._flows; delete overview._flowRange;
+    var result = Object.assign({}, payload, {nodes: passthrough.concat(proxies), edges: Array.from(pairs.values()).sort(function (a, b) {
+      return a.source < b.source ? -1 : a.source > b.source ? 1 : a.target < b.target ? -1 : a.target > b.target ? 1 : 0;
+    }), _scopeOverview: overview});
+    if (Array.isArray(payload.$shelves) && payload.$shelves.some(function (group) { return replacements.get(group) && replacements.get(group) !== group; }))
+      result.$shelves = payload.$shelves.map(function (group) { return replacements.get(group) || group; });
+    if (payload.$wikiOwners instanceof Map) result.$wikiOwners = new Map(Array.from(payload.$wikiOwners, function (pair) { return [pair[0], owners.get(pair[1]) || pair[1]]; }));
+    return result;
+  }
+
   // A derived overview of a large local scope, not a new mathematical graph.
   // Areas are authored; unassigned topics remain an explicitly structural bucket.
   function scopeOverviewProjection(payload, selectedGroup, reservedIds) {
     var local = payload.nodes.filter(function (node) { return node.kind !== "boundary"; });
-    if (local.length <= 40 || payload.nodes.length > MAX_MAP_NODES) return null;
+    if (local.length <= 40) return null;
+    var known = new Set(payload.nodes.map(function (node) { return node.id; }));
+    if (payload.edges.some(function (edge) { return !known.has(edge.source) || !known.has(edge.target); })) return null;
     var areas = new Set(local.map(function (node) { return node.area; }).filter(function (area) { return typeof area === "string" && area.trim(); }));
     if (areas.size < 2) return null;
     var groups = new Map(), owners = new Map(), used = new Set(reservedIds || []);
@@ -754,9 +1108,12 @@
       used.add(group.id);
     });
     if (!groups.has(selectedGroup)) selectedGroup = null;
+    var boundaryCount = payload.nodes.length - local.length;
+    if (groups.size + boundaryCount > MAX_MAP_NODES) return null;
+    var expand = selectedGroup && groups.get(selectedGroup).members.length + groups.size - 1 + boundaryCount <= MAX_MAP_NODES;
     var projected = [], endpoints = new Map(), bundles = new Map();
     groups.forEach(function (group) {
-      if (group.key === selectedGroup) {
+      if (group.key === selectedGroup && expand) {
         group.members.forEach(function (node) { projected.push(node); endpoints.set(node.id, node.id); });
         return;
       }
@@ -801,7 +1158,7 @@
 
   function scopeOverviewFlow(route, counts, flowRange) {
     if (!counts) return route;
-    var count = counts[route.kind];
+    var count = route.$statement !== undefined ? counts.statement + counts.proof : counts[route.kind];
     if (!count) return null;
     if (count === route.count) return route;
     var size = Math.log2(1 + count);
@@ -810,6 +1167,75 @@
 
   function wikiOwnerVisible(node, statuses) {
     return Boolean(node && (!node.status_counts || node.status_counts.every(function (pair) { return !pair[1] || statuses.has(pair[0]); })));
+  }
+
+  function sceneFrame(scene, ids, viewport, padding) {
+    var boxes = ids.map(function (id) { return scene.nodes.get(id); }).filter(Boolean);
+    if (!boxes.length) return null;
+    var left = Math.min.apply(null, boxes.map(function (box) { return box.x; }));
+    var top = Math.min.apply(null, boxes.map(function (box) { return box.y; }));
+    var width = Math.max.apply(null, boxes.map(function (box) { return box.x + box.w; })) - left;
+    var height = Math.max.apply(null, boxes.map(function (box) { return box.y + box.h; })) - top;
+    var fitted = Math.min((viewport.right - viewport.left - padding.side * 2) / Math.max(1, width),
+      (viewport.height - padding.top - padding.bottom) / Math.max(1, height));
+    var scale = clamp(Math.max(fitted, .9), MIN_SCALE, 1.35), cropped = fitted < .9;
+    var x = cropped ? viewport.left + padding.side - left * scale :
+      (viewport.left + viewport.right - width * scale) / 2 - left * scale;
+    var y = cropped ? viewport.top + padding.top - top * scale :
+      viewport.top + (viewport.height + padding.top - padding.bottom - height * scale) / 2 - top * scale;
+    var contained = boxes.filter(function (box) {
+      return box.x * scale + x >= viewport.left + padding.side - .01 &&
+        (box.x + box.w) * scale + x <= viewport.right - padding.side + .01 &&
+        box.y * scale + y >= viewport.top + padding.top - .01 &&
+        (box.y + box.h) * scale + y <= viewport.top + viewport.height - padding.bottom + .01;
+    }).length;
+    return {x: x, y: y, scale: scale, fitted: fitted, cropped: cropped, contained: contained};
+  }
+
+  function sceneDetours(scene) {
+    return scene.routes.reduce(function (count, route) {
+      var points = route.points || route.parts.reduce(function (all, part) { return all.concat(part.points); }, []);
+      var length = 0;
+      for (var index = 1; index < points.length; index++) length += Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y);
+      var from = scene.nodes.get(route.source), to = scene.nodes.get(route.target);
+      var direct = Math.hypot(from.x + from.w / 2 - to.x - to.w / 2, from.y + from.h / 2 - to.y - to.h / 2);
+      return count + (length > Math.max(480, direct * 3) ? 1 : 0);
+    }, 0);
+  }
+
+  function outlineProjection(nodes, currentScope, currentNode, limit) {
+    var records = new Map(nodes.map(function (node) { return [node.id, node]; })), children = new Map(), parents = new Map();
+    function parentOf(node) {
+      if (parents.has(node.id)) return parents.get(node.id);
+      var parent = records.get(node.parent), seen = new Set([node.id]);
+      while (parent && !seen.has(parent.id) && ["transparent", "source"].indexOf(parent.navigation) >= 0) {
+        seen.add(parent.id); parent = records.get(parent.parent);
+      }
+      var id = parent && !seen.has(parent.id) ? parent.id : null; parents.set(node.id, id); return id;
+    }
+    var root = records.get("roadmap") || nodes.find(function (node) { return node.scope === node.id && !records.has(node.parent); });
+    var chain = new Set(), cursor = records.get(currentNode) || records.get(currentScope);
+    while (cursor && !chain.has(cursor.id)) { chain.add(cursor.id); cursor = records.get(cursor.parent); }
+    nodes.forEach(function (node) {
+      if (["transparent", "source"].indexOf(node.navigation) >= 0) return;
+      var parent = parentOf(node), top = root ? parent === root.id : parent === null;
+      if (node.scope !== node.id && !top && node.id !== currentNode) return;
+      var bucket = children.get(parent) || []; bucket.push(node); children.set(parent, bucket);
+    });
+    var entries = [], seen = new Set();
+    function walk(id, depth) {
+      (children.get(id) || []).forEach(function (node) {
+        if (seen.has(node.id) || root && node.id === root.id) return;
+        seen.add(node.id); entries.push({node: node, depth: Math.min(depth, 3), collection: node.navigation === "collection"});
+        if (chain.has(node.id) || node.navigation === "collection") walk(node.id, depth + 1);
+      });
+    }
+    if (root) walk(root.id, 0); else walk(null, 0);
+    var required = new Set(entries.filter(function (entry) { return chain.has(entry.node.id); }).map(function (entry) { return entry.node.id; }));
+    var remaining = Math.max(0, (limit || 120) - required.size);
+    return {root: root || null, total: entries.length, entries: entries.filter(function (entry) {
+      return required.has(entry.node.id) || remaining-- > 0;
+    })};
   }
 
   function mount(host, data, instance, firstBundle, navigation) {
@@ -824,7 +1250,7 @@
     host.textContent = "";
     host.classList.remove("bp-dag-enhancing");
     var view, atlas, palette, byId, prerequisites, dependents, statusCounts, presentStatuses;
-    var mapAllowed, scene, sceneData, sceneDirection, sceneCompact, sceneFamily, sceneAspect, sceneWiki;
+    var mapAllowed, scene, sceneData, sceneDirection, sceneCompact, sceneFamily, sceneAspect, sceneWiki, sceneReduced;
     function recordId(node) {
       if (node._overviewGroup) return null;
       return node._recordId || (records.get(node.id) === node || ["scope", "boundary"].indexOf(node.kind) < 0 ? node.id : node.id.replace(/^(scope|boundary):/, ""));
@@ -843,8 +1269,8 @@
     data.nodes.forEach(function (node, index) {
       var layout = node.layout || {};
       node._index = index;
-      node.width = Number.isFinite(layout.width) ? layout.width : NODE_W;
-      node.height = Math.max(100, Number.isFinite(layout.height) ? layout.height : NODE_H);
+      node.width = node.kind === "boundary" ? Math.min(168, Number.isFinite(layout.width) ? layout.width : NODE_W) : Number.isFinite(layout.width) ? layout.width : NODE_W;
+      node.height = node.kind === "boundary" ? 88 : Math.max(100, Number.isFinite(layout.height) ? layout.height : NODE_H);
       node.isolated = node.isolated === true;
       byId.set(node.id, node);
       prerequisites.set(node.id, []); dependents.set(node.id, []);
@@ -876,7 +1302,7 @@
       ui$mode = "graph", ui$moved = false, ui$orientation = "lr", ui$pointers = new Map(), ui$pinch = null,
       ui$query = "", ui$searchLimit = 12, ui$selected = null, ui$searchCache = [], ui$searchCacheQuery = null,
       ui$searchError = null, ui$searchLoading = false, ui$searchNodes = data.nodes, ui$searchPromise = null,
-      ui$spotlight = null, ui$mapAllowed = mapAllowed, ui$mathQueue = [], ui$mathBusy = false, ui$mathObserver = null,
+      ui$spotlight = null, ui$mapAllowed = mapAllowed, ui$readableCrop = false, ui$mathQueue = [], ui$mathBusy = false, ui$mathObserver = null,
       ui$selectedStatuses = new Set(presentStatuses), ui$showIsolated = true,
       ui$transform = {x: 20, y: 20, scale: 1}, ui$reading = Boolean(firstBundle && firstBundle.readingSource),
       ui$area = null, ui$overviewGroup = null, ui$scopeOverview = false, ui$overviewOnly = false, ui$filtersTouched = false, ui$relationIds = null,
@@ -889,7 +1315,7 @@
       dom$inventoryScroll, dom$inventorySummary, dom$isolated, dom$listMode, dom$loadMore, dom$mapContext, dom$mapKey,
       dom$navigation, dom$navigationInner, dom$navigationNodes, dom$nodeLayer, dom$outlineToggle, dom$pageHeading,
       dom$readingBody, dom$readingContext, dom$readingNeighbors, dom$search, dom$searchResults,
-      dom$searchWrap, dom$sheetHandle, dom$sourcesMode, dom$stage, dom$statusFieldset, dom$statusInputs,
+      dom$searchWrap, dom$sheetHandle, dom$shelves, dom$sourcesMode, dom$stage, dom$statusFieldset, dom$statusInputs,
       dom$wholeSearch, dom$zoomIn, dom$zoomOut;
     var overlays = new Map(), scheduled = false, firstResize = true, family, hoverTimer;
     host.classList.add("bp-dag-integrated");
@@ -911,12 +1337,12 @@
     }
 
     function captureState() {
-      var active = document.activeElement, key = active === dom$search ? "search" : dom$readingBody && dom$readingBody.contains(active) ? "reading" : active && (active.dataset.autoformNodeId || active.dataset.inventoryNodeId);
+      var active = document.activeElement, key = active === dom$search ? "search" : dom$readingBody && dom$readingBody.contains(active) ? "reading" : active && (active.dataset.autoformNodeId || active.dataset.inventoryNodeId || active.dataset.shelfNodeId);
       return {node: ui$selected && ui$selected.id, requestedNode: ui$requestedNode, mode: ui$mode, direction: ui$direction,
         statuses: Array.from(ui$selectedStatuses), isolates: ui$showIsolated, camera: Object.assign({}, ui$transform),
         query: ui$query, area: ui$area, overviewGroup: ui$overviewGroup, readingOpen: host.classList.contains("bp-dag-sheet-open"), focus: key,
         readingScroll: dom$readingBody ? dom$readingBody.scrollTop : 0, outlineScroll: dom$navigation.scrollTop,
-        inventoryScroll: dom$inventoryScroll.scrollTop, listLimit: ui$listLimit, relationIds: ui$relationIds,
+        inventoryScroll: dom$inventoryScroll.scrollTop, shelfScroll: dom$shelves ? dom$shelves.scrollTop : 0, listLimit: ui$listLimit, relationIds: ui$relationIds,
         outlineOpen: host.classList.contains("bp-dag-outline-open"), outlineLimit: ui$outlineLimit};
     }
     function snapshotForRoute(saved, bundle) {
@@ -954,8 +1380,10 @@
         dom$navigation.scrollTop = saved.outlineScroll || 0;
         if (dom$readingBody) dom$readingBody.scrollTop = saved.readingScroll || 0;
         dom$inventoryScroll.scrollTop = saved.inventoryScroll || 0;
+        if (dom$shelves) dom$shelves.scrollTop = saved.shelfScroll || 0;
         var chosen = saved.focus === "search" ? dom$search : saved.focus === "reading" ? dom$readingBody :
           ui$mode === "graph" ? overlays.get(saved.focus) : dom$inventoryRows.get(saved.focus);
+        if (!chosen && dom$shelves && !dom$shelves.hidden) chosen = Array.from(dom$shelves.querySelectorAll("a")).find(function (link) { return link.dataset.shelfNodeId === saved.focus; });
         if (chosen === dom$readingBody) chosen.tabIndex = -1;
         if (chosen) chosen.focus({preventScroll: true});
         restoring = false; resolve();
@@ -965,7 +1393,7 @@
       dom$announcement.textContent = "The requested view could not be loaded. " + (error.message || error);
       dom$error.textContent = "Could not open this view. " + (error.message || error);
       var href = safeHref(error.url);
-      if (href) {
+      if (href && /(?:\/|\.html?)$/.test(new URL(href, window.location.href).pathname)) {
         dom$error.appendChild(document.createTextNode(" "));
         var fallback = element("a", "", "Open complete article in a new tab"); fallback.href = href;
         fallback.target = "_blank"; fallback.rel = "noopener";
@@ -1097,9 +1525,14 @@
       ui$overviewOnly = Boolean(mapAllowed && data.nodes.length && data.nodes.every(function (node) { return node._region; }) &&
         (!bundle.focus || bundle.mapFirst) && !bundle.anchor && !(record && record.result) && navigation.readerIsOverview && navigation.readerIsOverview(dom$readingBody));
       host.classList.toggle("bp-dag-overview-only", ui$overviewOnly);
-      var mapRequested = Boolean(bundle.mapFirst && (ui$scopeOverview || ui$overviewOnly) && !bundle.anchor && !(record && record.result));
+      var chapterOverview = record && record.scope === record.id && record.navigation !== "source" && record.catalog !== "module";
+      var topicCards = data.nodes.length && data.nodes.every(function (node) {
+        return node.kind === "scope" || node.kind === "boundary" || node._region || node._overviewGroup;
+      });
+      var topicOverview = mapAllowed && data.nodes.length && (chapterOverview || topicCards) && !bundle.focus && !bundle.anchor && !(record && record.result);
+      var mapRequested = Boolean(bundle.mapFirst && (ui$scopeOverview || ui$overviewOnly || mapAllowed && topicCards) && !bundle.anchor && !(record && record.result));
       var readingRequested = Boolean(bundle.focus && !mapRequested || bundle.anchor || record && record.result);
-      setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false && 1 : readingRequested ||
+      setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false && 1 : sheetLayout() && (topicOverview || mapRequested) ? false : readingRequested ||
         !ui$scopeOverview && !ui$overviewOnly && (!sheetLayout() || Boolean(bundle.nodeId)), ui$selected);
       refresh(true); firstResize = true; resize();
       if (ui$selected && mapAllowed) centerIfHidden(ui$selected);
@@ -1126,8 +1559,13 @@
       return readingReady;
     }
     function routeTrail(bundle) {
+      var home = navigation && navigation.getHomeURL && navigation.getHomeURL();
+      if (home && bundle.url && !bundle.nodeId) {
+        var at = new URL(bundle.url), start = new URL(home);
+        if (at.origin === start.origin && at.pathname === start.pathname && at.search === start.search) return [{label: "Home"}];
+      }
       var entries = [], record = records.get(bundle.nodeId), pending = records.get(bundle.scope), seen = new Set();
-      if (!pending) entries = bundle.graph.view && bundle.graph.view.breadcrumbs || [];
+      if (!pending) entries = (bundle.graph.view && bundle.graph.view.breadcrumbs || []).slice();
       while (pending && !seen.has(pending.id)) {
         seen.add(pending.id);
         // A collection never stands between crumbs, but its own page ends the trail with it, as the map header does.
@@ -1140,7 +1578,8 @@
       if (record && record.scope !== record.id) entries.push({label: record.title, reading_title: record.reading_title});
       if (ui$area) entries.push({label: ui$area});
       var group = currentOverviewGroup();
-      if (group) entries.push({label: group.area || "Other topics"});
+      if (group) entries.push({label: group.area || group.title || "Other topics", reading_title: group.reading_title});
+      if (home) entries.unshift({label: "Home", url: home});
       return entries;
     }
     function currentOverviewGroup() {
@@ -1209,10 +1648,19 @@
     function updateProjection() {
       ui$wikiProjectionTicket++; ui$wikiView = null;
       var focus = neighborhood(ui$requestedNode), eligible = contextGraph.nodes.filter(mapNode), known = new Set(eligible.map(function (node) { return node.id; }));
-      var overview = !focus && scopeOverviewProjection(Object.assign({}, contextGraph, {nodes: eligible,
-        edges: contextGraph.edges.filter(function (edge) { return known.has(edge.source) && known.has(edge.target); })}), ui$overviewGroup, records.keys());
-      var projected = focus || overview || regionProjection(contextGraph, ui$area);
-      ui$scopeOverview = Boolean(overview); ui$overviewGroup = overview && overview._scopeOverview.selectedGroup || null;
+      var payload = Object.assign({}, contextGraph, {nodes: eligible,
+        edges: contextGraph.edges.filter(function (edge) { return known.has(edge.source) && known.has(edge.target); })});
+      var areaView = regionProjection(payload, ui$area);
+      var overview = !focus && (scopeOverviewProjection(payload, ui$overviewGroup, records.keys()) ||
+        areaView === payload && structuralScopeProjection(payload, records, currentBundle && currentBundle.scope, records.keys()));
+      if (overview && overview._scopeOverview.$structural && overview._scopeOverview.groups.some(function (group) { return group.key === ui$overviewGroup; }))
+        overview._scopeOverview.selectedGroup = ui$overviewGroup;
+      var projected = focus || overview || areaView;
+      projected = expandedGroupShelves(projected);
+      if (!focus) projected = boundaryContextProjection(projected, records.keys()) || projected;
+      var scopeOverview = projected._scopeOverview;
+      if (scopeOverview && scopeOverview.groups.some(function (group) { return group.key === ui$overviewGroup; })) scopeOverview.selectedGroup = ui$overviewGroup;
+      ui$scopeOverview = Boolean(scopeOverview); ui$overviewGroup = scopeOverview && scopeOverview.selectedGroup || null;
       host.classList.toggle("bp-dag-scope-overview", ui$scopeOverview);
       host.classList.toggle("bp-dag-area-expanded", Boolean(navigation && ui$area));
       adoptGraph(projected); ui$mapAllowed = mapAllowed; ui$activeDirty = true; ui$spotlight = ui$hovered = null;
@@ -1234,6 +1682,25 @@
       }
       return names.slice(-2).join(" › ");
     }
+    function expandedGroupShelves(payload) {
+      var overview = payload._scopeOverview, group = overview && overview.groups.find(function (item) { return item.key === overview.selectedGroup; });
+      if (!group || group.$shelf || group.members.length <= 12 || !payload.nodes.some(function (node) { return node.id === group.members[0].id; })) return payload;
+      var members = new Set(group.members.map(function (node) { return node.id; })), linked = new Set();
+      payload.edges.forEach(function (edge) {
+        if (members.has(edge.source) && members.has(edge.target) && (edge.statement || edge.proof)) { linked.add(edge.source); linked.add(edge.target); }
+      });
+      var unlinked = group.members.filter(function (node) { return !linked.has(node.id); }); if (!unlinked.length) return payload;
+      var hidden = new Set(unlinked.map(function (node) { return node.id; })), retained = [], privateEdges = group.edges.slice();
+      payload.edges.forEach(function (edge) {
+        if (hidden.has(edge.source) || hidden.has(edge.target)) (edge._overviewEdges || [edge]).forEach(function (original) { privateEdges.push(original); });
+        else retained.push(edge);
+      });
+      var owner = Object.assign({}, group, {edges: privateEdges, $shelf: !linked.size});
+      var shelf = Object.assign({}, owner, {members: unlinked, $shelf: true});
+      return Object.assign({}, payload, {nodes: payload.nodes.filter(function (node) { return !hidden.has(node.id); }), edges: retained,
+        $shelves: (payload.$shelves || []).concat([shelf]),
+        _scopeOverview: Object.assign({}, overview, {groups: overview.groups.map(function (item) { return item === group ? owner : item; })})});
+    }
     function semanticParent(node) {
       var parent = records.get(node.parent), seen = new Set();
       while (parent && ["collection", "transparent"].indexOf(parent.navigation) >= 0 && !seen.has(parent.id)) {
@@ -1242,37 +1709,35 @@
       return parent && parent.id;
     }
     function renderOutline() {
-      var scopes = sharedIndex.nodes.filter(function (node) { return node.scope === node.id && ["collection", "transparent", "source"].indexOf(node.navigation) < 0; });
-      var chain = new Set(), key = currentBundle && currentBundle.scope, pending = records.get(key);
-      while (pending && !chain.has(pending.id)) { chain.add(pending.id); pending = records.get(semanticParent(pending)); }
-      var root = records.get("roadmap") || scopes.find(function (node) { return !semanticParent(node); });
-      if (root && dom$homeLink) {
-        dom$homeLink.textContent = "Library"; dom$homeLink.href = root.route || root.url;
-        // Its name starts with its visible word, so speech input can say "Library".
-        dom$homeLink.title = root.title; dom$homeLink.setAttribute("aria-label", "Library: " + root.title);
+      var key = currentBundle && currentBundle.scope, tree = outlineProjection(sharedIndex.nodes, key,
+        currentBundle && currentBundle.nodeId, ui$outlineLimit);
+      if (dom$homeLink) {
+        var home = navigation && navigation.getHomeURL && navigation.getHomeURL();
+        dom$homeLink.textContent = "Library"; dom$homeLink.href = home || tree.root && (tree.root.route || tree.root.url) || "";
+        // Its name is its visible word, so speech input can say "Library".
+        dom$homeLink.title = "Home"; dom$homeLink.removeAttribute("aria-label");
       }
-      var visible = scopes.filter(function (node) { var parent = semanticParent(node); return !parent || (root && parent === root.id) || chain.has(parent); });
-      var required = new Set(Array.from(chain).slice(0, ui$outlineLimit)), slots = Math.max(0, ui$outlineLimit - required.size);
-      var shown = visible.filter(function (node) { return required.has(node.id) || slots-- > 0; });
       var list = element("ul", "bp-dag-navigation-list");
-      shown.forEach(function (node) {
-        if (root && node.id === root.id) return;
-        var item = element("li"), link = readingLabel("a", "bp-dag-navigation-link", node.title, node.reading_title);
+      tree.entries.forEach(function (entry) {
+        var node = entry.node, item = element("li", "bp-outline-depth-" + entry.depth);
+        if (entry.collection) { item.appendChild(readingLabel("span", "bp-outline-collection", node.title, node.reading_title)); list.appendChild(item); return; }
+        var link = readingLabel("a", "bp-dag-navigation-link", node.title, node.reading_title);
         link.href = node.route || node.url; link.title = node.title; link.dataset.navigationNodeId = node.id;
-        if (node.id === key) link.setAttribute("aria-current", "page");
-        if (chain.has(semanticParent(node)) && root && semanticParent(node) !== root.id) item.className = "bp-outline-child";
+        if (node.id === (currentBundle && currentBundle.nodeId || key)) link.setAttribute("aria-current", "page");
         item.appendChild(link); list.appendChild(item);
         link.addEventListener("click", function (event) {
-          if (event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+          if (event.defaultPrevented || event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
           event.preventDefault(); navigation.navigateNode(node.id, {history: "push"});
         });
       });
       dom$navigationInner.appendChild(element("h2", "bp-outline-label", "Topics")); dom$navigationInner.appendChild(list);
-      if (shown.length < visible.length) {
+      if (tree.entries.length < tree.total) {
         var more = button("bp-dag-navigation-more", "Show more topics");
         more.addEventListener("click", function () { ui$outlineLimit += 50; renderNavigation(); remember(); }); dom$navigationInner.appendChild(more);
       }
-      if (navigation.declutterReader) navigation.declutterReader(dom$readingBody, shown.map(function (node) { return node.id; }));
+      if (navigation.declutterReader) navigation.declutterReader(dom$readingBody, tree.entries.filter(function (entry) {
+        return !entry.collection && entry.node.scope === entry.node.id;
+      }).map(function (entry) { return entry.node.id; }));
     }
     function renderReaderContext(retainedWiki) {
       if (!dom$readingContext) return;
@@ -1393,7 +1858,7 @@
       dom$browseToggle.setAttribute("aria-controls", dom$browsePopover.id);
       dom$listMode = button("bp-dag-button", "Statements in this topic");
       dom$sourcesMode = button("bp-dag-button", "Source texts");
-      dom$browsePopover.appendChild(dom$listMode); dom$browsePopover.appendChild(dom$sourcesMode);
+      dom$browsePopover.appendChild(dom$listMode);
       dom$browse.appendChild(dom$browseToggle); dom$browse.appendChild(dom$browsePopover); toolbar.appendChild(dom$browse);
 
       var zoomGroup = element("div", "bp-dag-zoom"); zoomGroup.setAttribute("role", "group"); zoomGroup.setAttribute("aria-label", "Zoom controls");
@@ -1405,7 +1870,7 @@
       head.appendChild(toolbar);
       dom$error = element("div", "bp-dag-error"); dom$error.setAttribute("role", "alert"); dom$error.hidden = true; head.appendChild(dom$error);
       var bookLink = dom$homeLink = element("a", "bp-dag-book", "Library");
-      bookLink.href = safeHref(view.book) || currentBundle.url; context.insertBefore(bookLink, crumbs);
+      bookLink.href = navigation.getHomeURL && navigation.getHomeURL() || safeHref(view.book) || currentBundle.url; context.insertBefore(bookLink, crumbs);
       host.appendChild(head);
 
       var body = dom$body = element("div", "bp-dag-body"), main = element("div", "bp-dag-main");
@@ -1427,6 +1892,8 @@
         "This roadmap has no articles yet."); dom$empty.hidden = true;
       dom$stage.append(help, dom$canvas, dom$nodeLayer, dom$density, dom$empty);
       main.appendChild(dom$stage);
+      dom$shelves = element("section", "bp-scope-shelves"); dom$shelves.hidden = true;
+      dom$shelves.setAttribute("aria-label", "Developments in this scope"); main.appendChild(dom$shelves);
 
       dom$inventory = element("section", "bp-dag-inventory"); dom$inventory.hidden = true;
       var inventoryHead = element("div", "bp-dag-inventory-head"), inventoryHeading = inventoryHead.appendChild(element("h2", "", "Contents"));
@@ -1538,7 +2005,10 @@
       dom$filters.addEventListener("keydown", function (event) {
         if (event.key === "Escape" && !dom$filterPopover.hidden) { event.preventDefault(); setFilters(false); dom$filterSummary.focus(); }
       });
-      dom$browseToggle.addEventListener("click", function () { setBrowse(dom$browsePopover.hidden); });
+      dom$browseToggle.addEventListener("click", function () {
+        if (sourceNodes().length) setBrowse(dom$browsePopover.hidden);
+        else { ui$relationIds = null; setMode("list", true); }
+      });
       dom$browse.addEventListener("keydown", function (event) {
         if (event.key === "Escape" && !dom$browsePopover.hidden) { event.preventDefault(); setBrowse(false); }
       });
@@ -1634,10 +2104,10 @@
       if (window.ResizeObserver) { var ro = new ResizeObserver(resize); ro.observe(dom$stage); observers.push(ro); }
       else globalListen(window, "resize", resize);
       globalListen(window, "resize", syncSheetAccessibility);
-      if (navigation) [dom$readingBody, dom$navigation, dom$inventoryScroll].forEach(function (pane) { pane.addEventListener("scroll", remember); });
+      if (navigation) [dom$readingBody, dom$navigation, dom$inventoryScroll, dom$shelves].forEach(function (pane) { pane.addEventListener("scroll", remember); });
       var theme = new MutationObserver(schedule); theme.observe(document.body, {attributes: true, attributeFilter: ["data-md-color-scheme"]}); observers.push(theme);
       if (dom$homeLink) dom$homeLink.addEventListener("click", function (event) {
-        if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         event.preventDefault(); navigation.navigate(dom$homeLink.href, {history: "push"});
       });
     }
@@ -1698,7 +2168,8 @@
     // status.STATES' order: the palette's keys arrive sorted, and regions merge their topics' counts out of order.
     var LEGEND = "mathlib fully_proved proved defined conditional can_prove stated can_state not_ready planned".split(" ");
     function legendRank(key) { var index = LEGEND.indexOf(key); return index < 0 ? LEGEND.length : index; }
-    function statusRing(node) {
+    // A card draws it as a bar; a shelf's round swatch, as a ring.
+    function statusRing(node, round) {
       var entries = (node.status_counts || []).filter(function (entry) { return entry[1] > 0; })
         .sort(function (a, b) { return legendRank(a[0]) - legendRank(b[0]); });
       var total = entries.reduce(function (sum, entry) { return sum + entry[1]; }, 0), cursor = 0, stops = [];
@@ -1707,27 +2178,55 @@
         var end = cursor + entry[1] / Math.max(1, total) * 100;
         stops.push((color.stroke || "#9ca3af") + " " + cursor + "% " + end + "%"); cursor = end;
       });
-      return stops.length ? "linear-gradient(90deg," + stops.join(",") + ")" : "var(--dag-node-stroke)";
+      return stops.length ? (round ? "conic-gradient(" : "linear-gradient(90deg,") + stops.join(",") + ")" : "var(--dag-node-stroke)";
     }
     function compactRegions() {
       return Boolean(navigation && atlas && !ui$area && dom$stage && dom$stage.clientWidth > 0 && dom$stage.clientWidth <= 620 &&
         data.nodes.length && data.nodes.every(function (node) { return node._region || node._overviewGroup; }));
     }
+    function framingNodes() {
+      var nodes = ui$active.length ? ui$active : data.nodes, group = currentOverviewGroup();
+      if (group) {
+        var members = new Set(group.members.map(function (node) { return node.id; }));
+        var local = nodes.filter(function (node) { return members.has(node.id); });
+        if (local.length) return local;
+      }
+      if (ui$selected && ui$selected.kind === "boundary") return nodes;
+      var localNodes = nodes.filter(function (node) { return node.kind !== "boundary"; });
+      return localNodes.length ? localNodes : nodes;
+    }
+    function framingViewport() {
+      var free = freeArea();
+      return {left: free.left, right: free.right, top: free.top || 0, height: free.band};
+    }
+    function framingPadding() {
+      return compactRegions() ? {side: 0, top: 0, bottom: 0} : {side: 20, top: 48, bottom: 56};
+    }
     function geometry() {
       if (!mapAllowed) return null;
       var compact = compactRegions(), aspect = dom$stage.clientWidth / Math.max(1, dom$stage.clientHeight);
       aspect = Math.round((Number.isFinite(aspect) && aspect > 0 ? clamp(aspect, .25, 4) : 1.4) * 10) / 10;
-      if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family || sceneAspect !== aspect || sceneWiki !== data.$wikiEdges) {
+      var reduced = !ui$selected && !data.nodes.some(function (node) { return node.kind !== "boundary" && node._overviewGroup; });
+      if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family || sceneAspect !== aspect || sceneWiki !== data.$wikiEdges || sceneReduced !== reduced) {
         var anchor = typeof document !== "undefined" && document.activeElement && document.activeElement.dataset &&
           document.activeElement.dataset.autoformNodeId, previous = !restoring && sceneData === data && scene && scene.nodes.get(anchor);
-        scene = layoutGraph(data.nodes.map(function (node) { return {id: node.id, width: compact ? 312 : node.width,
-          height: compact ? 96 : Math.max(node.height, node._region ? 148 : 100), area: node.area, scope: node.scope}; }), data.edges, ui$orientation,
-          aspect, data.$wikiEdges);
+        var nodes = data.nodes.map(function (node) { return {id: node.id, width: compact ? 312 : node.width,
+          height: compact ? 96 : node.height, area: node.area, scope: node.scope}; });
+        scene = layoutGraph(nodes, data.edges, ui$orientation, aspect, data.$wikiEdges, reduced);
+        var targets = framingNodes();
+        if (data.nodes.length <= 24 && targets.length) {
+          var alternative = layoutGraph(nodes, data.edges, ui$orientation === "lr" ? "tb" : "lr", aspect, data.$wikiEdges, reduced);
+          var ids = targets.map(function (node) { return node.id; }), viewport = framingViewport(), padding = framingPadding();
+          var chosenFrame = sceneFrame(scene, ids, viewport, padding), otherFrame = sceneFrame(alternative, ids, viewport, padding);
+          var detours = sceneDetours(scene), otherDetours = sceneDetours(alternative);
+          if (otherFrame.contained > chosenFrame.contained || otherFrame.contained === chosenFrame.contained &&
+              (otherDetours < detours || otherDetours === detours && otherFrame.fitted > chosenFrame.fitted)) scene = alternative;
+        }
         scene.$wikiRoutes = wikiRoutes(scene);
         var moved = previous && scene.nodes.get(anchor);
         if (moved) { ui$transform.x += (previous.x + previous.w / 2 - moved.x - moved.w / 2) * ui$transform.scale;
           ui$transform.y += (previous.y + previous.h / 2 - moved.y - moved.h / 2) * ui$transform.scale; }
-        sceneData = data; sceneDirection = ui$orientation; sceneCompact = compact; sceneFamily = family; sceneAspect = aspect; sceneWiki = data.$wikiEdges;
+        sceneData = data; sceneDirection = ui$orientation; sceneCompact = compact; sceneFamily = family; sceneAspect = aspect; sceneWiki = data.$wikiEdges; sceneReduced = reduced;
       }
       return scene;
     }
@@ -1745,22 +2244,86 @@
       if (resetList) ui$listLimit = LIST_PAGE;
       syncControls(); renderInspector(); renderInventory(resetList); schedule();
     }
+    function renderShelves() {
+      if (!dom$shelves) return;
+      var selected = currentOverviewGroup(), members = selected && new Set(selected.members.map(function (member) { return member.id; }));
+      var nativeGroup = selected && (selected.$shelf || !ui$active.some(function (node) { return members.has(node.id); }));
+      var groups = nativeGroup ? [selected] : data.$shelves || [];
+      var visible = ui$mode === "graph" && groups.length > 0;
+      dom$shelves.hidden = !visible; host.classList.toggle("bp-dag-has-shelves", visible);
+      host.classList.toggle("bp-dag-shelves-only", visible && (nativeGroup || !data.nodes.length));
+      var state = JSON.stringify([ui$mode, ui$overviewGroup, ui$listLimit, Array.from(ui$selectedStatuses), ui$query]);
+      if (renderShelves.$data === data && renderShelves.$state === state) return;
+      renderShelves.$data = data; renderShelves.$state = state; dom$shelves.replaceChildren();
+      if (!visible) return;
+      if (nativeGroup) {
+        var back = button("bp-reading-wiki-more", "← Topic overview");
+        back.addEventListener("click", function () { setMode("regions", true); }); dom$shelves.appendChild(back);
+      } else dom$shelves.appendChild(element("h2", "bp-scope-shelves-heading", "More developments"));
+      groups.forEach(function (group) {
+        var members = group.members.filter(function (node) { return matchesStatus(node) && (!ui$query || searchScore(node, ui$query.toLocaleLowerCase())); });
+        if (!members.length) return;
+        var section = element("section", "bp-scope-shelf"), heading = readingLabel("h3", "", group.area || group.title || "Unlinked topics", group.reading_title);
+        section.appendChild(heading);
+        var statements = members.some(function (node) { var record = records.get(recordId(node)); return record && record.result; });
+        section.appendChild(element("p", "bp-scope-shelf-count", plural(members.length, statements ? "entry" : "topic", statements ? "entries" : "topics") + (group.$shelf ? " · no local formal links" : "")));
+        var paged = nativeGroup || group.key === ui$overviewGroup, limit = paged ? ui$listLimit : 5, list = element("ul", "bp-scope-shelf-list");
+        members.slice(0, limit).forEach(function (node) {
+          var id = recordId(node), record = records.get(id), item = element("li");
+          if (!record) return;
+          var link = element("a"); link.appendChild(readingLabel("span", "bp-scope-shelf-title", record.title, record.reading_title)); link.href = record.route || record.url;
+          link.dataset.shelfNodeId = id;
+          var mark = swatch(record.status), counts = node.status_counts && node.status_counts.filter(function (pair) { return pair[1]; });
+          if (counts && counts.length > 1) {
+            mark.style.background = statusRing(node, true);
+            mark.title = counts.map(function (pair) { return pair[1].toLocaleString() + " " + statusLabel(pair[0]); }).join(" · ");
+          }
+          link.appendChild(mark);
+          link.addEventListener("click", function (event) {
+            if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault(); activateNode(node);
+          });
+          item.appendChild(link); list.appendChild(item);
+        });
+        section.appendChild(list);
+        if (members.length > limit) {
+          var more = button("bp-reading-wiki-more", paged ? "Show " + Math.min(LIST_PAGE, members.length - limit) + " more" : "Explore all " + members.length);
+          more.addEventListener("click", function () {
+            if (paged) { ui$listLimit += LIST_PAGE; renderShelves(); remember(); }
+            else activateNode({_overviewGroup: group.key});
+          }); section.appendChild(more);
+        }
+        dom$shelves.appendChild(section);
+      });
+      refreshReadingLabels(dom$shelves);
+    }
     function syncControls() {
       calculateActive();
+      renderShelves();
       host.classList.toggle("bp-dag-compact-regions", compactRegions());
       if (navigation) {
         var record = records.get(currentBundle && currentBundle.nodeId), links = record && record.result && neighborIds(record.id), group = currentOverviewGroup();
         // A long title gives way before the counts after it.
         // The reader beside a desktop map already says "Uses N · Used by M", so the counts show here only on a phone.
-        dom$mapContext.replaceChildren(links ? readingLabel("span", "", record.title, record.reading_title) :
-          element("span", "", group ? group.area || "Other topics" : ui$area || currentBundle && currentBundle.title || data.title),
+        var scope = records.get(currentBundle && currentBundle.scope), label = group || !ui$area && (record || scope);
+        var title = group ? group.area || group.title || "Other topics" : label ? label.title : ui$area || currentBundle && currentBundle.title || data.title;
+        dom$mapContext.replaceChildren(readingLabel("span", "", title, label && label.reading_title),
           links && sheetLayout() ? " · uses " + links.before.length + " · used by " + links.after.length : "");
-        if (links) refreshReadingLabels(dom$mapContext);
+        refreshReadingLabels(dom$mapContext);
         dom$mapKey.replaceChildren();
+        var compactKey = compactRegions();
         ["statement", "proof"].forEach(function (kind) {
           if (data.edges.some(function (edge) { return edge[kind]; })) dom$mapKey.appendChild(element("span", "bp-map-key-" + kind,
             (kind === "proof" ? "Proof" : "Statement") + (sheetLayout() ? "" : " dependency")));
         });
+        var display = mapAllowed && ui$mode === "graph" && geometry().$display;
+        if (display && display.reduced) {
+          var key = element("span", "bp-map-key-coverage", display.shownPairs < display.totalPairs ?
+            compactKey ? "Backbone " + display.shownPairs + "/" + display.totalPairs : "Backbone · " + display.shownPairs + " of " + display.totalPairs + " connections" :
+            compactKey ? "Types combined" : "Combined dependency types");
+          key.title = "One stroke per displayed pair; solid if it includes statement dependencies. All typed dependencies remain in articles and selected-result maps.";
+          dom$mapKey.appendChild(key);
+        }
         // One entry says what the dotted lines are and how many of them this map draws; a map that draws none says nothing about their coverage.
         if (data.$wikiEdges && data.$wikiEdges.length) {
           var local = sceneData === data && scene && scene.$wikiRoutes;
@@ -1779,10 +2342,19 @@
         " statuses" + (ui$showIsolated ? "" : " · linked only");
       dom$graphMode.hidden = ui$mode === "graph";
       dom$listMode.textContent = currentBundle && currentBundle.scope === "roadmap" ? "All statements" : "Statements in this topic";
+      var hasSources = sourceNodes().length > 0;
+      if (hasSources && dom$sourcesMode.parentElement !== dom$browsePopover) dom$browsePopover.appendChild(dom$sourcesMode);
+      if (!hasSources && dom$sourcesMode.parentElement === dom$browsePopover) { setBrowse(false); dom$sourcesMode.remove(); }
+      dom$browseToggle.textContent = hasSources ? "Browse" : "Statements";
+      dom$browseToggle.setAttribute("aria-label", hasSources ? "Browse statements or source texts" : "Browse statements");
+      if (hasSources) {
+        dom$browseToggle.setAttribute("aria-controls", dom$browsePopover.id);
+        dom$browseToggle.setAttribute("aria-expanded", String(!dom$browsePopover.hidden));
+      } else { dom$browsePopover.hidden = true; dom$browseToggle.removeAttribute("aria-controls"); dom$browseToggle.removeAttribute("aria-expanded"); }
       // Browse marks the list on screen, so at most one of its choices reads as pressed; on the map neither does.
       pressed(dom$listMode, ui$mode === "list");
       if (dom$sourcesMode) pressed(dom$sourcesMode, ui$mode === "sources");
-      dom$stage.hidden = ui$mode !== "graph"; dom$inventory.hidden = ui$mode === "graph";
+      dom$stage.hidden = ui$mode !== "graph" || host.classList.contains("bp-dag-shelves-only"); dom$inventory.hidden = ui$mode === "graph";
       dom$graphMode.disabled = !ui$mapAllowed;
       // A disabled Back to map says why the map is unavailable.
       if (ui$mapAllowed) dom$graphMode.removeAttribute("title"); else dom$graphMode.title = "Too many statements to draw as a map";
@@ -1803,7 +2375,7 @@
       return ui$spotlight || (ui$spotlight = spotlightOf(collect(ui$selected.id, prerequisites), collect(ui$selected.id, dependents)));
     }
     function matchesStatus(node) {
-      return (node._region || node._overviewGroup) && node.status_counts && node.status_counts.length ?
+      return (node._region || node._overviewGroup || node.kind === "scope" || node.kind === "boundary") && node.status_counts && node.status_counts.length ?
         node.status_counts.some(function (pair) { return ui$selectedStatuses.has(pair[0]); }) : ui$selectedStatuses.has(node.status);
     }
     function calculateActive() {
@@ -1855,68 +2427,50 @@
     }
     function fit() {
       if (!mapAllowed) return;
-      calculateActive(); var all = ui$active.length ? ui$active : data.nodes; if (!all.length) return;
-      // Fit a bounded authored-area overview to its cards, not a peripheral
-      // return path. Never shrink the repository or relax the readable floor.
-      var compact = compactRegions(), pad = 36, side = compact ? 18 : pad,
-        top = compact ? 52 : 56, bottom = compact ? 44 : 56, stageW = dom$stage.clientWidth;
-      var shown = mapHeight();
-      var readableFloor = .9;
-      // Unlinked cards are inventory: when the whole map cannot open readable and whole, the first view frames the linked graph.
-      var linked = all.filter(function (node) { return !node.isolated; }), box = frame(all);
-      if ((box.wide || box.tall) && linked.length) box = frame(linked);
-      var scale = ui$transform.scale = box.scale;
-      // A map that fits, if only once the padding gives way, is centred whole. A real crop centres the selection or a requested
-      // area's first card. With nothing to centre on, any map but a phone's compact overview starts each cropped axis at the graph's
-      // leading edge rather than leaving half the stage empty around one card; a scope overview keeps whatever useful local card
-      // that leaves in view, since an external boundary first in line is no reason to push the overview off the viewport.
-      ui$transform.x = (stageW - box.w * scale) / 2 - box.x * scale;
-      ui$transform.y = (shown + top - bottom - box.h * scale) / 2 - box.y * scale;
-      var target = ui$selected || box.nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; });
-      if (box.wide || box.tall || compact && box.fitted < readableFloor) {
-        if (target) center(target, readableFloor);
+      calculateActive(); var nodes = framingNodes(); if (!nodes.length) return;
+      // Frame local cards (or the drilled group's members), not distant context
+      // boundaries or route detours. The readable floor stays unchanged.
+      var frame = sceneFrame(geometry(), nodes.map(function (node) { return node.id; }), framingViewport(), framingPadding());
+      // Unlinked cards are inventory: when the whole map cannot open readable and whole, the first view frames the linked cards.
+      var linked = nodes.filter(function (node) { return !node.isolated; });
+      if (frame.cropped && linked.length && linked.length < nodes.length) {
+        nodes = linked; frame = sceneFrame(geometry(), nodes.map(function (node) { return node.id; }), framingViewport(), framingPadding());
+      }
+      ui$readableCrop = frame.cropped; ui$transform = {x: frame.x, y: frame.y, scale: frame.scale};
+      if (dom$fit) {
+        dom$fit.textContent = ui$readableCrop ? "Recentre" : "Fit";
+        // Its name starts with its visible word, so speech input can say it.
+        dom$fit.setAttribute("aria-label", ui$readableCrop ? "Recentre the map" : "Fit the map");
+      }
+      if (ui$readableCrop && navigation) {
+        var anchor = ui$selected || nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; });
+        if (anchor) center(anchor, .9);
+        // A phone's compact overview centres its first card; any other map keeps its leading edge.
+        else if (!data._scopeOverview && compactRegions()) center(nodes.find(function (node) { return node.kind !== "boundary"; }) || nodes[0], .9);
+        else if (!data._scopeOverview) lead();
         else {
-          if (!compact && box.wide) ui$transform.x = side - box.x * scale;
-          if (!compact && box.tall) ui$transform.y = top - box.y * scale;
-          if (data._scopeOverview) {
-            if (!usableLocal()) center(all.find(function (node) { return node._overviewGroup; }) ||
-              all.find(function (node) { return node.kind !== "boundary"; }) || all[0], readableFloor);
-          } else if (compact) center(box.nodes[0], readableFloor);
-          else if (!usableLocal()) lead();
+          var free = freeArea(), start = (free.top || 0) + 12, end = (free.top || 0) + free.band - 12;
+          var usable = nodes.some(function (node) { if (node.kind === "boundary") return false; var box = screen(node);
+            return box.x >= free.left + 12 && box.x + box.w <= free.right - 12 && box.y >= start && box.y + box.h <= end;
+          });
+          // Keep useful local coverage; a first external boundary is not an
+          // instruction to push the mathematical overview off the viewport.
+          if (!usable) center(nodes.find(function (node) { return node._overviewGroup; }) ||
+            nodes.find(function (node) { return node.kind !== "boundary"; }) || nodes[0], .9);
         }
       }
       schedule(); remember();
-      // A deep map's leading corner can be bare, or hold only another topic's card, and Fit gave the same empty view.
-      // Then the page's own first card, in reading order, opens at the leading edge, centred across.
+      // A cropped map with nothing to centre on keeps the leading edge sceneFrame gave it: centring its first card left half the
+      // stage empty. A deep map's leading corner can be bare, though, and then the first card in reading order opens there.
       function lead() {
-        var tb = ui$orientation === "tb", first = box.nodes.filter(function (node) { return node.kind !== "boundary"; }).sort(function (a, b) {
+        var free = freeArea(), pad = framingPadding(), top = (free.top || 0) + pad.top, end = (free.top || 0) + free.band - pad.bottom;
+        if (nodes.some(function (node) { var box = screen(node); return box.x >= free.left + pad.side - 1e-6 && box.x + box.w <= free.right - pad.side + 1e-6 &&
+          box.y >= top - 1e-6 && box.y + box.h <= end + 1e-6; })) return;
+        var tb = ui$orientation === "tb", first = nodes.filter(function (node) { return node.kind !== "boundary"; }).sort(function (a, b) {
           var p = world(a), q = world(b); return tb ? p.y - q.y || p.x - q.x : p.x - q.x || p.y - q.y;
-        })[0];
-        if (!first) return;
-        var cell = world(first), free = freeArea();
-        if (tb) { ui$transform.x = (free.left + free.right) / 2 - (cell.x + cell.w / 2) * scale; ui$transform.y = (free.top || 0) + top - cell.y * scale; }
-        else { ui$transform.x = free.left + side - cell.x * scale; ui$transform.y = (free.top || 0) + free.band / 2 - (cell.y + cell.h / 2) * scale; }
-      }
-      function usableLocal() {
-        var free = freeArea(), start = (free.top || 0) + 12, end = (free.top || 0) + free.band - 12;
-        return all.some(function (node) {
-          if (node.kind === "boundary") return false; var cell = screen(node);
-          return cell.x >= free.left + 12 && cell.x + cell.w <= free.right - 12 && cell.y >= start && cell.y + cell.h <= end;
-        });
-      }
-      function frame(nodes) {
-        var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        nodes.forEach(function (node) {
-          var cell = world(node); minX = Math.min(minX, cell.x); minY = Math.min(minY, cell.y);
-          maxX = Math.max(maxX, cell.x + cell.w); maxY = Math.max(maxY, cell.y + cell.h);
-        });
-        // Route detours are context, not a reason to shrink useful mathematical cards.
-        var width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY), fitted = Math.min((stageW - side * 2) / width, (shown - top - bottom) / height),
-          scale = clamp(Math.max(fitted, readableFloor), MIN_SCALE, 1.35);
-        // Across, the padding gives way first: cards that fit the stage's full width stay whole.
-        // A map scaled to fit its height exactly can overshoot it by a rounding error, which is not a crop.
-        return {nodes: nodes, x: minX, y: minY, w: width, h: height, fitted: fitted, scale: scale,
-          wide: width * scale > stageW && !compact, tall: height * scale > shown - top - bottom + 1e-6};
+        })[0] || nodes[0], cell = world(first), scale = ui$transform.scale;
+        if (tb) { ui$transform.x = (free.left + free.right) / 2 - (cell.x + cell.w / 2) * scale; ui$transform.y = top - cell.y * scale; }
+        else { ui$transform.x = free.left + pad.side - cell.x * scale; ui$transform.y = (free.top || 0) + free.band / 2 - (cell.y + cell.h / 2) * scale; }
       }
     }
     // A phone's open reader leaves the map only the band above it, so the map fits there and counts what falls below as off screen.
@@ -1924,7 +2478,7 @@
     // Open details cover part of the map; this is the larger part they leave, in stage pixels.
     function freeArea() {
       var band = dom$stage.clientHeight, left = 0, right = dom$stage.clientWidth, drawer = dom$inspector;
-      if (compactRegions() && (!sheetLayout() || !host.classList.contains("bp-dag-sheet-open"))) return {top: 52, band: Math.max(NODE_H, band - 96), left: 18, right: right - 18};
+      if (compactRegions() && (!sheetLayout() || !host.classList.contains("bp-dag-sheet-open"))) return {top: 28, band: Math.max(NODE_H, band - 44), left: 12, right: right - 12};
       if (!sheetLayout()) return {band: band, left: left, right: right};
       if (host.classList.contains("bp-dag-sheet-open")) {
         // The workspace sheet slides on a transform, so its top is the stylesheet's 45%, not offsetTop.
@@ -2120,7 +2674,12 @@
           else { var a = (12 - axis[0]) / axis[1], b = (axis[2] - 12 - axis[0]) / axis[1]; low = Math.max(low, Math.min(a, b)); high = Math.min(high, Math.max(a, b)); }
         });
         var length = (high - low) * segment.length * scale;
-        if (length >= 12) spots.push({x: x + dx * (low + high) / 2, y: y + dy * (low + high) / 2, dx: segment.dx, dy: segment.dy, length: length});
+        if (length >= 12) {
+          // A pill takes the middle of the visible run; the direction cue sits two thirds along it, towards the target.
+          var progress = low + (high - low) * .68;
+          spots.push({x: x + dx * (low + high) / 2, y: y + dy * (low + high) / 2, dx: segment.dx, dy: segment.dy, length: length,
+            cue: {x: x + dx * progress, y: y + dy * progress}});
+        }
       });
       spots.sort(function (a, b) { return b.length - a.length; });
       var cue = spots[0];
@@ -2143,9 +2702,9 @@
         })};
       }
       if (cue) {
-        ctx.lineWidth = Math.min(1.6, route.strength) * scale;
-        ctx.beginPath(); ctx.moveTo(cue.x - (cue.dx * 6 + cue.dy * 3) * scale, cue.y - (cue.dy * 6 - cue.dx * 3) * scale);
-        ctx.lineTo(cue.x, cue.y); ctx.lineTo(cue.x - (cue.dx * 6 - cue.dy * 3) * scale, cue.y - (cue.dy * 6 + cue.dx * 3) * scale); ctx.stroke();
+        var mark = cue.cue; ctx.lineWidth = Math.min(1.6, route.strength) * scale;
+        ctx.beginPath(); ctx.moveTo(mark.x - (cue.dx * 6 + cue.dy * 3) * scale, mark.y - (cue.dy * 6 - cue.dx * 3) * scale);
+        ctx.lineTo(mark.x, mark.y); ctx.lineTo(mark.x - (cue.dx * 6 - cue.dy * 3) * scale, mark.y - (cue.dy * 6 + cue.dx * 3) * scale); ctx.stroke();
       }
       ctx.restore(); return null;
     }
@@ -2242,7 +2801,8 @@
       if (kind && (node.title || "").indexOf(kind) === 0) kind = "";
       // A scope overview's group card is an area card, including its bucket of topics with no area.
       var area = node._region || node._overviewGroup;
-      var lead = area ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, said = scopeMeta || statusLabel(node.status);
+      // A bundle of other topics' cards is a boundary that counts them.
+      var lead = area ? node.kind === "boundary" ? plural(node._topics, "other topic", "other topics") : plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, said = scopeMeta || statusLabel(node.status);
       // A finished statement's fill already says so, so its line keeps a ✓ as the cue that is not colour; open states keep their words.
       var done = !area && !scopeMeta && node.status === "fully_proved", tail = done ? "✓" : said;
       var meta = area || !lead ? tail : lead + (done ? " " : " · ") + tail;
@@ -2251,7 +2811,7 @@
         num(count[0]) + " of " + num(count[1]) + " fully proved" : "", linked = share ? ", " + share : "";
       // A card is heard in words rather than glyphs: commas for its separators, an area card's topic count and members, and its
       // area only when that is not its own title.
-      var spoken = area ? [plural(node._topics, "topic", "topics"), said].concat(node.summary ? ["including " + String(node.summary).split(" · ").join(", ")] : []) :
+      var spoken = area ? [lead, said].concat(node.summary ? ["including " + String(node.summary).split(" · ").join(", ")] : []) :
         lead ? [lead, said] : [said];
       control.setAttribute("aria-label", [node.title].concat(node.area && node.area !== node.title ? [node.area] : [], spoken).join(", ") + linked +
         (node.isolated ? ", not linked to anything on this map" : ""));
@@ -2451,7 +3011,8 @@
         updateProjection(); setSheet(false, null); refresh(true); firstResize = true; resize(); writeLocation("push");
         var group = data._scopeOverview.groups.find(function (item) { return item.key === ui$overviewGroup; });
         var member = group && ui$active.find(function (item) { return group.members.some(function (original) { return original.id === item.id; }); });
-        if (member) { centerIfHidden(member); focusNodeControl(member); } else dom$sheetHandle.focus();
+        if (member) { centerIfHidden(member); focusNodeControl(member); }
+        else { var entry = dom$shelves && dom$shelves.querySelector("a"); if (entry) entry.focus(); else dom$sheetHandle.focus(); }
         return;
       }
       if (node._region) {
@@ -2462,7 +3023,7 @@
         if (keyboard && ui$active.length) focusNodeControl(ui$active.find(function (item) { return item.area === ui$area && !item._region; }) || ui$active[0]); return;
       }
       var id = recordId(node), record = records.get(id), settings = {history: "push", focus: "reading"};
-      if (record && record.scope === record.id && !record.result) settings.mapFirst = true;
+      if (record && record.scope === record.id && !record.result && record.navigation !== "source" && record.catalog !== "module") settings.mapFirst = true;
       navigation.navigateNode(id, settings); closeSearch();
     }
     function focusNodeControl(node) {
@@ -2623,16 +3184,13 @@
 
     function inventoryNodes() {
       var query = ui$query.toLocaleLowerCase();
+      var sources = ui$mode === "sources" ? new Set(sourceNodes().map(function (node) { return node.id; })) : null;
+      var relations = ui$relationIds ? new Set(ui$relationIds) : null;
       var pool = sharedIndex ? sharedIndex.nodes.filter(function (node) {
-        if (ui$relationIds) return ui$relationIds.indexOf(node.id) >= 0;
-        if (ui$mode === "sources") return node.navigation === "source";
+        if (relations) return relations.has(node.id);
         if (ui$mode === "regions") return false;
-        var scope = currentBundle && currentBundle.scope;
-        if (!scope || scope === "roadmap") return node.result === true || node.catalog === "module";
-        var current = node, seen = new Set();
-        while (current && !seen.has(current.id)) { if (current.id === scope || current.parent === scope) return node.result === true || node.catalog === "module";
-          seen.add(current.id); current = records.get(current.parent); }
-        return false;
+        if (sources) return sources.has(node.id);
+        return inCurrentScope(node) && (node.result === true || node.catalog === "module");
       }) : (calculateActive(), ui$active);
       var nodes = query ? rankMatches(pool, query).map(function (match) { return match.node; }) : pool;
       return nodes.filter(function (node) { return ui$selectedStatuses.has(node.status); });
@@ -2677,6 +3235,28 @@
       ui$mathBusy = true;
       Promise.resolve(window.AutoformMath.refresh(dom$inventoryList)).catch(function () {}).then(function () { ui$mathBusy = false; setTimeout(typesetRevealedRows, 0); });
     }
+    function inCurrentScope(node) {
+      var scope = currentBundle && currentBundle.scope; if (!scope || scope === "roadmap") return true;
+      var cache = inCurrentScope.$cache;
+      if (!cache || cache.index !== sharedIndex || cache.scope !== scope) {
+        cache = {index: sharedIndex, scope: scope, parents: new Map([[scope, true]])}; inCurrentScope.$cache = cache;
+      }
+      var current = node, path = [], seen = new Set();
+      while (current && current.parent !== scope && !cache.parents.has(current.id) && !seen.has(current.id)) {
+        seen.add(current.id); path.push(current.id); current = records.get(current.parent);
+      }
+      var included = Boolean(current && (current.parent === scope || cache.parents.get(current.id)));
+      path.forEach(function (id) { cache.parents.set(id, included); }); return included;
+    }
+    function sourceNodes() {
+      var scope = currentBundle && currentBundle.scope;
+      var cached = sourceNodes.$cache;
+      if (cached && cached.index === sharedIndex && cached.scope === scope) return cached.nodes;
+      var nodes = (sharedIndex ? sharedIndex.nodes : []).filter(function (node) {
+        return node.navigation === "source" && inCurrentScope(node);
+      });
+      sourceNodes.$cache = {index: sharedIndex, scope: scope, nodes: nodes}; return nodes;
+    }
     function renderInventory(resetScroll) {
       if (!dom$inventoryList || ui$mode === "graph") return;
       var nodes = inventoryNodes(), visible = nodes.slice(0, ui$listLimit); dom$inventoryList.textContent = "";
@@ -2697,7 +3277,7 @@
         dom$inventoryRows.set(node.id, row);
         var rowId = "bp-dag-row-" + instance + "-" + dom$inventoryRows.size;
         // A title's formulas wait for their row to come into view, as its summary's do.
-        var titleParts = (records.get(recordId(node)) || node).reading_title, rowTitle = row.appendChild(readingLabel("span", "bp-dag-inventory-title", node.title, titleParts));
+        var titleParts = node.reading_title || (records.get(recordId(node)) || node).reading_title, rowTitle = row.appendChild(readingLabel("span", "bp-dag-inventory-title", node.title, titleParts));
         rowTitle.id = rowId + "-title";
         if (titleParts) Array.prototype.forEach.call(rowTitle.querySelectorAll(".arithmatex"), function (math) { math.replaceWith(pendingMath(math.textContent)); });
         var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;
@@ -2720,6 +3300,7 @@
       dom$loadMore.hidden = visible.length >= nodes.length;
       dom$loadMore.textContent = visible.length < nodes.length ? "Show " + Math.min(LIST_PAGE, nodes.length - visible.length) + " more" : "";
       var current = ui$selected && dom$inventoryRows.get(ui$selected.id);
+      refreshReadingLabels(dom$inventoryList);
       if (resetScroll && dom$inventoryScroll) dom$inventoryScroll.scrollTop = 0;
       else if (current) current.scrollIntoView({block: "nearest"});
     }

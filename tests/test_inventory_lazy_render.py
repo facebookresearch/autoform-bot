@@ -25,7 +25,7 @@ function original(name) {
   }
   assert.fail('Unparseable actual callback: '+name);
 }
-const names=['element','readingLabel','button','statusLabel','searchScore','rankMatches','inventoryNodes','renderInventory',
+const names=['element','readingLabel','refreshReadingLabels','button','statusLabel','searchScore','rankMatches','inventoryNodes','inCurrentScope','sourceNodes','renderInventory',
   'setMode','refresh','snapshotForRoute','restoreState','writeLocation','neighborIds','relationCounts','renderReaderContext','topicPeers','semanticParent',
   'placeOf','recordId','pendingMath','summaryLine'];
 const constants=['NODE_W','plural','num','pressed'].map(name=>{
@@ -57,11 +57,12 @@ function peer(tag='div') {
     set(value){text=String(value);this.children=[];this.writes++;}});created.push(node);return node;
 }
 const document={activeElement:null,createElement:peer,createTextNode(value){const node=peer('#text');node.textContent=value;return node;}};
+const window={};
 const host=peer(),dom$inventory=peer('section'),dom$inventoryList=peer('ul'),dom$inventorySummary=peer('span');
 dom$inventory.appendChild(peer('h2'));
 const dom$loadMore=peer('button'),dom$inventoryScroll=peer(),dom$wholeSearch=peer('button');
 const dom$readingContext=peer(),dom$readingNeighbors=peer(),dom$readingBody=peer('article'),dom$navigation=peer('nav'),dom$search=peer('input');
-var dom$inventoryRows=new Map(),dom$outlineToggle=null,overlays=new Map();
+var dom$inventoryRows=new Map(),dom$outlineToggle=null,dom$shelves=null,overlays=new Map();
 const results=Array.from({length:150},(_,n)=>({id:'result-'+String(n).padStart(3,'0'),title:'Result '+n,
   summary:'Source statement '+n,status:n%2?'fully_proved':'planned',result:true,scope:'roadmap',parent:'roadmap',
   route:'https://example.test/roadmap/result-'+n+'.html',_index:n}));

@@ -20,7 +20,7 @@ BUDGETS = {
     "autoform_cli/reference/runtime-and-publication.md": 123,
     "autoform_cli/reference/search.md": 171,
     "autoform_cli/reference/validation-and-audit.md": 239,
-    "autoform_cli/reference/wiki-links.md": 20,  # New optional wire contract; keep it on demand and concise.
+    "autoform_cli/reference/wiki-links.md": 20,  # Internal optional viewer transport; keep it on demand and concise.
     "servers/README.md": 122,
     "skills/agent-review/SKILL.md": 65,
     "skills/debrief-orchestrator/SKILL.md": 47,

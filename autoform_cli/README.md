@@ -566,9 +566,8 @@ during extraction stops the whole command.
 absolute path. It names the target set, whether it covers every target or a
 `--node` selection, and the exact blueprint, by a hash of every article and the
 passage each cites; a report whose selection, articles and unresolved
-declarations disagree is neither built nor loaded. Only a report that selects
-every article, with the blueprint's `lean:` names as targets, is review
-evidence.
+declarations disagree cannot be built. Only a report that selects every article,
+with the blueprint's `lean:` names as targets, is review evidence.
 
 Run skeleton extraction only in a trusted checkout or an operating-system
 sandbox: Lake evaluates `lakefile.lean`, and the probe imports project code

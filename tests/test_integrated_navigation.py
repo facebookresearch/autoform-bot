@@ -618,6 +618,149 @@ def test_alias_notice_loads_canonical_article_and_keeps_legacy_selection() -> No
     """)
 
 
+@pytest.mark.parametrize("published_entrance", ("directory", "index"))
+def test_directory_statement_entrances_resolve_only_existing_published_routes_and_fetch_complete_canonical_reading(
+    published_entrance: str,
+) -> None:
+    _run("const entrance=" + json.dumps(published_entrance) + ";\n" + r"""
+      const directory=absolute('roadmap/chapter/'),indexed=directory+'index.html';
+      const canonical=entrance==='index'?indexed:directory,requested=entrance==='index'?directory:indexed;
+      const spec={title:'Complete chapter',route:canonical,data:'../../dependencies/a.json',catalog:'../../dependencies/index.json',scope:'chapter',
+        prose:'Complete published theorem, hypotheses, and proof.'};
+      const alias={...spec,prose:'Reading notice only'},app=setup({initial:alias,url:requested+'#theorem-a'});
+      const catalog=index();catalog.nodes[1]={...catalog.nodes[1],route:canonical+'#theorem-a',scope:'chapter'};
+      app.contents.set(absolute('dependencies/index.json'),catalog);app.contents.set(canonical,spec);
+      const opened=await app.nav.start();assert(opened);assert.equal(opened.url,canonical+'#theorem-a');
+      assert.equal(opened.nodeId,'a');assert.equal(opened.anchor,'theorem-a');assert.equal(opened.focus,true);
+      assert.equal(opened.documentURL,canonical);assert.equal(opened.scope,'chapter');
+      assert(opened.readingSource.textContent.includes(spec.prose));assert(!opened.readingSource.textContent.includes(alias.prose));
+      assert.equal(app.fetches.filter(url=>url===canonical).length,1);
+      assert.equal(app.win.history.length,1);assert.equal(app.win.history.state.autoformNavigation.url,opened.url);
+      assert.deepEqual(app.nav.getIndex().relations,[['a','b',1,0]]);assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+@pytest.mark.parametrize("fragment", ("theorem-a", "appendix%2Fnotes"))
+def test_ordinary_alias_fragment_survives_complete_redirect_chain_and_back_forward(fragment: str) -> None:
+    _run("const fragment=" + json.dumps(fragment) + ";\n" + r"""
+      const app=setup(),aliasURL=absolute('roadmap/old-a.html'),middle=absolute('roadmap/middle-a.html');
+      const notice={...aSpec,route:middle,prose:'First reading notice only'};
+      const second={...aSpec,route:aSpec.route,prose:'Second reading notice only'};
+      app.contents.set(aliasURL,notice);app.contents.set(middle,second);await app.nav.start();
+      const origin=app.win.location.href,opened=await app.nav.navigate(aliasURL+'#'+fragment);assert(opened);
+      const canonical=aSpec.route+'#'+fragment;
+      assert.equal(opened.url,canonical);assert.equal(opened.anchor,decodeURIComponent(fragment));
+      assert.equal(opened.nodeId,fragment==='theorem-a'?'a':null);assert.equal(opened.documentURL,aSpec.route);
+      assert(opened.readingSource.textContent.includes('Complete source statement and proof.'));
+      assert(!opened.readingSource.textContent.includes('reading notice only'));
+      for(const url of [aliasURL,middle,aSpec.route])assert.equal(app.fetches.filter(value=>value===url).length,1);
+      assert.equal(app.win.history.length,2);assert.equal(app.win.history.state.autoformNavigation.url,canonical);
+      app.state({mode:'graph',readingScroll:86});app.nav.checkpoint();app.win.history.back();
+      await until(()=>app.commits.at(-1).url===origin&&app.initial.host.getAttribute('aria-busy')===null);
+      app.win.history.forward();await until(()=>app.commits.at(-1).url===canonical&&app.initial.host.getAttribute('aria-busy')===null);
+      assert.equal(app.commits.at(-1).anchor,decodeURIComponent(fragment));assert.equal(app.getState().readingScroll,86);
+      assert.equal(app.win.history.length,2);assert.equal(app.win.history.state.material,'preserved');
+      assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+def test_alias_fragment_does_not_override_explicit_or_legacy_statement_selection() -> None:
+    _run(r"""
+      const app=setup(),aliasURL=absolute('roadmap/old-a.html');
+      app.contents.set(aliasURL,{...aSpec,prose:'Reading notice only'});await app.nav.start();
+      const explicit=await app.nav.navigate(aliasURL+'#wrong-section',{nodeId:'a'});
+      assert.equal(explicit.url,aSpec.route+'#theorem-a');assert.equal(explicit.nodeId,'a');assert.equal(explicit.anchor,'theorem-a');
+      const legacy=await app.nav.navigate(aliasURL+'#node=a&direction=prerequisites');
+      assert.equal(legacy.url,aSpec.route+'#theorem-a');assert.equal(legacy.nodeId,'a');assert.equal(legacy.anchor,'theorem-a');
+      assert.equal(legacy.parameters.direction,'prerequisites');assert(!legacy.readingSource.textContent.includes('Reading notice only'));
+      assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+@pytest.mark.parametrize("query", ("?edition=1", "?edition=2"))
+def test_directory_route_lookup_preserves_query_identity_and_uses_the_declared_canonical_query(query: str) -> None:
+    _run("const query=" + json.dumps(query) + ";\n" + r"""
+      const directory=absolute('roadmap/chapter/'),canonical=directory+'index.html?edition=1';
+      const spec={title:'Complete edition one',route:canonical,data:'../../dependencies/a.json',scope:'chapter'};
+      const app=setup(),catalog=index();catalog.nodes[1]={...catalog.nodes[1],route:canonical+'#theorem-a',scope:'chapter'};
+      app.contents.set(absolute('dependencies/index.json'),catalog);app.contents.set(canonical,spec);
+      app.contents.set(directory+query,{...spec,prose:'Alias reading notice only'});await app.nav.start();
+      const opened=await app.nav.navigate(directory+query+'#theorem-a');assert(opened);
+      assert.equal(opened.url,canonical+'#theorem-a');assert.equal(opened.nodeId,'a');assert.equal(opened.anchor,'theorem-a');
+      assert(opened.readingSource.textContent.includes('Complete source statement and proof.'));
+      assert.equal(app.fetches.filter(url=>url===directory+query).length,query==='?edition=1'?0:1,
+        'A different query must not acquire a published route through directory normalization');
+      assert.equal(app.fetches.filter(url=>url===canonical).length,1);assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+def test_query_only_canonical_contradiction_still_rejects_before_current_source_or_history_changes() -> None:
+    _run(r"""
+      const directory=absolute('roadmap/chapter/'),canonical=directory+'index.html?edition=1',other=directory+'index.html?edition=2';
+      const wrong={title:'Wrong edition',route:other,data:'../../dependencies/a.json',scope:'chapter'};
+      const app=setup({fetch(url,_settings,reply){if(url===canonical)return reply(wrong,other);}}),catalog=index();
+      catalog.nodes[1]={...catalog.nodes[1],route:canonical+'#theorem-a',scope:'chapter'};
+      app.contents.set(absolute('dependencies/index.json'),catalog);await app.nav.start();
+      const before={url:app.win.location.href,length:app.win.history.length,commits:app.commits.length,source:app.commits.at(-1).readingSource};
+      assert.equal(await app.nav.navigate(directory+'?edition=1#theorem-a'),null);
+      assert.equal(app.win.location.href,before.url);assert.equal(app.win.history.length,before.length);
+      assert.equal(app.commits.length,before.commits);assert.strictEqual(app.commits.at(-1).readingSource,before.source);
+      assert.equal(app.errors.length,1);assert.equal(app.errors[0].message,'Published reading route contradicts the requested article');
+      assert.equal(app.initial.host.getAttribute('aria-busy'),null);app.nav.dispose();
+    """)
+
+
+@pytest.mark.parametrize("prefix", ("/", "/project/", "/nested/notes/"))
+def test_home_url_keeps_deployment_prefix_and_loads_complete_home_without_implicit_indexed_root(prefix: str) -> None:
+    _run("const prefix=" + json.dumps(prefix) + ";\n" + r"""
+      const site='https://example.test'+prefix,home=site+'index.html';
+      const initial={title:'Current chapter',route:site+'roadmap/chapter/index.html',scope:'chapter',
+        data:'../../dependencies.json',catalog:'../../dependencies/index.json'};
+      const spec={title:'Site home',route:home,scope:'roadmap',data:'dependencies.json',catalog:'dependencies/index.json',
+        prose:'Complete authored introduction at the site home, not a roadmap redirect.'};
+      const app=setup({initial,url:initial.route}),catalog=index();catalog.nodes[0].route=home;
+      app.contents.set(site+'dependencies/index.json',catalog);app.contents.set(site+'dependencies.json',graph);
+      app.contents.set(initial.route,initial);app.contents.set(home,spec);
+      assert.equal(app.nav.getHomeURL(),home);await app.nav.start();const opened=await app.nav.navigate(app.nav.getHomeURL());
+      assert(opened);assert.equal(opened.url,home);assert.equal(opened.documentURL,home);
+      assert.equal(opened.nodeId,null,'Bare Home is not a request to open the indexed roadmap record');
+      assert.equal(opened.anchor,null);assert.equal(opened.title,spec.title);assert.equal(opened.scope,'roadmap');
+      assert(opened.readingSource.textContent.includes(spec.prose));assert.equal(app.fetches.filter(url=>url===home).length,1);
+      assert.equal(app.win.history.length,2);assert.equal(app.win.history.state.autoformNavigation.url,home);
+      app.win.history.back();await until(()=>app.commits.at(-1).url===initial.route&&app.initial.host.getAttribute('aria-busy')===null);
+      assert.equal(app.commits.at(-1).readingSource.querySelector('h1').textContent,initial.title);
+      app.win.history.forward();await until(()=>app.commits.at(-1).url===home&&app.initial.host.getAttribute('aria-busy')===null);
+      assert.equal(app.commits.at(-1).nodeId,null);assert.equal(app.nav.getHomeURL(),home);
+      assert.equal(app.win.history.state.material,'preserved');assert.equal(app.errors.length,0);app.nav.dispose();
+      assert.equal(app.nav.getHomeURL(),home,'The native destination remains usable after disposal');
+    """)
+
+
+def test_home_route_exclusion_keeps_explicit_root_and_real_home_statement_permalinks() -> None:
+    _run(r"""
+      const home=absolute('index.html'),spec={title:'Site home',route:home,scope:'roadmap',data:'dependencies.json'};
+      const app=setup(),catalog=index();catalog.nodes[0].route=home;catalog.nodes[1].route=home+'#theorem-a';
+      app.contents.set(absolute('dependencies/index.json'),catalog);app.contents.set(home,spec);await app.nav.start();
+      const root=await app.nav.navigateNode('roadmap');assert.equal(root.url,home);assert.equal(root.nodeId,'roadmap');
+      const statement=await app.nav.navigate(home+'#theorem-a');assert.equal(statement.url,home+'#theorem-a');
+      assert.equal(statement.nodeId,'a');assert.equal(statement.anchor,'theorem-a');assert.equal(statement.focus,true);
+      const bare=await app.nav.navigate(app.nav.getHomeURL());assert.equal(bare.url,home);assert.equal(bare.nodeId,null);
+      assert.equal(bare.anchor,null);assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+def test_home_prefix_uses_global_assets_not_nested_article_folders_named_roadmap_or_dependencies() -> None:
+    _run(r"""
+      for(const folder of ['roadmap','dependencies']) {
+        const initial={title:'Nested article',route:absolute('roadmap/notes/'+folder+'/index.html'),scope:'nested',
+          data:absolute('dependencies.json'),catalog:absolute('dependencies/index.json')};
+        const app=setup({initial,url:initial.route});assert.equal(app.nav.getHomeURL(),absolute('index.html'));
+        assert.equal(app.nav.getIndex(),null);assert.equal(app.fetches.length,0,'A native Home target needs no eager catalogue fetch');
+        app.nav.dispose();
+      }
+    """)
+
+
 def test_failed_reading_request_leaves_url_and_current_shell_unchanged() -> None:
     _run(r"""
       const app=setup({fetch(url,_settings,reply){if(url===aSpec.route)return reply({},url,503);}});
@@ -861,7 +1004,7 @@ def test_results_restoration_renders_saved_page_before_restoring_scroll_and_focu
       let ui$filtersTouched,ui$area,ui$requestedNode,ui$selected,ui$selectedStatuses,ui$showIsolated,
         ui$mode='list',ui$listLimit=100,ui$relationIds,ui$outlineLimit,ui$direction,ui$query,ui$activeDirty,ui$transform;
       const host={classList:{toggle(){}}},records=new Map(),byId=new Map(),overlays=new Map();
-      let dom$inventoryRows=new Map(),dom$outlineToggle;
+      let dom$inventoryRows=new Map(),dom$outlineToggle,dom$shelves=null;
       const dom$search={value:''},dom$navigation={scrollTop:0},dom$readingBody={scrollTop:0},dom$inventoryScroll={scrollTop:0};
       const updateProjection=()=>{},renderNavigation=()=>{},setSheet=()=>{},resize=()=>{};
       const syncControls=()=>{},renderInspector=()=>{},schedule=()=>{};

@@ -75,7 +75,6 @@ from autoform_cli.skeleton import (
     extract_skeletons,
     format_report,
     lean_libraries,
-    load_skeleton_report,
     module_of,
     parse_probe_output,
     path_of,
@@ -314,12 +313,6 @@ def _fake_report(tmp_path: Path, output: str | None = None) -> SkeletonReport:
             runner=lambda _probe, _root: output,
         )
     return extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
-
-
-def _assert_load_rejects(path: Path, payload: dict[str, object], match: str | None = None) -> None:
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(SkeletonError, match=match):
-        load_skeleton_report(path)
 
 
 # --------------------------------------------------------------------------- #
@@ -1530,16 +1523,14 @@ def test_unparsable_source_is_withheld_not_refused(tmp_path: Path) -> None:
     assert "as written" not in packet and "Eligible (S" not in packet
     assert packet.count("-- source not shown: no reliable standalone source is available") == 2
     assert f"-- raw signature: {eligible.raw_signature}" in packet
-    path = write_skeleton_report(report, tmp_path / "report.json")
-    assert load_skeleton_report(path) == report
-    # The flag cannot excuse source a report actually carries.
-    data = json.loads(path.read_text(encoding="utf-8"))
-    data["trusted"]["Skel.Main"][data["nodes"][0]["declarations"][0]["trusted"][2]]["source_withheld"] = True
-    _assert_load_rejects(path, data, "invalid withheld source flag")
-    data = report.as_dict()
-    data["trusted"]["Skel.Main"][eligible.name]["start_line"] = None
-    data["trusted"]["Skel.Main"][eligible.name]["end_line"] = None
-    _assert_load_rejects(path, data, "required source is missing")
+    # The written report keeps what was withheld, and the withheld source's lines.
+    written = json.loads(write_skeleton_report(report, tmp_path / "report.json").read_text(encoding="utf-8"))
+    (written_declaration,) = written["nodes"][0]["declarations"]
+    assert written_declaration["statement"] is None and written_declaration["source_withheld"] is True
+    entry = written["trusted"]["Skel.Main"]["Skel.Eligible"]
+    assert entry["source"] is None and entry["source_withheld"] is True
+    assert eligible.start_line is not None
+    assert (entry["start_line"], entry["end_line"]) == (eligible.start_line, eligible.end_line)
 
 
 # --------------------------------------------------------------------------- #
@@ -1918,6 +1909,8 @@ def test_statement_hash_and_packet_ignore_what_only_the_proof_reaches(tmp_path: 
         replace(declaration, statement_assumed=("Mathlib.Other",))
     with pytest.raises(SkeletonError, match="mismatched statement closure"):
         replace(declaration, statement_boundary_modules=())
+    with pytest.raises(SkeletonError, match="mismatched statement closure for Skel.observation_determined"):
+        replace(declaration, statement_boundary_modules=("Mathlib.Other",))
 
 
 def test_assumed_module_identity_is_path_independent_and_rejects_a_concurrent_edit(
@@ -2038,11 +2031,6 @@ def test_article_with_an_unresolved_declaration_has_no_article_hash(tmp_path: Pa
     assert node.hash is None and node.review_hash is None
     assert node.as_dict()["hash"] is None and node.as_dict()["review_hash"] is None
     assert "None" not in format_report(report)
-    path = write_skeleton_report(report, tmp_path / "report.json")
-    assert load_skeleton_report(path) == report
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["nodes"][0]["hash"] = node.declarations[0].hash
-    _assert_load_rejects(path, payload, "not a canonical")
 
 
 def test_extraction_never_runs_lean_when_nothing_resolves(tmp_path: Path) -> None:
@@ -2952,7 +2940,7 @@ def test_report_record_edits_do_not_reach_the_report(tmp_path: Path) -> None:
     assert report.as_dict() == json.loads(expected)
 
 
-def test_report_round_trips_through_json_deterministically(tmp_path: Path) -> None:
+def test_report_serializes_to_json_deterministically(tmp_path: Path) -> None:
     report = _fake_report(tmp_path)
 
     first = report.to_json()
@@ -2960,16 +2948,6 @@ def test_report_round_trips_through_json_deterministically(tmp_path: Path) -> No
     assert report.as_dict() == json.loads(first)
     assert json.loads(first)["schema"] == SKELETON_SCHEMA
     assert str(tmp_path) not in first
-
-    path = tmp_path / "skeleton.json"
-    path.write_text(first, encoding="utf-8")
-    assert load_skeleton_report(path) == report
-
-    _assert_load_rejects(path, {"schema": "something-else"})
-    for schema in ("autoform-skeleton/v1", "autoform-skeleton/v2", "autoform-skeleton/v3", "autoform-skeleton/v4"):
-        legacy = report.as_dict()
-        legacy["schema"] = schema
-        _assert_load_rejects(path, legacy, f"is an {schema} report; this version reads only {SKELETON_SCHEMA} reports")
 
 
 def test_public_skeleton_compatibility_helpers(tmp_path: Path) -> None:
@@ -3004,23 +2982,6 @@ def test_report_states_shared_material_once(tmp_path: Path) -> None:
         assert declaration["boundary_modules"] == ["Mathlib.Fake"]
     source = data["trusted"]["Skel.Main"]["Skel.Eligible"]["source"]
     assert first.count(json.dumps(source, ensure_ascii=False)) == 1
-    path = tmp_path / "skeleton.json"
-    path.write_text(first, encoding="utf-8")
-    assert load_skeleton_report(path) == report
-
-    for table, name in (("trusted", "Skel.Eligible"), ("semantics", "sorryAx"), ("boundary_modules", "Mathlib.Fake")):
-        payload = json.loads(first)
-        entries = payload[table]["Skel.Main"] if table in {"trusted", "semantics"} else payload[table]
-        entries["Skel.Unused"] = entries[name]
-        if table == "trusted":
-            entries["Skel.Unused"] = dict(entries[name], name="Skel.Unused")
-        _assert_load_rejects(path, payload, "not a canonical")
-        del entries["Skel.Unused"], entries[name]
-        _assert_load_rejects(path, payload, "mismatched")
-
-    payload = json.loads(first)
-    payload["trusted"]["Skel.Main"]["Skel.Eligible"]["name"] = "Skel.NonAmbiguous"
-    _assert_load_rejects(path, payload, "mismatched shared trusted declaration")
 
 
 def _two_module_report(tmp_path: Path, runner=_fake_module_probe) -> SkeletonReport:
@@ -3033,9 +2994,6 @@ def test_report_keys_shared_material_by_root_module(tmp_path: Path) -> None:
     report = _two_module_report(tmp_path, lambda probe, root: _fake_module_probe(probe, root, divergent=True))
     first = report.to_json()
     data = json.loads(first)
-    path = tmp_path / "skeleton.json"
-    path.write_text(first, encoding="utf-8")
-    assert load_skeleton_report(path) == report
 
     # Each root module states the trusted declarations it printed, and keeps its
     # own semantics when its imports declare other constants under one name.
@@ -3043,25 +3001,6 @@ def test_report_keys_shared_material_by_root_module(tmp_path: Path) -> None:
     assert data["trusted"]["Skel.Main"] == data["trusted"]["Skel.Uses"]
     for name in ("Mathlib.Fake", "sorryAx"):
         assert data["semantics"]["Skel.Main"][name] != data["semantics"]["Skel.Uses"][name]
-
-    # A declaration may name only the material printed for its own root module.
-    for table, mismatch, copy in (
-        ("trusted", "trusted declarations", "Skel.Other"),
-        ("semantics", "assumption semantics", "Skel.Uses"),
-    ):
-        payload = json.loads(first)
-        del payload[table]["Skel.Uses"]
-        _assert_load_rejects(path, payload, f"mismatched {mismatch} for Skel.heavy_of_notation")
-        payload = json.loads(first)
-        payload[table][copy] = payload[table]["Skel.Main"]
-        _assert_load_rejects(path, payload, "not a canonical")
-        payload = json.loads(first)
-        payload[table]["Skel.Other"] = {}
-        _assert_load_rejects(path, payload, f"malformed shared {table} table for root module Skel.Other")
-
-    payload = json.loads(first)
-    payload["trusted"] = payload["trusted"]["Skel.Main"]
-    _assert_load_rejects(path, payload)
 
 
 def test_cli_reports_conflicting_shared_material_as_an_error(
@@ -3087,13 +3026,8 @@ def test_cli_reports_conflicting_shared_material_as_an_error(
 
 
 @pytest.mark.parametrize("damage", ["nested", "a-number-too-long"])
-def test_a_report_or_packet_manifest_that_cannot_be_decoded_is_refused(tmp_path: Path, damage: str) -> None:
+def test_a_packet_manifest_that_cannot_be_decoded_is_refused(tmp_path: Path, damage: str) -> None:
     text = UNDECODABLE_JSON[damage]
-    path = tmp_path / "skeleton.json"
-    path.write_text(text, encoding="utf-8")
-    with pytest.raises(SkeletonError, match=f"^cannot read skeleton report {re.escape(str(path))}: "):
-        load_skeleton_report(path)
-
     packets = tmp_path / "packets"
     packets.mkdir()
     (packets / PACKET_MANIFEST).write_text(text, encoding="utf-8")
@@ -3112,41 +3046,6 @@ def test_a_packet_manifest_whose_schema_is_not_a_string_is_refused(tmp_path: Pat
     with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform packet output"):
         write_packets(_fake_report(tmp_path), packets)
     assert (packets / PACKET_MANIFEST).read_text(encoding="utf-8") == text
-
-
-def test_report_loader_refuses_a_lone_surrogate_as_unreadable(tmp_path: Path) -> None:
-    text = _fake_report(tmp_path).to_json()
-    assert '"lean_version":"' in text
-    path = tmp_path / "skeleton.json"
-    path.write_text(text.replace('"lean_version":"', '"lean_version":"\\ud800', 1), encoding="utf-8")
-
-    with pytest.raises(SkeletonError, match="surrogates not allowed"):
-        load_skeleton_report(path)
-
-
-def test_report_loader_rejects_scope_tampering(tmp_path: Path) -> None:
-    report = _fake_report(tmp_path)
-    path = tmp_path / "skeleton.json"
-
-    payload = report.as_dict()
-    payload["target_count"] = 0
-    _assert_load_rejects(path, payload, "not a canonical")
-
-    payload = report.as_dict()
-    payload["selection"]["mode"] = []
-    _assert_load_rejects(path, payload, "invalid skeleton selection mode")
-
-    payload = report.as_dict()
-    payload["nodes"][0] = replace(report.nodes[0], declarations=(), complete=False).as_dict()
-    payload["trusted"] = payload["semantics"] = payload["boundary_modules"] = {}
-    payload["unresolved"] = [
-        {"declaration": "made.up", "node_id": "basics/determined", "reason": "missing"}
-    ]
-    _assert_load_rejects(path, payload, "mismatched unresolved declarations")
-
-    payload = report.as_dict()
-    payload["targets"][0]["declarations"].append("Skel.observation_determined")
-    _assert_load_rejects(path, payload, "duplicate target declarations")
 
 
 _INCOHERENT_REPORTS = {
@@ -3182,52 +3081,9 @@ def test_an_incoherent_report_cannot_be_constructed(tmp_path: Path, issue: str) 
     report = _two_module_report(tmp_path)
     assert [node.node_id for node in report.nodes] == ["basics/determined", "basics/notation"]
 
-    # dataclasses.replace runs the same checks as the loader, so no copy escapes them.
+    # dataclasses.replace runs the constructor's checks, so no copy escapes them.
     with pytest.raises(SkeletonError, match=f"skeleton report {re.escape(issue)}"):
         _INCOHERENT_REPORTS[issue](report)
-
-
-def test_report_loader_rejects_mismatched_hashes_and_trust_identities(tmp_path: Path) -> None:
-    report = _fake_report(tmp_path)
-    path = tmp_path / "skeleton.json"
-
-    payload = report.as_dict()
-    payload["nodes"][0]["declarations"][0]["hash"] = "sha256:" + "0" * 64
-    _assert_load_rejects(path, payload, "not a canonical")
-
-    payload = report.as_dict()
-    payload["nodes"][0]["declarations"][0]["statement"] = "theorem t : True := by trivial"
-    payload["nodes"][0]["declarations"][0]["statement_comments"] = []
-    _assert_load_rejects(path, payload, "not a canonical")
-
-    payload = report.as_dict()
-    payload["nodes"][0]["passage"] = "different source theorem"
-    payload["nodes"][0]["passage_locator"] = "sources/book.tex#L1-L1"
-    _assert_load_rejects(path, payload, "not a canonical")
-
-    payload = report.as_dict()
-    declaration = payload["nodes"][0]["declarations"][0]
-    declaration["skeleton_lines"] = float(declaration["skeleton_lines"])
-    _assert_load_rejects(path, payload, "not a canonical")
-
-    payload = report.as_dict()
-    payload["nodes"][0]["declarations"][0]["assumed"] = ["Mathlib.Other"]
-    _assert_load_rejects(path, payload, "mismatched assumption semantics")
-
-    payload = report.as_dict()
-    trusted = payload["trusted"]["Skel.Main"][payload["nodes"][0]["declarations"][0]["trusted"][0]]
-    trusted["kind"] = "theorem"
-    trusted["semantic"] = _semantic({"type": {"sort": {"zero": None}}})
-    _assert_load_rejects(path, payload, "proof-bearing source is forbidden")
-
-    payload = report.as_dict()
-    payload["nodes"][0]["declarations"][0]["statement_hash"] = "sha256:" + "0" * 64
-    _assert_load_rejects(path, payload, "not a canonical")
-
-    for field in ("statement_assumed", "statement_boundary_modules"):
-        payload = report.as_dict()
-        payload["nodes"][0]["declarations"][0][field] = ["Mathlib.Other"]
-        _assert_load_rejects(path, payload, "mismatched statement closure for Skel.observation_determined")
 
 
 def test_text_report_quotes_the_sources_a_reader_must_trust(tmp_path: Path) -> None:
@@ -3274,7 +3130,7 @@ def test_cli_writes_the_artifact_and_fails_on_unresolved_names(tmp_path: Path, c
         f"{output}: 1 skeleton(s) for 2 article(s)",
         "error: basics/phantom: Skel.doesNotExist: declaration not found in the Lean sources",
     ]
-    assert load_skeleton_report(output).nodes[0].node_id == "basics/determined"
+    assert json.loads(output.read_text(encoding="utf-8"))["nodes"][0]["node_id"] == "basics/determined"
 
     assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--node", "basics/determined", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["unresolved"] == []
@@ -3408,7 +3264,7 @@ def test_cli_publishes_report_and_packet_trees_together(
     assert result == 0
     assert (packets / PACKET_MANIFEST).is_file()
     assert (passages / PACKET_MANIFEST).is_file()
-    assert load_skeleton_report(output).clean
+    assert json.loads(output.read_text(encoding="utf-8"))["unresolved"] == []
     assert list(tmp_path.glob(".*.autoform-*")) == []
     assert capsys.readouterr().err == ""
 
@@ -4041,8 +3897,13 @@ def test_a_declaration_reads_as_its_own_root_module_prints_it(
         "Skel.PktWrapUser": ["Skel.PktWrap.needsTwo", "Skel.PktWrap.wrap"],
         "Skel.PktWrapUser2": ["Skel.PktWrap.needsTwo", "Skel.PktWrap.wrap"],
     }
-    loaded = load_skeleton_report(write_skeleton_report(full, tmp_path / "skeleton.json"))
-    assert loaded == full and notated in loaded.declarations("basics/u2")[0].trusted
+    # The written report states each root module's own printing of the declaration they share.
+    written = json.loads(write_skeleton_report(full, tmp_path / "skeleton.json").read_text(encoding="utf-8"))
+    needs_two = {
+        module: written["trusted"][module]["Skel.PktWrap.needsTwo"]["signature"]
+        for module in ("Skel.PktWrapUser", "Skel.PktWrapUser2")
+    }
+    assert "Skel.PktWrap.wrap 2 = 2" in needs_two["Skel.PktWrapUser"] and "⟪2⟫ = 2" in needs_two["Skel.PktWrapUser2"]
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
@@ -4091,15 +3952,13 @@ def test_two_root_modules_may_see_different_constants_under_one_name(tmp_path: P
     data = json.loads(output.read_text(encoding="utf-8"))
     for name in ("Ext.collision", "Shared.ax"):
         assert data["semantics"]["Skel.UA"][name] != data["semantics"]["Skel.UB"][name]
-    loaded = load_skeleton_report(output)
-    (ua,) = loaded.declarations("basics/ua")
-    (ub,) = loaded.declarations("basics/ub")
-    assert ua.assumed == ub.assumed == ua.statement_assumed == ub.statement_assumed == ("Ext.collision",)
+    nodes = {node["node_id"]: node for node in data["nodes"]}
+    (ua,) = nodes["basics/ua"]["declarations"]
+    (ub,) = nodes["basics/ub"]["declarations"]
+    assert ua["assumed"] == ub["assumed"] == ua["statement_assumed"] == ub["statement_assumed"] == ["Ext.collision"]
     # Only the proof's axiom reaches its own module.
-    assert {module for module, _, _ in ua.boundary_modules} == {"DepA", "Skel.UA"}
-    assert (ua.statement_boundary_modules, ub.statement_boundary_modules) == (("DepA",), ("DepB",))
-    assert dict(ua.assumed_semantics)["Ext.collision"] != dict(ub.assumed_semantics)["Ext.collision"]
-    assert dict(ua.axiom_semantics)["Shared.ax"] != dict(ub.axiom_semantics)["Shared.ax"]
+    assert set(ua["boundary_modules"]) == {"DepA", "Skel.UA"}
+    assert (ua["statement_boundary_modules"], ub["statement_boundary_modules"]) == (["DepA"], ["DepB"])
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
@@ -5045,6 +4904,8 @@ def test_a_line_locator_on_a_source_file_yields_the_passage(tmp_path: Path) -> N
     (node,) = report.nodes
     assert node.passage == "line 5\nline 6\nline 7"
     assert node.passage_locator == "sources/book.tex#L5-L7"
+    written = json.loads(report.to_json())["nodes"][0]
+    assert (written["passage"], written["passage_locator"]) == ("line 5\nline 6\nline 7", "sources/book.tex#L5-L7")
     packets = tmp_path / "packets"
     passages = tmp_path / "passages"
     write_packets(report, packets, passages=passages)
@@ -5063,8 +4924,6 @@ def test_a_line_locator_on_a_source_file_yields_the_passage(tmp_path: Path) -> N
     # The passage never enters the blind packet.
     packet_path = packets / manifest["packets"][0]["packet"]
     assert "line 5" not in packet_path.read_text(encoding="utf-8")
-    (tmp_path / "r.json").write_text(report.to_json(), encoding="utf-8")
-    assert load_skeleton_report(tmp_path / "r.json") == report
 
 
 def test_packet_publication_refuses_an_incomplete_report(tmp_path: Path) -> None:
@@ -5111,7 +4970,9 @@ def test_cli_does_not_publish_packets_for_unresolved_declarations(
 
     assert result == 1
     assert not packets.exists()
-    assert load_skeleton_report(report_path).unresolved
+    assert json.loads(report_path.read_text(encoding="utf-8"))["unresolved"] == [
+        {"declaration": "Skel.absent", "node_id": "basics/missing", "reason": "declaration not found in the Lean sources"}
+    ]
     assert "refusing to publish review packets" in capsys.readouterr().err
 
 

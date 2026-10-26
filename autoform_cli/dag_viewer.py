@@ -43,6 +43,7 @@ SEARCH_SCHEMA = "autoform-dag-search/v1"
 WIKI_LINKS_SCHEMA = "autoform-wiki-links/v1"
 #: A separate optional reference layer must fit the reader's unchanged data limit.
 MAX_WIKI_LINK_BYTES = 32 * 1024 * 1024
+_SEARCH_INDEX_BYTE_LIMIT = 32 * 1024 * 1024
 _WIKI_BLOCK_MATH = re.compile(f"(?:{RE_DOLLAR_BLOCK}|{RE_BRACKET_BLOCK}|{RE_TEX_BLOCK})", re.DOTALL)
 _WIKI_INLINE_MATH = re.compile(f"(?:{RE_SMART_DOLLAR_INLINE}|{RE_BRACKET_INLINE})", re.DOTALL)
 _WIKI_INLINE_CODE = re.compile(BACKTICK_RE, re.DOTALL)
@@ -141,10 +142,15 @@ def _json_text(payload: Mapping[str, object]) -> str:
 
 def _write_json(
     path: Path, payload: Mapping[str, object], *, sha256_out: list[str] | None = None,
+    byte_count_out: list[int] | None = None,
 ) -> Path:
     text = _json_text(payload)
-    if sha256_out is not None:
-        sha256_out.append(hashlib.sha256(text.encode("utf-8")).hexdigest())
+    if sha256_out is not None or byte_count_out is not None:
+        encoded = text.encode("utf-8")
+        if sha256_out is not None:
+            sha256_out.append(hashlib.sha256(encoded).hexdigest())
+        if byte_count_out is not None:
+            byte_count_out.append(len(encoded))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         text,
@@ -308,6 +314,7 @@ def write_search_index(
     metadata: Mapping[str, Mapping[str, object]] | None = None,
     include_relations: bool = False,
     sha256_out: list[str] | None = None,
+    warnings_out: list[str] | None = None,
 ) -> Path:
     """Write the global search index and optional derived reading/navigation data.
 
@@ -318,6 +325,8 @@ def write_search_index(
     and every typed edge without repeating long article identifiers.
     ``sha256_out`` optionally receives the exact emitted bytes' digest without
     rereading any source or changing the index's wire representation.
+    ``warnings_out`` reports when those bytes reach 95% of the default browser
+    limit, without rejecting publication or removing any index content.
     """
     positions = {node.id: position for position, node in enumerate(view.nodes)}
     nodes: list[dict[str, object]] = []
@@ -358,7 +367,16 @@ def write_search_index(
             [positions[edge.source], positions[edge.target], edge.statement_count, edge.proof_count]
             for edge in view.edges
         ]
-    return _write_json(path, payload, sha256_out=sha256_out)
+    sizes: list[int] = []
+    written = _write_json(
+        path, payload, sha256_out=sha256_out, byte_count_out=sizes if warnings_out is not None else None,
+    )
+    if warnings_out is not None and sizes[0] * 100 >= _SEARCH_INDEX_BYTE_LIMIT * 95:
+        warnings_out.append(
+            f"search index uses {sizes[0]:,} bytes ({sizes[0] / _SEARCH_INDEX_BYTE_LIMIT:.1%} of the "
+            f"{_SEARCH_INDEX_BYTE_LIMIT:,}-byte default browser limit); browser loading fails above that limit"
+        )
+    return written
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,6 +15,7 @@ pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolat
 _CALLBACKS = (
     "projectWikiLinks", "projectWikiView", "recordId", "mapNode", "regionProjection",
     "geometry", "compactRegions", "layoutGraph", "wikiRoutes", "world", "screen", "inViewport",
+    "framingNodes", "framingViewport", "framingPadding", "sceneFrame", "sceneDetours", "freeArea", "sheetLayout", "currentOverviewGroup",
 )
 
 _LOADER = r"""
@@ -29,7 +30,7 @@ function original(name) {
   }
   assert.fail('Unparseable production callback: '+name);
 }
-const constants=['NODE_W','clamp'].map(name=>{
+const constants=['NODE_W','SEARCH_PAGE','clamp'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
 }).join('\n');
@@ -57,9 +58,9 @@ var alive=true,restoring=false,mapAllowed=true,ui$requestedNode='D',ui$area=null
 var ui$orientation='lr',ui$transform={x:23,y:41,scale:1.25},ui$selectedStatuses=new Set(['planned','fully_proved']);
 var ui$selected=data.nodes.find(node=>node.id==='D'),ui$active=data.nodes,ui$activeIds=new Set(data.nodes.map(node=>node.id));
 var byId=new Map(data.nodes.map(node=>[node.id,node])),navigation={},atlas=false,family='sans-serif';
-var scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,sceneWiki;
+var scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,sceneWiki,sceneReduced;
 const reader={dataset:{},scrollTop:137,textContent:'Complete authored mathematical reading',focuses:0};
-const document={activeElement:reader},dom$readingBody=reader,dom$stage={clientWidth:900,clientHeight:640};
+const document={activeElement:reader},dom$readingBody=reader,dom$stage={clientWidth:900,clientHeight:640},dom$inspector={offsetTop:0};
 const window={location:{href:'https://example.test/roadmap/D.html'},history:{length:4},devicePixelRatio:1};
 let syncs=0,schedules=0;
 function syncControls() {syncs++;}
@@ -110,8 +111,8 @@ def test_projection_is_atomic_and_repeated_pending_view_uses_one_actual_projecto
       await flush();assert.equal(held.length,1);assert.equal(ui$wikiView,null);assert.equal(data.$wikiEdges,undefined);
       assert.strictEqual(scene,initial);assert.equal(syncs,0);assert.equal(schedules,0);assert.equal(snapshot(),before);
       const projected=await release();assert.strictEqual(ui$wikiView,projected);assert.strictEqual(data.$wikiEdges,projected.edges);
-      assert.deepEqual(projected.edges,[{source:'C',target:'D',count:1}]);assert.equal(layouts.length,2);
-      assert.strictEqual(layouts[1][4],data.$wikiEdges);assert.strictEqual(sceneWiki,data.$wikiEdges);
+      assert.deepEqual(projected.edges,[{source:'C',target:'D',count:1}]);assert.equal(layouts.length,4);
+      assert(layouts.slice(-2).every(args=>args[4]===data.$wikiEdges));assert.strictEqual(sceneWiki,data.$wikiEdges);
       assert.equal(schedules,1);assert.equal(snapshot(),before);assert.strictEqual(document.activeElement,reader);
     """)
 
@@ -127,7 +128,7 @@ def test_pending_projection_cannot_publish_into_another_route_layer_index_or_dis
       if(change==='ticket')ui$wikiProjectionTicket++;
       if(change==='disposal')alive=false;
       const current=snapshot();await release();assert.equal(data.$wikiEdges,undefined);assert.equal(ui$wikiView,null);
-      assert.strictEqual(scene,initial);assert.equal(layouts.length,1);assert.equal(syncs,0);assert.equal(schedules,0);
+      assert.strictEqual(scene,initial);assert.equal(layouts.length,2);assert.equal(syncs,0);assert.equal(schedules,0);
       assert.equal(snapshot(),current);assert.strictEqual(document.activeElement,reader);
       if(change!=='layer')assert.strictEqual(ui$wikiLinks,originalLayer);
       if(change!=='layer'&&change!=='index')assert.equal(snapshot(),before);
@@ -165,7 +166,7 @@ def test_optional_geometry_preserves_anchor_screen_pose_with_exactly_one_camera_
       near(ui$transform.x,camera.x+(previous.x+previous.w/2-moved.x-moved.w/2)*camera.scale);
       near(ui$transform.y,camera.y+(previous.y+previous.h/2-moved.y-moved.h/2)*camera.scale);
       const after=center('D');near(after.x,pose.x);near(after.y,pose.y);assert.equal(ui$transform.scale,camera.scale);
-      assert.strictEqual(document.activeElement,focused);assert.equal(snapshot(),before);assert.equal(layouts.length,2);
+      assert.strictEqual(document.activeElement,focused);assert.equal(snapshot(),before);assert.equal(layouts.length,4);
     """)
 
 
@@ -179,11 +180,11 @@ def test_cached_projection_restoration_preserves_the_saved_clustered_camera_with
       geometry();const bare={...scene.nodes.get('D')};
       assert(bare.x!==clustered.x||bare.y!==clustered.y,'Restoration must rebuild the actual bare-to-clustered geometry');
       ui$transform={...saved};projectWikiView();await flush();
-      assert.equal(held.length,0);assert.equal(projections.length,1);assert.equal(layouts.length,4);
+      assert.equal(held.length,0);assert.equal(projections.length,1);assert.equal(layouts.length,8);
       assert.deepEqual(scene.nodes.get('D'),clustered);assert.deepEqual(ui$transform,saved);
       assert.strictEqual(document.activeElement,focused);assert.equal(snapshot(),before);
       restoring=false;const existing=scene;assert.strictEqual(geometry(),existing);assert.deepEqual(ui$transform,saved);
-      assert.equal(layouts.length,4);
+      assert.equal(layouts.length,8);
     """)
 
 
@@ -192,12 +193,12 @@ def test_geometry_cache_ignores_coverage_only_changes_but_updates_changed_or_rem
       geometry();projectWikiView();await release();const existing=scene,associations=data.$wikiEdges;
       const camera={...ui$transform};ui$wikiLinks=layer([['C','D']],'partial',['A']);
       projectWikiView();await release();assert.equal(ui$wikiView.availability,'partial');
-      assert.strictEqual(data.$wikiEdges,associations);assert.strictEqual(geometry(),existing);assert.equal(layouts.length,2);
+      assert.strictEqual(data.$wikiEdges,associations);assert.strictEqual(geometry(),existing);assert.equal(layouts.length,4);
       assert.deepEqual(ui$transform,camera);
       ui$wikiLinks=layer([['C','D'],['D','C']]);projectWikiView();await release();
-      assert.equal(layouts.length,3);assert.notStrictEqual(data.$wikiEdges,associations);
+      assert.equal(layouts.length,6);assert.notStrictEqual(data.$wikiEdges,associations);
       ui$wikiLinks=layer([],'unavailable');projectWikiView();await release();
-      assert.deepEqual(data.$wikiEdges,[]);assert.equal(layouts.length,4);assert.equal(ui$wikiView.availability,'unavailable');
+      assert.deepEqual(data.$wikiEdges,[]);assert.equal(layouts.length,8);assert.equal(ui$wikiView.availability,'unavailable');
       assert.deepEqual(data.edges,[{source:'A',target:'B',statement:1,proof:1}]);
       assert.strictEqual(document.activeElement,reader);assert.equal(reader.scrollTop,137);
     """)
@@ -208,7 +209,7 @@ def test_empty_or_unavailable_initial_layer_keeps_the_cached_mathematical_map(av
     _run("const availability=" + json.dumps(availability) + ";\n" + r"""
       ui$wikiLinks=layer([],availability);geometry();const before=snapshot(),initial=scene,camera={...ui$transform};
       projectWikiView();await release();assert.equal(ui$wikiView.availability,availability);
-      assert.equal(data.$wikiEdges,undefined);assert.strictEqual(geometry(),initial);assert.equal(layouts.length,1);
+      assert.equal(data.$wikiEdges,undefined);assert.strictEqual(geometry(),initial);assert.equal(layouts.length,2);
       assert.equal(syncs,1);assert.equal(schedules,0);assert.deepEqual(ui$transform,camera);assert.equal(snapshot(),before);
     """)
 

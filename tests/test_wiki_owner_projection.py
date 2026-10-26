@@ -208,6 +208,23 @@ def test_output_is_invariant_under_record_view_reference_and_mapping_insertion_o
     """)
 
 
+def test_large_authored_membership_uses_validated_index_bound_not_canvas_card_bound() -> None:
+    _run(r"""
+      const members=Array.from({length:1000},(_,n)=>record('n'+n));
+      const records=index(...members,record('outside'));
+      const group={id:'view-group:0',key:'real-component',members};
+      const graph=view([{id:group.id,_overviewGroup:group.key},records.get('outside')],{_scopeOverview:{groups:[group]}});
+      const state=layer([['n0','outside'],['n999','outside']]),before=snapshot(graph,records,state);
+      const projected=await projectWikiLinks(graph,records,state);
+      assert.equal(projected.availability,'complete');
+      assert.deepEqual(projected.edges,[{source:group.id,target:'outside',count:2}]);
+      assert.equal(graph.nodes.length,2);assert.equal(snapshot(graph,records,state),before);
+      const forged={...group,members:Array.from({length:records.size+1},()=>members[0])};
+      assert.deepEqual(await projectWikiLinks(view(graph.nodes,{_scopeOverview:{groups:[forged]}}),records,state),
+        {availability:'unavailable',edges:[],unavailableOwners:[]});
+    """)
+
+
 def test_large_reference_scan_yields_before_completion_and_returns_one_atomic_bounded_result() -> None:
     peers = _PEERS + r"""
       const scheduled=[];let yields=0;

@@ -306,7 +306,10 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-integrated .bp-dag-navigation { visibility: visible !important; transition: none; }
 .bp-dag-integrated .bp-dag-navigation-link { display: block; white-space: normal; overflow-wrap: anywhere; }
 .bp-dag-integrated .bp-dag-navigation-link[aria-current=page] { background: var(--dag-panel); color: var(--dag-link) !important; }
-.bp-outline-child { margin-left: 14px !important; border-left: 1px solid var(--dag-border); }
+.bp-outline-depth-1 { margin-left: 14px !important; }
+.bp-outline-depth-2 { margin-left: 28px !important; }
+.bp-outline-depth-3 { margin-left: 42px !important; }
+.bp-outline-collection { display: block; padding: 10px 7px 4px; color: var(--dag-muted); font-size: 12px; font-weight: 600; }
 .bp-outline-label { margin: 0 7px 10px !important; font-size: 12px !important; color: var(--dag-muted); font-weight: 600; }
 .bp-dag-integrated .bp-reading-pane { position: relative; inset: auto; width: auto; max-width: none; height: 100%; max-height: none; min-width: 0; min-height: 0; visibility: visible; opacity: 1; transform: none; transition: none; border: 0; border-left: 1px solid var(--dag-border); border-radius: 0; box-shadow: none; overflow: hidden; }
 .bp-dag-integrated .bp-dag-inspector-inner { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; padding: 0; height: 100%; overflow: hidden; }
@@ -381,12 +384,27 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 /* A quiet area overview at rest draws no links, so its key says how to light them instead of naming line kinds it does not draw. */
 .bp-dag-links-resting .bp-map-key > span { display: none; }
 .bp-dag-links-resting .bp-map-key::before { content: "Point at or focus an area to see its links"; }
-.bp-dag-compact-regions :is(.bp-dag-canvas, .bp-dag-node-layer) { clip-path: inset(52px 0 44px); }
+.bp-dag-has-shelves .bp-dag-main { display: grid; grid-template-rows: minmax(0, 1fr) minmax(140px, 34%); }
+.bp-dag-has-shelves .bp-dag-stage { position: relative; inset: auto; min-height: 0; }
+.bp-dag-shelves-only .bp-dag-main { grid-template-rows: minmax(0, 1fr); }
+.bp-scope-shelves { min-height: 0; overflow: auto; padding: 16px 22px 24px; border-top: 1px solid var(--dag-border); background: var(--dag-bg); }
+.bp-scope-shelves-heading { margin: 0 0 14px; color: var(--dag-muted); font-size: 13px; font-weight: 600; }
+.bp-scope-shelf { margin-bottom: 18px; }
+.bp-scope-shelf h3 { margin: 0 0 4px; font-size: 17px; font-weight: 600; }
+.bp-scope-shelf-count { margin: 0 0 6px; color: var(--dag-muted); font-size: 12px; }
+.bp-scope-shelf-list { margin: 0; padding: 0; list-style: none; }
+.bp-scope-shelf-list a { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; padding: 6px 0; color: var(--dag-link); font-size: 14px; line-height: 1.4; text-decoration: none; }
+.bp-scope-shelf-title { min-width: 0; overflow-wrap: anywhere; }
+.bp-scope-shelf-list a:hover { text-decoration: underline; }
+.bp-scope-shelf-list a:focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }
+.bp-dag-integrated .bp-dag-node[data-kind=boundary] .bp-dag-node-title { font-size: 14px; }
+.bp-dag-integrated .bp-dag-node[data-kind=boundary] .bp-dag-node-meta { font-size: 12px; }
+.bp-dag-compact-regions :is(.bp-dag-canvas, .bp-dag-node-layer) { clip-path: inset(28px 0 16px); }
 .bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-core { padding: 10px 14px; }
 .bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: 4px; font-size: 14px; }
 .bp-dag-compact-regions .bp-dag-node .bp-dag-node-summary { display: none; }
 .bp-dag-compact-regions .bp-map-context { top: 8px; left: 18px; right: 18px; line-height: 1.4; }
-.bp-dag-compact-regions .bp-map-key { line-height: 1.2; }
+.bp-dag-compact-regions .bp-map-key { right: 12px; bottom: 2px; gap: 8px; line-height: 1.1; }
 .bp-dag-compact-regions .bp-dag-density { top: 31px; bottom: auto; left: 18px; max-width: calc(100% - 36px); line-height: 1.2; }
 .bp-dag-integrated .bp-dag-inventory { left: 0 !important; }
 .bp-dag-integrated .bp-dag-inventory-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 16px; padding: 14px 16px; }

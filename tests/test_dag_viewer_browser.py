@@ -502,8 +502,9 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
             )
         if name == "topology":
             for n in range(55):
+                title = f"Later {n}" + (r" $\ZZ/n$ and `$literal$`" if n < 8 else "")
                 (folder / f"later-{n}.md").write_text(
-                    f"---\ndeclaration: theorem\n---\n\n# Later {n}\n\nThe identity $0=0$ is stated explicitly.\n\n"
+                    f"---\ndeclaration: theorem\n---\n\n# {title}\n\nThe identity $0=0$ is stated explicitly.\n\n"
                     "Its complete explanatory text remains available after relation navigation.\n\n"
                     "## Depends on\n\n- [Result](result.md)\n",
                     encoding="utf-8",
@@ -592,10 +593,17 @@ def _load_search_index(page: object) -> object:
 
 
 def _browse_contents(page: object, action: str) -> None:
-    """Choose an inventory through the visible Browse control and its native popover."""
-    toggle = page.get_by_role("button", name="Browse statements or source texts", exact=True)
+    """Use a real source-choice menu, or the direct statements action when no sources exist."""
+    toggle = page.locator(".bp-dag-browse > .bp-dag-button")
     popover = page.locator(".bp-dag-browse-popover")
     playwright.expect(popover).to_be_hidden()
+    if toggle.get_attribute("aria-controls") is None:
+        assert action in {"All statements", "Statements in this topic"}
+        playwright.expect(toggle).to_have_attribute("aria-label", "Browse statements")
+        toggle.click()
+        playwright.expect(popover).to_be_hidden()
+        playwright.expect(page.locator(".bp-dag-inventory")).to_be_visible()
+        return
     toggle.click()
     playwright.expect(toggle).to_have_attribute("aria-expanded", "true")
     playwright.expect(popover).to_be_visible()
@@ -2152,6 +2160,36 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     # The chapter-card fragment selects the initial statement in the client;
     # HTTP document requests never include URL fragments.
     assert documents == [urlsplit(first)._replace(fragment="").geturl()]
+
+
+def test_show_all_relations_typesets_titles_beyond_first_five_with_real_project_macros(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
+) -> None:
+    """The real inventory must retain math after the compact reader's first five links."""
+    from tests.test_integrated_explorer_browser import _math_source, _routes
+
+    page, site_url = desktop_page, marked_math_site_url
+    _routes(page, site_url, marked_math_runtime, graph_client=True)
+    page.goto(_site_route(page, site_url, "topology/result"))
+    _ready_site(page)
+    page.locator(".bp-reading-neighbors").get_by_role("button", name="Show all 55", exact=True).click()
+    inventory = page.locator(".bp-dag-inventory")
+    playwright.expect(inventory.locator(".bp-dag-inventory-row")).to_have_count(55)
+    row = inventory.locator('.bp-dag-inventory-row[data-inventory-node-id="topology/later-6"]')
+    row.scroll_into_view_if_needed()
+    row.focus()
+    assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-dag-inventory-list'))") is True
+    playwright.expect(row).to_be_focused()
+    playwright.expect(row.locator(".arithmatex")).to_have_count(1)
+    playwright.expect(row.locator("mjx-container")).to_have_count(1)
+    playwright.expect(row.locator("mjx-c.mjx-c2124")).to_have_count(1)
+    assert _math_source(page, row.locator("mjx-container")) == r"\ZZ/n"
+    playwright.expect(row.locator("code")).to_have_text("$literal$")
+    assert row.locator("mjx-merror, merror, [tabindex], [role=application], script, iframe, img").count() == 0
+    _assert_hit(page, row)
+    page.keyboard.press("Enter")
+    page.wait_for_url(_site_route(page, site_url, "topology/later-6"))
+    playwright.expect(_reading_card(page, "topology/later-6")).to_be_visible()
 
 
 def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_controls(

@@ -32,14 +32,15 @@ function original(name) {
 }
 const constants = source.slice(source.indexOf('  var NODE_W ='), source.indexOf('  var clients =')) +
   source.slice(source.indexOf('  var clamp ='), source.indexOf('  function element('));
-const functions = ['layoutGraph', 'wikiRoutes', 'geometry', 'compactRegions', 'world', 'screen', 'inViewport', 'fit', 'mapHeight', 'freeArea',
+const functions = ['layoutGraph', 'wikiRoutes', 'geometry', 'compactRegions', 'sceneFrame', 'sceneDetours', 'framingNodes', 'framingViewport',
+  'framingPadding', 'currentOverviewGroup', 'world', 'screen', 'inViewport', 'fit', 'mapHeight', 'freeArea',
   'center', 'bandInsets', 'updateOverlays'].map(original).join('\n');
 const fixture = JSON.parse(fs.readFileSync(0, 'utf8'));
 const sandbox = {assert, fixture}; vm.createContext(sandbox);
 const setup = String.raw`
 var navigation = {}, mapAllowed = true, atlas = false, family = 'sans-serif', data, byId, ui$active, ui$activeIds;
 var ui$selected = null, ui$orientation = 'lr', ui$area = null, ui$hovered = null, scene, sceneData, sceneDirection, sceneCompact, sceneFamily;
-var sceneAspect, sceneWiki, restoring = false;
+var sceneAspect, sceneWiki, sceneReduced, restoring = false, ui$readableCrop = false, ui$overviewGroup = null, dom$fit = null;
 var ui$transform = {x: 0, y: 0, scale: 1}, overlays = new Map(), document = {activeElement: null};
 var host = {classList: {contains() { return false; }}}, prerequisites = new Map(), dependents = new Map();
 var dom$stage = {clientWidth: fixture.width, clientHeight: fixture.height}, dom$density = {hidden: true, textContent: ''}, dom$inspector = {};
@@ -137,15 +138,14 @@ def test_a_dense_chapter_frames_its_linked_cards_and_says_part_of_it_is_hidden()
 @pytest.mark.parametrize(("width", "scale"), ((900, None), (740, 0.9)))
 def test_a_map_that_fits_shows_every_card_and_no_pan_note(width: int, scale: float | None) -> None:
     """The note told readers to pan when every card was already on screen."""
-    # At 740px the map is wider than the stage less its padding at the .9 floor, but not wider than the stage,
-    # so the padding gives way and the whole map stays centred instead of a card being centred.
+    # At 740px the map fits no higher than about the .9 floor, and still opens whole and centred instead of a card being centred.
     view = _view(["a", "b", "c", "loose"], [("a", "b"), ("b", "c")])
     height = 600
     result = _first_view(view, width, height)
     if scale is None:
         assert result["scale"] > 0.9
     else:
-        assert result["scale"] == pytest.approx(scale)
+        assert scale <= result["scale"] < 1
     assert all(_inside(box, width, height) for box in result["boxes"].values())
     assert result["hidden"] is True and result["note"] == ""
 
@@ -174,7 +174,8 @@ def test_a_long_chain_opens_at_its_leading_edge() -> None:
     result = _first_view(view, width, height)
     boxes = result["boxes"]
     assert result["scale"] == pytest.approx(0.9)
-    assert boxes["step-0"]["x"] == pytest.approx(36) and _inside(boxes["step-0"], width, height)
+    # It starts 20px in, the framing's side padding, with the first card whole.
+    assert boxes["step-0"]["x"] == pytest.approx(20) and _inside(boxes["step-0"], width, height)
     assert result["hidden"] is False and re.fullmatch(r"Drag to see more: \d+ of 33 cards in view\.", result["note"])
 
 
@@ -192,13 +193,14 @@ def test_a_deep_map_whose_leading_corner_is_bare_opens_on_its_first_card(width: 
     assert result["hidden"] is False
 
 def test_the_workspace_map_starts_below_its_title() -> None:
-    """The map title is drawn from 20px to about 37px, and a height-limited map started at 36px, under it."""
+    """The map title is drawn from 20px to about 37px, and a height-limited map started at 36px, under it. The header band is
+    44px and the framing starts cards 48px down."""
     view = _view(["hub", *(f"leaf-{index}" for index in range(5))], [("hub", f"leaf-{index}") for index in range(5)])
     width, height = 900, 800
     result = _first_view(view, width, height)
     assert result["scale"] > 0.9
-    assert min(box["y"] for box in result["boxes"].values()) == pytest.approx(56)
-    # The foot band under the pan note and key is 56px, and fit() keeps the cards above it.
+    assert min(box["y"] for box in result["boxes"].values()) == pytest.approx(48)
+    # The foot band under the pan note and key is 56px, and the framing keeps the cards above it.
     assert max(box["y"] + box["h"] for box in result["boxes"].values()) == pytest.approx(height - 56)
     assert all(_inside(box, width, height) for box in result["boxes"].values())
     assert result["hidden"] is True

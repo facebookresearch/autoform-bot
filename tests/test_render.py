@@ -1376,6 +1376,67 @@ def test_links_naming_a_node_file_follow_it_onto_the_chapter(tmp_path: Path) -> 
     assert "bp-book-nav" not in chapter
 
 
+def test_the_book_nav_nests_each_page_under_its_folder_whatever_the_book_order(tmp_path: Path) -> None:
+    """The book order follows links, so a landing page that links a deep page
+    first put it before its chapters; indented by folder depth alone, it then
+    skipped a level, and MkDocs refused the nav. Each page now nests under the
+    nearest chapter above it, a page beside a chapter's README under that one."""
+    from mkdocs_literate_nav import parser
+
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "README.md").write_text(
+        "---\nkind: blueprint\n---\n\n# Overview\n\n"
+        "- [Local degree](roadmap/homology/computations/local-degree/README.md)\n- [Roadmap](roadmap/README.md)\n",
+        encoding="utf-8",
+    )
+    roadmap = blueprint / "roadmap"
+    roadmap_readme = roadmap / "README.md"
+    roadmap_readme.write_text(
+        roadmap_readme.read_text(encoding="utf-8") + "\n## Chapters\n\n- [Homology](homology/README.md)\n",
+        encoding="utf-8",
+    )
+    (roadmap / "homology").mkdir()
+    (roadmap / "homology/README.md").write_text(
+        "---\n---\n\n# Homology\n\n- [Notes](notes.md)\n- [Local degree](computations/local-degree/README.md)\n",
+        encoding="utf-8",
+    )
+    (roadmap / "homology/notes.md").write_text("---\n---\n\n# Notes\n\nA narrative page.\n", encoding="utf-8")
+    (roadmap / "homology/computations/local-degree").mkdir(parents=True)
+    (roadmap / "homology/computations/local-degree/README.md").write_text(
+        "---\n---\n\n# Local degree\n", encoding="utf-8"
+    )
+
+    render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    nav = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
+    book = [line for line in nav.splitlines() if line.startswith("    ")]
+    assert book[:4] == [
+        "    - [Roadmap](roadmap/README.md)",
+        "        - [Homology](roadmap/homology/README.md)",
+        "            - [Local degree](roadmap/homology/computations/local-degree/README.md)",
+        "            - [Notes](roadmap/homology/notes.md)",
+    ]
+
+    class Globber:
+        def __call__(self, *args: object, **kwargs: object) -> list:
+            return []
+
+        def find_index(self, *args: object, **kwargs: object) -> None:
+            return None
+
+        def isdir(self, *args: object, **kwargs: object) -> bool:
+            return False
+
+        def glob(self, *args: object, **kwargs: object) -> list:
+            return []
+
+    # MkDocs reads the nav through literate-nav, which refuses a skipped level.
+    parsed = parser.NavParser(lambda folder: ("SUMMARY.md", nav) if folder in (".", "") else None, Globber())
+    (section,) = parsed.markdown_to_nav()[1].values()
+    assert section[0]["Roadmap"][0] == "roadmap/README.md"
+
+
 def test_coverage_is_reachable_once_the_landing_page_stops_listing_it(
     tmp_path: Path,
 ) -> None:

@@ -10,6 +10,7 @@
  * readerIsOverview(root) conservatively recognizes that owned, navigation-only reading projection.
  * loadWikiLinks()/getWikiLinks() expose a lazy optional, exact-index-SHA-bound hyperlink layer;
  * onWikiLinks receives canonical IDs and honest coverage, never mathematical dependencies.
+ * getHomeURL() names the site's native home page, separately from the indexed roadmap root.
  */
 (function () {
   "use strict";
@@ -45,7 +46,7 @@
     var jsonLimit = bounded(options.jsonLimit, 32 * 1024 * 1024, 1024, 64 * 1024 * 1024);
     var cacheLimit = bounded(options.cacheBytes, 48 * 1024 * 1024, 1024, 128 * 1024 * 1024);
     var htmlEntries = bounded(options.htmlEntries, 8, 1, 32), jsonEntries = bounded(options.jsonEntries, 16, 1, 64);
-    var sitePrefix = prefix(initialCanonical, catalogueURL, initialDataURL);
+    var sitePrefix = prefix(catalogueURL, initialDataURL, initialCanonical), homeURL = link(sitePrefix + "index.html", initialURL);
     documents.add(resource(initialCanonical));
 
     function bounded(value, fallback, low, high) {
@@ -376,10 +377,21 @@
         return false;
       });
     }
+    function indexedRoute(value) {
+      var exact = routes.get(value); if (exact) return exact;
+      // Only route lookup recognizes MkDocs's two directory entrances. Fetch,
+      // cache and canonical-source identity still use the exact resources.
+      var url = new URL(value);
+      if (/\/$/.test(url.pathname)) url.pathname += "index.html";
+      else if (/\/index\.html$/.test(url.pathname)) url.pathname = url.pathname.slice(0, -10);
+      else return null;
+      return routes.get(url.href) || null;
+    }
     function selection(url, navigation) {
       var hash = new URL(url).hash.slice(1), parameters = new URLSearchParams(hash), legacy = legacyHash(hash);
       var explicit = navigation.nodeId && indexedNode(navigation.nodeId);
-      var node = explicit || routes.get(url) || indexedNode(parameters.get("node"));
+      var home = url === homeURL && !navigation.nodeId && !parameters.has("node");
+      var node = explicit || (home ? null : indexedRoute(url)) || indexedNode(parameters.get("node"));
       var nodeId = explicit ? explicit.id : navigation.nodeId || node && node.id || parameters.get("node") || null;
       var anchor = navigation.anchor;
       if (anchor === undefined) {
@@ -437,6 +449,8 @@
       if (catalogueURL) await waitFor(loadIndex().catch(function () { return null; }), request.signal);
       assertAlive(request);
       var choice = selection(url, navigation), canonical = choice.node && choice.node.route || url;
+      var requestedHash = new URL(url).hash;
+      if (legacyHash(requestedHash.slice(1))) requestedHash = "";
       var seen = new Set(), page, graph, dataURL;
       for (var depth = 0; depth < 5; depth++) {
         assertAlive(request);
@@ -469,6 +483,9 @@
         var target = new URL(page.url), requested = new URL(canonical);
         if (choice.node && choice.node.route) target = new URL(choice.node.route);
         else if (requested.hash && resource(requested.href) === resource(target.href)) target.hash = requested.hash;
+        // An ordinary section belongs to the complete alias target. An exact
+        // indexed statement permalink or legacy node selection still wins.
+        if (requestedHash && !(choice.node && choice.node.route && new URL(choice.node.route).hash)) target.hash = requestedHash;
         if (choice.nodeId && !(choice.node && choice.node.route) && !target.hash) {
           var legacy = new URLSearchParams(); legacy.set("node", choice.nodeId); target.hash = legacy.toString();
         }
@@ -817,6 +834,7 @@
       decluttered = new WeakMap();
     }
     return {start: start, navigate: navigate, navigateNode: navigateNode, loadIndex: loadIndex, loadWikiLinks: loadWikiLinks,
+      getHomeURL: function () { return homeURL; },
       getWikiLinks: function () { return wikiLinks; },
       getIndex: function () { return index; }, bindReader: bindReader, declutterReader: declutterReader, readerIsOverview: readerIsOverview,
       checkpoint: checkpoint, dispose: dispose};
