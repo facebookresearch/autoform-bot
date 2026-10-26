@@ -354,9 +354,9 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 @media (max-width: 720px) {
   .bp-dag-integrated .bp-dag-body { display: block; }
   .bp-dag-integrated .bp-dag-main { position: absolute; inset: 0 0 48px; }
-  .bp-dag-integrated .bp-reading-pane { position: absolute; z-index: 12; inset: 0; height: auto; border: 0; transform: translateY(calc(100% - 48px)); transition: transform .16s ease; }
+  .bp-dag-integrated .bp-reading-pane { position: absolute; z-index: 12; inset: auto 0 0; height: 48px; border: 0; transform: none; }
   .bp-dag-viewer.bp-dag-integrated .bp-reading-pane { max-height: none; max-width: none; }
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-sheet-open .bp-reading-pane { transform: none; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-sheet-open .bp-reading-pane { inset: 0; height: auto; transform: none; }
   .bp-dag-integrated .bp-dag-sheet-handle { display: block; height: 48px; min-height: 48px; padding: 12px 20px; background: var(--dag-bg); border-bottom: 1px solid var(--dag-border); border-radius: 0; }
   .bp-dag-integrated .bp-dag-inspector-inner { height: calc(100% - 48px); }
   .bp-dag-integrated .bp-reading-body { padding: 20px 22px 60px; }

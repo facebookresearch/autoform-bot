@@ -75,8 +75,9 @@ date when the release is tagged.
 
 - **Explorer controls.** Closing full phone reading brings a cropped selected
   card back into the map without overriding restored cameras. Isolate/status
-  filters cover native shelves and count their hidden members; an empty shelf
-  no longer reserves map space. Phone panes use their containing insets (#442).
+  filters use the same eligible original members in maps and native shelves,
+  including external formal links, and count hidden members. Empty shelves
+  reserve no map space; the closed phone handle anchors to the bottom (#442).
 - **Reading and index feedback.** Valid HTML character references keep title
   math without admitting authored HTML. Publication warns when the exact
   UTF-8 search index reaches 95% of the unchanged 32 MiB browser limit; nothing

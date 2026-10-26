@@ -2156,9 +2156,9 @@
       if (!dom$shelves) return;
       var selected = currentOverviewGroup(), members = selected && new Set(selected.members.map(function (member) { return member.id; }));
       var nativeGroup = selected && (selected.$shelf || !ui$active.some(function (node) { return members.has(node.id); }));
-      var groups = (nativeGroup ? [selected] : data.$shelves || []).filter(function (group) { return ui$showIsolated || !group.$shelf; });
+      var groups = nativeGroup ? [selected] : data.$shelves || [];
       var visible = ui$mode === "graph" && groups.some(function (group) {
-        return group.members.some(function (node) { return matchesStatus(node) && (!ui$query || searchScore(node, ui$query.toLocaleLowerCase())); });
+        return group.members.some(function (node) { return matchesStatus(node) && matchesIsolation(node) && (!ui$query || searchScore(node, ui$query.toLocaleLowerCase())); });
       });
       dom$shelves.hidden = !visible; host.classList.toggle("bp-dag-has-shelves", visible);
       host.classList.toggle("bp-dag-shelves-only", visible && (nativeGroup || !data.nodes.length));
@@ -2171,7 +2171,7 @@
         back.addEventListener("click", function () { setMode("regions", true); }); dom$shelves.appendChild(back);
       } else dom$shelves.appendChild(element("h2", "bp-scope-shelves-heading", "More developments"));
       groups.forEach(function (group) {
-        var members = group.members.filter(function (node) { return matchesStatus(node) && (!ui$query || searchScore(node, ui$query.toLocaleLowerCase())); });
+        var members = group.members.filter(function (node) { return matchesStatus(node) && matchesIsolation(node) && (!ui$query || searchScore(node, ui$query.toLocaleLowerCase())); });
         if (!members.length) return;
         var section = element("section", "bp-scope-shelf"), heading = readingLabel("h3", "", group.area || group.title || "Unlinked topics", group.reading_title);
         section.appendChild(heading);
@@ -2286,13 +2286,30 @@
       return (node._region || node._overviewGroup || node.kind === "scope" || node.kind === "boundary") && node.status_counts && node.status_counts.length ?
         node.status_counts.some(function (pair) { return ui$selectedStatuses.has(pair[0]); }) : ui$selectedStatuses.has(node.status);
     }
+    function matchesIsolation(node) {
+      if (ui$showIsolated || node === ui$selected) return true;
+      if (node._overviewGroup || node._region) {
+        var groups = data._scopeOverview && data._scopeOverview.groups || [];
+        var group = groups.find(function (item) { return item.id === node.id || item.key === node._overviewGroup; });
+        var members = group ? group.members : node._region && contextGraph.nodes.filter(function (member) { return member.area === node._region && mapNode(member); });
+        if (members) return members.some(function (member) { return matchesStatus(member) && matchesIsolation(member); });
+      }
+      if (typeof node.isolated === "boolean") return !node.isolated;
+      var cache = matchesIsolation.$cache;
+      if (!cache || cache.graph !== contextGraph) {
+        var endpoints = new Set();
+        contextGraph.edges.forEach(function (edge) { if (edge.statement || edge.proof) { endpoints.add(edge.source); endpoints.add(edge.target); } });
+        cache = {graph: contextGraph, endpoints: endpoints}; matchesIsolation.$cache = cache;
+      }
+      return cache.endpoints.has(node.id);
+    }
     function calculateActive() {
       if (!ui$activeDirty) return;
       var directional = null;
       if (ui$selected && ui$direction === "prerequisites") directional = collect(ui$selected.id, prerequisites);
       if (ui$selected && ui$direction === "dependents") directional = collect(ui$selected.id, dependents);
       ui$active = data.nodes.filter(function (node) {
-        return matchesStatus(node) && (ui$showIsolated || !node.isolated || node === ui$selected) &&
+        return matchesStatus(node) && matchesIsolation(node) &&
           (!directional || directional.has(node.id));
       });
       ui$activeIds = new Set(ui$active.map(function (node) { return node.id; }));
@@ -2313,7 +2330,7 @@
         }, 0)));
       }
       var hidden = data.nodes.length - ui$active.length;
-      (data.$shelves || []).forEach(function (group) { group.members.forEach(function (node) { if (!ui$showIsolated || !matchesStatus(node)) hidden++; }); });
+      (data.$shelves || []).forEach(function (group) { group.members.forEach(function (node) { if (!matchesIsolation(node) || !matchesStatus(node)) hidden++; }); });
       dom$hiddenButton.textContent = "Show " + hidden + " hidden"; dom$hiddenButton.hidden = !hidden;
       dom$empty.hidden = ui$active.length !== 0;
       ui$activeDirty = false;

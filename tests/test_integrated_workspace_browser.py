@@ -1225,6 +1225,17 @@ def test_native_reader_and_library_links_remain_soft_navigation(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:
     page, site = workspace_page, workspace_site
+    home_url = site.url + "/index.html"
+    published = page.request.get(home_url, timeout=10_000)
+    assert published.ok and published.url == home_url
+    tree = html5lib.parse(published.text(), treebuilder="etree", namespaceHTMLElements=False)
+    reading = next(element for element in tree.iter() if "bp-reading-source" in element.get("class", "").split())
+    heading = next(element for element in reading.iter() if element.tag == "h1")
+    home_heading = " ".join("".join(heading.itertext()).split())
+    home_text = " ".join("".join(reading.itertext()).split())
+    assert home_heading == reading.get("data-page-title") and home_heading != site.records["roadmap"]["title"]
+    book_link = next(element for element in reading.iter() if "bp-intro-book" in element.get("class", "").split())
+    assert urljoin(home_url, book_link.get("href")) == site.route("roadmap")
     documents: list[str] = []
     page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
     _open(page, site, workspace_runtime, _TARGET)
@@ -1232,10 +1243,22 @@ def test_native_reader_and_library_links_remain_soft_navigation(
     page.wait_for_url(site.route(_OTHER))
     _selected(page, _OTHER)
     home = page.locator(".bp-dag-book")
-    playwright.expect(home).to_have_attribute("href", site.url + "/index.html")
+    playwright.expect(home).to_have_attribute("href", home_url)
     home.click()
-    page.wait_for_url(site.url + "/index.html")
-    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_LIBRARY)
+    page.wait_for_url(home_url)
+    source = page.locator(".bp-reading-body > .bp-reading-source")
+    playwright.expect(source).to_have_count(1)
+    playwright.expect(source.locator("h1")).to_have_text(home_heading)
+    playwright.expect(source).to_have_text(home_text)
+    playwright.expect(source.locator(".bp-intro-book")).to_have_attribute("href", site.route("roadmap"))
+    page.go_back()
+    page.wait_for_url(site.route(_OTHER))
+    _selected(page, _OTHER)
+    playwright.expect(_full_math(page, _OTHER, 1)).to_contain_text(site.records[_OTHER]["title"])
+    page.go_back()
+    page.wait_for_url(site.route(_TARGET))
+    _selected(page, _TARGET)
+    playwright.expect(_full_math(page)).to_contain_text(_LAST_SENTENCE)
     assert documents == [site.route(_TARGET).split("#", 1)[0]]
     assert page.evaluate("() => document === __workspaceDocument") is True
 
