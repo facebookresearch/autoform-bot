@@ -410,7 +410,9 @@ def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_pa
     script = _viewer_source()
     assert "inventoryNodes" in script
     assert '"Show unlinked"' in script
-    assert "if (state.showIsolated || node === state.selected) return true;" in script
+    # Map and native shelves share the original-member predicate, whose
+    # executed regressions cover explicit flags and external/private edges.
+    assert "matchesStatus(node) && matchesIsolation(node)" in script
     # Contents counts what it lists, and names no internals such as the map's size limit.
     assert 'element("h2", "", "Contents")' in script
     assert "items without edges included" not in script and "map unavailable" not in script
