@@ -2204,7 +2204,7 @@
       return {left: free.left, right: free.right, top: free.top || 0, height: free.band};
     }
     function framingPadding() {
-      return compactRegions() ? {side: 0, top: 0, bottom: 0} : {side: 20, top: 48, bottom: 56};
+      return compactRegions() ? {side: 0, top: 0, bottom: 0} : {side: 20, top: 48, bottom: 32};
     }
     function geometry() {
       if (!mapAllowed) return null;
@@ -2527,10 +2527,11 @@
       ui$transform.y = (free.top || 0) + free.band / 2 - (box.y + box.h / 2) * ui$transform.scale; schedule();
     }
     // The map's header and foot are opaque bands over the stage, which a phone's open reader removes. A card under one is
-    // out of view for the keyboard and the pan note.
+    // out of view for the keyboard and the pan note. The foot grows from the key's 32px to 56px while the note shows, so the
+    // note counts against the key's band alone, or a note once shown would keep itself.
     function bandInsets() {
       return navigation && !compactRegions() && !(sheetLayout() && host.classList.contains("bp-dag-sheet-open")) ?
-        {top: 44, bottom: dom$density.hidden ? 36 : 56} : {top: 0, bottom: 0};
+        {top: 44, bottom: dom$density.hidden ? 32 : 56, key: 32} : {top: 0, bottom: 0, key: 0};
     }
     function centerIfHidden(node) {
       if (!node) return; var box = screen(node), free = freeArea(), bands = bandInsets();
@@ -2816,7 +2817,7 @@
       // The note asks for a drag only while a shown card's real box reaches past the stage or under a phone's open reader,
       // and for a zoom only while labels are too small. It counts cards, which Browse does not list, so it names no Browse total.
       var bottom = mapHeight(), whole = ui$active.filter(function (node) {
-        var box = screen(node); return box.x >= 0 && box.y >= bands.top && box.x + box.w <= dom$stage.clientWidth && box.y + box.h <= bottom - bands.bottom;
+        var box = screen(node); return box.x >= 0 && box.y >= bands.top && box.x + box.w <= dom$stage.clientWidth && box.y + box.h <= bottom - bands.key;
       }).length, cropped = whole < ui$active.length, tiny = visible.length && ui$transform.scale < .34;
       dom$density.hidden = !cropped && !tiny;
       dom$density.textContent = cropped ? "Drag to see more: " + num(whole) + " of " + num(ui$active.length) + " cards in view." :

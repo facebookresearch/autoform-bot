@@ -200,7 +200,7 @@ def test_the_workspace_map_starts_below_its_title() -> None:
     result = _first_view(view, width, height)
     assert result["scale"] > 0.9
     assert min(box["y"] for box in result["boxes"].values()) == pytest.approx(48)
-    # The foot band under the pan note and key is 56px, and the framing keeps the cards above it.
-    assert max(box["y"] + box["h"] for box in result["boxes"].values()) == pytest.approx(height - 56)
+    # A map that fits shows no pan note, so the foot band under the key is 32px, and the framing keeps the cards above it.
+    assert max(box["y"] + box["h"] for box in result["boxes"].values()) == pytest.approx(height - 32)
     assert all(_inside(box, width, height) for box in result["boxes"].values())
     assert result["hidden"] is True

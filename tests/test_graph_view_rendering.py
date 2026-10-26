@@ -869,7 +869,7 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     # A card under the map's header or foot band is not in view either.
     assert "var box = screen(node); return box.x >= 0 && box.y >= bands.top && box.x + box.w <= refs.stage.clientWidth" in note
     # A card under a phone's open reader is off screen too; #442's framing uses the same free area.
-    assert "box.y + box.h <= bottom - bands.bottom;" in note and "cropped = whole < state.active.length" in note
+    assert "box.y + box.h <= bottom - bands.key;" in note and "cropped = whole < state.active.length" in note
     # It counts cards, which Browse does not list, so it names no Browse total.
     assert 'cropped ? "Drag to see more: " + num(whole) + " of " + num(state.active.length) + " cards in view."' in note
     assert '"Zoom in to reveal "' in note and "Pan or " not in script and "use Browse for all" not in script

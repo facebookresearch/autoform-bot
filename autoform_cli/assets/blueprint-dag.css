@@ -380,7 +380,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage::after { content: ""; position: absolute; z-index: 3; right: 0; left: 0; background: var(--dag-map); pointer-events: none; }
 .bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage::before { top: 0; height: 44px; }
 .bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage::after { bottom: 0; height: 56px; }
-.bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage:has(.bp-dag-density[hidden])::after { height: 36px; }
+/* Without the pan note the foot band only covers the key, and #442's framing keeps cards 32px clear of the stage's foot. */
+.bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage:has(.bp-dag-density[hidden])::after { height: 32px; }
 .bp-map-key .bp-map-key-wiki::before { border-top-style: dotted; }
 .bp-map-key .bp-map-key-coverage::before { display: none; }
 /* A quiet area overview at rest draws no links, so its key says how to light them instead of naming line kinds it does not draw. */
