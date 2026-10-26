@@ -932,7 +932,7 @@ def test_completion_requires_every_dependency_to_be_fully_proved(tmp_path: Path)
     # Nothing is ready, so the second figure is a label alone and opens no list.
     second = overview.split('class="bp-hero-figures">', 1)[1].split('<div class="bp-figure">')[2]
     assert re.match(r'<div class="bp-figure-label">[^<]+</div></div></div>', second)
-    assert "Ready to start" not in overview
+    assert "Ready to work on" not in overview
     assert "bp-figure-link" not in overview
 
 
@@ -1139,7 +1139,7 @@ def test_partial_module_catalog_is_not_reported_as_dispatchable_work(tmp_path: P
     render_site(project / "blueprint", tmp_path / "out")
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert "Ready to start" not in overview
+    assert "Ready to work on" not in overview
     assert "bp-figure-link" not in overview
 
 
@@ -1335,7 +1335,7 @@ def test_the_rail_hero_keeps_two_figures_and_the_coverage_counts_and_hides_nothi
     intro = overview.split('class="bp-landing-intro"', 1)[1].split('class="bp-dag-viewer"', 1)[0]
     # Two figures, the coverage counts beside their link, and no markup the stylesheet would hide.
     figures = intro.split('class="bp-hero-figures">', 1)[1]
-    assert re.findall(r'class="bp-figure-label">([^<]+)<', figures) == ["Fully proved", "Ready to start"]
+    assert re.findall(r'class="bp-figure-label">([^<]+)<', figures) == ["Fully proved", "Ready to work on"]
     assert intro.index("bp-hero-figures") < intro.index("bp-hero-coverage-counts") < intro.index("bp-hero-coverage-link")
     for hidden in ("bp-hero-kicker", "bp-hero-bar", "bp-hero-counts"):
         assert hidden not in intro
@@ -1864,6 +1864,26 @@ def test_authored_mermaid_survives_while_generated_graph_pages_use_the_explorer(
     assert all("```mermaid" not in page.read_text(encoding="utf-8") for page in graph_pages)
 
 
+
+def _relative_luminance(colour: str) -> float:
+    channels = [int(colour[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def test_links_keep_text_contrast_on_every_surface_in_both_schemes() -> None:
+    css = render_module._stylesheet()
+    blocks = {
+        "light": re.search(r":root \{([^}]+)\}", css),
+        "dark": re.search(r"\[data-md-color-scheme=slate\] \{([^}]+)\}", css),
+    }
+    for scheme, block in blocks.items():
+        assert block is not None, scheme
+        colours = dict(re.findall(r"--(bp-[\w-]+): (#[0-9A-Fa-f]{6});", block.group(1)))
+        for background in ("bp-surface", "bp-sunken", "bp-page"):
+            low, high = sorted((_relative_luminance(colours["bp-link"]), _relative_luminance(colours[background])))
+            assert (high + 0.05) / (low + 0.05) >= 4.5, (scheme, background)
+
 def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     _render(tmp_path)
     css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
@@ -1888,11 +1908,8 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     assert "setTimeout(refresh, pollDelayMs)" in live
     assert 'render({ claims: [], error: "Live overlay unavailable" })' in live
     assert live == packaged_live
-    # The brand sweep is defined once and reused, rather than pasted per rule.
-    assert css.count("--bp-sweep:") == 1
-    # Colour carries status only, so the sweep is the header's hairline and nothing else.
-    assert css.count("var(--bp-sweep)") == 1
-    assert '.md-header::after {\n  content: "";\n  display: block;\n  height: 3px;\n  background: var(--bp-sweep);' in css
+    # Colour carries status only, so no brand gradient decorates the page.
+    assert "--bp-sweep" not in css
     # One rule per theme selector, so no later rule silently overrides an earlier one.
     for selector in (".md-header", ".md-tabs__link"):
         assert len(re.findall(rf"(?m)^{re.escape(selector)} \{{", css)) == 1, selector

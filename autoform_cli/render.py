@@ -2336,7 +2336,7 @@ def _render_hero(
     if done < total:
         figures.append(("Fully proved", f"{share}%", f"{done:,} of {total:,} {statement_label}", False))
         figures.append(
-            ("Ready to start", f"{actionable:,}", "statements you can state or prove now", False)
+            ("Ready to work on", f"{actionable:,}", "statements you can state or prove now", False)
             if actionable
             else ("Nothing is ready right now", "", "", False)
         )
@@ -2355,7 +2355,7 @@ def _render_hero(
     def figure(label: str, value: str, note: str, neutral: bool) -> str:
         # A link is inline, and Markdown's HTML pass breaks blocks inside one
         # apart, so the linked figure is built from spans the stylesheet stacks.
-        link = label == "Ready to start" and ready_href
+        link = label == "Ready to work on" and ready_href
         tag = "span" if link else "div"
         inner = (
             (f'<{tag} class="bp-figure-value">{value}</{tag}>' if value else "")
@@ -3891,9 +3891,10 @@ def _stylesheet() -> str:
 @import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
 
 /* Facebook's product surfaces, not Material's defaults: the greys are the
-   ones Facebook ships in dark mode, the blue is Meta blue, and the accent
-   sweep is the brand gradient. A blueprint should look like it came from
-   here rather than from any documentation generator. */
+   ones Facebook ships in dark mode and the blue is Meta blue. Dark mode's link
+   blue is lighter than its status blue, so links keep 4.5:1 on every surface.
+   A blueprint should look like it came from here rather than from any
+   documentation generator. */
 :root {{
   --bp-fg: #050505;
   --bp-muted: #65676B;
@@ -3907,7 +3908,6 @@ def _stylesheet() -> str:
   --bp-blue: #0064E0;
   --bp-violet: #7B3FE4;
   --bp-magenta: #E0447B;
-  --bp-sweep: linear-gradient(95deg, #0082FB 0%, #0064E0 32%, #7B3FE4 68%, #E0447B 100%);
   --bp-radius: 12px;
 }}
 [data-md-color-scheme=slate] {{
@@ -3967,15 +3967,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 [data-md-color-scheme=slate] .md-container {{ background-color: #18191A; }}
 [data-md-color-scheme=slate] pre, [data-md-color-scheme=slate] code {{ color: var(--bp-fg); }}
 
-/* The brand sweep as a hairline under the header ties every page together
-   without spending any vertical space on decoration. */
 .md-header {{ box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35); border-bottom: 1px solid var(--bp-rule); }}
-.md-header::after {{
-  content: "";
-  display: block;
-  height: 3px;
-  background: var(--bp-sweep);
-}}
 /* The mobile drawer's title bar and repository strip match the header:
    white on slate's brighter blue is 3.5:1. */
 [data-md-color-scheme=slate] .md-header,
