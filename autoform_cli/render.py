@@ -1951,27 +1951,14 @@ def _book_links(source: Path, blueprint: Path, book_sources: Collection[Path]) -
 
 
 def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
-    """Follow authored container links to recover the book's page order."""
-    ordered: list[Path] = []
-    seen_outputs: set[Path] = set()
-    visited_sources: set[Path] = set()
-    book_sources = _book_sources(graph)
-    pending = [blueprint / "README.md"]
-    while pending:
-        source = pending.pop().resolve()
-        try:
-            relative = source.relative_to(blueprint)
-        except ValueError:
-            continue
-        output = (destination / relative).resolve()
-        if output.is_file() and output not in seen_outputs:
-            seen_outputs.add(output)
-            ordered.append(output)
-        if source in visited_sources or not source.is_file():
-            continue
-        visited_sources.add(source)
-        pending.extend(reversed(_book_links(source, blueprint, book_sources)))
-    return ordered
+    """The landing page, then the book in reading order (:func:`_reading_pages`).
+
+    SUMMARY.md and Previous/Next follow this order, and statement numbers, Next
+    up and the search index follow the same walk, so the book reads one way
+    everywhere."""
+    landing = (destination / "README.md").resolve()
+    pages = _reading_pages(blueprint, destination, graph)
+    return ([landing] if landing.is_file() else []) + [page for page in pages if page != landing]
 
 
 def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
