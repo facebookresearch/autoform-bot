@@ -470,7 +470,7 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert 'setMode("list", true)' in script
     assert 'refs.announcement.setAttribute("aria-live", "polite")' in script
     assert "control.dataset.autoformNodeId = node.id" in script
-    assert "new ResizeObserver(resize)" in script
+    assert "new ResizeObserver(queueResize)" in script
     assert "state.pointers.size === 2" in script
     assert "event.type === \"pointerup\" && wasSingle && !state.moved" in script
     assert "touch-action: none; cursor: grab;" in container
