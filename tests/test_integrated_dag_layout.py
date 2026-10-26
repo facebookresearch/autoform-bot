@@ -35,8 +35,10 @@ function original(name) {
 }
 const context={assert,structuredClone,URL,performance,restoring:false,productionSource:source,original,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
 vm.createContext(context);
-vm.runInContext(source.match(/var NODE_W =[^;]+;/)[0],context);
-const functions=['layoutGraph','wikiRoutes','geometry','compactRegions'].map(original).join('\n');
+vm.runInContext(source.slice(source.indexOf('  var NODE_W ='),source.indexOf('  var clients ='))+
+  source.slice(source.indexOf('  var clamp ='),source.indexOf('  function element(')),context);
+const functions=['layoutGraph','wikiRoutes','geometry','compactRegions','sceneFrame','sceneDetours',
+  'framingNodes','framingViewport','framingPadding','freeArea','currentOverviewGroup','sheetLayout'].map(original).join('\n');
 """
 
 _ORACLE = r"""
@@ -357,15 +359,16 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
     _run(r"""
       const events=[],expected=fixture.entry==='roadmap'?['region:Algebra','region:Topology']:['resultA','resultB'];
       const scopes=Array.from({length:12},(_,number)=>({id:'scope-'+number,title:'Topic '+number,
-        scope:'scope-'+number,kind:'scope',navigation:'module',status:'planned',area:number<6?'Algebra':'Topology'}));
-      const results=['resultA','resultB'].map((id,number)=>({id,title:id,scope:'scope-'+number*6,kind:'node',status:'planned',result:true}));
-      const index={nodes:[{id:'roadmap',scope:'roadmap',title:'Mathematics',status:'planned'},...scopes,...results],
+        scope:'scope-'+number,parent:'roadmap',kind:'scope',navigation:'module',status:'planned',area:number<6?'Algebra':'Topology'}));
+      const results=['resultA','resultB'].map((id,number)=>({id,title:id,scope:'scope-'+number*6,parent:'scope-'+number*6,kind:'node',status:'planned',result:true}));
+      const index={nodes:[{id:'roadmap',scope:'roadmap',parent:null,kind:'scope',title:'Mathematics',status:'planned'},...scopes,...results],
         relations:[['resultA','resultB',2,1]]};
       const payload={schema:'autoform-dag-view/v2',title:'Mathematics',palette:{planned:{label:'planned'}},
         nodes:scopes.map(node=>({...node,id:'scope:'+node.id,member_count:1,status_counts:[['planned',1]],
           layout:{width:232,height:116}})),edges:[{source:'scope:scope-0',target:'scope:scope-6',statement:2,proof:1}],
         view:{presentation:'atlas',breadcrumbs:[]},regions:[],present_statuses:['planned']};
-      const firstBundle={nodeId:fixture.entry,graph:payload,readingSource:{},dataURL:'https://example.test/dependencies.json'};
+      const firstBundle={nodeId:fixture.entry,scope:fixture.entry==='roadmap'?'roadmap':'scope-0',
+        graph:payload,readingSource:{},dataURL:'https://example.test/dependencies.json'};
       const navigation={getIndex(){events.push('index');return index;}};
       const host={querySelector(){return null;},classList:{add(){},remove(){},toggle(){}}};
       const window={location:{href:'https://example.test/roadmap/index.html',origin:'https://example.test'}};
@@ -373,10 +376,12 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
       eval(constants);
       const start=productionSource.indexOf('  function mount('),end=productionSource.indexOf('    function globalListen(',start);
       assert(start>=0&&end>start,'The real cold-mount boundary must exist');
-      const helpers=['scopeOverviewProjection','safeHref','graphAt','useIndex','requestWikiLinks','useWikiLinks','updateProjection','renderBreadcrumb','refreshReadingLabels','neighborhood','neighborIds','regionProjection',
-        'geometry','compactRegions'].map(original).join('\n');
+      const helpers=['scopeOverviewProjection','structuralScopeProjection','boundaryContextProjection','expandedGroupShelves',
+        'safeHref','graphAt','useIndex','requestWikiLinks','useWikiLinks','updateProjection','renderBreadcrumb','refreshReadingLabels',
+        'neighborhood','neighborIds','regionProjection','currentOverviewGroup','geometry','compactRegions',
+        'framingNodes','framingViewport','framingPadding','freeArea'].map(original).join('\n');
       const seams=`
-        function buildShell() {events.push('shell');family='sans-serif';dom$stage={clientWidth:900};
+        function buildShell() {events.push('shell');family='sans-serif';dom$stage={clientWidth:900,clientHeight:640};dom$inspector={offsetTop:0};
           dom$ctx={font:'11px sans-serif',measureText:text=>({width:String(text).length*8})};
           dom$search={};dom$breadcrumb={replaceChildren(){}};}
         function bindEvents() {events.push('bind');}
@@ -393,8 +398,20 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
           assert.strictEqual(sharedIndex,index,"Cold layout must use the router's validated index");
           assert.equal(ui$requestedNode,fixture.entry,'First fit must retain the canonical requested route');
           assert.deepEqual(data.nodes.map(node=>node.id).sort(),expected,'Raw scopes or an unrelated neighborhood reached layout');
-          const current=geometry(),verified=check(data,'lr');
-          assert.equal(normal(current),normal(verified),'Cold layout must run the production engine and clear-route oracle');
+          const current=geometry(),aspect=Math.round(dom$stage.clientWidth/dom$stage.clientHeight*10)/10;
+          const reduced=!ui$selected&&!data.nodes.some(node=>node._overviewGroup),dimensions=data.nodes.map(node=>({
+            ...node,width:compactRegions()?312:node.width,height:compactRegions()?96:node.height}));
+          const alternatives=['lr','tb'].map(direction=>({direction,
+            scene:layoutGraph(dimensions,data.edges,direction,aspect,data.$wikiEdges,reduced)}));
+          const chosen=alternatives.find(choice=>normal(choice.scene)===normal(current));
+          assert(chosen,'Cold layout must use one of the actual bounded orientation scenes');
+          // Two connected fixture nodes have no transitive edge to omit. The
+          // combined stroke must still conserve its original typed weights.
+          const edges=reduced?data.edges.map(edge=>({...edge,statement:edge.statement+edge.proof,proof:0})):data.edges;
+          check({nodes:dimensions,edges},chosen.direction,current);
+          assert.equal(current.$display.totalPairs,1);assert.equal(current.$display.totalRoutes,2);
+          if(reduced) {assert.equal(current.routes.length,1);assert.equal(current.routes[0].$statement,2);assert.equal(current.routes[0].$proof,1);}
+          else assert.equal(current.routes.length,2);
           events.push({phase,nodes:current.nodes.size,lanes:current.routes.length});
         }
         function fit() {record('fit');} function resize() {record('resize');}
@@ -459,15 +476,22 @@ def test_layout_replays_deterministically_after_input_permutation() -> None:
 def test_renderer_geometry_cache_changes_only_for_captured_geometry_inputs() -> None:
     _run("""
       var navigation={},mapAllowed=true,atlas=false,ui$area=null,ui$orientation='lr',family='sans-serif';
-      var dom$stage={clientWidth:760},dom$ctx={font:'12px sans-serif',measureText:text=>({width:text.length*8})};
-      var data=fixture,scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,sceneWiki,calls=0;
+      var dom$stage={clientWidth:760,clientHeight:640},dom$inspector={offsetTop:0};
+      var dom$ctx={font:'12px sans-serif',measureText:text=>({width:text.length*8})};
+      var window={matchMedia(){return {matches:false};}},document={activeElement:{dataset:{}}};
+      var data=fixture,scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,sceneWiki,sceneReduced,calls=0;
+      var ui$active=data.nodes,ui$selected=null,ui$overviewGroup=null,ui$transform={x:41,y:-73,scale:1.2};
       const actual=layoutGraph;layoutGraph=function(...args){calls++;return actual(...args);};
-      const first=geometry();assert.strictEqual(geometry(),first);assert.equal(calls,1);
-      var ui$transform={x:41,y:-73,scale:1.2},ui$selectedStatuses=new Set(['planned']);
-      assert.strictEqual(geometry(),first);assert.equal(calls,1);
-      ui$orientation='tb';assert.notStrictEqual(geometry(),first);assert.equal(calls,2);
-      data=JSON.parse(JSON.stringify(fixture));geometry();assert.equal(calls,3);
-      mapAllowed=false;assert.equal(geometry(),null);assert.equal(calls,3);
+      const first=geometry();assert.strictEqual(geometry(),first);assert.equal(calls,2);
+      var ui$selectedStatuses=new Set(['planned']);ui$transform.x+=40;
+      assert.strictEqual(geometry(),first);assert.equal(calls,2);
+      ui$orientation='tb';assert.notStrictEqual(geometry(),first);assert.equal(calls,4);
+      data=JSON.parse(JSON.stringify(fixture));geometry();assert.equal(calls,6);
+      ui$selected=data.nodes[1];const full=geometry();assert.equal(calls,8);
+      assert.equal(full.$display.reduced,false);assert.equal(full.routes.length,3);
+      ui$selected=null;const backbone=geometry();assert.equal(calls,10);assert.equal(backbone.routes.length,2);
+      assert.strictEqual(geometry(),backbone);assert.equal(calls,10);
+      mapAllowed=false;assert.equal(geometry(),null);assert.equal(calls,10);
     """, _graph(4, [(0, 1, 3, 1), (1, 2, 0, 5)]))
 
 

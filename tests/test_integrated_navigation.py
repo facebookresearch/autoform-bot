@@ -1004,7 +1004,7 @@ def test_results_restoration_renders_saved_page_before_restoring_scroll_and_focu
       let ui$filtersTouched,ui$area,ui$requestedNode,ui$selected,ui$selectedStatuses,ui$showIsolated,
         ui$mode='list',ui$listLimit=100,ui$relationIds,ui$outlineLimit,ui$direction,ui$query,ui$activeDirty,ui$transform;
       const host={classList:{toggle(){}}},records=new Map(),byId=new Map(),overlays=new Map();
-      let dom$inventoryRows=new Map(),dom$outlineToggle;
+      let dom$inventoryRows=new Map(),dom$outlineToggle,dom$shelves=null;
       const dom$search={value:''},dom$navigation={scrollTop:0},dom$readingBody={scrollTop:0},dom$inventoryScroll={scrollTop:0};
       const updateProjection=()=>{},renderNavigation=()=>{},setSheet=()=>{},resize=()=>{};
       const syncControls=()=>{},renderInspector=()=>{},schedule=()=>{};

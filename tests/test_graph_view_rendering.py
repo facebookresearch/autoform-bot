@@ -539,7 +539,17 @@ def test_rail_rows_show_a_status_swatch_and_a_lone_group_no_heading() -> None:
     script = _viewer_source()
 
     assert 'element("h2", "bp-outline-label", "Topics")' in script
-    assert 'node.scope === node.id && ["collection", "transparent", "source"].indexOf(node.navigation) < 0' in script
+    from tests.test_qa_outline_navigation import _PROJECTION_PEERS, _run
+
+    _run(r"""
+      const root=scope('roadmap',null),branch=scope('branch','roadmap'),child=scope('child','branch'),
+        zero=page('chapter-zero','roadmap'),source=scope('source','roadmap',{navigation:'source'});
+      const nodes=[root,child,zero,source,branch],before=JSON.stringify(nodes);
+      const tree=outlineProjection(nodes,'branch','branch',120);
+      assert.deepEqual(tree.entries.map(entry=>entry.node.id),['chapter-zero','branch','child']);
+      assert.equal(tree.entries.find(entry=>entry.node===child).depth,1);
+      assert.strictEqual(tree.root,root);assert.equal(JSON.stringify(nodes),before);
+    """, ["outlineProjection"], _PROJECTION_PEERS)
     assert 'link.title = node.title; link.dataset.navigationNodeId = node.id;' in script
     assert "function renderNavigation() {" in script and "renderOutline()" in script
     assert "bp-dag-navigation-group" not in script
@@ -551,8 +561,17 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
     script = _viewer_source()
     style = dag_viewer.render_container("graph.json")
 
-    assert 'element("span", "bp-dag-node-meta", (node._region || node._overviewGroup) ? plural(node._topics, "topic", "topics")' in script
-    assert ': scopeMeta || statusLabel(node.status))' in script
+    from tests.test_qa_outline_navigation import _OUTLINE_PEERS, _run
+
+    _run(r"""
+      function meta(node){const control=makeNodeControl(node);return control.all().find(child=>child.className==='bp-dag-node-meta').textContent;}
+      const topic={id:'scope:internal-id',kind:'scope',title:'Authored topic',status:'planned',member_count:4};
+      assert.equal(meta(topic),'4 items');
+      assert.equal(meta({...topic,id:'boundary:private-id',kind:'boundary'}),'External topic');
+      assert.equal(meta({...topic,id:'private-context',kind:'boundary',_overviewGroup:'needed',_topics:3}),'3 external topics');
+      assert.equal(meta({...topic,id:'private-region',_region:'Authored area',_topics:2}),'2 topics · 4 items');
+      assert.equal(meta({...topic,id:'private-result',kind:'node'}),'Planned');
+    """, ["element", "button", "makeNodeControl", "statusLabel"], _OUTLINE_PEERS + "\nvar atlas=false,palette={planned:{label:'Planned'}};\n")
     assert 'element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (node.area ? " · " + node.area : ""))' in script
     assert 'element("span", "bp-dag-result-meta", match.node.area || statusLabel(match.node.status))' in script
     for gone in ("bp-dag-node-id", "bp-dag-inventory-id", "bp-dag-result-id"):
@@ -781,7 +800,19 @@ def test_explorer_labels_use_the_site_family_and_remain_readable_at_initial_scal
     assert len(sizes) >= 3 and min(sizes) * .9 >= 11
     painter = script.split("function drawRoute(", 1)[1].split("function updateOverlays(", 1)[0]
     assert "fillText" not in painter and "measureText" not in painter
-    assert 'readableFloor = .9;' in script
+    from tests.test_integrated_dag_layout import _run
+
+    _run(r"""
+      eval(productionSource.slice(productionSource.indexOf('  var NODE_W ='),productionSource.indexOf('  var clients =')));
+      eval(productionSource.slice(productionSource.indexOf('  var clamp ='),productionSource.indexOf('  function element(')));
+      const frame=eval('('+original('sceneFrame')+')');
+      const box={x:0,y:0,w:1000,h:100},scene={nodes:new Map([['actual',box]])};
+      const before=JSON.stringify(Array.from(scene.nodes));
+      const measured=frame(scene,['actual'],{left:0,right:800,top:0,height:400},{side:0,top:0,bottom:0});
+      assert.equal(measured.fitted,.8);assert.equal(measured.scale,.9);assert.equal(measured.cropped,true);
+      assert.equal(measured.contained,0,'Readable cropping must not claim an oversized card fits');
+      assert.equal(JSON.stringify(Array.from(scene.nodes)),before);
+    """, {})
 
 
 def _contrast(first: str, second: str) -> float:
