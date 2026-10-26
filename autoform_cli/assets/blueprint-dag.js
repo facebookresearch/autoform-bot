@@ -1107,14 +1107,17 @@
       readingReady = readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || (isCurrent && !isCurrent())) { resolve(); return; }
         var target = bundle.anchor && document.getElementById(bundle.anchor);
-        if (target && dom$readingBody.contains(target)) {
-          target.classList.add("bp-reading-current");
+        var current = target && dom$readingBody.contains(target) ? target : null;
+        if (current) {
+          target.classList.add("bp-reading-current"); target.setAttribute("aria-current", "true");
           // The statement's own relations list replaces a separate strip, so it opens with the selection.
           var relations = target.querySelector(".bp-dependencies"); if (relations) relations.open = true;
           if (!bundle.snapshot) dom$readingBody.scrollTop += target.getBoundingClientRect().top - dom$readingBody.getBoundingClientRect().top - 24;
         }
         if (bundle.focus && !mapRequested && dom$readingBody && !bundle.snapshot) {
-          var heading = dom$readingBody.querySelector("h1"); if (heading) { heading.tabIndex = -1; heading.focus({preventScroll: true}); }
+          // Focus lands on the statement the reader chose, which the reader has just scrolled to, not on the page title above it.
+          var heading = current && current.querySelector(".bp-thmheading") || current || dom$readingBody.querySelector("h1");
+          if (heading) { heading.tabIndex = -1; heading.focus({preventScroll: true}); }
         } else if (bundle.focus && mapRequested && !bundle.snapshot) {
           var control = dom$nodeLayer.querySelector('.bp-dag-node[tabindex="0"]'); if (control) control.focus({preventScroll: true});
         }

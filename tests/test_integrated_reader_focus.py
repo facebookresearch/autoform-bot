@@ -94,15 +94,17 @@ async function frame() {
   for (let n = 0; n < 5; n++) await Promise.resolve();
 }
 function bundle(id, snapshot, focus = true) {
-  const heading = new Element('h1'), target = new Element('article', 'main'), source = new Element('div');
-  target.dataset.autoformNodeId = id; source.replaceChildren(heading, target);
+  // A routed statement takes focus on its own heading, which the reader has scrolled to, rather than the page's h1 above it.
+  // The stub's querySelector matches tag names, so the statement heading is named by its selector.
+  const pageHeading = new Element('h1'), heading = new Element('.bp-thmheading'), target = new Element('article', 'main'), source = new Element('div');
+  target.dataset.autoformNodeId = id; target.replaceChildren(heading); source.replaceChildren(pageHeading, target);
   const version = currentVersion;
   // A normal two-result scope is not an authored-area navigation overview.
   // This seam supplies graph context only; callbacks remain verbatim production source.
   return {nodeId: id, scope: 'chapter', anchor: 'main', title: 'Complete ' + id, readingSource: source,
     graph: {schema: 'autoform-dag-view/v2', title: 'Scope ' + id, nodes: Array.from(byId.values()), edges: [],
       palette, view: {kind: 'chapter', presentation: 'dag'}},
-    snapshot, focus, isCurrent: () => currentVersion === version, heading, target};
+    snapshot, focus, isCurrent: () => currentVersion === version, heading, pageHeading, target};
 }
 """
 
@@ -451,5 +453,6 @@ def test_map_intent_on_a_small_pure_overview_never_focuses_the_inert_reader() ->
       assert.equal(ui$overviewOnly,false,'Explicit reading intent still opens the source');
       assert.equal(host.classList.contains('bp-dag-sheet-open'),true);
       await frame();await readingReady;
-      assert.equal(document.activeElement,reading.heading);
+      // With no statement to land on, the page's own title takes focus.
+      assert.equal(document.activeElement,reading.pageHeading);
     """)
