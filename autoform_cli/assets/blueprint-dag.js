@@ -2225,22 +2225,24 @@
       if (kind && (node.title || "").indexOf(kind) === 0) kind = "";
       // A scope overview's group card is an area card, including its bucket of topics with no area.
       var area = node._region || node._overviewGroup;
-      var lead = area ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, tail = scopeMeta || statusLabel(node.status);
-      var meta = area || !lead ? tail : lead + " · " + tail;
+      var lead = area ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, said = scopeMeta || statusLabel(node.status);
+      // A finished statement's fill already says so, so its line keeps a ✓ as the cue that is not colour; open states keep their words.
+      var done = !area && !scopeMeta && node.status === "fully_proved", tail = done ? "✓" : said;
+      var meta = area || !lead ? tail : lead + (done ? " " : " · ") + tail;
       // A boundary's colour is the only place its linked results' statuses show, so a screen reader hears them as words.
       var linked = node.kind === "boundary" && count[1] ? ", " + (count[0] === count[1] ? count[1] === 1 ? "fully proved" : "all fully proved" :
         num(count[0]) + " of " + num(count[1]) + " fully proved") : "";
       // A card is heard in words rather than glyphs: commas for its separators, an area card's topic count and members, and its
       // area only when that is not its own title.
-      var spoken = area ? [plural(node._topics, "topic", "topics"), tail].concat(node.summary ? ["including " + String(node.summary).split(" · ").join(", ")] : []) :
-        lead ? [lead, tail] : [tail];
+      var spoken = area ? [plural(node._topics, "topic", "topics"), said].concat(node.summary ? ["including " + String(node.summary).split(" · ").join(", ")] : []) :
+        lead ? [lead, said] : [said];
       control.setAttribute("aria-label", [node.title].concat(node.area && node.area !== node.title ? [node.area] : [], spoken).join(", ") + linked +
         (node.isolated ? ", not linked to anything on this map" : ""));
       var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : control;
       content.appendChild(element("span", "bp-dag-node-title", node.title));
       // The kind word or topic count gives way first, so the status or count the line is there to show stays whole.
       var line = content.appendChild(element("span", "bp-dag-node-meta"));
-      if (lead) { line.appendChild(element("span", "", lead)); line.appendChild(element("span", "", " · ")); }
+      if (lead) { line.appendChild(element("span", "", lead)); line.appendChild(element("span", "", done ? " " : " · ")); }
       line.appendChild(element("span", "", tail));
       // An area's summary leads with its topic count, which the stylesheet then drops from the meta.
       if (area && node.summary) content.appendChild(element("span", "bp-dag-node-summary", lead + ": " + node.summary));

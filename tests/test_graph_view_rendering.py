@@ -645,9 +645,11 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
     script = _viewer_source()
     style = dag_viewer.render_container("graph.json")
 
-    assert 'var lead = area ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, tail = scopeMeta || statusLabel(node.status);' in script
-    assert 'var meta = area || !lead ? tail : lead + " · " + tail;' in script
-    assert 'if (lead) { line.appendChild(element("span", "", lead)); line.appendChild(element("span", "", " · ")); }' in script
+    assert 'var lead = area ? plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, said = scopeMeta || statusLabel(node.status);' in script
+    # A finished statement keeps a ✓ after its kind rather than the words its fill already says; the label still says them.
+    assert 'var done = !area && !scopeMeta && node.status === "fully_proved", tail = done ? "✓" : said;' in script
+    assert 'var meta = area || !lead ? tail : lead + (done ? " " : " · ") + tail;' in script
+    assert 'if (lead) { line.appendChild(element("span", "", lead)); line.appendChild(element("span", "", done ? " " : " · ")); }' in script
     # An area card's summary takes the topic count, and the meta keeps "2,070 of 2,485 fully proved" whole beside it.
     assert 'element("span", "bp-dag-node-summary", lead + ": " + node.summary)' in script
     assert ".bp-dag-viewer:not(.bp-dag-compact-regions) .bp-dag-node:has(.bp-dag-node-summary) .bp-dag-node-meta > span:not(:last-child) { display: none; }" in dag_viewer._STYLE
