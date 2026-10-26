@@ -2461,6 +2461,12 @@
       } else {
         dom$inspectorInner.removeAttribute("inert"); dom$inspectorInner.removeAttribute("aria-hidden");
       }
+      // A phone's full reader covers the map and the list, so they leave the tab order and the accessibility tree while it does.
+      var main = host.querySelector && host.querySelector(".bp-dag-main");
+      if (main && navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-full")) {
+        if (main.contains(document.activeElement)) dom$sheetHandle.focus();
+        main.setAttribute("inert", "");
+      } else if (main) main.removeAttribute("inert");
       if (navigation) {
         if (!dom$pageHeading) { dom$pageHeading = element("h1", "bp-dag-sr-only"); host.prepend(dom$pageHeading); }
         dom$pageHeading.textContent = currentBundle && currentBundle.title || data.title;
