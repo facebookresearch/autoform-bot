@@ -1072,13 +1072,9 @@ def _render_pages(
             target.write_bytes(content)
         report.pages += 1
 
-    # One reading order for Next up, the previous/next strip, SUMMARY.md and
-    # the search index. A chapter with no narrative page is written later.
-    book_pages = _book_page_order(
-        blueprint, destination, graph, planned={page.resolve() for page in group_pages.values()}
-    )
+    # One reading order for statement numbers, Next up and the search index.
     order = _reading_order(
-        graph, targets, book_pages, _card_positions(
+        graph, targets, _reading_pages(blueprint, destination, graph), _card_positions(
             groups, group_pages, graph=graph, blueprint=blueprint, node_sources=node_sources,
             targets=targets, typed=site.typed,
         ),
@@ -1141,6 +1137,11 @@ def _render_pages(
         report.linked += linked
         report.unresolved.extend(unresolved)
 
+    book_pages = _book_page_order(
+        blueprint,
+        destination,
+        graph,
+    )
     # The landing page is a dashboard, not chapter one. Previous/next belongs
     # to the book, so the strip starts at the contents page.
     _append_book_navigation([p for p in book_pages if p != overview])
@@ -1904,20 +1905,57 @@ def _group_page(group: str) -> Path:
     )
 
 
-def _book_page_order(
-    blueprint: Path, destination: Path, graph: Graph, *, planned: Collection[Path] = ()
-) -> list[Path]:
-    """Follow authored container links to recover the book's page order,
-    among the pages already written or ``planned`` (resolved)."""
-    ordered: list[Path] = []
-    seen_outputs: set[Path] = set()
-    visited_sources: set[Path] = set()
+def _book_sources(graph: Graph) -> dict[Path, str]:
+    """The book's pages, containers and narrative articles, by resolved source."""
     containers = _containers(graph)
-    book_sources = {
-        node.path.resolve()
+    return {
+        node.path.resolve(): node.id
         for node in graph.nodes.values()
         if node.id in containers or (not node.formalizable and node.catalog is None)
     }
+
+
+def _book_links(source: Path, blueprint: Path, book_sources: Collection[Path]) -> list[Path]:
+    """The book pages *source* links outside code fences, in the order it links them."""
+    linked_sources: list[Path] = []
+
+    def collect(line: str) -> str:
+        for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
+            raw = line[match.start("target") : match.end("target")]
+            bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
+            path = bare.partition("#")[0].partition("?")[0]
+            try:
+                if not path or urlsplit(path).scheme or path.startswith("/"):
+                    continue
+                candidate = (source.parent / unquote(path)).resolve()
+                candidate_relative = candidate.relative_to(blueprint)
+            except ValueError:  # a target outside the vault, an unbalanced IPv6 bracket, or a decoded NUL
+                continue
+            if (
+                not candidate_relative.parts
+                or candidate_relative.parts[0] != "roadmap"
+                or candidate.suffix.lower() != ".md"
+            ):
+                continue
+            if candidate not in book_sources:
+                continue
+            linked_sources.append(candidate)
+        return line
+
+    try:
+        text = source.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return []  # the site leaves out a page that is not UTF-8, as check warns
+    _outside_fences(text, collect)
+    return linked_sources
+
+
+def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
+    """Follow authored container links to recover the book's page order."""
+    ordered: list[Path] = []
+    seen_outputs: set[Path] = set()
+    visited_sources: set[Path] = set()
+    book_sources = _book_sources(graph)
     pending = [blueprint / "README.md"]
     while pending:
         source = pending.pop().resolve()
@@ -1926,75 +1964,57 @@ def _book_page_order(
         except ValueError:
             continue
         output = (destination / relative).resolve()
-        if (output in planned or output.is_file()) and output not in seen_outputs:
+        if output.is_file() and output not in seen_outputs:
             seen_outputs.add(output)
             ordered.append(output)
         if source in visited_sources or not source.is_file():
             continue
         visited_sources.add(source)
-        linked_sources: list[Path] = []
+        pending.extend(reversed(_book_links(source, blueprint, book_sources)))
+    return ordered
 
-        def collect(line: str) -> str:
-            for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
-                raw = line[match.start("target") : match.end("target")]
-                bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
-                path = bare.partition("#")[0].partition("?")[0]
-                try:
-                    if not path or urlsplit(path).scheme or path.startswith("/"):
-                        continue
-                    candidate = (source.parent / unquote(path)).resolve()
-                    candidate_relative = candidate.relative_to(blueprint)
-                except ValueError:  # a target outside the vault, an unbalanced IPv6 bracket, or a decoded NUL
-                    continue
-                if (
-                    not candidate_relative.parts
-                    or candidate_relative.parts[0] != "roadmap"
-                    or candidate.suffix.lower() != ".md"
-                ):
-                    continue
-                if candidate not in book_sources:
-                    continue
-                linked_sources.append(candidate)
-            return line
 
-        try:
-            text = source.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue  # the site leaves out a page that is not UTF-8, as check warns
-        _outside_fences(text, collect)
-        pending.extend(reversed(linked_sources))
+def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
+    """The published book pages in reading order: down the containment tree
+    from the landing page, each page's children in the order it links them,
+    then the ones it does not link. A link to a page elsewhere in the tree,
+    such as a landing-page shortcut to a deep milestone, does not move it."""
+    book_sources = _book_sources(graph)
+    children: dict[str | None, list[str]] = {}
+    for node_id in status.topological_order(graph):
+        if graph.nodes[node_id].path.resolve() in book_sources:
+            children.setdefault(graph.nodes[node_id].parent, []).append(node_id)
+    ordered: list[Path] = []
+    pending: list[tuple[Path, str | None]] = [(blueprint / "README.md", None)]
+    while pending:
+        source, parent = pending.pop()
+        output = destination / source.relative_to(blueprint)
+        if parent is not None and output.is_file():
+            ordered.append(output.resolve())
+        own = children.get(parent, [])
+        linked = [book_sources[path] for path in _book_links(source, blueprint, book_sources)] if source.is_file() else []
+        reading = dict.fromkeys([*(node_id for node_id in linked if node_id in own), *own])
+        pending.extend((graph.nodes[node_id].path, node_id) for node_id in reversed(reading))
     return ordered
 
 
 def _reading_order(
     graph: Graph,
     targets: Mapping[str, tuple[Path, str]],
-    book_pages: list[Path],
-    positions: Mapping[str, int] | None = None,
+    pages: list[Path],
+    positions: Mapping[str, int],
 ) -> list[str]:
-    """Every node in the order the book reads it: by the rank of its page in
-    ``book_pages``, or its nearest ancestor's when its page is not there,
-    then by its card's place on the page (``positions``; a page's own
-    article comes first), then in dependency order."""
-    page_rank = {page.resolve(): rank for rank, page in enumerate(book_pages)}
-    ranks: dict[str, int] = {}
+    """Every node in the order the book reads it: by its page's place in
+    ``pages``, then by its card's place on that page (``positions``; a page's
+    own article comes first), then in dependency order. Nodes on a page not
+    in ``pages`` follow, one page at a time."""
+    page_rank = {page: rank for rank, page in enumerate(pages)}
 
-    def rank(node_id: str | None) -> int:
-        chain: list[str] = []
-        while node_id in graph.nodes and node_id not in ranks:
-            target = targets.get(node_id)
-            found = page_rank.get(target[0].resolve()) if target else None
-            if found is not None:
-                ranks[node_id] = found
-                break
-            chain.append(node_id)
-            node_id = graph.nodes[node_id].parent
-        found = ranks.get(node_id, len(page_rank)) if node_id is not None else len(page_rank)
-        ranks.update(dict.fromkeys(chain, found))
-        return found
+    def key(node_id: str) -> tuple[int, str, int]:
+        page = targets[node_id][0].resolve() if node_id in targets else None
+        return page_rank.get(page, len(page_rank)), str(page or ""), positions.get(node_id, -1)
 
-    places = positions or {}
-    return sorted(status.topological_order(graph), key=lambda node_id: (rank(node_id), places.get(node_id, -1)))
+    return sorted(status.topological_order(graph), key=key)
 
 
 def _append_book_navigation(pages: list[Path]) -> None:
@@ -2918,14 +2938,23 @@ def _render_chapter(
     chapter = _place_environments(
         narrative, lead, slots, summary=chapter_summary, environments=environments, protect=not typed,
     )
+    for heading, section in _fallback_sections(node_ids, slots, graph):
+        if section:
+            chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(environments[n] for n in section)
+    return chapter.rstrip() + "\n", linked, unresolved
+
+
+def _fallback_sections(
+    node_ids: Iterable[str], slots: Mapping[int, str], graph: Graph
+) -> tuple[tuple[str, list[str]], ...]:
+    """The sections after the narrative for cards no authored slot holds, in page order."""
     placed = set(slots.values())
     remaining = [node_id for node_id in node_ids if node_id not in placed]
     # A catalog inventories Lean that already exists, so it is no formalization target.
-    for heading, catalog in (("Additional formalization targets", None), ("Module inventories", "module")):
-        section = [environments[node_id] for node_id in remaining if graph.nodes[node_id].catalog == catalog]
-        if section:
-            chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(section)
-    return chapter.rstrip() + "\n", linked, unresolved
+    return tuple(
+        (heading, [node_id for node_id in remaining if graph.nodes[node_id].catalog == catalog])
+        for heading, catalog in (("Additional formalization targets", None), ("Module inventories", "module"))
+    )
 
 
 def _card_positions(
@@ -2939,7 +2968,7 @@ def _card_positions(
     typed: Collection[Path],
 ) -> dict[str, int]:
     """Each card's place on its chapter page, as :func:`_render_chapter` lays
-    it out: authored slots first, then the fallback sections in order."""
+    it out: authored slots first, then the fallback sections."""
     positions: dict[str, int] = {}
     for group, node_ids in groups.items():
         page = group_pages[group]
@@ -2951,14 +2980,8 @@ def _card_positions(
             if page.is_file() and page not in typed
             else {}
         )
-        placed = [slots[index] for index in sorted(slots)]
-        taken = set(placed)
-        rest = [node_id for node_id in node_ids if node_id not in taken]
-        cards = [
-            *placed,
-            *(node_id for node_id in rest if graph.nodes[node_id].catalog is None),
-            *(node_id for node_id in rest if graph.nodes[node_id].catalog is not None),
-        ]
+        cards = [slots[index] for index in sorted(slots)]
+        cards += (node_id for _, section in _fallback_sections(node_ids, slots, graph) for node_id in section)
         positions.update((node_id, position) for position, node_id in enumerate(cards))
     return positions
 

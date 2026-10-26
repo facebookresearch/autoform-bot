@@ -3128,6 +3128,7 @@ def test_the_search_index_follows_the_book_order(tmp_path: Path) -> None:
     ids = [node["id"] for node in index["nodes"]]
     scopes = list(dict.fromkeys(node["scope"] for node in index["nodes"] if node["scope"] != "roadmap"))
     assert scopes == ["zeta", "alpha", "irrationality-proof"]
+    assert ids.index("zeta/second") < ids.index("zeta/first")
     # Reordering the nodes keeps every relation on the same two articles.
     graph = load_graph(project / "blueprint")
     assert {tuple(row[:2]) for row in _decoded_relations(index)} == {
@@ -3139,20 +3140,50 @@ def test_the_search_index_follows_the_book_order(tmp_path: Path) -> None:
     assert chapters[-1] == "irrationality-proof"
 
 
-def test_statement_numbers_rise_down_each_page_and_across_chapters(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "variant",
+    ("as-written", "landing-shortcut", "only-zeta-linked", "no-landing-page", "unlinked-scope", "unlisted-result"),
+)
+def test_statement_numbers_rise_down_each_page_and_across_chapters(tmp_path: Path, variant: str) -> None:
+    """A landing-page shortcut does not reorder the book. A page or result
+    its parent does not list follows the listed ones, as one run."""
     project = _book_order_project(tmp_path)
+    blueprint = project / "blueprint"
+    roadmap = blueprint / "roadmap"
+    pages = ["zeta", "alpha", "irrationality-proof"]
+    theorem = "---\ndeclaration: theorem\n---\n\n# {}\n\nA result.\n"
+    if variant == "landing-shortcut":
+        (blueprint / "README.md").write_text(
+            "---\nkind: blueprint\n---\n\n# Overview\n\nNew: [the proof](roadmap/irrationality-proof/README.md).\n\n"
+            "- [Roadmap](roadmap/README.md)\n",
+            encoding="utf-8",
+        )
+    elif variant == "only-zeta-linked":
+        (roadmap / "README.md").write_text("---\n---\n\n# Roadmap\n\n- [Zeta](zeta/README.md)\n", encoding="utf-8")
+    elif variant == "no-landing-page":
+        (blueprint / "README.md").unlink()
+    elif variant == "unlinked-scope":
+        (roadmap / "zeta/beta").mkdir()
+        (roadmap / "zeta/beta/README.md").write_text(
+            "---\n---\n\n# Beta\n\n- [B2](b2.md)\n- [B1](b1.md)\n", encoding="utf-8"
+        )
+        for name in ("b1", "b2"):
+            (roadmap / "zeta/beta" / f"{name}.md").write_text(theorem.format(name), encoding="utf-8")
+        pages.insert(1, "zeta/beta")
+    elif variant == "unlisted-result":
+        (roadmap / "zeta/third.md").write_text(theorem.format("Zeta third"), encoding="utf-8")
     out = tmp_path / "out"
 
-    render_site(project / "blueprint", out, lean_root=project)
+    render_site(blueprint, out, lean_root=project)
 
     numbers = [
         int(number)
-        for chapter in ("zeta", "alpha", "irrationality-proof")
+        for page in pages
         for number in re.findall(
-            r'class="bp-thmlabel">(\d+)<', (out / "roadmap" / chapter / "README.md").read_text(encoding="utf-8")
+            r'class="bp-thmlabel">(\d+)<', (out / "roadmap" / page / "README.md").read_text(encoding="utf-8")
         )
     ]
-    assert numbers == list(range(1, 7))
+    assert numbers == list(range(1, 7 + (variant == "unlisted-result") + 2 * (variant == "unlinked-scope")))
 
 
 def test_a_root_article_and_search_share_its_generated_canonical_book_route(tmp_path: Path) -> None:
