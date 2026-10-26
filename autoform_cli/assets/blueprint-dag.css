@@ -81,7 +81,8 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-button:disabled { opacity: .45; cursor: default; }
 /* One solid ring for every control, 3.9:1 or more on every surface; rows draw it inside, where the rail or list would clip it, and cards outside their selection ring. */
 .bp-dag-viewer :is(button, a, [tabindex]):focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }
-.bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body):focus-visible { outline-offset: -2px; }
+/* Controls inside a box that clips draw their ring inside it: the reader's handle sits in a pane that hides overflow. */
+.bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body, .bp-dag-sheet-handle):focus-visible { outline-offset: -2px; }
 .bp-dag-viewer .bp-dag-node:focus-visible { outline-offset: 4px; }
 .bp-dag-zoom { display: inline-flex; flex: none; gap: 2px; padding: 2px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); background: var(--dag-bg); }
 .bp-dag-zoom .bp-dag-button { min-height: 30px; padding: 4px 10px; border: 0; border-radius: var(--dag-radius-row); background: transparent; color: var(--dag-muted); }
@@ -281,7 +282,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li { min-width: 4em; }
 .bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:has(.bp-dag-sr-only) { flex: none; min-width: 0; }
 .bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :last-child) { max-width: 24ch; }
-.bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li:has(> a) { display: flex; align-items: center; }
+/* A crumb with a link lets its focus ring out; the link still truncates its own text. */
+.bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li:has(> a) { display: flex; align-items: center; overflow: visible; }
 .bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li > a { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li::before { flex: none; }
 .bp-dag-integrated .bp-dag-book { grid-area: auto; margin: 0 18px 0 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }

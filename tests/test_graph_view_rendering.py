@@ -1015,7 +1015,7 @@ def test_selection_focus_and_the_current_statement_do_not_borrow_status_blue() -
     assert "color-mix(in srgb, var(--dag-link) 45%" not in style and "52%" not in style
     assert [rule.split(" {")[0] for rule in style.splitlines() if rule.startswith(".bp-dag-viewer") and ":focus-visible {" in rule] == [
         ".bp-dag-viewer :is(button, a, [tabindex]):focus-visible",
-        ".bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body):focus-visible",
+        ".bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body, .bp-dag-sheet-handle):focus-visible",
         ".bp-dag-viewer .bp-dag-node:focus-visible",
     ]
     assert ":focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }" in style
