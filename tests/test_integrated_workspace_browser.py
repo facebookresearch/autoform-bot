@@ -817,7 +817,11 @@ def test_far_right_genuine_math_menu_and_hover_submenu_stay_inside_the_workspace
         assert root["x"] + root["width"] <= width
         assert root["y"] + root["height"] <= page.viewport_size["height"]
         show = page.get_by_role("menuitem", name=re.compile(r"^Show Math As(?:\s*\u25ba)?$"))
-        show.hover()
+        # The right-click can leave the pointer over another item, such as Math Settings, whose wide submenu opens at once and,
+        # with no room to its right at 390px, covers this item's middle. Its far end stays clear.
+        item = show.bounding_box()
+        assert item is not None
+        show.hover(position={"x": item["width"] - 6, "y": item["height"] / 2})
         command = page.get_by_role("menuitem", name="TeX Commands", exact=True)
         playwright.expect(command).to_be_visible()
         assert menus.count() >= 2
