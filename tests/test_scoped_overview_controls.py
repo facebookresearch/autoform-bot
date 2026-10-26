@@ -69,6 +69,7 @@ function clickPeer(link,settings={}) {
   (link.listeners.get('click')||[]).forEach(callback=>callback(event));return event;
 }
 const host=peer(),dom$body=peer(),dom$sheetHandle=peer('button'),dom$breadcrumb=peer('nav');
+var scene=null;
 const dom$mapContext=peer(),dom$mapKey=peer(),dom$isolated=peer('input'),dom$filterSummary=peer('button');
 const dom$graphMode=peer('button'),dom$listMode=peer('button'),dom$sourcesMode=peer('button');
 const dom$stage=Object.assign(peer(),{clientWidth:900,clientHeight:700}),dom$inventory=peer(),inventoryHeading=peer('h2');

@@ -2207,6 +2207,9 @@
       if (!mapAllowed) return null;
       var compact = compactRegions(), aspect = dom$stage.clientWidth / Math.max(1, dom$stage.clientHeight);
       aspect = Math.round((Number.isFinite(aspect) && aspect > 0 ? clamp(aspect, .25, 4) : 1.4) * 10) / 10;
+      // A phone's full reader covers the map and frees the toolbar's height, which changes the stage's shape. setSheet holds
+      // the scene, so the peek or half finds every card where it was rather than re-laid out for a map no one could see.
+      if (scene && sceneData === data && scene.$held) aspect = sceneAspect;
       var reduced = !ui$selected && !data.nodes.some(function (node) { return node.kind !== "boundary" && node._overviewGroup; });
       if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family || sceneAspect !== aspect || sceneWiki !== data.$wikiEdges || sceneReduced !== reduced) {
         var anchor = typeof document !== "undefined" && document.activeElement && document.activeElement.dataset &&
@@ -3070,6 +3073,7 @@
       var closed = host.classList.contains("bp-dag-sheet-open") && !open;
       var top = dom$body.offsetTop; host.classList.toggle("bp-dag-sheet-open", Boolean(open));
       host.classList.toggle("bp-dag-sheet-full", open > 1 || open === true && host.classList.contains("bp-dag-sheet-full"));
+      if (scene) scene.$held = host.classList.contains("bp-dag-sheet-full");
       host.classList.toggle("bp-dag-has-selection", Boolean(selected));
       ui$transform.y += top - dom$body.offsetTop; schedule();
       dom$sheetHandle.setAttribute("aria-expanded", String(Boolean(open)));

@@ -491,7 +491,10 @@ def test_renderer_geometry_cache_changes_only_for_captured_geometry_inputs() -> 
       assert.equal(full.$display.reduced,false);assert.equal(full.routes.length,3);
       ui$selected=null;const backbone=geometry();assert.equal(calls,10);assert.equal(backbone.routes.length,2);
       assert.strictEqual(geometry(),backbone);assert.equal(calls,10);
-      mapAllowed=false;assert.equal(geometry(),null);assert.equal(calls,10);
+      // A phone's full reader frees the toolbar's height over a covered map; a held scene keeps its layout for the way back.
+      backbone.$held=true;dom$stage.clientHeight=900;assert.strictEqual(geometry(),backbone);assert.equal(calls,10);
+      backbone.$held=false;assert.notStrictEqual(geometry(),backbone);assert.equal(calls,12);
+      mapAllowed=false;assert.equal(geometry(),null);assert.equal(calls,12);
     """, _graph(4, [(0, 1, 3, 1), (1, 2, 0, 5)]))
 
 
