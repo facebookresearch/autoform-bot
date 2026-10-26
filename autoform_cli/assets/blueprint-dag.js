@@ -2024,7 +2024,9 @@
     // At rest a link is a full grey line; a selection draws its prerequisites in the link blue and its dependents in the text colour.
     function edgeStyle(ctx, role) {
       var dark = isDark(); ctx.globalAlpha = role ? 1 : .08; ctx.lineWidth = role > 0 ? 2.5 : 1.5;
-      ctx.strokeStyle = ctx.fillStyle = role > 1 ? dark ? "#E4E6EB" : "#1C1E21" : role > 0 ? dark ? "#2D88FF" : "#0064E0" : dark ? "#A8B0BB" : "#8A8D91";
+      // A lit link takes the text colour whichever way it points, and its arrowheads say which: blue is "ready to prove".
+      // A resting light link is #85888C, 3.17:1 on the light map, where #8A8D91 fell just under 3:1.
+      ctx.strokeStyle = ctx.fillStyle = role > 0 ? dark ? "#E4E6EB" : "#1C1E21" : dark ? "#A8B0BB" : "#85888C";
     }
     // Only a lit link names its count, in words on a pill in the map colour.
     function pill(ctx, count, x, y, scale) {

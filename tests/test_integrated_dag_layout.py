@@ -442,8 +442,9 @@ def test_lit_links_take_two_accents_and_name_their_count_in_words_only_when_lit(
       assert.deepEqual([edgeRole(null,'a','d'),edgeRole(spotlight,'a','s'),edgeRole(spotlight,'s','d'),edgeRole(spotlight,'a','d')],[-1,1,2,0]);
       const styles=()=>[-1,0,1,2].map(role=>{const ctx=fake();edgeStyle(ctx,role);
         assert.equal(ctx.fillStyle,ctx.strokeStyle);return [ctx.globalAlpha,ctx.lineWidth,ctx.strokeStyle];});
-      assert.deepEqual(styles(),[[1,1.5,'#8A8D91'],[.08,1.5,'#8A8D91'],[1,2.5,'#0064E0'],[1,2.5,'#1C1E21']]);
-      dark=true;assert.deepEqual(styles().map(style=>style[2]),['#A8B0BB','#A8B0BB','#2D88FF','#E4E6EB']);dark=false;
+      // Lit links take the text colour both ways (blue is a status colour), and a resting light link reaches 3:1 on the map.
+      assert.deepEqual(styles(),[[1,1.5,'#85888C'],[.08,1.5,'#85888C'],[1,2.5,'#1C1E21'],[1,2.5,'#1C1E21']]);
+      dark=true;assert.deepEqual(styles().map(style=>style[2]),['#A8B0BB','#A8B0BB','#E4E6EB','#E4E6EB']);dark=false;
       // Only the painter dashes a proof route, scaled with the map; the style sets no dash.
       const plain=fake();edgeStyle(plain,-1);assert.deepEqual(plain.calls,[]);
       // The engine reserves no label boxes; the painter finds the pill's place on the route itself.
@@ -461,7 +462,7 @@ def test_lit_links_take_two_accents_and_name_their_count_in_words_only_when_lit(
         const lit=pair.map(route=>{const ctx=fake();drawPill(ctx,drawRoute(ctx,route,1,route.kind==='proof'?1:-1),[]);
           assert.equal(ctx.calls.find(call=>call[0]==='stroke')[2],(route.strength+1)*scale);
           const texts=ctx.calls.filter(call=>call[0]==='text');assert.equal(texts.length,1);
-          assert.deepEqual(texts[0].slice(1,4),[route.count+' links','600 '+13*scale+'px sans-serif','#0064E0']);return texts[0];});
+          assert.deepEqual(texts[0].slice(1,4),[route.count+' links','600 '+13*scale+'px sans-serif','#1C1E21']);return texts[0];});
         assert(Math.abs(lit[0][5]-lit[1][5])>=20*scale,'Statement and proof pills stack apart');
         const ctx=fake();assert.equal(drawRoute(ctx,single,2,0),null);
         assert(!ctx.calls.some(call=>call[0]==='text'),'A single link needs no count');

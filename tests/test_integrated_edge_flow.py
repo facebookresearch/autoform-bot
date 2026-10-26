@@ -100,7 +100,7 @@ def test_stroke_strength_scales_in_world_space_and_preserves_typed_counts(scale:
       drawRoute(ctx,weak,-1);const first=ctx.strokes[0];ctx.strokes=[];ctx.fills=[];
       drawRoute(ctx,strong,-1);const main=ctx.strokes[0];
       assert.equal(main.lineWidth,strong.strength*fixture.scale);assert(main.lineWidth>first.lineWidth);
-      assert(main.lineWidth<=4.8*fixture.scale);assert.equal(main.strokeStyle,'#8A8D91');
+      assert(main.lineWidth<=4.8*fixture.scale);assert.equal(main.strokeStyle,'#85888C');
       assert.deepEqual(main.dash,fixture.kind==='proof'?[6*fixture.scale,4*fixture.scale]:[]);
       assert.equal(ctx.fills.length,1,'Every edge retains its terminal arrow');
       assert.equal(JSON.stringify(strong),before);assert.deepEqual(ctx.state(),initial);
@@ -147,7 +147,7 @@ def test_cues_reuse_neutral_theme_colors_and_cached_geometry_without_ambient_ani
       const segments=drawRoute.$flowSegments.get(input.parts);assert(segments);
       ui$transform.x=40;window.matchMedia=()=>({matches:true});document.hidden=true;
       drawRoute(ctx,input,-1);assert.strictEqual(drawRoute.$flowSegments.get(input.parts),segments);
-      const color=fixture.dark?'#A8B0BB':'#8A8D91';
+      const color=fixture.dark?'#A8B0BB':'#85888C';
       assert(ctx.strokes.every(paint=>paint.strokeStyle===color));assert(ctx.fills.every(paint=>paint.fillStyle===color));
       assert.equal(input.count,12);assert.equal(input.source,'original-source');assert.equal(input.target,'original-target');
     """, {"dark": dark})
@@ -156,7 +156,8 @@ def test_cues_reuse_neutral_theme_colors_and_cached_geometry_without_ambient_ani
 @pytest.mark.parametrize("dark", [False, True])
 def test_only_a_lit_link_names_its_count_in_words_in_its_two_colours(dark: bool) -> None:
     _run(r"""
-      const lit={1:fixture.dark?'#2D88FF':'#0064E0',2:fixture.dark?'#E4E6EB':'#1C1E21'};
+      // Both lit roles take the text colour: blue is a status colour, and the arrowheads say which way a link points.
+      const lit={1:fixture.dark?'#E4E6EB':'#1C1E21',2:fixture.dark?'#E4E6EB':'#1C1E21'};
       [1,2].forEach(role=>{
         const input=route([{x:100,y:300},{x:600,y:300}]),ctx=new Canvas(),label=drawRoute(ctx,input,role,0);
         // The route hands its pill back, so draw() can paint every pill after the last route is stroked.

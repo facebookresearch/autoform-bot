@@ -316,7 +316,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-reading-body img, .bp-reading-body svg { max-width: 100%; }
 .bp-reading-body .bp-node { border-radius: 8px; }
 /* The current statement takes the contents row's tint and left bar inside the column; an offset outline ran past it. */
-.bp-reading-current { padding: 10px 12px 10px 15px; border-radius: 8px; background: color-mix(in srgb, var(--dag-link) 7%, transparent); box-shadow: inset 3px 0 0 var(--dag-fg); }
+/* The current statement takes a neutral tint: blue is a status colour. */
+.bp-reading-current { padding: 10px 12px 10px 15px; border-radius: 8px; background: color-mix(in srgb, var(--dag-fg) 6%, transparent); box-shadow: inset 3px 0 0 var(--dag-fg); }
 /* Under the statement, only a topic's other pages and its concept links: its relations are in its own Uses / Used by lists. */
 .bp-reading-neighbors { grid-row: 3; padding: 12px 22px; max-height: 192px; overflow: auto; border-top: 1px solid var(--dag-border); background: var(--dag-panel); }
 .bp-reading-related-topics { margin-top: 8px; font-size: 12px; color: var(--dag-muted); }
