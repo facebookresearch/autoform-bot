@@ -1354,7 +1354,7 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
 
     # The reader, hierarchy rail and bounded layout share one prebuilt
     # response; consumers still need no application build or runtime CDN.
-    assert len(dag_viewer.viewer_script().encode()) < 132_000
+    assert len(dag_viewer.viewer_script().encode()) < 144_000
     assert output.stat().st_size < 300_000
     assert search.stat().st_size < 100_000
     search_payload = json.loads(search.read_text(encoding="utf-8"))

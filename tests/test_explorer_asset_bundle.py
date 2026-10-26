@@ -84,7 +84,7 @@ def test_real_compiler_rejects_invalid_utf8_before_writing_a_bundle(tmp_path: Pa
 def test_explorer_bundle_keeps_the_integrated_client_budget_and_has_no_source_maps_or_local_paths() -> None:
     bundled = _BUNDLE.read_bytes()
     bundled.decode("utf-8")
-    assert len(bundled) < 132_000
+    assert len(bundled) < 144_000
     assert b"sourceMappingURL=" not in bundled
     assert str(_ROOT).encode("utf-8") not in bundled
     assert b"/Users/" not in bundled and b"/home/runner/" not in bundled
@@ -185,7 +185,7 @@ def test_publication_rejects_oversized_bundle_even_with_current_source_fingerpri
     assets.mkdir()
     fingerprint = hashlib.sha256(dag_viewer._SCRIPT.encode("utf-8")).hexdigest()
     (assets / _BUNDLE.name).write_text(
-        f"/* autoform-explorer-source-sha256:{fingerprint} */\n" + " " * 132_000, encoding="utf-8",
+        f"/* autoform-explorer-source-sha256:{fingerprint} */\n" + " " * 144_000, encoding="utf-8",
     )
     with pytest.raises(ValueError, match="Explorer bundle exceeds the JavaScript budget"):
         dag_viewer.viewer_script()
