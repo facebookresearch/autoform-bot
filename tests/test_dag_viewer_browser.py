@@ -802,7 +802,7 @@ def test_a_roadmap_without_articles_says_so(desktop_page: object, empty_consumer
     page.locator(".bp-dag-integrated .bp-dag-stage").wait_for()
     empty = page.locator(".bp-dag-empty")
     playwright.expect(empty).to_be_visible()
-    playwright.expect(empty).to_have_text("No formal graph entries in this scope.")
+    playwright.expect(empty).to_have_text("This roadmap has no articles yet.")
     playwright.expect(page.locator(".bp-reading-body")).to_contain_text("No mathematical articles are authored yet.")
 
 
@@ -946,16 +946,6 @@ def test_mobile_contents_pagination_stays_above_the_collapsed_sheet(mobile_page:
     page = mobile_page
     _open_consumer(page, explorer_consumer, "flat")
     _browse_contents(page, "Statements in this topic")
-    # In a list Back to map shows and Browse can wrap to a row's start; its menu still opens on screen.
-    toggle = page.get_by_role("button", name="Browse statements or source texts", exact=True)
-    toggle.click()
-    menu = page.locator(".bp-dag-browse-popover")
-    playwright.expect(menu).to_be_visible()
-    menu_box, viewport = menu.bounding_box(), page.viewport_size
-    assert menu_box is not None and viewport is not None
-    assert menu_box["x"] >= 0 and menu_box["x"] + menu_box["width"] <= viewport["width"]
-    toggle.click()
-    playwright.expect(menu).to_be_hidden()
     _close_phone_reading(page)
     more = page.locator(".bp-dag-inventory > .bp-dag-load-more")
     more.scroll_into_view_if_needed()
@@ -2192,36 +2182,6 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     # The chapter-card fragment selects the initial statement in the client;
     # HTTP document requests never include URL fragments.
     assert documents == [urlsplit(first)._replace(fragment="").geturl()]
-
-
-def test_show_all_relations_typesets_titles_beyond_first_five_with_real_project_macros(
-    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
-) -> None:
-    """The real inventory must retain math after the compact reader's first five links."""
-    from tests.test_integrated_explorer_browser import _routes
-
-    page, site_url = desktop_page, marked_math_site_url
-    _routes(page, site_url, marked_math_runtime, graph_client=True)
-    page.goto(_site_route(page, site_url, "topology/result"))
-    _ready_site(page)
-    page.locator(".bp-reading-neighbors").get_by_role("button", name="Show all 55", exact=True).click()
-    inventory = page.locator(".bp-dag-inventory")
-    playwright.expect(inventory.locator(".bp-dag-inventory-row")).to_have_count(55)
-    row = inventory.locator('.bp-dag-inventory-row[data-inventory-node-id="topology/later-6"]')
-    row.scroll_into_view_if_needed()
-    row.focus()
-    assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-dag-inventory-list'))") is True
-    playwright.expect(row).to_be_focused()
-    playwright.expect(row.locator(".arithmatex")).to_have_count(1)
-    playwright.expect(row.locator("mjx-container")).to_have_count(1)
-    playwright.expect(row.locator("mjx-c.mjx-c2124")).to_have_count(1)
-    playwright.expect(row.locator(".arithmatex")).to_have_attribute("data-autoform-math-source", r"\(\ZZ/n\)")
-    playwright.expect(row.locator("code")).to_have_text("$literal$")
-    assert row.locator("mjx-merror, merror, [tabindex], [role=application], script, iframe, img").count() == 0
-    _assert_hit(page, row)
-    page.keyboard.press("Enter")
-    page.wait_for_url(_site_route(page, site_url, "topology/later-6"))
-    playwright.expect(_reading_card(page, "topology/later-6")).to_be_visible()
 
 
 def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_controls(

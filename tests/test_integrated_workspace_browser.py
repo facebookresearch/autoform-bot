@@ -998,22 +998,25 @@ def test_long_ancestor_labels_and_full_reading_heading_stay_within_their_panes(
     playwright.expect(heading).to_have_text(_DEEP_TITLE)
     assert heading.evaluate("heading => heading.scrollWidth <= heading.clientWidth + 1") is True
     assert page.locator(".bp-dag-head").evaluate("head => head.scrollWidth <= head.clientWidth + 1") is True
-    # The four-deep trail fits its row, so it shows every crumb, the long ancestor cut short with an ellipsis rather than folded into "…".
+    # The trail, from the site's home, fits its row, so it shows every crumb, the long ancestor cut short with an ellipsis rather
+    # than folded into "…".
     crumbs = page.locator(".bp-dag-breadcrumb li")
-    playwright.expect(crumbs).to_have_count(4)
-    playwright.expect(crumbs.nth(0)).to_have_text(_LIBRARY)
-    playwright.expect(crumbs.nth(1)).to_have_attribute("title", _ANCESTOR)
-    playwright.expect(crumbs.nth(1)).to_have_text(_ANCESTOR)
+    playwright.expect(crumbs).to_have_count(5)
+    playwright.expect(crumbs.nth(0)).to_have_text("Home")
+    playwright.expect(crumbs.nth(1)).to_have_text(_LIBRARY)
+    playwright.expect(crumbs.nth(2)).to_have_attribute("title", _ANCESTOR)
+    playwright.expect(crumbs.nth(2)).to_have_text(_ANCESTOR)
     playwright.expect(page.locator(".bp-dag-breadcrumb .bp-dag-sr-only")).to_have_count(0)
-    playwright.expect(crumbs.nth(3)).to_have_text(_TARGET_TITLE)
-    playwright.expect(crumbs.nth(3)).to_have_attribute("aria-current", "page")
+    playwright.expect(crumbs.nth(4)).to_have_text(_TARGET_TITLE)
+    playwright.expect(crumbs.nth(4)).to_have_attribute("aria-current", "page")
     if width <= 720:
         # A phone keeps the first crumb, the parent and the current page.
         playwright.expect(crumbs.nth(1)).to_be_hidden()
-        playwright.expect(crumbs.nth(2)).to_be_visible()
+        playwright.expect(crumbs.nth(2)).to_be_hidden()
+        playwright.expect(crumbs.nth(3)).to_be_visible()
     else:
-        playwright.expect(crumbs.nth(1)).to_be_visible()
-        playwright.expect(crumbs.nth(2)).to_have_text(_DEEP_TITLE)
+        playwright.expect(crumbs.nth(2)).to_be_visible()
+        playwright.expect(crumbs.nth(3)).to_have_text(_DEEP_TITLE)
         # The trail has the row to itself, rather than a third of it.
         trail_box, head_box = page.locator(".bp-dag-breadcrumb").bounding_box(), page.locator(".bp-dag-head").bounding_box()
         assert trail_box is not None and head_box is not None and trail_box["width"] >= head_box["width"] / 2
@@ -1656,7 +1659,7 @@ def test_graph_first_browse_is_contextual_keyboard_closable_and_returns_to_the_s
     rows = page.locator(".bp-dag-inventory-row")
     playwright.expect(rows).to_have_count(1)
     assert set(rows.evaluate_all("nodes => nodes.map(node => node.dataset.inventoryNodeId)")) == expected
-    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 result")
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 statement")
     assert page.url == site.route(scope["id"])
     page.get_by_role("button", name="Back to map", exact=True).click()
     playwright.expect(stage).to_be_visible()
