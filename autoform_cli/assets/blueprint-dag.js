@@ -2804,11 +2804,13 @@
     // Measure both class changes together; callers need no selection-toggle ordering rule.
     function setSheet(open, selected) {
       var closed = host.classList.contains("bp-dag-sheet-open") && !open;
+      var width = dom$stage.clientWidth, height = dom$stage.clientHeight;
       var top = dom$body.offsetTop; host.classList.toggle("bp-dag-sheet-open", Boolean(open));
       host.classList.toggle("bp-dag-has-selection", Boolean(selected));
       ui$transform.y += top - dom$body.offsetTop; schedule();
       dom$sheetHandle.setAttribute("aria-expanded", String(Boolean(open)));
       syncSheetAccessibility();
+      if (width !== dom$stage.clientWidth || height !== dom$stage.clientHeight) resize();
       if (closed && selected && !restoring && sheetLayout() && mapAllowed) centerIfHidden(selected);
     }
     function sheetLayout() { return Boolean(window.matchMedia && window.matchMedia("(max-width: 720px)").matches); }
