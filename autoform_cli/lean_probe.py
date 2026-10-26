@@ -104,9 +104,11 @@ SNAPSHOT_FILE_LIMIT = 64 * 1024 * 1024
 class SkeletonError(RuntimeError):
     """A probe, or the extraction or output around it, failed; ``issues`` says why.
 
-    This module raises it when a command, a probe or a snapshot read fails;
-    ``skeleton`` when a blueprint, an article selection or a managed output
-    folder does; and ``impact`` when its probe's records are malformed.
+    This module raises it for Lake configuration, command, probe-run and
+    snapshot failures; ``skeleton`` for malformed skeleton-probe records,
+    blueprints, article selections, inputs that change mid-run and managed
+    output; ``impact`` for malformed impact-probe records and its project
+    inventory.
     """
 
     def __init__(self, issues: list[str] | tuple[str, ...]) -> None:

@@ -164,7 +164,6 @@ from .lean import (
 )
 from .lean_probe import (
     DEFAULT_PROBE_TIMEOUT,
-    PROBE_MARKER,
     LeanLibrary,
     SkeletonError,
     lean_libraries,
@@ -172,10 +171,8 @@ from .lean_probe import (
     module_of,
     path_of,
     project_control_snapshot,
-    read_snapshot_file,
     render_probe,
     run_module_probes,
-    stable_paths,
 )
 
 SKELETON_SCHEMA = "autoform-skeleton/v5"
@@ -830,10 +827,10 @@ def parse_probe_output(
     expected = None if expected_roots is None else set(expected_roots)
     # Not `splitlines`: Lean's JSON printer leaves U+0085, U+2028 and U+2029 unescaped.
     for line in text.split("\n"):
-        if not line.startswith(PROBE_MARKER):
+        if not line.startswith(lean_probe.PROBE_MARKER):
             continue
         try:
-            record = json.loads(line[len(PROBE_MARKER) :])
+            record = json.loads(line[len(lean_probe.PROBE_MARKER) :])
         except json.JSONDecodeError as exc:
             raise SkeletonError([f"the skeleton probe emitted invalid JSON: {exc}"]) from exc
         if isinstance(record, dict) and "table" in record:
@@ -1525,7 +1522,9 @@ def extract_graph_skeletons(
             result = results[module]
             if isinstance(result, SkeletonError):
                 # run_probe already cut Lean's output; a second cut would drop the end of what it kept.
-                failed_modules[module] = stable_paths(f"probe of module {module} failed: {result}", lean_root)
+                failed_modules[module] = lean_probe.stable_paths(
+                    f"probe of module {module} failed: {result}", lean_root
+                )
             else:
                 records.update(result)  # type: ignore[arg-type]
 
@@ -1546,7 +1545,7 @@ def extract_graph_skeletons(
                 continue
             if "error" in record:
                 reason = f"the probe failed on this declaration: {record['error']}"
-                unresolved.append(UnresolvedTarget(node.id, name, stable_paths(reason, lean_root)))
+                unresolved.append(UnresolvedTarget(node.id, name, lean_probe.stable_paths(reason, lean_root)))
                 continue
             if not record.get("found"):
                 unresolved.append(
@@ -1716,7 +1715,7 @@ def _read_cited_source(path: Path) -> bytes | str:
     if os.path.lexists(path) and not os.path.isfile(path):
         return "names something other than a regular file"
     try:
-        captured = read_snapshot_file(path)
+        captured = lean_probe.read_snapshot_file(path)
     except SkeletonError:
         return "names a file that cannot be read"
     return "names a missing file" if captured is None else captured[0]
