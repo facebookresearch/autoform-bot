@@ -590,7 +590,7 @@ def test_the_phone_reader_peeks_opens_to_half_or_covers_the_map() -> None:
     assert "var close = opened && !sheetLayout() && (state.area || state.overviewOnly || state.scopeOverview)" in script
     assert "band = Math.max(NODE_H, Math.min(band, drawer.clientHeight * .45));" in script
     assert 'navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-open") ? freeArea().band : refs.stage.clientHeight;' in script
-    assert "box.y + box.h > (free.top || 0) + free.band - 12) center(node, .82);" in script
+    assert "box.y + box.h > (free.top || 0) + free.band - Math.max(12, bands.bottom)) center(node, .82);" in script
 
 
 def test_explorer_counts_agree_with_their_nouns() -> None:
@@ -734,8 +734,10 @@ def test_a_click_pans_its_node_clear_of_the_details_it_opens() -> None:
     center = script.split("function center(", 1)[1].split("\n    function ", 1)[0]
     assert "free = freeArea()" in center
     hidden = script.split("function centerIfHidden(node) {", 1)[1].split("\n    function ", 1)[0]
-    # A card under a phone's half-open reader is hidden too, so the check stops at the map's visible band.
-    assert "refs.stage.clientWidth - 12" in hidden and "box.y + box.h > (free.top || 0) + free.band - 12" in hidden
+    # A card under a phone's half-open reader is hidden too, so the check stops at the map's visible band,
+    # and a card under the map's header or foot band is hidden as well.
+    assert "refs.stage.clientWidth - 12" in hidden and "box.y < Math.max(12, bands.top)" in hidden
+    assert "box.y + box.h > (free.top || 0) + free.band - Math.max(12, bands.bottom)" in hidden
     assert "function selectNode(" not in script
 
 
@@ -851,9 +853,10 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     assert "dependency neighborhood" not in script
     # The density note stays, only while a shown card's real box leaves the stage or labels are hidden by zoom, as plain text.
     note = script.split("var bottom = mapHeight(), whole = state.active.filter(function (node) {", 1)[1].split("\n    function ", 1)[0]
-    assert "var box = screen(node); return box.x >= 0 && box.y >= 0 && box.x + box.w <= refs.stage.clientWidth" in note
+    # A card under the map's header or foot band is not in view either.
+    assert "var box = screen(node); return box.x >= 0 && box.y >= bands.top && box.x + box.w <= refs.stage.clientWidth" in note
     # A card under a phone's open reader is off screen too; the fit uses the same bound.
-    assert "box.y + box.h <= bottom;" in note and "cropped = whole < state.active.length" in note
+    assert "box.y + box.h <= bottom - bands.bottom;" in note and "cropped = whole < state.active.length" in note
     assert "var shown = mapHeight();" in script
     # It counts cards, which Browse does not list, so it names no Browse total.
     assert 'cropped ? "Drag to see more: " + num(whole) + " of " + num(state.active.length) + " cards in view."' in note

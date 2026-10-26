@@ -1936,9 +1936,16 @@
       ui$transform.x = (free.left + free.right) / 2 - (box.x + box.w / 2) * ui$transform.scale;
       ui$transform.y = (free.top || 0) + free.band / 2 - (box.y + box.h / 2) * ui$transform.scale; schedule();
     }
+    // The map's header and foot are opaque bands over the stage, which a phone's open reader removes. A card under one is
+    // out of view for the keyboard and the pan note.
+    function bandInsets() {
+      return navigation && !compactRegions() && !(sheetLayout() && host.classList.contains("bp-dag-sheet-open")) ?
+        {top: 44, bottom: dom$density.hidden ? 36 : 56} : {top: 0, bottom: 0};
+    }
     function centerIfHidden(node) {
-      if (!node) return; var box = screen(node), free = freeArea();
-      if (box.x < 12 || box.y < 12 || box.x + box.w > dom$stage.clientWidth - 12 || box.y + box.h > (free.top || 0) + free.band - 12) center(node, .82);
+      if (!node) return; var box = screen(node), free = freeArea(), bands = bandInsets();
+      if (box.x < 12 || box.y < Math.max(12, bands.top) || box.x + box.w > dom$stage.clientWidth - 12 ||
+          box.y + box.h > (free.top || 0) + free.band - Math.max(12, bands.bottom)) center(node, .82);
     }
     function zoomAt(factor, x, y) {
       var old = ui$transform.scale, next = clamp(old * factor, MIN_SCALE, 4);
@@ -2173,9 +2180,10 @@
         var ab = screen(a), bb = screen(b); return ab.y - bb.y || ab.x - bb.x || a._index - b._index;
       });
       var keep = new Set(candidates.map(function (node) { return node.id; }));
-      var free = freeArea(), top = free.top || 0, available = candidates.find(function (node) {
+      var free = freeArea(), bands = bandInsets(), top = (free.top || 0) + bands.top, end = (free.top || 0) + free.band - bands.bottom;
+      var available = candidates.find(function (node) {
         var box = screen(node);
-        return box.x >= free.left && box.x + box.w <= free.right && box.y >= top && box.y + box.h <= top + free.band;
+        return box.x >= free.left && box.x + box.w <= free.right && box.y >= top && box.y + box.h <= end;
       });
       // Culling includes an 80px paint margin, not a usable keyboard viewport.
       // Keep an owned focus while panning; otherwise start on a contained card.
@@ -2213,7 +2221,7 @@
       // The note asks for a drag only while a shown card's real box reaches past the stage or under a phone's open reader,
       // and for a zoom only while labels are too small. It counts cards, which Browse does not list, so it names no Browse total.
       var bottom = mapHeight(), whole = ui$active.filter(function (node) {
-        var box = screen(node); return box.x >= 0 && box.y >= 0 && box.x + box.w <= dom$stage.clientWidth && box.y + box.h <= bottom;
+        var box = screen(node); return box.x >= 0 && box.y >= bands.top && box.x + box.w <= dom$stage.clientWidth && box.y + box.h <= bottom - bands.bottom;
       }).length, cropped = whole < ui$active.length, tiny = visible.length && ui$transform.scale < .34;
       dom$density.hidden = !cropped && !tiny;
       dom$density.textContent = cropped ? "Drag to see more: " + num(whole) + " of " + num(ui$active.length) + " cards in view." :

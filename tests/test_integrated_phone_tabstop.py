@@ -31,7 +31,7 @@ function original(name) {
 const context={assert};vm.createContext(context);
 const constants=source.slice(source.indexOf('  var NODE_W ='),source.indexOf('  var clients ='))+
   source.slice(source.indexOf('  var clamp ='),source.indexOf('  function element('));
-const functions=['layoutGraph','wikiRoutes','geometry','compactRegions','world','screen','inViewport','fit','mapHeight','freeArea','center','updateOverlays','relationCounts','weightWords'].map(original).join('\n');
+const functions=['layoutGraph','wikiRoutes','geometry','compactRegions','world','screen','inViewport','fit','mapHeight','freeArea','center','bandInsets','updateOverlays','relationCounts','weightWords'].map(original).join('\n');
 """
 
 _ENVIRONMENT = r"""
@@ -118,6 +118,18 @@ const current=geometry();
 // Keep the real production card geometry and readable camera, not a fake renderer.
 current.routes.forEach(route=>route.bounds={x:-5000,y:-5000,w:10000,h:10000});
 """
+
+
+def test_the_desktop_tabstop_skips_a_card_under_the_maps_header_band() -> None:
+    """The map's header and foot are opaque bands, so a card under one is not a usable tab stop."""
+    _run(_DESKTOP_OVERVIEW + """
+      fit();paint();
+      const top=data.nodes.slice().sort((a,b)=>screen(a).y-screen(b).y||screen(a).x-screen(b).x)[0];
+      ui$transform.y+=10-screen(top).y;paint();
+      const stop=byId.get(tabstop().dataset.autoformNodeId),box=screen(stop);
+      assert.notEqual(stop.id,top.id,'The card 10px down the stage is under the 44px header band');
+      assert(box.y>=44&&box.y+box.h<=dom$stage.clientHeight-56,'The tab stop clears both bands');
+    """)
 
 
 def test_small_authored_desktop_overview_fits_its_cards_not_peripheral_route_bounds() -> None:

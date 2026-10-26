@@ -33,7 +33,7 @@ function original(name) {
 const constants = source.slice(source.indexOf('  var NODE_W ='), source.indexOf('  var clients =')) +
   source.slice(source.indexOf('  var clamp ='), source.indexOf('  function element('));
 const functions = ['layoutGraph', 'wikiRoutes', 'geometry', 'compactRegions', 'world', 'screen', 'inViewport', 'fit', 'mapHeight', 'freeArea',
-  'center', 'updateOverlays'].map(original).join('\n');
+  'center', 'bandInsets', 'updateOverlays'].map(original).join('\n');
 const fixture = JSON.parse(fs.readFileSync(0, 'utf8'));
 const sandbox = {assert, fixture}; vm.createContext(sandbox);
 const setup = String.raw`
