@@ -39,6 +39,23 @@ release the complete currently held import set before waiting or reporting,
 unless handing off an existing verified candidate as described below. Renew,
 hand off, and release the full import claim set together.
 
+## Generated import roots
+
+Unlike other import edits, a root that the repository's deterministic generator
+writes from the tracked modules, such as a `Lib.lean` that imports every module
+of a folder, is not part of a worker's long-held claim set; a root written or
+edited by hand, or one with no such generator, keeps the import-edit rules
+above. A worker may regenerate it in its worktree to build and check its result,
+without claiming it, and may commit it; on a conflict in it during a rebase or
+merge, regenerate it from the merged tree. Before regenerating it from the
+integrated tree, the integrator acquires the root's module `claim_target`
+together with the complete set it holds, in one command under that set's worker
+ID. If another owner holds the root, follow the refusal rule under Import edits:
+release the complete held set before waiting, or keep it and hand off the
+verified candidate. Then re-run `autoform work import-impact` and the checks on
+the result, and release the root's claim with the rest of the set once the
+result is visible, as the next section requires.
+
 ## Integration and handoff
 
 Renew the complete claim set before integrating, and if a revision's claim set
