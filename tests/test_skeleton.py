@@ -1525,6 +1525,14 @@ def test_unparsable_source_is_withheld_not_refused(tmp_path: Path) -> None:
     assert "as written" not in packet and "Eligible (S" not in packet
     assert packet.count("-- source not shown: no reliable standalone source is available") == 2
     assert f"-- raw signature: {eligible.raw_signature}" in packet
+    # The written report keeps what was withheld, and the withheld source's lines.
+    written = json.loads(write_skeleton_report(report, tmp_path / "report.json").read_text(encoding="utf-8"))
+    (written_declaration,) = written["nodes"][0]["declarations"]
+    assert written_declaration["statement"] is None and written_declaration["source_withheld"] is True
+    entry = written["trusted"]["Skel.Main"]["Skel.Eligible"]
+    assert entry["source"] is None and entry["source_withheld"] is True
+    assert eligible.start_line is not None
+    assert (entry["start_line"], entry["end_line"]) == (eligible.start_line, eligible.end_line)
 
 
 # --------------------------------------------------------------------------- #
@@ -4898,6 +4906,8 @@ def test_a_line_locator_on_a_source_file_yields_the_passage(tmp_path: Path) -> N
     (node,) = report.nodes
     assert node.passage == "line 5\nline 6\nline 7"
     assert node.passage_locator == "sources/book.tex#L5-L7"
+    written = json.loads(report.to_json())["nodes"][0]
+    assert (written["passage"], written["passage_locator"]) == ("line 5\nline 6\nline 7", "sources/book.tex#L5-L7")
     packets = tmp_path / "packets"
     passages = tmp_path / "passages"
     write_packets(report, packets, passages=passages)
