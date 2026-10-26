@@ -1033,10 +1033,11 @@ def test_selection_focus_and_the_current_statement_do_not_borrow_status_blue() -
         pairs = [(int(colour[i : i + 2], 16), int(base[i : i + 2], 16)) for i in (1, 3, 5)]
         return "#" + "".join(f"{round(c * share + b * (1 - share)):02X}" for c, b in pairs)
 
-    # --bp-link on the explorer's surfaces: page, map, panel, and the 10% and 9% current-row tints.
-    for link, page, field in (("#0064E0", "#FFFFFF", "#F0F2F5"), ("#2D88FF", "#242526", "#18191A")):
+    # --bp-link on the explorer's surfaces: page, map, panel, and the 10% and 9% current-row tints, at the 4.5:1 small text needs.
+    # The dark link was #2D88FF, 4.44:1 on the panel and 4.18:1 on the outline's current row; it is #4A9AFF.
+    for link, page, field in (("#0064E0", "#FFFFFF", "#F0F2F5"), ("#4A9AFF", "#242526", "#18191A")):
         surfaces = (page, field, mixed(page, "#64748B", 0.94), mixed(link, page, 0.10), mixed(link, page, 0.09))
-        assert min(_contrast(link, surface) for surface in surfaces) >= 3.9, link
+        assert min(_contrast(link, surface) for surface in surfaces) >= 4.5, link
         # The old ring, link at 45% over the page, measured about 2:1 against it.
         assert _contrast(mixed(link, page, 0.45), page) < 3
 

@@ -3768,7 +3768,7 @@ def _stylesheet() -> str:
   --bp-sunken: #1C1D1F;
   --bp-page: #18191A;
   --bp-scroll-shade: rgba(228, 230, 235, 0.3);
-  --bp-link: #2D88FF;
+  --bp-link: #4A9AFF;
   --bp-link-hover: #7FB8FF;
   --bp-blue: #2D88FF;
   --bp-violet: #9B6BFF;

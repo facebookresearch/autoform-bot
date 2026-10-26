@@ -1703,7 +1703,7 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     assert "Plus Jakarta Sans" in css and "JetBrains Mono" in css
     assert "--bp-link: #0064E0" in css
     assert "[data-md-color-scheme=slate]" in css
-    assert "--bp-link: #2D88FF" in css
+    assert "--bp-link: #4A9AFF" in css
     assert "--bp-surface: #242526" in css
     assert "background-color: #18191A" in css
     assert "/__autoform/live.json" in live
