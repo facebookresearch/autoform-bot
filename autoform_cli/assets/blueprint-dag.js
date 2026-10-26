@@ -1893,7 +1893,7 @@
       dom$stage.append(help, dom$canvas, dom$nodeLayer, dom$density, dom$empty);
       main.appendChild(dom$stage);
       dom$shelves = element("section", "bp-scope-shelves"); dom$shelves.hidden = true;
-      dom$shelves.setAttribute("aria-label", "Developments in this scope"); main.appendChild(dom$shelves);
+      dom$shelves.setAttribute("aria-label", "Not on the map"); main.appendChild(dom$shelves);
 
       dom$inventory = element("section", "bp-dag-inventory"); dom$inventory.hidden = true;
       var inventoryHead = element("div", "bp-dag-inventory-head"), inventoryHeading = inventoryHead.appendChild(element("h2", "", "Contents"));
@@ -2259,14 +2259,14 @@
       if (nativeGroup) {
         var back = button("bp-reading-wiki-more", "← Topic overview");
         back.addEventListener("click", function () { setMode("regions", true); }); dom$shelves.appendChild(back);
-      } else dom$shelves.appendChild(element("h2", "bp-scope-shelves-heading", "More developments"));
+      } else dom$shelves.appendChild(element("h2", "bp-scope-shelves-heading", "Not on the map"));
       groups.forEach(function (group) {
         var members = group.members.filter(function (node) { return matchesStatus(node) && (!ui$query || searchScore(node, ui$query.toLocaleLowerCase())); });
         if (!members.length) return;
         var section = element("section", "bp-scope-shelf"), heading = readingLabel("h3", "", group.area || group.title || "Unlinked topics", group.reading_title);
         section.appendChild(heading);
         var statements = members.some(function (node) { var record = records.get(recordId(node)); return record && record.result; });
-        section.appendChild(element("p", "bp-scope-shelf-count", plural(members.length, statements ? "entry" : "topic", statements ? "entries" : "topics") + (group.$shelf ? " · no local formal links" : "")));
+        section.appendChild(element("p", "bp-scope-shelf-count", plural(members.length, statements ? "entry" : "topic", statements ? "entries" : "topics") + (group.$shelf ? ", none linked to each other" : "")));
         var paged = nativeGroup || group.key === ui$overviewGroup, limit = paged ? ui$listLimit : 5, list = element("ul", "bp-scope-shelf-list");
         members.slice(0, limit).forEach(function (node) {
           var id = recordId(node), record = records.get(id), item = element("li");
@@ -2318,10 +2318,10 @@
         });
         var display = mapAllowed && ui$mode === "graph" && geometry().$display;
         if (display && display.reduced) {
-          var key = element("span", "bp-map-key-coverage", display.shownPairs < display.totalPairs ?
-            compactKey ? "Backbone " + display.shownPairs + "/" + display.totalPairs : "Backbone · " + display.shownPairs + " of " + display.totalPairs + " connections" :
-            compactKey ? "Types combined" : "Combined dependency types");
-          key.title = "One stroke per displayed pair; solid if it includes statement dependencies. All typed dependencies remain in articles and selected-result maps.";
+          // In words: how many of the links the map draws, or that a pair's two kinds share one line.
+          var brief = compactKey || sheetLayout(), key = element("span", "bp-map-key-coverage", display.shownPairs < display.totalPairs ?
+            (brief ? "" : "Showing ") + num(display.shownPairs) + " of " + num(display.totalPairs) + " links" : brief ? "One line per pair" : "One line for each pair of cards");
+          key.title = "Cards linked both ways share one line, solid when it carries a statement dependency. Every link still shows in each statement's Uses and Used by, and around a selected result.";
           dom$mapKey.appendChild(key);
         }
         // One entry says what the dotted lines are and how many of them this map draws; a map that draws none says nothing about their coverage.

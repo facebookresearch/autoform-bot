@@ -927,6 +927,18 @@ def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_und
     assert ".bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button { min-height: 44px; }" in style
 
 
+def test_reduced_maps_and_shelves_say_what_they_show_in_plain_words() -> None:
+    """#442's key said "Backbone · 41 of 205 connections" and its shelves "More developments" and "no local formal links"."""
+    script = _viewer_source()
+    for jargon in ("Backbone", "Types combined", "Combined dependency types", '"More developments"', "Developments in this scope",
+                   "no local formal links", "One stroke per"):
+        assert jargon not in script, jargon
+    assert '(brief ? "" : "Showing ") + num(display.shownPairs) + " of " + num(display.totalPairs) + " links"' in script
+    assert 'brief ? "One line per pair" : "One line for each pair of cards"' in script
+    assert 'element("h2", "bp-scope-shelves-heading", "Not on the map")' in script
+    assert '(group.$shelf ? ", none linked to each other" : "")' in script
+
+
 def test_explorer_toolbar_copy_says_what_it_searches_and_filters() -> None:
     """The toolbar read "Search 7 roadmap entries", "Status · 2 · edges only" and "Regions".
 
