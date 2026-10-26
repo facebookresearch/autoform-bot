@@ -162,6 +162,40 @@ def test_stale_or_hidden_map_focus_request_does_not_steal_later_focus() -> None:
     """)
 
 
+def test_same_bundle_projection_replacement_cannot_steal_focus_scroll_or_checkpoint() -> None:
+    _controls(r"""
+      const entry=card('A',0,0),outside=new Element('a'),bundle=currentBundle;
+      host.appendChild(outside);outside.focus();ui$mode='graph';
+      focusNodeControl(entry.node);
+      data={...data,nodes:[]};overlays.delete(entry.node.id);entry.control.remove();outside.focus();
+      dom$nodeLayer.scrollTop=25;dom$nodeLayer.scrollLeft=40;
+      const before={remembered,scheduled,focuses:entry.control.focuses.length,sheetFocuses:dom$sheetHandle.focuses.length};
+      flushFrames();
+      assert.strictEqual(currentBundle,bundle);assert.equal(ui$mode,'graph');
+      assert.equal(document.activeElement,outside);assert.equal(entry.control.focuses.length,before.focuses);
+      assert.equal(dom$sheetHandle.focuses.length,before.sheetFocuses);
+      assert.equal(dom$nodeLayer.scrollTop,25);assert.equal(dom$nodeLayer.scrollLeft,40);
+      assert.equal(remembered,before.remembered);assert.equal(scheduled,before.scheduled);
+    """)
+
+
+def test_same_projection_wiki_geometry_and_overlay_refresh_keep_pending_focus_eligible() -> None:
+    _controls(r"""
+      const entry=card('A',0,0),projection=data,bundle=currentBundle,outside=new Element('a');
+      host.appendChild(outside);outside.focus();focusNodeControl(entry.node);
+      data.$wikiEdges=[{source:'A',target:'B',count:1}];
+      const current=card('A',150,100);entry.control.remove();
+      dom$nodeLayer.scrollTop=25;dom$nodeLayer.scrollLeft=40;
+      const before={remembered,scheduled};flushFrames();
+      assert.strictEqual(data,projection);assert.strictEqual(currentBundle,bundle);
+      assert.equal(document.activeElement,current.control);assert.equal(entry.control.focuses.length,0);
+      assert.deepEqual(current.control.focuses.at(-1),{preventScroll:true});
+      assert.equal(dom$nodeLayer.scrollTop,0);assert.equal(dom$nodeLayer.scrollLeft,0);
+      assert.equal(remembered,before.remembered+1);assert.equal(scheduled,before.scheduled+1);
+      assert.deepEqual(data.$wikiEdges,[{source:'A',target:'B',count:1}]);
+    """)
+
+
 def test_reveal_all_hiding_control_focuses_filter_and_keeps_all_real_statuses() -> None:
     _controls(r"""
       presentStatuses=['planned','fully_proved'];ui$selectedStatuses=new Set(['planned']);

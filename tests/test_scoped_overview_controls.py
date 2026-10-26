@@ -69,6 +69,11 @@ function clickPeer(link,settings={}) {
   (link.listeners.get('click')||[]).forEach(callback=>callback(event));return event;
 }
 const host=peer(),dom$body=peer(),dom$sheetHandle=peer('button'),dom$breadcrumb=peer('nav');
+const dom$nodeLayer=Object.assign(peer(),{scrollLeft:0,scrollTop:0});
+dom$nodeLayer.querySelector=selector=>{
+  assert.equal(selector,'.bp-dag-node[tabindex="0"]');
+  return Array.from(overlays.values()).find(control=>control.tabIndex===0)||null;
+};
 const dom$mapContext=peer(),dom$mapKey=peer(),dom$isolated=peer('input'),dom$filterSummary=peer('button');
 const dom$graphMode=peer('button'),dom$listMode=peer('button'),dom$sourcesMode=peer('button');
 const dom$stage=Object.assign(peer(),{clientWidth:900,clientHeight:700}),dom$inventory=peer(),inventoryHeading=peer('h2');
@@ -91,8 +96,9 @@ var records=new Map(nodes.map(node=>[node.id,Object.assign({},node,{scope:chapte
 records.set('roadmap',{id:'roadmap',scope:'roadmap',title:'Library',status:'planned',route:'https://example.test/roadmap/index.html'});
 records.set(chapterId,{id:chapterId,scope:chapterId,parent:'roadmap',title:'Large scope',status:'planned',route:window.location.href});
 ['view-group:1','view-group:2'].forEach(id=>records.set(id,{id,scope:id,parent:'roadmap',title:'Source track',status:'planned',navigation:'source'}));
+var alive=true;
 var sharedIndex={nodes:Array.from(records.values()),relations:[]},currentBundle={nodeId:chapterId,scope:chapterId,
-  title:'Large scope',graph:contextGraph,dataURL:'https://example.test/dependencies/chapters/chapter.json'};
+  title:'Large scope',graph:contextGraph,dataURL:'https://example.test/dependencies/chapters/chapter.json',isCurrent:()=>alive};
 var data=contextGraph,view,atlas,palette,byId,prerequisites,dependents,statusCounts,presentStatuses,mapAllowed;
 var ui$requestedNode=chapterId,ui$overviewGroup=null,ui$scopeOverview=false,ui$area=null,ui$overviewOnly=false;
 var ui$selected=null,ui$direction='both',ui$active=[],ui$activeIds=new Set(),ui$activeDirty=true,ui$spotlight=null;
@@ -113,7 +119,7 @@ function geometry(){return {$display:{reduced:false}};}
 var dom$shelves=null;
 const dom$browsePopover=peer(),dom$browseToggle=peer();
 function sheetLayout(){return false;}
-function resize(){syncControls();ui$active.forEach(node=>{const control=peer('button');control.dataset.autoformNodeId=node.id;overlays.set(node.id,control);});}
+function resize(){syncControls();ui$active.forEach((node,index)=>{const control=peer('button');control.dataset.autoformNodeId=node.id;control.tabIndex=index? -1:0;overlays.set(node.id,control);});}
 function fit(){effects.push({kind:'fit'});}
 function centerIfHidden(node){effects.push({kind:'center',id:node.id});}
 function screen(){return {x:0,y:0,w:264,h:148};}

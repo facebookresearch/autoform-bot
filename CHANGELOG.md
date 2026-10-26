@@ -86,8 +86,8 @@ date when the release is tagged.
   and truthful accessibility names. Switching actions no longer wraps the
   toolbar and shrinks the graph beneath a restored camera (#442).
 - **Explorer keyboard focus.** Result selection focuses its visible statement
-  heading; leaving filters closes them. Outline and self-hiding map controls
-  keep a native focus target. Slash is scoped to the focused explorer, modified
+  heading; stale projection callbacks cannot steal focus. Outline, filters
+  and self-hiding map controls keep native focus. Slash stays scoped; modified
   arrow keys stay native, and empty Escape no longer adds history entries (#442).
 - **Reading and index feedback.** Valid HTML character references keep title
   math without admitting authored HTML. Publication warns when the exact

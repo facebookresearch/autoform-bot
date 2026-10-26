@@ -2810,9 +2810,9 @@
       navigation.navigateNode(id, settings); closeSearch();
     }
     function focusNodeControl(node) {
-      var bundle = currentBundle;
+      var bundle = currentBundle, projection = data;
       requestAnimationFrame(function () { requestAnimationFrame(function () {
-        if (!alive || currentBundle !== bundle || ui$mode !== "graph" || (bundle && bundle.isCurrent && !bundle.isCurrent())) return;
+        if (!alive || currentBundle !== bundle || data !== projection || ui$mode !== "graph" || (bundle && bundle.isCurrent && !bundle.isCurrent())) return;
         var control = node ? overlays.get(node.id) : dom$nodeLayer.querySelector('.bp-dag-node[tabindex="0"]');
         if (control) control.focus({preventScroll: true}); else (node ? dom$sheetHandle : dom$filterSummary).focus({preventScroll: true});
         dom$nodeLayer.scrollLeft = 0; dom$nodeLayer.scrollTop = 0; remember(); schedule();
