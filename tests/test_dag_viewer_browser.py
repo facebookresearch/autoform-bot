@@ -1171,7 +1171,8 @@ def test_a_crop_with_nothing_selected_starts_at_the_maps_leading_edge(desktop_pa
     _paint_frame(page)
     playwright.expect(page.locator(".bp-dag-density")).to_be_visible()
     cards = page.evaluate(_CARDS_INSIDE_STAGE)
-    assert min(card["left"] for card in cards) == pytest.approx(36, abs=2), cards
+    # The framing's side padding is 20px.
+    assert min(card["left"] for card in cards) == pytest.approx(20, abs=2), cards
 
 
 def test_a_books_own_area_map_presses_nothing_and_a_list_presses_only_its_browse_choice(
