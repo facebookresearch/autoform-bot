@@ -1764,10 +1764,13 @@ def test_a_published_chapter_explorer_links_its_textbook_chapter_and_keeps_its_h
     playwright.expect(_reading_card(page, "algebra/result")).to_contain_text("The main result.")
 
 
-def test_slash_on_the_published_landing_page_opens_the_explorer_search(desktop_page: object, site_url: str) -> None:
-    """The landing page is the full-page explorer, so "/" opens its search, as on every explorer page."""
+def test_global_command_k_opens_landing_search_while_unfocused_slash_stays_native(desktop_page: object, site_url: str) -> None:
+    """Only the modified shortcut is global; slash requires explorer focus."""
     page = _open_site(desktop_page, site_url, "index.html")
+    page.evaluate("() => {document.body.tabIndex=-1;document.body.focus();}")
     page.keyboard.press("/")
+    assert page.evaluate("() => document.activeElement===document.body")
+    page.keyboard.press("Control+K")
     playwright.expect(page.locator(".bp-dag-search")).to_be_focused()
 
 
