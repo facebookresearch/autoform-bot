@@ -527,12 +527,12 @@ def test_resting_a_mouse_on_a_card_previews_its_neighbours_without_selecting_it(
     # Any map previews the direct neighbours; a selection keeps its own spotlight.
     assert "var spotlight = (atlas || !state.selected) && subject ? atlasSpotlight(subject) : pathSpotlight();" in script
     assert "return state.spotlight || (state.spotlight = spotlightOf(collect(state.selected.id, prerequisites), collect(state.selected.id, dependents)));" in script
-    # The cards fade briefly, and not at all for a reader who asks for reduced motion. Only opacity animates: with the saturate
-    # filter animated on every card as well, a stress run of previews never finished in WebKit, and full runs lost pages to crashes.
+    # Subdued cards change colour without animating: with the saturate filter animated on every card, a stress run of previews
+    # never finished in WebKit, and full runs lost pages to crashes.
     style = dag_viewer._STYLE
-    assert "will-change: transform; transition: opacity .15s ease; }" in style and "filter .15s" not in style
+    assert "pointer-events: auto; cursor: pointer; will-change: transform; }" in style and "filter .15s" not in style
     reduced = style[style.index("@media (prefers-reduced-motion: reduce) {"):]
-    assert ".bp-dag-node { will-change: auto; transition: none; }" in reduced[:reduced.index("\n}")]
+    assert ".bp-dag-node { will-change: auto; }" in reduced[:reduced.index("\n}")]
 
 
 def test_a_press_on_a_card_pans_once_it_travels_and_otherwise_stays_a_tap() -> None:
@@ -1019,7 +1019,8 @@ def test_selection_focus_and_the_current_statement_do_not_borrow_status_blue() -
     style = dag_viewer._STYLE
     # The selected card's ring is the text colour past a gap; blue stays a status colour.
     assert "data-selected=true] { box-shadow: 0 0 0 2px var(--dag-link)" not in style
-    assert ".bp-dag-node[data-subdued=true] { opacity: .62; filter: saturate(.25); }" in style
+    # Subdued cards wash their fill and border instead of fading as a group, which took the words and the focus ring with them.
+    assert "opacity: .62" not in style and "saturate(" not in style
     # One solid ring for every focus-visible state, drawn inside rows and outside a card's selection ring.
     assert "color-mix(in srgb, var(--dag-link) 45%" not in style and "52%" not in style
     assert [rule.split(" {")[0] for rule in style.splitlines() if rule.startswith(".bp-dag-viewer") and ":focus-visible {" in rule] == [
@@ -1093,6 +1094,27 @@ def test_dark_explorer_cards_read_against_the_page_toned_map() -> None:
     assert "[data-md-color-scheme=slate] .bp-dag-open { background: #0064e0; }" in style
     assert _contrast("#FFFFFF", "#0064E0") >= 4.5
     assert _contrast("#FF7B72", surface) >= 4.5 and "--dag-error: #ff7b72;" in style
+
+
+def test_subdued_cards_keep_their_words_readable_on_every_fill() -> None:
+    """Group opacity faded a subdued card's status line to 2.3:1 on the light map, with its focus ring."""
+    style = dag_viewer._STYLE
+    wash = re.search(r"\[data-subdued=true\]:not\(\[data-kind=boundary\]\) \{ background: color-mix\(in srgb, var\(--dag-node-fill\) (\d+)%, var\(--dag-map\)\); \}", style)
+    words = re.search(r"\[data-subdued=true\] :is\(\.bp-dag-node-title, \.bp-dag-node-meta, \.bp-dag-node-summary, \.bp-dag-node-share\) \{ color: color-mix\(in srgb, var\(--dag-muted\) (\d+)%, var\(--dag-fg\)\); \}", style)
+    assert wash is not None and words is not None
+    fill_share, muted_share = int(wash.group(1)) / 100, int(words.group(1)) / 100
+    assert "[data-subdued=true] { border-color: color-mix(in srgb, var(--dag-node-stroke) " in style
+    sheet = render._stylesheet()
+    (light_ink, dark_ink), (light_muted, dark_muted) = re.findall(r"--bp-fg: (#[0-9A-Fa-f]{6});", sheet), re.findall(r"--bp-muted: (#[0-9A-Fa-f]{6});", sheet)
+    light_map, dark_map = "#F0F2F5", "#18191A"
+    assert "--dag-map: var(--bp-sunken, #f0f2f5);" in style and "--dag-map: #18191a;" in style
+    # The book's ink, the standalone viewer's fallback ink, and slate; a boundary card keeps the map's own surface.
+    for state in (*status.STATES, *status.INVENTORY_STATES):
+        for ink, muted, fill, surface in ((light_ink, light_muted, state.fill, light_map), ("#1C1E21", light_muted, state.fill, light_map),
+                                         (dark_ink, dark_muted, state.dark_fill, dark_map)):
+            text = _mix(muted, ink, muted_share)
+            assert _contrast(text, _mix(fill, surface, fill_share)) >= 4.5, state.key
+            assert _contrast(text, surface) >= 4.5, state.key
 
 
 def test_card_titles_take_the_page_ink_on_every_status_fill() -> None:
