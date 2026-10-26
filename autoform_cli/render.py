@@ -3665,7 +3665,7 @@ def _node_references(
             f'<a class="bp-ref bp-ref-{key}" '
             f'href="{html.escape(links[other_id], quote=True)}">{label}</a>'
         )
-    return " · ".join(rendered)
+    return ' <span class="bp-ref-sep">·</span> '.join(rendered)
 
 
 def _render_rows(rows: list[tuple[str, str]], *, css_class: str) -> str:
@@ -4431,8 +4431,10 @@ mjx-container > svg {{ max-width: none !important; }}
   color: var(--bp-muted);
 }}
 .bp-value {{ flex: 1; }}
-/* A reference breaks between entries, never inside one; a long one wraps in its own box. */
-.bp-dependency-body .bp-ref {{ display: inline-block; max-width: 100%; }}
+/* A reference breaks between entries, never inside one; a long one wraps in its own box. Each starts with its status dot, so
+   the list drops the separators, which ended every wrapped line and could take a line of their own. */
+.bp-dependency-body .bp-ref {{ display: inline-block; max-width: 100%; margin-right: 0.5rem; }}
+.bp-dependency-body .bp-ref-sep {{ display: none; }}
 .bp-lean {{ font-family: {mono}; }}
 .bp-where {{ color: var(--bp-muted); }}
 .bp-missing {{ color: #b91c1c; }}

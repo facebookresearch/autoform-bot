@@ -709,6 +709,25 @@ def test_cross_references_point_at_anchors_on_the_chapter(tmp_path: Path) -> Non
     assert 'href="https://github.com/owner/repo/issues/42">#42' in page
 
 
+def test_a_dependency_list_drops_its_separators(tmp_path: Path) -> None:
+    """Every wrapped line of a Uses list ended in " ·", and a wrapped entry could leave its dot on a line of its own."""
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "blocker.md").write_text("---\ndeclaration: theorem\n---\n\n# Blocker\n", encoding="utf-8")
+    (roadmap / "top.md").write_text(
+        "---\ndeclaration: theorem\nlean: Project.top\n---\n\n# Top\n\nThe main result.\n\n"
+        "## Depends on\n\n- [Base](base.md)\n- [Blocker](blocker.md)\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    top = page[page.index('id="top"'):]
+    rows = top[top.index("bp-dependency-body"):top.index("</details>")]
+    # Each entry starts with its status dot, so the list hides the separators between entries; other lists keep them.
+    assert '</a> <span class="bp-ref-sep">·</span> <a class="bp-ref' in rows
+    assert ".bp-dependency-body .bp-ref-sep { display: none; }" in render_module._stylesheet()
+
+
 def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tmp_path: Path) -> None:
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
