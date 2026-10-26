@@ -205,6 +205,11 @@ def test_a_boundary_card_says_how_it_touches_the_page_and_counts_only_its_linked
       assert(card('boundary:needed').getAttribute('aria-label').endsWith(', 11 results needed here, all fully proved'));
       assert(card('boundary:user').getAttribute('aria-label').endsWith(', 7 results build on this, 4 of 7 fully proved'));
       assert(card('boundary:both').getAttribute('aria-label').endsWith(', 1 result, both ways, 0 of 1 fully proved'));
+      // On screen too: a line under the count, since a planned border is 1.4:1 on the light map.
+      const share = id => card(id).children[2];
+      assert.equal(share('boundary:needed').className, 'bp-dag-node-share');assert.equal(share('boundary:needed').textContent, 'all fully proved');
+      assert.equal(share('boundary:user').textContent, '4 of 7 fully proved');assert.equal(share('boundary:one').textContent, '0 of 1 fully proved');
+      assert.notEqual(card('L').children[2].className, 'bp-dag-node-share');
       assert.equal(meta('L'), 'planned');
     """)
 

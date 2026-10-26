@@ -2245,9 +2245,9 @@
       // A finished statement's fill already says so, so its line keeps a ✓ as the cue that is not colour; open states keep their words.
       var done = !area && !scopeMeta && node.status === "fully_proved", tail = done ? "✓" : said;
       var meta = area || !lead ? tail : lead + (done ? " " : " · ") + tail;
-      // A boundary's colour is the only place its linked results' statuses show, so a screen reader hears them as words.
-      var linked = node.kind === "boundary" && count[1] ? ", " + (count[0] === count[1] ? count[1] === 1 ? "fully proved" : "all fully proved" :
-        num(count[0]) + " of " + num(count[1]) + " fully proved") : "";
+      // A boundary's border takes the colour of its least finished linked result, so the card also says their share in words.
+      var share = node.kind === "boundary" && count[1] ? count[0] === count[1] ? count[1] === 1 ? "fully proved" : "all fully proved" :
+        num(count[0]) + " of " + num(count[1]) + " fully proved" : "", linked = share ? ", " + share : "";
       // A card is heard in words rather than glyphs: commas for its separators, an area card's topic count and members, and its
       // area only when that is not its own title.
       var spoken = area ? [plural(node._topics, "topic", "topics"), said].concat(node.summary ? ["including " + String(node.summary).split(" · ").join(", ")] : []) :
@@ -2260,6 +2260,7 @@
       var line = content.appendChild(element("span", "bp-dag-node-meta"));
       if (lead) { line.appendChild(element("span", "", lead)); line.appendChild(element("span", "", done ? " " : " · ")); }
       line.appendChild(element("span", "", tail));
+      if (share) content.appendChild(element("span", "bp-dag-node-share", share));
       // An area's summary leads with its topic count, which the stylesheet then drops from the meta.
       if (area && node.summary) content.appendChild(element("span", "bp-dag-node-summary", lead + ": " + node.summary));
       content.appendChild(element("span", "bp-dag-node-relation", ""));
