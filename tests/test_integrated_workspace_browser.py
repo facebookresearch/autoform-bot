@@ -1062,7 +1062,7 @@ def test_zero_edge_native_article_keeps_solo_focal_node_closed_topic_links_and_c
     page, site = workspace_page, workspace_site
     _open(page, site, workspace_runtime, _ISOLATED)
     node = _selected(page, _ISOLATED)
-    assert "no dependency edges" in node.get_attribute("aria-label")
+    assert "not linked to anything on this map" in node.get_attribute("aria-label")
     playwright.expect(page.locator(".bp-dag-node")).to_have_count(1)
     details = page.locator(".bp-reading-related-topics")
     playwright.expect(details).to_have_count(1)
@@ -1202,7 +1202,7 @@ def test_isolated_topic_link_opens_connected_result_and_its_real_edge(
     for identifier in (_BASE, _TARGET):
         control = _focus_graph_node(page, identifier)
         playwright.expect(control).to_be_visible()
-        assert "no dependency edges" not in control.get_attribute("aria-label")
+        assert "not linked to anything on this map" not in control.get_attribute("aria-label")
     page.go_back()
     page.wait_for_url(site.route(_ISOLATED))
     _selected(page, _ISOLATED)
@@ -1221,8 +1221,8 @@ def test_isolated_topic_link_opens_connected_result_and_its_real_edge(
     main = page.locator(f'.bp-dag-node[data-autoform-node-id="{_TARGET}"]')
     playwright.expect(base).to_be_visible()
     playwright.expect(main).to_be_visible()
-    assert "no dependency edges" not in base.get_attribute("aria-label")
-    assert "no dependency edges" not in main.get_attribute("aria-label")
+    assert "not linked to anything on this map" not in base.get_attribute("aria-label")
+    assert "not linked to anything on this map" not in main.get_attribute("aria-label")
     _frames(page)
     playwright.expect(base).to_be_visible()
     playwright.expect(main).to_be_visible()

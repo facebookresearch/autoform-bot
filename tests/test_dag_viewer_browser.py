@@ -1216,7 +1216,7 @@ def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_con
     page = desktop_page
     _open_consumer(page, explorer_consumer)
     search = _load_search_index(page)
-    results, announcement = page.locator(".bp-dag-search-results"), page.locator("p.bp-dag-sr-only")
+    results, announcement = page.locator(".bp-dag-search-results"), page.locator("p.bp-dag-sr-only[aria-live]")
     assert search.get_attribute("aria-expanded") is None
     search.fill("no such node")
     playwright.expect(announcement).to_have_text("No results")
