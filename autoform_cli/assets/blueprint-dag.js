@@ -2079,6 +2079,9 @@
       dom$inspector.addEventListener("keydown", function (event) {
         if (event.key === "Escape" && ui$selected) { event.preventDefault(); clearSelection(true, true); }
       });
+      // The card layer hides its overflow, but focusing a card the camera has not reached yet still scrolled it, and every card
+      // then sat that far from where the camera put it; the camera alone places cards.
+      dom$nodeLayer.addEventListener("scroll", function () { dom$nodeLayer.scrollLeft = dom$nodeLayer.scrollTop = 0; });
       dom$stage.addEventListener("pointerdown", pointerDown); dom$stage.addEventListener("pointermove", pointerMove);
       dom$stage.addEventListener("pointerup", pointerUp); dom$stage.addEventListener("pointercancel", pointerUp);
       dom$stage.addEventListener("wheel", function (event) {
@@ -3052,7 +3055,7 @@
     }
     function focusNodeControl(node) {
       requestAnimationFrame(function () { requestAnimationFrame(function () {
-        var control = overlays.get(node.id); if (control) control.focus(); else dom$sheetHandle.focus(); remember(); schedule();
+        var control = overlays.get(node.id); if (control) control.focus({preventScroll: true}); else dom$sheetHandle.focus(); remember(); schedule();
       }); });
     }
 
@@ -3064,7 +3067,7 @@
       syncNavigationSelection(); renderInspector(); renderInventory(false); if (refit) requestAnimationFrame(fit); else schedule();
       if (updateHistory) writeLocation("push");
       var chosen = returnFocus && cleared && (ui$mode === "list" ? dom$inventoryRows.get(cleared.id) : overlays.get(cleared.id));
-      if (chosen) chosen.focus();
+      if (chosen) chosen.focus({preventScroll: ui$mode !== "list"});
     }
     // From 681px to 1,100px details can open the head's first row; the map shifts back by it, so nothing jumps.
     // Measure both class changes together; callers need no selection-toggle ordering rule.
