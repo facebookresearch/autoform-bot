@@ -11,6 +11,7 @@ from pathlib import Path
 BUDGETS = {
     "AGENTS.md": 59,
     "CONTRIBUTING.md": 87,
+    "docs/explorer-design.md": 65,  # Internal architecture and failure contracts, not another user guide.
     "README.md": 120,
     "autoform_cli/README.md": 1188,
     "autoform_cli/project/README.md": 120,
@@ -19,6 +20,7 @@ BUDGETS = {
     "autoform_cli/reference/runtime-and-publication.md": 123,
     "autoform_cli/reference/search.md": 171,
     "autoform_cli/reference/validation-and-audit.md": 239,
+    "autoform_cli/reference/wiki-links.md": 20,  # Internal optional viewer transport; keep it on demand and concise.
     "servers/README.md": 122,
     "skills/agent-review/SKILL.md": 65,
     "skills/debrief-orchestrator/SKILL.md": 47,

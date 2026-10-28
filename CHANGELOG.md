@@ -11,6 +11,21 @@ date when the release is tagged.
 
 ### Changed
 
+- **Integrated reading.** The book, theorem search and dependency map share
+  one persistent workspace. The outline follows authored containment, includes
+  root-level pages and labels collections as subheads; Home returns to the site.
+  Large scopes group before the scene cap, with paged structural shelves for
+  topics without local formal links. Empty source choices are hidden (#442).
+- **Map framing.** Small cycles pack to the viewport's aspect, and bounded
+  maps compare both orientations. Fit frames local or drilled cards without
+  shrinking their labels. Dense unselected maps show an explicitly counted
+  connection backbone; all typed dependencies remain in article lists, and
+  selected results restore full routes in their bounded neighborhoods (#442).
+- **Wiki map.** Authored concept links cluster intact formal developments,
+  with distinct dotted associations and bounded local corridors. Proof edges,
+  ranks, status and full reading pages remain unchanged (#442).
+  Publication keeps card dimensions and authored region counts; the one
+  browser engine owns positions and routes, without an unused Python grid.
 - **Docs.** The CLI reference's contracts moved to `autoform_cli/reference/`
   (validation and audit, search, open statements, claims and revisions,
   runtime and publication). The reference, skills and contributor docs keep
@@ -58,6 +73,42 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Explorer controls.** Closing full phone reading brings a cropped selected
+  card back into the map without overriding restored cameras. Isolate/status
+  filters use the same eligible original members in maps and native shelves,
+  including external formal links, and count hidden members. Empty shelves
+  reserve no map space; the closed phone handle anchors to the bottom (#442).
+- **Explorer resizing.** Observer notifications coalesce into one animation
+  frame, keeping canvas writes out of observer delivery and cancelling pending
+  resize work when the viewer is disposed. Reading toggles settle changed stage
+  dimensions before recording the camera, so Back retains the shown view (#442).
+- **Phone framing control.** Fit and Recentre share a fixed-size focus icon
+  and truthful accessibility names. Switching actions no longer wraps the
+  toolbar and shrinks the graph beneath a restored camera (#442).
+- **Explorer keyboard focus.** Result selection focuses its visible statement
+  heading; stale projection callbacks cannot steal focus. Outline, filters
+  and self-hiding map controls keep native focus. Slash stays scoped; modified
+  arrow keys stay native, and empty Escape no longer adds history entries (#442).
+- **Reading and index feedback.** Valid HTML character references keep title
+  math without admitting authored HTML. Publication warns when the exact
+  UTF-8 search index reaches 95% of the unchanged 32 MiB browser limit; nothing
+  is truncated or refused. Directory aliases retain statement fragments (#442).
+- **Wiki references.** Section boundaries come from the site's converter, so
+  Setext and formatted Sources headings cannot turn provenance into concept
+  links. Formal dependencies, statuses and captured article bytes are unchanged (#442).
+- **Explorer navigation.** Contradictory canonical reading routes are refused
+  before changing the reader. Failed rendering cannot poison history snapshots,
+  and foreign-URL state is not restored. Failures offer a safe native article link (#442).
+- **Explorer builds.** Compiler and publisher share a UTF-8/LF source fingerprint,
+  including on CRLF checkouts, without requiring Node in consumer projects (#442).
+- **Large wiki catalogues.** Validation yields to visible page frames, with
+  a bounded fallback for hidden or stalled tabs, rather than relying only on
+  timer tasks. Parent references use the same compact node offsets as relations;
+  the client restores their exact IDs before publication. No content is dropped (#442).
+- **Wiki reading links.** The integrated explorer retains #455's title math
+  in its outline, breadcrumbs, paged inventory and related-reading controls, using safe MathJax
+  service and project macros. Code stays literal, canonical links keep focus
+  and native modifiers, and graph labels remain as typed (#442).
 - **Book navigation.** The generated `SUMMARY.md` nests each book page under
   its chapter's README, written in book order. A landing page that linked a
   deep page before its chapters, or a folder with no README in the book, put a

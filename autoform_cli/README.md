@@ -1040,17 +1040,17 @@ autoform render blueprint --output site-src --lean-root . --require-declarations
 ```
 
 `render` never writes into the vault. Once the roadmap has articles, the landing
-page is the full-page project explorer, and `structure.md` and `dependencies.md`
-open it, in bounded project, chapter, and nested-scope projections with a global
-search. That index, `dependencies/index.json`, the project payload
-`dependencies.json`, and every other payload under `dependencies/` are internal
-to the bundled viewer, and their schemas may change. Every generated site
-projection uses the same JSON-derived explorer. A formal statement links to the
-smallest scope holding it, as `<scope>.html#node=<id>`; only a legacy
-`dependencies/full.html#node=<id>` link redirects. A `lean:` declaration that
-resolves to a repository permalink gets a source link; a catalog's Lean row
-shows its first eight names and counts the rest. The explorer typesets only the
-TeX in its rail's and details' titles and summaries. Render percent-encodes each
+page combines the mathematical reader and dependency map in one full-page client.
+`structure.md`, `dependencies.md` and old dependency-page URLs enter canonical
+article or chapter-card reading, with bounded maps, authored areas and global search.
+Complete published statements, proofs and citations remain the reading content.
+The index `dependencies/index.json`, project payload `dependencies.json`, and
+other `dependencies/` payloads are internal to this viewer; their schemas may change.
+A formal statement links to its canonical article or containing chapter card;
+legacy `#node=<id>`, view and filter links remain aliases, not a second viewer.
+A `lean:` declaration resolving to a repository permalink gets a source link;
+a catalog's Lean row shows its first eight names and counts the rest.
+Render percent-encodes each
 link it writes from file and folder names, such as the book's previous and next
 links; a Markdown link it moves keeps its decoded spelling and starts with `./`
 when its first segment holds a colon, so no name can make a `javascript:` URL.
@@ -1111,11 +1111,12 @@ color, html, unicode, action, newcommand, extpfeil, verb, and bussproofs. So
 do nothing, however a formula or macro reaches them. A macro may not take one of
 their names; `check` and `render` warn about a macro they leave out, judging the
 copy of `tex-macros.json` that `render` reads once and publishes. Each read-back
-card has its own TeX input with only base, ams, and noundefined. Only formulas
-the site's Markdown marks, such as `$...$`, and the explorer's rail and details
-titles and summaries are typeset, with no MathJax tab stop or menu in a link or
-button; a heading's title, a `discussion:` value, the home page's lead, the
-navigation, and a table of contents show as typed. A formula paints only within
+card has its own TeX input with only base, ams, and noundefined. Only renderer-marked
+formulas, such as `$...$` in Markdown, are typeset. Formulas in links, controls and
+navigation get no extra MathJax tab stop, menu or accessibility explorer. Refreshes
+retain earlier glyph styles; graph labels, metadata titles, `discussion:` values,
+home-page leads and Material navigation/ToC stay typed. Explorer reading links and
+breadcrumbs typeset publisher-derived title parts with project macros. A formula paints only within
 its own line and block, and an inline formula wider than its paragraph is cut at
 its edge, so write one that wide as a display, which scrolls.
 

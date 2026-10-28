@@ -49,7 +49,7 @@ from urllib.parse import quote, unquote, urlsplit
 import html5lib
 import markdown as pymarkdown
 from markdown.blockprocessors import ReferenceProcessor
-from markdown.inlinepatterns import ReferenceInlineProcessor
+from markdown.inlinepatterns import ENTITY_RE, ReferenceInlineProcessor
 from pymdownx.arithmatex import RE_BRACKET_INLINE, RE_SMART_DOLLAR_INLINE
 from pymdownx.superfences import fence_div_format
 
@@ -370,7 +370,7 @@ def render_html(text: str) -> str:
         raise
 
 
-def render_tree(text: str) -> object | None:
+def render_tree(text: str, *, allow_html: bool = True) -> object | None:
     """Render ``text`` and parse the result the way a browser would.
 
     HTML5 tree construction is the point, not tokenising. Browsers repair
@@ -383,6 +383,18 @@ def render_tree(text: str) -> object | None:
 
     try:
         rendered = render_html(text)
+        # The converter also stashes character references. Validate their
+        # original spelling, never entity-decode a raw tag into trusted markup.
+        # HTML5 parses these as text; generated math and escaped code are not
+        # raw HTML. Unknown names and every other stashed fragment stay rejected.
+        if not allow_html and any(
+            not (
+                isinstance(block, str) and re.fullmatch(ENTITY_RE, block)
+                and (block.startswith("&#") or block[1:] in html.entities.html5)
+            )
+            for block in _converter().htmlStash.rawHtmlBlocks
+        ):
+            return None
     except Exception:
         return None
     try:
