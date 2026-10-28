@@ -86,9 +86,10 @@ def test_each_statement_card_is_one_search_record_holding_its_lean_names(tmp_pat
     records = _records(project)
 
     chapter_records = [record for record in records if record["location"].startswith("roadmap/ch/index.html")]
-    cards = {record["location"]: record for record in chapter_records if "#" in record["location"]}
-    assert sorted(cards) == ["roadmap/ch/index.html#first", "roadmap/ch/index.html#second"]
-    first, second = cards["roadmap/ch/index.html#first"], cards["roadmap/ch/index.html#second"]
+    anchors = [record["location"].partition("#")[2] for record in chapter_records]
+    assert anchors.count("first") == anchors.count("second") == 1
+    cards = {record["location"].partition("#")[2]: record for record in chapter_records}
+    first, second = cards["first"], cards["second"]
     assert (first["title"], second["title"]) == ("First", "Second")
     for name in ("Project.first", "Project.first_aux"):
         assert name in first["text"]
@@ -98,6 +99,8 @@ def test_each_statement_card_is_one_search_record_holding_its_lean_names(tmp_pat
         assert words in first["text"], words
     for words in ("Remarks", "secondremarkword", "Case {a", "secondbraceword"):
         assert words in second["text"], words
+    # No notes heading starts a record of its own.
+    assert not {"sources", "proof-sketch", "bound-for-nk", "remarks", "case-a"} & set(anchors)
     # A card is no entry in the page's table of contents, and every link and anchor still resolves.
     page = (project / "site/roadmap/ch/index.html").read_text(encoding="utf-8")
     assert 'href="#first"' not in page.split('class="md-content"')[0]
