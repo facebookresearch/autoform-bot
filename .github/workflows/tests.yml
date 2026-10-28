@@ -26,6 +26,14 @@ jobs:
         python-version: ["3.10", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22.23.2"
+      - name: Install pinned explorer compiler
+        run: |
+          timeout --signal=TERM --kill-after=30s 3m npm ci --ignore-scripts --no-audit --no-fund --prefer-offline \
+            --fetch-timeout=30000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=10000
+      - run: npm run check:explorer
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.12.1"
@@ -37,9 +45,9 @@ jobs:
       - run: make check-example
 
   browser:
-    name: WebKit dependency explorer regressions
+    name: WebKit integrated book and explorer regressions
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     # Playwright's image for the pinned playwright==1.62.0 carries WebKit and its
     # system libraries, so the job does not fetch them from an Ubuntu mirror;
     # that apt step alone has taken over 8 minutes and timed the job out.
@@ -70,11 +78,26 @@ jobs:
           mkdir mathjax
           tar xzf mathjax.tgz -C mathjax
           echo "AUTOFORM_MATHJAX_DIR=$PWD/mathjax/package" >> "$GITHUB_ENV"
-      - name: Run dependency explorer browser regressions
-        run: uv run --frozen --extra dev --extra browser pytest -q tests/test_dag_viewer_browser.py
+          echo "AUTOFORM_MATHJAX_ES5=$PWD/mathjax/package/es5" >> "$GITHUB_ENV"
+      - name: Run integrated book, explorer and genuine MathJax regressions
+        run: >-
+          uv run --frozen --extra dev --extra browser pytest -q
+          tests/test_dag_viewer_browser.py tests/test_integrated_explorer_browser.py
+          tests/test_integrated_workspace_browser.py tests/test_integrated_continuity_browser.py
+          tests/test_scoped_overview_browser.py tests/test_phone_fit_control.py
+          tests/test_integrated_selected_focus_browser.py
         env:
           AUTOFORM_REQUIRE_BROWSER_TESTS: "1"
           AUTOFORM_REQUIRE_MATHJAX_TESTS: "1"
+          AUTOFORM_UI_SCREENSHOT_DIR: ${{ runner.temp }}/autoform-ui-evidence
+      - name: Preserve browser UI screenshots and diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: integrated-ui-evidence-${{ github.run_id }}
+          path: ${{ runner.temp }}/autoform-ui-evidence
+          if-no-files-found: warn
+          retention-days: 7
 
   mathjax:
     name: MathJax read-back cards (Node)
@@ -82,6 +105,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22.23.2"
+      - name: Install locked native DOM test bridge
+        run: |
+          timeout --signal=TERM --kill-after=30s 3m npm ci --ignore-scripts --no-audit --no-fund --prefer-offline \
+            --fetch-timeout=30000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=10000
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.12.1"
@@ -101,8 +131,8 @@ jobs:
           mkdir mathjax
           tar xzf mathjax.tgz -C mathjax
           echo "AUTOFORM_MATHJAX_DIR=$PWD/mathjax/package" >> "$GITHUB_ENV"
-      - name: Typeset read-back cards in Node with the script render writes
-        run: uv run --frozen --extra dev pytest -q tests/test_site_mathjax_node.py
+      - name: Typeset read-back cards and reading titles with the script render writes
+        run: uv run --frozen --extra dev pytest -q tests/test_site_mathjax_node.py tests/test_explorer_title_math.py
         env:
           AUTOFORM_REQUIRE_MATHJAX_TESTS: "1"
 

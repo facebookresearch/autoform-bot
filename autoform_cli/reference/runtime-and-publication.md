@@ -43,7 +43,7 @@ The `runtime` module docstring describes the projection for Python consumers.
 
 `autoform render` publishes the book, derived progress, and one dependency
 explorer as bounded project, chapter, and nested-scope projections. Rendering
-never reads a `graph.json` or an operational queue. Hidden files and
+never reads a `graph.json` or an operational queue; [wiki references](wiki-links.md) are also derived. Hidden files and
 directories, including `.implementation-notes`, are omitted; the vault's
 implementation notes are read in place only to validate them. A `.autoform`
 directory and symlinks, credentials, logs, provider state, and agent/task state
@@ -55,6 +55,12 @@ in case from one it writes (`SUMMARY.md`, `dependencies.json`,
 scripts and logo inside them), and two blueprint paths that differ only in case
 or Unicode form. A blueprint file at exactly `dependencies.json` or
 `javascripts/blueprint-dag.js` is left out of the site with a warning.
+
+The search index and graph breadcrumbs may carry `reading_title` (`inline-parts-v1`):
+captured title text and publisher-derived text, code and marked TeX parts.
+Only reading controls and breadcrumbs typeset these parts with the project's macros; map,
+inventory and search labels retain the title as typed. Unsupported labels
+stay literal. The original title, relations and status are unchanged.
 
 Every render writes `publication.json`, schema `autoform-publication/v3`, with
 blueprint and Lean-source hashes (the Lean-source hash is empty when render

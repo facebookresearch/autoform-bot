@@ -8,7 +8,19 @@ import pytest
 
 from autoform_cli import dag_viewer, graph_pages, status
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
-from autoform_cli.markdown import FORMULA_CLASS
+
+
+def _viewer_source() -> str:
+    """Inspect readable implementation seams, not a compiler's private names.
+
+    The emitted runtime and its exact source fingerprint have separate asset
+    tests. Normalizing explicit private-property prefixes and renderer-private
+    ui$/dom$ locals keeps these static assertions independent of compiler naming.
+    Executed production bodies are never normalized.
+    """
+    source = dag_viewer._SCRIPT.replace("refs.$", "refs.").replace("state.$", "state.")
+    source = re.sub(r"\bui\$([A-Za-z_]\w*)", r"state.\1", source)
+    return re.sub(r"\bdom\$([A-Za-z_]\w*)", r"refs.\1", source)
 
 
 def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path: Path) -> None:
@@ -52,7 +64,8 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
         "title",
         "view",
     }
-    assert set(payload["nodes"][0]["layout"]) == {"column", "height", "row", "width", "x", "y"}
+    assert all(node["layout"] == {"height": 56, "width": 196} for node in payload["nodes"])
+    assert [node["id"] for node in payload["nodes"]] == [node.id for node in nodes]
     assert len(payload["nodes"]) == dag_viewer.MAX_MAP_NODES
     assert payload["edge_count"] == dag_viewer.MAX_MAP_NODES - 1
     assert payload["view"] == {
@@ -72,20 +85,20 @@ def test_full_view_payload_is_deterministic_layout_ready_and_data_only(tmp_path:
     assert payload["nodes"][0]["isolated"] is False
     assert payload["palette"]["inventory_checked"]["label"] == "inventory checked"
     assert payload["palette"]["inventory_checked"]["neutral"] is True
-    assert max(node["layout"]["column"] for node in payload["nodes"]) > 0
-    positions = {(node["layout"]["x"], node["layout"]["y"]) for node in payload["nodes"]}
-    assert len(positions) == len(nodes)
-    assert all(
-        payload["nodes"][index]["layout"]["x"] < payload["nodes"][index + 1]["layout"]["x"]
-        for index in range(len(nodes) - 1)
-    )
+    assert payload["edges"] == [
+        {"source": source.id, "target": target.id, "statement": 1, "proof": 0}
+        for source, target in zip(nodes, nodes[1:])
+    ]
+    assert not any(node["isolated"] for node in payload["nodes"])
 
     script = dag_viewer.viewer_script()
     assert "innerHTML" not in script
     assert "textContent" in script
     assert "requestAnimationFrame" in script
-    assert 'statusCounts.has("inventory_pending")' in script
-    assert '"Inventory statuses are neutral:' in script
+    for inventory in ("inventory_checked", "inventory_pending"):
+        assert "it records inspection, not a mathematical proof." in payload["palette"][inventory]["meaning"]
+    assert payload["palette"]["inventory_pending"]["neutral"] is True
+    assert "mark.title = entry.meaning || statusLabel(key)" in _viewer_source()
 
 
 def test_a_view_too_large_for_the_map_gets_no_layout(tmp_path: Path) -> None:
@@ -101,15 +114,51 @@ def test_a_view_too_large_for_the_map_gets_no_layout(tmp_path: Path) -> None:
     # The runtime draws a map up to the same limit.
     assert (
         f"var NODE_W = {dag_viewer._NODE_WIDTH}, NODE_H = {dag_viewer._NODE_HEIGHT}, "
-        f"MAX_MAP_NODES = {dag_viewer.MAX_MAP_NODES}," in dag_viewer.viewer_script()
+        f"MAX_MAP_NODES = {dag_viewer.MAX_MAP_NODES}," in _viewer_source()
     )
     # An atlas that large keeps its overview's count of topics in each region.
     topics = tuple(
         ViewNode(node.id, node.title, "scope", node.members, node.status_counts, area="Algebra") for node in nodes
     )
     dag_viewer.write_payload(output, GraphView(kind="project", title="Large", nodes=topics, edges=()), links={})
-    regions = json.loads(output.read_text(encoding="utf-8"))["regions"]
-    assert regions == [{"count": dag_viewer.MAX_MAP_NODES + 1, "label": "Algebra"}]
+    atlas = json.loads(output.read_text(encoding="utf-8"))
+    assert not any("layout" in node for node in atlas["nodes"])
+    assert atlas["regions"] == [{"count": dag_viewer.MAX_MAP_NODES + 1, "label": "Algebra"}]
+
+
+@pytest.mark.parametrize("wrapper_count", [2, dag_viewer.MAX_MAP_NODES + 1])
+def test_overview_dimensions_follow_drawn_nodes_without_changing_source_topology(
+    tmp_path: Path, wrapper_count: int,
+) -> None:
+    wrappers = tuple(
+        ViewNode(
+            f"scope:wrapper-{index}", f"Wrapper {index}", "scope", ("a", "b"), (("planned", 2),),
+            navigation="collection" if index % 2 else "transparent",
+        )
+        for index in range(wrapper_count)
+    )
+    results = tuple(ViewNode(name, name, "node", (name,), (("planned", 1),)) for name in ("a", "b"))
+    edges = (ViewEdge(wrappers[0].id, "a", statement_count=1), ViewEdge("a", "b", 1, 2))
+    view = GraphView("project", "Overview", (*wrappers, *results), edges, overview=True)
+    output = tmp_path / "overview.json"
+    dag_viewer.write_payload(output, view, links={})
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert [node["id"] for node in payload["nodes"]] == [node.id for node in view.nodes]
+    assert all(node["map"] is False and "layout" not in node and node["isolated"] for node in payload["nodes"][:-2])
+    assert all(
+        node["map"] is True and node["layout"] == {"height": 56, "width": 196} and not node["isolated"]
+        for node in payload["nodes"][-2:]
+    )
+    assert payload["edges"] == [
+        {"source": wrappers[0].id, "target": "a", "statement": 1, "proof": 0},
+        {"source": "a", "target": "b", "statement": 1, "proof": 2},
+    ]
+    assert payload["edge_count"] == 3
+    assert [node["status_counts"] for node in payload["nodes"]] == [
+        *([["planned", 2]] for _ in wrappers), [["planned", 1]], [["planned", 1]],
+    ]
+    assert payload["view"]["presentation"] == "dag" and payload["regions"] == []
 
 
 def test_each_inventory_has_a_neutral_colour_of_its_own(tmp_path: Path) -> None:
@@ -202,7 +251,7 @@ def test_a_catalog_carries_a_few_lean_names_and_counts_the_rest(tmp_path: Path) 
     assert "lean_more" not in leaf
 
 
-def test_isolated_inventory_does_not_spread_the_connected_dag(tmp_path: Path) -> None:
+def test_isolated_inventory_keeps_connected_data_and_dimensions_unchanged(tmp_path: Path) -> None:
     node_ids = ["root", "result", *(f"isolated-{index}" for index in range(100))]
     nodes = tuple(
         ViewNode(
@@ -226,11 +275,18 @@ def test_isolated_inventory_does_not_spread_the_connected_dag(tmp_path: Path) ->
     output = tmp_path / "mixed.json"
     dag_viewer.write_payload(output, view, links={})
     payload = json.loads(output.read_text(encoding="utf-8"))
-    columns = {node["id"]: node["layout"]["column"] for node in payload["nodes"]}
-
-    assert columns["root"] == 0
-    assert columns["result"] == 1
-    assert columns["isolated-0"] >= 3
+    assert [node["id"] for node in payload["nodes"]] == node_ids
+    assert all(node["layout"] == {"height": 56, "width": 196} for node in payload["nodes"])
+    assert [node["id"] for node in payload["nodes"] if node["isolated"]] == node_ids[2:]
+    assert all(node["status_counts"] == [["planned", 1]] for node in payload["nodes"])
+    assert payload["edges"] == [{"source": "root", "target": "result", "statement": 1, "proof": 0}]
+    connected = tmp_path / "connected.json"
+    dag_viewer.write_payload(
+        connected, GraphView("full", "Mixed graph", nodes[:2], view.edges), links={},
+    )
+    original = json.loads(connected.read_text(encoding="utf-8"))
+    assert payload["nodes"][:2] == original["nodes"]
+    assert payload["edges"] == original["edges"] and payload["edge_count"] == original["edge_count"] == 1
 
 
 def test_high_level_topics_use_a_readable_grouped_knowledge_atlas(tmp_path: Path) -> None:
@@ -253,16 +309,35 @@ def test_high_level_topics_use_a_readable_grouped_knowledge_atlas(tmp_path: Path
     layouts = [node["layout"] for node in payload["nodes"]]
 
     assert payload["view"]["presentation"] == "atlas"
-    assert {(region["label"], region["count"]) for region in payload["regions"]} == {
-        ("Applications", 23),
-        ("Foundations", 10),
-    }
-    assert len({(layout["x"], layout["y"]) for layout in layouts}) == len(nodes)
-    # The same fields a DAG's layout has; an atlas card is placed by x and y alone.
-    assert all(set(layout) == {"column", "height", "row", "width", "x", "y"} for layout in layouts)
+    assert payload["regions"] == [
+        {"label": "Applications", "count": 23},
+        {"label": "Foundations", "count": 10},
+    ]
+    assert [node["id"] for node in payload["nodes"]] == [node.id for node in nodes]
+    assert all(set(layout) == {"height", "width"} for layout in layouts)
     assert all(layout["width"] > layout["height"] for layout in layouts)
-    assert min(layout["width"] for layout in layouts) >= 220
-    assert min(layout["height"] for layout in layouts) >= 88
+    assert {layout["width"] for layout in layouts} == {232}
+    assert layouts[0]["height"] == 88 and layouts[-1]["height"] == 104
+    assert [layout["height"] for layout in layouts] == sorted(layout["height"] for layout in layouts)
+    assert len({layout["height"] for layout in layouts}) > 1
+
+
+@pytest.mark.parametrize(
+    ("items", "height"), [(0, 88), (1, 88), (2, 90), (3, 92), (15, 100), (31, 104), (255, 116), (4096, 116)],
+)
+def test_atlas_dimensions_retain_item_count_variation_and_height_bounds(
+    tmp_path: Path, items: int, height: int,
+) -> None:
+    node = ViewNode("scope:topic", "Topic", "scope", (), (("planned", items),), area="Authored area")
+    output = tmp_path / "dimensions.json"
+    dag_viewer.write_payload(output, GraphView("project", "Topics", (node,), ()), links={})
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert payload["nodes"][0]["layout"] == {"height": height, "width": 232}
+    assert payload["nodes"][0]["member_count"] == items
+    assert payload["nodes"][0]["status_counts"] == [["planned", items]]
+    assert payload["view"]["presentation"] == "atlas"
+    assert payload["regions"] == [{"count": 1, "label": "Authored area"}]
 
 
 def test_atlas_regions_that_differ_only_in_case_keep_one_order(tmp_path: Path) -> None:
@@ -278,7 +353,7 @@ def test_atlas_regions_that_differ_only_in_case_keep_one_order(tmp_path: Path) -
     dag_viewer.write_payload(output, view, links={})
 
     regions = json.loads(output.read_text(encoding="utf-8"))["regions"]
-    assert [region["label"] for region in regions] == sorted(areas)
+    assert regions == [{"count": 1, "label": area} for area in sorted(areas)]
 
 
 def test_a_view_of_topics_and_leaves_is_a_dag_not_an_atlas(tmp_path: Path) -> None:
@@ -294,7 +369,7 @@ def test_a_view_of_topics_and_leaves_is_a_dag_not_an_atlas(tmp_path: Path) -> No
 
     assert payload["view"]["presentation"] == "dag"
     assert payload["regions"] == []
-    assert {node["layout"]["width"] for node in payload["nodes"]} == {196}
+    assert all(node["layout"] == {"height": 56, "width": 196} for node in payload["nodes"])
 
 
 def test_an_explorer_page_is_named_for_how_the_explorer_draws_it() -> None:
@@ -332,8 +407,12 @@ def test_explorer_marks_isolates_but_keeps_them_in_the_complete_inventory(tmp_pa
     payload = json.loads(output.read_text(encoding="utf-8"))
 
     assert {node["id"] for node in payload["nodes"] if node["isolated"]} == {"isolated"}
-    script = dag_viewer.viewer_script()
+    script = _viewer_source()
     assert "inventoryNodes" in script
+    assert '"Include items without edges"' in script
+    # Map and native shelves share the original-member predicate, whose
+    # executed regressions cover explicit flags and external/private edges.
+    assert "matchesStatus(node) && matchesIsolation(node)" in script
     # Contents counts what it lists, and names no internals such as the map's size limit.
     assert 'element("h2", "", "Contents")' in script
     assert "items without edges included" not in script and "map unavailable" not in script
@@ -349,7 +428,7 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
         ),
         fallback_total=5,
     )
-    script = dag_viewer.viewer_script()
+    script = _viewer_source()
 
     assert 'data-graph-src="unsafe%22%20data-x%3D%22oops"' in container
     assert 'src="scripts/viewer%22%20onload%3D%22oops.js"' in container
@@ -369,35 +448,49 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert 'refs.navigation = element("aside", "bp-dag-navigation")' in script
     assert 'refs.navigation.setAttribute("aria-label", "Wiki hierarchy")' in script
     assert 'renderNavigation()' in script
-    # The rail and the details mark the authored titles and summaries they draw with the site's formula
-    # class, and ask the site's MathJax for a pass after each render; MathJax's own typeset finds nothing.
-    assert f'var TEX = "{FORMULA_CLASS}";' in script
-    assert "window.MathJax" not in script
-    assert 'function typeset() { document.dispatchEvent(new Event("autoform:typeset")); }' in script
-    assert "typeset(); refs.navigationInner.textContent" in script
-    assert "typeset(); refs.inspectorInner.textContent" in script
-    # Relation rows that Show more appends to the details are typeset too.
-    assert 'more.addEventListener("click", function () { appendNextBatch(); typeset(); });' in script
-    assert script.count("typeset();") == 3
-    # A formula keeps its letters' case under the rail's group headings, which are set in capitals.
-    assert ".bp-dag-viewer mjx-container { text-transform: none; }" in dag_viewer._STYLE
+    # Only the publisher's controlled formula service refreshes mathematics;
+    # navigation clones the complete reading source rather than graph summaries.
+    assert "typesetPromise" not in script
+    assert "autoform:typeset" not in script and "FORMULA_CLASS_JSON" not in script
+    assert "window.AutoformMath.refresh(refs.readingBody)" in script
+    assert "function readingLabel(" in script
+    assert "refreshReadingLabels(refs.navigationInner)" in script
+    assert "refreshReadingLabels(refs.readingNeighbors)" in script
+    assert "refreshReadingLabels(refs.breadcrumb)" in script
+    assert 'readingLabel("li", "", entry.label, entry.reading_title)' in script
+    assert 'readingLabel("a", "", entry.label, entry.reading_title)' in script
+    assert 'part[0] === "math" ? "arithmatex" : ""' in script
+    assert "refs.readingBody.replaceChildren(bundle.readingSource)" in script
+    assert "navigation.bindReader(refs.readingBody)" in script
+    # All enhancement enters through the canonical complete-reader router.
+    assert '!window.AutoformNavigation || !host.closest(".bp-explorer-page")' in script
+    assert '!navigation || !firstBundle || !firstBundle.readingSource' in script
+    assert "window.AutoformNavigation.create" in script
+    assert "function appendRelations(" not in script and "function drawRegions(" not in script
+    assert 'ui$relationIds = pair[1]' in dag_viewer._SCRIPT
+    assert 'setMode("list", true)' in script
     assert 'refs.announcement.setAttribute("aria-live", "polite")' in script
     assert "control.dataset.autoformNodeId = node.id" in script
-    assert "new ResizeObserver(resize)" in script
+    assert "new ResizeObserver(queueResize)" in script
     assert "state.pointers.size === 2" in script
     assert "event.type === \"pointerup\" && wasSingle && !state.moved" in script
     assert "touch-action: none; cursor: grab;" in container
     assert 'url.origin === window.location.origin' in script
-    assert 'w: node.width, h: node.height' in script
-    assert 'spotlight.before.has(edge.source) && spotlight.before.has(edge.target)' in script
-    assert 'spotlight.after.has(edge.source) && spotlight.after.has(edge.target)' in script
-    assert "if (atlas && !state.selected) edgeIndexes.clear()" in script
-    assert "(incident.get(state.selected.id) || []).forEach" in script
+    assert "return geometry().nodes.get(node.id)" in script
+    assert 'spotlight.before.has(route.source) && spotlight.before.has(route.target)' in script
+    assert 'spotlight.after.has(route.source) && spotlight.after.has(route.target)' in script
+    # The single bounded scene paints the authoritative routes, not a second grid projection.
+    assert "current.routes.forEach" in script and "if (!current) return" in script
     assert "if (!state.activeDirty) return" in script
     assert "if (query === state.searchCacheQuery) return state.searchCache" in script
     assert f'data.schema !== "{dag_viewer.SCHEMA}"' in script
-    assert f'index.schema !== "{dag_viewer.SEARCH_SCHEMA}"' in script
-    assert 'ctx.fillText("×" + count' in script
+    assert f'INDEX_SCHEMA = "{dag_viewer.SEARCH_SCHEMA}"' in script
+    assert 'ctx.fillText("×"' not in script
+    # Ranking matches exact names before prefixes, and statement text last.
+    assert script.index("if (title === query)") < script.index("if (title.startsWith(query))")
+    assert script.index("if (lean === query)") < script.index("if (lean.startsWith(query))")
+    assert script.index("if (lean.indexOf(query)") < script.index("if (summary.indexOf(query)")
+    assert "terms.every(function (term) { return all.indexOf(term) >= 0; })" in script
     # Search ranks exact, then prefix, then substring matches of title, id and Lean name, and says nothing of why.
     assert "if (title === query) return 1; if (id === query) return 2; if (lean === query) return 3;" in script
     assert "if (title.startsWith(query)) return 4; if (id.startsWith(query)) return 5;" in script
@@ -406,28 +499,21 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
 
 
 def test_explorer_counts_agree_with_their_nouns() -> None:
-    """The rail read "1 items · 1 dependencies"."""
-    script = dag_viewer.viewer_script()
+    """Integrated result/source counts and typed relation descriptions use the same plural formatter."""
+    script = _viewer_source()
 
     assert 'return count.toLocaleString() + " " + (count === 1 ? one : many);' in script
-    assert 'plural(data.edge_count || data.edges.length, "dependency", "dependencies")' in script
+    assert 'plural(counts.statement, "statement dependency", "statement dependencies")' in script
+    assert 'plural(counts.proof, "proof dependency", "proof dependencies")' in script
+    assert 'ui$mode === "sources" ? "source"' in dag_viewer._SCRIPT
     assert '.toLocaleString() + " dependencies"' not in script
-
-
-def _contrast(foreground: str, background: str) -> float:
-    def luminance(colour: str) -> float:
-        channels = [int(colour.lstrip("#")[index:index + 2], 16) / 255 for index in (0, 2, 4)]
-        linear = [value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4 for value in channels]
-        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
-
-    lighter, darker = sorted((luminance(foreground), luminance(background)), reverse=True)
-    return (lighter + 0.05) / (darker + 0.05)
 
 
 def test_card_meta_counts_items_in_a_readable_colour() -> None:
     """Topic cards read "1 item · 0 internal links" at three-quarter opacity, jargon in a faded grey."""
-    script = dag_viewer.viewer_script()
-    assert 'var scopeMeta = node.kind === "scope" ? plural(node.member_count || 0, "item", "items") :' in script
+    script = _viewer_source()
+    assert 'var scopeMeta = node.kind === "scope" ?' in script
+    assert 'plural(node.member_count || 0, "item", "items")' in script
     assert "internal link" not in script
     rule = re.search(r"\.bp-dag-node-meta \{([^}]*)\}", dag_viewer._STYLE)
     assert rule is not None and "opacity" not in rule.group(1) and "font-size: 12px" in rule.group(1)
@@ -451,20 +537,43 @@ def test_card_meta_counts_items_in_a_readable_colour() -> None:
 
 
 def test_rail_rows_show_a_status_swatch_and_a_lone_group_no_heading() -> None:
-    """Leaf rows ended in status phrases of every length, and a rail of one group still named it."""
-    script = dag_viewer.viewer_script()
+    """The rail is the semantic scope outline; leaf status belongs to result cards and search."""
+    script = _viewer_source()
 
-    assert 'if (groups.size > 1) section.appendChild(element("h2", TEX, label));' in script
-    assert 'mark.title = statusLabel(node.status); mark.setAttribute("role", "img"); mark.setAttribute("aria-label", mark.title);' in script
+    assert 'element("h2", "bp-outline-label", "Topics")' in script
+    from tests.test_qa_outline_navigation import _PROJECTION_PEERS, _run
+
+    _run(r"""
+      const root=scope('roadmap',null),branch=scope('branch','roadmap'),child=scope('child','branch'),
+        zero=page('chapter-zero','roadmap'),source=scope('source','roadmap',{navigation:'source'});
+      const nodes=[root,child,zero,source,branch],before=JSON.stringify(nodes);
+      const tree=outlineProjection(nodes,'branch','branch',120);
+      assert.deepEqual(tree.entries.map(entry=>entry.node.id),['chapter-zero','branch','child']);
+      assert.equal(tree.entries.find(entry=>entry.node===child).depth,1);
+      assert.strictEqual(tree.root,root);assert.equal(JSON.stringify(nodes),before);
+    """, ["outlineProjection"], _PROJECTION_PEERS)
+    assert 'link.title = node.title; link.dataset.navigationNodeId = node.id;' in script
+    assert "function renderNavigation() {" in script and "renderOutline()" in script
+    assert "bp-dag-navigation-group" not in script
     assert '(node.member_count || 0).toLocaleString() : statusLabel(node.status)' not in script
 
 
 def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
     """Cards, the details, Contents and search all printed ids such as "algebra/base" beside the titles."""
-    script = dag_viewer.viewer_script()
+    script = _viewer_source()
     style = dag_viewer.render_container("graph.json")
 
-    assert 'element("span", "bp-dag-node-meta", scopeMeta || statusLabel(node.status))' in script
+    from tests.test_qa_outline_navigation import _OUTLINE_PEERS, _run
+
+    _run(r"""
+      function meta(node){const control=makeNodeControl(node);return control.all().find(child=>child.className==='bp-dag-node-meta').textContent;}
+      const topic={id:'scope:internal-id',kind:'scope',title:'Authored topic',status:'planned',member_count:4};
+      assert.equal(meta(topic),'4 items');
+      assert.equal(meta({...topic,id:'boundary:private-id',kind:'boundary'}),'External topic');
+      assert.equal(meta({...topic,id:'private-context',kind:'boundary',_overviewGroup:'needed',_topics:3}),'3 external topics');
+      assert.equal(meta({...topic,id:'private-region',_region:'Authored area',_topics:2}),'2 topics · 4 items');
+      assert.equal(meta({...topic,id:'private-result',kind:'node'}),'Planned');
+    """, ["element", "button", "makeNodeControl", "statusLabel"], _OUTLINE_PEERS + "\nvar atlas=false,palette={planned:{label:'Planned'}};\n")
     assert 'element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (node.area ? " · " + node.area : ""))' in script
     assert 'element("span", "bp-dag-result-meta", match.node.area || statusLabel(match.node.status))' in script
     for gone in ("bp-dag-node-id", "bp-dag-inventory-id", "bp-dag-result-id"):
@@ -472,29 +581,27 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
 
 
 def test_details_close_in_their_corner_and_space_the_status_from_the_link() -> None:
-    """The close button floated beside the kicker, the status touched Open article, and the sheet named the title twice."""
-    script, style = dag_viewer.viewer_script(), dag_viewer._STYLE
+    """Already-collapsible readers have a native corner close control and one complete source."""
+    script, style = _viewer_source(), dag_viewer._STYLE
 
-    close = re.search(r"\.bp-dag-close \{([^}]*)\}", style)
+    close = re.search(r"\.bp-dag-sheet-open \.bp-dag-sheet-handle \{([^}]*)\}", style)
     assert close is not None
-    for declaration in ("position: absolute;", "top: 10px;", "right: 10px;", "width: 32px;", "height: 32px;"):
+    for declaration in ("position: absolute;", "top: 12px;", "right: 12px;", "width: 32px;", "height: 32px;"):
         assert declaration in close.group(1)
-    # The header text stops short of the 32px button 10px from the edge.
-    assert ".bp-dag-inspector-header { padding-right: 32px; }" in style
+    assert ".bp-dag-sheet-open .bp-reading-body h1 { padding-right: 32px; }" in style
     assert "titleWrap" not in script
-    actions = re.search(r"\.bp-dag-actions \{([^}]*)\}", style)
-    assert actions is not None and "flex-wrap: wrap;" in actions.group(1) and "gap: 8px 16px;" in actions.group(1)
-    assert "actions.appendChild(pill);" in script and "actions.appendChild(open);" in script
-    phone = style.split("@media (max-width: 680px) {\n", 1)[1].split("\n}", 1)[0]
-    # The handle repeats the selection's title, so the sheet hides its heading but keeps it for assistive technology.
-    assert ".bp-dag-viewer.bp-dag-viewer .bp-dag-inspector-header h2 { position: absolute; width: 1px;" in phone
-    assert "padding: 10px 48px 8px 12px;" in phone
-    assert ".bp-dag-viewer:not(.bp-dag-sheet-open) .bp-dag-close { display: none; }" in phone
+    assert 'refs.sheetHandle.title = opened ? "Close reading" : "Open reading";' in script
+    assert 'refs.sheetHandle.setAttribute("aria-expanded", String(Boolean(open)))' in script
+    assert 'element("span", "bp-dag-status-pill",' not in script
+    assert 'element("article", "bp-reading-body md-typeset")' in script
+    assert 'refs.readingBody.replaceChildren(bundle.readingSource)' in script
 
 
 def test_details_drop_instructions_and_label_paths_compactly() -> None:
     """The drawer explained its own controls, invented a summary for topics without one and titled its pivots."""
-    script, style = dag_viewer.viewer_script(), dag_viewer._STYLE
+    from tests.test_wiki_workspace_controls import _run
+
+    script, style = _viewer_source(), dag_viewer._STYLE
 
     for gone in (
         "keyboard-accessible",
@@ -509,31 +616,43 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
         '"Mathematics knowledge map"',
     ):
         assert gone not in script, gone
-    # Human review requires a level without authored edges to say so.
-    assert '"No dependencies are authored between these topics."' in script
-    assert 'if (node.declaration) header.appendChild(element("p", "bp-dag-kicker " + TEX,' in script
-    assert '[["All", "both", 1], ["Prerequisites " + beforeCount, "prerequisites", beforeCount],' in script
-    pivots = re.search(r"\.bp-dag-pivots \{([^}]*)\}", style)
-    assert pivots is not None and "display: flex;" in pivots.group(1) and "border: 1px solid" in pivots.group(1)
+    assert '", no dependency edges in this view"' in script
+    assert '[["Prerequisites", links.before], ["Used by", links.after]]' in script
+    _run(r"""
+      configure([focus]);renderReaderContext();
+      assert.equal(marked(dom$readingNeighbors,'bp-reading-links'),undefined,
+        'An edge-free result must not acquire empty prerequisite/dependent columns');
+      const base=record('B','chapter',{title:'Actual prerequisite'});
+      configure([focus,base],[['B','F',2,3]]);renderReaderContext();
+      const row=marked(dom$readingNeighbors,'bp-reading-links');assert(row);
+      assert(row.textContent.includes('Prerequisites · 1'));assert(row.textContent.includes('Used by · 0'));
+      assert.equal(links(row).length,1);assert.equal(links(row)[0].textContent,'Actual prerequisite');
+    """)
+    assert "function appendRelations(" not in script and "bp-dag-pivots" not in script
+    assert ".bp-reading-links { display: grid; grid-template-columns: 1fr 1fr;" in style
 
 
 def test_a_click_pans_its_node_clear_of_the_details_it_opens() -> None:
     """Every other way of choosing a node placed it beside the drawer; a click left it under the drawer."""
-    script = dag_viewer.viewer_script()
+    script = _viewer_source()
 
-    assert "if (moveCamera) center(node, .82); else reveal(node);" in script
-    # Centring and revealing share the drawer's geometry, on either side and as the phone sheet.
-    reveal = script.split("function reveal(node) {", 1)[1].split("\n}", 1)[0]
-    assert "free = freeArea()" in reveal and "free = freeArea()" in script.split("function center(", 1)[1]
-    # Only a node that the details cover moves.
-    assert "box.x + box.w > free.right" in reveal and "box.x < free.left" in reveal and "box.y + box.h > free.band" in reveal
+    assert 'settings = {history: "push", focus: "reading"}' in script
+    assert 'navigation.navigateNode(id, settings)' in script
+    assert "if (state.selected && mapAllowed) centerIfHidden(state.selected)" in script
+    center = script.split("function center(", 1)[1].split("\n    function ", 1)[0]
+    assert "free = freeArea()" in center
+    hidden = script.split("function centerIfHidden(node) {", 1)[1].split("\n    function ", 1)[0]
+    assert "refs.stage.clientWidth - 12" in hidden and "refs.stage.clientHeight - 12" in hidden
+    assert "function selectNode(" not in script
 
 
 def test_explorer_pages_relations_and_clamps_zoom() -> None:
-    script = dag_viewer.viewer_script()
+    script = _viewer_source()
 
-    assert "Math.min(visible + RELATION_PAGE, ids.length)" in script
-    assert "ids.slice(visible, next)" in script
+    assert 'pair[1].slice(0, 5)' in script
+    assert '"Show all " + pair[1].length' in script
+    assert 'nodes.slice(0, state.listLimit)' in script
+    assert 'Math.min(LIST_PAGE, nodes.length - visible.length)' in script
     assert "clamp(old * factor, MIN_SCALE, 4)" in script
 
 
@@ -541,7 +660,8 @@ def test_explorer_styles_keep_one_family_one_type_scale_and_one_micro_label() ->
     """The rail and drawer headings were set in Georgia, among twenty rem sizes and unloaded weights."""
     style = dag_viewer._STYLE
     assert "serif" not in style.replace("sans-serif", "")
-    assert set(re.findall(r"font-size: ([^;]+);", style)) <= {"11px", "12px", "13px", "14px", "17px", "22px"}
+    # Integrated reading and region cards add an 18px title; !important only protects it from Material.
+    assert set(re.findall(r"font-size: (\d+)px(?: !important)?;", style)) <= {"11", "12", "13", "14", "17", "18", "22"}
     assert set(re.findall(r"font-weight: ([^;]+);", style)) <= {"400", "600", "700"}
     uppercase = [rule.split("{")[0].strip() for rule in style.splitlines() if "text-transform: uppercase" in rule]
     assert uppercase == [
@@ -551,14 +671,18 @@ def test_explorer_styles_keep_one_family_one_type_scale_and_one_micro_label() ->
 
 def test_explorer_names_its_scope_once_and_lists_only_its_ancestors_above_it() -> None:
     """A kind pill, a rail kicker, the h1, the trail's last crumb and a home link all named the scope or the book."""
-    script, style = dag_viewer.viewer_script(), dag_viewer._STYLE
+    script, style = _viewer_source(), dag_viewer._STYLE
     for retired in ("bp-dag-view-kind", "bp-dag-navigation-kicker", "bp-dag-navigation-home"):
         assert retired not in script and retired not in style
     assert "Current scope" not in script and "Library atlas" not in script
-    # The rail's one-line trail drops the current crumb, which the h1 right under it names.
-    rail = 'trailList(trail.slice(0, -1), "bp-dag-navigation-path", TEX)'
-    assert rail in script
-    assert script.index(rail) < script.index('element("h1", "bp-dag-navigation-title " + TEX')
+    breadcrumb = script.split("function renderBreadcrumb() {", 1)[1].split("\n    function ", 1)[0]
+    assert 'var entries = routeTrail(currentBundle);' in breadcrumb
+    assert 'refs.breadcrumb.replaceChildren(trailList(' in breadcrumb
+    assert 'refreshReadingLabels(refs.breadcrumb)' in breadcrumb
+    assert 'reading_title: pending.reading_title' in script and 'reading_title: record.reading_title' in script
+    assert 'refs.pageHeading.textContent = currentBundle && currentBundle.title || data.title;' in script
+    assert 'element("h1", "bp-dag-navigation-title"' not in script
+    assert 'link.setAttribute("aria-current", "page")' in script
     assert ":is(.bp-dag-breadcrumb, .bp-dag-navigation-path) li + li::before { content: \"/\";" in style
 
 
@@ -574,57 +698,41 @@ def test_explorer_chrome_is_sized_in_px_not_in_materials_growing_rem() -> None:
 
 
 def test_explorer_head_is_one_row_where_the_rail_always_shows() -> None:
-    """Over the rail the hidden breadcrumb left a head row holding only the textbook link."""
+    """One persistent context/Library row precedes the responsive control row; no legacy book-link reparenting."""
     style = dag_viewer._STYLE
-    one_row = style.split("@media (min-width: 1101px) {\n", 1)[1].split("\n}", 1)[0]
-    assert ".bp-dag-context { display: contents; }" in one_row
-    assert ".bp-dag-viewer:has(.bp-dag-navigation-path) .bp-dag-breadcrumb { display: none; }" in one_row
-    # The textbook link ends the row in the DOM too, so Tab follows the row instead of starting at its end.
-    assert "order:" not in one_row
-    # The landing page's trail stays beside the search, capped so that it cannot push the controls over the link.
-    assert ".bp-dag-breadcrumb { flex: 0 1 auto; max-width: 32%; }" in one_row
-    script = dag_viewer.viewer_script()
-    assert script.index("head.appendChild(toolbar);") < script.index("placeBook();")
-    assert "context.appendChild(bookLink)" not in script
-    # At 1,100px and below a grid draws the link at the end of the first row, under phones on a line of its own.
-    # The runtime moves it before the toolbar there, so that Tab still follows what is drawn.
-    assert 'narrow = matchMedia("(max-width: 1100px)")' in script
-    assert "head.insertBefore(bookLink, narrow.matches ? toolbar : null);" in script
-    assert 'narrow.addEventListener("change", placeBook);' in script
-    narrow = style.split("@media (max-width: 1100px) {\n", 1)[1].split("\n}", 1)[0]
-    assert ".bp-dag-book { grid-area: 1 / 2;" in narrow and ".bp-dag-toolbar { grid-column: 1 / -1; }" in narrow
-    phones = style.split("@media (max-width: 680px) {\n", 1)[1].split("\n}", 1)[0]
-    assert ".bp-dag-book { grid-area: 2 / 1;" in phones
-    # Margins, not padding, space the link, so its focus ring sits on the text.
-    assert ".bp-dag-book { grid-area: 1 / 2; align-self: center; margin-right: 16px; }" in narrow
-    assert ".bp-dag-book { grid-area: 2 / 1; justify-self: start; margin: 4px 8px 0; }" in phones
-    assert not [rule for rule in style.splitlines() if ".bp-dag-book {" in rule and "padding" in rule]
-    # Up to 1,100px open details cover the rail, so the head keeps a row where the trail then appears.
-    assert (
-        "@media (min-width: 681px) and (max-width: 1100px) { "
-        ".bp-dag-viewer:has(.bp-dag-navigation-path) .bp-dag-breadcrumb { visibility: hidden; } }"
-    ) in style
-    assert ".bp-dag-viewer.bp-dag-has-selection.bp-dag-sheet-open .bp-dag-breadcrumb { visibility: visible; }" in style
-    # A head without a textbook link has nothing for that row while the rail keeps the trail, so it collapses.
-    assert (
-        ".bp-dag-viewer:has(.bp-dag-navigation-path):not(.bp-dag-has-selection.bp-dag-sheet-open) "
-        ".bp-dag-head:not(:has(.bp-dag-book)) .bp-dag-context { display: none; }"
-    ) in style.split("@media (min-width: 681px) and (max-width: 1100px) {\n", 1)[1].split("\n}", 1)[0]
-    # That row grows the head while details open, so the map shifts back by it instead of jumping under the pointer.
-    assert (
-        'var top = refs.body.offsetTop; host.classList.toggle("bp-dag-sheet-open", Boolean(open));\n'
-        'host.classList.toggle("bp-dag-has-selection", Boolean(selected));\n'
-        "state.transform.y += top - refs.body.offsetTop; schedule();"
-    ) in script
+    script = _viewer_source()
+    assert ".bp-dag-integrated .bp-dag-head { display: block; padding: 0; }" in style
+    assert ".bp-dag-integrated .bp-dag-context { display: flex;" in style
+    breadcrumb = next(rule for rule in style.splitlines() if rule.startswith(".bp-dag-integrated .bp-dag-breadcrumb {"))
+    declarations = {
+        name.strip(): value.strip()
+        for part in breadcrumb.split("{", 1)[1].rstrip(" }").split(";") if part.strip()
+        for name, _, value in (part.partition(":"),)
+    }
+    assert declarations["display"] == "block"
+    assert declarations["visibility"] == "visible !important"
+    assert declarations["max-width"] == "none", "The integrated context must not inherit the legacy 32% breadcrumb limit"
+    assert ".bp-dag-integrated .bp-dag-toolbar { display: flex;" in style
+    assert "context.insertBefore(bookLink, crumbs)" in script
+    assert "placeBook" not in script and "head.insertBefore(bookLink" not in script
+    narrow = style.split("@media (max-width: 1100px) {\n", 2)[2].split("\n}", 1)[0]
+    assert ".bp-dag-integrated .bp-dag-toolbar { flex-wrap: wrap; }" in narrow
+    assert ".bp-dag-integrated .bp-dag-search-wrap { flex-basis: 100%; }" in narrow
+    # The existing vertical compensation remains atomic with both class changes.
+    sheet = script.split("function setSheet(open, selected) {", 1)[1].split("\n    function ", 1)[0]
+    assert 'var top = refs.body.offsetTop;' in sheet
+    assert 'host.classList.toggle("bp-dag-sheet-open", Boolean(open));' in sheet
+    assert 'host.classList.toggle("bp-dag-has-selection", Boolean(selected));' in sheet
+    assert "state.transform.y += top - refs.body.offsetTop; schedule();" in sheet
 
 
 def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() -> None:
     """A pill over the map said to select a topic, or restated the selection the drawer and the dimming show."""
-    script, style = dag_viewer.viewer_script(), dag_viewer._STYLE
+    script, style = _viewer_source(), dag_viewer._STYLE
     assert "bp-dag-guide" not in script and "bp-dag-guide" not in style
     assert "dependency neighborhood" not in script
     # The density note stays, only for a readable crop or for labels hidden by zoom, as plain text.
-    assert '"Readable window · pan or Contents to see all "' in script and '"Zoom in to reveal "' in script
+    assert 'state.readableCrop ? "Pan or Browse to see all "' in script and '"Zoom in to reveal "' in script
     density = next(rule for rule in style.splitlines() if rule.startswith(".bp-dag-density {"))
     assert "left: 16px; bottom: 12px;" in density and "pointer-events: none;" in density
     # On phones it clears the collapsed sheet's 52px peek and 8px inset by 8px.
@@ -635,7 +743,7 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
 
 def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_under_status() -> None:
     """The toolbar always counted what it showed, and the toggle for items without edges sat in it."""
-    script, style = dag_viewer.viewer_script(), dag_viewer._STYLE
+    script, style = _viewer_source(), dag_viewer._STYLE
     assert "bp-dag-stats" not in script and "bp-dag-stats" not in style and '" shown"' not in script
     assert 'refs.hiddenButton.textContent = "Show " + hidden + " hidden"; refs.hiddenButton.hidden = !hidden;' in script
     assert '"Include items without edges"' in script and "Show items without edges" not in script
@@ -650,7 +758,7 @@ def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_und
 
 def test_explorer_search_draws_its_magnifier_and_shortcut_hint_in_css() -> None:
     """U+2315 is not in Plus Jakarta Sans and sat off the box's line, and "( / )" read as debug output."""
-    script, style = dag_viewer.viewer_script(), dag_viewer._STYLE
+    script, style = _viewer_source(), dag_viewer._STYLE
     assert "⌕" not in style and "( / )" not in script
     assert 'refs.search.placeholder = "Search the roadmap";' in script
     # A currentColor square masked by an inline SVG draws the magnifier in the muted text colour.
@@ -676,18 +784,47 @@ def test_explorer_elevation_is_two_shadows_and_a_selection_ring_that_keeps_the_c
         "0 0 0 2px color-mix(in srgb, var(--dag-link) 40%, transparent), var(--dag-e1)",
         "0 0 0 3px color-mix(in srgb, var(--dag-link) 18%, transparent)",
         "inset 3px 0 0 var(--dag-link)",
+        "inset 0 0 0 1px var(--dag-border)",
     }
+    # The phone's 44px group uses a zero-blur inner border, not extra elevation
+    # or a real border that grows the three native touch targets.
+    groups = re.findall(r"\.bp-dag-integrated \.bp-dag-zoom \{([^}]+)\}", style)
+    assert len(groups) == 1
+    group = dict(re.findall(r"([\w-]+):\s*([^;]+);", groups[0]))
+    assert group["height"] == "44px" and group["border"] == "0"
+    assert group["padding"] == "0" and group["gap"] == "0"
+    assert group["box-shadow"] == "inset 0 0 0 1px var(--dag-border)"
+    assert style.count("box-shadow: inset 0 0 0 1px var(--dag-border);") == 1
     assert ".bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-link), var(--dag-e1); }" in style
     assert "border-width" not in style
 
 
-def test_explorer_canvas_paints_its_labels_in_the_site_family_at_11px_or_more() -> None:
-    """Region and edge-count labels were painted in the generic sans-serif, the edge counts down to 9px."""
-    script = dag_viewer.viewer_script()
+def test_explorer_labels_use_the_site_family_and_remain_readable_at_initial_scale() -> None:
+    """Canvas labels and integrated DOM cards stay readable; weights need no text labels."""
+    script = _viewer_source()
     assert script.count('refs.ctx.font = "10px sans-serif";') == 1  # Parse probe only, never a painted label.
     assert 'family = getComputedStyle(host).fontFamily; refs.ctx.font = "11px " + family;' in script
-    fonts = re.findall(r"ctx\.font = ([^;]+);", script)
-    assert fonts == ['"10px sans-serif"', '"11px " + family', '"700 13px " + family', 'Math.max(11, 10 * state.transform.scale) + "px " + family']
+    assert 'if (refs.ctx.font.indexOf("11px") < 0) family = "sans-serif";' in script
+    # The integrated map uses DOM titles/statuses, not painted numeric weights.
+    # Their actual published CSS must remain readable at the .9 initial floor.
+    rules = re.findall(r"\.bp-dag-integrated(?:\.bp-dag-atlas)? \.bp-dag-node-(?:title|meta) \{([^}]+)\}", dag_viewer._STYLE)
+    sizes = [float(size) for rule in rules for size in re.findall(r"font-size:\s*([\d.]+)px", rule)]
+    assert len(sizes) >= 3 and min(sizes) * .9 >= 11
+    painter = script.split("function drawRoute(", 1)[1].split("function updateOverlays(", 1)[0]
+    assert "fillText" not in painter and "measureText" not in painter
+    from tests.test_integrated_dag_layout import _run
+
+    _run(r"""
+      eval(productionSource.slice(productionSource.indexOf('  var NODE_W ='),productionSource.indexOf('  var clients =')));
+      eval(productionSource.slice(productionSource.indexOf('  var clamp ='),productionSource.indexOf('  function element(')));
+      const frame=eval('('+original('sceneFrame')+')');
+      const box={x:0,y:0,w:1000,h:100},scene={nodes:new Map([['actual',box]])};
+      const before=JSON.stringify(Array.from(scene.nodes));
+      const measured=frame(scene,['actual'],{left:0,right:800,top:0,height:400},{side:0,top:0,bottom:0});
+      assert.equal(measured.fitted,.8);assert.equal(measured.scale,.9);assert.equal(measured.cropped,true);
+      assert.equal(measured.contained,0,'Readable cropping must not claim an oversized card fits');
+      assert.equal(JSON.stringify(Array.from(scene.nodes)),before);
+    """, {})
 
 
 def _contrast(first: str, second: str) -> float:
@@ -757,9 +894,9 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
         context_links={node.id: f"chapters/chapter.html#node={node.id}" for node in nodes},
     )
 
-    # The hierarchy rail is part of the shared runtime, but the dependency-free
-    # application still stays below one small uncompressed network response.
-    assert len(dag_viewer.viewer_script().encode()) < 66_000
+    # The reader, hierarchy rail and bounded layout share one prebuilt
+    # response; consumers still need no application build or runtime CDN.
+    assert len(dag_viewer.viewer_script().encode()) < 132_000
     assert output.stat().st_size < 300_000
     assert search.stat().st_size < 100_000
     search_payload = json.loads(search.read_text(encoding="utf-8"))
@@ -780,7 +917,7 @@ def test_viewer_script_links_are_relative_to_the_rendered_site_root(tmp_path: Pa
     )
 
 
-def test_payload_layout_follows_dependencies_and_keeps_collapsed_cycles_stable(tmp_path: Path) -> None:
+def test_payload_preserves_dependencies_and_collapsed_cycles_without_server_coordinates(tmp_path: Path) -> None:
     nodes = (
         ViewNode("result", "Result", "node", ("result",), (("planned", 1),)),
         ViewNode("base", "Base", "node", ("base",), (("planned", 1),)),
@@ -801,15 +938,24 @@ def test_payload_layout_follows_dependencies_and_keeps_collapsed_cycles_stable(t
         ),
     )
 
-    def layout(view: GraphView) -> dict[str, tuple[int, int]]:
-        output = tmp_path / f"{view.kind}.json"
-        dag_viewer.write_payload(output, view, links={})
-        payload = json.loads(output.read_text(encoding="utf-8"))
-        return {node["id"]: (node["layout"]["x"], node["layout"]["y"]) for node in payload["nodes"]}
-
-    assert layout(acyclic) == {"base": (0, 0), "result": (312, 0)}
-    # A collapsed cycle has no topological order, so it keeps source order.
-    assert layout(cyclic) == {"result": (0, 0), "base": (312, 0)}
+    for view, expected in (
+        (acyclic, [{"source": "base", "target": "result", "statement": 1, "proof": 0}]),
+        (cyclic, [
+            {"source": "base", "target": "result", "statement": 1, "proof": 0},
+            {"source": "result", "target": "base", "statement": 0, "proof": 1},
+        ]),
+    ):
+        outputs = [tmp_path / f"{view.kind}-{index}.json" for index in range(2)]
+        for output in outputs:
+            dag_viewer.write_payload(output, view, links={})
+        assert outputs[0].read_bytes() == outputs[1].read_bytes()
+        payload = json.loads(outputs[0].read_text(encoding="utf-8"))
+        assert [node["id"] for node in payload["nodes"]] == ["result", "base"]
+        assert all(node["layout"] == {"height": 56, "width": 196} for node in payload["nodes"])
+        assert all(node["status_counts"] == [["planned", 1]] and not node["isolated"] for node in payload["nodes"])
+        assert payload["edges"] == expected
+        assert payload["edge_count"] == len(expected)
+        assert payload["view"]["presentation"] == "dag" and payload["regions"] == []
 
 
 def test_payload_rejects_duplicate_nodes_and_unknown_edges(tmp_path: Path) -> None:
