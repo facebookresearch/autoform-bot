@@ -3671,7 +3671,18 @@ def _node_references(
     for other_id in node_ids:
         other = graph.nodes[other_id]
         shown = _display_title(other.title, numbers[other_id].rpartition(" ")[0])
-        label = html.escape(numbers[other_id] + (f" ({shown})" if shown else ""))
+        text = numbers[other_id] + (f" ({shown})" if shown else "")
+        reading = dag_viewer._reading_label(text, require_math=False)
+        label = html.escape(text)
+        if reading is not None:
+            # Only converter-validated text/code/math enters the native link;
+            # authored HTML, destinations and attributes remain literal.
+            label = "".join(
+                html.escape(value) if kind == "text" else
+                f"<code>{html.escape(value)}</code>" if kind == "code" else
+                f'<span class="arithmatex">{html.escape(value)}</span>'
+                for kind, value in reading["parts"]
+            )
         key = graph_views.display_status_key(other, statuses[other_id])
         rendered.append(
             f'<a class="bp-ref bp-ref-{key}" '

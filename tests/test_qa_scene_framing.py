@@ -17,13 +17,14 @@ pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is required for scen
 _ENVIRONMENT = r"""
 eval(productionSource.slice(productionSource.indexOf('  var NODE_W ='),productionSource.indexOf('  var clients =')));
 eval(productionSource.slice(productionSource.indexOf('  var clamp ='),productionSource.indexOf('  function element(')));
-eval(['sceneFrame','sceneDetours','framingNodes','framingViewport','framingPadding','world','screen','fit','freeArea','center']
+eval(['sceneFrame','sceneDetours','framingNodes','framingViewport','framingPadding','world','screen','fit','freeArea','center','bandInsets','centerIfHidden']
   .map(original).join('\n'));
 var data=fixture.data,ui$active=data.nodes,ui$selected=null,mapAllowed=true,atlas=fixture.atlas,
   navigation={},ui$area=null,ui$orientation=fixture.direction,family='sans-serif',restoring=false;
 var scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,sceneWiki,sceneReduced;
 var dom$stage={clientWidth:fixture.width,clientHeight:fixture.height},dom$inspector={offsetTop:260};
 var dom$fit={setAttribute(name,value){this[name]=String(value);}};
+var ui$activeIds=new Set(data.nodes.map(node=>node.id)),dom$density={hidden:true};
 var host={classList:{contains(){return false;}}},document={activeElement:{dataset:{}}};
 var ui$transform={x:0,y:0,scale:1},ui$readableCrop=false;
 function sheetLayout(){return fixture.width<=620;}
@@ -41,6 +42,29 @@ _AREAS = ["Algebra & Number Theory", "Analysis & Probability", "Discrete Mathema
 _ROOT_WEIGHTS = [(0, 1, 22, 74), (0, 2, 132, 26), (1, 2, 50, 79), (1, 3, 0, 9), (1, 0, 66, 49),
                  (2, 0, 118, 68), (2, 1, 0, 9), (2, 3, 0, 2), (3, 1, 3, 4), (3, 2, 1, 5),
                  (4, 2, 362, 342), (0, 3, 1, 4), (3, 0, 1, 3)]
+
+
+@pytest.mark.parametrize(("width", "height", "direction"), [(600, 260, "lr"), (390, 520, "tb")])
+def test_fit_keeps_the_selected_isolate_whole_when_the_linked_only_frame_fits(
+    width: int, height: int, direction: str,
+) -> None:
+    data = {
+        "nodes": [{"id": name, "kind": "node", "width": 196, "height": 100, "isolated": name == "C"}
+                  for name in ("A", "B", "C")],
+        "edges": [{"source": "A", "target": "B", "statement": 2, "proof": 3}],
+    }
+    _run(_ENVIRONMENT + r"""
+      ui$selected=data.nodes[2];
+      const before=JSON.stringify(data),current=geometry(),viewport=framingViewport(),padding=framingPadding();
+      assert(sceneFrame(current,['A','B','C'],viewport,padding).cropped,'Fixture must exercise an overfull whole map');
+      assert.equal(sceneFrame(current,['A','B'],viewport,padding).cropped,false,'Linked-only frame must fit');
+      fit();
+      assert(insideFrame(ui$selected),'Fit dropped its selected unlinked result outside the usable viewport');
+      assert(ui$transform.scale>=.9);assert.strictEqual(geometry(),current);
+      assert.equal(current.nodes.size,3);assert.equal(current.$display.totalPairs,1);
+      assert.equal(data.edges[0].statement,2);assert.equal(data.edges[0].proof,3);
+      assert.equal(JSON.stringify(data),before,'Selection must not invent links or modify the captured graph');
+    """, {"data": data, "width": width, "height": height, "direction": direction, "atlas": False})
 
 
 @pytest.fixture(scope="module")

@@ -71,7 +71,7 @@ const context={assert,frames,timers,cancelled,observed,listeners,notify,flushFra
   canvasWrite(){assert(!delivering,'Actual resize wrote canvas during observer delivery');}
 };
 vm.createContext(context);
-vm.runInContext(state[0]+'\n'+['queueResize','schedule','resize','setSheet','compactRegions','sheetLayout','syncSheetAccessibility']
+vm.runInContext(state[0]+'\n'+['queueResize','schedule','resize','setSheet','compactRegions','sheetLayout','syncSheetAccessibility','positionMapFeedback','stopRowMath','fallbackRowMath']
   .map(original).join('\n')+'\nvar dispose='+dispose+';',context,{timeout:1000});
 vm.runInContext(`
 var window={ResizeObserver,devicePixelRatio:2,matchMedia(){return {matches:false};}};
@@ -80,9 +80,12 @@ var classes=new Set(),host={classList:{contains(name){return classes.has(name);}
 var document={activeElement:null},navigation=null,dom$pageHeading=null;
 var dom$inspectorInner={contains(){return false;},setAttribute(){},removeAttribute(){}},dom$sheetHandle={replaceChildren(){},setAttribute(){},focus(){}};
 // The redesign's handle names the page, so its accessibility pass reads the route and records.
-var currentBundle=null,records=new Map(),ui$requestedNode=null,ui$selected=null,scene=null;
+var currentBundle=null,records=new Map(),ui$requestedNode=null,ui$selected=null,ui$mathJob=null,scene=null;
 function readingLabel(){return '';} function refreshReadingLabels(){} function swatch(){return '';}
 var dom$stage={clientWidth:800,clientHeight:600},writes=[],canvasWidth=0,canvasHeight=0;
+var dom$breadcrumb={clientWidth:600},dom$mapKey=null,dom$density=null;
+function renderBreadcrumb(){renderBreadcrumb.$width=dom$breadcrumb.clientWidth;}
+renderBreadcrumb.$width=dom$breadcrumb.clientWidth;
 var dom$canvas={
   get width(){return canvasWidth;},set width(value){canvasWrite();writes.push(['width',value]);canvasWidth=value;},
   get height(){return canvasHeight;},set height(value){canvasWrite();writes.push(['height',value]);canvasHeight=value;}

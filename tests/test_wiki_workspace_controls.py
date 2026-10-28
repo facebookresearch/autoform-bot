@@ -25,7 +25,7 @@ function original(name) {
   }
   assert.fail('Unparseable production callback: '+name);
 }
-const names=['element','readingLabel','button','recordId','semanticParent','topicPeers','neighborIds','neighborhood',
+const names=['element','readingLabel','button','bindNodeLink','recordId','semanticParent','topicPeers','neighborIds','neighborhood',
   'relationCounts','renderReaderContext','inventoryNodes','sourceNodes','inCurrentScope'];
 const constants=['NODE_W','plural','num','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
@@ -41,6 +41,7 @@ _PEERS = r"""
 class Element {
   constructor(tag) {this.tagName=tag.toUpperCase();this.children=[];this.listeners=new Map();this.attrs=new Map();this.text='';}
   get textContent() {return this.text+this.children.map(child=>child.textContent).join('');}
+  get firstChild() {return this.children[0]||null;}
   set textContent(value) {this.text=String(value);this.children=[];}
   setAttribute(name,value) {this.attrs.set(name,String(value));}
   getAttribute(name) {return this.attrs.has(name)?this.attrs.get(name):null;}
@@ -91,25 +92,39 @@ class Element {
     this.style={setProperty(name,value){this[name]=String(value);}};
   }
   get textContent() {return this.text+this.children.map(child=>child.textContent).join('');}
+  get firstChild() {return this.children[0]||null;}
   set textContent(value) {this.text=String(value);this.children=[];}
   setAttribute(name,value) {this.attrs.set(name,String(value));}
   getAttribute(name) {return this.attrs.has(name)?this.attrs.get(name):null;}
   removeAttribute(name) {this.attrs.delete(name);}
-  appendChild(child) {child.parentElement=this;this.children.push(child);return child;}
+  appendChild(child) {if(child.parentElement)child.remove();child.parentElement=this;this.children.push(child);return child;}
   remove() {
     const parent=this.parentElement;if(!parent)return;
     parent.children=parent.children.filter(child=>child!==this);this.parentElement=null;
   }
   insertBefore(child,before) {child.parentElement=this;this.children.splice(this.children.indexOf(before),0,child);}
   // As the DOM does, a string argument becomes a text node.
-  replaceChildren(...children) {this.children=[];this.text='';this.append(...children);}
+  replaceChildren(...children) {this.children.forEach(child=>child.parentElement=null);this.children=[];this.text='';this.append(...children);}
   append(...children) {children.forEach(child=>this.appendChild(typeof child==='string'?document.createTextNode(child):child));}
   contains(node) {return node===this||this.children.some(child=>child.contains(node));}
   addEventListener(type,callback) {
     const callbacks=this.listeners.get(type)||[];callbacks.push(callback);this.listeners.set(type,callbacks);
   }
   all() {return this.children.flatMap(child=>[child,...child.all()]);}
-  querySelector(tag) {return this.all().find(child=>child.tagName===tag.toUpperCase())||null;}
+  querySelectorAll(selector) {
+    return this.all().filter(child=>{
+      const tag=selector.match(/^[a-z][a-z0-9-]*/i),kind=selector.match(/^\.([\w-]+)/);
+      if(tag&&child.tagName!==tag[0].toUpperCase())return false;
+      if(kind&&!(child.className||'').split(/\s+/).includes(kind[1]))return false;
+      return Array.from(selector.matchAll(/\[([\w-]+)(?:="([^"]*)")?\]/g)).every(([,key,expected])=>{
+        let value=child.getAttribute(key);
+        if(key.startsWith('data-'))value=child.dataset[key.slice(5).replace(/-([a-z])/g,(_,letter)=>letter.toUpperCase())];
+        if(key==='tabindex'&&value===null&&child.tabIndex!==undefined)value=String(child.tabIndex);
+        return value!==null&&value!==undefined&&(expected===undefined||String(value)===expected);
+      });
+    });
+  }
+  querySelector(selector) {return this.querySelectorAll(selector)[0]||null;}
   getContext() {return {font:''};}
   focus(options) {this.focuses.push(options);document.activeElement=this;}
 }
@@ -132,14 +147,13 @@ var currentBundle={nodeId:'chapter',scope:'chapter',title:'Authored topic',url:'
 var instance=1,trail=[],view={},family,data={title:'Authored topic',nodes:[],edges:[]};
 var mapAllowed=true,ui$mapAllowed=true,ui$mode='graph',ui$selectedStatuses=new Set(['planned']),ui$showIsolated=true;
 var presentStatuses=['planned'],ui$relationIds=new Set(['F']),ui$overviewGroup=null,ui$area=null;
-var ui$wikiView=null,sceneData=null,scene=null;
+var ui$wikiView=null,ui$mathJob=null,sceneData=null,scene=null;
 function getComputedStyle() {return {fontFamily:'sans-serif'};}
 function globalListen(target,type,callback) {target.addEventListener(type,callback);}
 class MutationObserver {observe(){}}
-function trailList() {return new Element('ol');}
 function renderStatusFields(){}function renderNavigation(){}function calculateActive(){}
 function compactRegions(){return false;}function syncNavigationSelection(){}
-function ensureGlobalSearch(){}function fit(){}function revealAll(){}function openResults(){}
+function ensureGlobalSearch(){}function fit(){}function revealAll(){}function openResults(){}function focusNodeControl(){}
 function pointerDown(){}function pointerMove(){}function pointerUp(){}function resize(){}
 function syncSheetAccessibility(){}function schedule(){}function remember(){}function sheetLayout(){return false;}
 function closeSearch(){}function setFilters(){}
@@ -166,8 +180,8 @@ def _run(body: str) -> None:
 
 def _run_controls(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
-    script += "const controls=['element','button','readingLabel','safeHref','buildShell','bindEvents','setBrowse','syncControls','currentOverviewGroup',"
-    script += "'renderBreadcrumb','routeTrail','semanticParent','refreshReadingLabels','sourceNodes','inCurrentScope'].map(original).join('\\n');\n"
+    script += "const controls=['element','button','readingLabel','bindNodeLink','safeHref','buildShell','bindEvents','setBrowse','syncControls','wrapMapKey','currentOverviewGroup',"
+    script += "'trailList','renderBreadcrumb','routeTrail','semanticParent','refreshReadingLabels','sourceNodes','inCurrentScope'].map(original).join('\\n');\n"
     script += "const start=source.indexOf('    var dom$announcement,');assert(start>=0);\n"
     script += "const domDeclarations=source.slice(start,source.indexOf(';',start)+1);\n"
     program = _CONTROL_PEERS + "\n" + body
@@ -415,24 +429,28 @@ def test_source_free_direct_statement_button_handles_keyboard_generated_click_wi
     """)
 
 
-def test_library_control_targets_deployment_home_and_preserves_native_modified_clicks() -> None:
+def test_first_breadcrumb_targets_deployment_home_and_preserves_native_modified_clicks() -> None:
     _run_controls(r"""
       homeURL='https://example.test/deployed/project/index.html';
       sharedIndex=null;records.clear();
-      buildShell();bindEvents();
-      assert.equal(dom$homeLink.href,homeURL,
-        'Library must lead to site home even when the index is unavailable and no outline can retarget it');
+      renderBreadcrumb();const home=dom$breadcrumb.querySelector('.bp-dag-book');
+      assert(home);assert.equal(home.href,homeURL,
+        'Home must lead to the deployment home even when the index is unavailable');
+      assert.strictEqual(home.parentElement,dom$breadcrumb.firstChild.firstChild);
+      assert.equal(host.querySelectorAll('.bp-dag-book').length,1,'Home must have one real entrance, not a duplicate widget');
       for(const settings of [{ctrlKey:true},{metaKey:true},{shiftKey:true},{altKey:true},{button:1},{button:2},{defaultPrevented:true}]) {
-        const count=navigationCalls.length,event=emit(dom$homeLink,'click',Object.assign({button:0},settings));
+        const count=navigationCalls.length,event=emit(home,'click',Object.assign({button:0},settings));
         assert.equal(event.defaultPrevented,Boolean(settings.defaultPrevented));
         assert.equal(navigationCalls.length,count);
       }
-      const event=emit(dom$homeLink,'click',{button:0});assert.equal(event.defaultPrevented,true);
-      assert.equal(navigationCalls.at(-1).url,homeURL);assert.equal(navigationCalls.at(-1).options.history,'push');
+      const event=emit(home,'click',{button:0});assert.equal(event.defaultPrevented,true);
+      assert.equal(navigationCalls.at(-1).url,homeURL);
+      assert.deepEqual(navigationCalls.at(-1).options,{history:'push',focus:true,mapFirst:false});
       currentBundle={nodeId:null,scope:'roadmap',title:'Authored library',url:homeURL,graph:{view:{}}};
       const entries=routeTrail(currentBundle);
       assert.equal(entries.length,1,'The site home must not pretend to be inside the roadmap trail');
       assert.equal(entries[0].url,null,'The only home crumb is current, not a link to another view');
+      renderBreadcrumb();assert.equal(dom$breadcrumb.querySelectorAll('.bp-dag-book').length,0);
     """)
 
 

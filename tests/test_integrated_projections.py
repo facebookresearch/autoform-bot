@@ -37,7 +37,7 @@ assert(constants, 'Production map constants missing');
 const kinds = source.match(/\bvar KINDS =[^;]+;/);
 assert(kinds, 'Production kind words missing');
 const functions = [
-  'element', 'readingLabel', 'button', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
+  'element', 'readingLabel', 'button', 'bindNodeLink', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
   'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'matchesStatus', 'matchesIsolation', 'calculateActive',
   'statusLabel', 'finished', 'boundaryMeta', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
   'semanticParent', 'placeOf', 'pendingMath', 'summaryLine', 'refreshReadingLabels', 'inCurrentScope', 'sourceNodes'

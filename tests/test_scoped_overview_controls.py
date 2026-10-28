@@ -32,7 +32,7 @@ function original(name) {
 const names=['element','readingLabel','refreshReadingLabels','safeHref','graphAt','scopeOverviewProjection','structuralScopeProjection','boundaryContextProjection','expandedGroupShelves','scopeOverviewFlow','recordId','mapNode','adoptGraph',
   'neighborIds','neighborhood','regionProjection','updateProjection','semanticParent','routeTrail',
   'currentOverviewGroup','trailList','renderBreadcrumb','syncNavigationSelection','compactRegions','collect','matchesStatus','matchesIsolation','calculateActive',
-  'syncControls','refresh','activateNode','focusNodeControl','setSheet','writeLocation','setMode','zoomAt','closeSearch','sourceNodes','inCurrentScope'];
+  'syncControls','refresh','activateNode','focusNodeControl','setSheet','positionMapFeedback','freeArea','writeLocation','setMode','zoomAt','closeSearch','sourceNodes','inCurrentScope'];
 const constants=['NODE_W','SEARCH_PAGE','clamp','plural','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0,'Missing production constant: '+name);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
@@ -53,9 +53,14 @@ function peer(tag='div') {
     classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);},
       contains(name){return classes.has(name);}},
     setAttribute(name,value){attributes.set(name,String(value));},
-    getAttribute(name){return attributes.get(name)||null;},removeAttribute(name){attributes.delete(name);},
+    getAttribute(name){return attributes.has(name)?attributes.get(name):null;},removeAttribute(name){attributes.delete(name);},
+    contains(node){return node===this||this.children.some(child=>child.contains(node));},
+    all(){return this.children.flatMap(child=>[child,...child.all()]);},
+    querySelectorAll(tag){return this.all().filter(child=>child.tagName===tag.toUpperCase());},
+    querySelector(tag){return this.querySelectorAll(tag)[0]||null;},
     addEventListener(type,callback){const callbacks=listeners.get(type)||[];callbacks.push(callback);listeners.set(type,callbacks);},
-    appendChild(child){this.children.push(child);return child;},replaceChildren(...children){this.children=children;},
+    appendChild(child){this.children.push(child);return child;},
+    replaceChildren(...children){this.children=children.map(child=>typeof child==='string'?document.createTextNode(child):child);},
     remove(){this.removed=true;},
     focus(){document.activeElement=this;effects.push({kind:'focus',id:this.dataset.autoformNodeId||'reading'});}};
 }
@@ -70,7 +75,13 @@ function clickPeer(link,settings={}) {
 }
 const host=peer(),dom$body=peer(),dom$sheetHandle=peer('button'),dom$breadcrumb=peer('nav');
 var scene=null;
+const dom$nodeLayer=Object.assign(peer(),{scrollLeft:0,scrollTop:0});
+dom$nodeLayer.querySelector=selector=>{
+  assert.equal(selector,'.bp-dag-node[tabindex="0"]');
+  return Array.from(overlays.values()).find(control=>control.tabIndex===0)||null;
+};
 const dom$mapContext=peer(),dom$mapKey=peer(),dom$isolated=peer('input'),dom$filterSummary=peer('button');
+const dom$density=peer(),dom$inspector=peer();dom$mapKey.style={};dom$density.style={};
 const dom$graphMode=peer('button'),dom$listMode=peer('button'),dom$sourcesMode=peer('button');
 const dom$stage=Object.assign(peer(),{clientWidth:900,clientHeight:700}),dom$inventory=peer(),inventoryHeading=peer('h2');
 dom$inventory.querySelector=selector=>{assert.equal(selector,'h2');return inventoryHeading;};
@@ -92,15 +103,16 @@ var records=new Map(nodes.map(node=>[node.id,Object.assign({},node,{scope:chapte
 records.set('roadmap',{id:'roadmap',scope:'roadmap',title:'Library',status:'planned',route:'https://example.test/roadmap/index.html'});
 records.set(chapterId,{id:chapterId,scope:chapterId,parent:'roadmap',title:'Large scope',status:'planned',route:window.location.href});
 ['view-group:1','view-group:2'].forEach(id=>records.set(id,{id,scope:id,parent:'roadmap',title:'Source track',status:'planned',navigation:'source'}));
+var alive=true;
 var sharedIndex={nodes:Array.from(records.values()),relations:[]},currentBundle={nodeId:chapterId,scope:chapterId,
-  title:'Large scope',graph:contextGraph,dataURL:'https://example.test/dependencies/chapters/chapter.json'};
+  title:'Large scope',graph:contextGraph,dataURL:'https://example.test/dependencies/chapters/chapter.json',isCurrent:()=>alive};
 var data=contextGraph,view,atlas,palette,byId,prerequisites,dependents,statusCounts,presentStatuses,mapAllowed;
 var ui$requestedNode=chapterId,ui$overviewGroup=null,ui$scopeOverview=false,ui$area=null,ui$overviewOnly=false;
 var ui$selected=null,ui$direction='both',ui$active=[],ui$activeIds=new Set(),ui$activeDirty=true,ui$spotlight=null,ui$hovered=null;
 var ui$selectedStatuses=new Set(['fully_proved']),ui$filtersTouched=true,ui$showIsolated=true;
 var ui$mode='graph',ui$mapAllowed=true,ui$listLimit=100,ui$relationIds=null,ui$transform={x:0,y:0,scale:.9};
 var firstResize=false,trail=[],overlays=new Map();
-var ui$wikiProjectionTicket=0,ui$wikiView=null;
+var ui$wikiProjectionTicket=0,ui$wikiView=null,ui$mathJob=null;
 const navigation={checkpoint(method){effects.push({kind:'checkpoint',method:method||'replace',group:ui$overviewGroup});},
   navigateNode(id,options){effects.push({kind:'navigate',id,options});},
   navigate(url,options){effects.push({kind:'navigate-url',url,options});}};
@@ -114,7 +126,7 @@ function geometry(){return {$display:{reduced:false}};}
 var dom$shelves=null;
 const dom$browsePopover=peer(),dom$browseToggle=peer();
 function sheetLayout(){return false;}
-function resize(){syncControls();ui$active.forEach(node=>{const control=peer('button');control.dataset.autoformNodeId=node.id;overlays.set(node.id,control);});}
+function resize(){syncControls();ui$active.forEach((node,index)=>{const control=peer('button');control.dataset.autoformNodeId=node.id;control.tabIndex=index? -1:0;overlays.set(node.id,control);});}
 function fit(){effects.push({kind:'fit'});}
 function centerIfHidden(node){effects.push({kind:'center',id:node.id});}
 function screen(){return {x:0,y:0,w:264,h:148};}

@@ -873,7 +873,7 @@ def test_choosing_from_contents_keeps_the_readers_place_and_focus(desktop_page: 
     row.press("Enter")
     _consumer_selected(page, explorer_consumer, "flat/item-0150")
     # Focus lands on the chosen statement, which the reader scrolled to, not on the page title above it.
-    playwright.expect(page.locator(".bp-reading-current .bp-thmheading")).to_be_focused()
+    playwright.expect(page.locator(".bp-reading-body .bp-reading-current .bp-thmheading")).to_be_focused()
     playwright.expect(_reading_card(page, "flat/item-0150")).to_contain_text("complete reading page")
     page.go_back()
     _consumer_ready(page, explorer_consumer, "flat")
@@ -901,7 +901,7 @@ def test_phone_selection_opens_the_reader_at_half_and_returns_to_a_reachable_sel
     search.fill("Target theorem")
     search.press("Enter")
     node = _consumer_selected(page, explorer_consumer, "chapter/target")
-    playwright.expect(page.locator(".bp-reading-current .bp-thmheading")).to_be_focused()
+    playwright.expect(page.locator(".bp-reading-body .bp-reading-current .bp-thmheading")).to_be_focused()
     sheet, body = page.locator(".bp-reading-pane").bounding_box(), page.locator(".bp-dag-body").bounding_box()
     assert sheet is not None and body is not None
     # The three-position sheet opens a selection at half, leaving the top 45%
@@ -1243,7 +1243,7 @@ def test_search_keyboard_navigation_and_focus(desktop_page: object, explorer_con
     page.evaluate("window.__consumerDocument=document")
     search.press("Enter")
     _consumer_selected(page, explorer_consumer, "chapter/target")
-    playwright.expect(page.locator(".bp-reading-current .bp-thmheading")).to_be_focused()
+    playwright.expect(page.locator(".bp-reading-body .bp-reading-current .bp-thmheading")).to_be_focused()
     assert page.url == explorer_consumer.route("chapter/target")
     assert page.evaluate("document===window.__consumerDocument") is True
 
@@ -1260,7 +1260,7 @@ def test_a_search_result_in_this_view_selects_the_drawn_node(desktop_page: objec
         else:
             page.locator(f'.bp-dag-result[data-result-id="{node_id}"]').click()
         node = _consumer_selected(page, explorer_consumer, node_id)
-        playwright.expect(page.locator(".bp-reading-current .bp-thmheading")).to_be_focused()
+        playwright.expect(page.locator(".bp-reading-body .bp-reading-current .bp-thmheading")).to_be_focused()
         _assert_hit(page, node)
         assert page.locator(".bp-dag-node").count() > 1
         assert page.url == explorer_consumer.route(node_id)
@@ -1601,9 +1601,12 @@ def test_the_published_landing_page_is_one_full_page_explorer_opened_by_its_hero
     playwright.expect(page.get_by_role("heading", level=1)).to_have_count(1)
     playwright.expect(page.get_by_role("heading", level=1)).to_have_text("Explorer fixture")
     playwright.expect(page.locator(".bp-reading-body .bp-hero-title")).to_have_count(1)
-    library = page.locator(".bp-dag-book")
-    playwright.expect(library).to_have_attribute("href", site_url + "/index.html")
-    _assert_hit(page, library)
+    current = page.locator('.bp-dag-breadcrumb li[aria-current="page"]')
+    playwright.expect(current).to_have_text("Home")
+    playwright.expect(current.locator("a")).to_have_count(0)
+    playwright.expect(page.locator(".bp-dag-book")).to_have_count(0)
+    assert page.url == site_url + "/index.html"
+    _assert_hit(page, current)
     algebra = page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')
     playwright.expect(algebra).to_have_attribute("href", _site_route(page, site_url, "algebra"))
     _assert_hit(page, algebra)
@@ -1986,6 +1989,8 @@ def test_the_explorer_draws_its_breadcrumb_once(desktop_page: object, site_url: 
     playwright.expect(crumbs.locator('[aria-current="page"]')).to_have_text("Algebra")
     playwright.expect(page.locator(".bp-dag-navigation-path")).to_have_count(0)
     library = page.locator(".bp-dag-book")
+    playwright.expect(library).to_have_text("Home")
+    playwright.expect(library).to_have_attribute("href", site_url + "/index.html")
     _assert_hit(page, library)
     for width in (1000, 390, 1280):
         page.set_viewport_size({"width": width, "height": 900 if width != 390 else 844})
@@ -1995,6 +2000,8 @@ def test_the_explorer_draws_its_breadcrumb_once(desktop_page: object, site_url: 
     _open_site(page, site_url, "index.html")
     playwright.expect(crumbs).to_have_count(1)
     playwright.expect(crumbs).to_be_visible()
+    playwright.expect(crumbs.locator('li[aria-current="page"]')).to_have_text("Home")
+    playwright.expect(page.locator(".bp-dag-book")).to_have_count(0)
 
 
 def test_the_published_atlas_hides_the_isolate_toggle(desktop_page: object, site_url: str) -> None:
@@ -2089,12 +2096,12 @@ def test_a_published_app_page_restores_the_site_chrome_when_its_data_fails(
 def test_a_published_chapter_explorer_links_its_textbook_chapter_and_keeps_its_heading(
     desktop_page: object, site_url: str
 ) -> None:
-    """The canonical mathematical page is already the reader; Library is navigation, not a second self-link."""
+    """The canonical mathematical page is already the reader; Home is navigation, not a second self-link."""
     page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html")
     assert page.url == _site_route(page, site_url, "algebra")
     library = page.locator(".bp-dag-book")
     playwright.expect(library).to_have_attribute("href", site_url + "/index.html")
-    playwright.expect(library).to_have_text("Library")
+    playwright.expect(library).to_have_text("Home")
     _assert_hit(page, library)
     playwright.expect(page.get_by_role("heading", level=1)).to_have_count(1)
     playwright.expect(page.get_by_role("heading", level=1)).to_have_text("Algebra")
@@ -2102,10 +2109,13 @@ def test_a_published_chapter_explorer_links_its_textbook_chapter_and_keeps_its_h
     playwright.expect(_reading_card(page, "algebra/result")).to_contain_text("The main result.")
 
 
-def test_slash_on_the_published_landing_page_opens_the_explorer_search(desktop_page: object, site_url: str) -> None:
-    """The landing page is the full-page explorer, so "/" opens its search, as on every explorer page."""
+def test_global_command_k_opens_landing_search_while_unfocused_slash_stays_native(desktop_page: object, site_url: str) -> None:
+    """Only the modified shortcut is global; slash requires explorer focus."""
     page = _open_site(desktop_page, site_url, "index.html")
+    page.evaluate("() => {document.body.tabIndex=-1;document.body.focus();}")
     page.keyboard.press("/")
+    assert page.evaluate("() => document.activeElement===document.body")
+    page.keyboard.press("Control+K")
     playwright.expect(page.locator(".bp-dag-search")).to_be_focused()
 
 
@@ -2150,8 +2160,11 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     def full_math(node_id: str, count: int) -> object:
         assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-reading-body'))") is True
         card = _reading_card(page, node_id)
-        playwright.expect(card.locator(".arithmatex")).to_have_count(count)
-        playwright.expect(card.locator("mjx-container")).to_have_count(count)
+        # Generated formal-reference titles now have their own safe math.
+        # These exact counts still describe the complete authored statement;
+        # the reference-title native test independently checks its controls.
+        playwright.expect(card.locator(".arithmatex:not(.bp-dependencies .arithmatex)")).to_have_count(count)
+        playwright.expect(card.locator("mjx-container:not(.bp-dependencies mjx-container)")).to_have_count(count)
         playwright.expect(card.locator("mjx-merror, merror")).to_have_count(0)
         assert page.locator("[data-autoform-math-stage]").count() == 0
         return card
@@ -2594,14 +2607,22 @@ def test_widening_with_the_book_focused_resizes_and_repaints_the_live_canvas(
     page.set_viewport_size({"width": 1000, "height": 800})
     _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
     _paint_frame(page)
-    book = page.locator(".bp-dag-book").element_handle()
+    book = page.locator(".bp-dag-breadcrumb .bp-dag-book")
+    playwright.expect(book).to_have_text("Home")
+    playwright.expect(book).to_have_attribute("href", site_url + "/index.html")
     book.focus()
     before = _canvas_pixels(page)
     assert before["painted"] > 0
     page.set_viewport_size({"width": 1280, "height": 900})
-    playwright.expect(page.locator(".bp-dag-context > .bp-dag-book")).to_have_count(1)
+    playwright.expect(page.locator(".bp-dag-book")).to_have_count(1)
     _paint_frame(page)
-    assert book.evaluate("node => node === document.activeElement && node === document.querySelector('.bp-dag-book')")
+    playwright.expect(book).to_have_attribute("href", site_url + "/index.html")
+    playwright.expect(book).to_be_focused()
+    # Width changes may refold the trail, restoring its matching native link.
+    # Painting again at that width must not replace it a second time.
+    book.evaluate("node => window.__resizedHomeCrumb = node")
+    _paint_frame(page)
+    assert book.evaluate("node => node === __resizedHomeCrumb && node === document.activeElement")
     after = _canvas_pixels(page)
     assert after["width"] != before["width"] and after["height"] != before["height"]
     assert after["painted"] > 0, "Resizing cleared the canvas without painting the graph again"
@@ -2828,7 +2849,7 @@ def test_edges_group_and_status_summary_follow_checkbox_and_history_state(
     _consumer_selected(page, explorer_consumer, "chapter/middle")
     playwright.expect(popover).to_be_hidden()
     playwright.expect(summary).to_have_attribute("aria-expanded", "false")
-    playwright.expect(page.locator(".bp-reading-current .bp-thmheading")).to_be_focused()
+    playwright.expect(page.locator(".bp-reading-body .bp-reading-current .bp-thmheading")).to_be_focused()
     # The focal neighborhood has no isolates. That context hides the actual
     # Links fieldset; it does not pretend that the earlier chapter filter still applies.
     playwright.expect(edges).to_be_hidden()
@@ -3063,7 +3084,7 @@ def test_a_click_that_opens_details_over_its_card_pans_it_clear(desktop_page: ob
 
 @pytest.mark.parametrize("width", (800, 1000))
 def test_a_head_without_a_textbook_link_has_no_blank_row(desktop_page: object, site_url: str, width: int) -> None:
-    """The reusable Library/context row is real navigation, never a reserved blank textbook-link row."""
+    """The reusable Home/context row is real navigation, never a reserved blank textbook-link row."""
     page = desktop_page
     page.set_viewport_size({"width": width, "height": 900})
     page.emulate_media(reduced_motion="reduce")

@@ -52,8 +52,9 @@
   }
 
   function refreshReadingLabels(root) {
-    if (root && window.AutoformMath && typeof window.AutoformMath.refresh === "function")
-      Promise.resolve(window.AutoformMath.refresh(root)).catch(function () {});
+    if (root && window.AutoformMath && typeof window.AutoformMath.refresh === "function") {
+      try { Promise.resolve(window.AutoformMath.refresh(root)).catch(function () {}); } catch (_error) {}
+    }
   }
 
   function safeHref(value) {
@@ -1302,7 +1303,7 @@
       ui$mode = "graph", ui$moved = false, ui$orientation = "lr", ui$pointers = new Map(), ui$pinch = null,
       ui$query = "", ui$searchLimit = 12, ui$selected = null, ui$searchCache = [], ui$searchCacheQuery = null,
       ui$searchError = null, ui$searchLoading = false, ui$searchNodes = data.nodes, ui$searchPromise = null,
-      ui$spotlight = null, ui$mapAllowed = mapAllowed, ui$readableCrop = false, ui$mathQueue = [], ui$mathBusy = false, ui$mathObserver = null,
+      ui$spotlight = null, ui$mapAllowed = mapAllowed, ui$readableCrop = false, ui$mathJob = null,
       ui$selectedStatuses = new Set(presentStatuses), ui$showIsolated = true,
       ui$transform = {x: 20, y: 20, scale: 1}, ui$reading = Boolean(firstBundle && firstBundle.readingSource),
       ui$area = null, ui$overviewGroup = null, ui$scopeOverview = false, ui$overviewOnly = false, ui$filtersTouched = false, ui$relationIds = null,
@@ -1311,7 +1312,7 @@
     if (!mapAllowed) ui$mode = "list";
     var dom$announcement, dom$body, dom$breadcrumb, dom$browse, dom$browseToggle, dom$browsePopover, dom$canvas, dom$ctx, dom$density, dom$edgeFieldset, dom$empty,
       dom$error, dom$filterPopover, dom$filterSummary, dom$filters, dom$fit, dom$graphMode, dom$hiddenButton,
-      dom$homeLink, dom$inspector, dom$inspectorInner, dom$inventory, dom$inventoryList, dom$inventoryRows,
+      dom$inspector, dom$inspectorInner, dom$inventory, dom$inventoryList, dom$inventoryRows,
       dom$inventoryScroll, dom$inventorySummary, dom$isolated, dom$listMode, dom$loadMore, dom$mapContext, dom$mapKey,
       dom$navigation, dom$navigationInner, dom$navigationNodes, dom$nodeLayer, dom$outlineToggle, dom$pageHeading,
       dom$readingBody, dom$readingContext, dom$readingNeighbors, dom$search, dom$searchResults,
@@ -1548,9 +1549,9 @@
           if (!bundle.snapshot) dom$readingBody.scrollTop += target.getBoundingClientRect().top - dom$readingBody.getBoundingClientRect().top - 24;
         }
         if (bundle.focus && !mapRequested && dom$readingBody && !bundle.snapshot) {
-          // Focus lands on the statement the reader chose, which the reader has just scrolled to, not on the page title above it.
-          var heading = current && current.querySelector(".bp-thmheading") || current || dom$readingBody.querySelector("h1");
-          if (heading) { heading.tabIndex = -1; heading.focus({preventScroll: true}); }
+          var readingTarget = dom$readingBody.querySelector(".bp-reading-current .bp-thmheading") ||
+            dom$readingBody.querySelector(".bp-reading-current") || dom$readingBody.querySelector("h1");
+          if (readingTarget) { readingTarget.tabIndex = -1; readingTarget.focus({preventScroll: true}); }
         } else if (bundle.focus && mapRequested && !bundle.snapshot) {
           var control = dom$nodeLayer.querySelector('.bp-dag-node[tabindex="0"]'); if (control) control.focus({preventScroll: true});
         }
@@ -1708,15 +1709,15 @@
       }
       return parent && parent.id;
     }
+    function bindNodeLink(link, id, settings) {
+      link.addEventListener("click", function (event) {
+        if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault(); navigation.navigateNode(id, settings);
+      });
+    }
     function renderOutline() {
       var key = currentBundle && currentBundle.scope, tree = outlineProjection(sharedIndex.nodes, key,
         currentBundle && currentBundle.nodeId, ui$outlineLimit);
-      if (dom$homeLink) {
-        var home = navigation && navigation.getHomeURL && navigation.getHomeURL();
-        dom$homeLink.textContent = "Library"; dom$homeLink.href = home || tree.root && (tree.root.route || tree.root.url) || "";
-        // Its name is its visible word, so speech input can say "Library".
-        dom$homeLink.title = "Home"; dom$homeLink.removeAttribute("aria-label");
-      }
       var list = element("ul", "bp-dag-navigation-list");
       tree.entries.forEach(function (entry) {
         var node = entry.node, item = element("li", "bp-outline-depth-" + entry.depth);
@@ -1725,15 +1726,19 @@
         link.href = node.route || node.url; link.title = node.title; link.dataset.navigationNodeId = node.id;
         if (node.id === (currentBundle && currentBundle.nodeId || key)) link.setAttribute("aria-current", "page");
         item.appendChild(link); list.appendChild(item);
-        link.addEventListener("click", function (event) {
-          if (event.defaultPrevented || event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-          event.preventDefault(); navigation.navigateNode(node.id, {history: "push"});
-        });
+        bindNodeLink(link, node.id, {history: "push", focus: true});
       });
       dom$navigationInner.appendChild(element("h2", "bp-outline-label", "Topics")); dom$navigationInner.appendChild(list);
       if (tree.entries.length < tree.total) {
         var more = button("bp-dag-navigation-more", "Show more topics");
-        more.addEventListener("click", function () { ui$outlineLimit += 50; renderNavigation(); remember(); }); dom$navigationInner.appendChild(more);
+        more.addEventListener("click", function () {
+          var retained = new Set(tree.entries.map(function (entry) { return entry.node.id; }));
+          ui$outlineLimit += 50; renderNavigation();
+          var first = Array.from(dom$navigationInner.querySelectorAll("[data-navigation-node-id]")).find(function (link) {
+            return !retained.has(link.dataset.navigationNodeId);
+          }) || dom$navigationInner.querySelector('[aria-current="page"]');
+          if (first) first.focus(); remember();
+        }); dom$navigationInner.appendChild(more);
       }
       if (navigation.declutterReader) navigation.declutterReader(dom$readingBody, tree.entries.filter(function (entry) {
         return !entry.collection && entry.node.scope === entry.node.id;
@@ -1747,8 +1752,7 @@
       var node = ui$selected, record = records.get(currentBundle && currentBundle.nodeId || ui$requestedNode || (node && node.id)), scope = record && records.get(record.scope);
       if (scope && record.id !== scope.id) {
         var around = readingLabel("a", "bp-reading-around", scope.title, scope.reading_title, "← "); around.href = scope.route || scope.url;
-        around.addEventListener("click", function (event) { if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-          event.preventDefault(); navigation.navigateNode(scope.id, {history: "push", focus: "reading"}); }); dom$readingContext.appendChild(around);
+        bindNodeLink(around, scope.id, {history: "push", focus: "reading"}); dom$readingContext.appendChild(around);
       }
       syncSheetAccessibility();
       if (!record && !node) return;
@@ -1761,20 +1765,14 @@
         var list = element("ul", "bp-reading-topic-list");
         peers.nodes.slice(0, 5).forEach(function (peer) {
           var item = element("li"), link = readingLabel("a", "", peer.title, peer.reading_title); link.href = peer.route || peer.url;
-          link.addEventListener("click", function (event) {
-            if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-            event.preventDefault(); navigation.navigateNode(peer.id, {history: "push", focus: "reading"});
-          });
+          bindNodeLink(link, peer.id, {history: "push", focus: "reading"});
           item.appendChild(link); list.appendChild(item);
         });
         more.appendChild(list);
         if (peers.nodes.length > 5) {
           var browse = readingLabel("a", "bp-reading-topic-browse", peers.owner.title, peers.owner.reading_title, "Browse ");
           browse.href = peers.owner.route || peers.owner.url;
-          browse.addEventListener("click", function (event) {
-            if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-            event.preventDefault(); navigation.navigateNode(peers.owner.id, {history: "push", focus: "reading"});
-          });
+          bindNodeLink(browse, peers.owner.id, {history: "push", focus: "reading"});
           more.appendChild(browse);
         }
         dom$readingNeighbors.appendChild(more);
@@ -1863,14 +1861,13 @@
 
       var zoomGroup = element("div", "bp-dag-zoom"); zoomGroup.setAttribute("role", "group"); zoomGroup.setAttribute("aria-label", "Zoom controls");
       dom$zoomOut = button("bp-dag-button", "−", "Zoom out"); dom$zoomIn = button("bp-dag-button", "+", "Zoom in");
-      dom$fit = button("bp-dag-button", "Fit", "Fit the map");
+      var fitLabel = "Fit the map";
+      dom$fit = button("bp-dag-button bp-dag-fit", "Fit", fitLabel); dom$fit.title = fitLabel;
       zoomGroup.append(dom$zoomOut, dom$zoomIn, dom$fit); toolbar.appendChild(zoomGroup);
 
       dom$hiddenButton = button("bp-dag-hidden-button", ""); toolbar.appendChild(dom$hiddenButton);
       head.appendChild(toolbar);
       dom$error = element("div", "bp-dag-error"); dom$error.setAttribute("role", "alert"); dom$error.hidden = true; head.appendChild(dom$error);
-      var bookLink = dom$homeLink = element("a", "bp-dag-book", "Library");
-      bookLink.href = navigation.getHomeURL && navigation.getHomeURL() || safeHref(view.book) || currentBundle.url; context.insertBefore(bookLink, crumbs);
       host.appendChild(head);
 
       var body = dom$body = element("div", "bp-dag-body"), main = element("div", "bp-dag-main");
@@ -1940,7 +1937,7 @@
         var href = safeHref(entry.url), item = href ? element("li") : readingLabel("li", "", entry.label, entry.reading_title);
         item.title = entry.hidden || entry.label;
         if (href) {
-          var link = readingLabel("a", "", entry.label, entry.reading_title); link.href = href; link.title = entry.label;
+          var link = readingLabel("a", !className && index === 0 ? "bp-dag-book" : "", entry.label, entry.reading_title); link.href = href; link.title = entry.label;
           link.addEventListener("click", function (event) {
             if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
                 new URL(href).origin !== window.location.origin) return;
@@ -1950,7 +1947,8 @@
               var left = ui$overviewGroup || ui$area; setMode("regions", true);
               var back = ui$active.find(function (node) { return node._overviewGroup === left || node._region === left; }) || ui$active[0];
               if (back) { centerIfHidden(back); focusNodeControl(back); }
-            } else navigation.navigate(href, {history: "push", focus: true, mapFirst: true});
+            } else navigation.navigate(href, {history: "push", focus: true,
+              mapFirst: href !== (navigation.getHomeURL && navigation.getHomeURL())});
           });
           item.appendChild(link);
         }
@@ -1963,11 +1961,18 @@
     function renderBreadcrumb() {
       if (!dom$breadcrumb || !currentBundle) return;
       var entries = routeTrail(currentBundle); if (!entries.length) entries = [{label: data.title || "Dependencies"}];
+      var active = document.activeElement, retained = dom$breadcrumb.contains(active) && active.href;
       // A deep trail shows every crumb, which give way to ellipses as the row narrows, and folds its middle into "…" only
       // when even that cannot fit: a fold that hid the chapter of every Hartshorne result left most of a wide row empty.
-      dom$breadcrumb.replaceChildren(trailList(entries, null, true));
-      if (entries.length > 3 && dom$breadcrumb.scrollWidth > dom$breadcrumb.clientWidth + 1) dom$breadcrumb.replaceChildren(trailList(entries));
+      dom$breadcrumb.replaceChildren(trailList(entries, null, !sheetLayout()));
+      if (!sheetLayout() && entries.length > 3 && dom$breadcrumb.scrollWidth > dom$breadcrumb.clientWidth + 1) dom$breadcrumb.replaceChildren(trailList(entries));
       refreshReadingLabels(dom$breadcrumb);
+      renderBreadcrumb.$width = dom$breadcrumb.clientWidth;
+      if (retained) {
+        var link = Array.from(dom$breadcrumb.querySelectorAll("a")).find(function (item) { return item.href === retained; });
+        if (link) link.focus({preventScroll: true});
+        else { dom$breadcrumb.tabIndex = -1; dom$breadcrumb.focus({preventScroll: true}); }
+      }
     }
     function renderNavigation() {
       if (!dom$navigationInner) return;
@@ -2003,7 +2008,7 @@
       });
       dom$filterSummary.addEventListener("click", function () { setFilters(dom$filterPopover.hidden); });
       dom$filters.addEventListener("keydown", function (event) {
-        if (event.key === "Escape" && !dom$filterPopover.hidden) { event.preventDefault(); setFilters(false); dom$filterSummary.focus(); }
+        if (event.key === "Escape" && !dom$filterPopover.hidden) { event.preventDefault(); setFilters(false); }
       });
       dom$browseToggle.addEventListener("click", function () {
         if (sourceNodes().length) setBrowse(dom$browsePopover.hidden);
@@ -2013,12 +2018,15 @@
         if (event.key === "Escape" && !dom$browsePopover.hidden) { event.preventDefault(); setBrowse(false); }
       });
       globalListen(document, "pointerdown", function (event) {
-        if (!dom$filters.contains(event.target)) setFilters(false);
+        if (!dom$filters.contains(event.target)) setFilters(false, false);
         if (!dom$browse.contains(event.target)) setBrowse(false, false);
         if (!dom$searchWrap.contains(event.target)) closeSearch();
       });
       dom$browse.addEventListener("focusout", function (event) {
         if (event.relatedTarget && !dom$browse.contains(event.relatedTarget)) setBrowse(false, false);
+      });
+      dom$filters.addEventListener("focusout", function (event) {
+        if (!dom$filters.contains(event.relatedTarget)) setFilters(false, false);
       });
       dom$searchWrap.addEventListener("focusout", function (event) {
         if (event.relatedTarget && !dom$searchWrap.contains(event.relatedTarget)) closeSearch();
@@ -2027,7 +2035,7 @@
         ui$showIsolated = dom$isolated.checked; ui$activeDirty = true;
         writeLocation("replace"); refresh(true); announceShown();
       });
-      dom$graphMode.addEventListener("click", function () { setMode("graph", true); });
+      dom$graphMode.addEventListener("click", function () { setMode("graph", true); if (ui$mode === "graph") focusNodeControl(); });
       dom$listMode.addEventListener("click", function () { setBrowse(false); ui$relationIds = null; setMode("list", true); });
       if (dom$sourcesMode) dom$sourcesMode.addEventListener("click", function () { setBrowse(false); setMode("sources", true); });
       dom$zoomIn.addEventListener("click", function () { zoomAt(1.24, dom$stage.clientWidth / 2, dom$stage.clientHeight / 2); });
@@ -2042,6 +2050,10 @@
       if (dom$outlineToggle) dom$outlineToggle.addEventListener("click", function () {
         var open = !host.classList.contains("bp-dag-outline-open"); host.classList.toggle("bp-dag-outline-open", open);
         dom$outlineToggle.setAttribute("aria-expanded", String(open));
+        if (open) {
+          var current = dom$navigationInner.querySelector('[aria-current="page"]') || dom$navigationInner.querySelector("a");
+          if (current) current.focus();
+        }
         remember();
       });
       // On a phone the handle drags the reader, which snaps to the nearest of peek, half and full.
@@ -2079,12 +2091,12 @@
       dom$inspector.addEventListener("keydown", function (event) {
         if (event.key === "Escape" && ui$selected) { event.preventDefault(); clearSelection(true, true); }
       });
-      // The card layer hides its overflow, but focusing a card the camera has not reached yet still scrolled it, and every card
-      // then sat that far from where the camera put it; the camera alone places cards.
-      dom$nodeLayer.addEventListener("scroll", function () { dom$nodeLayer.scrollLeft = dom$nodeLayer.scrollTop = 0; });
       dom$stage.addEventListener("pointerdown", pointerDown); dom$stage.addEventListener("pointermove", pointerMove);
       dom$stage.addEventListener("pointerup", pointerUp); dom$stage.addEventListener("pointercancel", pointerUp);
+      // Only the camera places cards; native focus must not scroll the hidden layer away from Canvas.
+      dom$nodeLayer.addEventListener("scroll", function () { dom$nodeLayer.scrollLeft = 0; dom$nodeLayer.scrollTop = 0; });
       dom$stage.addEventListener("wheel", function (event) {
+        if (dom$mapKey.contains(event.target)) return;
         var zoom = event.ctrlKey || event.metaKey, pixels = event.deltaMode === 1 ? 25 : 1;
         event.preventDefault();
         if (!zoom) { ui$transform.x -= event.deltaX * pixels; ui$transform.y -= event.deltaY * pixels; schedule(); remember(); return; }
@@ -2098,9 +2110,11 @@
         else if (event.key === "0") { fit(); event.preventDefault(); }
       });
       globalListen(document, "keydown", function (event) {
+        if (event.defaultPrevented) return;
         var target = event.target, own = target === dom$search;
         if (!own && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || "") || target.isContentEditable)) return;
-        if ((event.key === "/" && !own) || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k")) {
+        if ((event.key === "/" && !own && host.contains(target) && !event.metaKey && !event.ctrlKey && !event.altKey) ||
+            ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k")) {
           event.preventDefault(); dom$search.focus(); dom$search.select();
         }
       });
@@ -2109,10 +2123,6 @@
       globalListen(window, "resize", syncSheetAccessibility);
       if (navigation) [dom$readingBody, dom$navigation, dom$inventoryScroll, dom$shelves].forEach(function (pane) { pane.addEventListener("scroll", remember); });
       var theme = new MutationObserver(schedule); theme.observe(document.body, {attributes: true, attributeFilter: ["data-md-color-scheme"]}); observers.push(theme);
-      if (dom$homeLink) dom$homeLink.addEventListener("click", function (event) {
-        if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-        event.preventDefault(); navigation.navigate(dom$homeLink.href, {history: "push"});
-      });
     }
 
     function statusLabel(key) { return palette[key] && palette[key].label ? palette[key].label : key.replace(/_/g, " "); }
@@ -2307,6 +2317,7 @@
       refreshReadingLabels(dom$shelves);
     }
     function syncControls() {
+      if (ui$mode === "graph" && ui$mathJob) stopRowMath();
       calculateActive();
       renderShelves();
       host.classList.toggle("bp-dag-compact-regions", compactRegions());
@@ -2319,6 +2330,8 @@
         dom$mapContext.replaceChildren(readingLabel("span", "", title, label && label.reading_title),
           links && sheetLayout() ? " · uses " + links.before.length + " · used by " + links.after.length : "");
         refreshReadingLabels(dom$mapContext);
+        var legend = dom$mapKey.querySelector("details"), open = legend && legend.open;
+        var keyFocus = legend && legend.contains(document.activeElement);
         dom$mapKey.replaceChildren();
         var compactKey = compactRegions();
         ["statement", "proof"].forEach(function (kind) {
@@ -2342,6 +2355,7 @@
         if (ui$wikiView && ui$wikiView.availability === "unavailable") dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Concept links unavailable"));
         if (data.$wikiEdges && data.$wikiEdges.some(function (edge) { return !wikiOwnerVisible(byId.get(edge.source), ui$selectedStatuses) || !wikiOwnerVisible(byId.get(edge.target), ui$selectedStatuses); }))
           dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Concept links hidden by filter"));
+        if (sheetLayout() && dom$mapKey.children.length) wrapMapKey(open, keyFocus);
       }
       syncNavigationSelection();
       dom$isolated.checked = ui$showIsolated;
@@ -2452,6 +2466,8 @@
     function resize() {
       syncSheetAccessibility();
       if (!dom$canvas || !dom$stage.clientWidth || !dom$stage.clientHeight) return;
+      if (renderBreadcrumb.$width !== dom$breadcrumb.clientWidth) renderBreadcrumb();
+      positionMapFeedback();
       host.classList.toggle("bp-dag-compact-regions", compactRegions());
       var ratio = Math.min(2, window.devicePixelRatio || 1);
       dom$canvas.width = Math.max(1, Math.round(dom$stage.clientWidth * ratio));
@@ -2473,9 +2489,9 @@
       }
       ui$readableCrop = frame.cropped; ui$transform = {x: frame.x, y: frame.y, scale: frame.scale};
       if (dom$fit) {
+        var label = ui$readableCrop ? "Recentre the map" : "Fit the map";
         dom$fit.textContent = ui$readableCrop ? "Recentre" : "Fit";
-        // Its name starts with its visible word, so speech input can say it.
-        dom$fit.setAttribute("aria-label", ui$readableCrop ? "Recentre the map" : "Fit the map");
+        dom$fit.setAttribute("aria-label", label); dom$fit.title = label;
       }
       if (ui$readableCrop && navigation) {
         var anchor = ui$selected || nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; });
@@ -2494,6 +2510,8 @@
             nodes.find(function (node) { return node.kind !== "boundary"; }) || nodes[0], .9);
         }
       }
+      // Linked-only framing must not leave an explicitly selected, drawn isolate offscreen.
+      if (navigation && ui$selected && ui$activeIds.has(ui$selected.id)) centerIfHidden(ui$selected);
       schedule(); remember();
       // A cropped map with nothing to centre on keeps the leading edge sceneFrame gave it: centring its first card left half the
       // stage empty. A deep map's leading corner can be bare, though, and then the first card in reading order opens there.
@@ -2530,6 +2548,8 @@
     // out of view for the keyboard and the pan note. The foot grows from the key's 32px to 56px while the note shows, so the
     // note counts against the key's band alone, or a note once shown would keep itself.
     function bandInsets() {
+      if (navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-open"))
+        return {top: 0, bottom: dom$density.hidden ? 32 : 56, key: 32};
       return navigation && !compactRegions() && !(sheetLayout() && host.classList.contains("bp-dag-sheet-open")) ?
         {top: 44, bottom: dom$density.hidden ? 32 : 56, key: 32} : {top: 0, bottom: 0, key: 0};
     }
@@ -2541,7 +2561,10 @@
     function zoomAt(factor, x, y) {
       var old = ui$transform.scale, next = clamp(old * factor, MIN_SCALE, 4);
       if (ui$scopeOverview && ui$overviewGroup && factor < 1 && next < .82) {
-        navigation.checkpoint(); ui$overviewGroup = null; updateProjection(); firstResize = true; resize(); writeLocation("push"); return;
+        var collapsed = ui$overviewGroup;
+        navigation.checkpoint(); ui$overviewGroup = null; updateProjection(); firstResize = true; resize(); writeLocation("push");
+        var parent = data.nodes.find(function (node) { return node._overviewGroup === collapsed; });
+        if (parent) focusNodeControl(parent); return;
       }
       if (ui$scopeOverview && !ui$overviewGroup) {
         if (factor > 1 && next >= 1.6) {
@@ -2874,13 +2897,14 @@
       });
       control.addEventListener("keydown", function (event) {
         if (/^Arrow(Left|Right|Up|Down)$/.test(event.key)) {
+          if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
           var next = nearest(node, event.key);
           if (next) {
             event.preventDefault();
             center(next, .7);
             focusNodeControl(next);
           }
-        } else if (event.key === "Escape") { event.preventDefault(); clearSelection(true); }
+        } else if (event.key === "Escape" && ui$selected) { event.preventDefault(); clearSelection(true); }
       });
       return control;
     }
@@ -2901,6 +2925,7 @@
     // A press on a card stays a tap until it travels 8px or a second finger lands. Only then does the stage
     // take the pointers, since a captured press would send the tap's click to the stage instead of the card.
     function pointerDown(event) {
+      if (event.button || dom$mapKey.contains(event.target)) return;
       ui$pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
       if (ui$pointers.size === 1) ui$moved = false;
       if (ui$pointers.size === 2) { ui$pinch = pinchState(); grab(); }
@@ -3026,8 +3051,8 @@
       if (next) { event.preventDefault(); next.focus(); }
       else if (event.key === "ArrowUp") { event.preventDefault(); dom$search.focus(); }
     }
-    function setFilters(open) {
-      if (!open && dom$filterPopover.contains(document.activeElement)) dom$filterSummary.focus({preventScroll: true});
+    function setFilters(open, returnFocus) {
+      if (!open && returnFocus !== false && dom$filterPopover.contains(document.activeElement)) dom$filterSummary.focus({preventScroll: true});
       dom$filterPopover.hidden = !open; dom$filterSummary.setAttribute("aria-expanded", String(open));
     }
     function setBrowse(open, returnFocus) {
@@ -3063,12 +3088,18 @@
       navigation.navigateNode(id, settings); closeSearch();
     }
     function focusNodeControl(node) {
+      var bundle = currentBundle, projection = data;
       requestAnimationFrame(function () { requestAnimationFrame(function () {
-        var control = overlays.get(node.id); if (control) control.focus({preventScroll: true}); else dom$sheetHandle.focus(); remember(); schedule();
+        if (!alive || currentBundle !== bundle || data !== projection || ui$mode !== "graph" ||
+            (sheetLayout() && host.classList.contains("bp-dag-sheet-full")) || (bundle && bundle.isCurrent && !bundle.isCurrent())) return;
+        var control = node ? overlays.get(node.id) : dom$nodeLayer.querySelector('.bp-dag-node[tabindex="0"]');
+        if (control) control.focus({preventScroll: true}); else (node ? dom$sheetHandle : dom$filterSummary).focus({preventScroll: true});
+        dom$nodeLayer.scrollLeft = 0; dom$nodeLayer.scrollTop = 0; remember(); schedule();
       }); });
     }
 
     function clearSelection(updateHistory, returnFocus) {
+      if (!ui$selected) return;
       if (navigation && updateHistory) navigation.checkpoint();
       var refit = ui$direction !== "both", cleared = ui$selected;
       ui$selected = null; ui$direction = "both"; ui$activeDirty = true; ui$spotlight = null;
@@ -3076,7 +3107,7 @@
       syncNavigationSelection(); renderInspector(); renderInventory(false); if (refit) requestAnimationFrame(fit); else schedule();
       if (updateHistory) writeLocation("push");
       var chosen = returnFocus && cleared && (ui$mode === "list" ? dom$inventoryRows.get(cleared.id) : overlays.get(cleared.id));
-      if (chosen) chosen.focus({preventScroll: ui$mode !== "list"});
+      if (chosen) chosen.focus({preventScroll: true});
     }
     // From 681px to 1,100px details can open the head's first row; the map shifts back by it, so nothing jumps.
     // Measure both class changes together; callers need no selection-toggle ordering rule.
@@ -3091,10 +3122,25 @@
       ui$transform.y += top - dom$body.offsetTop; schedule();
       dom$sheetHandle.setAttribute("aria-expanded", String(Boolean(open)));
       syncSheetAccessibility();
+      positionMapFeedback();
       if (width !== dom$stage.clientWidth || height !== dom$stage.clientHeight) resize();
       if (closed && selected && !restoring && sheetLayout() && mapAllowed) centerIfHidden(selected);
     }
     function sheetLayout() { return Boolean(window.matchMedia && window.matchMedia("(max-width: 720px)").matches); }
+    function wrapMapKey(open, returnFocus) {
+      var legend = element("details", "bp-map-key-legend"), summary = element("summary", "", "Link key");
+      var body = element("div", "bp-map-key-body");
+      while (dom$mapKey.firstChild) body.appendChild(dom$mapKey.firstChild);
+      legend.open = Boolean(open); legend.append(summary, body); dom$mapKey.appendChild(legend);
+      if (returnFocus && !host.classList.contains("bp-dag-sheet-full")) summary.focus({preventScroll: true});
+    }
+    function positionMapFeedback() {
+      if (!dom$stage || !dom$mapKey || !dom$density) return;
+      var open = sheetLayout() && host.classList.contains("bp-dag-sheet-open") && !host.classList.contains("bp-dag-sheet-full");
+      var inset = open ? Math.max(0, dom$stage.clientHeight - freeArea().band) : 0;
+      dom$mapKey.style.bottom = open ? inset + 4 + "px" : "";
+      dom$density.style.bottom = open ? inset + 34 + "px" : "";
+    }
     function syncSheetAccessibility() {
       if (!dom$inspectorInner || !dom$sheetHandle) return;
       var opened = host.classList.contains("bp-dag-sheet-open");
@@ -3130,6 +3176,7 @@
     function revealAll() {
       ui$selectedStatuses = new Set(presentStatuses); ui$showIsolated = true; ui$direction = "both";
       ui$activeDirty = true; writeLocation("replace"); refresh(true); fit();
+      dom$filterSummary.focus({preventScroll: true});
     }
     // A search or filter that changes the rows or cards says what is left, since the count on screen is not announced.
     function announceShown() {
@@ -3194,10 +3241,7 @@
           pair[1].slice(ui$wikiLimit, limit).forEach(function (relatedId) {
             var related = records.get(relatedId), item = element("li"), link = readingLabel("a", "", related.title, related.reading_title);
             link.href = related.route || related.url;
-            link.addEventListener("click", function (event) {
-              if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-              event.preventDefault(); navigation.navigateNode(relatedId, {history: "push", focus: "reading"});
-            });
+            bindNodeLink(link, relatedId, {history: "push", focus: "reading"});
             item.appendChild(link); list.appendChild(item);
           });
           ui$wikiLimit = limit; more.hidden = limit >= pair[1].length;
@@ -3236,20 +3280,24 @@
       var nodes = query ? rankMatches(pool, query).map(function (match) { return match.node; }) : pool;
       return nodes.filter(function (node) { return ui$selectedStatuses.has(node.status); });
     }
-    // A summary keeps its article's inline code and TeX. The list sets them as the reader does instead of printing their source,
-    // and drops a run-in that only repeats the title.
+    // Preview only closed code spans and unambiguous inline formulas. Unsupported
+    // Markdown stays literal; it must not silently turn currency or code into math.
     function pendingMath(source) { var span = element("span", "bp-math-pending", source); span.setAttribute("aria-hidden", "true"); return span; }
     function summaryLine(node) {
       var text = String(node.summary), line = element("span", "bp-result-summary"), title = node.title || "";
       if (title && text.indexOf(title) === 0 && /^[.:]\s/.test(text.slice(title.length))) text = text.slice(title.length + 1).trim();
-      var pattern = /`([^`\n]+)`|\$([^$\n]+)\$|\\\(([\s\S]+?)\\\)/g, last = 0, match;
+      var pattern = /\\([\\`$])|(?<![\\`])(`+)(?!`)([^\n]*?)(?<!`)\2(?!`)|(?<![\\$])\$(?![\s$])((?:\\.|[^\\$\n])+?)(?<!\s)\$(?![$\d])|(?<!\\)\\\(((?:\\[^)]|[^\\\n])+?)\\\)/g;
+      var last = 0, match;
       while ((match = pattern.exec(text))) {
+        // An unmatched backtick may own later dollars. Keep the complete preview
+        // literal instead of guessing where code ends.
+        if (text.slice(last, match.index).indexOf("`") >= 0) return element("span", "bp-result-summary", text);
         if (match.index > last) line.appendChild(element("span", "", text.slice(last, match.index)));
-        // A formula waits under its own class, which MathJax does not read, until its row comes near the view.
-        line.appendChild(match[1] !== undefined ? element("code", "", match[1]) :
-          pendingMath("\\(" + (match[2] !== undefined ? match[2] : match[3]) + "\\)"));
+        line.appendChild(match[1] !== undefined ? element("span", "", match[1]) : match[2] !== undefined ?
+          element("code", "", match[3].trim()) : pendingMath("\\(" + (match[4] !== undefined ? match[4] : match[5]) + "\\)"));
         last = pattern.lastIndex;
       }
+      if (text.slice(last).indexOf("`") >= 0) return element("span", "bp-result-summary", text);
       if (last < text.length) line.appendChild(element("span", "", text.slice(last)));
       return line;
     }
@@ -3257,24 +3305,67 @@
     // to read only as the row comes near the view, after the list has painted, and a pass reads at most six rows, so a
     // pass stays short and a scroll costs a pass or two rather than one per row.
     function typesetRowsInView() {
-      if (ui$mathObserver) ui$mathObserver.disconnect();
-      ui$mathQueue = [];
+      stopRowMath();
+      if (!alive || ui$mode === "graph") return;
       var lines = Array.prototype.filter.call(dom$inventoryList.querySelectorAll(".bp-dag-inventory-row"), function (row) { return row.querySelector(".bp-math-pending"); });
       if (!lines.length) return;
-      if (typeof IntersectionObserver !== "function") { ui$mathQueue = lines; setTimeout(typesetRevealedRows, 60); return; }
-      var observer = ui$mathObserver = new IntersectionObserver(function (entries) {
-        entries.forEach(function (entry) { if (entry.isIntersecting) { observer.unobserve(entry.target); ui$mathQueue.push(entry.target); } });
-        setTimeout(typesetRevealedRows, 60);
+      if (!window.AutoformMath || typeof window.AutoformMath.refresh !== "function") { fallbackRowMath(lines); return; }
+      var job = ui$mathJob = {$bundle: currentBundle, $mode: ui$mode, $rows: lines, $queue: [], $queued: new Set(), $busy: false,
+        $timer: null, $deadline: null, $observer: null};
+      if (typeof IntersectionObserver !== "function") { job.$queue = lines.slice(); queueRowMath(job, 60); return; }
+      var observer = job.$observer = new IntersectionObserver(function (entries) {
+        if (!rowMathCurrent(job)) { if (ui$mathJob === job) stopRowMath(); else observer.disconnect(); return; }
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting && dom$inventoryList.contains(entry.target) && !job.$queued.has(entry.target)) {
+            observer.unobserve(entry.target); job.$queued.add(entry.target); job.$queue.push(entry.target);
+          }
+        });
+        queueRowMath(job, 60);
       }, {root: dom$inventoryScroll, rootMargin: "200px 0px"});
       lines.forEach(function (line) { observer.observe(line); });
     }
-    function typesetRevealedRows() {
-      if (ui$mathBusy || !ui$mathQueue.length || !window.AutoformMath || typeof window.AutoformMath.refresh !== "function") return;
-      ui$mathQueue.splice(0, 6).forEach(function (line) {
+    function rowMathCurrent(job) {
+      return alive && ui$mathJob === job && currentBundle === job.$bundle && ui$mode === job.$mode && ui$mode !== "graph" &&
+        (!job.$bundle.isCurrent || job.$bundle.isCurrent());
+    }
+    function queueRowMath(job, delay) {
+      if (!rowMathCurrent(job) || job.$busy || !job.$queue.length || job.$timer !== null) return;
+      job.$timer = setTimeout(function () { job.$timer = null; typesetRevealedRows(job); }, delay);
+    }
+    function fallbackRowMath(rows) {
+      rows.forEach(function (line) {
+        Array.prototype.forEach.call(line.querySelectorAll(".bp-math-pending, .arithmatex:not(:has(mjx-container))"), function (span) {
+          span.className = "bp-math-fallback"; span.removeAttribute("aria-hidden");
+        });
+      });
+    }
+    function stopRowMath() {
+      var job = ui$mathJob; ui$mathJob = null;
+      if (!job) return;
+      clearTimeout(job.$timer); clearTimeout(job.$deadline); if (job.$observer) job.$observer.disconnect();
+      fallbackRowMath(job.$rows); job.$queue = [];
+    }
+    function typesetRevealedRows(job) {
+      if (!rowMathCurrent(job)) { if (ui$mathJob === job) stopRowMath(); return; }
+      if (job.$busy || !job.$queue.length) return;
+      var batch = job.$queue.splice(0, 6).filter(function (line) { return line.isConnected && dom$inventoryList.contains(line); });
+      if (!batch.length) { queueRowMath(job, 0); return; }
+      if (!window.AutoformMath || typeof window.AutoformMath.refresh !== "function") { stopRowMath(); return; }
+      batch.forEach(function (line) {
         Array.prototype.forEach.call(line.querySelectorAll(".bp-math-pending"), function (span) { span.className = "arithmatex"; span.removeAttribute("aria-hidden"); });
       });
-      ui$mathBusy = true;
-      Promise.resolve(window.AutoformMath.refresh(dom$inventoryList)).catch(function () {}).then(function () { ui$mathBusy = false; setTimeout(typesetRevealedRows, 0); });
+      job.$busy = true;
+      function failed() { if (ui$mathJob === job) stopRowMath(); }
+      // An unavailable or stalled engine must leave honest, visible source text.
+      job.$deadline = setTimeout(failed, 2000);
+      try {
+        Promise.resolve(window.AutoformMath.refresh(dom$inventoryList)).then(function (result) {
+          clearTimeout(job.$deadline); job.$deadline = null;
+          if (result === false) { failed(); return; }
+          if (!rowMathCurrent(job)) { if (ui$mathJob === job) stopRowMath(); return; }
+          job.$busy = false; queueRowMath(job, 0);
+        }, failed);
+      } catch (_error) { failed(); }
     }
     function inCurrentScope(node) {
       var scope = currentBundle && currentBundle.scope; if (!scope || scope === "roadmap") return true;
@@ -3341,7 +3432,6 @@
       dom$loadMore.hidden = visible.length >= nodes.length;
       dom$loadMore.textContent = visible.length < nodes.length ? "Show " + Math.min(LIST_PAGE, nodes.length - visible.length) + " more" : "";
       var current = ui$selected && dom$inventoryRows.get(ui$selected.id);
-      refreshReadingLabels(dom$inventoryList);
       if (resetScroll && dom$inventoryScroll) dom$inventoryScroll.scrollTop = 0;
       else if (current) current.scrollIntoView({block: "nearest"});
     }
@@ -3351,7 +3441,7 @@
 
     syncControls();
     return {ready: readingReady, applyRoute: applyRoute, useIndex: useIndex, useWikiLinks: useWikiLinks, captureState: captureState, restoreState: restoreState, showError: showError,
-      dispose: function () { alive = false; ui$wikiProjectionTicket++; ui$wikiProjectionCache = new WeakMap(); clearTimeout(checkpointTimer); cancelAnimationFrame(frame);
+      dispose: function () { alive = false; stopRowMath(); ui$wikiProjectionTicket++; ui$wikiProjectionCache = new WeakMap(); clearTimeout(checkpointTimer); cancelAnimationFrame(frame);
         if (resizeFrame !== null) cancelAnimationFrame(resizeFrame); resizeFrame = null; cleanup.forEach(function (close) { close(); });
         observers.forEach(function (observer) { observer.disconnect(); }); if (navigation) navigation.dispose(); }};
   }

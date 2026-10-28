@@ -938,17 +938,26 @@ def test_focused_library_link_survives_1000_to_1280_resize_and_canvas_repaints(
     page.set_viewport_size({"width": 1000, "height": 900})
     _open(page, site, workspace_runtime, _TARGET)
     _selected(page, _TARGET)
-    link = page.locator(".bp-dag-book")
+    link = page.locator(".bp-dag-breadcrumb .bp-dag-book")
+    playwright.expect(link).to_have_text("Home")
+    playwright.expect(link).to_have_attribute("href", site.url + "/index.html")
     link.focus()
-    link.evaluate("element => window.__focusedWorkspaceBook = element")
+    source = page.locator(".bp-reading-body > .bp-reading-source").text_content()
     before = _pixels(page)
     assert before["painted"] > 0
     page.set_viewport_size({"width": 1280, "height": 900})
     _frames(page)
-    assert page.evaluate("() => document.querySelector('.bp-dag-book') === __focusedWorkspaceBook && document.activeElement === __focusedWorkspaceBook") is True
+    playwright.expect(page.locator(".bp-dag-book")).to_have_count(1)
+    playwright.expect(link).to_have_attribute("href", site.url + "/index.html")
+    playwright.expect(link).to_be_focused()
+    link.evaluate("element => window.__focusedWorkspaceBook = element")
+    _frames(page)
+    assert link.evaluate("element => element === __focusedWorkspaceBook && document.activeElement === element") is True
     after = _pixels(page)
     assert (after["width"], after["height"]) != (before["width"], before["height"])
     assert after["painted"] > 0, "the resized canvas lost its painted graph"
+    assert page.locator(".bp-reading-body > .bp-reading-source").text_content() == source
+    assert page.url == site.route(_TARGET) and page.evaluate("document === __workspaceDocument") is True
 
 
 def test_closed_phone_reader_resized_to_desktop_is_visible_and_interactive(
@@ -1341,6 +1350,8 @@ def test_native_reader_and_library_links_remain_soft_navigation(
     page.wait_for_url(site.route(_OTHER))
     _selected(page, _OTHER)
     home = page.locator(".bp-dag-book")
+    playwright.expect(home).to_have_count(1)
+    playwright.expect(home).to_have_text("Home")
     playwright.expect(home).to_have_attribute("href", home_url)
     home.click()
     page.wait_for_url(home_url)
@@ -1349,6 +1360,8 @@ def test_native_reader_and_library_links_remain_soft_navigation(
     playwright.expect(source.locator("h1")).to_have_text(home_heading)
     playwright.expect(source).to_have_text(home_text)
     playwright.expect(source.locator(".bp-intro-book")).to_have_attribute("href", site.route("roadmap"))
+    playwright.expect(page.locator('.bp-dag-breadcrumb li[aria-current="page"]')).to_have_text("Home")
+    playwright.expect(page.locator(".bp-dag-book")).to_have_count(0)
     page.go_back()
     page.wait_for_url(site.route(_OTHER))
     _selected(page, _OTHER)

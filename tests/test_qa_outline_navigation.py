@@ -52,7 +52,7 @@ navigation.navigateNode=(id,options)=>dispatched.push({id,options});
 navigation.declutterReader=(root,ids)=>decluttered.push({root,ids});
 window.AutoformMath={refresh(root){mathRoots.push(root);return Promise.resolve(true);}};
 dom$navigationInner=new Element('div');dom$readingBody=new Element('article');
-dom$homeLink=new Element('a');dom$breadcrumb=new Element('nav');
+dom$breadcrumb=new Element('nav');
 function configureOutline(nodes,id,relations=[]) {
   records.clear();nodes.forEach(node=>records.set(node.id,node));
   sharedIndex={nodes,relations};
@@ -63,7 +63,7 @@ function outlineLinks() {return dom$navigationInner.all().filter(node=>node.tagN
 )
 
 _OUTLINE_CALLBACKS = [
-    "element", "button", "readingLabel", "safeHref", "outlineProjection", "renderOutline", "renderNavigation",
+    "element", "button", "readingLabel", "bindNodeLink", "safeHref", "outlineProjection", "renderOutline", "renderNavigation",
     "refreshReadingLabels", "semanticParent", "routeTrail", "currentOverviewGroup", "trailList", "renderBreadcrumb",
 ]
 
@@ -97,7 +97,7 @@ function setMode(mode,push) {modes.push({mode,push});ui$mode=mode;renderInventor
 """
 
 _INVENTORY_CALLBACKS = [
-    "element", "button", "readingLabel", "refreshReadingLabels", "renderReaderContext", "neighborIds",
+    "element", "button", "readingLabel", "bindNodeLink", "refreshReadingLabels", "renderReaderContext", "neighborIds",
     "relationCounts", "topicPeers", "semanticParent", "sourceNodes", "inCurrentScope", "inventoryNodes", "renderInventory", "statusLabel",
 ]
 
@@ -105,6 +105,56 @@ _INVENTORY_CALLBACKS = [
 def test_qa_runner_rejects_an_unfinished_async_body() -> None:
     with pytest.raises(AssertionError, match="QA callback test body did not complete"):
         _run("await new Promise(()=>{});assert.fail('Must not reach this assertion');", [])
+
+
+@pytest.mark.parametrize("focus_parent", [True, False])
+def test_breadcrumb_refolding_retains_canonical_link_focus_or_the_real_nav_fallback(focus_parent: bool) -> None:
+    _run("const focusParent=" + json.dumps(focus_parent) + ";\n" + r"""
+      const root=scope('roadmap',null),a=scope('A','roadmap'),b=scope('B','A'),c=scope('C','B');
+      const result=page('C/result','C',{scope:'C'});configureOutline([root,a,b,c,result],result.id);
+      dom$breadcrumb.clientWidth=600;dom$breadcrumb.scrollWidth=500;renderBreadcrumb();
+      const href=(focusParent?c:b).route;
+      const old=dom$breadcrumb.querySelectorAll('a').find(link=>link.href===href);assert(old);old.focus();
+      const before=JSON.stringify(sharedIndex);sheetLayout=()=>true;dom$breadcrumb.clientWidth=300;renderBreadcrumb();
+      const first=dom$breadcrumb.querySelector('.bp-dag-book');assert.equal(first.href,homeURL);
+      assert.equal(dom$breadcrumb.firstChild.children.length,4);
+      if(focusParent){
+        const current=dom$breadcrumb.querySelectorAll('a').find(link=>link.href===href);
+        assert(current);assert.notStrictEqual(current,old);assert.equal(document.activeElement,current);
+        assert.deepEqual(current.focuses.at(-1),{preventScroll:true});
+      }else{
+        assert.equal(dom$breadcrumb.querySelectorAll('a').some(link=>link.href===href),false);
+        assert.equal(document.activeElement,dom$breadcrumb);assert.equal(dom$breadcrumb.tagName,'NAV');
+        assert.equal(dom$breadcrumb.tabIndex,-1);assert.deepEqual(dom$breadcrumb.focuses.at(-1),{preventScroll:true});
+      }
+      assert.equal(renderBreadcrumb.$width,300);assert.equal(JSON.stringify(sharedIndex),before);
+    """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
+
+
+def test_actual_resize_refolds_only_for_breadcrumb_width_changes_and_keeps_height_only_focus_identity() -> None:
+    _run(r"""
+      const root=scope('roadmap',null),a=scope('A','roadmap'),b=scope('B','A'),c=scope('C','B');
+      const result=page('C/result','C',{scope:'C'});configureOutline([root,a,b,c,result],result.id);
+      ui$orientation='lr';ui$mode='graph';firstResize=false;draws=0;
+      dom$stage={clientWidth:800,clientHeight:600};dom$canvas={};
+      dom$breadcrumb.clientWidth=600;dom$breadcrumb.scrollWidth=500;renderBreadcrumb();
+      const firstList=dom$breadcrumb.firstChild,first=dom$breadcrumb.querySelectorAll('a').find(link=>link.href===c.route);
+      first.focus();const before=JSON.stringify(sharedIndex),mathCount=mathRoots.length;
+      dom$stage.clientHeight=650;resize();
+      assert.strictEqual(dom$breadcrumb.firstChild,firstList);assert.equal(document.activeElement,first);
+      assert.equal(mathRoots.length,mathCount);assert.equal(dom$canvas.height,650);assert.equal(draws,1);
+      dom$breadcrumb.clientWidth=300;dom$breadcrumb.scrollWidth=700;resize();
+      const secondList=dom$breadcrumb.firstChild,current=dom$breadcrumb.querySelectorAll('a').find(link=>link.href===c.route);
+      assert.notStrictEqual(secondList,firstList);assert.equal(document.activeElement,current);
+      assert.deepEqual(current.focuses.at(-1),{preventScroll:true});assert.equal(mathRoots.length,mathCount+1);
+      assert.strictEqual(mathRoots.at(-1),dom$breadcrumb);assert.equal(renderBreadcrumb.$width,300);
+      resize();assert.strictEqual(dom$breadcrumb.firstChild,secondList);assert.equal(document.activeElement,current);
+      assert.equal(mathRoots.length,mathCount+1);assert.equal(draws,3);assert.equal(JSON.stringify(sharedIndex),before);
+    """, _OUTLINE_CALLBACKS + ["resize", "positionMapFeedback"],
+        _OUTLINE_PEERS.replace("function resize(){}", "") + r"""
+var ui$orientation='lr',ui$mode='graph',firstResize=false,draws=0;
+function draw(){draws++;}
+""")
 
 
 @pytest.mark.parametrize("branch_first", [False, True])
@@ -173,11 +223,12 @@ def test_rendered_outline_preserves_depth_current_leaf_and_native_canonical_link
       const subhead=dom$navigationInner.all().find(node=>node.className==='bp-outline-collection');
       assert(subhead);assert.equal(subhead.textContent,collection.title);
       assert.equal(subhead.tagName,'SPAN');assert.equal(subhead.all().some(node=>['A','BUTTON'].includes(node.tagName)),false);
-      assert.equal(dom$homeLink.href,homeURL);
       assert.deepEqual(decluttered.at(-1).ids,
         ['cohomology','curves','schemes','varieties','fine','deep','deepest','coherent','wrapped-topic']);
       assert.strictEqual(decluttered.at(-1).root,dom$readingBody);
       assert.deepEqual(mathRoots,[dom$navigationInner],'Outline refresh must not re-typeset the mathematical article');
+      renderBreadcrumb();assert.equal(dom$breadcrumb.querySelector('.bp-dag-book').href,homeURL);
+      assert.deepEqual(mathRoots,[dom$navigationInner,dom$breadcrumb]);
       for(const id of ['chapter-zero','varieties']) {
         const link=byId.get(id),record=records.get(id),count=dispatched.length;
         assert.equal(link.href,record.route);
@@ -186,7 +237,7 @@ def test_rendered_outline_preserves_depth_current_leaf_and_native_canonical_link
           assert.equal(event.defaultPrevented,Boolean(settings.defaultPrevented));assert.equal(dispatched.length,count);
         }
         assert.equal(emit(link,'click',{button:0}).defaultPrevented,true);
-        assert.deepEqual(dispatched.at(-1),{id,options:{history:'push'}});
+        assert.deepEqual(dispatched.at(-1),{id,options:{history:'push',focus:true}});
       }
       assert.equal(JSON.stringify(sharedIndex),before,'Rendering and selecting the outline must retain every authored field and edge');
     """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
@@ -208,7 +259,7 @@ def test_outline_keeps_actual_current_result_link_without_turning_its_peers_into
       assert.deepEqual(decluttered.at(-1).ids,[topic.id,subtopic.id],
         'The complete selected result is reading, not a duplicated scope index to hide');
       assert.equal(emit(links.at(-1),'click',{button:0}).defaultPrevented,true);
-      assert.deepEqual(dispatched.at(-1),{id:selected.id,options:{history:'push'}});
+      assert.deepEqual(dispatched.at(-1),{id:selected.id,options:{history:'push',focus:true}});
       assert.equal(JSON.stringify(sharedIndex),before);
     """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
 

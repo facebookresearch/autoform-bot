@@ -458,7 +458,7 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert "refreshReadingLabels(refs.readingNeighbors)" in script
     assert "refreshReadingLabels(refs.breadcrumb)" in script
     assert 'readingLabel("li", "", entry.label, entry.reading_title)' in script
-    assert 'readingLabel("a", "", entry.label, entry.reading_title)' in script
+    assert 'readingLabel("a", !className && index === 0 ? "bp-dag-book" : "", entry.label, entry.reading_title)' in script
     assert 'part[0] === "math" ? "arithmatex" : ""' in script
     assert "refs.readingBody.replaceChildren(bundle.readingSource)" in script
     assert "navigation.bindReader(refs.readingBody)" in script
@@ -1038,7 +1038,17 @@ def test_explorer_elevation_is_two_shadows_and_a_selection_ring_that_keeps_the_c
         "0 0 0 3px color-mix(in srgb, var(--dag-link) 18%, transparent)",
         "inset 3px 0 0 var(--dag-link)",
         "inset 3px 0 0 var(--dag-fg)",
+        "inset 0 0 0 1px var(--dag-border)",
     }
+    # The phone's 44px group uses a zero-blur inner border, not extra elevation
+    # or a real border that grows the three native touch targets.
+    groups = re.findall(r"\.bp-dag-integrated \.bp-dag-zoom \{([^}]+)\}", style)
+    assert len(groups) == 1
+    group = dict(re.findall(r"([\w-]+):\s*([^;]+);", groups[0]))
+    assert group["height"] == "44px" and group["border"] == "0"
+    assert group["padding"] == "0" and group["gap"] == "0"
+    assert group["box-shadow"] == "inset 0 0 0 1px var(--dag-border)"
+    assert style.count("box-shadow: inset 0 0 0 1px var(--dag-border);") == 1
     selected = ".bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-map), 0 0 0 4px var(--dag-fg), var(--dag-e1); }"
     assert selected in style
     assert "border-width" not in style

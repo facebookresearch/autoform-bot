@@ -12,7 +12,7 @@ import pytest
 _NODE = shutil.which("node")
 _CLIENT = Path(__file__).resolve().parents[1] / "autoform_cli/assets/blueprint-dag.js"
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated wiki projection tests")
-_CALLBACKS = ("element", "readingLabel", "refreshReadingLabels", "button", "recordId", "requestWikiLinks", "useWikiLinks", "wikiNeighbors", "renderWikiContext")
+_CALLBACKS = ("element", "readingLabel", "refreshReadingLabels", "button", "bindNodeLink", "recordId", "requestWikiLinks", "useWikiLinks", "wikiNeighbors", "renderWikiContext")
 
 _LOADER = r"""
 const fs=require('fs'),vm=require('vm'),assert=require('assert');

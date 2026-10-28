@@ -185,6 +185,7 @@ _BOOT = r"""
   const pluralStart=source.indexOf('  var plural ='),pluralLine=source.slice(pluralStart,source.indexOf('\n',pluralStart));
   var plural=eval('(function(){'+pluralLine+';return plural;})()');
   var element=original('element'),button=original('button'),readingLabel=original('readingLabel');
+  var bindNodeLink=original('bindNodeLink');
   var safeHref=original('safeHref'),graphAt=original('graphAt');
   var refreshReadingLabels=original('refreshReadingLabels'),semanticParent=original('semanticParent');
   var routeTrail=original('routeTrail'),currentOverviewGroup=original('currentOverviewGroup');
@@ -199,13 +200,13 @@ _BOOT = r"""
   var ui$wikiLinks=null,ui$wikiRendered=null,ui$wikiNode=null;
   var dom$navigationInner=element('div','fixture-outline'),dom$navigationNodes=new Map();
   var dom$readingContext=element('div','fixture-context'),dom$readingNeighbors=element('div','fixture-neighbors');
-  var dom$readingBody=element('article','fixture-body'),dom$homeLink=element('a','fixture-home');
+  var dom$readingBody=element('article','fixture-body');
   var dom$error=element('div','fixture-error'),dom$announcement=element('div','fixture-announcement');dom$error.hidden=true;
   var dom$breadcrumb=element('nav','bp-dag-breadcrumb');dom$breadcrumb.setAttribute('aria-label','Explorer context');
   var root=element('section','fixture-labels');root.id='explorer-title-proof';
   root.appendChild(dom$breadcrumb);
   root.appendChild(dom$navigationInner);root.appendChild(dom$readingContext);root.appendChild(dom$readingNeighbors);
-  root.appendChild(dom$readingBody);root.appendChild(dom$homeLink);document.body.appendChild(root);
+  root.appendChild(dom$readingBody);document.body.appendChild(root);
   root.appendChild(dom$error);root.appendChild(dom$announcement);
   const calls=[],observations=[];
   var navigation={navigateNode(id,options){calls.push({id,options});},navigate(url,options){calls.push({url,options});},declutterReader(){}};

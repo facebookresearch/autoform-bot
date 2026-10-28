@@ -52,13 +52,15 @@ without JavaScript; enhancement uses published fragments, never graph summaries.
 project macros; read-back cards use fresh isolated inputs without them. Reading
 labels carry converter-derived text/code/TeX parts, revalidated by the client;
 code stays literal. Refreshes add no MathJax menus or tab stops inside controls.
+List previews use conservative inline formatting with literal fallback; deferred
+typesetting is bounded to the current list and cancelled with its viewer.
 
 ## Builds and verification
 
 [build-explorer.mjs](../scripts/build-explorer.mjs) fingerprints canonical UTF-8/LF
 development source text. This is distinct from raw captured mathematical inputs,
 the exact-byte index/sidecar binding, and the emitted runtime's byte SHA.
-Pinned development-only compilers ship one asset below 132 KB; consumers need no Node.
+Pinned development-only compilers ship one asset below 144 KB; consumers need no Node.
 Unsafe compression, public-field mangling/raw-source fallbacks are forbidden; stale bundles fail publication.
 
 Source/unit and geometry tests check lifecycle, ranks, conservation/collisions; MathJax/WebKit check glyphs, hits/focus and Back.

@@ -11,6 +11,8 @@ date when the release is tagged.
 
 ### Changed
 
+- **Explorer delivery.** The approved integrated redesign ships below 144 KB,
+  with the same bounded graph, JSON and frame budgets and pinned safe compiler.
 - **Integrated reading.** The book, theorem search and dependency map share
   one persistent workspace. The outline follows authored containment, includes
   root-level pages and labels collections as subheads; Home returns to the site.
@@ -92,6 +94,10 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Explorer review follow-ups.** Fit retains a selected unlinked result.
+  Deferred list math cancels with its view and falls back to visible text on
+  unavailable typesetting. Preview formatting keeps currency and code literal;
+  formal dependency links use converter-validated code and formula labels (#444).
 - **Explorer controls.** Closing full phone reading brings a cropped selected
   card back into the map without overriding restored cameras. Isolate/status
   filters use the same eligible original members in maps and native shelves,
@@ -101,6 +107,13 @@ date when the release is tagged.
   frame, keeping canvas writes out of observer delivery and cancelling pending
   resize work when the viewer is disposed. Reading toggles settle changed stage
   dimensions before recording the camera, so Back retains the shown view (#442).
+- **Phone framing control.** Fit and Recentre share a fixed-size focus icon
+  and truthful accessibility names. Switching actions no longer wraps the
+  toolbar and shrinks the graph beneath a restored camera (#442).
+- **Explorer keyboard focus.** Result selection focuses its visible statement
+  heading; stale projection callbacks cannot steal focus. Outline, filters
+  and self-hiding map controls keep native focus. Slash stays scoped; modified
+  arrow keys stay native, and empty Escape no longer adds history entries (#442).
 - **Reading and index feedback.** Valid HTML character references keep title
   math without admitting authored HTML. Publication warns when the exact
   UTF-8 search index reaches 95% of the unchanged 32 MiB browser limit; nothing

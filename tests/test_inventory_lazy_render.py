@@ -25,7 +25,7 @@ function original(name) {
   }
   assert.fail('Unparseable actual callback: '+name);
 }
-const names=['element','readingLabel','refreshReadingLabels','button','statusLabel','searchScore','rankMatches','inventoryNodes','inCurrentScope','sourceNodes','renderInventory',
+const names=['element','readingLabel','refreshReadingLabels','button','bindNodeLink','statusLabel','searchScore','rankMatches','inventoryNodes','inCurrentScope','sourceNodes','renderInventory',
   'setMode','refresh','snapshotForRoute','restoreState','writeLocation','neighborIds','relationCounts','renderReaderContext','topicPeers','semanticParent',
   'placeOf','recordId','pendingMath','summaryLine'];
 const constants=['NODE_W','plural','num','pressed'].map(name=>{

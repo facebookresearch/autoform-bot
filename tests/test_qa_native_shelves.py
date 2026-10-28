@@ -14,8 +14,8 @@ _CALLBACKS = [
     "adoptGraph", "neighborIds", "neighborhood", "scopeOverviewProjection", "structuralScopeProjection",
     "expandedGroupShelves", "boundaryContextProjection",
     "regionProjection", "updateProjection", "currentOverviewGroup", "matchesStatus", "matchesIsolation", "calculateActive",
-    "statusLabel", "swatch", "solid", "statusRing", "legendRank", "isDark", "renderShelves", "syncControls", "activateNode", "setMode", "refresh",
-    "setSheet", "sheetLayout", "syncSheetAccessibility", "captureState", "snapshotForRoute", "restoreState", "sourceNodes", "inCurrentScope",
+    "statusLabel", "swatch", "solid", "statusRing", "legendRank", "isDark", "renderShelves", "syncControls", "wrapMapKey", "activateNode", "setMode", "refresh",
+    "setSheet", "positionMapFeedback", "freeArea", "sheetLayout", "syncSheetAccessibility", "captureState", "snapshotForRoute", "restoreState", "sourceNodes", "inCurrentScope",
 ]
 
 _PEERS = (
@@ -81,6 +81,7 @@ function fixture(count=13){
   currentBundle={nodeId:owner.id,scope:owner.id,url:owner.route,title:owner.title,
     dataURL:'https://example.test/project/dependencies/chapter.json',graph:contextGraph,isCurrent:()=>true};
   buildShell();dom$body.offsetTop=0;dom$inventoryRows=new Map();
+  dom$stage.clientWidth=900;dom$stage.clientHeight=700;dom$inspector.clientHeight=700;
   [dom$readingBody,dom$navigation,dom$inventoryScroll,dom$shelves].forEach(pane=>pane.scrollTop=0);
   const reading=document.createElement('p');reading.textContent='Complete captured reading';dom$readingBody.appendChild(reading);
   updateProjection();syncControls();

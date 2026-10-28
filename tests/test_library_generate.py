@@ -616,7 +616,7 @@ def test_a_complete_and_a_wanted_result_with_one_name_in_two_modules_are_both_in
     ]
 
 
-# What `skeleton.run_probe` raises when `lake --rehash --no-build build` says a module needs building.
+# What `lean_probe.run_probe` raises when `lake --rehash --no-build build` says a module needs building.
 def _stale(modules: list[str], detail: str) -> SkeletonError:
     return SkeletonError(
         [f"Lean build artifacts are stale; run `lake build {' '.join(modules)}` before running the library index probe\n{detail}"]
@@ -874,7 +874,7 @@ def test_check_accepts_an_index_checked_out_with_crlf(tmp_path: Path) -> None:
 
 
 def _cli(monkeypatch, runner):
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", runner)
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", runner)
 
 
 def test_the_command_writes_the_index_and_reports_what_it_left_out(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -1304,18 +1304,18 @@ def test_real_signature_of_a_shared_name_is_that_of_the_module_it_is_indexed_und
 def test_a_probe_over_its_budget_is_stopped_and_not_retried(built: Path, tmp_path: Path, monkeypatch) -> None:
     import tempfile
 
-    from autoform_cli import skeleton
+    from autoform_cli import lean_probe
 
     # The probe is written under the temporary directory; make that one only this test uses.
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     calls = []
-    run_probe = skeleton.run_probe
+    run_probe = lean_probe.run_probe
 
     def counted(*args: object, **options: object) -> str:
         calls.append(1)
         return run_probe(*args, **options)
 
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", counted)
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", counted)
     with pytest.raises(GenerateError, match="timed out after 0.01 seconds"):
         generate_index(built, timeout=0.01)
     assert calls == [1]
