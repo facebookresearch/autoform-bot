@@ -38,12 +38,19 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import skeleton
+from . import lean_probe
 from ._tree_snapshot import TreeSnapshotError
 from .claims import author_claim_key
 from .lean import IndexedSourceSnapshot, LeanSourceError, bind_project_source_snapshot, resolve_lean_root
+from .lean_probe import (
+    LeanLibrary,
+    SkeletonError,
+    lean_libraries,
+    lean_name_components,
+    lean_name_parts,
+    lean_requests,
+)
 from .runtime import load_runtime_graph
-from .skeleton import LeanLibrary, SkeletonError, _lean_name_parts, _lean_requests, lean_libraries
 from .work import select_work_item
 
 IMPACT_SCHEMA = "autoform-impact/v1"
@@ -284,7 +291,7 @@ def _name_key(name: str) -> tuple[object, ...]:
     """Compare names by component, so ``A.«b»`` and ``A.b`` are the same name."""
 
     try:
-        parts = _lean_name_parts(name)
+        parts = lean_name_parts(name)
     except SkeletonError:
         return (name,)
     return tuple((part, not quoted and part.isascii() and part.isdigit()) for part, quoted in parts)
@@ -434,7 +441,7 @@ def _module_source_paths(
 def _may_import(data: bytes, module: str) -> bool:
     """Whether ``data`` could import ``module``: it contains each component, however the import spells it."""
 
-    return all(part.encode("utf-8") in data for part, _quoted in _lean_name_parts(module))
+    return all(part.encode("utf-8") in data for part, _quoted in lean_name_parts(module))
 
 
 def import_closure(
@@ -461,7 +468,7 @@ def import_closure(
             if name not in closure and _may_import(data, target):
                 closure.add(name)
                 work.append(name)
-    firsts = {_lean_name_parts(name)[0][0].encode("utf-8") for name in closure}
+    firsts = {lean_name_parts(name)[0][0].encode("utf-8") for name in closure}
     for path, data in outside:
         if any(first in data for first in firsts):
             for name in sorted(closure):
@@ -594,7 +601,7 @@ def _module_artifact_paths(
     artifact_dir = _root_artifact_dir(libraries)
     artifacts: dict[tuple[object, ...], Path] = {}
     for module in source_paths:
-        *package, stem = (part for part, _quoted in _lean_name_parts(module))
+        *package, stem = (part for part, _quoted in lean_name_parts(module))
         # Not with_suffix, which would cut the dotted stem of `«a.b»`.
         artifacts[_name_key(module)] = artifact_dir.joinpath(*package, f"{stem}.olean").resolve()
     return artifacts
@@ -680,7 +687,7 @@ def render_impact_probe(
     if not modules:
         raise SkeletonError(["refusing to render an impact probe with no imports"])
     walks = [
-        [str(directory), list(skeleton._lean_name_components(base)), glob] for directory, base, glob in glob_directories
+        [str(directory), list(lean_name_components(base)), glob] for directory, base, glob in glob_directories
     ]
     return _impact_template().format(
         imports="\n".join(f"import {module}" for module in modules),
@@ -690,10 +697,10 @@ def render_impact_probe(
         emit_module_evidence="true" if emit_module_evidence else "false",
         artifact_dir=json.dumps(str(artifact_dir or ""), ensure_ascii=False),
         glob_directories=json.dumps(json.dumps(walks, ensure_ascii=False), ensure_ascii=False),
-        output_env=skeleton.PROBE_OUTPUT_ENV,
-        output_limit=skeleton.DEFAULT_PROBE_OUTPUT_LIMIT,
-        project_modules=_lean_requests(tuple(sorted(set(project_modules)))),
-        selected_modules=_lean_requests(tuple(sorted(set(selected_modules)))),
+        output_env=lean_probe.PROBE_OUTPUT_ENV,
+        output_limit=lean_probe.DEFAULT_PROBE_OUTPUT_LIMIT,
+        project_modules=lean_requests(tuple(sorted(set(project_modules)))),
+        selected_modules=lean_requests(tuple(sorted(set(selected_modules)))),
     )
 
 
@@ -1450,7 +1457,7 @@ def _project_controls(root: Path) -> tuple[tuple[str, tuple[int, str] | None], .
     """Read the Lake inputs that select the environment as one stable snapshot."""
 
     try:
-        return skeleton._project_control_snapshot(root)
+        return lean_probe.project_control_snapshot(root)
     except SkeletonError as exc:
         raise ImpactError(
             "the Lake project controls could not be read consistently; rebuild and rerun the command"
@@ -1543,7 +1550,7 @@ def _load_impact_evidence(
             if not imports:
                 raise ImpactError(f"not a loaded project module: {module}")
         try:
-            output = skeleton.run_probe(
+            output = lean_probe.run_probe(
                 render_impact_probe(
                     imports=imports,
                     project_modules=local_modules,
@@ -1553,11 +1560,11 @@ def _load_impact_evidence(
                     emit_module_evidence=require_modules,
                 ),
                 root,
-                timeout=skeleton.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
+                timeout=lean_probe.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
                 label="impact probe",
             )
         except SkeletonError as error:
-            said = skeleton.stale_build_said(error)
+            said = lean_probe.stale_build_said(error)
             if said is None:
                 raise
             if module_scope == IMPORT_CLOSURE_SCOPE:
@@ -1568,7 +1575,7 @@ def _load_impact_evidence(
             checked = f"{len(imports)} module{'' if len(imports) == 1 else 's'}"
             raise SkeletonError(
                 [
-                    f"{skeleton.STALE_BUILD}{names}` before running the impact probe "
+                    f"{lean_probe.STALE_BUILD}{names}` before running the impact probe "
                     f"({checked}" + (f"; Lake: {said})" if said else ")")
                 ]
             ) from None
@@ -1625,7 +1632,7 @@ def revision_impact(
 
     ``declarations`` replaces the article's ``lean:`` names as the revised set.
     The Lean project must be built and fresh: the probe runs through
-    ``skeleton.run_probe``, with its freshness check, time limit and output bound.
+    ``lean_probe.run_probe``, with its freshness check, time limit and output bound.
     """
 
     evidence = _load_impact_evidence(

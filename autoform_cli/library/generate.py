@@ -34,9 +34,9 @@ from pathlib import Path, PurePosixPath
 
 import tomli
 
-from .. import skeleton
+from .. import lean_probe, skeleton
+from ..lean_probe import SkeletonError, lean_libraries
 from ..project.catalog import canonical_lean_toolchain
-from ..skeleton import SkeletonError, lean_libraries
 from .declarations import ProbeOutputError, classify, parse_probe_output, starts_with_module
 from .index import (
     INDEX_FILE,
@@ -132,12 +132,12 @@ def render_library_probe(modules: Sequence[str]) -> str:
     names = sorted(set(modules))
     if not names:
         raise GenerateError("the indexed libraries hold no Lean module")
-    template = (Path(skeleton.__file__).parent / "probes" / "library_probe.lean").read_text(encoding="utf-8")
+    template = (Path(__file__).parent.parent / "probes" / "library_probe.lean").read_text(encoding="utf-8")
     return template.format(
         imports="\n".join(f"import {module}" for module in names),
         marker=LIBRARY_MARKER,
-        output_env=skeleton.PROBE_OUTPUT_ENV,
-        output_limit=skeleton.DEFAULT_PROBE_OUTPUT_LIMIT,
+        output_env=lean_probe.PROBE_OUTPUT_ENV,
+        output_limit=lean_probe.DEFAULT_PROBE_OUTPUT_LIMIT,
         modules=_module_set(names),
     )
 
@@ -244,10 +244,10 @@ def generate_index(
         ) from None
 
     try:
-        output = (runner or skeleton.run_probe)(
+        output = (runner or lean_probe.run_probe)(
             render_library_probe(tuple(sources.modules)),
             directory,
-            timeout=skeleton.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
+            timeout=lean_probe.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
             label=_LABEL,
         )
     except SkeletonError as error:
@@ -256,7 +256,7 @@ def generate_index(
         if clash:
             second, name, first = clash.groups()
             raise GenerateError(_clash(first, second, name)) from None
-        said = skeleton.stale_build_said(error)
+        said = lean_probe.stale_build_said(error)
         if said is not None:
             # The probe imports every module, and `run_probe` names each one; the libraries say the same.
             raise GenerateError(
