@@ -111,7 +111,10 @@ def test_each_statement_card_is_one_search_record_holding_its_lean_names(tmp_pat
 def test_a_kind_only_title_keeps_its_own_search_record_and_canonical_anchor(tmp_path: Path, title: str) -> None:
     project = _project(tmp_path)
     article = project / "blueprint/roadmap/ch/first.md"
-    article.write_text(article.read_text(encoding="utf-8").replace("# First\n", f"# {title}\n"), encoding="utf-8")
+    text = article.read_text(encoding="utf-8").replace("# First\n", f"# {title}\n")
+    if title == "Definition":
+        text = text.replace("declaration: theorem\n", "declaration: definition\n")
+    article.write_text(text, encoding="utf-8")
     render_site(project / "blueprint", project / "site-src")
 
     records = _records(project)
