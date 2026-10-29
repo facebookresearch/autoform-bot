@@ -42,7 +42,7 @@ camera, filters and reader state. Canvas paints routes; native DOM controls prov
 readable labels, keyboard focus and hit targets. The 120-node scene bound limits
 geometry, not index membership or paged structural shelves. Group before this cap;
 only authored areas name mathematical regions. Collections and real components are structural.
-Fit compares bounded orientations and frames drilled members/local cards, not distant context.
+Fit compares bounded orientations; selected neighborhoods include direct boundary links and retain a proved-fit pose.
 An unselected connection backbone reduces condensation transitively; its key reports shown/total.
 Canonical weights/SCCs and reader lists stay complete; selected maps restore full bounded-neighborhood routes.
 Server-produced pages contain complete mathematical reading and theorem anchors
@@ -52,7 +52,7 @@ without JavaScript; enhancement uses published fragments, never graph summaries.
 project macros; read-back cards use fresh isolated inputs without them. Reading
 labels carry converter-derived text/code/TeX parts, revalidated by the client;
 Code and unsupported previews stay literal; deferred list math is bounded and viewer-scoped.
-Refreshes add no MathJax menus or tab stops inside controls.
+Page-owned reading labels add no MathJax menus/tab stops; typed link counts describe rather than replace their names.
 
 ## Builds and verification
 

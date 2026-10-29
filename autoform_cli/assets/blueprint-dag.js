@@ -1411,8 +1411,8 @@
       index.nodes.forEach(function (node, i) { node._index = i; records.set(node.id, node); });
       ui$searchNodes = index.nodes; ui$searchCacheQuery = null;
       if (currentBundle) updateProjection();
-      renderNavigation(); renderReaderContext(); renderInventory(false); refresh(false);
-      if (ui$requestedNode) { fit(); centerIfHidden(ui$selected); }
+      renderNavigation(); refresh(false);
+      if (ui$requestedNode) fit();
       requestWikiLinks();
     }
     function requestWikiLinks() {
@@ -1539,7 +1539,6 @@
       setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false && 1 : sheetLayout() && (topicOverview || mapRequested) ? false : readingRequested ||
         !ui$scopeOverview && !ui$overviewOnly && (!sheetLayout() || Boolean(bundle.nodeId)), ui$selected);
       refresh(true); firstResize = true; resize();
-      if (ui$selected && mapAllowed) centerIfHidden(ui$selected);
       if (navigation) navigation.loadIndex().catch(showError);
       readingReady = readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || (isCurrent && !isCurrent())) { resolve(); return; }
@@ -2133,7 +2132,7 @@
       var theme = new MutationObserver(schedule); theme.observe(document.body, {attributes: true, attributeFilter: ["data-md-color-scheme"]}); observers.push(theme);
     }
 
-    function statusLabel(key) { return palette[key] && palette[key].label ? palette[key].label : key.replace(/_/g, " "); }
+    function statusLabel(key) { return (palette[key] || {}).label || key.replace(/_/g, " "); }
     function renderStatusFields() {
       dom$statusFieldset.replaceChildren(element("legend", "", "Formalization status"));
       dom$statusInputs.clear();
@@ -2351,7 +2350,7 @@
           // In words: how many of the links the map draws, or that a pair's two kinds share one line.
           var brief = compactKey || sheetLayout(), key = element("span", "bp-map-key-coverage", display.shownPairs < display.totalPairs ?
             (brief ? "" : "Showing ") + num(display.shownPairs) + " of " + num(display.totalPairs) + " links" : "One line per direction");
-          key.title = "Statement and proof dependencies in the same direction share one line, solid when it includes a statement dependency. Every link remains in each statement's Uses and Used by, and around a selected result.";
+          key.title = "Statement and proof links in the same direction share a line; statement links make it solid. Uses, Used by and selected-result maps retain every dependency.";
           dom$mapKey.appendChild(key);
         }
         // One entry says what the dotted lines are and how many of them this map draws; a map that draws none says nothing about their coverage.
@@ -2489,7 +2488,9 @@
       calculateActive(); var nodes = framingNodes(); if (!nodes.length) return;
       // Frame local cards (or the drilled group's members), not distant context
       // boundaries or route detours. The readable floor stays unchanged.
-      var frame = sceneFrame(geometry(), nodes.map(function (node) { return node.id; }), framingViewport(), framingPadding());
+      var currentScene = geometry();
+      if (ui$selected) nodes = ui$active;
+      var frame = sceneFrame(currentScene, nodes.map(function (node) { return node.id; }), framingViewport(), framingPadding());
       // Unlinked cards are inventory: when the whole map cannot open readable and whole, the first view frames the linked cards.
       var linked = nodes.filter(function (node) { return !node.isolated; });
       if (frame.cropped && linked.length && linked.length < nodes.length) {
@@ -2518,8 +2519,9 @@
             nodes.find(function (node) { return node.kind !== "boundary"; }) || nodes[0], .9);
         }
       }
-      // Linked-only framing must not leave an explicitly selected, drawn isolate offscreen.
-      if (navigation && ui$selected && ui$activeIds.has(ui$selected.id)) centerIfHidden(ui$selected);
+      // Preserve a proved-fit neighborhood; only excluded isolates or cropped frames need another center.
+      if (navigation && ui$selected && ui$activeIds.has(ui$selected.id) &&
+          (frame.cropped || nodes.indexOf(ui$selected) < 0)) centerIfHidden(ui$selected);
       schedule(); remember();
       // A cropped map with nothing to centre on keeps the leading edge sceneFrame gave it: centring its first card left half the
       // stage empty. A deep map's leading corner can be bare, though, and then the first card in reading order opens there.
@@ -2885,7 +2887,7 @@
         (node.isolated ? ", not linked to anything on this map" : ""));
       var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : control;
       content.appendChild(element("span", "bp-dag-node-title", node.title));
-      // The kind word or topic count gives way first, so the status or count the line is there to show stays whole.
+      // Keep declaration kinds whole; the status or topic count yields when its line is narrow.
       var line = content.appendChild(element("span", "bp-dag-node-meta"));
       if (lead) { line.appendChild(element("span", "", lead)); line.appendChild(element("span", "", done ? " " : " · ")); }
       line.appendChild(element("span", "", tail));
@@ -3158,8 +3160,9 @@
       var collapsed = !opened && (sheetLayout() || Boolean(ui$area) || ui$overviewOnly || ui$scopeOverview);
       // The handle names the page or entry, with its status, rather than a generic "Reading"; its accessible name starts with that title.
       // An open desktop reader over an area or the overview closes with ×.
-      var close = opened && !sheetLayout() && (ui$area || ui$overviewOnly || ui$scopeOverview), title = (currentBundle || data).title,
-        record = records.get(currentBundle && currentBundle.nodeId || ui$requestedNode || (ui$selected && ui$selected.id));
+      var close = opened && !sheetLayout() && (ui$area || ui$overviewOnly || ui$scopeOverview), title = currentBundle.title,
+        record = records.get(currentBundle.nodeId || ui$requestedNode || (ui$selected && ui$selected.id));
+      if (!record || record.title !== title) record = records.get(currentBundle.scope);
       // A chapter's own record carries a rollup status, not its results', so only a statement gets a status mark.
       var handleTitle = close ? "" : readingLabel("span", "bp-dag-sheet-title", title, record && record.title === title ? record.reading_title : null);
       dom$sheetHandle.replaceChildren(close ? "×" : record && record.result && record.status ? swatch(record.status) : "", handleTitle);

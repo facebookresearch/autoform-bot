@@ -13,6 +13,8 @@ date when the release is tagged.
 
 - **Explorer delivery.** The approved integrated redesign ships below 144 KB,
   with the same bounded graph, JSON and frame budgets and pinned safe compiler.
+  Touch keeps single-pointer zoom controls; reading handles retain page-owned
+  mathematical titles, and typed dependency counts remain accessible descriptions.
 - **Integrated reading.** The book, theorem search and dependency map share
   one persistent workspace. The outline follows authored containment, includes
   root-level pages and labels collections as subheads; Home returns to the site.

@@ -59,6 +59,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 }
 .bp-dag-search-wrap { position: relative; flex: 1 1 384px; min-width: 160px; max-width: 672px; }
 .bp-dag-search { display: block; width: 100%; min-height: 36px; margin: 0; padding: 7px 36px 7px 32px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); outline: 0; background: var(--dag-panel); color: var(--dag-fg); font: inherit; }
+.bp-dag-search::placeholder { color: var(--dag-muted); opacity: 1; }
 .bp-dag-search-wrap::before {
   content: ""; position: absolute; z-index: 2; left: 11px; top: 50%; width: 14px; height: 14px; margin-top: -7px; background: currentColor; color: var(--dag-muted); pointer-events: none;
   --dag-magnifier: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='5'/%3E%3Cpath d='m11 11 3.5 3.5'/%3E%3C/svg%3E");
@@ -144,9 +145,9 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-node { position: absolute; top: 0; left: 0; display: grid; align-content: center; width: 196px; height: 56px; padding: 6px 10px; overflow: hidden; border: 1.5px solid var(--dag-node-stroke); border-radius: var(--dag-radius-control); background: var(--dag-node-fill); color: var(--dag-node-text); box-shadow: var(--dag-e1); text-align: left; transform-origin: 0 0; pointer-events: auto; cursor: pointer; will-change: transform; }
 .bp-dag-node-title { overflow: hidden; color: var(--dag-fg); font-size: 14px; font-weight: 600; line-height: 1.18; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-node-meta { display: flex; overflow: hidden; color: color-mix(in srgb, var(--dag-node-text) 95%, var(--dag-node-fill)); font-size: 12px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
-/* A kind word or topic count leads the status or count; the lead truncates first, so the status stays whole. */
-.bp-dag-node-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
-.bp-dag-node-meta > span + span { flex: none; }
+/* Keep the kind or topic count and its separator whole; only the final status or count can elide. */
+.bp-dag-node-meta > span { flex: none; white-space: pre; }
+.bp-dag-node-meta > span:last-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* Selection is a neutral ring past a gap in the map colour, since blue marks cards that are ready to state or prove. */
 .bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-map), 0 0 0 4px var(--dag-fg), var(--dag-e1); }
 /* Subdued cards give up colour, not legibility: fill and border wash towards the map and the words turn a grey that keeps 5.3:1 on
@@ -271,14 +272,10 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
   .bp-dag-viewer.bp-dag-viewer .bp-dag-inspector-header h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .bp-dag-density { bottom: 68px; }
 }
-/* A finger pinches to zoom, so it keeps only Fit, as an ordinary button as tall as its neighbours: inside the zoom group's box,
-   in its muted text and 2px taller, it looked disabled. */
+/* Pinch has a single-pointer alternative: all three zoom controls remain visible and reach 44px. */
 @media (pointer: coarse) {
-  .bp-dag-zoom .bp-dag-button:not(:last-child) { display: none; }
-  .bp-dag-zoom { padding: 0; border: 0; background: transparent; }
-  .bp-dag-zoom .bp-dag-button { min-width: 44px; min-height: 36px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); background: var(--dag-bg); color: var(--dag-fg); }
+  .bp-dag-zoom .bp-dag-button { min-width: 44px; min-height: 44px; color: var(--dag-fg); }
 }
-@media (pointer: coarse) and (max-width: 680px) { .bp-dag-zoom .bp-dag-button { min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) {
   .bp-dag-inspector { transition: none; }
   .bp-dag-node { will-change: auto; }
@@ -294,13 +291,14 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 /* The trail has the row to itself: each crumb keeps a few letters, the "…" its glyph, and a parent at most 24ch. */
 .bp-dag-integrated .bp-dag-breadcrumb { display: block; flex: 1 1 auto; max-width: none; visibility: visible !important; }
 .bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li { min-width: 4em; }
+.bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:first-child { flex: none; min-width: 0; }
 .bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:has(.bp-dag-sr-only) { flex: none; min-width: 0; }
 .bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :last-child) { max-width: 24ch; }
 /* A crumb with a link lets its focus ring out; the link still truncates its own text. */
 .bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li:has(> a) { display: flex; align-items: center; overflow: visible; }
 .bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li > a { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li::before { flex: none; }
-.bp-dag-integrated .bp-dag-book { grid-area: auto; margin: 0 18px 0 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.bp-dag-integrated .bp-dag-book { grid-area: auto; margin: 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 .bp-dag-integrated .bp-dag-toolbar { display: flex; padding: 10px 16px; }
 .bp-dag-integrated .bp-dag-search-wrap { max-width: none; }
 /* The box can span a wide head, but its results stop at 720px, so a row's status stays near its title. */
@@ -479,9 +477,13 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated .bp-dag-context { padding-inline: 12px; }
   /* Keep every 44px control and both rows; trim only their outer padding for a readable five-area map. */
   .bp-dag-integrated .bp-dag-toolbar { padding: 4px 12px; gap: 6px; }
-  /* Keep the existing 44px group footprint while offering a 44px hit target. */
+  /* Secondary labels can elide before any touch target shrinks or the zoom group adds a third row. */
+  .bp-dag-integrated :is(.bp-dag-filters, .bp-dag-browse, .bp-dag-hidden-button) { flex: 1 1 44px; min-width: 44px; max-width: max-content; }
+  .bp-dag-integrated :is(.bp-dag-filter-summary, .bp-dag-browse > .bp-dag-button, .bp-dag-hidden-button) { min-width: 44px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Each of the three zoom controls keeps its own 44px target inside one border. */
   .bp-dag-integrated .bp-dag-zoom { height: 44px; gap: 0; padding: 0; border: 0; box-shadow: inset 0 0 0 1px var(--dag-border); }
-  .bp-dag-integrated .bp-dag-zoom .bp-dag-fit { flex: 0 0 44px; width: 44px; min-width: 44px; max-width: 44px; height: 44px; min-height: 44px; padding: 0; font-size: 0; }
+  .bp-dag-integrated .bp-dag-zoom .bp-dag-button { flex: 0 0 44px; width: 44px; min-width: 44px; max-width: 44px; height: 44px; min-height: 44px; padding: 0; }
+  .bp-dag-integrated .bp-dag-zoom .bp-dag-fit { font-size: 0; }
   .bp-dag-integrated .bp-dag-fit::before { content: ""; display: block; width: 16px; height: 16px; margin: auto; border: 1.5px solid currentColor; border-radius: 50%; background: radial-gradient(circle, currentColor 0 1.5px, transparent 2px); }
   .bp-dag-integrated .bp-dag-breadcrumb { min-width: 0; flex: 1; }
   /* JavaScript folds middle ancestors with their names; CSS must not silently erase them. */
@@ -494,6 +496,5 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated .bp-dag-browse-popover, .bp-dag-viewer.bp-dag-integrated .bp-dag-filter-popover { left: 12px; right: 12px; width: auto; max-width: none; }
   /* A list has no map to zoom, and a phone's row has no room to keep the zoom buttons' place beside Back to map. */
   .bp-dag-viewer.bp-dag-integrated:has(.bp-dag-stage[hidden]) .bp-dag-zoom { display: none; }
-  .bp-dag-integrated .bp-dag-book { margin-right: 10px; max-width: 150px; }
 }
 @media (prefers-reduced-motion: reduce) { .bp-dag-integrated .bp-reading-pane { transition: none; } }

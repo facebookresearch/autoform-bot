@@ -67,6 +67,33 @@ def test_fit_keeps_the_selected_isolate_whole_when_the_linked_only_frame_fits(
     """, {"data": data, "width": width, "height": height, "direction": direction, "atlas": False})
 
 
+def test_a_fitted_phone_neighborhood_is_not_recentred_by_the_old_density_footer() -> None:
+    data = {
+        "nodes": [{"id": name, "kind": "node", "width": 196, "height": 100, "isolated": False}
+                  for name in ("A", "B")],
+        "edges": [{"source": "A", "target": "B", "statement": 2, "proof": 3}],
+    }
+    _run(_ENVIRONMENT + r"""
+      ui$selected=data.nodes[1];dom$density.hidden=false;dom$inspector.clientHeight=420/.45;
+      host.classList.contains=name=>name==='bp-dag-sheet-open';
+      const before=JSON.stringify(data),current=geometry(),ids=data.nodes.map(node=>node.id);
+      const expected=sceneFrame(current,ids,framingViewport(),framingPadding());
+      assert.equal(expected.cropped,false,JSON.stringify({message:'The real two-card neighborhood must fit at the readable floor',
+        expected,viewport:framingViewport(),nodes:Array.from(current.nodes.values())}));
+      const actualCenter=center;let centres=0;center=(...args)=>{centres++;return actualCenter(...args);};
+      fit();
+      assert.equal(centres,0,'A stale 56px density band destroyed an already fitted neighborhood');
+      assert.deepEqual(ui$transform,{x:expected.x,y:expected.y,scale:expected.scale});
+      assert(data.nodes.every(insideFrame));assert(ui$transform.scale>=.9);
+      assert.strictEqual(geometry(),current);assert.equal(current.nodes.size,2);
+      assert.equal(current.$display.totalPairs,1);assert.equal(current.$display.totalRoutes,2);
+      assert.equal(JSON.stringify(data),before,'Framing must preserve every original node and typed edge');
+      centerIfHidden(ui$selected);
+      assert.equal(centres,1,'The fixture must exercise the old unconditional final recenter');
+      assert(!insideFrame(data.nodes[0]),'The old stale footer check must crop the upstream neighbor');
+    """, {"data": data, "width": 390, "height": 933.333334, "direction": "tb", "atlas": False})
+
+
 @pytest.fixture(scope="module")
 def infimum_loss_scene() -> dict:
     """Read the real published chapter metadata, without rendering or running Lean."""

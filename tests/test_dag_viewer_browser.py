@@ -513,7 +513,7 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
         folder.mkdir()
         links = "- [Base](base.md)\n- [Result](result.md)\n"
         if name == "algebra":
-            links += "- [Groups](title-foundation.md)\n- [Title-math target](title-target.md)\n"
+            links += "- [Groups](title-foundation.md)\n- [Title-math target](title-target.md)\n- [Catalogue](catalog.md)\n"
         if name == "topology":
             links += "".join(f"- [Later {n}](later-{n}.md)\n" for n in range(55))
         heading = _TITLE_MATH_SCOPE if name == "algebra" else name.title()
@@ -545,6 +545,12 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
                 "The actual [group notation](title-foundation.md) remains available in the reader.\n\n"
                 "## Depends on\n\n- [Groups](title-foundation.md)\n", encoding="utf-8",
             )
+            _write_consumer(folder / "catalog.md", (
+                "---\ncatalog: module\n---\n\n# Catalogue of groups\n\n"
+                "An authored inventory is not a mathematical proof.\n\n"
+                "## Sources\n\n- [Catalogue source](../../sources/catalog.md)\n"
+            ))
+            _write_consumer(project / "blueprint/sources/catalog.md", "# Catalogue source\n\nAuthored source commentary.\n")
         if name == "topology":
             for n in range(55):
                 title = f"Later {n}" + (r" $\ZZ/n$ and `$literal$`" if n < 8 else "")
@@ -567,10 +573,283 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
 
 
 @pytest.fixture(scope="module")
+def math_handle_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """Twelve real authored modules create two regions, not a manual graph payload."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("math-handle-site") / "project"
+    scaffold_project(project, title="Mathematical handle fixture")
+    blueprint = project / "blueprint"
+    _write_consumer(blueprint / "tex-macros.json", json.dumps({"ZZ": r"\mathbb{Z}"}))
+    _write_consumer(blueprint / "README.md", "# Mathematical handle fixture\n\n- [Library](roadmap/README.md)\n")
+    _write_consumer(blueprint / "roadmap/README.md", (
+        "# Library $\\ZZ/n$ and code `$literal$`\n\n"
+        + "\n".join(f"- [Topic {number}](topic-{number}/README.md)" for number in range(12)) + "\n"
+    ))
+    for number in range(12):
+        area = "Geometry" if number < 6 else "Analysis"
+        _write_consumer(blueprint / f"roadmap/topic-{number}/README.md", (
+            f"---\nnavigation: module\narea: {area}\n---\n\n# Authored topic {number}\n\n"
+            "- [Complete statement](identity.md)\n"
+        ))
+        _consumer_article(blueprint / "roadmap", f"topic-{number}/identity", f"Identity {number}")
+    render_site(blueprint, project / "site-src")
+    build(load_config(config_file=str(project / "mkdocs.yml"), strict=True))
+    index = json.loads((project / "site/dependencies/index.json").read_text(encoding="utf-8"))
+    root = next(node for node in index["nodes"] if node["id"] == "roadmap")
+    assert root["title"] == r"Library $\ZZ/n$ and code `$literal$`"
+    assert root["reading_title"] == dag_viewer._reading_label(root["title"])
+    graph = json.loads((project / "site/dependencies.json").read_text(encoding="utf-8"))
+    assert len(graph["nodes"]) == 12 and {node["area"] for node in graph["nodes"]} == {"Geometry", "Analysis"}
+    with _served(project / "site") as url:
+        yield url
+
+
+@pytest.fixture(scope="module")
 def marked_math_runtime() -> object:
     from tests.test_integrated_explorer_browser import _PinnedRuntime
 
     return _PinnedRuntime()
+
+
+def _assert_native_handle_math(page: object) -> None:
+    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
+    assert page.evaluate("AutoformMath.refresh(document.querySelector('.bp-dag-sheet-handle'))") is True
+    title = handle.locator(".bp-dag-sheet-title")
+    playwright.expect(title.locator(".arithmatex")).to_have_count(1)
+    playwright.expect(title.locator(".arithmatex")).to_have_attribute("data-autoform-math-source", r"\(\ZZ/n\)")
+    playwright.expect(title.locator("mjx-container")).to_have_count(1)
+    playwright.expect(title.locator("mjx-c.mjx-c2124")).to_have_count(1)
+    assert title.locator("mjx-c").evaluate_all("""nodes=>nodes.length>=3&&nodes.every(node=>
+      !['none','normal',''].includes(getComputedStyle(node,'::before').content))""")
+    playwright.expect(title.locator("code")).to_have_text("$literal$")
+    assert r"\(" not in title.inner_text() and r"\ZZ" not in title.inner_text()
+    assert title.locator("code .arithmatex,code mjx-container,[tabindex],[role=application],mjx-merror,merror").count() == 0
+    playwright.expect(handle.locator(".bp-dag-swatch")).to_have_count(0)
+    assert page.evaluate("MathJax.version") == "3.2.2"
+    _assert_hit(page, handle)
+    handle.focus()
+    assert page.evaluate("AutoformMath.refresh(document.querySelector('.bp-dag-sheet-handle'))") is True
+    playwright.expect(handle).to_be_focused()
+
+
+@pytest.mark.parametrize("width,height", [(320, 844), (390, 844), (1000, 900)])
+def test_coarse_pointer_zoom_has_whole_44px_single_finger_targets_in_two_toolbar_rows(
+    mobile_page: object, explorer_consumer: _ExplorerConsumer, marked_math_runtime: object, width: int, height: int,
+) -> None:
+    from tests.test_integrated_explorer_browser import _routes
+    from tests.test_integrated_selected_focus_browser import _complete_source, _published_source
+
+    page, consumer = mobile_page, explorer_consumer
+    page.set_viewport_size({"width": width, "height": height})
+    assert page.evaluate("matchMedia('(pointer: coarse)').matches") is True
+    route = consumer.route("chapter/middle")
+    expected = _published_source(page, route)
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _routes(page, consumer.url, marked_math_runtime, graph_client=True)
+    page.goto(route)
+    _consumer_ready(page, consumer, "chapter/middle")
+    page.evaluate("window.__singleFingerDocument=document")
+    _complete_source(page, expected)
+    if width <= 720:
+        _close_phone_reading(page)
+    control = _consumer_selected(page, consumer, "chapter/middle")
+    buttons = [page.get_by_role("button", name=name, exact=True) for name in ("Zoom out", "Zoom in")]
+    buttons.append(page.locator(".bp-dag-fit"))
+    for button in buttons:
+        playwright.expect(button).to_be_visible()
+        _assert_hit(page, button)
+        box = button.bounding_box()
+        assert box is not None and box["width"] >= 44 and box["height"] >= 44
+        assert 0 <= box["x"] and box["x"] + box["width"] <= width
+    rows = """()=>new Set(Array.from(document.querySelector('.bp-dag-toolbar').children)
+      .filter(node=>node.getClientRects().length).map(node=>Math.round(node.getBoundingClientRect().top))).size"""
+    assert page.evaluate(rows) == 2
+    history = page.evaluate("history.length")
+    before = control.evaluate("node=>new DOMMatrix(getComputedStyle(node).transform).a")
+    buttons[0].tap()
+    _paint_frame(page)
+    smaller = control.evaluate("node=>new DOMMatrix(getComputedStyle(node).transform).a")
+    assert smaller < before
+    buttons[1].tap()
+    _paint_frame(page)
+    assert control.evaluate("node=>new DOMMatrix(getComputedStyle(node).transform).a") > smaller
+    assert page.evaluate(rows) == 2
+    for button in buttons:
+        _assert_hit(page, button)
+    assert page.url == route and page.evaluate("history.length") == history
+    _complete_source(page, expected)
+    assert page.evaluate("document===__singleFingerDocument") is True
+    assert documents == [route.split("#", 1)[0]]
+
+
+@pytest.mark.parametrize("width", [320, 390])
+def test_phone_card_kind_word_remains_whole_at_native_readable_typography(
+    mobile_page: object, explorer_consumer: _ExplorerConsumer, marked_math_runtime: object, width: int,
+) -> None:
+    from tests.test_integrated_explorer_browser import _routes
+    from tests.test_integrated_selected_focus_browser import _complete_source, _published_source
+
+    page, consumer = mobile_page, explorer_consumer
+    page.set_viewport_size({"width": width, "height": 844})
+    node_id = "remote/deep-theorem"
+    assert consumer.records[node_id]["status"] == "stated"
+    route = consumer.route(node_id)
+    expected = _published_source(page, route)
+    _routes(page, consumer.url, marked_math_runtime, graph_client=True)
+    page.goto(route)
+    _consumer_ready(page, consumer, node_id)
+    page.evaluate("window.__kindDocument=document")
+    _complete_source(page, expected)
+    card = _consumer_selected(page, consumer, node_id)
+    meta = card.locator(".bp-dag-node-meta")
+    playwright.expect(meta).to_have_text("Theorem · statement formalized")
+    kind = meta.locator(":scope > span").first
+    playwright.expect(kind).to_have_text("Theorem")
+    _assert_hit(page, kind)
+    assert kind.evaluate("""node=>{
+      const r=node.getBoundingClientRect(),meta=node.parentElement.getBoundingClientRect();
+      const scale=new DOMMatrix(getComputedStyle(node.closest('.bp-dag-node')).transform).a;
+      const range=document.createRange();range.selectNodeContents(node);
+      return scale>=.9&&parseFloat(getComputedStyle(node).fontSize)*scale>=11&&node.scrollWidth<=node.clientWidth+1&&
+        r.left>=meta.left&&r.right<=meta.right&&Array.from(range.getClientRects()).every(part=>part.left>=r.left&&part.right<=r.right);
+    }"""), "The full kind, not an ellipsis, must remain beside the unchanged status"
+    _complete_source(page, expected)
+    assert page.url == route and page.evaluate("document===__kindDocument") is True
+
+
+@pytest.mark.parametrize("entrance", ["chapter-heading", "catalogue"])
+def test_phone_peek_typesets_the_pages_own_chapter_title_without_borrowing_a_catalogue_status(
+    mobile_page: object, marked_math_site_url: str, marked_math_runtime: object, entrance: str,
+) -> None:
+    from tests.test_integrated_explorer_browser import _routes
+    from tests.test_integrated_selected_focus_browser import _complete_source, _published_source
+
+    page, base = mobile_page, marked_math_site_url
+    scope = _site_route(page, base, "algebra")
+    if entrance == "catalogue":
+        record = _site_record(page, base, "algebra/catalog")
+        assert record["result"] is False and record["scope"] == "algebra"
+        assert record["title"] != _TITLE_MATH_SCOPE
+        canonical = _site_route(page, base, "algebra/catalog")
+    else:
+        response = page.request.get(scope)
+        assert response.ok
+        tree = html5lib.parse(response.text(), namespaceHTMLElements=False)
+        source = next(node for node in tree.iter() if "bp-reading-source" in node.get("class", "").split())
+        anchor = next(source.iter("h1")).get("id")
+        assert anchor and anchor != urlsplit(_site_route(page, base, "algebra/result")).fragment
+        canonical = urlsplit(scope)._replace(fragment=anchor).geturl()
+    expected, home_source = _published_source(page, canonical), _published_source(page, base + "/index.html")
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _routes(page, base, marked_math_runtime, graph_client=True)
+    page.goto(canonical)
+    _ready_site(page)
+    page.evaluate("window.__chapterHandleDocument=document")
+    _complete_source(page, expected)
+    assert page.title() == _TITLE_MATH_SCOPE
+    _close_phone_reading(page)
+    _paint_frame(page)
+    _assert_native_handle_math(page)
+    assert page.url == canonical
+    home = page.locator(".bp-dag-breadcrumb .bp-dag-book")
+    playwright.expect(home).to_have_attribute("href", base + "/index.html")
+    _assert_hit(page, home)
+    home.click()
+    page.wait_for_url(base + "/index.html")
+    _complete_source(page, home_source)
+    page.go_back()
+    page.wait_for_url(canonical)
+    _complete_source(page, expected)
+    _paint_frame(page)
+    _assert_native_handle_math(page)
+    assert page.evaluate("document===__chapterHandleDocument") is True
+    assert documents == [scope.split("#", 1)[0]]
+
+
+@pytest.mark.parametrize("width,height", [(390, 844), (1000, 900)])
+def test_region_reader_handle_keeps_genuine_page_math_when_its_peek_or_rail_is_collapsed(
+    mobile_page: object, math_handle_site_url: str, marked_math_runtime: object, width: int, height: int,
+) -> None:
+    from tests.test_integrated_explorer_browser import _routes
+    from tests.test_integrated_selected_focus_browser import _complete_source, _published_source
+    from tests.test_integrated_workspace_browser import _focus_graph_region
+
+    page, base = mobile_page, math_handle_site_url
+    page.set_viewport_size({"width": width, "height": height})
+    canonical = _site_route(page, base, "roadmap")
+    expected = _published_source(page, canonical)
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _routes(page, base, marked_math_runtime, graph_client=True)
+    page.goto(canonical)
+    _ready_site(page)
+    page.evaluate("window.__regionHandleDocument=document")
+    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    _assert_native_handle_math(page)
+    _focus_graph_region(page, "Geometry").tap()
+    playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(1)
+    assert page.url == canonical
+    _assert_native_handle_math(page)
+    _complete_source(page, expected)
+    parent = page.locator('.bp-dag-breadcrumb a[href="' + canonical + '"]')
+    playwright.expect(parent).to_have_count(1)
+    parent.click()
+    playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(0)
+    _paint_frame(page)
+    _assert_native_handle_math(page)
+    _complete_source(page, expected)
+    assert page.url == canonical and page.evaluate("document===__regionHandleDocument") is True
+    assert documents == [canonical]
+
+
+def test_phone_tap_keeps_the_selected_result_and_its_direct_neighbor_whole_when_the_scene_fits(
+    mobile_page: object, marked_math_site_url: str, marked_math_runtime: object,
+) -> None:
+    from tests.test_integrated_explorer_browser import _routes
+    from tests.test_integrated_selected_focus_browser import _complete_source, _published_source
+
+    page, base = mobile_page, marked_math_site_url
+    page.set_viewport_size({"width": 680, "height": 844})
+    first_id, target_id = "algebra/title-foundation", "algebra/title-target"
+    first, target = _site_route(page, base, first_id), _site_route(page, base, target_id)
+    initial_source, expected = _published_source(page, first), _published_source(page, target)
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _routes(page, base, marked_math_runtime, graph_client=True)
+    page.goto(first)
+    _ready_site(page)
+    page.evaluate("window.__fittedNeighborDocument=document")
+    _focus_consumer_node(page, target_id)
+    control = page.locator('.bp-dag-node[data-autoform-node-id="' + target_id + '"]')
+    _assert_hit(page, control)
+    control.tap()
+    page.wait_for_url(target)
+    _ready_site(page)
+    _paint_frame(page)
+    playwright.expect(page.locator(".bp-dag-fit")).to_have_attribute("aria-label", "Fit the map")
+    playwright.expect(page.locator(".bp-dag-sheet-handle")).to_have_attribute("title", "Expand reading")
+    controls = page.locator(".bp-dag-node")
+    assert set(controls.evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId)")) == {first_id, target_id}
+    assert controls.evaluate_all("""nodes=>nodes.every(node=>{
+      const r=node.getBoundingClientRect(),stage=node.closest('.bp-dag-stage').getBoundingClientRect();
+      const pane=document.querySelector('.bp-reading-pane').getBoundingClientRect();
+      const scale=new DOMMatrix(getComputedStyle(node).transform).a;
+      return scale>=.9&&r.left>=stage.left+12&&r.right<=stage.right-12&&r.top>=stage.top+12&&r.bottom<=pane.top-32&&
+        node.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
+    })"""), "A fitted focal map must not recenter its selection into a crop of its actual neighbor"
+    playwright.expect(control).to_have_attribute("data-selected", "true")
+    _complete_source(page, expected)
+    assert page.evaluate("document===__fittedNeighborDocument") is True
+    page.go_back()
+    page.wait_for_url(first)
+    _complete_source(page, initial_source)
+    assert page.evaluate("document===__fittedNeighborDocument") is True
+    assert documents == [first.split("#", 1)[0]]
 
 
 def _consumer_ready(page: object, consumer: _ExplorerConsumer, node_id: str = "chapter") -> None:

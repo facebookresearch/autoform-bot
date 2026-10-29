@@ -924,14 +924,16 @@ def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_und
     assert ".bp-dag-zoom { display: inline-flex; flex: none; gap: 2px; padding: 2px; border: 1px solid var(--dag-border);" in style
     assert ".bp-dag-zoom .bp-dag-button { min-height: 30px; padding: 4px 10px; border: 0;" in style
     assert "bp-dag-modes" not in style and "bp-dag-mode-button" not in style and "bp-dag-mode-button" not in script
-    # Zoom leaves with the map but keeps its place, so a finger's 44px Fit does not change the row's height between views.
+    # Zoom leaves with the map; touch retains both single-pointer zoom controls as well as Fit.
     assert ".bp-dag-viewer:has(.bp-dag-stage[hidden]) .bp-dag-zoom { visibility: hidden; }" in style
     coarse = style.split("@media (pointer: coarse) {\n", 1)[1].split("\n}", 1)[0]
-    assert ".bp-dag-zoom .bp-dag-button:not(:last-child) { display: none; }" in coarse
-    # Alone, Fit is an ordinary button as tall as its neighbours; in the group's box and muted text it looked disabled.
-    assert ".bp-dag-zoom { padding: 0; border: 0; background: transparent; }" in coarse
-    assert ".bp-dag-zoom .bp-dag-button { min-width: 44px; min-height: 36px; border: 1px solid var(--dag-border);" in coarse and "color: var(--dag-fg); }" in coarse
-    assert "@media (pointer: coarse) and (max-width: 680px) { .bp-dag-zoom .bp-dag-button { min-height: 44px; } }" in style
+    assert "display: none" not in coarse and "visibility: hidden" not in coarse and "pointer-events: none" not in coarse
+    targets = re.search(r"\.bp-dag-zoom \.bp-dag-button \{([^}]+)\}", coarse)
+    assert targets is not None
+    dimensions = dict(re.findall(r"([\w-]+):\s*([^;]+);", targets.group(1)))
+    assert dimensions["min-width"] == dimensions["min-height"] == "44px"
+    assert dimensions["color"] == "var(--dag-fg)"
+    assert ".bp-dag-zoom .bp-dag-button:not(:last-child)" not in style
     assert ".bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button { min-height: 44px; }" in style
 
 
@@ -1001,6 +1003,9 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     assert ".bp-dag-integrated .bp-dag-browse-popover, .bp-dag-viewer.bp-dag-integrated .bp-dag-filter-popover { left: 12px; right: 12px; width: auto; max-width: none; }" in phone
     assert ".bp-dag-integrated .bp-dag-breadcrumb { display: block; flex: 1 1 auto; max-width: none;" in style
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li { min-width: 4em; }" in style
+    assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:first-child { flex: none; min-width: 0; }" in style
+    home = re.search(r"^\.bp-dag-integrated \.bp-dag-book \{([^}]+)\}", style, re.M)
+    assert home is not None and dict(re.findall(r"([\w-]+):\s*([^;]+);", home.group(1)))["margin"] == "0"
     assert ".bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:has(.bp-dag-sr-only) { flex: none; min-width: 0; }" in style
     tablet = style.split("@media (max-width: 1100px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
     # Two rows, search and Topics on the first; search no longer takes a row of its own.
@@ -1012,6 +1017,11 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     # Topics sat a few px above the control beside it.
     assert ".bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; align-items: center; }" in tablet
     phones = style.split("@media (max-width: 720px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
+    assert ".bp-dag-integrated .bp-dag-book { margin-right:" not in phones
+    assert (".bp-dag-integrated :is(.bp-dag-filters, .bp-dag-browse, .bp-dag-hidden-button) "
+            "{ flex: 1 1 44px; min-width: 44px; max-width: max-content; }") in phones
+    assert (".bp-dag-integrated :is(.bp-dag-filter-summary, .bp-dag-browse > .bp-dag-button, .bp-dag-hidden-button) "
+            "{ min-width: 44px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }") in phones
     assert ".bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :nth-last-child(-n+2)) { display: none; }" not in phones
     # The real renderer folds before layout rather than hiding ancestor nodes
     # a second time; its summary retains their complete accessible labels.
@@ -1035,6 +1045,26 @@ def test_explorer_search_draws_its_magnifier_and_shortcut_hint_in_css() -> None:
     assert "\n.bp-dag-search-wrap:has(.bp-dag-search:not(:placeholder-shown))::after { display: none; }" in style
     phones = style.split("@media (max-width: 680px) {", 1)[1]
     assert ".bp-dag-search-wrap::after { display: none; }" in phones
+
+
+def test_search_placeholder_uses_opaque_readable_book_tokens_in_both_schemes() -> None:
+    style = dag_viewer._STYLE
+    placeholder = re.search(r"^\.bp-dag-search::placeholder \{([^}]+)\}", style, re.M)
+    assert placeholder is not None
+    declarations = dict(re.findall(r"([\w-]+):\s*([^;]+);", placeholder.group(1)))
+    assert declarations["color"] == "var(--dag-muted)" and declarations["opacity"] == "1"
+    field = re.search(r"^\.bp-dag-search \{([^}]+)\}", style, re.M)
+    assert field is not None and "background: var(--dag-panel);" in field.group(1)
+    assert "--dag-muted: var(--bp-muted, #65676b);" in style
+    panel = re.search(r"--dag-panel: color-mix\(in srgb, var\(--dag-bg\) (\d+)%, (#[\da-f]+) \d+%\)", style)
+    assert panel is not None
+    book = render._stylesheet()
+    for selector in (":root", "[data-md-color-scheme=slate]"):
+        rule = re.search(re.escape(selector) + r" \{([^}]+)\}", book)
+        assert rule is not None
+        tokens = dict(re.findall(r"(--[\w-]+):\s*([^;]+);", rule.group(1)))
+        background = _mix(tokens["--bp-surface"], panel.group(2), int(panel.group(1)) / 100)
+        assert _contrast(tokens["--bp-muted"], background) >= 4.5, selector
 
 
 def test_explorer_elevation_is_two_shadows_and_a_selection_ring_that_keeps_the_card_still() -> None:
@@ -1061,6 +1091,11 @@ def test_explorer_elevation_is_two_shadows_and_a_selection_ring_that_keeps_the_c
     assert group["padding"] == "0" and group["gap"] == "0"
     assert group["box-shadow"] == "inset 0 0 0 1px var(--dag-border)"
     assert style.count("box-shadow: inset 0 0 0 1px var(--dag-border);") == 1
+    targets = re.search(r"\.bp-dag-integrated \.bp-dag-zoom \.bp-dag-button \{([^}]+)\}", style)
+    assert targets is not None
+    dimensions = dict(re.findall(r"([\w-]+):\s*([^;]+);", targets.group(1)))
+    assert {dimensions[key] for key in ("width", "min-width", "max-width", "height", "min-height")} == {"44px"}
+    assert dimensions["flex"] == "0 0 44px" and dimensions["padding"] == "0"
     selected = ".bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-map), 0 0 0 4px var(--dag-fg), var(--dag-e1); }"
     assert selected in style
     assert "border-width" not in style
@@ -1220,12 +1255,18 @@ def test_card_kind_words_match_the_book_captions() -> None:
     assert 'if (kind && (node.title || "").indexOf(kind) === 0) kind = "";' in script
 
 
-def test_card_meta_keeps_its_status_whole() -> None:
-    """A stated theorem's card read "Theorem · statement formali…": the ellipsis took the status, not the kind."""
+def test_card_meta_keeps_the_kind_whole_and_truncates_only_the_status() -> None:
+    """A card squeezed its kind to "T…" while reserving the whole status word."""
     style = dag_viewer._STYLE
     assert re.search(r"^\.bp-dag-node-meta \{ display: flex;", style, re.M)
-    assert ".bp-dag-node-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }" in style
-    assert ".bp-dag-node-meta > span + span { flex: none; }" in style
+    lead = re.search(r"^\.bp-dag-node-meta > span \{([^}]+)\}", style, re.M)
+    tail = re.search(r"^\.bp-dag-node-meta > span:last-child \{([^}]+)\}", style, re.M)
+    assert lead is not None and tail is not None
+    whole = dict(re.findall(r"([\w-]+):\s*([^;]+);", lead.group(1)))
+    clipped = dict(re.findall(r"([\w-]+):\s*([^;]+);", tail.group(1)))
+    assert whole["flex"] == "none" and whole["white-space"] == "pre" and "overflow" not in whole
+    assert clipped["flex"] == "0 1 auto" and clipped["min-width"] == "0"
+    assert clipped["overflow"] == "hidden" and clipped["text-overflow"] == "ellipsis"
 
 
 def test_status_ring_greys_stay_apart_in_both_schemes() -> None:
