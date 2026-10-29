@@ -385,6 +385,8 @@ def _index_builds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chapters: int
     graph = _nested_graph(tmp_path / str(chapters), chapters, 3)
     nodes = _CountingDict(graph.nodes)
     builds = {"_containment_children": 0, "_relations": 0}
+    contexts: dict[str, tuple[Path, str]] = {}
+    destination = tmp_path / str(chapters) / "site"
 
     def counted(name: str):
         original = getattr(graph_views, name)
@@ -401,11 +403,16 @@ def _index_builds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chapters: int
         graph_pages.write_graph_pages(
             Graph(graph.blueprint_dir, nodes),
             derive(graph),
-            tmp_path / str(chapters) / "site",
+            destination,
             node_links=lambda page, node_ids: {
                 node_id: "book.html" for node_id in node_ids
             },
+            contexts_out=contexts,
         )
+    assert set(contexts) == set(graph.nodes)
+    assert contexts["roadmap"] == (destination / "dependencies.json", "roadmap")
+    assert contexts["c0000/s00/t"] == (destination / "dependencies/scopes/c0000/s00.json", "c0000/s00")
+    assert contexts["c0000/s00"][1] == "c0000/s00"
     return {**builds, "graph walks": nodes.values_calls}
 
 

@@ -1241,7 +1241,9 @@ def test_a_dependency_after_a_fence_that_never_closes_is_left_to_render(
     # The graph reads the fence as text and keeps the edge, but the check for
     # links into unpublished folders reads it on to the end of the file and
     # names nothing. Check warns about a fence left open at the margin, and
-    # render refuses the dependency, so the site never links into the folder (#201).
+    # render refuses the dependency, as a missing target rather than an
+    # unpublished one; with the fence closed, both name the folder. The split is
+    # known, not a design to keep (#201).
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "drafts/README.md", "# Drafts\n", published="false")
     _node(blueprint, "drafts/idea.md", "# Idea\n")

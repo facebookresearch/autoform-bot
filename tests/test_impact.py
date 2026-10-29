@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 import autoform_cli.lean as lean_module
-from autoform_cli import __main__ as cli, claims, runtime, skeleton
+from autoform_cli import __main__ as cli, claims, lean_probe, runtime
 from autoform_cli import _tree_snapshot as tree_snapshot_module
 from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.impact import (
@@ -36,7 +36,7 @@ from autoform_cli.impact import (
     revision_impact,
 )
 from autoform_cli.lean import snapshot_project_sources
-from autoform_cli.skeleton import LeanLibrary, SkeletonError, lean_libraries
+from autoform_cli.lean_probe import LeanLibrary, SkeletonError, lean_libraries
 from autoform_cli.work import work_context
 from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
 
@@ -1201,9 +1201,9 @@ def test_rendered_probe_imports_modules_and_names_exact_local_modules() -> None:
 
     assert source.startswith("import Demo\nimport Demo.B\n-- Autoform impact probe.")
     # The module names reach Lean as one JSON string, not a list literal.
-    assert f"AutoformImpact.requestedNames {skeleton._lean_requests(('Demo', 'Internal'))}" in source
+    assert f"AutoformImpact.requestedNames {lean_probe.lean_requests(('Demo', 'Internal'))}" in source
     assert ".isPrefixOf" not in source
-    assert f'"{skeleton.PROBE_OUTPUT_ENV}"' in source
+    assert f'"{lean_probe.PROBE_OUTPUT_ENV}"' in source
     assert IMPACT_MARKER in source
     assert IMPACT_MODULE_MARKER in source
     assert "env.header.moduleData[moduleIdx.toNat]!.imports" in source
@@ -1260,18 +1260,18 @@ def test_probe_failures_name_the_impact_probe(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stderr: str, message: str
 ) -> None:
     (tmp_path / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
-    monkeypatch.setattr("autoform_cli.skeleton._check_artifacts_fresh", lambda *args, **kwargs: None)
+    monkeypatch.setattr("autoform_cli.lean_probe.shutil.which", lambda executable: "/bin/lake")
+    monkeypatch.setattr("autoform_cli.lean_probe._check_artifacts_fresh", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        "autoform_cli.skeleton._run_bounded_command",
+        "autoform_cli.lean_probe._run_bounded_command",
         lambda command, **kwargs: subprocess.CompletedProcess(command, 1, stdout="", stderr=stderr),
     )
     probe = render_impact_probe(imports=["Demo"], project_modules=["Demo"])
 
     with pytest.raises(SkeletonError) as impact:
-        skeleton.run_probe(probe, tmp_path, label="impact probe")
+        lean_probe.run_probe(probe, tmp_path, label="impact probe")
     with pytest.raises(SkeletonError) as default:
-        skeleton.run_probe(probe, tmp_path)
+        lean_probe.run_probe(probe, tmp_path)
 
     assert impact.value.issues == (message.format(label="impact probe"),)
     assert default.value.issues == (message.format(label="skeleton probe"),)
@@ -1279,21 +1279,21 @@ def test_probe_failures_name_the_impact_probe(
 
 def test_impact_probe_freshness_messages_never_mention_skeletons(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
-        "autoform_cli.skeleton._run_bounded_command",
+        "autoform_cli.lean_probe._run_bounded_command",
         lambda command, **kwargs: subprocess.CompletedProcess(command, 3, stdout="", stderr="Demo is out of date"),
     )
     probe = render_impact_probe(imports=["Demo"], project_modules=["Demo"])
 
     def issues(label: str | None) -> tuple[str, ...]:
         with pytest.raises(SkeletonError) as caught:
-            skeleton.run_probe(probe, tmp_path, **({} if label is None else {"label": label}))
+            lean_probe.run_probe(probe, tmp_path, **({} if label is None else {"label": label}))
         return caught.value.issues
 
-    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: None)
+    monkeypatch.setattr("autoform_cli.lean_probe.shutil.which", lambda executable: None)
     no_lake = "lake is not on PATH;"
     assert issues("impact probe") == (f"{no_lake} running the impact probe requires a built Lean project",)
     assert issues(None) == (f"{no_lake} extracting skeletons requires a built Lean project",)
-    monkeypatch.setattr("autoform_cli.skeleton.shutil.which", lambda executable: "/bin/lake")
+    monkeypatch.setattr("autoform_cli.lean_probe.shutil.which", lambda executable: "/bin/lake")
     missing = "lake-manifest.json is missing; run `lake build` before"
     assert issues("impact probe") == (f"{missing} running the impact probe",)
     assert issues(None) == (f"{missing} extracting skeletons",)
@@ -1680,7 +1680,7 @@ def _stub_probe(
             ]
         ) + "\n"
 
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", run_probe)
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", run_probe)
     return calls
 
 
@@ -1881,14 +1881,14 @@ def test_import_closure_scope_names_only_its_modules_when_stale(tmp_path: Path, 
     lean_root = _closure_lean_root(tmp_path)
     _stub_probe(
         monkeypatch,
-        error=SkeletonError([f"{skeleton.STALE_BUILD}Demo.A Demo.B` before running the impact probe\n✖ Demo.B"]),
+        error=SkeletonError([f"{lean_probe.STALE_BUILD}Demo.A Demo.B` before running the impact probe\n✖ Demo.B"]),
     )
 
     with pytest.raises(SkeletonError) as caught:
         module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
 
     message = str(caught.value.issues[0])
-    assert message.startswith(f"{skeleton.STALE_BUILD}Demo.A Demo.B` ")
+    assert message.startswith(f"{lean_probe.STALE_BUILD}Demo.A Demo.B` ")
     assert "(2 modules" in message
 
 
@@ -2284,7 +2284,7 @@ def test_cli_text_report_lists_each_section(tmp_path: Path, monkeypatch, capsys)
         "  Demo.old -> Demo.base_eq: used by Demo.loose",
         f"Claim targets: {_BASE_ID}, {_USES_ID}, chapter/inlines, chapter/loose, lean/demo-base-eq-7f17aa41d1461243",
     ]
-    assert calls[0]["timeout"] == skeleton.DEFAULT_PROBE_TIMEOUT
+    assert calls[0]["timeout"] == lean_probe.DEFAULT_PROBE_TIMEOUT
 
 
 def test_cli_import_impact_text_report_lists_each_section(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -2428,7 +2428,7 @@ def test_cli_names_the_libraries_to_build_for_a_stale_build_instead_of_every_mod
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _stub_lean_root(tmp_path)
     modules = " ".join(f"Demo.M{number}" for number in range(2000))
-    # What `skeleton.run_probe` raises: every imported module, then Lake's replay before the unbuilt one.
+    # What `lean_probe.run_probe` raises: every imported module, then Lake's replay before the unbuilt one.
     lake = (
         "⚠ [2/9] Replayed Demo.M3\nwarning: Demo/M3.lean:1:8: declaration uses `sorry`\n"
         "✖ [3/9] Building Demo.M7\nerror: target is out-of-date and needs to be rebuilt\n"
@@ -2657,14 +2657,14 @@ def test_revision_impact_refuses_a_roadmap_that_changes_during_the_probe(
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _stub_lean_root(tmp_path)
     _stub_probe(monkeypatch)
-    original = skeleton.run_probe
+    original = lean_probe.run_probe
 
     def run_then_change(*args, **kwargs):
         output = original(*args, **kwargs)
         change(project)
         return output
 
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", run_then_change)
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", run_then_change)
     with pytest.raises(
         ImpactError,
         match="^the roadmap changed while the impact probe ran; rerun the command$",
@@ -2705,7 +2705,7 @@ def test_revision_impact_refuses_project_controls_changed_during_the_probe(
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _stub_lean_root(tmp_path)
     _stub_probe(monkeypatch)
-    original = skeleton.run_probe
+    original = lean_probe.run_probe
 
     def run_then_change(*args, **kwargs):
         output = original(*args, **kwargs)
@@ -2716,7 +2716,7 @@ def test_revision_impact_refuses_project_controls_changed_during_the_probe(
         )
         return output
 
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", run_then_change)
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", run_then_change)
 
     with pytest.raises(
         ImpactError,
@@ -2731,7 +2731,7 @@ def test_revision_impact_refuses_lean_sources_that_change_during_the_probe(
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _stub_lean_root(tmp_path)
     _stub_probe(monkeypatch)
-    original = skeleton.run_probe
+    original = lean_probe.run_probe
 
     def run_then_change(*args, **kwargs):
         output = original(*args, **kwargs)
@@ -2739,7 +2739,7 @@ def test_revision_impact_refuses_lean_sources_that_change_during_the_probe(
         source.write_text(source.read_text(encoding="utf-8") + "\n-- changed\n", encoding="utf-8")
         return output
 
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", run_then_change)
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", run_then_change)
     with pytest.raises(
         ImpactError,
         match="^the Lean sources changed while the impact probe ran; rebuild and rerun the command$",
@@ -2753,7 +2753,7 @@ def test_revision_impact_refuses_byte_identical_source_replacement_during_the_pr
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _stub_lean_root(tmp_path)
     _stub_probe(monkeypatch)
-    original = skeleton.run_probe
+    original = lean_probe.run_probe
 
     def run_then_replace(*args, **kwargs):
         output = original(*args, **kwargs)
@@ -2763,7 +2763,7 @@ def test_revision_impact_refuses_byte_identical_source_replacement_during_the_pr
         source.write_bytes(data)
         return output
 
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", run_then_replace)
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", run_then_replace)
     with pytest.raises(
         ImpactError,
         match="^the Lean sources changed while the impact probe ran; rebuild and rerun the command$",
@@ -2779,7 +2779,7 @@ def test_revision_impact_accepts_unrelated_churn_during_its_final_capture(
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _stub_lean_root(tmp_path)
     _stub_probe(monkeypatch)
-    original = skeleton.run_probe
+    original = lean_probe.run_probe
     probed = False
     saves = 0
 
@@ -2799,7 +2799,7 @@ def test_revision_impact_accepts_unrelated_churn_during_its_final_capture(
             saves += 1
             (lean_root / "notes.md.tmp").write_text(f"{saves}\n", encoding="utf-8")
 
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", run_then_mark)
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", run_then_mark)
     monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", checkpoint)
 
     report = revision_impact(project, "chapter/base", lean_root=lean_root)
@@ -2953,7 +2953,7 @@ def test_impact_probe_reads_more_project_modules_than_lean_compiles_in_a_list(tm
     modules = ("Imp", "Imp.Basic", *(f"Imp.Absent{index}" for index in range(3000)))
     probe = render_impact_probe(imports=["Imp"], project_modules=modules)
 
-    records = parse_impact_output(skeleton.run_probe(probe, lean_root, label="impact probe"))
+    records = parse_impact_output(lean_probe.run_probe(probe, lean_root, label="impact probe"))
 
     assert {record.module for record in records.values()} == {"Imp.Basic"}
 
@@ -3285,13 +3285,13 @@ def test_the_probe_reads_a_built_project(tmp_path: Path, monkeypatch, capsys) ->
     project = _imp_roadmap(tmp_path)
     source_revision, _ = work_context(project, "chapter/base")
     outputs: list[str] = []
-    run_probe = skeleton.run_probe
+    run_probe = lean_probe.run_probe
 
     def recorded(*args: object, **kwargs: object) -> str:
         outputs.append(run_probe(*args, **kwargs))
         return outputs[-1]
 
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", recorded)
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", recorded)
 
     code = cli.main(["work", "impact", "chapter/base", str(project), "--lean-root", str(lean_root), "--json"])
 

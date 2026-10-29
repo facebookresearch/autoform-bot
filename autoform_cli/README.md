@@ -59,17 +59,19 @@ ends that section and resumes the statement; a later H1 stays in its section.
 Headings deeper than `##`, and a `##` line inside a fenced code block or an HTML
 comment, do not end the statement. Close each fence with its own bare line of
 the same character, length and indent: on a chapter page an unclosed fence can
-pair with a later article's fence and hide what lies between, so `check` warns,
-the site shows that page as typed (see
-[Validation](reference/validation-and-audit.md#validation)), and the audit
-reports `unclosed-code-fence`. For headings, dependency and source links, an
-unclosed fence is plain text, even where the page pairs its backticks with a
-later run as inline code, and a later bare line of its character at least as
-long closes it. Coverage files and the unpublished-folder link check read it as
-open to the end of the file. An HTML comment that never closes, even one opened
-in inline code or an indented code block, hides every later heading and
-dependency link: the graph loses those edges, one opened in the statement puts
-the rest of the article in the theorem box, and nothing reports it.
+pair with a later article's fence and hide what lies between, so the audit
+reports `unclosed-code-fence`, and for a fence left open at the margin `check`
+warns and the site shows that page as typed (see
+[Validation](reference/validation-and-audit.md#validation)). The graph and an
+article's statement and sections read an unclosed fence as plain text, even
+where the page pairs its backticks with a later run as inline code, and a later
+bare line of its character at least as long closes it. Coverage files and the
+unpublished-folder link check read it as open to the end of the file, and so
+does render when it rewrites links, orders the book and places a chapter's
+statements. An HTML comment that never closes, even one opened in inline code or
+an indented code block, hides every later heading and dependency link: the graph
+loses those edges, one opened in the statement puts the rest of the article in
+the theorem box, and nothing reports it.
 
 `## Depends on` lists what the article needs to be *stated*;
 `## Proof depends on` lists what only its *proof* needs. Links under them are
@@ -382,9 +384,10 @@ verification deploys nothing, so the last verified site stays up. Pull requests
 and manual runs build the site but never deploy, and cannot cancel a waiting
 deploy. To redeploy, re-run the Pages run that the newest successful verify run
 on `main` started; re-running an older one deploys the older commit. Deleting or
-renaming that workflow, or disabling it in the repository's Actions settings,
-stops every deploy, with no error. A project scaffolded before this rule deploys
-every push; [Upgrading](../CHANGELOG.md#upgrading-from-050) says how to switch.
+renaming `autoform-verify.yml`, or disabling it in the repository's Actions
+settings, stops every deploy, with no error. A project scaffolded before this
+rule deploys every push; [Upgrading](../CHANGELOG.md#upgrading-from-050) says how
+to switch.
 No pin has to move: every `AUTOFORM_REF` since 0.5.0 has `render --ref`.
 
 Pages gates on `check` and `render`, and runs `audit` after `check` and
@@ -394,8 +397,11 @@ contract fails `render` before it writes anything, but `MAPPED` rows (each an
 audit `declared-coverage-gap`; a new project lists the template's row) and
 coverage-role issues, which `render` prints as warnings, still publish. A
 project scaffolded before a report step can add it by hand, with
-`continue-on-error: true` and the same `uvx --from` source (for `site check`,
-from 0.6.0). To block merges on findings, run `autoform audit` in CI without it.
+`continue-on-error: true` and the same `uvx --from` source:
+`autoform audit blueprint --lean-root .` after `check`, and
+`autoform site check site --source site-src` after the MkDocs build, which needs
+an `AUTOFORM_REF` from 0.6.0 or later. To block merges on findings, run
+`autoform audit` in CI without it.
 
 ### check
 
@@ -1040,17 +1046,17 @@ autoform render blueprint --output site-src --lean-root . --require-declarations
 ```
 
 `render` never writes into the vault. Once the roadmap has articles, the landing
-page is the full-page project explorer, and `structure.md` and `dependencies.md`
-open it, in bounded project, chapter, and nested-scope projections with a global
-search. That index, `dependencies/index.json`, the project payload
-`dependencies.json`, and every other payload under `dependencies/` are internal
-to the bundled viewer, and their schemas may change. Every generated site
-projection uses the same JSON-derived explorer. A formal statement links to the
-smallest scope holding it, as `<scope>.html#node=<id>`; only a legacy
-`dependencies/full.html#node=<id>` link redirects. A `lean:` declaration that
-resolves to a repository permalink gets a source link; a catalog's Lean row
-shows its first eight names and counts the rest. The explorer typesets only the
-TeX in its rail's and details' titles and summaries. Render percent-encodes each
+page combines the mathematical reader and dependency map in one full-page client.
+`structure.md`, `dependencies.md` and old dependency-page URLs enter canonical
+article or chapter-card reading, with bounded maps, authored areas and global search.
+Complete published statements, proofs and citations remain the reading content.
+The index `dependencies/index.json`, project payload `dependencies.json`, and
+other `dependencies/` payloads are internal to this viewer; their schemas may change.
+A formal statement links to its canonical article or containing chapter card;
+legacy `#node=<id>`, view and filter links remain aliases, not a second viewer.
+A `lean:` declaration resolving to a repository permalink gets a source link;
+a catalog's Lean row shows its first eight names and counts the rest.
+Render percent-encodes each
 link it writes from file and folder names, such as the book's previous and next
 links; a Markdown link it moves keeps its decoded spelling and starts with `./`
 when its first segment holds a colon, so no name can make a `javascript:` URL.
@@ -1111,11 +1117,12 @@ color, html, unicode, action, newcommand, extpfeil, verb, and bussproofs. So
 do nothing, however a formula or macro reaches them. A macro may not take one of
 their names; `check` and `render` warn about a macro they leave out, judging the
 copy of `tex-macros.json` that `render` reads once and publishes. Each read-back
-card has its own TeX input with only base, ams, and noundefined. Only formulas
-the site's Markdown marks, such as `$...$`, and the explorer's rail and details
-titles and summaries are typeset, with no MathJax tab stop or menu in a link or
-button; a heading's title, a `discussion:` value, the home page's lead, the
-navigation, and a table of contents show as typed. A formula paints only within
+card has its own TeX input with only base, ams, and noundefined. Only renderer-marked
+formulas, such as `$...$` in Markdown, are typeset. Formulas in links, controls and
+navigation get no extra MathJax tab stop, menu or accessibility explorer. Refreshes
+retain earlier glyph styles; graph labels, metadata titles, `discussion:` values,
+home-page leads and Material navigation/ToC stay typed. Explorer reading links and
+breadcrumbs typeset publisher-derived title parts with project macros. A formula paints only within
 its own line and block, and an inline formula wider than its paragraph is cut at
 its edge, so write one that wide as a display, which scrolls.
 

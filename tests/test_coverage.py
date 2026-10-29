@@ -725,8 +725,9 @@ def test_ignores_fenced_tables_and_accepts_escaped_pipes(tmp_path: Path) -> None
 
 
 def test_a_fence_that_never_closes_keeps_the_table_below_it_out_of_the_contract(tmp_path: Path) -> None:
-    # Left open at the margin, the fence makes the site show the page as typed,
-    # so the rows below it never render as a table (#201).
+    # Coverage keeps the fence open to the end of the file, so the table below
+    # it is not the contract. The page's own table reader sees the table, so the
+    # refusal blames the pipes, not the fence; check's warning names the fence (#201).
     blueprint = tmp_path / "blueprint"
     path = blueprint / "coverage/README.md"
     path.parent.mkdir(parents=True)
@@ -739,7 +740,9 @@ def test_a_fence_that_never_closes_keeps_the_table_below_it_out_of_the_contract(
     summary, issues = load_coverage(blueprint)
 
     assert summary is None
-    assert issues
+    assert [issue.reason for issue in issues] == [
+        "coverage table must be written with a leading and trailing pipe on every row"
+    ]
 
 
 def test_rejects_placeholder_and_unresolved_decomposed_evidence(tmp_path: Path) -> None:
