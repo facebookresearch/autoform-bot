@@ -50,7 +50,9 @@ def test_phone_fit_target_stays_in_the_existing_group_footprint_and_leaves_deskt
     assert group["height"] == "44px"
     assert group["padding"] == group["gap"] == group["border"] == "0"
     assert group["box-shadow"] == "inset 0 0 0 1px var(--dag-border)"
-    target = _rule(phone, ".bp-dag-integrated .bp-dag-zoom .bp-dag-fit")
+    # Fit inherits the shared touch target before its later, equally specific icon rule.
+    target = _rule(phone, ".bp-dag-integrated .bp-dag-zoom .bp-dag-button")
+    target.update(_rule(phone, ".bp-dag-integrated .bp-dag-zoom .bp-dag-fit"))
     assert target["width"] == target["min-width"] == target["max-width"] == "44px"
     assert target["height"] == target["min-height"] == "44px"
     assert target["flex"] == "0 0 44px" and target["padding"] == target["font-size"] == "0"

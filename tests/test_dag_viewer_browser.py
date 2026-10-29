@@ -2582,21 +2582,21 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     playwright.expect(page.locator(".bp-reading-wiki-links strong").first).to_have_text("Links to other concepts · 1")
     outline = page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')
     # The redesign lists a result's relations once, in the statement itself, so the related title is the topic peer's link.
-    related = page.locator(".bp-reading-topic-list a").filter(has_text="Groups")
+    related = page.locator('.bp-reading-topic-list a[href="' + foundation_route + '"]')
     around = page.locator(".bp-reading-around")
     summary = page.locator(".bp-reading-related-topics summary")
     ancestor = page.locator(".bp-dag-breadcrumb a").filter(has=page.locator(".arithmatex"))
     playwright.expect(outline).to_have_attribute("href", scope_route)
     playwright.expect(related).to_have_attribute("href", foundation_route)
     playwright.expect(ancestor).to_have_attribute("href", scope_route)
-    page.evaluate("""() => {
+    page.evaluate("""foundation => {
       window.__titleMathDocument=document;window.__titleMathClicks=0;
       window.__titleMathControls=[document.querySelector('[data-navigation-node-id="algebra"]'),
-        Array.from(document.querySelectorAll('.bp-reading-topic-list a')).find(node=>node.textContent.includes('Groups')),
+        Array.from(document.querySelectorAll('.bp-reading-topic-list a')).find(node=>node.href===foundation),
         document.querySelector('.bp-reading-related-topics summary'),
         document.querySelector('.bp-dag-breadcrumb a:has(.arithmatex)')];
       __titleMathControls[1].addEventListener('click',()=>__titleMathClicks++);
-    }""")
+    }""", foundation_route)
     outline.focus()
     assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-dag-integrated'))") is True
     assert page.evaluate("() => document.activeElement===__titleMathControls[0] && __titleMathControls.every(node=>node.isConnected)")
