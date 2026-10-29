@@ -114,6 +114,26 @@ def test_phone_fit_recentre_round_trip_keeps_native_target_toolbar_stage_and_all
     _open(page, site, workspace_runtime)
     page.locator(".bp-dag-overview-only").wait_for()
     fit = page.locator(".bp-dag-fit")
+    _capture(page, "initial", {
+        "url": page.url, "fit_label": fit.get_attribute("aria-label"), "fit_title": fit.get_attribute("title"),
+        "source": page.locator(".bp-reading-body > .bp-reading-source").text_content(), "published_graph": site.root_graph,
+        "geometry": page.locator('.bp-dag-node[data-autoform-node-id^="region:"]').evaluate_all("""nodes=>{
+          const rectangle=box=>({left:box.left,right:box.right,top:box.top,bottom:box.bottom,width:box.width,height:box.height});
+          const stage=document.querySelector('.bp-dag-stage'),bounds=stage.getBoundingClientRect();
+          return {stage:rectangle(bounds),client:[stage.clientWidth,stage.clientHeight],
+            toolbar:rectangle(document.querySelector('.bp-dag-toolbar').getBoundingClientRect()),
+            body:rectangle(document.querySelector('.bp-dag-body').getBoundingClientRect()),
+            reading:rectangle(document.querySelector('.bp-reading-pane').getBoundingClientRect()),
+            readingOpen:document.querySelector('.bp-dag-sheet-handle').getAttribute('aria-expanded'),
+            cards:nodes.slice(0,120).map(node=>{const box=node.getBoundingClientRect(),matrix=new DOMMatrix(getComputedStyle(node).transform);
+              const title=node.querySelector('.bp-dag-node-title'),meta=node.querySelector('.bp-dag-node-meta');
+              return {id:node.dataset.autoformNodeId,box:rectangle(box),scale:matrix.a,
+                camera:[matrix.a,matrix.d,matrix.e,matrix.f],title:title.textContent,meta:meta.textContent,
+                titlePixels:parseFloat(getComputedStyle(title).fontSize)*matrix.a,metaPixels:parseFloat(getComputedStyle(meta).fontSize)*matrix.a,
+                whole:box.left>=bounds.left+12&&box.right<=bounds.right-12&&box.top>=bounds.top+12&&box.bottom<=bounds.bottom-12,
+                hit:node.contains(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2))};})};
+        }"""),
+    })
     playwright.expect(fit).to_have_attribute("aria-label", "Fit the map")
     playwright.expect(fit).to_have_attribute("title", "Fit the map")
     playwright.expect(fit).to_be_visible()

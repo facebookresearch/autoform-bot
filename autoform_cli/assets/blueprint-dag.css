@@ -461,7 +461,7 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated.bp-dag-sheet-open .bp-dag-stage::before, .bp-dag-integrated.bp-dag-sheet-open .bp-dag-stage::after { display: none; }
   .bp-dag-integrated .bp-map-key { left: 16px; overflow: visible; white-space: nowrap; }
   .bp-dag-integrated .bp-map-key span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .bp-dag-viewer .bp-map-key-legend { position: relative; margin: 0 0 0 auto; padding: 0; border: 0; background: none; box-shadow: none; pointer-events: auto; }
+  .bp-dag-viewer .bp-map-key-legend { position: relative; margin: 0 0 0 auto; padding: 0; border: 0; background: none; box-shadow: none; font: inherit; line-height: 1.2; pointer-events: auto; }
   .bp-dag-viewer .bp-map-key-legend > summary { position: static; min-height: 24px; margin: 0; padding: 4px 8px; border: 1px solid var(--dag-border); border-radius: 6px; background: var(--dag-panel); color: var(--dag-fg); font: inherit; cursor: pointer; list-style: disclosure-closed inside; }
   .bp-dag-viewer .bp-map-key-legend > summary::before, .bp-dag-viewer .bp-map-key-legend > summary::after { display: none; }
   .bp-map-key-body { position: absolute; right: 0; bottom: calc(100% + 6px); width: min(280px, calc(100vw - 32px)); padding: 12px; border: 1px solid var(--dag-border); border-radius: 8px; background: var(--dag-panel); box-shadow: var(--dag-e1); white-space: normal; }

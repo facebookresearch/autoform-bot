@@ -2034,9 +2034,14 @@ def test_published_explorer_controls_keep_their_own_styles_under_material(
     playwright.expect(heading).to_have_css("font-weight", "700")
     assert heading.evaluate("element => parseFloat(getComputedStyle(element).fontSize)") >= 22
     page.set_viewport_size({"width": 390, "height": 844})
+    _paint_frame(page)
     crumbs = page.locator(".bp-dag-breadcrumb li")
     assert crumbs.count() >= 2
-    assert len({round(crumbs.nth(index).bounding_box()["y"]) for index in range(crumbs.count())}) == 1
+    # Resizing intentionally refolds this trail. Measure one native DOM
+    # generation, not separate nth locators across that replacement.
+    boxes = crumbs.evaluate_all("nodes=>nodes.map(node=>{const r=node.getBoundingClientRect();return {y:r.y,width:r.width,height:r.height};})")
+    assert len(boxes) >= 2 and all(box["width"] > 0 and box["height"] > 0 for box in boxes)
+    assert len({round(box["y"]) for box in boxes}) == 1
     assert page.locator(".bp-dag-head").evaluate("head => head.scrollWidth <= head.clientWidth + 1")
 
 
@@ -2348,6 +2353,7 @@ def test_failed_reader_reconciliation_opens_current_permalink_in_fresh_native_ta
 ) -> None:
     """One real renderer boundary rejects SPA B; a native noopener tab loads B's complete source."""
     from tests.test_integrated_explorer_browser import _routes
+    from tests.test_integrated_selected_focus_browser import _complete_source, _published_source
 
     page, site_url = desktop_page, marked_math_site_url
     documents: list[str] = []
@@ -2396,10 +2402,24 @@ def test_failed_reader_reconciliation_opens_current_permalink_in_fresh_native_ta
         assert recovered.evaluate("() => window.opener===null && !window.__failureDocument && !window.__readingBoundaryFailure")
         assert recovered.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-reading-body'))") is True
         card = _reading_card(recovered, "topology/result")
-        playwright.expect(card.locator(".arithmatex")).to_have_count(5)
-        playwright.expect(card.locator("mjx-container")).to_have_count(5)
+        playwright.expect(card.locator(".arithmatex:not(.bp-dependencies .arithmatex)")).to_have_count(5)
+        playwright.expect(card.locator("mjx-container:not(.bp-dependencies mjx-container)")).to_have_count(5)
+        # All eight authored math-bearing reference titles are additional
+        # controls, not substitutes for any of the five statement formulas.
+        titles = card.locator(".bp-dependencies .arithmatex")
+        playwright.expect(titles).to_have_count(8)
+        assert titles.evaluate_all("nodes=>nodes.map(node=>node.getAttribute('data-autoform-math-source'))") == [r"\(\ZZ/n\)"] * 8
+        playwright.expect(titles.locator("mjx-container")).to_have_count(8)
+        playwright.expect(titles.locator("mjx-c.mjx-c2124")).to_have_count(8)
+        assert titles.locator("mjx-c").evaluate_all("""nodes=>nodes.length>=24&&nodes.every(node=>
+          !['none','normal',''].includes(getComputedStyle(node,'::before').content))""")
+        playwright.expect(card.locator(".bp-dependencies code")).to_have_text(["$literal$"] * 8)
+        assert card.locator(".bp-dependencies [tabindex], .bp-dependencies [role=application]").count() == 0
+        playwright.expect(card.locator(".arithmatex")).to_have_count(13)
+        playwright.expect(card.locator("mjx-container")).to_have_count(13)
         playwright.expect(card.locator("mjx-merror, merror")).to_have_count(0)
         playwright.expect(card).to_contain_text("Final sentence of the complete statement.")
+        _complete_source(recovered, _published_source(recovered, failed))
         assert recovered.evaluate("() => MathJax.version==='3.2.2'")
         assert page.url == failed
         assert page.evaluate("() => document===__failureDocument && "

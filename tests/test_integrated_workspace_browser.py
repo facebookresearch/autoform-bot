@@ -1011,28 +1011,38 @@ def test_long_ancestor_labels_and_full_reading_heading_stay_within_their_panes(
     playwright.expect(heading).to_have_text(_DEEP_TITLE)
     assert heading.evaluate("heading => heading.scrollWidth <= heading.clientWidth + 1") is True
     assert page.locator(".bp-dag-head").evaluate("head => head.scrollWidth <= head.clientWidth + 1") is True
-    # The trail, from the site's home, fits its row, so it shows every crumb, the long ancestor cut short with an ellipsis rather
-    # than folded into "…".
+    # A phone folds the middle ancestors into a named elision; the parent,
+    # current article and canonical Home remain native, visible context.
     crumbs = page.locator(".bp-dag-breadcrumb li")
-    playwright.expect(crumbs).to_have_count(5)
     playwright.expect(crumbs.nth(0)).to_have_text("Home")
-    playwright.expect(crumbs.nth(1)).to_have_text(_LIBRARY)
-    playwright.expect(crumbs.nth(2)).to_have_attribute("title", _ANCESTOR)
-    playwright.expect(crumbs.nth(2)).to_have_text(_ANCESTOR)
-    playwright.expect(page.locator(".bp-dag-breadcrumb .bp-dag-sr-only")).to_have_count(0)
-    playwright.expect(crumbs.nth(4)).to_have_text(_TARGET_TITLE)
-    playwright.expect(crumbs.nth(4)).to_have_attribute("aria-current", "page")
+    playwright.expect(crumbs.nth(0).locator("a")).to_have_attribute("href", site.url + "/index.html")
     if width <= 720:
-        # A phone keeps the first crumb, the parent and the current page.
-        playwright.expect(crumbs.nth(1)).to_be_hidden()
-        playwright.expect(crumbs.nth(2)).to_be_hidden()
-        playwright.expect(crumbs.nth(3)).to_be_visible()
+        playwright.expect(crumbs).to_have_count(4)
+        hidden_names = _LIBRARY + " / " + _ANCESTOR
+        elision = crumbs.nth(1)
+        playwright.expect(elision).to_be_visible()
+        playwright.expect(elision).to_have_attribute("title", hidden_names)
+        assert elision.evaluate("item=>item.firstChild.nodeType===Node.TEXT_NODE&&item.firstChild.textContent==='…'")
+        playwright.expect(elision.locator(".bp-dag-sr-only")).to_have_count(1)
+        playwright.expect(elision.locator(".bp-dag-sr-only")).to_have_text(hidden_names)
+        parent, current = crumbs.nth(2), crumbs.nth(3)
     else:
+        playwright.expect(crumbs).to_have_count(5)
+        playwright.expect(crumbs.nth(1)).to_have_text(_LIBRARY)
+        playwright.expect(crumbs.nth(2)).to_have_attribute("title", _ANCESTOR)
+        playwright.expect(crumbs.nth(2)).to_have_text(_ANCESTOR)
+        playwright.expect(page.locator(".bp-dag-breadcrumb .bp-dag-sr-only")).to_have_count(0)
         playwright.expect(crumbs.nth(2)).to_be_visible()
-        playwright.expect(crumbs.nth(3)).to_have_text(_DEEP_TITLE)
+        parent, current = crumbs.nth(3), crumbs.nth(4)
         # The trail has the row to itself, rather than a third of it.
         trail_box, head_box = page.locator(".bp-dag-breadcrumb").bounding_box(), page.locator(".bp-dag-head").bounding_box()
         assert trail_box is not None and head_box is not None and trail_box["width"] >= head_box["width"] / 2
+    playwright.expect(parent).to_have_text(_DEEP_TITLE)
+    playwright.expect(parent).to_be_visible()
+    playwright.expect(parent.locator("a")).to_have_attribute("href", site.route(site.records[_TARGET]["scope"]))
+    playwright.expect(current).to_have_text(_TARGET_TITLE)
+    playwright.expect(current).to_have_attribute("aria-current", "page")
+    playwright.expect(current.locator("a")).to_have_count(0)
     if width == 1000:
         # A tablet gives search and Topics the first row and filter, Browse and zoom the second, rather than three rows.
         boxes = page.locator(".bp-dag-toolbar").evaluate(

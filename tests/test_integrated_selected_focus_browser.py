@@ -6,7 +6,10 @@ checks establish browser/source behavior, not kernel verification.
 
 from __future__ import annotations
 
+import json
+import os
 import re
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import html5lib
@@ -47,6 +50,18 @@ pytestmark = pytest.mark.skipif(playwright is None, reason="Playwright is needed
 
 def _normalized(text: str) -> str:
     return " ".join(text.split())
+
+
+def _native_diagnostic(page: object, label: str, details: dict) -> None:
+    folder = os.environ.get("AUTOFORM_UI_SCREENSHOT_DIR")
+    if not folder:
+        return
+    directory = Path(folder)
+    directory.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=str(directory / f"selected-focus-{label}.png"))
+    evidence = {"url": page.url, "viewport": page.viewport_size, "history_length": page.evaluate("history.length"),
+                "details": details}
+    (directory / f"selected-focus-{label}.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
 
 
 def _published_source(page: object, route: str) -> dict:
@@ -198,15 +213,28 @@ def test_full_phone_reader_keeps_covered_map_and_toolbar_out_of_native_tab_order
               const toolbar=document.querySelector('.bp-dag-toolbar'),outline=document.querySelector('.bp-dag-navigation');
               const reading=document.querySelector('.bp-reading-pane'),handle=reading.querySelector('.bp-dag-sheet-handle');
               const style=getComputedStyle(node);
+              const rectangle=box=>({left:box.left,right:box.right,top:box.top,bottom:box.bottom,width:box.width,height:box.height});
+              const hit=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2),parents=[];
+              for(let parent=node.parentElement;parent&&parents.length<8;parent=parent.parentElement){
+                const css=getComputedStyle(parent);parents.push({tag:parent.tagName,class:parent.className,
+                  box:rectangle(parent.getBoundingClientRect()),scroll:[parent.scrollLeft,parent.scrollTop],
+                  client:[parent.clientWidth,parent.clientHeight],overflow:[css.overflowX,css.overflowY],clipPath:css.clipPath});
+              }
               return {boundary:false,atHandle:node===handle,inReader:reading.contains(node),
                 covered:main.contains(node)||toolbar.contains(node)||outline.contains(node)||Boolean(node.closest('[inert]')),
                 visible:box.width>0&&box.height>0&&box.left>=0&&box.right<=innerWidth&&box.top>=0&&box.bottom<=innerHeight&&
                   style.visibility!=='hidden'&&node.contains(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)),
-                tag:node.tagName,id:node.id,href:node.getAttribute('href')};
+                tag:node.tagName,id:node.id,class:node.className,href:node.getAttribute('href'),text:node.textContent.slice(0,240),
+                box:rectangle(box),clientRects:Array.from(node.getClientRects()).slice(0,16).map(rectangle),
+                hit:hit&&{tag:hit.tagName,id:hit.id,class:hit.className,text:hit.textContent.slice(0,120)},
+                font:{family:style.fontFamily,size:style.fontSize,lineHeight:style.lineHeight},
+                reading:rectangle(reading.getBoundingClientRect()),windowScroll:[scrollX,scrollY],parents};
             }""")
             if focused["boundary"]:
                 break  # Native browser chrome is outside the document's Tab order.
-            assert not focused["covered"] and focused["visible"], focused
+            if focused["covered"] or not focused["visible"]:
+                _native_diagnostic(page, f"full-reader-{direction}", focused)
+            assert not focused["covered"] and focused["visible"], json.dumps(focused, indent=2)
             seen.append(focused)
             if focused["atHandle"]:
                 break
@@ -271,14 +299,25 @@ def test_320px_link_key_is_whole_native_and_keeps_half_reader_feedback_and_camer
     # behind, the half reader. The map's actual framing still determines them.
     _assert_hit(page, summary)
     playwright.expect(page.locator(".bp-dag-density")).to_be_visible()
-    assert page.locator(".bp-dag-density").evaluate("""note=>{
+    feedback_geometry = page.locator(".bp-dag-density").evaluate("""note=>{
       const n=note.getBoundingClientRect(),key=document.querySelector('.bp-map-key-legend > summary').getBoundingClientRect();
       const pane=document.querySelector('.bp-reading-pane').getBoundingClientRect();
       const range=document.createRange();range.selectNodeContents(note);
-      return n.width>0&&n.height>0&&n.left>=0&&n.right<=innerWidth&&n.top>=0&&n.bottom<=key.top&&
+      const rectangle=box=>({left:box.left,right:box.right,top:box.top,bottom:box.bottom,width:box.width,height:box.height});
+      const whole=n.width>0&&n.height>0&&n.left>=0&&n.right<=innerWidth&&n.top>=0&&n.bottom<=key.top&&
         key.left>=0&&key.right<=innerWidth&&key.bottom<=pane.top&&
         Array.from(range.getClientRects()).every(box=>box.left>=n.left&&box.right<=n.right&&box.top>=n.top&&box.bottom<=n.bottom);
+      const style=getComputedStyle(note),summary=document.querySelector('.bp-map-key-legend > summary'),keyStyle=getComputedStyle(summary);
+      return {whole,note:rectangle(n),key:rectangle(key),pane:rectangle(pane),text:note.textContent,
+        textRects:Array.from(range.getClientRects()).slice(0,16).map(rectangle),
+        font:{family:style.fontFamily,size:style.fontSize,lineHeight:style.lineHeight},
+        keyFont:{family:keyStyle.fontFamily,size:keyStyle.fontSize,lineHeight:keyStyle.lineHeight},
+        noteBottom:note.style.bottom,keyBottom:document.querySelector('.bp-map-key').style.bottom,
+        stage:rectangle(document.querySelector('.bp-dag-stage').getBoundingClientRect()),windowScroll:[scrollX,scrollY]};
     }""")
+    if not feedback_geometry["whole"]:
+        _native_diagnostic(page, "320-feedback", feedback_geometry)
+    assert feedback_geometry["whole"], json.dumps(feedback_geometry, indent=2)
     feedback = page.locator(".bp-dag-density").inner_text()
     assert feedback.startswith("Drag to see more: ") and " cards in view." in feedback
     before = page.locator(".bp-dag-node").evaluate_all(camera)
@@ -373,7 +412,10 @@ def test_selected_statement_formal_reference_retains_genuine_title_math_code_and
     reference.scroll_into_view_if_needed()
     _frames(page)
     _assert_hit(page, reference)
-    reference.evaluate("node=>{window.__formalReference=node;node.addEventListener('click',()=>__formalReferenceClicks++);}")
+    reference.evaluate("""node=>{window.__formalReference=node;node.addEventListener('click',event=>{
+      if(event.button===0&&!event.defaultPrevented&&!event.metaKey&&!event.ctrlKey&&!event.shiftKey&&!event.altKey)
+        __formalReferenceClicks++;
+    });}""")
     reference.focus()
     assert page.evaluate("AutoformMath.refresh(__formalReference)") is True
     playwright.expect(reference).to_be_focused()
@@ -381,7 +423,8 @@ def test_selected_statement_formal_reference_retains_genuine_title_math_code_and
     playwright.expect(reference).to_have_attribute("href", target)
     reference.locator("mjx-container").click(button="right")
     playwright.expect(page.get_by_role("menu")).to_have_count(0)
-    page.keyboard.press("Escape")
+    # There is no MathJax menu to dismiss. Escape here is the explorer's
+    # real clear-selection action, which would collapse the phone reader.
     reference.focus()
     page.keyboard.press("Enter")
     page.wait_for_url(target)
