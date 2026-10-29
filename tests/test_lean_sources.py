@@ -35,7 +35,7 @@ from autoform_cli.lean import (
     open_project_sources,
     snapshot_project_sources,
 )
-from autoform_cli.skeleton import _output_identity, _replace_outputs
+from autoform_cli._managed_output import output_identity, replace_outputs
 
 _SOURCE = """import Mathlib
 
@@ -989,7 +989,7 @@ def _republish_packets(root: Path) -> None:
     generated = root / "review-packets"
     stage = root / ".review-packets.autoform-stage-1"
     _packets_output(stage, 1)
-    _replace_outputs([(generated, stage, _output_identity(generated))])
+    replace_outputs([(generated, stage, output_identity(generated))])
     assert sorted(path.name for path in root.iterdir()) == ["Proj", "review-packets"]
 
 
