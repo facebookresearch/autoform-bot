@@ -274,6 +274,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 }
 /* Pinch has a single-pointer alternative: all three zoom controls remain visible and reach 44px. */
 @media (pointer: coarse) {
+  .bp-dag-toolbar :is(.bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button) { min-height: 44px; }
   .bp-dag-zoom .bp-dag-button { min-width: 44px; min-height: 44px; color: var(--dag-fg); }
 }
 @media (prefers-reduced-motion: reduce) {

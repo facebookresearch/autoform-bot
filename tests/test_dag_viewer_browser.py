@@ -695,7 +695,9 @@ def test_phone_card_kind_word_remains_whole_at_native_readable_typography(
     page, consumer = mobile_page, explorer_consumer
     page.set_viewport_size({"width": width, "height": 844})
     node_id = "remote/deep-theorem"
-    assert consumer.records[node_id]["status"] == "stated"
+    record = consumer.records[node_id]
+    assert record["status"] == "can_prove"
+    status_label = consumer.graphs[record["scope"]]["palette"][record["status"]]["label"]
     route = consumer.route(node_id)
     expected = _published_source(page, route)
     _routes(page, consumer.url, marked_math_runtime, graph_client=True)
@@ -705,7 +707,7 @@ def test_phone_card_kind_word_remains_whole_at_native_readable_typography(
     _complete_source(page, expected)
     card = _consumer_selected(page, consumer, node_id)
     meta = card.locator(".bp-dag-node-meta")
-    playwright.expect(meta).to_have_text("Theorem · statement formalized")
+    playwright.expect(meta).to_have_text("Theorem · " + status_label)
     kind = meta.locator(":scope > span").first
     playwright.expect(kind).to_have_text("Theorem")
     _assert_hit(page, kind)
@@ -729,16 +731,18 @@ def test_phone_peek_typesets_the_pages_own_chapter_title_without_borrowing_a_cat
 
     page, base = mobile_page, marked_math_site_url
     scope = _site_route(page, base, "algebra")
+    response = page.request.get(scope)
+    assert response.ok
+    tree = html5lib.parse(response.text(), namespaceHTMLElements=False)
+    source = next(node for node in tree.iter() if "bp-reading-source" in node.get("class", "").split())
+    page_title = source.get("data-page-title")
+    assert page_title
     if entrance == "catalogue":
         record = _site_record(page, base, "algebra/catalog")
         assert record["result"] is False and record["scope"] == "algebra"
         assert record["title"] != _TITLE_MATH_SCOPE
         canonical = _site_route(page, base, "algebra/catalog")
     else:
-        response = page.request.get(scope)
-        assert response.ok
-        tree = html5lib.parse(response.text(), namespaceHTMLElements=False)
-        source = next(node for node in tree.iter() if "bp-reading-source" in node.get("class", "").split())
         anchor = next(source.iter("h1")).get("id")
         assert anchor and anchor != urlsplit(_site_route(page, base, "algebra/result")).fragment
         canonical = urlsplit(scope)._replace(fragment=anchor).geturl()
@@ -750,7 +754,7 @@ def test_phone_peek_typesets_the_pages_own_chapter_title_without_borrowing_a_cat
     _ready_site(page)
     page.evaluate("window.__chapterHandleDocument=document")
     _complete_source(page, expected)
-    assert page.title() == _TITLE_MATH_SCOPE
+    assert page.title() == page_title
     _close_phone_reading(page)
     _paint_frame(page)
     _assert_native_handle_math(page)
@@ -789,6 +793,15 @@ def test_region_reader_handle_keeps_genuine_page_math_when_its_peek_or_rail_is_c
     _ready_site(page)
     page.evaluate("window.__regionHandleDocument=document")
     handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
+    if width > 720:
+        # The conservative overview classifier preserves an authored math/code H1.
+        # Close the genuine desktop reader to exercise that page's collapsed rail.
+        playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+        _complete_source(page, expected)
+        playwright.expect(handle).to_have_attribute("title", "Close reading")
+        _assert_hit(page, handle)
+        handle.click()
+        _paint_frame(page)
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     _assert_native_handle_math(page)
     _focus_graph_region(page, "Geometry").tap()

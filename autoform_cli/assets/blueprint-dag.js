@@ -2350,7 +2350,7 @@
           // In words: how many of the links the map draws, or that a pair's two kinds share one line.
           var brief = compactKey || sheetLayout(), key = element("span", "bp-map-key-coverage", display.shownPairs < display.totalPairs ?
             (brief ? "" : "Showing ") + num(display.shownPairs) + " of " + num(display.totalPairs) + " links" : "One line per direction");
-          key.title = "Statement and proof links in the same direction share a line; statement links make it solid. Uses, Used by and selected-result maps retain every dependency.";
+          key.title = "Same-direction statement/proof links share a line, solid for statements. Uses, Used by and selected-result maps keep every dependency.";
           dom$mapKey.appendChild(key);
         }
         // One entry says what the dotted lines are and how many of them this map draws; a map that draws none says nothing about their coverage.
@@ -3160,11 +3160,12 @@
       var collapsed = !opened && (sheetLayout() || Boolean(ui$area) || ui$overviewOnly || ui$scopeOverview);
       // The handle names the page or entry, with its status, rather than a generic "Reading"; its accessible name starts with that title.
       // An open desktop reader over an area or the overview closes with ×.
-      var close = opened && !sheetLayout() && (ui$area || ui$overviewOnly || ui$scopeOverview), title = currentBundle.title,
-        record = records.get(currentBundle.nodeId || ui$requestedNode || (ui$selected && ui$selected.id));
-      if (!record || record.title !== title) record = records.get(currentBundle.scope);
+      var page = currentBundle || data, close = opened && !sheetLayout() && (ui$area || ui$overviewOnly || ui$scopeOverview),
+        record = records.get(page.nodeId || ui$requestedNode || (ui$selected && ui$selected.id));
+      if (!record || !record.result) record = page.readingSource && records.get(page.readingSource.dataset.autoformNodeId);
+      var title = record ? record.title : page.title;
       // A chapter's own record carries a rollup status, not its results', so only a statement gets a status mark.
-      var handleTitle = close ? "" : readingLabel("span", "bp-dag-sheet-title", title, record && record.title === title ? record.reading_title : null);
+      var handleTitle = close ? "" : readingLabel("span", "bp-dag-sheet-title", title, record && record.reading_title);
       dom$sheetHandle.replaceChildren(close ? "×" : record && record.result && record.status ? swatch(record.status) : "", handleTitle);
       if (handleTitle) refreshReadingLabels(dom$sheetHandle);
       dom$sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");

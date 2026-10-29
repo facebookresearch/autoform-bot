@@ -743,7 +743,11 @@ def test_a_click_pans_its_node_clear_of_the_details_it_opens() -> None:
 
     assert 'settings = {history: "push", focus: "reading"}' in script
     assert 'navigation.navigateNode(id, settings)' in script
-    assert "if (state.selected && mapAllowed) centerIfHidden(state.selected)" in script
+    # Route reconciliation invokes resize/Fit. Fit preserves a proved-fit
+    # neighborhood and recenters only excluded selections or cropped frames.
+    assert "refresh(true); firstResize = true; resize();" in script
+    assert "if (navigation && state.selected && state.activeIds.has(state.selected.id) &&" in script
+    assert "(frame.cropped || nodes.indexOf(state.selected) < 0)) centerIfHidden(state.selected);" in script
     center = script.split("function center(", 1)[1].split("\n    function ", 1)[0]
     assert "free = freeArea()" in center
     hidden = script.split("function centerIfHidden(node) {", 1)[1].split("\n    function ", 1)[0]
@@ -933,6 +937,8 @@ def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_und
     dimensions = dict(re.findall(r"([\w-]+):\s*([^;]+);", targets.group(1)))
     assert dimensions["min-width"] == dimensions["min-height"] == "44px"
     assert dimensions["color"] == "var(--dag-fg)"
+    assert (".bp-dag-toolbar :is(.bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button) "
+            "{ min-height: 44px; }") in coarse
     assert ".bp-dag-zoom .bp-dag-button:not(:last-child)" not in style
     assert ".bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button { min-height: 44px; }" in style
 
@@ -945,7 +951,8 @@ def test_reduced_maps_and_shelves_say_what_they_show_in_plain_words() -> None:
         assert jargon not in script, jargon
     assert '(brief ? "" : "Showing ") + num(display.shownPairs) + " of " + num(display.totalPairs) + " links"' in script
     assert '"One line per direction"' in script
-    assert 'Statement and proof dependencies in the same direction share one line' in script
+    assert 'Same-direction statement/proof links share a line, solid for statements.' in script
+    assert 'Uses, Used by and selected-result maps keep every dependency.' in script
     assert 'Cards linked both ways share one line' not in script
     assert 'element("h2", "bp-scope-shelves-heading", "Not on the map")' in script
     assert '(group.$shelf ? ", none linked to each other" : "")' in script

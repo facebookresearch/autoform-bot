@@ -84,7 +84,7 @@ def _published_source(page: object, route: str) -> dict:
 def _complete_source(page: object, expected: dict) -> object:
     source = page.locator(".bp-reading-body > .bp-reading-source")
     playwright.expect(source).to_have_count(1)
-    playwright.expect(source.locator("h1")).to_have_text(expected["headings"])
+    playwright.expect(source.locator("h1")).to_have_count(len(expected["headings"]))
     assert source.locator(".bp-thmwrapper").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId)") == expected["cards"]
     playwright.expect(source.locator(".arithmatex")).to_have_count(len(expected["tex"]))
     playwright.expect(source.locator("mjx-container")).to_have_count(len(expected["tex"]))
@@ -95,9 +95,10 @@ def _complete_source(page: object, expected: dict) -> object:
     restored = source.evaluate("""(source,tex)=>{
       const clone=source.cloneNode(true);
       Array.from(clone.querySelectorAll('.arithmatex')).forEach((node,index)=>node.textContent=tex[index]);
-      return clone.textContent;
+      return {text:clone.textContent,headings:Array.from(clone.querySelectorAll('h1'),node=>node.textContent)};
     }""", expected["tex"])
-    assert _normalized(restored) == expected["text"], "Selection must retain the complete published mathematical source"
+    assert [_normalized(text) for text in restored["headings"]] == expected["headings"]
+    assert _normalized(restored["text"]) == expected["text"], "Selection must retain the complete published mathematical source"
     return source
 
 
