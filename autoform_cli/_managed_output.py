@@ -1,4 +1,15 @@
-"""Failure-atomic replacement of generated files and directories."""
+"""Failure-atomic replacement of generated files and directories.
+
+``skeleton``, ``review prepare`` and ``library index`` publish through here.
+A writer stages its output beside the destination as
+``.<name>.autoform-stage-<16 hex>``, a name ``lean`` skips when it reads
+project sources, and hands ``replace_outputs`` the identity the destination
+had before staging. A packet tree is marked by ``PACKET_MANIFEST``, which
+``lean`` also reads; ``validate_managed_output`` refuses to replace a
+non-empty directory whose manifest does not name a known schema. Detected
+failures raise ``SkeletonError``; ``stage_output``, ``remove_output`` and
+the install preflight of ``replace_outputs`` let ``OSError`` through.
+"""
 
 from __future__ import annotations
 
@@ -23,7 +34,11 @@ PACKET_MANIFEST = "manifest.json"
 
 
 def output_identity(path: Path) -> tuple[int, int, str] | None:
-    """Return the identity of an output path without following its final link."""
+    """``(st_dev, st_ino, digest)`` of a file or tree, or None when absent.
+
+    The digest covers every name and file's bytes; a symlink or special file
+    at or below ``path`` is refused.
+    """
 
     try:
         metadata = path.lstat()
@@ -49,7 +64,10 @@ def output_identity(path: Path) -> tuple[int, int, str] | None:
 
 
 def validate_managed_output(path: Path, *, kind: str, schema: str | None = None) -> tuple[int, int, str] | None:
-    """Validate an output tree against its exact producer schema."""
+    """``output_identity(path)``, refusing a non-directory, or a non-empty
+    directory whose manifest does not name ``kind`` with a known schema
+    (``schema`` pins one).
+    """
 
     identity = output_identity(path)
     if identity is None:
