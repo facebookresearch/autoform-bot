@@ -477,7 +477,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-sheet-full) .bp-reading-neighbors { display: none; }
   .bp-dag-integrated.bp-dag-sheet-full .bp-reading-neighbors { max-height: 208px; padding-bottom: 72px; }
   .bp-dag-integrated .bp-dag-context { padding-inline: 12px; }
-  .bp-dag-integrated .bp-dag-toolbar { padding-inline: 12px; gap: 6px; }
+  /* Keep every 44px control and both rows; trim only their outer padding for a readable five-area map. */
+  .bp-dag-integrated .bp-dag-toolbar { padding: 4px 12px; gap: 6px; }
   /* Keep the existing 44px group footprint while offering a 44px hit target. */
   .bp-dag-integrated .bp-dag-zoom { height: 44px; gap: 0; padding: 0; border: 0; box-shadow: inset 0 0 0 1px var(--dag-border); }
   .bp-dag-integrated .bp-dag-zoom .bp-dag-fit { flex: 0 0 44px; width: 44px; min-width: 44px; max-width: 44px; height: 44px; min-height: 44px; padding: 0; font-size: 0; }

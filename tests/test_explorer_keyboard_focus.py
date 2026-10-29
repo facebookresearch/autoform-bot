@@ -65,8 +65,21 @@ _CALLBACKS = [
 ]
 
 
-def _controls(body: str) -> None:
-    _run(body, _CALLBACKS, _PEERS)
+def _controls(body: str, *, real_sheet: bool = False) -> None:
+    callbacks, peers = _CALLBACKS, _PEERS
+    if real_sheet:
+        callbacks = [*_CALLBACKS, "setSheet", "syncSheetAccessibility"]
+        peers = peers.replace("function setSheet(open,selected){sheets.push({open,selected});}", "")
+        peers = peers.replace("function syncSheetAccessibility(){}", "")
+        peers += r"""
+Element.prototype.prepend=function(...children){
+  for(let index=children.length-1;index>=0;index--){
+    if(this.firstChild)this.insertBefore(children[index],this.firstChild);else this.appendChild(children[index]);
+  }
+};
+dom$body.offsetTop=100;
+"""
+    _run(body, callbacks, peers)
 
 
 def test_filter_focusout_closes_only_when_focus_leaves_and_never_steals_it() -> None:
@@ -284,6 +297,68 @@ def test_slash_is_scoped_to_explorer_focus_and_global_command_k_is_preserved() -
       assert.equal(document.activeElement,editor);
       assert.equal(emit(document,'keydown',{target:dom$search,key:'/'}).defaultPrevented,false);
     """)
+
+
+def test_full_phone_shortcuts_set_actual_half_and_clear_inert_before_search_focus() -> None:
+    _controls(r"""
+      const entry=card('A',0,0),article=new Element('div'),reading=new Element('a');
+      article.className='bp-reading-source';article.textContent='Complete authored reading.';
+      article.appendChild(reading);dom$readingBody.appendChild(article);ui$selected=entry.node;ui$phone=true;
+      const main=host.querySelector('.bp-dag-main'),bundle=currentBundle,projection=data;
+      const source=article.textContent,beforeIndex=JSON.stringify(sharedIndex),beforeGraph=JSON.stringify(data);
+      const href=window.location.href,focus=dom$search.focus,select=dom$search.select;
+      let order=[];
+      dom$search.focus=function(options){
+        assert(host.classList.contains('bp-dag-sheet-open'),'Search keeps the reader open at half');
+        assert(!host.classList.contains('bp-dag-sheet-full'),'Actual setSheet must reveal search before focus');
+        assert.equal(main.getAttribute('inert'),null);
+        assert.equal(dom$inspectorInner.getAttribute('inert'),null);
+        order.push('focus');return focus.call(this,options);
+      };
+      dom$search.select=function(){order.push('select');return select.call(this);};
+      for(const setting of [{key:'/'},{key:'k',ctrlKey:true},{key:'k',metaKey:true}]){
+        host.classList.toggle('bp-dag-sheet-open',true);host.classList.toggle('bp-dag-sheet-full',true);
+        syncSheetAccessibility();assert.equal(main.getAttribute('inert'),'');reading.focus();order=[];
+        const before={camera:JSON.stringify(ui$transform),history:history.slice(),checkpoints,remembered,
+          scheduled,resized,selected:ui$selected,selects:dom$search.selects||0};
+        const event=emit(document,'keydown',Object.assign({target:reading},setting));
+        assert.equal(event.defaultPrevented,true);assert.deepEqual(order,['focus','select']);
+        assert.equal(document.activeElement,dom$search);assert.equal(dom$search.selects,before.selects+1);
+        assert.strictEqual(currentBundle,bundle);assert.strictEqual(data,projection);assert.strictEqual(ui$selected,before.selected);
+        assert.equal(window.location.href,href);assert.deepEqual(history,before.history);assert.equal(checkpoints,before.checkpoints);
+        assert.equal(JSON.stringify(ui$transform),before.camera);assert.equal(resized,before.resized);
+        assert.equal(remembered,before.remembered);assert.equal(scheduled,before.scheduled+1);
+        assert.strictEqual(dom$readingBody.firstChild,article);assert.equal(article.textContent,source);
+        assert.equal(JSON.stringify(sharedIndex),beforeIndex);assert.equal(JSON.stringify(data),beforeGraph);
+        assert.deepEqual(navigationCalls,[]);
+      }
+    """, real_sheet=True)
+
+
+def test_ignored_full_phone_shortcuts_keep_full_reader_focus_and_view_state() -> None:
+    _controls(r"""
+      const reading=new Element('a');dom$readingBody.appendChild(reading);ui$phone=true;
+      host.classList.toggle('bp-dag-sheet-open',true);host.classList.toggle('bp-dag-sheet-full',true);
+      syncSheetAccessibility();const main=host.querySelector('.bp-dag-main');
+      for(const setting of [{key:'/',ctrlKey:true},{key:'/',metaKey:true},{key:'/',altKey:true},
+                            {key:'/',defaultPrevented:true},{key:'k'}]){
+        reading.focus();const before={camera:JSON.stringify(ui$transform),scheduled,resized,checkpoints,history:history.slice()};
+        const event=emit(document,'keydown',Object.assign({target:reading},setting));
+        assert.equal(event.defaultPrevented,Boolean(setting.defaultPrevented));assert.equal(document.activeElement,reading);
+        assert(host.classList.contains('bp-dag-sheet-full'));assert.equal(main.getAttribute('inert'),'');
+        assert.equal(JSON.stringify(ui$transform),before.camera);assert.equal(scheduled,before.scheduled);
+        assert.equal(resized,before.resized);assert.equal(checkpoints,before.checkpoints);assert.deepEqual(history,before.history);
+      }
+      for(const tag of ['input','textarea','select','div']){
+        const editor=new Element(tag);editor.isContentEditable=tag==='div';dom$readingBody.appendChild(editor);editor.focus();
+        for(const setting of [{key:'/'},{key:'k',ctrlKey:true},{key:'k',metaKey:true}]){
+          const event=emit(document,'keydown',Object.assign({target:editor},setting));
+          assert.equal(event.defaultPrevented,false);assert.equal(document.activeElement,editor);
+          assert(host.classList.contains('bp-dag-sheet-full'));assert.equal(main.getAttribute('inert'),'');
+        }
+      }
+      assert.deepEqual(navigationCalls,[]);assert.deepEqual(history,[]);assert.equal(checkpoints,0);
+    """, real_sheet=True)
 
 
 def test_modified_arrows_remain_native_and_plain_arrow_focuses_actual_neighbor() -> None:

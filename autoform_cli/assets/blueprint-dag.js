@@ -2115,7 +2115,9 @@
         if (!own && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || "") || target.isContentEditable)) return;
         if ((event.key === "/" && !own && host.contains(target) && !event.metaKey && !event.ctrlKey && !event.altKey) ||
             ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k")) {
-          event.preventDefault(); dom$search.focus(); dom$search.select();
+          event.preventDefault();
+          if (sheetLayout() && host.classList.contains("bp-dag-sheet-full")) setSheet(1, ui$selected);
+          dom$search.focus(); dom$search.select();
         }
       });
       if (window.ResizeObserver) { var ro = new ResizeObserver(queueResize); ro.observe(dom$stage); observers.push(ro); }
@@ -2227,9 +2229,9 @@
       if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family || sceneAspect !== aspect || sceneWiki !== data.$wikiEdges || sceneReduced !== reduced) {
         var anchor = typeof document !== "undefined" && document.activeElement && document.activeElement.dataset &&
           document.activeElement.dataset.autoformNodeId, previous = !restoring && sceneData === data && scene && scene.nodes.get(anchor);
-        // Compact cards fit five areas in the captured phone band without shrinking type or the 48px collision gap.
+        // Two-line compact cards retain their type and status bar, with room for five areas and the 48px collision gap.
         var nodes = data.nodes.map(function (node) { return {id: node.id, width: compact ? 312 : node.width,
-          height: compact ? 92 : node.height, area: node.area, scope: node.scope}; });
+          height: compact ? 88 : node.height, area: node.area, scope: node.scope}; });
         scene = layoutGraph(nodes, data.edges, ui$orientation, aspect, data.$wikiEdges, reduced);
         var targets = framingNodes();
         if (data.nodes.length <= 24 && targets.length) {
@@ -2343,8 +2345,8 @@
         if (display && display.reduced) {
           // In words: how many of the links the map draws, or that a pair's two kinds share one line.
           var brief = compactKey || sheetLayout(), key = element("span", "bp-map-key-coverage", display.shownPairs < display.totalPairs ?
-            (brief ? "" : "Showing ") + num(display.shownPairs) + " of " + num(display.totalPairs) + " links" : brief ? "One line per pair" : "One line for each pair of cards");
-          key.title = "Cards linked both ways share one line, solid when it carries a statement dependency. Every link still shows in each statement's Uses and Used by, and around a selected result.";
+            (brief ? "" : "Showing ") + num(display.shownPairs) + " of " + num(display.totalPairs) + " links" : "One line per direction");
+          key.title = "Statement and proof dependencies in the same direction share one line, solid when it includes a statement dependency. Every link remains in each statement's Uses and Used by, and around a selected result.";
           dom$mapKey.appendChild(key);
         }
         // One entry says what the dotted lines are and how many of them this map draws; a map that draws none says nothing about their coverage.
@@ -2532,7 +2534,8 @@
     // Open details cover part of the map; this is the larger part they leave, in stage pixels.
     function freeArea() {
       var band = dom$stage.clientHeight, left = 0, right = dom$stage.clientWidth, drawer = dom$inspector;
-      if (compactRegions() && (!sheetLayout() || !host.classList.contains("bp-dag-sheet-open"))) return {top: 28, band: Math.max(NODE_H, band - 44), left: 12, right: right - 12};
+      // Leave a whole card eight pixels clear of the caption and native Link key; the paint clip also leaves room for its ring.
+      if (compactRegions() && (!sheetLayout() || !host.classList.contains("bp-dag-sheet-open"))) return {top: 36, band: Math.max(NODE_H, band - 72), left: 12, right: right - 12};
       if (!sheetLayout()) return {band: band, left: left, right: right};
       if (host.classList.contains("bp-dag-sheet-open")) {
         // The workspace sheet slides on a transform, so its top is the stylesheet's 45%, not offsetTop.

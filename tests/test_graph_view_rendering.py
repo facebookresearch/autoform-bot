@@ -942,7 +942,9 @@ def test_reduced_maps_and_shelves_say_what_they_show_in_plain_words() -> None:
                    "no local formal links", "One stroke per"):
         assert jargon not in script, jargon
     assert '(brief ? "" : "Showing ") + num(display.shownPairs) + " of " + num(display.totalPairs) + " links"' in script
-    assert 'brief ? "One line per pair" : "One line for each pair of cards"' in script
+    assert '"One line per direction"' in script
+    assert 'Statement and proof dependencies in the same direction share one line' in script
+    assert 'Cards linked both ways share one line' not in script
     assert 'element("h2", "bp-scope-shelves-heading", "Not on the map")' in script
     assert '(group.$shelf ? ", none linked to each other" : "")' in script
 

@@ -164,7 +164,7 @@ def test_actual_atlas_root_uses_real_free_area_and_fits_all_five_cards(width: in
       assert.equal(current.routes.reduce((sum,route)=>sum+route.$proof,0),674);
       assert.strictEqual(geometry(),current);assert.equal(calls,2,'Unchanged framing recomputed scene geometry');
       assert.equal(JSON.stringify(data),source,'Fit or orientation selection changed captured graph fields');
-      const dimensions=data.nodes.map(node=>({...node,width:compactRegions()?312:node.width,height:compactRegions()?92:node.height}));
+      const dimensions=data.nodes.map(node=>({...node,width:compactRegions()?312:node.width,height:compactRegions()?88:node.height}));
       check({nodes:dimensions,edges:data.edges},'lr');check({nodes:dimensions,edges:data.edges},'tb');
     """, {"data": data, "width": width, "height": height, "direction": direction, "atlas": True})
 
@@ -172,7 +172,8 @@ def test_actual_atlas_root_uses_real_free_area_and_fits_all_five_cards(width: in
 @pytest.mark.parametrize("direction", ["lr", "tb"])
 def test_native_five_area_cycle_fits_the_captured_phone_stage_without_changing_connections(direction: str) -> None:
     # Exact authored-area projection and stage from the native navigation-only
-    # overview. Five 96px cards exceeded this real phone band at the .9 floor.
+    # overview. The 44px controls retain both rows; trimming only their outer
+    # padding adds 12px to the captured stage, with clear caption and key bands.
     areas = ["Algebra", "Analysis", "Discrete mathematics", "Geometry", "Logic"]
     data = {
         "nodes": [{"id": "region:" + area, "area": area, "_region": area, "kind": "scope",
@@ -189,9 +190,9 @@ def test_native_five_area_cycle_fits_the_captured_phone_stage_without_changing_c
       assert.equal(current.$display.totalPairs,5);assert.equal(current.$display.totalRoutes,5);
       assert.equal(current.routes.reduce((sum,route)=>sum+route.$statement,0),10);
       assert.equal(JSON.stringify(data),source,'Compact framing changed captured status or typed dependencies');
-      const dimensions=data.nodes.map(node=>({...node,width:312,height:92}));
+      const dimensions=data.nodes.map(node=>({...node,width:312,height:88}));
       check({nodes:dimensions,edges:data.edges},'lr');check({nodes:dimensions,edges:data.edges},'tb');
-    """, {"data": data, "width": 390, "height": 630.984375, "direction": direction, "atlas": True})
+    """, {"data": data, "width": 390, "height": 642.984375, "direction": direction, "atlas": True})
 
 
 def _algebra_connected() -> dict:

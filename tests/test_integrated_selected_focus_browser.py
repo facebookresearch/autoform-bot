@@ -27,6 +27,7 @@ from tests.test_integrated_explorer_browser import _routes
 from tests.test_integrated_workspace_browser import (
     _BASE,
     _LAST_SENTENCE,
+    _OTHER,
     _READY,
     _TARGET,
     _PinnedRuntime,
@@ -256,6 +257,75 @@ def test_full_phone_reader_keeps_covered_map_and_toolbar_out_of_native_tab_order
     assert page.url == selected and page.evaluate("history.length") == history
     assert page.evaluate("document===window.__workspaceDocument") is True
     assert documents == [site.route(_BASE).split("#", 1)[0]]
+
+
+@pytest.mark.parametrize("shortcut", ["/", "Control+k", "Meta+k"], ids=["slash", "control-k", "meta-k"])
+def test_full_phone_reader_shortcut_reveals_focused_search_at_half_without_changing_the_article(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, shortcut: str,
+) -> None:
+    page, site = workspace_page, workspace_site
+    page.set_viewport_size({"width": 390, "height": 844})
+    initial, selected = site.route(_BASE), site.route(_TARGET)
+    initial_source, expected = _published_source(page, initial), _published_source(page, selected)
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _open(page, site, workspace_runtime, _BASE)
+    _search(page, site.records[_TARGET]["title"], _TARGET)
+    page.wait_for_url(selected)
+    _selected(page, _TARGET)
+    playwright.expect(_full_math(page)).to_contain_text(_LAST_SENTENCE)
+    source = _complete_source(page, expected)
+    source.evaluate("node=>window.__shortcutReadingSource=node")
+    viewer, handle = page.locator(".bp-dag-viewer"), page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
+    playwright.expect(handle).to_have_attribute("title", "Expand reading")
+    handle.click()
+    _frames(page)
+    playwright.expect(viewer).to_have_class(re.compile(r"\bbp-dag-sheet-full\b"))
+    playwright.expect(page.locator(".bp-dag-main")).to_have_attribute("inert", "")
+    playwright.expect(page.locator(".bp-dag-toolbar")).to_be_hidden()
+    link = page.locator(f'.bp-reading-body .bp-thmwrapper[data-autoform-node-id="{_TARGET}"]').get_by_role(
+        "link", name="Read the counterpart identity", exact=True,
+    )
+    playwright.expect(link).to_have_attribute("href", site.route(_OTHER))
+    link.scroll_into_view_if_needed()
+    link.focus()
+    _frames(page)
+    playwright.expect(link).to_be_focused()
+    _assert_hit(page, link)
+    link.evaluate("node=>window.__shortcutReadingLink=node")
+    history = page.evaluate("history.length")
+    search = page.locator(".bp-dag-search")
+    value = search.input_value()
+    page.keyboard.press(shortcut)
+    _frames(page)
+    playwright.expect(search).to_be_visible()
+    playwright.expect(search).to_be_focused()
+    _assert_hit(page, search)
+    assert search.evaluate("node=>{const r=node.getBoundingClientRect();return r.width>0&&r.height>0&&r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;}")
+    assert search.input_value() == value
+    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    playwright.expect(handle).to_have_attribute("title", "Expand reading")
+    assert "bp-dag-sheet-full" not in viewer.get_attribute("class").split()
+    assert page.locator(".bp-dag-main").get_attribute("inert") is None
+    playwright.expect(page.locator(".bp-dag-toolbar")).to_be_visible()
+    assert page.locator(".bp-reading-pane").evaluate("""pane=>{
+      const p=pane.getBoundingClientRect(),body=pane.closest('.bp-dag-body').getBoundingClientRect();
+      return Math.abs(p.top-body.top-.45*body.height)<=1&&Math.abs(p.height-body.height)<=1;
+    }""")
+    assert page.url == selected and page.evaluate("history.length") == history
+    _selected(page, _TARGET)
+    playwright.expect(_full_math(page)).to_contain_text(_LAST_SENTENCE)
+    _complete_source(page, expected)
+    assert source.evaluate("node=>node===__shortcutReadingSource")
+    assert link.evaluate("node=>node===__shortcutReadingLink&&node.isConnected")
+    assert page.evaluate("document===window.__workspaceDocument") is True
+    page.go_back()
+    page.wait_for_url(initial)
+    _frames(page)
+    _selected(page, _BASE)
+    _complete_source(page, initial_source)
+    assert page.evaluate("document===window.__workspaceDocument") is True
+    assert documents == [initial.split("#", 1)[0]]
 
 
 def test_320px_link_key_is_whole_native_and_keeps_half_reader_feedback_and_camera(
