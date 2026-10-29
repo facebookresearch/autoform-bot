@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import psutil
 import pytest
 
+from servers._process import processes_with_token
 from servers.lsp import server as lsp
 from tests.lean_fixture import _real_lean_project, _requires_real_lean
 
@@ -337,7 +338,8 @@ def test_abort_retries_the_token_sweep_before_reaping_the_leader(monkeypatch):
     # one is left after SIGKILL; the retry's first scan finds none.
     scans = iter([[_FakeTokenCarrier(events)]] * 3)
 
-    def scan(token):
+    def scan(name, token):
+        assert name == lsp._SESSION_TOKEN_ENV
         assert token == "session-token"
         events.append("scan")
         return next(scans, [])
@@ -346,7 +348,7 @@ def test_abort_retries_the_token_sweep_before_reaping_the_leader(monkeypatch):
         events.append("reap")
         owned.wait()
 
-    monkeypatch.setattr(lsp, "_processes_with_token", scan)
+    monkeypatch.setattr(lsp, "processes_with_token", scan)
     monkeypatch.setattr(lsp, "_terminate_process_group", lambda process_group_id: events.append("group"))
     monkeypatch.setattr(lsp, "_reap_process", reap)
     monkeypatch.setattr(lsp.time, "sleep", lambda delay: None)
@@ -366,7 +368,7 @@ def test_token_sweep_signals_only_what_its_latest_scan_found(monkeypatch):
     session = _owned_session(_FakeProcess(), "session-token")
     signals: list[str] = []
     scans = iter([[_FakeTokenCarrier(signals)], []])
-    monkeypatch.setattr(lsp, "_processes_with_token", lambda token: next(scans, []))
+    monkeypatch.setattr(lsp, "processes_with_token", lambda name, token: next(scans, []))
     monkeypatch.setattr(lsp, "_terminate_process_group", lambda process_group_id: None)
     monkeypatch.setattr(lsp, "_reap_process", lambda owned: owned.wait())
 
@@ -539,7 +541,7 @@ def test_abort_refuses_to_signal_a_pre_reaped_leader_with_live_group(monkeypatch
 
     monkeypatch.setattr(
         lsp,
-        "_process_group_has_live_members",
+        "process_group_has_live_members",
         lambda process_group_id: True,
     )
     monkeypatch.setattr(
@@ -575,7 +577,9 @@ def test_token_scan_finds_only_the_processes_carrying_the_token():
     }
     try:
         # Popen returns once the child has exec'd, so its environment is set.
-        assert [process.pid for process in lsp._processes_with_token(token)] == [processes["this session"].pid]
+        assert [process.pid for process in processes_with_token(lsp._SESSION_TOKEN_ENV, token)] == [
+            processes["this session"].pid
+        ]
     finally:
         for process in processes.values():
             process.kill()
@@ -605,7 +609,7 @@ def test_token_scan_leaves_out_processes_it_cannot_read(monkeypatch):
     monkeypatch.setattr(psutil, "pids", lambda: list(candidates))
     monkeypatch.setattr(psutil, "Process", lambda pid: candidates[pid])
 
-    assert lsp._processes_with_token("session-token") == [candidates[1]]
+    assert processes_with_token(lsp._SESSION_TOKEN_ENV, "session-token") == [candidates[1]]
 
 
 def test_token_scan_fails_when_the_process_table_cannot_be_read(monkeypatch):
@@ -616,7 +620,7 @@ def test_token_scan_fails_when_the_process_table_cannot_be_read(monkeypatch):
 
     # The attempt fails, so close and abort retry instead of reaping the leader.
     with pytest.raises(RuntimeError, match="cannot read the process table"):
-        lsp._processes_with_token("session-token")
+        processes_with_token(lsp._SESSION_TOKEN_ENV, "session-token")
 
 
 @pytest.mark.parametrize(
@@ -635,14 +639,14 @@ def test_token_scan_fails_on_any_other_environment_error(monkeypatch, error):
     # Only exited and unreadable processes are passed over; anything else
     # fails the attempt, so close and abort retry.
     with pytest.raises(type(error)):
-        lsp._processes_with_token("session-token")
+        processes_with_token(lsp._SESSION_TOKEN_ENV, "session-token")
 
 
 @pytest.mark.parametrize("token", [None, ""], ids=["none", "empty"])
 def test_token_scan_refuses_a_missing_token(token):
     # A missing token would match every process without the variable.
     with pytest.raises(ValueError, match="nonempty"):
-        lsp._processes_with_token(token)
+        processes_with_token(lsp._SESSION_TOKEN_ENV, token)
 
 
 def test_concurrent_abort_and_close_serialize_owned_cleanup(monkeypatch):

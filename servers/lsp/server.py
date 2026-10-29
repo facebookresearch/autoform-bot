@@ -44,11 +44,12 @@ from fastmcp.server import FastMCP
 from servers._process import (
     REPL_ABORT_KILL_SECONDS,
     REPL_ABORT_TERM_SECONDS,
-    _inherit_clean_env,
-    _process_group_has_live_members,
     _reap_process,
     _terminate_process_group,
     _wait_for_live_process_group_exit,
+    inherit_clean_env,
+    process_group_has_live_members,
+    processes_with_token,
 )
 from servers.lean_client import LeanRuntimeClient
 
@@ -120,42 +121,6 @@ class LspConfig:
     timeout: float = DEFAULT_LSP_TIMEOUT
 
 
-def _processes_with_token(token: str) -> list[Any]:
-    """Return the processes whose environment carries a session's token.
-
-    A process whose environment cannot be read is left out, so it is never
-    signalled: nothing shows that it is the session's. Lean and Lake run as
-    the user, who can read their environments; setuid programs the user runs,
-    such as ``login``, are unreadable at all times, so counting them would
-    fail every close. A process table that cannot be read fails the scan.
-    """
-    if not token:
-        # A missing token would match every process without the variable.
-        raise ValueError("a Lean LSP session token must be a nonempty string")
-    import psutil
-
-    try:
-        pids = psutil.pids()
-    except (OSError, psutil.Error) as error:
-        raise RuntimeError("cannot read the process table to find the Lean LSP session's processes") from error
-    found = []
-    for pid in pids:
-        if pid == os.getpid():
-            continue
-        try:
-            # The handle records the creation time before the environment is
-            # read, so it can only name the process that was read or an
-            # earlier one, which psutil then refuses to signal.
-            candidate = psutil.Process(pid)
-            environment = candidate.environ()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            # Exited or unreadable; a zombie reads as exited or empty.
-            continue
-        if environment.get(_SESSION_TOKEN_ENV) == token:
-            found.append(candidate)
-    return found
-
-
 def _running(process: Any) -> bool:
     """Whether a psutil process is still running; one that cannot be read counts as running."""
     import psutil
@@ -197,7 +162,7 @@ class LeanLspSession:
         """Start the language server process."""
         if os.name != "posix":
             raise RuntimeError("Lean LSP transport requires a POSIX platform")
-        env = _inherit_clean_env()
+        env = inherit_clean_env()
         self._token = secrets.token_hex(16)
         env[_SESSION_TOKEN_ENV] = self._token
         process: subprocess.Popen | None = None
@@ -255,7 +220,7 @@ class LeanLspSession:
                 process_group_id = process.pid
                 self._process_group_id = process_group_id
             if getattr(process, "returncode", None) is not None:
-                if _process_group_has_live_members(process_group_id):
+                if process_group_has_live_members(process_group_id):
                     raise RuntimeError(
                         "refusing to signal an LSP process group after its leader was reaped"
                     )
@@ -309,7 +274,7 @@ class LeanLspSession:
             (signal.SIGTERM, REPL_ABORT_TERM_SECONDS),
             (signal.SIGKILL, REPL_ABORT_KILL_SECONDS),
         ):
-            processes = _processes_with_token(token)
+            processes = processes_with_token(_SESSION_TOKEN_ENV, token)
             if not processes:
                 return
             for process in processes:
@@ -320,7 +285,7 @@ class LeanLspSession:
                 except (OSError, psutil.Error):
                     pass
             _wait_for_exit(processes, time.monotonic() + seconds)
-        if _processes_with_token(token):
+        if processes_with_token(_SESSION_TOKEN_ENV, token):
             raise RuntimeError("processes started by the Lean LSP server are still running")
 
     def _abort_process(self) -> None:
@@ -539,7 +504,7 @@ class LeanLspSession:
         if token is None:
             return False
         try:
-            carriers = _processes_with_token(token)
+            carriers = processes_with_token(_SESSION_TOKEN_ENV, token)
         except RuntimeError:
             return True
         outside = []
