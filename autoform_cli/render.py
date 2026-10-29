@@ -1964,8 +1964,10 @@ def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[P
 def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
     """The published book pages in reading order: down the containment tree
     from the landing page, each page's children in the order it links them,
-    then the ones it does not link. A link to a page elsewhere in the tree,
-    such as a landing-page shortcut to a deep milestone, does not move it."""
+    then the ones it does not link. A child the page never links directly
+    takes the place of the page's first link into its subtree; a direct link
+    wins over that, so a prose shortcut to a deep milestone does not pull its
+    chapter forward. A link to a page elsewhere in the tree does not move it."""
     book_sources = _book_sources(graph)
     children: dict[str | None, list[str]] = {}
     for node_id in status.topological_order(graph):
@@ -1980,9 +1982,30 @@ def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Pat
             ordered.append(output.resolve())
         own = children.get(parent, [])
         linked = [book_sources[path] for path in _book_links(source, blueprint, book_sources)] if source.is_file() else []
-        reading = dict.fromkeys([*(node_id for node_id in linked if node_id in own), *own])
+        direct: dict[str, int] = {}
+        through: dict[str, int] = {}
+        for index, node_id in enumerate(linked):
+            child = node_id if node_id in own else _child_containing(graph, parent, node_id)
+            if child in own:
+                (direct if child == node_id else through).setdefault(child, index)
+        placed = through | direct
+        reading = dict.fromkeys([*sorted(placed, key=placed.__getitem__), *own])
         pending.extend((graph.nodes[node_id].path, node_id) for node_id in reversed(reading))
     return ordered
+
+
+def _child_containing(graph: Graph, parent: str | None, node_id: str) -> str | None:
+    """The child of *parent* whose containment subtree holds *node_id*, if any."""
+    seen: set[str] = set()
+    while node_id in graph.nodes and node_id not in seen:
+        seen.add(node_id)
+        up = graph.nodes[node_id].parent
+        if up == parent:
+            return node_id
+        if up is None:
+            return None
+        node_id = up
+    return None
 
 
 def _reading_order(
