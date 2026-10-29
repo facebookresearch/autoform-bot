@@ -21,9 +21,15 @@ class Element {
   contains(node) { return node === this || this.children.some(child => child.contains(node)); }
   replaceChildren(...children) {
     if (this.contains(document.activeElement) && document.activeElement !== this) document.activeElement = document.body;
-    this.children = children;
+    this.children = children; children.forEach(child => { child.parent = this; });
   }
-  prepend(child) { this.children.unshift(child); }
+  prepend(child) { this.children.unshift(child); child.parent = this; }
+  closest(selector) {
+    for (let node = this; node; node = node.parent) {
+      if (selector.startsWith('.') ? node.classes.has(selector.slice(1)) : node.tagName === selector) return node;
+    }
+    return null;
+  }
   querySelector(selector) {
     const parts = selector.split(' ');
     if (parts.length === 2) {

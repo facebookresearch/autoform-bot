@@ -1813,7 +1813,8 @@ def test_decluttered_reader_keeps_native_math_anchors_leaf_navigation_and_back_p
     _selected(page, "alpha/identity")
     card = _full_math(page, "alpha/identity", 1)
     assert "complete proposed statement" in card.inner_text() and len(card.inner_text()) > 420
-    assert card.get_attribute("id")
+    # The card's anchor is on its heading, which site search makes a record of.
+    assert card.locator(".bp-thmheading").get_attribute("id")
     page.evaluate("() => history.back()")
     page.wait_for_url(site.route("alpha"))
     playwright.expect(reader.locator("h1")).to_have_text(site.records["alpha"]["title"])

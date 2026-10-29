@@ -1533,7 +1533,9 @@
       if (navigation) navigation.loadIndex().catch(showError);
       readingReady = readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || (isCurrent && !isCurrent())) { resolve(); return; }
-        var target = bundle.anchor && document.getElementById(bundle.anchor);
+        // A statement's anchor is on its card's heading; the whole card is the current reading.
+        var anchored = bundle.anchor && document.getElementById(bundle.anchor);
+        var target = anchored && (anchored.closest(".bp-thmwrapper") || anchored);
         if (target && dom$readingBody.contains(target)) {
           target.classList.add("bp-reading-current");
           if (!bundle.snapshot) dom$readingBody.scrollTop += target.getBoundingClientRect().top - dom$readingBody.getBoundingClientRect().top - 24;

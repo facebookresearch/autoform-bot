@@ -547,7 +547,9 @@ def _consumer_selected(page: object, consumer: _ExplorerConsumer, node_id: str) 
     playwright.expect(control).to_have_attribute("data-selected", "true")
     anchor = unquote(urlsplit(consumer.route(node_id)).fragment)
     if anchor:
-        playwright.expect(page.locator(f'.bp-reading-body [id="{anchor}"].bp-reading-current')).to_have_count(1)
+        # A statement's anchor is on its card's heading, and the card is the current reading.
+        current = f'.bp-reading-body .bp-reading-current [id="{anchor}"], .bp-reading-body [id="{anchor}"].bp-reading-current'
+        playwright.expect(page.locator(current)).to_have_count(1)
     return control
 
 
