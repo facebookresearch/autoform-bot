@@ -192,7 +192,8 @@ def test_controlled_tablet_sheet_resize_settles_before_checkpoint_and_trailing_o
         box.x*ui$transform.scale+ui$transform.x,box.y*ui$transform.scale+ui$transform.y];};
       fit();flushFrame();assert.equal(layouts,2);install();
       setSheet(true,null);assert.equal(ui$orientation,'tb');assert.equal(dom$canvas.width,1140);
-      assert(Math.abs(ui$transform.scale-1.0089285714285714)<1e-9);
+      // Five compact cards and four unchanged 48px gaps fill the 678px free band.
+      assert(Math.abs(ui$transform.scale-(722-44)/(5*92+4*48))<1e-9);
       flushFrame();assert.equal(layouts,4);notify(observed[0]);
       setSheet(false,null);
       assert.equal(ui$orientation,'lr','The owning click must settle the actual new orientation');
