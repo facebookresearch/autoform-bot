@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import errno
 import hashlib
+import html
 import json
 import logging
 import os
@@ -50,7 +51,7 @@ from autoform_cli.render import (
     publication_source_revision,
     render_site,
 )
-from autoform_cli.status import INVENTORY_STATES, STATES, derive
+from autoform_cli.status import INVENTORY_STATES, MEANINGS, STATES, derive
 from tests.test_integrated_publication import _decoded_relations
 from tests.test_lean_sources import _git_commit
 
@@ -540,6 +541,7 @@ def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -
     assert '<span class="bp-thmtitle">Top</span>' in page
     assert "The main result." in page
     assert "<strong>2</strong> fully proved" in page
+    assert f'<span class="bp-progress-state" title="{html.escape(MEANINGS["fully_proved"])}">' in page
     # A node's own subheadings must not compete with the chapter's structure.
     assert "###### Sources" in page
     assert "\n## Sources" not in page
