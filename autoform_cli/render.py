@@ -133,6 +133,7 @@ from .markdown import (
     yaml_string,
 )
 from .markdown import HEADING as _HEADING
+from .markdown import _LINK_DEFINITION as _SITE_LINK_DEFINITION
 from .markdown import content_lines as _content_lines
 from .markdown import outside_fences as _outside_fences
 from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, TEX_MACROS, mathjax_script, project_macros
@@ -2383,8 +2384,9 @@ def _lead_sentence(body: str) -> str:
     """
     lines = mask_fences_and_comments(body.splitlines())
     # Each block is read alone, so raw HTML elsewhere does not hide the lead,
-    # with the reference definitions its links may name.
-    definitions = "\n".join(line for line in lines if _LINK_DEFINITION.match(line))
+    # with the reference definitions its links may name. Only lines the site's
+    # converter reads as definitions, so a footnote never becomes a paragraph.
+    definitions = "\n".join(line for line in lines if _SITE_LINK_DEFINITION.match(line))
     for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
         tree = render_tree(f"{block}\n\n{definitions}", allow_html=False) if block.strip() else None
         page = tree.find("body") if tree is not None else None
@@ -2439,8 +2441,9 @@ def _lead_html(parts: list[tuple[str, str]]) -> str:
 
     The sentence ends at the first period in the prose that whitespace and
     anything but a lowercase ASCII letter follow, unless the period ends an
-    abbreviation such as "i.e." or "Ch." or a name's initial. A period inside
-    code or a formula never ends it.
+    abbreviation such as "i.e." or "Ch." or a name's initial, or "et al."
+    that no capital follows. A period inside code, a formula or a `$$` pair
+    the converter left as text never ends it.
     """
     plain, starts = "", []
     for kind, value in parts:
@@ -2452,9 +2455,13 @@ def _lead_html(parts: list[tuple[str, str]]) -> str:
         before = plain[: stop.start()]
         words = [word.lstrip("(") for word in before.split()] or [""]
         word, previous = words[-1], words[-2] if len(words) > 1 else ""
+        after = plain[stop.end() :]
         # An all-caps word, such as "CH." or "EGA I.", is not an abbreviation.
-        if (not word.isupper() and word.lower() in _LEAD_ABBREVIATIONS) or _is_initial(
-            word, previous, plain[stop.end() :]
+        abbreviation = not word.isupper() and word.lower() in _LEAD_ABBREVIATIONS
+        if (
+            before.count("$$") % 2
+            or (abbreviation and not (word.lower() == "al" and after[:1].isupper()))
+            or _is_initial(word, previous, after)
         ):
             continue
         cut = stop.start()
