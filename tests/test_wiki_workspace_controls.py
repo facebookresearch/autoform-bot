@@ -460,6 +460,24 @@ def test_first_breadcrumb_targets_deployment_home_and_preserves_native_modified_
     """)
 
 
+def test_home_leads_back_in_place_from_an_area_or_group_opened_on_the_home_map() -> None:
+    _run_controls(r"""
+      var ui$scopeOverview=false,ui$active=[{id:'region:Geometry',_region:'Geometry'},{id:'region:Analysis',_region:'Analysis'}];
+      const centered=[];function centerIfHidden(node){centered.push(node.id);}
+      currentBundle={nodeId:null,scope:'roadmap',title:'Authored library',url:homeURL,graph:{view:{}}};
+      const crumbs=()=>routeTrail(currentBundle).map(entry=>[entry.label,entry.url||null]);
+      assert.deepEqual(crumbs(),[['Home',null]]);
+      // Opening an area keeps the home URL; Home must lead back to the whole map in place.
+      ui$area='Geometry';assert.deepEqual(crumbs(),[['Home',homeURL],['Geometry',null]]);
+      renderBreadcrumb();const home=dom$breadcrumb.querySelector('.bp-dag-book');assert.equal(home.href,homeURL);
+      const calls=navigationCalls.length,event=emit(home,'click',{button:0});
+      assert.equal(event.defaultPrevented,true);assert.equal(navigationCalls.length,calls,'Home returns in place');
+      assert.deepEqual(modes.at(-1),{mode:'regions',push:true});assert.deepEqual(centered,['region:Geometry']);
+      ui$area=null;ui$scopeOverview=true;ui$overviewGroup='g1';data._scopeOverview={groups:[{key:'g1',title:'Group one'}]};
+      assert.deepEqual(crumbs(),[['Home',homeURL],['Group one',null]]);
+    """)
+
+
 def test_leaf_peers_use_exact_scope_and_keep_catalog_status_without_source_or_note_leakage() -> None:
     _run(r"""
       const first=record('A','chapter',{status:'fully_proved'});

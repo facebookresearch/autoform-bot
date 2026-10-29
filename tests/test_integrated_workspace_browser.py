@@ -1384,6 +1384,66 @@ def test_native_reader_and_library_links_remain_soft_navigation(
     assert page.evaluate("() => document === __workspaceDocument") is True
 
 
+@pytest.mark.parametrize("width", [1600, 1000, 390])
+def test_home_leads_back_from_an_area_opened_on_the_home_map(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int,
+) -> None:
+    page, site = workspace_page, workspace_site
+    page.set_viewport_size({"width": width, "height": 900 if width > 720 else 844})
+    home_url = site.url + "/index.html"
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _routes(page, site.url, workspace_runtime, graph_client=True)
+    page.goto(home_url)
+    page.locator(".bp-dag-integrated .bp-dag-stage").wait_for()
+    playwright.expect(page.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
+    playwright.expect(page.locator(".bp-dag-search")).not_to_have_attribute("aria-busy", "true")
+    _frames(page)
+    crumbs = page.locator(".bp-dag-breadcrumb")
+    playwright.expect(crumbs.locator("li")).to_have_text(["Home"])
+    playwright.expect(crumbs.locator("a")).to_have_count(0)
+    page.evaluate("() => window.__workspaceDocument = document")
+    source = page.locator(".bp-reading-body > .bp-reading-source")
+    original_text = source.text_content()
+    original_cards = source.locator(".bp-thmwrapper").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId)")
+    original_ids = page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()")
+    region = _focus_graph_region(page, "Geometry")
+    region_matrix = region.evaluate("node=>{const m=new DOMMatrix(getComputedStyle(node).transform);return [m.a,m.d,m.e,m.f];}")
+    history_length = page.evaluate("history.length")
+    # An opened area keeps the home URL; its parent crumb returns to the whole map.
+    region.click()
+    playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(1)
+    assert page.url == home_url
+    playwright.expect(crumbs.locator("li")).to_have_text(["Home", "Geometry"])
+    playwright.expect(crumbs.locator("li").last).to_have_attribute("aria-current", "page")
+    expanded_ids = page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()")
+    home = crumbs.get_by_role("link", name="Home", exact=True)
+    playwright.expect(home).to_have_attribute("href", home_url)
+    home.click()
+    playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(0)
+    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id="region:Geometry"]')).to_be_focused()
+    assert page.url == home_url
+    playwright.expect(crumbs.locator("li")).to_have_text(["Home"])
+    assert page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()") == original_ids
+    page.wait_for_function("""expected=>{
+      const node=document.querySelector('.bp-dag-node[data-autoform-node-id="region:Geometry"]');
+      if(!node)return false;const m=new DOMMatrix(getComputedStyle(node).transform);
+      return [m.a,m.d,m.e,m.f].every((value,index)=>Math.abs(value-expected[index])<=(index<2?.0001:1));
+    }""", arg=region_matrix)
+    assert page.evaluate("history.length") == history_length + 2
+    page.go_back()
+    playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(1)
+    playwright.expect(crumbs.locator("li")).to_have_text(["Home", "Geometry"])
+    assert page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()") == expanded_ids
+    page.go_forward()
+    playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(0)
+    playwright.expect(crumbs.locator("li")).to_have_text(["Home"])
+    assert source.text_content() == original_text
+    assert source.locator(".bp-thmwrapper").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId)") == original_cards
+    assert page.evaluate("() => document === __workspaceDocument") is True
+    assert documents == [home_url] and page.url == home_url
+
+
 def test_verified_concept_links_have_native_direction_navigation_back_and_known_empty_coverage(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:
@@ -1934,7 +1994,8 @@ def test_decluttered_reader_keeps_native_math_anchors_leaf_navigation_and_back_p
     _selected(page, "alpha/identity")
     card = _full_math(page, "alpha/identity", 1)
     assert "complete proposed statement" in card.inner_text() and len(card.inner_text()) > 420
-    assert card.get_attribute("id")
+    # The card's anchor is on its heading, which site search makes a record of.
+    assert card.locator(".bp-thmheading").get_attribute("id")
     page.evaluate("() => history.back()")
     page.wait_for_url(site.route("alpha"))
     playwright.expect(reader.locator("h1")).to_have_text(site.records["alpha"]["title"])

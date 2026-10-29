@@ -1540,9 +1540,10 @@
       if (navigation) navigation.loadIndex().catch(showError);
       readingReady = readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || (isCurrent && !isCurrent())) { resolve(); return; }
-        var target = bundle.anchor && document.getElementById(bundle.anchor);
-        var current = target && dom$readingBody.contains(target) ? target : null;
-        if (current) {
+        // A statement's anchor is on its card's heading; the whole card is the current reading.
+        var anchored = bundle.anchor && document.getElementById(bundle.anchor);
+        var target = anchored && (anchored.closest(".bp-thmwrapper") || anchored);
+        if (target && dom$readingBody.contains(target)) {
           target.classList.add("bp-reading-current"); target.setAttribute("aria-current", "true");
           // The statement's own relations list replaces a separate strip, so it opens with the selection.
           var relations = target.querySelector(".bp-dependencies"); if (relations) relations.open = true;
@@ -1561,13 +1562,15 @@
     }
     function routeTrail(bundle) {
       var home = navigation && navigation.getHomeURL && navigation.getHomeURL();
+      var atHome = false, group = currentOverviewGroup();
       if (home && bundle.url && !bundle.nodeId) {
         var at = new URL(bundle.url), start = new URL(home);
-        if (at.origin === start.origin && at.pathname === start.pathname && at.search === start.search) return [{label: "Home"}];
+        atHome = at.origin === start.origin && at.pathname === start.pathname && at.search === start.search;
       }
+      if (atHome && !ui$area && !group) return [{label: "Home"}];
       var entries = [], record = records.get(bundle.nodeId), pending = records.get(bundle.scope), seen = new Set();
-      if (!pending) entries = (bundle.graph.view && bundle.graph.view.breadcrumbs || []).slice();
-      while (pending && !seen.has(pending.id)) {
+      if (!atHome && !pending) entries = (bundle.graph.view && bundle.graph.view.breadcrumbs || []).slice();
+      while (!atHome && pending && !seen.has(pending.id)) {
         seen.add(pending.id);
         // A collection never stands between crumbs, but its own page ends the trail with it, as the map header does.
         var own = pending.id === bundle.scope && pending.navigation === "collection";
@@ -1578,9 +1581,9 @@
       }
       if (record && record.scope !== record.id) entries.push({label: record.title, reading_title: record.reading_title});
       if (ui$area) entries.push({label: ui$area});
-      var group = currentOverviewGroup();
       if (group) entries.push({label: group.area || group.title || "Other topics", reading_title: group.reading_title});
-      if (home) entries.unshift({label: "Home", url: home});
+      // The same Home crumb leads back in place while an area or group is open on the home map.
+      if (home) entries.unshift({label: "Home", url: home, _overviewParent: atHome});
       return entries;
     }
     function currentOverviewGroup() {
