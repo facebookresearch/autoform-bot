@@ -767,6 +767,11 @@ def test_phone_peek_typesets_the_pages_own_chapter_title_without_borrowing_a_cat
     _complete_source(page, home_source)
     page.go_back()
     page.wait_for_url(canonical)
+    # History commits its URL before the captured reader is reconciled.
+    # Wait for this source's actual owner and full card count, not just H1 count.
+    restored = page.locator('.bp-reading-body > .bp-reading-source[data-autoform-node-id="algebra"]')
+    playwright.expect(restored).to_have_count(1)
+    playwright.expect(restored.locator(".bp-thmwrapper")).to_have_count(len(expected["cards"]))
     _complete_source(page, expected)
     _paint_frame(page)
     _assert_native_handle_math(page)
