@@ -148,6 +148,115 @@ def test_map_focus_and_native_layer_scroll_never_diverge_from_the_canvas() -> No
     """)
 
 
+def test_only_the_latest_map_focus_request_can_focus_or_checkpoint() -> None:
+    _controls(r"""
+      const first=card('A',0,0),latest=card('B',150,0),outside=new Element('button');outside.focus();
+      const before={remembered,scheduled,bundle:currentBundle,projection:data,index:JSON.stringify(sharedIndex)};
+      focusNodeControl(first.node);
+      // Queue the old request's second rAF before a newer request arrives.
+      frames.splice(0).forEach(callback=>callback());focusNodeControl(latest.node);
+      dom$nodeLayer.scrollLeft=35;dom$nodeLayer.scrollTop=70;flushFrames();
+      assert.equal(document.activeElement,latest.control);assert.equal(first.control.focuses.length,0);
+      assert.deepEqual(latest.control.focuses,[{preventScroll:true}]);
+      assert.equal(remembered,before.remembered+1);assert.equal(scheduled,before.scheduled+1);
+      assert.equal(dom$nodeLayer.scrollLeft,0);assert.equal(dom$nodeLayer.scrollTop,0);
+      assert.strictEqual(currentBundle,before.bundle);assert.strictEqual(data,before.projection);
+      assert.equal(JSON.stringify(sharedIndex),before.index);assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
+    """)
+
+
+def test_pending_back_to_map_focus_cannot_take_a_new_search_focus() -> None:
+    _controls(r"""
+      const entry=card('A',0,0);ui$active=[entry.node];ui$mode='list';syncControls();dom$graphMode.focus();
+      emit(dom$graphMode,'click');assert.equal(dom$graphMode.hidden,true);assert.equal(ui$mode,'graph');
+      frames.splice(0).forEach(callback=>callback());
+      dom$search.focus();dom$search.value='Geometry topic 0';
+      dom$nodeLayer.scrollLeft=35;dom$nodeLayer.scrollTop=70;
+      const before={remembered,scheduled,bundle:currentBundle,projection:data,index:JSON.stringify(sharedIndex),
+        sheetFocuses:dom$sheetHandle.focuses.length,filterFocuses:dom$filterSummary.focuses.length};
+      flushFrames();
+      assert.equal(document.activeElement,dom$search);assert.equal(dom$search.value,'Geometry topic 0');
+      assert.equal(entry.control.focuses.length,0);assert.equal(dom$sheetHandle.focuses.length,before.sheetFocuses);
+      assert.equal(dom$filterSummary.focuses.length,before.filterFocuses);
+      assert.equal(dom$nodeLayer.scrollLeft,35);assert.equal(dom$nodeLayer.scrollTop,70);
+      assert.equal(remembered,before.remembered);assert.equal(scheduled,before.scheduled);
+      assert.strictEqual(currentBundle,before.bundle);assert.strictEqual(data,before.projection);
+      assert.equal(JSON.stringify(sharedIndex),before.index);assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
+    """)
+
+
+def test_pending_map_focus_cannot_take_a_new_outside_focus() -> None:
+    _controls(r"""
+      const entry=card('A',0,0),outside=new Element('a');document.body.appendChild(outside);dom$fit.focus();
+      focusNodeControl(entry.node);frames.splice(0).forEach(callback=>callback());outside.focus();
+      dom$nodeLayer.scrollLeft=35;dom$nodeLayer.scrollTop=70;
+      const before={remembered,scheduled,bundle:currentBundle,projection:data,index:JSON.stringify(sharedIndex),
+        sheetFocuses:dom$sheetHandle.focuses.length,filterFocuses:dom$filterSummary.focuses.length};
+      flushFrames();
+      assert.equal(document.activeElement,outside);assert.equal(entry.control.focuses.length,0);
+      assert.equal(dom$sheetHandle.focuses.length,before.sheetFocuses);assert.equal(dom$filterSummary.focuses.length,before.filterFocuses);
+      assert.equal(dom$nodeLayer.scrollLeft,35);assert.equal(dom$nodeLayer.scrollTop,70);
+      assert.equal(remembered,before.remembered);assert.equal(scheduled,before.scheduled);
+      assert.strictEqual(currentBundle,before.bundle);assert.strictEqual(data,before.projection);
+      assert.equal(JSON.stringify(sharedIndex),before.index);assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
+    """)
+
+
+def test_self_hiding_back_button_body_or_html_blur_still_focuses_the_actual_map() -> None:
+    _controls(r"""
+      const entry=card('A',0,0);ui$active=[entry.node];document.documentElement=new Element('html');
+      for(const fallback of [document.body,document.documentElement]){
+        ui$mode='list';syncControls();dom$graphMode.focus();emit(dom$graphMode,'click');
+        assert.equal(dom$graphMode.hidden,true);assert.equal(ui$mode,'graph');
+        // Native hiding of the owner may leave body/html focused before rAF.
+        fallback.focus();dom$nodeLayer.scrollLeft=35;dom$nodeLayer.scrollTop=70;
+        const before={remembered,scheduled,focuses:entry.control.focuses.length};flushFrames();
+        assert.equal(document.activeElement,entry.control);assert.equal(entry.control.focuses.length,before.focuses+1);
+        assert.deepEqual(entry.control.focuses.at(-1),{preventScroll:true});
+        assert.equal(dom$nodeLayer.scrollLeft,0);assert.equal(dom$nodeLayer.scrollTop,0);
+        assert.equal(remembered,before.remembered+1);assert.equal(scheduled,before.scheduled+1);
+      }
+      assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
+    """)
+
+
+def test_visible_owner_or_unowned_hidden_owner_blur_to_body_cancels_pending_map_focus() -> None:
+    _controls(r"""
+      const entry=card('A',0,0),outside=new Element('button');document.body.appendChild(outside);
+      Element.prototype.blur=function(){if(document.activeElement===this)document.activeElement=document.body;};
+      outside.isConnected=true;dom$fit.isConnected=true;
+      for(const owner of [dom$fit,outside]){
+        owner.focus();focusNodeControl(entry.node);frames.splice(0).forEach(callback=>callback());
+        if(owner===outside)outside.hidden=true;
+        owner.blur();
+        assert.equal(document.activeElement,document.body);
+        dom$nodeLayer.scrollLeft=35;dom$nodeLayer.scrollTop=70;
+        const before={remembered,scheduled,focuses:entry.control.focuses.length};flushFrames();
+        assert.equal(document.activeElement,document.body);assert.equal(entry.control.focuses.length,before.focuses);
+        assert.equal(dom$nodeLayer.scrollLeft,35);assert.equal(dom$nodeLayer.scrollTop,70);
+        assert.equal(remembered,before.remembered);assert.equal(scheduled,before.scheduled);
+      }
+      assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
+    """)
+
+
+def test_removed_owned_overlay_body_blur_keeps_the_latest_target_focus_eligible() -> None:
+    _controls(r"""
+      const owner=card('A',0,0),target=card('B',150,0),bundle=currentBundle,projection=data;
+      owner.control.isConnected=true;target.control.isConnected=true;owner.control.focus();
+      assert(host.contains(owner.control));focusNodeControl(target.node);frames.splice(0).forEach(callback=>callback());
+      owner.control.remove();owner.control.isConnected=false;overlays.delete(owner.node.id);document.body.focus();
+      dom$nodeLayer.scrollLeft=35;dom$nodeLayer.scrollTop=70;
+      const before={remembered,scheduled};flushFrames();
+      assert.equal(document.activeElement,target.control);assert.equal(target.control.focuses.length,1);
+      assert.deepEqual(target.control.focuses.at(-1),{preventScroll:true});
+      assert.equal(dom$nodeLayer.scrollLeft,0);assert.equal(dom$nodeLayer.scrollTop,0);
+      assert.equal(remembered,before.remembered+1);assert.equal(scheduled,before.scheduled+1);
+      assert.strictEqual(currentBundle,bundle);assert.strictEqual(data,projection);
+      assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
+    """)
+
+
 def test_disposed_map_focus_callback_does_not_focus_scroll_or_checkpoint() -> None:
     _controls(r"""
       const entry=card('A',0,0),outside=new Element('button');outside.focus();

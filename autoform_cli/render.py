@@ -3614,8 +3614,11 @@ def _dependency_disclosure(
     """Hide DAG relations behind a native, keyboard-accessible disclosure."""
     rows: list[tuple[str, str]] = []
 
-    def references(node_ids: list[str] | tuple[str, ...]) -> str:
-        return _node_references(node_ids, graph=graph, statuses=statuses, numbers=numbers, links=links)
+    def references(node_ids: list[str] | tuple[str, ...], *, used_by_row: bool = False) -> str:
+        return _node_references(
+            node_ids, graph=graph, statuses=statuses, numbers=numbers, links=links,
+            relation_node=node, used_by_row=used_by_row,
+        )
 
     if node.statement_dependencies:
         rows.append(("Statement uses", references(node.statement_dependencies)))
@@ -3623,7 +3626,7 @@ def _dependency_disclosure(
     if proof_only:
         rows.append(("Proof uses", references(proof_only)))
     if used_by[node.id]:
-        rows.append(("Used by", references(used_by[node.id])))
+        rows.append(("Used by", references(used_by[node.id], used_by_row=True)))
     if not rows:
         return ""
 
@@ -3662,10 +3665,14 @@ def _node_references(
     statuses: dict[str, status.NodeStatus],
     numbers: dict[str, str],
     links: Mapping[str, str],
+    relation_node: Node | None = None,
+    used_by_row: bool = False,
 ) -> str:
     """Link each node by number and title, coloured by its derived state.
 
     A catalog is coloured as neutrally as its own environment, checked or not.
+    Dependency rows additionally describe the original pair's typed counts;
+    other callers, including assumed statements, retain their original labels.
     """
     rendered = []
     for other_id in node_ids:
@@ -3684,9 +3691,23 @@ def _node_references(
                 for kind, value in reading["parts"]
             )
         key = graph_views.display_status_key(other, statuses[other_id])
+        relation_attributes = ""
+        if relation_node is not None:
+            owner, endpoint = (other, relation_node.id) if used_by_row else (relation_node, other_id)
+            counts = (
+                (owner.statement_dependencies.count(endpoint), "statement"),
+                (owner.proof_dependencies.count(endpoint), "proof"),
+            )
+            weights = ", ".join(
+                f"{count} {kind} {'dependency' if count == 1 else 'dependencies'}"
+                for count, kind in counts if count
+            )
+            if weights:
+                accessible = html.escape(text + " · " + weights, quote=True)
+                relation_attributes = f'aria-label="{accessible}" title="{accessible}" '
         rendered.append(
             f'<a class="bp-ref bp-ref-{key}" '
-            f'href="{html.escape(links[other_id], quote=True)}">{label}</a>'
+            f'{relation_attributes}href="{html.escape(links[other_id], quote=True)}">{label}</a>'
         )
     return ' <span class="bp-ref-sep">·</span> '.join(rendered)
 

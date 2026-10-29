@@ -3092,9 +3092,11 @@
       navigation.navigateNode(id, settings); closeSearch();
     }
     function focusNodeControl(node) {
-      var bundle = currentBundle, projection = data;
+      var bundle = currentBundle, projection = data, owner = document.activeElement, owned = host.contains(owner), request = focusNodeControl.$request = {};
       requestAnimationFrame(function () { requestAnimationFrame(function () {
-        if (!alive || currentBundle !== bundle || data !== projection || ui$mode !== "graph" ||
+        if (!alive || focusNodeControl.$request !== request || currentBundle !== bundle || data !== projection || ui$mode !== "graph" ||
+            (document.activeElement !== owner && !(owned && (owner.hidden || owner.isConnected === false) &&
+              (document.activeElement === document.body || document.activeElement === document.documentElement))) ||
             (sheetLayout() && host.classList.contains("bp-dag-sheet-full")) || (bundle && bundle.isCurrent && !bundle.isCurrent())) return;
         var control = node ? overlays.get(node.id) : dom$nodeLayer.querySelector('.bp-dag-node[tabindex="0"]');
         if (control) control.focus({preventScroll: true}); else (node ? dom$sheetHandle : dom$filterSummary).focus({preventScroll: true});

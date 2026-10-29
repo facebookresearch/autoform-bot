@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import json
 import shutil
 import subprocess
 from pathlib import Path
 
+import html5lib
 import pytest
+
+from autoform_cli import render, status
+from autoform_cli.graph import Graph, Node, load_graph
 
 _NODE = shutil.which("node")
 _CLIENT = Path(__file__).resolve().parents[1] / "autoform_cli/assets/blueprint-dag.js"
@@ -513,9 +519,47 @@ def test_structural_peers_never_pad_the_focal_graph_or_acquire_dependency_edges(
     """)
 
 
-def test_reader_leaves_relations_to_the_statement_and_keeps_structural_details_closed() -> None:
-    # The redesign shows a result's relations once, in the statement's own Uses / Used by lists, so the reader
-    # repeats no weighted relation strip; only the closed structural disclosure follows the reading.
+def _weighted_publisher_fixture(tmp_path: Path) -> tuple[Graph, dict, dict, dict]:
+    # Direct Node tuples model original weighted pairs at this private boundary.
+    # load_graph de-duplicates ordinary Markdown references; these multiplicities
+    # are synthetic arithmetic coverage, not a source-parser or Lean proof claim.
+    nodes = {
+        "A": Node("A", "A", tmp_path / "A.md", (), declaration="def"),
+        "F": Node("F", "F", tmp_path / "F.md", ("A",),
+                  statement_dependencies=("A", "A"), proof_dependencies=("A", "A", "A"), declaration="theorem"),
+        "B": Node("B", "B", tmp_path / "B.md", ("F",), proof_dependencies=("F",) * 4, declaration="theorem"),
+    }
+    graph = Graph(tmp_path, nodes)
+    numbers = {"A": "Definition 1", "F": "Theorem 1", "B": "Theorem 2"}
+    links = {key: "https://example.test/chapter/" + key + ".html" for key in nodes}
+    used_by = {key: [other.id for other in nodes.values() if key in other.dependencies] for key in nodes}
+    return graph, numbers, links, used_by
+
+
+def test_reader_keeps_exact_weighted_relations_separate_from_closed_structural_details(tmp_path: Path) -> None:
+    graph, numbers, routes, used_by = _weighted_publisher_fixture(tmp_path)
+    before = copy.deepcopy((graph, numbers, routes, used_by))
+    markup = render._dependency_disclosure(
+        graph.nodes["F"], graph=graph, statuses=status.derive(graph), numbers=numbers, used_by=used_by, links=routes,
+    )
+    tree = html5lib.parseFragment(markup, namespaceHTMLElements=False)
+    details = next(tree.iter("details"))
+    assert details.get("class") == "bp-dependencies" and details.get("open") is None
+    assert "".join(next(tree.iter("summary")).itertext()) == "Uses 1 · Used by 1"
+    labels = ["".join(node.itertext()) for node in tree.iter("span") if node.get("class") == "bp-key"]
+    assert labels == ["Statement uses", "Used by"], "The shared prerequisite stays in one typed row, not a duplicate panel"
+    incoming = [node for node in tree.iter("a") if node.get("href") == routes["A"]]
+    outgoing = [node for node in tree.iter("a") if node.get("href") == routes["B"]]
+    assert len(incoming) == 2 and len(outgoing) == 1
+    for link in incoming:
+        assert "".join(link.itertext()) == "Definition 1 (A)"
+        assert link.get("aria-label") == "Definition 1 (A) · 2 statement dependencies, 3 proof dependencies"
+        assert link.get("title") == link.get("aria-label"), "Suppressed proof-only rows must retain their original proof information"
+    assert outgoing[0].get("aria-label") == "Theorem 2 (B) · 4 proof dependencies"
+    assert outgoing[0].get("title") == outgoing[0].get("aria-label")
+    assert (graph, numbers, routes, used_by) == before
+    # The same captured pair counts accompany the actual closed, unweighted
+    # structural controls. The redesign adds no second relation panel.
     _run(r"""
       const a=record('A','chapter'),b=record('B','chapter');configure([focus,a,b],[['A','F',2,3],['F','B',0,4]]);
       const before=snapshot();renderReaderContext();
@@ -528,6 +572,53 @@ def test_reader_leaves_relations_to_the_statement_and_keeps_structural_details_c
       assert(links(details).every(link=>link.getAttribute('aria-label')===null),'Structural links cannot claim dependency weights');
       assert.equal(snapshot(),before);
     """)
+
+
+def test_dependency_annotation_preserves_validated_title_parts_and_default_reference_bytes(tmp_path: Path) -> None:
+    graph, numbers, routes, used_by = _weighted_publisher_fixture(tmp_path)
+    default = render._node_references(["A"], graph=graph, statuses=status.derive(graph), numbers=numbers, links=routes)
+    assert default == '<a class="bp-ref bp-ref-can_state" href="https://example.test/chapter/A.html">Definition 1 (A)</a>'
+    graph.nodes["A"] = dataclasses.replace(graph.nodes["A"], title=r'Groups $x$ and `$literal$` "quoted" & rings')
+    before = copy.deepcopy(graph)
+    kwargs = {"graph": graph, "statuses": status.derive(graph), "numbers": numbers, "links": routes}
+    plain = html5lib.parseFragment(render._node_references(["A"], **kwargs), namespaceHTMLElements=False)
+    marked = html5lib.parseFragment(
+        render._node_references(["A"], **kwargs, relation_node=graph.nodes["F"]), namespaceHTMLElements=False,
+    )
+    original, annotated = next(plain.iter("a")), next(marked.iter("a"))
+    assert original.get("aria-label") is None and original.get("title") is None
+    assert original.get("href") == annotated.get("href") == routes["A"]
+    assert annotated.get("aria-label") == 'Definition 1 (Groups $x$ and `$literal$` "quoted" & rings) · 2 statement dependencies, 3 proof dependencies'
+    assert annotated.get("title") == annotated.get("aria-label")
+    assert "".join(original.itertext()) == "".join(annotated.itertext())
+    assert [node.text for node in original.iter("code")] == [node.text for node in annotated.iter("code")] == ["$literal$"]
+    assert [node.text for node in original.iter("span")] == [node.text for node in annotated.iter("span")] == [r"\(x\)"]
+    assert all(node.tag not in {"script", "img", "iframe"} for node in marked.iter())
+    assert graph == before
+
+
+def test_valid_source_shared_statement_and_proof_reference_exposes_both_original_kinds(tmp_path: Path) -> None:
+    roadmap = tmp_path / "roadmap"
+    roadmap.mkdir()
+    (roadmap / "README.md").write_text("# Chapter\n\n- [A](A.md)\n- [F](F.md)\n", encoding="utf-8")
+    (roadmap / "A.md").write_text("# A\n\nAn authored base.\n", encoding="utf-8")
+    (roadmap / "F.md").write_text(
+        "# F\n\nAn authored result.\n\n## Depends on\n\n- [A](A.md)\n- [A again](A.md)\n\n"
+        "## Proof depends on\n\n- [A](A.md)\n- [A again](A.md)\n", encoding="utf-8",
+    )
+    graph = load_graph(tmp_path)
+    assert graph.nodes["F"].statement_dependencies == ("A",) and graph.nodes["F"].proof_dependencies == ("A",)
+    before = copy.deepcopy(graph)
+    markup = render._dependency_disclosure(
+        graph.nodes["F"], graph=graph, statuses=status.derive(graph), numbers={"A": "Definition 1", "F": "Theorem 1"},
+        used_by={"A": ["F"], "F": []}, links={"A": "A.html", "F": "F.html"},
+    )
+    tree = html5lib.parseFragment(markup, namespaceHTMLElements=False)
+    link = next(tree.iter("a"))
+    assert link.get("href") == "A.html"
+    assert link.get("aria-label") == "Definition 1 (A) · 1 statement dependency, 1 proof dependency"
+    assert "Proof uses" not in "".join(tree.itertext())
+    assert graph == before
 
 
 def test_peer_links_and_browse_owner_preserve_modifiers_and_dispatch_canonical_reading_intent() -> None:
