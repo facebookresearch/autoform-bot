@@ -37,6 +37,27 @@ function insideFrame(node) {
 }
 """
 
+_SHEET_ENVIRONMENT = _ENVIRONMENT + r"""
+eval(['setSheet','resize'].map(original).join('\n'));
+const sheetClasses=new Set();
+host.classList={contains:name=>sheetClasses.has(name),toggle(name,enabled){
+  if(enabled)sheetClasses.add(name);else sheetClasses.delete(name);
+}};
+// Only canvas, breadcrumb and accessibility side effects are peers. Closure,
+// resize, layout, framing and centering remain original production callbacks.
+var dom$body={offsetTop:0},dom$canvas={},dom$breadcrumb={clientWidth:fixture.width};
+var dom$sheetHandle={dataset:{},attrs:{},setAttribute(name,value){this.attrs[name]=String(value);}};
+var window={devicePixelRatio:1},firstResize=false,ui$mode='graph',draws=0,coveredExtra=96;
+Object.defineProperty(dom$stage,'clientHeight',{get(){
+  return fixture.height+(sheetClasses.has('bp-dag-sheet-full')?coveredExtra:0);
+}});
+Object.defineProperty(dom$inspector,'clientHeight',{get(){return dom$stage.clientHeight;}});
+function syncSheetAccessibility(){}function positionMapFeedback(){}
+function renderBreadcrumb(){}renderBreadcrumb.$width=fixture.width;
+function draw(){draws++;geometry();}
+document.activeElement=dom$sheetHandle;
+"""
+
 _AREAS = ["Algebra & Number Theory", "Analysis & Probability", "Discrete Mathematics & Computer Science",
           "Geometry & Topology", "Foundations & Logic"]
 _ROOT_WEIGHTS = [(0, 1, 22, 74), (0, 2, 132, 26), (1, 2, 50, 79), (1, 3, 0, 9), (1, 0, 66, 49),
@@ -309,6 +330,148 @@ def test_small_selected_result_uses_a_readable_vertical_corridor_and_keeps_both_
       assert(ui$transform.scale>=.9);assert.equal(current.routes.length,4);assert.equal(current.$display.reduced,false);
       check(data,'tb',current);assert.equal(JSON.stringify(data),source);
     """, {"data": data, "width": 240, "height": 640, "direction": "lr", "atlas": False})
+
+
+def _ordinary_focal_neighbors() -> dict:
+    # The actual Levi replay's geometry: three ordinary 208x100 result cards,
+    # with one incoming and one outgoing proof dependency, not boundary proxies.
+    return {
+        "nodes": [{"id": name, "kind": "node", "result": True, "width": 208, "height": 100,
+                   "status": "fully_proved"} for name in ("before", "result", "after")],
+        "edges": [{"source": "before", "target": "result", "statement": 0, "proof": 1},
+                  {"source": "result", "target": "after", "statement": 0, "proof": 1}],
+    }
+
+
+@pytest.mark.parametrize("direction", ["lr", "tb"])
+def test_ordinary_focal_neighbors_reorient_on_automatic_half_reader_close_without_another_fit(direction: str) -> None:
+    _run(_SHEET_ENVIRONMENT + r"""
+      const source=JSON.stringify(data),ids=data.nodes.map(node=>node.id);ui$selected=data.nodes[1];
+      setSheet(1,ui$selected);
+      assert(Math.abs(freeArea().band-295)<1e-6);assert.equal(dom$sheetHandle.attrs['aria-expanded'],'true');
+      const aspect=Math.round(dom$stage.clientWidth/freeArea().band*10)/10;
+      const viewport=framingViewport(),padding=framingPadding();
+      const lr=layoutGraph(data.nodes,data.edges,'lr',aspect,undefined,false);
+      const tb=layoutGraph(data.nodes,data.edges,'tb',aspect,undefined,false);
+      const lrFrame=sceneFrame(lr,ids,viewport,padding),tbFrame=sceneFrame(tb,ids,viewport,padding);
+      assert(lrFrame.cropped&&tbFrame.cropped,'Neither complete pose fits above the half reader at .9');
+      assert.equal(lrFrame.contained,1);assert.equal(tbFrame.contained,1);assert(lrFrame.fitted>tbFrame.fitted);
+      fit();const half=geometry();assert.equal(normal(half),normal(lr));assert(ui$readableCrop&&ui$transform.scale>=.9);
+      const stage=[dom$stage.clientWidth,dom$stage.clientHeight],oldAspect=sceneAspect;
+      const actualLayout=layoutGraph;let layouts=0;layoutGraph=(...args)=>{layouts++;return actualLayout(...args);};
+      // Execute the real automatic close. No Fit or manual centering follows it.
+      setSheet(false,ui$selected);
+      const closed=geometry();
+      assert.equal(dom$sheetHandle.attrs['aria-expanded'],'false');assert(!sheetClasses.has('bp-dag-sheet-open'));
+      assert.deepEqual([dom$stage.clientWidth,dom$stage.clientHeight],stage);
+      assert(closed!==half,'Closing a same-sized stage must discard its cached half-band orientation');
+      assert.notEqual(sceneAspect,oldAspect);assert.equal(layouts,2,'The new available band re-scores exactly both orientations');
+      const closedAspect=Math.round(dom$stage.clientWidth/freeArea().band*10)/10;
+      const vertical=actualLayout(data.nodes,data.edges,'tb',closedAspect,undefined,false);
+      const expected=sceneFrame(vertical,ids,framingViewport(),framingPadding());
+      assert.equal(expected.cropped,false);assert.equal(expected.contained,3);
+      assert.equal(normal(closed),normal(vertical));assert(ui$transform.scale>=.9);
+      assert(data.nodes.every(insideFrame),'Automatic close left an ordinary proof neighbor cropped');
+      assert.strictEqual(geometry(),closed);assert.equal(layouts,2);assert.strictEqual(sceneData,data);
+      assert.deepEqual(closed.routes.map(route=>[route.source,route.target,route.kind,route.count]).sort(),[
+        ['before','result','proof',1],['result','after','proof',1]
+      ].sort());
+      for(const produced of [half,closed]) {
+        const ranks=new Map(produced.clusters.flatMap(cluster=>cluster.members.map(id=>[id,cluster.rank])));
+        assert.deepEqual(ids.map(id=>ranks.get(id)),[0,1,2]);assert.equal(produced.clusters.length,3);
+      }
+      check(data,'lr',half);check(data,'tb',closed);
+      assert.equal(JSON.stringify(data),source,'Changing only the reader band altered original kinds, status or proof weights');
+    """, {"data": _ordinary_focal_neighbors(), "width": 390, "height": 655.555555556,
+           "direction": direction, "atlas": False})
+
+
+def test_full_reader_holds_the_scene_across_real_resize_and_restoring_close_never_refits_or_centers() -> None:
+    _run(_SHEET_ENVIRONMENT + r"""
+      const source=JSON.stringify(data);ui$selected=data.nodes[1];
+      const actualFit=fit,actualCenter=center,actualHidden=centerIfHidden;
+      let fits=0,centres=0,hiddenChecks=0;
+      fit=(...args)=>{fits++;return actualFit(...args);};
+      center=(...args)=>{centres++;return actualCenter(...args);};
+      centerIfHidden=(...args)=>{hiddenChecks++;return actualHidden(...args);};
+      fit();const current=geometry(),shape=normal(current),aspect=sceneAspect;
+      assert(data.nodes.every(insideFrame));assert.equal(fits,1);
+      const actualLayout=layoutGraph;let layouts=0;layoutGraph=(...args)=>{layouts++;return actualLayout(...args);};
+      // The DOM peer exposes the extra stage height when the full reader hides
+      // the toolbar; original setSheet detects that resize and holds the scene.
+      setSheet(2,ui$selected);
+      assert(current.$held);assert.strictEqual(geometry(),current);assert.equal(sceneAspect,aspect);
+      assert.equal(dom$canvas.height,Math.round(fixture.height+coveredExtra));assert(draws>0);
+      coveredExtra+=16;resize();
+      assert.strictEqual(geometry(),current);assert.equal(normal(current),shape);assert.equal(layouts,0);
+      assert.equal(dom$canvas.height,Math.round(fixture.height+coveredExtra));assert.equal(fits,1);
+      const savedCamera={x:19,y:-27,scale:1.1};ui$transform={...savedCamera};restoring=true;
+      const checks=hiddenChecks,centerCalls=centres,drawCalls=draws;
+      setSheet(false,ui$selected);
+      assert(!current.$held);assert(!sheetClasses.has('bp-dag-sheet-full'));assert(draws>drawCalls);
+      assert.equal(dom$canvas.height,Math.round(fixture.height));assert.equal(fits,1);
+      assert.equal(hiddenChecks,checks);assert.equal(centres,centerCalls,'Restoration must not center a saved cropped camera');
+      assert.deepEqual(ui$transform,savedCamera);assert.strictEqual(geometry(),current);assert.equal(layouts,0);
+      assert.equal(normal(current),shape);assert.equal(JSON.stringify(data),source);
+      check(data,'tb',current);
+    """, {"data": _ordinary_focal_neighbors(), "width": 390, "height": 655.555555556,
+           "direction": "tb", "atlas": False})
+
+
+@pytest.mark.parametrize("direction", ["lr", "tb"])
+def test_selected_result_frames_both_boundary_neighbors_before_choosing_phone_orientation(direction: str) -> None:
+    data = {
+        "nodes": [
+            {"id": "boundary:before", "_recordId": "before", "kind": "boundary", "result": True,
+             "width": 196, "height": 100, "status": "fully_proved"},
+            {"id": "chapter/theorem", "kind": "node", "result": True,
+             "width": 212, "height": 100, "status": "fully_proved"},
+            {"id": "boundary:after", "_recordId": "after", "kind": "boundary", "result": True,
+             "width": 196, "height": 100, "status": "fully_proved"},
+        ],
+        "edges": [
+            {"source": "boundary:before", "target": "chapter/theorem", "statement": 2, "proof": 3},
+            {"source": "chapter/theorem", "target": "boundary:after", "statement": 0, "proof": 4},
+        ],
+    }
+    _run(_ENVIRONMENT + r"""
+      const source=JSON.stringify(data),ids=data.nodes.map(node=>node.id);ui$selected=data.nodes[1];
+      assert.deepEqual(framingNodes().map(node=>node.id),ids,
+        'Orientation selection must include the same external result neighbors that Fit will frame');
+      const aspect=Math.round(dom$stage.clientWidth/dom$stage.clientHeight*10)/10;
+      const viewport=framingViewport(),padding=framingPadding();
+      const lr=layoutGraph(data.nodes,data.edges,'lr',aspect,undefined,false);
+      const tb=layoutGraph(data.nodes,data.edges,'tb',aspect,undefined,false);
+      assert(sceneFrame(lr,ids,viewport,padding).cropped,'The fixture must reject a horizontal three-card phone pose');
+      const expected=sceneFrame(tb,ids,viewport,padding);
+      assert.equal(expected.cropped,false,JSON.stringify({message:'The vertical neighborhood must fit without lowering .9',
+        expected,viewport,nodes:Array.from(tb.nodes.values())}));
+      assert.equal(expected.contained,3);
+      const current=geometry();assert.equal(normal(current),normal(tb),'Both default orientations must choose the feasible vertical pose');
+      const actualCenter=center;let centres=0;center=(...args)=>{centres++;return actualCenter(...args);};
+      fit();
+      assert.equal(ui$readableCrop,false);assert(ui$transform.scale>=.9);assert.equal(centres,0);
+      assert(data.nodes.every(insideFrame),'A proved-fit external neighbor was cropped after selection');
+      assert.deepEqual(ui$transform,{x:expected.x,y:expected.y,scale:expected.scale});
+      assert.strictEqual(geometry(),current);assert.equal(current.nodes.size,3);
+      assert.equal(current.$display.reduced,false);assert.equal(current.$display.totalPairs,2);
+      assert.equal(current.$display.totalRoutes,3);
+      assert.deepEqual(current.routes.map(route=>[route.source,route.target,route.kind,route.count]).sort(),[
+        ['boundary:before','chapter/theorem','proof',3],
+        ['boundary:before','chapter/theorem','statement',2],
+        ['chapter/theorem','boundary:after','proof',4]
+      ].sort());
+      for(const produced of [lr,tb,current]) {
+        const ranks=new Map(produced.clusters.flatMap(cluster=>cluster.members.map(id=>[id,cluster.rank])));
+        assert.equal(ranks.get('boundary:before'),0);assert.equal(ranks.get('chapter/theorem'),1);
+        assert.equal(ranks.get('boundary:after'),2);assert.equal(produced.clusters.length,3);
+      }
+      const boxes=ids.map(id=>current.nodes.get(id));
+      boxes.slice(1).forEach((box,index)=>assert(box.y>=boxes[index].y+boxes[index].h+48-1e-6,
+        'Vertical framing cannot reduce the original 48px world-space collision gap'));
+      check(data,'lr',lr);check(data,'tb',tb);check(data,'tb',current);
+      assert.equal(JSON.stringify(data),source,'Framing changed canonical endpoints, boundary kinds, statuses or typed weights');
+    """, {"data": data, "width": 390, "height": 650.59375, "direction": direction, "atlas": False})
 
 
 def test_framing_prefers_drilled_members_but_explicit_boundary_selection_retains_context() -> None:

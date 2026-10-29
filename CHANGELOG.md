@@ -66,8 +66,9 @@ date when the release is tagged.
 - **Dependency explorer.** The rail and the details typeset the TeX in titles
   and summaries, with the articles' input and the project's macros, where the
   explorer's own MathJax calls had typeset nothing on a generated site. Map
-  cards, the Contents list, search and the explorer's head still show a title
-  as typed (#455).
+  cards retain titles as typed (#455). Reading controls, breadcrumbs, search
+  and supported inventory titles now typeset safe title parts; inventory math
+  is deferred and unsupported inputs stay literal (#444).
 - **Theme.** A new project's site opens in the reader's own light or dark
   setting, with Material's sun or moon to switch it, and the explorer's head
   carries the same switch (#444). Setup leaves an existing `mkdocs.yml` alone,

@@ -2206,12 +2206,13 @@
     }
     function framingNodes() {
       var nodes = ui$active.length ? ui$active : data.nodes, group = currentOverviewGroup();
+      // Orientation and camera fitting must score the same complete selected neighborhood.
+      if (ui$selected) return nodes;
       if (group) {
         var members = new Set(group.members.map(function (node) { return node.id; }));
         var local = nodes.filter(function (node) { return members.has(node.id); });
         if (local.length) return local;
       }
-      if (ui$selected && ui$selected.kind === "boundary") return nodes;
       var localNodes = nodes.filter(function (node) { return node.kind !== "boundary"; });
       return localNodes.length ? localNodes : nodes;
     }
@@ -2224,7 +2225,8 @@
     }
     function geometry() {
       if (!mapAllowed) return null;
-      var compact = compactRegions(), aspect = dom$stage.clientWidth / Math.max(1, dom$stage.clientHeight);
+      // Score the space the reader leaves visible, not the full covered stage.
+      var compact = compactRegions(), aspect = dom$stage.clientWidth / Math.max(1, freeArea().band);
       aspect = Math.round((Number.isFinite(aspect) && aspect > 0 ? clamp(aspect, .25, 4) : 1.4) * 10) / 10;
       // A phone's full reader covers the map and frees the toolbar's height, which changes the stage's shape. setSheet holds
       // the scene, so the peek or half finds every card where it was rather than re-laid out for a map no one could see.
@@ -2486,10 +2488,9 @@
     function fit() {
       if (!mapAllowed) return;
       calculateActive(); var nodes = framingNodes(); if (!nodes.length) return;
-      // Frame local cards (or the drilled group's members), not distant context
-      // boundaries or route detours. The readable floor stays unchanged.
+      // Frame the selected neighborhood, drilled members or local scope cards,
+      // never route detours. The readable floor stays unchanged.
       var currentScene = geometry();
-      if (ui$selected) nodes = ui$active;
       var frame = sceneFrame(currentScene, nodes.map(function (node) { return node.id; }), framingViewport(), framingPadding());
       // Unlinked cards are inventory: when the whole map cannot open readable and whole, the first view frames the linked cards.
       var linked = nodes.filter(function (node) { return !node.isolated; });
