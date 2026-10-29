@@ -2273,9 +2273,10 @@ def _render_summary_nav(
 
     A chapter's README nests under the nearest README above its folder, any
     other page under the nearest README in its own folder or above, and the
-    tree is written depth first in book order. The book order follows links,
-    so a page can come before its chapter, and indenting by folder depth alone
-    then skipped a level, which literate-nav refuses.
+    tree is written depth first in book order. The book order walks the
+    containment tree (:func:`_reading_pages`), so a page always comes after
+    its chapter. Nesting by folder rather than by depth alone keeps each
+    level one step below its parent, which literate-nav requires.
     """
     # SUMMARY.md is a navigation manifest, not a searchable content page. A
     # repository-wide book can make this one generated page larger than every

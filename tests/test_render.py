@@ -1258,10 +1258,9 @@ def test_links_naming_a_node_file_follow_it_onto_the_chapter(tmp_path: Path) -> 
 
 
 def test_the_book_nav_nests_each_page_under_its_folder_whatever_the_book_order(tmp_path: Path) -> None:
-    """The book order follows links, so a landing page that links a deep page
-    first put it before its chapters; indented by folder depth alone, it then
-    skipped a level, and MkDocs refused the nav. Where it did not, a page sat
-    under whichever page came just before it. Each page now nests under the
+    """A landing page that links a deep page first, and a chapter that links
+    a sibling chapter first, move neither: the book walks the containment
+    tree, so each page comes after its chapter. Each page nests under the
     nearest chapter above it, a page beside a chapter's README under that one,
     and siblings keep the book order."""
     from mkdocs_literate_nav import parser
@@ -1281,7 +1280,7 @@ def test_the_book_nav_nests_each_page_under_its_folder_whatever_the_book_order(t
         encoding="utf-8",
     )
     (roadmap / "homology").mkdir()
-    # Cohomology is reached before Notes, so by book order alone Notes would sit under it.
+    # Homology links Cohomology first, but Cohomology belongs to the roadmap, so it reads after Notes.
     (roadmap / "homology/README.md").write_text(
         "---\n---\n\n# Homology\n\n- [Cohomology](../cohomology/README.md)\n"
         "- [Local degree](computations/local-degree/README.md)\n- [Notes](notes.md)\n",
@@ -3094,8 +3093,8 @@ def test_the_hierarchical_explorer_indexes_nodes_without_a_full_graph(tmp_path: 
 
 def _book_order_project(tmp_path: Path) -> Path:
     """A zeta(7)-shaped book: chapters zeta, alpha, then the irrationality
-    proof, which sorts first but the book reads last. Each chapter lists its
-    second result before its first."""
+    proof, which comes first by path but the roadmap lists last. Each chapter
+    lists its second result before its first."""
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
     (roadmap / "README.md").write_text(
