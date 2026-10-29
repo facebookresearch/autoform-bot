@@ -589,7 +589,9 @@ def test_the_phone_reader_peeks_opens_to_half_or_covers_the_map() -> None:
     # Its accessible name starts with the title it shows; an open desktop reader over an area or the overview closes with ×.
     assert 'refs.sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");' in script
     assert "Toggle mathematical reading" not in script
-    assert "var close = opened && !sheetLayout() && (state.area || state.overviewOnly || state.scopeOverview)" in script
+    assert "close = opened && !sheetLayout() && (state.area || state.overviewOnly || state.scopeOverview)" in script
+    assert "var page = currentBundle || data" in script
+    assert "record = page.readingSource && records.get(page.readingSource.dataset.autoformNodeId);" in script
     assert "band = Math.max(NODE_H, Math.min(band, drawer.clientHeight * .45));" in script
     assert 'navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-open") ? freeArea().band : refs.stage.clientHeight;' in script
     assert "box.y + box.h > (free.top || 0) + free.band - Math.max(12, bands.bottom)) center(node, .82);" in script
@@ -939,6 +941,7 @@ def test_explorer_toolbar_counts_only_hidden_items_and_files_the_edge_toggle_und
     assert dimensions["color"] == "var(--dag-fg)"
     assert (".bp-dag-toolbar :is(.bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button) "
             "{ min-height: 44px; }") in coarse
+    assert ".bp-dag-zoom { padding: 0; border: 0; box-shadow: inset 0 0 0 1px var(--dag-border); }" in coarse
     assert ".bp-dag-zoom .bp-dag-button:not(:last-child)" not in style
     assert ".bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button { min-height: 44px; }" in style
 
@@ -1097,7 +1100,9 @@ def test_explorer_elevation_is_two_shadows_and_a_selection_ring_that_keeps_the_c
     assert group["height"] == "44px" and group["border"] == "0"
     assert group["padding"] == "0" and group["gap"] == "0"
     assert group["box-shadow"] == "inset 0 0 0 1px var(--dag-border)"
-    assert style.count("box-shadow: inset 0 0 0 1px var(--dag-border);") == 1
+    # Both the phone-width and coarse-pointer rules use the same border
+    # without padding that would make a 44px zoom target's group 50px tall.
+    assert style.count("box-shadow: inset 0 0 0 1px var(--dag-border);") == 2
     targets = re.search(r"\.bp-dag-integrated \.bp-dag-zoom \.bp-dag-button \{([^}]+)\}", style)
     assert targets is not None
     dimensions = dict(re.findall(r"([\w-]+):\s*([^;]+);", targets.group(1)))

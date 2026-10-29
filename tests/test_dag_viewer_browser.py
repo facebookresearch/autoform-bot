@@ -793,20 +793,22 @@ def test_region_reader_handle_keeps_genuine_page_math_when_its_peek_or_rail_is_c
     _ready_site(page)
     page.evaluate("window.__regionHandleDocument=document")
     handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
+    source = _complete_source(page, expected)
     if width > 720:
-        # The conservative overview classifier preserves an authored math/code H1.
-        # Close the genuine desktop reader to exercise that page's collapsed rail.
+        # This authored math/code root keeps its full reader and has no desktop close control.
+        # Its real Geometry area supplies the collapsed rail checked below.
         playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-        _complete_source(page, expected)
-        playwright.expect(handle).to_have_attribute("title", "Close reading")
-        _assert_hit(page, handle)
-        handle.click()
-        _paint_frame(page)
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-    _assert_native_handle_math(page)
+        playwright.expect(handle).to_be_hidden()
+        playwright.expect(source.locator("h1")).to_be_visible()
+        playwright.expect(source.locator("h1 mjx-c.mjx-c2124")).to_have_count(1)
+        playwright.expect(source.locator("h1 code")).to_have_text("$literal$")
+    else:
+        playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+        _assert_native_handle_math(page)
     _focus_graph_region(page, "Geometry").tap()
     playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(1)
     assert page.url == canonical
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     _assert_native_handle_math(page)
     _complete_source(page, expected)
     parent = page.locator('.bp-dag-breadcrumb a[href="' + canonical + '"]')
@@ -814,8 +816,14 @@ def test_region_reader_handle_keeps_genuine_page_math_when_its_peek_or_rail_is_c
     parent.click()
     playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(0)
     _paint_frame(page)
-    _assert_native_handle_math(page)
-    _complete_source(page, expected)
+    source = _complete_source(page, expected)
+    if width > 720:
+        playwright.expect(handle).to_be_hidden()
+        playwright.expect(source.locator("h1")).to_be_visible()
+        playwright.expect(source.locator("h1 mjx-c.mjx-c2124")).to_have_count(1)
+        playwright.expect(source.locator("h1 code")).to_have_text("$literal$")
+    else:
+        _assert_native_handle_math(page)
     assert page.url == canonical and page.evaluate("document===__regionHandleDocument") is True
     assert documents == [canonical]
 
