@@ -2431,8 +2431,12 @@ def _lead_html(parts: list[tuple[str, str]]) -> str:
 
     The hero is raw HTML, so Markdown never runs over it. Escaping every part
     means the only tags are the emphasis, code and formula span built here,
-    and a formula is the span the page's MathJax already typesets. A sentence
-    ends only at a period in the prose, never inside code or a formula.
+    and a formula is the span the page's MathJax already typesets.
+
+    The sentence ends at the first period in the prose that whitespace and
+    anything but a lowercase ASCII letter follow, unless the period ends an
+    abbreviation such as "i.e." or "Ch." or a name's initial. A period inside
+    code or a formula never ends it.
     """
     plain, starts = "", []
     for kind, value in parts:
@@ -2444,7 +2448,10 @@ def _lead_html(parts: list[tuple[str, str]]) -> str:
         before = plain[: stop.start()]
         words = [word.lstrip("(") for word in before.split()] or [""]
         word, previous = words[-1], words[-2] if len(words) > 1 else ""
-        if word.lower() in _LEAD_ABBREVIATIONS or _is_initial(word, previous):
+        # An all-caps word, such as "CH." or "EGA I.", is not an abbreviation.
+        if (not word.isupper() and word.lower() in _LEAD_ABBREVIATIONS) or _is_initial(
+            word, previous, plain[stop.end() :]
+        ):
             continue
         cut = stop.start()
         break
@@ -2471,7 +2478,9 @@ def _lead_html(parts: list[tuple[str, str]]) -> str:
 
 
 #: Words whose period does not end the hero's sentence.
-_LEAD_ABBREVIATIONS = frozenset({"i.e", "e.g", "cf", "ch", "thm", "al", "prop", "sec", "eq", "fig"})
+_LEAD_ABBREVIATIONS = frozenset(
+    {"i.e", "e.g", "cf", "ch", "thm", "al", "prop", "sec", "eq", "fig", "vs", "resp", "def", "lem", "cor"}
+)
 #: Words a single capital names rather than abbreviates, as in "Theorem A.".
 _LEAD_LABELS = frozenset(
     {"theorem", "lemma", "proposition", "corollary", "conjecture", "definition", "chapter", "part",
@@ -2479,15 +2488,22 @@ _LEAD_LABELS = frozenset(
 )
 
 
-def _is_initial(word: str, previous: str) -> bool:
-    """Whether ``word`` is a name's initial, as in "Luis H. Gallardo", so its
-    period does not end the sentence. A capital after a lowercase word or a
-    label ("the group G.", "Theorem A.") ends one."""
+def _is_initial(word: str, previous: str, after: str) -> bool:
+    """Whether ``word`` is a name's initial, as in "Luis H. Gallardo" or "J. S.
+    Milne", so its period does not end the sentence. A capital after a
+    lowercase word, an all-caps word or a label ("the group G.", "EGA I.",
+    "Theorem A.") ends one, unless another initial follows it."""
     previous = previous.rstrip(".")
-    return (
-        len(word) == 1
-        and word.isupper()
-        and (not previous or (previous[:1].isupper() and previous.lower() not in _LEAD_LABELS))
+    if len(word) != 1 or not word.isupper():
+        return False
+    return bool(
+        re.match(r"[A-Z]\.(?:\s|$)", after)
+        or not previous
+        or (
+            previous[:1].isupper()
+            and not (len(previous) > 1 and previous.isupper())
+            and previous.lower() not in _LEAD_LABELS
+        )
     )
 
 
