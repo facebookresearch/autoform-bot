@@ -2669,7 +2669,9 @@ def test_reference_style_links_are_rewritten_with_the_inline_ones(tmp_path: Path
     assert "[paper]: ../sources/paper.md" not in chapter
 
 
-@pytest.mark.parametrize("prose", ["[^1]: Grounded in", "[note]: grounded in"])
+@pytest.mark.parametrize(
+    "prose", ["[^1]: Grounded in", "[note]: grounded in", "[note]:\tgrounded in", "[note]: grounded\tin"]
+)
 def test_a_line_that_only_looks_like_a_definition_keeps_its_words_and_has_its_links_rewritten(
     tmp_path: Path, prose: str
 ) -> None:
@@ -2704,6 +2706,43 @@ def test_a_line_that_only_looks_like_a_definition_keeps_its_words_and_has_its_li
     assert f"{prose} [Paper]({paper})." in chapter
     # A definition with a title is still one, and keeps its title.
     assert f'[paper]: {paper} "The paper"' in chapter
+
+
+@pytest.mark.parametrize(
+    "rest", ["   ", "\t", '\t"The paper"', ' "The paper"\t', " 'The paper'", " (The paper)", " (The paper)\t"]
+)
+def test_a_definition_is_rewritten_with_each_title_form_and_tab_markdown_accepts(
+    tmp_path: Path, rest: str
+) -> None:
+    """Python-Markdown expands tabs before it reads a definition, so a tab
+    around the title counts as spaces do, and the title may be in double
+    quotes, single quotes or parentheses. A definition the rewrite did not
+    recognize kept naming a page the site doesn't publish."""
+    project = _project(tmp_path)
+    sources = project / "blueprint" / "sources"
+    sources.mkdir()
+    (sources / "paper.md").write_text("---\n---\n\n# Paper\n", encoding="utf-8")
+    roadmap = project / "blueprint" / "roadmap" / "README.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8") + "\nGrounded in [Paper][paper].\n\n"
+        f"[paper]: ../sources/paper.md{rest}\n",
+        encoding="utf-8",
+    )
+    ref = _commit_project(project)
+    out = tmp_path / "out"
+
+    render_site(
+        project / "blueprint",
+        out,
+        lean_root=project,
+        repository_url="https://github.com/owner/repo",
+        ref=ref,
+    )
+
+    chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")
+    paper = f"https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.md"
+    lines = [line.rstrip() for line in chapter.splitlines()]
+    assert f"[paper]: {paper}{rest}".rstrip() in lines
 
 
 @pytest.mark.parametrize(
