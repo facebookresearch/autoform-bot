@@ -35,7 +35,7 @@ from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS
 from autoform_cli.dashboard import publication_bound_live_state
-from autoform_cli.graph import GraphValidationError, atlas_omissions, load_graph
+from autoform_cli.graph import Graph, GraphValidationError, Node, atlas_omissions, load_graph
 from autoform_cli.lean import LeanSourceError
 from autoform_cli.markdown import site_converter
 from autoform_cli.render import (
@@ -3267,6 +3267,39 @@ def test_statement_numbers_rise_down_each_page_and_across_chapters(tmp_path: Pat
         )
     ]
     assert numbers == list(range(1, 7 + (variant == "unlisted-result") + 2 * (variant == "unlinked-scope")))
+    if variant == "landing-shortcut":
+        # The nav and Previous/Next read the same book: the shortcut moves neither.
+        assert _summary_chapters(out) == ["zeta", "alpha", "irrationality-proof"]
+        assert _next_chain(out / "roadmap/README.md") == [
+            out / "roadmap" / page / "README.md" for page in ("", "zeta", "alpha", "irrationality-proof")
+        ]
+
+
+def _next_chain(page: Path) -> list[Path]:
+    """*page*, then every page its Next links lead to, in turn."""
+    chain = [page]
+    while match := re.search(r'bp-book-nav-next" href="([^"]+)"', chain[-1].read_text(encoding="utf-8")):
+        target = Path(os.path.normpath(chain[-1].parent / unquote(match.group(1))))
+        chain.append(target.with_name("README.md") if target.name == "index.html" else target.with_suffix(".md"))
+        assert len(chain) <= 50, chain
+    return chain
+
+
+def test_nodes_on_pages_outside_the_book_follow_one_page_at_a_time(tmp_path: Path) -> None:
+    """Dependency order interleaves the two pages; each still reads as one run."""
+    first, second = tmp_path / "p.md", tmp_path / "q.md"
+    nodes = {
+        "x1": Node("x1", "x1", first, ()),
+        "x2": Node("x2", "x2", first, ("y1",)),
+        "y1": Node("y1", "y1", second, ()),
+        "y2": Node("y2", "y2", second, ()),
+    }
+    targets = {node_id: (node.path, node_id) for node_id, node in nodes.items()}
+    positions = {"x1": 0, "x2": 1, "y1": 0, "y2": 1}
+
+    order = render_module._reading_order(Graph(tmp_path, nodes), targets, [], positions)
+
+    assert order == ["x1", "x2", "y1", "y2"]
 
 
 def test_a_root_article_and_search_share_its_generated_canonical_book_route(tmp_path: Path) -> None:
