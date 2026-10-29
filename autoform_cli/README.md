@@ -59,17 +59,19 @@ ends that section and resumes the statement; a later H1 stays in its section.
 Headings deeper than `##`, and a `##` line inside a fenced code block or an HTML
 comment, do not end the statement. Close each fence with its own bare line of
 the same character, length and indent: on a chapter page an unclosed fence can
-pair with a later article's fence and hide what lies between, so `check` warns,
-the site shows that page as typed (see
-[Validation](reference/validation-and-audit.md#validation)), and the audit
-reports `unclosed-code-fence`. For headings, dependency and source links, an
-unclosed fence is plain text, even where the page pairs its backticks with a
-later run as inline code, and a later bare line of its character at least as
-long closes it. Coverage files and the unpublished-folder link check read it as
-open to the end of the file. An HTML comment that never closes, even one opened
-in inline code or an indented code block, hides every later heading and
-dependency link: the graph loses those edges, one opened in the statement puts
-the rest of the article in the theorem box, and nothing reports it.
+pair with a later article's fence and hide what lies between, so the audit
+reports `unclosed-code-fence`, and for a fence left open at the margin `check`
+warns and the site shows that page as typed (see
+[Validation](reference/validation-and-audit.md#validation)). The graph and an
+article's statement and sections read an unclosed fence as plain text, even
+where the page pairs its backticks with a later run as inline code, and a later
+bare line of its character at least as long closes it. Coverage files and the
+unpublished-folder link check read it as open to the end of the file, and so
+does render when it rewrites links, orders the book and places a chapter's
+statements. An HTML comment that never closes, even one opened in inline code or
+an indented code block, hides every later heading and dependency link: the graph
+loses those edges, one opened in the statement puts the rest of the article in
+the theorem box, and nothing reports it.
 
 `## Depends on` lists what the article needs to be *stated*;
 `## Proof depends on` lists what only its *proof* needs. Links under them are
@@ -382,9 +384,10 @@ verification deploys nothing, so the last verified site stays up. Pull requests
 and manual runs build the site but never deploy, and cannot cancel a waiting
 deploy. To redeploy, re-run the Pages run that the newest successful verify run
 on `main` started; re-running an older one deploys the older commit. Deleting or
-renaming that workflow, or disabling it in the repository's Actions settings,
-stops every deploy, with no error. A project scaffolded before this rule deploys
-every push; [Upgrading](../CHANGELOG.md#upgrading-from-050) says how to switch.
+renaming `autoform-verify.yml`, or disabling it in the repository's Actions
+settings, stops every deploy, with no error. A project scaffolded before this
+rule deploys every push; [Upgrading](../CHANGELOG.md#upgrading-from-050) says how
+to switch.
 No pin has to move: every `AUTOFORM_REF` since 0.5.0 has `render --ref`.
 
 Pages gates on `check` and `render`, and runs `audit` after `check` and
@@ -394,8 +397,11 @@ contract fails `render` before it writes anything, but `MAPPED` rows (each an
 audit `declared-coverage-gap`; a new project lists the template's row) and
 coverage-role issues, which `render` prints as warnings, still publish. A
 project scaffolded before a report step can add it by hand, with
-`continue-on-error: true` and the same `uvx --from` source (for `site check`,
-from 0.6.0). To block merges on findings, run `autoform audit` in CI without it.
+`continue-on-error: true` and the same `uvx --from` source:
+`autoform audit blueprint --lean-root .` after `check`, and
+`autoform site check site --source site-src` after the MkDocs build, which needs
+an `AUTOFORM_REF` from 0.6.0 or later. To block merges on findings, run
+`autoform audit` in CI without it.
 
 ### check
 

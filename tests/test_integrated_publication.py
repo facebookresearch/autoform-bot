@@ -120,7 +120,8 @@ def test_complete_book_content_and_authoritative_cards_survive_without_javascrip
     assert "The proof uses reflexivity." in text
     assert len(text) > 420
     cards = _class(reading, "bp-thmwrapper")
-    assert [(card.get("data-autoform-node-id"), card.get("id")) for card in cards] == [
+    # Each card's anchor is on its heading, which search makes a record of.
+    assert [(card.get("data-autoform-node-id"), _class(card, "bp-thmheading")[0].get("id")) for card in cards] == [
         (f"{group}/base", "base"), (f"{group}/main", "main"),
     ]
     assert not (output / "roadmap" / group / "main.md").exists()
@@ -226,7 +227,7 @@ def test_emitted_result_ids_and_book_anchors_preserve_reserved_looking_prefixes(
     for node_id in ids:
         record, card = records[node_id], cards[node_id]
         assert record["id"] == node_id and record["result"] is True
-        assert record["route"] == "../roadmap/index.html#" + card.get("id")
+        assert record["route"] == "../roadmap/index.html#" + _class(card, "bp-thmheading")[0].get("id")
         assert record["scope"] == "roadmap" and type(record["parent"]) is int
         assert index["nodes"][record["parent"]]["id"] == "roadmap"
         assert unquote(urlsplit(record["url"]).fragment) == "node=" + node_id

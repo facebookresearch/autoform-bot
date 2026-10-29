@@ -266,6 +266,15 @@ def test_the_site_stylesheet_leaves_the_explorer_to_its_own_rules() -> None:
     assert ".bp-dag-" not in render_module._stylesheet()
 
 
+def test_a_card_heading_keeps_the_look_of_the_div_it_replaced() -> None:
+    """The card's heading row is an h4, for search, and Material and the site
+    give an h4 a margin and letter-spacing the row never had."""
+    css = re.sub(r"/\*.*?\*/", "", render_module._stylesheet(), flags=re.DOTALL)
+    rules = {selector.strip(): body for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)}
+    declarations = {part.strip() for part in rules[".bp-thmwrapper > .bp-thmheading"].split(";") if part.strip()}
+    assert declarations == {"margin: 0", "font-size: inherit", "letter-spacing: inherit"}
+
+
 @pytest.mark.parametrize("node_count", (2, 502), ids=("small", "large"))
 def test_small_and_large_chapters_use_the_same_json_explorer(
     tmp_path: Path,
@@ -533,17 +542,26 @@ def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -
     assert page.index("This chapter develops") < page.index('class="bp-progress-overview"')
     assert page.index("## Definitions") < page.index('id="base"') < page.index("## Results")
     assert page.index("## Results") < page.index('id="top"')
-    assert '<div class="bp-thmwrapper theorem-style-definition bp-fully_proved" id="base"' in page
-    assert '<div class="bp-thmwrapper theorem-style-plain bp-fully_proved" id="top"' in page
+    assert '<div class="bp-thmwrapper theorem-style-definition bp-fully_proved" data-autoform-node-id="base"' in page
+    assert '<div class="bp-thmwrapper theorem-style-plain bp-fully_proved" data-autoform-node-id="top"' in page
+    # The anchor is on the card's heading, so site search gives the card a record of its own.
+    assert '<h4 class="bp-thmheading" id="base">' in page
+    assert '<h4 class="bp-thmheading" id="top">' in page
+    assert '<div class="bp-search-names" hidden>Project.Base</div>' in page
+    assert '<div class="bp-search-names" hidden>Project.top</div>' in page
     assert 'data-autoform-node-id="base"' in page
     assert 'data-autoform-node-id="top"' in page
-    assert '<span class="bp-thmcaption">Definition</span><span class="bp-thmlabel">1</span>' in page
+    assert (
+        '<span class="bp-thmcaption" data-search-exclude>Definition</span>'
+        '<span class="bp-thmlabel" data-search-exclude>1</span>'
+    ) in page
     assert '<span class="bp-thmtitle">Top</span>' in page
     assert "The main result." in page
     assert "<strong>2</strong> fully proved" in page
     assert f'<span class="bp-progress-state" title="{html.escape(MEANINGS["fully_proved"])}">' in page
-    # A node's own subheadings must not compete with the chapter's structure.
-    assert "###### Sources" in page
+    # A node's own subheadings must not compete with the chapter's structure,
+    # and a notes heading starts no search record of its own.
+    assert '<h6 data-search-exclude="1" markdown="1">Sources</h6>' in page
     assert "\n## Sources" not in page
     assert "## Depends on" not in page
     assert "Other statements" not in page
@@ -871,9 +889,13 @@ def test_module_catalog_is_separate_from_formalization_progress(
     assert roadmap["member_count"] == 3
     assert roadmap["status_counts"] == [["fully_proved", 2], ["inventory_checked", 1]]
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    assert '<span class="bp-thmcaption">Module</span><span class="bp-thmlabel">1</span>' in chapter
+    assert (
+        '<span class="bp-thmcaption" data-search-exclude>Module</span><span class="bp-thmlabel" data-search-exclude>1</span>'
+    ) in chapter
     assert "A checked inventory of an existing Lean module." in chapter
     assert "<strong>2</strong> fully proved" in chapter
+    # A catalog can list hundreds of names, so search gets none beyond its Lean row: only base's card lists it.
+    assert chapter.count('<div class="bp-search-names" hidden>Project.Base</div>') == 1
     # No slot places the catalog, and it is no formalization target.
     assert chapter.index("## Module inventories") < chapter.index('id="catalog"')
     assert "Other statements" not in chapter
@@ -1090,7 +1112,8 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
     assert chapter["palette"]["inventory_pending"]["label"] == "inventory pending"
     book = (out / "roadmap/library/README.md").read_text(encoding="utf-8")
     for name in ("a", "b", "c"):
-        assert f'<div class="bp-thmwrapper theorem-style-definition bp-planned" id="{name}" ' in book
+        assert f'<div class="bp-thmwrapper theorem-style-definition bp-planned" data-autoform-node-id="library/{name}" ' in book
+        assert f'<h4 class="bp-thmheading" id="{name}">' in book
     assert book.count('●<span class="bp-mark-label">inventory pending</span>') == 3
     assert '<a class="bp-ref bp-ref-planned" href="#a">Module 1 (Module A)</a>' in book
     assert "ready to state" not in book
@@ -1585,7 +1608,7 @@ def test_a_protected_article_preserves_malformed_link_targets(tmp_path: Path) ->
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     tree = html5lib.parse(site_converter().convert(chapter), treebuilder="etree", namespaceHTMLElements=False)
-    card = next(el for el in tree.iter() if el.get("id") == "top")
+    card = next(el for el in tree.iter() if el.get("data-autoform-node-id") == "top")
     statement = next(el for el in card.iter() if "bp-thmcontent" in el.get("class", "").split())
     assert [(el.text, el.get("href")) for el in _authored_body_elements(statement) if el.tag == "a"] == [
         ("the paper", ipv6), ("the note", nul),
@@ -2787,7 +2810,7 @@ def test_a_site_relative_link_with_a_decoded_space_or_parenthesis_is_bracketed(t
     chapter, _ = _render_statement_link(tmp_path, links, committed=False)
 
     tree = html5lib.parse(site_converter().convert(chapter), treebuilder="etree", namespaceHTMLElements=False)
-    card = next(el for el in tree.iter() if el.get("id") == "top")
+    card = next(el for el in tree.iter() if el.get("data-autoform-node-id") == "top")
     statement = next(el for el in card.iter() if "bp-thmcontent" in el.get("class", "").split())
     # Exact destinations and the whole visible sentence guard against decoding
     # '(' as a bare-link delimiter and swallowing the following text.
@@ -3225,7 +3248,7 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     top = page[page.index('id="top"'):]
 
-    assert '<div class="bp-thmwrapper theorem-style-plain bp-conditional" id="top"' in page
+    assert '<div class="bp-thmwrapper theorem-style-plain bp-conditional" data-autoform-node-id="top"' in page
     assert '●<span class="bp-mark-label">conditionally proved</span>' in top
     assert (
         '<span class="bp-key">Assumes</span><span class="bp-value">'
@@ -3250,7 +3273,7 @@ def test_the_strict_policy_shows_the_same_proof_as_proved_with_no_assumptions(tm
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
 
-    assert '<div class="bp-thmwrapper theorem-style-plain bp-proved" id="top"' in page
+    assert '<div class="bp-thmwrapper theorem-style-plain bp-proved" data-autoform-node-id="top"' in page
     assert '<span class="bp-key">Assumes</span>' not in page
 
 
@@ -3361,7 +3384,7 @@ def test_compact_comparisons_keep_later_statements_and_proof_notes(tmp_path: Pat
     # generated Markdown misses the silent loss during md_in_html extraction.
     rendered = site_converter().convert(page + '\n<nav id="following-chapter">Next</nav>\n')
     tree = html5lib.parse(rendered, treebuilder="etree", namespaceHTMLElements=False)
-    assert [el.get("id") for el in tree.iter() if "bp-thmwrapper" in el.get("class", "").split()] == ["base", "top"]
+    assert [el.get("id") for el in tree.iter() if "bp-thmheading" in el.get("class", "").split()] == ["base", "top"]
     assert any(el.get("id") == "following-chapter" for el in tree.iter())
     assert ["".join(el.itertext()) for el in tree.iter() if "arithmatex" in el.get("class", "").split()] == [
         r"\(a<b>c\)", r"\(i<ell\)",
@@ -3407,7 +3430,7 @@ def test_body_protection_shares_references_in_both_directions(
         # for the final site conversion rather than preconverting its chunks.
         assert statement in chapter and '[ref]: https://example.invalid/paper "Paper title"' in chapter
     tree = html5lib.parse(site_converter().convert(chapter), treebuilder="etree", namespaceHTMLElements=False)
-    card = next(el for el in tree.iter() if el.get("id") == "top")
+    card = next(el for el in tree.iter() if el.get("data-autoform-node-id") == "top")
     content = next(el for el in card.iter() if "bp-thmcontent" in el.get("class", "").split())
     proof = next(el for el in card.iter() if "bp-thmnotes" in el.get("class", "").split())
     assert [(el.text, el.get("href"), el.get("title")) for el in content.iter("a")] == [
@@ -3596,7 +3619,7 @@ def test_a_statement_keeps_its_subheadings_inside_the_theorem(tmp_path: Path) ->
     assert "###### Setting" in box
     assert "\n### Setting" not in page
     assert "A citation." not in box
-    assert page.index("###### Setting") < page.index("###### Sources")
+    assert page.index("###### Setting") < page.index('<h6 data-search-exclude="1" markdown="1">Sources</h6>')
     assert "## Depends on" not in page
 
 
@@ -3627,7 +3650,7 @@ def test_neither_dependency_section_is_republished(tmp_path: Path) -> None:
 
     assert "Statement prerequisites." not in page
     assert "Proof depends on" not in page
-    assert "###### Sources" in page and "A citation." in page
+    assert '<h6 data-search-exclude="1" markdown="1">Sources</h6>' in page and "A citation." in page
 
 
 def test_prose_above_the_title_is_published_in_the_theorem(tmp_path: Path) -> None:
