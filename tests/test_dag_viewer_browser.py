@@ -434,7 +434,7 @@ def _reference_counts(graph: dict, owner_id: str, target_id: str) -> tuple[int, 
 
 
 def _numbered_reference(disclosure: object, target: object, href: str, counts: tuple[int, int]) -> object:
-    """Match these named plain-text fixture references and their exact weighted names."""
+    """Match natural numbered fixture names and their exact typed descriptions."""
     playwright.expect(target).to_have_count(1)
     caption = target.locator(".bp-thmheading > .bp-thmcaption").text_content()
     number = target.locator(".bp-thmheading > .bp-thmlabel").text_content()
@@ -450,10 +450,10 @@ def _numbered_reference(disclosure: object, target: object, href: str, counts: t
         f"{count} {kind} {'dependency' if count == 1 else 'dependencies'}"
         for count, kind in zip(counts, ("statement", "proof")) if count
     )
-    accessible = label + " · " + weights
-    playwright.expect(link).to_have_attribute("aria-label", accessible)
-    playwright.expect(link).to_have_attribute("title", accessible)
-    playwright.expect(link).to_have_accessible_name(accessible)
+    assert link.get_attribute("aria-label") is None
+    playwright.expect(link).to_have_attribute("title", weights)
+    playwright.expect(link).to_have_accessible_description(weights)
+    playwright.expect(link).to_have_accessible_name(label)
     playwright.expect(link).to_be_visible()
     return link
 

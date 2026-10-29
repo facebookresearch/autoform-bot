@@ -571,10 +571,13 @@ def test_reader_keeps_exact_weighted_relations_separate_from_closed_structural_d
     assert len(incoming) == 2 and len(outgoing) == 1
     for link in incoming:
         assert "".join(link.itertext()) == "Definition 1 (A)"
-        assert link.get("aria-label") == "Definition 1 (A) · 2 statement dependencies, 3 proof dependencies"
-        assert link.get("title") == link.get("aria-label"), "Suppressed proof-only rows must retain their original proof information"
-    assert outgoing[0].get("aria-label") == "Theorem 2 (B) · 4 proof dependencies"
-    assert outgoing[0].get("title") == outgoing[0].get("aria-label")
+        assert link.get("aria-label") is None, "Counts must describe, not replace, the naturally rendered name"
+        assert link.get("title") == "2 statement dependencies, 3 proof dependencies", (
+            "Suppressed proof-only rows must retain their original proof information"
+        )
+    assert "".join(outgoing[0].itertext()) == "Theorem 2 (B)"
+    assert outgoing[0].get("aria-label") is None
+    assert outgoing[0].get("title") == "4 proof dependencies"
     assert (graph, numbers, routes, used_by) == before
     # The same captured pair counts accompany the actual closed, unweighted
     # structural controls. The redesign adds no second relation panel.
@@ -600,14 +603,16 @@ def test_dependency_annotation_preserves_validated_title_parts_and_default_refer
     before = copy.deepcopy(graph)
     kwargs = {"graph": graph, "statuses": status.derive(graph), "numbers": numbers, "links": routes}
     plain = html5lib.parseFragment(render._node_references(["A"], **kwargs), namespaceHTMLElements=False)
-    marked = html5lib.parseFragment(
-        render._node_references(["A"], **kwargs, relation_node=graph.nodes["F"]), namespaceHTMLElements=False,
-    )
+    annotated_markup = render._node_references(["A"], **kwargs, relation_node=graph.nodes["F"])
+    marked = html5lib.parseFragment(annotated_markup, namespaceHTMLElements=False)
     original, annotated = next(plain.iter("a")), next(marked.iter("a"))
     assert original.get("aria-label") is None and original.get("title") is None
     assert original.get("href") == annotated.get("href") == routes["A"]
-    assert annotated.get("aria-label") == 'Definition 1 (Groups $x$ and `$literal$` "quoted" & rings) · 2 statement dependencies, 3 proof dependencies'
-    assert annotated.get("title") == annotated.get("aria-label")
+    assert annotated.get("aria-label") is None
+    assert annotated.get("title") == "2 statement dependencies, 3 proof dependencies"
+    assert set(annotated.attrib) == {"class", "href", "title"}
+    assert "$x$" not in annotated.get("title") and "$literal$" not in annotated.get("title")
+    assert "&quot;quoted&quot; &amp; rings" in annotated_markup
     assert "".join(original.itertext()) == "".join(annotated.itertext())
     assert [node.text for node in original.iter("code")] == [node.text for node in annotated.iter("code")] == ["$literal$"]
     assert [node.text for node in original.iter("span")] == [node.text for node in annotated.iter("span")] == [r"\(x\)"]
@@ -634,7 +639,9 @@ def test_valid_source_shared_statement_and_proof_reference_exposes_both_original
     tree = html5lib.parseFragment(markup, namespaceHTMLElements=False)
     link = next(tree.iter("a"))
     assert link.get("href") == "A.html"
-    assert link.get("aria-label") == "Definition 1 (A) · 1 statement dependency, 1 proof dependency"
+    assert "".join(link.itertext()) == "Definition 1 (A)"
+    assert link.get("aria-label") is None
+    assert link.get("title") == "1 statement dependency, 1 proof dependency"
     assert "Proof uses" not in "".join(tree.itertext())
     assert graph == before
 

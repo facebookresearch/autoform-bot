@@ -1319,6 +1319,9 @@
       dom$searchWrap, dom$sheetHandle, dom$shelves, dom$sourcesMode, dom$stage, dom$statusFieldset, dom$statusInputs,
       dom$wholeSearch, dom$zoomIn, dom$zoomOut;
     var overlays = new Map(), scheduled = false, firstResize = true, family, hoverTimer;
+    // Cold native shelves can render mixed status rings before mount returns.
+    // Initialize their immutable order before any startup callback can run.
+    var LEGEND = "mathlib fully_proved proved defined conditional can_prove stated can_state not_ready planned".split(" ");
     host.classList.add("bp-dag-integrated");
 
     buildShell();
@@ -2185,7 +2188,6 @@
     }
     // A topic's or region's statuses as a progress bar, in legend order since a region merges its topics' counts as it meets them.
     // status.STATES' order: the palette's keys arrive sorted, and regions merge their topics' counts out of order.
-    var LEGEND = "mathlib fully_proved proved defined conditional can_prove stated can_state not_ready planned".split(" ");
     function legendRank(key) { var index = LEGEND.indexOf(key); return index < 0 ? LEGEND.length : index; }
     // A card draws it as a bar; a shelf's round swatch, as a ring.
     function statusRing(node, round) {

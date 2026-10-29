@@ -3774,8 +3774,7 @@ def _node_references(
                 for count, kind in counts if count
             )
             if weights:
-                accessible = html.escape(text + " · " + weights, quote=True)
-                relation_attributes = f'aria-label="{accessible}" title="{accessible}" '
+                relation_attributes = f'title="{html.escape(weights, quote=True)}" '
         rendered.append(
             f'<a class="bp-ref bp-ref-{key}" '
             f'{relation_attributes}href="{html.escape(links[other_id], quote=True)}">{label}</a>'
