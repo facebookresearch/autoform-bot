@@ -359,6 +359,8 @@ def test_ordinary_focal_neighbors_reorient_on_automatic_half_reader_close_withou
       fit();const half=geometry();assert.equal(normal(half),normal(lr));assert(ui$readableCrop&&ui$transform.scale>=.9);
       const stage=[dom$stage.clientWidth,dom$stage.clientHeight],oldAspect=sceneAspect;
       const actualLayout=layoutGraph;let layouts=0;layoutGraph=(...args)=>{layouts++;return actualLayout(...args);};
+      // Atlas closes with its explicit Map pill, not the pose-owning reader handle.
+      const mapButton={dataset:{}};document.activeElement=mapButton;
       // Execute the real automatic close. No Fit or manual centering follows it.
       setSheet(false,ui$selected);
       const closed=geometry();
@@ -414,6 +416,41 @@ def test_full_reader_holds_the_scene_across_real_resize_and_restoring_close_neve
       assert.deepEqual(ui$transform,savedCamera);assert.strictEqual(geometry(),current);assert.equal(layouts,0);
       assert.equal(normal(current),shape);assert.equal(JSON.stringify(data),source);
       check(data,'tb',current);
+    """, {"data": _ordinary_focal_neighbors(), "width": 390, "height": 655.555555556,
+           "direction": "tb", "atlas": False})
+
+
+def test_handle_focused_reader_cycles_keep_the_selected_screen_box_and_graph_identity() -> None:
+    _run(_SHEET_ENVIRONMENT + r"""
+      const graph=data,source=JSON.stringify(data),selected=data.nodes[1];ui$selected=selected;
+      // Full reading releases the toolbar's height; compare global screen
+      // coordinates, as the native bounding-box oracle does, not stage-local y.
+      const stageTop=844-56-fixture.height;
+      Object.defineProperty(dom$body,'offsetTop',{get(){
+        return stageTop-(sheetClasses.has('bp-dag-sheet-full')?coveredExtra:0);
+      }});
+      function screenBox(){const box=screen(selected);return {...box,y:box.y+dom$body.offsetTop};}
+      assert.strictEqual(document.activeElement,dom$sheetHandle);
+      assert.equal(document.activeElement.dataset.autoformNodeId,undefined,'The handle is not a focused graph card');
+      fit();assert(data.nodes.every(insideFrame));assert(ui$transform.scale>=.9);
+      const initialBox=screenBox(),navigationBefore=JSON.stringify(navigation);
+      for(let cycle=0;cycle<2;cycle++)for(const level of [1,2,0]) {
+        setSheet(level,selected); // Only original handle toggles; no extra Fit or camera action.
+        const actual=screenBox();
+        assert(Math.abs(actual.y-initialBox.y)<.01,JSON.stringify({
+          message:'Focused reader-handle reflow moved the current card under the pointer',cycle,level,initialBox,actual
+        }));
+        for(const key of ['x','w','h'])assert(Math.abs(actual[key]-initialBox[key])<.01,JSON.stringify({cycle,level,key,initialBox,actual}));
+        assert.strictEqual(ui$selected,selected);assert.strictEqual(data,graph);
+        assert.equal(selected.id,'result');assert.strictEqual(document.activeElement,dom$sheetHandle);
+        assert.equal(dom$sheetHandle.attrs['aria-expanded'],String(Boolean(level)));
+        assert.equal(JSON.stringify(navigation),navigationBefore);
+        assert.equal(JSON.stringify(data),source,'Handle cycling changed graph IDs, status or proof weights');
+        if(!level)assert(data.nodes.every(insideFrame),'Returning to the original whole-map pose cropped a neighbor');
+      }
+      const current=geometry(),ranks=new Map(current.clusters.flatMap(cluster=>cluster.members.map(id=>[id,cluster.rank])));
+      assert.deepEqual(data.nodes.map(node=>ranks.get(node.id)),[0,1,2]);
+      check(data,'tb',current);assert.equal(JSON.stringify(data),source);
     """, {"data": _ordinary_focal_neighbors(), "width": 390, "height": 655.555555556,
            "direction": "tb", "atlas": False})
 

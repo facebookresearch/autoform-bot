@@ -1925,7 +1925,7 @@
       navigation.bindReader(dom$readingBody);
       // A full phone reader hides the toolbar, so a pill at the bottom drops it back to its peek.
       var mapButton = button("bp-reading-map", "Map", "Show the map"); dom$inspector.appendChild(mapButton);
-      mapButton.addEventListener("click", function () { setSheet(false, ui$selected); dom$sheetHandle.focus(); writeLocation("replace"); });
+      mapButton.addEventListener("click", function () { mapButton.focus({preventScroll: true}); setSheet(false, ui$selected); dom$sheetHandle.focus(); writeLocation("replace"); });
       dom$announcement = element("p", "bp-dag-sr-only"); dom$announcement.setAttribute("aria-live", "polite"); host.appendChild(dom$announcement);
       dom$ctx = dom$canvas.getContext("2d");
       // Reset the probe first: a rejected site font must not inherit an earlier 11px font.
@@ -2085,6 +2085,7 @@
       dom$sheetHandle.addEventListener("click", function (event) {
         // The drag already placed the sheet; a keyboard click has no detail.
         if (dragged && event.detail) return;
+        dom$sheetHandle.focus({preventScroll: true});
         var open = host.classList.contains("bp-dag-sheet-open");
         // A tap on a phone cycles peek, half and full.
         setSheet(navigation && sheetLayout() ? (open + host.classList.contains("bp-dag-sheet-full") + 1) % 3 : !open, ui$selected);
@@ -2233,8 +2234,11 @@
       if (scene && sceneData === data && scene.$held) aspect = sceneAspect;
       var reduced = !ui$selected && !data.nodes.some(function (node) { return node.kind !== "boundary" && node._overviewGroup; });
       if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family || sceneAspect !== aspect || sceneWiki !== data.$wikiEdges || sceneReduced !== reduced) {
-        var anchor = typeof document !== "undefined" && document.activeElement && document.activeElement.dataset &&
-          document.activeElement.dataset.autoformNodeId, previous = !restoring && sceneData === data && scene && scene.nodes.get(anchor);
+        // Reading's handle owns the selected card's pose; the explicit Map action may refit its neighborhood.
+        var focused = typeof document !== "undefined" && document.activeElement,
+          anchor = focused && (focused.dataset && focused.dataset.autoformNodeId ||
+            focused === dom$sheetHandle && ui$selected && ui$selected.id),
+          previous = !restoring && sceneData === data && scene && scene.nodes.get(anchor);
         // Two-line compact cards retain their type and status bar, with room for five areas and the 48px collision gap.
         var nodes = data.nodes.map(function (node) { return {id: node.id, width: compact ? 312 : node.width,
           height: compact ? 88 : node.height, area: node.area, scope: node.scope}; });
