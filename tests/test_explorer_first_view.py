@@ -36,7 +36,7 @@ const functions = ['layoutGraph', 'wikiRoutes', 'geometry', 'compactRegions', 's
   'framingPadding', 'currentOverviewGroup', 'world', 'screen', 'inViewport', 'fit', 'mapHeight', 'freeArea',
   'center', 'bandInsets', 'updateOverlays'].map(original).join('\n');
 const fixture = JSON.parse(fs.readFileSync(0, 'utf8'));
-const sandbox = {assert, fixture}; vm.createContext(sandbox);
+const sandbox = {assert, fixture, dom$sheetHandle: undefined}; vm.createContext(sandbox);
 const setup = String.raw`
 var navigation = {}, mapAllowed = true, atlas = false, family = 'sans-serif', data, byId, ui$active, ui$activeIds;
 var ui$selected = null, ui$orientation = 'lr', ui$area = null, ui$hovered = null, scene, sceneData, sceneDirection, sceneCompact, sceneFamily;
