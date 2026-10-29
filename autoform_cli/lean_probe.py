@@ -753,12 +753,12 @@ def module_of(path: Path, libraries: tuple[LeanLibrary, ...]) -> str | None:
     held = [lib for lib in libraries if resolved != lib.src_dir and resolved.is_relative_to(lib.src_dir)]
     for library in sorted(held, key=lambda lib: len(lib.src_dir.parts), reverse=True):
         module = ".".join(resolved.relative_to(library.src_dir).with_suffix("").parts)
-        if _builds(library, module):
+        if builds(library, module):
             return module
     return None
 
 
-def _builds(library: LeanLibrary, module: str) -> bool:
+def builds(library: LeanLibrary, module: str) -> bool:
     """Whether Lake builds ``module`` for ``library``, as ``LeanLibConfig.isBuildableModule`` decides.
 
     Lake finds, imports and builds a module by that rule, not by ``isLocalModule``:
@@ -1288,6 +1288,7 @@ __all__ = [
     "STALE_BUILD",
     "LeanLibrary",
     "SkeletonError",
+    "builds",
     "default_runner",
     "lean_libraries",
     "lean_name_components",
