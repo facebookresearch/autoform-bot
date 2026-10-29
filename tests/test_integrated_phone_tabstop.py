@@ -47,7 +47,7 @@ var navigation={},mapAllowed=true,atlas=true,ui$area=null,ui$orientation='tb',fa
 var scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,sceneWiki,sceneReduced;
 // Three cards now fit a normal phone stage. A genuinely short band keeps
 // the readable-crop/tabstop regression active without shrinking text.
-var dom$stage={clientWidth:390,clientHeight:240},dom$ctx={},dom$inspector,dom$fit=null,dom$sheetHandle;
+var dom$stage={clientWidth:390,clientHeight:240},dom$ctx={},dom$inspector,dom$fit=null;
 var host={classList:{contains(){return false;}}};
 var ui$transform={x:0,y:0,scale:1},ui$selected=null,ui$hovered=null,ui$readableCrop=false,ui$overviewGroup=null;
 var data={nodes:['Analysis','Geometry','Unstarted mathematics'].map((area,index)=>({id:'region:'+area,

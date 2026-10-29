@@ -33,8 +33,7 @@ function original(name) {
   }
   assert.fail('Production function did not parse: '+name);
 }
-const context={assert,structuredClone,URL,performance,restoring:false,dom$sheetHandle:undefined,
-  productionSource:source,original,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
+const context={assert,structuredClone,URL,performance,restoring:false,productionSource:source,original,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
 vm.createContext(context);
 vm.runInContext(source.slice(source.indexOf('  var NODE_W ='),source.indexOf('  var clients ='))+
   source.slice(source.indexOf('  var clamp ='),source.indexOf('  function element(')),context);

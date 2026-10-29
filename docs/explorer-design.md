@@ -42,7 +42,7 @@ camera, filters and reader state. Canvas paints routes; native DOM controls prov
 readable labels, keyboard focus and hit targets. The 120-node scene bound limits
 geometry, not index membership or paged structural shelves. Group before this cap;
 only authored areas name mathematical regions. Collections and real components are structural.
-Fit scores bounded orientations in the reader's visible band; selected neighborhoods include direct boundaries and retain proved-fit poses.
+Fit compares bounded orientations; selected neighborhoods include direct boundary links and retain a proved-fit pose.
 An unselected connection backbone reduces condensation transitively; its key reports shown/total.
 Canonical weights/SCCs and reader lists stay complete; selected maps restore full bounded-neighborhood routes.
 Server-produced pages contain complete mathematical reading and theorem anchors

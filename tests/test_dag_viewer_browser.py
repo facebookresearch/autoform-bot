@@ -3553,6 +3553,66 @@ def test_opening_details_keeps_the_clicked_card_under_the_pointer(desktop_page: 
         assert page.url == url and page.evaluate("history.length") == history_length
 
 
+@pytest.mark.parametrize("attempt", (1, 2, 3))
+def test_dragging_the_reader_without_handle_focus_keeps_the_selected_card_under_the_pointer(
+    desktop_page: object, site_url: str, attempt: int,
+) -> None:
+    """A pointer drag must hold the card even when the press gives no keyboard focus."""
+    page = desktop_page
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.emulate_media(reduced_motion="reduce")
+    _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
+    handle = page.get_by_role("button", name=re.compile(r", reading$"))
+    handle.click()
+    handle.click()
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    # QA's 40833240355/40833244794 probe: suppress only the press's default
+    # focus, as on iOS Safari, while the actual pointer handlers still run.
+    page.evaluate("""() => {
+      document.addEventListener('mousedown', event => event.preventDefault(), true);
+      window.__readerDragFocusLog = [];
+      document.addEventListener('focusin', event => {
+        window.__readerDragFocusLog.push(event.target.className || event.target.tagName);
+      }, true);
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    }""")
+    playwright.expect(handle).not_to_be_focused()
+    node = page.locator('.bp-dag-node[data-autoform-node-id="algebra/result"]')
+    _paint_frame(page)
+    initial, grip = node.bounding_box(), handle.bounding_box()
+    identity = node.element_handle()
+    assert initial is not None and grip is not None and identity is not None
+    url, history_length = page.url, page.evaluate("history.length")
+    reading = page.locator(".bp-reading-body > .bp-reading-source").text_content()
+    x, y = grip["x"] + grip["width"] / 2, grip["y"] + grip["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    try:
+        page.mouse.move(x, y - 190, steps=8)
+        page.mouse.move(x, y - 380, steps=8)
+    finally:
+        page.mouse.up()
+    _paint_frame(page)
+    page.wait_for_timeout(300)
+    _paint_frame(page)
+    opened = node.bounding_box()
+    state = page.evaluate("""() => ({
+      open: document.querySelector('.bp-dag-viewer').classList.contains('bp-dag-sheet-open'),
+      full: document.querySelector('.bp-dag-viewer').classList.contains('bp-dag-sheet-full'),
+      handleFocused: document.activeElement === document.querySelector('.bp-dag-sheet-handle'),
+      focusLog: window.__readerDragFocusLog
+    })""")
+    assert state["open"] and not state["full"], (attempt, state)
+    assert not state["handleFocused"] and not any("sheet-handle" in str(entry) for entry in state["focusLog"]), state
+    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    playwright.expect(handle).not_to_be_focused()
+    assert opened is not None
+    assert abs(opened["x"] - initial["x"]) < 2 and abs(opened["y"] - initial["y"]) < 2, (attempt, initial, opened, state)
+    assert identity.evaluate("node => node === document.querySelector('.bp-dag-node[data-autoform-node-id=\"algebra/result\"]')")
+    assert page.url == url and page.evaluate("history.length") == history_length
+    assert page.locator(".bp-reading-body > .bp-reading-source").text_content() == reading
+
+
 
 
 def test_a_phone_reader_keeps_half_for_the_statement_and_ends_full_clear_of_the_map_pill(mobile_page: object, site_url: str) -> None:

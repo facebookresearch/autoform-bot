@@ -34,7 +34,7 @@ const constants=['NODE_W','SEARCH_PAGE','clamp'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
 }).join('\n');
-const context={assert,setImmediate,setTimeout,clearTimeout,dom$sheetHandle:undefined};vm.createContext(context);
+const context={assert,setImmediate,setTimeout,clearTimeout};vm.createContext(context);
 const production='"use strict";\n'+constants+'\n'+NAMES.map(original).join('\n');
 """
 
