@@ -432,7 +432,7 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
 
     assert 'data-graph-src="unsafe%22%20data-x%3D%22oops"' in container
     assert 'src="scripts/viewer%22%20onload%3D%22oops.js"' in container
-    assert "The dependency explorer could not load." in container
+    assert "The dependency explorer needs JavaScript and its graph data." in container
     assert "Unsafe &lt;node&gt;" in container
     assert 'href="roadmap/a&quot; onclick=&quot;oops"' in container
     assert "javascript:alert" not in container
