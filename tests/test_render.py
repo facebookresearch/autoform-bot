@@ -1210,7 +1210,10 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
         assert f'<div class="bp-thmwrapper theorem-style-definition bp-planned" data-autoform-node-id="library/{name}" ' in book
         assert f'<h4 class="bp-thmheading" id="{name}">' in book
     assert book.count('●<span class="bp-mark-label">inventory pending</span>') == 3
-    assert '<a class="bp-ref bp-ref-planned" href="#a">Module 1 (Module A)</a>' in book
+    assert (
+        '<a class="bp-ref bp-ref-planned" aria-label="Module 1 (Module A) · 1 statement dependency" '
+        'title="Module 1 (Module A) · 1 statement dependency" href="#a">Module 1 (Module A)</a>'
+    ) in book
     assert "ready to state" not in book
     structure = (out / "structure.md").read_text(encoding="utf-8")
     assert "[Open the mathematical wiki](roadmap/README.md)" in structure

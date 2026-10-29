@@ -1406,8 +1406,8 @@ def test_home_leads_back_from_an_area_opened_on_the_home_map(
     source = page.locator(".bp-reading-body > .bp-reading-source")
     original_text = source.text_content()
     original_cards = source.locator(".bp-thmwrapper").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId)")
-    original_ids = page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()")
     region = _focus_graph_region(page, "Geometry")
+    original_ids = page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()")
     region_matrix = region.evaluate("node=>{const m=new DOMMatrix(getComputedStyle(node).transform);return [m.a,m.d,m.e,m.f];}")
     history_length = page.evaluate("history.length")
     # An opened area keeps the home URL; its parent crumb returns to the whole map.
@@ -1416,7 +1416,11 @@ def test_home_leads_back_from_an_area_opened_on_the_home_map(
     assert page.url == home_url
     playwright.expect(crumbs.locator("li")).to_have_text(["Home", "Geometry"])
     playwright.expect(crumbs.locator("li").last).to_have_attribute("aria-current", "page")
+    _frames(page)
     expanded_ids = page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()")
+    expanded_camera = page.locator(".bp-dag-node").first.evaluate("""node=>{
+      const m=new DOMMatrix(getComputedStyle(node).transform);return {id:node.dataset.autoformNodeId,matrix:[m.a,m.d,m.e,m.f]};
+    }""")
     home = crumbs.get_by_role("link", name="Home", exact=True)
     playwright.expect(home).to_have_attribute("href", home_url)
     home.click()
@@ -1434,10 +1438,25 @@ def test_home_leads_back_from_an_area_opened_on_the_home_map(
     page.go_back()
     playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(1)
     playwright.expect(crumbs.locator("li")).to_have_text(["Home", "Geometry"])
+    # The breadcrumb updates before asynchronous history/camera restoration.
+    # Wait for the saved native camera, not an arbitrary sleep or a weaker ID set.
+    page.wait_for_function("""expected=>{
+      const node=Array.from(document.querySelectorAll('.bp-dag-node')).find(node=>node.dataset.autoformNodeId===expected.id);
+      if(!node)return false;const m=new DOMMatrix(getComputedStyle(node).transform);
+      return [m.a,m.d,m.e,m.f].every((value,index)=>Math.abs(value-expected.matrix[index])<=(index<2?.0001:1));
+    }""", arg=expanded_camera)
+    _frames(page)
     assert page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()") == expanded_ids
     page.go_forward()
     playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(0)
     playwright.expect(crumbs.locator("li")).to_have_text(["Home"])
+    page.wait_for_function("""expected=>{
+      const node=document.querySelector('.bp-dag-node[data-autoform-node-id="region:Geometry"]');
+      if(!node)return false;const m=new DOMMatrix(getComputedStyle(node).transform);
+      return [m.a,m.d,m.e,m.f].every((value,index)=>Math.abs(value-expected[index])<=(index<2?.0001:1));
+    }""", arg=region_matrix)
+    _frames(page)
+    assert page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()") == original_ids
     assert source.text_content() == original_text
     assert source.locator(".bp-thmwrapper").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId)") == original_cards
     assert page.evaluate("() => document === __workspaceDocument") is True
