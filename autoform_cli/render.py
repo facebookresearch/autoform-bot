@@ -2383,6 +2383,14 @@ def _lead_sentence(body: str) -> str:
     image, such as a badge, is dropped.
     """
     lines = mask_fences_and_comments(body.splitlines())
+    if _read_page(body)[1]:
+        # Check flags this page, and the landing page then shows only its
+        # title and lead, as text: the first prose block, escaped as typed.
+        for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
+            typed = " ".join(block.split())
+            if typed and not typed.startswith(("#", "-", "*", "<", "|", ">", "!", "[")):
+                return _lead_html([("text", typed)])
+        return ""
     # Each block is read alone, so raw HTML elsewhere does not hide the lead,
     # with the reference definitions its links may name. Only lines the site's
     # converter reads as definitions, so a footnote never becomes a paragraph.
