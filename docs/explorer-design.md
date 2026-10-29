@@ -51,15 +51,13 @@ without JavaScript; enhancement uses published fragments, never graph summaries.
 [mathjax.py](../autoform_cli/mathjax.py) owns marked formulas: ordinary reading uses
 project macros; read-back cards use fresh isolated inputs without them. Reading
 labels carry converter-derived text/code/TeX parts, revalidated by the client;
-code stays literal. Refreshes add no MathJax menus or tab stops inside controls.
-List previews use conservative inline formatting with literal fallback; deferred
-typesetting is bounded to the current list and cancelled with its viewer.
+Code and unsupported previews stay literal; deferred list math is bounded and viewer-scoped.
+Refreshes add no MathJax menus or tab stops inside controls.
 
 ## Builds and verification
 
-[build-explorer.mjs](../scripts/build-explorer.mjs) fingerprints canonical UTF-8/LF
-development source text. This is distinct from raw captured mathematical inputs,
-the exact-byte index/sidecar binding, and the emitted runtime's byte SHA.
+[build-explorer.mjs](../scripts/build-explorer.mjs) hashes canonical UTF-8/LF development text.
+That fingerprint differs from raw math sources, exact index/sidecar bytes and the runtime byte SHA.
 Pinned development-only compilers ship one asset below 144 KB; consumers need no Node.
 Unsafe compression, public-field mangling/raw-source fallbacks are forbidden; stale bundles fail publication.
 

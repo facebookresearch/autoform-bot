@@ -186,6 +186,7 @@ _BOOT = r"""
   var plural=eval('(function(){'+pluralLine+';return plural;})()');
   var element=original('element'),button=original('button'),readingLabel=original('readingLabel');
   var bindNodeLink=original('bindNodeLink');
+  var sheetLayout=original('sheetLayout');
   var safeHref=original('safeHref'),graphAt=original('graphAt');
   var refreshReadingLabels=original('refreshReadingLabels'),semanticParent=original('semanticParent');
   var routeTrail=original('routeTrail'),currentOverviewGroup=original('currentOverviewGroup');

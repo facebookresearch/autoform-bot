@@ -828,7 +828,7 @@ def test_explorer_chrome_is_sized_in_px_not_in_materials_growing_rem() -> None:
 
 
 def test_explorer_head_is_one_row_where_the_rail_always_shows() -> None:
-    """One persistent context/Library row precedes the responsive control row; no legacy book-link reparenting."""
+    """One persistent context row precedes the controls; Home is its first native breadcrumb, not a second widget."""
     style = dag_viewer._STYLE
     script = _viewer_source()
     assert ".bp-dag-integrated .bp-dag-head { display: block; padding: 0; }" in style
@@ -844,7 +844,8 @@ def test_explorer_head_is_one_row_where_the_rail_always_shows() -> None:
     assert declarations["visibility"] == "visible !important"
     assert declarations["max-width"] == "none", "The integrated context must not inherit the legacy 32% breadcrumb limit"
     assert ".bp-dag-integrated .bp-dag-toolbar { display: flex;" in style
-    assert "context.insertBefore(bookLink, crumbs)" in script
+    assert 'readingLabel("a", !className && index === 0 ? "bp-dag-book" : "", entry.label, entry.reading_title)' in script
+    assert "bookLink" not in script and "homeLink" not in script
     assert "placeBook" not in script and "head.insertBefore(bookLink" not in script
     narrow = style.split("@media (max-width: 1100px) {\n", 2)[2].split("\n}", 1)[0]
     assert ".bp-dag-integrated .bp-dag-toolbar { flex-wrap: wrap; }" in narrow
@@ -879,10 +880,15 @@ def test_explorer_drops_the_map_guide_and_keeps_a_plain_note_for_real_crops() ->
     phones = style.split("@media (max-width: 680px) {\n", 1)[1].split("\n}", 1)[0]
     assert ".bp-dag-density { bottom: 68px; }" in phones
     assert not any(word in density for word in ("border", "shadow", "background", "blur"))
-    # In the workspace it sits a line above the map key. With a phone reader open, the band above it is small and the handle names
-    # the page, so the map header and the note leave instead of sitting on cards.
+    # In the workspace the note sits above the key. Half-reading hides the
+    # header but positions the note/key in the remaining real map band.
     assert ".bp-dag-integrated .bp-dag-density { bottom: 36px; }" in style
-    assert ".bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-compact-regions) :is(.bp-map-context, .bp-dag-density) { display: none; }" in style
+    assert ".bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-compact-regions) .bp-map-context { display: none; }" in style
+    assert ".bp-dag-density) { display: none; }" not in style
+    feedback = script.split("function positionMapFeedback() {", 1)[1].split("\n    function ", 1)[0]
+    assert 'var inset = open ? Math.max(0, refs.stage.clientHeight - freeArea().band) : 0;' in feedback
+    assert 'refs.mapKey.style.bottom = open ? inset + 4 + "px" : "";' in feedback
+    assert 'refs.density.style.bottom = open ? inset + 34 + "px" : "";' in feedback
     # Over a card in a cropped view the header, note and key keep a two-layer halo of the map's colour, still with no box.
     assert ".bp-dag-integrated :is(.bp-dag-density, .bp-map-context, .bp-map-key) { text-shadow: 0 0 3px var(--dag-map), 0 0 6px var(--dag-map); }" in style
 
@@ -1004,7 +1010,11 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     # Topics sat a few px above the control beside it.
     assert ".bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; align-items: center; }" in tablet
     phones = style.split("@media (max-width: 720px) {\n  .bp-dag-integrated", 1)[1].split("\n}", 1)[0]
-    assert ".bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :nth-last-child(-n+2)) { display: none; }" in phones
+    assert ".bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :nth-last-child(-n+2)) { display: none; }" not in phones
+    # The real renderer folds before layout rather than hiding ancestor nodes
+    # a second time; its summary retains their complete accessible labels.
+    assert 'refs.breadcrumb.replaceChildren(trailList(entries, null, !sheetLayout()));' in script
+    assert 'entries.slice(1, -2).map(function (entry) { return entry.label; }).join(" / ")' in script
     # A phone keeps search and Topics on the first row too; Topics on the second pushed the toolbar to three rows.
     assert "search-wrap { flex-basis: 100%; }" not in phones
 

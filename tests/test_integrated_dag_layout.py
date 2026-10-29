@@ -372,6 +372,7 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
       const navigation={getIndex(){events.push('index');return index;}};
       const host={querySelector(){return null;},classList:{add(){},remove(){},toggle(){}}};
       const window={location:{href:'https://example.test/roadmap/index.html',origin:'https://example.test'}};
+      const document={activeElement:null};
       const constants=productionSource.slice(productionSource.indexOf('  var NODE_W ='),productionSource.indexOf('  var clients ='));
       eval(constants);
       const start=productionSource.indexOf('  function mount('),end=productionSource.indexOf('    function globalListen(',start);
@@ -383,7 +384,7 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
       const seams=`
         function buildShell() {events.push('shell');family='sans-serif';dom$stage={clientWidth:900,clientHeight:640};dom$inspector={offsetTop:0};
           dom$ctx={font:'11px sans-serif',measureText:text=>({width:String(text).length*8})};
-          dom$search={removeAttribute(){}};dom$breadcrumb={replaceChildren(){}};}
+          dom$search={removeAttribute(){}};dom$breadcrumb={replaceChildren(){},contains(){return false;},clientWidth:900};}
         function bindEvents() {events.push('bind');}
         function sheetLayout() {return false;} function renderNavigation() {} function renderReaderContext() {}
         function renderWikiContext() {events.push('optional-wiki');}

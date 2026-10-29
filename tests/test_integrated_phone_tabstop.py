@@ -31,7 +31,7 @@ function original(name) {
 const context={assert};vm.createContext(context);
 const constants=source.slice(source.indexOf('  var NODE_W ='),source.indexOf('  var clients ='))+
   source.slice(source.indexOf('  var clamp ='),source.indexOf('  function element('));
-const functions=['layoutGraph','wikiRoutes','geometry','compactRegions','sceneFrame','sceneDetours','framingNodes','framingViewport','framingPadding','currentOverviewGroup','world','screen','inViewport','fit','mapHeight','freeArea','center','bandInsets','updateOverlays','relationCounts','weightWords'].map(original).join('\n');
+const functions=['layoutGraph','wikiRoutes','geometry','compactRegions','sceneFrame','sceneDetours','framingNodes','framingViewport','framingPadding','currentOverviewGroup','world','screen','inViewport','fit','mapHeight','freeArea','center','centerIfHidden','bandInsets','updateOverlays','relationCounts','weightWords'].map(original).join('\n');
 """
 
 _ENVIRONMENT = r"""

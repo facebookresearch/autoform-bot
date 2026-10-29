@@ -103,17 +103,17 @@ async function frame() {
   for (let n = 0; n < 5; n++) await Promise.resolve();
 }
 function bundle(id, snapshot, focus = true) {
-  // A routed statement takes focus on its own heading, which the reader has scrolled to, rather than the page's h1 above it.
-  // The stub's querySelector matches tag names, so the statement heading is named by its selector.
-  const pageHeading = new Element('h1'), heading = new Element('.bp-thmheading'), target = new Element('article', 'main'), source = new Element('div');
-  target.dataset.autoformNodeId = id; target.replaceChildren(heading); source.replaceChildren(pageHeading, target);
+  // The default thin fragment exercises the statement-without-heading fallback.
+  // Heading tests insert real elements carrying the published .bp-thmheading class.
+  const heading = new Element('h1'), target = new Element('article', 'main'), source = new Element('div');
+  target.dataset.autoformNodeId = id; source.replaceChildren(heading, target);
   const version = currentVersion;
   // A normal two-result scope is not an authored-area navigation overview.
   // This seam supplies graph context only; callbacks remain verbatim production source.
   return {nodeId: id, scope: 'chapter', anchor: 'main', title: 'Complete ' + id, readingSource: source,
     graph: {schema: 'autoform-dag-view/v2', title: 'Scope ' + id, nodes: Array.from(byId.values()), edges: [],
       palette, view: {kind: 'chapter', presentation: 'dag'}},
-    snapshot, focus, isCurrent: () => currentVersion === version, heading, pageHeading, target};
+    snapshot, focus, isCurrent: () => currentVersion === version, heading, pageHeading: heading, target};
 }
 """
 
@@ -389,9 +389,8 @@ def test_stale_restore_ticket_cannot_reapply_old_reading_focus_or_scroll() -> No
 
 def test_a_selected_statement_opens_its_own_relations() -> None:
     """The reader's separate relation strip is gone; the current statement's disclosure opens instead."""
-    # The stub's querySelector matches tag names, so the disclosure is named by its selector.
     _run(r"""
-      const page = bundle('A', null), relations = new Element('.bp-dependencies');
+      const page = bundle('A', null), relations = new Element('details');relations.classList.add('bp-dependencies');
       page.target.replaceChildren(relations); const ready = applyRoute(page);
       await frame(); await ready;
       assert(page.target.classList.contains('bp-reading-current'));
