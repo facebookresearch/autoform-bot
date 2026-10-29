@@ -1057,6 +1057,13 @@ def test_explorer_search_draws_its_magnifier_and_shortcut_hint_in_css() -> None:
     assert ".bp-dag-search-wrap::after { display: none; }" in phones
 
 
+def test_resting_overview_keeps_an_open_or_focused_native_link_key_visible() -> None:
+    style = dag_viewer._STYLE
+    assert ".bp-dag-links-resting .bp-map-key > details:not([open]):not(:focus-within) { display: none; }" in style
+    assert ".bp-dag-links-resting .bp-map-key > details { display: none; }" not in style
+    assert ".bp-dag-links-resting .bp-map-key:has(> details[open], > details:focus-within)::before { content: none; }" in style
+
+
 def test_search_placeholder_uses_opaque_readable_book_tokens_in_both_schemes() -> None:
     style = dag_viewer._STYLE
     placeholder = re.search(r"^\.bp-dag-search::placeholder \{([^}]+)\}", style, re.M)

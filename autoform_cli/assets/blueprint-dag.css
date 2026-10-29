@@ -386,7 +386,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-map-key .bp-map-key-coverage::before { display: none; }
 /* A quiet area overview at rest draws no links, so its key says how to light them instead of naming line kinds it does not draw. */
 .bp-dag-links-resting .bp-map-key > span { display: none; }
-.bp-dag-links-resting .bp-map-key > details { display: none; }
+.bp-dag-links-resting .bp-map-key > details:not([open]):not(:focus-within) { display: none; }
+.bp-dag-links-resting .bp-map-key:has(> details[open], > details:focus-within)::before { content: none; }
 .bp-dag-links-resting .bp-map-key::before { content: "Point at or focus an area to see its links"; }
 .bp-dag-has-shelves .bp-dag-main { display: grid; grid-template-rows: minmax(0, 1fr) minmax(140px, 34%); }
 .bp-dag-has-shelves .bp-dag-stage { position: relative; inset: auto; min-height: 0; }
