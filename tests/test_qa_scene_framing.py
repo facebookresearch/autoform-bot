@@ -164,9 +164,34 @@ def test_actual_atlas_root_uses_real_free_area_and_fits_all_five_cards(width: in
       assert.equal(current.routes.reduce((sum,route)=>sum+route.$proof,0),674);
       assert.strictEqual(geometry(),current);assert.equal(calls,2,'Unchanged framing recomputed scene geometry');
       assert.equal(JSON.stringify(data),source,'Fit or orientation selection changed captured graph fields');
-      const dimensions=data.nodes.map(node=>({...node,width:compactRegions()?312:node.width,height:compactRegions()?96:node.height}));
+      const dimensions=data.nodes.map(node=>({...node,width:compactRegions()?312:node.width,height:compactRegions()?92:node.height}));
       check({nodes:dimensions,edges:data.edges},'lr');check({nodes:dimensions,edges:data.edges},'tb');
     """, {"data": data, "width": width, "height": height, "direction": direction, "atlas": True})
+
+
+@pytest.mark.parametrize("direction", ["lr", "tb"])
+def test_native_five_area_cycle_fits_the_captured_phone_stage_without_changing_connections(direction: str) -> None:
+    # Exact authored-area projection and stage from the native navigation-only
+    # overview. Five 96px cards exceeded this real phone band at the .9 floor.
+    areas = ["Algebra", "Analysis", "Discrete mathematics", "Geometry", "Logic"]
+    data = {
+        "nodes": [{"id": "region:" + area, "area": area, "_region": area, "kind": "scope",
+                   "width": 264, "height": 148, "status": "not_ready", "status_counts": [["not_ready", 3]]}
+                  for area in areas],
+        "edges": [{"source": "region:" + areas[index], "target": "region:" + areas[(index + 1) % 5],
+                   "statement": 2, "proof": 0} for index in range(5)],
+    }
+    _run(_ENVIRONMENT + r"""
+      const source=JSON.stringify(data);fit();const current=geometry();
+      assert.equal(ui$readableCrop,false);assert(ui$transform.scale>=.9);
+      assert(data.nodes.every(insideFrame),'The actual five-area phone band still crops an authored area');
+      assert.deepEqual(current.clusters.map(cluster=>cluster.members.length),[5]);
+      assert.equal(current.$display.totalPairs,5);assert.equal(current.$display.totalRoutes,5);
+      assert.equal(current.routes.reduce((sum,route)=>sum+route.$statement,0),10);
+      assert.equal(JSON.stringify(data),source,'Compact framing changed captured status or typed dependencies');
+      const dimensions=data.nodes.map(node=>({...node,width:312,height:92}));
+      check({nodes:dimensions,edges:data.edges},'lr');check({nodes:dimensions,edges:data.edges},'tb');
+    """, {"data": data, "width": 390, "height": 630.984375, "direction": direction, "atlas": True})
 
 
 def _algebra_connected() -> dict:

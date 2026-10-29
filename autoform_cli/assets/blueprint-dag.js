@@ -2227,8 +2227,9 @@
       if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family || sceneAspect !== aspect || sceneWiki !== data.$wikiEdges || sceneReduced !== reduced) {
         var anchor = typeof document !== "undefined" && document.activeElement && document.activeElement.dataset &&
           document.activeElement.dataset.autoformNodeId, previous = !restoring && sceneData === data && scene && scene.nodes.get(anchor);
+        // Compact cards fit five areas in the captured phone band without shrinking type or the 48px collision gap.
         var nodes = data.nodes.map(function (node) { return {id: node.id, width: compact ? 312 : node.width,
-          height: compact ? 96 : node.height, area: node.area, scope: node.scope}; });
+          height: compact ? 92 : node.height, area: node.area, scope: node.scope}; });
         scene = layoutGraph(nodes, data.edges, ui$orientation, aspect, data.$wikiEdges, reduced);
         var targets = framingNodes();
         if (data.nodes.length <= 24 && targets.length) {

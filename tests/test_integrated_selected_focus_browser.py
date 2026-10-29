@@ -215,6 +215,7 @@ def test_full_phone_reader_keeps_covered_map_and_toolbar_out_of_native_tab_order
               const style=getComputedStyle(node);
               const rectangle=box=>({left:box.left,right:box.right,top:box.top,bottom:box.bottom,width:box.width,height:box.height});
               const hit=document.elementFromPoint(box.x+box.width/2,box.y+box.height/2),parents=[];
+              const fragments=Array.from(node.getClientRects()).filter(part=>part.width>0&&part.height>0);
               for(let parent=node.parentElement;parent&&parents.length<8;parent=parent.parentElement){
                 const css=getComputedStyle(parent);parents.push({tag:parent.tagName,class:parent.className,
                   box:rectangle(parent.getBoundingClientRect()),scroll:[parent.scrollLeft,parent.scrollTop],
@@ -223,7 +224,9 @@ def test_full_phone_reader_keeps_covered_map_and_toolbar_out_of_native_tab_order
               return {boundary:false,atHandle:node===handle,inReader:reading.contains(node),
                 covered:main.contains(node)||toolbar.contains(node)||outline.contains(node)||Boolean(node.closest('[inert]')),
                 visible:box.width>0&&box.height>0&&box.left>=0&&box.right<=innerWidth&&box.top>=0&&box.bottom<=innerHeight&&
-                  style.visibility!=='hidden'&&node.contains(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2)),
+                  style.visibility!=='hidden'&&fragments.length>0&&fragments.every(part=>
+                    part.left>=0&&part.right<=innerWidth&&part.top>=0&&part.bottom<=innerHeight&&
+                    node.contains(document.elementFromPoint(part.x+part.width/2,part.y+part.height/2))),
                 tag:node.tagName,id:node.id,class:node.className,href:node.getAttribute('href'),text:node.textContent.slice(0,240),
                 box:rectangle(box),clientRects:Array.from(node.getClientRects()).slice(0,16).map(rectangle),
                 hit:hit&&{tag:hit.tagName,id:hit.id,class:hit.className,text:hit.textContent.slice(0,120)},
@@ -412,10 +415,13 @@ def test_selected_statement_formal_reference_retains_genuine_title_math_code_and
     reference.scroll_into_view_if_needed()
     _frames(page)
     _assert_hit(page, reference)
-    reference.evaluate("""node=>{window.__formalReference=node;node.addEventListener('click',event=>{
-      if(event.button===0&&!event.defaultPrevented&&!event.metaKey&&!event.ctrlKey&&!event.shiftKey&&!event.altKey)
+    # The router intentionally captures and stops reader-link clicks before
+    # the anchor. Observe the genuine event before that reader boundary.
+    reference.evaluate("""node=>{window.__formalReference=node;document.addEventListener('click',event=>{
+      if(event.isTrusted&&event.target.closest&&event.target.closest('a.bp-ref')===node&&
+        event.button===0&&!event.defaultPrevented&&!event.metaKey&&!event.ctrlKey&&!event.shiftKey&&!event.altKey)
         __formalReferenceClicks++;
-    });}""")
+    },true);}""")
     reference.focus()
     assert page.evaluate("AutoformMath.refresh(__formalReference)") is True
     playwright.expect(reference).to_be_focused()
@@ -423,6 +429,7 @@ def test_selected_statement_formal_reference_retains_genuine_title_math_code_and
     playwright.expect(reference).to_have_attribute("href", target)
     reference.locator("mjx-container").click(button="right")
     playwright.expect(page.get_by_role("menu")).to_have_count(0)
+    assert page.evaluate("__formalReferenceClicks") == 0
     # There is no MathJax menu to dismiss. Escape here is the explorer's
     # real clear-selection action, which would collapse the phone reader.
     reference.focus()
@@ -434,7 +441,8 @@ def test_selected_statement_formal_reference_retains_genuine_title_math_code_and
     playwright.expect(selected.locator(".bp-thmheading")).to_be_focused()
     assert "Its complete explanatory text remains available after relation navigation." in selected.inner_text()
     _complete_source(page, _published_source(page, target))
-    assert page.evaluate("__formalReferenceClicks===1&&document===__formalReferenceDocument") is True
+    assert page.evaluate("__formalReferenceClicks") == 1
+    assert page.evaluate("document===__formalReferenceDocument") is True
     page.go_back()
     page.wait_for_url(first)
     _complete_source(page, expected)
