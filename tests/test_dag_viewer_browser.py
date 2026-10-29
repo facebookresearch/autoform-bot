@@ -422,15 +422,60 @@ def _assert_hit(page: object, control: object) -> None:
     )
 
 
-def _open_dependency(card: object, title: str) -> object:
-    """Use the publisher's native disclosure and its numbered reference label."""
+def _reference_counts(graph: dict, owner_id: str, target_id: str) -> tuple[int, int]:
+    """Original weights in these one-direction fixtures, not a reciprocal-link resolver."""
+    pair = {owner_id, target_id}
+    assert len(pair) == 2
+    edges = [edge for edge in graph["edges"] if {edge["source"], edge["target"]} == pair]
+    assert len(edges) == 1, "This fixture reference must name one unambiguous original directed pair"
+    counts = (edges[0]["statement"], edges[0]["proof"])
+    assert all(type(count) is int and count >= 0 for count in counts) and sum(counts) > 0
+    return counts
+
+
+def _numbered_reference(disclosure: object, target: object, href: str, counts: tuple[int, int]) -> object:
+    """Match these named plain-text fixture references and their exact weighted names."""
+    playwright.expect(target).to_have_count(1)
+    caption = target.locator(".bp-thmheading > .bp-thmcaption").text_content()
+    number = target.locator(".bp-thmheading > .bp-thmlabel").text_content()
+    title = target.locator(".bp-thmheading > .bp-thmtitle").text_content()
+    assert isinstance(caption, str) and isinstance(number, str) and isinstance(title, str)
+    label = f"{caption.strip()} {number.strip()} ({title.strip()})"
+    link = disclosure.locator("a.bp-ref").filter(has_text=re.compile(r"^" + re.escape(label) + r"$"))
+    playwright.expect(link).to_have_count(1)
+    playwright.expect(link).to_have_text(label)
+    published_href = link.get_attribute("href")
+    assert published_href is not None and urljoin(disclosure.page.url, published_href) == href
+    weights = ", ".join(
+        f"{count} {kind} {'dependency' if count == 1 else 'dependencies'}"
+        for count, kind in zip(counts, ("statement", "proof")) if count
+    )
+    accessible = label + " · " + weights
+    playwright.expect(link).to_have_attribute("aria-label", accessible)
+    playwright.expect(link).to_have_attribute("title", accessible)
+    playwright.expect(link).to_have_accessible_name(accessible)
+    playwright.expect(link).to_be_visible()
+    return link
+
+
+def _open_dependency(card: object, consumer: _ExplorerConsumer, target_id: str) -> object:
+    """Use the existing disclosure, canonical endpoint and original typed pair."""
     disclosure = card.locator("details.bp-dependencies")
     playwright.expect(disclosure).to_have_count(1)
     if disclosure.get_attribute("open") is None:
         disclosure.locator(":scope > summary").click()
-    link = disclosure.get_by_role("link", name=re.compile(r"\(" + re.escape(title) + r"\)$"))
-    playwright.expect(link).to_be_visible()
-    return link
+    owner_id = card.get_attribute("data-autoform-node-id")
+    assert owner_id in consumer.records and target_id in consumer.records
+    target = card.page.locator(
+        ".bp-reading-source .bp-thmwrapper[data-autoform-node-id=" + json.dumps(target_id) + "]"
+    )
+    playwright.expect(target.locator(".bp-thmheading > .bp-thmtitle")).to_have_text(
+        consumer.records[target_id]["title"]
+    )
+    graph = consumer.graphs[consumer.records[owner_id]["scope"]]
+    return _numbered_reference(
+        disclosure, target, consumer.route(target_id), _reference_counts(graph, owner_id, target_id)
+    )
 
 
 def _close_phone_reading(page: object) -> None:
@@ -1206,7 +1251,7 @@ def test_back_restores_a_phone_reader_at_half_rather_than_carrying_full_over(
     _open_consumer(page, explorer_consumer, "chapter/middle")
     host, handle = page.locator(".bp-dag-viewer"), page.locator(".bp-dag-sheet-handle")
     playwright.expect(host).to_have_class(re.compile(r"\bbp-dag-sheet-open\b"))
-    _open_dependency(_reading_card(page, "chapter/middle"), "Foundation").click()
+    _open_dependency(_reading_card(page, "chapter/middle"), explorer_consumer, "chapter/foundation").click()
     _consumer_ready(page, explorer_consumer, "chapter/foundation")
     playwright.expect(handle).to_have_attribute("title", "Expand reading")
     handle.click()
@@ -1524,7 +1569,7 @@ def test_no_javascript_keeps_the_linked_fallback(webkit_browser: object, explore
         playwright.expect(download).to_be_visible()
         assert page.request.get(download.get_attribute("href") if download.get_attribute("href").startswith("http")
                                 else urljoin(page.url, download.get_attribute("href"))).json()["schema"] == "autoform-dag-view/v2"
-        reference = _open_dependency(card, "Middle lemma")
+        reference = _open_dependency(card, explorer_consumer, "chapter/middle")
         assert urljoin(page.url, reference.get_attribute("href")) == explorer_consumer.route("chapter/middle")
         reference.click()
         assert page.url == explorer_consumer.route("chapter/middle")
@@ -1540,7 +1585,9 @@ def test_fetch_failure_restores_the_linked_fallback(desktop_page: object, explor
     playwright.expect(page.locator(".bp-dag-error")).to_contain_text("HTTP 404")
     source = page.locator(".bp-explorer-page > .bp-reading-source")
     playwright.expect(source.locator("h1")).to_have_text("Dependency chapter")
-    reference = _open_dependency(source.locator('.bp-thmwrapper[data-autoform-node-id="chapter/target"]'), "Middle lemma")
+    reference = _open_dependency(
+        source.locator('.bp-thmwrapper[data-autoform-node-id="chapter/target"]'), explorer_consumer, "chapter/middle"
+    )
     assert urljoin(page.url, reference.get_attribute("href")) == explorer_consumer.route("chapter/middle")
     playwright.expect(page.locator(".bp-dag-fallback")).to_be_visible()
     playwright.expect(page.locator(".bp-dag-fallback").get_by_role("link", name="Download the complete graph data")).to_be_visible()
@@ -2193,7 +2240,16 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     playwright.expect(relations).to_have_attribute("open", "")
     playwright.expect(relations.locator("summary")).to_have_text("Uses 1 · Used by 55")
     playwright.expect(relations.locator("a.bp-ref")).to_have_count(56)
-    last = relations.get_by_role("link", name=re.compile(r"\(Later 54\)$"))
+    last_id = "topology/later-54"
+    graph_url = urljoin(
+        site_url + "/dependencies/index.json", _site_record(page, site_url, "topology/result")["data_url"]
+    )
+    graph_response = page.request.get(graph_url, timeout=10_000)
+    assert graph_response.ok
+    last_card = _reading_card(page, last_id)
+    playwright.expect(last_card.locator(".bp-thmheading > .bp-thmtitle")).to_have_text("Later 54")
+    last = _numbered_reference(relations, last_card, _site_route(page, site_url, last_id),
+                               _reference_counts(graph_response.json(), "topology/result", last_id))
     last.scroll_into_view_if_needed()
     _assert_hit(page, last)
     last.click()
@@ -2802,9 +2858,9 @@ def test_sheet_selection_close_clear_filter_and_history_states_stay_consistent(
     # Ordinary reading links in each statement's own dependency disclosure,
     # rather than forced offscreen node clicks, retain each entry's open
     # reader state for the Back/Forward assertions.
-    _open_dependency(_reading_card(page, "chapter/middle"), "Foundation").click()
+    _open_dependency(_reading_card(page, "chapter/middle"), explorer_consumer, "chapter/foundation").click()
     _consumer_selected(page, explorer_consumer, "chapter/foundation")
-    _open_dependency(_reading_card(page, "chapter/foundation"), "Middle lemma").click()
+    _open_dependency(_reading_card(page, "chapter/foundation"), explorer_consumer, "chapter/middle").click()
     middle = _consumer_selected(page, explorer_consumer, "chapter/middle")
     _assert_sheet_state(page, selected="chapter/middle", opened=True)
     survivor = page.locator('.bp-dag-node:not([data-autoform-node-id="chapter/middle"])').first
@@ -2916,7 +2972,7 @@ def test_complete_reader_has_native_actions_without_the_legacy_summary_chrome(
     playwright.expect(page.locator(".bp-dag-close,.bp-dag-open,.bp-dag-status-pill")).to_have_count(0)
     stage, pane = page.locator(".bp-dag-stage").bounding_box(), page.locator(".bp-reading-pane").bounding_box()
     assert stage is not None and pane is not None and stage["x"] + stage["width"] <= pane["x"] + 1
-    prerequisite = _open_dependency(card, "Foundation")
+    prerequisite = _open_dependency(card, explorer_consumer, "chapter/foundation")
     assert urljoin(page.url, prerequisite.get_attribute("href")) == explorer_consumer.route("chapter/foundation")
     prerequisite.scroll_into_view_if_needed()
     _assert_hit(page, prerequisite)
@@ -2946,7 +3002,7 @@ def test_details_read_as_mathematics_not_as_instructions(desktop_page: object, e
     # They show once, in the selected statement's own disclosure, which opens with it; no second strip repeats them.
     playwright.expect(page.locator(".bp-reading-links")).to_have_count(0)
     playwright.expect(card.locator("details.bp-dependencies")).to_have_attribute("open", "")
-    playwright.expect(_open_dependency(card, "Middle lemma")).to_be_visible()
+    playwright.expect(_open_dependency(card, explorer_consumer, "chapter/middle")).to_be_visible()
     # The removed inspector's path pivots do not justify dropping their
     # compatibility behavior: the same controller interprets old directions.
     for direction, expected in (
