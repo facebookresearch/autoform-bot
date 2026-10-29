@@ -2098,7 +2098,11 @@ def _render_structure_page(
     """
     target = entry or page.parent / "dependencies.md"
     explorer = relative_link(target, page, ".md")
-    heading = _page_heading(target.read_text(encoding="utf-8")) if target.is_file() else None
+    text = target.read_text(encoding="utf-8") if target.is_file() else ""
+    # A header title is visible text already, while an H1 is Markdown, as in
+    # the site's nav.
+    named = _header_title(text)
+    title = name_text(named) if named else title_text(_first_h1(text) or "")
     return "\n".join(
         [
             "---",
@@ -2111,7 +2115,7 @@ def _render_structure_page(
             "",
             "# This page moved",
             "",
-            f"The book starts at [{title_text(heading) if heading else 'its contents'}]({explorer}).",
+            f"The book starts at [{title or 'its contents'}]({explorer}).",
             "",
         ]
     )
