@@ -1173,6 +1173,20 @@ def test_the_rail_hero_keeps_two_figures_a_counts_line_and_the_coverage_link(tmp
         "# T\n\nWe study *the $p$-adic numbers* in `$x$`. Then we stop.\n",
         'We study <em>the <span class="arithmatex">\\(p\\)</span>-adic numbers</em> in <code>$x$</code>.',
     ),
+    (
+        "# T\n\nWe prove $[X,Y](f) = X(Yf) - Y(Xf)$ for vector fields. Then more.\n",
+        'We prove <span class="arithmatex">\\([X,Y](f) = X(Yf) - Y(Xf)\\)</span> for vector fields.',
+    ),
+    ("# T\n\nRun `simp [h](x)` to close it. Then more.\n", "Run <code>simp [h](x)</code> to close it."),
+    ("# T\n\nWe use `a * b = b * a` and *this*. Then more.\n", "We use <code>a * b = b * a</code> and <em>this</em>."),
+    ("# T\n\nThis formalizes [the preprint][arxiv]. Then more.\n\n[arxiv]: https://arxiv.org/abs/1\n", "This formalizes the preprint."),
+    ("# T\n\nSee [[Target|the target]] and [[Other]]. Then more.\n", "See the target and Other."),
+    (
+        '# T\n\n<!-- note -->\n\n[![CI](https://x/badge.svg)](https://x/actions)\n\n<p align="center">x</p>\n\nWe prove X. Then more.\n',
+        "We prove X.",
+    ),
+    ("# T\n\nWe show $a. B$ holds. Then we stop.\n", 'We show <span class="arithmatex">\\(a. B\\)</span> holds.'),
+    ("# T\n\nSee Hartshorne Ch. II for the setup. Then we stop.\n", "See Hartshorne Ch. II for the setup."),
 ])
 def test_the_hero_lead_is_the_whole_first_sentence_as_readable_html(readme: str, lead: str) -> None:
     """The README's raw Markdown link brackets and formulas never reach the hero, and abbreviations and initials do not end it."""

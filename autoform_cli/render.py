@@ -125,6 +125,7 @@ from .markdown import (
     page_title,
     published_page,
     relative_link,
+    render_tree,
     rendered_visible_text,
     site_converter,
     statement_and_notes,
@@ -2371,58 +2372,102 @@ def _lead_sentence(body: str) -> str:
 
     Written by a human in `blueprint/README.md`, so it says what the project is
     far better than anything derived from the graph could. Prose only: a
-    heading or a list is structure rather than a claim.
+    heading or a list is structure rather than a claim. The first paragraph
+    with words is read through the site's own converter, so code and formulas
+    keep their contents, a link keeps its words without its target, and an
+    image, such as a badge, is dropped.
     """
-    for block in body.split("\n\n"):
-        line = block.strip()
-        if not line or line.startswith(("#", "-", "*", "<", "|", ">", "!")):
-            continue
-        # A link keeps its words only: its target is relative to blueprint/.
-        text = re.sub(r"(?<!!)\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)", r"\1", line.replace("\n", " "))
-        # Display math reads as inline math in a one-line lead.
-        text = re.sub(r"(?<!\\)\$\$(.+?)\$\$", r"$\1$", text.replace("\0", ""))
-        code = [match.span() for match in INLINE_CODE.finditer(text)]
-        formulas = [
-            match
-            for match in _INLINE_MATH.finditer(text)
-            if (match.group(3) or match.group(6)) and not any(a <= match.start() < b for a, b in code)
-        ]
-        kept = [*code, *(match.span() for match in formulas)]
-        sentence = text
-        for stop in re.finditer(r"\.\s+(?![a-z])", text):
-            before = text[: stop.start()]
-            words = [word.lstrip("(") for word in before.split()] or [""]
-            if (
-                words[-1].lower() in _LEAD_ABBREVIATIONS
-                or _is_initial(words[-1], words[-2] if len(words) > 1 else "")
-                or any(a <= stop.start() < b for a, b in kept)
-            ):
-                continue
-            sentence = before
-            break
-        sentence = sentence.rstrip(".")
-        # The hero is raw HTML, so Markdown never runs over it and a title in
-        # *emphasis* would otherwise show its asterisks. Formulas wait behind
-        # placeholders so emphasis around one still pairs up; escaping first
-        # means the substitutions can only ever produce these tags, and a
-        # formula becomes the span the page's MathJax already typesets.
-        pieces, spans, start = [], [], 0
-        for match in (match for match in formulas if match.end() <= len(sentence)):
-            pieces += [sentence[start : match.start()], f"\0{len(spans)}\0"]
-            formula = html.escape(match.group(3) or match.group(6))
-            spans.append(f'<span class="{FORMULA_CLASS}">\\({formula}\\)</span>')
-            start = match.end()
-        shown = _lead_text("".join(pieces) + sentence[start:])
-        return re.sub("\0(\\d+)\0", lambda match: spans[int(match.group(1))], shown) + "."
+    lines = mask_fences_and_comments(body.splitlines())
+    # Each block is read alone, so raw HTML elsewhere does not hide the lead,
+    # with the reference definitions its links may name.
+    definitions = "\n".join(line for line in lines if _LINK_DEFINITION.match(line))
+    for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
+        tree = render_tree(f"{block}\n\n{definitions}", allow_html=False) if block.strip() else None
+        page = tree.find("body") if tree is not None else None
+        for paragraph in page if page is not None else ():
+            parts = _lead_parts(paragraph) if paragraph.tag == "p" else []
+            if any(kind in {"code", "math"} or (kind == "text" and value.strip()) for kind, value in parts):
+                return _lead_html(parts)
     return ""
 
 
-def _lead_text(text: str) -> str:
-    """Escaped lead prose with its emphasis and code shown as tags."""
-    safe = html.escape(text)
-    safe = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", safe)
-    safe = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", safe)
-    return re.sub(r"`([^`]+)`", r"<code>\1</code>", safe)
+def _lead_parts(element: object) -> list[tuple[str, str]]:
+    """A converted paragraph as text, code, math and emphasis parts."""
+    parts: list[tuple[str, str]] = []
+
+    def text(value: str | None) -> None:
+        if value:
+            # An Obsidian link reads as its alias, or else its target.
+            value = re.sub(r"\[\[([^\[\]|]*)(?:\|([^\[\]]*))?\]\]", lambda link: link.group(2) or link.group(1), value)
+            parts.append(("text", re.sub(r"\s+", " ", value)))
+
+    def read(node: object) -> None:
+        for child in node:
+            if child.tag == "code":
+                parts.append(("code", "".join(child.itertext())))
+            elif child.tag == "span" and child.get("class") == FORMULA_CLASS:
+                parts.append(("math", "".join(child.itertext())))
+            elif child.tag in {"em", "strong"}:
+                parts.append(("open", child.tag))
+                text(child.text)
+                read(child)
+                parts.append(("close", child.tag))
+            elif child.tag == "br":
+                text(" ")
+            elif child.tag != "img":
+                # A link, or anything else, keeps its words only: an authored
+                # target is relative to blueprint/.
+                text(child.text)
+                read(child)
+            text(child.tail)
+
+    text(element.text)
+    read(element)
+    return parts
+
+
+def _lead_html(parts: list[tuple[str, str]]) -> str:
+    """The first sentence of ``parts`` as escaped HTML.
+
+    The hero is raw HTML, so Markdown never runs over it. Escaping every part
+    means the only tags are the emphasis, code and formula span built here,
+    and a formula is the span the page's MathJax already typesets. A sentence
+    ends only at a period in the prose, never inside code or a formula.
+    """
+    plain, starts = "", []
+    for kind, value in parts:
+        starts.append(len(plain))
+        # Code and formulas stand in as one character no rule below matches.
+        plain += value if kind == "text" else "\x01" if kind in {"code", "math"} else ""
+    cut = len(plain)
+    for stop in re.finditer(r"\.\s+(?![a-z])", plain):
+        before = plain[: stop.start()]
+        words = [word.lstrip("(") for word in before.split()] or [""]
+        word, previous = words[-1], words[-2] if len(words) > 1 else ""
+        if word.lower() in _LEAD_ABBREVIATIONS or _is_initial(word, previous):
+            continue
+        cut = stop.start()
+        break
+    cut = len(plain[:cut].rstrip().rstrip(".").rstrip())
+    begin = len(plain) - len(plain.lstrip())
+    shown: list[str] = []
+    opened: list[str] = []
+    for (kind, value), start in zip(parts, starts):
+        if start >= cut:
+            break
+        if kind == "text":
+            shown.append(html.escape(value[max(begin - start, 0) : cut - start]))
+        elif kind == "code":
+            shown.append(f"<code>{html.escape(value)}</code>")
+        elif kind == "math":
+            shown.append(f'<span class="{FORMULA_CLASS}">{html.escape(value)}</span>')
+        elif kind == "open":
+            opened.append(value)
+            shown.append(f"<{value}>")
+        else:
+            opened.pop()
+            shown.append(f"</{value}>")
+    return "".join(shown) + "".join(f"</{tag}>" for tag in reversed(opened)) + "."
 
 
 #: Words whose period does not end the hero's sentence.
