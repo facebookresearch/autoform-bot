@@ -21,15 +21,16 @@ date when the release is tagged.
   shrinking their labels. Dense unselected maps show an explicitly counted
   connection backbone; all typed dependencies remain in article lists, and
   selected results restore full routes in their bounded neighborhoods (#442).
-- **Book copy.** The landing lead keeps link text, formulas and whole
-  sentences. Next up says which Lean step is next. A chapter's progress is one
-  line of counts with each status's meaning, gone when the chapter has one
-  statement. The map's failure message no longer shows in search results.
 - **Wiki map.** Authored concept links cluster intact formal developments,
   with distinct dotted associations and bounded local corridors. Proof edges,
   ranks, status and full reading pages remain unchanged (#442).
   Publication keeps card dimensions and authored region counts; the one
   browser engine owns positions and routes, without an unused Python grid.
+- **Book copy.** The landing lead keeps link text, code, formulas and whole
+  sentences. Next up says which Lean step is next. A chapter's progress is one
+  line of counts whose status meanings show on hover, gone when the chapter has
+  fewer than two countable statements. Unplaced statements sit under "Other
+  statements", and the map's fallback stays out of search results (#494).
 - **Docs.** The CLI reference's contracts moved to `autoform_cli/reference/`
   (validation and audit, search, open statements, claims and revisions,
   runtime and publication). The reference, skills and contributor docs keep
