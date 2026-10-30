@@ -113,7 +113,7 @@ date when the release is tagged.
   module Lake can build. A library whose `globs` leave out its own root no
   longer claims the other files under that root, so a library nested there no
   longer makes the command refuse a project Lake builds with "maps to more
-  than one module" (#NNN).
+  than one module" (#500).
 - **Book navigation.** The generated `SUMMARY.md` nests each book page under
   its chapter's README, written in book order. A landing page that linked a
   deep page before its chapters, or a folder with no README in the book, put a
