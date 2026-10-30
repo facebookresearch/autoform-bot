@@ -69,7 +69,7 @@ var host = {classList: {contains: name => hostClasses.has(name),
   toggle(name, enabled) { if (enabled) hostClasses.add(name); else hostClasses.delete(name); }},
   closest() { return {querySelector() {return null;}}; }};
 var ui$selected, ui$requestedNode = 'A', ui$mode = 'graph', ui$direction = 'both';
-var ui$selectedStatuses = new Set(['fully_proved']), ui$showIsolated = true, ui$query = 'saved query', ui$area = null, ui$overviewGroup = null, ui$scopeOverview = false;
+var ui$selectedStatuses = new Set(['fully_proved']), ui$showIsolated = true, ui$query = 'saved query', ui$area = null, ui$overviewGroup = null, ui$scopeOverview = false, ui$coarseOverview = false;
 var ui$transform = {x: 20, y: 30, scale: 1}, ui$listLimit = 100, ui$relationIds = null, ui$outlineLimit = 120;
 var ui$filtersTouched = false, ui$activeDirty = true, ui$reading = true, ui$overviewOnly = false;
 var byId = new Map(['A','B'].map(id => [id, {id, title: id, kind: 'node', result: true,
@@ -612,7 +612,7 @@ def test_group_history_keeps_derived_selection_reading_focus_and_saved_camera() 
 def test_large_scope_landing_never_overrides_explicit_reading_or_saved_sheet_intent() -> None:
     _run(r"""
       const project=updateProjection;
-      updateProjection=function(){project();ui$scopeOverview=true;};
+      updateProjection=function(){project();ui$scopeOverview=true;ui$coarseOverview=true;};
       byId.get('A').result=false;
       const landing=bundle('A',null,false);landing.anchor=null;
       const landingReady=applyRoute(landing);

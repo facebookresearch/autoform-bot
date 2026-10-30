@@ -107,7 +107,7 @@ var alive=true;
 var sharedIndex={nodes:Array.from(records.values()),relations:[]},currentBundle={nodeId:chapterId,scope:chapterId,
   title:'Large scope',graph:contextGraph,dataURL:'https://example.test/dependencies/chapters/chapter.json',isCurrent:()=>alive};
 var data=contextGraph,view,atlas,palette,byId,prerequisites,dependents,statusCounts,presentStatuses,mapAllowed;
-var ui$requestedNode=chapterId,ui$overviewGroup=null,ui$scopeOverview=false,ui$area=null,ui$overviewOnly=false;
+var ui$requestedNode=chapterId,ui$overviewGroup=null,ui$scopeOverview=false,ui$coarseOverview=false,ui$area=null,ui$overviewOnly=false;
 var ui$selected=null,ui$direction='both',ui$active=[],ui$activeIds=new Set(),ui$activeDirty=true,ui$spotlight=null,ui$hovered=null;
 var ui$selectedStatuses=new Set(['fully_proved']),ui$filtersTouched=true,ui$showIsolated=true;
 var ui$mode='graph',ui$mapAllowed=true,ui$listLimit=100,ui$relationIds=null,ui$transform={x:0,y:0,scale:.9};

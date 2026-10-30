@@ -589,7 +589,7 @@ def test_the_phone_reader_peeks_opens_to_half_or_covers_the_map() -> None:
     # Its accessible name starts with the title it shows; an open desktop reader over an area or the overview closes with ×.
     assert 'refs.sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");' in script
     assert "Toggle mathematical reading" not in script
-    assert "close = opened && !sheetLayout() && (state.area || state.overviewOnly || state.scopeOverview)" in script
+    assert "close = opened && !sheetLayout() && (state.area || state.overviewOnly || state.coarseOverview)" in script
     assert "var page = currentBundle || data" in script
     assert "record = page.readingSource && records.get(page.readingSource.dataset.autoformNodeId);" in script
     assert "band = Math.max(NODE_H, Math.min(band, drawer.clientHeight * .45));" in script

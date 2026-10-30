@@ -1306,7 +1306,7 @@
       ui$spotlight = null, ui$mapAllowed = mapAllowed, ui$readableCrop = false, ui$mathJob = null,
       ui$selectedStatuses = new Set(presentStatuses), ui$showIsolated = true,
       ui$transform = {x: 20, y: 20, scale: 1}, ui$reading = Boolean(firstBundle && firstBundle.readingSource),
-      ui$area = null, ui$overviewGroup = null, ui$scopeOverview = false, ui$overviewOnly = false, ui$filtersTouched = false, ui$relationIds = null,
+      ui$area = null, ui$overviewGroup = null, ui$scopeOverview = false, ui$coarseOverview = false, ui$overviewOnly = false, ui$filtersTouched = false, ui$relationIds = null,
       ui$hovered = null,
       ui$requestedNode = firstBundle && firstBundle.nodeId || null, ui$outlineLimit = 120;
     if (!mapAllowed) ui$mode = "list";
@@ -1537,7 +1537,7 @@
       var mapRequested = Boolean(bundle.mapFirst && (ui$scopeOverview || ui$overviewOnly || mapAllowed && topicCards) && !bundle.anchor && !(record && record.result));
       var readingRequested = Boolean(bundle.focus && !mapRequested || bundle.anchor || record && record.result);
       setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false && 1 : sheetLayout() && (topicOverview || mapRequested) ? false : readingRequested ||
-        !ui$scopeOverview && !ui$overviewOnly && (!sheetLayout() || Boolean(bundle.nodeId)), ui$selected);
+        !ui$overviewOnly && (sheetLayout() ? !ui$scopeOverview && Boolean(bundle.nodeId) : !ui$coarseOverview), ui$selected);
       refresh(true); firstResize = true; resize();
       if (navigation) navigation.loadIndex().catch(showError);
       readingReady = readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
@@ -1667,7 +1667,9 @@
       var scopeOverview = projected._scopeOverview;
       if (scopeOverview && scopeOverview.groups.some(function (group) { return group.key === ui$overviewGroup; })) scopeOverview.selectedGroup = ui$overviewGroup;
       ui$scopeOverview = Boolean(scopeOverview); ui$overviewGroup = scopeOverview && scopeOverview.selectedGroup || null;
-      host.classList.toggle("bp-dag-scope-overview", ui$scopeOverview);
+      // Only authored-area overviews and oversized coarsening open map-first; shelves and context cards keep the reader.
+      ui$coarseOverview = Boolean(overview && (!overview._scopeOverview.$structural || overview._scopeOverview.originalNodes > MAX_MAP_NODES));
+      host.classList.toggle("bp-dag-scope-overview", ui$coarseOverview);
       host.classList.toggle("bp-dag-area-expanded", Boolean(navigation && ui$area));
       adoptGraph(projected); ui$mapAllowed = mapAllowed; ui$activeDirty = true; ui$spotlight = ui$hovered = null;
       overlays.forEach(function (control) { control.remove(); }); overlays.clear();
@@ -2583,7 +2585,7 @@
             x >= box.x && x <= box.x + box.w && y >= box.y && y <= box.y + box.h; });
           if (group) { activateNode(group); return; }
         }
-        next = Math.max(.9, next);
+        if (ui$coarseOverview) next = Math.max(.9, next);
       }
       ui$transform.x = x - (x - ui$transform.x) * next / old;
       ui$transform.y = y - (y - ui$transform.y) * next / old; ui$transform.scale = next; schedule(); remember();
@@ -3116,7 +3118,7 @@
       if (navigation && updateHistory) navigation.checkpoint();
       var refit = ui$direction !== "both", cleared = ui$selected;
       ui$selected = null; ui$direction = "both"; ui$activeDirty = true; ui$spotlight = null;
-      setSheet(navigation && !sheetLayout() && !ui$overviewOnly && !ui$scopeOverview, null);
+      setSheet(navigation && !sheetLayout() && !ui$overviewOnly && !ui$coarseOverview, null);
       syncNavigationSelection(); renderInspector(); renderInventory(false); if (refit) requestAnimationFrame(fit); else schedule();
       if (updateHistory) writeLocation("push");
       var chosen = returnFocus && cleared && (ui$mode === "list" ? dom$inventoryRows.get(cleared.id) : overlays.get(cleared.id));
@@ -3158,10 +3160,10 @@
     function syncSheetAccessibility() {
       if (!dom$inspectorInner || !dom$sheetHandle) return;
       var opened = host.classList.contains("bp-dag-sheet-open");
-      var collapsed = !opened && (sheetLayout() || Boolean(ui$area) || ui$overviewOnly || ui$scopeOverview);
+      var collapsed = !opened && (sheetLayout() || Boolean(ui$area) || ui$overviewOnly || ui$coarseOverview);
       // The handle names the page or entry, with its status, rather than a generic "Reading"; its accessible name starts with that title.
       // An open desktop reader over an area or the overview closes with ×.
-      var page = currentBundle || data, close = opened && !sheetLayout() && (ui$area || ui$overviewOnly || ui$scopeOverview),
+      var page = currentBundle || data, close = opened && !sheetLayout() && (ui$area || ui$overviewOnly || ui$coarseOverview),
         record = records.get(page.nodeId || ui$requestedNode || (ui$selected && ui$selected.id));
       if (!record || !record.result) record = page.readingSource && records.get(page.readingSource.dataset.autoformNodeId);
       var title = record ? record.title : page.title;
@@ -3205,7 +3207,7 @@
       dom$statusInputs.forEach(function (input, key) { if (input.checked) ui$selectedStatuses.add(key); });
       if (ui$selected && !ui$selectedStatuses.has(ui$selected.status)) {
         ui$selected = null; ui$direction = "both"; ui$spotlight = null;
-        setSheet(navigation && !sheetLayout() && !ui$overviewOnly && !ui$scopeOverview, null);
+        setSheet(navigation && !sheetLayout() && !ui$overviewOnly && !ui$coarseOverview, null);
         dom$announcement.textContent = "Selection cleared because its status is hidden.";
       }
       ui$activeDirty = true; writeLocation("replace"); refresh(true); announceShown();
