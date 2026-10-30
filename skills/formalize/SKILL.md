@@ -29,10 +29,9 @@ commit.
 
 For a direct formalization request, use a compatible native persistent Goal when
 available and complete one useful frontier pass. When a run starts or resumes,
-first read the review threads on the pull requests this project's runs opened,
-as their reports or the user name them, and decide each finding: fix it under
-the rules below, note why it is resolved or moot, or ask the user; reply on a
-pull request only if the request covers posting. Native subagents may work
+and at each later re-read of the frontier, the lead first reads and decides the
+reviews on the project's pull requests as the [review
+steps](references/pull-request-reviews.md) say. Native subagents may work
 independent leaves in separate Git worktrees; no custom scheduler or provider
 adapter is part of the protocol. A subagent may keep its worktree for several
 related leaves, each once it is ready, integrating one before taking the next;
