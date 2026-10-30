@@ -244,7 +244,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "worktrees", help="report which linked worktrees are safe to remove, or remove those a saved report lists"
     )
     project_worktrees.add_argument(
-        "target", nargs="?", default=".", help="a path in the checkout results integrate into (default: .)"
+        "target",
+        nargs="?",
+        default=".",
+        help="a path in the checkout whose HEAD results integrate into (default: current directory)",
     )
     project_worktrees.add_argument("--json", action="store_true", help="write stable machine-readable output")
     project_worktrees.add_argument(

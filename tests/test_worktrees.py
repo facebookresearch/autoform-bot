@@ -152,16 +152,22 @@ def board(repo: Path) -> Path:
 def test_clean_integrated_worktree_is_removable_and_names_what_removal_deletes(repo: Path) -> None:
     clean = _add_worktree(repo, "clean")
     (clean / ".lake").mkdir()
-    (clean / ".lake" / "own.olean").write_bytes(b"x" * 50_000)
+    # Random bytes, so a compressing filesystem cannot shrink their blocks.
+    (clean / ".lake" / "own.olean").write_bytes(os.urandom(50_000))
     cache = repo.parent / "lake-cache"
     cache.mkdir()
-    (cache / "shared.olean").write_bytes(b"y" * 200_000)
+    (cache / "shared.olean").write_bytes(os.urandom(200_000))
     os.link(cache / "shared.olean", clean / ".lake" / "shared.olean")
     _age(repo)
 
     report = worktrees.report_worktrees(repo).as_dict()
     [entry] = report["worktrees"]
 
+    assert set(report) == {"board", "integration", "repository", "schema", "worktrees"}
+    assert set(entry) == {
+        "branch", "freeable_bytes", "freed_bytes", "head", "ignored", "logical_bytes", "path", "protected_by",
+        "recover", "removed",
+    }
     assert report["board"] is None
     assert report["integration"] == _git("rev-parse", "HEAD", cwd=repo)
     assert entry["protected_by"] == []
@@ -188,10 +194,39 @@ def test_main_worktree_and_the_targets_own_are_never_candidates(repo: Path) -> N
 
 def test_a_worktree_touched_within_a_lease_lifetime_is_recent(repo: Path) -> None:
     fresh = _add_worktree(repo, "fresh")
+    checked_out = _add_worktree(repo, "checked-out")
+    built = _add_worktree(repo, "built")
     _age(repo)
+    _add_worktree(repo, "new")
+    _git("checkout", "--quiet", "--detach", cwd=checked_out)
+    (built / ".lake").mkdir()
     (fresh / ".lake").mkdir()
+    os.utime(fresh / ".lake", (time.time() - 3600, time.time() - 3600))
 
-    assert _codes(_entries(repo)["fresh"]) == {"recent": "its .lake changed 0 min ago"}
+    entries = _entries(repo)
+
+    # A fresh worker's worktree has no .lake and no process inside, only a new index and HEAD reflog.
+    assert set(_codes(entries["new"])) == {"recent"}
+    assert "its index changed " in _codes(entries["new"])["recent"]
+    assert "its HEAD reflog changed " in _codes(entries["new"])["recent"]
+    assert "its HEAD reflog changed " in _codes(entries["checked-out"])["recent"]
+    assert _codes(entries["built"])["recent"].startswith("its .lake changed ")
+    assert entries["fresh"]["protected_by"] == []
+
+
+def test_files_a_configuration_hides_from_status_still_protect(repo: Path) -> None:
+    hidden = _add_worktree(repo, "hidden")
+    _git("config", "status.showUntrackedFiles", "no", cwd=repo)
+    (hidden / "evidence.json").write_text("{}", encoding="utf-8")
+    unchecked = _add_worktree(repo, "unchecked")
+    _git("update-index", "--assume-unchanged", "Main.lean", cwd=unchecked)
+    (unchecked / "Main.lean").write_text("theorem t : 2 = 2 := rfl\n", encoding="utf-8")
+    _age(repo)
+
+    entries = _entries(repo)
+
+    assert _codes(entries["hidden"]) == {"dirty": "0 changed, 1 untracked: evidence.json"}
+    assert _codes(entries["unchecked"]) == {"dirty": "1 assume-unchanged or skip-worktree: Main.lean"}
 
 
 def test_dirty_worktree_and_evidence_written_into_it_are_protected(repo: Path) -> None:
@@ -239,6 +274,24 @@ def test_a_merge_the_integration_head_cannot_reach_stays_unintegrated(repo: Path
     integration = _git("rev-parse", "HEAD", cwd=repo)[:12]
     assert entries["side"]["protected_by"] == []
     assert _codes(entries["merged"]) == {"unintegrated": f"1 commit(s) the integration HEAD {integration} lacks"}
+
+
+def test_commits_only_a_worktrees_reflog_reaches_are_protected_but_an_amended_one_is_not(repo: Path) -> None:
+    switched = _add_worktree(repo, "switched")
+    _git("checkout", "--quiet", "--detach", cwd=switched)
+    _commit(switched, "Detour.lean")
+    _git("checkout", "--quiet", "switched", cwd=switched)
+    amended = _add_worktree(repo, "amended")
+    _commit(amended, "Amended.lean")
+    _git("commit", "--quiet", "--amend", "-m", "amended again", cwd=amended)
+    _git("merge", "--quiet", "--ff-only", "amended", cwd=repo)
+    _age(repo)
+
+    entries = _entries(repo)
+
+    assert _codes(entries["switched"]) == {"unintegrated": "its HEAD reflog alone reaches 1 commit(s)"}
+    # The amended-away commit survives in the branch's reflog, which removal keeps.
+    assert entries["amended"]["protected_by"] == []
 
 
 def test_a_detached_worktree_whose_reflog_alone_reaches_a_commit_is_protected(repo: Path) -> None:
@@ -328,7 +381,24 @@ def test_an_uninspectable_process_protects_only_worktrees_created_before_it_star
     assert evidence == {"liveness-unknown": detail}
 
 
-def test_a_reused_pid_is_a_new_process_and_refuses_removal(
+def test_a_process_without_a_start_time_or_an_unreadable_process_table_protects_every_worktree(
+    repo: Path, processes: list[object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add_worktree(repo, "worker")
+    _age(repo)
+    processes.append(_Process(44, "/elsewhere", started=None))  # type: ignore[arg-type]
+    assert _codes(_entries(repo)["worker"]) == {
+        "liveness-unknown": "could not inspect pid 44 (fake-44) started at an unknown time"
+    }
+
+    def unreadable(attrs: object = None) -> list[object]:
+        raise psutil.AccessDenied(0)
+
+    monkeypatch.setattr(worktrees.psutil, "process_iter", unreadable)
+    assert list(_codes(_entries(repo)["worker"])) == ["liveness-unknown"]
+
+
+def test_a_process_inside_at_removal_refuses_it_even_under_a_pid_seen_before(
     repo: Path, tmp_path: Path, processes: list[object]
 ) -> None:
     worker = _add_worktree(repo, "worker")
@@ -363,22 +433,42 @@ def test_a_live_lease_from_this_host_protects_every_worktree(repo: Path, board: 
         assert evidence["claimed"].endswith(" (note: feat/first)")
 
 
-def test_repo_names_the_board_when_there_is_no_origin(repo: Path, tmp_path: Path) -> None:
+def test_repo_names_the_board_instead_of_origin(repo: Path, board: Path, tmp_path: Path) -> None:
     _add_worktree(repo, "worker")
     _age(repo)
-    board = tmp_path / "elsewhere.git"
-    _git("init", "--bare", "--quiet", str(board), cwd=tmp_path)
-    _plant_lease(board, "af_live")
+    elsewhere = tmp_path / "elsewhere.git"
+    _git("init", "--bare", "--quiet", str(elsewhere), cwd=tmp_path)
+    _plant_lease(elsewhere, "af_live")
+    assert worktrees.report_worktrees(repo).as_dict()["worktrees"][0]["protected_by"] == []
 
-    assert list(_codes(_entries(repo, repo=str(board))["worker"])) == ["claimed"]
+    report = worktrees.report_worktrees(repo, repo=str(elsewhere)).as_dict()
+
+    assert report["board"] == str(elsewhere.resolve())
+    assert list(_codes(report["worktrees"][0])) == ["claimed"]
+
+
+def test_a_board_url_is_reported_without_its_password() -> None:
+    assert worktrees._without_password("https://me:secret@example.com/r.git") == "https://example.com/r.git"
+    assert worktrees._without_password("git@example.com:r.git") == "git@example.com:r.git"
+
+
+def test_a_lease_expiring_past_the_calendar_does_not_stop_the_report(repo: Path, board: Path) -> None:
+    _add_worktree(repo, "worker")
+    _age(repo)
+    _plant_lease(board, "af_forever", expires_at=1e15)
+
+    assert "1e+15 seconds after the epoch" in _codes(_entries(repo)["worker"])["claimed"]
 
 
 def test_an_unreadable_board_or_lease_leaves_liveness_unknown(repo: Path, board: Path) -> None:
     _add_worktree(repo, "worker")
     _age(repo)
     _plant_lease(board, "af_hostless", host=None)
+    tree = _git("mktree", cwd=board, input_text="")
+    commit = _git("commit-tree", tree, "-m", "not a lease", cwd=board)
+    _git("update-ref", claims.CLAIM_REF_PREFIX + "af_garbled", commit, cwd=board)
     assert _codes(_entries(repo)["worker"]) == {
-        "liveness-unknown": "claim(s) naming no host or unreadable: af_hostless"
+        "liveness-unknown": "claim(s) naming no host or unreadable: af_hostless, af_garbled"
     }
 
     _git("remote", "set-url", "origin", str(repo.parent / "no-such-board.git"), cwd=repo)
@@ -412,8 +502,9 @@ def test_remove_removes_only_the_manifests_removable_worktrees_and_keeps_branche
     assert entries["first"]["removed"] is True
     assert isinstance(entries["first"]["freed_bytes"], int)
     assert entries["first"]["recover"] == f"git worktree add {first} first"
-    assert [name for name, entry in entries.items() if entry["removed"]] == ["first"]
-    assert set(entries) == {"first", "second", "ahead", "later"}
+    # Only the requested entries come back, so feeding the result in again removes nothing more.
+    assert set(entries) == {"first"}
+    assert (entries["first"]["logical_bytes"], entries["first"]["freeable_bytes"]) == (None, None)
     assert not first.exists()
     assert second.is_dir() and ahead.is_dir() and later.is_dir()
     assert _git("branch", "--list", "first", cwd=repo) != ""
@@ -473,6 +564,33 @@ def test_remove_refuses_the_main_worktree_and_the_targets_own(repo: Path, tmp_pa
 
     assert refused == {"main": {"changed": "the main worktree"}, "lead": {"changed": "the worktree the target is in"}}
     assert lead.is_dir()
+
+
+def test_remove_reports_git_refusing_and_removes_a_worktree_listed_twice_once(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = _add_worktree(repo, "first")
+    second = _add_worktree(repo, "second")
+    _age(repo)
+    manifest = _manifest(repo, tmp_path)
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["worktrees"].append(dict(data["worktrees"][0]))
+    manifest.write_text(json.dumps(data), encoding="utf-8")
+    real_git = worktrees._git
+
+    def git(cwd: Path, *arguments: str, **options: object) -> subprocess.CompletedProcess[bytes]:
+        if arguments[:2] == ("worktree", "remove") and arguments[-1] == str(second):
+            return subprocess.CompletedProcess(arguments, 128, b"", b"fatal: refused for the test")
+        return real_git(cwd, *arguments, **options)
+
+    monkeypatch.setattr(worktrees, "_git", git)
+    result = worktrees.remove_worktrees(repo, manifest)
+
+    entries = {entry.path.name: entry for entry in result.entries}
+    assert entries["first"].removed and not first.exists()
+    assert not entries["second"].removed and second.is_dir()
+    assert entries["second"].protected_by == [("git-refused", "fatal: refused for the test")]
+    assert [entry.path.name for entry in result.refused] == ["second"]
 
 
 def test_remove_refuses_after_a_lease_is_renewed(repo: Path, board: Path, tmp_path: Path) -> None:
@@ -542,6 +660,9 @@ def test_cli_reports_removes_and_sets_the_exit_status(
 
     assert main(["project", "worktrees", str(tmp_path / "nowhere")]) == 1
     assert "error:" in capsys.readouterr().err
+    manifest.write_text("{}", encoding="utf-8")
+    assert main(["project", "worktrees", str(repo), "--remove", str(manifest)]) == 1
+    assert "is not an autoform-project-worktrees/v1 report" in capsys.readouterr().err
 
 
 def test_only_the_worktrees_module_removes_a_worktree(repo_root: Path) -> None:

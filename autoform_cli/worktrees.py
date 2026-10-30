@@ -12,17 +12,19 @@ worktree. The user-facing contract is the ``project worktrees`` section of
 ``autoform_cli/README.md``.
 
 What protects a worktree is evidence, never inference. Git's own command
-refuses only a dirty or locked worktree: it removes one holding a Git lock
-file, one containing another worktree, and a detached one whose reflog alone
-reaches its commits, and it never looks at processes or claims, so each is
-checked here. A process is identified by its PID and start time, so a reused
-PID is a new process. An agent between commands has no process inside its
+refuses only a worktree that its configured status shows dirty, or a locked one:
+it removes one holding a Git lock file, one containing another worktree, untracked
+files a configuration hides, and commits only the worktree's reflog reaches, and
+it never looks at processes or claims, so each is checked here. Every check scans
+the process table again and names each process by its PID and start time, never
+trusting a PID seen earlier. An agent between commands has no process inside its
 worktree, so a worktree whose index, HEAD reflog or ``.lake`` changed within a
 lease's lifetime is protected too. A process running as the caller that cannot
 be inspected protects every worktree created before it started, since it may
 have started inside one. A lease names an article, not a worktree, so any live
 lease written from this host protects them all, and a board that cannot be
-read protects them all. A lock file protects whatever its age.
+read protects them all. A lock file protects whatever its age, and a check
+that cannot run protects the worktree it was about.
 """
 
 from __future__ import annotations
@@ -35,6 +37,7 @@ import socket
 import subprocess
 import tempfile
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -229,7 +232,8 @@ def report_worktrees(target: str | os.PathLike[str] = ".", *, repo: str | None =
     """
     repository = _read_repository(Path(target))
     machine = _read_machine(repository, repo)
-    entries = tuple(_evaluate(repository, worktree, machine, sizes=True) for worktree in repository.candidates)
+    candidates = sorted(repository.candidates, key=lambda worktree: str(worktree.path))
+    entries = tuple(_evaluate(repository, worktree, machine, sizes=True) for worktree in candidates)
     return WorktreeReport(repository.common_dir, repository.integration, machine.board, entries)
 
 
@@ -240,9 +244,11 @@ def remove_worktrees(
 
     Each is checked again immediately before its removal, against a fresh
     worktree list and process scan; the claim board is read once, first. The
-    result is the report as rechecked, without sizes, where a removed entry has
-    ``removed`` and its measured ``freed_bytes``. An entry whose integration
-    HEAD, path, commit or branch differs from the manifest is ``changed``.
+    result lists those entries alone, rechecked and without sizes, so feeding
+    it back removes nothing more; a removed entry has ``removed`` and its
+    measured ``freed_bytes``. An entry whose integration HEAD, path, commit or
+    branch differs from the manifest, or that cannot be rechecked, is
+    ``changed``.
     """
     header, wanted = _load_manifest(Path(manifest))
     repository = _read_repository(Path(target))
@@ -251,46 +257,48 @@ def remove_worktrees(
             f"the manifest describes the repository {header['repository']}, not {repository.common_dir}"
         )
     machine = _read_machine(repository, repo)
-    done: dict[str, WorktreeEntry] = {}
+    entries: list[WorktreeEntry] = []
     for item in wanted:
-        path = Path(item["path"])
-        repository = _read_repository(Path(target))
-        current = next((tree for tree in repository.worktrees if str(tree.real) == os.path.realpath(path)), None)
-        entry = WorktreeEntry(path, item["head"], item["branch"])
-        if current is None:
-            entry.protect("changed", "no longer a linked worktree of this repository")
-        elif current == repository.worktrees[0]:
-            entry.protect("changed", "the main worktree")
-        elif not repository.is_candidate(current):
-            entry.protect("changed", "the worktree the target is in")
-        elif header["integration"] != repository.integration:
-            entry.protect(
-                "changed",
-                f"the integration HEAD is now {_short(repository.integration)}, not {_short(header['integration'])}",
-            )
-        elif (current.head, current.branch) != (item["head"], item["branch"]):
-            now = _describe_checkout(current.branch, current.head)
-            entry.protect("changed", f"now {now}, not {_describe_checkout(item['branch'], item['head'])}")
-        else:
-            entry = _evaluate(repository, current, _rescan(machine), sizes=False)
-            if entry.removable:
-                _remove(repository, current, entry)
-        done[os.path.realpath(path)] = entry
-    done_paths = set(done)
-    repository = _read_repository(Path(target))
-    rescanned = _rescan(machine)
-    entries = [
-        done.pop(str(worktree.real), None) or _evaluate(repository, worktree, rescanned, sizes=False)
-        for worktree in repository.candidates
-    ]
-    entries.extend(done.values())  # removed, or no longer a candidate
+        try:
+            entries.append(_remove_one(Path(target), header["integration"], item, machine))
+        except WorktreeError as error:
+            entry = WorktreeEntry(Path(item["path"]), item["head"], item["branch"])
+            entry.protect("changed", f"could not be rechecked: {error}")
+            entries.append(entry)
     return WorktreeReport(
         repository.common_dir,
         repository.integration,
         machine.board,
         tuple(sorted(entries, key=lambda entry: str(entry.path))),
-        frozenset(done_paths),
+        frozenset(os.path.realpath(item["path"]) for item in wanted),
     )
+
+
+def _remove_one(
+    target: Path, integration: str | None, item: dict[str, str | None], machine: _Machine
+) -> WorktreeEntry:
+    path = Path(str(item["path"]))
+    repository = _read_repository(target)
+    current = next((tree for tree in repository.worktrees if str(tree.real) == os.path.realpath(path)), None)
+    entry = WorktreeEntry(path, item["head"], item["branch"])
+    if current is None:
+        entry.protect("changed", "no longer a linked worktree of this repository")
+    elif current == repository.worktrees[0]:
+        entry.protect("changed", "the main worktree")
+    elif not repository.is_candidate(current):
+        entry.protect("changed", "the worktree the target is in")
+    elif integration != repository.integration:
+        entry.protect(
+            "changed", f"the integration HEAD is now {_short(repository.integration)}, not {_short(integration)}"
+        )
+    elif (current.head, current.branch) != (item["head"], item["branch"]):
+        now = _describe_checkout(current.branch, current.head)
+        entry.protect("changed", f"now {now}, not {_describe_checkout(item['branch'], item['head'])}")
+    else:
+        entry = _evaluate(repository, current, _rescan(machine), sizes=False)
+        if entry.removable:
+            _remove(target, repository.top, current, entry)
+    return entry
 
 
 def format_worktrees(report: WorktreeReport) -> list[str]:
@@ -333,12 +341,19 @@ def format_removal(report: WorktreeReport) -> list[str]:
     return lines
 
 
-def _remove(repository: _Repository, worktree: _Worktree, entry: WorktreeEntry) -> None:
+def _remove(target: Path, top: Path, worktree: _Worktree, entry: WorktreeEntry) -> None:
+    """Remove ``worktree`` with Git, untimed since stopping it partway would leave half a tree.
+
+    Git may fail after it has started deleting, so the worktree list says
+    whether it went.
+    """
     free_before = _free_bytes(worktree.path.parent)
-    result = _git(repository.top, "worktree", "remove", "--", str(worktree.path))
+    result = _git(top, "worktree", "remove", "--", str(worktree.path), timeout=None)
     if result.returncode != 0:
-        entry.protect("git-refused", _text(result.stderr).strip() or f"exit status {result.returncode}")
-        return
+        remaining = _read_repository(target).worktrees
+        if any(other.real == worktree.real for other in remaining):
+            entry.protect("git-refused", _text(result.stderr).strip() or f"exit status {result.returncode}")
+            return
     free_after = _free_bytes(worktree.path.parent)
     entry.removed = True
     entry.freed_bytes = free_after - free_before if free_before is not None and free_after is not None else None
@@ -377,7 +392,7 @@ def _parse_worktrees(output: bytes, common_dir: Path) -> list[_Worktree]:
                         head=head if head and head.strip("0") else None,
                         branch=branch.removeprefix("refs/heads/") if branch else None,
                         locked=record.get("locked"),
-                        admin=admins.get(os.path.realpath(path)),
+                        admin=_admin_directory(path) or admins.get(os.path.realpath(path)),
                     )
                 )
             record = {}
@@ -385,6 +400,18 @@ def _parse_worktrees(output: bytes, common_dir: Path) -> list[_Worktree]:
         name, _, value = os.fsdecode(item).partition(" ")
         record[name] = value
     return worktrees
+
+
+def _admin_directory(worktree: Path) -> Path | None:
+    """The Git directory a present worktree's ``.git`` file names, the exact one."""
+    try:
+        pointer = (worktree / ".git").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not pointer.startswith("gitdir: "):
+        return None
+    admin = worktree / pointer.removeprefix("gitdir: ")
+    return Path(os.path.realpath(admin)) if admin.is_dir() else None
 
 
 def _admin_directories(common_dir: Path) -> dict[str, Path]:
@@ -442,7 +469,13 @@ def _evaluate(repository: _Repository, worktree: _Worktree, machine: _Machine, *
 
 
 def _check_status(worktree: _Worktree, entry: WorktreeEntry) -> None:
-    result = _git(worktree.path, "status", "--porcelain", "-z", "--ignored")
+    """Changes, untracked files and files Git was told to stop checking, which removal deletes unseen.
+
+    The options override a configuration that hides untracked files or submodule
+    changes, which ``git worktree remove`` would then delete.
+    """
+    options = ("--porcelain", "-z", "--ignored", "--untracked-files=normal", "--ignore-submodules=none")
+    result = _git(worktree.path, "status", *options)
     if result.returncode != 0:
         entry.protect("dirty", f"git status failed: {_text(result.stderr).strip() or result.returncode}")
         return
@@ -463,16 +496,27 @@ def _check_status(worktree: _Worktree, entry: WorktreeEntry) -> None:
                 next(fields, None)  # a rename or copy names its source next
     if changed or untracked:
         entry.protect("dirty", f"{len(changed)} changed, {len(untracked)} untracked: {_some(changed + untracked)}")
+    tags = _git(worktree.path, "ls-files", "-v", "-z")
+    if tags.returncode != 0:
+        entry.protect("dirty", f"git ls-files failed: {_text(tags.stderr).strip() or tags.returncode}")
+        return
+    # A lowercase tag is assume-unchanged and S skip-worktree: status no longer shows those files' changes.
+    hidden = [os.fsdecode(item[2:]) for item in tags.stdout.split(b"\0") if item[:1].islower() or item[:1] == b"S"]
+    if hidden:
+        entry.protect("dirty", f"{len(hidden)} assume-unchanged or skip-worktree: {_some(hidden)}")
 
 
 def _git_operation(repository: _Repository, worktree: _Worktree) -> str | None:
     if worktree.admin is None:
         return "its Git directory could not be found"
     found: list[str] = []
-    for directory, _, files in os.walk(worktree.admin):
+    errors: list[OSError] = []
+    for directory, _, files in os.walk(worktree.admin, onerror=errors.append):
         found.extend(
             os.path.relpath(os.path.join(directory, name), worktree.admin) for name in files if name.endswith(".lock")
         )
+    if errors:
+        found.append(f"unreadable {errors[0].filename}")
     found.extend(name for name in _OPERATION_MARKERS if os.path.lexists(worktree.admin / name))
     if worktree.branch is not None:
         branch_lock = repository.common_dir / "refs" / "heads" / f"{worktree.branch}.lock"
@@ -491,10 +535,9 @@ def _unintegrated(repository: _Repository, worktree: _Worktree) -> str | None:
         return "its branch has no commit"
     if repository.integration is None:
         return f"{repository.top} has no commit to compare with"
-    if worktree.branch is None:
-        orphaned = _reflog_only_commits(repository, worktree)
-        if orphaned:
-            return orphaned
+    orphaned = _reflog_only_commits(repository, worktree)
+    if orphaned:
+        return orphaned
     ancestor = _git(repository.top, "merge-base", "--is-ancestor", worktree.head, repository.integration)
     if ancestor.returncode == 0:
         return None
@@ -515,28 +558,53 @@ def _unintegrated(repository: _Repository, worktree: _Worktree) -> str | None:
 
 
 def _reflog_only_commits(repository: _Repository, worktree: _Worktree) -> str | None:
-    """Commits a detached worktree's HEAD reflog names that no ref reaches; removal deletes that reflog."""
+    """Commits only what removal deletes reaches: the worktree's HEAD reflog and its own refs.
+
+    A commit a ref or the branch's reflog reaches survives, so an amended
+    commit on a branch is not counted.
+    """
     if worktree.admin is None:
-        return None
-    try:
-        lines = (worktree.admin / "logs" / "HEAD").read_bytes().splitlines()
-    except OSError:
-        return None
-    named = {os.fsdecode(part) for line in lines for part in line.split(b" ")[:2]}
-    named = {oid for oid in named if oid.strip("0")}
+        return "its Git directory could not be found"
+    own_refs = [
+        os.path.relpath(os.path.join(directory, name), worktree.admin)
+        for directory, _, files in os.walk(worktree.admin / "refs")
+        for name in files
+    ]
+    if own_refs:
+        return f"its own refs, which removal deletes: {_some(own_refs)}"
+    named = _reflog_commits(worktree.admin / "logs" / "HEAD")
+    if isinstance(named, str):
+        return named
     if not named:
         return None
+    kept: set[str] | str = set()
+    if worktree.branch is not None:
+        kept = _reflog_commits(repository.common_dir / "logs" / "refs" / "heads" / worktree.branch)
+    if isinstance(kept, str):
+        return kept
     tips = _git(repository.top, "for-each-ref", "--format=%(objectname)")
     if tips.returncode != 0:
         return f"its reflog could not be checked: {_text(tips.stderr).strip()}"
     stdin = "".join(f"{oid}\n" for oid in sorted(named)) + "".join(
-        f"^{tip}\n" for tip in sorted(set(_text(tips.stdout).split()))
+        f"^{tip}\n" for tip in sorted(set(_text(tips.stdout).split()) | kept)
     )
     unreached = _git(repository.top, "rev-list", "--ignore-missing", "--stdin", stdin=stdin.encode("ascii"))
     if unreached.returncode != 0:
         return f"its reflog could not be checked: {_text(unreached.stderr).strip()}"
     count = len(_text(unreached.stdout).split())
     return f"its HEAD reflog alone reaches {count} commit(s)" if count else None
+
+
+def _reflog_commits(path: Path) -> set[str] | str:
+    """The commits a reflog names; none for a missing reflog, and the reason when it cannot be read."""
+    try:
+        lines = path.read_bytes().splitlines()
+    except FileNotFoundError:
+        return set()
+    except OSError as error:
+        return f"its reflog could not be read: {error}"
+    named = {os.fsdecode(part) for line in lines for part in line.split(b" ")[:2]}
+    return {oid for oid in named if oid.strip("0")}
 
 
 def _recent(worktree: _Worktree) -> str | None:
@@ -548,7 +616,10 @@ def _recent(worktree: _Worktree) -> str | None:
     for name, path in places:
         try:
             age = now - os.stat(path).st_mtime
-        except OSError:
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            changed.append(f"its {name} could not be read: {error}")
             continue
         if age < _RECENT_S:
             changed.append(f"its {name} changed {max(int(age // 60), 0)} min ago")
@@ -622,20 +693,22 @@ def _read_claims(top: Path, repo: str | None) -> tuple[str | None, tuple[tuple[s
     """The board read, or None without one, and the protections its leases give every worktree."""
     if repo is None:
         configured = _git(top, "config", "--get", "remote.origin.url")
-        url = _text(configured.stdout).strip()
-        if configured.returncode == 1 and not url:
+        repo = _text(configured.stdout).strip()
+        if configured.returncode == 1 and not repo:
             return None, ()
-        if configured.returncode != 0 or not url:
-            return "origin", (("liveness-unknown", f"the origin remote could not be read: {configured.returncode}"),)
-        if not _repository_is_remote(url):
-            url = str((top / Path(url).expanduser()).resolve())
-        repo = url
+        if configured.returncode != 0 or not repo:
+            raise WorktreeError(f"the origin remote could not be read: {_text(configured.stderr).strip()}")
+        if not _repository_is_remote(repo):
+            repo = str((top / Path(repo).expanduser()).resolve())
+    elif not _repository_is_remote(repo):
+        repo = str(Path(repo).expanduser().resolve())  # relative to the working directory, as for `dashboard`
+    shown = _without_password(repo)
     try:
         with tempfile.TemporaryDirectory(prefix="autoform-worktrees-") as temporary:
             board = ClaimBoard(repo, "autoform-worktrees", Path(temporary) / "claims.git")
             leases = board.list(timeout=_CLAIM_TIMEOUT_S)
     except (ClaimTransportError, ValueError, OSError) as error:
-        return repo, (("liveness-unknown", f"the claim board could not be read: {error}"),)
+        return shown, (("liveness-unknown", f"the claim board could not be read: {error}"),)
     host = socket.gethostname()
     live = [lease for lease in leases if not lease["_malformed"] and not lease["_expired"]]
     held = [
@@ -652,7 +725,15 @@ def _read_claims(top: Path, repo: str | None) -> tuple[str | None, tuple[tuple[s
         protections.append(("claimed", "; ".join(held)))
     if unplaced:
         protections.append(("liveness-unknown", f"claim(s) naming no host or unreadable: {', '.join(unplaced)}"))
-    return board.repo_url, tuple(protections)
+    return shown, tuple(protections)
+
+
+def _without_password(url: str) -> str:
+    """``url`` without the credentials a saved report must not carry."""
+    parts = urllib.parse.urlsplit(url)
+    if not parts.password:
+        return url
+    return urllib.parse.urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
 
 
 def _sizes(root: Path) -> tuple[int, int] | None:
@@ -720,6 +801,10 @@ def _load_manifest(path: Path) -> tuple[dict[str, str | None], list[dict[str, st
             raise WorktreeError(f"the manifest {path} has a malformed worktree entry")
         if not entry["protected_by"] and not entry.get("removed"):
             wanted.append({"path": entry["path"], "head": entry.get("head"), "branch": entry.get("branch")})
+    unique: dict[str, dict[str, str | None]] = {}
+    for entry in wanted:
+        unique.setdefault(os.path.realpath(str(entry["path"])), entry)  # one worktree listed twice is removed once
+    wanted = list(unique.values())
     return {"repository": repository, "integration": integration}, wanted
 
 
@@ -727,19 +812,17 @@ def _optional_text(value: object) -> bool:
     return value is None or isinstance(value, str)
 
 
-def _git(cwd: Path, *arguments: str, stdin: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
+def _git(
+    cwd: Path, *arguments: str, stdin: bytes | None = None, timeout: float | None = _GIT_TIMEOUT_S
+) -> subprocess.CompletedProcess[bytes]:
+    """Run Git; one that cannot start or runs out of time fails with exit status -1, so its caller protects."""
+    command = ["git", "--no-optional-locks", *arguments]
     try:
         return subprocess.run(
-            ["git", "--no-optional-locks", *arguments],
-            cwd=cwd,
-            input=stdin,
-            capture_output=True,
-            env=_git_environment(),
-            timeout=_GIT_TIMEOUT_S,
-            check=False,
+            command, cwd=cwd, input=stdin, capture_output=True, env=_git_environment(), timeout=timeout, check=False
         )
     except (OSError, subprocess.SubprocessError) as error:
-        raise WorktreeError(f"git {arguments[0]} could not run in {cwd}: {error}") from error
+        return subprocess.CompletedProcess(command, -1, b"", os.fsencode(f"git {arguments[0]} could not run: {error}"))
 
 
 def _git_line(cwd: Path, *arguments: str) -> str | None:
@@ -789,7 +872,10 @@ def _signed_bytes(count: int) -> str:
 
 
 def _timestamp(seconds: float) -> str:
-    return datetime.fromtimestamp(seconds, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    try:
+        return datetime.fromtimestamp(seconds, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    except (OverflowError, ValueError, OSError):
+        return f"{seconds:g} seconds after the epoch"
 
 
 __all__ = [
