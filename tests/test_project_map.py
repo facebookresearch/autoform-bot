@@ -28,6 +28,8 @@ def _library() -> tuple[list[dict[str, object]], list[tuple[str, str, int, int]]
         _scope("Algebra/MathlibExt/part-01/groups", "Algebra/MathlibExt/part-01", "Groups", navigation="module"),
         _result("Algebra/MathlibExt/part-01/groups/lagrange", "Algebra/MathlibExt/part-01/groups", "Lagrange", lean="Subgroup.card_dvd"),
         _result("Algebra/MathlibExt/part-01/groups/cauchy", "Algebra/MathlibExt/part-01/groups", "Cauchy", status="can_prove"),
+        _scope("NumberTheory", "roadmap", "Number Theory", area="Algebra & Number Theory"),
+        _result("NumberTheory/euclid", "NumberTheory", "Euclid", status="fully_proved"),
         _scope("Analysis", "roadmap", "Analysis", area="Analysis & Probability"),
         _scope("Analysis/WantedExt", "Analysis", "WantedExt", navigation="collection"),
         _scope("Analysis/WantedExt/series", "Analysis/WantedExt", "Series", navigation="module"),
@@ -59,18 +61,20 @@ def test_collections_and_pagination_are_flattened_and_collections_become_facets(
 
 def test_authored_areas_become_regions_and_projects_without_them_use_chapters() -> None:
     records, relations = _library()
-    regions = files_regions = project_map.build_project_map(records, relations)["index.json"]["regions"]
-    assert [region["id"] for region in files_regions] == ["region:Algebra & Number Theory", "region:Analysis & Probability"]
-    assert [region["results"] for region in regions] == [2, 1]
+    regions = project_map.build_project_map(records, relations)["index.json"]["regions"]
+    # Analysis is alone in its area, so the chapter stands for the area instead of adding a level.
+    assert [region["id"] for region in regions] == ["region:Algebra & Number Theory", "Analysis"]
+    assert [region["results"] for region in regions] == [3, 1]
     plain = [{key: value for key, value in record.items() if key != "area"} for record in records]
-    assert [region["id"] for region in project_map.build_project_map(plain, relations)["index.json"]["regions"]] == ["Algebra", "Analysis"]
+    assert [region["id"] for region in project_map.build_project_map(plain, relations)["index.json"]["regions"]] == [
+        "Algebra", "Analysis", "NumberTheory"]
 
 
 def test_public_api_counts_outside_users_and_imports_count_outside_dependencies() -> None:
     files = project_map.build_project_map(*_library())
     regions = {region["id"]: region for region in files["index.json"]["regions"]}
-    algebra, analysis = regions["region:Algebra & Number Theory"], regions["region:Analysis & Probability"]
-    # Abel summation (Analysis) uses Lagrange (Algebra): Lagrange is Algebra's public API, Analysis imports it.
+    algebra, analysis = regions["region:Algebra & Number Theory"], regions["Analysis"]
+    # Abel summation (Analysis) uses Lagrange (Algebra): Lagrange is the region's public API, Analysis imports it.
     assert algebra["api"] == [["Algebra/MathlibExt/part-01/groups/lagrange", "Lagrange", 1]]
     assert (algebra["api_total"], algebra["imports_total"]) == (1, 0)
     assert (analysis["api_total"], analysis["imports_total"]) == (0, 1)
@@ -78,20 +82,20 @@ def test_public_api_counts_outside_users_and_imports_count_outside_dependencies(
     groups = _part(files, "Algebra/MathlibExt/part-01/groups")
     assert groups["result_edges"] == [["Algebra/MathlibExt/part-01/groups/cauchy", "Algebra/MathlibExt/part-01/groups/lagrange", 0, 1]]
     assert groups["boundary_edges"] == [["Analysis/WantedExt/series/abel", "Algebra/MathlibExt/part-01/groups/lagrange", 1, 0]]
-    assert groups["outside"] == [["Analysis/WantedExt/series/abel", "Abel summation",
-                                  ["region:Analysis & Probability", "Analysis", "Analysis/WantedExt/series"]]]
+    assert groups["outside"] == [["Analysis/WantedExt/series/abel", "Abel summation", ["Analysis", "Analysis/WantedExt/series"]]]
 
 
 def test_links_are_summed_between_the_siblings_below_their_common_ancestor() -> None:
     records, relations = _library()
     relations.append(("Algebra/MathlibExt/part-01/groups/lagrange", "Analysis/WantedExt/series/abel", 0, 2))
+    relations.append(("NumberTheory/euclid", "Algebra/MathlibExt/part-01/groups/lagrange", 1, 0))
     files = project_map.build_project_map(records, relations)
     assert files["index.json"]["region_edges"] == [
-        ["region:Algebra & Number Theory", "region:Analysis & Probability", 0, 2],
-        ["region:Analysis & Probability", "region:Algebra & Number Theory", 1, 0],
+        ["Analysis", "region:Algebra & Number Theory", 1, 0],
+        ["region:Algebra & Number Theory", "Analysis", 0, 2],
     ]
-    # Inside a region nothing crosses, so its children carry no links.
-    assert _part(files, "Algebra")["edges"] == []
+    # Inside the region, Number Theory uses Algebra.
+    assert _part(files, "region:Algebra & Number Theory")["edges"] == [["NumberTheory", "Algebra", 1, 0]]
 
 
 def test_wide_parts_are_grouped_into_linked_communities_and_one_standalone_group() -> None:

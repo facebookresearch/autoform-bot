@@ -90,11 +90,18 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
     chapters = sorted(part for part, parent in part_parent.items() if parent == root)
     area_of = {chapter: str(by_id[chapter]["area"]) for chapter in chapters if by_id[chapter].get("area")}
     if len(set(area_of.values())) >= 2:
+        members: dict[str, list[str]] = defaultdict(list)
         for chapter in chapters:
-            region = _REGION + area_of.get(chapter, "Other")
-            part_parent[chapter] = region
+            members[area_of.get(chapter, "Other")].append(chapter)
+        for area, inside_area in members.items():
+            # An area holding a single chapter adds a level without adding structure: the chapter stands for it.
+            if len(inside_area) == 1:
+                continue
+            region = _REGION + area
             part_parent[region] = root
-            title[region] = region[len(_REGION):]
+            title[region] = area
+            for chapter in inside_area:
+                part_parent[chapter] = region
 
     def chain(part: str) -> list[str]:
         out: list[str] = []

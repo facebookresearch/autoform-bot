@@ -210,7 +210,7 @@
   var canvas = svg("svg", {role: "application", "aria-label": "Map of the whole project. Scroll or use plus and minus to zoom, drag or use the arrow keys to move."});
   canvas.setAttribute("tabindex", "0");
   var defs = svg("defs");
-  defs.innerHTML = '<marker id="pm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>';
+  defs.innerHTML = '<marker id="pm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" fill="currentColor"/></marker>';
   var edgeLayer = svg("g"), partLayer = svg("g"), resultLayer = svg("g"), relationLayer = svg("g"), labelLayer = svg("g");
   canvas.append(defs, edgeLayer, partLayer, resultLayer, relationLayer, labelLayer);
   var hint = el("div", "pm-hint", "Scroll to zoom into a region. Search to jump to a theorem.");
@@ -313,15 +313,17 @@
       var open = isOpen(record, b);
       if (record.id !== ROOT && !record.data && b.w > OPEN_W * FETCH_SHARE && b.h > OPEN_H * FETCH_SHARE) load(record.id);
       if (record.id !== ROOT) {
-        if (open && b.x <= size.w / 2 && b.x + b.w >= size.w / 2 && b.y <= size.h / 2 && b.y + b.h >= size.h / 2) deepestAtCenter = record;
+        // The part the reader is in: the deepest open part under the centre that fills most of the view.
+        if (open && b.x <= size.w / 2 && b.x + b.w >= size.w / 2 && b.y <= size.h / 2 && b.y + b.h >= size.h / 2 &&
+            Math.min(b.w, size.w) * Math.min(b.h, size.h) >= size.w * size.h * 0.45) deepestAtCenter = record;
         var dim = related && !related.parts.has(record.id);
-        var group = keep(partLayer, "part:" + record.id, "g", {class: "pm-part" + (open ? " pm-open" : "") + (dim ? " pm-dimmed" : "") +
+        var holder = keep(partLayer, "part:" + record.id, "g", {class: "pm-part" + (open ? " pm-open" : "") + (dim ? " pm-dimmed" : "") +
           (state.focusPart === record.id ? " pm-focus" : ""), tabindex: open ? -1 : 0, role: "button", "data-part": record.id,
           "aria-label": plain(record.summary.title) + ", " + num(record.summary.results) + " results" + (record.summary.api_total ? ", " + num(record.summary.api_total) + " used elsewhere" : "")});
-        var shape = group.firstChild || group.appendChild(svg("rect"));
+        var shape = holder.firstChild || holder.appendChild(svg("rect"));
         shape.setAttribute("x", b.x); shape.setAttribute("y", b.y); shape.setAttribute("width", Math.max(1, b.w)); shape.setAttribute("height", Math.max(1, b.h));
         shape.setAttribute("rx", clamp(Math.min(b.w, b.h) * 0.04, 2, 12));
-        if (!group.querySelector("title")) group.appendChild(svg("title")).textContent = plain(record.summary.title);
+        if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(record.summary.title);
         statusStrip(record, b, dim);
         labelPart(record, b, open, dim);
       }
@@ -393,12 +395,12 @@
     var b = screenBox(entry.box);
     if (!onScreen(b) || b.w < 1.2) return;
     var row = entry.row, dim = related ? !related.results.has(row.id) && row.id !== selected : state.facets && row.facet && !state.facets.has(row.facet);
-    var group = keep(resultLayer, "result:" + row.id, "g", {class: "pm-result" + (row.id === selected ? " pm-selected" : "") + (dim ? " pm-dimmed" : ""),
+    var holder = keep(resultLayer, "result:" + row.id, "g", {class: "pm-result" + (row.id === selected ? " pm-selected" : "") + (dim ? " pm-dimmed" : ""),
       tabindex: 0, role: "button", "aria-label": plain(row.title) + ", " + statusWords(row.status), "data-result": row.id});
-    var card = group.firstChild || group.appendChild(svg("rect"));
+    var card = holder.firstChild || holder.appendChild(svg("rect"));
     card.setAttribute("x", b.x); card.setAttribute("y", b.y); card.setAttribute("width", b.w); card.setAttribute("height", b.h);
     card.setAttribute("rx", clamp(b.w * 0.18, 1, 6)); card.setAttribute("fill", color(group(row.status)));
-    if (!group.querySelector("title")) group.appendChild(svg("title")).textContent = plain(row.title);
+    if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(row.title);
     if (b.w >= RESULT_LABEL_PX * 4) {
       var fontSize = clamp(b.w / 9, 10, 15), lines = wrap(plain(row.title), Math.max(4, Math.floor(b.w / (fontSize * 0.55))), Math.max(1, Math.min(4, Math.floor(b.h / (fontSize * 1.3)))));
       lines.forEach(function (line, index) {
@@ -435,10 +437,12 @@
       if (!a || !b || !a.box || !b.box) return;
       var ends = edgeEnds(a.box, b.box);
       if (ends[4] < 6) return;
-      var weight = pair.ab + pair.ba, width = clamp(0.8 + Math.log2(1 + weight) * 0.7, 0.8, 9);
+      var weight = pair.ab + pair.ba, width = clamp(0.6 + Math.log2(1 + weight) * 0.45, 0.8, 6);
       var dim = state.related && !(state.related.parts.has(pair.a) && state.related.parts.has(pair.b));
       // Arrows point from the part that is used to the part that uses it: knowledge flows along the line.
-      var line = keep(edgeLayer, "edge:" + key, "path", {d: "M" + ends[0] + "," + ends[1] + "L" + ends[2] + "," + ends[3],
+      var bend = Math.min(60, ends[4] * 0.18), mx = (ends[0] + ends[2]) / 2 - (ends[3] - ends[1]) / (ends[4] || 1) * bend,
+        my = (ends[1] + ends[3]) / 2 + (ends[2] - ends[0]) / (ends[4] || 1) * bend;
+      var line = keep(edgeLayer, "edge:" + key, "path", {d: "M" + ends[0] + "," + ends[1] + "Q" + mx + "," + my + " " + ends[2] + "," + ends[3],
         class: "pm-edge" + (dim ? " pm-dimmed" : ""), "stroke-width": width,
         "marker-start": pair.ab ? "url(#pm-arrow)" : "", "marker-end": pair.ba ? "url(#pm-arrow)" : ""});
       var label = plain(a.summary.title) + " uses " + plain(b.summary.title) + ": " + num(pair.ab) + " links" +
