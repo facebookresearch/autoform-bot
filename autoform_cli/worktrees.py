@@ -167,8 +167,14 @@ class WorktreeEntry:
         return None
 
     def protect(self, code: str, detail: str | None) -> None:
-        if detail:
-            self.protected_by.append((code, detail))
+        """Record ``code`` with its evidence; a second piece of evidence for one code joins the first."""
+        if not detail:
+            return
+        for index, (known, earlier) in enumerate(self.protected_by):
+            if known == code:
+                self.protected_by[index] = (code, f"{earlier}; {detail}")
+                return
+        self.protected_by.append((code, detail))
 
     def as_dict(self) -> dict[str, Any]:
         return {
