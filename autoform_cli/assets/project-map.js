@@ -584,11 +584,12 @@
       state.focusPart = homeId;
       select(resultId, {history: false});
       if (options.history !== false) remember(options.replace);
-      // Close enough that the result's card carries its title, with as much of its part around it as fits. A card
-      // the layout left without area gets its part's view instead of an endless zoom.
+      // Close enough that the result's card carries its title, with as much of its part around it as fits. The card
+      // sits in the upper third, under the pinned title, so its part's band scrolls off and more of its neighbours
+      // show below it. A card the layout left without area gets its part's view instead of an endless zoom.
       if (entry.box.w > 0 && entry.box.h > 0) {
-        var at = centerOf(entry.box);
-        flyTo({x: at[0], y: at[1], k: Math.max(fitK(L.contentOf(record.box)), (CARD_TEXT_W * 1.9) / entry.box.w)});
+        var at = centerOf(entry.box), k = Math.max(fitK(L.contentOf(record.box)), (CARD_TEXT_W * 1.9) / entry.box.w);
+        flyTo({x: at[0], y: at[1] + size.h * 0.2 / k, k: k});
       } else flyToContent(record);
       live.textContent = "Showing " + plain(entry.row.title);
     });
