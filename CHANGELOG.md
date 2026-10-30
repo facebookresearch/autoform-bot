@@ -16,7 +16,8 @@ date when the release is tagged.
   operations, unintegrated commits, processes, recent activity and live leases
   from this host. `--remove` takes a saved report, rechecks each entry, removes
   it with `git worktree remove`, never `--force`, and reports the free space
-  recovered and how to restore it (#435).
+  recovered and how to re-create the checkout; ignored files such as `.lake`
+  are not kept (#435).
 
 ### Changed
 
