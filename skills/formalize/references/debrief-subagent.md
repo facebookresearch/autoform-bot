@@ -14,3 +14,7 @@ standard input. If `record` rejects the answer, correct it and resubmit.
 
 Only the subagent witnessed its searches and dead ends, so the lead must not
 answer on its behalf.
+
+The form's `copied_code` answer is not a wish list: it records duplication that
+now exists, and the lead raises it into shared declarations at the end of the
+run (see [auto-abstraction](auto-abstraction.md)). List every copy.

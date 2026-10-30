@@ -104,8 +104,9 @@ Preserve the exact mathematical statement. Work only on the selected phase: do
 not modify another article or its Lean declarations, or weaken a public
 statement. The exceptions are deleting stale and repairing orphaned
 implementation notes, repairing another article's Lean that an [import
-edit](#import-edits) breaks, and revising a declaration other articles' Lean
-uses: start from `autoform work impact` and make only the edits the [revision
+edit](#import-edits) breaks, raising copied code at the end of a run (below),
+and revising a declaration other articles' Lean uses: start from `autoform work
+impact` and make only the edits the [revision
 contract](../../autoform_cli/reference/claims-and-revisions.md#revision-contract)
 requires, under the claims it requires. A work item flagged `revision`, whose
 article records `statement: retracted`, is such a revision; restating it
@@ -236,8 +237,10 @@ reporting.
 Re-read the work frontier from the updated shared branch and repeat while
 independent ready leaves and authorized capacity remain. Stop when the frontier
 is empty or every remaining attempt has a concrete mathematical or ownership
-blocker. Then the lead follows
+blocker. When `AUTOFORM_SUBAGENT_DEBRIEF=1`, the lead then
+[raises the code workers copied](references/auto-abstraction.md) into shared
+declarations. Then the lead follows
 [Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with `--skill
 formalize`. Report changed articles and Lean files, integrated commits, branches
 and commits handed off, any claims released or handed off, checks and reviews
-run, and exact remaining goals.
+run, copied code raised or left open, and exact remaining goals.

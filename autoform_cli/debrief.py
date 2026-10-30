@@ -31,7 +31,7 @@ import json
 import os
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -93,6 +93,16 @@ Answer with a single JSON object and no other text. Do not wrap it in a Markdown
       "evidence": "friction 1 | searched_for 2 | other"
     }
   ],
+  "copied_code": [
+    {
+      "kind": "private-declaration | declaration | inline",
+      "source_file": "path/to/File/It/Came/From.lean",
+      "source_declaration": "its Lean name there, or null for code inside a proof",
+      "copy_file": "path/to/Your/File.lean",
+      "copy_declaration": "the Lean name of your copy, or null if you inlined it",
+      "what": "one sentence: what the copied code states or does"
+    }
+  ],
   "nothing_to_report": false
 }
 
@@ -114,6 +124,19 @@ Rules for `infrastructure_proposals`:
   be reused. An `import-export` proposal should name the missing module.
 - An empty `infrastructure_proposals` array is perfectly valid.
 
+Rules for `copied_code`:
+- List every piece of this project's own code you copied into your work,
+  verbatim or adapted (renamed, specialised, reformatted), because you could not
+  use it where it was: a `private` declaration (`private-declaration`), a
+  declaration in a module you could not import (`declaration`), or steps inside
+  another proof (`inline`). Mathlib is not this project's code.
+- This is a record of duplication that exists now, not a wish: the lead raises
+  each copied piece into one shared declaration and points every copy at it.
+  A lemma you would have liked in a more general form, or that does not exist
+  yet, is a `helper-lemma` in `infrastructure_proposals` instead.
+- Give file paths relative to the project root, and the names as written in
+  the source, without `private`.
+
 Rules for `searched_for`:
 - This is a friction report, **not a history of searches**. Include an entry
   only when needed infrastructure was absent or inaccessible, several searches
@@ -122,7 +145,7 @@ Rules for `searched_for`:
 
 If you have no useful notes, that is a complete and valid answer: return
 `"nothing_to_report": true` with every array empty. Do not invent entries to
-fill the schema."""
+fill the schema. Copied code is never nothing to report: list it."""
 
 _ATTEMPT_ID = re.compile(r"\A[0-9a-f]{32}\Z")
 
@@ -278,12 +301,23 @@ class Proposal:
 
 
 @dataclass(frozen=True, slots=True)
+class CopiedCode:
+    kind: str
+    source_file: str
+    source_declaration: str
+    copy_file: str
+    copy_declaration: str
+    what: str
+
+
+@dataclass(frozen=True, slots=True)
 class DebriefAnswer:
     """The agent's answer, normalised to the form's schema and bounded."""
 
     friction: tuple[Friction, ...] = ()
     searched_for: tuple[SearchReport, ...] = ()
     infrastructure_proposals: tuple[Proposal, ...] = ()
+    copied_code: tuple[CopiedCode, ...] = ()
     nothing_to_report: bool = False
 
     @classmethod
@@ -320,6 +354,17 @@ class DebriefAnswer:
                 )
                 for item in _items(data.get("infrastructure_proposals"))
             ),
+            copied_code=tuple(
+                CopiedCode(
+                    kind=_text(item.get("kind"), 64),
+                    source_file=_text(item.get("source_file"), 512),
+                    source_declaration=_text(item.get("source_declaration"), 512),
+                    copy_file=_text(item.get("copy_file"), 512),
+                    copy_declaration=_text(item.get("copy_declaration"), 512),
+                    what=_text(item.get("what")),
+                )
+                for item in _items(data.get("copied_code"))
+            ),
             nothing_to_report=data.get("nothing_to_report") is True,
         )
 
@@ -328,6 +373,7 @@ class DebriefAnswer:
             "friction": [_fields(item) for item in self.friction],
             "searched_for": [_fields(item) for item in self.searched_for],
             "infrastructure_proposals": [_fields(item) for item in self.infrastructure_proposals],
+            "copied_code": [_fields(item) for item in self.copied_code],
             "nothing_to_report": self.nothing_to_report,
         }
 
@@ -438,6 +484,36 @@ def _select(project_or_blueprint: str | Path, selector: str):
     return runtime.source_revision, matches[0]
 
 
+def _worktree_roots(project: Path) -> list[Path]:
+    """The project and every worktree of its repository, deepest first."""
+    roots = {project}
+    for line in (git(project, "worktree", "list", "--porcelain") or "").splitlines():
+        if line.startswith("worktree "):
+            roots.add(Path(line.removeprefix("worktree ")).resolve())
+    return sorted(roots, key=lambda root: len(root.parts), reverse=True)
+
+
+def _project_path(path: str, roots: list[Path]) -> str:
+    """A reported path relative to its worktree, so copies reported from different worktrees match.
+
+    Slot worktrees may live inside the main checkout, so the deepest worktree
+    that holds an absolute path is the one it is relative to.
+    """
+    if not path:
+        return path
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        return candidate.as_posix().removeprefix("./")
+    try:
+        resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        return path
+    for root in roots:
+        if root in resolved.parents:
+            return resolved.relative_to(root).as_posix()
+    return path
+
+
 def _outcome(node: RuntimeNode, phase: str) -> str:
     if phase not in PHASES:
         raise DebriefError(f"phase must be one of {sorted(PHASES)}: {phase!r}")
@@ -475,6 +551,19 @@ def record(
         raise DebriefError(f"the answer exceeds {MAX_ANSWER_BYTES} bytes")
     answer = DebriefAnswer.from_json(parse_answer(answer_text))
     source_revision, node = _select(project_or_blueprint, selector)
+    if answer.copied_code:
+        roots = _worktree_roots(project_dir(project_or_blueprint))
+        answer = replace(
+            answer,
+            copied_code=tuple(
+                replace(
+                    item,
+                    source_file=_project_path(item.source_file, roots),
+                    copy_file=_project_path(item.copy_file, roots),
+                )
+                for item in answer.copied_code
+            ),
+        )
     outcome = _outcome(node, phase)
     entry = DebriefRecord(
         attempt_id=uuid.uuid4().hex,
@@ -548,6 +637,7 @@ def render_record_markdown(entry: DebriefRecord) -> str:
         f"- Friction blocks: {len(answer.friction)}",
         f"- Search reports: {len(answer.searched_for)}",
         f"- Infrastructure proposals: {len(answer.infrastructure_proposals)}",
+        f"- Copied code: {len(answer.copied_code)}",
         f"- Nothing to report: {'yes' if answer.nothing_to_report else 'no'}",
         "",
         "## Infrastructure proposals",
@@ -562,6 +652,19 @@ def render_record_markdown(entry: DebriefRecord) -> str:
             f"- **Kind:** {_md(proposal.kind)}",
             f"- **Improvement:** {_md(proposal.what)}",
             f"- **Evidence:** {_md(proposal.evidence)}",
+            "",
+        ]
+    lines += ["## Copied code", ""]
+    if not answer.copied_code:
+        lines += ["No copied code was reported.", ""]
+    for index, item in enumerate(answer.copied_code, 1):
+        lines += [
+            f"### {index}. {_md(item.copy_declaration or item.what, 'Copied code')}",
+            "",
+            f"- **Kind:** {_md(item.kind)}",
+            f"- **Copied from:** {_md(f'{item.source_file} {item.source_declaration}'.strip())}",
+            f"- **Copy:** {_md(f'{item.copy_file} {item.copy_declaration}'.strip())}",
+            f"- **What:** {_md(item.what)}",
             "",
         ]
     lines += ["## Mechanical friction", ""]
@@ -617,6 +720,7 @@ def render(root: Path) -> list[Path]:
 
 
 __all__ = [
+    "CopiedCode",
     "DebriefAnswer",
     "DebriefError",
     "DebriefRecord",
