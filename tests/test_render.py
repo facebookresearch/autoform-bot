@@ -3487,7 +3487,7 @@ def test_statement_numbers_rise_down_each_page_and_across_chapters(tmp_path: Pat
         int(number)
         for page in pages
         for number in re.findall(
-            r'class="bp-thmlabel">(\d+)<', (out / "roadmap" / page / "README.md").read_text(encoding="utf-8")
+            r'class="bp-thmlabel"[^>]*>(\d+)<', (out / "roadmap" / page / "README.md").read_text(encoding="utf-8")
         )
     ]
     assert numbers == list(range(1, 7 + (variant == "unlisted-result") + 2 * (variant == "unlinked-scope")))
