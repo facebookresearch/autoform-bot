@@ -20,8 +20,11 @@ from .markdown import (
     INLINE_CODE,
     PAGE_HEADER,
     content_lines,
+    first_unclosed_fence,
+    frontmatter_end,
     published_markdown,
     published_page,
+    strip_line_comments,
 )
 from .mathjax import NEUTRALISED, TEX_MACROS
 
@@ -150,7 +153,8 @@ def publishable_article(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...
     errors: list[str] = []
     attributes: list[tuple[str, str]] = []
     defining: dict[str, None] = {}
-    for source, markdown in published_markdown(visible):
+    page_fence = False
+    for piece, (source, markdown) in enumerate(published_markdown(visible)):
         rendered, passed, assigned, unclosed, defined = _rendered_article(markdown)
         reading = _RenderedText()
         reading.feed(rendered)
@@ -180,6 +184,7 @@ def publishable_article(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...
                     + f"raw HTML is not allowed: the site would publish {shown} as HTML; write it in Markdown, or in code to show it as typed"
                 )
         if unclosed is not None:
+            page_fence = page_fence or piece == 0
             opener = unclosed.strip()
             numbers = [number for number, line in enumerate(text.splitlines(), start=1) if line.expandtabs(4).strip() == opener]
             fence = re.match(r"[> ]*(`{3,}|~{3,})", unclosed)
@@ -188,6 +193,31 @@ def publishable_article(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...
                 + "code fence is not closed: the site would read it on into what autoform render puts after this "
                 + f"text, to the next fence on the page; close it with a line of {fence.group(1) if fence else '```'}"
             )
+        else:
+            # The site ends an indented fence at the next line at the margin and
+            # reads a fence with options it rejects as text, but coverage, the
+            # link checks and render's link rewriting read every fence left open
+            # on to the end of the text, so the page is shown as typed (#201).
+            source_lines = source.splitlines()
+            at = first_unclosed_fence(source_lines)
+            # The page's own warning already names a fence its statement or notes leave open.
+            if at is not None and not (piece and page_fence):
+                page_fence = page_fence or piece == 0
+                line = _open_fence_line(text, source_lines[at], page=piece == 0)
+                fence = re.match(r"( *)(`{3,}|~{3,})(.*)", source_lines[at])
+                indent, marker, options = fence.groups() if fence else ("", "```", "")
+                # The site reads an opener with options it rejects as text, so alone at
+                # the margin it leaves no fence open; it closes an indented fence only
+                # at the same indent. Each needs its own fix, and both can apply.
+                rejected = _rendered_article(f"{marker}{options}\n")[3] is None
+                spaces = f"{len(indent)} space{'s' if len(indent) > 1 else ''}"
+                found.append(
+                    (f"line {line}: " if line else "")
+                    + "code fence is not closed: autoform reads the rest of this text as code, which the site does not; "
+                    + ("keep only options the site accepts, such as its language, and " if rejected else "")
+                    + f"close it with a line of {marker}"
+                    + (f" indented {spaces}, as its opening line is" if indent else "")
+                )
         schemes = list(dict.fromkeys(filter(None, map(_unsafe_scheme, [*reading.destinations, *defined]))))
         if schemes:
             found.append(
@@ -210,6 +240,28 @@ def publishable_article(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...
             + f"an error in red; put the project's notation in blueprint/{TEX_MACROS}",
         )
     return visible, tuple(dict.fromkeys(errors)), notation
+
+
+def _open_fence_line(text: str, opener: str, *, page: bool) -> int | None:
+    """The line of the file ``text`` that opens the fence ``opener`` left open.
+
+    For the whole page the file's own lines are scanned as content() scans
+    them, with comments masked in place, so the index is exact; a statement
+    or its notes falls back to the last line with the opener's text.
+    """
+
+    lines = text.removeprefix("\ufeff").splitlines()
+    # The opener comes from published text, which has its comments removed.
+    bare = strip_line_comments(opener, False)[0].strip()
+    if page:
+        start = frontmatter_end(lines)
+        if start == len(lines) and (start < 2 or lines[-1].strip() != "---"):
+            start = 0
+        at = first_unclosed_fence(lines[start:])
+        if at is not None and strip_line_comments(lines[start + at], False)[0].strip() == bare:
+            return start + at + 1
+    numbers = [number for number, line in enumerate(lines, start=1) if strip_line_comments(line, False)[0].strip() == bare]
+    return numbers[-1] if numbers else None
 
 
 #: A command a formula would use to change the formulas around it, or one the

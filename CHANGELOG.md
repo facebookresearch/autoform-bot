@@ -94,6 +94,12 @@ date when the release is tagged.
   keeps a check that cannot run from stopping one either. A scaffolded project
   keeps its workflow: delete it and rerun `autoform init`, or add the step by
   hand once its `AUTOFORM_REF` is from 0.6.0 or later (#389).
+- **Check.** `check` also warns about a code fence that autoform reads as left
+  open but the site ends sooner or reads as text: one indented one to three
+  spaces, one inside a list item, or one whose options the site rejects.
+  Coverage, the link checks and render's link rewriting read everything after
+  it as code, so render shows such a page as typed until the fence is closed,
+  at the indent of its opening line, with options the site accepts (#201).
 
 ### Fixed
 
