@@ -557,7 +557,7 @@ def test_bounded_command_interruption_kills_the_process(tmp_path: Path, monkeypa
     def interrupt_after_start() -> float:
         nonlocal calls
         calls += 1
-        if calls == 1:
+        if calls != 2:
             return monotonic()
         deadline = monotonic() + 5
         while not process_pid.exists() and monotonic() < deadline:
@@ -918,10 +918,14 @@ def test_a_file_no_library_selects_has_no_module(tmp_path: Path) -> None:
     assert module_of(project / "v1" / "Old.lean", libraries) is None
 
 
-def test_a_package_without_library_targets_is_its_own_library(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "lakefile",
+    [pytest.param('name = "Solo"\n', id="absent"), pytest.param('name = "Solo"\nlean_lib = []\n', id="empty-array")],
+)
+def test_a_package_without_library_targets_is_its_own_library(tmp_path: Path, lakefile: str) -> None:
     project = tmp_path / "project"
     project.mkdir()
-    (project / "lakefile.toml").write_text('name = "Solo"\n', encoding="utf-8")
+    (project / "lakefile.toml").write_text(lakefile, encoding="utf-8")
 
     (library,) = lean_libraries(project)
 
@@ -970,6 +974,34 @@ def test_lake_toml_1_1_extensions_are_rejected_on_every_python(tmp_path: Path, t
 
     # Lake 4.32.2 reads TOML 1.0 and rejects every spelling in this matrix.
     with pytest.raises(SkeletonError, match="cannot parse the Lake configuration"):
+        lean_libraries(project)
+
+
+@pytest.mark.parametrize(
+    ("lean_lib", "match"),
+    [
+        pytest.param("lean_lib = true\n", r"lean_lib targets .*array of tables", id="boolean"),
+        pytest.param("lean_lib = false\n", r"lean_lib targets .*array of tables", id="false"),
+        pytest.param('lean_lib = "Solo"\n', r"lean_lib targets .*array of tables", id="string"),
+        pytest.param(
+            '[lean_lib]\nname = "Solo"\nroots = ["Other"]\n',
+            r"lean_lib targets .*array of tables",
+            id="single-brackets",
+        ),
+        pytest.param("lean_lib = [1]\n", r"lean_lib targets .*array of tables", id="array-of-int"),
+        pytest.param('[[lean_lib]]\nroots = ["Other"]\n', r"lean_lib targets .*has no name", id="nameless"),
+    ],
+)
+def test_a_lean_lib_that_is_not_an_array_is_refused_as_lake_refuses_it(
+    tmp_path: Path, lean_lib: str, match: str
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "lakefile.toml").write_text('name = "Solo"\n' + lean_lib, encoding="utf-8")
+
+    # Lake's TOML loader fails with "expected array", "expected table" or
+    # "missing required key: name" (Lake/Load/Toml.lean, decodeTargetDecls).
+    with pytest.raises(SkeletonError, match=match):
         lean_libraries(project)
 
 
