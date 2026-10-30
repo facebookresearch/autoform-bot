@@ -16,6 +16,8 @@
   var BAND = 52, BAND2 = 72, PAD = 12, GAP = 16, MIN_W = 150, MIN_H = 120, ASPECT = 1.6, LANE = 5, RADIUS = 6;
   // Mean advance of a 15 px semibold title character, for choosing one or two title lines.
   var TITLE_EM = 8.4;
+  // The band height a lone title line needs.
+  var LABEL_BAND = 36;
 
   function byKey(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
   function inset(rect, d) {
@@ -24,9 +26,9 @@
   // World units per screen pixel at the zoom that fits this content box to the stage.
   function unitsPerPixel(content, stage) { return Math.max(content.w / stage.w, content.h / stage.h); }
   function contentOf(box) {
-    var unit = box.unit, band = box.band || BAND;
-    return {x: box.x + PAD * unit, y: box.y + band * unit, w: Math.max(0, box.w - 2 * PAD * unit),
-      h: Math.max(0, box.h - (band + PAD) * unit)};
+    var unit = box.unit, band = box.band === undefined ? BAND : box.band, pad = box.pad === undefined ? PAD : box.pad;
+    return {x: box.x + pad * unit, y: box.y + band * unit, w: Math.max(0, box.w - 2 * pad * unit),
+      h: Math.max(0, box.h - (band + pad) * unit)};
   }
   // A title too long for one line at this width takes two, when the box is tall enough for both.
   function bandFor(title, box) {
@@ -156,44 +158,40 @@
         });
         y += heights[index];
       });
-      var count = labelled(rects, minW, minH);
-      return {rects: rects, readable: count === order.length, labelled: count};
+      // Each item's zoom, against this level's, at which its box is big enough for its label; a
+      // sliver needs a lot. Their geometric mean weighs every item alike, large or small.
+      var worst = 0, logs = 0, count = 0;
+      for (var id in rects) {
+        var r = rects[id], zoom = Math.max(minW / Math.max(r.w, 1e-9), minH / Math.max(r.h, 1e-9));
+        worst = Math.max(worst, zoom); logs += Math.log(zoom); count++;
+      }
+      return {rects: rects, readable: worst <= 1 / 0.99, zoom: Math.exp(logs / count)};
     }
     var kept = place(rows, minW, minH);
-    if (kept.readable) return kept;
-    var free = place(group(Infinity), 0, 0);
-    return free.labelled > kept.labelled || (free.labelled === kept.labelled && shapeCost(free.rects) < shapeCost(kept.rects)) ? free : kept;
-  }
-  // How many items get a box big enough for their label (allowing for rounding).
-  function labelled(rects, minW, minH) {
-    var count = 0;
-    for (var id in rects) if (rects[id].w >= 0.99 * minW && rects[id].h >= 0.99 * minH) count++;
-    return count;
+    return kept.readable ? [kept] : [kept, place(group(Infinity), 0, 0)];
   }
 
-  // Strips run across a box, or down it as columns when that labels more items or shapes them much
-  // better: a wide box with one dominant item would otherwise give it a flat full-width row.
+  // Strips run across a box, or down it as columns. A layout where every item is readable wins,
+  // rows first, since they read like text. Otherwise the one whose items become readable soonest
+  // as the camera closes in wins: a wide box with one dominant item would otherwise give it a flat
+  // full-width row, and a flat box would give its children slivers.
   function transpose(rect) { return {x: rect.y, y: rect.x, w: rect.h, h: rect.w, row: rect.row}; }
-  function shapeCost(rects) {
-    var cost = 0, area = 0;
-    for (var id in rects) {
-      var r = rects[id], a = r.w * r.h, ratio = r.w / Math.max(r.h, 1e-9) / ASPECT;
-      cost += a * Math.max(ratio, 1 / ratio); area += a;
-    }
-    return area ? cost / area : 0;
-  }
   // Area grows with the square root of a part's statements, so a small part stays a usable box
   // beside a large one; the label carries the count.
   function packOrdered(order, weights, titles, content, unit) {
     var gap = GAP * unit, weightOf = function (id) { return Math.sqrt(Math.max(weights.get(id), 1)); };
     var minW = MIN_W * unit + gap, minH = MIN_H * unit + gap;
-    var across = strips(order, weightOf, content, minW, minH, ASPECT);
-    var down = strips(order, weightOf, transpose(content), minH, minW, 1 / ASPECT), rects = {};
-    for (var key in down.rects) rects[key] = transpose(down.rects[key]);
-    // Rows read like text, so columns win only by labelling more boxes or by much better shapes.
-    var columns = down.labelled !== across.labelled ? down.labelled > across.labelled : 1.5 * shapeCost(rects) < shapeCost(across.rects);
-    var packed = columns ? {rects: rects, readable: down.readable, labelled: down.labelled} : across;
-    rects = packed.rects;
+    var candidates = strips(order, weightOf, content, minW, minH, ASPECT).map(function (layout) {
+      return Object.assign(layout, {columns: false});
+    });
+    strips(order, weightOf, transpose(content), minH, minW, 1 / ASPECT).forEach(function (layout) {
+      var rects = {};
+      for (var key in layout.rects) rects[key] = transpose(layout.rects[key]);
+      candidates.push(Object.assign(layout, {rects: rects, columns: true}));
+    });
+    var packed = candidates.filter(function (layout) { return layout.readable; })[0] ||
+      candidates.reduce(function (best, layout) { return layout.zoom < best.zoom * 0.98 ? layout : best; });
+    var rects = packed.rects, columns = packed.columns;
     // Gaps shrink in a row of small items, so a small box keeps its shape instead of vanishing.
     var margin = new Map();
     order.forEach(function (id) {
@@ -204,7 +202,10 @@
     order.forEach(function (id, index) {
       var r = inset(rects[id], margin.get(rects[id].row) / 2), box = {x: r.x, y: r.y, w: r.w, h: r.h, unit: unit, order: index,
         row: rects[id].row, axis: columns ? "columns" : "rows"};
-      box.band = bandFor(titles.get(id), box);
+      // A box too small for a whole band keeps most of its height for its content, so what it
+      // holds still opens as the camera closes in; its label waits until the band is tall enough.
+      box.band = Math.min(bandFor(titles.get(id), box), 0.4 * r.h / unit);
+      box.pad = Math.min(PAD, 0.1 * Math.min(r.w, r.h) / unit);
       boxes[id] = box;
     });
     Object.defineProperty(boxes, "$readable", {value: packed.readable});
@@ -243,7 +244,7 @@
     var id = partData.part.id, ownId = id + "#results", content = contentOf(box), boxes = {};
     var unit = unitsPerPixel(content, stage);
     if (!items.length) {
-      if (own) boxes[ownId] = Object.assign({depth: box.depth + 1, parent: id, own: true, unit: unit, order: 0, row: 0, band: 0}, content);
+      if (own) boxes[ownId] = Object.assign({depth: box.depth + 1, parent: id, own: true, unit: unit, order: 0, row: 0, band: 0, pad: 0}, content);
       return boxes;
     }
     var order = dependencyOrder(items, partData.edges || []), weights = weightsOf(items), titles = titlesOf(items);
@@ -251,7 +252,7 @@
     var packed = packOrdered(order, weights, titles, content, unit);
     for (var child in packed) {
       boxes[child] = Object.assign({depth: box.depth + 1, parent: id}, packed[child]);
-      if (child === ownId) { boxes[child].own = true; boxes[child].band = 0; }
+      if (child === ownId) { boxes[child].own = true; boxes[child].band = 0; boxes[child].pad = 0; }
     }
     return boxes;
   }
@@ -619,18 +620,22 @@
   }
 
   // Labels for the boxes on screen at this camera: a box whose band is a title line tall and MIN_W
-  // wide gets one; deeper boxes gain theirs as the camera closes in.
+  // wide gets one; deeper boxes gain theirs as the camera closes in. A box whose band is still too
+  // thin but whose height has room for a title line gets an overlay label over its top: its
+  // children are smaller still, so none of them is labelled underneath it.
   function placeLabels(boxes, camera, stage) {
     var labels = [];
     Object.keys(boxes).sort(byKey).forEach(function (id) {
       var box = boxes[id];
       var x = (box.x - camera.x) * camera.z, y = (box.y - camera.y) * camera.z;
-      var w = box.w * camera.z, h = box.h * camera.z, band = (box.band || BAND) * box.unit * camera.z;
+      var w = box.w * camera.z, h = box.h * camera.z, band = box.band * box.unit * camera.z, pad = box.pad * box.unit * camera.z;
       if (x >= stage.w || y >= stage.h || x + w <= 0 || y + h <= 0) return;
-      if (!box.band || w < MIN_W * 0.9 || Math.min(band, h) < 0.9 * 36) return;
-      labels.push({id: id, x: x + PAD * box.unit * camera.z, y: y, w: w - 2 * PAD * box.unit * camera.z, band: band,
+      if (!box.band || w < MIN_W * 0.9) return;
+      var inBand = band >= 0.9 * LABEL_BAND;
+      if (!inBand && h < LABEL_BAND) return;
+      labels.push({id: id, x: x + pad, y: y, w: w - 2 * pad, band: inBand ? band : LABEL_BAND, overlay: !inBand,
         lines: box.band === BAND2 && band >= 0.9 * BAND2 ? 2 : 1,
-        detail: Math.min(band, h) >= 0.9 * BAND ? (band >= 120 ? "full" : "meta") : "title"});
+        detail: inBand && Math.min(band, h) >= 0.9 * BAND ? (band >= 120 ? "full" : "meta") : "title"});
     });
     return labels;
   }
@@ -650,7 +655,7 @@
     var content = contentOf(box), fit = fitCamera(content, stage), needs = [];
     for (var id in children) {
       var child = children[id];
-      if (child.band) needs.push(Math.max(MIN_W / child.w, MIN_H / child.h));
+      if (child.band) needs.push(Math.max(0.9 * MIN_W / child.w, 0.9 * LABEL_BAND / (child.band * child.unit)));
     }
     needs.sort(function (a, b) { return a - b; });
     var z = Math.min(needs.length ? needs[Math.floor(needs.length / 2)] : 0, 2 * fit.z);
