@@ -6,9 +6,12 @@ A writer stages its output beside the destination as
 project sources, and hands ``replace_outputs`` the identity the destination
 had before staging. A packet tree is marked by ``PACKET_MANIFEST``, which
 ``lean`` also reads; ``validate_managed_output`` refuses to replace a
-non-empty directory whose manifest does not name a known schema. Detected
-failures raise ``SkeletonError``; ``stage_output``, ``remove_output`` and
-the install preflight of ``replace_outputs`` let ``OSError`` through.
+non-empty directory unless that manifest names the expected kind, a schema
+in ``MANAGED_OUTPUT_SCHEMAS`` (or the one the caller pins) and a list under
+that kind. Detected failures raise ``SkeletonError``, except after a
+successful commit, when a backup that changed, disappeared or cannot be
+removed only gets a ``RuntimeWarning``. ``stage_output``, ``remove_output``
+and the install preflight of ``replace_outputs`` let ``OSError`` through.
 """
 
 from __future__ import annotations
@@ -36,8 +39,10 @@ PACKET_MANIFEST = "manifest.json"
 def output_identity(path: Path) -> tuple[int, int, str] | None:
     """``(st_dev, st_ino, digest)`` of a file or tree, or None when absent.
 
-    The digest covers every name and file's bytes; a symlink or special file
-    at or below ``path`` is refused.
+    The digest covers the names and file bytes ``Path.rglob`` lists; it skips
+    the contents of a directory, ``path`` included, that the process cannot
+    list, without an error.
+    A symlink or special file it reaches is refused.
     """
 
     try:
