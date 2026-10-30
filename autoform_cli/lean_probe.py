@@ -48,6 +48,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import psutil
 import tomli
@@ -207,17 +208,11 @@ _PROJECT_CONTROL_FILES = (
 )
 
 
-def _snapshot_regular_file(path: Path) -> tuple[int, str] | None:
-    captured = read_snapshot_file(path)
-    return None if captured is None else captured[1]
-
-
 def project_control_snapshot(root: Path) -> tuple[tuple[str, tuple[int, str] | None], ...]:
     """Fingerprint the Lake inputs that select the compiled environment."""
 
-    return tuple(
-        (name, _snapshot_regular_file(root / name)) for name in _PROJECT_CONTROL_FILES
-    )
+    captured = ((name, read_snapshot_file(root / name)) for name in _PROJECT_CONTROL_FILES)
+    return tuple((name, None if snapshot is None else snapshot[1]) for name, snapshot in captured)
 
 
 # --------------------------------------------------------------------------- #
@@ -680,10 +675,15 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
     artifact_dir = (root / build_dir / lean_lib_dir).resolve()
     package_src = root / str(config.get("srcDir", "."))
 
+    entries = config.get("lean_lib", [])
+    if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
+        raise SkeletonError(
+            [f"cannot read the lean_lib targets of {root}: Lake expects an array of tables, written [[lean_lib]]"]
+        )
     libraries: list[LeanLibrary] = []
-    for entry in config.get("lean_lib", []) or []:
-        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
-            continue
+    for entry in entries:
+        if not isinstance(entry.get("name"), str):
+            raise SkeletonError([f"cannot read the lean_lib targets of {root}: a [[lean_lib]] target has no name"])
         name = entry["name"]
         src_dir = package_src / str(entry.get("srcDir", "."))
         roots = entry.get("roots")
@@ -707,12 +707,11 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
         )
     if not libraries:
         package = config.get("name")
-        if isinstance(package, str) and package:
-            libraries.append(
-                LeanLibrary(name=package, src_dir=package_src.resolve(), roots=(package,), artifact_dir=artifact_dir)
-            )
-    if not libraries:
-        raise SkeletonError([f"the Lake configuration of {root} declares no library"])
+        if not isinstance(package, str) or not package:
+            raise SkeletonError([f"the Lake configuration of {root} declares no library"])
+        libraries.append(
+            LeanLibrary(name=package, src_dir=package_src.resolve(), roots=(package,), artifact_dir=artifact_dir)
+        )
     return tuple(libraries)
 
 
@@ -1024,12 +1023,10 @@ def _lake_executable(lean_root: Path, label: str = "skeleton probe") -> str:
     return lake
 
 
-def _check_build_freshness(
-    lean_root: Path, modules: tuple[str, ...], *, timeout: float = DEFAULT_FRESHNESS_TIMEOUT
-) -> None:
+def _check_build_freshness(lean_root: Path, modules: tuple[str, ...]) -> None:
     """Run the Lake freshness check once over every module about to be probed."""
 
-    _check_artifacts_fresh(_lake_executable(lean_root), lean_root, modules, timeout=timeout)
+    _check_artifacts_fresh(_lake_executable(lean_root), lean_root, modules, timeout=DEFAULT_FRESHNESS_TIMEOUT)
 
 
 def _probe_environment() -> dict[str, str]:
@@ -1233,7 +1230,10 @@ def _probe_workers(jobs: int) -> int:
     return max(1, min(jobs, _MAX_PROBE_WORKERS, cpus or 1))
 
 
-def run_module_probes(modules: list[str], probe: Callable[[str], object]) -> dict[str, object]:
+_T = TypeVar("_T")
+
+
+def run_module_probes(modules: list[str], probe: Callable[[str], _T]) -> dict[str, _T | SkeletonError]:
     """Run ``probe(module)`` for each module in a bounded pool and collect the results.
 
     A ``SkeletonError`` from one probe is that module's result. Anything else,
@@ -1246,14 +1246,14 @@ def run_module_probes(modules: list[str], probe: Callable[[str], object]) -> dic
 
     cancelled = threading.Event()
 
-    def run(module: str) -> object:
+    def run(module: str) -> _T:
         _PROBE_POOL.cancelled = cancelled
         try:
             return probe(module)
         finally:
             _PROBE_POOL.cancelled = None
 
-    results: dict[str, object] = {}
+    results: dict[str, _T | SkeletonError] = {}
     pool = ThreadPoolExecutor(max_workers=_probe_workers(len(modules)), thread_name_prefix="autoform-probe")
     with _signal_guard() as guard:
         try:
