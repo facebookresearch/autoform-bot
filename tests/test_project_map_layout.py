@@ -150,6 +150,46 @@ def test_a_flat_part_with_one_dominant_child_keeps_every_box_in_shape() -> None:
     """)
 
 
+def test_every_part_at_every_depth_keeps_room_for_what_it_holds() -> None:
+    _run(r"""
+    // A deep, skewed library: wide and flat parents, one dominant child each, results at every depth.
+    let seq = 0;
+    function make(id, depth) {
+      const count = depth >= 6 ? 0 : [12, 9, 7, 5, 4, 3][depth];
+      const children = Array.from({length: count}, (_, k) => make(id + '/' + k, depth + 1));
+      const own = depth >= 6 || seq++ % 3 === 0 ? Array.from({length: 1 + (seq % 9)}, (_, k) => ({id: id + '#' + k, title: 'r'})) : [];
+      const results = own.length + children.reduce((total, child) => total + child.summary.results, 0);
+      const edges = children.slice(1).map((child, k) => [child.summary.id, children[k].summary.id, 1, 0]);
+      const resultEdges = own.slice(1).map((row, k) => [row.id, own[k].id, 1, 0]);
+      return {summary: summary(id, results), data: {part: summary(id, results), children: children.map(c => c.summary),
+        edges, results: own, result_edges: resultEdges, boundary_edges: []}, children};
+    }
+    const regions = Array.from({length: 5}, (_, k) => make('r' + k, 1));
+    for (const stage of [DESKTOP, PHONE]) {
+      const top = L.packLevels({regions: regions.map(r => r.summary), region_edges: []}, stage);
+      const queue = regions.map(r => [r, top.boxes[r.summary.id]]);
+      let parts = 0, cards = 0;
+      while (queue.length) {
+        const [node, box] = queue.shift();
+        const content = L.contentOf(box);
+        assert(content.w > 0 && content.h > 0, node.summary.id + ' ' + JSON.stringify(box));
+        // Fitted to the stage, a part always shows its own label.
+        assert(L.placeLabels({[node.summary.id]: box}, L.fitCamera(box, stage), stage).length === 1, node.summary.id);
+        const kids = L.packPart(node.data, box, stage);
+        const own = kids[node.summary.id + '#results'];
+        if (own) {
+          assert(own.w > 0 && own.h > 0);
+          const view = L.layoutCommunity(node.data.results, node.data.result_edges, [], own);
+          for (const row of node.data.results) { const card = view.cards[row.id]; assert(card.w > 0 && card.h > 0 && inside(card, own)); cards++; }
+        }
+        node.children.forEach(child => queue.push([child, kids[child.summary.id]]));
+        parts++;
+      }
+      assert(parts > 1000 && cards > 1000, parts + ' ' + cards);
+    }
+    """)
+
+
 def test_routes_run_only_through_gaps_and_merge_both_directions() -> None:
     _run(r"""
     for (const parent of [{x: 0, y: 0, w: 900, h: 780, unit: 1, band: 52, depth: 1},
@@ -224,7 +264,7 @@ def test_labels_appear_only_where_they_fit() -> None:
       assert(label.w >= 0.9 * MIN_W - 2 * 12 * box.unit * camera.z - EPS);
     }
     // Opening a crowded part comes closer than its fit, at most twice, until most children are labelled.
-    const crowd = sizes(30, 40).map((results, k) => summary('r1/c' + k, results));
+    const crowd = Array.from({length: 60}, (_, k) => summary('r1/c' + k, 10 + k % 7));
     const many = L.packPart({part: summary('r1', 300), children: crowd, edges: []}, packed.boxes.r1, DESKTOP);
     const fit = L.fitCamera(L.contentOf(packed.boxes.r1), DESKTOP), focus = L.focusCamera(packed.boxes.r1, many, DESKTOP);
     assert(focus.z >= fit.z - EPS && focus.z <= 2 * fit.z + EPS);
