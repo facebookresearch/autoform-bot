@@ -8,9 +8,22 @@ import pytest
 
 from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
-from tests.test_dag_viewer_browser import _page, _served, playwright, webkit_browser  # noqa: F401  (fixture)
+from tests.test_dag_viewer_browser import _REQUIRED, _page, _served, playwright
 
 _ARTICLE = "---\ndeclaration: {kind}\nstatement: formalized\nlean: {lean}\n---\n\n# {title}\n\n{body}\n\n## Depends on\n\n{uses}\n"
+
+
+@pytest.fixture(scope="module")
+def webkit_browser() -> Iterator[object]:
+    with playwright.sync_playwright() as runtime:
+        try:
+            browser = runtime.webkit.launch()
+        except playwright.Error as error:
+            if _REQUIRED or "Executable doesn't exist" not in str(error):
+                raise
+            pytest.skip("WebKit is not installed")
+        yield browser
+        browser.close()
 
 
 @pytest.fixture(scope="module")
