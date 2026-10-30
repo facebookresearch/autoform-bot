@@ -30,6 +30,11 @@ date when the release is tagged.
   ranks, status and full reading pages remain unchanged (#442).
   Publication keeps card dimensions and authored region counts; the one
   browser engine owns positions and routes, without an unused Python grid.
+- **Book copy.** The landing lead keeps link text, code, formulas and whole
+  sentences. Next up says which Lean step is next. A chapter's progress is one
+  line of counts whose status meanings show on hover, gone when the chapter has
+  fewer than two countable statements. Unplaced statements sit under "Other
+  statements", and the map's fallback stays out of search results (#494).
 - **Docs.** The CLI reference's contracts moved to `autoform_cli/reference/`
   (validation and audit, search, open statements, claims and revisions,
   runtime and publication). The reference, skills and contributor docs keep

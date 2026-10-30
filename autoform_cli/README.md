@@ -17,7 +17,7 @@ directory path, and the root article's is `roadmap`.
 
 The H1 is the article's title. Container prose is the exposition; a standalone
 list item linking to a formalizable leaf places the leaf there in the published
-chapter. Unplaced leaves appear under “Additional formalization targets”,
+chapter. Unplaced leaves appear under “Other statements”,
 unplaced module catalogs under “Module inventories”. Keep the root article a
 short preface and table of contents, not an inventory of every milestone: large
 inventories belong in coverage, and a detailed container introduces its
@@ -515,14 +515,14 @@ implies the other. It does **not** claim the rows cover the source
 exhaustively, which no local check can judge, nor that linked articles are
 formalized or proved.
 
-Target metrics (the denominator, readiness count, declaration-kind totals, and
-progress breakdowns in the book and `autoform check`) count non-container
-articles carrying `declaration`, never a `catalog: module` record. A scope's
-status bar, item count, and dependency-map legend also count `not_ready`
-leaves that declare nothing yet, so deferred work holds its scope open, and
-each catalog under a neutral status, `inventory checked` once fully proved and
-`inventory pending` until then, which never changes the scope's rolled-up
-status; a target that depends on a catalog still waits for it.
+Target metrics (the denominator, readiness count, and progress breakdowns in the
+book and `autoform check`) count non-container articles carrying `declaration`,
+never a `catalog: module` record. A scope's status bar, item count, and
+dependency-map legend also count `not_ready` leaves that declare nothing yet, so
+deferred work holds its scope open, and each catalog under a neutral status,
+`inventory checked` once fully proved and `inventory pending` until then, which
+never changes the scope's rolled-up status; a target that depends on a catalog
+still waits for it.
 
 ### skeleton
 

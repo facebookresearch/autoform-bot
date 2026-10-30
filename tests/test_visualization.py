@@ -63,7 +63,7 @@ _MERMAID_PAGE = (
     "\n"
     "<div class=\"bp-legend-grid\"><span class=\"bp-swatch bp-swatch-can_state\"></span>"
     "<span class=\"bp-legend-label\">ready to state</span><span class=\"bp-legend-count\">1</span>"
-    "<span class=\"bp-legend-meaning\">Nothing it needs is blocked, so the statement can be written in Lean.</span>"
+    "<span class=\"bp-legend-meaning\">Everything its statement uses is in Lean, so the statement can be written in Lean.</span>"
     "</div>\n"
 )
 
@@ -231,7 +231,7 @@ def test_the_legend_explains_readiness_without_naming_a_policy(tmp_path: Path) -
 
     assert [statuses[key].key for key in ("stated", "unstated")] == ["can_prove", "can_state"]
     assert "Statement is in Lean and nothing it needs is blocked, so the proof can start." in legend
-    assert "Nothing it needs is blocked, so the statement can be written in Lean." in legend
+    assert "Everything its statement uses is in Lean, so the statement can be written in Lean." in legend
 
 
 def test_the_summary_counts_targets_not_the_chapters_that_hold_them(tmp_path: Path) -> None:

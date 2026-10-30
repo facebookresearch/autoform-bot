@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import errno
 import hashlib
+import html
 import json
 import logging
 import os
@@ -51,7 +52,7 @@ from autoform_cli.render import (
     publication_source_revision,
     render_site,
 )
-from autoform_cli.status import INVENTORY_STATES, STATES, derive
+from autoform_cli.status import INVENTORY_STATES, MEANINGS, STATES, derive
 from tests.test_integrated_publication import _decoded_relations
 from tests.test_lean_sources import _git_commit
 
@@ -316,14 +317,14 @@ def test_small_and_large_chapters_use_the_same_json_explorer(
     assert payload["edge_count"] == node_count - 1
 
 
-def test_the_structure_compatibility_page_opens_the_mathematical_wiki(tmp_path: Path) -> None:
+def test_the_structure_compatibility_page_opens_the_book(tmp_path: Path) -> None:
     """Hierarchy has one public UI, rather than a second repository-sized tree."""
     _render(tmp_path)
     page = (tmp_path / "out/structure.md").read_text(encoding="utf-8")
     summary = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
 
-    assert "# Browse the roadmap" in page
-    assert "[Open the mathematical wiki](roadmap/README.md)" in page
+    assert "# This page moved" in page
+    assert "[Roadmap](roadmap/README.md)" in page
     assert "bp-tree" not in page and "data-autoform-node-id" not in page
     assert "Browse all mathematics" not in summary
     assert "Vault structure" not in summary
@@ -350,7 +351,7 @@ def test_a_flat_roadmap_gets_the_same_bounded_browse_doorway(tmp_path: Path) -> 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     page = (tmp_path / "out/structure.md").read_text(encoding="utf-8")
-    assert "[Open the mathematical wiki](roadmap/README.md)" in page
+    assert "[Roadmap](roadmap/README.md)" in page
     assert "Result a" not in page
 
 
@@ -607,13 +608,32 @@ def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -
     assert '<a class="bp-permalink" href="#base" aria-label="Link to Definition 1" data-search-exclude>#</a>' in page
     assert '<span class="bp-thmtitle">Top</span>' in page
     assert "The main result." in page
-    assert "1 definition · 1 result" in page
+    assert "<strong>2</strong> fully proved" in page
+    assert f'<span class="bp-progress-state" title="{html.escape(MEANINGS["fully_proved"])}">' in page
     # A node's own subheadings must not compete with the chapter's structure,
     # and a notes heading starts no search record of its own.
     assert '<h6 data-search-exclude="1" markdown="1">Sources</h6>' in page
     assert "\n## Sources" not in page
     assert "## Depends on" not in page
-    assert "Additional formalization targets" not in page
+    assert "Other statements" not in page
+
+
+def test_a_one_statement_chapter_leaves_its_status_to_the_card(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "base.md").unlink()
+    readme, top = roadmap / "README.md", roadmap / "top.md"
+    readme.write_text(readme.read_text(encoding="utf-8").replace("## Definitions\n\n- [Base](base.md)\n\n", ""), encoding="utf-8")
+    top.write_text(
+        top.read_text(encoding="utf-8").replace("- [Base](base.md)\n", "This node has no prerequisites.\n"),
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    assert 'id="top"' in page
+    assert "bp-progress-overview" not in page
 
 
 def test_inline_triple_backticks_do_not_hide_the_chapter_structure(tmp_path: Path) -> None:
@@ -631,7 +651,7 @@ def test_inline_triple_backticks_do_not_hide_the_chapter_structure(tmp_path: Pat
 
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert page.index('class="bp-progress-overview"') < page.index("## Definitions") < page.index('id="base"')
-    assert "Additional formalization targets" not in page
+    assert "Other statements" not in page
 
 
 def test_unplaced_statements_use_an_explicit_fallback_section(tmp_path: Path) -> None:
@@ -645,8 +665,8 @@ def test_unplaced_statements_use_an_explicit_fallback_section(tmp_path: Path) ->
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
 
-    assert page.index('id="top"') < page.index("## Additional formalization targets")
-    assert page.index("## Additional formalization targets") < page.index('id="base"')
+    assert page.index('id="top"') < page.index("## Other statements")
+    assert page.index("## Other statements") < page.index('id="base"')
 
 
 def test_a_bullet_with_a_bracket_before_its_link_keeps_its_prose(tmp_path: Path) -> None:
@@ -662,7 +682,7 @@ def test_a_bullet_with_a_bracket_before_its_link_keeps_its_prose(tmp_path: Path)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
 
     assert "- [Hartshorne II.3] constructs [Base](#base)\n- [x] [Top](#top)\n" in page
-    assert page.index("## Additional formalization targets") < page.index('id="base"')
+    assert page.index("## Other statements") < page.index('id="base"')
 
 
 def test_a_label_holding_half_open_math_is_still_a_link(tmp_path: Path) -> None:
@@ -689,7 +709,7 @@ def test_a_label_holding_half_open_math_is_still_a_link(tmp_path: Path) -> None:
     page = (tmp_path / "out/roadmap/ch/README.md").read_text(encoding="utf-8")
 
     assert "bp-book-nav" in page
-    assert "Additional formalization targets" not in page
+    assert "Other statements" not in page
     assert "- [Lemma on $(0,1]$](../../sources/paper.md)\n" in page
 
 
@@ -809,7 +829,7 @@ def test_overview_carries_the_counts_without_a_separate_progress_page(tmp_path: 
     assert 'role="img"' not in overview
     assert "items settled" not in overview
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    assert "1 definition · 1 result" in chapter
+    assert "<strong>2</strong> fully proved" in chapter
     # Progress stays on the landing page; the only summary link explains scope.
     assert "bp-progress-link" not in overview
     assert not (tmp_path / "out/progress.md").exists()
@@ -988,12 +1008,12 @@ def test_module_catalog_is_separate_from_formalization_progress(
         '<span class="bp-thmcaption" data-search-exclude>Module</span><span class="bp-thmlabel" data-search-exclude>1</span>'
     ) in chapter
     assert "A checked inventory of an existing Lean module." in chapter
+    assert "<strong>2</strong> fully proved" in chapter
     # A catalog can list hundreds of names, so search gets none beyond its Lean row: only base's card lists it.
     assert chapter.count('<div class="bp-search-names" hidden>Project.Base</div>') == 1
-    assert "1 module inventory" in chapter
     # No slot places the catalog, and it is no formalization target.
     assert chapter.index("## Module inventories") < chapter.index('id="catalog"')
-    assert "Additional formalization targets" not in chapter
+    assert "Other statements" not in chapter
 
 
 def test_catalog_slot_with_bracketed_inline_code_is_absorbed(
@@ -1033,7 +1053,7 @@ def test_catalog_slot_with_bracketed_inline_code_is_absorbed(
     assert "A checked inventory with bracketed mathematics in its title." in chapter
     assert chapter.index("## Existing modules") < chapter.index('id="catalog"')
     assert "- [Existing module on" not in chapter
-    assert "## Additional formalization targets" not in chapter
+    assert "## Other statements" not in chapter
     assert "## Module inventories" not in chapter
 
 
@@ -1215,7 +1235,7 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
     ) in book
     assert "ready to state" not in book
     structure = (out / "structure.md").read_text(encoding="utf-8")
-    assert "[Open the mathematical wiki](roadmap/README.md)" in structure
+    assert "[Roadmap](roadmap/README.md)" in structure
     assert "Module A" not in structure
 
 
@@ -1279,6 +1299,49 @@ def test_the_rail_hero_keeps_two_figures_a_counts_line_and_the_coverage_link(tmp
     assert "background: none;" in value and "color: var(--bp-fg);" in value
     assert ".bp-landing-intro.bp-landing-intro .bp-hero-coverage-link { margin-left: 0; }" in css
     assert "last-child:nth-child(odd)" not in css
+
+
+@pytest.mark.parametrize(("readme", "lead"), [
+    (
+        "# Zeta\n\nThis formalizes the preprint ([Zenodo 1](https://zenodo.org/records/1)), which claims more. Next.\n",
+        "This formalizes the preprint (Zenodo 1), which claims more.",
+    ),
+    ("# Rings\n\nA ring, i.e. A unital one, is commutative here. Later prose.\n", "A ring, i.e. A unital one, is commutative here."),
+    (
+        "# Zeta\n\nWe prove $\\zeta(7) < 2$ is irrational. Later prose.\n",
+        'We prove <span class="arithmatex">\\(\\zeta(7) &lt; 2\\)</span> is irrational.',
+    ),
+    ("# T\n\nWe prove Theorem A. Then we stop.\n", "We prove Theorem A."),
+    ("# T\n\nWe cite Luis H. Gallardo. Then we stop.\n", "We cite Luis H. Gallardo."),
+    (
+        "# T\n\nWe study *the $p$-adic numbers* in `$x$`. Then we stop.\n",
+        'We study <em>the <span class="arithmatex">\\(p\\)</span>-adic numbers</em> in <code>$x$</code>.',
+    ),
+    (
+        "# T\n\nWe prove $[X,Y](f) = X(Yf) - Y(Xf)$ for vector fields. Then more.\n",
+        'We prove <span class="arithmatex">\\([X,Y](f) = X(Yf) - Y(Xf)\\)</span> for vector fields.',
+    ),
+    ("# T\n\nRun `simp [h](x)` to close it. Then more.\n", "Run <code>simp [h](x)</code> to close it."),
+    ("# T\n\nWe use `a * b = b * a` and *this*. Then more.\n", "We use <code>a * b = b * a</code> and <em>this</em>."),
+    ("# T\n\nThis formalizes [the preprint][arxiv]. Then more.\n\n[arxiv]: https://arxiv.org/abs/1\n", "This formalizes the preprint."),
+    ("# T\n\nSee [[Target|the target]] and [[Other]]. Then more.\n", "See the target and Other."),
+    (
+        '# T\n\n<!-- note -->\n\n[![CI](https://x/badge.svg)](https://x/actions)\n\n<p align="center">x</p>\n\nWe prove X. Then more.\n',
+        "We prove X.",
+    ),
+    ("# T\n\nWe show $a. B$ holds. Then we stop.\n", 'We show <span class="arithmatex">\\(a. B\\)</span> holds.'),
+    ("# T\n\nSee Hartshorne Ch. II for the setup. Then we stop.\n", "See Hartshorne Ch. II for the setup."),
+    ("# T\n\nWe follow the notes of J. S. Milne. Then we stop.\n", "We follow the notes of J. S. Milne."),
+    ("# T\n\nWe compare rings vs. Fields here. Then we stop.\n", "We compare rings vs. Fields here."),
+    ("# T\n\nWe assume CH. Then we stop.\n", "We assume CH."),
+    ("# T\n\nWe prove X[^1]. Then more.\n\n[^1]: A footnote.\n", "We prove X[^1]."),
+    ("# T\n\nWe prove\n$$\nx = 1.\n$$\nfor all x. Then more.\n", "We prove $$ x = 1. $$ for all x."),
+    ("# T\n\nThis is due to Smith et al. Then we stop.\n", "This is due to Smith et al."),
+    ("# T\n\nSmith et al. (2020) prove it. Then we stop.\n", "Smith et al. (2020) prove it."),
+])
+def test_the_hero_lead_is_the_whole_first_sentence_as_readable_html(readme: str, lead: str) -> None:
+    """The README's link targets never reach the hero, code and formulas keep their contents, and abbreviations and initials do not end it."""
+    assert render_module._lead_sentence(readme) == lead
 
 
 def test_the_legends_beside_the_explorer_count_what_its_rings_count(tmp_path: Path) -> None:
@@ -1771,7 +1834,7 @@ def test_a_nested_article_named_like_a_generated_view_is_published(tmp_path: Pat
     assert 'id="progress"' in (out / "roadmap/ch/README.md").read_text(encoding="utf-8")
     assert "Prose named like a generated page." in (out / "roadmap/ch/structure.md").read_text(encoding="utf-8")
     vault_structure = (out / "structure.md").read_text(encoding="utf-8")
-    assert "[Open the mathematical wiki](roadmap/README.md)" in vault_structure
+    assert "[Roadmap](roadmap/README.md)" in vault_structure
     assert 'data-autoform-node-id="ch/progress"' not in vault_structure
 
 
@@ -3407,10 +3470,10 @@ def test_the_strict_policy_shows_the_same_proof_as_proved_with_no_assumptions(tm
 @pytest.mark.parametrize(
     ("dropped", "why"),
     [
-        ("proof: formalized\n", "Its prerequisites are ready, so the proof can be written now."),
+        ("proof: formalized\n", "Everything it uses is in Lean, so its Lean proof can start."),
         (
             "statement: formalized\nproof: formalized\n",
-            "Its prerequisites are ready, so the statement can be written down.",
+            "Everything its statement uses is in Lean, so its Lean statement can be written now.",
         ),
     ],
 )
