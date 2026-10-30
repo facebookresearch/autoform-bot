@@ -1,4 +1,4 @@
-"""Give a Lean child a clean environment, find the processes it started, and stop and reap its dedicated POSIX process group."""
+"""Give a Lean child a clean environment, find the processes carrying a token the caller set, and stop and reap its dedicated POSIX process group."""
 
 from __future__ import annotations
 

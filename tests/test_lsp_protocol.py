@@ -337,10 +337,11 @@ def test_abort_retries_the_token_sweep_before_reaping_the_leader(monkeypatch):
     # Each scan of the first attempt finds a process carrying the token, so
     # one is left after SIGKILL; the retry's first scan finds none.
     scans = iter([[_FakeTokenCarrier(events)]] * 3)
+    # Asserting inside the scan would only be retried by abort, so record.
+    calls: list[tuple[str, str]] = []
 
     def scan(name, token):
-        assert name == lsp._SESSION_TOKEN_ENV
-        assert token == "session-token"
+        calls.append((name, token))
         events.append("scan")
         return next(scans, [])
 
@@ -359,6 +360,7 @@ def test_abort_retries_the_token_sweep_before_reaping_the_leader(monkeypatch):
     # the retired group again, and the leader was reaped only after a sweep
     # found nothing left.
     assert events == ["group", "scan", "SIGTERM", "scan", "SIGKILL", "scan", "scan", "reap"]
+    assert calls == [(lsp._SESSION_TOKEN_ENV, "session-token")] * 4
     assert session.process is None
 
 
@@ -610,6 +612,24 @@ def test_token_scan_leaves_out_processes_it_cannot_read(monkeypatch):
     monkeypatch.setattr(psutil, "Process", lambda pid: candidates[pid])
 
     assert processes_with_token(lsp._SESSION_TOKEN_ENV, "session-token") == [candidates[1]]
+
+
+def test_token_scan_reads_the_variable_it_is_given(monkeypatch):
+    class Candidate:
+        def __init__(self, environment):
+            self.environment = environment
+
+        def environ(self):
+            return self.environment
+
+    candidates = {
+        1: Candidate({"OTHER_TOKEN": "session-token"}),
+        2: Candidate({lsp._SESSION_TOKEN_ENV: "session-token"}),
+    }
+    monkeypatch.setattr(psutil, "pids", lambda: list(candidates))
+    monkeypatch.setattr(psutil, "Process", lambda pid: candidates[pid])
+
+    assert processes_with_token("OTHER_TOKEN", "session-token") == [candidates[1]]
 
 
 def test_token_scan_fails_when_the_process_table_cannot_be_read(monkeypatch):
