@@ -97,6 +97,16 @@ or `nonrec`, is not indexed, and neither is an unnamed `instance` or
 `instance_wanted`. `_root_.X` is recorded as `X`. `alias b := a` records `b`,
 and `alias ⟨mp, mpr⟩ := a_iff` each of its names that is not `_`; the `:=` must
 be on the alias's line, and the target on that line or the next nonblank one.
+A `structure` or `class` also records each field it declares after `where` (or
+`:=`), and each parent it names (`extends toA : A`), as `Structure.field`, the
+projection Lean defines; a field that only gives a default, `x := v` or
+`(x := v)`, counts only when the structure extends nothing, since it may set an
+inherited field. A field is private when it or its structure is, and protected
+when it is. The index reads no constructor, unnamed parent's projection,
+inherited field, recursor or other generated name, and `check --lean-root`
+reports one under a project structure, class or inductive type with that
+type's `path:line`. `audit` takes a field as a one-line `def` or theorem,
+elaborated under its structure's limits.
 
 A name declared once has that declaration, even a private one. A name declared
 more than once has the one declaration that is neither `private` nor a wanted

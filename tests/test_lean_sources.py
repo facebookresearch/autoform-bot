@@ -196,7 +196,8 @@ def test_declaration_identifier_can_follow_its_keyword_on_the_next_line(
     source = f"import Mathlib\nnamespace Outer\n{keyword}\n  result {body}\nend Outer\n"
     index = _index(tmp_path, source)
 
-    assert set(index.declarations) == {"Outer.result"}
+    # A structure's field is its projection.
+    assert set(index.declarations) == {"Outer.result", *(["Outer.result.value"] if keyword == "structure" else [])}
     declaration = index.find("Outer.result")
     assert declaration.line == 3
     assert declaration.keyword == keyword
@@ -421,7 +422,8 @@ def test_multiline_declaration_names_keep_legal_signature_continuations(
     )
     index = _index(tmp_path, source)
 
-    assert set(index.declarations) == {f"Outer.{name}", "Outer.actual"}
+    fields = {f"Outer.{name}.value"} if keyword == "structure" else set()
+    assert set(index.declarations) == {f"Outer.{name}", "Outer.actual", *fields}
     declaration = index.find(f"Outer.{name}")
     assert declaration.line == 3
     assert declaration.keyword == keyword
@@ -499,6 +501,124 @@ def test_the_scan_indexes_every_declaration_form(tmp_path: Path) -> None:
         "Outer.«dotted.name»",
         "rootLevel",
     ]
+
+
+def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: Path) -> None:
+    """Issue #498: Lean makes each field a projection named under its structure."""
+    source = [
+        "namespace Demo",
+        "/-- An entry. -/",
+        "structure Entry where",
+        "  /-- Its value. -/",
+        "  value : Nat",
+        "  (x y : Int)",
+        "  {a : Nat} [inst : Inhabited Nat]",
+        "  ⦃f : Nat → Nat⦄",
+        "  label (n : Nat) : String := toString n",
+        "  label' n : String := toString n",
+        "  (g (n : Nat) : Nat)",
+        "  /- A comment. -/ private secret : Nat",
+        "  protected guarded : Nat",
+        "  @[simp] tagged : Nat",
+        "  @[simp]",
+        "  private",
+        "  above : Nat",
+        "  sides",
+        "    : Nat",
+        "  (first : Nat)",
+        "    (second : Nat)",
+        "  deriving Repr",
+        "class Shape (α : Type) where",
+        "  area : α → Nat",
+        "end Demo",
+    ]
+    index = _index(tmp_path, "\n".join(source) + "\n")
+
+    fields = (
+        *("value", "x", "y", "a", "inst", "f", "label", "label'", "g", "secret", "guarded"),
+        *("tagged", "above", "sides", "first", "second"),
+    )
+    assert sorted(index.declarations) == sorted(
+        ["Demo.Entry", *(f"Demo.Entry.{name}" for name in fields), "Demo.Shape", "Demo.Shape.area"]
+    )
+    value = index.find("Demo.Entry.value")
+    assert (value.path, value.line, value.keyword, value.private) == (Path("Project/Basic.lean"), 5, "field", False)
+    assert [index.find(f"Demo.Entry.{name}").line for name in ("y", "inst", "secret", "above", "sides")] == [
+        6, 7, 12, 17, 18
+    ]
+    assert index.find("Demo.Shape.area").line == 24
+    secret, guarded = index.find("Demo.Entry.secret"), index.find("Demo.Entry.guarded")
+    assert (secret.private, secret.protected, guarded.private, guarded.protected) == (True, False, False, True)
+    # Modifiers on a line of their own reach only the field below them.
+    assert (index.find("Demo.Entry.above").private, index.find("Demo.Entry.sides").private) == (True, False)
+    linker = SourceLinker(index=index, repository_url="https://github.com/owner/repo", ref="deadbeef")
+    assert linker.url("Demo.Entry.value") == "https://github.com/owner/repo/blob/deadbeef/Project/Basic.lean#L5"
+
+
+@pytest.mark.parametrize(
+    ("source", "names"),
+    [
+        ("structure Pair where (fst snd : Nat)\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair (α : Type)\n    (β : Type) where\n  fst : α\n  snd : β\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure\n  Pair where\n  fst : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  mkPair ::\n  fst : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  mkPair :: fst : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Trie where\n  node ::\n    values : Nat\n    children : Nat\n", ["Trie", "Trie.children", "Trie.values"]),
+        ("class HasMap (α : Type) where\nmk' ::\n  map : α\n", ["HasMap", "HasMap.map"]),
+        ("structure Pair where\n  fst : Nat\n  deriving Repr\n  snd : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  fst : Nat\n  #exit\n  snd : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Marker : Type\ninstance : Inhabited Nat where\n  default := 0\n", ["Marker"]),
+        ("structure Marker where\ndef after : Nat := 0\n", ["Marker", "after"]),
+        ("structure Pair :=\n  (fst : Nat)\n  (snd : Nat)\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Hom extends toBase : Base where\n  w : Nat\n", ["Hom", "Hom.toBase", "Hom.w"]),
+        ("structure Location where\n  module : String\n  range : Nat\n", ["Location", "Location.module", "Location.range"]),
+        ("structure Tree : Prop extends\n    connected : C, acyclic : A\n", ["Tree", "Tree.acyclic", "Tree.connected"]),
+        ("structure Plain extends Base, Pair (fun x => x, 1) where\n  z : Nat\n", ["Plain", "Plain.z"]),
+        ("structure Sized (n : Nat := 0)\n    (m : Nat) where\n  size : Nat\n", ["Sized", "Sized.size"]),
+        # A default may set an inherited field, which Lean declares nothing for.
+        (
+            "structure Point where\n  x := 0\n  (w := 4)\n"
+            "structure Moved extends Point where\n  x := 1\n  (w := 5)\n  y : Nat := 2\n",
+            ["Moved", "Moved.y", "Point", "Point.w", "Point.x"],
+        ),
+    ],
+    ids=["inline", "multiline-header", "keyword-alone", "constructor", "constructor-and-field",
+         "constructor-above-deeper-fields", "constructor-at-the-structure-s-column", "deriving", "exit", "no-where",
+         "no-fields", "assign", "named-parent", "field-named-module", "named-parents-without-where", "unnamed-parents",
+         "header-default", "defaults"],
+)
+def test_structure_fields_follow_the_structure_s_where(tmp_path: Path, source: str, names: list[str]) -> None:
+    assert sorted(_index(tmp_path, source).declarations) == names
+
+
+def test_fields_of_private_and_module_structures_keep_their_structure_s_visibility(tmp_path: Path) -> None:
+    index = _index_files(
+        tmp_path,
+        {
+            "Project/Hidden.lean": "private structure Hidden where\n  inner : Nat\n",
+            "Project/Section.lean": "module\n\npublic section\nnamespace Demo\nstructure Entry where\n"
+            "  value : Nat\nend Demo\nend\n",
+            "Project/Marked.lean": "module\n\nnamespace Demo\npublic structure Record where\n  count : Nat\nend Demo\n",
+        },
+    )
+
+    assert index.find("Hidden.inner").private
+    assert index.find("Demo.Entry.value").path == Path("Project/Section.lean")
+    assert index.find("Demo.Record.count").path == Path("Project/Marked.lean")
+    assert not index.find("Demo.Record.count").private
+
+
+def test_a_field_and_a_declaration_of_its_name_are_ambiguous(tmp_path: Path) -> None:
+    index = _index_files(
+        tmp_path,
+        {
+            "Project/A.lean": "structure Entry where\n  value : Nat\n",
+            "Project/B.lean": "def Entry.value (entry : Entry) : Nat := 0\n",
+        },
+    )
+
+    assert index.find("Entry.value") is None
+    assert index.ambiguity("Entry.value") == "Project/A.lean:2, Project/B.lean:1"
 
 
 def test_every_scope_closes_at_its_own_end(tmp_path: Path) -> None:

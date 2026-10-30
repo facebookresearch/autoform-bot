@@ -802,6 +802,11 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
     scopes: list[str | None] = []
 
     lines = _without_lean_comments(text, mask_literals=True).splitlines()
+    # Masking shortens a comment, so a comment before a field on its line would
+    # move the field's column: columns come from the text as written, unless a
+    # comment or string holds a line separator other than a line end.
+    written = text.splitlines()
+    indents = [len(line) - len(line.lstrip()) for line in (written if len(written) == len(lines) else lines)]
     for number, line in enumerate(lines, start=1):
         if not line.strip():
             continue
@@ -868,8 +873,241 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
             # `_name_token` stops before the `{` in an explicit universe
             # binder, leaving the syntactic separator behind.
             name = name.removesuffix(".")
-            found.append(Declaration(_qualified(namespaces, name), relative, number, keyword, protected, private))
+            qualified = _qualified(namespaces, name)
+            found.append(Declaration(qualified, relative, number, keyword, protected, private))
+            if keyword in ("structure", "class"):
+                found.extend(_fields(lines, indents, number - 1, body_index, qualified, relative, private))
     return found, len(lines)
+
+
+#: What may stand before a structure field's name: modifiers and attribute lists.
+_FIELD_MODIFIERS = frozenset({"private", "protected", "public", "noncomputable", "partial", "unsafe"})
+#: What a structure's header is read by: quoted names, brackets, and what ends it.
+_HEADER_TOKEN = re.compile(r"«[^»]*»|\bwhere\b|:=|[()\[\]{}⦃⦄]")
+
+
+def _fields(
+    lines: list[str],
+    indents: list[int],
+    keyword_index: int,
+    header_index: int,
+    structure: str,
+    relative: Path,
+    private: bool,
+) -> list[Declaration]:
+    """The fields a ``structure`` or ``class`` declares after its ``where``, each as ``Structure.field``.
+
+    Lean makes each field a projection constant of that name. The fields
+    follow ``where``, or the older ``:=``, outside the header's binders. A
+    field line starts at the column of the first line after it; a deeper line
+    continues a field, and a shallower one, or ``deriving``, ends them. A
+    bracketed group names each of its fields, a plain field only its first
+    name. A field given only a default, ``x := v`` or ``(x := v)``, may set an
+    inherited field, which Lean declares no constant for, so it is read only
+    when the structure extends nothing. The constructor's ``mk ::`` names no
+    field, and on a line of its own it may stand at any column. A parent the
+    header names, ``extends toA : A``, is a field as well.
+    """
+
+    base = indents[keyword_index]
+    header: list[tuple[int, str]] = []
+    found = None
+    depth = 0
+    for index in range(header_index, len(lines)):
+        line = lines[index]
+        if not line.strip():
+            continue
+        if index > header_index and indents[index] <= base or _EXIT.match(line):
+            break
+        for token in _HEADER_TOKEN.finditer(line):
+            if token.group() in _BINDER_CLOSERS:
+                depth += 1
+            elif token.group() in _BINDER_CLOSERS.values():
+                depth -= 1
+            elif token.group() in ("where", ":=") and depth <= 0:
+                found = (index, line[token.end() :])
+                break
+        if found is not None:
+            header.append((index, line[: token.start()]))
+            break
+        header.append((index, line))
+    extends, parents = _parents(header)
+    # A parent the header names, `extends toA : A`, is a field too.
+    fields = [
+        Declaration(f"{structure}.{name}", relative, number, "field", False, private)
+        for name, number in parents
+        if name not in _FIELD_FORBIDDEN
+    ]
+    if found is None:
+        return fields
+    where_index, inline = found
+
+    def read(text: str, number: int) -> bool:
+        """Record the fields one field line starts; ``False`` once ``deriving`` ends them."""
+        words = _ATTRIBUTE_LIST.sub(" ", text).split()
+        modifiers = set()
+        while words and words[0] in _FIELD_MODIFIERS:
+            modifiers.add(words.pop(0))
+        text = " ".join(words)
+        if text == "deriving" or text.startswith("deriving "):
+            return False
+        # Each group of names, with what follows their binders: a type, a default, or neither.
+        groups: list[tuple[list[str], str]] = []
+        if text[:1] in _BINDER_CLOSERS:
+            # `(x y : T)`, `{x : T}`, `[inst : C]`: the names a group starts with are all fields.
+            while text[:1] in _BINDER_CLOSERS:
+                end = _bracket_end(text)
+                inner = (text[1 : end - 1] if end > 0 else text[1:]).lstrip()
+                names = []
+                while name := _FIELD_NAME.match(inner):
+                    names.append(name.group())
+                    inner = inner[name.end() :].lstrip()
+                groups.append((names, _after_binders(inner)))
+                if end < 0:
+                    break
+                text = text[end:].lstrip()
+        else:
+            name = _FIELD_NAME.match(text)
+            if name is None:
+                return True
+            tail = _after_binders(text[name.end() :])
+            if tail.startswith("::"):
+                # The constructor's name; a field may follow it on its line.
+                rest = tail[2:].strip()
+                return read(rest, number) if rest else True
+            groups.append(([name.group()], tail))
+        for names, tail in groups:
+            if not tail.startswith(":") or (tail.startswith(":=") and extends):
+                continue
+            for member in names:
+                if member not in _FIELD_FORBIDDEN:
+                    fields.append(
+                        Declaration(
+                            f"{structure}.{member}", relative, number, "field",
+                            "protected" in modifiers, private or "private" in modifiers,
+                        )
+                    )
+        return True
+
+    if inline.strip() and not read(inline.strip(), where_index + 1):
+        return fields
+    start = where_index + 1
+    if not inline.strip():
+        # The constructor may stand alone above the fields, even at the
+        # structure's own column, and the fields' column is then the next line's.
+        first = next((index for index in range(start, len(lines)) if lines[index].strip()), None)
+        if first is not None and _constructor_only(lines[first]):
+            start = first + 1
+    # Each field line with the deeper lines that continue it, such as a type
+    # on the next line or a second bracketed group.
+    entries: list[tuple[int, list[str]]] = []
+    column = None
+    for index in range(start, len(lines)):
+        text = lines[index].strip()
+        if not text:
+            continue
+        if _EXIT.match(text):
+            break
+        indent = indents[index]
+        if column is None:
+            if indent <= base:
+                break
+            column = indent
+        if indent < column:
+            break
+        if indent == column:
+            entries.append((index + 1, [text]))
+        else:
+            entries[-1][1].append(text)
+    # Attribute lists and modifiers may stand on lines of their own above a field.
+    modifiers = ""
+    for number, parts in entries:
+        text = " ".join(parts)
+        if _MODIFIER_LINE.fullmatch(text):
+            modifiers += f" {text}"
+            continue
+        if not read(f"{modifiers} {text}".strip(), number):
+            break
+        modifiers = ""
+    return fields
+
+
+def _parents(header: list[tuple[int, str]]) -> tuple[bool, list[tuple[str, int]]]:
+    """Whether a structure's header extends anything, and each parent it names, with its line."""
+
+    for position, (index, text) in enumerate(header):
+        extends = re.search(r"\bextends\b", text)
+        if extends is not None:
+            break
+    else:
+        return False, []
+    named: list[tuple[str, int]] = []
+    depth, start = 0, True
+    # The parents are separated by the commas outside brackets.
+    for index, text in [(index, text[extends.end() :]), *header[position + 1 :]]:
+        for offset, char in enumerate(text):
+            if start and not char.isspace():
+                if parent := _NAMED_PARENT.match(text, offset):
+                    named.append((parent.group(1), index + 1))
+                start = False
+            if char in _BINDER_CLOSERS:
+                depth += 1
+            elif char in _BINDER_CLOSERS.values():
+                depth -= 1
+            elif char == "," and depth == 0:
+                start = True
+    return True, named
+
+
+def _after_binders(text: str) -> str:
+    """What follows a field's binders, ``(n : Nat) m`` in ``label (n : Nat) m : String``: its type, default or ``::``."""
+
+    while True:
+        text = text.lstrip()
+        if text[:1] in _BINDER_CLOSERS:
+            end = _bracket_end(text)
+            if end < 0:
+                return ""
+            text = text[end:]
+        elif binder := _FIELD_NAME.match(text):
+            text = text[binder.end() :]
+        else:
+            return text
+
+
+def _constructor_only(line: str) -> bool:
+    """Whether ``line`` holds only a structure's constructor, such as ``private mk (n : Nat) ::``."""
+
+    words = _ATTRIBUTE_LIST.sub(" ", line).split()
+    while words and words[0] in _FIELD_MODIFIERS:
+        words.pop(0)
+    text = " ".join(words)
+    name = _FIELD_NAME.match(text)
+    return name is not None and _after_binders(text[name.end() :]) == "::"
+
+
+def _bracket_end(text: str) -> int:
+    """The index just past the bracket that closes the one ``text`` opens with, or -1 if this line does not close it."""
+
+    closers: list[str] = []
+    position = 0
+    while position < len(text):
+        char = text[position]
+        if char == "«":
+            end = text.find("»", position + 1)
+            if end == -1:
+                return -1
+            position = end + 1
+            continue
+        if char in _BINDER_CLOSERS:
+            closers.append(_BINDER_CLOSERS[char])
+        elif char in _BINDER_CLOSERS.values():
+            if not closers or char != closers.pop():
+                return -1
+            if not closers:
+                return position + 1
+        position += 1
+    return -1
 
 
 _ATTRIBUTE_LIST = re.compile(r"@\[[^\]]*\]")
@@ -905,8 +1143,14 @@ _ID_LETTER = (
 _ID_REST = rf"[{_ID_LETTER}0-9'!?\u2080-\u2089\u2090-\u209c\u1d62-\u1d6a\u2c7c]*"
 _ID_COMPONENT = rf"(?:«[^«»]*»|[{_ID_LETTER}]{_ID_REST})"
 _CONTINUATION_IDENTIFIER = re.compile(rf"{_ID_COMPONENT}(?:\.{_ID_COMPONENT})*")
+#: One component of a Lean name, such as a structure field's.
+_FIELD_NAME = re.compile(_ID_COMPONENT)
+#: A parent that names its projection, ``toA : A`` in ``extends toA : A``.
+_NAMED_PARENT = re.compile(rf"({_ID_COMPONENT})\s*:(?![:=])")
 _SIGNATURE_WORDS = frozenset({"where", "extends", "requires", "ensures"})
 _NAME_FORBIDDEN = _COMMAND_HEADS | _COMMAND_MODIFIERS | {"where", "extends", "by", "do", "in", "let", "match"}
+#: ``module`` heads a file, not a command, so a field may have that name.
+_FIELD_FORBIDDEN = _NAME_FORBIDDEN - {"module"}
 _BINDER_CLOSERS = {"(": ")", "{": "}", "[": "]", "⦃": "⦄"}
 
 

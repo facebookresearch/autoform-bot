@@ -782,6 +782,26 @@ def _formalizable_container_warnings(graph: Graph) -> list[str]:
     ]
 
 
+#: How check ends the reason it gives for a name under one of the project's own types.
+_GENERATED = "and record the name in the article's implementation note"
+
+
+def _generated_name(index, name: str) -> str:
+    """Why a name under one of the project's own structures or inductive types may not be found, or ""."""
+    parent = index.find(name.rpartition(".")[0]) if "." in name else None
+    if parent is None or parent.keyword not in ("structure", "class", "inductive"):
+        return ""
+    if parent.keyword == "inductive":
+        kind, read = "an inductive type", "no constructor, recursor"
+    else:
+        kind, read = f"a {parent.keyword}", "the fields it declares, but no constructor, recursor, inherited field"
+    return (
+        f"; {parent.name} is {kind} at {parent.path.as_posix()}:{parent.line}: the index reads {read} or other "
+        f"name Lean generates for it, so for such a name put {parent.name} or another project declaration in "
+        f"lean: {_GENERATED}"
+    )
+
+
 def _check(args: argparse.Namespace) -> int:
     try:
         graph = load_graph(args.blueprint_dir)
@@ -827,13 +847,14 @@ def _check(args: argparse.Namespace) -> int:
             if (ambiguous := index.ambiguity(name))
             else f"{node.id}: declaration not found in {args.lean_root}: {name}"
             + ("; a name Lean generates is not indexed and belongs in the catalog's ledger" if node.catalog else "")
+            + ("" if node.catalog else _generated_name(index, name))
             for node in graph.nodes.values()
             for name in declaration_names(node.lean or "")
             if index.find(name) is None
         ]
         for issue in missing:
             print(f"error: {issue}")
-        if any(": declaration not found in " in issue for issue in missing):
+        if any(": declaration not found in " in issue and _GENERATED not in issue for issue in missing):
             print(
                 "note: check resolves lean: names only in the project's own Lean files, not in Mathlib or other "
                 "dependencies under .lake; if a name is a shared library's declaration, record it in the article's "
