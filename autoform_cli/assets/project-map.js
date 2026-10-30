@@ -1008,6 +1008,11 @@
   fetchJSON("index.json").then(function (index) {
     if (!L) throw new Error("the map's layout script did not load");
     model.index = index;
+    if (!index.regions.length) {
+      readerInner.replaceChildren(el("p", "pm-kicker", "Whole project"), el("h2", "", plain(index.title)),
+        el("p", "pm-empty", "Nothing is on the map yet: the roadmap has no results."));
+      return;
+    }
     var root = {id: ROOT, summary: {id: ROOT, title: index.title, results: index.results, status: index.status, parts: index.regions.length, api: [], api_total: 0, imports_total: 0},
       parent: null, data: {children: index.regions, edges: index.region_edges}, loading: null, box: null, ownBox: null, view: null, kids: [], results: []};
     model.parts.set(ROOT, root);

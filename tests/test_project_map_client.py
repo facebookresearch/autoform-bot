@@ -37,14 +37,14 @@ def _library(tmp_path: Path) -> Path:
     return tmp_path / "map"
 
 
-def _walk(tmp_path: Path, script: str) -> str:
+def _walk(tmp_path: Path, script: str, map_dir: Path | None = None) -> str:
     path = tmp_path / "walk.js"
     path.write_text(script, encoding="utf-8")
     # The page loads the layout module and the controller as one file, in this order.
     client = tmp_path / "project-map.js"
     client.write_text("\n".join((_ASSETS / name).read_text(encoding="utf-8") for name in ("project-map-layout.js", "project-map.js")),
                       encoding="utf-8")
-    run = subprocess.run([_NODE, str(_DOM), str(client), str(_library(tmp_path)), str(path)],
+    run = subprocess.run([_NODE, str(_DOM), str(client), str(map_dir or _library(tmp_path)), str(path)],
                          capture_output=True, text=True, timeout=60)
     assert run.returncode == 0, run.stdout[-2000:] + run.stderr[-4000:]
     return run.stdout
@@ -104,6 +104,18 @@ def test_zooming_into_a_region_opens_it_in_place(tmp_path: Path) -> None:
       console.log('zoom ok');
     """)
     assert "zoom ok" in out
+
+
+def test_an_empty_roadmap_says_so(tmp_path: Path) -> None:
+    empty = tmp_path / "empty"
+    project_map.write_project_map(empty, project_map.build_project_map(
+        [{"id": "roadmap", "kind": "scope", "title": "Fresh roadmap", "parent": None, "result": False}], []))
+    out = _walk(tmp_path, r"""
+      assert.strictEqual($('.pm-reader').querySelector('.pm-empty').textContent, 'Nothing is on the map yet: the roadmap has no results.');
+      assert.strictEqual($$('.pm-part').length, 0);
+      console.log('empty ok');
+    """, empty)
+    assert "empty ok" in out
 
 
 def test_titles_with_tex_are_readable_on_the_map(tmp_path: Path) -> None:
