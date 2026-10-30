@@ -363,7 +363,8 @@
     for (i = 1; i < pts.length - 1; i++) {
       var p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1];
       var l1 = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]), l2 = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
-      if (!l1 || !l2) continue;
+      // A leg that clamping folded to nothing keeps its corner, so the path never cuts a diagonal.
+      if (!l1 || !l2) { d += "L" + p1[0].toFixed(1) + "," + p1[1].toFixed(1); continue; }
       var rr = Math.min(r, l1 / 2, l2 / 2);
       d += "L" + (p1[0] - (p1[0] - p0[0]) / l1 * rr).toFixed(1) + "," + (p1[1] - (p1[1] - p0[1]) / l1 * rr).toFixed(1) +
         "Q" + p1[0].toFixed(1) + "," + p1[1].toFixed(1) + " " +
