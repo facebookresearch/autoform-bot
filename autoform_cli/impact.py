@@ -34,13 +34,12 @@ import json
 import os
 import re
 import shlex
-import unicodedata
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import lean_probe
-from ._tree_snapshot import TreeSnapshotError
+from ._tree_snapshot import TreeSnapshotError, _normalized_name
 from .claims import author_claim_key
 from .lean import IndexedSourceSnapshot, LeanSourceError, bind_project_source_snapshot, resolve_lean_root
 from .lean_probe import (
@@ -488,10 +487,6 @@ def _raise(error: OSError) -> None:
     raise ImpactError(f"cannot read {error.filename}{_RERUN_DEFAULT_SCOPE}") from error
 
 
-def _folded(name: str) -> str:
-    return unicodedata.normalize("NFC", name).casefold()
-
-
 def _outside_sources(
     root: Path, libraries: Sequence[LeanLibrary], inventoried: Collection[Path]
 ) -> Iterator[tuple[str, bytes]]:
@@ -501,7 +496,7 @@ def _outside_sources(
     first component of one of its roots or globs (``LeanLib.isLocalModule``),
     and a dependency's module in its package directory. Nothing else under
     ``root``, such as build output, is ever loaded, so it is not read; nor is
-    a package's own ``.lake``, or a nested checkout, which the captured
+    a ``.lake`` in a package, or a nested checkout, which the captured
     inventory leaves out too.
     """
 
@@ -510,18 +505,18 @@ def _outside_sources(
     for library in libraries:
         bases = (*library.roots, *(_glob(glob, library)[0] for glob in library.globs))
         try:
-            firsts: set[str] | None = {_folded(lean_name_parts(base)[0][0]) for base in bases}
+            firsts: set[str] | None = {_normalized_name(lean_name_parts(base)[0][0]) for base in bases}
         except SkeletonError:
             firsts = None  # a name this parser cannot read may be in any entry
         try:
             entries = sorted(os.listdir(library.src_dir))
-        except FileNotFoundError:
+        except (FileNotFoundError, NotADirectoryError):
             continue
         except OSError as error:
             raise ImpactError(f"cannot read {library.src_dir}{_RERUN_DEFAULT_SCOPE}") from error
         for entry in entries:
             # Matched loosely, since a case-insensitive volume finds `Demo/` under `demo/`.
-            if entry != ".git" and (firsts is None or _folded(entry.removesuffix(".lean")) in firsts):
+            if entry != ".git" and (firsts is None or _normalized_name(entry.removesuffix(".lean")) in firsts):
                 tops.setdefault(library.src_dir / entry, None)
     manifest_path = root / "lake-manifest.json"
     try:
@@ -556,15 +551,16 @@ def _outside_sources(
                 depth = len(folder.relative_to(top).parts)
                 # A nested checkout, such as a worktree with its own `.lake`, is another
                 # source tree, as the captured inventory treats it; a package root is a clone.
+                # A module in one, such as a library's Git submodule, goes unread.
                 checkout = (packages_at is None or depth > packages_at) and (".git" in names or ".git" in files)
                 if real in seen or checkout:
                     names[:] = []
                     continue
                 seen.add(real)
-                # A package's own `.lake` holds its build and packages Lake does not use. A
-                # dependency whose srcDir lies inside its `.lake` goes unread, the one module
-                # source this skips.
-                names[:] = [name for name in names if name != ".git" and not (depth == packages_at and name == ".lake")]
+                # In a package, `.lake` holds build output and packages Lake does not use;
+                # a dependency whose srcDir lies inside it goes unread.
+                skipped = {".git", ".lake"} if packages_at is not None else {".git"}
+                names[:] = [name for name in names if name not in skipped]
             # Only `.lean` names cost a path, since build trees hold many other files.
             base = folder.relative_to(root) if folder.is_relative_to(root) else folder
             for file in files:

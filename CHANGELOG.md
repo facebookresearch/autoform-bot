@@ -109,10 +109,10 @@ date when the release is tagged.
 ### Fixed
 
 - **Import-closure scan.** `work import-impact --module-scope import-closure`
-  reads uncaptured `.lean` files only where Lake can find a module: the root
-  libraries' module directories and the dependency packages outside their
-  `.lake`. Nested checkouts, build output and other trees under the Lean root
-  no longer stall the run before its probe or make it refuse (#429).
+  reads uncaptured `.lean` files only in the root libraries' module trees and
+  in dependency packages. It no longer reads nested checkouts, such as worker
+  worktrees with their own `.lake`, the root's build output or a package's
+  `.lake`, which could stall the run before its probe (#429).
 - **Large libraries' search index.** The explorer loads JSON up to 64 MiB,
   and a whole-library index over 32 MiB leaves out statement summaries, so
   search still matches titles and Lean names; publication warns when it

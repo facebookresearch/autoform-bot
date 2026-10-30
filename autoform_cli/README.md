@@ -879,11 +879,10 @@ declaration when one of its `lean:` names equals it or is a dotted prefix of it,
 so `affected_articles` may list more articles and `article_local` is always
 `false`; `affected_unowned_helpers` keep the parent-chain rule, and
 `unresolved_articles` leaves out a name the source index places outside
-`affected_modules`. An uncaptured `.lean` file where Lake can find a module (a
-root library's module directories, or a dependency package outside its `.lake`),
-outside nested checkouts, that may import a candidate makes the command exit 2
-and ask for the default scope; use the default scope too when a component of a
-module name is a common word.
+`affected_modules`. An uncaptured `.lean` file that may import a candidate, in
+a root library's module tree or a dependency package (outside its `.lake` and
+nested checkouts), makes the command exit 2 and ask for the default scope; use
+the default scope too when a component of a module name is a common word.
 
 JSON uses `autoform-module-import-impact/v1`, with `module_graph_revision` and
 `module_scope` (`loaded-root-library-graph` or `import-closure`). `article` is

@@ -1945,11 +1945,22 @@ def _closure_probe(monkeypatch: pytest.MonkeyPatch, lean_root: Path) -> list[dic
 
 
 def test_import_closure_scope_reads_only_where_lake_can_find_a_module(tmp_path: Path, monkeypatch) -> None:
-    # No package loads the root's build output or a dependency's own .lake, so
-    # neither is read or refuses.
+    # No package loads the root's build output or a .lake in a package, so none
+    # of them is read or refuses.
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _closure_lean_root(tmp_path)
-    for relative in (".lake/build/ir/Demo/C.lean", "build/Demo/C.lean", ".lake/packages/D/.lake/packages/E/E.lean"):
+    (lean_root / "lake-manifest.json").write_text(
+        json.dumps({"packagesDir": "../pkgs", "packages": [{"type": "path", "dir": "../P", "name": "P"}]}),
+        encoding="utf-8",
+    )
+    for relative in (
+        ".lake/build/ir/Demo/C.lean",
+        "build/Demo/C.lean",
+        ".lake/packages/D/.lake/packages/E/E.lean",
+        "../pkgs/D/.lake/build/X.lean",
+        "../pkgs/D/sub/.lake/build/X.lean",
+        "../P/.lake/build/X.lean",
+    ):
         (lean_root / relative).parent.mkdir(parents=True)
         (lean_root / relative).write_text("import Demo.B\n", encoding="utf-8")
     calls = _closure_probe(monkeypatch, lean_root)
@@ -1966,7 +1977,11 @@ def test_import_closure_scope_never_walks_a_nested_checkout(tmp_path: Path, monk
     # dependency tree; walking each one stalled the run before its probe (#429).
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _closure_lean_root(tmp_path).resolve()
-    checkouts = [lean_root / ".claude/worktrees/w", lean_root / "Demo/.worktrees/w", lean_root / ".lake/packages/D/vendor/w"]
+    checkouts = [
+        lean_root / ".claude/worktrees/w",
+        lean_root / "Demo/.worktrees/w",
+        lean_root / ".lake/packages/D/vendor/w",
+    ]
     for checkout in checkouts:
         for folder in ("Demo", ".lake/packages/mathlib/Mathlib"):
             (checkout / folder).mkdir(parents=True)
@@ -2003,6 +2018,8 @@ def test_import_closure_scope_never_walks_a_nested_checkout(tmp_path: Path, monk
         ("Demo/build/X.lean", ""),
         # A case-insensitive volume finds library Other's modules under OTHER/.
         ("OTHER/build/X.lean", '\n[[lean_lib]]\nname = "Other"\nglobs = ["Other.+"]\n'),
+        # A root this parser cannot read may name any entry, so every one is read.
+        ("build/X.lean", '\n[[lean_lib]]\nname = "Odd"\nroots = ["Odd name"]\nglobs = ["Odd.+"]\n'),
     ],
 )
 def test_import_closure_scope_refuses_an_uncaptured_file_in_a_library_tree(
@@ -2017,6 +2034,18 @@ def test_import_closure_scope_refuses_an_uncaptured_file_in_a_library_tree(
     _stub_probe(monkeypatch)
 
     with pytest.raises(ImpactError, match=rf"{re.escape(relative)} may import Demo\.B"):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+
+def test_import_closure_scope_refuses_a_file_in_the_manifest_packages_dir(tmp_path: Path, monkeypatch) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "lake-manifest.json").write_text(json.dumps({"packagesDir": "../pkgs"}), encoding="utf-8")
+    (tmp_path / "pkgs" / "D" / "D").mkdir(parents=True)
+    (tmp_path / "pkgs" / "D" / "D" / "X.lean").write_text("import Demo.B\n", encoding="utf-8")
+    _stub_probe(monkeypatch)
+
+    with pytest.raises(ImpactError, match=r"pkgs/D/D/X\.lean may import Demo\.B"):
         module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
 
 
