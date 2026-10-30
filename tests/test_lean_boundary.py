@@ -7,13 +7,18 @@ from autoform_cli, so any module can import it without a cycle. servers/ never
 imports autoform_cli, because the runtime daemon's code fingerprint
 (servers/lean_client.py) covers servers/ only. autoform_cli never imports the
 top-level servers package by name, because under `python -m autoform_cli` a
-consumer's own `servers` would be found first.
+consumer's own `servers` would be found first. autoform_cli loads
+servers/_process.py by path, so that file imports only the standard library
+and psutil.
 """
 
 from __future__ import annotations
 
 import ast
+import os
 import re
+import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -177,4 +182,48 @@ def test_autoform_cli_never_imports_servers(repo_root: Path) -> None:
     assert not found, (
         "autoform_cli/ must not import the top-level servers package"
         " (under python -m autoform_cli, a consumer's own servers is found first):\n" + "\n".join(found)
+    )
+
+
+def test_autoform_cli_loads_process_helpers_from_beside_itself(repo_root: Path, tmp_path: Path) -> None:
+    # `-c` puts the working directory first on sys.path, as `python -m autoform_cli` does,
+    # unless PYTHONSAFEPATH is set.
+    (tmp_path / "servers").mkdir()
+    for name in ("__init__.py", "_process.py"):
+        (tmp_path / "servers" / name).write_text('raise SystemExit("consumer servers imported")\n', encoding="utf-8")
+    program = (
+        "import sys\n"
+        "import autoform_cli.__main__\n"  # every startup import, not just lean_probe's
+        "from autoform_cli import lean_probe\n"
+        "print(lean_probe._process_helpers.__file__)\n"
+        "print('servers' in sys.modules)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        cwd=tmp_path,
+        env={k: v for k, v in os.environ.items() if k != "PYTHONSAFEPATH"} | {"PYTHONPATH": str(repo_root)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    helpers, servers_imported = result.stdout.splitlines()
+    assert Path(helpers).resolve() == repo_root / "servers" / "_process.py"
+    assert servers_imported == "False"
+
+
+def test_process_helpers_import_only_the_standard_library_and_psutil(repo_root: Path) -> None:
+    where = "servers/_process.py"
+    allowed = sys.stdlib_module_names | {"psutil"}
+    found = []
+    for node in ast.walk(ast.parse((repo_root / where).read_text(encoding="utf-8"), where)):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            names = ["." * node.level + (node.module or "")]
+        else:
+            continue
+        found += [f"{where}:{node.lineno}: {name}" for name in names if name.partition(".")[0] not in allowed]
+    assert not found, (
+        f"autoform_cli loads {where} by path, so it may import only the standard library and psutil:\n"
+        + "\n".join(found)
     )

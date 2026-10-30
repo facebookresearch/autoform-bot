@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -442,14 +443,15 @@ def test_tagged_process_scan_retries_a_transient_system_error(monkeypatch) -> No
 
     calls = 0
 
-    def process_iter():
+    def pids():
         nonlocal calls
         calls += 1
         if calls == 1:
             raise SystemError("transient Darwin process state")
-        return [Candidate()]
+        return [123456]
 
-    monkeypatch.setattr(psutil, "process_iter", process_iter)
+    monkeypatch.setattr(psutil, "pids", pids)
+    monkeypatch.setattr(psutil, "Process", lambda pid: Candidate())
     descendants = {}
 
     _remember_tagged_processes("owned", descendants, root_pid=654321)
@@ -463,7 +465,7 @@ def test_tagged_process_scan_fails_closed_after_repeated_system_errors(
 ) -> None:
     monkeypatch.setattr(
         psutil,
-        "process_iter",
+        "pids",
         lambda: (_ for _ in ()).throw(SystemError("persistent failure")),
     )
 
@@ -482,7 +484,7 @@ def test_tagged_process_scan_fails_closed_when_enumeration_remains_unreadable(
 ) -> None:
     monkeypatch.setattr(
         psutil,
-        "process_iter",
+        "pids",
         lambda: (_ for _ in ()).throw(error),
     )
 
@@ -498,7 +500,7 @@ def test_tagged_process_scan_does_not_treat_mixed_failures_as_success(
     errors = iter((SystemError("transient state"), OSError("table unreadable")))
     monkeypatch.setattr(
         psutil,
-        "process_iter",
+        "pids",
         lambda: (_ for _ in ()).throw(next(errors)),
     )
 
@@ -522,13 +524,74 @@ def test_tagged_process_scan_retries_a_candidate_system_error(monkeypatch) -> No
         def create_time(self):
             return 7.0
 
-    monkeypatch.setattr(psutil, "process_iter", lambda: [Candidate()])
+    monkeypatch.setattr(psutil, "pids", lambda: [123456])
+    monkeypatch.setattr(psutil, "Process", lambda pid: Candidate())
     descendants = {}
 
     _remember_tagged_processes("owned", descendants, root_pid=654321)
 
     assert calls == 2
     assert list(descendants) == [(123456, 7.0)]
+
+
+def test_tagged_process_scan_fails_closed_on_an_unreadable_environment(monkeypatch) -> None:
+    class Unreadable:
+        def environ(self):
+            raise OSError(errno.EIO, "environment unreadable")
+
+    monkeypatch.setattr(psutil, "pids", lambda: [123456])
+    monkeypatch.setattr(psutil, "Process", lambda pid: Unreadable())
+
+    with pytest.raises(SkeletonError, match="repeated process-table errors"):
+        _remember_tagged_processes("owned", {}, root_pid=654321)
+    _remember_tagged_processes("owned", {}, root_pid=654321, strict=False)
+
+    # A denied process is still left out.
+    class Denied:
+        def environ(self):
+            raise psutil.AccessDenied(123456)
+
+    class Tagged:
+        pid = 123457
+
+        def environ(self):
+            return {"_AUTOFORM_PROCESS_TOKEN": "owned"}
+
+        def create_time(self):
+            return 7.0
+
+    candidates = {123456: Denied, 123457: Tagged}
+    monkeypatch.setattr(psutil, "pids", lambda: list(candidates))
+    monkeypatch.setattr(psutil, "Process", lambda pid: candidates[pid]())
+    descendants = {}
+
+    _remember_tagged_processes("owned", descendants, root_pid=654321)
+
+    assert list(descendants) == [(123457, 7.0)]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-specific")
+@pytest.mark.parametrize("failure", ["process-table", "killpg"])
+def test_bounded_command_reports_a_process_group_it_cannot_inspect(tmp_path: Path, monkeypatch, failure: str) -> None:
+    if failure == "process-table":
+        monkeypatch.setattr(
+            psutil,
+            "process_iter",
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("table unreadable")),
+        )
+    else:
+        killpg = os.killpg
+
+        def probe_fails(pid: int, signal_number: int) -> None:
+            if signal_number == 0:
+                raise OSError(errno.EINVAL, "invalid argument")
+            killpg(pid, signal_number)
+
+        monkeypatch.setattr(os, "killpg", probe_fails)
+
+    # Neither error may reach the caller as anything but a SkeletonError.
+    with pytest.raises(SkeletonError, match="could not inspect its process group"):
+        _bounded(tmp_path, "pass")
 
 
 def test_process_liveness_fails_closed_on_inspection_uncertainty() -> None:

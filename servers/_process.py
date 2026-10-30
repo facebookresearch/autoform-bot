@@ -1,4 +1,8 @@
-"""Give a Lean child a clean environment, find the processes carrying a token the caller set, and stop and reap its dedicated POSIX process group."""
+"""Give a Lean child a clean environment, find the processes carrying a token the caller set, and stop and reap its dedicated POSIX process group.
+
+autoform_cli.lean_probe loads this file by path, so it imports only the
+standard library and psutil.
+"""
 
 from __future__ import annotations
 

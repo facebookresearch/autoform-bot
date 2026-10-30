@@ -63,6 +63,11 @@ date when the release is tagged.
   on one toolchain reuse each other's builds; Setup offers the same two lines
   to an existing project. A probe that finds no `.olean` for a module Lake
   calls built now names the cache-without-restore cause (#431).
+- **Process checks.** `autoform` and the Lean runtime share one process-table
+  scan. A process whose environment cannot be read for any reason but
+  permission now fails a probe run instead of being skipped, and a probe
+  whose process group cannot be inspected fails with "could not inspect its
+  process group" (#NNN).
 - **Library results in Roadmap.** When a shared library already proves a
   result, Roadmap lists under the article's `## Proof depends on` only the
   articles that proof uses, and keeps the source's route in the proof sketch,
