@@ -1916,8 +1916,8 @@ def _book_sources(graph: Graph) -> dict[Path, str]:
     }
 
 
-def _book_links(source: Path, blueprint: Path, book_sources: Collection[Path]) -> list[Path]:
-    """The book pages *source* links outside code fences, in the order it links them."""
+def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> list[Path]:
+    """The *targets* *source* links outside code fences, in the order it links them."""
     linked_sources: list[Path] = []
 
     def collect(line: str) -> str:
@@ -1938,7 +1938,7 @@ def _book_links(source: Path, blueprint: Path, book_sources: Collection[Path]) -
                 or candidate.suffix.lower() != ".md"
             ):
                 continue
-            if candidate not in book_sources:
+            if candidate not in targets:
                 continue
             linked_sources.append(candidate)
         return line
@@ -1966,14 +1966,15 @@ def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Pat
     """The published book pages in reading order: down the containment tree
     from the landing page, each page's children in the order it links them,
     then the ones it does not link. A child the page never links directly
-    takes the place of the page's first link into its subtree; a direct link
-    wins over that, so a prose shortcut to a deep milestone does not pull its
-    chapter forward. A link to a page elsewhere in the tree does not move it.
-    The children a page does not link at all follow in dependency order
-    (:func:`_dependency_sorted`)."""
+    takes the place of the page's first link into its subtree, to a section
+    or a result; a direct link wins over that, so a prose shortcut to a deep
+    milestone does not pull its chapter forward. A link to a page elsewhere in
+    the tree does not move it. The children a page does not link at all
+    follow in dependency order, ties by id (:func:`_dependency_sorted`)."""
     book_sources = _book_sources(graph)
+    node_sources = {node.path.resolve(): node.id for node in graph.nodes.values()}
     children: dict[str | None, list[str]] = {}
-    for node_id in status.topological_order(graph):
+    for node_id in sorted(graph.nodes):
         if graph.nodes[node_id].path.resolve() in book_sources:
             children.setdefault(graph.nodes[node_id].parent, []).append(node_id)
     precedence: dict[str, set[str]] | None = None
@@ -1985,7 +1986,7 @@ def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Pat
         if parent is not None and output.is_file():
             ordered.append(output.resolve())
         own = children.get(parent, [])
-        linked = [book_sources[path] for path in _book_links(source, blueprint, book_sources)] if source.is_file() else []
+        linked = [node_sources[path] for path in _book_links(source, blueprint, node_sources)] if source.is_file() else []
         direct: dict[str, int] = {}
         through: dict[str, int] = {}
         for index, node_id in enumerate(linked):
@@ -2006,9 +2007,11 @@ def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Pat
 def _containment_chain(graph: Graph, node_id: str) -> list[str]:
     """*node_id* and its containers, innermost first."""
     chain: list[str] = []
+    seen: set[str] = set()
     current: str | None = node_id
-    while current is not None and current in graph.nodes and current not in chain:
+    while current is not None and current in graph.nodes and current not in seen:
         chain.append(current)
+        seen.add(current)
         current = graph.nodes[current].parent
     return chain
 
@@ -2034,8 +2037,9 @@ def _sibling_precedence(graph: Graph) -> dict[str, set[str]]:
 
 
 def _dependency_sorted(siblings: list[str], precedence: Mapping[str, set[str]]) -> list[str]:
-    """*siblings* with each subtree after the subtrees it depends on, ties and
-    cycles broken by their order in *siblings*."""
+    """*siblings* with each subtree after the subtrees it depends on, ties
+    broken by their order in *siblings*. When only cycles are left, the
+    earliest sibling on one of them goes next."""
     rank = {node_id: index for index, node_id in enumerate(siblings)}
     later = {node_id: sorted(rank[other] for other in precedence.get(node_id, ()) if other in rank) for node_id in siblings}
     waiting = [0] * len(siblings)
@@ -2045,10 +2049,22 @@ def _dependency_sorted(siblings: list[str], precedence: Mapping[str, set[str]]) 
     ready = [index for index, count in enumerate(waiting) if not count]
     heapq.heapify(ready)
     done: set[int] = set()
+
+    def on_cycle(start: int) -> bool:
+        stack, seen = list(later[siblings[start]]), set()
+        while stack:
+            index = stack.pop()
+            if index == start:
+                return True
+            if index not in done and index not in seen:
+                seen.add(index)
+                stack.extend(later[siblings[index]])
+        return False
+
     ordered: list[str] = []
     while len(ordered) < len(siblings):
-        if not ready:  # a cycle between subtrees: release the earliest left
-            heapq.heappush(ready, min(index for index in range(len(siblings)) if index not in done))
+        if not ready:  # every sibling left waits on one, so some sit on a cycle
+            heapq.heappush(ready, next(i for i in range(len(siblings)) if i not in done and on_cycle(i)))
         index = heapq.heappop(ready)
         if index in done:
             continue

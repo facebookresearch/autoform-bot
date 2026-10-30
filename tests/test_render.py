@@ -43,6 +43,7 @@ from autoform_cli.render import (
     PublicationError,
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
+    _dependency_sorted,
     _document_body,
     _first_h1,
     _protect_markdown_in_html,
@@ -3161,6 +3162,13 @@ def _summary_chapters(out: Path) -> list[str]:
             "alpha/beta",
             ["zeta", "alpha", "alpha/beta", "irrationality-proof"],
         ),
+        # The roadmap lists one of alpha's results but never alpha itself.
+        (
+            "- [Zeta](zeta/README.md)\n- [Alpha second](alpha/second.md)\n"
+            "- [Irrationality proof](irrationality-proof/README.md)\n",
+            "alpha/beta",
+            ["zeta", "alpha", "alpha/beta", "irrationality-proof"],
+        ),
         # A shortcut into the proof comes first, but the chapter's own link decides.
         (
             "New: [beta](irrationality-proof/beta/README.md).\n\n- [Zeta](zeta/README.md)\n"
@@ -3191,7 +3199,7 @@ def test_a_chapter_linked_only_through_its_sections_reads_at_that_link(
         # The proof rests on alpha and omega, so it reads after both.
         ("", ["zeta", "alpha", "omega", "irrationality-proof"]),
         # Alpha and the proof also rest on each other; omega is free, then the
-        # cycle is broken by path.
+        # cycle is broken by id.
         ("- [Proof](../irrationality-proof/second.md)\n", ["zeta", "omega", "alpha", "irrationality-proof"]),
     ),
 )
@@ -3220,6 +3228,11 @@ def test_unlinked_chapters_read_after_the_chapters_they_rest_on(
     render_site(project / "blueprint", out, lean_root=project)
 
     assert _summary_chapters(out) == chapters
+
+
+def test_a_cycle_releases_a_sibling_on_it_not_one_waiting_behind_it() -> None:
+    # A rests on C; B and C rest on each other.
+    assert _dependency_sorted(["A", "B", "C"], {"C": {"A", "B"}, "B": {"C"}}) == ["B", "C", "A"]
 
 
 @pytest.mark.parametrize(

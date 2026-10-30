@@ -150,6 +150,32 @@ def test_book_order_follows_a_1200_deep_book(tmp_path: Path) -> None:
     assert ordered[-1] == roadmap / "a-note0000.md"
 
 
+def test_book_order_sorts_unlinked_pages_of_a_1200_deep_book(tmp_path: Path) -> None:
+    """No page links anything. Each page holds the next page and two notes
+    that sort after it, and each z-note rests on the z-note one level up, so
+    every level reads its notes before the next page."""
+    blueprint = tmp_path.resolve() / "blueprint"
+    roadmap = blueprint / "roadmap"
+    roadmap.mkdir(parents=True)
+    (blueprint / "README.md").write_text("# Book\n", encoding="utf-8")
+    nodes: dict[str, Node] = {}
+    for index in range(1_200):
+        node_id, parent = f"page{index:04d}", f"page{index - 1:04d}" if index else None
+        (roadmap / f"{node_id}.md").write_text(f"# {node_id}\n", encoding="utf-8")
+        nodes[node_id] = Node(node_id, node_id, roadmap / f"{node_id}.md", (), parent=parent)
+        for note in (f"y-note{index:04d}", f"z-note{index:04d}"):
+            (roadmap / f"{note}.md").write_text(f"# {note}\n", encoding="utf-8")
+            depends = (f"z-note{index - 1:04d}",) if note[0] == "z" and index else ()
+            nodes[note] = Node(note, note, roadmap / f"{note}.md", depends, parent=node_id)
+    graph = Graph(blueprint, nodes)
+
+    ordered = [path.stem for path in _book_page_order(blueprint, blueprint, graph)[1:]]
+
+    assert len(ordered) == 3 * 1_200
+    assert ordered[:4] == ["page0000", "y-note0000", "z-note0000", "page0001"]
+    assert ordered[-3:] == ["page1199", "y-note1199", "z-note1199"]
+
+
 
 
 
