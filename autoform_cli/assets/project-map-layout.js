@@ -641,8 +641,25 @@
     return {x: box.x + box.w / 2 - stage.w / 2 / z, y: box.y + box.h / 2 - stage.h / 2 / z, z: z};
   }
 
+  // The camera for opening a part: its content fitted to the stage, or up to twice as close when
+  // most of its children would be too small to label there. Closer in, the view starts at the
+  // content's top-left, where reading starts, leaving TITLE_ROOM pixels above it for the page to
+  // pin the part's title, since the band itself has scrolled off.
+  var TITLE_ROOM = 44;
+  function focusCamera(box, children, stage) {
+    var content = contentOf(box), fit = fitCamera(content, stage), needs = [];
+    for (var id in children) {
+      var child = children[id];
+      if (child.band) needs.push(Math.max(MIN_W / child.w, MIN_H / child.h));
+    }
+    needs.sort(function (a, b) { return a - b; });
+    var z = Math.min(needs.length ? needs[Math.floor(needs.length / 2)] : 0, 2 * fit.z);
+    if (z <= fit.z) return fit;
+    return {x: content.x - PAD / z, y: content.y - TITLE_ROOM / z, z: z};
+  }
+
   var api = {packLevels: packLevels, packPart: packPart, bundleEdges: bundleEdges, layoutCommunity: layoutCommunity,
-    placeLabels: placeLabels, fitCamera: fitCamera, contentOf: contentOf, dependencyOrder: dependencyOrder,
+    placeLabels: placeLabels, fitCamera: fitCamera, focusCamera: focusCamera, contentOf: contentOf, dependencyOrder: dependencyOrder,
     constants: {BAND: BAND, PAD: PAD, GAP: GAP, MIN_W: MIN_W, MIN_H: MIN_H}};
   if (typeof window !== "undefined") window.AutoformMapLayout = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

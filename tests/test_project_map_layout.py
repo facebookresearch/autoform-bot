@@ -223,4 +223,12 @@ def test_labels_appear_only_where_they_fit() -> None:
       assert(label.x >= left - EPS && label.y >= top - EPS && label.x + label.w <= left + box.w * camera.z + EPS);
       assert(label.w >= 0.9 * MIN_W - 2 * 12 * box.unit * camera.z - EPS);
     }
+    // Opening a crowded part comes closer than its fit, at most twice, until most children are labelled.
+    const crowd = sizes(30, 40).map((results, k) => summary('r1/c' + k, results));
+    const many = L.packPart({part: summary('r1', 300), children: crowd, edges: []}, packed.boxes.r1, DESKTOP);
+    const fit = L.fitCamera(L.contentOf(packed.boxes.r1), DESKTOP), focus = L.focusCamera(packed.boxes.r1, many, DESKTOP);
+    assert(focus.z >= fit.z - EPS && focus.z <= 2 * fit.z + EPS);
+    assert(L.placeLabels(many, focus, DESKTOP).length > L.placeLabels(many, fit, DESKTOP).length);
+    // A part whose children are readable at its fit opens fitted.
+    assert.deepEqual(L.focusCamera(packed.boxes.r0, kids, DESKTOP), L.fitCamera(L.contentOf(packed.boxes.r0), DESKTOP));
     """)
