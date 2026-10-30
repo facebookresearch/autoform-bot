@@ -100,7 +100,7 @@ date when the release is tagged.
 - **Explorer reading defaults.** Desktop chapters open with the reader showing
   their text again; only authored-area overviews and scopes over 120 nodes open
   map-first, with the 0.9 zoom-out floor. On a phone, Back to a result whose
-  reader was closed no longer fails with "Could not open this view".
+  reader was closed no longer fails with "Could not open this view" (#507).
 - **Explorer review follow-ups.** Fit retains a selected unlinked result.
   Deferred list math cancels with its view and falls back to visible text on
   unavailable typesetting. Preview formatting keeps currency and code literal;
