@@ -5,8 +5,10 @@
  * at a time from dependencies/map/: index.json (regions), parts/<file>.json (a part's children, and its results when
  * it holds them) and search.json (titles and Lean names, loaded on first search).
  *
- * Layout lives in `layout` below. It is a deterministic stand-in (spiral packing, straight links) that the layout
- * engine replaces without touching the controller.
+ * Geometry comes from window.AutoformMapLayout (project-map-layout.js, shipped ahead of this file): world units are
+ * stage pixels at the opening pose, a part's children are packed when its file loads, prerequisites come first, and
+ * routes run only through the gaps between boxes. This file is the controller: camera, drawing, search, selection,
+ * history and the reading pane.
  */
 (function () {
   "use strict";
@@ -14,17 +16,17 @@
   var host = document.querySelector("[data-project-map]");
   if (!host || host.dataset.pmMounted) return;
   host.dataset.pmMounted = "1";
+  var L = window.AutoformMapLayout;
 
   var mapBase = new URL(host.getAttribute("data-map") || "dependencies/map/", location.href);
   var routeBase = new URL(host.getAttribute("data-routes") || "dependencies/index.json", location.href);
   var reduceMotion = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
   var SVGNS = "http://www.w3.org/2000/svg";
   var ROOT = "#root";
-  var OPEN_W = 300, OPEN_H = 190;  // a part opens in place once its box is this big on screen (px)
-  var FETCH_SHARE = 0.6;           // and starts loading at this share of that size
-  var LABEL_W = 46;                // closed parts narrower than this draw no label
-  var RESULT_LABEL_PX = 9;         // results label themselves once their card is this wide
-  var WORLD_W = 1600;              // the project's box in world units; its height follows the stage's shape
+  var OPEN_W = 140, OPEN_H = 90;   // a part shows its children (as tiles at first) once its box is this big on screen (px)
+  var LABEL_MIN_W = 130;           // boxes narrower than this on screen never get a label
+  var CARD_TEXT_W = 120;           // result cards carry their titles, and their links, once this wide on screen (px)
+  var TITLE_EM = 8.4, META_EM = 6.6, CARD_EM = 7.2, CARD_META_EM = 6.2;  // mean character advances of the label fonts (px)
 
   // ---------------------------------------------------------------- small helpers
   function el(tag, cls, text) {
@@ -67,9 +69,30 @@
     for (var key in status || {}) out[group(key)] += status[key];
     return out;
   }
+  function progressText(summary) {
+    return num(mix(summary.status).done) + " of " + num(summary.results) + " finished";
+  }
+  // A closed part's tile is tinted by what most of it is.
+  function tileKind(status) {
+    var counts = mix(status), total = counts.done + counts.progress + counts.planned;
+    if (!total) return "planned";
+    return counts.done / total >= 0.9 ? "done" : (counts.done + counts.progress) / total >= 0.5 ? "progress" : "planned";
+  }
   function color(kind) {
     return getComputedStyle(document.documentElement).getPropertyValue(kind === "done" ? "--pm-proved" : kind === "progress" ? "--pm-progress" : "--pm-planned").trim() || "#999";
   }
+  function wrap(text, width, maxLines) {
+    var words = text.split(/\s+/), lines = [], line = "";
+    words.forEach(function (word) {
+      if (!line) line = word;
+      else if ((line + " " + word).length <= width) line += " " + word;
+      else { lines.push(line); line = word; }
+    });
+    if (line) lines.push(line);
+    if (lines.length > maxLines) { lines = lines.slice(0, maxLines); lines[maxLines - 1] = clip(lines[maxLines - 1] + "…", width); }
+    return lines.map(function (l) { return clip(l, width); });
+  }
+  function clip(text, width) { return text.length > width ? text.slice(0, Math.max(1, width - 1)) + "…" : text; }
 
   // ---------------------------------------------------------------- data
   var cache = new Map();
@@ -88,7 +111,7 @@
   function register(summary, parentId) {
     var known = model.parts.get(summary.id);
     if (known) { known.summary = summary; return known; }
-    var record = {id: summary.id, summary: summary, parent: parentId, data: null, loading: null, box: null, ownBox: null, kids: [], results: []};
+    var record = {id: summary.id, summary: summary, parent: parentId, data: null, loading: null, box: null, ownBox: null, view: null, kids: [], results: []};
     model.parts.set(summary.id, record);
     var parent = model.parts.get(parentId);
     if (parent && parent.kids.indexOf(summary.id) < 0) parent.kids.push(summary.id);
@@ -111,7 +134,7 @@
           model.results.set(row.id, {row: row, home: record.id, box: null});
           if (record.results.indexOf(row.id) < 0) record.results.push(row.id);
         });
-        layoutApi().packPart(record, record.data);
+        packChildren(record);
         schedule();
         return record;
       });
@@ -119,71 +142,28 @@
     return record.loading;
   }
 
-  // ---------------------------------------------------------------- layout (stand-in for the layout engine)
-  // Boxes: every part is a rectangle {x, y, w, h} with a header band for its title; children share the rest by area.
-  var BAND = 0.075, PAD = 0.018;
-  function content(box, record) {
-    var band = record.id === ROOT ? 0 : Math.max(box.h * BAND, Math.min(box.w, box.h) * 0.06), pad = Math.min(box.w, box.h) * PAD;
-    return {x: box.x + pad, y: box.y + band + pad, w: Math.max(1, box.w - 2 * pad), h: Math.max(1, box.h - band - 2 * pad)};
+  // ---------------------------------------------------------------- layout (from the layout module)
+  var stageSize = null;      // the stage the world was packed for
+  var routesAt = new Map();  // part id -> routes between its children, in world units
+  function packRoot() {
+    var root = part(ROOT), top = L.packLevels(model.index, stageSize);
+    root.box = top.root;
+    root.kids.forEach(function (id) { part(id).box = top.boxes[id] || null; });
+    routesAt.set(ROOT, L.bundleEdges(top.boxes, model.index.region_edges || [], top.content));
+    root.kids.forEach(function (id) { packChildren(part(id)); });
   }
-  var stub = {
-    // Place a part's children (and a box for its own results) inside its content area, in proportion to their results.
-    packPart: function (record) {
-      if (!record.box) return;
-      var inner = content(record.box, record);
-      var items = record.kids.map(function (id) { return {id: id, kind: "part", size: Math.max(1, part(id).summary.results) + 1}; });
-      if (record.results.length) items.push({id: OWN + record.id, kind: "own", size: record.results.length + 1});
-      squarify(items, inner);
-      items.forEach(function (item) {
-        if (item.kind === "own") { record.ownBox = item.box; placeResults(record, item.box); return; }
-        var child = part(item.id);
-        child.box = item.box;
-        if (child.data) stub.packPart(child);
-      });
-    },
-  };
-  var OWN = "own:";
-  function layoutApi() { return window.AutoformMapLayout || stub; }
-  // Squarified treemap: rows of near-square boxes, largest first, ties by id, so the same data gives the same map.
-  function squarify(items, box) {
-    items.sort(function (a, b) { return b.size - a.size || (a.id < b.id ? -1 : 1); });
-    var total = items.reduce(function (sum, item) { return sum + item.size; }, 0) || 1, scale = box.w * box.h / total;
-    var rest = {x: box.x, y: box.y, w: box.w, h: box.h}, queue = items.slice(), row = [];
-    function worst(row, side) {
-      var sum = 0, max = 0, min = Infinity;
-      row.forEach(function (item) { var a = item.size * scale; sum += a; max = Math.max(max, a); min = Math.min(min, a); });
-      return Math.max(side * side * max / (sum * sum), (sum * sum) / (side * side * min));
-    }
-    function lay(row) {
-      var sum = row.reduce(function (s2, item) { return s2 + item.size * scale; }, 0), horizontal = rest.w >= rest.h;
-      var thick = sum / (horizontal ? rest.h : rest.w), at = horizontal ? rest.y : rest.x;
-      row.forEach(function (item) {
-        var span = item.size * scale / thick;
-        item.box = horizontal ? {x: rest.x, y: at, w: thick, h: span} : {x: at, y: rest.y, w: span, h: thick};
-        at += span;
-      });
-      if (horizontal) { rest.x += thick; rest.w -= thick; } else { rest.y += thick; rest.h -= thick; }
-    }
-    while (queue.length) {
-      var item = queue[0], side = Math.min(rest.w, rest.h);
-      if (!row.length || worst(row.concat([item]), side) <= worst(row, side)) { row.push(queue.shift()); }
-      else { lay(row); row = []; }
-    }
-    if (row.length) lay(row);
-    // A small inset keeps neighbours apart.
-    items.forEach(function (item) {
-      var inset = Math.min(item.box.w, item.box.h) * 0.04;
-      item.box = {x: item.box.x + inset, y: item.box.y + inset, w: Math.max(0.1, item.box.w - 2 * inset), h: Math.max(0.1, item.box.h - 2 * inset)};
-    });
-  }
-  // Results in a grid of square cells inside their box.
-  function placeResults(record, box) {
-    var n = record.results.length, cols = Math.max(1, Math.ceil(Math.sqrt(n * box.w / box.h))), rows = Math.ceil(n / cols);
-    var cell = Math.min(box.w / cols, box.h / rows), x0 = box.x + (box.w - cell * cols) / 2, y0 = box.y + (box.h - cell * rows) / 2;
-    record.results.slice().sort().forEach(function (id, index) {
-      var col = index % cols, line = Math.floor(index / cols);
-      model.results.get(id).box = {x: x0 + col * cell + cell * 0.12, y: y0 + line * cell + cell * 0.12, w: cell * 0.76, h: cell * 0.76};
-    });
+  // A part's children, its own results and the routes between them, once both its box and its file are known.
+  function packChildren(record) {
+    if (!record || !record.box || !record.data) return;
+    var boxes = L.packPart(record.data, record.box, stageSize);
+    record.kids.forEach(function (id) { part(id).box = boxes[id] || null; });
+    record.ownBox = boxes[record.id + "#results"] || null;
+    routesAt.set(record.id, record.kids.length ? L.bundleEdges(boxes, record.data.edges || [], L.contentOf(record.box)) : []);
+    var results = record.data.results || [];
+    record.view = record.ownBox && results.length ?
+      L.layoutCommunity(results, record.data.result_edges || [], record.data.boundary_edges || [], record.ownBox) : null;
+    record.results.forEach(function (id) { var entry = model.results.get(id); if (entry) entry.box = record.view ? record.view.cards[id] || null : null; });
+    record.kids.forEach(function (id) { if (part(id).data) packChildren(part(id)); });
   }
 
   // ---------------------------------------------------------------- page shell
@@ -210,11 +190,16 @@
   var canvas = svg("svg", {role: "application", "aria-label": "Map of the whole project. Scroll or use plus and minus to zoom, drag or use the arrow keys to move."});
   canvas.setAttribute("tabindex", "0");
   var defs = svg("defs");
-  defs.innerHTML = '<marker id="pm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z" fill="currentColor"/></marker>';
-  var edgeLayer = svg("g"), partLayer = svg("g"), resultLayer = svg("g"), relationLayer = svg("g"), labelLayer = svg("g");
-  canvas.append(defs, edgeLayer, partLayer, resultLayer, relationLayer, labelLayer);
+  // Markers do not inherit the colour of the line that uses them, so a highlighted route has its own.
+  defs.innerHTML = ["pm-arrow", "pm-arrow-on"].map(function (id) {
+    return '<marker id="' + id + '" class="' + id + '" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z"/></marker>';
+  }).join("");
+  // Routes run through the gaps between boxes, so they draw above every box; labels draw last.
+  var partLayer = svg("g"), routeLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), labelLayer = svg("g");
+  canvas.append(defs, partLayer, routeLayer, resultLayer, cardRouteLayer, labelLayer);
+  var pin = el("div", "pm-pin"); pin.hidden = true;
   var hint = el("div", "pm-hint", "Scroll to zoom into a region. Search to jump to a theorem.");
-  stage.append(canvas, hint);
+  stage.append(canvas, pin, hint);
   var reader = el("aside", "pm-reader"); reader.setAttribute("aria-label", "Reading pane");
   var readerInner = el("div", "pm-reader-inner"); reader.append(readerInner);
   var live = el("p", "pm-sr"); live.setAttribute("aria-live", "polite");
@@ -222,13 +207,14 @@
   host.append(app);
 
   // ---------------------------------------------------------------- camera
+  // The camera is the world point at the centre of the stage and the zoom k (screen px per world unit).
   var camera = {x: 0, y: 0, k: 1};
   var size = {w: 1, h: 1};
   function measure() {
     var box = canvas.getBoundingClientRect();
     size.w = Math.max(1, box.width); size.h = Math.max(1, box.height);
   }
-  function fitK(box, share) { return Math.min(size.w / box.w, size.h / box.h) * (share || 0.94); }
+  function fitK(box, share) { return Math.min(size.w / box.w, size.h / box.h) * (share || 0.96); }
   function centerOf(box) { return [box.x + box.w / 2, box.y + box.h / 2]; }
   function toScreen(x, y) { return [(x - camera.x) * camera.k + size.w / 2, (y - camera.y) * camera.k + size.h / 2]; }
   function toWorld(sx, sy) { return [(sx - size.w / 2) / camera.k + camera.x, (sy - size.h / 2) / camera.k + camera.y]; }
@@ -236,9 +222,11 @@
     var a = toScreen(box.x, box.y);
     return {x: a[0], y: a[1], w: box.w * camera.k, h: box.h * camera.k};
   }
+  // The layout module's camera: the world point at the stage's top-left corner and the zoom.
+  function cornerCamera() { return {x: camera.x - size.w / 2 / camera.k, y: camera.y - size.h / 2 / camera.k, z: camera.k}; }
   function limits() {
-    var root = part(ROOT);
-    return {low: fitK(root.box, 0.5), high: fitK(root.box) * 60000};
+    var box = part(ROOT).box;
+    return {low: Math.min(size.w / box.w, size.h / box.h) * 0.5, high: 60000};
   }
   var flight = null;
   function flyTo(target, done) {
@@ -258,25 +246,39 @@
     };
     flight.frame = requestAnimationFrame(step);
   }
-  function flyToBox(box, share, done) { var c = centerOf(box); flyTo({x: c[0], y: c[1], k: fitK(box, share || 0.9)}, done); }
+  // A focus fits the part's content, not its whole box, so its header band does not fill the top of the screen.
+  function flyToContent(record, done) {
+    var content = L.contentOf(record.box), c = centerOf(content);
+    flyTo({x: c[0], y: c[1], k: fitK(content)}, done);
+  }
   function zoomAt(factor, sx, sy) {
     var range = limits(), k = clamp(camera.k * factor, range.low, range.high);
     var world = toWorld(sx, sy);
     camera = {x: world[0] - (sx - size.w / 2) / k, y: world[1] - (sy - size.h / 2) / k, k: k};
     schedule();
   }
+  function fitProject(instant) {
+    var box = part(ROOT).box, k = Math.min(size.w / box.w, size.h / box.h), target = {x: box.x + box.w / 2, y: box.y + box.h / 2, k: k};
+    // A world taller than the stage (many regions on a narrow screen) opens at full width, top-aligned, and pans down.
+    if (box.h / box.w > size.h / size.w * 1.05) { k = size.w / box.w; target = {x: box.x + box.w / 2, y: box.y + size.h / 2 / k, k: k}; }
+    if (instant) { camera = target; schedule(); } else flyTo(target);
+  }
 
   // ---------------------------------------------------------------- state
-  var state = {selected: null, related: null, focusPart: null, facets: null, hover: null};
+  // focusPart pins the reading pane and trail to a part the reader asked for (ROOT for the whole project) until they
+  // move the map themselves; then both follow the part that fills the view.
+  var state = {selected: null, related: null, focusPart: null, hoverPart: null, facets: null};
   var pending = false;
   function schedule() {
     if (pending) return;
     pending = true;
     requestAnimationFrame(function () { pending = false; render(); });
   }
+  function release() { if (state.focusPart && !state.selected) state.focusPart = null; }
 
   // ---------------------------------------------------------------- render
   var keyed = new Map(), used = new Set();
+  // Each key always gets the same attributes, so a node reused across frames never keeps a stale one.
   function keep(layer, key, tag, attrs) {
     var node = keyed.get(key);
     if (!node) { node = svg(tag); node.dataset.key = key; keyed.set(key, node); }
@@ -285,189 +287,182 @@
     used.add(key);
     return node;
   }
+  function setText(node, text) { if (node.textContent !== text) node.textContent = text; return node; }
   function onScreen(b) { return b.x + b.w > -40 && b.x < size.w + 40 && b.y + b.h > -40 && b.y < size.h + 40; }
-  function isOpen(record, b) { return record.id === ROOT || (b.w > OPEN_W && b.h > OPEN_H && !!record.data); }
-  // A thin bar along the header shows how much of the part is finished, in progress and planned.
-  function statusStrip(record, b, dim) {
-    var counts = mix(record.summary.status), total = counts.done + counts.progress + counts.planned;
-    if (!total || b.w < 24) return;
-    var x = b.x, height = clamp(b.h * 0.012, 2, 4);
-    ["done", "progress", "planned"].forEach(function (kind) {
-      var w = b.w * counts[kind] / total;
-      keep(partLayer, "strip:" + kind + ":" + record.id, "rect", {x: x, y: b.y, width: Math.max(0, w), height: height,
-        fill: color(kind), class: dim ? "pm-dimmed" : "", "pointer-events": "none"});
-      x += w;
-    });
+  function isOpen(record, b) { return record.id === ROOT || (!!record.data && b.w >= OPEN_W && b.h >= OPEN_H); }
+  // The part the view is in: the deepest open part under the centre that fills most of the stage.
+  function covers(b) {
+    return b.x <= size.w / 2 && b.x + b.w >= size.w / 2 && b.y <= size.h / 2 && b.y + b.h >= size.h / 2 &&
+      Math.min(b.w, size.w) * Math.min(b.h, size.h) >= size.w * size.h * 0.45;
   }
   var deepestAtCenter = null;
+  function currentPart() { return state.focusPart ? part(state.focusPart) || part(ROOT) : deepestAtCenter; }
   function render() {
+    if (!part(ROOT) || !part(ROOT).box) return;
     measure();
     used = new Set();
     deepestAtCenter = part(ROOT);
-    var related = state.related, selected = state.selected;
-    var drawEdgesFor = [];
+    var onPath = state.selected && model.results.get(state.selected) ? new Set(chainOf(model.results.get(state.selected).home)) : null;
+    var labelBoxes = {}, opened = [], communities = [];
     (function visit(record) {
       if (!record.box) return;
       var b = screenBox(record.box);
       if (record.id !== ROOT && !onScreen(b)) return;
+      if (record.id !== ROOT && !record.data && b.w >= OPEN_W && b.h >= OPEN_H) load(record.id);
       var open = isOpen(record, b);
-      if (record.id !== ROOT && !record.data && b.w > OPEN_W * FETCH_SHARE && b.h > OPEN_H * FETCH_SHARE) load(record.id);
       if (record.id !== ROOT) {
-        // The part the reader is in: the deepest open part under the centre that fills most of the view.
-        if (open && b.x <= size.w / 2 && b.x + b.w >= size.w / 2 && b.y <= size.h / 2 && b.y + b.h >= size.h / 2 &&
-            Math.min(b.w, size.w) * Math.min(b.h, size.h) >= size.w * size.h * 0.45) deepestAtCenter = record;
-        var dim = related && !related.parts.has(record.id);
-        var holder = keep(partLayer, "part:" + record.id, "g", {class: "pm-part" + (open ? " pm-open" : "") + (dim ? " pm-dimmed" : "") +
-          (state.focusPart === record.id ? " pm-focus" : ""), tabindex: open ? -1 : 0, role: "button", "data-part": record.id,
-          "aria-label": plain(record.summary.title) + ", " + num(record.summary.results) + " results" + (record.summary.api_total ? ", " + num(record.summary.api_total) + " used elsewhere" : "")});
-        var shape = holder.firstChild || holder.appendChild(svg("rect"));
-        shape.setAttribute("x", b.x); shape.setAttribute("y", b.y); shape.setAttribute("width", Math.max(1, b.w)); shape.setAttribute("height", Math.max(1, b.h));
-        shape.setAttribute("rx", clamp(Math.min(b.w, b.h) * 0.04, 2, 12));
-        if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(record.summary.title);
-        statusStrip(record, b, dim);
-        labelPart(record, b, open, dim);
+        if (open && covers(b)) deepestAtCenter = record;
+        drawPart(record, b, open, onPath);
+        if (b.w >= LABEL_MIN_W) labelBoxes[record.id] = record.box;
       }
-      if (open) {
-        drawEdgesFor.push(record);
-        record.kids.forEach(function (id) { visit(part(id)); });
-        record.results.forEach(function (id) { drawResult(model.results.get(id), related, selected); });
-      }
+      if (!open) return;
+      opened.push(record);
+      record.kids.forEach(function (id) { visit(part(id)); });
+      if (record.view) communities.push(record);
     })(part(ROOT));
-    drawEdgesFor.forEach(drawEdges);
-    drawRelations();
+    opened.forEach(drawRoutes);
+    communities.forEach(drawCommunity);
+    drawLabels(labelBoxes);
+    drawPin();
     keyed.forEach(function (node, key) { if (!used.has(key)) { node.remove(); keyed.delete(key); } });
     updateTrail();
-    if (!state.selected) showPart(state.focusPart ? part(state.focusPart) : deepestAtCenter);
+    if (!state.selected) showPart(currentPart());
   }
-  function labelPart(record, b, open, dim) {
-    var title = plain(record.summary.title);
-    if (open) {
-      var band = Math.max(b.h * BAND, Math.min(b.w, b.h) * 0.06);
-      var fontSize = clamp(band * 0.42, 12, 22);
-      keep(labelLayer, "label:" + record.id, "text", {x: b.x + clamp(b.w * 0.012, 8, 18), y: b.y + band * 0.58, "dominant-baseline": "middle",
-        class: "pm-label" + (dim ? " pm-dimmed" : ""), "font-size": fontSize}).textContent = clip(title, Math.floor(b.w / (fontSize * 0.56)));
-      if (b.w > 420) {
-        keep(labelLayer, "sub:" + record.id, "text", {x: b.x + b.w - clamp(b.w * 0.012, 8, 18), y: b.y + band * 0.58, "dominant-baseline": "middle",
-          "text-anchor": "end", class: "pm-sub" + (dim ? " pm-dimmed" : "")}).textContent =
-          num(record.summary.results) + " results" + (record.summary.api_total ? " · " + num(record.summary.api_total) + " used elsewhere" : "");
-      }
-      return;
+  function drawPart(record, b, open, onPath) {
+    var dim = state.related && !state.related.parts.has(record.id);
+    var holder = keep(partLayer, "part:" + record.id, "g", {
+      class: "pm-part " + (open ? "pm-open" : "pm-tile pm-tile-" + tileKind(record.summary.status)) + (dim ? " pm-dimmed" : "") +
+        (state.focusPart === record.id ? " pm-focus" : "") + (onPath && onPath.has(record.id) ? " pm-on-path" : ""),
+      tabindex: open ? -1 : 0, role: "button", "data-part": record.id,
+      "aria-label": plain(record.summary.title) + ", " + num(record.summary.results) + " results" +
+        (record.summary.api_total ? ", " + num(record.summary.api_total) + " used elsewhere" : "")});
+    var shape = holder.firstChild || holder.appendChild(svg("rect"));
+    shape.setAttribute("x", b.x); shape.setAttribute("y", b.y); shape.setAttribute("width", Math.max(1, b.w)); shape.setAttribute("height", Math.max(1, b.h));
+    shape.setAttribute("rx", clamp(Math.min(b.w, b.h) * 0.05, 1.5, 10));
+    if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(record.summary.title);
+  }
+  // An orthogonal route as a screen path, its corners rounded to radius.
+  function routePath(points, radius) {
+    var pts = [];
+    for (var i = 0; i < points.length; i += 2) pts.push(toScreen(points[i], points[i + 1]));
+    var r = radius * camera.k, d = "M" + pts[0][0].toFixed(1) + "," + pts[0][1].toFixed(1);
+    for (i = 1; i < pts.length - 1; i++) {
+      var p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1];
+      var l1 = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]), l2 = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+      if (!l1 || !l2) continue;
+      var rr = Math.min(r, l1 / 2, l2 / 2);
+      d += "L" + (p1[0] - (p1[0] - p0[0]) / l1 * rr).toFixed(1) + "," + (p1[1] - (p1[1] - p0[1]) / l1 * rr).toFixed(1) +
+        "Q" + p1[0].toFixed(1) + "," + p1[1].toFixed(1) + " " +
+        (p1[0] + (p2[0] - p1[0]) / l2 * rr).toFixed(1) + "," + (p1[1] + (p2[1] - p1[1]) / l2 * rr).toFixed(1);
     }
-    if (b.w < LABEL_W || b.h < 18) return;
-    var fontSize = clamp(Math.min(b.w / 9, b.h / 4.2), 10, 20);
-    var lines = wrap(title, Math.max(4, Math.floor((b.w - 12) / (fontSize * 0.56))), b.h > fontSize * 5 ? 3 : b.h > fontSize * 3 ? 2 : 1);
-    var lineHeight = fontSize * 1.18, x = b.x + clamp(b.w * 0.06, 5, 14), y0 = b.y + clamp(b.h * 0.12, 6, 18) + fontSize * 0.5;
-    lines.forEach(function (line, index) {
-      keep(labelLayer, "label:" + record.id + ":" + index, "text", {x: x, y: y0 + index * lineHeight, "dominant-baseline": "middle",
-        class: "pm-label" + (dim ? " pm-dimmed" : ""), "font-size": fontSize}).textContent = line;
+    var last = pts[pts.length - 1];
+    return d + "L" + last[0].toFixed(1) + "," + last[1].toFixed(1);
+  }
+  function routeVisible(points) {
+    var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (var i = 0; i < points.length; i += 2) { x0 = Math.min(x0, points[i]); x1 = Math.max(x1, points[i]); y0 = Math.min(y0, points[i + 1]); y1 = Math.max(y1, points[i + 1]); }
+    var a = toScreen(x0, y0), b = toScreen(x1, y1);
+    return onScreen({x: a[0], y: a[1], w: b[0] - a[0], h: b[1] - a[1]});
+  }
+  function arrow(on) { return on ? "url(#pm-arrow-on)" : "url(#pm-arrow)"; }
+  function linkWords(route, titleOf) {
+    var main = route.weights[0] + route.weights[1], back = route.weights[2] + route.weights[3];
+    return titleOf(route.to) + " uses " + titleOf(route.from) + ": " + num(main) + (main === 1 ? " link" : " links") +
+      (route.both ? "; " + titleOf(route.from) + " uses " + titleOf(route.to) + ": " + num(back) + (back === 1 ? " link" : " links") : "");
+  }
+  // The routes between an open part's children: the central ones at rest, and every route of the part in focus or under the pointer.
+  function drawRoutes(record) {
+    var routes = routesAt.get(record.id) || [];
+    routes.forEach(function (route) {
+      var involved = [state.focusPart, state.hoverPart].some(function (id) { return id && (route.from === id || route.to === id); });
+      if ((!route.rest && !involved) || !route.points || !routeVisible(route.points)) return;
+      var dim = state.related && !(state.related.parts.has(route.from) && state.related.parts.has(route.to));
+      var path = keep(routeLayer, "route:" + record.id + ":" + route.from + ">" + route.to, "path", {
+        d: routePath(route.points, route.radius),
+        class: "pm-route" + (route.kind === "proof" ? " pm-proof" : "") + (involved ? " pm-involved" : "") + (dim ? " pm-dimmed" : ""),
+        "stroke-width": route.tier === 3 ? 3 : route.tier === 2 ? 2 : 1.25,
+        "marker-end": arrow(involved), "marker-start": route.both ? arrow(involved) : "none"});
+      setText(path.firstChild || path.appendChild(svg("title")), linkWords(route, function (id) { return plain((part(id) || {summary: {title: id}}).summary.title); }));
     });
-    var y = y0 + lines.length * lineHeight + 2;
-    if (b.h > y - b.y + 16) {
-      keep(labelLayer, "sub:" + record.id, "text", {x: x, y: y, "dominant-baseline": "middle", class: "pm-sub" + (dim ? " pm-dimmed" : "")}).textContent =
-        num(record.summary.results) + " results" + (record.summary.parts ? " · " + num(record.summary.parts) + " parts" : "");
-      y += 18;
-    }
-    // A big closed part lists its public API: the results other parts use most.
-    var api = record.summary.api || [], room = Math.floor((b.y + b.h - y - 10) / 17);
-    if (api.length && room >= 2 && b.w > 160) {
-      keep(labelLayer, "apihead:" + record.id, "text", {x: x, y: y + 4, "dominant-baseline": "middle", class: "pm-sub" + (dim ? " pm-dimmed" : "")})
-        .textContent = "Used elsewhere (" + num(record.summary.api_total) + "):";
-      api.slice(0, Math.min(6, room - 1)).forEach(function (row, index) {
-        keep(labelLayer, "api:" + record.id + ":" + index, "text", {x: x + 6, y: y + 4 + 17 * (index + 1), "dominant-baseline": "middle",
-          class: "pm-api" + (dim ? " pm-dimmed" : "")}).textContent = clip(plain(row[1]), Math.floor((b.w - 40) / 6.6)) + "  ×" + row[2];
+  }
+  // A part's own results: status tiles while small, then cards with their titles and the links between them.
+  function drawCommunity(record) {
+    var view = record.view, first = view.cards[record.results[0]];
+    var text = !!first && first.w * camera.k >= CARD_TEXT_W;
+    record.results.forEach(function (id) { drawCard(model.results.get(id), view, text); });
+    if (!text) return;
+    var selected = state.selected && model.results.get(state.selected) && model.results.get(state.selected).home === record.id ? state.selected : null;
+    function titleOf(id) { var entry = model.results.get(id); return plain(entry ? entry.row.title : id); }
+    view.routes.concat(selected ? view.implied.filter(function (route) { return route.from === selected || route.to === selected; }) : [])
+      .forEach(function (route) {
+        if (!route.points || !routeVisible(route.points)) return;
+        var involved = selected && (route.from === selected || route.to === selected);
+        var path = keep(cardRouteLayer, "croute:" + route.from + ">" + route.to, "path", {
+          d: routePath(route.points, route.radius),
+          class: "pm-route pm-card-route" + (route.kind === "proof" ? " pm-proof" : "") + (involved ? " pm-involved" : "") + (selected && !involved ? " pm-dimmed" : ""),
+          "stroke-width": involved ? 2 : 1.25, "marker-end": arrow(involved), "marker-start": route.both ? arrow(involved) : "none"});
+        setText(path.firstChild || path.appendChild(svg("title")), linkWords(route, titleOf));
       });
-    }
   }
-  function wrap(text, width, maxLines) {
-    var words = text.split(/\s+/), lines = [], line = "";
-    words.forEach(function (word) {
-      if (!line) line = word;
-      else if ((line + " " + word).length <= width) line += " " + word;
-      else { lines.push(line); line = word; }
-    });
-    if (line) lines.push(line);
-    if (lines.length > maxLines) { lines = lines.slice(0, maxLines); lines[maxLines - 1] = clip(lines[maxLines - 1] + "…", width); }
-    return lines.map(function (l) { return clip(l, width); });
-  }
-  function clip(text, width) { return text.length > width ? text.slice(0, Math.max(1, width - 1)) + "…" : text; }
-  function drawResult(entry, related, selected) {
+  function drawCard(entry, view, text) {
     if (!entry || !entry.box) return;
     var b = screenBox(entry.box);
-    if (!onScreen(b) || b.w < 1.2) return;
-    var row = entry.row, dim = related ? !related.results.has(row.id) && row.id !== selected : state.facets && row.facet && !state.facets.has(row.facet);
-    var holder = keep(resultLayer, "result:" + row.id, "g", {class: "pm-result" + (row.id === selected ? " pm-selected" : "") + (dim ? " pm-dimmed" : ""),
+    if (!onScreen(b) || b.w < 1) return;
+    var row = entry.row, isSelected = row.id === state.selected;
+    var dim = state.related ? !state.related.results.has(row.id) : state.facets && row.facet && !state.facets.has(row.facet);
+    var holder = keep(resultLayer, "result:" + row.id, "g", {
+      class: "pm-result pm-" + group(row.status) + (text ? " pm-card" : "") + (isSelected ? " pm-selected" : "") + (dim ? " pm-dimmed" : ""),
       tabindex: 0, role: "button", "aria-label": plain(row.title) + ", " + statusWords(row.status), "data-result": row.id});
     var card = holder.firstChild || holder.appendChild(svg("rect"));
-    card.setAttribute("x", b.x); card.setAttribute("y", b.y); card.setAttribute("width", b.w); card.setAttribute("height", b.h);
-    card.setAttribute("rx", clamp(b.w * 0.18, 1, 6)); card.setAttribute("fill", color(group(row.status)));
+    card.setAttribute("x", b.x); card.setAttribute("y", b.y); card.setAttribute("width", Math.max(1, b.w)); card.setAttribute("height", Math.max(1, b.h));
+    card.setAttribute("rx", clamp(b.w * 0.04, 1, 8));
     if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(row.title);
-    if (b.w >= RESULT_LABEL_PX * 4) {
-      var fontSize = clamp(b.w / 9, 10, 15), lines = wrap(plain(row.title), Math.max(4, Math.floor(b.w / (fontSize * 0.55))), Math.max(1, Math.min(4, Math.floor(b.h / (fontSize * 1.3)))));
-      lines.forEach(function (line, index) {
-        keep(labelLayer, "rlabel:" + row.id + ":" + index, "text", {x: b.x + b.w / 2, y: b.y + b.h / 2 + (index - (lines.length - 1) / 2) * fontSize * 1.2,
-          "text-anchor": "middle", "dominant-baseline": "middle", class: "pm-card-label" + (dim ? " pm-dimmed" : ""), "font-size": fontSize}).textContent = line;
-      });
-    } else if (b.w >= RESULT_LABEL_PX || row.id === selected || (related && related.results.has(row.id))) {
-      keep(labelLayer, "rlabel:" + row.id + ":0", "text", {x: b.x + b.w + 4, y: b.y + b.h / 2, "dominant-baseline": "middle",
-        class: "pm-label pm-small" + (dim ? " pm-dimmed" : "")}).textContent = clip(plain(row.title), 40);
+    if (!text) return;
+    var pad = 10, width = b.w - 2 * pad, cls = dim ? " pm-dimmed" : "";
+    var lines = wrap(plain(row.title), Math.max(4, Math.floor(width / CARD_EM)), b.h >= 58 ? 2 : 1);
+    lines.forEach(function (line, index) {
+      setText(keep(labelLayer, "ct:" + row.id + ":" + index, "text", {x: b.x + pad, y: b.y + pad + 13 + index * 17, class: "pm-card-title" + cls}), line);
+    });
+    if (b.h >= 52) {
+      var stub = view.stubs[row.id], meta = statusWords(row.status) + (stub && stub.usedBy ? " · used " + num(stub.usedBy) + "× elsewhere" : "");
+      setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: b.y + b.h - pad, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
     }
   }
-  // Where the segment between two boxes' centres leaves each box.
-  function clipToBox(from, to, box) {
-    var hw = box.w / 2, hh = box.h / 2, dx = to[0] - from[0], dy = to[1] - from[1];
-    var t = Math.min(dx ? hw / Math.abs(dx) : Infinity, dy ? hh / Math.abs(dy) : Infinity, 1);
-    return [from[0] + dx * t, from[1] + dy * t];
-  }
-  function edgeEnds(a, b) {
-    var sa = screenBox(a), sb = screenBox(b), ca = [sa.x + sa.w / 2, sa.y + sa.h / 2], cb = [sb.x + sb.w / 2, sb.y + sb.h / 2];
-    var pa = clipToBox(ca, cb, sa), pb = clipToBox(cb, ca, sb);
-    return [pa[0], pa[1], pb[0], pb[1], Math.hypot(pb[0] - pa[0], pb[1] - pa[1])];
-  }
-  // Links between the parts inside an open part, summed per pair; a pair that uses each other draws one line.
-  function drawEdges(record) {
-    var rows = record.id === ROOT ? (model.index.region_edges || []) : ((record.data && record.data.edges) || []);
-    var pairs = new Map();
-    rows.forEach(function (row) {
-      var key = row[0] < row[1] ? row[0] + "|" + row[1] : row[1] + "|" + row[0], entry = pairs.get(key);
-      if (!entry) { entry = {a: row[0] < row[1] ? row[0] : row[1], b: row[0] < row[1] ? row[1] : row[0], ab: 0, ba: 0}; pairs.set(key, entry); }
-      if (row[0] === entry.a) entry.ab += row[2] + row[3]; else entry.ba += row[2] + row[3];
+  // Titles and progress in each box's header band, at fixed sizes, where the layout module finds room for them.
+  function drawLabels(boxes) {
+    L.placeLabels(boxes, cornerCamera(), size).forEach(function (slot) {
+      var record = part(slot.id);
+      if (!record) return;
+      var cls = state.related && !state.related.parts.has(slot.id) ? " pm-dimmed" : "", title = plain(record.summary.title);
+      var lines = slot.lines === 2 ? wrap(title, Math.max(4, Math.floor(slot.w / TITLE_EM)), 2) : [clip(title, Math.max(4, Math.floor(slot.w / TITLE_EM)))];
+      var y = slot.y + 30;
+      lines.forEach(function (line, index) {
+        setText(keep(labelLayer, "lt:" + slot.id + ":" + index, "text", {x: slot.x, y: y + index * 20, class: "pm-title" + cls}), line);
+      });
+      if (slot.detail === "title") return;
+      var metaY = y + (lines.length - 1) * 20 + 18;
+      setText(keep(labelLayer, "lm:" + slot.id, "text", {x: slot.x, y: metaY, class: "pm-meta" + cls}), clip(progressText(record.summary), Math.floor(slot.w / META_EM)));
+      var api = record.summary.api || [];
+      if (slot.detail === "full" && api.length) {
+        var text = "Used elsewhere: " + api.slice(0, 4).map(function (row) { return plain(row[1]) + " ×" + num(row[2]); }).join(" · ");
+        setText(keep(labelLayer, "la:" + slot.id, "text", {x: slot.x, y: metaY + 18, class: "pm-meta" + cls}), clip(text, Math.floor(slot.w / META_EM)));
+      }
     });
-    pairs.forEach(function (pair, key) {
-      var a = part(pair.a), b = part(pair.b);
-      if (!a || !b || !a.box || !b.box) return;
-      var ends = edgeEnds(a.box, b.box);
-      if (ends[4] < 6) return;
-      var weight = pair.ab + pair.ba, width = clamp(0.6 + Math.log2(1 + weight) * 0.45, 0.8, 6);
-      var dim = state.related && !(state.related.parts.has(pair.a) && state.related.parts.has(pair.b));
-      // Arrows point from the part that is used to the part that uses it: knowledge flows along the line.
-      var bend = Math.min(60, ends[4] * 0.18), mx = (ends[0] + ends[2]) / 2 - (ends[3] - ends[1]) / (ends[4] || 1) * bend,
-        my = (ends[1] + ends[3]) / 2 + (ends[2] - ends[0]) / (ends[4] || 1) * bend;
-      var line = keep(edgeLayer, "edge:" + key, "path", {d: "M" + ends[0] + "," + ends[1] + "Q" + mx + "," + my + " " + ends[2] + "," + ends[3],
-        class: "pm-edge" + (dim ? " pm-dimmed" : ""), "stroke-width": width,
-        "marker-start": pair.ab ? "url(#pm-arrow)" : "", "marker-end": pair.ba ? "url(#pm-arrow)" : ""});
-      var label = plain(a.summary.title) + " uses " + plain(b.summary.title) + ": " + num(pair.ab) + " links" +
-        (pair.ba ? ". " + plain(b.summary.title) + " uses " + plain(a.summary.title) + ": " + num(pair.ba) + " links" : "");
-      (line.firstChild || line.appendChild(svg("title"))).textContent = label;
-    });
+  }
+  // Once the part the view is in has its header band scrolled off, its title stays pinned to the top of the stage.
+  function drawPin() {
+    var record = currentPart();
+    if (!record || record.id === ROOT || !record.box) { pin.hidden = true; return; }
+    var b = screenBox(record.box), band = (record.box.band || L.constants.BAND) * (record.box.unit || 1) * camera.k;
+    if (b.y + band * 0.6 >= 0 || b.y + b.h < 60) { pin.hidden = true; return; }
+    pin.hidden = false;
+    if (pin.dataset.part !== record.id) {
+      pin.dataset.part = record.id;
+      pin.replaceChildren(el("strong", "", plain(record.summary.title)), el("span", "", progressText(record.summary)));
+    }
   }
 
   // ---------------------------------------------------------------- selection and relationships
-  // Where a result's line ends: its own dot when its part is open, else the innermost part on its path that is drawn.
-  function anchorFor(id, chain) {
-    var entry = model.results.get(id);
-    if (entry && entry.box) {
-      var owner = part(entry.home);
-      if (owner && owner.box && isOpen(owner, screenBox(owner.box))) return {box: entry.box, result: true};
-    }
-    var path = chain || (entry ? chainOf(entry.home) : []), best = null;
-    for (var i = 0; i < path.length; i++) {
-      var record = part(path[i]);
-      if (!record || !record.box) break;
-      best = record;
-      if (!isOpen(record, screenBox(record.box))) break;
-    }
-    return best ? {box: best.box, part: best.id} : null;
-  }
   function relationsOf(id) {
     var entry = model.results.get(id), owner = entry && part(entry.home);
     var uses = [], usedBy = [], outside = new Map();
@@ -479,22 +474,7 @@
     });
     return {uses: uses, usedBy: usedBy, outside: outside};
   }
-  function drawRelations() {
-    if (!state.selected) return;
-    var from = anchorFor(state.selected);
-    if (!from) return;
-    var rel = relationsOf(state.selected);
-    [["uses", rel.uses], ["used-by", rel.usedBy]].forEach(function (pair) {
-      pair[1].forEach(function (item) {
-        var outside = rel.outside.get(item.id), to = anchorFor(item.id, outside ? outside[2] : null);
-        if (!to) return;
-        var fa = centerOf(from.box), fb = centerOf(to.box), a = toScreen(fa[0], fa[1]), b = toScreen(fb[0], fb[1]);
-        var midX = (a[0] + b[0]) / 2, midY = (a[1] + b[1]) / 2 - Math.hypot(b[0] - a[0], b[1] - a[1]) * 0.12;
-        keep(relationLayer, "rel:" + pair[0] + ":" + item.id, "path", {d: "M" + a[0] + "," + a[1] + "Q" + midX + "," + midY + " " + b[0] + "," + b[1],
-          class: "pm-rel pm-" + pair[0], "stroke-dasharray": item.statement ? "" : "5 4"});
-      });
-    });
-  }
+  // A selection keeps its relatives and every part they live in at full strength; the rest of the map dims.
   function relatedSets(id) {
     var rel = relationsOf(id), results = new Set([id]), parts = new Set();
     function addChain(chain) { chain.forEach(function (p) { parts.add(p); }); }
@@ -511,7 +491,7 @@
     options = options || {};
     state.selected = id;
     state.related = id ? relatedSets(id) : null;
-    if (id) showResult(id); else showPart(state.focusPart ? part(state.focusPart) : deepestAtCenter);
+    if (id) showResult(id); else showPart(currentPart());
     if (options.history !== false) remember(options.replace);
     schedule();
   }
@@ -537,12 +517,11 @@
   }
   function flyToPart(id, options) {
     options = options || {};
-    var chain = chainOf(id);
-    return ensureChain(chain).then(function () {
+    return ensureChain(chainOf(id)).then(function () {
       var record = part(id);
       state.focusPart = id;
       if (options.history !== false) remember(options.replace);
-      flyToBox(record.box, 0.9);
+      flyToContent(record);
       showPart(record);
     });
   }
@@ -550,11 +529,10 @@
     options = options || {};
     return ensureChain(chain).then(function () {
       var homeId = chain[chain.length - 1], record = part(homeId), entry = model.results.get(resultId);
-      if (!entry) throw new Error("Result not found in its part: " + resultId);
+      if (!entry || !entry.box) throw new Error("Result not found in its part: " + resultId);
       state.focusPart = homeId;
-      // Close enough that the part is open and its result cards carry their titles.
-      var at = centerOf(entry.box), k = Math.max(fitK(record.box, 0.9), RESULT_LABEL_PX * 5 / entry.box.w);
-      k = Math.min(k, fitK(record.box, 0.9) * 4 > k ? k : fitK(record.box, 0.9) * 4);
+      // Close enough that the result's card carries its title, with as much of its part around it as fits.
+      var at = centerOf(entry.box), k = Math.max(fitK(L.contentOf(record.box)), (CARD_TEXT_W * 1.9) / entry.box.w);
       select(resultId, {history: false});
       if (options.history !== false) remember(options.replace);
       flyTo({x: at[0], y: at[1], k: k});
@@ -675,7 +653,7 @@
       var item = el("li"), button = el("button");
       button.type = "button"; button.dataset.part = summary.id;
       button.append(el("span", "", plain(summary.title)), el("span", "pm-count", num(summary.results)));
-      button.addEventListener("click", function () { flyToPart(summary.id).catch(report); });
+      button.addEventListener("click", function () { select(null, {history: false}); flyToPart(summary.id).catch(report); });
       item.append(button);
       var record = part(summary.id);
       if (record && record.data && record.kids.length) {
@@ -684,7 +662,7 @@
           var child = part(id), li = el("li"), b = el("button");
           b.type = "button"; b.dataset.part = id;
           b.append(el("span", "", plain(child.summary.title)), el("span", "pm-count", num(child.summary.results)));
-          b.addEventListener("click", function () { flyToPart(id).catch(report); });
+          b.addEventListener("click", function () { select(null, {history: false}); flyToPart(id).catch(report); });
           li.append(b); sub.append(li);
         });
         item.append(sub);
@@ -724,7 +702,7 @@
     readerInner.replaceChildren();
     if (record.id === ROOT) {
       readerInner.append(el("p", "pm-kicker", "Whole project"), el("h2", "", plain(model.index.title)));
-      readerInner.append(el("p", "", "Each box is a region of the library, sized by its number of results. Lines show how often one region's results use another's; arrows run from what is used to what uses it. Zoom in to open a region in place, or search for a theorem by name."));
+      readerInner.append(el("p", "", "Each box is a part of the library, sized by its results, with prerequisites placed first. Arrows run from what is used to what uses it: the main links show at rest, and every link of a part shows under the pointer. Zoom in to open a part in place, or search for a theorem by name."));
       readerInner.append(el("h3", "", "Regions"));
       readerInner.append(listOfParts(model.index.regions.map(function (s) { return s.id; })));
       return;
@@ -754,21 +732,39 @@
       var record = part(id); if (!record) return;
       var item = el("li"), button = el("button"); button.type = "button";
       button.append(el("span", "", plain(record.summary.title)), el("small", "", num(record.summary.results)));
-      button.addEventListener("click", function () { flyToPart(id).catch(report); });
+      button.addEventListener("click", function () { select(null, {history: false}); flyToPart(id).catch(report); });
       item.append(button); list.append(item);
     });
     return list;
   }
+  // Formulas go to the site's MathJax runtime (javascripts/mathjax.js), which reads only the spans marked for it.
   function typeset(node) {
-    if (window.MathJax && typeof window.MathJax.typesetPromise === "function") window.MathJax.typesetPromise([node]).catch(function () {});
+    if (window.AutoformMath && typeof window.AutoformMath.refresh === "function") window.AutoformMath.refresh(node);
   }
-  function richText(text) {
-    var node = el("p", "pm-statement");
-    String(text || "").split(/(`[^`]*`)/).forEach(function (piece) {
-      if (/^`[^`]*`$/.test(piece)) node.append(el("code", "", piece.slice(1, -1)));
-      else node.append(document.createTextNode(piece));
-    });
+  // The explorer's reading of a summary: closed code spans and unambiguous inline formulas; anything else stays literal.
+  var MARKUP = /\\([\\`$])|(?<![\\`])(`+)(?!`)([^\n]*?)(?<!`)\2(?!`)|(?<![\\$])\$(?![\s$])((?:\\.|[^\\$\n])+?)(?<!\s)\$(?![$\d])|(?<!\\)\\\(((?:\\[^)]|[^\\\n])+?)\\\)/g;
+  function withMath(node, text) {
+    text = String(text || "");
+    var last = 0, match, parts = [];
+    MARKUP.lastIndex = 0;
+    while ((match = MARKUP.exec(text))) {
+      // An unmatched backtick may own later dollars: keep the whole text literal instead of guessing where code ends.
+      if (text.slice(last, match.index).indexOf("`") >= 0) { node.append(document.createTextNode(text)); return node; }
+      if (match.index > last) parts.push(document.createTextNode(text.slice(last, match.index)));
+      parts.push(match[1] !== undefined ? document.createTextNode(match[1]) : match[2] !== undefined ? el("code", "", match[3].trim()) :
+        el("span", "arithmatex", "\\(" + (match[4] !== undefined ? match[4] : match[5]) + "\\)"));
+      last = MARKUP.lastIndex;
+    }
+    if (text.slice(last).indexOf("`") >= 0) { node.append(document.createTextNode(text)); return node; }
+    if (last < text.length) parts.push(document.createTextNode(text.slice(last)));
+    parts.forEach(function (piece) { node.append(piece); });
     return node;
+  }
+  function statement(text, title) {
+    text = String(text || "");
+    // Summaries open with the title as their first sentence; the heading already says it.
+    if (title && text.indexOf(title) === 0 && /^[.:]\s/.test(text.slice(title.length))) text = text.slice(title.length + 1).trim();
+    return withMath(el("p", "pm-statement"), text);
   }
   function showResult(id) {
     var entry = model.results.get(id);
@@ -777,10 +773,10 @@
     var row = entry.row, rel = relationsOf(id);
     readerInner.replaceChildren();
     readerInner.append(el("p", "pm-kicker", "Result"));
-    var heading = el("h2", "", row.title); readerInner.append(heading);
+    readerInner.append(withMath(el("h2"), row.title));
     readerInner.append(pathLine(chainOf(entry.home)));
     readerInner.append(el("span", "pm-chip", statusWords(row.status) + (row.facet ? " · " + row.facet : "")));
-    if (row.summary) readerInner.append(richText(row.summary));
+    if (row.summary) readerInner.append(statement(row.summary, row.title));
     if (row.lean) {
       var lean = el("div", "pm-lean"), code = el("code", "", row.lean), copy = el("button", "pm-button", "Copy");
       copy.type = "button"; copy.addEventListener("click", function () { if (navigator.clipboard) navigator.clipboard.writeText(row.lean); });
@@ -803,51 +799,50 @@
         li.append(button); list.append(li);
       });
       readerInner.append(list);
+      if (pair[1].length > 80) readerInner.append(el("p", "pm-empty", "and " + num(pair[1].length - 80) + " more"));
     });
     typeset(readerInner);
   }
 
   // ---------------------------------------------------------------- trail
   function updateTrail() {
+    var here = currentPart();
     var chain = state.selected && model.results.get(state.selected) ? chainOf(model.results.get(state.selected).home)
-      : deepestAtCenter && deepestAtCenter.id !== ROOT ? chainOf(deepestAtCenter.id) : [];
+      : here && here.id !== ROOT ? chainOf(here.id) : [];
     var signature = chain.join("|") + "#" + (state.selected || "");
     if (trail.dataset.signature === signature) return;
     trail.dataset.signature = signature;
     trail.replaceChildren();
-    var rootItem = el("li"), rootButton = el("button", "", plain(model.index.title)); rootButton.type = "button";
-    rootButton.addEventListener("click", function () { select(null, {history: false}); state.focusPart = null; remember(); fitProject(); });
-    rootItem.append(rootButton); trail.append(rootItem);
-    chain.forEach(function (id, index) {
-      var item = el("li"), last = index === chain.length - 1 && !state.selected;
-      if (last) { item.textContent = plain(part(id).summary.title); item.setAttribute("aria-current", "location"); }
-      else {
-        var button = el("button", "", plain(part(id).summary.title)); button.type = "button";
-        button.addEventListener("click", function () { select(null, {history: false}); flyToPart(id).catch(report); });
-        item.append(button);
-      }
-      trail.append(item);
-    });
-    if (state.selected) {
-      var item = el("li", "", plain(model.results.get(state.selected).row.title)); item.setAttribute("aria-current", "location"); trail.append(item);
+    function step(text, go, current) {
+      var item = el("li"), node = current ? el("span", "", text) : el("button", "", text);
+      if (current) item.setAttribute("aria-current", "location");
+      else { node.type = "button"; node.title = text; node.addEventListener("click", go); }
+      item.append(node); trail.append(item);
     }
+    step(plain(model.index.title), wholeProject, !chain.length && !state.selected);
+    chain.forEach(function (id, index) {
+      step(plain(part(id).summary.title), function () { select(null, {history: false}); flyToPart(id).catch(report); }, index === chain.length - 1 && !state.selected);
+    });
+    if (state.selected) step(plain(model.results.get(state.selected).row.title), null, true);
   }
 
   // ---------------------------------------------------------------- history
   function snapshot() {
     return {pm: 1, camera: {x: camera.x, y: camera.y, k: camera.k}, selected: state.selected, focusPart: state.focusPart,
-      chain: state.selected && model.results.get(state.selected) ? chainOf(model.results.get(state.selected).home) : state.focusPart ? chainOf(state.focusPart) : []};
+      chain: state.selected && model.results.get(state.selected) ? chainOf(model.results.get(state.selected).home) :
+        state.focusPart && state.focusPart !== ROOT ? chainOf(state.focusPart) : []};
   }
   function remember(replace) {
     var snap = snapshot();
-    var hash = snap.selected ? "#result=" + encodeURIComponent(snap.selected) : snap.focusPart ? "#part=" + encodeURIComponent(snap.focusPart) : location.pathname + location.search;
+    var hash = snap.selected ? "#result=" + encodeURIComponent(snap.selected) :
+      snap.focusPart && snap.focusPart !== ROOT ? "#part=" + encodeURIComponent(snap.focusPart) : location.pathname + location.search;
     // The current entry keeps its camera, so Back returns to exactly where the reader was.
     try { history.replaceState(Object.assign({}, history.state || {}, {pm: 1, camera: {x: camera.x, y: camera.y, k: camera.k}, selected: history.state && history.state.selected, focusPart: history.state && history.state.focusPart, chain: history.state && history.state.chain}), ""); } catch (_e) { /* ignore */ }
     if (replace) history.replaceState(snap, "", hash); else history.pushState(snap, "", hash);
   }
   window.addEventListener("popstate", function (event) {
     var snap = event.state;
-    if (!snap || !snap.pm) { select(null, {history: false}); state.focusPart = null; fitProject(true); return; }
+    if (!snap || !snap.pm) { select(null, {history: false}); state.focusPart = ROOT; fitProject(true); return; }
     ensureChain(snap.chain || []).then(function () {
       state.focusPart = snap.focusPart || null;
       select(snap.selected || null, {history: false});
@@ -860,7 +855,7 @@
     clearTimeout(cameraTimer);
     cameraTimer = setTimeout(function () {
       var current = history.state && history.state.pm ? history.state : snapshot();
-      try { history.replaceState(Object.assign({}, current, {camera: {x: camera.x, y: camera.y, k: camera.k}}), ""); } catch (_e) { /* ignore */ }
+      try { history.replaceState(Object.assign({}, current, {camera: {x: camera.x, y: camera.y, k: camera.k}, focusPart: state.focusPart}), ""); } catch (_e) { /* ignore */ }
     }, 250);
   }
 
@@ -869,6 +864,7 @@
   canvas.addEventListener("wheel", function (event) {
     event.preventDefault();
     var box = canvas.getBoundingClientRect();
+    release();
     zoomAt(Math.exp(-event.deltaY * (event.ctrlKey ? 0.01 : 0.0022)), event.clientX - box.left, event.clientY - box.top);
     rememberCamera();
   }, {passive: false});
@@ -877,22 +873,28 @@
     drag = {x: event.clientX, y: event.clientY, cx: camera.x, cy: camera.y, moved: false, id: event.pointerId};
   });
   canvas.addEventListener("pointermove", function (event) {
-    if (!drag) return;
+    if (!drag) { hover(event.target); return; }
     var dx = event.clientX - drag.x, dy = event.clientY - drag.y;
     if (!drag.moved && Math.hypot(dx, dy) < 4) return;
-    if (!drag.moved) { drag.moved = true; canvas.setPointerCapture(drag.id); canvas.classList.add("pm-dragging"); }
+    if (!drag.moved) { drag.moved = true; canvas.setPointerCapture(drag.id); canvas.classList.add("pm-dragging"); release(); }
     camera = {x: drag.cx - dx / camera.k, y: drag.cy - dy / camera.k, k: camera.k};
     schedule();
   });
+  canvas.addEventListener("pointerleave", function () { hover(null); });
+  // The part under the pointer shows all of its routes, not only the central ones.
+  function hover(target) {
+    var node = target && target.closest ? target.closest("[data-part]") : null, id = node ? node.getAttribute("data-part") : null;
+    if (id !== state.hoverPart) { state.hoverPart = id; schedule(); }
+  }
   function endDrag(event) {
     if (!drag) return;
     var moved = drag.moved; drag = null; canvas.classList.remove("pm-dragging");
     if (moved) { rememberCamera(); return; }
-    activate(event.target, event.detail >= 2);
+    activate(event.target);
   }
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", function () { drag = null; canvas.classList.remove("pm-dragging"); });
-  function activate(target, deep) {
+  function activate(target) {
     var resultNode = target.closest && target.closest("[data-result]");
     if (resultNode) { select(resultNode.getAttribute("data-result")); return; }
     var partNode = target.closest && target.closest("[data-part]");
@@ -912,24 +914,33 @@
     else if (event.key === "ArrowDown") camera.y += step / camera.k;
     else if (event.key === "+" || event.key === "=") zoomAt(1.35, size.w / 2, size.h / 2);
     else if (event.key === "-") zoomAt(1 / 1.35, size.w / 2, size.h / 2);
-    else if (event.key === "0") fitProject();
+    else if (event.key === "0") wholeProject();
     else if (event.key === "Escape") select(null);
     else return;
-    event.preventDefault(); schedule(); rememberCamera();
+    if (event.key !== "0" && event.key !== "Escape") release();
+    event.preventDefault(); schedule();
+    if (event.key !== "0") rememberCamera();
   });
-  zoomIn.addEventListener("click", function () { zoomAt(1.5, size.w / 2, size.h / 2); rememberCamera(); });
-  zoomOut.addEventListener("click", function () { zoomAt(1 / 1.5, size.w / 2, size.h / 2); rememberCamera(); });
-  fitAll.addEventListener("click", function () { select(null, {history: false}); state.focusPart = null; remember(); fitProject(); });
+  zoomIn.addEventListener("click", function () { release(); zoomAt(1.5, size.w / 2, size.h / 2); rememberCamera(); });
+  zoomOut.addEventListener("click", function () { release(); zoomAt(1 / 1.5, size.w / 2, size.h / 2); rememberCamera(); });
+  function wholeProject() { state.focusPart = ROOT; select(null, {history: false}); remember(); fitProject(); }
+  fitAll.addEventListener("click", wholeProject);
   document.addEventListener("keydown", function (event) {
     if (event.key === "/" && document.activeElement !== search && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
       event.preventDefault(); search.focus(); search.select();
     }
   });
-  if (window.ResizeObserver) new ResizeObserver(function () { schedule(); }).observe(stage);
-  function fitProject(instant) {
-    var root = part(ROOT), c = centerOf(root.box), target = {x: c[0], y: c[1], k: fitK(root.box)};
-    if (instant) { camera = target; schedule(); } else flyTo(target);
-  }
+  // The world is packed for the stage's shape: a resize refits the camera, and turning between portrait and landscape repacks.
+  if (window.ResizeObserver) new ResizeObserver(function () {
+    if (!stageSize) return;
+    measure();
+    if ((size.w >= size.h) !== (stageSize.w >= stageSize.h)) {
+      stageSize = {w: size.w, h: size.h};
+      packRoot();
+      fitProject(true);
+    }
+    schedule();
+  }).observe(stage);
   function report(error) {
     live.textContent = "Something went wrong: " + (error && error.message ? error.message : error);
     if (window.console) console.error(error);
@@ -937,18 +948,18 @@
 
   // ---------------------------------------------------------------- start
   fetchJSON("index.json").then(function (index) {
+    if (!L) throw new Error("the map's layout script did not load");
     model.index = index;
     var root = {id: ROOT, summary: {id: ROOT, title: index.title, results: index.results, status: index.status, parts: index.regions.length, api: [], api_total: 0, imports_total: 0},
-      parent: null, data: {children: index.regions, edges: index.region_edges}, loading: null, box: null, ownBox: null, kids: [], results: []};
+      parent: null, data: {children: index.regions, edges: index.region_edges}, loading: null, box: null, ownBox: null, view: null, kids: [], results: []};
     model.parts.set(ROOT, root);
     index.regions.forEach(function (summary) { register(summary, ROOT); });
     measure();
-    // The project's box takes the stage's shape, quantized so a small resize never reshuffles the map.
-    var aspect = size.w / size.h >= 1 ? clamp(Math.round(size.w / size.h * 4) / 4, 1, 2.5) : 0.75;
-    root.box = {x: -WORLD_W / 2, y: -WORLD_W / aspect / 2, w: WORLD_W, h: WORLD_W / aspect};
-    layoutApi().packPart(root, root.data);
-    var c0 = centerOf(root.box);
-    camera = {x: c0[0], y: c0[1], k: fitK(root.box)};
+    stageSize = {w: size.w, h: size.h};
+    packRoot();
+    // The map opens on the whole project, which the reading pane describes until the reader goes somewhere.
+    state.focusPart = ROOT;
+    fitProject(true);
     renderSide();
     var hash = location.hash.slice(1), params = new URLSearchParams(hash);
     var start = params.get("result") ? arriveById(params.get("result")).then(function () { remember(true); })

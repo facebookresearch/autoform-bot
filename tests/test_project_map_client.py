@@ -11,7 +11,7 @@ import pytest
 from autoform_cli import project_map
 
 _NODE = shutil.which("node")
-_CLIENT = Path(__file__).resolve().parents[1] / "autoform_cli/assets/project-map.js"
+_ASSETS = Path(__file__).resolve().parents[1] / "autoform_cli/assets"
 _DOM = Path(__file__).resolve().with_name("project_map_dom.js")
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node runs the map client")
 
@@ -40,7 +40,11 @@ def _library(tmp_path: Path) -> Path:
 def _walk(tmp_path: Path, script: str) -> str:
     path = tmp_path / "walk.js"
     path.write_text(script, encoding="utf-8")
-    run = subprocess.run([_NODE, str(_DOM), str(_CLIENT), str(_library(tmp_path)), str(path)],
+    # The page loads the layout module and the controller as one file, in this order.
+    client = tmp_path / "project-map.js"
+    client.write_text("\n".join((_ASSETS / name).read_text(encoding="utf-8") for name in ("project-map-layout.js", "project-map.js")),
+                      encoding="utf-8")
+    run = subprocess.run([_NODE, str(_DOM), str(client), str(_library(tmp_path)), str(path)],
                          capture_output=True, text=True, timeout=60)
     assert run.returncode == 0, run.stdout[-2000:] + run.stderr[-4000:]
     return run.stdout
@@ -64,7 +68,9 @@ def test_overview_search_arrival_pivot_back_and_whole_project(tmp_path: Path) ->
       const usedBy = reader.querySelectorAll('.pm-list');
       const names = usedBy[usedBy.length - 1].querySelectorAll('button').map(b => b.querySelector('span').textContent).sort();
       assert.deepStrictEqual(names, ['Abel summation for ℝ', "Cauchy's theorem"]);
-      assert($$('.pm-rel').length >= 1, 'selection draws its relationships');
+      // Its card carries its title, and the link from Cauchy's theorem, inside the part, is highlighted.
+      assert($$('.pm-card').length >= 2, 'cards carry titles at this zoom');
+      assert($$('.pm-involved').length >= 1, 'selection highlights its links');
       // Following one pivots the focus; Back restores the previous selection.
       const cauchy = usedBy[usedBy.length - 1].querySelectorAll('button').find(b => b.textContent.includes('Cauchy'));
       emit(cauchy, 'click'); await wait(40);
@@ -78,6 +84,26 @@ def test_overview_search_arrival_pivot_back_and_whole_project(tmp_path: Path) ->
       console.log('walk ok');
     """)
     assert "walk ok" in out
+
+
+def test_zooming_into_a_region_opens_it_in_place(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      assert.strictEqual($$('.pm-result').length, 3, 'the opening shows every result');
+      assert.deepStrictEqual($('.pm-trail').querySelectorAll('li').map(li => li.textContent), ['Library']);
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Library');
+      // Zoom towards Lagrange's theorem.
+      const canvas = app.querySelector('svg'), card = $$('.pm-result')[0].querySelector('rect');
+      const x = +card.getAttribute('x') + card.getAttribute('width') / 2, y = +card.getAttribute('y') + card.getAttribute('height') / 2;
+      for (let i = 0; i < 3; i++) { emit(canvas, 'wheel', {deltaY: -320, clientX: x, clientY: y}); await wait(4); }
+      await wait(20);
+      // The same page now reads Groups from inside: its results are cards with titles, and the trail says where we are.
+      assert.strictEqual(location.hash, '', 'zooming is not navigation');
+      assert($$('.pm-card').length >= 1, 'the result carries its title');
+      assert.deepStrictEqual($('.pm-trail').querySelectorAll('li').map(li => li.textContent), ['Library', 'Algebra', 'Groups']);
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Groups');
+      console.log('zoom ok');
+    """)
+    assert "zoom ok" in out
 
 
 def test_titles_with_tex_are_readable_on_the_map(tmp_path: Path) -> None:

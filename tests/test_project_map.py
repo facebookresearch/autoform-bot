@@ -53,6 +53,8 @@ def test_collections_and_pagination_are_flattened_and_collections_become_facets(
     assert groups["path"] == [["region:Algebra & Number Theory", "Algebra & Number Theory"], ["Algebra", "Algebra"],
                               ["Algebra/MathlibExt/part-01/groups", "Groups"]]
     assert [row["facet"] for row in groups["results"]] == ["MathlibExt", "MathlibExt"]
+    # Results keep reading order, not id order.
+    assert [row["title"] for row in groups["results"]] == ["Lagrange", "Cauchy"]
     algebra = _part(files, "Algebra")
     assert [child["id"] for child in algebra["children"]] == ["Algebra/MathlibExt/part-01/groups"]
     assert not any(key.endswith(project_map.part_file("Algebra/MathlibExt")) for key in files)
@@ -66,8 +68,9 @@ def test_authored_areas_become_regions_and_projects_without_them_use_chapters() 
     assert [region["id"] for region in regions] == ["region:Algebra & Number Theory", "Analysis"]
     assert [region["results"] for region in regions] == [3, 1]
     plain = [{key: value for key, value in record.items() if key != "area"} for record in records]
+    # Without areas the chapters are the regions, in reading order.
     assert [region["id"] for region in project_map.build_project_map(plain, relations)["index.json"]["regions"]] == [
-        "Algebra", "Analysis", "NumberTheory"]
+        "Algebra", "NumberTheory", "Analysis"]
 
 
 def test_public_api_counts_outside_users_and_imports_count_outside_dependencies() -> None:

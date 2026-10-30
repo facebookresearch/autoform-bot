@@ -1209,7 +1209,8 @@ def _render_pages(
         (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
         (DAG_SCRIPT, explorer_script),
         (DAG_STYLE, dag_viewer._STYLE),
-        (MAP_SCRIPT, _static_asset("project-map.js")),
+        # The layout module ships ahead of the controller in one file, so the page makes one request for both.
+        (MAP_SCRIPT, _static_asset("project-map-layout.js") + "\n" + _static_asset("project-map.js")),
         (MAP_STYLE, _static_asset("project-map.css")),
         # The whole-project map: one standalone page over the per-level files in dependencies/map/.
         (MAP_PAGE, project_map.render_page(

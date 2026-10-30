@@ -48,8 +48,12 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
     ``title`` and ``parent`` (an id); results are the entries whose ``result``
     is true (or, without that flag, every non-scope entry). ``relations`` are
     ``(user, used, statement links, proof links)`` between record ids.
+
+    Records arrive in reading order (the book's own order); every level keeps it,
+    so the layout can fall back on it wherever dependencies leave a tie.
     """
     by_id = {str(record["id"]): record for record in records}
+    order = {key: index for index, key in enumerate(by_id)}
     roots = [key for key, record in by_id.items() if record.get("parent") in (None, "")]
     if len(roots) != 1:
         raise ValueError(f"a project map needs exactly one root, found {len(roots)}")
@@ -69,7 +73,7 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
     facet: dict[str, str] = {}
 
     def walk(node: str, part: str, collection: str | None) -> None:
-        for child in sorted(children.get(node, ())):
+        for child in children.get(node, ()):
             record = by_id[child]
             if record.get("kind") == "scope":
                 navigation = record.get("navigation")
@@ -151,16 +155,26 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
 
     relations = list(relations)
     chains, inside, exports, imports, pair, internal, boundary = aggregate()
+
+    def first_positions() -> dict[str, int]:
+        # A part reads from where its first record appears: its own scope, or the earliest result inside it.
+        first = {part: order.get(part, len(order)) for part in part_parent}
+        for result, parts in chains.items():
+            for part in parts:
+                first[part] = min(first[part], order[result])
+        return first
+
     synthetic: set[str] = set()
-    if _group_wide_parts(part_parent, title, inside, pair, synthetic):
+    if _group_wide_parts(part_parent, title, inside, pair, synthetic, first_positions()):
         chains, inside, exports, imports, pair, internal, boundary = aggregate()
+    first = first_positions()
     status = {part: Counter(str(by_id[result].get("status")) for result in results) for part, results in inside.items()}
 
     kids: dict[str, list[str]] = defaultdict(list)
     for part, parent in part_parent.items():
         kids[parent].append(part)
     for parent in kids:
-        kids[parent].sort(key=lambda part: (-len(inside.get(part, ())), title[part]))
+        kids[parent].sort(key=lambda part: (first[part], title[part], part))
 
     def summary(part: str) -> dict[str, object]:
         exported = exports.get(part, Counter())
@@ -189,7 +203,7 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
 
     files: dict[str, object] = {}
     for part in part_parent:
-        own = sorted(result for result, at in home.items() if at == part)
+        own = sorted((result for result, at in home.items() if at == part), key=order.__getitem__)
         body: dict[str, object] = {
             "schema": SCHEMA, "part": summary(part),
             "path": [[step, title[step]] for step in chain(part)[::-1]],
@@ -232,12 +246,13 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
 
 
 def _group_wide_parts(part_parent: dict[str, str], title: dict[str, str], inside: Mapping[str, Sequence[str]],
-                      pair: Mapping[tuple[str, str], Sequence[int]], synthetic: set[str]) -> bool:
+                      pair: Mapping[tuple[str, str], Sequence[int]], synthetic: set[str], first: Mapping[str, int]) -> bool:
     """Group the children of any part wider than GROUP_LIMIT into linked communities, in place.
 
     Children that link to each other form one community (a weak component of the sibling links), titled by its largest
-    member. Children that link to no sibling share one "Standalone topics" group, in reading order. Each group gets a
-    stable id under its parent. Returns whether anything was grouped.
+    member. Children that link to no sibling share one "Standalone topics" group. Groups are numbered in reading order
+    (``first`` is each part's reading position), so each gets a stable id under its parent. Returns whether anything
+    was grouped.
     """
     kids: dict[str, list[str]] = defaultdict(list)
     for part, parent in part_parent.items():
@@ -274,10 +289,10 @@ def _group_wide_parts(part_parent: dict[str, str], title: dict[str, str], inside
                         seen.add(other)
                         stack.append(other)
             islands.append(sorted(component, key=lambda m: (-size[m], title[m], m)))
-        groups = [island for island in islands if len(island) > 1]
+        groups = sorted((island for island in islands if len(island) > 1), key=lambda island: min(first[m] for m in island))
         loners.extend(island[0] for island in islands if len(island) == 1)
-        loners.sort(key=lambda m: (title[m].casefold(), m))
         # Topics that link to no sibling stay together, in reading order: grouping them by size would invent a structure.
+        loners.sort(key=lambda m: (first[m], m))
         everything = groups + ([loners] if loners else [])
         if len(everything) >= len(members):
             continue
@@ -341,7 +356,6 @@ _PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title} · map</title>
 <link rel="stylesheet" href="{style}">
-<script>window.MathJax = window.MathJax || {{tex: {{inlineMath: [["$", "$"], ["\\\\(", "\\\\)"]]}}, startup: {{typeset: false}}}};</script>
 <script defer src="{mathjax}"></script>
 <script defer src="{script}"></script>
 </head>

@@ -2,7 +2,7 @@
 :root {
   --pm-bg: #f7f7f5; --pm-panel: #ffffff; --pm-fg: #1d1d1f; --pm-muted: #5f6368; --pm-faint: #9aa0a6; --pm-border: #e3e3e0;
   --pm-link: #1a5fb4; --pm-accent: #1a5fb4; --pm-region: #ffffff; --pm-region-stroke: #c9c9c4; --pm-edge: #7a7f86;
-  --pm-proved: #2e7d4f; --pm-progress: #3b82c4; --pm-planned: #b9bdc2; --pm-select: #111111; --pm-dim: .16;
+  --pm-proved: #2e7d4f; --pm-progress: #3b82c4; --pm-planned: #b9bdc2; --pm-select: #111111; --pm-dim: .38;
   --pm-font: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --pm-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -24,9 +24,11 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-top { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--pm-border); background: var(--pm-panel); }
 .pm-home { color: var(--pm-link); font-weight: 600; text-decoration: none; white-space: nowrap; }
 .pm-trail { display: flex; flex: 1 1 auto; min-width: 0; gap: 6px; margin: 0; padding: 0; list-style: none; color: var(--pm-muted); font-size: 13px; overflow: hidden; }
-.pm-trail li { flex: 0 1 auto; min-width: 4em; max-width: 26ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pm-trail li:last-child { flex-shrink: 0; max-width: 34ch; }
-.pm-trail li + li::before { content: "/"; margin-right: 6px; color: var(--pm-faint); }
+/* Every step shrinks to a readable prefix rather than vanishing; the current step gives way last. */
+.pm-trail li { display: flex; flex: 0 1 auto; min-width: 0; max-width: 24ch; white-space: nowrap; }
+.pm-trail li:last-child { flex-shrink: .2; max-width: 40ch; }
+.pm-trail li + li::before { content: "/"; flex: none; margin-right: 6px; color: var(--pm-faint); }
+.pm-trail li > button, .pm-trail li > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pm-trail button { padding: 0; border: 0; background: none; color: var(--pm-link); font: inherit; cursor: pointer; }
 .pm-trail [aria-current=location] { color: var(--pm-fg); font-weight: 600; }
 .pm-search { position: relative; flex: 0 1 380px; min-width: 220px; }
@@ -65,25 +67,33 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-stage svg { display: block; width: 100%; height: 100%; touch-action: none; user-select: none; cursor: grab; }
 .pm-stage svg.pm-dragging { cursor: grabbing; }
 .pm-hint { position: absolute; left: 14px; bottom: 12px; padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--pm-bg) 82%, transparent); color: var(--pm-muted); font-size: 12px; pointer-events: none; }
-.pm-part > rect { fill: var(--pm-region); stroke: var(--pm-region-stroke); stroke-width: 1.2; cursor: zoom-in; }
-.pm-part.pm-open > rect { fill: color-mix(in srgb, var(--pm-bg) 60%, var(--pm-region)); cursor: grab; }
+.pm-part > rect { fill: var(--pm-region); stroke: var(--pm-region-stroke); stroke-width: 1; cursor: zoom-in; }
+.pm-part.pm-open > rect { fill: color-mix(in srgb, var(--pm-bg) 55%, var(--pm-region)); cursor: grab; }
+.pm-tile-done > rect { fill: color-mix(in srgb, var(--pm-proved) 10%, var(--pm-region)); }
+.pm-tile-progress > rect { fill: color-mix(in srgb, var(--pm-progress) 10%, var(--pm-region)); }
 .pm-part:hover > rect { stroke: color-mix(in srgb, var(--pm-accent) 55%, var(--pm-region-stroke)); }
-.pm-part:focus-visible > rect, .pm-part.pm-focus > rect { stroke: var(--pm-accent); stroke-width: 2.4; outline: none; }
-.pm-label { fill: var(--pm-fg); font: 600 13px var(--pm-font); paint-order: stroke; stroke: var(--pm-bg); stroke-width: 3px; stroke-linejoin: round; pointer-events: none; }
-.pm-label.pm-big { font-size: 17px; }
-.pm-label.pm-small { font-size: 11px; font-weight: 500; }
-.pm-sub { fill: var(--pm-muted); font: 12px var(--pm-font); paint-order: stroke; stroke: var(--pm-bg); stroke-width: 3px; pointer-events: none; }
-.pm-api { fill: var(--pm-fg); font: 12px var(--pm-font); pointer-events: none; }
-.pm-result > rect { stroke: var(--pm-bg); stroke-width: 1; cursor: pointer; }
+.pm-part:focus-visible > rect, .pm-part.pm-focus > rect { stroke: var(--pm-accent); stroke-width: 2; outline: none; }
+.pm-part.pm-on-path > rect { stroke: var(--pm-select); stroke-width: 1.8; }
+.pm-title { fill: var(--pm-fg); font: 600 15px var(--pm-font); pointer-events: none; }
+.pm-meta { fill: var(--pm-muted); font: 12px var(--pm-font); pointer-events: none; }
+.pm-route { fill: none; stroke: var(--pm-edge); stroke-linejoin: round; stroke-linecap: round; opacity: .85; }
+.pm-route.pm-proof { stroke-dasharray: 6 4; }
+.pm-route.pm-involved { stroke: var(--pm-accent); opacity: 1; }
+.pm-arrow path { fill: var(--pm-edge); }
+.pm-arrow-on path { fill: var(--pm-accent); }
+.pm-result > rect { stroke-width: 1; cursor: pointer; }
+.pm-result.pm-done > rect { fill: color-mix(in srgb, var(--pm-proved) 16%, var(--pm-panel)); stroke: color-mix(in srgb, var(--pm-proved) 65%, var(--pm-panel)); }
+.pm-result.pm-progress > rect { fill: color-mix(in srgb, var(--pm-progress) 14%, var(--pm-panel)); stroke: color-mix(in srgb, var(--pm-progress) 65%, var(--pm-panel)); }
+.pm-result.pm-planned > rect { fill: var(--pm-panel); stroke: var(--pm-planned); }
+.pm-result.pm-card > rect { stroke-width: 1.4; }
 .pm-result:focus-visible > rect, .pm-result.pm-selected > rect { stroke: var(--pm-select); stroke-width: 2.5; outline: none; }
-.pm-card-label { fill: #ffffff; font: 600 12px var(--pm-font); pointer-events: none; }
-.pm-result text { fill: var(--pm-fg); font: 12px var(--pm-font); paint-order: stroke; stroke: var(--pm-bg); stroke-width: 3px; pointer-events: none; }
-.pm-edge { fill: none; stroke: var(--pm-edge); color: var(--pm-edge); stroke-linecap: round; opacity: .55; }
-.pm-edge.pm-two-way { stroke-dasharray: none; }
-.pm-rel { fill: none; stroke-width: 1.6; opacity: .9; }
-.pm-rel.pm-uses { stroke: var(--pm-progress); }
-.pm-rel.pm-used-by { stroke: #c2410c; }
+.pm-card-title { fill: var(--pm-fg); font: 600 13px var(--pm-font); pointer-events: none; }
+.pm-card-meta { fill: var(--pm-muted); font: 11px var(--pm-font); pointer-events: none; }
 .pm-dimmed { opacity: var(--pm-dim); }
+.pm-pin { position: absolute; top: 0; left: 0; right: 0; display: flex; gap: 12px; align-items: baseline; padding: 8px 16px; border-bottom: 1px solid var(--pm-border); background: color-mix(in srgb, var(--pm-panel) 94%, transparent); pointer-events: none; }
+.pm-pin[hidden] { display: none; }
+.pm-pin strong { font-size: 15px; }
+.pm-pin span { color: var(--pm-muted); font-size: 12px; }
 .pm-reader { min-height: 0; overflow: auto; border-left: 1px solid var(--pm-border); background: var(--pm-panel); }
 .pm-reader-inner { padding: 18px 18px 40px; }
 .pm-kicker { margin: 0 0 4px; color: var(--pm-muted); font-size: 12px; }
