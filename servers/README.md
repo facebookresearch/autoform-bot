@@ -22,9 +22,9 @@ uv run autoform-lean-runtime stop
 
 `stop` is graceful: it returns once admitted tool calls and Lean children have
 shut down, so a later `start` replaces the runtime cleanly. If they are still
-running after `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT`, `stop` gives up waiting and
-exits 1 with a traceback ending in "Lean runtime is still draining requests";
-the runtime goes on draining and exits by itself.
+running after the `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` set where `stop` runs, it
+gives up and exits 1 with a traceback naming "Lean runtime is still draining
+requests"; the runtime goes on draining and exits by itself.
 
 ## REPL tools
 
