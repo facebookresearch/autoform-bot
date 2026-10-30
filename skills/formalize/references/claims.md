@@ -41,21 +41,19 @@ hand off, and release the full import claim set together.
 
 ## Generated import roots
 
-Unlike other import edits, a root that the repository's deterministic generator
-writes from the tracked modules, such as a `Lib.lean` that imports every module
-of a folder, is not part of a worker's long-held claim set; a root written or
-edited by hand, or one with no such generator, keeps the import-edit rules
-above. A worker may regenerate it in its worktree to build and check its result,
-without claiming it, and may commit it; on a conflict in it during a rebase or
-merge, regenerate it from the merged tree. Before landing a commit that changes
-the root, the integrator acquires the root's module `claim_target` together
-with the complete set it holds, in one command under that set's worker ID, then
-regenerates it from the integrated tree. If another owner holds the root, follow
-the refusal rule under Import edits:
-release the complete held set before waiting, or keep it and hand off the
-verified candidate. Then re-run `autoform work import-impact` and the checks on
-the result, and release the root's claim with the rest of the set once the
-result is visible, as the next section requires.
+A root whose file Git attributes mark `linguist-generated`, normally by a
+`.gitattributes` line such as `Lib/Topology.lean linguist-generated`, belongs to
+the repository's generator, not to an author: `work import-impact` reports
+`module_generated` and leaves its module target out of `claim_targets`. No
+worker or integrator claims it, and another owner's live claim on it is neither
+a conflict nor yours to release. Never edit it by hand: regenerate it with the
+command the repository writes it with, from the tree you build and again from
+the merged tree after every rebase or merge, including to resolve a conflict in
+it; rerunning that command must leave no change. Before landing, re-run
+`autoform work import-impact` and the repository's checks on the result; an
+affected target another owner holds is still a conflict. Any other root keeps
+the import-edit rules above, whatever its header or name says; to share one,
+ask the user to mark it.
 
 ## Integration and handoff
 

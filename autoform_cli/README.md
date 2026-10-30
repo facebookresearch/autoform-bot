@@ -888,7 +888,9 @@ JSON uses `autoform-module-import-impact/v1`, with `module_graph_revision` and
 `module_scope` (`loaded-root-library-graph` or `import-closure`). `article` is
 the selected article (`id`, `article_id`, `claim_target`). `claim_targets` holds
 only it and `module_claim_target`, `lean-module/<lowercase-slug>-<sha256[:16]>`,
-whose key is `module_claim_key`. `affected_claim_targets` are downstream
+whose key is `module_claim_key`; it holds only the article when Git attributes
+mark MODULE's file `linguist-generated` (`module_generated`), a generated root
+that is regenerated, not claimed. `affected_claim_targets` are downstream
 warnings, not ownership requirements; `claim_keys` and `affected_claim_keys`
 match the JSON of `autoform claim list --worker-id WORKER` given those targets.
 `affected_articles` lists each article that names, or owns through the parent

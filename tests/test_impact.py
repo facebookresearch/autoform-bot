@@ -212,6 +212,35 @@ def test_module_import_impact_reports_reverse_import_scope_without_blocking() ->
         )
 
 
+def test_module_import_impact_leaves_a_generated_root_out_of_the_claim_targets() -> None:
+    # A generated root's header belongs to the repository's generator, so the
+    # import edit claims only its article (#466, #496).
+    records = {"Demo.Leaf.value": _rec("Demo.Leaf.value", module="Demo.Leaf")}
+    modules = {
+        "Demo.Leaf": ModuleEvidence("Demo.Leaf", "/project/Demo/Leaf.lean"),
+        "Demo": ModuleEvidence("Demo", "/project/Demo.lean", ("Demo.Leaf",)),
+    }
+    articles = (ImpactArticle("leaf", "af_leaf", ("Demo.Leaf.value",)),)
+
+    def report(**options: bool):
+        return compute_module_import_impact(
+            records, modules, articles, articles[0], "Demo", source_revision="roadmap", **options
+        )
+
+    generated, handwritten = report(module_generated=True), report()
+
+    assert generated.claim_targets == ("af_leaf",)
+    assert generated.claim_keys == (claims.author_claim_key("af_leaf"),)
+    assert generated.module_claim_target == handwritten.module_claim_target
+    assert generated.as_dict()["module_generated"] is True
+    assert handwritten.claim_targets == ("af_leaf", handwritten.module_claim_target)
+    assert handwritten.as_dict()["module_generated"] is False
+    note = "Generated module (linguist-generated): regenerate it, don't edit it; it is not a claim target."
+    lines = format_module_import_impact(generated)
+    assert lines[lines.index(note) - 1].startswith("Module claim target: ")
+    assert note not in format_module_import_impact(handwritten)
+
+
 def test_module_import_impact_reports_unresolved_local_articles_as_unknown_scope() -> None:
     records = {"Demo.value": _rec("Demo.value")}
     modules = {"Demo": ModuleEvidence("Demo", "/project/Demo.lean")}
@@ -1990,6 +2019,7 @@ def test_cli_reports_import_impact_without_refusing_the_edit(tmp_path: Path, mon
         "module_scope",
         "module_claim_target",
         "module_claim_key",
+        "module_generated",
         "selected_affected",
         "article_local",
         "affected_modules",
@@ -2012,6 +2042,7 @@ def test_cli_reports_import_impact_without_refusing_the_edit(tmp_path: Path, mon
         "chapter/uses",
     ]
     assert report["claim_targets"][0] == _BASE_ID
+    assert report["module_generated"] is False
     assert report["module_claim_target"] in report["claim_targets"]
     assert set(report["affected_claim_targets"]) >= {
         _USES_ID,
@@ -2328,6 +2359,100 @@ def test_cli_import_impact_text_report_lists_each_section(tmp_path: Path, monkey
         f"Claim targets of the import edit: {keyed(_BASE_ID, module)}",
     ]
     assert calls[0]["timeout"] == 30
+
+
+def _git_repository(path: Path, attributes: str | None) -> None:
+    subprocess.run(["git", "init", "--quiet", str(path)], check=True)
+    if attributes is not None:
+        (path / ".gitattributes").write_text(attributes, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("attributes", "generated"),
+    [
+        ("Demo.lean linguist-generated\n", True),
+        ("*.lean linguist-generated=true\n", True),
+        ("*.lean linguist-generated\nDemo.lean -linguist-generated\n", False),
+        ("Demo.lean linguist-generated=false\n", False),
+        ("Other.lean linguist-generated\n", False),
+        (None, False),
+    ],
+)
+def test_cli_import_impact_reads_linguist_generated_from_git_attributes(
+    tmp_path: Path, monkeypatch, capsys, attributes: str | None, generated: bool
+) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    _git_repository(lean_root, attributes)
+    _stub_probe(monkeypatch, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
+
+    code = cli.main(["work", "import-impact", _BASE_ID, "Demo", str(project), "--lean-root", str(lean_root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    assert report["module_generated"] is generated
+    expected = [_BASE_ID] if generated else [_BASE_ID, report["module_claim_target"]]
+    assert report["claim_targets"] == expected
+    assert report["claim_keys"] == [claims.author_claim_key(target) for target in expected]
+
+
+def test_cli_import_impact_outside_git_reports_no_generated_module(tmp_path: Path, monkeypatch, capsys) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    # Attributes mean nothing without a work tree.
+    if subprocess.run(["git", "-C", str(lean_root), "rev-parse"], capture_output=True).returncode == 0:
+        pytest.skip("a Git work tree encloses tmp_path")
+    (lean_root / ".gitattributes").write_text("Demo.lean linguist-generated\n", encoding="utf-8")
+    _stub_probe(monkeypatch, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
+
+    code = cli.main(["work", "import-impact", _BASE_ID, "Demo", str(project), "--lean-root", str(lean_root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    assert report["module_generated"] is False
+    assert report["claim_targets"] == [_BASE_ID, report["module_claim_target"]]
+
+
+@pytest.mark.parametrize("generated", [True, False])
+def test_an_unrelated_workers_claim_on_a_generated_root_does_not_block_an_import_edit(
+    tmp_path: Path, monkeypatch, capsys, generated: bool
+) -> None:
+    # #496: worker A holds its own article and the root `Demo` on the board.
+    # Worker B adds a leaf to the root: its import edit claims what
+    # import-impact names, which leaves out a generated root, so B is not
+    # refused and A keeps its claim; a handwritten root still refuses B.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    _git_repository(lean_root, "Demo.lean linguist-generated\n" if generated else None)
+    _stub_probe(monkeypatch, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
+    board = tmp_path / "claims.git"
+    subprocess.run(["git", "init", "--bare", "--quiet", str(board)], check=True)
+
+    def claim(worker: str, *command: str) -> int:
+        return cli.main(
+            ["claim", *command, "--repo", str(board), "--worker-id", worker, "--scratch", str(tmp_path / worker)]
+        )
+
+    root = "lean-module/demo-" + hashlib.sha256(b"Demo").hexdigest()[:16]
+    assert claim("worker-a", "acquire", _USES_ID, root) == 0
+    capsys.readouterr()
+    args = ["work", "import-impact", _BASE_ID, "Demo", str(project), "--lean-root", str(lean_root), "--json"]
+    assert cli.main(args) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["module_claim_target"] == root
+
+    code = claim("worker-b", "acquire", *report["claim_targets"])
+
+    output = capsys.readouterr()
+    lease = claims.ClaimBoard(board, "worker-a", tmp_path / "worker-a").read(claims.author_claim_key(root))
+    assert lease is not None and lease["owner"] == "worker-a"
+    if generated:
+        assert code == 0, output.out
+    else:
+        assert code == 1
+        assert output.out.endswith(f"no claim was acquired: held by another worker: {root}\n")
 
 
 def test_cli_declaration_flag_replaces_the_article_s_names(tmp_path: Path, monkeypatch, capsys) -> None:
