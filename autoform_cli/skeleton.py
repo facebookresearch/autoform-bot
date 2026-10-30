@@ -97,7 +97,9 @@ through temporary files, hard links, and atomic renames, so a concurrent change
 detected before commit aborts publication instead of being overwritten.
 Combined, they are staged together and a failed commit restores the previous
 set: failure atomicity, not simultaneous visibility, since each rename is
-atomic on its own.
+atomic on its own. Packets, the report, and the trees' identities are hashed
+and written in pieces: a joint packet repeats every closure in its article, and
+can be gigabytes.
 
 Passages. A ``## Sources`` link with a ``#L<start>-L<end>`` fragment that names
 a regular Markdown file in the blueprint, in any letter case, is a note; any

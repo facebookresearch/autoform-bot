@@ -58,6 +58,10 @@ date when the release is tagged.
 - **Check and render.** One reused converter reads every page, and each linked
   path is resolved once per run, so `check` uses about a fifth less CPU on an
   1,806-article vault; neither command's output changes (#415).
+- **Skeleton memory.** Packets, the report, and the check that guards their
+  publication are hashed and written in pieces, so writing a large report no
+  longer holds every packet in memory, and roots that share a closure parse and
+  escape it once. Output bytes and hashes are unchanged (#497).
 - **Builds.** `project new` turns on Lake's artifact cache with
   `enableArtifactCache` and `restoreAllArtifacts`, so checkouts and worktrees
   on one toolchain reuse each other's builds; Setup offers the same two lines
