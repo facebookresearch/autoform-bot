@@ -53,7 +53,7 @@ left out of the page, and a reference a browser shows as typed, such as the
 to anything but the site's own pages or an `http:`, `https:`, or `mailto:`
 address, in any case, unless shown in code; an attribute list (the braces of a
 code fence may only name its language, as in ```` ```{.lean} ````, and options
-such as `title` or `linenums`); a code fence autoform or the site reads as left
+such as `title` or `linenums`); a code fence Autoform or the site reads as left
 open where an article, a statement, its notes, or a stretch of a chapter ends;
 and a list nested hundreds of levels deep, beyond what the site's converter can
 read.
