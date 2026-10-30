@@ -460,8 +460,10 @@
       var own = /#results$/.test(slot.id), record = part(own ? slot.id.slice(0, -"#results".length) : slot.id);
       if (!record) return;
       var cls = state.related && !state.related.parts.has(record.id) ? " pm-dimmed" : "";
-      var count = own ? record.results.length : 0;
-      var title = own ? num(count) + (count === 1 ? " result" : " results") + (slot.compact ? "" : " directly in " + plain(record.summary.title)) : plain(record.summary.title);
+      var count = own ? record.results.length : 0, short = num(count) + (count === 1 ? " result" : " results");
+      // A part's own results say whose they are when the line has room, and just how many when it does not.
+      var long = short + " directly in " + plain(record.summary.title);
+      var title = own ? (!slot.compact && long.length * TITLE_EM <= slot.w ? long : short) : plain(record.summary.title);
       if (slot.overlay) {
         var b = screenBox(own ? record.ownBox : record.box), backdrop = keep(labelLayer, "lb:" + slot.id, "rect", {
           class: "pm-backdrop pm-backdrop-" + (own ? "open" : isOpen(record, b) ? "open" : tileKind(record.summary.status)) + cls, rx: 6});
