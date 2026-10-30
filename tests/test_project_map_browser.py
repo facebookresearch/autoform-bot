@@ -80,11 +80,10 @@ def test_the_map_walkthrough_overview_search_pivot_back_and_whole_project(webkit
         assert before is not None and after is not None
         assert abs(after["x"] - before["x"]) < 2 and abs(after["y"] - before["y"]) < 2 and abs(after["width"] - before["width"]) < 2
         # The trail names where the theorem lives; the whole library is one action away.
-        trail = page.locator(".pm-trail li").all_inner_texts()
-        assert trail == ["Fixture library", "Algebra", "Lagrange's theorem"]
+        playwright.expect(page.locator(".pm-trail li")).to_have_text(["Fixture library", "Algebra", "Lagrange's theorem"])
         page.get_by_role("button", name="Whole project").click()
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Fixture library")
-        assert page.locator(".pm-trail li").all_inner_texts() == ["Fixture library"]
+        playwright.expect(page.locator(".pm-trail li")).to_have_text(["Fixture library"])
 
 
 def test_zooming_out_keeps_the_theorem_and_shows_its_place(webkit_browser: object, map_url: str) -> None:
@@ -111,6 +110,6 @@ def test_a_region_opens_in_place_without_leaving_the_page(webkit_browser: object
         page.locator('.pm-part[data-part="algebra"] > rect').click(position={"x": 24, "y": 10})
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Algebra")
         assert page.url.endswith("/map/#part=algebra")
-        # The region's results are on the same map now, with their titles.
-        playwright.expect(page.locator(".pm-card")).to_have_count(2)
-        assert page.locator(".pm-trail li").all_inner_texts() == ["Fixture library", "Algebra"]
+        # The region's results are on the same map now, with their titles, and Analysis stays in view below.
+        playwright.expect(page.locator('.pm-card[data-result^="algebra/"]')).to_have_count(2)
+        playwright.expect(page.locator(".pm-trail li")).to_have_text(["Fixture library", "Algebra"])
