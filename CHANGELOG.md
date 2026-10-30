@@ -107,7 +107,7 @@ date when the release is tagged.
   `lean:` name for one; `audit` takes it as a `def` or theorem under its
   structure's limits. For a constructor or other name Lean generates under a
   project type, `check` names the type's `path:line` instead of pointing to
-  `.lake` (#498).
+  `.lake` (#509).
 - **Explorer controls.** Closing full phone reading brings a cropped selected
   card back into the map without overriding restored cameras. Isolate/status
   filters use the same eligible original members in maps and native shelves,
