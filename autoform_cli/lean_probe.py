@@ -830,21 +830,28 @@ def _stable_detail(text: str, lean_root: Path, *scratch: Path) -> str:
 # The probe
 # --------------------------------------------------------------------------- #
 
-def _probe_template() -> str:
-    """The probe's Lean helpers, kept under probes/ beside this module."""
+def render_probe_template(name: str, **fields: object) -> str:
+    """Fill the probe template ``probes/<name>`` with ``fields`` and the records-file contract.
 
-    return (Path(__file__).parent / "probes" / "skeleton_probe.lean").read_text(encoding="utf-8")
+    Every probe writes its records to the file ``PROBE_OUTPUT_ENV`` names, which
+    ``run_probe`` sets, and stops before its records pass
+    ``DEFAULT_PROBE_OUTPUT_LIMIT`` bytes, which ``_read_probe_records``
+    enforces; ``output_env`` and ``output_limit`` give the template both. Read
+    at call time, so a patched limit applies.
+    """
+
+    template = (Path(__file__).parent / "probes" / name).read_text(encoding="utf-8")
+    return template.format(**fields, output_env=PROBE_OUTPUT_ENV, output_limit=DEFAULT_PROBE_OUTPUT_LIMIT)
 
 
 def _render_probe_helper() -> str:
     """Render the helper module every probe imports; see ``_build_probe_helper``."""
 
-    return _probe_template().format(
+    return render_probe_template(
+        "skeleton_probe.lean",
         core_roots=", ".join(_lean_name(name) for name in _CORE_MODULE_ROOTS),
         error_limit=_FAILURE_DETAIL_LIMIT,
         marker=PROBE_MARKER,
-        output_env=PROBE_OUTPUT_ENV,
-        output_limit=DEFAULT_PROBE_OUTPUT_LIMIT,
     )
 
 
@@ -1298,6 +1305,7 @@ __all__ = [
     "project_control_snapshot",
     "read_snapshot_file",
     "render_probe",
+    "render_probe_template",
     "run_module_probes",
     "run_probe",
     "stable_paths",
