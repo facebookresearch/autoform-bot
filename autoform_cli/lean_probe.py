@@ -139,9 +139,9 @@ def _read_snapshot_pass(
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise SkeletonError([f"cannot inspect skeleton input {path}: {exc}"]) from exc
+        raise SkeletonError([f"cannot inspect {path}: {exc}"]) from exc
     if not stat.S_ISREG(path_metadata.st_mode):
-        raise SkeletonError([f"skeleton input is not a regular file: {path}"])
+        raise SkeletonError([f"not a regular file: {path}"])
     flags = (
         os.O_RDONLY
         | getattr(os, "O_BINARY", 0)
@@ -153,11 +153,11 @@ def _read_snapshot_pass(
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise SkeletonError([f"cannot open skeleton input {path}: {exc}"]) from exc
+        raise SkeletonError([f"cannot open {path}: {exc}"]) from exc
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
-            raise SkeletonError([f"skeleton input is not a regular file: {path}"])
+            raise SkeletonError([f"not a regular file: {path}"])
         digest = hashlib.sha256()
         chunks: list[bytes] = []
         size = 0
@@ -168,13 +168,13 @@ def _read_snapshot_pass(
             size += len(block)
             if size > SNAPSHOT_FILE_LIMIT:
                 raise SkeletonError(
-                    [f"skeleton input exceeds the {SNAPSHOT_FILE_LIMIT}-byte limit: {path}"]
+                    [f"over the {SNAPSHOT_FILE_LIMIT}-byte limit: {path}"]
                 )
             digest.update(block)
             if keep_content:
                 chunks.append(block)
     except OSError as exc:
-        raise SkeletonError([f"cannot read skeleton input {path}: {exc}"]) from exc
+        raise SkeletonError([f"cannot read {path}: {exc}"]) from exc
     finally:
         os.close(descriptor)
     return b"".join(chunks), (size, digest.hexdigest())
@@ -194,7 +194,7 @@ def read_snapshot_file(path: Path) -> tuple[bytes, tuple[int, str]] | None:
     captured_fingerprint = None if captured is None else captured[1]
     verified_fingerprint = None if verified is None else verified[1]
     if captured_fingerprint != verified_fingerprint:
-        raise SkeletonError([f"skeleton input changed while it was read: {path}"])
+        raise SkeletonError([f"changed while it was read: {path}"])
     return captured
 
 

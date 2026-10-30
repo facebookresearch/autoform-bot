@@ -806,8 +806,8 @@ def test_a_failed_rollback_is_not_reported_as_an_unchanged_index(tmp_path: Path,
         os.replace(path, backup)
         raise SkeletonError(
             [
-                "could not publish skeleton output: [Errno 5] Input/output error",
-                f"could not restore skeleton output {path}; previous output remains at {backup}: [Errno 5] Input/output error",
+                "could not publish output: [Errno 5] Input/output error",
+                f"could not restore output {path}; previous output remains at {backup}: [Errno 5] Input/output error",
             ]
         )
 
@@ -816,7 +816,7 @@ def test_a_failed_rollback_is_not_reported_as_an_unchanged_index(tmp_path: Path,
         write_index(root, changed)
     message = str(raised.value)
     assert "unchanged" not in message
-    assert message.startswith(f"{INDEX_FILE} could not be written: could not publish skeleton output: [Errno 5] Input/output error; ")
+    assert message.startswith(f"{INDEX_FILE} could not be written: could not publish output: [Errno 5] Input/output error; ")
     assert f"previous output remains at {backup}" in message
     assert message.endswith(f"; {INDEX_FILE} is not the file it was before")
 

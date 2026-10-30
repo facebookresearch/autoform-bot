@@ -3035,7 +3035,7 @@ def test_a_packet_manifest_that_cannot_be_decoded_is_refused(tmp_path: Path, dam
     packets = tmp_path / "packets"
     packets.mkdir()
     (packets / PACKET_MANIFEST).write_text(text, encoding="utf-8")
-    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform packet output"):
+    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform output"):
         write_packets(_fake_report(tmp_path), packets)
     assert (packets / PACKET_MANIFEST).read_text(encoding="utf-8") == text
 
@@ -3047,7 +3047,7 @@ def test_a_packet_manifest_whose_schema_is_not_a_string_is_refused(tmp_path: Pat
     text = json.dumps({"kind": "packets", "schema": schema, "packets": []})
     (packets / PACKET_MANIFEST).write_text(text, encoding="utf-8")
 
-    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform packet output"):
+    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform output"):
         write_packets(_fake_report(tmp_path), packets)
     assert (packets / PACKET_MANIFEST).read_text(encoding="utf-8") == text
 
@@ -3232,7 +3232,7 @@ def test_cli_reports_unsafe_packet_output_without_a_traceback(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "refusing to overwrite non-Autoform packet output" in captured.err
+    assert "refusing to overwrite non-Autoform output" in captured.err
 
 
 def test_cli_rejects_a_report_path_inside_the_packet_tree(tmp_path: Path, capsys) -> None:
@@ -5021,7 +5021,7 @@ def test_packet_publication_refuses_unmanaged_or_symlink_output(tmp_path: Path) 
     unmanaged.mkdir()
     (unmanaged / "keep.txt").write_text("mine\n", encoding="utf-8")
 
-    with pytest.raises(SkeletonError, match="non-Autoform packet output"):
+    with pytest.raises(SkeletonError, match="non-Autoform output"):
         write_packets(report, unmanaged)
 
     outside = tmp_path / "outside"
@@ -5036,7 +5036,7 @@ def test_packet_publication_refuses_unmanaged_or_symlink_output(tmp_path: Path) 
     (fake_managed / PACKET_MANIFEST).write_text(report.to_json(), encoding="utf-8")
     valuable = fake_managed / "valuable.txt"
     valuable.write_text("keep me\n", encoding="utf-8")
-    with pytest.raises(SkeletonError, match="non-Autoform packet output"):
+    with pytest.raises(SkeletonError, match="non-Autoform output"):
         write_packets(report, fake_managed)
     assert valuable.read_text(encoding="utf-8") == "keep me\n"
 
@@ -5095,7 +5095,7 @@ def test_packet_publication_rolls_back_both_trees_on_commit_failure(
 
     monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_passage_install)
 
-    with pytest.raises(SkeletonError, match="could not publish skeleton output"):
+    with pytest.raises(SkeletonError, match="could not publish output"):
         write_packets(report, packets, passages=passages)
 
     assert (packets / "old-marker").read_text(encoding="utf-8") == "old packets\n"
@@ -5425,7 +5425,7 @@ def test_packet_publication_does_not_overwrite_during_backup_restore(
     monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_passage_install)
     monkeypatch.setattr("autoform_cli._managed_output._rename_no_replace", create_before_restore)
 
-    with pytest.raises(SkeletonError, match="could not restore skeleton output"):
+    with pytest.raises(SkeletonError, match="could not restore output"):
         write_packets(report, packets, passages=passages)
 
     assert concurrent_inode is not None

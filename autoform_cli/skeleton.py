@@ -5,9 +5,10 @@ declaration says what the blueprint claims: its statement and, transitively,
 every project definition that statement rests on. Proofs are the kernel's
 problem. The closure comes from elaborated terms, read back from a small probe
 run with ``lake env lean``, never from source text. The output is deterministic
-and path-free, and nothing here writes into the vault. The user-facing contract
-is the ``autoform skeleton`` section of ``autoform_cli/README.md``; the
-mechanics below are what it leaves out.
+and has project paths relative to the project; a failure reason quotes other
+paths as Lean printed them. Nothing here writes into the vault. The user-facing
+contract is the ``autoform skeleton`` section of ``autoform_cli/README.md``;
+the mechanics below are what it leaves out.
 
 Probe. For each module that declares a selected target, the probe imports that
 module and the helper module ``autoform-skeleton-helper`` (compiled with the
