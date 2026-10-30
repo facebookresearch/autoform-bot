@@ -16,8 +16,11 @@
   var BAND = 52, BAND2 = 72, PAD = 12, GAP = 16, MIN_W = 150, MIN_H = 120, ASPECT = 1.6, LANE = 5, RADIUS = 6;
   // Mean advance of a 15 px semibold title character, for choosing one or two title lines.
   var TITLE_EM = 8.4;
-  // The band height a lone title line needs.
-  var LABEL_BAND = 36;
+  // The band height a lone title line needs, and a compact one: a 13 px title, clipped, in a box at
+  // least COMPACT_W wide, so narrow parts are still named.
+  var LABEL_BAND = 36, COMPACT_BAND = 20, COMPACT_W = 60;
+  // The most routes a sibling set shows at rest; the rest appear with their parts.
+  var MAX_REST = 18;
 
   function byKey(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
   function inset(rect, d) {
@@ -25,10 +28,11 @@
   }
   // World units per screen pixel at the zoom that fits this content box to the stage.
   function unitsPerPixel(content, stage) { return Math.max(content.w / stage.w, content.h / stage.h); }
+  // A box's content area; its margin is the padding beside and below it, where routes may run.
   function contentOf(box) {
     var unit = box.unit, band = box.band === undefined ? BAND : box.band, pad = box.pad === undefined ? PAD : box.pad;
     return {x: box.x + pad * unit, y: box.y + band * unit, w: Math.max(0, box.w - 2 * pad * unit),
-      h: Math.max(0, box.h - (band + pad) * unit)};
+      h: Math.max(0, box.h - (band + pad) * unit), margin: pad * unit};
   }
   // A title too long for one line at this width takes two, when the box is tall enough for both.
   function bandFor(title, box) {
@@ -226,7 +230,7 @@
     var regions = summaries(index.regions), order = dependencyOrder(regions, index.region_edges || []);
     var height = stage.h, root, content, packed;
     for (var attempt = 0; attempt <= regions.length; attempt++) {
-      root = {x: 0, y: 0, w: stage.w, h: height, unit: 1, depth: 0}; content = inset(root, PAD);
+      root = {x: 0, y: 0, w: stage.w, h: height, unit: 1, depth: 0}; content = Object.assign(inset(root, PAD), {margin: PAD});
       packed = packOrdered(order, weightsOf(regions), titlesOf(regions), content, 1);
       if (packed.$readable) break;
       height += MIN_H + GAP;
@@ -237,8 +241,9 @@
   }
 
   // A part's children inside its box, when its file loads. A part that also holds results of its
-  // own opens with an "own results" box, keyed by the part id with "#results" appended. The area
-  // for this part's routes is contentOf(box).
+  // own opens with an "own results" box, keyed by the part id with "#results" appended; beside
+  // other children it has a band for the page's title for it, and alone it is the part's whole
+  // content. The area for this part's routes is contentOf(box).
   function packPart(partData, box, stage) {
     var items = summaries(partData.children || []), own = (partData.results || []).length;
     var id = partData.part.id, ownId = id + "#results", content = contentOf(box), boxes = {};
@@ -252,15 +257,16 @@
     var packed = packOrdered(order, weights, titles, content, unit);
     for (var child in packed) {
       boxes[child] = Object.assign({depth: box.depth + 1, parent: id}, packed[child]);
-      if (child === ownId) { boxes[child].own = true; boxes[child].band = 0; boxes[child].pad = 0; }
+      if (child === ownId) boxes[child].own = true;
     }
     return boxes;
   }
 
   // One route per linked sibling pair, from the used part to its user; a pair linked both ways is
   // one route with a head at each end, its source the heavier side's used part. At rest the map
-  // shows the central routes: each box's heaviest route, then the heaviest others, up to four for
-  // every five boxes. Every route has an orthogonal path through the gaps of area.
+  // shows the central routes, at most four for every five boxes and never more than MAX_REST:
+  // heaviest first, preferring routes that reach boxes no shown route reaches yet. Every route has
+  // an orthogonal path through the gaps of area, never in a band.
   function bundleEdges(boxes, edges, area) {
     var pairs = new Map();
     edges.forEach(function (edge) {
@@ -280,22 +286,24 @@
         weight: weight, tier: weight >= 100 ? 3 : weight >= 10 ? 2 : 1, rest: false};
     });
     var byWeight = routes.slice().sort(function (p, q) { return q.weight - p.weight || byKey(p.from + p.to, q.from + q.to); });
-    var heaviest = new Map();
-    byWeight.forEach(function (route) {
-      if (!heaviest.has(route.from)) heaviest.set(route.from, route);
-      if (!heaviest.has(route.to)) heaviest.set(route.to, route);
+    var budget = Math.min(MAX_REST, Math.max(1, Math.round(Object.keys(boxes).length * 0.8))), shown = 0;
+    var reached = new Set();
+    // Routes between two unreached boxes first, then routes reaching one, then the heaviest others.
+    [2, 1, 0].forEach(function (fresh) {
+      byWeight.forEach(function (route) {
+        var count = (reached.has(route.from) ? 0 : 1) + (reached.has(route.to) ? 0 : 1);
+        if (route.rest || shown >= budget || count < fresh) return;
+        route.rest = true; shown++; reached.add(route.from); reached.add(route.to);
+      });
     });
-    heaviest.forEach(function (route) { route.rest = true; });
-    var budget = Math.max(1, Math.round(Object.keys(boxes).length * 0.8));
-    var shown = routes.filter(function (route) { return route.rest; }).length;
-    byWeight.forEach(function (route) { if (!route.rest && shown < budget) { route.rest = true; shown++; } });
     if (routes.length) {
       var first = boxes[routes[0].from];
       if (first.axis === "columns") {
         // Route in the transposed picture, where the columns are rows, then turn it back.
         var flipped = {};
         for (var id in boxes) flipped[id] = Object.assign({}, boxes[id], transpose(boxes[id]));
-        routeThroughGaps(routes, flipped, transpose(area));
+        // Transposed, the left margin is the top one, which is the parent's band: never route there.
+        routeThroughGaps(routes, flipped, Object.assign(transpose(area), {margin: area.margin}), true);
         routes.forEach(function (route) {
           for (var k = 0; k < route.points.length; k += 2) {
             var t = route.points[k]; route.points[k] = route.points[k + 1]; route.points[k + 1] = t;
@@ -310,7 +318,7 @@
   // each row the gaps between neighbours plus the side margins. A route leaves its source through
   // the side facing its target, runs along corridors and down or up through row gaps, and enters
   // its target the same way. Routes sharing a corridor or gap take separate lanes.
-  function routeThroughGaps(routes, boxes, area) {
+  function routeThroughGaps(routes, boxes, area, noLeftMargin) {
     var ids = Object.keys(boxes), unit = boxes[ids[0]].unit, rows = [];
     ids.forEach(function (id) {
       var box = boxes[id], r = box.row || 0;
@@ -324,14 +332,15 @@
       row.ids.sort(function (p, q) { return boxes[p].x - boxes[q].x; });
       row.ids.forEach(function (id) { rowOf.set(id, r); });
     });
-    var left = area.x - PAD * unit / 2, right = area.x + area.w + PAD * unit / 2;
-    var floor = area.y + area.h + PAD * unit / 2;
+    var margin = area.margin === undefined ? PAD * unit : area.margin;
+    var left = area.x - margin / 2, right = area.x + area.w + margin / 2, floor = area.y + area.h + margin / 2;
     // corridor[c] lies above row c (c = 1 .. rows.length - 1) or below the last row (c = rows.length).
     function corridorY(c) { return c < rows.length ? (rows[c - 1].bottom + rows[c].top) / 2 : (rows[c - 1].bottom + floor) / 2; }
     function corridorWidth(c) { return c < rows.length ? rows[c].top - rows[c - 1].bottom : floor - rows[c - 1].bottom; }
     // The passages through row r: the margins and the gaps between neighbours.
     function passages(r) {
-      var list = [{x: left, width: PAD * unit, key: "L"}, {x: right, width: PAD * unit, key: "R"}];
+      var list = [{x: right, width: margin, key: "R"}];
+      if (!noLeftMargin) list.push({x: left, width: margin, key: "L"});
       var row = rows[r].ids;
       for (var k = 0; k + 1 < row.length; k++) {
         var a = boxes[row[k]], b = boxes[row[k + 1]];
@@ -474,7 +483,9 @@
   // many share the box) and sit in rows of at most `cols`, chosen to fill the box best. Links to
   // results outside the part become per-card stub counts. Returns {cards, routes, implied, stubs}.
   var CARD_W = 200, CARD_H = 64, COL_GAP = 24, ROW_GAP = 40;
-  function layoutCommunity(results, resultEdges, boundaryEdges, box) {
+  function layoutCommunity(results, resultEdges, boundaryEdges, ownBox) {
+    // An own box beside other children keeps its band for its title.
+    var box = ownBox.band ? Object.assign(contentOf(ownBox), {unit: ownBox.unit}) : ownBox;
     var ids = results.map(function (result) { return result.id; }), at = new Map();
     ids.forEach(function (id, index) { at.set(id, index); });
     var n = ids.length, after = ids.map(function () { return []; });
@@ -619,23 +630,25 @@
     return routes;
   }
 
-  // Labels for the boxes on screen at this camera: a box whose band is a title line tall and MIN_W
-  // wide gets one; deeper boxes gain theirs as the camera closes in. A box whose band is still too
-  // thin but whose height has room for a title line gets an overlay label over its top: its
-  // children are smaller still, so none of them is labelled underneath it.
+  // Labels for the boxes on screen at this camera. A box at least MIN_W wide whose band holds a title
+  // line gets a full label; one at least COMPACT_W wide gets a compact one (one clipped 13 px line);
+  // deeper boxes gain theirs as the camera closes in. A box whose band is still too thin, but whose
+  // height has room for the line, gets it as an overlay over its top: its children are smaller
+  // still, so none of them is labelled underneath.
   function placeLabels(boxes, camera, stage) {
     var labels = [];
     Object.keys(boxes).sort(byKey).forEach(function (id) {
       var box = boxes[id];
       var x = (box.x - camera.x) * camera.z, y = (box.y - camera.y) * camera.z;
       var w = box.w * camera.z, h = box.h * camera.z, band = box.band * box.unit * camera.z, pad = box.pad * box.unit * camera.z;
-      if (x >= stage.w || y >= stage.h || x + w <= 0 || y + h <= 0) return;
-      if (!box.band || w < MIN_W * 0.9) return;
-      var inBand = band >= 0.9 * LABEL_BAND;
-      if (!inBand && h < LABEL_BAND) return;
-      labels.push({id: id, x: x + pad, y: y, w: w - 2 * pad, band: inBand ? band : LABEL_BAND, overlay: !inBand,
-        lines: box.band === BAND2 && band >= 0.9 * BAND2 ? 2 : 1,
-        detail: inBand && Math.min(band, h) >= 0.9 * BAND ? (band >= 120 ? "full" : "meta") : "title"});
+      if (x >= stage.w || y >= stage.h || x + w <= 0 || y + h <= 0 || !box.band) return;
+      var compact = w < 0.9 * MIN_W, need = compact ? COMPACT_BAND : 0.9 * LABEL_BAND;
+      if (w < COMPACT_W) return;
+      var inBand = band >= need;
+      if (!inBand && h < (compact ? COMPACT_BAND : LABEL_BAND)) return;
+      labels.push({id: id, x: x + pad, y: y, w: w - 2 * pad, band: inBand ? band : need, overlay: !inBand, compact: compact,
+        lines: !compact && box.band === BAND2 && band >= 0.9 * BAND2 ? 2 : 1,
+        detail: !compact && inBand && Math.min(band, h) >= 0.9 * BAND ? (band >= 120 ? "full" : "meta") : "title"});
     });
     return labels;
   }
