@@ -43,7 +43,7 @@
     var decluttered = new WeakMap();
     var timeout = bounded(options.timeout, 15000, 1000, 60000);
     var htmlLimit = bounded(options.htmlLimit, 8 * 1024 * 1024, 1024, 32 * 1024 * 1024);
-    var jsonLimit = bounded(options.jsonLimit, 32 * 1024 * 1024, 1024, 64 * 1024 * 1024);
+    var jsonLimit = bounded(options.jsonLimit, 64 * 1024 * 1024, 1024, 64 * 1024 * 1024);
     var cacheLimit = bounded(options.cacheBytes, 48 * 1024 * 1024, 1024, 128 * 1024 * 1024);
     var htmlEntries = bounded(options.htmlEntries, 8, 1, 32), jsonEntries = bounded(options.jsonEntries, 16, 1, 64);
     var sitePrefix = prefix(catalogueURL, initialDataURL, initialCanonical), homeURL = link(sitePrefix + "index.html", initialURL);

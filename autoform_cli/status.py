@@ -141,7 +141,7 @@ MEANINGS = {
     "conditional": "Proof compiles, but rests on an open statement without a recorded Lean proof.",
     "can_prove": "Statement is in Lean and nothing it needs is blocked, so the proof can start.",
     "stated": "Statement is in Lean; the proof is not.",
-    "can_state": "Nothing it needs is blocked, so the statement can be written in Lean.",
+    "can_state": "Everything its statement uses is in Lean, so the statement can be written in Lean.",
     "not_ready": "Needs more blueprint work before it can be attempted.",
     "planned": "Described in the blueprint only.",
     "inventory_checked": "Module inventory checked in full; it records inspection, not a mathematical proof.",
