@@ -61,7 +61,8 @@ comment, do not end the statement. Close each fence with its own bare line of
 the same character, length and indent: on a chapter page an unclosed fence can
 pair with a later article's fence and hide what lies between, and coverage, the
 link checks and render's link rewriting take everything after it as code
-(below), so `check` warns, the site shows that page as typed (see
+(below), so `check` warns when autoform or the site reads a fence as left open,
+the site shows that page as typed (see
 [Validation](reference/validation-and-audit.md#validation)), and the audit
 reports `unclosed-code-fence`. The graph and an article's statement and sections
 read an unclosed fence as plain text, even where the page pairs its backticks

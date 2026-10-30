@@ -24,6 +24,7 @@ from .markdown import (
     frontmatter_end,
     published_markdown,
     published_page,
+    strip_line_comments,
 )
 from .mathjax import NEUTRALISED, TEX_MACROS
 
@@ -203,14 +204,19 @@ def publishable_article(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...
             if at is not None and not (piece and page_fence):
                 page_fence = page_fence or piece == 0
                 line = _open_fence_line(text, source_lines[at], page=piece == 0)
-                fence = re.match(r"\s*(`{3,}|~{3,})", source_lines[at])
-                marker = fence.group(1) if fence else "```"
-                options = re.search(r"\s|\{", source_lines[at].strip()[len(marker) :].strip())
+                fence = re.match(r"( *)(`{3,}|~{3,})", source_lines[at])
+                indent, marker = fence.groups() if fence else ("", "```")
+                # The site closes an indented fence only at the same indent. One at
+                # the margin it does not read as open is one whose options it rejects.
+                spaces = f"{len(indent)} space{'s' if len(indent) > 1 else ''}"
                 found.append(
                     (f"line {line}: " if line else "")
                     + "code fence is not closed: autoform reads the rest of this text as code, which the site does not; "
-                    + f"close it with a line of {marker}"
-                    + (", and keep only options the site accepts, such as its language" if options else "")
+                    + (
+                        f"close it with a line of {marker} indented {spaces}, as its opening line is"
+                        if indent
+                        else f"keep only options the site accepts, such as its language, and close it with a line of {marker}"
+                    )
                 )
         schemes = list(dict.fromkeys(filter(None, map(_unsafe_scheme, [*reading.destinations, *defined]))))
         if schemes:
@@ -245,14 +251,16 @@ def _open_fence_line(text: str, opener: str, *, page: bool) -> int | None:
     """
 
     lines = text.removeprefix("\ufeff").splitlines()
+    # The opener comes from published text, which has its comments removed.
+    bare = strip_line_comments(opener, False)[0].strip()
     if page:
         start = frontmatter_end(lines)
         if start == len(lines) and (start < 2 or lines[-1].strip() != "---"):
             start = 0
         at = first_unclosed_fence(lines[start:])
-        if at is not None and lines[start + at].strip() == opener.strip():
+        if at is not None and strip_line_comments(lines[start + at], False)[0].strip() == bare:
             return start + at + 1
-    numbers = [number for number, line in enumerate(lines, start=1) if line.strip() == opener.strip()]
+    numbers = [number for number, line in enumerate(lines, start=1) if strip_line_comments(line, False)[0].strip() == bare]
     return numbers[-1] if numbers else None
 
 

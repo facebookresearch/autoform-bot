@@ -59,8 +59,8 @@ date when the release is tagged.
   open but the site ends sooner or reads as text: one indented one to three
   spaces, one inside a list item, or one whose options the site rejects.
   Coverage, the link checks and render's link rewriting read everything after
-  it as code, so render shows such a page as typed until the fence is closed
-  and its options are ones the site accepts (#201).
+  it as code, so render shows such a page as typed until the fence is closed,
+  at the indent of its opening line, with options the site accepts (#201).
 
 ### Fixed
 

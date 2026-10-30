@@ -743,10 +743,14 @@ def test_a_fence_the_next_margin_line_ends_is_published(
 @pytest.mark.parametrize(
     ("notes", "line", "advice"),
     [
-        ("  ```\n  indented\n", 3, "close it with a line of ```\n"),
-        ("- item\n\n  ```lean\n  code\n", 5, "close it with a line of ```\n"),
-        ("  ~~~~\n  tildes\n", 3, "close it with a line of ~~~~\n"),
-        ('```lean linenums="x"\nrejected\n', 3, "keep only options the site accepts, such as its language\n"),
+        ("  ```\n  indented\n", 3, "close it with a line of ``` indented 2 spaces, as its opening line is\n"),
+        ("- item\n\n  ```lean\n  code\n", 5, "close it with a line of ``` indented 2 spaces, as its opening line is\n"),
+        ("  ~~~~\n  tildes\n", 3, "close it with a line of ~~~~ indented 2 spaces, as its opening line is\n"),
+        (" ~~~\n tildes\n", 3, "close it with a line of ~~~ indented 1 space, as its opening line is\n"),
+        ("  ```{.lean}\n  accepted\n", 3, "close it with a line of ``` indented 2 spaces, as its opening line is\n"),
+        ("  ```lean <!-- aside -->\n  code\n", 3, "close it with a line of ``` indented 2 spaces, as its opening line is\n"),
+        ('```lean linenums="x"\nrejected\n', 3, "keep only options the site accepts, such as its language, and close"),
+        ("```lean!\nrejected\n", 3, "keep only options the site accepts, such as its language, and close it with a line of ```\n"),
         ('```lean linenums="x"\na\n\n```lean linenums="x"\nb\n', 3, "keep only options the site accepts"),
     ],
 )
@@ -770,12 +774,20 @@ def test_a_fence_autoform_reads_as_open_is_reported_wherever_it_starts(
     assert "bp-as-typed" in (_render(blueprint) / "notes.md").read_text(encoding="utf-8")
 
 
-def test_a_closed_indented_fence_is_not_reported(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("fence", ["  ```\n  indented\n  ```", " ~~~\n tildes\n ~~~", "- item\n\n  ```lean\n  code\n  ```"])
+def test_a_fence_closed_as_the_warning_advises_is_not_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], fence: str
+) -> None:
+    """Closed at the indent of its opening line, as the warning says, a fence
+    ends on the same line for the site as for autoform."""
+
     blueprint = _vault(tmp_path)
-    (blueprint / "notes.md").write_text("# Notes\n\n  ```\n  indented\n  ```\n\nAfter it.\n", encoding="utf-8")
+    (blueprint / "notes.md").write_text(f"# Notes\n\n{fence}\n\nAfter it.\n", encoding="utf-8")
 
     assert main(["check", str(blueprint)]) == 0
     assert "code fence is not closed" not in capsys.readouterr().out
+    rendered = " ".join(_rendered_article(f"{fence}\n\nAfter it.\n")[0].split())
+    assert '<div class="highlight">' in rendered and rendered.endswith("<p>After it.</p>")
 
 
 def test_a_statement_after_a_paragraph_is_a_box_of_its_own(tmp_path: Path) -> None:
