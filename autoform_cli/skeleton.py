@@ -1369,6 +1369,7 @@ def extract_skeletons(
     runner: ProbeRunner | None = None,
     node_ids: tuple[str, ...] | None = None,
     timeout: float | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> SkeletonReport:
     """Extract the skeleton of every ``lean:`` declaration the blueprint names.
 
@@ -1381,7 +1382,8 @@ def extract_skeletons(
     so it cannot be combined with ``timeout``, and may be called from several
     threads at once. A declaration the lexical index cannot place is reported
     as unresolved without running Lean, exactly as
-    ``autoform check --lean-root`` reports it.
+    ``autoform check --lean-root`` reports it. ``progress`` hears each phase as
+    it starts, as :func:`extract_graph_skeletons` says.
     """
 
     if runner is not None and timeout is not None:
@@ -1407,7 +1409,14 @@ def extract_skeletons(
         probing, runner = lean_probe.default_runner(root, timeout=DEFAULT_PROBE_TIMEOUT if timeout is None else timeout)
 
     report = extract_graph_skeletons(
-        graph, lean_root=root, libraries=libraries, index=index, runner=runner, node_ids=node_ids, probing=probing
+        graph,
+        lean_root=root,
+        libraries=libraries,
+        index=index,
+        runner=runner,
+        node_ids=node_ids,
+        probing=probing,
+        progress=progress,
     )
     current = check_inputs_unchanged(graph, root, index, inputs, activity=activity)
     if _blueprint_hash(current, _source_passages(current)) != report.blueprint_hash:
@@ -1530,12 +1539,16 @@ def extract_graph_skeletons(
     runner: ProbeRunner,
     node_ids: tuple[str, ...] | None = None,
     probing: Callable[[tuple[str, ...]], contextlib.AbstractContextManager[object]] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> SkeletonReport:
     """Extract skeletons for an already loaded graph.
 
     ``probing``, when given, is entered with every module about to be probed and
     held while the probes run, and only then; the default runner's freshness
     check, helper build, scratch directory and signal guard live there.
+    ``progress``, when given, hears ``probing <n> modules`` before ``probing``
+    is entered and ``assembling <n> skeletons`` once it has been left, when no
+    probe runs any more.
     """
 
     targets, selected, selection = select_lean_targets(graph, node_ids)
@@ -1581,6 +1594,8 @@ def extract_graph_skeletons(
             for module in sorted(groups)
         }
         snapshot_started_ns = time.time_ns()
+        if progress is not None:
+            progress(f"probing {_plural(len(programs), 'module')}")
 
         def probe(module: str) -> dict[str, dict[str, object]]:
             # Parsed in the worker, as soon as the probe ends.
@@ -1598,6 +1613,9 @@ def extract_graph_skeletons(
             else:
                 records.update(result)
 
+    if progress is not None:
+        pending = sum(name in roots and node.id not in broken_passages for node, names in selected for name in names)
+        progress(f"assembling {_plural(pending, 'skeleton')}")
     nodes: list[NodeSkeleton] = []
     module_hashes: dict[tuple[str, str], str] = {}
     # A probe states each shared record once; these keep it read once, by id.

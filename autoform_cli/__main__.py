@@ -1754,22 +1754,29 @@ def _skeleton(args: argparse.Namespace) -> int:
             print("error: --output must be disjoint from packet and passage directories", file=sys.stderr)
             return 2
     stream = sys.stderr if args.json else sys.stdout
+
+    def progress(phase: str) -> None:
+        print(f"skeleton: {phase}...", file=sys.stderr, flush=True)
+
     try:
         report = extract_skeletons(
             args.blueprint_dir,
             lean_root=args.lean_root,
             timeout=args.timeout,
             node_ids=tuple(args.nodes) if args.nodes else None,
+            progress=progress,
         )
         if args.packets is not None and not report.clean:
             print("error: refusing to publish review packets from an incomplete skeleton report", file=sys.stderr)
         elif args.packets is not None:
+            progress("writing")
             written = write_packets(report, args.packets, passages=args.passages, report_path=args.output)
             print(f"{args.packets}: {len(written)} blind packet(s) written", file=stream)
             if args.passages is not None:
                 cited = sum(1 for node in report.nodes if node.passage is not None)
                 print(f"{args.passages}: {cited} source passage(s) written", file=stream)
         if args.output is not None and (args.packets is None or not report.clean):
+            progress("writing")
             write_skeleton_report(report, args.output)
     except SkeletonError as exc:
         for issue in exc.issues:

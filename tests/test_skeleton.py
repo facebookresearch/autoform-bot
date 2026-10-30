@@ -317,17 +317,21 @@ def _shared_closure(root: Path, articles: dict[str, int], *, closure: int, size:
     (project / "Synth.lean").write_text("import Synth.Main\n", encoding="utf-8")
     roots = {stem: [f"{stem}_{index}" for index in range(count)] for stem, count in articles.items()}
     names = [name for group in roots.values() for name in group]
+    lean = {stem: ", ".join(f"Synth.{name}" for name in group) for stem, group in roots.items()}
     (project / "Synth" / "Main.lean").write_text(
         "\n".join(["namespace Synth", "", *(f"theorem {name} : True := trivial" for name in names), "", "end Synth"])
         + "\n",
         encoding="utf-8",
     )
-    blueprint = _blueprint(root, lean={stem: ", ".join(f"Synth.{name}" for name in group) for stem, group in roots.items()})
+    blueprint = _blueprint(root, lean=lean)
     source = blueprint / "sources" / "book.tex"
     source.parent.mkdir()
     source.write_text("Every root is \\emph{true}.\n", encoding="utf-8")
     first = blueprint / "roadmap" / "basics" / f"{next(iter(articles))}.md"
     _replace_source(first, "## Depends on", "## Sources\n\n- [book](../../sources/book.tex#L1-L1)\n\n## Depends on")
+
+    def table(kind: str, name: str, value: object) -> str:
+        return PROBE_MARKER + json.dumps({"table": kind, "name": name, "value": value})
 
     pad = ('"q\\b" ℝ → 𝔽\t' * (size // 12 + 1))[:size]
     lines: list[str] = []
@@ -345,13 +349,10 @@ def _shared_closure(root: Path, articles: dict[str, int], *, closure: int, size:
             module="Synth.Main",
             semantic=json.dumps({"generated": [], "root": material}, separators=(",", ":"), ensure_ascii=False),
         )
-        lines.append(PROBE_MARKER + json.dumps({"table": "trusted", "name": name, "value": dict(entry, semantic=[entry["semantic"]])}))
+        lines.append(table("trusted", name, dict(entry, semantic=[entry["semantic"]])))
     semantic = _semantic({"type": {"sort": {"zero": None}}})
-    lines += [
-        PROBE_MARKER + json.dumps({"table": "semantic", "name": name, "value": [semantic]})
-        for name in ("Mathlib.Fake", "propext")
-    ]
-    lines.append(PROBE_MARKER + json.dumps({"table": "module", "name": "Mathlib.Fake", "value": [["olean", "Synth/Main.lean"]]}))
+    lines += [table("semantic", name, [semantic]) for name in ("Mathlib.Fake", "propext")]
+    lines.append(table("module", "Mathlib.Fake", [["olean", "Synth/Main.lean"]]))
     for line, name in enumerate(names, start=3):
         # Every other root's written statement holds a comment Lean could not place, so it is withheld.
         statement = f"theorem {name} :\n    True" if line % 2 else f"theorem {name} : -- why\n    True"
@@ -2264,7 +2265,28 @@ def test_cli_publishes_report_and_packet_trees_together(
     assert (passages / PACKET_MANIFEST).is_file()
     assert json.loads(output.read_text(encoding="utf-8"))["unresolved"] == []
     assert list(tmp_path.glob(".*.autoform-*")) == []
-    assert capsys.readouterr().err == ""
+    assert capsys.readouterr().err == "skeleton: probing 1 module...\nskeleton: assembling 1 skeleton...\nskeleton: writing...\n"
+
+
+def test_cli_names_each_phase_on_stderr_as_it_starts(tmp_path: Path, capsys, monkeypatch) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    during_probe: list[str] = []
+
+    def probe(program: str, lean_root: Path) -> str:
+        during_probe.append(capsys.readouterr().err)
+        return _fake_probe_output()
+
+    _fake_default_probe(monkeypatch, probe)
+    output = tmp_path / "skeleton.json"
+
+    assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--output", str(output)]) == 0
+
+    captured = capsys.readouterr()
+    # Every probe has ended once `assembling` appears, so an orchestrator may release its Lean slot.
+    assert during_probe == ["skeleton: probing 1 module...\n"]
+    assert captured.err == "skeleton: assembling 1 skeleton...\nskeleton: writing...\n"
+    assert captured.out == f"{output}: 1 skeleton(s) for 1 article(s)\n"
 
 
 def test_cli_does_not_publish_packets_when_report_staging_fails(

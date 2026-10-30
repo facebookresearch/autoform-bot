@@ -49,7 +49,11 @@ of the packet that was read, and, for a source-faithfulness verdict, the
 article review hash; the
 [CLI reference](../../autoform_cli/README.md#skeleton-hashes) says what each
 binds. These hashes are provenance evidence, not reviewer authentication or an
-approval key.
+approval key. If the user has paused skeleton evidence during proof development,
+skip it and Formalize's import-edit baselines, say so, and record no skeleton
+hash; still build the target, run `#print axioms` on each recorded declaration
+and `autoform check` and `audit` with `--lean-root`, and compare the compiled
+statement with its source.
 
 Report findings first, ordered by severity and tied to files or nodes. Then give
 the rubric scores, weighted verdict, commands run, unresolved questions, and a
