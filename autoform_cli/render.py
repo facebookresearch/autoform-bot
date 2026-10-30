@@ -169,10 +169,15 @@ _MARKDOWN_LINK = re.compile(
 _MARKDOWN_IMAGE = re.compile("!" + _MARKDOWN_LINK.pattern.removeprefix("(?<!!)"))
 #: A reference-style link definition, `[label]: target "title"`. Markdown
 #: resolves `[Paper][paper]` through one of these, so a rewrite that only sees
-#: inline links leaves the destination behind and publishes a dead link.
+#: inline links leaves the destination behind and publishes a dead link. As in
+#: Python-Markdown, at most a quoted or parenthesized title follows the target:
+#: a line such as `[^1]: Grounded in [Paper](...)` is prose, not a definition.
+#: Python-Markdown expands tabs before it reads one, so a tab around the title
+#: counts as spaces do.
 _LINK_DEFINITION = re.compile(
     r'^(?P<indent>[ ]{0,3})\[(?P<label>[^\]]+)\]:[ \t]*'
-    r'(?P<target><[^>\r\n]+>|[^\s]+)(?P<rest>[ \t]+.*)?$'
+    r'(?P<target><[^>\r\n]+>|[^\s]+)'
+    r'(?P<rest>[ \t]*(?:(?P<quote>["\'])(?:.*)(?P=quote)[ \t]*|\(.*\)[ \t]*)?)$'
 )
 _ARTICLE_SLOT = re.compile(
     rf"^(?P<indent>[ \t]*)[-*+]\s+\[(?=[^\]]){_LINK_LABEL}\]"

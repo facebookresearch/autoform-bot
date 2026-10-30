@@ -175,6 +175,10 @@ date when the release is tagged.
   by its statement and opening at its anchor, and its exact `lean:` names find
   it even when they show only as code icons. Notes headings such as Sources
   are no longer results of their own; their text stays in the card's (#390).
+- **Links on chapter pages.** A definition-like line with more words after
+  its first, such as `[^1]: Grounded in [Paper](../sources/paper.md)`, is
+  prose, as Python-Markdown reads it. Render read it as a definition and left
+  the links after its first word pointing at unpublished pages (#484).
 
 ## 0.6.0 (2026-10-22)
 
