@@ -24,21 +24,31 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 SCHEMA = "autoform-project-map/v1"
-MAP_DIRECTORY = "dependencies/map"
+MAP_DIRECTORY = "map/data"
 TOP_EXPORTS = 8
 # A part whose subtree holds at most this many results ships them in its own file.
 LEAF_RESULTS = 400
 # A part with more children than this gets them grouped into linked communities, so no level is a field of tiles.
 GROUP_LIMIT = 30
+# Parts share 256 files by the first byte of their id's hash, so the files a site gets are known before the map is
+# built, and render can guard each one.
+SHARDS = 256
 _FLATTENED = frozenset({"collection", "transparent"})
 _REGION = "region:"
+_ROOT = "~roadmap"
 
 Relation = tuple[str, str, int, int]
 
 
 def part_file(part_id: str) -> str:
-    """A stable, short file name for a part, so caches and links survive rebuilds."""
-    return hashlib.sha256(part_id.encode("utf-8")).hexdigest()[:16] + ".json"
+    """The shard file that holds a part, stable across rebuilds so caches and links survive them."""
+    return f"{hashlib.sha256(part_id.encode('utf-8')).digest()[0] * SHARDS // 256:02x}.json"
+
+
+def map_paths() -> tuple[str, ...]:
+    """Every file the map can write, relative to the site's root, whatever the project holds."""
+    return (f"{MAP_DIRECTORY}/index.json", f"{MAP_DIRECTORY}/search.json",
+            *(f"{MAP_DIRECTORY}/parts/{shard:02x}.json" for shard in range(SHARDS)))
 
 
 def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterable[Relation]) -> dict[str, object]:
@@ -215,7 +225,7 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
     for part in part_parent:
         own = sorted((result for result, at in home.items() if at == part), key=order.__getitem__)
         body: dict[str, object] = {
-            "schema": SCHEMA, "part": summary(part),
+            "part": summary(part),
             "path": [[step, title[step]] for step in chain(part)[::-1]],
             "children": [summary(child) for child in kids.get(part, ())],
             "edges": among(kids.get(part, ())),
@@ -230,7 +240,8 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
             body["result_edges"] = internal.get(part, [])
             body["boundary_edges"] = boundary.get(part, [])
             body["outside"] = sorted(outside.values(), key=lambda row: str(row[0]))
-        files[f"parts/{part_file(part)}"] = body
+        shard = files.setdefault(f"parts/{part_file(part)}", {"schema": SCHEMA, "parts": {}})
+        shard["parts"][part] = body  # type: ignore[index]
 
     regions = kids.get(root, [])
     part_ids = sorted(part_parent)
@@ -354,6 +365,12 @@ def records_from_view(view: object, metadata: Mapping[str, Mapping[str, object]]
             if value is not None:
                 record[key] = value
         records.append(record)
+    # Without a roadmap contents page the view has no single root; the map gets one titled like the view.
+    roots = [record for record in records if record.get("parent") in (None, "")]
+    if len(roots) != 1:
+        for record in roots:
+            record["parent"] = _ROOT
+        records.insert(0, {"id": _ROOT, "kind": "scope", "title": str(getattr(view, "title", "") or "Roadmap"), "parent": None, "result": False})
     # A view edge runs from the dependency to the result that uses it.
     relations = [(edge.target, edge.source, edge.statement_count, edge.proof_count) for edge in view.edges]  # type: ignore[attr-defined]
     return records, relations

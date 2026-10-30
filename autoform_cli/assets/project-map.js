@@ -2,7 +2,7 @@
  *
  * One continuous map of the whole project. Regions hold the mathematical parts inside them, and parts hold their
  * results; zooming in opens a part in place, so its boundary and its neighbours stay on screen. Data arrives one level
- * at a time from dependencies/map/: index.json (regions), parts/<file>.json (a part's children, and its results when
+ * at a time from map/data/: index.json (regions), parts/<shard>.json (a part's children, and its results when
  * it holds them) and search.json (titles and Lean names, loaded on first search).
  *
  * Geometry comes from window.AutoformMapLayout (project-map-layout.js, shipped ahead of this file): world units are
@@ -18,7 +18,7 @@
   host.dataset.pmMounted = "1";
   var L = window.AutoformMapLayout;
 
-  var mapBase = new URL(host.getAttribute("data-map") || "dependencies/map/", location.href);
+  var mapBase = new URL(host.getAttribute("data-map") || "data/", location.href);
   var routeBase = new URL(host.getAttribute("data-routes") || "dependencies/index.json", location.href);
   var reduceMotion = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
   var SVGNS = "http://www.w3.org/2000/svg";
@@ -127,7 +127,10 @@
     if (!record || record.id === ROOT) return Promise.resolve(record);
     if (record.data) return Promise.resolve(record);
     if (!record.loading) {
-      record.loading = fetchJSON("parts/" + record.summary.file).then(function (data) {
+      // Parts share files: each holds the parts whose ids hash to it.
+      record.loading = fetchJSON("parts/" + record.summary.file).then(function (shard) {
+        var data = shard.parts && shard.parts[record.id];
+        if (!data) throw new Error("Part " + record.id + " is missing from parts/" + record.summary.file);
         record.data = data;
         (data.children || []).forEach(function (child) { register(child, record.id); });
         (data.results || []).forEach(function (row) {

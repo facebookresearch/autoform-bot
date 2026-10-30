@@ -44,7 +44,7 @@ def _library() -> tuple[list[dict[str, object]], list[tuple[str, str, int, int]]
 
 
 def _part(files: dict[str, object], part_id: str) -> dict[str, object]:
-    return files[f"parts/{project_map.part_file(part_id)}"]  # type: ignore[return-value]
+    return files[f"parts/{project_map.part_file(part_id)}"]["parts"][part_id]  # type: ignore[index,return-value]
 
 
 def test_collections_and_pagination_are_flattened_and_collections_become_facets() -> None:
@@ -57,7 +57,7 @@ def test_collections_and_pagination_are_flattened_and_collections_become_facets(
     assert [row["title"] for row in groups["results"]] == ["Lagrange", "Cauchy"]
     algebra = _part(files, "Algebra")
     assert [child["id"] for child in algebra["children"]] == ["Algebra/MathlibExt/part-01/groups"]
-    assert not any(key.endswith(project_map.part_file("Algebra/MathlibExt")) for key in files)
+    assert all("Algebra/MathlibExt" not in shard["parts"] for key, shard in files.items() if key.startswith("parts/"))
     assert files["index.json"]["facets"] == ["MathlibExt", "WantedExt"]
 
 
@@ -151,18 +151,18 @@ def test_records_from_view_turn_dependency_edges_into_user_used_relations() -> N
         ViewNode("b", "B", "node", (), (("planned", 1),), status_key="planned"),
     )
     view = GraphView("full", "Library", nodes, (ViewEdge("a", "b", statement_count=1),))  # b depends on a
-    records, relations = project_map.records_from_view(view, {"a": {"parent": "roadmap", "result": True}})
+    records, relations = project_map.records_from_view(view, {"a": {"parent": "roadmap", "result": True}, "b": {"parent": "roadmap", "result": True}})
     assert relations == [("b", "a", 1, 0)]
     assert records[1] == {"id": "a", "kind": "node", "title": "A", "status": "fully_proved", "lean": "A.a",
                           "parent": "roadmap", "result": True}
 
 
 def test_page_escapes_its_links_and_title(tmp_path: Path) -> None:
-    page = project_map.render_page(title='A "map" <b>', map_base="../dependencies/map/", routes="../dependencies/index.json",
+    page = project_map.render_page(title='A "map" <b>', map_base="data/", routes="../dependencies/index.json",
                                    home="../", script="../javascripts/project-map.js", style="../stylesheets/project-map.css",
                                    mathjax="../javascripts/mathjax.js")
     assert "<title>A &quot;map&quot; &lt;b&gt; · map</title>" in page
-    assert 'data-map="../dependencies/map/"' in page
+    assert 'data-map="data/"' in page
     written = project_map.write_project_map(tmp_path, project_map.build_project_map(*_library()))
     assert tmp_path / "index.json" in written
     assert json.loads((tmp_path / "index.json").read_text(encoding="utf-8"))["schema"] == project_map.SCHEMA
@@ -183,6 +183,22 @@ def test_results_in_the_root_get_a_part_of_their_own() -> None:
     regions = {region["id"]: region for region in project_map.build_project_map(records, relations)["index.json"]["regions"]}
     assert regions["roadmap/~results"]["title"] == "Outside the chapters"
     assert regions["Analysis"]["api_total"] == 1
+
+
+def test_the_map_writes_only_files_render_can_guard() -> None:
+    files = project_map.build_project_map(*_library())
+    assert {f"{project_map.MAP_DIRECTORY}/{name}" for name in files} <= set(project_map.map_paths())
+    assert len(project_map.map_paths()) == 2 + project_map.SHARDS
+
+
+def test_a_view_without_one_root_gets_one() -> None:
+    nodes = (ViewNode("a", "A", "node", (), (("fully_proved", 1),), status_key="fully_proved"),
+             ViewNode("b", "B", "node", (), (("planned", 1),), status_key="planned"))
+    view = GraphView("full", "Library", nodes, (ViewEdge("a", "b", statement_count=1),))
+    records, relations = project_map.records_from_view(view, {})
+    assert records[0] == {"id": "~roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False}
+    regions = project_map.build_project_map(records, relations)["index.json"]["regions"]
+    assert [(region["title"], region["results"]) for region in regions] == [("Library", 2)]
 
 
 def test_a_map_needs_exactly_one_root() -> None:

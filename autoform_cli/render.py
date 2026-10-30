@@ -781,6 +781,8 @@ def _site_paths(graph: Graph) -> tuple[str, ...]:
                 "SUMMARY.md",
                 *(_group_page(group).as_posix() for group in _group_nodes(graph)),
                 *graph_pages.graph_page_paths(graph, wiki_links=True),
+                *project_map.map_paths(),
+                MAP_SCRIPT, MAP_STYLE, MAP_PAGE,
                 *_ASSETS,
             }
         )
@@ -1220,7 +1222,7 @@ def _render_pages(
         # The layout module ships ahead of the controller in one file, so the page makes one request for both.
         (MAP_SCRIPT, _static_asset("project-map-layout.js") + "\n" + _static_asset("project-map.js")),
         (MAP_STYLE, _static_asset("project-map.css")),
-        # The whole-project map: one standalone page over the per-level files in dependencies/map/.
+        # The whole-project map: one standalone page over the per-level files in map/data/.
         (MAP_PAGE, project_map.render_page(
             title=graph_views.group_title(graph, "roadmap"), map_base="../" + project_map.MAP_DIRECTORY + "/",
             routes="../" + graph_pages.SEARCH_INDEX, home="../", script="../" + MAP_SCRIPT, style="../" + MAP_STYLE,
