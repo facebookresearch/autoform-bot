@@ -107,6 +107,28 @@ def test_each_statement_card_is_one_search_record_holding_its_lean_names(tmp_pat
     assert check_site(project / "site", project / "site-src").issues == ()
 
 
+@pytest.mark.parametrize("title", ("Theorem", "Definition"))
+def test_a_kind_only_title_keeps_its_own_search_record_and_canonical_anchor(tmp_path: Path, title: str) -> None:
+    project = _project(tmp_path)
+    article = project / "blueprint/roadmap/ch/first.md"
+    text = article.read_text(encoding="utf-8").replace("# First\n", f"# {title}\n")
+    if title == "Definition":
+        text = text.replace("declaration: theorem\n", "declaration: definition\n")
+    article.write_text(text, encoding="utf-8")
+    render_site(project / "blueprint", project / "site-src")
+
+    records = _records(project)
+    first = next(record for record in records if record["location"] == "roadmap/ch/index.html#first")
+    assert first["title"] == title and first["title"] != "Chapter"
+    assert "Project.first" in first["text"] and "firstsketchword" in first["text"]
+    assert check_site(project / "site", project / "site-src").issues == ()
+    page = (project / "site/roadmap/ch/index.html").read_text(encoding="utf-8")
+    tree = html5lib.parse(page, treebuilder="etree", namespaceHTMLElements=False)
+    heading = next(node for node in tree.iter("h4") if node.get("id") == "first")
+    hidden = [node for node in heading.iter("span") if "hidden" in node.attrib]
+    assert len(hidden) == 1 and "".join(hidden[0].itertext()) == title
+
+
 def test_isolating_notes_headings_keeps_every_card_and_heading_whole(tmp_path: Path) -> None:
     project = _project(tmp_path)
     render_site(project / "blueprint", project / "site-src")

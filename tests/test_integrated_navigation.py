@@ -344,9 +344,15 @@ def test_visible_index_batches_await_real_window_frame_boundaries_before_publica
         paint.release(0);await until(()=>paint.frames.size===1);
         assert.deepEqual(paint.requested,[0,1]);assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
         await new Promise(resolve=>setImmediate(resolve));
-        assert.deepEqual(paint.requested,[0,1],'Publication must still wait for the second frame');
-        paint.release(1);const result=await pending;assertPaintIndex(app,result,published);
-        assert.equal(paint.frames.size,0);assert.equal(paint.timers.size,0);assert.deepEqual(paint.cancelled,[0,1]);
+        assert.deepEqual(paint.requested,[0,1],'The first frame must remain free of the next validation batch');
+        paint.release(1);await until(()=>paint.frames.size===1);
+        assert.deepEqual(paint.requested,[0,1,2]);assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+        paint.release(2);await until(()=>paint.frames.size===1);
+        assert.deepEqual(paint.requested,[0,1,2,3]);assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+        await new Promise(resolve=>setImmediate(resolve));
+        assert.deepEqual(paint.requested,[0,1,2,3],'Publication must still await the second actual paint boundary');
+        paint.release(3);const result=await pending;assertPaintIndex(app,result,published);
+        assert.equal(paint.frames.size,0);assert.equal(paint.timers.size,0);assert.deepEqual(paint.cancelled,[1,3]);
       } finally {app.nav.dispose();paint.restore();}
     """)
 
@@ -391,17 +397,43 @@ def test_hidden_index_batches_never_depend_on_window_animation_frames() -> None:
     """)
 
 
-def test_disposal_while_index_frame_is_pending_never_exposes_a_partial_index() -> None:
-    _run(_PAINT_PEERS + r"""
+@pytest.mark.parametrize("phase", [0, 1])
+@pytest.mark.parametrize("completion", ["frame", "timer"])
+def test_disposal_while_index_frame_is_pending_never_exposes_a_partial_index(phase: int, completion: str) -> None:
+    _run(_PAINT_PEERS + "const phase=" + json.dumps(phase) + ";\nconst completion=" + json.dumps(completion) + ";\n" + r"""
       const published=[],app=setup({onIndex(value){published.push(value);}});paintCatalogue(app);
       const paint=controlledPaint(app);
       try {
         const pending=app.nav.loadIndex();await until(()=>paint.frames.size===1);
         assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
-        app.nav.dispose();paint.release(0);
+        if(phase===1)paint.release(0);
+        const expected=phase===1?[0,1]:[0];app.nav.dispose();
+        if(completion==='frame')paint.release(phase);
+        else {const timeout=paint.timers.values().next().value;assert(timeout);timeout();}
         await assert.rejects(pending,error=>error.name==='AbortError');
         assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);assert.equal(app.errors.length,0);
-        assert.deepEqual(paint.requested,[0]);assert.equal(paint.frames.size,0);assert.equal(paint.timers.size,0);
+        assert.deepEqual(paint.requested,expected);assert.deepEqual(paint.cancelled,[phase]);
+        assert.equal(paint.frames.size,0);assert.equal(paint.timers.size,0);
+      } finally {app.nav.dispose();paint.restore();}
+    """)
+
+
+def test_stalled_second_index_frame_keeps_the_original_fifty_ms_fallback() -> None:
+    _run(_PAINT_PEERS + r"""
+      const published=[],app=setup({onIndex(value){published.push(value);}});paintCatalogue(app);
+      const paint=controlledPaint(app);
+      try {
+        const pending=app.nav.loadIndex();await until(()=>paint.frames.size===1);
+        const firstTimer=paint.timers.keys().next().value;
+        paint.release(0);await until(()=>paint.frames.size===1);
+        assert.equal(paint.timers.size,1);assert.strictEqual(paint.timers.keys().next().value,firstTimer,
+          'The second frame must not restart or extend the original fifty-ms timer');
+        assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
+        paint.timers.get(firstTimer)();await until(()=>paint.frames.size===1);
+        assert.deepEqual(paint.cancelled,[1]);assert.deepEqual(paint.requested,[0,1,2]);
+        paint.release(2);const secondTimer=paint.timers.values().next().value;assert(secondTimer);secondTimer();
+        const result=await pending;assertPaintIndex(app,result,published);
+        assert.deepEqual(paint.cancelled,[1,3]);assert.equal(paint.frames.size,0);assert.equal(paint.timers.size,0);
       } finally {app.nav.dispose();paint.restore();}
     """)
 

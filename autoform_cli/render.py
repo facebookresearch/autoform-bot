@@ -2233,7 +2233,7 @@ def _render_landing_page(
             if book == Path("README.md")
             else '<a class="bp-intro-book" href="'
             + html.escape(_as_published(relative_link(destination / book, page, ".html")), quote=True)
-            + '">Explore all mathematics</a>'
+            + '">Read the book</a>'
         )
         # The shared shell is attached after all full reading content is final.
         reading = f'<div class="bp-landing-intro">{hero}{book_link}{next_up}</div>'
@@ -2298,7 +2298,7 @@ def _render_hero(
     The same numbers set as figures answer "how far along is this?" before the
     reader has finished the title, which is the only question the top of a
     blueprint has to answer. In the explorer's narrow rail (*rail*) the
-    stylesheet keeps only the first two figures, so the chapter and inventory
+    stylesheet keeps only the first two figures, so the topic and inventory
     counts also come as one plain line under them.
     """
     leaves = _countable(graph)
@@ -2313,11 +2313,14 @@ def _render_hero(
     total = len(leaves)
     inventory_count = len(_module_inventories(graph))
     share = _completion_percentage(done, total)
-    target_label = "target" if total == 1 else "targets"
+    article_label = "article" if total == 1 else "articles"
 
+    # The labels reuse the status words, so the share reads as the fully
+    # proved status it counts and the second figure as "ready to state or
+    # prove"; each note says in plain words what the number counts.
     figures = [
-        ("Scoped roadmap", f"{share}%", f"{done} of {total} {target_label} complete", False),
-        ("Ready now", str(actionable), "unblocked, waiting for an author", False),
+        ("Fully proved", f"{share}%", f"{done} of {total} {article_label}", False),
+        ("Ready to start", str(actionable), "nothing they need is blocked", False),
     ]
     # The figure counts every catalog, checked or not; a project without
     # catalogs has no inventory to report.
@@ -2331,7 +2334,7 @@ def _render_hero(
             )
         )
     chapters = len(graph_views.group_nodes(graph))
-    figures.append(("Chapters", str(chapters), "top-level milestones", False))
+    figures.append(("Topics", str(chapters), "top-level parts of the book", False))
     stats = "".join(
         f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">'
         f'<div class="bp-figure-value">{value}</div>'
@@ -2339,7 +2342,7 @@ def _render_hero(
         f'<div class="bp-figure-note">{html.escape(note)}</div></div>'
         for label, value, note, neutral in figures
     )
-    counts = [f"{chapters} {'chapter' if chapters == 1 else 'chapters'}"]
+    counts = [f"{chapters} {'topic' if chapters == 1 else 'topics'}"]
     if inventory_count:
         counts.append(f"{inventory_count} module {'inventory' if inventory_count == 1 else 'inventories'}")
     counts_line = f'<p class="bp-hero-counts">{" · ".join(counts)}</p>' if rail else ""
@@ -2348,7 +2351,7 @@ def _render_hero(
         '<span class="bp-hero-coverage-label">Declared source coverage:</span> '
         f'<span class="bp-hero-coverage-counts">{html.escape(_coverage_summary(coverage))}</span> '
         f'<a class="bp-hero-coverage-link" href="{html.escape(coverage_href, quote=True)}">'
-        "View coverage contract</a>"
+        "What the sources cover</a>"
         "</div>"
     )
     lead = _lead_sentence(body)
@@ -3222,16 +3225,25 @@ def _render_environment(
     # A checked inventory is fully proved, so it keeps the tick.
     mark = "✓" if node_status.key in {"fully_proved", "mathlib"} else "●"
 
+    shown = _display_title(node.title, caption)
+    title_html = (
+        f'<span class="bp-thmtitle">{html.escape(shown)}</span>' if shown
+        else f'<span hidden>{html.escape(node.title)}</span>'
+    )
+    # The "#" link's only text is "#", so its name says which statement it links to.
+    permalink_label = " ".join(part for part in ("Link to", caption, number) if part)
+
     lines = [
         f'<div class="bp-thmwrapper {style} bp-{display_key}" '
         f'data-autoform-node-id="{html.escape(node.id, quote=True)}" markdown="1">',
         f'<h4 class="bp-thmheading" id="{html.escape(anchor, quote=True)}">',
         f'<span class="bp-thmcaption" data-search-exclude>{html.escape(caption)}</span>'
         f'<span class="bp-thmlabel" data-search-exclude>{html.escape(number)}</span>'
-        f'<span class="bp-thmtitle">{html.escape(node.title)}</span>'
+        f"{title_html}"
         f"{code_links}"
         f"{source_link}"
-        f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}" data-search-exclude>#</a>'
+        f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}" '
+        f'aria-label="{html.escape(permalink_label, quote=True)}" data-search-exclude>#</a>'
         f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}" data-search-exclude>'
         f'{mark}<span class="bp-mark-label">{html.escape(display_label)}</span></span>',
         "</h4>",
@@ -3673,8 +3685,11 @@ def _dependency_disclosure(
     """Hide DAG relations behind a native, keyboard-accessible disclosure."""
     rows: list[tuple[str, str]] = []
 
-    def references(node_ids: list[str] | tuple[str, ...]) -> str:
-        return _node_references(node_ids, graph=graph, statuses=statuses, numbers=numbers, links=links)
+    def references(node_ids: list[str] | tuple[str, ...], *, used_by_row: bool = False) -> str:
+        return _node_references(
+            node_ids, graph=graph, statuses=statuses, numbers=numbers, links=links,
+            relation_node=node, used_by_row=used_by_row,
+        )
 
     if node.statement_dependencies:
         rows.append(("Statement uses", references(node.statement_dependencies)))
@@ -3682,12 +3697,36 @@ def _dependency_disclosure(
     if proof_only:
         rows.append(("Proof uses", references(proof_only)))
     if used_by[node.id]:
-        rows.append(("Used by", references(used_by[node.id])))
+        rows.append(("Used by", references(used_by[node.id], used_by_row=True)))
     if not rows:
         return ""
 
+    # The summary counts both directions, so a reader can tell from the closed
+    # line whether opening it is worth it.
+    uses = len(dict.fromkeys((*node.statement_dependencies, *node.proof_dependencies)))
+    label = f"Uses {uses} · Used by {len(used_by[node.id])}"
     body = _render_rows(rows, css_class="bp-dependency-body")
-    return f'<details class="bp-dependencies"><summary>Dependencies</summary>{body}</details>'
+    return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
+
+
+def _display_title(title: str, caption: str) -> str:
+    """Drop a kind the caption already shows: 'Theorem (X)' under 'Theorem 4' reads X.
+
+    Display only; the graph keeps the authored title. A title that is just the
+    kind word shows nothing, and the outer parentheses are only removed when
+    they enclose the whole rest of the title.
+    """
+    if title.casefold() == caption.casefold():
+        return ""
+    prefix = f"{caption} ("
+    if not (title.casefold().startswith(prefix.casefold()) and title.endswith(")")):
+        return title
+    inner, depth = title[len(prefix) : -1], 0
+    for character in inner:
+        depth += (character == "(") - (character == ")")
+        if depth < 0:
+            return title
+    return inner if depth == 0 else title
 
 
 def _node_references(
@@ -3697,21 +3736,50 @@ def _node_references(
     statuses: dict[str, status.NodeStatus],
     numbers: dict[str, str],
     links: Mapping[str, str],
+    relation_node: Node | None = None,
+    used_by_row: bool = False,
 ) -> str:
     """Link each node by number and title, coloured by its derived state.
 
     A catalog is coloured as neutrally as its own environment, checked or not.
+    Dependency rows additionally describe the original pair's typed counts;
+    other callers, including assumed statements, retain their original labels.
     """
     rendered = []
     for other_id in node_ids:
         other = graph.nodes[other_id]
-        label = html.escape(f"{numbers[other_id]} ({other.title})")
+        shown = _display_title(other.title, numbers[other_id].rpartition(" ")[0])
+        text = numbers[other_id] + (f" ({shown})" if shown else "")
+        reading = dag_viewer._reading_label(text, require_math=False)
+        label = html.escape(text)
+        if reading is not None:
+            # Only converter-validated text/code/math enters the native link;
+            # authored HTML, destinations and attributes remain literal.
+            label = "".join(
+                html.escape(value) if kind == "text" else
+                f"<code>{html.escape(value)}</code>" if kind == "code" else
+                f'<span class="arithmatex">{html.escape(value)}</span>'
+                for kind, value in reading["parts"]
+            )
         key = graph_views.display_status_key(other, statuses[other_id])
+        relation_attributes = ""
+        if relation_node is not None:
+            owner, endpoint = (other, relation_node.id) if used_by_row else (relation_node, other_id)
+            counts = (
+                (owner.statement_dependencies.count(endpoint), "statement"),
+                (owner.proof_dependencies.count(endpoint), "proof"),
+            )
+            weights = ", ".join(
+                f"{count} {kind} {'dependency' if count == 1 else 'dependencies'}"
+                for count, kind in counts if count
+            )
+            if weights:
+                relation_attributes = f'title="{html.escape(weights, quote=True)}" '
         rendered.append(
             f'<a class="bp-ref bp-ref-{key}" '
-            f'href="{html.escape(links[other_id], quote=True)}">{label}</a>'
+            f'{relation_attributes}href="{html.escape(links[other_id], quote=True)}">{label}</a>'
         )
-    return " · ".join(rendered)
+    return ' <span class="bp-ref-sep">·</span> '.join(rendered)
 
 
 def _render_rows(rows: list[tuple[str, str]], *, css_class: str) -> str:
@@ -3745,10 +3813,19 @@ def _stylesheet() -> str:
     light dimmed: it is the palette Facebook uses in dark mode, and it hangs off
     Material's colour scheme attribute so the theme's own toggle drives it.
     """
+    # Dependency dots and swatches are a few pixels wide and carry no word, so
+    # every state with a tinted light fill (the four finished states,
+    # conditionally proved, not ready and inventory pending) fills them with
+    # its stroke: the tints are too pale to tell from an outline there. The
+    # light fill decides, so both schemes fill the same states.
+    def dot(state: status.State, dark: bool = False) -> str:
+        fill, stroke = (state.dark_fill, state.dark_stroke) if dark else (state.fill, state.stroke)
+        return f"background: {fill if state.fill == '#FFFFFF' else stroke}; border-color: {stroke};"
+
     light = "\n".join(
         f".bp-{state.key} .bp-mark {{ color: {state.stroke}; }}\n"
         f".bp-{state.key} > .bp-thmcontent {{ border-left-color: {state.stroke}; }}\n"
-        f".bp-ref-{state.key}::before, .bp-swatch-{state.key} {{ background: {state.fill}; border-color: {state.stroke}; }}"
+        f".bp-ref-{state.key}::before, .bp-swatch-{state.key} {{ {dot(state)} }}"
         for state in status.STATES
     )
     dark = "\n".join(
@@ -3757,15 +3834,15 @@ def _stylesheet() -> str:
         f"{{ border-left-color: {state.dark_stroke}; }}\n"
         f"[data-md-color-scheme=slate] .bp-ref-{state.key}::before, "
         f"[data-md-color-scheme=slate] .bp-swatch-{state.key} "
-        f"{{ background: {state.dark_fill}; border-color: {state.dark_stroke}; }}"
+        f"{{ {dot(state, dark=True)} }}"
         for state in status.STATES
     )
     # The legends beside the explorer's rings list module inventories, so
     # their swatches take the colours the explorer draws inventories in.
     inventory = "\n".join(
-        f".bp-swatch-{state.key} {{ background: {state.fill}; border-color: {state.stroke}; }}\n"
+        f".bp-swatch-{state.key} {{ {dot(state)} }}\n"
         f"[data-md-color-scheme=slate] .bp-swatch-{state.key} "
-        f"{{ background: {state.dark_fill}; border-color: {state.dark_stroke}; }}"
+        f"{{ {dot(state, dark=True)} }}"
         for state in status.INVENTORY_STATES
     )
     serif = '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
@@ -3805,12 +3882,32 @@ def _stylesheet() -> str:
   --bp-sunken: #1C1D1F;
   --bp-page: #18191A;
   --bp-scroll-shade: rgba(228, 230, 235, 0.3);
-  --bp-link: #2D88FF;
+  --bp-link: #4A9AFF;
   --bp-link-hover: #7FB8FF;
   --bp-blue: #2D88FF;
   --bp-violet: #9B6BFF;
   --bp-magenta: #FF6B9D;
 }}
+/* Material's own tokens take the same blue, so its links, breadcrumbs and
+   Previous/Next match the explorer instead of the theme's default indigo.
+   The theme sets them on body through data-md-color-primary, and the slate
+   link colour through two attributes, so this selector carries two
+   attributes and wins by coming later. The bp tokens already switch with
+   the scheme, so one rule covers both. The darker and lighter shades follow,
+   or the drawer's repository strip and hover tints stay indigo. */
+[data-md-color-scheme][data-md-color-primary] {{
+  --md-primary-fg-color: var(--bp-blue);
+  --md-primary-fg-color--light: color-mix(in srgb, var(--bp-blue) 80%, #FFFFFF);
+  --md-primary-fg-color--dark: color-mix(in srgb, var(--bp-blue) 80%, #000000);
+  --md-accent-fg-color: var(--bp-link-hover);
+  --md-accent-fg-color--transparent: color-mix(in srgb, var(--bp-link-hover) 10%, transparent);
+  --md-typeset-a-color: var(--bp-link);
+}}
+/* White on the accent is 2.1:1 in slate and 3.8:1 in light, and the
+   back-to-top button shows focus only by that fill. Slate's accent takes the
+   page's near-black text; light's button fills with the link blue. */
+[data-md-color-scheme=slate][data-md-color-accent] {{ --md-accent-bg-color: #18191A; }}
+[data-md-color-scheme=default] .md-top:is(:hover, :focus) {{ background-color: var(--bp-link); }}
 
 body {{ font-family: {sans}; color: var(--bp-fg); }}
 .md-typeset {{
@@ -3843,8 +3940,12 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   height: 3px;
   background: var(--bp-sweep);
 }}
+/* The mobile drawer's title bar and repository strip match the header:
+   white on slate's brighter blue is 3.5:1. */
 [data-md-color-scheme=slate] .md-header,
-[data-md-color-scheme=slate] .md-tabs {{ background-color: #242526; }}
+[data-md-color-scheme=slate] .md-tabs,
+[data-md-color-scheme=slate] .md-nav--primary .md-nav__title[for=__drawer],
+[data-md-color-scheme=slate] .md-nav__source {{ background-color: #242526; }}
 .md-tabs {{ border-bottom: 1px solid var(--bp-rule); }}
 .md-tabs__link {{ font-weight: 600; opacity: 0.72; }}
 .md-tabs__link--active, .md-tabs__link:hover {{ opacity: 1; }}
@@ -3865,9 +3966,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-hero-kicker {{
   margin-top: 1.1rem;
   font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-weight: 600;
   color: var(--bp-muted);
 }}
 .md-typeset .bp-hero-title {{
@@ -3953,15 +4052,15 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
    reach the hero's heading, paragraph and links there, so these rules carry
    a doubled class; the explorer's own rules stay in its script. The narrow
    hero keeps the gradient rule as its one accent and two plain figures,
-   the share complete and what is ready now; the chapter and inventory
-   counts become one muted line, and coverage its link. */
+   the share fully proved and what is ready to start, each with its
+   one-line note; the topic and inventory counts become one muted line,
+   and coverage its link. */
 .bp-landing-intro.bp-landing-intro {{ margin: 0 6px 18px; font-size: 13px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero {{ margin: 0; }}
 .bp-landing-intro.bp-landing-intro .bp-hero-rule {{ width: 56px; height: 3px; }}
 .bp-landing-intro.bp-landing-intro :is(
   .bp-hero-kicker,
   .bp-figure:nth-child(n + 3),
-  .bp-figure-note,
   .bp-hero-bar,
   .bp-hero-coverage-label,
   .bp-hero-coverage-counts
@@ -3998,6 +4097,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-weight: 700;
 }}
 .bp-landing-intro.bp-landing-intro .bp-figure-label {{ margin-top: 5px; font-size: 12px; font-weight: 600; }}
+.bp-landing-intro.bp-landing-intro .bp-figure-note {{ margin-top: 2px; font-size: 12px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero-counts {{
   margin: 8px 0 0;
   color: var(--bp-muted);
@@ -4054,11 +4154,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   background: var(--bp-surface);
 }}
 .bp-progress-kicker {{
-  font-family: {mono};
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--bp-muted);
 }}
 .bp-progress-total {{ margin-top: 0.2rem; font-family: {serif}; font-size: 1.05rem; }}
@@ -4089,11 +4186,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-book-nav-link:hover {{ text-decoration: none; }}
 .bp-book-nav-next {{ margin-left: auto; text-align: right; }}
 .bp-book-nav-direction {{
-  font-family: {mono};
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
   color: var(--bp-muted);
 }}
 .bp-book-nav-title {{ margin-top: 0.15rem; font-family: {serif}; font-size: 1rem; }}
@@ -4140,9 +4234,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-next-kicker {{
   font-family: {sans};
   font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-weight: 600;
   color: var(--bp-muted);
 }}
 .bp-next-title {{ font-family: {serif}; font-size: 1.15rem; margin-top: 0.15rem; }}
@@ -4261,16 +4353,29 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   opacity: 0;
   transition: opacity 0.1s ease;
 }}
-.bp-thmwrapper:hover .bp-permalink {{ opacity: 1; }}
+/* A keyboard reaches the permalink too, so focus shows it as hover does. */
+.bp-thmwrapper:hover .bp-permalink, .bp-permalink:focus-visible {{ opacity: 1; }}
 
-.bp-mark {{ margin-left: auto; font-weight: 400; padding-left: 1rem; }}
-.bp-mark-label {{
-  margin-left: 0.3rem;
-  font-family: {mono};
-  font-size: 0.78rem;
-  letter-spacing: 0.02em;
-  color: var(--bp-muted);
+/* The status is a pill on its own line under the title, a dot and a word
+   tinted with the status colour, as in the explorer's drawer. An empty item
+   the full width of the heading breaks the line before it, so the pill sits
+   at the left however long the title runs. */
+.bp-thmheading::after {{ content: ""; order: 1; flex-basis: 100%; }}
+.bp-mark {{
+  order: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  margin-top: 0.3rem;
+  padding: 0.1em 0.6em;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-family: {sans};
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.5;
 }}
+.bp-mark-label {{ color: var(--bp-fg); }}
 
 .bp-thmcontent {{
   font-family: {serif};
@@ -4295,9 +4400,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-thmnotes h6 {{
   font-family: {sans};
   font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  letter-spacing: normal;
   color: var(--bp-muted);
   margin: 0.5rem 0 0.15rem;
 }}
@@ -4309,19 +4413,45 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   line-height: 1.8;
   margin: 0.6rem 0 0 2rem;
 }}
-.bp-dependencies {{
+/* Material styles every details element as a collapsible admonition: a
+   bordered box, a tinted summary and a pencil icon. This one is a quiet line
+   under each statement, so the selectors outrank Material's and take that
+   chrome off, keeping only its chevron, which turns when the line opens. */
+.md-typeset details.bp-dependencies {{
   margin: 0.65rem 0 0 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: none;
   font-family: {sans};
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   color: var(--bp-muted);
 }}
-.bp-dependencies summary {{
+.md-typeset details.bp-dependencies > summary {{
+  display: flex;
+  align-items: center;
   width: fit-content;
+  margin: 0;
+  padding: 0.2rem 0;
+  border: 0;
+  background: none;
+  font-weight: 600;
   cursor: pointer;
-  color: var(--bp-link);
   user-select: none;
 }}
-.bp-dependencies summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+.md-typeset details.bp-dependencies > summary::before {{ display: none; }}
+.md-typeset details.bp-dependencies > summary::after {{
+  position: static;
+  flex: none;
+  width: 1em;
+  height: 1em;
+  margin-left: 0.25em;
+}}
+.md-typeset details.bp-dependencies > summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+@media (pointer: coarse) {{
+  .md-typeset details.bp-dependencies > summary {{ min-height: 44px; }}
+}}
 .bp-dependency-body {{ margin-top: 0.35rem; color: var(--bp-fg); }}
 .bp-review {{
   margin: 0.65rem 0 0 2rem;
@@ -4413,13 +4543,15 @@ mjx-container > svg {{ max-width: none !important; }}
 .bp-row {{ display: flex; gap: 0.75rem; }}
 .bp-key {{
   flex: 0 0 7.5rem;
-  font-family: {mono};
   font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-weight: 600;
   color: var(--bp-muted);
 }}
 .bp-value {{ flex: 1; }}
+/* A reference breaks between entries, never inside one; a long one wraps in its own box. Each starts with its status dot, so
+   the list drops the separators, which ended every wrapped line and could take a line of their own. */
+.bp-dependency-body .bp-ref {{ display: inline-block; max-width: 100%; margin-right: 0.5rem; }}
+.bp-dependency-body .bp-ref-sep {{ display: none; }}
 .bp-lean {{ font-family: {mono}; }}
 .bp-where {{ color: var(--bp-muted); }}
 .bp-missing {{ color: #b91c1c; }}
@@ -4431,14 +4563,14 @@ mjx-container > svg {{ max-width: none !important; }}
   height: 0.6rem;
   margin-right: 0.35rem;
   border: 1px solid var(--bp-rule);
-  border-radius: 2px;
+  border-radius: 50%;
 }}
 .bp-swatch {{
   display: inline-block;
-  width: 0.9rem;
-  height: 0.9rem;
-  border: 1px solid var(--bp-rule);
-  border-radius: 3px;
+  width: 0.6rem;
+  height: 0.6rem;
+  border: 2px solid var(--bp-rule);
+  border-radius: 50%;
   vertical-align: middle;
 }}
 

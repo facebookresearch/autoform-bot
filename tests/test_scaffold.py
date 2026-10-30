@@ -671,6 +671,32 @@ def test_scaffolded_theme_defers_navigation_to_the_book(tmp_path: Path) -> None:
     assert "name: material" in mkdocs
 
 
+def test_the_scaffolded_site_follows_the_readers_light_or_dark_setting(tmp_path: Path) -> None:
+    """One `scheme: slate` made every published blueprint dark for every reader.
+
+    Material picks the entry whose media query matches, shows the entry's
+    toggle to switch to the next, and draws the first before its script runs,
+    so light comes first. The explorer's own switch clicks these entries.
+    """
+    import yaml
+
+    scaffold_project(tmp_path, title="Finite Flat")
+    mkdocs = (tmp_path / "mkdocs.yml").read_text(encoding="utf-8")
+    # The whole file carries a python/name tag that safe_load refuses; the theme block is plain YAML.
+    theme = mkdocs[mkdocs.index("\ntheme:\n") : mkdocs.index("\nplugins:")]
+
+    palette = yaml.safe_load(theme)["theme"]["palette"]
+
+    assert [(entry["media"], entry["scheme"]) for entry in palette] == [
+        ("(prefers-color-scheme: light)", "default"),
+        ("(prefers-color-scheme: dark)", "slate"),
+    ]
+    assert [entry["toggle"] for entry in palette] == [
+        {"icon": "material/weather-night", "name": "Use dark theme"},
+        {"icon": "material/weather-sunny", "name": "Use light theme"},
+    ]
+
+
 def test_generated_ci_pins_the_checkout_that_scaffolded_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

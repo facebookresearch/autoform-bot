@@ -12,7 +12,7 @@ import pytest
 _NODE = shutil.which("node")
 _CLIENT = Path(__file__).resolve().parents[1] / "autoform_cli/assets/blueprint-dag.js"
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated wiki projection tests")
-_CALLBACKS = ("element", "readingLabel", "refreshReadingLabels", "button", "recordId", "requestWikiLinks", "useWikiLinks", "wikiNeighbors", "renderWikiContext")
+_CALLBACKS = ("element", "readingLabel", "refreshReadingLabels", "button", "bindNodeLink", "recordId", "requestWikiLinks", "useWikiLinks", "wikiNeighbors", "renderWikiContext")
 
 _LOADER = r"""
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
@@ -248,6 +248,8 @@ def test_show_more_is_local_to_each_direction_and_late_updates_preserve_reader_a
       assert.equal(outgoing.querySelectorAll('a').length,5);assert.equal(incoming.querySelectorAll('a').length,5);
       const more=outgoing.querySelector('button');assert.equal(more.textContent,'Show 20 more links');
       emit(more,'click');assert.equal(outgoing.querySelectorAll('a').length,25);
+      // The button stays below the new links, so focus moves to the first of them.
+      assert.strictEqual(document.activeElement,outgoing.querySelectorAll('a')[5]);
       assert.equal(incoming.querySelectorAll('a').length,5);assert.equal(more.textContent,'Show 2 more links');
       emit(more,'click');assert.equal(outgoing.querySelectorAll('a').length,27);assert.equal(more.hidden,true);
       emit(incoming.querySelector('button'),'click');assert.equal(incoming.querySelectorAll('a').length,25);
@@ -362,7 +364,7 @@ def test_disposal_between_chunks_keeps_the_last_committed_maps_and_reader() -> N
 
 def test_same_article_refresh_retains_open_paged_focused_disclosure_and_new_article_resets_it() -> None:
     peers = _READER_PEERS + r"""
-      const dom$readingContext=new Element('div');document.activeElement=null;
+      const dom$readingContext=new Element('div');document.activeElement=null;function syncSheetAccessibility() {}
     """
     callbacks = _CALLBACKS + (
         "neighborIds", "relationCounts", "topicPeers", "semanticParent", "renderReaderContext", "renderInspector",
@@ -384,9 +386,9 @@ def test_same_article_refresh_retains_open_paged_focused_disclosure_and_new_arti
         assert.strictEqual(existing.parentElement,dom$readingNeighbors);assert.equal(snapshot(state),before);
         assert.strictEqual(dom$readingBody.children[0],math);assert.equal(dom$readingBody.scrollTop,137);
       }
-      const formal=dom$readingNeighbors.querySelector('.bp-reading-links');assert(formal);
-      assert(formal.textContent.includes('Prerequisites · 1'));assert(formal.textContent.includes('Used by · 0'));
-      assert(dom$readingNeighbors.children.indexOf(formal)<dom$readingNeighbors.children.indexOf(existing));
+      // The statement's own Uses / Used by lists carry its relations, so no strip precedes the retained concept links.
+      assert.equal(dom$readingNeighbors.querySelector('.bp-reading-links'),null);
+      assert.strictEqual(dom$readingNeighbors.children[0],existing);
       currentBundle={nodeId:'G',scope:'chapter'};renderInspector();
       assert.notStrictEqual(disclosure(),existing);assert.equal(existing.parentElement,null);assert.equal(disclosure().open,false);
       assert.equal(groups()[0].querySelectorAll('a').length,5);assert.equal(groups()[1].querySelectorAll('a').length,5);

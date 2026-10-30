@@ -58,9 +58,9 @@ or Unicode form. A blueprint file at exactly `dependencies.json` or
 
 The search index and graph breadcrumbs may carry `reading_title` (`inline-parts-v1`):
 captured title text and publisher-derived text, code and marked TeX parts.
-Only reading controls and breadcrumbs typeset these parts with the project's macros; map,
-inventory and search labels retain the title as typed. Unsupported labels
-stay literal. The original title, relations and status are unchanged.
+Reading, breadcrumbs and search typeset supported parts with project macros;
+inventory math uses bounded viewer-owned jobs. Map labels and unsupported or
+failed/stalled math stay literal. Original titles, relations and status are unchanged.
 
 Every render writes `publication.json`, schema `autoform-publication/v3`, with
 blueprint and Lean-source hashes (the Lean-source hash is empty when render

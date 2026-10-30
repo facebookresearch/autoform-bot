@@ -61,34 +61,46 @@ class State:
 #: Ordered most complete first; this is also the legend order.
 #:
 #: Only finished work is filled in; everything in progress is an outline, which
-#: keeps a chapter quiet when most of it is still open. The hues are Facebook's
-#: semantic set -- #31A24C green, #0064E0 blue, #F7B928 amber, #B0B3B8 grey --
-#: so that finished, actionable, blocked and untouched read at a glance without
-#: anyone learning a legend. Green tracks proof progress, blue marks what a
-#: contributor can pick up now, amber marks what nothing can start on. Violet
-#: marks a proof that compiles but rests on an open statement (a theorem whose
-#: Lean proof is still ``sorry``): filled because the work is done, never green
-#: so that it cannot be mistaken for a sorry-free proof.
+#: keeps a chapter quiet when most of it is still open. Finished fills are
+#: light tints, deepest for mathlib, so that done work does not outshout the
+#: blue a contributor can pick up next, and so that a card's title can stay in
+#: the page's ink on every fill; only the status word under the title (text)
+#: and the stroke carry the colour. A small mark of a finished state is filled
+#: with its stroke and is then the only status signal, so the four finished
+#: strokes keep 1.5:1 between neighbours: darkest for mathlib on light and
+#: brightest for it on dark, so more finished always reads stronger. Dark
+#: defined keeps 3:1 on a selected rail row too. The four greens span the
+#: lightness that keeps 3:1 on the map, so the filled amber and grey marks
+#: (not ready, inventory pending) each match some green's lightness and part
+#: from it by hue alone, which some colour-blind readers lose. The hues are
+#: Facebook's semantic set -- #31A24C green, #0064E0 blue, #F7B928 amber,
+#: #B0B3B8 grey -- so that finished, actionable, blocked and untouched read at
+#: a glance without anyone learning a legend. Green tracks proof progress, blue
+#: marks what a contributor can pick up now, amber marks what nothing can start
+#: on. Violet marks a proof that compiles but rests on an open statement (a
+#: theorem whose Lean proof is still ``sorry``): filled because the work is
+#: done, never green so that it cannot be mistaken for a sorry-free proof.
 #:
 #: Dark is not light dimmed: on #18191A a saturated fill closes up, so dark
-#: states are near-black panels with a bright stroke and brighter label. The
-#: outlined states take the #242526 surface, not the page's #18191A, so that
-#: on the page and on the explorer's map they still read as cards, and
-#: planned's grey stroke keeps 3:1 against both.
+#: states are near-black panels with a bright stroke and label (mathlib's
+#: stroke, the top of the ladder above, outshines its label). The outlined
+#: states take the #242526 surface, not the page's #18191A, so that on the
+#: page and on the explorer's map they still read as cards, and planned's grey
+#: stroke keeps 3:1 against both.
 STATES: tuple[State, ...] = (
-    State("mathlib", "in mathlib", "#1C5C33", "#134426", "#FFFFFF",
-          "#10281A", "#42B72A", "#8BE78B"),
-    State("fully_proved", "fully proved", "#31A24C", "#22773A", "#FFFFFF",
-          "#13301E", "#42B72A", "#8BE78B"),
-    State("proved", "proved", "#8ED4A2", "#22773A", "#0B2415",
-          "#122A1B", "#31A24C", "#6BD97F"),
-    State("defined", "defined", "#C3E9CE", "#22773A", "#0B2415",
-          "#122A1B", "#2B8F44", "#6BD97F"),
+    State("mathlib", "in mathlib", "#C6E6CF", "#123C20", "#134426",
+          "#10281A", "#B2F3BA", "#8BE78B"),
+    State("fully_proved", "fully proved", "#D7EEDD", "#1B5B2E", "#1E6B34",
+          "#13301E", "#4DD35F", "#8BE78B"),
+    State("proved", "proved", "#E5F4E9", "#277B3E", "#1E6B34",
+          "#122A1B", "#32AC4E", "#6BD97F"),
+    State("defined", "defined", "#EEF8F0", "#349D4D", "#1E6B34",
+          "#122A1B", "#288841", "#6BD97F"),
     State("conditional", "conditionally proved", "#E9DFFC", "#6B3FCF", "#2E1065",
           "#231A36", "#9F7AEA", "#D6C8FA"),
     State("can_prove", "ready to prove", "#FFFFFF", "#0064E0", "#0064E0",
           "#101F33", "#2D88FF", "#7FB8FF"),
-    State("stated", "statement formalized", "#FFFFFF", "#31A24C", "#22773A",
+    State("stated", "statement formalized", "#FFFFFF", "#2B8F44", "#22773A",
           "#242526", "#31A24C", "#E4E6EB"),
     State("can_state", "ready to state", "#FFFFFF", "#0082FB", "#0B4EA2",
           "#242526", "#2D88FF", "#E4E6EB"),
@@ -103,7 +115,7 @@ _BY_KEY = {state.key: state for state in STATES}
 #: Neutral statuses for module catalogs, which record inspection of existing
 #: Lean rather than formalization targets: checked once fully proved, pending
 #: until then. Each takes a grey stroke of its own, apart from planned's, so
-#: planned targets and both kinds of inventory stay apart in a status ring:
+#: planned targets and both kinds of inventory stay apart in a status bar:
 #: in each scheme any two of the three greys keep 1.5:1 between them, and
 #: on dark each keeps 3:1 against its fill and the page.
 INVENTORY_STATES: tuple[State, ...] = (

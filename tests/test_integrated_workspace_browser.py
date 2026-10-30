@@ -429,7 +429,7 @@ def _browse_contents(page: object, action: str) -> None:
 
 def _fit_graph(page: object) -> object:
     """Invoke the actual Fit/Recentre action without assuming every view fits."""
-    control = page.get_by_role("button", name=re.compile(r"^(?:Fit shown nodes|Recentre readable local cards)$"))
+    control = page.get_by_role("button", name=re.compile(r"^(?:Fit|Recentre) the map$"))
     playwright.expect(control).to_have_count(1)
     playwright.expect(control).to_be_visible()
     control.click()
@@ -437,12 +437,22 @@ def _fit_graph(page: object) -> object:
     return control
 
 
-def _focus_graph_node(page: object, target_id: str) -> object:
-    """Reach a map control with real keys, without relying on grid coordinates."""
-    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
-    if page.viewport_size["width"] <= 720 and handle.get_attribute("aria-expanded") == "true":
+def _peek_reader(page: object, handle: object) -> None:
+    """Tap the reader's handle down to its peek: a phone cycles half, full and peek, so two taps at most, then it must be closed."""
+    for _ in range(2):
+        if handle.get_attribute("aria-expanded") != "true":
+            break
         handle.click()
         _frames(page)
+    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+
+
+def _focus_graph_node(page: object, target_id: str) -> object:
+    """Reach a map control with real keys, without relying on grid coordinates."""
+    handle = page.get_by_role("button", name=re.compile(r", reading$"))
+    # A phone's taps cycle half, full and peek, so the map is clear once the reader is closed.
+    if page.viewport_size["width"] <= 720:
+        _peek_reader(page, handle)
     pending: list[tuple[str, ...]] = [()]
     visited: set[str] = set()
     while pending and len(visited) <= 32:
@@ -617,9 +627,10 @@ def _open(
     page.goto(site.route(node_id))
     page.locator(".bp-dag-integrated .bp-dag-stage").wait_for()
     playwright.expect(page.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
-    playwright.expect(page.locator(".bp-dag-search")).to_have_attribute(
-        "placeholder", f"Search {len(site.records):,} roadmap entries",
-    )
+    # The placeholder says what search matches; aria-busy clearing says its index has loaded.
+    search = page.locator(".bp-dag-search")
+    playwright.expect(search).to_have_attribute("placeholder", "Search titles and Lean names")
+    playwright.expect(search).not_to_have_attribute("aria-busy", "true")
     page.evaluate("() => window.__workspaceDocument = document")
     _frames(page)
 
@@ -714,7 +725,7 @@ def test_empty_authored_overview_opens_on_the_map_and_restores_its_reading_and_c
     # The same retained control is visible on the collapsible overview, but a
     # wide theorem reader intentionally hides it. Inspect that state by DOM,
     # while keeping native click/visibility assertions on the overview itself.
-    handle = page.locator('.bp-reading-pane > button[aria-label="Toggle mathematical reading"]')
+    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
     inner = page.locator(".bp-reading-pane .bp-dag-inspector-inner")
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     playwright.expect(inner).to_have_attribute("inert", "")
@@ -738,6 +749,11 @@ def test_empty_authored_overview_opens_on_the_map_and_restores_its_reading_and_c
     assert inner.get_attribute("inert") is None and inner.get_attribute("aria-hidden") is None
     playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Mathematical map")
     playwright.expect(handle).to_be_visible()
+    if width <= 720:
+        # A phone reader opens at half; the next tap covers the map and the one after returns to the peek, as the title says.
+        playwright.expect(handle).to_have_attribute("title", "Expand reading")
+        handle.click()
+        playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-sheet-full\b"))
     playwright.expect(handle).to_have_attribute("title", "Close reading")
     handle.click()
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
@@ -801,7 +817,11 @@ def test_far_right_genuine_math_menu_and_hover_submenu_stay_inside_the_workspace
         assert root["x"] + root["width"] <= width
         assert root["y"] + root["height"] <= page.viewport_size["height"]
         show = page.get_by_role("menuitem", name=re.compile(r"^Show Math As(?:\s*\u25ba)?$"))
-        show.hover()
+        # The right-click can leave the pointer over another item, such as Math Settings, whose wide submenu opens at once and,
+        # with no room to its right at 390px, covers this item's middle. Its far end stays clear.
+        item = show.bounding_box()
+        assert item is not None
+        show.hover(position={"x": item["width"] - 6, "y": item["height"] / 2})
         command = page.get_by_role("menuitem", name="TeX Commands", exact=True)
         playwright.expect(command).to_be_visible()
         assert menus.count() >= 2
@@ -918,17 +938,26 @@ def test_focused_library_link_survives_1000_to_1280_resize_and_canvas_repaints(
     page.set_viewport_size({"width": 1000, "height": 900})
     _open(page, site, workspace_runtime, _TARGET)
     _selected(page, _TARGET)
-    link = page.locator(".bp-dag-book")
+    link = page.locator(".bp-dag-breadcrumb .bp-dag-book")
+    playwright.expect(link).to_have_text("Home")
+    playwright.expect(link).to_have_attribute("href", site.url + "/index.html")
     link.focus()
-    link.evaluate("element => window.__focusedWorkspaceBook = element")
+    source = page.locator(".bp-reading-body > .bp-reading-source").text_content()
     before = _pixels(page)
     assert before["painted"] > 0
     page.set_viewport_size({"width": 1280, "height": 900})
     _frames(page)
-    assert page.evaluate("() => document.querySelector('.bp-dag-book') === __focusedWorkspaceBook && document.activeElement === __focusedWorkspaceBook") is True
+    playwright.expect(page.locator(".bp-dag-book")).to_have_count(1)
+    playwright.expect(link).to_have_attribute("href", site.url + "/index.html")
+    playwright.expect(link).to_be_focused()
+    link.evaluate("element => window.__focusedWorkspaceBook = element")
+    _frames(page)
+    assert link.evaluate("element => element === __focusedWorkspaceBook && document.activeElement === element") is True
     after = _pixels(page)
     assert (after["width"], after["height"]) != (before["width"], before["height"])
     assert after["painted"] > 0, "the resized canvas lost its painted graph"
+    assert page.locator(".bp-reading-body > .bp-reading-source").text_content() == source
+    assert page.url == site.route(_TARGET) and page.evaluate("document === __workspaceDocument") is True
 
 
 def test_closed_phone_reader_resized_to_desktop_is_visible_and_interactive(
@@ -937,8 +966,10 @@ def test_closed_phone_reader_resized_to_desktop_is_visible_and_interactive(
     page, site = workspace_page, workspace_site
     page.set_viewport_size({"width": 390, "height": 844})
     _open(page, site, workspace_runtime, _TARGET)
-    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    handle = page.get_by_role("button", name=re.compile(r", reading$"))
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
+    # Half, then full, then the peek.
+    handle.click()
     handle.click()
     inner = page.locator(".bp-reading-pane .bp-dag-inspector-inner")
     playwright.expect(inner).to_have_attribute("inert", "")
@@ -980,8 +1011,50 @@ def test_long_ancestor_labels_and_full_reading_heading_stay_within_their_panes(
     playwright.expect(heading).to_have_text(_DEEP_TITLE)
     assert heading.evaluate("heading => heading.scrollWidth <= heading.clientWidth + 1") is True
     assert page.locator(".bp-dag-head").evaluate("head => head.scrollWidth <= head.clientWidth + 1") is True
+    # A phone folds the middle ancestors into a named elision; the parent,
+    # current article and canonical Home remain native, visible context.
+    crumbs = page.locator(".bp-dag-breadcrumb li")
+    playwright.expect(crumbs.nth(0)).to_have_text("Home")
+    playwright.expect(crumbs.nth(0).locator("a")).to_have_attribute("href", site.url + "/index.html")
+    if width <= 720:
+        playwright.expect(crumbs).to_have_count(4)
+        hidden_names = _LIBRARY + " / " + _ANCESTOR
+        elision = crumbs.nth(1)
+        playwright.expect(elision).to_be_visible()
+        playwright.expect(elision).to_have_attribute("title", hidden_names)
+        assert elision.evaluate("item=>item.firstChild.nodeType===Node.TEXT_NODE&&item.firstChild.textContent==='…'")
+        playwright.expect(elision.locator(".bp-dag-sr-only")).to_have_count(1)
+        playwright.expect(elision.locator(".bp-dag-sr-only")).to_have_text(hidden_names)
+        parent, current = crumbs.nth(2), crumbs.nth(3)
+    else:
+        playwright.expect(crumbs).to_have_count(5)
+        playwright.expect(crumbs.nth(1)).to_have_text(_LIBRARY)
+        playwright.expect(crumbs.nth(2)).to_have_attribute("title", _ANCESTOR)
+        playwright.expect(crumbs.nth(2)).to_have_text(_ANCESTOR)
+        playwright.expect(page.locator(".bp-dag-breadcrumb .bp-dag-sr-only")).to_have_count(0)
+        playwright.expect(crumbs.nth(2)).to_be_visible()
+        parent, current = crumbs.nth(3), crumbs.nth(4)
+        # The trail has the row to itself, rather than a third of it.
+        trail_box, head_box = page.locator(".bp-dag-breadcrumb").bounding_box(), page.locator(".bp-dag-head").bounding_box()
+        assert trail_box is not None and head_box is not None and trail_box["width"] >= head_box["width"] / 2
+    playwright.expect(parent).to_have_text(_DEEP_TITLE)
+    playwright.expect(parent).to_be_visible()
+    playwright.expect(parent.locator("a")).to_have_attribute("href", site.route(site.records[_TARGET]["scope"]))
+    playwright.expect(current).to_have_text(_TARGET_TITLE)
+    playwright.expect(current).to_have_attribute("aria-current", "page")
+    playwright.expect(current.locator("a")).to_have_count(0)
+    if width == 1000:
+        # A tablet gives search and Topics the first row and filter, Browse and zoom the second, rather than three rows.
+        boxes = page.locator(".bp-dag-toolbar").evaluate(
+            "bar => [...bar.children].filter(child => child.getClientRects().length)"
+            ".map(child => { const box = child.getBoundingClientRect(); return [box.top, box.bottom]; })"
+        )
+        first, second = boxes[:2], boxes[2:]
+        assert max(top for top, _ in first) < min(bottom for _, bottom in first), boxes
+        assert max(top for top, _ in second) < min(bottom for _, bottom in second), boxes
+        assert min(top for top, _ in second) >= max(bottom for _, bottom in first), boxes
     if width <= 1100:
-        page.get_by_role("button", name="Toggle topic outline", exact=True).click()
+        page.get_by_role("button", name="Topics", exact=True).click()
     outline = page.locator(".bp-dag-navigation")
     playwright.expect(outline).to_be_visible()
     ancestor = outline.locator('[data-navigation-node-id="division-00"]')
@@ -996,23 +1069,33 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
 ) -> None:
     page, site = workspace_page, workspace_site
     _open(page, site, workspace_runtime)
+    # The map offers no way back to itself, and Browse marks only the list on screen, so at most one control reads as pressed.
+    pressed = page.get_by_role("group", name="Dependency explorer controls", exact=True).locator('[aria-pressed="true"]')
+    playwright.expect(pressed).to_have_count(0)
+    playwright.expect(page.get_by_role("button", name="Back to map", exact=True)).to_be_hidden()
     titles = {_focus_graph_region(page, area).locator(".bp-dag-node-title").inner_text() for area in _AREAS}
     assert titles == set(_AREAS)
     assert page.locator('.bp-dag-node[data-autoform-node-id="scope:appendix-a"]').count() == 0
     _browse_contents(page, "Source texts")
-    playwright.expect(page.locator(".bp-dag-inventory-head h2")).to_have_text("Source tracks")
+    playwright.expect(page.locator(".bp-dag-inventory-head h2")).to_have_text("Source texts")
+    playwright.expect(pressed).to_have_count(1)
+    playwright.expect(pressed).to_have_text("Source texts")
     titles = page.locator(".bp-dag-inventory-title").all_text_contents()
     assert sorted(titles) == sorted(_SOURCE_TITLES)
     assert site.records["source-notes"]["title"] not in titles
     _browse_contents(page, "All statements")
-    playwright.expect(page.locator(".bp-dag-inventory-head h2")).to_have_text("Results")
+    playwright.expect(page.locator(".bp-dag-inventory-head h2")).to_have_text("Statements")
+    playwright.expect(pressed).to_have_count(1)
+    playwright.expect(pressed).to_have_text("All statements")
     assert _TARGET_TITLE in page.locator(".bp-dag-inventory-title").all_text_contents()
     assert not set(_SOURCE_TITLES).intersection(page.locator(".bp-dag-inventory-title").all_text_contents())
     assert "Reading note" not in page.locator(".bp-dag-inventory-title").all_text_contents()
     page.get_by_role("button", name="Back to map", exact=True).click()
+    playwright.expect(pressed).to_have_count(0)
     _focus_graph_region(page, "Geometry").click()
     notes = _focus_graph_node(page, "scope:source-notes")
     playwright.expect(notes).to_be_focused()
+    playwright.expect(pressed).to_have_count(0)
     playwright.expect(notes.locator(".bp-dag-node-title")).to_have_text(site.records["source-notes"]["title"])
     assert page.url == site.route("roadmap")
 
@@ -1023,7 +1106,7 @@ def test_zero_edge_native_article_keeps_solo_focal_node_closed_topic_links_and_c
     page, site = workspace_page, workspace_site
     _open(page, site, workspace_runtime, _ISOLATED)
     node = _selected(page, _ISOLATED)
-    assert "no dependency edges" in node.get_attribute("aria-label")
+    assert "not linked to anything on this map" in node.get_attribute("aria-label")
     playwright.expect(page.locator(".bp-dag-node")).to_have_count(1)
     details = page.locator(".bp-reading-related-topics")
     playwright.expect(details).to_have_count(1)
@@ -1074,7 +1157,7 @@ def test_real_result_flag_drives_document_title_leaf_breadcrumb_and_result_count
                    and record.get("status") in enabled
                    for record in site.records.values())
     assert expected > 0
-    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text(f"{expected} results")
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text(f"{expected} statements")
 
 
 @pytest.mark.parametrize("node_id", ["scope:authored/main", "boundary:authored/main"])
@@ -1100,8 +1183,8 @@ def test_zero_count_authored_region_is_visible_and_does_not_invent_one_item(
     assert authored and all(node["member_count"] == 0 and node["status_counts"] == [] for node in authored)
     _open(page, site, workspace_runtime)
     region = _focus_graph_region(page, "Unstarted mathematics")
-    assert ", 0 items" in region.get_attribute("aria-label")
-    assert ", 1 item" not in region.get_attribute("aria-label")
+    assert ", 0 articles" in region.get_attribute("aria-label")
+    assert ", 1 article" not in region.get_attribute("aria-label")
     _browse_contents(page, "All statements")
     page.get_by_role("button", name="Back to map", exact=True).click()
     _focus_graph_region(page, "Unstarted mathematics")
@@ -1146,12 +1229,12 @@ def test_isolated_topic_link_opens_connected_result_and_its_real_edge(
     isolate_control = _focus_graph_node(page, _ISOLATED)
     playwright.expect(isolate_control).to_be_visible()
     assert _cluster_native_box(isolate_control)["hit"] is True
-    status = page.get_by_role("button", name=re.compile(r"^Status\b"))
+    status = page.get_by_role("button", name=re.compile(r"^Filter: "))
     status.click()
     playwright.expect(status).to_have_attribute("aria-expanded", "true")
     popover = page.locator(".bp-dag-filter-popover")
     playwright.expect(popover).to_be_visible()
-    isolated = popover.get_by_role("checkbox", name="Include items without edges", exact=True)
+    isolated = popover.get_by_role("checkbox", name="Show unlinked", exact=True)
     playwright.expect(isolated).to_be_visible()
     isolated.uncheck()
     playwright.expect(isolated).not_to_be_checked()
@@ -1163,7 +1246,7 @@ def test_isolated_topic_link_opens_connected_result_and_its_real_edge(
     for identifier in (_BASE, _TARGET):
         control = _focus_graph_node(page, identifier)
         playwright.expect(control).to_be_visible()
-        assert "no dependency edges" not in control.get_attribute("aria-label")
+        assert "not linked to anything on this map" not in control.get_attribute("aria-label")
     page.go_back()
     page.wait_for_url(site.route(_ISOLATED))
     _selected(page, _ISOLATED)
@@ -1182,8 +1265,8 @@ def test_isolated_topic_link_opens_connected_result_and_its_real_edge(
     main = page.locator(f'.bp-dag-node[data-autoform-node-id="{_TARGET}"]')
     playwright.expect(base).to_be_visible()
     playwright.expect(main).to_be_visible()
-    assert "no dependency edges" not in base.get_attribute("aria-label")
-    assert "no dependency edges" not in main.get_attribute("aria-label")
+    assert "not linked to anything on this map" not in base.get_attribute("aria-label")
+    assert "not linked to anything on this map" not in main.get_attribute("aria-label")
     _frames(page)
     playwright.expect(base).to_be_visible()
     playwright.expect(main).to_be_visible()
@@ -1221,6 +1304,40 @@ def test_isolated_topic_link_opens_connected_result_and_its_real_edge(
     _full_math(page, _ISOLATED, 2)
 
 
+def test_a_drag_from_a_map_card_pans_and_keeps_the_reading_and_a_tap_opens_it(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    page, site = workspace_page, workspace_site
+    _open(page, site, workspace_runtime, _TARGET)
+    _selected(page, _TARGET)
+    card = _focus_graph_node(page, _BASE)
+    url = page.url
+    before = card.bounding_box()
+    stage = page.locator(".bp-dag-stage").bounding_box()
+    assert before and stage
+    x, y = before["x"] + before["width"] / 2, before["y"] + before["height"] / 2
+    # Drag towards the middle of the map, so the card stays in view for the tap.
+    dx = 40 if x < stage["x"] + stage["width"] / 2 else -40
+    dy = 30 if y < stage["y"] + stage["height"] / 2 else -30
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + dx, y + dy, steps=5)
+    page.mouse.up()
+    _frames(page)
+    after = card.bounding_box()
+    assert after
+    assert abs(after["x"] - before["x"] - dx) < 1 and abs(after["y"] - before["y"] - dy) < 1
+    _selected(page, _TARGET)
+    assert page.url == url
+
+    page.mouse.move(x + dx, y + dy)
+    page.mouse.down()
+    page.mouse.move(x + dx + 3, y + dy + 4, steps=2)
+    page.mouse.up()
+    page.wait_for_url(site.route(_BASE))
+    _selected(page, _BASE)
+
+
 def test_native_reader_and_library_links_remain_soft_navigation(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:
@@ -1243,6 +1360,8 @@ def test_native_reader_and_library_links_remain_soft_navigation(
     page.wait_for_url(site.route(_OTHER))
     _selected(page, _OTHER)
     home = page.locator(".bp-dag-book")
+    playwright.expect(home).to_have_count(1)
+    playwright.expect(home).to_have_text("Home")
     playwright.expect(home).to_have_attribute("href", home_url)
     home.click()
     page.wait_for_url(home_url)
@@ -1251,6 +1370,8 @@ def test_native_reader_and_library_links_remain_soft_navigation(
     playwright.expect(source.locator("h1")).to_have_text(home_heading)
     playwright.expect(source).to_have_text(home_text)
     playwright.expect(source.locator(".bp-intro-book")).to_have_attribute("href", site.route("roadmap"))
+    playwright.expect(page.locator('.bp-dag-breadcrumb li[aria-current="page"]')).to_have_text("Home")
+    playwright.expect(page.locator(".bp-dag-book")).to_have_count(0)
     page.go_back()
     page.wait_for_url(site.route(_OTHER))
     _selected(page, _OTHER)
@@ -1261,6 +1382,85 @@ def test_native_reader_and_library_links_remain_soft_navigation(
     playwright.expect(_full_math(page)).to_contain_text(_LAST_SENTENCE)
     assert documents == [site.route(_TARGET).split("#", 1)[0]]
     assert page.evaluate("() => document === __workspaceDocument") is True
+
+
+@pytest.mark.parametrize("width", [1600, 1000, 390])
+def test_home_leads_back_from_an_area_opened_on_the_home_map(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int,
+) -> None:
+    page, site = workspace_page, workspace_site
+    page.set_viewport_size({"width": width, "height": 900 if width > 720 else 844})
+    home_url = site.url + "/index.html"
+    documents: list[str] = []
+    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
+    _routes(page, site.url, workspace_runtime, graph_client=True)
+    page.goto(home_url)
+    page.locator(".bp-dag-integrated .bp-dag-stage").wait_for()
+    playwright.expect(page.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
+    playwright.expect(page.locator(".bp-dag-search")).not_to_have_attribute("aria-busy", "true")
+    _frames(page)
+    crumbs = page.locator(".bp-dag-breadcrumb")
+    playwright.expect(crumbs.locator("li")).to_have_text(["Home"])
+    playwright.expect(crumbs.locator("a")).to_have_count(0)
+    page.evaluate("() => window.__workspaceDocument = document")
+    source = page.locator(".bp-reading-body > .bp-reading-source")
+    original_text = source.text_content()
+    original_cards = source.locator(".bp-thmwrapper").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId)")
+    region = _focus_graph_region(page, "Geometry")
+    original_ids = page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()")
+    region_matrix = region.evaluate("node=>{const m=new DOMMatrix(getComputedStyle(node).transform);return [m.a,m.d,m.e,m.f];}")
+    history_length = page.evaluate("history.length")
+    # An opened area keeps the home URL; its parent crumb returns to the whole map.
+    region.click()
+    playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(1)
+    assert page.url == home_url
+    playwright.expect(crumbs.locator("li")).to_have_text(["Home", "Geometry"])
+    playwright.expect(crumbs.locator("li").last).to_have_attribute("aria-current", "page")
+    _frames(page)
+    expanded_ids = page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()")
+    expanded_camera = page.locator(".bp-dag-node").first.evaluate("""node=>{
+      const m=new DOMMatrix(getComputedStyle(node).transform);return {id:node.dataset.autoformNodeId,matrix:[m.a,m.d,m.e,m.f]};
+    }""")
+    home = crumbs.get_by_role("link", name="Home", exact=True)
+    playwright.expect(home).to_have_attribute("href", home_url)
+    home.click()
+    playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(0)
+    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id="region:Geometry"]')).to_be_focused()
+    assert page.url == home_url
+    playwright.expect(crumbs.locator("li")).to_have_text(["Home"])
+    assert page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()") == original_ids
+    page.wait_for_function("""expected=>{
+      const node=document.querySelector('.bp-dag-node[data-autoform-node-id="region:Geometry"]');
+      if(!node)return false;const m=new DOMMatrix(getComputedStyle(node).transform);
+      return [m.a,m.d,m.e,m.f].every((value,index)=>Math.abs(value-expected[index])<=(index<2?.0001:1));
+    }""", arg=region_matrix)
+    assert page.evaluate("history.length") == history_length + 2
+    page.go_back()
+    playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(1)
+    playwright.expect(crumbs.locator("li")).to_have_text(["Home", "Geometry"])
+    # The breadcrumb updates before asynchronous history/camera restoration.
+    # Wait for the saved native camera, not an arbitrary sleep or a weaker ID set.
+    page.wait_for_function("""expected=>{
+      const node=Array.from(document.querySelectorAll('.bp-dag-node')).find(node=>node.dataset.autoformNodeId===expected.id);
+      if(!node)return false;const m=new DOMMatrix(getComputedStyle(node).transform);
+      return [m.a,m.d,m.e,m.f].every((value,index)=>Math.abs(value-expected.matrix[index])<=(index<2?.0001:1));
+    }""", arg=expanded_camera)
+    _frames(page)
+    assert page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()") == expanded_ids
+    page.go_forward()
+    playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(0)
+    playwright.expect(crumbs.locator("li")).to_have_text(["Home"])
+    page.wait_for_function("""expected=>{
+      const node=document.querySelector('.bp-dag-node[data-autoform-node-id="region:Geometry"]');
+      if(!node)return false;const m=new DOMMatrix(getComputedStyle(node).transform);
+      return [m.a,m.d,m.e,m.f].every((value,index)=>Math.abs(value-expected[index])<=(index<2?.0001:1));
+    }""", arg=region_matrix)
+    _frames(page)
+    assert page.locator(".bp-dag-node").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId).sort()") == original_ids
+    assert source.text_content() == original_text
+    assert source.locator(".bp-thmwrapper").evaluate_all("nodes=>nodes.map(node=>node.dataset.autoformNodeId)") == original_cards
+    assert page.evaluate("() => document === __workspaceDocument") is True
+    assert documents == [home_url] and page.url == home_url
 
 
 def test_verified_concept_links_have_native_direction_navigation_back_and_known_empty_coverage(
@@ -1330,7 +1530,8 @@ def test_verified_concept_links_have_native_direction_navigation_back_and_known_
     # The already-verified layer makes its empty disclosure genuinely known.
     assert not any(_BASE in pair for pair in site.wiki_pairs)
     base = page.locator(f'.bp-reading-body .bp-thmwrapper[data-autoform-node-id="{_BASE}"]')
-    permalink = base.get_by_role("link", name="#", exact=True)
+    # The permalink shows "#" and is named for the statement it links to.
+    permalink = base.get_by_role("link", name=re.compile(r"^Link to "))
     playwright.expect(permalink).to_have_attribute("href", site.route(_BASE))
     permalink.click()
     page.wait_for_url(site.route(_BASE))
@@ -1470,7 +1671,8 @@ def test_authored_concept_families_pack_real_owner_cards_and_keep_native_focus_m
     for letter, identifier in owners.items():
         control = _cluster_readable_owner(page, identifier)
         box = _cluster_native_box(control)
-        assert box["title"] == f"Identity {letter.upper()}" and box["meta"] == "2 items"
+        # A topic card names its fully proved share in the redesign, not a bare item count.
+        assert box["title"] == f"Identity {letter.upper()}" and box["meta"] == "1 of 2 fully proved"
         _cluster_capture(page, width, f"readable-{letter}")
 
     control = _cluster_readable_owner(page, owners["c"])
@@ -1482,7 +1684,7 @@ def test_authored_concept_families_pack_real_owner_cards_and_keep_native_focus_m
     playwright.expect(page.locator(".bp-reading-body h1")).to_have_text("Identity C")
     target_card = page.locator(f'.bp-reading-body .bp-thmwrapper[data-autoform-node-id="{target}"]')
     playwright.expect(target_card).to_have_count(1)
-    permalink = target_card.get_by_role("link", name="#", exact=True)
+    permalink = target_card.get_by_role("link", name=re.compile(r"^Link to "))
     playwright.expect(permalink).to_have_attribute("href", site.route(target))
     permalink.click()
     page.wait_for_url(site.route(target))
@@ -1526,7 +1728,8 @@ def test_graph_first_browse_is_contextual_keyboard_closable_and_returns_to_the_s
     documents: list[str] = []
     page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
     _open(page, site, workspace_runtime)
-    handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
+    # The redesign's handle names the page it opens, so its accessible name ends ", reading".
+    handle = page.get_by_role("button", name=re.compile(r", reading$"))
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     stage = page.locator(".bp-dag-stage")
     playwright.expect(stage).to_be_visible()
@@ -1562,7 +1765,7 @@ def test_graph_first_browse_is_contextual_keyboard_closable_and_returns_to_the_s
     rows = page.locator(".bp-dag-inventory-row")
     playwright.expect(rows).to_have_count(1)
     assert set(rows.evaluate_all("nodes => nodes.map(node => node.dataset.inventoryNodeId)")) == expected
-    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 result")
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 statement")
     assert page.url == site.route(scope["id"])
     page.get_by_role("button", name="Back to map", exact=True).click()
     playwright.expect(stage).to_be_visible()
@@ -1655,10 +1858,7 @@ def test_rich_workspace_region_and_full_reader_screenshots(
     _frames(page)
     assert _pixels(page)["painted"] > 0
     if width <= 720:
-        handle = page.get_by_role("button", name="Toggle mathematical reading", exact=True)
-        if handle.get_attribute("aria-expanded") == "true":
-            handle.click()
-            _frames(page)
+        _peek_reader(page, page.get_by_role("button", name=re.compile(r", reading$")))
     page.evaluate("() => document.fonts.ready")
     output = os.environ.get("AUTOFORM_UI_SCREENSHOT_DIR")
     directory = Path(output) if output else None

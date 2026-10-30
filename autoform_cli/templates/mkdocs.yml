@@ -36,8 +36,19 @@ theme:
     - navigation.top
     - toc.follow
     - search.suggest
+  # The site opens in the reader's own light or dark setting, and the sun or
+  # moon in the header switches it; Material remembers the choice.
   palette:
-    scheme: slate
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Use dark theme
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Use light theme
 
 plugins:
   - search

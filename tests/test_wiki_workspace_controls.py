@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import json
 import shutil
 import subprocess
 from pathlib import Path
 
+import html5lib
 import pytest
+
+from autoform_cli import render, status
+from autoform_cli.graph import Graph, Node, load_graph
 
 _NODE = shutil.which("node")
 _CLIENT = Path(__file__).resolve().parents[1] / "autoform_cli/assets/blueprint-dag.js"
@@ -25,9 +31,9 @@ function original(name) {
   }
   assert.fail('Unparseable production callback: '+name);
 }
-const names=['element','readingLabel','button','recordId','semanticParent','topicPeers','neighborIds','neighborhood',
+const names=['element','readingLabel','button','bindNodeLink','recordId','semanticParent','topicPeers','neighborIds','neighborhood',
   'relationCounts','renderReaderContext','inventoryNodes','sourceNodes','inCurrentScope'];
-const constants=['NODE_W','plural'].map(name=>{
+const constants=['NODE_W','plural','num','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
 }).join('\n');
@@ -41,6 +47,7 @@ _PEERS = r"""
 class Element {
   constructor(tag) {this.tagName=tag.toUpperCase();this.children=[];this.listeners=new Map();this.attrs=new Map();this.text='';}
   get textContent() {return this.text+this.children.map(child=>child.textContent).join('');}
+  get firstChild() {return this.children[0]||null;}
   set textContent(value) {this.text=String(value);this.children=[];}
   setAttribute(name,value) {this.attrs.set(name,String(value));}
   getAttribute(name) {return this.attrs.has(name)?this.attrs.get(name):null;}
@@ -75,6 +82,7 @@ function click(link,options={}) {
   callback(event);return event;
 }
 function snapshot() {return JSON.stringify({nodes:sharedIndex.nodes,relations:sharedIndex.relations,contextGraph});}
+function syncSheetAccessibility() {}
 """
 
 _CONTROL_PEERS = r"""
@@ -90,17 +98,20 @@ class Element {
     this.style={setProperty(name,value){this[name]=String(value);}};
   }
   get textContent() {return this.text+this.children.map(child=>child.textContent).join('');}
+  get firstChild() {return this.children[0]||null;}
   set textContent(value) {this.text=String(value);this.children=[];}
   setAttribute(name,value) {this.attrs.set(name,String(value));}
   getAttribute(name) {return this.attrs.has(name)?this.attrs.get(name):null;}
   removeAttribute(name) {this.attrs.delete(name);}
-  appendChild(child) {child.parentElement=this;this.children.push(child);return child;}
+  appendChild(child) {if(child.parentElement)child.remove();child.parentElement=this;this.children.push(child);return child;}
   remove() {
     const parent=this.parentElement;if(!parent)return;
     parent.children=parent.children.filter(child=>child!==this);this.parentElement=null;
   }
   insertBefore(child,before) {child.parentElement=this;this.children.splice(this.children.indexOf(before),0,child);}
-  replaceChildren(...children) {this.children=[];this.text='';children.forEach(child=>this.appendChild(child));}
+  // As the DOM does, a string argument becomes a text node.
+  replaceChildren(...children) {this.children.forEach(child=>child.parentElement=null);this.children=[];this.text='';this.append(...children);}
+  append(...children) {children.forEach(child=>this.appendChild(typeof child==='string'?document.createTextNode(child):child));}
   contains(node) {return node===this||this.children.some(child=>child.contains(node));}
   addEventListener(type,callback) {
     const callbacks=this.listeners.get(type)||[];callbacks.push(callback);this.listeners.set(type,callbacks);
@@ -108,7 +119,7 @@ class Element {
   all() {return this.children.flatMap(child=>[child,...child.all()]);}
   querySelectorAll(selector) {
     return this.all().filter(child=>{
-      const tag=selector.match(/^[a-z][a-z0-9]*/i),kind=selector.match(/^\.([\w-]+)/);
+      const tag=selector.match(/^[a-z][a-z0-9-]*/i),kind=selector.match(/^\.([\w-]+)/);
       if(tag&&child.tagName!==tag[0].toUpperCase())return false;
       if(kind&&!(child.className||'').split(/\s+/).includes(kind[1]))return false;
       return Array.from(selector.matchAll(/\[([\w-]+)(?:="([^"]*)")?\]/g)).every(([,key,expected])=>{
@@ -142,16 +153,15 @@ var currentBundle={nodeId:'chapter',scope:'chapter',title:'Authored topic',url:'
 var instance=1,trail=[],view={},family,data={title:'Authored topic',nodes:[],edges:[]};
 var mapAllowed=true,ui$mapAllowed=true,ui$mode='graph',ui$selectedStatuses=new Set(['planned']),ui$showIsolated=true;
 var presentStatuses=['planned'],ui$relationIds=new Set(['F']),ui$overviewGroup=null,ui$area=null;
-var ui$wikiView=null,sceneData=null,scene=null;
+var ui$wikiView=null,ui$mathJob=null,sceneData=null,scene=null;
 function getComputedStyle() {return {fontFamily:'sans-serif'};}
 function globalListen(target,type,callback) {target.addEventListener(type,callback);}
 class MutationObserver {observe(){}}
-function trailList() {return new Element('ol');}
 function renderStatusFields(){}function renderNavigation(){}function calculateActive(){}
 function compactRegions(){return false;}function syncNavigationSelection(){}
 function ensureGlobalSearch(){}function fit(){}function revealAll(){}function openResults(){}function focusNodeControl(){}
 function pointerDown(){}function pointerMove(){}function pointerUp(){}function resize(){}
-function syncSheetAccessibility(){}function schedule(){}function remember(){}
+function syncSheetAccessibility(){}function schedule(){}function remember(){}function sheetLayout(){return false;}
 function closeSearch(){}function setFilters(){}
 // Scene/shelf rendering is outside these toolbar-control assertions.
 function geometry(){return {};}function renderShelves(){}
@@ -176,8 +186,8 @@ def _run(body: str) -> None:
 
 def _run_controls(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
-    script += "const controls=['element','button','readingLabel','safeHref','buildShell','bindEvents','setBrowse','syncControls','currentOverviewGroup',"
-    script += "'renderBreadcrumb','routeTrail','semanticParent','refreshReadingLabels','sourceNodes','inCurrentScope'].map(original).join('\\n');\n"
+    script += "const controls=['element','button','readingLabel','bindNodeLink','safeHref','buildShell','bindEvents','setBrowse','syncControls','wrapMapKey','currentOverviewGroup',"
+    script += "'trailList','renderBreadcrumb','routeTrail','semanticParent','refreshReadingLabels','sourceNodes','inCurrentScope'].map(original).join('\\n');\n"
     script += "const start=source.indexOf('    var dom$announcement,');assert(start>=0);\n"
     script += "const domDeclarations=source.slice(start,source.indexOf(';',start)+1);\n"
     program = _CONTROL_PEERS + "\n" + body
@@ -199,18 +209,52 @@ def test_toolbar_keeps_browse_choices_nested_and_back_visible_only_outside_the_g
       assert.equal(dom$sourcesMode.textContent,'Source texts');
       assert.equal(dom$listMode.textContent,'Statements in this topic');
       assert.equal(typeof dom$regionsMode,'undefined');
-      assert(!toolbar.all().some(node=>node.tagName==='BUTTON'&&['Map','Results','Sources','Regions'].includes(node.textContent)));
+      assert(!toolbar.all().some(node=>node.tagName==='BUTTON'&&['Map','Results','Sources','Regions','Areas'].includes(node.textContent)));
       assert.equal(dom$graphMode.textContent,'Back to map');assert.equal(dom$graphMode.hidden,true);
+      // Browse marks only the list on screen, so on the map no control reads as pressed and in a list exactly one does.
+      const pressedNow=()=>toolbar.all().filter(node=>node.getAttribute('aria-pressed')==='true');
+      assert.deepEqual(pressedNow(),[]);
       assert.equal(dom$stage.hidden,false);assert.equal(dom$inventory.hidden,true);
       currentBundle.scope='roadmap';ui$mode='list';ui$mapAllowed=false;syncControls();
       assert.equal(dom$listMode.textContent,'All statements');assert.equal(dom$graphMode.hidden,false);
+      assert.deepEqual(pressedNow(),[dom$listMode]);
       assert.equal(dom$graphMode.disabled,true);assert.equal(dom$stage.hidden,true);assert.equal(dom$inventory.hidden,false);
       ui$mapAllowed=true;ui$mode='sources';syncControls();
       assert.equal(dom$graphMode.disabled,false);assert.equal(dom$graphMode.hidden,false);
-      assert.equal(dom$inventory.querySelector('h2').textContent,'Source tracks');
-      ui$mode='graph';syncControls();assert.equal(dom$graphMode.hidden,true);
+      assert.equal(dom$inventory.querySelector('h2').textContent,'Source texts');assert.deepEqual(pressedNow(),[dom$sourcesMode]);
+      ui$mode='graph';syncControls();assert.equal(dom$graphMode.hidden,true);assert.deepEqual(pressedNow(),[]);
     """)
 
+
+
+def test_a_collection_page_ends_its_own_trail_and_never_stands_between_crumbs() -> None:
+    _run_controls(r"""
+      const add=(id,parent,extra={})=>records.set(id,Object.assign({id,scope:id,parent,title:id.toUpperCase(),
+        route:'https://example.test/'+id+'/index.html'},extra));
+      add('roadmap',null);add('area','roadmap');add('shelf','area',{navigation:'collection'});add('topic','shelf');
+      add('shelf/thm','shelf',{scope:'shelf',result:true});
+      const crumbs=(nodeId,scope)=>routeTrail({nodeId,scope,graph:{view:{}}}).map(entry=>[entry.label,entry.url||null]);
+      // Dynamics/MathlibExt's trail ended at Dynamics while its header said MathlibExt. Every trail starts at the site's home.
+      const home=['Home','https://example.test/index.html'];
+      assert.deepEqual(crumbs('shelf','shelf'),[home,['ROADMAP','https://example.test/roadmap/index.html'],
+        ['AREA','https://example.test/area/index.html'],['SHELF',null]]);
+      assert.deepEqual(crumbs('shelf/thm','shelf'),[home,['ROADMAP','https://example.test/roadmap/index.html'],
+        ['AREA','https://example.test/area/index.html'],['SHELF','https://example.test/shelf/index.html'],['SHELF/THM',null]]);
+      assert.deepEqual(crumbs('topic','topic').map(entry=>entry[0]),['Home','ROADMAP','AREA','TOPIC'],'A topic inside a collection skips it');
+    """)
+
+
+def test_the_map_key_names_concept_links_once_and_only_when_the_map_draws_them() -> None:
+    _run_controls(r"""
+      var byId=new Map();function wikiOwnerVisible(){return true;}
+      const key=()=>dom$mapKey.children.map(node=>node.textContent);
+      // "Partial link coverage" printed on maps with no concept links, where it read as missing dependencies.
+      ui$wikiView={availability:'partial'};syncControls();assert.deepEqual(key(),[]);
+      data.$wikiEdges=[{source:'a',target:'b'}];syncControls();assert.deepEqual(key(),['Concept links, some pages unread']);
+      // "Local concept links · All links in articles" read as two kinds of line; one entry now says how many this map draws.
+      sceneData=data;scene={$wikiRoutes:{omitted:28,total:40}};ui$wikiView={availability:'complete'};syncControls();
+      assert.deepEqual(key(),['Concept links: 12 of 40 on this map']);
+    """)
 
 def test_browse_toggle_and_escape_close_with_focus_return_from_the_actual_menu() -> None:
     _run_controls(r"""
@@ -391,24 +435,46 @@ def test_source_free_direct_statement_button_handles_keyboard_generated_click_wi
     """)
 
 
-def test_library_control_targets_deployment_home_and_preserves_native_modified_clicks() -> None:
+def test_first_breadcrumb_targets_deployment_home_and_preserves_native_modified_clicks() -> None:
     _run_controls(r"""
       homeURL='https://example.test/deployed/project/index.html';
       sharedIndex=null;records.clear();
-      buildShell();bindEvents();
-      assert.equal(dom$homeLink.href,homeURL,
-        'Library must lead to site home even when the index is unavailable and no outline can retarget it');
+      renderBreadcrumb();const home=dom$breadcrumb.querySelector('.bp-dag-book');
+      assert(home);assert.equal(home.href,homeURL,
+        'Home must lead to the deployment home even when the index is unavailable');
+      assert.strictEqual(home.parentElement,dom$breadcrumb.firstChild.firstChild);
+      assert.equal(host.querySelectorAll('.bp-dag-book').length,1,'Home must have one real entrance, not a duplicate widget');
       for(const settings of [{ctrlKey:true},{metaKey:true},{shiftKey:true},{altKey:true},{button:1},{button:2},{defaultPrevented:true}]) {
-        const count=navigationCalls.length,event=emit(dom$homeLink,'click',Object.assign({button:0},settings));
+        const count=navigationCalls.length,event=emit(home,'click',Object.assign({button:0},settings));
         assert.equal(event.defaultPrevented,Boolean(settings.defaultPrevented));
         assert.equal(navigationCalls.length,count);
       }
-      const event=emit(dom$homeLink,'click',{button:0});assert.equal(event.defaultPrevented,true);
-      assert.equal(navigationCalls.at(-1).url,homeURL);assert.equal(navigationCalls.at(-1).options.history,'push');
+      const event=emit(home,'click',{button:0});assert.equal(event.defaultPrevented,true);
+      assert.equal(navigationCalls.at(-1).url,homeURL);
+      assert.deepEqual(navigationCalls.at(-1).options,{history:'push',focus:true,mapFirst:false});
       currentBundle={nodeId:null,scope:'roadmap',title:'Authored library',url:homeURL,graph:{view:{}}};
       const entries=routeTrail(currentBundle);
       assert.equal(entries.length,1,'The site home must not pretend to be inside the roadmap trail');
       assert.equal(entries[0].url,null,'The only home crumb is current, not a link to another view');
+      renderBreadcrumb();assert.equal(dom$breadcrumb.querySelectorAll('.bp-dag-book').length,0);
+    """)
+
+
+def test_home_leads_back_in_place_from_an_area_or_group_opened_on_the_home_map() -> None:
+    _run_controls(r"""
+      var ui$scopeOverview=false,ui$active=[{id:'region:Geometry',_region:'Geometry'},{id:'region:Analysis',_region:'Analysis'}];
+      const centered=[];function centerIfHidden(node){centered.push(node.id);}
+      currentBundle={nodeId:null,scope:'roadmap',title:'Authored library',url:homeURL,graph:{view:{}}};
+      const crumbs=()=>routeTrail(currentBundle).map(entry=>[entry.label,entry.url||null]);
+      assert.deepEqual(crumbs(),[['Home',null]]);
+      // Opening an area keeps the home URL; Home must lead back to the whole map in place.
+      ui$area='Geometry';assert.deepEqual(crumbs(),[['Home',homeURL],['Geometry',null]]);
+      renderBreadcrumb();const home=dom$breadcrumb.querySelector('.bp-dag-book');assert.equal(home.href,homeURL);
+      const calls=navigationCalls.length,event=emit(home,'click',{button:0});
+      assert.equal(event.defaultPrevented,true);assert.equal(navigationCalls.length,calls,'Home returns in place');
+      assert.deepEqual(modes.at(-1),{mode:'regions',push:true});assert.deepEqual(centered,['region:Geometry']);
+      ui$area=null;ui$scopeOverview=true;ui$overviewGroup='g1';data._scopeOverview={groups:[{key:'g1',title:'Group one'}]};
+      assert.deepEqual(crumbs(),[['Home',homeURL],['Group one',null]]);
     """)
 
 
@@ -471,22 +537,113 @@ def test_structural_peers_never_pad_the_focal_graph_or_acquire_dependency_edges(
     """)
 
 
-def test_reader_keeps_exact_weighted_relations_separate_from_closed_structural_details() -> None:
+def _weighted_publisher_fixture(tmp_path: Path) -> tuple[Graph, dict, dict, dict]:
+    # Direct Node tuples model original weighted pairs at this private boundary.
+    # load_graph de-duplicates ordinary Markdown references; these multiplicities
+    # are synthetic arithmetic coverage, not a source-parser or Lean proof claim.
+    nodes = {
+        "A": Node("A", "A", tmp_path / "A.md", (), declaration="def"),
+        "F": Node("F", "F", tmp_path / "F.md", ("A",),
+                  statement_dependencies=("A", "A"), proof_dependencies=("A", "A", "A"), declaration="theorem"),
+        "B": Node("B", "B", tmp_path / "B.md", ("F",), proof_dependencies=("F",) * 4, declaration="theorem"),
+    }
+    graph = Graph(tmp_path, nodes)
+    numbers = {"A": "Definition 1", "F": "Theorem 1", "B": "Theorem 2"}
+    links = {key: "https://example.test/chapter/" + key + ".html" for key in nodes}
+    used_by = {key: [other.id for other in nodes.values() if key in other.dependencies] for key in nodes}
+    return graph, numbers, links, used_by
+
+
+def test_reader_keeps_exact_weighted_relations_separate_from_closed_structural_details(tmp_path: Path) -> None:
+    graph, numbers, routes, used_by = _weighted_publisher_fixture(tmp_path)
+    before = copy.deepcopy((graph, numbers, routes, used_by))
+    markup = render._dependency_disclosure(
+        graph.nodes["F"], graph=graph, statuses=status.derive(graph), numbers=numbers, used_by=used_by, links=routes,
+    )
+    tree = html5lib.parseFragment(markup, namespaceHTMLElements=False)
+    details = next(tree.iter("details"))
+    assert details.get("class") == "bp-dependencies" and details.get("open") is None
+    assert "".join(next(tree.iter("summary")).itertext()) == "Uses 1 · Used by 1"
+    labels = ["".join(node.itertext()) for node in tree.iter("span") if node.get("class") == "bp-key"]
+    assert labels == ["Statement uses", "Used by"], "The shared prerequisite stays in one typed row, not a duplicate panel"
+    incoming = [node for node in tree.iter("a") if node.get("href") == routes["A"]]
+    outgoing = [node for node in tree.iter("a") if node.get("href") == routes["B"]]
+    assert len(incoming) == 2 and len(outgoing) == 1
+    for link in incoming:
+        assert "".join(link.itertext()) == "Definition 1 (A)"
+        assert link.get("aria-label") is None, "Counts must describe, not replace, the naturally rendered name"
+        assert link.get("title") == "2 statement dependencies, 3 proof dependencies", (
+            "Suppressed proof-only rows must retain their original proof information"
+        )
+    assert "".join(outgoing[0].itertext()) == "Theorem 2 (B)"
+    assert outgoing[0].get("aria-label") is None
+    assert outgoing[0].get("title") == "4 proof dependencies"
+    assert (graph, numbers, routes, used_by) == before
+    # The same captured pair counts accompany the actual closed, unweighted
+    # structural controls. The redesign adds no second relation panel.
     _run(r"""
       const a=record('A','chapter'),b=record('B','chapter');configure([focus,a,b],[['A','F',2,3],['F','B',0,4]]);
       const before=snapshot();renderReaderContext();
-      const relation=marked(dom$readingNeighbors,'bp-reading-links'),details=marked(dom$readingNeighbors,'bp-reading-related-topics');
-      assert(relation);assert(details);assert.equal(details.tagName,'DETAILS');assert.equal(details.getAttribute('open'),null);
+      assert.equal(marked(dom$readingNeighbors,'bp-reading-links'),undefined);
+      const details=marked(dom$readingNeighbors,'bp-reading-related-topics');
+      assert(details);assert.equal(details.tagName,'DETAILS');assert.equal(details.getAttribute('open'),null);
+      assert.deepEqual(dom$readingNeighbors.children,[details]);
       assert.equal(details.children[0].tagName,'SUMMARY');assert.equal(details.children[0].textContent,'More in '+owner.title);
-      assert(relation.textContent.includes('Prerequisites · 1'));assert(relation.textContent.includes('Used by · 1'));
-      const [incoming,outgoing]=links(relation);
-      assert.equal(incoming.href,a.route);assert.equal(outgoing.href,b.route);
-      assert.equal(incoming.getAttribute('aria-label'),'A · 2 statement dependencies, 3 proof dependencies');
-      assert.equal(outgoing.getAttribute('aria-label'),'B · 4 proof dependencies');
       assert.deepEqual(links(details).map(link=>link.href),[a.route,b.route]);
       assert(links(details).every(link=>link.getAttribute('aria-label')===null),'Structural links cannot claim dependency weights');
       assert.equal(snapshot(),before);
     """)
+
+
+def test_dependency_annotation_preserves_validated_title_parts_and_default_reference_bytes(tmp_path: Path) -> None:
+    graph, numbers, routes, used_by = _weighted_publisher_fixture(tmp_path)
+    default = render._node_references(["A"], graph=graph, statuses=status.derive(graph), numbers=numbers, links=routes)
+    assert default == '<a class="bp-ref bp-ref-can_state" href="https://example.test/chapter/A.html">Definition 1 (A)</a>'
+    graph.nodes["A"] = dataclasses.replace(graph.nodes["A"], title=r'Groups $x$ and `$literal$` "quoted" & rings')
+    before = copy.deepcopy(graph)
+    kwargs = {"graph": graph, "statuses": status.derive(graph), "numbers": numbers, "links": routes}
+    plain = html5lib.parseFragment(render._node_references(["A"], **kwargs), namespaceHTMLElements=False)
+    annotated_markup = render._node_references(["A"], **kwargs, relation_node=graph.nodes["F"])
+    marked = html5lib.parseFragment(annotated_markup, namespaceHTMLElements=False)
+    original, annotated = next(plain.iter("a")), next(marked.iter("a"))
+    assert original.get("aria-label") is None and original.get("title") is None
+    assert original.get("href") == annotated.get("href") == routes["A"]
+    assert annotated.get("aria-label") is None
+    assert annotated.get("title") == "2 statement dependencies, 3 proof dependencies"
+    assert set(annotated.attrib) == {"class", "href", "title"}
+    assert "$x$" not in annotated.get("title") and "$literal$" not in annotated.get("title")
+    assert "&quot;quoted&quot; &amp; rings" in annotated_markup
+    assert "".join(original.itertext()) == "".join(annotated.itertext())
+    assert [node.text for node in original.iter("code")] == [node.text for node in annotated.iter("code")] == ["$literal$"]
+    assert [node.text for node in original.iter("span")] == [node.text for node in annotated.iter("span")] == [r"\(x\)"]
+    assert all(node.tag not in {"script", "img", "iframe"} for node in marked.iter())
+    assert graph == before
+
+
+def test_valid_source_shared_statement_and_proof_reference_exposes_both_original_kinds(tmp_path: Path) -> None:
+    roadmap = tmp_path / "roadmap"
+    roadmap.mkdir()
+    (roadmap / "README.md").write_text("# Chapter\n\n- [A](A.md)\n- [F](F.md)\n", encoding="utf-8")
+    (roadmap / "A.md").write_text("# A\n\nAn authored base.\n", encoding="utf-8")
+    (roadmap / "F.md").write_text(
+        "# F\n\nAn authored result.\n\n## Depends on\n\n- [A](A.md)\n- [A again](A.md)\n\n"
+        "## Proof depends on\n\n- [A](A.md)\n- [A again](A.md)\n", encoding="utf-8",
+    )
+    graph = load_graph(tmp_path)
+    assert graph.nodes["F"].statement_dependencies == ("A",) and graph.nodes["F"].proof_dependencies == ("A",)
+    before = copy.deepcopy(graph)
+    markup = render._dependency_disclosure(
+        graph.nodes["F"], graph=graph, statuses=status.derive(graph), numbers={"A": "Definition 1", "F": "Theorem 1"},
+        used_by={"A": ["F"], "F": []}, links={"A": "A.html", "F": "F.html"},
+    )
+    tree = html5lib.parseFragment(markup, namespaceHTMLElements=False)
+    link = next(tree.iter("a"))
+    assert link.get("href") == "A.html"
+    assert "".join(link.itertext()) == "Definition 1 (A)"
+    assert link.get("aria-label") is None
+    assert link.get("title") == "1 statement dependency, 1 proof dependency"
+    assert "Proof uses" not in "".join(tree.itertext())
+    assert graph == before
 
 
 def test_peer_links_and_browse_owner_preserve_modifiers_and_dispatch_canonical_reading_intent() -> None:
