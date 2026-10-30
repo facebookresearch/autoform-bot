@@ -364,7 +364,8 @@
   function routePath(points, radius) {
     var pts = [];
     for (var i = 0; i < points.length; i += 2) { var at = toScreen(points[i], points[i + 1]); pts.push([cx(at[0]), cy(at[1])]); }
-    var r = radius * camera.k, d = "M" + pts[0][0].toFixed(1) + "," + pts[0][1].toFixed(1);
+    // Corners stay tight when the camera is far closer than the route's own level.
+    var r = Math.min(radius * camera.k, 14), d = "M" + pts[0][0].toFixed(1) + "," + pts[0][1].toFixed(1);
     for (i = 1; i < pts.length - 1; i++) {
       var p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1];
       var l1 = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]), l2 = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
@@ -395,7 +396,8 @@
   function drawRoutes(record, labelled) {
     var routes = routesAt.get(record.id) || [];
     routes.forEach(function (route) {
-      var involved = [state.focusPart, state.hoverPart].some(function (id) { return id && (route.from === id || route.to === id); });
+      // With a result selected, its part's own links to its neighbours are beside the point; the pointer still shows them.
+      var involved = [state.selected ? null : state.focusPart, state.hoverPart].some(function (id) { return id && (route.from === id || route.to === id); });
       var resting = route.rest && labelled.has(route.from) && labelled.has(route.to);
       if ((!resting && !involved) || !route.points || !routeVisible(route.points)) return;
       var dim = state.related && !(state.related.parts.has(route.from) && state.related.parts.has(route.to));
@@ -505,7 +507,8 @@
     var record = currentPart();
     if (!record || record.id === ROOT || !record.box) { pin.hidden = true; return; }
     var b = screenBox(record.box), band = (record.box.band || L.constants.BAND) * (record.box.unit || 1) * camera.k;
-    if (b.y + band * 0.6 >= 0 || b.y + b.h < 60) { pin.hidden = true; return; }
+    // The title line sits at the top of the band, however tall the band has grown: pin once that line is off the stage.
+    if (b.y + Math.min(30, band / 2 + 6) >= 12 || b.y + b.h < 60) { pin.hidden = true; return; }
     pin.hidden = false;
     if (pin.dataset.part !== record.id) {
       pin.dataset.part = record.id;
