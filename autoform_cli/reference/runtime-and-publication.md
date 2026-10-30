@@ -61,8 +61,6 @@ captured title text and publisher-derived text, code and marked TeX parts.
 Reading, breadcrumbs and search typeset supported parts with project macros;
 inventory math uses bounded viewer-owned jobs. Map labels and unsupported or
 failed/stalled math stay literal. Original titles, relations and status are unchanged.
-The explorer reads JSON files up to 64 MiB. A search index over 32 MiB leaves out
-statement summaries, with a render warning, so search still matches titles and Lean names.
 
 Every render writes `publication.json`, schema `autoform-publication/v3`, with
 blueprint and Lean-source hashes (the Lean-source hash is empty when render
