@@ -59,7 +59,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from markdown.treeprocessors import Treeprocessor
 
-from . import dag_viewer, graph_pages, graph_views, status
+from . import dag_viewer, graph_pages, graph_views, project_map, status
 from ._repository import detect_ref, detect_repository_url, repository_top_level, verify_repository_snapshot
 from ._tree_snapshot import (
     TreeChangedError,
@@ -255,6 +255,9 @@ MERMAID_LIBRARY = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.
 LIVE_SCRIPT = "javascripts/blueprint-live.js"
 DAG_SCRIPT = dag_viewer.SCRIPT_PATH
 DAG_STYLE = dag_viewer.STYLE_PATH
+MAP_SCRIPT = "javascripts/project-map.js"
+MAP_STYLE = "stylesheets/project-map.css"
+MAP_PAGE = "map/index.html"
 LOGO = "assets/autoform.svg"
 #: The files render writes into every site, whatever the vault holds there.
 _ASSETS = (STYLESHEET, MERMAID_SCRIPT, MATHJAX_SCRIPT, LIVE_SCRIPT, DAG_SCRIPT, DAG_STYLE, LOGO)
@@ -1206,6 +1209,14 @@ def _render_pages(
         (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
         (DAG_SCRIPT, explorer_script),
         (DAG_STYLE, dag_viewer._STYLE),
+        (MAP_SCRIPT, _static_asset("project-map.js")),
+        (MAP_STYLE, _static_asset("project-map.css")),
+        # The whole-project map: one standalone page over the per-level files in dependencies/map/.
+        (MAP_PAGE, project_map.render_page(
+            title=graph_views.group_title(graph, "roadmap"), map_base="../" + project_map.MAP_DIRECTORY + "/",
+            routes="../" + graph_pages.SEARCH_INDEX, home="../", script="../" + MAP_SCRIPT, style="../" + MAP_STYLE,
+            mathjax="../" + MATHJAX_SCRIPT,
+        )),
         (LOGO, _logo()),
     ):
         asset = destination / relative

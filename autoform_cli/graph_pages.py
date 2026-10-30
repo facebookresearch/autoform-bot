@@ -16,7 +16,7 @@ from dataclasses import replace
 from pathlib import Path, PurePath
 from urllib.parse import quote
 
-from . import dag_viewer
+from . import dag_viewer, project_map
 from .graph import Graph
 from .graph_views import (
     FLATTENED_ROLES,
@@ -184,6 +184,11 @@ def write_graph_pages(
         search_index, complete, context_links=context_links, metadata=metadata, include_relations=True,
         sha256_out=index_digests if captured_sources is not None else None, warnings_out=warnings_out,
     )
+    # The whole-project map reads the same records and typed relations, one level per file.
+    map_records, map_relations = project_map.records_from_view(complete, metadata)
+    written.extend(project_map.write_project_map(
+        destination / project_map.MAP_DIRECTORY, project_map.build_project_map(map_records, map_relations),
+    ))
     if captured_sources is not None:
         references = dag_viewer.extract_wiki_links(
             complete, captured_sources=captured_sources, source_paths=source_paths, metadata=metadata,
