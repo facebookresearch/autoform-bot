@@ -42,7 +42,7 @@ from .impact import (
     module_import_impact,
     revision_impact,
 )
-from .lean import declaration_names, index_failure_message, index_project
+from .lean import _name_prefix, declaration_names, index_failure_message, index_project
 from .lean_probe import DEFAULT_PROBE_TIMEOUT
 from .library.citations import library_citation_warnings
 from .library.generate import GenerateError, check_index, generate_index, write_index
@@ -788,17 +788,16 @@ _GENERATED = "and record the name in the article's implementation note"
 
 def _generated_name(index, name: str) -> str:
     """Why a name under one of the project's own structures or inductive types may not be found, or ""."""
-    parent = index.find(name.rpartition(".")[0]) if "." in name else None
+    parent = index.find(_name_prefix(name)) if "." in name else None
     if parent is None or parent.keyword not in ("structure", "class", "inductive"):
         return ""
-    if parent.keyword == "inductive":
-        kind, read = "an inductive type", "no constructor, recursor"
-    else:
-        kind, read = f"a {parent.keyword}", "the fields it declares, but no constructor, recursor, inherited field"
+    kind = "an inductive type" if parent.keyword == "inductive" else f"a {parent.keyword}"
+    # Lean defines no constant for a field inherited through a parent's projection.
+    inherited = "" if parent.keyword == "inductive" else ", and no field it inherits"
     return (
-        f"; {parent.name} is {kind} at {parent.path.as_posix()}:{parent.line}: the index reads {read} or other "
-        f"name Lean generates for it, so for such a name put {parent.name} or another project declaration in "
-        f"lean: {_GENERATED}"
+        f"; {parent.name} is {kind} at {parent.path.as_posix()}:{parent.line}: the index reads no constructor, "
+        f"recursor or other name Lean generates for it{inherited}, so put {parent.name} or another project "
+        f"declaration in lean: {_GENERATED}, or check its spelling"
     )
 
 

@@ -4263,6 +4263,7 @@ def test_a_structure_field_root_gets_a_skeleton(tmp_path: Path) -> None:
         "a",
         None,
     )
+    assert "Nat" in declaration.signature
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")

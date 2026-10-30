@@ -970,6 +970,9 @@ def _fields(
             name = _FIELD_NAME.match(text)
             if name is None:
                 return True
+            # `notation3:50 …` is a command with a precedence, which ends the structure.
+            if re.match(r":[0-9]", text[name.end() :]):
+                return False
             tail = _after_binders(text[name.end() :])
             if tail.startswith("::"):
                 # The constructor's name; a field may follow it on its line.
@@ -1059,8 +1062,16 @@ def _parents(header: list[tuple[int, str]]) -> tuple[bool, list[tuple[str, int]]
     return True, named
 
 
+def _name_prefix(name: str) -> str:
+    """``name`` without its last component, which a guillemet may quote together with dots."""
+
+    if name.endswith("»") and "«" in name:
+        return name[: name.rindex("«")].removesuffix(".")
+    return name.rpartition(".")[0]
+
+
 def _after_binders(text: str) -> str:
-    """What follows a field's binders, ``(n : Nat) m`` in ``label (n : Nat) m : String``: its type, default or ``::``."""
+    """What follows a field's binders, as in ``label (n : Nat) m : String``: its type, default or ``::``."""
 
     while True:
         text = text.lstrip()

@@ -1392,19 +1392,19 @@ def test_check_resolves_a_structure_field_and_says_why_a_generated_name_is_not_f
     names = "Demo.Entry.value Demo.Entry.mk Demo.Shape.dot Demo.Pretty.mk"
     article.write_text(article.read_text(encoding="utf-8").replace("Demo.Entry.value", names), encoding="utf-8")
     assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 1
-    advice = "or another project declaration in lean: and record the name in the article's implementation note"
-    fields = "the fields it declares, but no constructor, recursor, inherited field"
+    generated = "the index reads no constructor, recursor or other name Lean generates for it"
+    advice = (
+        "or another project declaration in lean: and record the name in the article's implementation note, "
+        "or check its spelling"
+    )
     # Only names under the project's own types: the note about .lake is not printed.
     assert [line for line in capsys.readouterr().out.splitlines() if line.startswith(("error:", "note:"))] == [
         f"error: entry: declaration not found in {lean_root}: Demo.Entry.mk; Demo.Entry is a structure at "
-        f"Demo.lean:2: the index reads {fields} or other name Lean generates for it, so for such a name put "
-        f"Demo.Entry {advice}",
+        f"Demo.lean:2: {generated}, and no field it inherits, so put Demo.Entry {advice}",
         f"error: entry: declaration not found in {lean_root}: Demo.Shape.dot; Demo.Shape is an inductive type at "
-        "Demo.lean:4: the index reads no constructor, recursor or other name Lean generates for it, so for such a "
-        f"name put Demo.Shape {advice}",
+        f"Demo.lean:4: {generated}, so put Demo.Shape {advice}",
         f"error: entry: declaration not found in {lean_root}: Demo.Pretty.mk; Demo.Pretty is a class at "
-        f"Demo.lean:6: the index reads {fields} or other name Lean generates for it, so for such a name put "
-        f"Demo.Pretty {advice}",
+        f"Demo.lean:6: {generated}, and no field it inherits, so put Demo.Pretty {advice}",
     ]
 
     # A catalog keeps its own reason, and a name of a shared library brings the note back.

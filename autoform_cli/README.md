@@ -141,12 +141,12 @@ ledger under `sources/` draws a `check` warning and fails only `audit` (see
 
 A completed catalog records in `lean:` the full name of every public
 declaration the module writes with a declaration keyword, as the Lean source
-index records them; a structure's fields, which the index records too, may
-also go there. Names Lean generates, such as constructors, derived or unnamed
-instances, and `@[ext]`, `@[simps]`, or `@[to_additive]` results, and
-declarations the index cannot see yet, behind `nonrec` or `meta` or written
-`class inductive`, go in the ledger as supporting entries, never in `lean:`;
-a `private` name never goes in `lean:`.
+index records them; a structure's fields, which the index records too, may go
+there instead of the ledger. Names Lean generates, such as constructors,
+derived or unnamed instances, and `@[ext]`, `@[simps]`, or `@[to_additive]`
+results, and declarations the index cannot see yet, behind `nonrec` or `meta`
+or written `class inductive`, go in the ledger as supporting entries, never in
+`lean:`; a `private` name never goes in `lean:`.
 A completed catalog may assert `statement: formalized` and `proof: formalized`
 once the complete module has been checked. Like any prerequisite, a catalog
 linked under `## Depends on` or `## Proof depends on` holds its dependents back

@@ -563,17 +563,26 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
         ("structure\n  Pair where\n  fst : Nat\n", ["Pair", "Pair.fst"]),
         ("structure Pair where\n  mkPair ::\n  fst : Nat\n", ["Pair", "Pair.fst"]),
         ("structure Pair where\n  mkPair :: fst : Nat\n", ["Pair", "Pair.fst"]),
-        ("structure Trie where\n  node ::\n    values : Nat\n    children : Nat\n", ["Trie", "Trie.children", "Trie.values"]),
+        (
+            "structure Trie where\n  node ::\n    values : Nat\n    children : Nat\n",
+            ["Trie", "Trie.children", "Trie.values"],
+        ),
         ("class HasMap (α : Type) where\nmk' ::\n  map : α\n", ["HasMap", "HasMap.map"]),
         ("structure Pair where\n  fst : Nat\n  deriving Repr\n  snd : Nat\n", ["Pair", "Pair.fst"]),
         ("structure Pair where\n  fst : Nat\n  #exit\n  snd : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair\n  #exit\n  where fst : Nat\n", ["Pair"]),
+        ('structure Pair where\n  fst : Nat\n  notation3:50 "x" => 1\n', ["Pair", "Pair.fst"]),
         ("structure Marker : Type\ninstance : Inhabited Nat where\n  default := 0\n", ["Marker"]),
         ("structure Marker where\ndef after : Nat := 0\n", ["Marker", "after"]),
         ("structure Pair :=\n  (fst : Nat)\n  (snd : Nat)\n", ["Pair", "Pair.fst", "Pair.snd"]),
         ("structure Hom extends toBase : Base where\n  w : Nat\n", ["Hom", "Hom.toBase", "Hom.w"]),
-        ("structure Location where\n  module : String\n  range : Nat\n", ["Location", "Location.module", "Location.range"]),
+        (
+            "structure Location where\n  module : String\n  range : Nat\n",
+            ["Location", "Location.module", "Location.range"],
+        ),
         ("structure Tree : Prop extends\n    connected : C, acyclic : A\n", ["Tree", "Tree.acyclic", "Tree.connected"]),
         ("structure Plain extends Base, Pair (fun x => x, 1) where\n  z : Nat\n", ["Plain", "Plain.z"]),
+        ("structure S extends A { x := 1, y : Nat := 2 }, toB : B where\n  z : Nat\n", ["S", "S.toB", "S.z"]),
         ("structure Sized (n : Nat := 0)\n    (m : Nat) where\n  size : Nat\n", ["Sized", "Sized.size"]),
         # A default may set an inherited field, which Lean declares nothing for.
         (
@@ -583,8 +592,9 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
         ),
     ],
     ids=["inline", "multiline-header", "keyword-alone", "constructor", "constructor-and-field",
-         "constructor-above-deeper-fields", "constructor-at-the-structure-s-column", "deriving", "exit", "no-where",
-         "no-fields", "assign", "named-parent", "field-named-module", "named-parents-without-where", "unnamed-parents",
+         "constructor-above-deeper-fields", "constructor-at-the-structure-s-column", "deriving", "exit",
+         "exit-in-the-header", "command-with-a-precedence", "no-where", "no-fields", "assign", "named-parent",
+         "field-named-module", "named-parents-without-where", "unnamed-parents", "comma-inside-a-parent",
          "header-default", "defaults"],
 )
 def test_structure_fields_follow_the_structure_s_where(tmp_path: Path, source: str, names: list[str]) -> None:

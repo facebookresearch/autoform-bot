@@ -35,6 +35,7 @@ from .lean import (
     Declaration,
     LeanSourceError,
     SourceIndex,
+    _name_prefix,
     _without_lean_comments,
     declaration_names,
     index_failure_message,
@@ -691,9 +692,13 @@ def _declared_deprecated(declaration: Declaration, sources: dict[Path, list[str]
 
     Only ``@[...]`` lists before the keyword count: on the declaration's line,
     or on the contiguous attribute lines directly above it. Comments are
-    blanked first, so a commented-out attribute does not count.
+    blanked first, so a commented-out attribute does not count. A field has
+    none: Lean puts a structure's attributes on the structure alone, even when
+    a field shares its line.
     """
 
+    if declaration.keyword == "field":
+        return False
     lines = sources.get(declaration.path)
     if lines is None or not 0 < declaration.line <= len(lines):
         return False
@@ -717,9 +722,17 @@ def _limit_line(declaration: Declaration, index: SourceIndex) -> int:
     """The line of the command that elaborates ``declaration``: a field's structure's, otherwise its own."""
 
     if declaration.keyword == "field":
-        structure = index.find(declaration.name.rpartition(".")[0])
-        if structure is not None and structure.path == declaration.path:
-            return structure.line
+        # The structure is the last declaration of its name above the field in
+        # the field's own file, even where the name is declared elsewhere too.
+        above = [
+            item.line
+            for item in index.occurrences(_name_prefix(declaration.name))
+            if item.keyword in ("structure", "class")
+            and item.path == declaration.path
+            and item.line <= declaration.line
+        ]
+        if above:
+            return max(above)
     return declaration.line
 
 

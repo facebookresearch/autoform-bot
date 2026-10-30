@@ -101,8 +101,8 @@ date when the release is tagged.
   Deferred list math cancels with its view and falls back to visible text on
   unavailable typesetting. Preview formatting keeps currency and code literal;
   formal dependency links use converter-validated code and formula labels (#444).
-- **Structure fields.** The Lean source index records each field a
-  `structure` or `class` declares, and each parent it names, as
+- **Structure fields.** The Lean source index records the fields a
+  `structure` or `class` declares and the parents it names, as
   `Structure.field`, so `check`, `render`, `audit` and `skeleton` resolve a
   `lean:` name for one; `audit` takes it as a `def` or theorem under its
   structure's limits. For a constructor or other name Lean generates under a

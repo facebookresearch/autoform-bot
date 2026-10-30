@@ -1204,6 +1204,29 @@ def test_a_field_does_not_end_its_structure_s_source_span(tmp_path: Path) -> Non
     }
 
 
+def test_a_field_s_limits_come_from_the_structure_in_its_own_file(tmp_path: Path) -> None:
+    """The structure's name may be declared elsewhere too, and a quoted field name may hold a dot."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "value.md", declaration="def", statement="formalized", lean="Big.value")
+    _article(blueprint, "quoted.md", declaration="def", statement="formalized", lean="Big.«a.b»")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "A.lean").write_text(
+        "set_option maxHeartbeats 0 in\nstructure Big where\n  value : Nat\n  «a.b» : Nat\n", encoding="utf-8"
+    )
+    # B.lean's structure starts below A.lean's, but it is not the field's.
+    (lean_root / "B.lean").write_text(
+        "theorem pad : True := trivial\n\nstructure Big where\n  other : Nat\n", encoding="utf-8"
+    )
+
+    reason = "lean target {} has no maxHeartbeats limit: `set_option maxHeartbeats 0` at A.lean:1; set a finite limit"
+    assert _finding_map(blueprint, lean_root=lean_root) == {
+        "roadmap/value.md": [("lean-target-unbounded-limit", reason.format("Big.value"))],
+        "roadmap/quoted.md": [("lean-target-unbounded-limit", reason.format("Big.«a.b»"))],
+    }
+
+
 def test_an_alias_with_no_sure_target_reads_no_limit(tmp_path: Path) -> None:
     # B.lean declares its `N.aux` only after the alias and A.lean declares one
     # too, so the index cannot place the alias and reads no limit for it.
@@ -1599,6 +1622,27 @@ def test_audit_reads_a_field_s_elaboration_limits_at_its_structure(tmp_path: Pat
     ]
     limit = (DeclarationLimit("P.Big.value", "maxHeartbeats", 0, "Big.lean:2", "declaration"),)
     assert [(warning.code, warning.declarations) for warning in result.warnings] == [("catalog-unbounded-limit", limit)]
+
+
+def test_a_field_does_not_take_its_structure_s_deprecation(tmp_path: Path) -> None:
+    """Lean puts a structure's attributes on the structure alone, even when a field shares its line."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "b.md", declaration="structure", statement="formalized", lean="P.B")
+    for name in ("B.toA", "B.b", "Q.q"):
+        _article(blueprint, f"{name.lower()}.md", declaration="def", statement="formalized", lean=f"P.{name}")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    deprecated = '@[deprecated "use C" (since := "2026-01-01")]'
+    (lean_root / "D.lean").write_text(
+        f"namespace P\n{deprecated}\nstructure B extends toA : A where\n  b : Nat\n"
+        f"{deprecated}\nstructure Q where q : Nat\nend P\n",
+        encoding="utf-8",
+    )
+
+    assert _finding_map(blueprint, lean_root=lean_root) == {
+        "roadmap/b.md": [("lean-target-deprecated", "lean target P.B is deprecated; point lean: at its replacement")]
+    }
 
 
 def test_audit_checks_irreducible_def_kinds(tmp_path: Path) -> None:
