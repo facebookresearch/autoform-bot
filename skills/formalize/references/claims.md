@@ -47,10 +47,11 @@ of a folder, is not part of a worker's long-held claim set; a root written or
 edited by hand, or one with no such generator, keeps the import-edit rules
 above. A worker may regenerate it in its worktree to build and check its result,
 without claiming it, and may commit it; on a conflict in it during a rebase or
-merge, regenerate it from the merged tree. Before regenerating it from the
-integrated tree, the integrator acquires the root's module `claim_target`
-together with the complete set it holds, in one command under that set's worker
-ID. If another owner holds the root, follow the refusal rule under Import edits:
+merge, regenerate it from the merged tree. Before landing a commit that changes
+the root, the integrator acquires the root's module `claim_target` together
+with the complete set it holds, in one command under that set's worker ID, then
+regenerates it from the integrated tree. If another owner holds the root, follow
+the refusal rule under Import edits:
 release the complete held set before waiting, or keep it and hand off the
 verified candidate. Then re-run `autoform work import-impact` and the checks on
 the result, and release the root's claim with the rest of the set once the

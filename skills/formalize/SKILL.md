@@ -242,13 +242,13 @@ reporting.
 
 Once a worker has reported, debrief included, and its result is integrated or
 handed off, the lead removes its worktree with `git worktree remove` (never
-`--force`) unless that worker takes another leaf there; a handed-off commit
-stays on its branch. Each holds a multi-gigabyte `.lake`; Autoform never clears
-Lake's shared artifact cache, so tell the user if disk runs low. Re-read the
-work frontier from the updated shared branch and repeat while independent ready
-leaves and authorized capacity remain. Stop when the frontier is empty or every
-remaining attempt has a concrete mathematical or ownership blocker. Then the
-lead follows [Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with
+`--force`), unless, after integrating its result, that worker takes another leaf
+there; first make sure a branch points at any handed-off commit. Autoform never
+clears Lake's shared artifact cache, so tell the user if disk runs low. Re-read
+the work frontier from the updated shared branch and repeat while independent
+ready leaves and authorized capacity remain. Stop when the frontier is empty or
+every remaining attempt has a concrete mathematical or ownership blocker. Then
+the lead follows [Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with
 `--skill formalize`. Report changed articles and Lean files, integrated commits,
-branches and commits handed off, any claims released or handed off, checks and
-reviews run, and exact remaining goals.
+branches and commits handed off, pull requests opened, any claims released or
+handed off, checks and reviews run, and exact remaining goals.
