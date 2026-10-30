@@ -9,6 +9,15 @@ date when the release is tagged.
 
 ## Unreleased
 
+### Added
+
+- **Worktrees.** `autoform project worktrees` reports which linked worktrees
+  are safe to remove after a run and what protects the rest: changes, Git
+  operations, unintegrated commits, processes, recent activity and live leases
+  from this host. `--remove` takes a saved report, rechecks each entry, removes
+  it with `git worktree remove`, never `--force`, and reports the free space
+  recovered and how to restore it (#435).
+
 ### Changed
 
 - **Explorer delivery.** The approved integrated redesign ships below 144 KB,

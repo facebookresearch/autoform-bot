@@ -236,15 +236,15 @@ commit for handoff. When the run uses claims, the [claim
 rules](references/claims.md#integration-and-handoff) say how to renew, keep,
 hand off, and release the claim set.
 
-When `AUTOFORM_SUBAGENT_DEBRIEF=1`, the agent that worked an attempt then
-follows the [subagent debrief steps](references/debrief-subagent.md) before
-reporting.
+When `AUTOFORM_SUBAGENT_DEBRIEF=1`, the agent that worked an attempt follows the
+[subagent debrief steps](references/debrief-subagent.md) before reporting.
 
 Once a worker has reported, debrief included, and its result is integrated or
-handed off, the lead removes its worktree with `git worktree remove` (never
-`--force`), unless, after integrating its result, that worker takes another leaf
-there; first make sure a branch points at any handed-off commit. Autoform never
-clears Lake's shared artifact cache, so tell the user if disk runs low. Re-read
+handed off (branch any handed-off commit first), the lead removes its worktree
+with `git worktree remove`, never `--force`, unless it takes another leaf there.
+Autoform never clears Lake's shared artifact cache: tell the user if disk runs
+low. Use `autoform project worktrees` and its `--remove` only after the run,
+when the user asks and no session's workers on this clone run. Re-read
 the work frontier from the updated shared branch and repeat while independent
 ready leaves and authorized capacity remain. Stop when the frontier is empty or
 every remaining attempt has a concrete mathematical or ownership blocker. Then
