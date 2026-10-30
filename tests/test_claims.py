@@ -2495,15 +2495,20 @@ def test_claim_cli_multi_node_round_trip_prints_one_line_per_target(tmp_path: Pa
 
 
 def test_claim_cli_acquire_without_a_note_drops_the_note(tmp_path: Path, board_repo: Path, capsys) -> None:
-    """A Formalize worker names its branch in the note, so it passes `--note` on every acquire (#434)."""
+    """The owner's next acquire replaces its lease, note included, so one without `--note` leaves none."""
     scratch = tmp_path / "scratch"
-    assert main(_args(board_repo, scratch, "acquire", "chapter/result", "--note", "formalize-w1")) == 0
+
+    def listed() -> dict:
+        capsys.readouterr()
+        assert main(_args(board_repo, scratch, "list")) == 0
+        [lease] = json.loads(capsys.readouterr().out)
+        assert lease["owner"] == "worker-a"
+        return lease
+
+    assert main(_args(board_repo, scratch, "acquire", "chapter/result", "--note", "branch-a")) == 0
+    assert listed()["note"] == "branch-a"
     assert main(_args(board_repo, scratch, "acquire", "chapter/result")) == 0
-    capsys.readouterr()
-    assert main(_args(board_repo, scratch, "list")) == 0
-    [lease] = json.loads(capsys.readouterr().out)
-    assert lease["owner"] == "worker-a"
-    assert "note" not in lease
+    assert "note" not in listed()
 
 
 def test_claim_cli_multi_node_failure_changes_no_claim(tmp_path: Path, board_repo: Path, capsys) -> None:

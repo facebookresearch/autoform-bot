@@ -15,9 +15,8 @@ from a profile that sets a shared value. Run claim commands from the project
 worktree so every worker uses its `origin` board, or pass the same `--repo`
 everywhere when it has none. Claims write refs to that board's remote, which is
 outward-facing: make sure the request covers it before the first claim.
-A session leads from [its own clone](../../../README.md#run-several-sessions)
-and creates its worktrees there; if `git worktree list` shows others before the
-first dispatch, ask the user whether another session shares the clone.
+A session leads from [its own clone](../../../README.md#run-several-sessions):
+if `git worktree list` shows the shared branch elsewhere, ask the user first.
 
 ## Acquire and renew
 
@@ -70,11 +69,12 @@ targets. Keep the complete acquired set until every checkout on the claim board
 can see the verified commit: on the shared branch and, for an `origin` board,
 pushed, since other clones read their frontier from the remote. No message
 grants ownership or completes a leaf. For a handoff, keep the set and report it
-with the worker ID instead of making the leaf look free; when another session
-may integrate it, push the branch the note names to `origin`, so `claim list`
-locates it even if the report is lost. The integrator renews, integrates, and
-releases a handed-off set with `--worker-id` set to the reported ID; if the
-lease has lapsed, it acquires the complete set under its own ID and, before
+with the worker ID instead of making the leaf look free; when the lead hands it
+to another session and the request covers pushing, push the branch the note
+names where that session can fetch it. The integrator renews, integrates, and
+releases a handed-off set with `--worker-id` set to the reported ID; without a
+report, it waits for the lease to lapse. After a lapse, it reads the note with
+`claim list`, acquires the complete set under its own ID and, before
 integrating, repeats Formalize's pre-edit reload of `work context`. Release the
 complete set once the result is visible that way, or when abandoning the leaf
 without a candidate. For ordinary work that set is just the article; for an

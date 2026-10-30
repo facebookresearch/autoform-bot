@@ -55,10 +55,11 @@ date when the release is tagged.
 - **Work packages and sessions.** A Formalize subagent may keep its worktree
   for a package of related leaves that the lead confirms together, taking each
   once `work context` shows it ready. With claims, each session leads from its
-  own clone and checks `git worktree list` before dispatching, and workers name
-  their branch with `claim acquire --note`, now documented, so `claim list`
-  locates a candidate handed off to another session when the report is lost.
-  No message grants ownership or completes a leaf (#434).
+  own clone and checks `git worktree list` before dispatching. Workers name
+  their branch with `claim acquire --note`, now documented; a handoff to another
+  session pushes that branch when the request covers it, and without the report
+  the integrator waits for the lease to lapse and reads the note from `claim
+  list`. No message grants ownership or completes a leaf (#434).
 - **Render.** An article's page lists its `mathlib_declaration` names in a
   Mathlib row, as text without a link, so a `mathlib: true` article names the
   declaration it restates (#388).

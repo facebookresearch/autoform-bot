@@ -44,7 +44,7 @@ default build passes. Before dispatching, commit the roadmap state the frontier
 was read from and base each worktree on that commit, not on the remote's default
 branch (Claude Code's agent isolation does so only with `worktree.baseRef:
 head`). Give each subagent each leaf's `claim_target`, `article_revision`,
-`open_statements`, `revision`, and a ready one's `phase` and `assumes`. A new
+`open_statements`, `revision`, and the first leaf's `phase` and `assumes`. A new
 worktree has no `.lake`: in a Mathlib project, run `lake exe cache get` in the
 lead's checkout before creating worktrees, rerunning it once if it fails, then
 in each worktree before its first build or Lean tool call. If the rerun fails
