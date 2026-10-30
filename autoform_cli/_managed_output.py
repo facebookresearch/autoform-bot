@@ -40,7 +40,8 @@ def output_identity(path: Path) -> tuple[int, int, str] | None:
     """``(st_dev, st_ino, digest)`` of a file or tree, or None when absent.
 
     The digest covers the names and file bytes ``Path.rglob`` lists; it skips
-    the contents of a subdirectory the process cannot list, without an error.
+    the contents of a directory, ``path`` included, that the process cannot
+    list, without an error.
     A symlink or special file it reaches is refused.
     """
 
