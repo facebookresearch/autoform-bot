@@ -329,3 +329,11 @@ def test_typed_page_keeps_its_true_title_and_complete_reading_source(tmp_path: P
     assert reading.get("data-autoform-node-id") == "note"
     assert "All original source remains as typed." in "".join(reading.itertext())
     assert not list(reading.iter("h1"))  # The client has the true title without inventing one from code.
+    # The no-JavaScript fallback offers no link back to this page, and it and
+    # the loading line stay out of search.
+    (fallback,) = _class(tree, "bp-dag-fallback")
+    assert "data-search-exclude" in fallback.attrib
+    (loading,) = _class(tree, "bp-dag-loading")
+    assert "data-search-exclude" in loading.attrib
+    assert not _class(fallback, "bp-dag-fallback-list")
+    assert all(link.get("href") != "#" for link in fallback.iter("a"))

@@ -30,6 +30,11 @@ date when the release is tagged.
   ranks, status and full reading pages remain unchanged (#442).
   Publication keeps card dimensions and authored region counts; the one
   browser engine owns positions and routes, without an unused Python grid.
+- **Book copy.** The landing lead keeps link text, code, formulas and whole
+  sentences. Next up says which Lean step is next. A chapter's progress is one
+  line of counts whose status meanings show on hover, gone when the chapter has
+  fewer than two countable statements. Unplaced statements sit under "Other
+  statements", and the map's fallback stays out of search results (#494).
 - **Docs.** The CLI reference's contracts moved to `autoform_cli/reference/`
   (validation and audit, search, open statements, claims and revisions,
   runtime and publication). The reference, skills and contributor docs keep
@@ -103,6 +108,11 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Large libraries' search index.** The explorer loads JSON up to 64 MiB,
+  and a whole-library index over 32 MiB leaves out statement summaries, so
+  search still matches titles and Lean names; publication warns when it
+  does. ATLAS's index had grown past the old 32 MiB limit, so search and the
+  Topics outline failed on every page.
 - **Explorer review follow-ups.** Fit retains a selected unlinked result.
   Deferred list math cancels with its view and falls back to visible text on
   unavailable typesetting. Preview formatting keeps currency and code literal;
@@ -139,6 +149,10 @@ date when the release is tagged.
   a bounded fallback for hidden or stalled tabs, rather than relying only on
   timer tasks. Parent references use the same compact node offsets as relations;
   the client restores their exact IDs before publication. No content is dropped (#442).
+- **Lake configuration.** A `lakefile.toml` whose `lean_lib` is not an array
+  of named tables, such as `[lean_lib]` written for `[[lean_lib]]`, is
+  refused as Lake refuses it, instead of crashing or silently reading the
+  package's default library (#505).
 - **Wiki reading links.** The integrated explorer retains #455's title math
   in its outline, breadcrumbs, paged inventory and related-reading controls, using safe MathJax
   service and project macros. Code stays literal, canonical links keep focus
@@ -161,6 +175,10 @@ date when the release is tagged.
   by its statement and opening at its anchor, and its exact `lean:` names find
   it even when they show only as code icons. Notes headings such as Sources
   are no longer results of their own; their text stays in the card's (#390).
+- **Links on chapter pages.** A definition-like line with more words after
+  its first, such as `[^1]: Grounded in [Paper](../sources/paper.md)`, is
+  prose, as Python-Markdown reads it. Render read it as a definition and left
+  the links after its first word pointing at unpublished pages (#484).
 
 ## 0.6.0 (2026-10-22)
 

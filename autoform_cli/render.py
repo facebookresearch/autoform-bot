@@ -106,6 +106,7 @@ from .lean import (
 from .markdown import (
     _BRACKET_ESCAPE,
     _INLINE_MATH,
+    FORMULA_CLASS,
     GENERATED_VIEWS,
     INLINE_CODE,
     NOTES_BOX,
@@ -124,6 +125,7 @@ from .markdown import (
     page_title,
     published_page,
     relative_link,
+    render_tree,
     rendered_visible_text,
     site_converter,
     statement_and_notes,
@@ -131,6 +133,7 @@ from .markdown import (
     yaml_string,
 )
 from .markdown import HEADING as _HEADING
+from .markdown import _LINK_DEFINITION as _SITE_LINK_DEFINITION
 from .markdown import content_lines as _content_lines
 from .markdown import outside_fences as _outside_fences
 from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, TEX_MACROS, mathjax_script, project_macros
@@ -166,10 +169,15 @@ _MARKDOWN_LINK = re.compile(
 _MARKDOWN_IMAGE = re.compile("!" + _MARKDOWN_LINK.pattern.removeprefix("(?<!!)"))
 #: A reference-style link definition, `[label]: target "title"`. Markdown
 #: resolves `[Paper][paper]` through one of these, so a rewrite that only sees
-#: inline links leaves the destination behind and publishes a dead link.
+#: inline links leaves the destination behind and publishes a dead link. As in
+#: Python-Markdown, at most a quoted or parenthesized title follows the target:
+#: a line such as `[^1]: Grounded in [Paper](...)` is prose, not a definition.
+#: Python-Markdown expands tabs before it reads one, so a tab around the title
+#: counts as spaces do.
 _LINK_DEFINITION = re.compile(
     r'^(?P<indent>[ ]{0,3})\[(?P<label>[^\]]+)\]:[ \t]*'
-    r'(?P<target><[^>\r\n]+>|[^\s]+)(?P<rest>[ \t]+.*)?$'
+    r'(?P<target><[^>\r\n]+>|[^\s]+)'
+    r'(?P<rest>[ \t]*(?:(?P<quote>["\'])(?:.*)(?P=quote)[ \t]*|\(.*\)[ \t]*)?)$'
 )
 _ARTICLE_SLOT = re.compile(
     rf"^(?P<indent>[ \t]*)[-*+]\s+\[(?=[^\]]){_LINK_LABEL}\]"
@@ -1258,7 +1266,6 @@ def _integrated_page(
         search_href=relative_link(destination / graph_pages.SEARCH_INDEX, page, ".json"),
         page_href=_as_published(relative_link(page, page, ".html")),
         scope=scope,
-        fallback_links=(("Read the mathematical page", "#"),),
     )
     return (
         header + '\n<div class="bp-explorer-page" markdown="1">\n'
@@ -2060,9 +2067,9 @@ def _next_target(
             f'<a href="{html.escape(statement, quote=True)}">{title}</a>' if statement else title
         )
         why = (
-            "Its prerequisites are ready, so the proof can be written now."
+            "Everything it uses is in Lean, so its Lean proof can start."
             if node_status.key == "can_prove"
-            else "Its prerequisites are ready, so the statement can be written down."
+            else "Everything its statement uses is in Lean, so its Lean statement can be written now."
         )
         actions = [f'<a href="{html.escape(graph_href, quote=True)}">Dependencies</a>']
         if chapter_page is not None:
@@ -2101,29 +2108,32 @@ def _render_structure_page(
     page: Path,
     entry: Path | None = None,
 ) -> str:
-    """Keep the old structure route as a bounded doorway into the mathematical wiki.
+    """Keep the old structure route as a bounded doorway into the book.
 
     The explorer owns hierarchy now. Republishing every source path as one raw
     HTML tree made this compatibility page larger than the rest of a small
     site, duplicated the explorer, and became unusable on repository-scale books.
     """
-    explorer = relative_link(entry or page.parent / "dependencies.md", page, ".md")
+    target = entry or page.parent / "dependencies.md"
+    explorer = relative_link(target, page, ".md")
+    text = target.read_text(encoding="utf-8") if target.is_file() else ""
+    # A header title is visible text already, while an H1 is Markdown, as in
+    # the site's nav.
+    named = _header_title(text)
+    title = name_text(named) if named else title_text(_first_h1(text) or "")
     return "\n".join(
         [
             "---",
-            "title: Browse the roadmap",
+            "title: This page moved",
             "search:",
             "  exclude: true",
             "hide:",
             "  - toc",
             "---",
             "",
-            "# Browse the roadmap",
+            "# This page moved",
             "",
-            "The mathematical wiki presents the authored hierarchy and its mathematical",
-            "relations without flattening the repository into a file listing.",
-            "",
-            f"[Open the mathematical wiki]({explorer})",
+            f"The book starts at [{title or 'its contents'}]({explorer}).",
             "",
         ]
     )
@@ -2387,22 +2397,154 @@ def _lead_sentence(body: str) -> str:
 
     Written by a human in `blueprint/README.md`, so it says what the project is
     far better than anything derived from the graph could. Prose only: a
-    heading or a list is structure rather than a claim.
+    heading or a list is structure rather than a claim. The first paragraph
+    with words is read through the site's own converter, so code and formulas
+    keep their contents, a link keeps its words without its target, and an
+    image, such as a badge, is dropped.
     """
-    for block in body.split("\n\n"):
-        line = block.strip()
-        if not line or line.startswith(("#", "-", "*", "<", "|", ">", "!")):
-            continue
-        sentence = line.split(". ")[0].rstrip(".").replace("\n", " ")
-        # The hero is raw HTML, so Markdown never runs over it and a title in
-        # *emphasis* would otherwise show its asterisks. Escaping first means
-        # the substitutions below can only ever produce these two tags.
-        safe = html.escape(sentence)
-        safe = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", safe)
-        safe = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", safe)
-        safe = re.sub(r"`([^`]+)`", r"<code>\1</code>", safe)
-        return safe + "."
+    lines = mask_fences_and_comments(body.splitlines())
+    if _read_page(body)[1]:
+        # Check flags this page, and the landing page then shows only its
+        # title and lead, as text: the first prose block, escaped as typed.
+        for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
+            typed = " ".join(block.split())
+            if typed and not typed.startswith(("#", "-", "*", "<", "|", ">", "!", "[")):
+                return _lead_html([("text", typed)])
+        return ""
+    # Each block is read alone, so raw HTML elsewhere does not hide the lead,
+    # with the reference definitions its links may name. Only lines the site's
+    # converter reads as definitions, so a footnote never becomes a paragraph.
+    definitions = "\n".join(line for line in lines if _SITE_LINK_DEFINITION.match(line))
+    for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
+        tree = render_tree(f"{block}\n\n{definitions}", allow_html=False) if block.strip() else None
+        page = tree.find("body") if tree is not None else None
+        for paragraph in page if page is not None else ():
+            parts = _lead_parts(paragraph) if paragraph.tag == "p" else []
+            if any(kind in {"code", "math"} or (kind == "text" and value.strip()) for kind, value in parts):
+                return _lead_html(parts)
     return ""
+
+
+def _lead_parts(element: object) -> list[tuple[str, str]]:
+    """A converted paragraph as text, code, math and emphasis parts."""
+    parts: list[tuple[str, str]] = []
+
+    def text(value: str | None) -> None:
+        if value:
+            # An Obsidian link reads as its alias, or else its target.
+            value = re.sub(r"\[\[([^\[\]|]*)(?:\|([^\[\]]*))?\]\]", lambda link: link.group(2) or link.group(1), value)
+            parts.append(("text", re.sub(r"\s+", " ", value)))
+
+    def read(node: object) -> None:
+        for child in node:
+            if child.tag == "code":
+                parts.append(("code", "".join(child.itertext())))
+            elif child.tag == "span" and child.get("class") == FORMULA_CLASS:
+                parts.append(("math", "".join(child.itertext())))
+            elif child.tag in {"em", "strong"}:
+                parts.append(("open", child.tag))
+                text(child.text)
+                read(child)
+                parts.append(("close", child.tag))
+            elif child.tag == "br":
+                text(" ")
+            elif child.tag != "img":
+                # A link, or anything else, keeps its words only: an authored
+                # target is relative to blueprint/.
+                text(child.text)
+                read(child)
+            text(child.tail)
+
+    text(element.text)
+    read(element)
+    return parts
+
+
+def _lead_html(parts: list[tuple[str, str]]) -> str:
+    """The first sentence of ``parts`` as escaped HTML.
+
+    The hero is raw HTML, so Markdown never runs over it. Escaping every part
+    means the only tags are the emphasis, code and formula span built here,
+    and a formula is the span the page's MathJax already typesets.
+
+    The sentence ends at the first period in the prose that whitespace and
+    anything but a lowercase ASCII letter follow, unless the period ends an
+    abbreviation such as "i.e." or "Ch." or a name's initial, or "et al."
+    that no capital follows. A period inside code, a formula or a `$$` pair
+    the converter left as text never ends it.
+    """
+    plain, starts = "", []
+    for kind, value in parts:
+        starts.append(len(plain))
+        # Code and formulas stand in as one character no rule below matches.
+        plain += value if kind == "text" else "\x01" if kind in {"code", "math"} else ""
+    cut = len(plain)
+    for stop in re.finditer(r"\.\s+(?![a-z])", plain):
+        before = plain[: stop.start()]
+        words = [word.lstrip("(") for word in before.split()] or [""]
+        word, previous = words[-1], words[-2] if len(words) > 1 else ""
+        after = plain[stop.end() :]
+        # An all-caps word, such as "CH." or "EGA I.", is not an abbreviation.
+        abbreviation = not word.isupper() and word.lower() in _LEAD_ABBREVIATIONS
+        if (
+            before.count("$$") % 2
+            or (abbreviation and not (word.lower() == "al" and after[:1].isupper()))
+            or _is_initial(word, previous, after)
+        ):
+            continue
+        cut = stop.start()
+        break
+    cut = len(plain[:cut].rstrip().rstrip(".").rstrip())
+    begin = len(plain) - len(plain.lstrip())
+    shown: list[str] = []
+    opened: list[str] = []
+    for (kind, value), start in zip(parts, starts):
+        if start >= cut:
+            break
+        if kind == "text":
+            shown.append(html.escape(value[max(begin - start, 0) : cut - start]))
+        elif kind == "code":
+            shown.append(f"<code>{html.escape(value)}</code>")
+        elif kind == "math":
+            shown.append(f'<span class="{FORMULA_CLASS}">{html.escape(value)}</span>')
+        elif kind == "open":
+            opened.append(value)
+            shown.append(f"<{value}>")
+        else:
+            opened.pop()
+            shown.append(f"</{value}>")
+    return "".join(shown) + "".join(f"</{tag}>" for tag in reversed(opened)) + "."
+
+
+#: Words whose period does not end the hero's sentence.
+_LEAD_ABBREVIATIONS = frozenset(
+    {"i.e", "e.g", "cf", "ch", "thm", "al", "prop", "sec", "eq", "fig", "vs", "resp", "def", "lem", "cor"}
+)
+#: Words a single capital names rather than abbreviates, as in "Theorem A.".
+_LEAD_LABELS = frozenset(
+    {"theorem", "lemma", "proposition", "corollary", "conjecture", "definition", "chapter", "part",
+     "section", "appendix", "case", "step", "example", "exercise", "figure", "table", "problem"}
+)
+
+
+def _is_initial(word: str, previous: str, after: str) -> bool:
+    """Whether ``word`` is a name's initial, as in "Luis H. Gallardo" or "J. S.
+    Milne", so its period does not end the sentence. A capital after a
+    lowercase word, an all-caps word or a label ("the group G.", "EGA I.",
+    "Theorem A.") ends one, unless another initial follows it."""
+    previous = previous.rstrip(".")
+    if len(word) != 1 or not word.isupper():
+        return False
+    return bool(
+        re.match(r"[A-Z]\.(?:\s|$)", after)
+        or not previous
+        or (
+            previous[:1].isupper()
+            and not (len(previous) > 1 and previous.isupper())
+            and previous.lower() not in _LEAD_LABELS
+        )
+    )
+
 
 def _render_overview_summary(
     graph: Graph,
@@ -2411,44 +2553,28 @@ def _render_overview_summary(
     containers: frozenset[str],
     node_ids: list[str] | None = None,
 ) -> str:
-    """Render the compact, honest progress strip shown at the start of the book."""
+    """Render a chapter's progress as one line, or nothing for a single statement.
+
+    A lone statement's card already shows its status, and the module
+    inventories have their own section, so neither is counted here.
+    """
     candidates = list(node_ids if node_ids is not None else graph.nodes)
-    selected_ids = [
-        node_id
+    selected = {
+        node_id: statuses[node_id]
         for node_id in candidates
         if _is_countable(graph, node_id, containers)
+    }
+    if len(selected) < 2:
+        return ""
+    parts = [
+        f'<span class="bp-progress-state" title="{html.escape(status.MEANINGS[state.key], quote=True)}">'
+        f'<span class="bp-swatch bp-swatch-{state.key}"></span>'
+        f"<strong>{count:,}</strong> {html.escape(state.label)}</span>"
+        for state, count in status.summarize(selected)
     ]
-    inventory_count = len(
-        _module_inventories(graph, containers=containers, node_ids=candidates)
-    )
-    definitions = sum(is_definition(graph.nodes[node_id]) for node_id in selected_ids)
-    results = len(selected_ids) - definitions
-    item_parts = []
-    if definitions:
-        item_parts.append(f"{definitions} definition{'s' if definitions != 1 else ''}")
-    if results:
-        item_parts.append(f"{results} result{'s' if results != 1 else ''}")
-    if inventory_count:
-        item_parts.append(
-            f"{inventory_count} module "
-            f"{'inventory' if inventory_count == 1 else 'inventories'}"
-        )
-    item_summary = " · ".join(item_parts) or "No decomposed definitions or results yet"
-
-    state_parts = []
-    selected_statuses = {node_id: statuses[node_id] for node_id in selected_ids}
-    for state, count in status.summarize(selected_statuses):
-        state_parts.append(
-            f'<span class="bp-progress-state"><span class="bp-swatch '
-            f'bp-swatch-{state.key}"></span><strong>{count}</strong> '
-            f"{html.escape(state.label)}</span>"
-        )
-    states = "".join(state_parts)
     return (
         '<div class="bp-progress-overview">'
-        '<div class="bp-progress-kicker">Formalization progress</div>'
-        f'<div class="bp-progress-total">{item_summary}</div>'
-        f'<div class="bp-progress-states">{states}</div>'
+        f'<div class="bp-progress-states">{"".join(parts)}</div>'
         "</div>"
     )
 
@@ -2889,7 +3015,7 @@ def _render_chapter(
     placed = set(slots.values())
     remaining = [node_id for node_id in node_ids if node_id not in placed]
     # A catalog inventories Lean that already exists, so it is no formalization target.
-    for heading, catalog in (("Additional formalization targets", None), ("Module inventories", "module")):
+    for heading, catalog in (("Other statements", None), ("Module inventories", "module")):
         section = [environments[node_id] for node_id in remaining if graph.nodes[node_id].catalog == catalog]
         if section:
             chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(section)

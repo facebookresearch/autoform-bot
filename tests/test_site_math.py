@@ -1297,7 +1297,7 @@ def test_a_flagged_statement_keeps_its_chapter_in_place(tmp_path: Path, capsys: 
 
     site = _warned(blueprint, capsys, "base: the site shows it as typed until these are fixed")
     published = (site / "roadmap/README.md").read_text(encoding="utf-8")
-    assert "Additional formalization targets" not in published
+    assert "Other statements" not in published
     assert published.count('<pre class="bp-as-typed">') == 1
     definitions, results = published.index("## Definitions"), published.index("## Results")
     assert definitions < published.index("The base &lt;kbd&gt;object&lt;/kbd&gt;.") < results < published.index("The main result.")
