@@ -3137,7 +3137,8 @@
       syncSheetAccessibility();
       positionMapFeedback();
       if (width !== dom$stage.clientWidth || height !== dom$stage.clientHeight) resize();
-      if (closed && selected && !restoring && sheetLayout() && mapAllowed) centerIfHidden(selected);
+      // A route change can arrive here before refresh(); frame the current projection's cards.
+      if (closed && selected && !restoring && sheetLayout() && mapAllowed) { calculateActive(); centerIfHidden(selected); }
     }
     function sheetLayout() { return Boolean(window.matchMedia && window.matchMedia("(max-width: 720px)").matches); }
     function wrapMapKey(open, returnFocus) {

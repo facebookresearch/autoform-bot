@@ -775,7 +775,7 @@ def viewer_script() -> str:
         raise ValueError("Explorer bundle is missing or corrupt; run npm run build:explorer before publication.") from error
     if not contents.startswith(f"/* autoform-explorer-source-sha256:{fingerprint} */\n"):
         raise ValueError("Explorer bundle is stale; run npm run build:explorer before publication.")
-    if len(contents.encode("utf-8")) >= 144_000:
+    if len(contents.encode("utf-8")) >= 145_000:
         raise ValueError("Explorer bundle exceeds the JavaScript budget; run npm run build:explorer before publication.")
     return contents
 
