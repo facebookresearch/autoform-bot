@@ -204,19 +204,19 @@ def publishable_article(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...
             if at is not None and not (piece and page_fence):
                 page_fence = page_fence or piece == 0
                 line = _open_fence_line(text, source_lines[at], page=piece == 0)
-                fence = re.match(r"( *)(`{3,}|~{3,})", source_lines[at])
-                indent, marker = fence.groups() if fence else ("", "```")
-                # The site closes an indented fence only at the same indent. One at
-                # the margin it does not read as open is one whose options it rejects.
+                fence = re.match(r"( *)(`{3,}|~{3,})(.*)", source_lines[at])
+                indent, marker, options = fence.groups() if fence else ("", "```", "")
+                # The site reads an opener with options it rejects as text, so alone at
+                # the margin it leaves no fence open; it closes an indented fence only
+                # at the same indent. Each needs its own fix, and both can apply.
+                rejected = _rendered_article(f"{marker}{options}\n")[3] is None
                 spaces = f"{len(indent)} space{'s' if len(indent) > 1 else ''}"
                 found.append(
                     (f"line {line}: " if line else "")
                     + "code fence is not closed: autoform reads the rest of this text as code, which the site does not; "
-                    + (
-                        f"close it with a line of {marker} indented {spaces}, as its opening line is"
-                        if indent
-                        else f"keep only options the site accepts, such as its language, and close it with a line of {marker}"
-                    )
+                    + ("keep only options the site accepts, such as its language, and " if rejected else "")
+                    + f"close it with a line of {marker}"
+                    + (f" indented {spaces}, as its opening line is" if indent else "")
                 )
         schemes = list(dict.fromkeys(filter(None, map(_unsafe_scheme, [*reading.destinations, *defined]))))
         if schemes:

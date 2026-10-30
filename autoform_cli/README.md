@@ -64,7 +64,9 @@ link checks and render's link rewriting take everything after it as code
 (below), so `check` warns when Autoform or the site reads a fence as left open,
 the site shows that page as typed (see
 [Validation](reference/validation-and-audit.md#validation)), and the audit
-reports `unclosed-code-fence`. The graph and an article's statement and sections
+reports `unclosed-code-fence`. Nothing reports a fence line inside an HTML
+comment, though render's link rewriting still reads it as one. The graph and an
+article's statement and sections
 read an unclosed fence as plain text, even where the page pairs its backticks
 with a later run as inline code, and a later bare line of its character at least
 as long closes it. Coverage files and the unpublished-folder link check read it
