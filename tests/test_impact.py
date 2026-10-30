@@ -29,12 +29,12 @@ from autoform_cli.impact import (
     format_module_import_impact,
     import_closure,
     module_import_impact,
+    _module_source_paths,
     parse_impact_output,
     parse_module_evidence,
     project_modules,
     render_impact_probe,
     revision_impact,
-    _module_source_paths,
 )
 from autoform_cli.lean import snapshot_project_sources
 from autoform_cli.lean_probe import LeanLibrary, SkeletonError, lean_libraries
@@ -2286,8 +2286,9 @@ def test_cli_import_impact_accepts_a_root_lake_does_not_build(tmp_path: Path, mo
 
 
 def test_cli_import_impact_refuses_a_loaded_module_no_library_builds(tmp_path: Path, monkeypatch, capsys) -> None:
-    # Foo.lean is under library Foo's root, but no glob matches Foo, so Lake
-    # does not build it and the probe could load it only from a stale .olean.
+    # Foo.lean is under library Foo's root, but no glob matches Foo, so no
+    # library builds it and Lean could load it only from a leftover .olean or
+    # as the root of a lean_exe.
     project = _blueprint_project(tmp_path, "Foo")
     lean_root = _unbuilt_root_lean(tmp_path)
     _stub_probe(
