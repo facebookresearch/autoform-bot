@@ -67,6 +67,7 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-stage svg { display: block; width: 100%; height: 100%; touch-action: none; user-select: none; cursor: grab; }
 .pm-stage svg.pm-dragging { cursor: grabbing; }
 .pm-hint { position: absolute; left: 14px; bottom: 12px; padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--pm-bg) 82%, transparent); color: var(--pm-muted); font-size: 12px; pointer-events: none; }
+.pm-hint.pm-hint-strong { left: 50%; bottom: 50%; transform: translate(-50%, 50%); padding: 10px 14px; background: var(--pm-panel); border: 1px solid var(--pm-border); color: var(--pm-fg); font-size: 14px; box-shadow: 0 4px 16px rgba(0,0,0,.08); }
 .pm-part > rect { fill: var(--pm-region); stroke: var(--pm-region-stroke); stroke-width: 1; cursor: zoom-in; }
 .pm-part.pm-open > rect { fill: color-mix(in srgb, var(--pm-bg) 55%, var(--pm-region)); cursor: grab; }
 .pm-tile-done > rect { fill: color-mix(in srgb, var(--pm-proved) 10%, var(--pm-region)); }
@@ -75,6 +76,7 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-part:focus-visible > rect, .pm-part.pm-focus > rect { stroke: var(--pm-accent); stroke-width: 2; outline: none; }
 .pm-part.pm-on-path > rect { stroke: var(--pm-select); stroke-width: 1.8; }
 .pm-title { fill: var(--pm-fg); font: 600 15px var(--pm-font); pointer-events: none; }
+.pm-title.pm-compact { font-size: 13px; }
 .pm-backdrop { pointer-events: none; fill: var(--pm-region); }
 .pm-backdrop-open { fill: color-mix(in srgb, var(--pm-bg) 55%, var(--pm-region)); }
 .pm-backdrop-done { fill: color-mix(in srgb, var(--pm-proved) 10%, var(--pm-region)); }

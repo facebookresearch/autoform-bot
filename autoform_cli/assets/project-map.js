@@ -24,9 +24,9 @@
   var SVGNS = "http://www.w3.org/2000/svg";
   var ROOT = "#root";
   var OPEN_W = 140, OPEN_H = 90;   // a part shows its children (as tiles at first) once its box is this big on screen (px)
-  var LABEL_MIN_W = 130;           // boxes narrower than this on screen never get a label
+  var LABEL_MIN_W = 60;            // boxes narrower than this on screen never get a label
   var CARD_TEXT_W = 120;           // result cards carry their titles, and their links, once this wide on screen (px)
-  var TITLE_EM = 8.4, META_EM = 6.6, CARD_EM = 7.2, CARD_META_EM = 6.2;  // mean character advances of the label fonts (px)
+  var TITLE_EM = 8.4, COMPACT_EM = 7.3, META_EM = 6.6, CARD_EM = 7.2, CARD_META_EM = 6.2;  // mean character advances of the label fonts (px)
 
   // ---------------------------------------------------------------- small helpers
   function el(tag, cls, text) {
@@ -198,7 +198,7 @@
   var partLayer = svg("g"), routeLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), labelLayer = svg("g");
   canvas.append(defs, partLayer, routeLayer, resultLayer, cardRouteLayer, labelLayer);
   var pin = el("div", "pm-pin"); pin.hidden = true;
-  var hint = el("div", "pm-hint", "Scroll to zoom into a region. Search to jump to a theorem.");
+  var hint = el("div", "pm-hint", "");
   stage.append(canvas, pin, hint);
   var reader = el("aside", "pm-reader"); reader.setAttribute("aria-label", "Reading pane");
   var readerInner = el("div", "pm-reader-inner"); reader.append(readerInner);
@@ -317,7 +317,7 @@
     used = new Set();
     deepestAtCenter = part(ROOT);
     var onPath = state.selected && model.results.get(state.selected) ? new Set(chainOf(model.results.get(state.selected).home)) : null;
-    var labelBoxes = {}, opened = [], communities = [];
+    var labelBoxes = {}, opened = [], communities = [], drawn = new Set();
     (function visit(record) {
       if (!record.box) return;
       var b = screenBox(record.box);
@@ -327,17 +327,22 @@
       if (record.id !== ROOT) {
         if (open && covers(b)) deepestAtCenter = record;
         drawPart(record, b, open, onPath);
+        drawn.add(record.id);
         if (b.w >= LABEL_MIN_W) labelBoxes[record.id] = record.box;
       }
       if (!open) return;
       opened.push(record);
       record.kids.forEach(function (id) { visit(part(id)); });
       if (record.view) communities.push(record);
+      // Beside other children, a part's own results have a band of their own to name them.
+      if (record.ownBox && record.ownBox.band && record.kids.length && screenBox(record.ownBox).w >= LABEL_MIN_W) labelBoxes[record.id + "#results"] = record.ownBox;
     })(part(ROOT));
-    opened.forEach(drawRoutes);
-    communities.forEach(drawCommunity);
-    drawLabels(labelBoxes);
+    var slots = L.placeLabels(labelBoxes, cornerCamera(), size), labelled = new Set(slots.map(function (slot) { return slot.id; }));
+    opened.forEach(function (record) { drawRoutes(record, labelled); });
+    communities.forEach(function (record) { if (drawCommunity(record)) drawn.add(record.id + "#results"); });
+    drawLabels(slots);
     drawPin();
+    explainEmpty(drawn);
     keyed.forEach(function (node, key) { if (!used.has(key)) { node.remove(); keyed.delete(key); } });
     updateTrail();
     if (!state.selected) showPart(currentPart());
@@ -385,12 +390,14 @@
     return titleOf(route.to) + " uses " + titleOf(route.from) + ": " + num(main) + (main === 1 ? " link" : " links") +
       (route.both ? "; " + titleOf(route.from) + " uses " + titleOf(route.to) + ": " + num(back) + (back === 1 ? " link" : " links") : "");
   }
-  // The routes between an open part's children: the central ones at rest, and every route of the part in focus or under the pointer.
-  function drawRoutes(record) {
+  // The routes between an open part's children: the central ones at rest, once both ends carry a label (a route between
+  // two anonymous tiles is noise), and every route of the part in focus or under the pointer.
+  function drawRoutes(record, labelled) {
     var routes = routesAt.get(record.id) || [];
     routes.forEach(function (route) {
       var involved = [state.focusPart, state.hoverPart].some(function (id) { return id && (route.from === id || route.to === id); });
-      if ((!route.rest && !involved) || !route.points || !routeVisible(route.points)) return;
+      var resting = route.rest && labelled.has(route.from) && labelled.has(route.to);
+      if ((!resting && !involved) || !route.points || !routeVisible(route.points)) return;
       var dim = state.related && !(state.related.parts.has(route.from) && state.related.parts.has(route.to));
       var path = keep(routeLayer, "route:" + record.id + ":" + route.from + ">" + route.to, "path", {
         d: routePath(route.points, route.radius),
@@ -402,10 +409,10 @@
   }
   // A part's own results: status tiles while small, then cards with their titles and the links between them.
   function drawCommunity(record) {
-    var view = record.view, first = view.cards[record.results[0]];
+    var view = record.view, first = view.cards[record.results[0]], shown = 0;
     var text = !!first && first.w * camera.k >= CARD_TEXT_W;
-    record.results.forEach(function (id) { drawCard(model.results.get(id), view, text); });
-    if (!text) return;
+    record.results.forEach(function (id) { if (drawCard(model.results.get(id), view, text)) shown++; });
+    if (!text) return shown > 0;
     var selected = state.selected && model.results.get(state.selected) && model.results.get(state.selected).home === record.id ? state.selected : null;
     function titleOf(id) { var entry = model.results.get(id); return plain(entry ? entry.row.title : id); }
     view.routes.concat(selected ? view.implied.filter(function (route) { return route.from === selected || route.to === selected; }) : [])
@@ -418,11 +425,12 @@
           "stroke-width": involved ? 2 : 1.25, "marker-end": arrow(involved), "marker-start": route.both ? arrow(involved) : "none"});
         setText(path.firstChild || path.appendChild(svg("title")), linkWords(route, titleOf));
       });
+    return shown > 0;
   }
   function drawCard(entry, view, text) {
-    if (!entry || !entry.box) return;
+    if (!entry || !entry.box) return false;
     var b = screenBox(entry.box);
-    if (!onScreen(b) || b.w < 1) return;
+    if (!onScreen(b) || b.w < 1) return false;
     var row = entry.row, isSelected = row.id === state.selected;
     var dim = state.related ? !state.related.results.has(row.id) : state.facets && row.facet && !state.facets.has(row.facet);
     var holder = keep(resultLayer, "result:" + row.id, "g", {
@@ -432,7 +440,7 @@
     placeRect(card, b);
     card.setAttribute("rx", clamp(b.w * 0.04, 1, 8));
     if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(row.title);
-    if (!text) return;
+    if (!text) return true;
     var pad = 10, width = b.w - 2 * pad, cls = dim ? " pm-dimmed" : "";
     var lines = wrap(plain(row.title), Math.max(4, Math.floor(width / CARD_EM)), b.h >= 58 ? 2 : 1);
     lines.forEach(function (line, index) {
@@ -442,26 +450,34 @@
       var stub = view.stubs[row.id], meta = statusWords(row.status) + (stub && stub.usedBy ? " · used " + num(stub.usedBy) + "× elsewhere" : "");
       setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: b.y + b.h - pad, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
     }
+    return true;
   }
-  // Titles and progress in each box's header band, at fixed sizes, where the layout module finds room for them. A box
-  // whose band is still too thin gets its title over its top, on a backdrop in its own fill; nothing inside it is
-  // labelled yet, so nothing is covered.
-  function drawLabels(boxes) {
-    L.placeLabels(boxes, cornerCamera(), size).forEach(function (slot) {
-      var record = part(slot.id);
+  // Titles and progress in each box's header band, at fixed sizes, where the layout module finds room for them. Narrow
+  // boxes get one short title line. A box whose band is still too thin gets its title over its top, on a backdrop in
+  // its own fill; nothing inside it is labelled yet, so nothing is covered.
+  function drawLabels(slots) {
+    slots.forEach(function (slot) {
+      var own = /#results$/.test(slot.id), record = part(own ? slot.id.slice(0, -"#results".length) : slot.id);
       if (!record) return;
-      var cls = state.related && !state.related.parts.has(slot.id) ? " pm-dimmed" : "", title = plain(record.summary.title);
+      var cls = state.related && !state.related.parts.has(record.id) ? " pm-dimmed" : "";
+      var count = own ? record.results.length : 0;
+      var title = own ? num(count) + (count === 1 ? " result" : " results") + (slot.compact ? "" : " directly in " + plain(record.summary.title)) : plain(record.summary.title);
       if (slot.overlay) {
-        var b = screenBox(record.box), backdrop = keep(labelLayer, "lb:" + slot.id, "rect", {
-          class: "pm-backdrop pm-backdrop-" + (isOpen(record, b) ? "open" : tileKind(record.summary.status)) + cls, rx: 6});
+        var b = screenBox(own ? record.ownBox : record.box), backdrop = keep(labelLayer, "lb:" + slot.id, "rect", {
+          class: "pm-backdrop pm-backdrop-" + (own ? "open" : isOpen(record, b) ? "open" : tileKind(record.summary.status)) + cls, rx: 6});
         placeRect(backdrop, {x: b.x + 1, y: b.y + 1, w: b.w - 2, h: slot.band});
+      }
+      if (slot.compact) {
+        setText(keep(labelLayer, "lc:" + slot.id, "text", {x: slot.x, y: slot.y + Math.min(30, slot.band / 2 + 5), class: "pm-title pm-compact" + cls}),
+          clip(title, Math.max(3, Math.floor(slot.w / COMPACT_EM))));
+        return;
       }
       var lines = slot.lines === 2 ? wrap(title, Math.max(4, Math.floor(slot.w / TITLE_EM)), 2) : [clip(title, Math.max(4, Math.floor(slot.w / TITLE_EM)))];
       var y = slot.y + Math.min(30, slot.band / 2 + 6);
       lines.forEach(function (line, index) {
         setText(keep(labelLayer, "lt:" + slot.id + ":" + index, "text", {x: slot.x, y: y + index * 20, class: "pm-title" + cls}), line);
       });
-      if (slot.detail === "title") return;
+      if (slot.detail === "title" || own) return;
       var metaY = y + (lines.length - 1) * 20 + 18;
       setText(keep(labelLayer, "lm:" + slot.id, "text", {x: slot.x, y: metaY, class: "pm-meta" + cls}), clip(progressText(record.summary), Math.floor(slot.w / META_EM)));
       var api = record.summary.api || [];
@@ -470,6 +486,17 @@
         setText(keep(labelLayer, "la:" + slot.id, "text", {x: slot.x, y: metaY + 18, class: "pm-meta" + cls}), clip(text, Math.floor(slot.w / META_EM)));
       }
     });
+  }
+  // Zoomed into a gap, the stage would be blank under the pinned title: say where the reader is and how to get out.
+  var HINT = "Scroll to zoom into a region. Search to jump to a theorem.";
+  function explainEmpty(drawn) {
+    var record = currentPart(), text = HINT;
+    if (record && record.id !== ROOT && record.data && !state.selected) {
+      var inside = record.kids.some(function (id) { return drawn.has(id); }) || drawn.has(record.id + "#results");
+      if (!inside && (record.kids.length || record.results.length)) text = "You are between the parts of " + plain(record.summary.title) + ". Zoom out, or choose a part in the reading pane.";
+    }
+    if (hint.textContent !== text) hint.textContent = text;
+    hint.classList.toggle("pm-hint-strong", text !== HINT);
   }
   // Once the part the view is in has its header band scrolled off, its title stays pinned to the top of the stage.
   function drawPin() {
