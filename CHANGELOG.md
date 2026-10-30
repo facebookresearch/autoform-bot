@@ -108,11 +108,13 @@ date when the release is tagged.
 
 ### Fixed
 
-- **Large libraries' search index.** The explorer loads JSON up to 64 MiB,
-  and a whole-library index over 32 MiB leaves out statement summaries, so
-  search still matches titles and Lean names; publication warns when it
-  does. ATLAS's index had grown past the old 32 MiB limit, so search and the
-  Topics outline failed on every page.
+- **No size caps on published data.** The explorer loads its own site's
+  search index, map data, pages and concept links whatever their size, and
+  its timeout now measures a stalled transfer rather than a long one. Render
+  keeps the whole concept-links layer and reads any `atlas.json`, and notes a
+  search index over 32 MiB, which every explorer page downloads. ATLAS's
+  42 MB index had passed the old 32 MiB limit, so search and the Topics
+  outline failed on every page.
 - **Explorer review follow-ups.** Fit retains a selected unlinked result.
   Deferred list math cancels with its view and falls back to visible text on
   unavailable typesetting. Preview formatting keeps currency and code literal;
@@ -133,10 +135,9 @@ date when the release is tagged.
   heading; stale projection callbacks cannot steal focus. Outline, filters
   and self-hiding map controls keep native focus. Slash stays scoped; modified
   arrow keys stay native, and empty Escape no longer adds history entries (#442).
-- **Reading and index feedback.** Valid HTML character references keep title
-  math without admitting authored HTML. Publication warns when the exact
-  UTF-8 search index reaches 95% of the unchanged 32 MiB browser limit; nothing
-  is truncated or refused. Directory aliases retain statement fragments (#442).
+- **Reading feedback.** Valid HTML character references keep title math
+  without admitting authored HTML. Directory aliases retain statement
+  fragments (#442).
 - **Wiki references.** Section boundaries come from the site's converter, so
   Setext and formatted Sources headings cannot turn provenance into concept
   links. Formal dependencies, statuses and captured article bytes are unchanged (#442).

@@ -17,7 +17,7 @@
   if (window.AutoformNavigation) return;
 
   var HISTORY_KEY = "autoformNavigation", GRAPH_SCHEMA = "autoform-dag-view/v2", INDEX_SCHEMA = "autoform-dag-search/v1";
-  var WIKI_SCHEMA = "autoform-wiki-links/v1", WIKI_LIMIT = 32 * 1024 * 1024;
+  var WIKI_SCHEMA = "autoform-wiki-links/v1";
 
   function create(options) {
     options = options || {};
@@ -42,8 +42,6 @@
     var bound = new Map(), htmlCache = new Map(), jsonCache = new Map(), cacheBytes = 0;
     var decluttered = new WeakMap();
     var timeout = bounded(options.timeout, 15000, 1000, 60000);
-    var htmlLimit = bounded(options.htmlLimit, 8 * 1024 * 1024, 1024, 32 * 1024 * 1024);
-    var jsonLimit = bounded(options.jsonLimit, 64 * 1024 * 1024, 1024, 64 * 1024 * 1024);
     var cacheLimit = bounded(options.cacheBytes, 48 * 1024 * 1024, 1024, 128 * 1024 * 1024);
     var htmlEntries = bounded(options.htmlEntries, 8, 1, 32), jsonEntries = bounded(options.jsonEntries, 16, 1, 64);
     var sitePrefix = prefix(catalogueURL, initialDataURL, initialCanonical), homeURL = link(sitePrefix + "index.html", initialURL);
@@ -124,39 +122,37 @@
     }
     function captureIndexDigest(bytes) {
       // Hash the existing exact input before decoding; retain no JS byte buffers
-      // or closure over them. Native WebCrypto's one input copy is bounded.
+      // or closure over them.
       try {
         var subtle = win.crypto && win.crypto.subtle;
-        if (!subtle || typeof subtle.digest !== "function" || bytes.byteLength > WIKI_LIMIT) return Promise.resolve(null);
+        if (!subtle || typeof subtle.digest !== "function") return Promise.resolve(null);
         return subtle.digest("SHA-256", bytes).then(digestHex, digestUnavailable);
       } catch (_error) { return Promise.resolve(null); }
     }
-    async function fetchText(value, type, parentSignal, maximum) {
+    async function fetchText(value, type, parentSignal) {
       var href = link(value, initialURL); if (!href) throw new Error("Refusing an external data request");
       var key = resource(href), cache = type === "html" ? htmlCache : jsonCache;
-      var limit = type === "html" ? htmlLimit : jsonLimit;
-      if (Number.isSafeInteger(maximum)) limit = Math.min(limit, maximum);
       var cached = cacheGet(cache, key);
-      if (cached) { if (cached.bytes > limit) throw new Error("Published data is too large"); return cached; }
-      var controller = new AbortController(), expired = false;
+      if (cached) return cached;
+      var controller = new AbortController(), expired = false, timer = null;
       function abort() { controller.abort(); }
+      // The timeout measures a stall, not the whole transfer: each chunk restarts it, so size never times a request out.
+      function arm() { clearTimeout(timer); timer = setTimeout(function () { expired = true; controller.abort(); }, timeout); }
       if (parentSignal) {
         if (parentSignal.aborted) throw abortError();
         parentSignal.addEventListener("abort", abort, {once: true});
       }
-      var timer = setTimeout(function () { expired = true; controller.abort(); }, timeout);
+      arm();
       try {
         var response = await (options.fetch || win.fetch.bind(win))(key, {credentials: "same-origin", signal: controller.signal});
         if (!response.ok) throw new Error("HTTP " + response.status);
         var responseURL = link(response.url || key, key); if (!responseURL) throw new Error("Data redirected outside this site");
-        if (Number(response.headers.get("content-length")) > limit) throw new Error("Published data is too large");
         var text, length, digest = null, isCatalogue = type === "json" && catalogueURL && key === resource(catalogueURL);
         if (response.body && response.body.getReader) {
           var reader = response.body.getReader(), chunks = [], total = 0;
           while (true) {
             var chunk = await reader.read(); if (chunk.done) break;
-            total += chunk.value.byteLength;
-            if (total > limit) { await reader.cancel(); throw new Error("Published data is too large"); }
+            arm(); total += chunk.value.byteLength;
             chunks.push(chunk.value);
           }
           var bytes = new Uint8Array(total), offset = 0;
@@ -166,13 +162,11 @@
           bytes = null; chunks = null;
         } else if (isCatalogue && typeof response.arrayBuffer === "function") {
           var raw = new Uint8Array(await response.arrayBuffer());
-          if (raw.byteLength > limit) throw new Error("Published data is too large");
           digest = captureIndexDigest(raw);
           text = new TextDecoder("utf-8", {fatal: true}).decode(raw); length = raw.byteLength; raw = null;
         } else {
           // Older text-only peers remain readable, but cannot prove byte identity.
           text = await response.text(); length = new TextEncoder().encode(text).byteLength;
-          if (length > limit) throw new Error("Published data is too large");
         }
         if (parentSignal && parentSignal.aborted) throw abortError();
         var entry = {text: text, url: responseURL, bytes: length, indexDigest: digest};
@@ -330,8 +324,7 @@
       if (disposed) return Promise.resolve(null);
       if (wikiLinks && wikiLinks.availability !== "unavailable") return Promise.resolve(wikiLinks);
       if (wikiPromise) return wikiPromise;
-      var generation = ++wikiGeneration, controller = wikiController = new AbortController(), digest = null, expired = false;
-      var timer = setTimeout(function () { expired = true; controller.abort(); }, timeout);
+      var generation = ++wikiGeneration, controller = wikiController = new AbortController(), digest = null;
       function finish(value) {
         if (disposed || generation !== wikiGeneration) return null;
         if (value.availability === "unavailable" && wikiURL) cacheDelete(jsonCache, resource(wikiURL));
@@ -346,17 +339,17 @@
         if (!loadedIndex || !wikiURL) return finish(unavailableWiki("index_unavailable"));
         digest = await waitFor(indexDigest || Promise.resolve(null), controller.signal);
         if (!digest) return finish(unavailableWiki("index_unverified"));
-        var loaded = await waitFor(fetchText(wikiURL, "json", controller.signal, WIKI_LIMIT), controller.signal), payload;
+        var loaded = await waitFor(fetchText(wikiURL, "json", controller.signal), controller.signal), payload;
         try { payload = JSON.parse(loaded.text); } catch (_error) { return finish(unavailableWiki("invalid_layer", digest)); }
         // Map insertion order is the original validated offset identity, even
         // if a view reorders the public nodes array after receiving the index.
         var normalized = await normalizeWikiLinks(payload, digest, Array.from(indexed.keys()), controller.signal);
         if (loadedIndex !== index) return null;
         return finish(normalized);
-      })().catch(function () {
+      })().catch(function (error) {
+        var expired = error && error.message === "Published data request timed out";
         return finish(unavailableWiki(expired ? "request_timed_out" : "request_unavailable", digest));
       }).finally(function () {
-        clearTimeout(timer);
         if (generation === wikiGeneration) { wikiPromise = null; wikiController = null; }
       });
       return wikiPromise;
