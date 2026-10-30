@@ -9,6 +9,12 @@
   var clients = new Map();
   var clamp = function (value, low, high) { return Math.max(low, Math.min(high, value)); };
   var plural = function (count, one, many) { return count.toLocaleString() + " " + (count === 1 ? one : many); };
+  var num = function (value) { return value.toLocaleString(); };
+  var pressed = function (control, value) { control.setAttribute("aria-pressed", String(value)); };
+  // The book's caption for each declaration (render.DECLARATION_LABELS), so a card reads "Definition · defined" beside "Definition 1".
+  var KINDS = new Map(Object.entries({abbrev: "Abbreviation", axiom: "Axiom", class: "Class", corollary: "Corollary", def: "Definition",
+    definition: "Definition", example: "Example", inductive: "Inductive", instance: "Instance", lemma: "Lemma", proposition: "Proposition",
+    structure: "Structure", theorem: "Theorem"}));
 
   function element(tag, className, text) {
     var node = document.createElement(tag);
@@ -46,8 +52,9 @@
   }
 
   function refreshReadingLabels(root) {
-    if (root && window.AutoformMath && typeof window.AutoformMath.refresh === "function")
-      Promise.resolve(window.AutoformMath.refresh(root)).catch(function () {});
+    if (root && window.AutoformMath && typeof window.AutoformMath.refresh === "function") {
+      try { Promise.resolve(window.AutoformMath.refresh(root)).catch(function () {}); } catch (_error) {}
+    }
   }
 
   function safeHref(value) {
@@ -1118,7 +1125,7 @@
         if (node.member_count === undefined) unknown = true; else items += node.member_count;
         internal += node.internal_dependency_count || 0;
       });
-      projected.push({id: group.id, kind: "scope", title: group.area || "Unassigned topics", area: group.area || undefined,
+      projected.push({id: group.id, kind: "scope", title: group.area || "Other topics", area: group.area || undefined,
         _region: group.area || undefined, _overviewGroup: group.key, _topics: group.members.length,
         _unknownCount: unknown, member_count: items, status_counts: Array.from(counts.entries()),
         status: group.area ? group.members[0].status : "inventory_pending", internal_dependency_count: internal,
@@ -1296,21 +1303,25 @@
       ui$mode = "graph", ui$moved = false, ui$orientation = "lr", ui$pointers = new Map(), ui$pinch = null,
       ui$query = "", ui$searchLimit = 12, ui$selected = null, ui$searchCache = [], ui$searchCacheQuery = null,
       ui$searchError = null, ui$searchLoading = false, ui$searchNodes = data.nodes, ui$searchPromise = null,
-      ui$spotlight = null, ui$mapAllowed = mapAllowed, ui$readableCrop = false,
+      ui$spotlight = null, ui$mapAllowed = mapAllowed, ui$readableCrop = false, ui$mathJob = null,
       ui$selectedStatuses = new Set(presentStatuses), ui$showIsolated = true,
       ui$transform = {x: 20, y: 20, scale: 1}, ui$reading = Boolean(firstBundle && firstBundle.readingSource),
       ui$area = null, ui$overviewGroup = null, ui$scopeOverview = false, ui$overviewOnly = false, ui$filtersTouched = false, ui$relationIds = null,
+      ui$hovered = null,
       ui$requestedNode = firstBundle && firstBundle.nodeId || null, ui$outlineLimit = 120;
     if (!mapAllowed) ui$mode = "list";
     var dom$announcement, dom$body, dom$breadcrumb, dom$browse, dom$browseToggle, dom$browsePopover, dom$canvas, dom$ctx, dom$density, dom$edgeFieldset, dom$empty,
       dom$error, dom$filterPopover, dom$filterSummary, dom$filters, dom$fit, dom$graphMode, dom$hiddenButton,
-      dom$homeLink, dom$inspector, dom$inspectorInner, dom$inventory, dom$inventoryList, dom$inventoryRows,
+      dom$inspector, dom$inspectorInner, dom$inventory, dom$inventoryList, dom$inventoryRows,
       dom$inventoryScroll, dom$inventorySummary, dom$isolated, dom$listMode, dom$loadMore, dom$mapContext, dom$mapKey,
       dom$navigation, dom$navigationInner, dom$navigationNodes, dom$nodeLayer, dom$outlineToggle, dom$pageHeading,
       dom$readingBody, dom$readingContext, dom$readingNeighbors, dom$search, dom$searchResults,
       dom$searchWrap, dom$sheetHandle, dom$shelves, dom$sourcesMode, dom$stage, dom$statusFieldset, dom$statusInputs,
       dom$wholeSearch, dom$zoomIn, dom$zoomOut;
-    var overlays = new Map(), scheduled = false, firstResize = true, family;
+    var overlays = new Map(), scheduled = false, firstResize = true, family, hoverTimer;
+    // Cold native shelves can render mixed status rings before mount returns.
+    // Initialize their immutable order before any startup callback can run.
+    var LEGEND = "mathlib fully_proved proved defined conditional can_prove stated can_state not_ready planned".split(" ");
     host.classList.add("bp-dag-integrated");
 
     buildShell();
@@ -1366,7 +1377,7 @@
       ui$direction = saved.direction || "both"; ui$query = saved.query || ""; dom$search.value = ui$query;
       host.classList.toggle("bp-dag-outline-open", Boolean(saved.outlineOpen));
       if (dom$outlineToggle) dom$outlineToggle.setAttribute("aria-expanded", String(Boolean(saved.outlineOpen)));
-      ui$activeDirty = true; setSheet(saved.readingOpen !== false, ui$selected); refresh(false); resize();
+      ui$activeDirty = true; setSheet(saved.readingOpen !== false && 1, ui$selected); refresh(false); resize();
       if (saved.camera) ui$transform = Object.assign({}, saved.camera);
       return readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || ticket !== restoration || (isCurrent && !isCurrent())) { if (ticket === restoration) restoring = false; resolve(); return; }
@@ -1396,13 +1407,12 @@
     }
     function useIndex(index) {
       if (!index || sharedIndex === index) return;
-      sharedIndex = index; records = new Map();
+      sharedIndex = index; records = new Map(); dom$search.removeAttribute("aria-busy");
       index.nodes.forEach(function (node, i) { node._index = i; records.set(node.id, node); });
       ui$searchNodes = index.nodes; ui$searchCacheQuery = null;
-      dom$search.placeholder = "Search " + index.nodes.length.toLocaleString() + " roadmap entries";
       if (currentBundle) updateProjection();
-      renderNavigation(); renderReaderContext(); renderInventory(false); refresh(false);
-      if (ui$requestedNode) { fit(); centerIfHidden(ui$selected); }
+      renderNavigation(); refresh(false);
+      if (ui$requestedNode) fit();
       requestWikiLinks();
     }
     function requestWikiLinks() {
@@ -1526,16 +1536,19 @@
       var topicOverview = mapAllowed && data.nodes.length && (chapterOverview || topicCards) && !bundle.focus && !bundle.anchor && !(record && record.result);
       var mapRequested = Boolean(bundle.mapFirst && (ui$scopeOverview || ui$overviewOnly || mapAllowed && topicCards) && !bundle.anchor && !(record && record.result));
       var readingRequested = Boolean(bundle.focus && !mapRequested || bundle.anchor || record && record.result);
-      setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false : sheetLayout() && (topicOverview || mapRequested) ? false : readingRequested ||
+      setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false && 1 : sheetLayout() && (topicOverview || mapRequested) ? false : readingRequested ||
         !ui$scopeOverview && !ui$overviewOnly && (!sheetLayout() || Boolean(bundle.nodeId)), ui$selected);
       refresh(true); firstResize = true; resize();
-      if (ui$selected && mapAllowed) centerIfHidden(ui$selected);
       if (navigation) navigation.loadIndex().catch(showError);
       readingReady = readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || (isCurrent && !isCurrent())) { resolve(); return; }
-        var target = bundle.anchor && document.getElementById(bundle.anchor);
+        // A statement's anchor is on its card's heading; the whole card is the current reading.
+        var anchored = bundle.anchor && document.getElementById(bundle.anchor);
+        var target = anchored && (anchored.closest(".bp-thmwrapper") || anchored);
         if (target && dom$readingBody.contains(target)) {
-          target.classList.add("bp-reading-current");
+          target.classList.add("bp-reading-current"); target.setAttribute("aria-current", "true");
+          // The statement's own relations list replaces a separate strip, so it opens with the selection.
+          var relations = target.querySelector(".bp-dependencies"); if (relations) relations.open = true;
           if (!bundle.snapshot) dom$readingBody.scrollTop += target.getBoundingClientRect().top - dom$readingBody.getBoundingClientRect().top - 24;
         }
         if (bundle.focus && !mapRequested && dom$readingBody && !bundle.snapshot) {
@@ -1551,24 +1564,28 @@
     }
     function routeTrail(bundle) {
       var home = navigation && navigation.getHomeURL && navigation.getHomeURL();
+      var atHome = false, group = currentOverviewGroup();
       if (home && bundle.url && !bundle.nodeId) {
         var at = new URL(bundle.url), start = new URL(home);
-        if (at.origin === start.origin && at.pathname === start.pathname && at.search === start.search) return [{label: "Home"}];
+        atHome = at.origin === start.origin && at.pathname === start.pathname && at.search === start.search;
       }
+      if (atHome && !ui$area && !group) return [{label: "Home"}];
       var entries = [], record = records.get(bundle.nodeId), pending = records.get(bundle.scope), seen = new Set();
-      if (!pending) entries = (bundle.graph.view && bundle.graph.view.breadcrumbs || []).slice();
-      while (pending && !seen.has(pending.id)) {
+      if (!atHome && !pending) entries = (bundle.graph.view && bundle.graph.view.breadcrumbs || []).slice();
+      while (!atHome && pending && !seen.has(pending.id)) {
         seen.add(pending.id);
-        if (["collection", "transparent"].indexOf(pending.navigation) < 0) entries.unshift({label: pending.title, reading_title: pending.reading_title,
+        // A collection never stands between crumbs, but its own page ends the trail with it, as the map header does.
+        var own = pending.id === bundle.scope && pending.navigation === "collection";
+        if (own || ["collection", "transparent"].indexOf(pending.navigation) < 0) entries.unshift({label: pending.title, reading_title: pending.reading_title,
           url: pending.id === bundle.scope && (!record || record.id === pending.id) && !ui$overviewGroup && !ui$area ? null : pending.route || pending.url,
           _overviewParent: pending.id === bundle.scope && Boolean(ui$overviewGroup || ui$area)});
         pending = records.get(semanticParent(pending));
       }
       if (record && record.scope !== record.id) entries.push({label: record.title, reading_title: record.reading_title});
       if (ui$area) entries.push({label: ui$area});
-      var group = currentOverviewGroup();
-      if (group) entries.push({label: group.area || group.title || "Unassigned topics", reading_title: group.reading_title});
-      if (home) entries.unshift({label: "Home", url: home});
+      if (group) entries.push({label: group.area || group.title || "Other topics", reading_title: group.reading_title});
+      // The same Home crumb leads back in place while an area or group is open on the home map.
+      if (home) entries.unshift({label: "Home", url: home, _overviewParent: atHome});
       return entries;
     }
     function currentOverviewGroup() {
@@ -1652,7 +1669,7 @@
       ui$scopeOverview = Boolean(scopeOverview); ui$overviewGroup = scopeOverview && scopeOverview.selectedGroup || null;
       host.classList.toggle("bp-dag-scope-overview", ui$scopeOverview);
       host.classList.toggle("bp-dag-area-expanded", Boolean(navigation && ui$area));
-      adoptGraph(projected); ui$mapAllowed = mapAllowed; ui$activeDirty = true; ui$spotlight = null;
+      adoptGraph(projected); ui$mapAllowed = mapAllowed; ui$activeDirty = true; ui$spotlight = ui$hovered = null;
       overlays.forEach(function (control) { control.remove(); }); overlays.clear();
       ui$selected = byId.get(ui$requestedNode) || null;
       if (!ui$filtersTouched) ui$selectedStatuses = new Set(presentStatuses);
@@ -1660,6 +1677,16 @@
       if (dom$statusFieldset) renderStatusFields();
       renderBreadcrumb();
       projectWikiView();
+    }
+    // Where a result or topic lives: the nearest topics above it, short of the root or of the page a list belongs to,
+    // so rows that share a title, such as ATLAS's 93 "Conjecture"s, tell themselves apart.
+    function placeOf(node, stop) {
+      var record = records.get(recordId(node)) || node, names = [], seen = new Set();
+      var pending = records.get(record.scope === record.id ? semanticParent(record) : record.scope);
+      while (pending && pending.id !== stop && !seen.has(pending.id) && semanticParent(pending)) {
+        seen.add(pending.id); names.unshift(pending.title); pending = records.get(semanticParent(pending));
+      }
+      return names.slice(-2).join(" › ");
     }
     function expandedGroupShelves(payload) {
       var overview = payload._scopeOverview, group = overview && overview.groups.find(function (item) { return item.key === overview.selectedGroup; });
@@ -1687,14 +1714,15 @@
       }
       return parent && parent.id;
     }
+    function bindNodeLink(link, id, settings) {
+      link.addEventListener("click", function (event) {
+        if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault(); navigation.navigateNode(id, settings);
+      });
+    }
     function renderOutline() {
       var key = currentBundle && currentBundle.scope, tree = outlineProjection(sharedIndex.nodes, key,
         currentBundle && currentBundle.nodeId, ui$outlineLimit);
-      if (dom$homeLink) {
-        var home = navigation && navigation.getHomeURL && navigation.getHomeURL();
-        dom$homeLink.textContent = "Library"; dom$homeLink.href = home || tree.root && (tree.root.route || tree.root.url) || "";
-        dom$homeLink.title = "Home"; dom$homeLink.setAttribute("aria-label", "Open site home");
-      }
       var list = element("ul", "bp-dag-navigation-list");
       tree.entries.forEach(function (entry) {
         var node = entry.node, item = element("li", "bp-outline-depth-" + entry.depth);
@@ -1703,10 +1731,7 @@
         link.href = node.route || node.url; link.title = node.title; link.dataset.navigationNodeId = node.id;
         if (node.id === (currentBundle && currentBundle.nodeId || key)) link.setAttribute("aria-current", "page");
         item.appendChild(link); list.appendChild(item);
-        link.addEventListener("click", function (event) {
-          if (event.defaultPrevented || event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-          event.preventDefault(); navigation.navigateNode(node.id, {history: "push", focus: true});
-        });
+        bindNodeLink(link, node.id, {history: "push", focus: true});
       });
       dom$navigationInner.appendChild(element("h2", "bp-outline-label", "Topics")); dom$navigationInner.appendChild(list);
       if (tree.entries.length < tree.total) {
@@ -1732,34 +1757,11 @@
       var node = ui$selected, record = records.get(currentBundle && currentBundle.nodeId || ui$requestedNode || (node && node.id)), scope = record && records.get(record.scope);
       if (scope && record.id !== scope.id) {
         var around = readingLabel("a", "bp-reading-around", scope.title, scope.reading_title, "← "); around.href = scope.route || scope.url;
-        around.addEventListener("click", function (event) { if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-          event.preventDefault(); navigation.navigateNode(scope.id, {history: "push"}); }); dom$readingContext.appendChild(around);
+        bindNodeLink(around, scope.id, {history: "push", focus: "reading"}); dom$readingContext.appendChild(around);
       }
+      syncSheetAccessibility();
       if (!record && !node) return;
-      var links = neighborIds(record ? record.id : node.id), weights = relationCounts(
-        sharedIndex && sharedIndex.relations || [], record ? record.id : node.id);
-      var row = element("div", "bp-reading-links");
-      [["Prerequisites", links.before], ["Used by", links.after]].forEach(function (pair) {
-        var group = element("div", "bp-reading-related"); group.appendChild(element("strong", "", pair[0] + " · " + pair[1].length));
-        pair[1].slice(0, 5).forEach(function (id) { var related = records.get(id); if (!related) return;
-          var link = readingLabel("a", "", related.title, related.reading_title); link.href = related.route || related.url;
-          var counts = (pair[1] === links.before ? weights.before : weights.after).get(id);
-          if (counts) {
-            var description = [counts.statement && plural(counts.statement, "statement dependency", "statement dependencies"),
-              counts.proof && plural(counts.proof, "proof dependency", "proof dependencies")].filter(Boolean).join(", ");
-            link.title = related.title + " · " + description;
-            link.setAttribute("aria-label", link.title);
-          }
-          link.addEventListener("click", function (event) { if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-            event.preventDefault(); navigation.navigateNode(id, {history: "push"}); }); group.appendChild(link);
-        });
-        if (pair[1].length > 5) { var more = button("bp-dag-hidden-button", "Show all " + pair[1].length);
-          more.addEventListener("click", function () { ui$relationIds = pair[1]; setMode("list", true); }); group.appendChild(more); }
-        row.appendChild(group);
-      });
-      if (links.before.length || links.after.length) {
-        if (retainedWiki) dom$readingNeighbors.insertBefore(row, retainedWiki); else dom$readingNeighbors.appendChild(row);
-      }
+      // A result's relations show once, in the statement's own Uses / Used by lists; the reader adds only its topic's other pages.
       var peers = topicPeers(record ? record.id : node.id);
       if (peers && peers.nodes.length) {
         var more = element("details", "bp-reading-related-topics");
@@ -1768,20 +1770,14 @@
         var list = element("ul", "bp-reading-topic-list");
         peers.nodes.slice(0, 5).forEach(function (peer) {
           var item = element("li"), link = readingLabel("a", "", peer.title, peer.reading_title); link.href = peer.route || peer.url;
-          link.addEventListener("click", function (event) {
-            if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-            event.preventDefault(); navigation.navigateNode(peer.id, {history: "push", focus: "reading"});
-          });
+          bindNodeLink(link, peer.id, {history: "push", focus: "reading"});
           item.appendChild(link); list.appendChild(item);
         });
         more.appendChild(list);
         if (peers.nodes.length > 5) {
           var browse = readingLabel("a", "bp-reading-topic-browse", peers.owner.title, peers.owner.reading_title, "Browse ");
           browse.href = peers.owner.route || peers.owner.url;
-          browse.addEventListener("click", function (event) {
-            if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-            event.preventDefault(); navigation.navigateNode(peers.owner.id, {history: "push", focus: "reading"});
-          });
+          bindNodeLink(browse, peers.owner.id, {history: "push", focus: "reading"});
           more.appendChild(browse);
         }
         dom$readingNeighbors.appendChild(more);
@@ -1806,36 +1802,53 @@
       var head = element("header", "bp-dag-head");
       var context = element("div", "bp-dag-context");
       var crumbs = dom$breadcrumb = element("nav", "bp-dag-breadcrumb");
-      crumbs.setAttribute("aria-label", "Explorer context");
+      crumbs.setAttribute("aria-label", "Breadcrumb");
       renderBreadcrumb(); context.appendChild(crumbs);
       head.appendChild(context);
+      // The explorer hides Material's header and its sun or moon, so this clicks that toggle: the one label Material leaves
+      // unhidden, which points at the next palette entry, so a three-entry automatic palette steps on as Material's own does.
+      // A palette list without toggle keys draws the form but no label, so it gets no switch.
+      var schemes = document.querySelector("[data-md-component=palette]");
+      if (schemes && schemes.querySelector("label")) {
+        var themeLabel = "Switch light or dark theme", flip = button("bp-dag-button bp-dag-theme", "", themeLabel), svg = "http://www.w3.org/2000/svg";
+        // A drawn half-disc in the text colour, rather than a half-circle glyph that each fallback font draws at its own size.
+        var icon = document.createElementNS(svg, "svg"); icon.setAttribute("viewBox", "0 0 20 20"); icon.setAttribute("aria-hidden", "true");
+        [["circle", {cx: 10, cy: 10, r: 7.25, fill: "none", stroke: "currentColor", "stroke-width": 1.5}], ["path", {d: "M10 2.75a7.25 7.25 0 0 1 0 14.5z", fill: "currentColor"}]].forEach(function (shape) {
+          var part = document.createElementNS(svg, shape[0]); Object.keys(shape[1]).forEach(function (key) { part.setAttribute(key, shape[1][key]); }); icon.appendChild(part);
+        });
+        flip.appendChild(icon);
+        flip.title = themeLabel; context.appendChild(flip);
+        flip.onclick = function () { var next = schemes.querySelector("label:not([hidden])"); if (next) next.click(); };
+      }
 
       var toolbar = element("div", "bp-dag-toolbar");
       toolbar.setAttribute("role", "group"); toolbar.setAttribute("aria-label", "Dependency explorer controls");
-      dom$outlineToggle = button("bp-dag-button bp-dag-outline-toggle", "Topics", "Toggle topic outline");
-      dom$outlineToggle.setAttribute("aria-expanded", "false"); toolbar.appendChild(dom$outlineToggle);
+      // Its name is its visible word, so speech input can say "Topics"; aria-expanded gives its state. It follows search, which a
+      // phone puts on a row of its own, so the tab order runs along the rows instead of from Topics up to search and back down.
+      dom$outlineToggle = button("bp-dag-button bp-dag-outline-toggle", "Topics");
+      dom$outlineToggle.setAttribute("aria-expanded", "false");
       var searchWrap = dom$searchWrap = element("div", "bp-dag-search-wrap");
       dom$search = element("input", "bp-dag-search");
-      dom$search.type = "search"; dom$search.placeholder = "Search the roadmap";
-      dom$search.setAttribute("aria-label", "Search all graph nodes");
+      dom$search.type = "search"; dom$search.placeholder = "Search titles and Lean names";
+      dom$search.setAttribute("aria-label", "Search titles and Lean names");
       dom$search.setAttribute("aria-controls", "bp-dag-search-results-" + instance);
       dom$searchResults = element("div", "bp-dag-search-results"); dom$searchResults.id = "bp-dag-search-results-" + instance;
       dom$searchResults.setAttribute("role", "region"); dom$searchResults.setAttribute("aria-label", "Search results");
       dom$searchResults.hidden = true;
-      searchWrap.appendChild(dom$search); searchWrap.appendChild(dom$searchResults); toolbar.appendChild(searchWrap);
+      searchWrap.append(dom$search, dom$searchResults); toolbar.append(searchWrap, dom$outlineToggle);
 
       dom$filters = element("div", "bp-dag-filters");
-      dom$filterSummary = button("bp-dag-filter-summary", "Status"); dom$filterSummary.setAttribute("aria-expanded", "false");
+      dom$filterSummary = button("bp-dag-filter-summary", "Filter: all statuses"); dom$filterSummary.setAttribute("aria-expanded", "false");
       dom$filterPopover = element("div", "bp-dag-filter-popover"); dom$filterPopover.hidden = true;
       dom$filterPopover.id = "bp-dag-filters-" + instance; dom$filterSummary.setAttribute("aria-controls", dom$filterPopover.id);
       var fieldset = dom$statusFieldset = element("fieldset"); dom$statusInputs = new Map();
       var edges = dom$edgeFieldset = element("fieldset", "bp-dag-isolated"), isolated = element("label", "bp-dag-check");
-      edges.appendChild(element("legend", "", "Edges"));
+      edges.appendChild(element("legend", "", "Links"));
       dom$isolated = element("input"); dom$isolated.type = "checkbox"; isolated.appendChild(dom$isolated);
-      isolated.appendChild(document.createTextNode("Include items without edges")); edges.appendChild(isolated);
+      isolated.appendChild(document.createTextNode("Show unlinked")); edges.appendChild(isolated);
       renderStatusFields();
-      dom$filterPopover.appendChild(fieldset); dom$filterPopover.appendChild(edges);
-      dom$filters.appendChild(dom$filterSummary); dom$filters.appendChild(dom$filterPopover); toolbar.appendChild(dom$filters);
+      dom$filterPopover.append(fieldset, edges);
+      dom$filters.append(dom$filterSummary, dom$filterPopover); toolbar.appendChild(dom$filters);
 
       dom$graphMode = button("bp-dag-button", "Back to map"); dom$graphMode.hidden = true;
       dom$graphMode.disabled = !mapAllowed; toolbar.appendChild(dom$graphMode);
@@ -1853,50 +1866,50 @@
 
       var zoomGroup = element("div", "bp-dag-zoom"); zoomGroup.setAttribute("role", "group"); zoomGroup.setAttribute("aria-label", "Zoom controls");
       dom$zoomOut = button("bp-dag-button", "−", "Zoom out"); dom$zoomIn = button("bp-dag-button", "+", "Zoom in");
-      var fitLabel = "Fit shown nodes";
+      var fitLabel = "Fit the map";
       dom$fit = button("bp-dag-button bp-dag-fit", "Fit", fitLabel); dom$fit.title = fitLabel;
-      zoomGroup.appendChild(dom$zoomOut); zoomGroup.appendChild(dom$zoomIn); zoomGroup.appendChild(dom$fit); toolbar.appendChild(zoomGroup);
+      zoomGroup.append(dom$zoomOut, dom$zoomIn, dom$fit); toolbar.appendChild(zoomGroup);
 
       dom$hiddenButton = button("bp-dag-hidden-button", ""); toolbar.appendChild(dom$hiddenButton);
       head.appendChild(toolbar);
       dom$error = element("div", "bp-dag-error"); dom$error.setAttribute("role", "alert"); dom$error.hidden = true; head.appendChild(dom$error);
-      var bookLink = dom$homeLink = element("a", "bp-dag-book", "Library");
-      bookLink.href = navigation.getHomeURL && navigation.getHomeURL() || safeHref(view.book) || currentBundle.url; context.insertBefore(bookLink, crumbs);
       host.appendChild(head);
 
       var body = dom$body = element("div", "bp-dag-body"), main = element("div", "bp-dag-main");
       dom$navigation = element("aside", "bp-dag-navigation");
-      dom$navigation.setAttribute("aria-label", "Wiki hierarchy");
+      dom$navigation.setAttribute("aria-label", "Topics");
       dom$navigationInner = element("div", "bp-dag-navigation-inner");
       dom$navigation.appendChild(dom$navigationInner); body.appendChild(dom$navigation);
       renderNavigation();
       dom$stage = element("section", "bp-dag-stage"); dom$stage.setAttribute("role", "region");
-      dom$stage.setAttribute("aria-label", "Dependency graph. Drag or scroll to pan, " +
-        "use Control or Command plus scroll to zoom, and use arrow keys between node buttons.");
+      // The region says what it is in the page's own word; how to work it is its description, keys first.
+      var help = element("p", "bp-dag-sr-only", "Arrow keys move between cards, Enter opens one, plus and minus zoom, 0 fits the map, " +
+        "and Escape clears the selection. Drag or scroll to pan, and Control or Command with scroll to zoom.");
+      help.id = "bp-dag-map-help-" + instance; dom$stage.setAttribute("aria-label", "Map"); dom$stage.setAttribute("aria-describedby", help.id);
       dom$canvas = element("canvas", "bp-dag-canvas"); dom$canvas.setAttribute("aria-hidden", "true");
       dom$nodeLayer = element("div", "bp-dag-node-layer"); dom$density = element("div", "bp-dag-density"); dom$density.hidden = true;
       dom$mapContext = element("div", "bp-map-context"); dom$mapKey = element("div", "bp-map-key");
       dom$stage.appendChild(dom$mapContext); dom$stage.appendChild(dom$mapKey);
-      dom$empty = element("div", "bp-dag-empty", data.nodes.length ? "No nodes match these controls." :
-        "No formal graph entries in this scope."); dom$empty.hidden = true;
-      dom$stage.appendChild(dom$canvas); dom$stage.appendChild(dom$nodeLayer);
-      dom$stage.appendChild(dom$density); dom$stage.appendChild(dom$empty);
+      dom$empty = element("div", "bp-dag-empty", data.nodes.length ? "Nothing matches these filters." :
+        "This roadmap has no articles yet."); dom$empty.hidden = true;
+      dom$stage.append(help, dom$canvas, dom$nodeLayer, dom$density, dom$empty);
       main.appendChild(dom$stage);
       dom$shelves = element("section", "bp-scope-shelves"); dom$shelves.hidden = true;
-      dom$shelves.setAttribute("aria-label", "Developments in this scope"); main.appendChild(dom$shelves);
+      dom$shelves.setAttribute("aria-label", "Not on the map"); main.appendChild(dom$shelves);
 
       dom$inventory = element("section", "bp-dag-inventory"); dom$inventory.hidden = true;
-      dom$inventory.setAttribute("aria-label", "Complete node inventory");
-      var inventoryHead = element("div", "bp-dag-inventory-head"); inventoryHead.appendChild(element("h2", "", "Contents"));
+      var inventoryHead = element("div", "bp-dag-inventory-head"), inventoryHeading = inventoryHead.appendChild(element("h2", "", "Contents"));
+      // The list is named by its heading, "Statements" or "Source texts", not a fixed label.
+      inventoryHeading.id = "bp-dag-inventory-heading-" + instance; dom$inventory.setAttribute("aria-labelledby", inventoryHeading.id);
       dom$inventorySummary = element("span", "bp-dag-inventory-summary"); inventoryHead.appendChild(dom$inventorySummary);
       dom$wholeSearch = button("bp-dag-whole-search", "search the whole roadmap");
       dom$inventoryScroll = element("div", "bp-dag-inventory-scroll"); dom$inventoryList = element("ul", "bp-dag-inventory-list");
       dom$inventoryScroll.appendChild(dom$inventoryList); dom$loadMore = button("bp-dag-load-more", "Show more nodes");
-      dom$inventory.appendChild(inventoryHead); dom$inventory.appendChild(dom$inventoryScroll); dom$inventory.appendChild(dom$loadMore);
+      dom$inventory.append(inventoryHead, dom$inventoryScroll, dom$loadMore);
       main.appendChild(dom$inventory); body.appendChild(main);
 
       dom$inspector = element("aside", "bp-dag-inspector bp-reading-pane"); dom$inspector.setAttribute("aria-label", "Mathematical reading");
-      dom$sheetHandle = button("bp-dag-sheet-handle", "Reading", "Toggle mathematical reading");
+      dom$sheetHandle = button("bp-dag-sheet-handle", "Reading", "");
       dom$sheetHandle.setAttribute("aria-expanded", "false");
       dom$inspectorInner = element("div", "bp-dag-inspector-inner");
       dom$inspectorInner.id = "bp-dag-inspector-content-" + instance;
@@ -1905,11 +1918,14 @@
       dom$inspector.appendChild(dom$inspectorInner); body.appendChild(dom$inspector); host.appendChild(body);
       dom$readingContext = element("div", "bp-reading-context");
       dom$readingBody = element("article", "bp-reading-body md-typeset");
-      dom$readingNeighbors = element("section", "bp-reading-neighbors");
       dom$inspectorInner.appendChild(dom$readingContext);
       dom$inspectorInner.appendChild(dom$readingBody);
+      dom$readingNeighbors = element("section", "bp-reading-neighbors");
       dom$inspectorInner.appendChild(dom$readingNeighbors);
       navigation.bindReader(dom$readingBody);
+      // A full phone reader hides the toolbar, so a pill at the bottom drops it back to its peek.
+      var mapButton = button("bp-reading-map", "Map", "Show the map"); dom$inspector.appendChild(mapButton);
+      mapButton.addEventListener("click", function () { setSheet(false, ui$selected); dom$sheetHandle.focus(); writeLocation("replace"); });
       dom$announcement = element("p", "bp-dag-sr-only"); dom$announcement.setAttribute("aria-live", "polite"); host.appendChild(dom$announcement);
       dom$ctx = dom$canvas.getContext("2d");
       // Reset the probe first: a rejected site font must not inherit an earlier 11px font.
@@ -1918,22 +1934,30 @@
       if (dom$ctx.font.indexOf("11px") < 0) family = "sans-serif";
     }
 
-    function trailList(entries, className) {
+    function trailList(entries, className, whole) {
       var list = element("ol", className);
+      // A folded trail keeps its ends, first / … / parent / current, and the "…" names the ancestors it stands for.
+      if (!className && !whole && entries.length > 3) entries = [entries[0], {label: "…", hidden: entries.slice(1, -2).map(function (entry) { return entry.label; }).join(" / ")}].concat(entries.slice(-2));
       entries.forEach(function (entry, index) {
         var href = safeHref(entry.url), item = href ? element("li") : readingLabel("li", "", entry.label, entry.reading_title);
-        item.title = entry.label;
+        item.title = entry.hidden || entry.label;
         if (href) {
-          var link = readingLabel("a", "", entry.label, entry.reading_title); link.href = href; link.title = entry.label;
+          var link = readingLabel("a", !className && index === 0 ? "bp-dag-book" : "", entry.label, entry.reading_title); link.href = href; link.title = entry.label;
           link.addEventListener("click", function (event) {
             if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
                 new URL(href).origin !== window.location.origin) return;
             event.preventDefault();
-            if (entry._overviewParent && (ui$scopeOverview && ui$overviewGroup || ui$area)) setMode("regions", true);
-            else navigation.navigate(href, {history: "push", focus: true, mapFirst: true});
+            if (entry._overviewParent && (ui$scopeOverview && ui$overviewGroup || ui$area)) {
+              // The trail is rebuilt under the click, so focus goes to the card of the area or group just left.
+              var left = ui$overviewGroup || ui$area; setMode("regions", true);
+              var back = ui$active.find(function (node) { return node._overviewGroup === left || node._region === left; }) || ui$active[0];
+              if (back) { centerIfHidden(back); focusNodeControl(back); }
+            } else navigation.navigate(href, {history: "push", focus: true,
+              mapFirst: href !== (navigation.getHomeURL && navigation.getHomeURL())});
           });
           item.appendChild(link);
         }
+        else if (entry.hidden) item.appendChild(element("span", "bp-dag-sr-only", entry.hidden));
         else if (!className && index === entries.length - 1) item.setAttribute("aria-current", "page");
         list.appendChild(item);
       });
@@ -1941,9 +1965,19 @@
     }
     function renderBreadcrumb() {
       if (!dom$breadcrumb || !currentBundle) return;
-      var entries = routeTrail(currentBundle);
-      dom$breadcrumb.replaceChildren(trailList(entries.length ? entries : [{label: data.title || "Dependencies"}]));
+      var entries = routeTrail(currentBundle); if (!entries.length) entries = [{label: data.title || "Dependencies"}];
+      var active = document.activeElement, retained = dom$breadcrumb.contains(active) && active.href;
+      // A deep trail shows every crumb, which give way to ellipses as the row narrows, and folds its middle into "…" only
+      // when even that cannot fit: a fold that hid the chapter of every Hartshorne result left most of a wide row empty.
+      dom$breadcrumb.replaceChildren(trailList(entries, null, !sheetLayout()));
+      if (!sheetLayout() && entries.length > 3 && dom$breadcrumb.scrollWidth > dom$breadcrumb.clientWidth + 1) dom$breadcrumb.replaceChildren(trailList(entries));
       refreshReadingLabels(dom$breadcrumb);
+      renderBreadcrumb.$width = dom$breadcrumb.clientWidth;
+      if (retained) {
+        var link = Array.from(dom$breadcrumb.querySelectorAll("a")).find(function (item) { return item.href === retained; });
+        if (link) link.focus({preventScroll: true});
+        else { dom$breadcrumb.tabIndex = -1; dom$breadcrumb.focus({preventScroll: true}); }
+      }
     }
     function renderNavigation() {
       if (!dom$navigationInner) return;
@@ -1966,6 +2000,7 @@
         ui$query = dom$search.value.trim(); ui$searchLimit = 12; ui$listLimit = LIST_PAGE;
         if (ui$mode === "list") closeSearch(); else renderSearch();
         renderInventory(true); if (ui$query) ensureGlobalSearch();
+        if (ui$mode !== "graph") announceShown();
         remember();
       });
       dom$search.addEventListener("keydown", function (event) {
@@ -2003,7 +2038,7 @@
       });
       dom$isolated.addEventListener("change", function () {
         ui$showIsolated = dom$isolated.checked; ui$activeDirty = true;
-        writeLocation("replace"); refresh(true);
+        writeLocation("replace"); refresh(true); announceShown();
       });
       dom$graphMode.addEventListener("click", function () { setMode("graph", true); if (ui$mode === "graph") focusNodeControl(); });
       dom$listMode.addEventListener("click", function () { setBrowse(false); ui$relationIds = null; setMode("list", true); });
@@ -2011,7 +2046,11 @@
       dom$zoomIn.addEventListener("click", function () { zoomAt(1.24, dom$stage.clientWidth / 2, dom$stage.clientHeight / 2); });
       dom$zoomOut.addEventListener("click", function () { zoomAt(.8, dom$stage.clientWidth / 2, dom$stage.clientHeight / 2); });
       dom$fit.addEventListener("click", fit); dom$hiddenButton.addEventListener("click", revealAll);
-      dom$loadMore.addEventListener("click", function () { ui$listLimit += LIST_PAGE; renderInventory(false); });
+      // Paging rebuilds the rows and may hide the button, so focus moves to the first new row, as search's paging does.
+      dom$loadMore.addEventListener("click", function () {
+        var previous = dom$inventoryRows ? dom$inventoryRows.size : 0; ui$listLimit += LIST_PAGE; renderInventory(false);
+        var rows = dom$inventoryList.querySelectorAll(".bp-dag-inventory-row"); if (rows[previous]) rows[previous].focus();
+      });
       dom$wholeSearch.addEventListener("click", openResults);
       if (dom$outlineToggle) dom$outlineToggle.addEventListener("click", function () {
         var open = !host.classList.contains("bp-dag-outline-open"); host.classList.toggle("bp-dag-outline-open", open);
@@ -2022,8 +2061,33 @@
         }
         remember();
       });
-      dom$sheetHandle.addEventListener("click", function () {
-        setSheet(!host.classList.contains("bp-dag-sheet-open"), ui$selected);
+      // On a phone the handle drags the reader, which snaps to the nearest of peek, half and full.
+      var drag = null, dragged = false;
+      dom$sheetHandle.addEventListener("pointerdown", function (event) {
+        dragged = false; if (!navigation || !sheetLayout()) return;
+        drag = [event.clientY, sheetTop()];
+        dom$sheetHandle.setPointerCapture(event.pointerId);
+      });
+      dom$sheetHandle.addEventListener("pointermove", function (event) {
+        if (!drag || !dragged && Math.abs(event.clientY - drag[0]) <= 8) return;
+        dragged = true; dom$inspector.style.transition = "none";
+        dom$inspector.style.transform = "translateY(" + clamp(drag[1] + event.clientY - drag[0], 0, dom$inspector.clientHeight - 56) + "px)";
+      });
+      function sheetTop() { return dom$inspector.getBoundingClientRect().top - dom$body.getBoundingClientRect().top; }
+      function dropSheet() {
+        if (!drag) return; drag = null; if (!dragged) return;
+        var height = dom$inspector.clientHeight, top = sheetTop();
+        dom$inspector.style.transition = dom$inspector.style.transform = "";
+        // Full is at 0, half at 45% and peek 56px from the bottom; these are the midpoints between them.
+        setSheet(top < height * .225 ? 2 : top < height * .725 - 28 ? 1 : 0, ui$selected); writeLocation("replace");
+      }
+      dom$sheetHandle.addEventListener("pointerup", dropSheet); dom$sheetHandle.addEventListener("pointercancel", dropSheet);
+      dom$sheetHandle.addEventListener("click", function (event) {
+        // The drag already placed the sheet; a keyboard click has no detail.
+        if (dragged && event.detail) return;
+        var open = host.classList.contains("bp-dag-sheet-open");
+        // A tap on a phone cycles peek, half and full.
+        setSheet(navigation && sheetLayout() ? (open + host.classList.contains("bp-dag-sheet-full") + 1) % 3 : !open, ui$selected);
         if (navigation && !sheetLayout() && host.classList.contains("bp-dag-sheet-open")) {
           dom$readingBody.tabIndex = -1; dom$readingBody.focus({preventScroll: true});
         }
@@ -2034,8 +2098,10 @@
       });
       dom$stage.addEventListener("pointerdown", pointerDown); dom$stage.addEventListener("pointermove", pointerMove);
       dom$stage.addEventListener("pointerup", pointerUp); dom$stage.addEventListener("pointercancel", pointerUp);
+      // Only the camera places cards; native focus must not scroll the hidden layer away from Canvas.
       dom$nodeLayer.addEventListener("scroll", function () { dom$nodeLayer.scrollLeft = 0; dom$nodeLayer.scrollTop = 0; });
       dom$stage.addEventListener("wheel", function (event) {
+        if (dom$mapKey.contains(event.target)) return;
         var zoom = event.ctrlKey || event.metaKey, pixels = event.deltaMode === 1 ? 25 : 1;
         event.preventDefault();
         if (!zoom) { ui$transform.x -= event.deltaX * pixels; ui$transform.y -= event.deltaY * pixels; schedule(); remember(); return; }
@@ -2054,7 +2120,9 @@
         if (!own && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || "") || target.isContentEditable)) return;
         if ((event.key === "/" && !own && host.contains(target) && !event.metaKey && !event.ctrlKey && !event.altKey) ||
             ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k")) {
-          event.preventDefault(); dom$search.focus(); dom$search.select();
+          event.preventDefault();
+          if (sheetLayout() && host.classList.contains("bp-dag-sheet-full")) setSheet(1, ui$selected);
+          dom$search.focus(); dom$search.select();
         }
       });
       if (window.ResizeObserver) { var ro = new ResizeObserver(queueResize); ro.observe(dom$stage); observers.push(ro); }
@@ -2062,13 +2130,9 @@
       globalListen(window, "resize", syncSheetAccessibility);
       if (navigation) [dom$readingBody, dom$navigation, dom$inventoryScroll, dom$shelves].forEach(function (pane) { pane.addEventListener("scroll", remember); });
       var theme = new MutationObserver(schedule); theme.observe(document.body, {attributes: true, attributeFilter: ["data-md-color-scheme"]}); observers.push(theme);
-      if (dom$homeLink) dom$homeLink.addEventListener("click", function (event) {
-        if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-        event.preventDefault(); navigation.navigate(dom$homeLink.href, {history: "push"});
-      });
     }
 
-    function statusLabel(key) { return palette[key] && palette[key].label ? palette[key].label : key.replace(/_/g, " "); }
+    function statusLabel(key) { return (palette[key] || {}).label || key.replace(/_/g, " "); }
     function renderStatusFields() {
       dom$statusFieldset.replaceChildren(element("legend", "", "Formalization status"));
       dom$statusInputs.clear();
@@ -2076,7 +2140,14 @@
         var label = element("label", "bp-dag-check"), input = element("input");
         input.type = "checkbox"; input.checked = ui$selectedStatuses.has(key); input.value = key;
         input.addEventListener("change", onStatusChange); dom$statusInputs.set(key, input);
-        label.appendChild(input); label.appendChild(swatch(key)); label.appendChild(document.createTextNode(statusLabel(key)));
+        // The filter doubles as the legend: each status says what it means, in the palette's own words.
+        var text = element("span", "bp-dag-check-text", statusLabel(key)), meaning = (palette[key] || {}).meaning, mark = swatch(key);
+        // A checkbox is named by its status and count; the meaning is its description, not part of a name heard on every Tab.
+        input.setAttribute("aria-label", statusLabel(key) + ", " + plural(statusCounts.get(key) || 0, "statement", "statements"));
+        if (meaning) { var described = text.appendChild(element("span", "bp-dag-check-meaning", meaning)); described.id = "bp-dag-meaning-" + instance + "-" + key;
+          input.setAttribute("aria-describedby", described.id); }
+        mark.removeAttribute("title"); mark.setAttribute("aria-hidden", "true");
+        label.appendChild(input); label.appendChild(mark); label.appendChild(text);
         label.appendChild(element("span", "bp-dag-check-count", String(statusCounts.get(key) || 0))); dom$statusFieldset.appendChild(label);
       });
       dom$edgeFieldset.hidden = !(data.$shelves && data.$shelves.length) &&
@@ -2087,30 +2158,51 @@
       mark.title = entry.meaning || statusLabel(key);
       ["light", "dark"].forEach(function (scheme) {
         var color = entry[scheme] || {};
-        mark.style.setProperty("--dag-swatch-" + scheme + "-fill", color.fill || "transparent");
+        mark.style.setProperty("--dag-swatch-" + scheme + "-fill", solid(key, color) || "transparent");
         mark.style.setProperty("--dag-swatch-" + scheme + "-stroke", color.stroke || "#9ca3af");
       });
       return mark;
     }
+    // States with a tinted light fill (finished, conditionally proved, not ready, inventory pending): the tints are too pale to tell from an outline at a few pixels, so small marks fill them with the stroke.
+    function solid(key, color) { return ((palette[key] || palette.planned || {}).light || {}).fill === "#FFFFFF" ? color.fill : color.stroke; }
     function isDark() { return document.body.getAttribute("data-md-color-scheme") === "slate"; }
     function colors(node) {
-      if (node._region) return isDark() ? {fill: "#242526", stroke: "#737578", text: "#E4E6EB"} : {fill: "#FFFFFF", stroke: "#CED0D4", text: "#1C1E21"};
+      if (node._region || node._overviewGroup) return isDark() ? {fill: "#242526", stroke: "#737578", text: "#E4E6EB"} : {fill: "#FFFFFF", stroke: "#CED0D4", text: "#1C1E21"};
       var entry = palette[node.status] || palette.planned || {};
       return entry[isDark() ? "dark" : "light"] || {fill: "#fff", stroke: "#9ca3af", text: "#374151"};
     }
-    function statusRing(node) {
-      var entries = (node.status_counts || []).filter(function (entry) { return entry[1] > 0; });
+    // Another topic's card says how it touches this page and how many of its results it links here, not its own total.
+    function boundaryMeta(node) {
+      var uses = prerequisites && (prerequisites.get(node.id) || []).length, usedBy = dependents && (dependents.get(node.id) || []).length;
+      var count = node.member_count || finished(node)[1], results = plural(count, "result", "results");
+      // The count is the other topic's results: those this page needs, or those that build on it.
+      return uses && usedBy ? results + ", both ways" : usedBy ? results + " needed here" : uses ? results + (count === 1 ? " builds" : " build") + " on this" :
+        plural(count, "linked result", "linked results");
+    }
+    // A scope's fully proved results of its targets. Module inventories are neutral and stay out of both counts, as in the hero's figure.
+    function finished(node) {
+      var done = 0, total = 0;
+      (node.status_counts || []).forEach(function (entry) { if ((palette[entry[0]] || {}).neutral) return; total += entry[1]; if (/^(fully_proved|mathlib)$/.test(entry[0])) done += entry[1]; });
+      return [done, total];
+    }
+    // A topic's or region's statuses as a progress bar, in legend order since a region merges its topics' counts as it meets them.
+    // status.STATES' order: the palette's keys arrive sorted, and regions merge their topics' counts out of order.
+    function legendRank(key) { var index = LEGEND.indexOf(key); return index < 0 ? LEGEND.length : index; }
+    // A card draws it as a bar; a shelf's round swatch, as a ring.
+    function statusRing(node, round) {
+      var entries = (node.status_counts || []).filter(function (entry) { return entry[1] > 0; })
+        .sort(function (a, b) { return legendRank(a[0]) - legendRank(b[0]); });
       var total = entries.reduce(function (sum, entry) { return sum + entry[1]; }, 0), cursor = 0, stops = [];
       entries.forEach(function (entry) {
         var color = (palette[entry[0]] || palette.planned || {})[isDark() ? "dark" : "light"] || {};
-        var end = cursor + entry[1] / Math.max(1, total) * 360;
-        stops.push((color.stroke || "#9ca3af") + " " + cursor + "deg " + end + "deg"); cursor = end;
+        var end = cursor + entry[1] / Math.max(1, total) * 100;
+        stops.push((color.stroke || "#9ca3af") + " " + cursor + "% " + end + "%"); cursor = end;
       });
-      return stops.length ? "conic-gradient(" + stops.join(",") + ")" : "var(--dag-node-stroke)";
+      return stops.length ? (round ? "conic-gradient(" : "linear-gradient(90deg,") + stops.join(",") + ")" : "var(--dag-node-stroke)";
     }
     function compactRegions() {
       return Boolean(navigation && atlas && !ui$area && dom$stage && dom$stage.clientWidth > 0 && dom$stage.clientWidth <= 620 &&
-        data.nodes.length && data.nodes.every(function (node) { return node._region; }));
+        data.nodes.length && data.nodes.every(function (node) { return node._region || node._overviewGroup; }));
     }
     function framingNodes() {
       var nodes = ui$active.length ? ui$active : data.nodes, group = currentOverviewGroup();
@@ -2134,12 +2226,16 @@
       if (!mapAllowed) return null;
       var compact = compactRegions(), aspect = dom$stage.clientWidth / Math.max(1, dom$stage.clientHeight);
       aspect = Math.round((Number.isFinite(aspect) && aspect > 0 ? clamp(aspect, .25, 4) : 1.4) * 10) / 10;
+      // A phone's full reader covers the map and frees the toolbar's height, which changes the stage's shape. setSheet holds
+      // the scene, so the peek or half finds every card where it was rather than re-laid out for a map no one could see.
+      if (scene && sceneData === data && scene.$held) aspect = sceneAspect;
       var reduced = !ui$selected && !data.nodes.some(function (node) { return node.kind !== "boundary" && node._overviewGroup; });
       if (sceneData !== data || sceneDirection !== ui$orientation || sceneCompact !== compact || sceneFamily !== family || sceneAspect !== aspect || sceneWiki !== data.$wikiEdges || sceneReduced !== reduced) {
         var anchor = typeof document !== "undefined" && document.activeElement && document.activeElement.dataset &&
           document.activeElement.dataset.autoformNodeId, previous = !restoring && sceneData === data && scene && scene.nodes.get(anchor);
+        // Two-line compact cards retain their type and status bar, with room for five areas and the 48px collision gap.
         var nodes = data.nodes.map(function (node) { return {id: node.id, width: compact ? 312 : node.width,
-          height: compact ? 96 : node.height, area: node.area, scope: node.scope}; });
+          height: compact ? 88 : node.height, area: node.area, scope: node.scope}; });
         scene = layoutGraph(nodes, data.edges, ui$orientation, aspect, data.$wikiEdges, reduced);
         var targets = framingNodes();
         if (data.nodes.length <= 24 && targets.length) {
@@ -2189,14 +2285,14 @@
       if (nativeGroup) {
         var back = button("bp-reading-wiki-more", "← Topic overview");
         back.addEventListener("click", function () { setMode("regions", true); }); dom$shelves.appendChild(back);
-      } else dom$shelves.appendChild(element("h2", "bp-scope-shelves-heading", "More developments"));
+      } else dom$shelves.appendChild(element("h2", "bp-scope-shelves-heading", "Not on the map"));
       groups.forEach(function (group) {
         var members = group.members.filter(function (node) { return matchesStatus(node) && matchesIsolation(node) && (!ui$query || searchScore(node, ui$query.toLocaleLowerCase())); });
         if (!members.length) return;
         var section = element("section", "bp-scope-shelf"), heading = readingLabel("h3", "", group.area || group.title || "Unlinked topics", group.reading_title);
         section.appendChild(heading);
         var statements = members.some(function (node) { var record = records.get(recordId(node)); return record && record.result; });
-        section.appendChild(element("p", "bp-scope-shelf-count", plural(members.length, statements ? "entry" : "topic", statements ? "entries" : "topics") + (group.$shelf ? " · no local formal links" : "")));
+        section.appendChild(element("p", "bp-scope-shelf-count", plural(members.length, statements ? "entry" : "topic", statements ? "entries" : "topics") + (group.$shelf ? ", none linked to each other" : "")));
         var paged = nativeGroup || group.key === ui$overviewGroup, limit = paged ? ui$listLimit : 5, list = element("ul", "bp-scope-shelf-list");
         members.slice(0, limit).forEach(function (node) {
           var id = recordId(node), record = records.get(id), item = element("li");
@@ -2205,7 +2301,7 @@
           link.dataset.shelfNodeId = id;
           var mark = swatch(record.status), counts = node.status_counts && node.status_counts.filter(function (pair) { return pair[1]; });
           if (counts && counts.length > 1) {
-            mark.style.background = statusRing(node);
+            mark.style.background = statusRing(node, true);
             mark.title = counts.map(function (pair) { return pair[1].toLocaleString() + " " + statusLabel(pair[0]); }).join(" · ");
           }
           link.appendChild(mark);
@@ -2228,48 +2324,52 @@
       refreshReadingLabels(dom$shelves);
     }
     function syncControls() {
+      if (ui$mode === "graph" && ui$mathJob) stopRowMath();
       calculateActive();
       renderShelves();
       host.classList.toggle("bp-dag-compact-regions", compactRegions());
       if (navigation) {
         var record = records.get(currentBundle && currentBundle.nodeId), links = record && record.result && neighborIds(record.id), group = currentOverviewGroup();
-        var title = group ? group.area || group.title || "Unassigned topics" : ui$area || currentBundle && currentBundle.title || data.title;
+        // A long title gives way before the counts after it.
+        // The reader beside a desktop map already says "Uses N · Used by M", so the counts show here only on a phone.
         var scope = records.get(currentBundle && currentBundle.scope), label = group || !ui$area && (record || scope);
-        if (label && label.reading_title) title = label.area || label.title;
-        var heading = readingLabel("span", "", title, label && label.reading_title);
-        if (links) heading.appendChild(document.createTextNode(" · Uses " + links.before.length + " · Used by " + links.after.length));
-        dom$mapContext.replaceChildren(heading);
+        var title = group ? group.area || group.title || "Other topics" : label ? label.title : ui$area || currentBundle && currentBundle.title || data.title;
+        dom$mapContext.replaceChildren(readingLabel("span", "", title, label && label.reading_title),
+          links && sheetLayout() ? " · uses " + links.before.length + " · used by " + links.after.length : "");
         refreshReadingLabels(dom$mapContext);
+        var legend = dom$mapKey.querySelector("details"), open = legend && legend.open;
+        var keyFocus = legend && legend.contains(document.activeElement);
         dom$mapKey.replaceChildren();
         var compactKey = compactRegions();
         ["statement", "proof"].forEach(function (kind) {
           if (data.edges.some(function (edge) { return edge[kind]; })) dom$mapKey.appendChild(element("span", "bp-map-key-" + kind,
-            kind === "proof" ? compactKey ? "Proof only" : "Proof dependency" : compactKey ? "Statement" : "Statement dependency"));
+            (kind === "proof" ? "Proof" : "Statement") + (sheetLayout() ? "" : " dependency")));
         });
         var display = mapAllowed && ui$mode === "graph" && geometry().$display;
         if (display && display.reduced) {
-          var key = element("span", "bp-map-key-coverage", display.shownPairs < display.totalPairs ?
-            compactKey ? "Backbone " + display.shownPairs + "/" + display.totalPairs : "Backbone · " + display.shownPairs + " of " + display.totalPairs + " connections" :
-            compactKey ? "Types combined" : "Combined dependency types");
-          key.title = "One stroke per displayed pair; solid if it includes statement dependencies. All typed dependencies remain in articles and selected-result maps.";
+          // In words: how many of the links the map draws, or that a pair's two kinds share one line.
+          var brief = compactKey || sheetLayout(), key = element("span", "bp-map-key-coverage", display.shownPairs < display.totalPairs ?
+            (brief ? "" : "Showing ") + num(display.shownPairs) + " of " + num(display.totalPairs) + " links" : "One line per direction");
+          key.title = "Same-direction statement/proof links share a line, solid for statements. Uses, Used by and selected-result maps keep every dependency.";
           dom$mapKey.appendChild(key);
         }
+        // One entry says what the dotted lines are and how many of them this map draws; a map that draws none says nothing about their coverage.
         if (data.$wikiEdges && data.$wikiEdges.length) {
           var local = sceneData === data && scene && scene.$wikiRoutes;
-          dom$mapKey.appendChild(element("span", "bp-map-key-wiki", local && local.omitted ? "Local concept links" : "Concept links"));
-          if (local && local.omitted) dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "All links in articles"));
+          dom$mapKey.appendChild(element("span", "bp-map-key-wiki", (local && local.omitted ? "Concept links: " + num(local.total - local.omitted) + " of " +
+            num(local.total) + (sheetLayout() ? "" : " on this map") : "Concept links") + (ui$wikiView && ui$wikiView.availability === "partial" ? ", some pages unread" : "")));
         }
-        if (ui$wikiView && ui$wikiView.availability === "partial") dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Partial link coverage"));
         if (ui$wikiView && ui$wikiView.availability === "unavailable") dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Concept links unavailable"));
         if (data.$wikiEdges && data.$wikiEdges.some(function (edge) { return !wikiOwnerVisible(byId.get(edge.source), ui$selectedStatuses) || !wikiOwnerVisible(byId.get(edge.target), ui$selectedStatuses); }))
           dom$mapKey.appendChild(element("span", "bp-map-key-coverage", "Concept links hidden by filter"));
+        if (sheetLayout() && dom$mapKey.children.length) wrapMapKey(open, keyFocus);
       }
       syncNavigationSelection();
       dom$isolated.checked = ui$showIsolated;
       dom$statusInputs.forEach(function (input, key) { input.checked = ui$selectedStatuses.has(key); });
       var enabled = ui$selectedStatuses.size;
-      dom$filterSummary.textContent = (enabled === presentStatuses.length ? "Status" : "Status · " + enabled) +
-        (ui$showIsolated ? "" : " · edges only");
+      dom$filterSummary.textContent = "Filter: " + (enabled === presentStatuses.length ? "all" : enabled + " of " + presentStatuses.length) +
+        " statuses" + (ui$showIsolated ? "" : " · linked only");
       dom$graphMode.hidden = ui$mode === "graph";
       dom$listMode.textContent = currentBundle && currentBundle.scope === "roadmap" ? "All statements" : "Statements in this topic";
       var hasSources = sourceNodes().length > 0;
@@ -2281,9 +2381,14 @@
         dom$browseToggle.setAttribute("aria-controls", dom$browsePopover.id);
         dom$browseToggle.setAttribute("aria-expanded", String(!dom$browsePopover.hidden));
       } else { dom$browsePopover.hidden = true; dom$browseToggle.removeAttribute("aria-controls"); dom$browseToggle.removeAttribute("aria-expanded"); }
+      // Browse marks the list on screen, so at most one of its choices reads as pressed; on the map neither does.
+      pressed(dom$listMode, ui$mode === "list");
+      if (dom$sourcesMode) pressed(dom$sourcesMode, ui$mode === "sources");
       dom$stage.hidden = ui$mode !== "graph" || host.classList.contains("bp-dag-shelves-only"); dom$inventory.hidden = ui$mode === "graph";
       dom$graphMode.disabled = !ui$mapAllowed;
-      if (navigation) dom$inventory.querySelector("h2").textContent = ui$mode === "sources" ? "Source tracks" : "Results";
+      // A disabled Back to map says why the map is unavailable.
+      if (ui$mapAllowed) dom$graphMode.removeAttribute("title"); else dom$graphMode.title = "Too many statements to draw as a map";
+      if (navigation) dom$inventory.querySelector("h2").textContent = ui$mode === "sources" ? "Source texts" : "Statements";
     }
 
     function collect(start, adjacency) {
@@ -2297,10 +2402,7 @@
     }
     function pathSpotlight() {
       if (!ui$selected) return null;
-      if (ui$spotlight) return ui$spotlight;
-      var before = collect(ui$selected.id, prerequisites), after = collect(ui$selected.id, dependents);
-      var nodes = new Set(before); after.forEach(function (id) { nodes.add(id); });
-      ui$spotlight = {after: after, before: before, nodes: nodes}; return ui$spotlight;
+      return ui$spotlight || (ui$spotlight = spotlightOf(collect(ui$selected.id, prerequisites), collect(ui$selected.id, dependents)));
     }
     function matchesStatus(node) {
       return (node._region || node._overviewGroup || node.kind === "scope" || node.kind === "boundary") && node.status_counts && node.status_counts.length ?
@@ -2351,7 +2453,7 @@
       }
       var hidden = data.nodes.length - ui$active.length;
       (data.$shelves || []).forEach(function (group) { group.members.forEach(function (node) { if (!matchesIsolation(node) || !matchesStatus(node)) hidden++; }); });
-      dom$hiddenButton.textContent = "Show " + hidden + " hidden"; dom$hiddenButton.hidden = !hidden;
+      dom$hiddenButton.textContent = "Show " + hidden + " filtered out"; dom$hiddenButton.hidden = !hidden;
       dom$empty.hidden = ui$active.length !== 0;
       ui$activeDirty = false;
     }
@@ -2371,6 +2473,8 @@
     function resize() {
       syncSheetAccessibility();
       if (!dom$canvas || !dom$stage.clientWidth || !dom$stage.clientHeight) return;
+      if (renderBreadcrumb.$width !== dom$breadcrumb.clientWidth) renderBreadcrumb();
+      positionMapFeedback();
       host.classList.toggle("bp-dag-compact-regions", compactRegions());
       var ratio = Math.min(2, window.devicePixelRatio || 1);
       dom$canvas.width = Math.max(1, Math.round(dom$stage.clientWidth * ratio));
@@ -2384,16 +2488,26 @@
       calculateActive(); var nodes = framingNodes(); if (!nodes.length) return;
       // Frame local cards (or the drilled group's members), not distant context
       // boundaries or route detours. The readable floor stays unchanged.
-      var frame = sceneFrame(geometry(), nodes.map(function (node) { return node.id; }), framingViewport(), framingPadding());
+      var currentScene = geometry();
+      if (ui$selected) nodes = ui$active;
+      var frame = sceneFrame(currentScene, nodes.map(function (node) { return node.id; }), framingViewport(), framingPadding());
+      // Unlinked cards are inventory: when the whole map cannot open readable and whole, the first view frames the linked cards.
+      var linked = nodes.filter(function (node) { return !node.isolated; });
+      if (frame.cropped && linked.length && linked.length < nodes.length) {
+        nodes = linked; frame = sceneFrame(geometry(), nodes.map(function (node) { return node.id; }), framingViewport(), framingPadding());
+      }
       ui$readableCrop = frame.cropped; ui$transform = {x: frame.x, y: frame.y, scale: frame.scale};
       if (dom$fit) {
-        var label = ui$readableCrop ? "Recentre readable local cards" : "Fit shown nodes";
+        var label = ui$readableCrop ? "Recentre the map" : "Fit the map";
         dom$fit.textContent = ui$readableCrop ? "Recentre" : "Fit";
         dom$fit.setAttribute("aria-label", label); dom$fit.title = label;
       }
       if (ui$readableCrop && navigation) {
         var anchor = ui$selected || nodes.find(function (node) { return ui$area && node.area === ui$area && !node._region; });
-        if (anchor || !data._scopeOverview) center(anchor || nodes.find(function (node) { return node.kind !== "boundary"; }) || nodes[0], .9);
+        if (anchor) center(anchor, .9);
+        // A phone's compact overview centres its first card; any other map keeps its leading edge.
+        else if (!data._scopeOverview && compactRegions()) center(nodes.find(function (node) { return node.kind !== "boundary"; }) || nodes[0], .9);
+        else if (!data._scopeOverview) lead();
         else {
           var free = freeArea(), start = (free.top || 0) + 12, end = (free.top || 0) + free.band - 12;
           var usable = nodes.some(function (node) { if (node.kind === "boundary") return false; var box = screen(node);
@@ -2405,15 +2519,34 @@
             nodes.find(function (node) { return node.kind !== "boundary"; }) || nodes[0], .9);
         }
       }
+      // Preserve a proved-fit neighborhood; only excluded isolates or cropped frames need another center.
+      if (navigation && ui$selected && ui$activeIds.has(ui$selected.id) &&
+          (frame.cropped || nodes.indexOf(ui$selected) < 0)) centerIfHidden(ui$selected);
       schedule(); remember();
+      // A cropped map with nothing to centre on keeps the leading edge sceneFrame gave it: centring its first card left half the
+      // stage empty. A deep map's leading corner can be bare, though, and then the first card in reading order opens there.
+      function lead() {
+        var free = freeArea(), pad = framingPadding(), top = (free.top || 0) + pad.top, end = (free.top || 0) + free.band - pad.bottom;
+        if (nodes.some(function (node) { var box = screen(node); return box.x >= free.left + pad.side - 1e-6 && box.x + box.w <= free.right - pad.side + 1e-6 &&
+          box.y >= top - 1e-6 && box.y + box.h <= end + 1e-6; })) return;
+        var tb = ui$orientation === "tb", first = nodes.filter(function (node) { return node.kind !== "boundary"; }).sort(function (a, b) {
+          var p = world(a), q = world(b); return tb ? p.y - q.y || p.x - q.x : p.x - q.x || p.y - q.y;
+        })[0] || nodes[0], cell = world(first), scale = ui$transform.scale;
+        if (tb) { ui$transform.x = (free.left + free.right) / 2 - (cell.x + cell.w / 2) * scale; ui$transform.y = top - cell.y * scale; }
+        else { ui$transform.x = free.left + pad.side - cell.x * scale; ui$transform.y = (free.top || 0) + free.band / 2 - (cell.y + cell.h / 2) * scale; }
+      }
     }
+    // A phone's open reader leaves the map only the band above it, so the map fits there and counts what falls below as off screen.
+    function mapHeight() { return navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-open") ? freeArea().band : dom$stage.clientHeight; }
     // Open details cover part of the map; this is the larger part they leave, in stage pixels.
     function freeArea() {
       var band = dom$stage.clientHeight, left = 0, right = dom$stage.clientWidth, drawer = dom$inspector;
-      if (compactRegions() && (!sheetLayout() || !host.classList.contains("bp-dag-sheet-open"))) return {top: 28, band: Math.max(NODE_H, band - 44), left: 12, right: right - 12};
+      // Leave a whole card eight pixels clear of the caption and native Link key; the paint clip also leaves room for its ring.
+      if (compactRegions() && (!sheetLayout() || !host.classList.contains("bp-dag-sheet-open"))) return {top: 36, band: Math.max(NODE_H, band - 72), left: 12, right: right - 12};
       if (!sheetLayout()) return {band: band, left: left, right: right};
       if (host.classList.contains("bp-dag-sheet-open")) {
-        if (sheetLayout()) band = Math.max(NODE_H, Math.min(band, drawer.offsetTop));
+        // The workspace sheet slides on a transform, so its top is the stylesheet's 45%, not offsetTop.
+        if (sheetLayout()) band = Math.max(NODE_H, Math.min(band, drawer.clientHeight * .45));
       }
       return {band: band, left: left, right: right};
     }
@@ -2422,9 +2555,19 @@
       ui$transform.x = (free.left + free.right) / 2 - (box.x + box.w / 2) * ui$transform.scale;
       ui$transform.y = (free.top || 0) + free.band / 2 - (box.y + box.h / 2) * ui$transform.scale; schedule();
     }
+    // The map's header and foot are opaque bands over the stage, which a phone's open reader removes. A card under one is
+    // out of view for the keyboard and the pan note. The foot grows from the key's 32px to 56px while the note shows, so the
+    // note counts against the key's band alone, or a note once shown would keep itself.
+    function bandInsets() {
+      if (navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-open"))
+        return {top: 0, bottom: dom$density.hidden ? 32 : 56, key: 32};
+      return navigation && !compactRegions() && !(sheetLayout() && host.classList.contains("bp-dag-sheet-open")) ?
+        {top: 44, bottom: dom$density.hidden ? 32 : 56, key: 32} : {top: 0, bottom: 0, key: 0};
+    }
     function centerIfHidden(node) {
-      if (!node) return; var box = screen(node);
-      if (box.x < 12 || box.y < 12 || box.x + box.w > dom$stage.clientWidth - 12 || box.y + box.h > dom$stage.clientHeight - 12) center(node, .82);
+      if (!node) return; var box = screen(node), free = freeArea(), bands = bandInsets();
+      if (box.x < 12 || box.y < Math.max(12, bands.top) || box.x + box.w > dom$stage.clientWidth - 12 ||
+          box.y + box.h > (free.top || 0) + free.band - Math.max(12, bands.bottom)) center(node, .82);
     }
     function zoomAt(factor, x, y) {
       var old = ui$transform.scale, next = clamp(old * factor, MIN_SCALE, 4);
@@ -2452,7 +2595,14 @@
       ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, width, height);
       var current = geometry(); if (!current) return;
       var visible = ui$active.filter(function (node) { return inViewport(screen(node), 80); });
-      var spotlight = atlas && ui$selected ? atlasSpotlight() : pathSpotlight();
+      // The area overview stays quiet until a card is selected, hovered or focused; then only its own links show.
+      // The compact overview (phones and most tablets) keeps every link: a tap there opens an area and nothing hovers, so nothing could light one.
+      var quiet = !compactRegions() && data.nodes.every(function (node) { return node._region || node._overviewGroup; }), subject = ui$selected || ui$hovered;
+      // At rest a quiet overview draws no links, so its key says how to light them instead of naming line kinds it does not draw.
+      host.classList.toggle("bp-dag-links-resting", Boolean(quiet && !subject && data.edges.length));
+      // A hovered card previews its direct neighbours on any map; a selection keeps its own spotlight.
+      var spotlight = (atlas || !ui$selected) && subject ? atlasSpotlight(subject) : pathSpotlight();
+      var bottom = mapHeight(), labels = [];
       (current.$wikiFamilies || []).forEach(function (family) {
         if (family.island_count < 2 || family.members.some(function (id) { return !ui$activeIds.has(id) || !wikiOwnerVisible(byId.get(id), ui$selectedStatuses); })) return;
         var box = family.bounds;
@@ -2462,14 +2612,17 @@
         ctx.save(); ctx.fillStyle = isDark() ? "#84a7bd" : "#63879b"; ctx.globalAlpha = .035;
         rounded(ctx, area.x, area.y, area.w, area.h, 24); ctx.fill(); ctx.restore();
       });
+      // Concept links follow the dependency links' rule: a quiet overview shows only its subject's, and a preview or selection fades the rest.
       if (current.$wikiRoutes) current.$wikiRoutes.routes.forEach(function (route) {
         if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target)) return;
         if (!wikiOwnerVisible(byId.get(route.source), ui$selectedStatuses) || !wikiOwnerVisible(byId.get(route.target), ui$selectedStatuses)) return;
-        var highlighted = !ui$selected || route.source === ui$selected.id || route.target === ui$selected.id;
-        drawRoute(ctx, route, highlighted);
+        var touches = subject && (route.source === subject.id || route.target === subject.id);
+        if (quiet && !touches) return;
+        drawRoute(ctx, route, !subject || touches ? -1 : 0);
       });
       current.routes.forEach(function (route) {
-          if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target)) return;
+          if (!ui$activeIds.has(route.source) || !ui$activeIds.has(route.target) ||
+            quiet && !(subject && (route.source === subject.id || route.target === subject.id))) return;
           if (data._scopeOverview) {
             route = scopeOverviewFlow(route, data._scopeOverview._flows[route.edgeIndex], data._scopeOverview._flowRange);
             if (!route) return;
@@ -2477,25 +2630,50 @@
           var bounds = {x: route.bounds.x * ui$transform.scale + ui$transform.x, y: route.bounds.y * ui$transform.scale + ui$transform.y,
             w: route.bounds.w * ui$transform.scale, h: route.bounds.h * ui$transform.scale};
           if (!inViewport(bounds, 40)) return;
-          var highlighted = !spotlight || (spotlight.before.has(route.source) && spotlight.before.has(route.target)) ||
-            (spotlight.after.has(route.source) && spotlight.after.has(route.target));
-          var painted = route;
+          // A scope overview stacks by its status-filtered flows, which can drop one kind of a bundle.
+          var painted = route, edge = data._scopeOverview ? data._scopeOverview._flows[route.edgeIndex] : data.edges[route.edgeIndex];
           if (route.parts) {
             var points = [], radii = [];
             route.parts.forEach(function (part) { points = points.concat(part.points); radii = radii.concat(part.radii); });
             painted = Object.assign({}, route, {points: points, radii: radii});
           }
-          drawRoute(ctx, painted, highlighted);
+          // A pair linked in both kinds stacks its two count pills.
+          var label = drawRoute(ctx, painted, edgeRole(spotlight, route.source, route.target), edge.statement && edge.proof ? route.kind === "proof" ? 1 : -1 : 0, bottom);
+          if (label) labels.push(label);
       });
+      var cards = visible.map(screen), pills = [];
+      // Larger counts choose their spots first.
+      labels.sort(function (a, b) { return b.count - a.count; }).forEach(function (label) { drawPill(ctx, label, cards, pills); });
       visible.forEach(function (node) { drawPlate(ctx, node, screen(node), !spotlight || spotlight.nodes.has(node.id)); });
       updateOverlays(visible, spotlight);
     }
-    function atlasSpotlight() {
-      var before = new Set([ui$selected.id]), after = new Set([ui$selected.id]);
-      (prerequisites.get(ui$selected.id) || []).forEach(function (id) { before.add(id); });
-      (dependents.get(ui$selected.id) || []).forEach(function (id) { after.add(id); });
+    function atlasSpotlight(node) {
+      var spot = spotlightOf(new Set([node.id].concat(prerequisites.get(node.id) || [])), new Set([node.id].concat(dependents.get(node.id) || [])));
+      spot.subject = node.id; return spot;
+    }
+    function spotlightOf(before, after) {
       var nodes = new Set(before); after.forEach(function (id) { nodes.add(id); });
       return {after: after, before: before, nodes: nodes};
+    }
+    // -1 is a link at rest; under a selection 1 is on its prerequisite chain, 2 among its dependents, and 0 fades.
+    // A link into a previewed card is a prerequisite and one out of it a dependent, even when the neighbour is both, as in a cycle of areas.
+    function edgeRole(spotlight, source, target) {
+      if (spotlight && spotlight.subject) { if (target === spotlight.subject && spotlight.before.has(source)) return 1; if (source === spotlight.subject && spotlight.after.has(target)) return 2; }
+      return !spotlight ? -1 : spotlight.before.has(source) && spotlight.before.has(target) ? 1 : spotlight.after.has(source) && spotlight.after.has(target) ? 2 : 0;
+    }
+    // At rest a link is a full grey line; a selection draws its prerequisites in the link blue and its dependents in the text colour.
+    function edgeStyle(ctx, role) {
+      var dark = isDark(); ctx.globalAlpha = role ? 1 : .08; ctx.lineWidth = role > 0 ? 2.5 : 1.5;
+      // A lit link takes the text colour whichever way it points, and its arrowheads say which: blue is "ready to prove".
+      // A resting light link is #85888C, 3.17:1 on the light map, where #8A8D91 fell just under 3:1.
+      ctx.strokeStyle = ctx.fillStyle = role > 0 ? dark ? "#E4E6EB" : "#1C1E21" : dark ? "#A8B0BB" : "#85888C";
+    }
+    // Only a lit link names its count, in words on a pill in the map colour.
+    function pill(ctx, count, x, y, scale) {
+      var text = count + " links", h = 20 * scale; ctx.font = "600 " + 13 * scale + "px " + family;
+      var w = ctx.measureText(text).width + 12 * scale; ctx.fillStyle = isDark() ? "#18191a" : "#f0f2f5"; ctx.lineWidth = 1;
+      rounded(ctx, x - w / 2, y - h / 2, w, h, h / 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = ctx.strokeStyle; ctx.textAlign = "center"; ctx.fillText(text, x, y + 4.5 * scale);
     }
     function rounded(ctx, x, y, w, h, radius) {
       var r = Math.min(radius, w / 2, h / 2); ctx.beginPath(); ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y);
@@ -2510,20 +2688,23 @@
       if (atlas && node.kind === "scope") {
         rounded(ctx, box.x, box.y, box.w, box.h, 14 * ui$transform.scale); ctx.fill(); ctx.stroke(); ctx.restore(); return;
       }
-      if (tiny) ctx.fillRect(box.x, box.y, Math.max(3, box.w), Math.max(3, box.h));
+      // A zoomed-out plate is the only status signal left, so a highlighted one is opaque: at .82 over the map neighbouring greens fell under 1.5:1.
+      if (tiny) { if (highlighted) ctx.globalAlpha = 1; ctx.fillStyle = solid(node.status, color); ctx.fillRect(box.x, box.y, Math.max(3, box.w), Math.max(3, box.h)); }
       else { rounded(ctx, box.x, box.y, box.w, box.h, 7 * ui$transform.scale); ctx.fill(); ctx.stroke(); }
       ctx.restore();
     }
-    function drawRoute(ctx, route, highlighted) {
+    // A lit count comes back as a pill for draw() to paint after every route; bottom is the map's visible band.
+    function drawRoute(ctx, route, role, stack, bottom) {
       if (!route.points || route.points.length < 2) return;
       var scale = ui$transform.scale, points = route.points.map(function (point) {
         return {x: point.x * scale + ui$transform.x, y: point.y * scale + ui$transform.y};
       });
-      ctx.save(); ctx.globalAlpha = highlighted ? .65 : .15; ctx.strokeStyle = isDark() ? "#a8b0bb" : "#64748b";
-      ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = route.strength * scale;
-      ctx.lineCap = "round"; ctx.lineJoin = "round";
+      // Colour and fade follow the link's role; the width stays the router's weighted strength, a step wider when lit.
+      ctx.save(); edgeStyle(ctx, role); ctx.lineWidth = (route.strength + (role > 0 ? 1 : 0)) * scale;
+      // Round caps would close a lit proof link's 4px gaps, so its dashes keep butt ends.
+      ctx.lineCap = route.kind === "proof" ? "butt" : "round"; ctx.lineJoin = "round";
       if (route.kind === "proof") ctx.setLineDash([6 * scale, 4 * scale]);
-      if (route.kind === "wiki") { ctx.globalAlpha = highlighted ? .38 : .1; ctx.strokeStyle = isDark() ? "#84a7bd" : "#63879b"; ctx.setLineDash([1.5 * scale, 5 * scale]); }
+      if (route.kind === "wiki") { ctx.globalAlpha = role ? .38 : .1; ctx.strokeStyle = isDark() ? "#84a7bd" : "#63879b"; ctx.setLineDash([1.5 * scale, 5 * scale]); }
       ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y);
       for (var index = 1; index < points.length - 1; index++) {
         var point = points[index], before = points[index - 1], after = points[index + 1], radius = route.radii[index] * scale;
@@ -2536,8 +2717,8 @@
       ctx.lineTo(tip.x, tip.y); ctx.stroke(); ctx.setLineDash([]);
       if (route.kind === "wiki") { ctx.restore(); return; }
       ctx.beginPath(); ctx.moveTo(tip.x, tip.y);
-      ctx.lineTo(tip.x - (arrow.dx * 8 - arrow.dy * 4) * scale, tip.y - (arrow.dy * 8 + arrow.dx * 4) * scale);
-      ctx.lineTo(tip.x - (arrow.dx * 8 + arrow.dy * 4) * scale, tip.y - (arrow.dy * 8 - arrow.dx * 4) * scale);
+      ctx.lineTo(tip.x - (arrow.dx * 10 - arrow.dy * 5) * scale, tip.y - (arrow.dy * 10 + arrow.dx * 5) * scale);
+      ctx.lineTo(tip.x - (arrow.dx * 10 + arrow.dy * 5) * scale, tip.y - (arrow.dy * 10 - arrow.dx * 5) * scale);
       ctx.closePath(); ctx.fill();
       // Cached straight portions carry one static direction cue. The solver
       // remains finite/cached; neither this painter nor the cue schedules RAF.
@@ -2554,7 +2735,7 @@
         }
         segments.sort(function (a, b) { return b.length - a.length; }); segments = segments.slice(0, 3); cache.set(key, segments);
       }
-      var cue = null, visible = 0, width = dom$stage.clientWidth, height = dom$stage.clientHeight;
+      var spots = [], width = dom$stage.clientWidth, height = bottom || dom$stage.clientHeight;
       segments.forEach(function (segment) {
         var x = segment.x * scale + ui$transform.x, y = segment.y * scale + ui$transform.y, dx = segment.dx * segment.length * scale, dy = segment.dy * segment.length * scale;
         var low = 0, high = 1;
@@ -2563,15 +2744,59 @@
           else { var a = (12 - axis[0]) / axis[1], b = (axis[2] - 12 - axis[0]) / axis[1]; low = Math.max(low, Math.min(a, b)); high = Math.min(high, Math.max(a, b)); }
         });
         var length = (high - low) * segment.length * scale;
-        if (length < 12 || length <= visible) return;
-        var progress = low + (high - low) * .68;
-        visible = length; cue = {x: x + dx * progress, y: y + dy * progress, dx: segment.dx, dy: segment.dy};
+        if (length >= 12) {
+          // A pill takes the middle of the visible run; the direction cue sits two thirds along it, towards the target.
+          var progress = low + (high - low) * .68;
+          spots.push({x: x + dx * (low + high) / 2, y: y + dy * (low + high) / 2, dx: segment.dx, dy: segment.dy, length: length,
+            cue: {x: x + dx * progress, y: y + dy * progress}});
+        }
       });
-      if (cue) {
-        ctx.lineWidth = Math.min(1.6, route.strength) * scale;
-        ctx.beginPath(); ctx.moveTo(cue.x - (cue.dx * 6 + cue.dy * 3) * scale, cue.y - (cue.dy * 6 - cue.dx * 3) * scale);
-        ctx.lineTo(cue.x, cue.y); ctx.lineTo(cue.x - (cue.dx * 6 - cue.dy * 3) * scale, cue.y - (cue.dy * 6 + cue.dx * 3) * scale); ctx.stroke();
+      spots.sort(function (a, b) { return b.length - a.length; });
+      var cue = spots[0];
+      // Only a lit link names its count, in words on a pill in the cue's place; its terminal arrow still shows the direction.
+      // A route with no straight part long enough for the cue takes its pill halfway along.
+      if (route.count > 1 && role > 0) {
+        if (!cue) {
+          var half = 0;
+          points.slice(1).forEach(function (b, i) { half += Math.hypot(b.x - points[i].x, b.y - points[i].y) / 2; });
+          points.slice(1).some(function (b, i) {
+            var a = points[i], length = Math.hypot(b.x - a.x, b.y - a.y);
+            if (half > length) { half -= length; return false; }
+            spots.push({x: a.x + (b.x - a.x) * half / (length || 1), y: a.y + (b.y - a.y) * half / (length || 1)}); return true;
+          });
+        }
+        ctx.restore();
+        // A pair linked in both kinds starts its two pills 11px apart, and drawPill moves the second clear of the first; each spot keeps its segment's run to slide along.
+        return {count: route.count, role: role, scale: scale, spots: spots.map(function (spot) {
+          var at = {x: spot.x, y: spot.y + (stack || 0) * 11 * scale}; if (spot.dx !== undefined) { at.dx = spot.dx; at.dy = spot.dy; at.length = spot.length; } return at;
+        })};
       }
+      if (cue) {
+        var mark = cue.cue; ctx.lineWidth = Math.min(1.6, route.strength) * scale;
+        ctx.beginPath(); ctx.moveTo(mark.x - (cue.dx * 6 + cue.dy * 3) * scale, mark.y - (cue.dy * 6 - cue.dx * 3) * scale);
+        ctx.lineTo(mark.x, mark.y); ctx.lineTo(mark.x - (cue.dx * 6 - cue.dy * 3) * scale, mark.y - (cue.dy * 6 + cue.dx * 3) * scale); ctx.stroke();
+      }
+      ctx.restore(); return null;
+    }
+    // Pills paint after every route, so no later stroke crosses one; each takes its route's first spot clear of the cards.
+    // A pill takes the first spot clear of the cards and of the pills already painted, sliding along its segment a pill at a time;
+    // with no room left beside the pills it is left out rather than printed over one.
+    function drawPill(ctx, label, cards, pills) {
+      var scale = label.scale, h = 20 * scale; ctx.save(); edgeStyle(ctx, label.role);
+      ctx.font = "600 " + 13 * scale + "px " + family; var w = ctx.measureText(label.count + " links").width + 12 * scale;
+      var candidates = label.spots.slice();
+      label.spots.forEach(function (spot) {
+        for (var step = 1; spot.dx !== undefined && step * (w + 6) * 2 <= spot.length; step++) [1, -1].forEach(function (side) {
+          candidates.push({x: spot.x + side * step * (w + 6) * spot.dx, y: spot.y + side * step * (w + 6) * spot.dy});
+        });
+      });
+      var apart = function (boxes) { return function (spot) {
+        return boxes.every(function (box) {
+          return spot.x + w / 2 + 4 < box.x || spot.x - w / 2 - 4 > box.x + box.w || spot.y + h / 2 + 4 < box.y || spot.y - h / 2 - 4 > box.y + box.h;
+        });
+      }; };
+      var spot = candidates.find(apart(cards.concat(pills || []))) || candidates.find(apart(pills || []));
+      if (spot) { pill(ctx, label.count, spot.x, spot.y, scale); if (pills) pills.push({x: spot.x - w / 2, y: spot.y - h / 2, w: w, h: h}); }
       ctx.restore();
     }
 
@@ -2585,14 +2810,16 @@
         var ab = screen(a), bb = screen(b); return ab.y - bb.y || ab.x - bb.x || a._index - b._index;
       });
       var keep = new Set(candidates.map(function (node) { return node.id; }));
-      var free = freeArea(), top = free.top || 0, available = candidates.find(function (node) {
+      var free = freeArea(), bands = bandInsets(), top = (free.top || 0) + bands.top, end = (free.top || 0) + free.band - bands.bottom;
+      var available = candidates.find(function (node) {
         var box = screen(node);
-        return box.x >= free.left && box.x + box.w <= free.right && box.y >= top && box.y + box.h <= top + free.band;
+        return box.x >= free.left && box.x + box.w <= free.right && box.y >= top && box.y + box.h <= end;
       });
       // Culling includes an 80px paint margin, not a usable keyboard viewport.
       // Keep an owned focus while panning; otherwise start on a contained card.
       var tabId = keep.has(focusedId) ? focusedId : available && available.id || ui$selected && ui$selected.id || candidates[0] && candidates[0].id;
       overlays.forEach(function (control, id) { if (!keep.has(id)) { control.remove(); overlays.delete(id); } });
+      var weights = ui$selected && relationCounts(data.edges, ui$selected.id);
       candidates.forEach(function (node, index) {
         var control = overlays.get(node.id);
         if (!control) { control = makeNodeControl(node); overlays.set(node.id, control); dom$nodeLayer.appendChild(control); }
@@ -2601,6 +2828,7 @@
         control.style.width = size.w + "px"; control.style.height = size.h + "px";
         control.style.setProperty("--dag-node-fill", color.fill); control.style.setProperty("--dag-node-stroke", color.stroke);
         control.style.setProperty("--dag-node-text", color.text); control.dataset.selected = String(node === ui$selected);
+        if (node === ui$selected) control.setAttribute("aria-current", "page"); else control.removeAttribute("aria-current");
         if (atlas && node.kind === "scope") control.style.setProperty("--dag-status-ring", statusRing(node));
         var relation = "";
         if (atlas && ui$selected && node !== ui$selected) {
@@ -2608,29 +2836,76 @@
           else if ((dependents.get(ui$selected.id) || []).indexOf(node.id) >= 0) relation = "dependent";
         }
         control.dataset.relation = relation;
+        // The map shows a link's weight only as width and a lit pill, so a card linked to the selection names it by kind for screen readers.
+        if (!control.$label) control.$label = control.getAttribute("aria-label");
+        var named = [control.$label];
+        if (weights && node !== ui$selected) [["used by ", weights.before], ["uses ", weights.after]].forEach(function (side) {
+          var counts = side[1].get(node.id); if (counts) named.push(side[0] + ui$selected.title + " · " + weightWords(counts));
+        });
+        if (control.getAttribute("aria-label") !== named.join(", ")) control.setAttribute("aria-label", named.join(", "));
         var relationLabel = control.querySelector(".bp-dag-node-relation");
-        if (relationLabel) relationLabel.textContent = relation === "prerequisite" ? "Prerequisite" : relation === "dependent" ? "Dependent" : "";
+        if (relationLabel) relationLabel.textContent = relation ? (relation === "prerequisite" ? "Used by " : "Uses ") + ui$selected.title : "";
         control.dataset.subdued = String(Boolean(spotlight && !spotlight.nodes.has(node.id)));
         control.tabIndex = node.id === tabId ? 0 : -1;
       });
-      dom$density.hidden = !ui$readableCrop && !(visible.length && ui$transform.scale < .34);
-      dom$density.textContent = ui$readableCrop ? "Pan or Browse to see all " + ui$active.length + " items" :
-        (visible.length && ui$transform.scale < .34 ? "Zoom in to reveal " + visible.length + " node labels" : "");
+      // The note asks for a drag only while a shown card's real box reaches past the stage or under a phone's open reader,
+      // and for a zoom only while labels are too small. It counts cards, which Browse does not list, so it names no Browse total.
+      var bottom = mapHeight(), whole = ui$active.filter(function (node) {
+        var box = screen(node); return box.x >= 0 && box.y >= bands.top && box.x + box.w <= dom$stage.clientWidth && box.y + box.h <= bottom - bands.key;
+      }).length, cropped = whole < ui$active.length, tiny = visible.length && ui$transform.scale < .34;
+      dom$density.hidden = !cropped && !tiny;
+      dom$density.textContent = cropped ? "Drag to see more: " + num(whole) + " of " + num(ui$active.length) + " cards in view." :
+        tiny ? "Zoom in to reveal " + visible.length + " node labels" : "";
+      // A removed card gets no pointerleave or blur, and a late timer can name one from the previous projection.
+      if (ui$hovered && !overlays.has(ui$hovered.id)) { ui$hovered = null; schedule(); }
     }
     function makeNodeControl(node) {
       var control = button("bp-dag-node", ""); control.dataset.autoformNodeId = node.id; control.dataset.kind = node.kind || "node";
       if (node._overviewGroup) control.dataset.overviewGroup = node._overviewGroup;
-      var scopeMeta = node.kind === "scope" ? node._unknownCount ? "Topic" : plural(node.member_count || 0, "item", "items") :
-        node.kind === "boundary" ? node._overviewGroup ? plural(node._topics, "external topic", "external topics") : "External topic" : null;
-      control.setAttribute("aria-label", node.title + (node.area ? ", " + node.area : "") + ", " +
-        (scopeMeta || statusLabel(node.status)) + (node.isolated ? ", no dependency edges in this view" : ""));
+      // A topic or region names its fully proved share, which its bar cannot: statement formalized shares proved's green.
+      var count = finished(node), scopeMeta = node.kind === "scope" ? node._unknownCount ? "Topic" : count[1] ?
+        num(count[0]) + " of " + num(count[1]) + " fully proved" : plural(node.member_count || 0, "article", "articles") :
+        node.kind === "boundary" ? boundaryMeta(node) : null;
+      // ATLAS titles such as "Theorem (Crystallographic Restriction)" already name their kind, so the meta does not repeat it.
+      var kind = KINDS.get((node.declaration || "").toLowerCase());
+      if (kind && (node.title || "").indexOf(kind) === 0) kind = "";
+      // A scope overview's group card is an area card, including its bucket of topics with no area.
+      var area = node._region || node._overviewGroup;
+      // A bundle of other topics' cards is a boundary that counts them.
+      var lead = area ? node.kind === "boundary" ? plural(node._topics, "other topic", "other topics") : plural(node._topics, "topic", "topics") : scopeMeta ? "" : kind, said = scopeMeta || statusLabel(node.status);
+      // A finished statement's fill already says so, so its line keeps a ✓ as the cue that is not colour; open states keep their words.
+      var done = !area && !scopeMeta && node.status === "fully_proved", tail = done ? "✓" : said;
+      var meta = area || !lead ? tail : lead + (done ? " " : " · ") + tail;
+      // A boundary's border takes the colour of its least finished linked result, so the card also says their share in words.
+      var share = node.kind === "boundary" && count[1] ? count[0] === count[1] ? count[1] === 1 ? "fully proved" : "all fully proved" :
+        num(count[0]) + " of " + num(count[1]) + " fully proved" : "", linked = share ? ", " + share : "";
+      // A card is heard in words rather than glyphs: commas for its separators, an area card's topic count and members, and its
+      // area only when that is not its own title.
+      var spoken = area ? [lead, said].concat(node.summary ? ["including " + String(node.summary).split(" · ").join(", ")] : []) :
+        lead ? [lead, said] : [said];
+      control.setAttribute("aria-label", [node.title].concat(node.area && node.area !== node.title ? [node.area] : [], spoken).join(", ") + linked +
+        (node.isolated ? ", not linked to anything on this map" : ""));
       var content = atlas && node.kind === "scope" ? element("span", "bp-dag-node-core") : control;
       content.appendChild(element("span", "bp-dag-node-title", node.title));
-      content.appendChild(element("span", "bp-dag-node-meta", node.kind === "boundary" ? scopeMeta : (node._region || node._overviewGroup) ? plural(node._topics, "topic", "topics") + " · " + scopeMeta : scopeMeta || statusLabel(node.status)));
-      if ((node._region || node._overviewGroup) && node.summary) content.appendChild(element("span", "bp-dag-node-summary", node.summary));
+      // Keep declaration kinds whole; the status or topic count yields when its line is narrow.
+      var line = content.appendChild(element("span", "bp-dag-node-meta"));
+      if (lead) { line.appendChild(element("span", "", lead)); line.appendChild(element("span", "", done ? " " : " · ")); }
+      line.appendChild(element("span", "", tail));
+      if (share) content.appendChild(element("span", "bp-dag-node-share", share));
+      // An area's summary leads with its topic count, which the stylesheet then drops from the meta.
+      if (area && node.summary) content.appendChild(element("span", "bp-dag-node-summary", lead + ": " + node.summary));
       content.appendChild(element("span", "bp-dag-node-relation", ""));
       if (content !== control) control.appendChild(content);
-      control.addEventListener("click", function (event) { event.stopPropagation(); activateNode(node, false); });
+      // A drag or pinch that began on the card is not a tap; a keyboard click has no detail and always opens it.
+      control.addEventListener("click", function (event) { event.stopPropagation(); if (!ui$moved || !event.detail) activateNode(node); });
+      // Resting a mouse on a card for 120 ms, or focusing it from the keyboard, previews its neighbours without selecting it; touch has no hover.
+      // Leaving waits as long, so a mouse crossing the gap to another card hands over after its delay instead of flashing the whole map back.
+      ["pointerenter", "focus", "pointerleave", "blur"].forEach(function (type, index) {
+        control.addEventListener(type, function (event) {
+          clearTimeout(hoverTimer);
+          if (index - 1 ? index || event.pointerType !== "touch" : control.matches(":focus-visible")) hoverTimer = setTimeout(function () { ui$hovered = index < 2 && node; schedule(); }, index % 2 ? 0 : 120);
+        });
+      });
       control.addEventListener("keydown", function (event) {
         if (/^Arrow(Left|Right|Up|Down)$/.test(event.key)) {
           if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
@@ -2658,28 +2933,38 @@
       return best;
     }
 
+    // A press on a card stays a tap until it travels 8px or a second finger lands. Only then does the stage
+    // take the pointers, since a captured press would send the tap's click to the stage instead of the card.
     function pointerDown(event) {
-      if (event.target.closest && event.target.closest(".bp-dag-node")) return;
-      ui$pointers.set(event.pointerId, {x: event.clientX, y: event.clientY, type: event.pointerType});
-      ui$moved = false; dom$stage.setPointerCapture(event.pointerId); dom$stage.dataset.dragging = "true";
-      if (ui$pointers.size === 2) ui$pinch = pinchState();
+      if (event.button || dom$mapKey.contains(event.target)) return;
+      ui$pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
+      if (ui$pointers.size === 1) ui$moved = false;
+      if (ui$pointers.size === 2) { ui$pinch = pinchState(); grab(); }
+    }
+    function grab() {
+      ui$moved = true; dom$stage.dataset.dragging = "true";
+      ui$pointers.forEach(function (_, id) { dom$stage.setPointerCapture(id); });
     }
     function pinchState() {
       var points = Array.from(ui$pointers.values()), dx = points[1].x - points[0].x, dy = points[1].y - points[0].y;
       return {distance: Math.max(1, Math.hypot(dx, dy)), x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2};
     }
     function pointerMove(event) {
-      if (!ui$pointers.has(event.pointerId)) return;
-      var previous = ui$pointers.get(event.pointerId); ui$pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
+      // A press released off the stage never sends its pointerup here; a move with no button down ends it.
+      if (!event.buttons) ui$pointers.delete(event.pointerId);
+      var previous = ui$pointers.get(event.pointerId);
+      if (!previous) return;
+      var dx = event.clientX - previous.x, dy = event.clientY - previous.y;
+      // The press point stays put until the 8px crossing, so the first pan step carries the whole way travelled.
+      if (!ui$moved) { if (Math.hypot(dx, dy) <= 8) return; grab(); }
+      ui$pointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
       if (ui$pointers.size === 1) {
-        var dx = event.clientX - previous.x, dy = event.clientY - previous.y;
-        if (Math.abs(dx) + Math.abs(dy) > 1) ui$moved = true;
         ui$transform.x += dx; ui$transform.y += dy; schedule();
       } else if (ui$pointers.size === 2) {
         var next = pinchState(), rect = dom$stage.getBoundingClientRect();
         ui$transform.x += next.x - ui$pinch.x; ui$transform.y += next.y - ui$pinch.y;
         zoomAt(next.distance / ui$pinch.distance, next.x - rect.left, next.y - rect.top);
-        ui$pinch = next; ui$moved = true;
+        ui$pinch = next;
       }
     }
     function pointerUp(event) {
@@ -2687,8 +2972,10 @@
       var wasSingle = ui$pointers.size === 1; ui$pointers.delete(event.pointerId);
       if (ui$pointers.size < 2) ui$pinch = null;
       if (!ui$pointers.size) dom$stage.dataset.dragging = "false";
-      if (event.type === "pointerup" && wasSingle && !ui$moved && ui$selected) clearSelection(true);
-      remember();
+      // A tap on a card leaves the selection to the card's click.
+      if (event.type === "pointerup" && wasSingle && !ui$moved && ui$selected && !event.target.closest(".bp-dag-node")) clearSelection(true);
+      // Only a pan or pinch moved the camera; a card's tap records its own history.
+      if (ui$moved) remember();
     }
 
     function searchScore(node, query) {
@@ -2705,13 +2992,13 @@
     function ensureGlobalSearch() {
       if (sharedIndex) return Promise.resolve(sharedIndex);
       if (ui$searchPromise) return ui$searchPromise;
-      ui$searchLoading = true;
+      ui$searchLoading = true; dom$search.setAttribute("aria-busy", "true");
       ui$searchPromise = navigation.loadIndex().then(function (loaded) {
         useIndex(loaded); ui$searchError = null;
       }).catch(function (error) {
         ui$searchError = error.message;
       }).then(function () {
-        ui$searchLoading = false;
+        ui$searchLoading = false; dom$search.removeAttribute("aria-busy");
         if (dom$searchResults.hidden) return;
         var focused = document.activeElement, inside = dom$searchResults.contains(focused);
         var key = inside && (focused.dataset.resultId || "more");
@@ -2738,15 +3025,17 @@
       var matches = searchMatches(), list = element("ul", "bp-dag-results");
       matches.slice(0, ui$searchLimit).forEach(function (match) {
         var item = element("li"), choose = button("bp-dag-result", ""); choose.dataset.resultId = match.node.id;
-        choose.appendChild(element("span", "bp-dag-result-title", match.node.title));
-        choose.appendChild(element("span", "bp-dag-result-meta", match.node.area || statusLabel(match.node.status)));
+        choose.appendChild(readingLabel("span", "bp-dag-result-title", match.node.title, (records.get(recordId(match.node)) || match.node).reading_title));
+        choose.appendChild(element("span", "bp-dag-result-meta", statusLabel(match.node.status))).title = (palette[match.node.status] || {}).meaning || "";
+        var place = placeOf(match.node), topic = (records.get(recordId(match.node)) || match.node).scope === match.node.id;
+        if (place || topic) choose.appendChild(element("span", "bp-dag-result-place", topic ? "Topic" + (place ? " in " + place : "") : place));
         choose.addEventListener("click", function () { activateNode(match.node, true); }); item.appendChild(choose); list.appendChild(item);
         choose.addEventListener("keydown", searchResultKeydown);
       });
-      dom$searchResults.appendChild(list);
+      dom$searchResults.appendChild(list); refreshReadingLabels(list);
       if (matches.length > ui$searchLimit) {
         var remaining = matches.length - ui$searchLimit, increment = Math.min(SEARCH_PAGE, remaining);
-        var more = button("bp-dag-load-more", "Show " + increment + " more of " + remaining);
+        var more = button("bp-dag-load-more", "Show " + num(increment) + " more of " + num(matches.length));
         more.addEventListener("click", function () {
           var previous = ui$searchLimit;
           ui$searchLimit = Math.min(matches.length, ui$searchLimit + SEARCH_PAGE); renderSearch();
@@ -2810,9 +3099,12 @@
       navigation.navigateNode(id, settings); closeSearch();
     }
     function focusNodeControl(node) {
-      var bundle = currentBundle, projection = data;
+      var bundle = currentBundle, projection = data, owner = document.activeElement, owned = host.contains(owner), request = focusNodeControl.$request = {};
       requestAnimationFrame(function () { requestAnimationFrame(function () {
-        if (!alive || currentBundle !== bundle || data !== projection || ui$mode !== "graph" || (bundle && bundle.isCurrent && !bundle.isCurrent())) return;
+        if (!alive || focusNodeControl.$request !== request || currentBundle !== bundle || data !== projection || ui$mode !== "graph" ||
+            (document.activeElement !== owner && !(owned && (owner.hidden || owner.isConnected === false) &&
+              (document.activeElement === document.body || document.activeElement === document.documentElement))) ||
+            (sheetLayout() && host.classList.contains("bp-dag-sheet-full")) || (bundle && bundle.isCurrent && !bundle.isCurrent())) return;
         var control = node ? overlays.get(node.id) : dom$nodeLayer.querySelector('.bp-dag-node[tabindex="0"]');
         if (control) control.focus({preventScroll: true}); else (node ? dom$sheetHandle : dom$filterSummary).focus({preventScroll: true});
         dom$nodeLayer.scrollLeft = 0; dom$nodeLayer.scrollTop = 0; remember(); schedule();
@@ -2832,30 +3124,64 @@
     }
     // From 681px to 1,100px details can open the head's first row; the map shifts back by it, so nothing jumps.
     // Measure both class changes together; callers need no selection-toggle ordering rule.
+    // A phone reader also has a full position: 1 asks for half, 2 for full, and true keeps full if it is there.
     function setSheet(open, selected) {
       var closed = host.classList.contains("bp-dag-sheet-open") && !open;
       var width = dom$stage.clientWidth, height = dom$stage.clientHeight;
       var top = dom$body.offsetTop; host.classList.toggle("bp-dag-sheet-open", Boolean(open));
+      host.classList.toggle("bp-dag-sheet-full", open > 1 || open === true && host.classList.contains("bp-dag-sheet-full"));
+      if (scene) scene.$held = host.classList.contains("bp-dag-sheet-full");
       host.classList.toggle("bp-dag-has-selection", Boolean(selected));
       ui$transform.y += top - dom$body.offsetTop; schedule();
       dom$sheetHandle.setAttribute("aria-expanded", String(Boolean(open)));
       syncSheetAccessibility();
+      positionMapFeedback();
       if (width !== dom$stage.clientWidth || height !== dom$stage.clientHeight) resize();
       if (closed && selected && !restoring && sheetLayout() && mapAllowed) centerIfHidden(selected);
     }
     function sheetLayout() { return Boolean(window.matchMedia && window.matchMedia("(max-width: 720px)").matches); }
+    function wrapMapKey(open, returnFocus) {
+      var legend = element("details", "bp-map-key-legend"), summary = element("summary", "", "Link key");
+      var body = element("div", "bp-map-key-body");
+      while (dom$mapKey.firstChild) body.appendChild(dom$mapKey.firstChild);
+      legend.open = Boolean(open); legend.append(summary, body); dom$mapKey.appendChild(legend);
+      if (returnFocus && !host.classList.contains("bp-dag-sheet-full")) summary.focus({preventScroll: true});
+    }
+    function positionMapFeedback() {
+      if (!dom$stage || !dom$mapKey || !dom$density) return;
+      var open = sheetLayout() && host.classList.contains("bp-dag-sheet-open") && !host.classList.contains("bp-dag-sheet-full");
+      var inset = open ? Math.max(0, dom$stage.clientHeight - freeArea().band) : 0;
+      dom$mapKey.style.bottom = open ? inset + 4 + "px" : "";
+      dom$density.style.bottom = open ? inset + 34 + "px" : "";
+    }
     function syncSheetAccessibility() {
       if (!dom$inspectorInner || !dom$sheetHandle) return;
       var opened = host.classList.contains("bp-dag-sheet-open");
       var collapsed = !opened && (sheetLayout() || Boolean(ui$area) || ui$overviewOnly || ui$scopeOverview);
-      dom$sheetHandle.textContent = opened && !sheetLayout() && (ui$area || ui$overviewOnly || ui$scopeOverview) ? "×" : "Reading";
-      dom$sheetHandle.title = opened ? "Close reading" : "Open reading";
+      // The handle names the page or entry, with its status, rather than a generic "Reading"; its accessible name starts with that title.
+      // An open desktop reader over an area or the overview closes with ×.
+      var page = currentBundle || data, close = opened && !sheetLayout() && (ui$area || ui$overviewOnly || ui$scopeOverview),
+        record = records.get(page.nodeId || ui$requestedNode || (ui$selected && ui$selected.id));
+      if (!record || !record.result) record = page.readingSource && records.get(page.readingSource.dataset.autoformNodeId);
+      var title = record ? record.title : page.title;
+      // A chapter's own record carries a rollup status, not its results', so only a statement gets a status mark.
+      var handleTitle = close ? "" : readingLabel("span", "bp-dag-sheet-title", title, record && record.reading_title);
+      dom$sheetHandle.replaceChildren(close ? "×" : record && record.result && record.status ? swatch(record.status) : "", handleTitle);
+      if (handleTitle) refreshReadingLabels(dom$sheetHandle);
+      dom$sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");
+      dom$sheetHandle.title = !opened ? "Open reading" : navigation && sheetLayout() && !host.classList.contains("bp-dag-sheet-full") ? "Expand reading" : "Close reading";
       if (collapsed) {
         if (dom$inspectorInner.contains(document.activeElement)) dom$sheetHandle.focus();
         dom$inspectorInner.setAttribute("inert", ""); dom$inspectorInner.setAttribute("aria-hidden", "true");
       } else {
         dom$inspectorInner.removeAttribute("inert"); dom$inspectorInner.removeAttribute("aria-hidden");
       }
+      // A phone's full reader covers the map and the list, so they leave the tab order and the accessibility tree while it does.
+      var main = host.querySelector && host.querySelector(".bp-dag-main");
+      if (main && navigation && sheetLayout() && host.classList.contains("bp-dag-sheet-full")) {
+        if (main.contains(document.activeElement)) dom$sheetHandle.focus();
+        main.setAttribute("inert", "");
+      } else if (main) main.removeAttribute("inert");
       if (navigation) {
         if (!dom$pageHeading) { dom$pageHeading = element("h1", "bp-dag-sr-only"); host.prepend(dom$pageHeading); }
         dom$pageHeading.textContent = currentBundle && currentBundle.title || data.title;
@@ -2867,6 +3193,11 @@
       ui$activeDirty = true; writeLocation("replace"); refresh(true); fit();
       dom$filterSummary.focus({preventScroll: true});
     }
+    // A search or filter that changes the rows or cards says what is left, since the count on screen is not announced.
+    function announceShown() {
+      if (ui$mode !== "graph") dom$announcement.textContent = dom$inventorySummary.firstChild ? dom$inventorySummary.firstChild.textContent : "";
+      else dom$announcement.textContent = !dom$empty.hidden ? dom$empty.textContent : num(ui$active.length) + " of " + num(data.nodes.length) + " cards shown";
+    }
     function onStatusChange() {
       ui$filtersTouched = true;
       ui$selectedStatuses = new Set();
@@ -2876,7 +3207,7 @@
         setSheet(navigation && !sheetLayout() && !ui$overviewOnly && !ui$scopeOverview, null);
         dom$announcement.textContent = "Selection cleared because its status is hidden.";
       }
-      ui$activeDirty = true; writeLocation("replace"); refresh(true);
+      ui$activeDirty = true; writeLocation("replace"); refresh(true); announceShown();
     }
     function setMode(mode, updateHistory) {
       if (mode === "graph" && !ui$mapAllowed) return;
@@ -2925,17 +3256,15 @@
           pair[1].slice(ui$wikiLimit, limit).forEach(function (relatedId) {
             var related = records.get(relatedId), item = element("li"), link = readingLabel("a", "", related.title, related.reading_title);
             link.href = related.route || related.url;
-            link.addEventListener("click", function (event) {
-              if (event.defaultPrevented || event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-              event.preventDefault(); navigation.navigateNode(relatedId, {history: "push", focus: "reading"});
-            });
+            bindNodeLink(link, relatedId, {history: "push", focus: "reading"});
             item.appendChild(link); list.appendChild(item);
           });
           ui$wikiLimit = limit; more.hidden = limit >= pair[1].length;
           more.textContent = "Show " + Math.min(20, pair[1].length - limit) + " more links";
           refreshReadingLabels(list);
         }
-        appendLinks(); more.addEventListener("click", appendLinks);
+        appendLinks();
+        more.addEventListener("click", function () { var first = ui$wikiLimit; appendLinks(); var links = list.querySelectorAll("a"); if (links[first]) links[first].focus(); });
         group.appendChild(list); group.appendChild(more); disclosure.appendChild(group);
       });
       var peers = dom$readingNeighbors.querySelector(".bp-reading-related-topics");
@@ -2947,6 +3276,10 @@
       var previous = dom$readingNeighbors && dom$readingNeighbors.querySelector(".bp-reading-wiki-links");
       renderReaderContext(previous && ui$wikiNode === id ? previous : null); renderWikiContext();
       refreshReadingLabels(dom$readingContext); refreshReadingLabels(dom$readingNeighbors);
+    }
+    function weightWords(counts) {
+      return [counts.statement && plural(counts.statement, "statement dependency", "statement dependencies"),
+        counts.proof && plural(counts.proof, "proof dependency", "proof dependencies")].filter(Boolean).join(", ");
     }
 
     function inventoryNodes() {
@@ -2961,6 +3294,93 @@
       }) : (calculateActive(), ui$active);
       var nodes = query ? rankMatches(pool, query).map(function (match) { return match.node; }) : pool;
       return nodes.filter(function (node) { return ui$selectedStatuses.has(node.status); });
+    }
+    // Preview only closed code spans and unambiguous inline formulas. Unsupported
+    // Markdown stays literal; it must not silently turn currency or code into math.
+    function pendingMath(source) { var span = element("span", "bp-math-pending", source); span.setAttribute("aria-hidden", "true"); return span; }
+    function summaryLine(node) {
+      var text = String(node.summary), line = element("span", "bp-result-summary"), title = node.title || "";
+      if (title && text.indexOf(title) === 0 && /^[.:]\s/.test(text.slice(title.length))) text = text.slice(title.length + 1).trim();
+      var pattern = /\\([\\`$])|(?<![\\`])(`+)(?!`)([^\n]*?)(?<!`)\2(?!`)|(?<![\\$])\$(?![\s$])((?:\\.|[^\\$\n])+?)(?<!\s)\$(?![$\d])|(?<!\\)\\\(((?:\\[^)]|[^\\\n])+?)\\\)/g;
+      var last = 0, match;
+      while ((match = pattern.exec(text))) {
+        // An unmatched backtick may own later dollars. Keep the complete preview
+        // literal instead of guessing where code ends.
+        if (text.slice(last, match.index).indexOf("`") >= 0) return element("span", "bp-result-summary", text);
+        if (match.index > last) line.appendChild(element("span", "", text.slice(last, match.index)));
+        line.appendChild(match[1] !== undefined ? element("span", "", match[1]) : match[2] !== undefined ?
+          element("code", "", match[3].trim()) : pendingMath("\\(" + (match[4] !== undefined ? match[4] : match[5]) + "\\)"));
+        last = pattern.lastIndex;
+      }
+      if (text.slice(last).indexOf("`") >= 0) return element("span", "bp-result-summary", text);
+      if (last < text.length) line.appendChild(element("span", "", text.slice(last)));
+      return line;
+    }
+    // Typesetting a page of 100 summaries at once held the page still for two seconds. A row's formulas become MathJax's
+    // to read only as the row comes near the view, after the list has painted, and a pass reads at most six rows, so a
+    // pass stays short and a scroll costs a pass or two rather than one per row.
+    function typesetRowsInView() {
+      stopRowMath();
+      if (!alive || ui$mode === "graph") return;
+      var lines = Array.prototype.filter.call(dom$inventoryList.querySelectorAll(".bp-dag-inventory-row"), function (row) { return row.querySelector(".bp-math-pending"); });
+      if (!lines.length) return;
+      if (!window.AutoformMath || typeof window.AutoformMath.refresh !== "function") { fallbackRowMath(lines); return; }
+      var job = ui$mathJob = {$bundle: currentBundle, $mode: ui$mode, $rows: lines, $queue: [], $queued: new Set(), $busy: false,
+        $timer: null, $deadline: null, $observer: null};
+      if (typeof IntersectionObserver !== "function") { job.$queue = lines.slice(); queueRowMath(job, 60); return; }
+      var observer = job.$observer = new IntersectionObserver(function (entries) {
+        if (!rowMathCurrent(job)) { if (ui$mathJob === job) stopRowMath(); else observer.disconnect(); return; }
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting && dom$inventoryList.contains(entry.target) && !job.$queued.has(entry.target)) {
+            observer.unobserve(entry.target); job.$queued.add(entry.target); job.$queue.push(entry.target);
+          }
+        });
+        queueRowMath(job, 60);
+      }, {root: dom$inventoryScroll, rootMargin: "200px 0px"});
+      lines.forEach(function (line) { observer.observe(line); });
+    }
+    function rowMathCurrent(job) {
+      return alive && ui$mathJob === job && currentBundle === job.$bundle && ui$mode === job.$mode && ui$mode !== "graph" &&
+        (!job.$bundle.isCurrent || job.$bundle.isCurrent());
+    }
+    function queueRowMath(job, delay) {
+      if (!rowMathCurrent(job) || job.$busy || !job.$queue.length || job.$timer !== null) return;
+      job.$timer = setTimeout(function () { job.$timer = null; typesetRevealedRows(job); }, delay);
+    }
+    function fallbackRowMath(rows) {
+      rows.forEach(function (line) {
+        Array.prototype.forEach.call(line.querySelectorAll(".bp-math-pending, .arithmatex:not(:has(mjx-container))"), function (span) {
+          span.className = "bp-math-fallback"; span.removeAttribute("aria-hidden");
+        });
+      });
+    }
+    function stopRowMath() {
+      var job = ui$mathJob; ui$mathJob = null;
+      if (!job) return;
+      clearTimeout(job.$timer); clearTimeout(job.$deadline); if (job.$observer) job.$observer.disconnect();
+      fallbackRowMath(job.$rows); job.$queue = [];
+    }
+    function typesetRevealedRows(job) {
+      if (!rowMathCurrent(job)) { if (ui$mathJob === job) stopRowMath(); return; }
+      if (job.$busy || !job.$queue.length) return;
+      var batch = job.$queue.splice(0, 6).filter(function (line) { return line.isConnected && dom$inventoryList.contains(line); });
+      if (!batch.length) { queueRowMath(job, 0); return; }
+      if (!window.AutoformMath || typeof window.AutoformMath.refresh !== "function") { stopRowMath(); return; }
+      batch.forEach(function (line) {
+        Array.prototype.forEach.call(line.querySelectorAll(".bp-math-pending"), function (span) { span.className = "arithmatex"; span.removeAttribute("aria-hidden"); });
+      });
+      job.$busy = true;
+      function failed() { if (ui$mathJob === job) stopRowMath(); }
+      // An unavailable or stalled engine must leave honest, visible source text.
+      job.$deadline = setTimeout(failed, 2000);
+      try {
+        Promise.resolve(window.AutoformMath.refresh(dom$inventoryList)).then(function (result) {
+          clearTimeout(job.$deadline); job.$deadline = null;
+          if (result === false) { failed(); return; }
+          if (!rowMathCurrent(job)) { if (ui$mathJob === job) stopRowMath(); return; }
+          job.$busy = false; queueRowMath(job, 0);
+        }, failed);
+      } catch (_error) { failed(); }
     }
     function inCurrentScope(node) {
       var scope = currentBundle && currentBundle.scope; if (!scope || scope === "roadmap") return true;
@@ -2988,30 +3408,45 @@
       if (!dom$inventoryList || ui$mode === "graph") return;
       var nodes = inventoryNodes(), visible = nodes.slice(0, ui$listLimit); dom$inventoryList.textContent = "";
       var articles = nodes.some(function (node) { return node.catalog === "module"; });
-      if (navigation && ui$mode !== "sources") dom$inventory.querySelector("h2").textContent = articles ? "Results & articles" : "Results";
+      // The list says "statements", as Browse and the dashboard do.
+      if (navigation && ui$mode !== "sources") dom$inventory.querySelector("h2").textContent = articles ? "Statements & articles" : "Statements";
       dom$inventoryRows = new Map();
+      // A page too big for a map says so in words: a disabled button's tooltip never shows on a touch screen.
+      if (navigation && !mapAllowed && ui$mode === "list") {
+        var topics = data.nodes.filter(function (node) { return node.kind === "scope"; }).length;
+        dom$inventoryList.appendChild(element("li", "bp-dag-inventory-note", topics > 1 ? (currentBundle && currentBundle.title || "This page") + " has " +
+          num(topics) + " topics, too many to draw as one map. Open one from Topics, or search." : "Too many statements to draw as one map. Search to find one."));
+      }
       visible.forEach(function (node) {
         var item = element("li"), row = button("bp-dag-inventory-row", "");
         row.dataset.inventoryNodeId = node.id;
         if (ui$selected && node.id === ui$selected.id) row.setAttribute("aria-current", "true");
         dom$inventoryRows.set(node.id, row);
-        row.appendChild(readingLabel("span", "bp-dag-inventory-title", node.title, node.reading_title));
-        row.appendChild(element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (node.area ? " · " + node.area : "")));
-        if (navigation && node.summary) row.appendChild(element("span", "bp-result-summary", node.summary));
+        var rowId = "bp-dag-row-" + instance + "-" + dom$inventoryRows.size;
+        // A title's formulas wait for their row to come into view, as its summary's do.
+        var titleParts = node.reading_title || (records.get(recordId(node)) || node).reading_title, rowTitle = row.appendChild(readingLabel("span", "bp-dag-inventory-title", node.title, titleParts));
+        rowTitle.id = rowId + "-title";
+        if (titleParts) Array.prototype.forEach.call(rowTitle.querySelectorAll(".arithmatex"), function (math) { math.replaceWith(pendingMath(math.textContent)); });
+        var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;
+        var rowMeta = row.appendChild(element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (where ? " · " + where : "")));
+        rowMeta.title = (palette[node.status] || {}).meaning || ""; rowMeta.id = rowId + "-meta";
+        // A row is named by its title and status line; its summary is the description, so a name is not 400 characters long.
+        row.setAttribute("aria-labelledby", rowId + "-title " + rowId + "-meta");
+        if (navigation && node.summary) { var summary = row.appendChild(summaryLine(node)); summary.id = rowId + "-summary"; row.setAttribute("aria-describedby", summary.id); }
         row.addEventListener("click", function () { activateNode(node, true); }); item.appendChild(row); dom$inventoryList.appendChild(item);
       });
+      if (navigation) typesetRowsInView();
       // A count, or "N of M" while a page or a filter shows fewer.
       var shown = visible.length < nodes.length ? visible : nodes, total = nodes;
-      dom$inventorySummary.textContent = shown.length < total.length ? shown.length.toLocaleString() + " of " +
-        total.length.toLocaleString() : plural(total.length, ui$mode === "sources" ? "source" : articles ? "article" : "result",
-          ui$mode === "sources" ? "sources" : articles ? "articles" : "results");
+      dom$inventorySummary.textContent = shown.length < total.length ? num(shown.length) + " of " +
+        num(total.length) : plural(total.length, ui$mode === "sources" ? "source" : articles ? "article" : "statement",
+          ui$mode === "sources" ? "sources" : articles ? "articles" : "statements");
       if (ui$query && host.getAttribute("data-catalog-src")) {
         dom$inventorySummary.appendChild(document.createTextNode(" · ")); dom$inventorySummary.appendChild(dom$wholeSearch);
       }
       dom$loadMore.hidden = visible.length >= nodes.length;
       dom$loadMore.textContent = visible.length < nodes.length ? "Show " + Math.min(LIST_PAGE, nodes.length - visible.length) + " more" : "";
       var current = ui$selected && dom$inventoryRows.get(ui$selected.id);
-      refreshReadingLabels(dom$inventoryList);
       if (resetScroll && dom$inventoryScroll) dom$inventoryScroll.scrollTop = 0;
       else if (current) current.scrollIntoView({block: "nearest"});
     }
@@ -3021,7 +3456,7 @@
 
     syncControls();
     return {ready: readingReady, applyRoute: applyRoute, useIndex: useIndex, useWikiLinks: useWikiLinks, captureState: captureState, restoreState: restoreState, showError: showError,
-      dispose: function () { alive = false; ui$wikiProjectionTicket++; ui$wikiProjectionCache = new WeakMap(); clearTimeout(checkpointTimer); cancelAnimationFrame(frame);
+      dispose: function () { alive = false; stopRowMath(); ui$wikiProjectionTicket++; ui$wikiProjectionCache = new WeakMap(); clearTimeout(checkpointTimer); cancelAnimationFrame(frame);
         if (resizeFrame !== null) cancelAnimationFrame(resizeFrame); resizeFrame = null; cleanup.forEach(function (close) { close(); });
         observers.forEach(function (observer) { observer.disconnect(); }); if (navigation) navigation.dispose(); }};
   }

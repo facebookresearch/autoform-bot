@@ -42,7 +42,7 @@ camera, filters and reader state. Canvas paints routes; native DOM controls prov
 readable labels, keyboard focus and hit targets. The 120-node scene bound limits
 geometry, not index membership or paged structural shelves. Group before this cap;
 only authored areas name mathematical regions. Collections and real components are structural.
-Fit compares bounded orientations and frames drilled members/local cards, not distant context.
+Fit compares bounded orientations; selected neighborhoods include direct boundary links and retain a proved-fit pose.
 An unselected connection backbone reduces condensation transitively; its key reports shown/total.
 Canonical weights/SCCs and reader lists stay complete; selected maps restore full bounded-neighborhood routes.
 Server-produced pages contain complete mathematical reading and theorem anchors
@@ -51,14 +51,14 @@ without JavaScript; enhancement uses published fragments, never graph summaries.
 [mathjax.py](../autoform_cli/mathjax.py) owns marked formulas: ordinary reading uses
 project macros; read-back cards use fresh isolated inputs without them. Reading
 labels carry converter-derived text/code/TeX parts, revalidated by the client;
-code stays literal. Refreshes add no MathJax menus or tab stops inside controls.
+Code and unsupported previews stay literal; deferred list math is bounded and viewer-scoped.
+Page-owned reading labels add no MathJax menus/tab stops; typed link counts describe rather than replace their names.
 
 ## Builds and verification
 
-[build-explorer.mjs](../scripts/build-explorer.mjs) fingerprints canonical UTF-8/LF
-development source text. This is distinct from raw captured mathematical inputs,
-the exact-byte index/sidecar binding, and the emitted runtime's byte SHA.
-Pinned development-only compilers ship one asset below 132 KB; consumers need no Node.
+[build-explorer.mjs](../scripts/build-explorer.mjs) hashes canonical UTF-8/LF development text.
+That fingerprint differs from raw math sources, exact index/sidecar bytes and the runtime byte SHA.
+Pinned development-only compilers ship one asset below 144 KB; consumers need no Node.
 Unsafe compression, public-field mangling/raw-source fallbacks are forbidden; stale bundles fail publication.
 
 Source/unit and geometry tests check lifecycle, ranks, conservation/collisions; MathJax/WebKit check glyphs, hits/focus and Back.

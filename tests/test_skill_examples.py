@@ -79,12 +79,17 @@ def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -
 
     That render still draws Mermaid maps through the global Mermaid script, so
     mkdocs.yml keeps that line, and the example's texts say only what both
-    renders write. That pin has no `review` command either, so the example
-    turns on no statement review. Move the pin, here and in the workflow
-    equivalence test, before relaxing this.
+    renders write. That pin has no `review` command, and its check rejects
+    `review_approved:`, so the example turns on no statement review: no marker,
+    no read-back cards and no approvals, which the verify workflow looks for.
+    Move the pin, here and in the workflow equivalence test, before relaxing this.
     """
     example = repo_root / _EXAMPLE
     assert not (example / "blueprint/.autoform-review").exists()
+    assert not (example / "blueprint/readbacks").exists()
+    for path in (example / "blueprint/roadmap").rglob("*"):
+        if path.is_file():
+            assert not re.search(r"^\s*review_approved\s*:", path.read_text(encoding="utf-8"), re.MULTILINE), path
     assert "mermaid@11.4.1/dist/mermaid.min.js" in (example / "mkdocs.yml").read_text(encoding="utf-8")
     assert "dependency maps of the project and each chapter" in " ".join(
         (example / "README.md").read_text(encoding="utf-8").split()
@@ -281,7 +286,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert '<a class="bp-context-link"' not in chapter
     assert 'class="bp-reading-source"' in chapter and 'class="bp-explorer-page"' in chapter
     assert 'data-graph-src="../../dependencies/chapters/infimum-loss.json"' in chapter
-    assert '<details class="bp-dependencies"><summary>Dependencies</summary>' in chapter
+    assert re.search(r'<details class="bp-dependencies"><summary>Uses \d+ · Used by \d+</summary>', chapter)
     assert '<nav class="bp-book-nav" aria-label="Blueprint chapters">' in chapter
     assert (
         'class="bp-book-nav-link bp-book-nav-previous" '
@@ -380,8 +385,8 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     overview = (site / "README.md").read_text(encoding="utf-8")
     assert 'data-graph-src="dependencies.json"' in overview
     # The landing page states progress as figures; the chapters keep the strip.
-    assert "Scoped roadmap" in overview
-    assert "5 of 7 targets complete" in overview
+    assert '<div class="bp-figure-label">Fully proved</div>' in overview
+    assert '<div class="bp-figure-note">5 of 7 articles</div>' in overview
     assert ">71%<" in overview
     assert "Declared source coverage:" in overview
     assert "1 decomposed · 5 mapped · 1 out" in overview

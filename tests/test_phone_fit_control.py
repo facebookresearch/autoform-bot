@@ -50,7 +50,9 @@ def test_phone_fit_target_stays_in_the_existing_group_footprint_and_leaves_deskt
     assert group["height"] == "44px"
     assert group["padding"] == group["gap"] == group["border"] == "0"
     assert group["box-shadow"] == "inset 0 0 0 1px var(--dag-border)"
-    target = _rule(phone, ".bp-dag-integrated .bp-dag-zoom .bp-dag-fit")
+    # Fit inherits the shared touch target before its later, equally specific icon rule.
+    target = _rule(phone, ".bp-dag-integrated .bp-dag-zoom .bp-dag-button")
+    target.update(_rule(phone, ".bp-dag-integrated .bp-dag-zoom .bp-dag-fit"))
     assert target["width"] == target["min-width"] == target["max-width"] == "44px"
     assert target["height"] == target["min-height"] == "44px"
     assert target["flex"] == "0 0 44px" and target["padding"] == target["font-size"] == "0"
@@ -71,13 +73,13 @@ def test_actual_framing_labels_and_tooltips_track_fit_and_readable_crop_without_
     }
     _run(_ENVIRONMENT + r"""
       const before=JSON.stringify(data);fit();
-      assert.equal(dom$fit.textContent,'Fit');assert.equal(dom$fit['aria-label'],'Fit shown nodes');
+      assert.equal(dom$fit.textContent,'Fit');assert.equal(dom$fit['aria-label'],'Fit the map');
       assert.equal(dom$fit.title,dom$fit['aria-label']);
       dom$stage.clientHeight=100;fit();assert(ui$readableCrop);
-      assert.equal(dom$fit.textContent,'Recentre');assert.equal(dom$fit['aria-label'],'Recentre readable local cards');
+      assert.equal(dom$fit.textContent,'Recentre');assert.equal(dom$fit['aria-label'],'Recentre the map');
       assert.equal(dom$fit.title,dom$fit['aria-label']);
       dom$stage.clientHeight=600;fit();assert.equal(ui$readableCrop,false);
-      assert.equal(dom$fit.textContent,'Fit');assert.equal(dom$fit.title,'Fit shown nodes');
+      assert.equal(dom$fit.textContent,'Fit');assert.equal(dom$fit.title,'Fit the map');
       assert.equal(JSON.stringify(data),before);
     """, {"data": data, "width": 390, "height": 600, "direction": "lr", "atlas": False})
 
@@ -114,8 +116,28 @@ def test_phone_fit_recentre_round_trip_keeps_native_target_toolbar_stage_and_all
     _open(page, site, workspace_runtime)
     page.locator(".bp-dag-overview-only").wait_for()
     fit = page.locator(".bp-dag-fit")
-    playwright.expect(fit).to_have_attribute("aria-label", "Fit shown nodes")
-    playwright.expect(fit).to_have_attribute("title", "Fit shown nodes")
+    _capture(page, "initial", {
+        "url": page.url, "fit_label": fit.get_attribute("aria-label"), "fit_title": fit.get_attribute("title"),
+        "source": page.locator(".bp-reading-body > .bp-reading-source").text_content(), "published_graph": site.root_graph,
+        "geometry": page.locator('.bp-dag-node[data-autoform-node-id^="region:"]').evaluate_all("""nodes=>{
+          const rectangle=box=>({left:box.left,right:box.right,top:box.top,bottom:box.bottom,width:box.width,height:box.height});
+          const stage=document.querySelector('.bp-dag-stage'),bounds=stage.getBoundingClientRect();
+          return {stage:rectangle(bounds),client:[stage.clientWidth,stage.clientHeight],
+            toolbar:rectangle(document.querySelector('.bp-dag-toolbar').getBoundingClientRect()),
+            body:rectangle(document.querySelector('.bp-dag-body').getBoundingClientRect()),
+            reading:rectangle(document.querySelector('.bp-reading-pane').getBoundingClientRect()),
+            readingOpen:document.querySelector('.bp-dag-sheet-handle').getAttribute('aria-expanded'),
+            cards:nodes.slice(0,120).map(node=>{const box=node.getBoundingClientRect(),matrix=new DOMMatrix(getComputedStyle(node).transform);
+              const title=node.querySelector('.bp-dag-node-title'),meta=node.querySelector('.bp-dag-node-meta');
+              return {id:node.dataset.autoformNodeId,box:rectangle(box),scale:matrix.a,
+                camera:[matrix.a,matrix.d,matrix.e,matrix.f],title:title.textContent,meta:meta.textContent,
+                titlePixels:parseFloat(getComputedStyle(title).fontSize)*matrix.a,metaPixels:parseFloat(getComputedStyle(meta).fontSize)*matrix.a,
+                whole:box.left>=bounds.left+12&&box.right<=bounds.right-12&&box.top>=bounds.top+12&&box.bottom<=bounds.bottom-12,
+                hit:node.contains(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2))};})};
+        }"""),
+    })
+    playwright.expect(fit).to_have_attribute("aria-label", "Fit the map")
+    playwright.expect(fit).to_have_attribute("title", "Fit the map")
     playwright.expect(fit).to_be_visible()
     initial = {
         "fit": _box(fit), "group": _box(page.locator(".bp-dag-zoom")),
@@ -136,8 +158,8 @@ def test_phone_fit_recentre_round_trip_keeps_native_target_toolbar_stage_and_all
     _search(page, target, target)
     page.wait_for_url(site.route(target))
     _full_math(page, target, 1)
-    playwright.expect(fit).to_have_attribute("aria-label", "Recentre readable local cards")
-    playwright.expect(fit).to_have_attribute("title", "Recentre readable local cards")
+    playwright.expect(fit).to_have_attribute("aria-label", "Recentre the map")
+    playwright.expect(fit).to_have_attribute("title", "Recentre the map")
     _frames(page)
     for key, locator in (("fit", fit), ("group", page.locator(".bp-dag-zoom")),
                          ("toolbar", page.locator(".bp-dag-toolbar")), ("stage", page.locator(".bp-dag-stage"))):
@@ -146,8 +168,8 @@ def test_phone_fit_recentre_round_trip_keeps_native_target_toolbar_stage_and_all
 
     page.go_back()
     page.wait_for_url(site.route("roadmap"))
-    playwright.expect(fit).to_have_attribute("aria-label", "Fit shown nodes")
-    playwright.expect(page.locator('.bp-reading-pane > button[aria-label="Toggle mathematical reading"]')).to_have_attribute("aria-expanded", "false")
+    playwright.expect(fit).to_have_attribute("aria-label", "Fit the map")
+    playwright.expect(page.locator('.bp-reading-pane > .bp-dag-sheet-handle')).to_have_attribute("aria-expanded", "false")
     _frames(page)
     for key, locator in (("fit", fit), ("group", page.locator(".bp-dag-zoom")),
                          ("toolbar", page.locator(".bp-dag-toolbar")), ("stage", page.locator(".bp-dag-stage"))):
@@ -166,6 +188,6 @@ def test_phone_fit_recentre_round_trip_keeps_native_target_toolbar_stage_and_all
 
     # The same real button remains visibly textual outside the phone rule.
     page.set_viewport_size({"width": 1600, "height": 900})
-    playwright.expect(fit).to_have_attribute("aria-label", "Fit shown nodes")
+    playwright.expect(fit).to_have_attribute("aria-label", "Fit the map")
     playwright.expect(fit).to_have_text("Fit")
     assert fit.evaluate("button => {const range=document.createRange();range.selectNodeContents(button);return parseFloat(getComputedStyle(button).fontSize)>=12&&range.getBoundingClientRect().width>0&&getComputedStyle(button,'::before').content==='none';}") is True

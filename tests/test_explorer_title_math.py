@@ -185,6 +185,8 @@ _BOOT = r"""
   const pluralStart=source.indexOf('  var plural ='),pluralLine=source.slice(pluralStart,source.indexOf('\n',pluralStart));
   var plural=eval('(function(){'+pluralLine+';return plural;})()');
   var element=original('element'),button=original('button'),readingLabel=original('readingLabel');
+  var bindNodeLink=original('bindNodeLink');
+  var sheetLayout=original('sheetLayout');
   var safeHref=original('safeHref'),graphAt=original('graphAt');
   var refreshReadingLabels=original('refreshReadingLabels'),semanticParent=original('semanticParent');
   var routeTrail=original('routeTrail'),currentOverviewGroup=original('currentOverviewGroup');
@@ -199,18 +201,18 @@ _BOOT = r"""
   var ui$wikiLinks=null,ui$wikiRendered=null,ui$wikiNode=null;
   var dom$navigationInner=element('div','fixture-outline'),dom$navigationNodes=new Map();
   var dom$readingContext=element('div','fixture-context'),dom$readingNeighbors=element('div','fixture-neighbors');
-  var dom$readingBody=element('article','fixture-body'),dom$homeLink=element('a','fixture-home');
+  var dom$readingBody=element('article','fixture-body');
   var dom$error=element('div','fixture-error'),dom$announcement=element('div','fixture-announcement');dom$error.hidden=true;
   var dom$breadcrumb=element('nav','bp-dag-breadcrumb');dom$breadcrumb.setAttribute('aria-label','Explorer context');
   var root=element('section','fixture-labels');root.id='explorer-title-proof';
   root.appendChild(dom$breadcrumb);
   root.appendChild(dom$navigationInner);root.appendChild(dom$readingContext);root.appendChild(dom$readingNeighbors);
-  root.appendChild(dom$readingBody);root.appendChild(dom$homeLink);document.body.appendChild(root);
+  root.appendChild(dom$readingBody);document.body.appendChild(root);
   root.appendChild(dom$error);root.appendChild(dom$announcement);
   const calls=[],observations=[];
   var navigation={navigateNode(id,options){calls.push({id,options});},navigate(url,options){calls.push({url,options});},declutterReader(){}};
   function check(condition,message) {if(!condition)throw Error('Reading-label proof: '+message);}
-  function remember(){}function setMode(){throw Error('Reading-label proof should not change display mode');}
+  function remember(){}function syncSheetAccessibility(){}function setMode(){throw Error('Reading-label proof should not change display mode');}
   function renderFor(bundle){const previous=currentBundle;try{currentBundle=bundle;renderBreadcrumb();}finally{currentBundle=previous;}}
   const canonicalTrail={nodeId:'C',scope:'chapter',graph:{view:{}}},unchangedRecords=JSON.stringify(fixture.nodes);
   const trailEntries=routeTrail(canonicalTrail),refreshStart=(window.__titleRefreshScopes||[]).length;
@@ -223,7 +225,8 @@ _BOOT = r"""
   const unsupported=readingLabel('a','fixture-unsupported',fixture.unsupported,null);unsupported.href='https://blueprint.example.invalid/fallback.html';root.appendChild(unsupported);
   refreshReadingLabels(root);
   const outline=dom$navigationInner.querySelector('[data-navigation-node-id="chapter"]');
-  const related=dom$readingNeighbors.querySelector('.bp-reading-links a');
+  // The redesign lists a result's relations once, in the statement itself, so the related title read here is a topic peer's.
+  const related=dom$readingNeighbors.querySelector('.bp-reading-topic-list a');
   const ownerSummary=dom$readingNeighbors.querySelector('.bp-reading-related-topics summary');
   const ancestor=dom$breadcrumb.querySelector('a[href="https://blueprint.example.invalid/chapter.html"]');
   const currentCrumb=dom$breadcrumb.querySelector('[aria-current="page"]');

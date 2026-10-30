@@ -25,9 +25,10 @@ function original(name) {
   }
   assert.fail('Unparseable actual callback: '+name);
 }
-const names=['element','readingLabel','refreshReadingLabels','button','statusLabel','searchScore','rankMatches','inventoryNodes','inCurrentScope','sourceNodes','renderInventory',
-  'setMode','refresh','snapshotForRoute','restoreState','writeLocation','neighborIds','relationCounts','renderReaderContext','topicPeers','semanticParent'];
-const constants=['NODE_W','plural'].map(name=>{
+const names=['element','readingLabel','refreshReadingLabels','button','bindNodeLink','statusLabel','searchScore','rankMatches','inventoryNodes','inCurrentScope','sourceNodes','renderInventory',
+  'setMode','refresh','snapshotForRoute','restoreState','writeLocation','neighborIds','relationCounts','renderReaderContext','topicPeers','semanticParent',
+  'placeOf','recordId','pendingMath','summaryLine'];
+const constants=['NODE_W','plural','num','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
 }).join('\n');
@@ -80,7 +81,7 @@ const mapAllowed=true,presentStatuses=['planned','fully_proved','inventory_pendi
 const palette={planned:{label:'planned'},fully_proved:{label:'fully proved'},inventory_pending:{label:'inventory pending'}};
 const navigation={checkpoint(method){effects.push({kind:'checkpoint',method});},navigateNode(){assert.fail('A list entry changed the canonical route');}};
 function syncControls(){dom$inventory.hidden=ui$mode==='graph';}
-function renderInspector(){}function schedule(){}function sheetLayout(){return false;}function setSheet(){}
+function renderInspector(){}function schedule(){}function sheetLayout(){return false;}function setSheet(){}function refreshReadingLabels(){}function typesetRowsInView(){}var instance=1;
 function updateProjection(){}function renderNavigation(){}function resize(){}function fit(){}
 function calculateActive(){assert.fail('An available complete index was replaced by a map subset');}
 function activateNode(node){effects.push({kind:'activate',node});}
@@ -131,14 +132,14 @@ def test_results_and_sources_entry_run_the_real_builder_and_keep_full_paging() -
 
 
 def test_show_all_related_enters_list_with_every_original_result() -> None:
+    # The redesign shows a result's relations once, in its own dependency disclosure, so no reader strip offers "Show all N";
+    # a related list restored from history still enters the list with every original result, built only then.
     _run(r"""
-      currentBundle={nodeId:results[0].id,scope:'roadmap'};ui$selected=results[0];renderReaderContext();
-      const more=dom$readingNeighbors.querySelectorAll('button').find(button=>button.textContent==='Show all 7');
-      assert(more,'The actual reader callback must offer the complete related inventory');
-      assert.equal(dom$inventoryRows.size,0);more.listeners.get('click')();
+      currentBundle={nodeId:results[0].id,scope:'roadmap'};ui$selected=results[0];
+      assert.equal(dom$inventoryRows.size,0);ui$relationIds=results.slice(1,8).map(node=>node.id);setMode('list',true);
       assert.equal(ui$mode,'list');assert.equal(dom$inventory.hidden,false);
       assert.deepEqual(rowIds(),results.slice(1,8).map(node=>node.id));assert.equal(dom$inventoryRows.size,7);
-      assert.equal(dom$inventorySummary.textContent,'7 results');assert.equal(dom$loadMore.hidden,true);
+      assert.equal(dom$inventorySummary.textContent,'7 statements');assert.equal(dom$loadMore.hidden,true);
       assert.deepEqual(ui$relationIds,results.slice(1,8).map(node=>node.id));
     """)
 
@@ -165,9 +166,9 @@ def test_deferred_inventory_still_applies_query_and_status_without_truncating_th
     _run(r"""
       const before=JSON.stringify(indexNodes);ui$query='Result 130';refresh(true);
       assert.equal(dom$inventoryRows.size,0);setMode('list',true);
-      assert.deepEqual(rowIds(),['result-130']);assert.equal(dom$inventorySummary.textContent,'1 result');
+      assert.deepEqual(rowIds(),['result-130']);assert.equal(dom$inventorySummary.textContent,'1 statement');
       ui$query='';ui$selectedStatuses=new Set(['fully_proved']);refresh(true);
-      assert.equal(dom$inventoryRows.size,75);assert.equal(dom$inventorySummary.textContent,'75 results');
+      assert.equal(dom$inventoryRows.size,75);assert.equal(dom$inventorySummary.textContent,'75 statements');
       assert(rowIds().every(id=>records.get(id).status==='fully_proved'));
       assert.equal(sharedIndex.nodes.length,155);assert.equal(JSON.stringify(indexNodes),before);
     """)

@@ -254,14 +254,15 @@ def write_payload(
 
 
 @lru_cache(maxsize=4096)
-def _reading_label(text: str) -> dict[str, object] | None:
+def _reading_label(text: str, *, require_math: bool = True) -> dict[str, object] | None:
     """Safe, derived inline text/code/math parts for reading-only controls.
 
     Read the same captured label through the site's converter, never a source
     pathname. HTML, links, images and attributes are not a label transport.
     Plain labels keep their existing wire bytes and require no conversion.
     """
-    if len(text) > 16_384 or not re.search(r"\$|\\\(|\\\[", text):
+    triggers = r"\$|\\\(|\\\[" if require_math else r"\$|\\\(|\\\[|`"
+    if len(text) > 16_384 or not re.search(triggers, text):
         return None
     tree = markdown.render_tree(text, allow_html=False)
     if tree is None:
@@ -301,7 +302,7 @@ def _reading_label(text: str) -> dict[str, object] | None:
             append("text", child.tail)
         return True
 
-    if not read(body) or not has_math or len(parts) > 256:
+    if not read(body) or (require_math and not has_math) or len(parts) > 256:
         return None
     return {"format": "inline-parts-v1", "source": text, "parts": parts}
 
@@ -774,7 +775,7 @@ def viewer_script() -> str:
         raise ValueError("Explorer bundle is missing or corrupt; run npm run build:explorer before publication.") from error
     if not contents.startswith(f"/* autoform-explorer-source-sha256:{fingerprint} */\n"):
         raise ValueError("Explorer bundle is stale; run npm run build:explorer before publication.")
-    if len(contents.encode("utf-8")) >= 132_000:
+    if len(contents.encode("utf-8")) >= 144_000:
         raise ValueError("Explorer bundle exceeds the JavaScript budget; run npm run build:explorer before publication.")
     return contents
 

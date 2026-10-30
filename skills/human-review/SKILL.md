@@ -48,7 +48,7 @@ Formalize takes it up under the
 [revision contract](../../autoform_cli/reference/claims-and-revisions.md#revision-contract),
 and autonomous rubric scoring to Agent Review.
 
-Treat the landing page's `Scoped roadmap` percentage as the share of
+Treat the landing page's `Fully proved` percentage as the share of
 formalizable leaf targets that are fully proved, as the
 [derived status](../../autoform_cli/README.md#assertions-and-derived-status)
 defines it, never as whole-source completion; read the declared source coverage
