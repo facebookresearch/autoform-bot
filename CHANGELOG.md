@@ -11,6 +11,9 @@ date when the release is tagged.
 
 ### Changed
 
+- **Landing.** The ready figure links the list of what it counts, each count
+  shows once with thousands separators, and the brand gradient is off the
+  figures, bar and header. Source coverage reads in plain words (#503).
 - **Explorer delivery.** The approved integrated redesign ships below 144 KB,
   with the same bounded graph, JSON and frame budgets and pinned safe compiler.
   Touch keeps single-pointer zoom controls; reading handles retain page-owned

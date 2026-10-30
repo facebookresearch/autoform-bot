@@ -2271,7 +2271,7 @@ def _completion_percentage(done: int, total: int) -> int:
 # What each disposition means for a source area, in the reader's words.
 _COVERAGE_WORDS = {
     "DECOMPOSED": "split into statements",
-    "MAPPED": "not yet split",
+    "MAPPED": "not yet settled",
     "INVENTORIED": "inventoried as Lean modules",
     "DEFERRED": "left for later",
     "OUT": "out of scope",
@@ -2309,7 +2309,7 @@ def _render_hero(
     The dashboard this replaces was a paragraph of counts in a bordered box.
     The same numbers set as figures answer "how far along is this?" before the
     reader has finished the title, which is the only question the top of a
-    blueprint has to answer. The explorer's narrow rail (*rail*) gets the
+    blueprint has to answer. The explorer's reading pane (*rail*) gets the
     two progress figures only, and module inventories as one plain line under
     them. With *ready_href* the ready figure links the list of what it counts,
     and *book_href* puts the way into the book right under the claim.
@@ -2336,7 +2336,12 @@ def _render_hero(
     if done < total:
         figures.append(("Fully proved", f"{share}%", f"{done:,} of {total:,} {statement_label}", False))
         figures.append(
-            ("Ready to work on", f"{actionable:,}", "statements you can state or prove now", False)
+            (
+                "Ready to work on",
+                f"{actionable:,}",
+                f"{'statement' if actionable == 1 else 'statements'} you can state or prove now",
+                False,
+            )
             if actionable
             else ("Nothing is ready right now", "", "", False)
         )
@@ -3844,10 +3849,10 @@ def _discussion_link(discussion: str, linker: SourceLinker) -> str:
 def _stylesheet() -> str:
     """Blueprint styling: amsthm structure over Facebook's product surfaces.
 
-    Both schemes are Facebook's shipped greys with Meta blue and the brand
-    gradient, set in Plus Jakarta Sans with JetBrains Mono for code. Dark is not
-    light dimmed: it is the palette Facebook uses in dark mode, and it hangs off
-    Material's colour scheme attribute so the theme's own toggle drives it.
+    Both schemes are Facebook's shipped greys with Meta blue, set in Plus
+    Jakarta Sans with JetBrains Mono for code. Dark is not light dimmed: it is
+    the palette Facebook uses in dark mode, and it hangs off Material's colour
+    scheme attribute so the theme's own toggle drives it.
     """
     # Dependency dots and swatches are a few pixels wide and carry no word, so
     # every state with a tinted light fill (the four finished states,
@@ -3891,8 +3896,10 @@ def _stylesheet() -> str:
 @import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
 
 /* Facebook's product surfaces, not Material's defaults: the greys are the
-   ones Facebook ships in dark mode and the blue is Meta blue. Dark mode's link
-   blue is lighter than its status blue, so links keep 4.5:1 on every surface.
+   ones Facebook ships in dark mode and the blue is Meta blue, which light
+   mode's links share with the status strokes. The brand gradient stays off
+   the figures, the progress bar and the header. Dark mode's link blue is
+   lighter than its status blue, so links keep 4.5:1 on every surface.
    A blueprint should look like it came from here rather than from any
    documentation generator. */
 :root {{
@@ -3906,8 +3913,6 @@ def _stylesheet() -> str:
   --bp-link: #0064E0;
   --bp-link-hover: #0082FB;
   --bp-blue: #0064E0;
-  --bp-violet: #7B3FE4;
-  --bp-magenta: #E0447B;
   --bp-radius: 12px;
 }}
 [data-md-color-scheme=slate] {{
@@ -3921,8 +3926,6 @@ def _stylesheet() -> str:
   --bp-link: #4A9AFF;
   --bp-link-hover: #7FB8FF;
   --bp-blue: #2D88FF;
-  --bp-violet: #9B6BFF;
-  --bp-magenta: #FF6B9D;
 }}
 /* Material's own tokens take the same blue, so its links, breadcrumbs and
    Previous/Next match the explorer instead of the theme's default indigo.
@@ -3984,9 +3987,10 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
    is unsupported the page simply stays at reading width. */
 .md-typeset:has(.bp-landing) {{ max-width: 62rem; }}
 /* The explorer's reading pane sets its own width. Only running text keeps the
-   reading measure, so tables, code and cards use the whole pane. */
+   reading measure, so tables, code and cards use the whole pane. The pane's
+   article holds the page's reading source, whose children are the text. */
 .bp-reading-body.md-typeset {{ max-width: none; }}
-.bp-reading-body.md-typeset > :is(p, ul, ol, dl, blockquote) {{ max-width: 72ch; }}
+.bp-reading-body > .bp-reading-source > :is(p, ul, ol, dl, blockquote) {{ max-width: 72ch; }}
 
 .bp-hero {{ margin: 0 0 2.5rem; }}
 .bp-hero-kicker {{
@@ -4045,7 +4049,11 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .md-typeset a.bp-figure-link:is(:visited, :hover, :focus-visible) {{ color: var(--bp-fg); text-decoration: none; }}
 .bp-figure-link > span {{ display: block; }}
 .md-typeset a.bp-figure-link:is(:hover, :focus-visible) .bp-figure-label {{ text-decoration: underline; }}
-.bp-figure-link .bp-figure-label::after {{ content: " →"; }}
+/* The arrow is decoration, so it stays out of the link's accessible name where
+   the browser supports alt text. The figures clip overflow, so the focus ring
+   is drawn inside the cell. */
+.bp-figure-link .bp-figure-label::after {{ content: " →"; content: " →" / ""; }}
+.md-typeset a.bp-figure-link:focus-visible {{ outline-offset: -2px; }}
 /* With no figures, or all statements fully proved, this one sentence is the
    hero's status, so it is set at the claim's size. */
 .md-typeset .bp-hero-status {{ margin: 1rem 0 0; color: var(--bp-fg); font-size: 1.05rem; font-weight: 600; }}
@@ -4082,7 +4090,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
    reach the hero's heading, paragraph and links there, so these rules carry
    a doubled class; the explorer's own rules stay in its script. The narrow
    hero keeps two plain figures, the share fully proved and what is ready
-   to start, each with its one-line note; module inventories become one
+   to work on, each with its one-line note; module inventories become one
    muted line under them. */
 .bp-landing-intro.bp-landing-intro {{ margin: 0 6px 18px; font-size: 13px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero {{ margin: 0; }}

@@ -802,7 +802,7 @@ def test_overview_carries_the_counts_without_a_separate_progress_page(tmp_path: 
     for retired in ("Scoped roadmap", "Ready now", "targets complete", "top-level milestones", "coverage contract</a>"):
         assert retired not in overview
     assert ">What the sources cover</a>" in overview
-    assert '<span class="bp-hero-coverage-counts">1 source area: 1 not yet split</span>' in overview
+    assert '<span class="bp-hero-coverage-counts">1 source area: 1 not yet settled</span>' in overview
     assert 'href="coverage/index.html"' in overview
     assert 'role="img"' not in overview
     assert "items settled" not in overview
@@ -992,6 +992,8 @@ def test_coverage_summary_tracks_every_canonical_disposition() -> None:
     assert set(_COVERAGE_SUMMARY_ORDER) == set(COVERAGE_DISPOSITIONS)
     assert len(_COVERAGE_SUMMARY_ORDER) == len(COVERAGE_DISPOSITIONS)
     assert _COVERAGE_SUMMARY_ORDER[0] == "DECOMPOSED"
+    # Every disposition has its reader's words, so a new one cannot fail render.
+    assert set(render_module._COVERAGE_WORDS) == set(COVERAGE_DISPOSITIONS)
     # Counts carry thousands separators.
     entries = tuple(CoverageEntry(f"Area {n}", "MAPPED", "Pending", n) for n in range(1234))
     summary = render_module._coverage_summary(CoverageSummary(COVERAGE_SCHEMA, "README.md", "0" * 64, entries))
@@ -1033,18 +1035,24 @@ def test_module_catalog_is_separate_from_formalization_progress(
         + "| Existing module | INVENTORIED | [Catalog](../roadmap/catalog.md) |\n",
         encoding="utf-8",
     )
+    # One open theorem keeps the figures, so the statement count shows.
+    (project / "blueprint/roadmap/open.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Open\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    )
+    _edit(project / "blueprint/roadmap/README.md", "- [Top](top.md)\n", "- [Top](top.md)\n- [Open](open.md)\n")
 
     render_site(project / "blueprint", tmp_path / "out")
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    # The catalog is no statement, so the two targets are all of them.
-    assert '<p class="bp-hero-status">Every statement is fully proved.</p>' in overview
+    # The catalog is no statement, so the three targets are all of them.
+    assert '<div class="bp-figure-note">2 of 3 statements</div>' in overview
+    assert "of 4 statements" not in overview
     assert '<p class="bp-hero-counts">1 module inventory</p>' in overview
     assert not (tmp_path / "out/roadmap/catalog.md").exists()
     project_payload = json.loads((tmp_path / "out/dependencies.json").read_text(encoding="utf-8"))
     roadmap = project_payload["nodes"][0]
-    assert roadmap["member_count"] == 3
-    assert roadmap["status_counts"] == [["fully_proved", 2], ["inventory_checked", 1]]
+    assert roadmap["member_count"] == 4
+    assert roadmap["status_counts"] == [["fully_proved", 2], ["can_state", 1], ["inventory_checked", 1]]
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert (
         '<span class="bp-thmcaption" data-search-exclude>Module</span><span class="bp-thmlabel" data-search-exclude>1</span>'
@@ -1135,12 +1143,17 @@ def test_partial_module_catalog_is_not_reported_as_dispatchable_work(tmp_path: P
         + "| Existing module | INVENTORIED | [Catalog](../roadmap/catalog.md) |\n",
         encoding="utf-8",
     )
+    # One open theorem is the only ready work, so the catalog must not add to it.
+    (project / "blueprint/roadmap/open.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Open\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    )
 
     render_site(project / "blueprint", tmp_path / "out")
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert "Ready to work on" not in overview
-    assert "bp-figure-link" not in overview
+    assert '<div class="bp-figure-note">2 of 3 statements</div>' in overview
+    ready = re.findall(r'class="bp-figure bp-figure-link"[^>]*><span class="bp-figure-value">([^<]*)<', overview)
+    assert ready == ["1"]
 
 
 def test_the_module_inventory_figure_counts_inventories_and_hides_at_zero(tmp_path: Path) -> None:
@@ -1343,7 +1356,7 @@ def test_the_rail_hero_keeps_two_figures_and_the_coverage_counts_and_hides_nothi
     assert "display: none" not in css.split(".bp-landing-intro.bp-landing-intro {", 1)[1].split(".bp-legend-grid", 1)[0]
     # Each of the two figures keeps its one-line note, so the number says what it counts.
     assert ".bp-landing-intro.bp-landing-intro .bp-figure-note { margin-top: 2px; font-size: 12px; }" in css
-    # Colour carries status only: the figures are set in the text colour, with no gradient to undo.
+    # The figures are set in the text colour, with no gradient to undo.
     value = css.split("\n.bp-figure-value {", 1)[1].split("}", 1)[0]
     assert "color: var(--bp-fg);" in value and "--bp-sweep" not in value
     assert "bp-hero-rule" not in css and "bp-hero-rule" not in intro
@@ -1884,6 +1897,38 @@ def test_links_keep_text_contrast_on_every_surface_in_both_schemes() -> None:
             low, high = sorted((_relative_luminance(colours["bp-link"]), _relative_luminance(colours[background])))
             assert (high + 0.05) / (low + 0.05) >= 4.5, (scheme, background)
 
+def test_the_reading_measure_reaches_running_text_in_the_explorer_pane(tmp_path: Path) -> None:
+    """The pane's 72ch rule must select the text the pane actually holds.
+
+    The explorer moves a page's whole `.bp-reading-source` into its
+    `.bp-reading-body` article, so the paragraphs are grandchildren of the
+    article. A rule written against the article's children matched nothing.
+    """
+    _render(tmp_path)
+    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
+    [selector] = [head.strip() for head, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+                  if "bp-reading-body" in head and "72ch" in body]
+    *chain, last = [part.strip() for part in selector.split(">")]
+    assert chain == [".bp-reading-body", ".bp-reading-source"]
+    texts = set(re.fullmatch(r":is\(([^)]*)\)", last).group(1).replace(" ", "").split(","))
+    assert "p" in texts
+
+    # The explorer's article, and the page's reading source as its child.
+    assets = Path(__file__).resolve().parent.parent / "autoform_cli/assets"
+    dag = (assets / "blueprint-dag.js").read_text(encoding="utf-8")
+    assert 'element("article", "bp-reading-body md-typeset")' in dag
+    assert "dom$readingBody.replaceChildren(bundle.readingSource)" in dag
+    navigation = (assets / "blueprint-navigation.js").read_text(encoding="utf-8")
+    assert 'reading = page && page.querySelector(".bp-reading-source")' in navigation
+    # In the rendered chapter, the running text sits directly in the reading source.
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    page = html5lib.parse(
+        site_converter().convert(chapter.split("\n---\n", 1)[-1]), treebuilder="etree", namespaceHTMLElements=False
+    )
+    [source] = [el for el in page.iter() if "bp-reading-source" in (el.get("class") or "").split()]
+    assert [child for child in source if child.tag in texts]
+
+
 def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     _render(tmp_path)
     css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
@@ -1908,8 +1953,12 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     assert "setTimeout(refresh, pollDelayMs)" in live
     assert 'render({ claims: [], error: "Live overlay unavailable" })' in live
     assert live == packaged_live
-    # Colour carries status only, so no brand gradient decorates the page.
+    # The brand gradient is off the figures, the bar and the header hairline.
     assert "--bp-sweep" not in css
+    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+    for selector in (".bp-figure-value", ".bp-hero-bar", ".md-header"):
+        bodies = [body for head, body in rules if selector in head]
+        assert bodies and not any("gradient" in body for body in bodies), selector
     # One rule per theme selector, so no later rule silently overrides an earlier one.
     for selector in (".md-header", ".md-tabs__link"):
         assert len(re.findall(rf"(?m)^{re.escape(selector)} \{{", css)) == 1, selector
