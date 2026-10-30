@@ -42,11 +42,9 @@ SCHEMA = "autoform-dag-view/v2"
 SEARCH_SCHEMA = "autoform-dag-search/v1"
 WIKI_LINKS_SCHEMA = "autoform-wiki-links/v1"
 #: A separate optional reference layer must fit the reader's unchanged data limit.
-MAX_WIKI_LINK_BYTES = 32 * 1024 * 1024
-_SEARCH_INDEX_BYTE_LIMIT = 64 * 1024 * 1024
-# Above this size the whole-library index leaves out statement summaries,
-# which are a quarter of a large library's index; titles and Lean names stay.
-_SEARCH_INDEX_SUMMARY_BUDGET = 32 * 1024 * 1024
+#: Every explorer page downloads the whole search index, so publication notes
+#: when it passes this size. Nothing caps how large it may grow.
+_SEARCH_INDEX_NOTE_BYTES = 32 * 1024 * 1024
 _WIKI_BLOCK_MATH = re.compile(f"(?:{RE_DOLLAR_BLOCK}|{RE_BRACKET_BLOCK}|{RE_TEX_BLOCK})", re.DOTALL)
 _WIKI_INLINE_MATH = re.compile(f"(?:{RE_SMART_DOLLAR_INLINE}|{RE_BRACKET_INLINE})", re.DOTALL)
 _WIKI_INLINE_CODE = re.compile(BACKTICK_RE, re.DOTALL)
@@ -329,10 +327,8 @@ def write_search_index(
     and every typed edge without repeating long article identifiers.
     ``sha256_out`` optionally receives the exact emitted bytes' digest without
     rereading any source or changing the index's wire representation.
-    An index over ``_SEARCH_INDEX_SUMMARY_BUDGET`` bytes is written again
-    without statement summaries, so search keeps titles and Lean names.
-    ``warnings_out`` reports that omission, and when the emitted bytes reach
-    95% of the default browser limit, without rejecting publication.
+    ``warnings_out`` notes when the emitted bytes pass
+    ``_SEARCH_INDEX_NOTE_BYTES``, without refusing or trimming anything.
     """
     positions = {node.id: position for position, node in enumerate(view.nodes)}
     nodes: list[dict[str, object]] = []
@@ -374,24 +370,13 @@ def write_search_index(
             for edge in view.edges
         ]
     sizes: list[int] = []
-    digests = len(sha256_out) if sha256_out is not None else 0
-    written = _write_json(path, payload, sha256_out=sha256_out, byte_count_out=sizes)
-    if sizes[0] > _SEARCH_INDEX_SUMMARY_BUDGET and any("summary" in entry for entry in nodes):
-        full = sizes.pop()
-        for entry in nodes:
-            entry.pop("summary", None)
-        if sha256_out is not None:
-            del sha256_out[digests:]
-        written = _write_json(path, payload, sha256_out=sha256_out, byte_count_out=sizes)
-        if warnings_out is not None:
-            warnings_out.append(
-                f"search index leaves out statement summaries: with them it would use {full:,} bytes, over the "
-                f"{_SEARCH_INDEX_SUMMARY_BUDGET:,}-byte budget; search still matches titles and Lean names"
-            )
-    if warnings_out is not None and sizes[0] * 100 >= _SEARCH_INDEX_BYTE_LIMIT * 95:
+    written = _write_json(
+        path, payload, sha256_out=sha256_out, byte_count_out=sizes if warnings_out is not None else None,
+    )
+    if warnings_out is not None and sizes[0] > _SEARCH_INDEX_NOTE_BYTES:
         warnings_out.append(
-            f"search index uses {sizes[0]:,} bytes ({sizes[0] / _SEARCH_INDEX_BYTE_LIMIT:.1%} of the "
-            f"{_SEARCH_INDEX_BYTE_LIMIT:,}-byte default browser limit); browser loading fails above that limit"
+            f"search index is {sizes[0]:,} bytes; every explorer page downloads it, so first loads slow down "
+            f"past {_SEARCH_INDEX_NOTE_BYTES:,} bytes"
         )
     return written
 
@@ -604,7 +589,6 @@ def extract_wiki_links(
     references: set[tuple[int, int]] = set()
     invalid_targets: set[int] = set()
     omitted_sources = frozenset(unavailable_source_ids)
-    reference_bytes = 2
     for source_id in paths:
         if owners[paths[source_id]] is None:
             unavailable.add(positions[source_id])
@@ -648,11 +632,6 @@ def extract_wiki_links(
                 continue
             pair = (positions[source_id], positions[target_id])
             if pair not in references:
-                reference_bytes += len(str(pair[0])) + len(str(pair[1])) + 3 + bool(references)
-                if reference_bytes > MAX_WIKI_LINK_BYTES:
-                    return WikiLinks(
-                        (), (), f"wiki reference layer exceeds {MAX_WIKI_LINK_BYTES} bytes; no references were published",
-                    )
                 references.add(pair)
     return WikiLinks(
         tuple(sorted(pair for pair in references if pair[1] not in invalid_targets)),
@@ -667,7 +646,7 @@ def write_wiki_links(
     index_sha256: str,
     warnings_out: list[str] | None = None,
 ) -> Path:
-    """Publish a SHA-bound optional layer, explicitly omitting an oversized one.
+    """Publish a SHA-bound optional layer.
 
     The search index and its dependencies remain byte-for-byte unchanged. A
     reader must verify its exact index digest before using these offsets.
@@ -685,12 +664,7 @@ def write_wiki_links(
         payload["reason"] = "some captured article sources or publication routes were unavailable or unsupported"
     if links.reason is not None:
         payload.update(availability="unavailable", reason=links.reason)
-    if len(_json_text(payload).encode("utf-8")) > MAX_WIKI_LINK_BYTES:
-        reason = f"wiki reference layer exceeds {MAX_WIKI_LINK_BYTES} bytes; no references were published"
-        payload.update(availability="unavailable", reason=reason, references=(), unavailable_sources=())
-        if warnings_out is not None:
-            warnings_out.append(reason)
-    elif links.reason is not None and warnings_out is not None:
+    if links.reason is not None and warnings_out is not None:
         warnings_out.append(f"wiki reference layer unavailable: {links.reason}")
     return _write_json(path, payload)
 
