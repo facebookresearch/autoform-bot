@@ -29,7 +29,7 @@ Compare the import-impact report's claim keys with `autoform claim list`, as the
 [CLI reference](../../../autoform_cli/README.md#work-import-impact) describes: another
 owner's live affected claim is a conflict, malformed evidence is unverifiable,
 and an expired valid claim is not active. Before the edit, atomically acquire
-the required article and module `claim_targets`; an already-held same-worker
+the report's `claim_targets`; an already-held same-worker
 article claim is upgraded, not released first. Recheck affected keys after
 acquisition and before integration; these checks are best-effort coordination,
 not a lock on downstream articles. Before repairing any article that actually
@@ -41,19 +41,20 @@ hand off, and release the full import claim set together.
 
 ## Generated import roots
 
-A root whose file Git attributes mark `linguist-generated`, normally by a
-`.gitattributes` line such as `Lib/Topology.lean linguist-generated`, belongs to
-the repository's generator, not to an author: `work import-impact` reports
-`module_generated` and leaves its module target out of `claim_targets`. No
-worker or integrator claims it, and another owner's live claim on it is neither
-a conflict nor yours to release. Never edit it by hand: regenerate it with the
-command the repository writes it with, from the tree you build and again from
-the merged tree after every rebase or merge, including to resolve a conflict in
-it; rerunning that command must leave no change. Before landing, re-run
-`autoform work import-impact` and the repository's checks on the result; an
-affected target another owner holds is still a conflict. Any other root keeps
-the import-edit rules above, whatever its header or name says; to share one,
-ask the user to mark it.
+A root is generated only when a committed `.gitattributes` line such as
+`/Lib/Topology.lean linguist-generated` marks it and the repository's CI
+regenerates it and fails on any difference. The user marks roots and adds or
+confirms that check; workers never edit attribute files, and a mark in a
+clone's local attribute files counts only in that clone. `work import-impact`
+reports a marked root as `module_generated` and leaves it out of
+`claim_targets`; without that check, claim its `module_claim_target` under the
+import-edit rules above. No one claims a generated root; another owner's live
+claim on it is neither a conflict nor yours to release. Never edit it by hand:
+regenerate it with the command that check runs, from the tree you build and
+again from the merged tree after every rebase or merge; rerunning it must leave
+no change. Before landing, re-run `work import-impact` and the repository's
+checks on the result; an affected target another owner holds is still a
+conflict. Any other root, whatever its header says, keeps the import-edit rules.
 
 ## Integration and handoff
 
@@ -69,5 +70,5 @@ free. The integrator renews, integrates, and releases a handed-off set with
 complete set under its own ID and, before integrating, repeats Formalize's
 pre-edit reload of `work context`. Release the complete set once the result is
 visible that way, or when abandoning the leaf without a candidate. For ordinary
-work that set is just the article; for an import edit it also includes the
-module and any validated expansion.
+work that set is just the article; for an import edit it is the report's
+`claim_targets` and any validated expansion.

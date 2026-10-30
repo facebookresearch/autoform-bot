@@ -52,13 +52,13 @@ date when the release is tagged.
   listing that runs out of time or is interrupted no longer leaves its
   transport running. Formalize treats a labelled `claim list` failure as an
   unreadable board, not as a board without claims (#432).
-- **Generated import roots.** A root that Git attributes mark
-  `linguist-generated`, such as a `Lib.lean` the repository's generator writes,
-  is no one's to claim: `work import-impact` reports `module_generated` and
-  leaves its module target out of `claim_targets`, and Formalize regenerates the
-  root from the merged tree, so independent leaves, other projects' included,
-  publish without waiting on a claim on it. Any other root keeps the import-edit
-  claims; this replaces #488's rule for roots judged generated (#466, #496).
+- **Generated import roots.** A root that a committed `.gitattributes` line
+  such as `/Lib.lean linguist-generated` marks, and that CI regenerates and
+  checks, is no one's to claim: `work import-impact` reports `module_generated`
+  and leaves its module target out of `claim_targets`, and Formalize regenerates
+  the root from the merged tree, so independent leaves, other projects'
+  included, publish without waiting on a claim on it. Any other root keeps the
+  import-edit claims (#466, #496).
 - **Render.** An article's page lists its `mathlib_declaration` names in a
   Mathlib row, as text without a link, so a `mathlib: true` article names the
   declaration it restates (#388).
