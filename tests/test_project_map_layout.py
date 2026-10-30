@@ -287,6 +287,15 @@ def test_labels_appear_only_where_they_fit() -> None:
     const [named] = L.placeLabels({narrow}, {x: 0, y: 0, z: 1}, DESKTOP);
     assert(named && named.compact && named.detail === 'title', JSON.stringify(named));
     assert.equal(L.placeLabels({tiny: Object.assign({}, narrow, {w: 50})}, {x: 0, y: 0, z: 1}, DESKTOP).length, 0);
+    // A parent's overlay title covers the top of its content: a child's label moves below it, or
+    // goes when its box has no room there, so no two labels overlap.
+    const thin = {x: 0, y: 0, w: 300, h: 120, unit: 1, band: 10, pad: 4, depth: 1, parent: null};
+    const tall = {x: 10, y: 14, w: 120, h: 96, unit: 1, band: 22, pad: 4, depth: 2, parent: 'thin'};
+    const flat = {x: 140, y: 14, w: 120, h: 30, unit: 1, band: 22, pad: 4, depth: 2, parent: 'thin'};
+    const stack = L.placeLabels({thin, tall, flat}, {x: 0, y: 0, z: 1}, DESKTOP);
+    const cover = stack.find(label => label.id === 'thin'), moved = stack.find(label => label.id === 'tall');
+    assert(cover && cover.overlay && moved && moved.overlay && !stack.some(label => label.id === 'flat'), JSON.stringify(stack));
+    assert(moved.y >= cover.y + cover.band - EPS && moved.y + moved.band <= tall.y + tall.h + EPS);
     // Opening a crowded part comes closer than its fit, at most twice, until most children are labelled.
     const crowd = Array.from({length: 60}, (_, k) => summary('r1/c' + k, 10 + k % 7));
     const many = L.packPart({part: summary('r1', 300), children: crowd, edges: []}, packed.boxes.r1, DESKTOP);
