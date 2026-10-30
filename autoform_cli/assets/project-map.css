@@ -75,6 +75,10 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-part:focus-visible > rect, .pm-part.pm-focus > rect { stroke: var(--pm-accent); stroke-width: 2; outline: none; }
 .pm-part.pm-on-path > rect { stroke: var(--pm-select); stroke-width: 1.8; }
 .pm-title { fill: var(--pm-fg); font: 600 15px var(--pm-font); pointer-events: none; }
+.pm-backdrop { pointer-events: none; fill: var(--pm-region); }
+.pm-backdrop-open { fill: color-mix(in srgb, var(--pm-bg) 55%, var(--pm-region)); }
+.pm-backdrop-done { fill: color-mix(in srgb, var(--pm-proved) 10%, var(--pm-region)); }
+.pm-backdrop-progress { fill: color-mix(in srgb, var(--pm-progress) 10%, var(--pm-region)); }
 .pm-meta { fill: var(--pm-muted); font: 12px var(--pm-font); pointer-events: none; }
 .pm-route { fill: none; stroke: var(--pm-edge); stroke-linejoin: round; stroke-linecap: round; opacity: .85; }
 .pm-route.pm-proof { stroke-dasharray: 6 4; }

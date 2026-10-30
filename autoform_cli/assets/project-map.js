@@ -291,6 +291,17 @@
     return node;
   }
   function setText(node, text) { if (node.textContent !== text) node.textContent = text; return node; }
+  // Deep zooms put ancestors' edges tens of millions of pixels away, where the compositor's float32 loses whole pixels;
+  // geometry is cut to a margin around the stage first. Clamping each coordinate keeps an orthogonal route's visible
+  // part exactly and folds the rest onto the margin, out of sight.
+  var MARGIN = 2000;
+  function cx(x) { return clamp(x, -MARGIN, size.w + MARGIN); }
+  function cy(y) { return clamp(y, -MARGIN, size.h + MARGIN); }
+  function placeRect(rect, b) {
+    var x = cx(b.x), y = cy(b.y);
+    rect.setAttribute("x", x); rect.setAttribute("y", y);
+    rect.setAttribute("width", Math.max(1, cx(b.x + b.w) - x)); rect.setAttribute("height", Math.max(1, cy(b.y + b.h) - y));
+  }
   function onScreen(b) { return b.x + b.w > -40 && b.x < size.w + 40 && b.y + b.h > -40 && b.y < size.h + 40; }
   function isOpen(record, b) { return record.id === ROOT || (!!record.data && b.w >= OPEN_W && b.h >= OPEN_H); }
   // The part the view is in: the deepest open part under the centre that fills most of the stage.
@@ -340,14 +351,14 @@
       "aria-label": plain(record.summary.title) + ", " + num(record.summary.results) + " results" +
         (record.summary.api_total ? ", " + num(record.summary.api_total) + " used elsewhere" : "")});
     var shape = holder.firstChild || holder.appendChild(svg("rect"));
-    shape.setAttribute("x", b.x); shape.setAttribute("y", b.y); shape.setAttribute("width", Math.max(1, b.w)); shape.setAttribute("height", Math.max(1, b.h));
+    placeRect(shape, b);
     shape.setAttribute("rx", clamp(Math.min(b.w, b.h) * 0.05, 1.5, 10));
     if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(record.summary.title);
   }
   // An orthogonal route as a screen path, its corners rounded to radius.
   function routePath(points, radius) {
     var pts = [];
-    for (var i = 0; i < points.length; i += 2) pts.push(toScreen(points[i], points[i + 1]));
+    for (var i = 0; i < points.length; i += 2) { var at = toScreen(points[i], points[i + 1]); pts.push([cx(at[0]), cy(at[1])]); }
     var r = radius * camera.k, d = "M" + pts[0][0].toFixed(1) + "," + pts[0][1].toFixed(1);
     for (i = 1; i < pts.length - 1; i++) {
       var p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1];
@@ -417,7 +428,7 @@
       class: "pm-result pm-" + group(row.status) + (text ? " pm-card" : "") + (isSelected ? " pm-selected" : "") + (dim ? " pm-dimmed" : ""),
       tabindex: 0, role: "button", "aria-label": plain(row.title) + ", " + statusWords(row.status), "data-result": row.id});
     var card = holder.firstChild || holder.appendChild(svg("rect"));
-    card.setAttribute("x", b.x); card.setAttribute("y", b.y); card.setAttribute("width", Math.max(1, b.w)); card.setAttribute("height", Math.max(1, b.h));
+    placeRect(card, b);
     card.setAttribute("rx", clamp(b.w * 0.04, 1, 8));
     if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(row.title);
     if (!text) return;
@@ -431,14 +442,21 @@
       setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: b.y + b.h - pad, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
     }
   }
-  // Titles and progress in each box's header band, at fixed sizes, where the layout module finds room for them.
+  // Titles and progress in each box's header band, at fixed sizes, where the layout module finds room for them. A box
+  // whose band is still too thin gets its title over its top, on a backdrop in its own fill; nothing inside it is
+  // labelled yet, so nothing is covered.
   function drawLabels(boxes) {
     L.placeLabels(boxes, cornerCamera(), size).forEach(function (slot) {
       var record = part(slot.id);
       if (!record) return;
       var cls = state.related && !state.related.parts.has(slot.id) ? " pm-dimmed" : "", title = plain(record.summary.title);
+      if (slot.overlay) {
+        var b = screenBox(record.box), backdrop = keep(labelLayer, "lb:" + slot.id, "rect", {
+          class: "pm-backdrop pm-backdrop-" + (isOpen(record, b) ? "open" : tileKind(record.summary.status)) + cls, rx: 6});
+        placeRect(backdrop, {x: b.x + 1, y: b.y + 1, w: b.w - 2, h: slot.band});
+      }
       var lines = slot.lines === 2 ? wrap(title, Math.max(4, Math.floor(slot.w / TITLE_EM)), 2) : [clip(title, Math.max(4, Math.floor(slot.w / TITLE_EM)))];
-      var y = slot.y + 30;
+      var y = slot.y + Math.min(30, slot.band / 2 + 6);
       lines.forEach(function (line, index) {
         setText(keep(labelLayer, "lt:" + slot.id + ":" + index, "text", {x: slot.x, y: y + index * 20, class: "pm-title" + cls}), line);
       });
