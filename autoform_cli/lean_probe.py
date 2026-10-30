@@ -548,6 +548,7 @@ def _run_registered_command(
     process_env[_PROCESS_TOKEN_ENV] = token
     deadline = time.monotonic() + timeout
     cleanup_deadline: float | None = None
+    succeeded = False
     try:
         if cancelled is not None and cancelled.is_set():
             raise SkeletonError([f"{context} was cancelled"])
@@ -565,12 +566,12 @@ def _run_registered_command(
             )
         except OSError as exc:
             raise SkeletonError([f"{context} failed: {exc}"]) from exc
-        guard.arm()
         assert process.stdout is not None and process.stderr is not None
         for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
             reader = threading.Thread(target=drain, args=(name, stream), daemon=True)
             reader.start()
             readers.append(reader)
+        guard.arm()
         while not _leader_has_exited(process):
             _remember_descendants(process, descendants)
             check_output()
@@ -602,17 +603,22 @@ def _run_registered_command(
             stderr = b"".join(chunks["stderr"]).decode("utf-8")
         except UnicodeDecodeError as exc:
             raise SkeletonError([f"{context} emitted invalid UTF-8 output"]) from exc
-        return subprocess.CompletedProcess(command, process.returncode, stdout=stdout, stderr=stderr)
+        result = subprocess.CompletedProcess(command, process.returncode, stdout=stdout, stderr=stderr)
+        succeeded = True
+        return result
     except BaseException:
+        # The guard raises at most once, possibly on entry here, before this
+        # disarm; teardown therefore runs in finally, with the guard disarmed.
         guard.disarm()
-        if cleanup_deadline is None:
-            cleanup_deadline = time.perf_counter() + _PROCESS_TERMINATION_GRACE
-        if process is not None:
-            _terminate_process_tree(process, descendants, deadline=cleanup_deadline, token=token)
-        _join_readers(readers, deadline=cleanup_deadline)
         raise
     finally:
         try:
+            if not succeeded:
+                if cleanup_deadline is None:
+                    cleanup_deadline = time.perf_counter() + _PROCESS_TERMINATION_GRACE
+                if process is not None:
+                    _terminate_process_tree(process, descendants, deadline=cleanup_deadline, token=token)
+                _join_readers(readers, deadline=cleanup_deadline)
             if process is not None:
                 for reader, stream in zip(readers + [None, None], (process.stdout, process.stderr)):
                     if stream is not None and not (reader and reader.is_alive()):

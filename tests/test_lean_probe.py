@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import _thread
 import ctypes
 import hashlib
 import json
@@ -28,6 +29,7 @@ from autoform_cli.lean_probe import (
     _ProbeEnvironmentError,
     _build_probe_helper,
     _join_readers,
+    _leader_has_exited,
     lean_libraries,
     module_of,
     path_of,
@@ -799,6 +801,73 @@ def test_bounded_command_finishes_failure_teardown_when_signalled_during_it(
                 process.kill()
             except psutil.Error:
                 pass
+
+
+@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
+def test_bounded_command_tears_down_when_a_signal_is_pending_as_it_fails(tmp_path: Path, monkeypatch) -> None:
+    # A signal pending as the command fails is handled on entry to the failure
+    # path (3.10) or at its first call (3.11+), while the guard is still armed.
+    # Teardown must still reach the command and its child.
+    pids = tmp_path / "pids"
+    tripped: list[bool] = []
+
+    def fail_with_sigterm_pending(process: subprocess.Popen[bytes]) -> bool:
+        if not tripped:
+            deadline = time.monotonic() + 20
+            while not (pids.exists() and len(pids.read_text(encoding="utf-8").split()) == 2):
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            tripped.append(True)
+            # interrupt_main marks SIGTERM pending without running its handler;
+            # the second item fails inside the same C call, so the handler first
+            # runs once this TypeError has reached the runner's failure path.
+            list(map(_thread.interrupt_main, [signal.SIGTERM, "not a signal"]))
+        return _leader_has_exited(process)
+
+    delivered: list[int] = []
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: delivered.append(signum))
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr("autoform_cli.lean_probe._leader_has_exited", fail_with_sigterm_pending)
+            with pytest.raises(SkeletonError, match="interrupted by SIGTERM"):
+                _bounded(tmp_path, _sleeping_probe(pids), timeout=60)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert tripped == [True]
+    assert delivered == [signal.SIGTERM]
+    _assert_no_survivors([pids])
+
+
+@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
+def test_bounded_command_joins_a_reader_started_as_a_signal_arrives(tmp_path: Path, monkeypatch) -> None:
+    # A signal while a reader starts must not leave it unjoined, with its stream
+    # closed under it.
+    started: list[threading.Thread] = []
+    joined: list[threading.Thread] = []
+
+    class SignalledThread(threading.Thread):
+        def start(self) -> None:
+            super().start()
+            started.append(self)
+            if len(started) == 1:
+                signal.raise_signal(signal.SIGTERM)
+
+    def recording_join(readers: list[threading.Thread], *, deadline: float) -> bool:
+        joined.extend(readers)
+        return _join_readers(readers, deadline=deadline)
+
+    delivered: list[int] = []
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: delivered.append(signum))
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr("autoform_cli.lean_probe.threading.Thread", SignalledThread)
+            patch.setattr("autoform_cli.lean_probe._join_readers", recording_join)
+            with pytest.raises(SkeletonError, match="interrupted by SIGTERM"):
+                _bounded(tmp_path, "import time; time.sleep(60)", timeout=60)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert len(started) == 2 and set(joined) == set(started)
+    assert delivered == [signal.SIGTERM]
 
 
 def test_bounded_command_cleanup_reserves_time_and_reuses_final_deadline(
