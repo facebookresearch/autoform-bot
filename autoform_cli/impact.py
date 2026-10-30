@@ -34,6 +34,7 @@ import json
 import os
 import re
 import shlex
+import unicodedata
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -487,49 +488,94 @@ def _raise(error: OSError) -> None:
     raise ImpactError(f"cannot read {error.filename}{_RERUN_DEFAULT_SCOPE}") from error
 
 
-def _outside_sources(root: Path, inventoried: Collection[Path]) -> Iterator[tuple[str, bytes]]:
-    """Every ``.lean`` file the captured inventory lacks under ``root`` and the manifest's outside package dirs."""
+def _folded(name: str) -> str:
+    return unicodedata.normalize("NFC", name).casefold()
 
-    tops = [root]
+
+def _outside_sources(
+    root: Path, libraries: Sequence[LeanLibrary], inventoried: Collection[Path]
+) -> Iterator[tuple[str, bytes]]:
+    """Every ``.lean`` file the captured inventory lacks where Lake can find a module.
+
+    Lake finds a root-package module only in a library's ``srcDir``, under the
+    first component of one of its roots or globs (``LeanLib.isLocalModule``),
+    and a dependency's module in its package directory. Nothing else under
+    ``root``, such as build output, is ever loaded, so it is not read; nor is
+    a package's own ``.lake``, or a nested checkout, which the captured
+    inventory leaves out too.
+    """
+
+    # Each top is a directory or file to read, with the depth of the packages it holds.
+    tops: dict[Path, int | None] = {}
+    for library in libraries:
+        bases = (*library.roots, *(_glob(glob, library)[0] for glob in library.globs))
+        try:
+            firsts: set[str] | None = {_folded(lean_name_parts(base)[0][0]) for base in bases}
+        except SkeletonError:
+            firsts = None  # a name this parser cannot read may be in any entry
+        try:
+            entries = sorted(os.listdir(library.src_dir))
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise ImpactError(f"cannot read {library.src_dir}{_RERUN_DEFAULT_SCOPE}") from error
+        for entry in entries:
+            # Matched loosely, since a case-insensitive volume finds `Demo/` under `demo/`.
+            if entry != ".git" and (firsts is None or _folded(entry.removesuffix(".lean")) in firsts):
+                tops.setdefault(library.src_dir / entry, None)
     manifest_path = root / "lake-manifest.json"
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
     except (OSError, ValueError) as error:
         raise ImpactError(f"cannot read {manifest_path}{_RERUN_DEFAULT_SCOPE}") from error
+    dirs: list[tuple[object, int]] = [(".lake/packages", 1)]
     if isinstance(manifest, dict):
-        dirs = [manifest.get("packagesDir")]
+        dirs.append((manifest.get("packagesDir"), 1))
         packages = manifest.get("packages")
         if isinstance(packages, list):
             dirs += [
-                package.get("dir")
+                (package.get("dir"), 0)
                 for package in packages
                 if isinstance(package, dict) and package.get("type") == "path"
             ]
-        real_root = Path(os.path.realpath(root))
-        for entry in dirs:
-            if isinstance(entry, str):
-                top = Path(os.path.realpath(root / entry))
-                if top.is_dir() and not top.is_relative_to(real_root):
-                    tops.append(top)
+    for entry, packages_at in dirs:
+        if isinstance(entry, str):
+            top = Path(os.path.normpath(root / entry))
+            if top.is_dir():
+                tops.setdefault(top, packages_at)
     seen: set[str] = set()
-    for top in tops:
+    for top, packages_at in tops.items():
+        walked = top.is_dir()
         # An unreadable directory raises rather than hiding a file that may import the closure.
-        for directory, names, files in os.walk(top, onerror=_raise, followlinks=True):
-            real = os.path.realpath(directory)
-            if real in seen:
-                names[:] = []
-                continue
-            seen.add(real)
-            names[:] = [name for name in names if name != ".git"]
+        # A top that is no directory is a library's `<root>.lean`, or a link to read and refuse.
+        listing = os.walk(top, onerror=_raise, followlinks=True) if walked else [(str(top.parent), [], [top.name])]
+        for directory, names, files in listing:
+            folder = Path(directory)
+            if walked:
+                real = os.path.realpath(directory)
+                depth = len(folder.relative_to(top).parts)
+                # A nested checkout, such as a worktree with its own `.lake`, is another
+                # source tree, as the captured inventory treats it; a package root is a clone.
+                checkout = (packages_at is None or depth > packages_at) and (".git" in names or ".git" in files)
+                if real in seen or checkout:
+                    names[:] = []
+                    continue
+                seen.add(real)
+                # A package's own `.lake` holds its build and packages Lake does not use. A
+                # dependency whose srcDir lies inside its `.lake` goes unread, the one module
+                # source this skips.
+                names[:] = [name for name in names if name != ".git" and not (depth == packages_at and name == ".lake")]
+            # Only `.lean` names cost a path, since build trees hold many other files.
+            base = folder.relative_to(root) if folder.is_relative_to(root) else folder
             for file in files:
-                path = Path(directory, file)
-                relative = path.relative_to(root) if top == root else path
-                if file.endswith(".lean") and relative not in inventoried:
-                    try:
-                        data = path.read_bytes()
-                    except OSError as error:
-                        raise ImpactError(f"cannot read {path}{_RERUN_DEFAULT_SCOPE}") from error
-                    yield relative.as_posix(), data
+                if not file.endswith(".lean") or base / file in inventoried:
+                    continue
+                path = folder / file
+                try:
+                    data = path.read_bytes()
+                except OSError as error:
+                    raise ImpactError(f"cannot read {path}{_RERUN_DEFAULT_SCOPE}") from error
+                yield (base / file).as_posix(), data
 
 
 def _validated_module_evidence(
@@ -1536,7 +1582,7 @@ def _load_impact_evidence(
                 for library in libraries
                 for name, path in _source_modules(library, source_snapshot)[0].items()
             ]
-            closure = import_closure(module, sources, _outside_sources(root, set(captured)))
+            closure = import_closure(module, sources, _outside_sources(root, libraries, set(captured)))
             paths = {path: name for name, path in _module_source_paths(libraries, source_snapshot, strict=True).items()}
             index = source_snapshot.index
             # A name the narrowed probe did not load is unresolved; the index
