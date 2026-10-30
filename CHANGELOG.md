@@ -108,6 +108,11 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Large libraries' search index.** The explorer loads JSON up to 64 MiB,
+  and a whole-library index over 32 MiB leaves out statement summaries, so
+  search still matches titles and Lean names; publication warns when it
+  does. ATLAS's index had grown past the old 32 MiB limit, so search and the
+  Topics outline failed on every page.
 - **Explorer review follow-ups.** Fit retains a selected unlinked result.
   Deferred list math cancels with its view and falls back to visible text on
   unavailable typesetting. Preview formatting keeps currency and code literal;
