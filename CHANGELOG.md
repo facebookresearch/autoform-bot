@@ -38,7 +38,7 @@ date when the release is tagged.
 - **Messages.** The read and publish errors that `skeleton`, `library index`,
   `work impact`, `work import-impact` and `review prepare` share no longer
   call the project files they read "skeleton input", or the files they write
-  "skeleton output" or "packet output"; they name the path alone (#NNN).
+  "skeleton output" or "packet output"; they name the path alone (#506).
 - **Claims.** `claim list TARGET...` fetches and reads only those claims.
   `--timeout` (120 seconds by default) bounds a listing, a slow step is named on
   stderr, and a failure goes to stderr labelled `timeout:`, `contention:` or
