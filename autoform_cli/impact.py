@@ -1484,6 +1484,7 @@ class _ImpactEvidence:
     modules: Mapping[str, ModuleEvidence]
     locate: Locator
     declaration_modules: Mapping[str, str] | None = None
+    module_generated: bool = False
 
 
 def _load_impact_evidence(
@@ -1617,6 +1618,11 @@ def _load_impact_evidence(
             snapshot=source_snapshot,
             required_modules=required_modules,
         )
+    module_generated = False
+    if require_modules and module is not None:
+        paths = _module_source_paths(libraries, source_snapshot, strict=True)
+        relative = {_name_key(name): path for name, path in paths.items()}.get(_name_key(module))
+        module_generated = relative is not None and _linguist_generated(root, relative)
 
     return _ImpactEvidence(
         source_revision=source_revision,
@@ -1627,6 +1633,7 @@ def _load_impact_evidence(
         modules=module_evidence,
         locate=_locator(libraries, source_snapshot),
         declaration_modules=declaration_modules,
+        module_generated=module_generated,
     )
 
 
@@ -1699,19 +1706,23 @@ def module_import_impact(
         lean_source_revision=evidence.lean_source_revision,
         module_scope=module_scope,
         declaration_modules=evidence.declaration_modules,
-        module_generated=module in evidence.modules and _linguist_generated(evidence.modules[module].source_path),
+        module_generated=evidence.module_generated,
     )
 
 
-def _linguist_generated(source_path: str) -> bool:
-    """Whether Git attributes mark the file ``linguist-generated``, as GitHub reads them.
+def _linguist_generated(root: Path, relative: str) -> bool:
+    """Whether Git attributes set ``linguist-generated``, or make it ``true``, on ``relative`` under ``root``.
 
-    That is how a repository declares a generated import root; a file outside
-    a Git work tree, or one Git cannot be asked about, is not generated.
+    That is how a repository declares a generated import root. ``--cached``
+    reads ``.gitattributes`` from the index, so an unstaged edit does not
+    count; Git's local attribute files still do. A file outside a Git work
+    tree, or one Git cannot be asked about, is not generated.
     """
 
-    path = Path(source_path)
-    output = git(path.parent, "check-attr", "linguist-generated", "--", path.name)
+    try:
+        output = git(root, "check-attr", "--cached", "linguist-generated", "--", relative)
+    except ValueError:  # Git printed a name that is not UTF-8
+        return False
     return output is not None and output.rsplit(": ", 1)[-1] in ("set", "true")
 
 
@@ -1809,11 +1820,8 @@ def format_module_import_impact(report: ModuleImportImpactReport) -> list[str]:
         f"Lean build revision: {report.build_revision}",
         f"Module graph revision: {report.module_graph_revision}",
         f"Module scope: {report.module_scope}",
-        f"Module claim target: {report.module_claim_target} (key {report.module_claim_key})",
-    ]
-    if report.module_generated:
-        lines.append("Generated module (linguist-generated): regenerate it, don't edit it; it is not a claim target.")
-    lines += [
+        f"Module claim target: {report.module_claim_target} (key {report.module_claim_key})"
+        + (", not claimed: linguist-generated; regenerate it, don't edit it" if report.module_generated else ""),
         "Affected project modules: " + ", ".join(report.affected_modules),
         "Removing an import can also drop modules that only imports bring into the build; "
         "this reverse-import scope does not list them.",

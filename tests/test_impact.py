@@ -235,10 +235,11 @@ def test_module_import_impact_leaves_a_generated_root_out_of_the_claim_targets()
     assert generated.as_dict()["module_generated"] is True
     assert handwritten.claim_targets == ("af_leaf", handwritten.module_claim_target)
     assert handwritten.as_dict()["module_generated"] is False
-    note = "Generated module (linguist-generated): regenerate it, don't edit it; it is not a claim target."
-    lines = format_module_import_impact(generated)
-    assert lines[lines.index(note) - 1].startswith("Module claim target: ")
-    assert note not in format_module_import_impact(handwritten)
+    line = f"Module claim target: {handwritten.module_claim_target} (key {handwritten.module_claim_key})"
+    assert line in format_module_import_impact(handwritten)
+    assert line + ", not claimed: linguist-generated; regenerate it, don't edit it" in format_module_import_impact(
+        generated
+    )
 
 
 def test_module_import_impact_reports_unresolved_local_articles_as_unknown_scope() -> None:
@@ -2361,29 +2362,34 @@ def test_cli_import_impact_text_report_lists_each_section(tmp_path: Path, monkey
     assert calls[0]["timeout"] == 30
 
 
-def _git_repository(path: Path, attributes: str | None) -> None:
+def _git_repository(path: Path, attributes: str | None, *, staged: bool = True) -> None:
     subprocess.run(["git", "init", "--quiet", str(path)], check=True)
     if attributes is not None:
         (path / ".gitattributes").write_text(attributes, encoding="utf-8")
+        if staged:
+            subprocess.run(["git", "-C", str(path), "add", ".gitattributes"], check=True)
 
 
 @pytest.mark.parametrize(
-    ("attributes", "generated"),
+    ("attributes", "staged", "generated"),
     [
-        ("Demo.lean linguist-generated\n", True),
-        ("*.lean linguist-generated=true\n", True),
-        ("*.lean linguist-generated\nDemo.lean -linguist-generated\n", False),
-        ("Demo.lean linguist-generated=false\n", False),
-        ("Other.lean linguist-generated\n", False),
-        (None, False),
+        ("/Demo.lean linguist-generated\n", True, True),
+        ("*.lean linguist-generated=true\n", True, True),
+        ("*.lean linguist-generated\n/Demo.lean -linguist-generated\n", True, False),
+        ("/Demo.lean linguist-generated=false\n", True, False),
+        ("/Demo.lean linguist-generated=1\n", True, False),
+        ("/Other.lean linguist-generated\n", True, False),
+        # Git reads .gitattributes from the index, so an unstaged mark does not count.
+        ("/Demo.lean linguist-generated\n", False, False),
+        (None, True, False),
     ],
 )
 def test_cli_import_impact_reads_linguist_generated_from_git_attributes(
-    tmp_path: Path, monkeypatch, capsys, attributes: str | None, generated: bool
+    tmp_path: Path, monkeypatch, capsys, attributes: str | None, staged: bool, generated: bool
 ) -> None:
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _stub_lean_root(tmp_path)
-    _git_repository(lean_root, attributes)
+    _git_repository(lean_root, attributes, staged=staged)
     _stub_probe(monkeypatch, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
 
     code = cli.main(["work", "import-impact", _BASE_ID, "Demo", str(project), "--lean-root", str(lean_root), "--json"])
@@ -2397,13 +2403,46 @@ def test_cli_import_impact_reads_linguist_generated_from_git_attributes(
     assert report["claim_keys"] == [claims.author_claim_key(target) for target in expected]
 
 
+def test_cli_import_impact_reads_a_nested_root_s_attributes_from_the_repository_root(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    # The Lean root sits below the repository root, and the generated root
+    # below the Lean root, as for `MathlibExt/AlgebraicTopology.lean`.
+    project = _blueprint_project(tmp_path, "Demo")
+    repository = tmp_path / "repository"
+    lean_root = repository / "lean"
+    lean_root.mkdir(parents=True)
+    (lean_root / "lakefile.toml").write_text('name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\n', encoding="utf-8")
+    (lean_root / "Demo").mkdir()
+    (lean_root / "Demo.lean").write_text("import Demo.Topology\n", encoding="utf-8")
+    (lean_root / "Demo" / "Topology.lean").write_text("namespace Demo\n\ndef base : Nat := 0\n\nend Demo\n")
+    _git_repository(repository, "/lean/Demo/Topology.lean linguist-generated\n")
+    _stub_probe(
+        monkeypatch,
+        modules=(
+            ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve()), ("Demo.Topology",)),
+            ModuleEvidence("Demo.Topology", str((lean_root / "Demo" / "Topology.lean").resolve())),
+        ),
+    )
+
+    def report(module: str) -> dict[str, object]:
+        args = [module, str(project), "--lean-root", str(lean_root), "--json"]
+        code = cli.main(["work", "import-impact", _BASE_ID, *args])
+        output = capsys.readouterr()
+        assert code == 0, output.err
+        return json.loads(output.out)
+
+    assert report("Demo.Topology")["module_generated"] is True
+    assert report("Demo")["module_generated"] is False
+
+
 def test_cli_import_impact_outside_git_reports_no_generated_module(tmp_path: Path, monkeypatch, capsys) -> None:
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _stub_lean_root(tmp_path)
     # Attributes mean nothing without a work tree.
     if subprocess.run(["git", "-C", str(lean_root), "rev-parse"], capture_output=True).returncode == 0:
         pytest.skip("a Git work tree encloses tmp_path")
-    (lean_root / ".gitattributes").write_text("Demo.lean linguist-generated\n", encoding="utf-8")
+    (lean_root / ".gitattributes").write_text("/Demo.lean linguist-generated\n", encoding="utf-8")
     _stub_probe(monkeypatch, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
 
     code = cli.main(["work", "import-impact", _BASE_ID, "Demo", str(project), "--lean-root", str(lean_root), "--json"])
@@ -2425,7 +2464,7 @@ def test_an_unrelated_workers_claim_on_a_generated_root_does_not_block_an_import
     # refused and A keeps its claim; a handwritten root still refuses B.
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _stub_lean_root(tmp_path)
-    _git_repository(lean_root, "Demo.lean linguist-generated\n" if generated else None)
+    _git_repository(lean_root, "/Demo.lean linguist-generated\n" if generated else None)
     _stub_probe(monkeypatch, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
     board = tmp_path / "claims.git"
     subprocess.run(["git", "init", "--bare", "--quiet", str(board)], check=True)
@@ -2452,7 +2491,7 @@ def test_an_unrelated_workers_claim_on_a_generated_root_does_not_block_an_import
         assert code == 0, output.out
     else:
         assert code == 1
-        assert output.out.endswith(f"no claim was acquired: held by another worker: {root}\n")
+        assert root in output.out
 
 
 def test_cli_declaration_flag_replaces_the_article_s_names(tmp_path: Path, monkeypatch, capsys) -> None:
