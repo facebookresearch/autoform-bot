@@ -124,8 +124,11 @@ def test_children_fill_their_parent_without_moving_it() -> None:
     assert.equal(JSON.stringify(parent), before);
     assert.equal(JSON.stringify(L.packPart(part, parent, DESKTOP)), JSON.stringify(kids));
     assert.equal(Object.keys(kids).length, 13);
+    // Beside other children, the own-results box keeps a band for its title, and its cards sit below it.
     const own = kids['r0#results'];
-    assert(own && own.own && own.band === 0);
+    assert(own && own.own && own.band > 0);
+    const ownView = L.layoutCommunity(part.results.map(r => ({id: r.id, title: r.id})), [], [], own);
+    for (const card of Object.values(ownView.cards)) assert(inside(card, L.contentOf(own)));
     const content = L.contentOf(parent);
     for (const box of Object.values(kids)) { assert(inside(box, content)); assert.equal(box.depth, parent.depth + 1); }
     disjoint(kids);
@@ -192,6 +195,7 @@ def test_every_part_at_every_depth_keeps_room_for_what_it_holds() -> None:
 
 def test_routes_run_only_through_gaps_and_merge_both_directions() -> None:
     _run(r"""
+    const axes = new Set();
     for (const parent of [{x: 0, y: 0, w: 900, h: 780, unit: 1, band: 52, depth: 1},
                           {x: 0, y: 0, w: 1400, h: 260, unit: 1, band: 52, depth: 1}]) {
       const children = sizes(14, 90).map((results, k) => summary('c' + k, results));
@@ -199,21 +203,35 @@ def test_routes_run_only_through_gaps_and_merge_both_directions() -> None:
       for (let k = 1; k < 14; k++) edges.push(['c' + k, 'c' + ((k * 5) % k), k % 3, 1]);
       edges.push(['c2', 'c9', 3, 0], ['c9', 'c2', 1, 0], ['c13', 'c0', 0, 1], ['c4', 'c11', 2, 2]);
       const kids = L.packPart({part: summary('p', 1000), children, edges}, parent, DESKTOP);
-      const routes = L.bundleEdges(kids, edges, L.contentOf(parent));
+      const content = L.contentOf(parent), routes = L.bundleEdges(kids, edges, content);
       checkRoutes(routes, kids);
+      axes.add(Object.values(kids)[0].axis);
+      // No route runs through the parent's band, above its content.
+      for (const route of routes) for (let k = 1; k < route.points.length; k += 2) assert(route.points[k] >= content.y - EPS, JSON.stringify(route));
       const pairs = new Set(edges.filter(e => e[0] !== e[1]).map(e => [e[0], e[1]].sort().join()));
       assert.equal(routes.length, pairs.size);
       // c2 uses c9 three times and c9 uses c2 once: one route, from c9 to its heavier user.
       const both = routes.find(r => [r.from, r.to].sort().join() === 'c2,c9');
       assert(both.both && both.from === 'c9' && both.to === 'c2', JSON.stringify(both));
       assert.deepEqual(both.weights, [3, 0, 1, 0]);
-      // Every linked box keeps its heaviest route on the map at rest.
+      // In a small set every linked box has a route on the map at rest.
       for (const id of Object.keys(kids)) {
         const mine = routes.filter(r => r.from === id || r.to === id);
         if (mine.length) assert(mine.some(r => r.rest), id);
       }
-      assert(routes.filter(r => r.rest).length <= Math.max(14 * 0.8, new Set(routes.flatMap(r => [r.from, r.to])).size));
+      assert(routes.filter(r => r.rest).length <= Math.round(14 * 0.8));
     }
+    assert(axes.has('rows') && axes.has('columns'), [...axes].join());
+    // A dense island shows only its central routes at rest; the others wait for their parts.
+    const island = sizes(40, 60).map((results, k) => summary('i' + k, results)), links = [];
+    for (let a = 0; a < 40; a++) for (let b = 0; b < a; b += 3) links.push(['i' + a, 'i' + b, 1 + (a + b) % 4, 1]);
+    const room = {x: 0, y: 0, w: 900, h: 780, unit: 1, band: 52, depth: 1};
+    const packed40 = L.packPart({part: summary('island', 2000), children: island, edges: links}, room, DESKTOP);
+    const dense = L.bundleEdges(packed40, links, L.contentOf(room));
+    checkRoutes(dense, packed40);
+    const resting = dense.filter(r => r.rest);
+    assert(resting.length >= 10 && resting.length <= 18, resting.length);
+    assert(Math.min(...resting.map(r => r.weight)) >= Math.max(...dense.filter(r => !r.rest).map(r => r.weight)) - 4);
     """)
 
 
@@ -256,19 +274,25 @@ def test_labels_appear_only_where_they_fit() -> None:
     const kids = L.packPart({part: summary('r0', 400), children, edges: []}, packed.boxes.r0, DESKTOP);
     const far = L.placeLabels(kids, {x: 0, y: 0, z: 1}, DESKTOP);
     const near = L.placeLabels(kids, L.fitCamera(L.contentOf(packed.boxes.r0), DESKTOP), DESKTOP);
-    assert(near.length > far.length);
+    const full = labels => labels.filter(label => !label.compact).length;
+    assert(full(near) > full(far));
     for (const label of near) {
       const box = kids[label.id], camera = L.fitCamera(L.contentOf(packed.boxes.r0), DESKTOP);
       const left = (box.x - camera.x) * camera.z, top = (box.y - camera.y) * camera.z;
       assert(label.x >= left - EPS && label.y >= top - EPS && label.x + label.w <= left + box.w * camera.z + EPS);
       assert(label.w >= 0.9 * MIN_W - 2 * 12 * box.unit * camera.z - EPS);
     }
+    // A box too narrow for a full label but at least 60 px wide still gets a compact one.
+    const narrow = {x: 0, y: 0, w: 100, h: 90, unit: 1, band: 52, pad: 12, depth: 2};
+    const [named] = L.placeLabels({narrow}, {x: 0, y: 0, z: 1}, DESKTOP);
+    assert(named && named.compact && named.detail === 'title', JSON.stringify(named));
+    assert.equal(L.placeLabels({tiny: Object.assign({}, narrow, {w: 50})}, {x: 0, y: 0, z: 1}, DESKTOP).length, 0);
     // Opening a crowded part comes closer than its fit, at most twice, until most children are labelled.
     const crowd = Array.from({length: 60}, (_, k) => summary('r1/c' + k, 10 + k % 7));
     const many = L.packPart({part: summary('r1', 300), children: crowd, edges: []}, packed.boxes.r1, DESKTOP);
     const fit = L.fitCamera(L.contentOf(packed.boxes.r1), DESKTOP), focus = L.focusCamera(packed.boxes.r1, many, DESKTOP);
     assert(focus.z >= fit.z - EPS && focus.z <= 2 * fit.z + EPS);
-    assert(L.placeLabels(many, focus, DESKTOP).length > L.placeLabels(many, fit, DESKTOP).length);
+    assert(full(L.placeLabels(many, focus, DESKTOP)) > full(L.placeLabels(many, fit, DESKTOP)));
     // A part whose children are readable at its fit opens fitted.
     assert.deepEqual(L.focusCamera(packed.boxes.r0, kids, DESKTOP), L.fitCamera(L.contentOf(packed.boxes.r0), DESKTOP));
     """)
