@@ -78,6 +78,7 @@ from .skeleton import (
 )
 from .testimony import typesetting_warnings
 from .work import WORK_SCHEMA, WorkError, assumption_contract, list_ready_work, work_context
+from .worktrees import WorktreeError, format_removal, format_worktrees, remove_worktrees, report_worktrees
 
 
 class _Version(argparse.Action):
@@ -180,7 +181,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="the rendered source the site was built from (MkDocs's docs_dir), to check every statement card",
     )
 
-    project = subparsers.add_parser("project", help="create or inspect local projects and supported releases")
+    project = subparsers.add_parser(
+        "project", help="create or inspect local projects, their worktrees, and supported releases"
+    )
     project_subparsers = project.add_subparsers(dest="project_command", required=True)
     project_new = project_subparsers.add_parser("new", help="atomically create a complete Lean and Autoform project")
     project_new.add_argument("target", nargs="?", help="new project directory (required); it must not exist")
@@ -237,6 +240,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         "versions", help="list bundled known-good Lean and Mathlib releases"
     )
     project_versions.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    project_worktrees = project_subparsers.add_parser(
+        "worktrees", help="report which linked worktrees are safe to remove, or remove those a saved report lists"
+    )
+    project_worktrees.add_argument(
+        "target", nargs="?", default=".", help="a path in the checkout results integrate into (default: .)"
+    )
+    project_worktrees.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    project_worktrees.add_argument(
+        "--remove",
+        type=Path,
+        metavar="MANIFEST",
+        help="remove the worktrees this saved --json report lists as removable, if nothing protects them now",
+    )
+    project_worktrees.add_argument("--repo", help="claim-board Git repository; defaults to this checkout's origin")
 
     work = subparsers.add_parser("work", help="inspect the Markdown-derived formalization frontier")
     work_subparsers = work.add_subparsers(dest="work_command", required=True)
@@ -946,6 +963,8 @@ def _site_check(args: argparse.Namespace) -> int:
 
 
 def _project(args: argparse.Namespace) -> int:
+    if args.project_command == "worktrees":
+        return _project_worktrees(args)
     try:
         if args.project_command == "new":
             if args.target is None:
@@ -1037,6 +1056,26 @@ def _project(args: argparse.Namespace) -> int:
     else:
         _print_project_inspection(result)
     return 0 if result.ok else 1
+
+
+def _project_worktrees(args: argparse.Namespace) -> int:
+    try:
+        if args.remove is None:
+            report = report_worktrees(args.target, repo=args.repo)
+            lines = format_worktrees(report)
+        else:
+            report = remove_worktrees(args.target, args.remove, repo=args.repo)
+            lines = format_removal(report)
+    except WorktreeError as error:
+        print(f"error: {_human_text(error)}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(report.to_json())
+    else:
+        for line in lines:
+            print(_human_text(line))
+    # A refusal is the removal's answer for that worktree, but not what was asked.
+    return 1 if report.refused else 0
 
 
 def _work(args: argparse.Namespace) -> int:
