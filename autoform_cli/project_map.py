@@ -28,6 +28,8 @@ MAP_DIRECTORY = "dependencies/map"
 TOP_EXPORTS = 8
 # A part whose subtree holds at most this many results ships them in its own file.
 LEAF_RESULTS = 400
+# A part with more children than this gets them grouped into linked communities, so no level is a field of tiles.
+GROUP_LIMIT = 30
 _FLATTENED = frozenset({"collection", "transparent"})
 _REGION = "region:"
 
@@ -101,44 +103,51 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
             part = part_parent[part]
         return out  # nearest first
 
-    chains = {result: chain(part) for result, part in home.items()}
-    inside: dict[str, list[str]] = defaultdict(list)
-    for result, parts in chains.items():
-        for part in parts:
-            inside[part].append(result)
-    status = {part: Counter(str(by_id[result].get("status")) for result in results) for part, results in inside.items()}
+    def aggregate() -> tuple:
+        chains = {result: chain(part) for result, part in home.items()}
+        inside: dict[str, list[str]] = defaultdict(list)
+        for result, parts in chains.items():
+            for part in parts:
+                inside[part].append(result)
+        exports: dict[str, Counter[str]] = defaultdict(Counter)
+        imports: dict[str, set[str]] = defaultdict(set)
+        pair: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
+        internal: dict[str, list[list[object]]] = defaultdict(list)
+        boundary: dict[str, list[list[object]]] = defaultdict(list)
+        for user, used, statement, proof in relations:
+            if user not in chains or used not in chains or user == used:
+                continue
+            user_parts, used_parts = chains[user], chains[used]
+            user_set, used_set = set(user_parts), set(used_parts)
+            for part in used_parts:
+                if part not in user_set:
+                    exports[part][used] += 1
+            for part in user_parts:
+                if part not in used_set:
+                    imports[part].add(used)
+            # The aggregated edge belongs to the two siblings just below the common ancestor.
+            top_user, top_used = user_parts[::-1], used_parts[::-1]
+            depth = 0
+            while depth < min(len(top_user), len(top_used)) and top_user[depth] == top_used[depth]:
+                depth += 1
+            if depth < len(top_user) and depth < len(top_used):
+                weights = pair[(top_user[depth], top_used[depth])]
+                weights[0] += statement
+                weights[1] += proof
+            row = [user, used, statement, proof]
+            if home[user] == home[used]:
+                internal[home[user]].append(row)
+            else:
+                boundary[home[user]].append(row)
+                boundary[home[used]].append(row)
+        return chains, inside, exports, imports, pair, internal, boundary
 
-    exports: dict[str, Counter[str]] = defaultdict(Counter)
-    imports: dict[str, set[str]] = defaultdict(set)
-    pair: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
-    internal: dict[str, list[list[object]]] = defaultdict(list)
-    boundary: dict[str, list[list[object]]] = defaultdict(list)
-    for user, used, statement, proof in relations:
-        if user not in chains or used not in chains or user == used:
-            continue
-        user_parts, used_parts = chains[user], chains[used]
-        user_set, used_set = set(user_parts), set(used_parts)
-        for part in used_parts:
-            if part not in user_set:
-                exports[part][used] += 1
-        for part in user_parts:
-            if part not in used_set:
-                imports[part].add(used)
-        # The aggregated edge belongs to the two siblings just below the common ancestor.
-        top_user, top_used = user_parts[::-1], used_parts[::-1]
-        depth = 0
-        while depth < min(len(top_user), len(top_used)) and top_user[depth] == top_used[depth]:
-            depth += 1
-        if depth < len(top_user) and depth < len(top_used):
-            weights = pair[(top_user[depth], top_used[depth])]
-            weights[0] += statement
-            weights[1] += proof
-        row = [user, used, statement, proof]
-        if home[user] == home[used]:
-            internal[home[user]].append(row)
-        else:
-            boundary[home[user]].append(row)
-            boundary[home[used]].append(row)
+    relations = list(relations)
+    chains, inside, exports, imports, pair, internal, boundary = aggregate()
+    synthetic: set[str] = set()
+    if _group_wide_parts(part_parent, title, inside, pair, synthetic):
+        chains, inside, exports, imports, pair, internal, boundary = aggregate()
+    status = {part: Counter(str(by_id[result].get("status")) for result in results) for part, results in inside.items()}
 
     kids: dict[str, list[str]] = defaultdict(list)
     for part, parent in part_parent.items():
@@ -154,6 +163,7 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
             "api": [[result, str(by_id[result].get("title")), uses] for result, uses in exported.most_common(TOP_EXPORTS)],
             "api_total": len(exported), "imports_total": len(imports.get(part, ())),
             "file": part_file(part),
+            **({"grouped": True} if part in synthetic else {}),
         }
 
     def among(parts: Sequence[str]) -> list[list[object]]:
@@ -212,6 +222,74 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
         ],
     }
     return files
+
+
+def _group_wide_parts(part_parent: dict[str, str], title: dict[str, str], inside: Mapping[str, Sequence[str]],
+                      pair: Mapping[tuple[str, str], Sequence[int]], synthetic: set[str]) -> bool:
+    """Group the children of any part wider than GROUP_LIMIT into linked communities, in place.
+
+    Children that link to each other form one community (a weak component of the sibling links), titled by its largest
+    member. Children that link to no sibling share one "Standalone topics" group, in reading order. Each group gets a
+    stable id under its parent. Returns whether anything was grouped.
+    """
+    kids: dict[str, list[str]] = defaultdict(list)
+    for part, parent in part_parent.items():
+        kids[parent].append(part)
+    changed = False
+    for parent, members in sorted(kids.items()):
+        if len(members) <= GROUP_LIMIT:
+            continue
+        member_set = set(members)
+        neighbours: dict[str, set[str]] = defaultdict(set)
+        for (user, used), _weights in pair.items():
+            if user in member_set and used in member_set:
+                neighbours[user].add(used)
+                neighbours[used].add(user)
+        size = {member: len(inside.get(member, ())) for member in members}
+        order = sorted(members, key=lambda member: (-size[member], title[member], member))
+        seen: set[str] = set()
+        islands: list[list[str]] = []
+        loners: list[str] = []
+        for member in order:
+            if member in seen:
+                continue
+            if not neighbours.get(member):
+                seen.add(member)
+                loners.append(member)
+                continue
+            component, stack = [], [member]
+            seen.add(member)
+            while stack:
+                at = stack.pop()
+                component.append(at)
+                for other in sorted(neighbours[at]):
+                    if other not in seen:
+                        seen.add(other)
+                        stack.append(other)
+            islands.append(sorted(component, key=lambda m: (-size[m], title[m], m)))
+        groups = [island for island in islands if len(island) > 1]
+        loners.extend(island[0] for island in islands if len(island) == 1)
+        loners.sort(key=lambda m: (title[m].casefold(), m))
+        # Topics that link to no sibling stay together, in reading order: grouping them by size would invent a structure.
+        everything = groups + ([loners] if loners else [])
+        if len(everything) >= len(members):
+            continue
+        for number, group in enumerate(everything, start=1):
+            group_id = f"{parent}/~{number}"
+            names = [title[m] for m in group[:2]]
+            if number <= len(groups):
+                if len(group) > 2:
+                    title[group_id] = f"{names[0]} and {len(group) - 1} linked topics"
+                else:
+                    title[group_id] = f"{names[0]} (2 topics)" if names[0] == names[1] else " and ".join(names)
+            else:
+                title[group_id] = "Standalone topics"
+            part_parent[group_id] = parent
+            synthetic.add(group_id)
+            for member in group:
+                part_parent[member] = group_id
+        changed = True
+    return changed
 
 
 def write_project_map(directory: Path, files: Mapping[str, object]) -> tuple[Path, ...]:
