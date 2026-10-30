@@ -858,14 +858,14 @@ autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH [--json] [
 `import-impact` is advisory and edits no authored roadmap or Lean source, though
 its Lake freshness check may refresh build hash sidecars. By default the probe
 imports every module of the root libraries, so each must be built in this
-checkout, not another clone or worktree: a missing or stale build exits 2 with
-the `lake build` command for those libraries, how many modules were checked, and
-the first one Lake found unbuilt. `affected_modules` is `MODULE` and every
-loaded module that imports it, transitively, complete over the root libraries'
-Lake roots and globs. Modules that removing an import drops from the build are
-not listed. Like `work impact`, the probe refuses a root-package module the
-captured inventory lacks or no `lean_lib` builds, and one whose loaded source or
-artifact is not the captured root one, so a dependency cannot shadow it.
+checkout (a build in another clone or worktree does not count): a missing or
+stale build exits 2 with the `lake build` command for those libraries, how many
+modules were checked, and the first one Lake found unbuilt. `affected_modules`
+is `MODULE` and every loaded module that imports it, transitively, complete over
+the root libraries' Lake roots and globs. Modules that removing an import drops
+from the build are not listed. Like `work impact`, the probe refuses a
+root-package module the captured inventory lacks, and one whose loaded source
+or artifact is not the captured root one, so a dependency cannot shadow it.
 
 Under `--module-scope import-closure` the candidates are `MODULE` and every
 root-package module whose source contains each component of a candidate's name,
@@ -878,7 +878,9 @@ so `affected_articles` may list more articles and `article_local` is always
 `affected_modules` but lists one in a file no `lean_lib` builds. A `.lean` file
 outside the captured sources, as in `.lake/packages` or a path dependency, that
 may import a candidate makes the command exit 2 and ask for the default scope;
-use the default scope too when a component of a module name is a common word.
+use the default scope too when a component of a module name is a common word. In
+either scope, and unlike `work impact`, the probe also refuses a loaded module
+that no `lean_lib` builds, as from a leftover `.olean`.
 
 JSON uses `autoform-module-import-impact/v1`, with `module_graph_revision` and
 `module_scope` (`loaded-root-library-graph` or `import-closure`). `article` is
