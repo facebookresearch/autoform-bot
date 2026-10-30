@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -1756,7 +1757,9 @@ def _skeleton(args: argparse.Namespace) -> int:
     stream = sys.stderr if args.json else sys.stdout
 
     def progress(phase: str) -> None:
-        print(f"skeleton: {phase}...", file=sys.stderr, flush=True)
+        # Information only: a closed or full stderr must not stop the run.
+        with contextlib.suppress(OSError):
+            print(f"skeleton: {phase}...", file=sys.stderr, flush=True)
 
     try:
         report = extract_skeletons(
@@ -1791,7 +1794,9 @@ def _skeleton(args: argparse.Namespace) -> int:
         for issue in report.unresolved:
             print(f"error: {issue.message}", file=stream)
     elif args.json:
-        print(report.to_json())
+        # In pieces, as `--output` writes it: a large report need not be held twice.
+        sys.stdout.writelines(report._json_pieces())
+        sys.stdout.write("\n")
     else:
         print(format_report(report, lean_root=args.lean_root), end="")
     return 0 if report.clean else 1

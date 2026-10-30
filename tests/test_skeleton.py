@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import tracemalloc
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -58,6 +59,7 @@ from autoform_cli.skeleton import (
     _replace_outputs,
     _stage_output,
     _hash_module_files,
+    _json_utf8,
     _local_safety_issue,
     _without_comments,
     _probe_record_issue,
@@ -1915,16 +1917,41 @@ def test_report_serialization_fingerprints_each_declaration_once(
     assert calls == {"_fingerprint": 2, "_packet": 2, "_shared_tables": 1}
 
 
-def test_writing_streams_every_packet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # A large shared closure makes a packet gigabytes, so no output holds a whole packet or report.
-    project, blueprint, output = _shared_closure(tmp_path, {"joint": 3}, closure=4, size=300)
+def test_writing_holds_no_whole_packet(tmp_path: Path) -> None:
+    # A large shared closure makes a packet gigabytes, so writing holds pieces of it, not all of it.
+    project, blueprint, output = _shared_closure(tmp_path, {"joint": 3}, closure=80, size=20000)
     report = extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
     first, second, _ = report.nodes[0].declarations
     assert all(item is other for item, other in zip(first.trusted, second.trusted, strict=True))
-    for owner, name in ((DeclarationSkeleton, "blind_text"), (NodeSkeleton, "blind_text"), (SkeletonReport, "to_json")):
-        monkeypatch.setattr(owner, name, lambda self: pytest.fail("joined a whole output"))
 
-    write_packets(report, tmp_path / "packets", report_path=tmp_path / "skeleton.json")
+    tracemalloc.start()
+    try:
+        write_packets(report, tmp_path / "packets", report_path=tmp_path / "skeleton.json")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    article = (tmp_path / "packets" / "basics" / "joint" / "article.lean").stat().st_size
+    assert peak < article / 3, (peak, article)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {},
+        [],
+        "",
+        {"b": [], "a": {}, "é": "\u2028", "A": ["\x00\x1f\x7f", "\"\\/", "𝔽 ℝ\t\n"]},
+        [["x", [], {"z": "1", "y": ["2", "3"]}], "\ud7ff\ue000\uffff"],
+    ],
+)
+def test_fingerprint_encoding_matches_json_dumps(value: object) -> None:
+    escaped: dict[str, bytes] = {}
+    expected = json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")
+
+    # Twice, so a string escaped once encodes the same from the memo.
+    assert b"".join(_json_utf8(value, escaped)) == expected
+    assert b"".join(_json_utf8(value, escaped)) == expected
 
 
 def test_report_record_edits_do_not_reach_the_report(tmp_path: Path) -> None:
@@ -2265,7 +2292,7 @@ def test_cli_publishes_report_and_packet_trees_together(
     assert (passages / PACKET_MANIFEST).is_file()
     assert json.loads(output.read_text(encoding="utf-8"))["unresolved"] == []
     assert list(tmp_path.glob(".*.autoform-*")) == []
-    assert capsys.readouterr().err == "skeleton: probing 1 module...\nskeleton: assembling 1 skeleton...\nskeleton: writing...\n"
+    assert capsys.readouterr().err == "skeleton: probing 1 module...\nskeleton: assembling...\nskeleton: writing...\n"
 
 
 def test_cli_names_each_phase_on_stderr_as_it_starts(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -2283,10 +2310,18 @@ def test_cli_names_each_phase_on_stderr_as_it_starts(tmp_path: Path, capsys, mon
     assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--output", str(output)]) == 0
 
     captured = capsys.readouterr()
-    # Every probe has ended once `assembling` appears, so an orchestrator may release its Lean slot.
+    # No probe runs once `assembling` appears, though the build must stay as it is until the command ends.
     assert during_probe == ["skeleton: probing 1 module...\n"]
-    assert captured.err == "skeleton: assembling 1 skeleton...\nskeleton: writing...\n"
+    assert captured.err == "skeleton: assembling...\nskeleton: writing...\n"
     assert captured.out == f"{output}: 1 skeleton(s) for 1 article(s)\n"
+
+
+def test_cli_json_prints_the_report_bytes(tmp_path: Path, capsys, monkeypatch) -> None:
+    assert _cli(tmp_path, monkeypatch, "--json") == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == _fake_report(tmp_path / "other").to_json() + "\n"
+    assert captured.err == "skeleton: probing 1 module...\nskeleton: assembling...\n"
 
 
 def test_cli_does_not_publish_packets_when_report_staging_fails(

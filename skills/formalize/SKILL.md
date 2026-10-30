@@ -84,7 +84,7 @@ rerunning it with `--module-scope import-closure` when the default scope cannot
 build or load every root library. When the run uses claims, follow the [import
 claims](references/claims.md#import-edits) from then on; otherwise send the lead
 the report's `claim_targets` and `affected_claim_targets` and wait for its
-answer. Capture baseline skeleton evidence for the report's currently
+answer. Unless paused, capture baseline skeleton evidence for the report's currently
 built, named affected articles and, when the edit removes an import, for the
 articles of modules only that import kept in the build. The affected articles
 are not a lock: do not acquire or edit them merely because they are listed, and

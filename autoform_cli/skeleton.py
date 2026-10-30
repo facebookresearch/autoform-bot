@@ -1546,9 +1546,8 @@ def extract_graph_skeletons(
     ``probing``, when given, is entered with every module about to be probed and
     held while the probes run, and only then; the default runner's freshness
     check, helper build, scratch directory and signal guard live there.
-    ``progress``, when given, hears ``probing <n> modules`` before ``probing``
-    is entered and ``assembling <n> skeletons`` once it has been left, when no
-    probe runs any more.
+    ``progress``, when given, hears ``probing <n> modules`` before any module
+    is probed, ``probing`` included, and ``assembling`` once no probe runs.
     """
 
     targets, selected, selection = select_lean_targets(graph, node_ids)
@@ -1614,8 +1613,7 @@ def extract_graph_skeletons(
                 records.update(result)
 
     if progress is not None:
-        pending = sum(name in roots and node.id not in broken_passages for node, names in selected for name in names)
-        progress(f"assembling {_plural(pending, 'skeleton')}")
+        progress("assembling")
     nodes: list[NodeSkeleton] = []
     module_hashes: dict[tuple[str, str], str] = {}
     # A probe states each shared record once; these keep it read once, by id.
