@@ -246,10 +246,13 @@
     };
     flight.frame = requestAnimationFrame(step);
   }
-  // A focus fits the part's content, not its whole box, so its header band does not fill the top of the screen.
+  // Opening a part fits its content, not its whole box, or comes closer when most of its children would be too small
+  // to label (the layout module decides); the layout module's camera holds the stage's top-left corner.
   function flyToContent(record, done) {
-    var content = L.contentOf(record.box), c = centerOf(content);
-    flyTo({x: c[0], y: c[1], k: fitK(content)}, done);
+    var children = {};
+    record.kids.forEach(function (id) { var child = part(id); if (child && child.box) children[id] = child.box; });
+    var corner = L.focusCamera(record.box, children, size);
+    flyTo({x: corner.x + size.w / 2 / corner.z, y: corner.y + size.h / 2 / corner.z, k: corner.z}, done);
   }
   function zoomAt(factor, sx, sy) {
     var range = limits(), k = clamp(camera.k * factor, range.low, range.high);
@@ -531,11 +534,14 @@
       var homeId = chain[chain.length - 1], record = part(homeId), entry = model.results.get(resultId);
       if (!entry || !entry.box) throw new Error("Result not found in its part: " + resultId);
       state.focusPart = homeId;
-      // Close enough that the result's card carries its title, with as much of its part around it as fits.
-      var at = centerOf(entry.box), k = Math.max(fitK(L.contentOf(record.box)), (CARD_TEXT_W * 1.9) / entry.box.w);
       select(resultId, {history: false});
       if (options.history !== false) remember(options.replace);
-      flyTo({x: at[0], y: at[1], k: k});
+      // Close enough that the result's card carries its title, with as much of its part around it as fits. A card
+      // the layout left without area gets its part's view instead of an endless zoom.
+      if (entry.box.w > 0 && entry.box.h > 0) {
+        var at = centerOf(entry.box);
+        flyTo({x: at[0], y: at[1], k: Math.max(fitK(L.contentOf(record.box)), (CARD_TEXT_W * 1.9) / entry.box.w)});
+      } else flyToContent(record);
       live.textContent = "Showing " + plain(entry.row.title);
     });
   }
