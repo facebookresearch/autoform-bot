@@ -63,7 +63,7 @@ def test_large_scope_uses_authored_areas_and_keeps_unassigned_topics_explicit() 
       assert(areas.every(node=>node.member_count===36&&node._topics===18));
       assert(areas.every(node=>JSON.stringify(node.status_counts)===JSON.stringify([['fully_proved',18],['stated',18]])));
       const unassigned=overview.nodes.find(node=>node._overviewGroup==='unassigned');
-      assert.equal(unassigned.title,'Unassigned topics');assert.equal(unassigned._region,undefined);
+      assert.equal(unassigned.title,'Other topics');assert.equal(unassigned._region,undefined);
       assert.equal(unassigned.area,undefined);assert.equal(unassigned.member_count,12);
       assert.equal(unassigned.status,'inventory_pending');
       // Sixty existing scope-internal links, plus captured internal weights8 and60.

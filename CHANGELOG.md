@@ -11,6 +11,10 @@ date when the release is tagged.
 
 ### Changed
 
+- **Explorer delivery.** The approved integrated redesign ships below 144 KB,
+  with the same bounded graph, JSON and frame budgets and pinned safe compiler.
+  Touch keeps single-pointer zoom controls; reading handles retain page-owned
+  mathematical titles, and typed dependency counts remain accessible descriptions.
 - **Integrated reading.** The book, theorem search and dependency map share
   one persistent workspace. The outline follows authored containment, includes
   root-level pages and labels collections as subheads; Home returns to the site.
@@ -67,8 +71,28 @@ date when the release is tagged.
 - **Dependency explorer.** The rail and the details typeset the TeX in titles
   and summaries, with the articles' input and the project's macros, where the
   explorer's own MathJax calls had typeset nothing on a generated site. Map
-  cards, the Contents list, search and the explorer's head still show a title
-  as typed (#455).
+  cards retain titles as typed (#455). Reading controls, breadcrumbs, search
+  and supported inventory titles now typeset safe title parts; inventory math
+  is deferred and unsupported inputs stay literal (#444).
+- **Theme.** A new project's site opens in the reader's own light or dark
+  setting, with Material's sun or moon to switch it, and the explorer's head
+  carries the same switch (#444). Setup leaves an existing `mkdocs.yml` alone,
+  so an existing site stays dark until the `palette:` and `scheme: slate` lines
+  under `theme:` are replaced with the scaffolded pair:
+
+  ```yaml
+    palette:
+      - media: "(prefers-color-scheme: light)"
+        scheme: default
+        toggle:
+          icon: material/weather-night
+          name: Use dark theme
+      - media: "(prefers-color-scheme: dark)"
+        scheme: slate
+        toggle:
+          icon: material/weather-sunny
+          name: Use light theme
+  ```
 - **Pages.** The generated `blueprint-pages.yml` runs
   `autoform site check site --source site-src` after the MkDocs build. Its
   warnings show in the log and never stop a deploy, and `continue-on-error`
@@ -78,6 +102,10 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Explorer review follow-ups.** Fit retains a selected unlinked result.
+  Deferred list math cancels with its view and falls back to visible text on
+  unavailable typesetting. Preview formatting keeps currency and code literal;
+  formal dependency links use converter-validated code and formula labels (#444).
 - **Explorer controls.** Closing full phone reading brings a cropped selected
   card back into the map without overriding restored cameras. Isolate/status
   filters use the same eligible original members in maps and native shelves,

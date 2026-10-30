@@ -342,7 +342,7 @@ def write_graph_pages(
             links=view_links(project, full_page),
             heading=root_title,
             lead=(
-                f"Search {len(graph.nodes)} roadmap entries without flattening them into one canvas; "
+                f"Search the titles and Lean names of {len(graph.nodes)} articles without flattening them into one canvas; "
                 "a result opens its chapter or nested scope."
             ),
             navigation=_navigation(

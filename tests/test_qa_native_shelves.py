@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from autoform_cli import dag_viewer, status
+from tests.test_graph_view_rendering import _contrast
 from tests.test_qa_outline_navigation import _run as _execute
-from tests.test_wiki_workspace_controls import _CONTROL_PEERS, _NODE
+from tests.test_wiki_workspace_controls import _CLIENT, _CONTROL_PEERS, _NODE
 
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for bounded shelf callback tests")
 
@@ -14,8 +18,8 @@ _CALLBACKS = [
     "adoptGraph", "neighborIds", "neighborhood", "scopeOverviewProjection", "structuralScopeProjection",
     "expandedGroupShelves", "boundaryContextProjection",
     "regionProjection", "updateProjection", "currentOverviewGroup", "matchesStatus", "matchesIsolation", "calculateActive",
-    "statusLabel", "swatch", "statusRing", "isDark", "renderShelves", "syncControls", "activateNode", "setMode", "refresh",
-    "setSheet", "sheetLayout", "syncSheetAccessibility", "captureState", "snapshotForRoute", "restoreState", "sourceNodes", "inCurrentScope",
+    "statusLabel", "swatch", "solid", "statusRing", "legendRank", "isDark", "renderShelves", "syncControls", "wrapMapKey", "activateNode", "setMode", "refresh",
+    "setSheet", "positionMapFeedback", "freeArea", "sheetLayout", "syncSheetAccessibility", "captureState", "snapshotForRoute", "restoreState", "sourceNodes", "inCurrentScope",
 ]
 
 _PEERS = (
@@ -33,6 +37,7 @@ Element.prototype.querySelectorAll=function(tag){return this.all().filter(node=>
 Element.prototype.prepend=function(child){child.parentElement=this;this.children.unshift(child);};
 const location=window.location,frames=[],checkpoints=[],writes=[],mathRoots=[];
 window.matchMedia=()=>({matches:false});
+""" + next(line.strip() for line in _CLIENT.read_text(encoding="utf-8").splitlines() if line.strip().startswith("var LEGEND = ")) + r"""
 window.AutoformMath={refresh(root){mathRoots.push(root);return Promise.resolve(true);}};
 var atlas,palette,byId=new Map(),prerequisites,dependents,statusCounts;
 var ui$active=[],ui$activeIds=new Set(),ui$activeDirty=true,ui$direction='both',ui$selected=null,ui$requestedNode='chapter';
@@ -53,7 +58,7 @@ async function frame(){
   frames.splice(0).forEach(callback=>callback());
   for(let attempt=0;attempt<5;attempt++)await Promise.resolve();
 }
-function fixture(count=13){
+function fixture(count=13,start=true){
   const root={id:'roadmap',scope:'roadmap',parent:null,kind:'scope',result:false,title:'Library',status:'planned'};
   const owner={id:'chapter',scope:'chapter',parent:root.id,kind:'scope',result:false,title:'Authored chapter',status:'planned',
     route:'https://example.test/project/roadmap/chapter/index.html'};
@@ -80,9 +85,10 @@ function fixture(count=13){
   currentBundle={nodeId:owner.id,scope:owner.id,url:owner.route,title:owner.title,
     dataURL:'https://example.test/project/dependencies/chapter.json',graph:contextGraph,isCurrent:()=>true};
   buildShell();dom$body.offsetTop=0;dom$inventoryRows=new Map();
+  dom$stage.clientWidth=900;dom$stage.clientHeight=700;dom$inspector.clientHeight=700;
   [dom$readingBody,dom$navigation,dom$inventoryScroll,dom$shelves].forEach(pane=>pane.scrollTop=0);
   const reading=document.createElement('p');reading.textContent='Complete captured reading';dom$readingBody.appendChild(reading);
-  updateProjection();syncControls();
+  updateProjection();if(start)syncControls();
   return {root,owner,collection,members,reading};
 }
 function links(){return dom$shelves.querySelectorAll('a');}
@@ -94,6 +100,80 @@ function allMemberIds(){return data.$shelves.flatMap(group=>group.members.map(no
 
 def _run(body: str) -> None:
     _execute(body, [*_CALLBACKS, "buildShell"], _PEERS)
+
+
+def test_cold_mount_index_phase_renders_mixed_status_shelves_with_the_published_legend() -> None:
+    source = _CLIENT.read_text(encoding="utf-8")
+    legend = next(line.strip() for line in source.splitlines() if line.strip().startswith("var LEGEND = "))
+    index_call = next(
+        line.strip() for line in source.splitlines()
+        if line.strip().startswith("if (navigation && navigation.getIndex) useIndex(")
+    )
+    mount_start = source.index("  function mount(")
+    # Preserve the actual initializer/callback order, including var hoisting.
+    # Preloading LEGEND in the usual warmed callback peer hid the cold-mount crash.
+    startup = "\n".join(text for _, text in sorted(
+        [(source.index(legend, mount_start), legend), (source.index(index_call, mount_start), index_call)]
+    ))
+    peers = _PEERS.replace(legend, "", 1).replace(
+        "const window=new Element('window'),host=new Element('div'),records=new Map(),modes=[],observers=[];",
+        "const window=new Element('window'),host=new Element('div'),modes=[],observers=[];var records=new Map();",
+    ) + "\nfunction renderReaderContext(){}function requestWikiLinks(){}\n"
+    palette = dag_viewer._palette()
+    for state in (*status.STATES, *status.INVENTORY_STATES):
+        for scheme in ("light", "dark"):
+            assert _contrast(palette[state.key][scheme]["text"], palette[state.key][scheme]["fill"]) >= 4.5
+    for key in ("fully_proved", "can_prove"):
+        assert _contrast(palette[key]["light"]["stroke"], "#F0F2F5") >= 3
+        assert _contrast(palette[key]["dark"]["stroke"], "#18191A") >= 3
+    body = "const publishedPalette=" + json.dumps(palette) + ";\n"
+    body += "const officialOrder=" + json.dumps([state.key for state in status.STATES]) + ";\n"
+    body += r"""
+      const state=fixture(13,false),record=state.members[0],node=contextGraph.nodes[0];
+      Object.assign(record,{kind:'scope',scope:record.id,result:false,status:'can_prove',
+        status_counts:[['can_prove',17],['fully_proved',6]]});
+      Object.assign(node,{kind:'scope',scope:record.id,result:false,status:'can_prove',
+        status_counts:record.status_counts.map(pair=>pair.slice()),member_count:23});
+      contextGraph.palette=publishedPalette;
+      const coldIndex=sharedIndex;coldIndex.nodes.forEach((entry,index)=>entry._index=index);
+      const before=JSON.stringify({contextGraph,index:coldIndex}),reading=dom$readingBody.children[0];
+      sharedIndex=null;let getters=0;navigation.getIndex=()=>{getters++;return coldIndex;};
+    """
+    # Indirect eval uses the same global scope as the verbatim callbacks;
+    # neither a replacement table nor a fake statusRing runs before startup.
+    body += "(0,eval)(" + json.dumps(startup) + ");\n"
+    body += r"""
+      assert.equal(getters,1);assert.equal(sharedIndex,coldIndex);assert.equal(dom$shelves.hidden,false);
+      assert.deepEqual(LEGEND,officialOrder);assert.deepEqual(Object.keys(palette),Object.keys(publishedPalette));
+      assert.deepEqual(allMemberIds(),state.members.map(entry=>entry.id));
+      const first=links()[0],mark=first.all().find(entry=>entry.className==='bp-dag-swatch');assert(mark);
+      assert.equal(first.href,record.route);assert.equal(first.dataset.shelfNodeId,record.id);
+      assert.equal(mark.title,'17 '+statusLabel('can_prove')+' · 6 '+statusLabel('fully_proved'));
+      assert(mark.style.background.startsWith('conic-gradient('));
+      const mixed=Array.from(mark.style.background.matchAll(/(#[0-9A-Fa-f]{6}) ([\d.]+)% ([\d.]+)%/g));
+      assert.deepEqual(mixed.map(arc=>arc[1]),[palette.fully_proved.light.stroke,palette.can_prove.light.stroke]);
+      assert.equal(Number(mixed[0][2]),0);assert(Math.abs(Number(mixed[0][3])-6/23*100)<1e-9);
+      assert.equal(Number(mixed[1][2]),Number(mixed[0][3]));assert(Math.abs(Number(mixed[1][3])-100)<1e-9);
+      const allStates=Object.keys(publishedPalette),fallback=allStates.filter(key=>!officialOrder.includes(key));
+      const counts=officialOrder.slice().reverse().concat(fallback).map((key,index)=>[key,index+1]);
+      const countsBefore=JSON.stringify(counts),weights=new Map(counts),total=counts.reduce((sum,pair)=>sum+pair[1],0);
+      for(const scheme of ['light','dark']) {
+        document.body.setAttribute('data-md-color-scheme',scheme==='dark'?'slate':'default');
+        const ring=statusRing({status_counts:counts},true);
+        const arcs=Array.from(ring.matchAll(/(#[0-9A-Fa-f]{6}) ([\d.]+)% ([\d.]+)%/g));
+        assert.equal(arcs.length,allStates.length);let cumulative=0;
+        allStates.forEach((key,index)=>{
+          assert.equal(legendRank(key),index<officialOrder.length?index:officialOrder.length);
+          assert.equal(arcs[index][1],publishedPalette[key][scheme].stroke);
+          assert(Math.abs(Number(arcs[index][2])-cumulative/total*100)<1e-9);
+          cumulative+=weights.get(key);assert(Math.abs(Number(arcs[index][3])-cumulative/total*100)<1e-9);
+        });
+      }
+      assert.equal(JSON.stringify(counts),countsBefore);
+      assert.equal(JSON.stringify({contextGraph,index:coldIndex}),before);
+      assert.strictEqual(dom$readingBody.children[0],reading);
+    """
+    _execute(body, [*_CALLBACKS, "buildShell", "useIndex"], peers)
 
 
 def test_shelves_preserve_canonical_anchors_native_modifiers_and_typed_status_swatches() -> None:
@@ -108,7 +188,8 @@ def test_shelves_preserve_canonical_anchors_native_modifiers_and_typed_status_sw
         const mark=link.all().find(node=>node.className==='bp-dag-swatch');assert(mark);
         assert.equal(mark.title,palette[record.status].meaning);
         for(const scheme of ['light','dark']){
-          assert.equal(mark.style['--dag-swatch-'+scheme+'-fill'],palette[record.status][scheme].fill);
+          // A finished state's small mark is filled with its stroke; an outlined one keeps its fill.
+          assert.equal(mark.style['--dag-swatch-'+scheme+'-fill'],solid(record.status,palette[record.status][scheme]));
           assert.equal(mark.style['--dag-swatch-'+scheme+'-stroke'],palette[record.status][scheme].stroke);
         }
         for(const settings of [{ctrlKey:true},{metaKey:true},{shiftKey:true},{altKey:true},{button:1},{button:2},{defaultPrevented:true}]){
@@ -129,12 +210,12 @@ def test_isolate_and_status_filters_hide_native_shelves_and_count_every_hidden_m
       assert.equal(dom$shelves.hidden,false);assert.equal(allMemberIds().length,13);
       ui$showIsolated=false;ui$activeDirty=true;syncControls();
       assert.equal(dom$shelves.hidden,true);assert.equal(links().length,0);
-      assert.equal(dom$hiddenButton.textContent,'Show 13 hidden');
+      assert.equal(dom$hiddenButton.textContent,'Show 13 filtered out');
       ui$showIsolated=true;ui$selectedStatuses=new Set(['fully_proved']);ui$activeDirty=true;syncControls();
-      assert.equal(dom$shelves.hidden,false);assert.equal(dom$hiddenButton.textContent,'Show 7 hidden');
+      assert.equal(dom$shelves.hidden,false);assert.equal(dom$hiddenButton.textContent,'Show 7 filtered out');
       assert(links().every(link=>records.get(link.dataset.shelfNodeId).status==='fully_proved'));
       ui$selectedStatuses.clear();ui$activeDirty=true;syncControls();
-      assert.equal(dom$shelves.hidden,true);assert.equal(dom$hiddenButton.textContent,'Show 13 hidden');
+      assert.equal(dom$shelves.hidden,true);assert.equal(dom$hiddenButton.textContent,'Show 13 filtered out');
       assert.equal(JSON.stringify({contextGraph,index:sharedIndex}),before);
     """)
 
@@ -154,11 +235,11 @@ def test_expanded_owner_fallback_cannot_reveal_isolates_hidden_by_the_same_membe
       const before=JSON.stringify({contextGraph,index:sharedIndex,members:currentOverviewGroup().members});
       ui$selectedStatuses=new Set(['fully_proved']);ui$showIsolated=false;ui$activeDirty=true;syncControls();
       assert.equal(ui$active.length,0);assert.equal(dom$shelves.hidden,true);assert.equal(links().length,0);
-      assert.equal(dom$hiddenButton.textContent,'Show 14 hidden');
+      assert.equal(dom$hiddenButton.textContent,'Show 14 filtered out');
       assert.equal(JSON.stringify({contextGraph,index:sharedIndex,members:currentOverviewGroup().members}),before);
       ui$showIsolated=true;ui$activeDirty=true;syncControls();
       assert.equal(dom$shelves.hidden,false);assert.equal(links().length,11);
-      assert.equal(dom$hiddenButton.textContent,'Show 3 hidden');
+      assert.equal(dom$hiddenButton.textContent,'Show 3 filtered out');
       assert.equal(JSON.stringify({contextGraph,index:sharedIndex,members:currentOverviewGroup().members}),before);
     """)
 
@@ -183,7 +264,7 @@ def test_external_connected_power_series_shelf_topic_keeps_its_canonical_link_an
       ui$showIsolated=false;ui$activeDirty=true;syncControls();
       assert.equal(dom$shelves.hidden,false);assert.equal(links().length,1);
       assert.equal(links()[0].dataset.shelfNodeId,canonical);assert.equal(links()[0].href,power.route);
-      assert.equal(dom$hiddenButton.textContent,'Show 12 hidden');
+      assert.equal(dom$hiddenButton.textContent,'Show 12 filtered out');
       assert.equal(contextGraph.nodes[0].isolated,false);assert.strictEqual(contextGraph.edges[0],edge);
       assert.equal(JSON.stringify({contextGraph,index:sharedIndex}),before);
       assert.deepEqual(data.$shelves[0].members,originalShelf.members);
@@ -308,6 +389,9 @@ def test_focal_definition_heading_keeps_authored_math_title_and_actual_neighbour
       assert(dom$mapContext.textContent.startsWith('Definition '),'A definition must be identified by its authored title');
       const math=dom$mapContext.all().filter(node=>node.className==='arithmatex');assert.equal(math.length,1);
       assert.equal(math[0].textContent,'\\(D\\)');
+      // The reader beside a desktop map already says Uses and Used by, so the header counts them only on a phone.
+      assert.equal(dom$mapContext.textContent.match(/\b\d+\b/g),null);
+      const desktop=sheetLayout;sheetLayout=()=>true;syncControls();sheetLayout=desktop;
       assert.deepEqual(dom$mapContext.textContent.match(/\b\d+\b/g),['2','1']);
       assert.equal(JSON.stringify(sharedIndex),before);
     """)

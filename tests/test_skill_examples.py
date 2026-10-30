@@ -286,7 +286,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert '<a class="bp-context-link"' not in chapter
     assert 'class="bp-reading-source"' in chapter and 'class="bp-explorer-page"' in chapter
     assert 'data-graph-src="../../dependencies/chapters/infimum-loss.json"' in chapter
-    assert '<details class="bp-dependencies"><summary>Dependencies</summary>' in chapter
+    assert re.search(r'<details class="bp-dependencies"><summary>Uses \d+ · Used by \d+</summary>', chapter)
     assert '<nav class="bp-book-nav" aria-label="Blueprint chapters">' in chapter
     assert (
         'class="bp-book-nav-link bp-book-nav-previous" '
@@ -385,8 +385,8 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     overview = (site / "README.md").read_text(encoding="utf-8")
     assert 'data-graph-src="dependencies.json"' in overview
     # The landing page states progress as figures; the chapters keep the strip.
-    assert "Scoped roadmap" in overview
-    assert "5 of 7 targets complete" in overview
+    assert '<div class="bp-figure-label">Fully proved</div>' in overview
+    assert '<div class="bp-figure-note">5 of 7 articles</div>' in overview
     assert ">71%<" in overview
     assert "Declared source coverage:" in overview
     assert "1 decomposed · 5 mapped · 1 out" in overview

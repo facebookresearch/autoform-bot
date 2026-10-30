@@ -109,6 +109,8 @@ async function frame() {
   for (let n = 0; n < 5; n++) await Promise.resolve();
 }
 function bundle(id, snapshot, focus = true) {
+  // The default thin fragment exercises the statement-without-heading fallback.
+  // Heading tests insert real elements carrying the published .bp-thmheading class.
   const heading = new Element('h1'), target = new Element('article', 'main'), source = new Element('div');
   target.dataset.autoformNodeId = id; source.replaceChildren(heading, target);
   const version = currentVersion;
@@ -117,7 +119,24 @@ function bundle(id, snapshot, focus = true) {
   return {nodeId: id, scope: 'chapter', anchor: 'main', title: 'Complete ' + id, readingSource: source,
     graph: {schema: 'autoform-dag-view/v2', title: 'Scope ' + id, nodes: Array.from(byId.values()), edges: [],
       palette, view: {kind: 'chapter', presentation: 'dag'}},
-    snapshot, focus, isCurrent: () => currentVersion === version, heading, target};
+    snapshot, focus, isCurrent: () => currentVersion === version, heading, pageHeading: heading, target};
+}
+function headingBundle(id, snapshot, focus = true) {
+  const page = bundle(id, snapshot, focus);
+  // Match the publisher: only the h4 has the anchor; the containing div owns the node ID.
+  page.target.tagName = 'div'; page.target.id = ''; page.target.classList.add('bp-thmwrapper');
+  const statementHeading = new Element('h4', page.anchor), statementBody = new Element('div');
+  const relations = new Element('details');
+  statementHeading.classList.add('bp-thmheading');
+  statementHeading.textContent = 'Statement ' + id;
+  statementHeading.getBoundingClientRect = function () {
+    const top = 460 - dom$readingBody.scrollTop;
+    return {top, bottom: top + 40, left: 0, right: 640, width: 640, height: 40};
+  };
+  statementBody.textContent = 'Original statement and proof for ' + id + ': \\(x + 1\\)';
+  relations.classList.add('bp-dependencies'); relations.open = false;
+  page.target.replaceChildren(statementHeading, statementBody, relations);
+  return Object.assign(page, {statementHeading, statementBody, relations});
 }
 """
 
@@ -141,6 +160,130 @@ def _run(body: str) -> None:
 def test_reader_runner_rejects_an_unfinished_async_test_body() -> None:
     with pytest.raises(AssertionError, match="Reader callback test body did not complete"):
         _run("await new Promise(() => {}); assert.fail('This assertion must never run');")
+
+
+def test_heading_anchor_marks_and_opens_the_whole_card_then_focuses_after_math() -> None:
+    _run(r"""
+      const math=deferred();mathPass=math.promise;dom$search.focus({});
+      const incoming=headingBundle('A',null,'reading'),source=incoming.readingSource;
+      const sourceChildren=source.children.slice(),cardChildren=incoming.target.children.slice();
+      const bodyText=incoming.statementBody.textContent,graph=incoming.graph;
+      const graphBefore=JSON.stringify(graph),indexBefore=JSON.stringify(Array.from(records.values()));
+      assert.equal(document.getElementById(incoming.anchor),null,'The fragment is not mounted before navigation');
+      const ready=applyRoute(incoming);
+      assert.equal(document.getElementById(incoming.anchor),incoming.statementHeading);
+      assert.equal(incoming.statementHeading.closest('.bp-thmwrapper'),incoming.target);
+      assert.equal(document.activeElement,dom$search);assert.equal(frames.length,0);
+      assert.equal(incoming.target.attrs['aria-current'],undefined);assert.equal(incoming.relations.open,false);
+      math.resolve(true);await queued();
+      assert.equal(document.activeElement,dom$search,'Math completion still awaits the real navigation frame');
+      await frame();await ready;
+      assert(incoming.target.classList.contains('bp-reading-current'));
+      assert.equal(incoming.target.attrs['aria-current'],'true');assert.equal(incoming.relations.open,true);
+      assert.equal(incoming.statementHeading.classList.contains('bp-reading-current'),false);
+      assert.equal(incoming.statementHeading.attrs['aria-current'],undefined);
+      assert.equal(document.activeElement,incoming.statementHeading);assert.equal(incoming.statementHeading.tabIndex,-1);
+      assert.deepEqual(incoming.statementHeading.focuses,[{preventScroll:true}]);
+      assert.equal(incoming.target.focuses.length,0);assert.equal(incoming.pageHeading.focuses.length,0);
+      assert.equal(dom$readingBody.scrollTop,276,'Anchor scrolling must use the card, not the lower h4 rectangle');
+      assert.equal(incoming.statementHeading.jumps.length,0);assert.equal(incoming.target.jumps.length,0);
+      assert.equal(dom$readingBody.children[0],source);assert.equal(currentBundle.readingSource,source);
+      assert.equal(currentBundle.graph,graph);assert.deepEqual(source.children,sourceChildren);
+      assert.deepEqual(incoming.target.children,cardChildren);assert.equal(incoming.statementBody.textContent,bodyText);
+      assert.equal(source.querySelector('h1'),incoming.pageHeading);
+      assert.equal(JSON.stringify(graph),graphBefore);assert.equal(JSON.stringify(Array.from(records.values())),indexBefore);
+      assert.deepEqual(mathRoots,[dom$readingBody]);
+    """)
+
+
+def test_heading_anchor_snapshot_opens_the_card_without_overriding_saved_reader_focus_or_scroll() -> None:
+    _run(r"""
+      records.get('A').route='/book/a.html#main';
+      dom$readingBody.focus({});dom$readingBody.scrollTop=211;
+      dom$navigation.scrollTop=44;dom$inventoryScroll.scrollTop=9;ui$transform={x:145,y:-78,scale:1.1};
+      const saved=captureState(),savedBefore=JSON.stringify(saved),math=deferred();mathPass=math.promise;
+      const incoming=headingBundle('A',saved,'reading');incoming.url='https://example.test/book/a.html#main';
+      assert.equal(snapshotForRoute(saved,incoming),saved);
+      const ready=applyRoute(incoming);math.resolve(true);await frame();await ready;
+      assert.equal(incoming.target.attrs['aria-current'],'true');assert.equal(incoming.relations.open,true);
+      assert.equal(incoming.statementHeading.attrs['aria-current'],undefined);
+      assert.equal(incoming.statementHeading.focuses.length,0);assert.equal(incoming.pageHeading.focuses.length,0);
+      assert.equal(dom$readingBody.scrollTop,0,'The saved route suppresses a fresh anchor jump');
+      const restored=restoreState(saved,incoming);await frame();await restored;
+      assert.equal(document.activeElement,dom$readingBody);assert.equal(dom$readingBody.focuses.at(-1).preventScroll,true);
+      assert.equal(dom$readingBody.scrollTop,211);assert.equal(dom$navigation.scrollTop,44);
+      assert.equal(dom$inventoryScroll.scrollTop,9);assert.deepEqual(ui$transform,saved.camera);
+      assert.equal(incoming.statementHeading.focuses.length,0);assert.equal(incoming.target.focuses.length,0);
+      assert.equal(dom$readingBody.children[0],incoming.readingSource);assert.equal(JSON.stringify(saved),savedBefore);
+      assert.deepEqual(mathRoots,[dom$readingBody]);
+    """)
+
+
+def test_foreign_heading_anchor_snapshot_cannot_hide_or_refocus_the_new_card() -> None:
+    _run(r"""
+      records.get('A').route='/book/a.html#main';records.get('B').route='/book/b.html#main';
+      dom$readingBody.focus({});dom$readingBody.scrollTop=211;const saved=captureState();
+      saved.readingOpen=false;saved.mode='sources';const savedBefore=JSON.stringify(saved);
+      const incoming=headingBundle('B',saved,'reading');incoming.url='https://example.test/book/b.html#main';
+      assert.equal(snapshotForRoute(saved,incoming),null);
+      const ready=applyRoute(incoming);await frame();await ready;
+      assert.notEqual(currentBundle,incoming);assert.equal(currentBundle.snapshot,null);assert.equal(incoming.snapshot,saved);
+      assert.equal(hostClasses.has('bp-dag-sheet-open'),true);assert.equal(ui$mode,'graph');
+      assert.equal(incoming.target.attrs['aria-current'],'true');assert.equal(incoming.relations.open,true);
+      assert.equal(document.activeElement,incoming.statementHeading);assert.equal(dom$readingBody.scrollTop,276);
+      assert.equal(incoming.pageHeading.focuses.length,0);assert.equal(incoming.target.focuses.length,0);
+      assert.equal(dom$readingBody.children[0],incoming.readingSource);
+      const current=captureState(),ticket=restoration;await restoreState(saved,incoming);
+      assert.deepEqual(captureState(),current);assert.equal(restoration,ticket);assert.equal(frames.length,0);
+      assert.equal(document.activeElement,incoming.statementHeading);assert.equal(JSON.stringify(saved),savedBefore);
+    """)
+
+
+@pytest.mark.parametrize("lifecycle", ["superseded", "disposed"])
+def test_stale_heading_anchor_math_cannot_mark_open_scroll_or_focus(lifecycle: str) -> None:
+    _run("const lifecycle=" + json.dumps(lifecycle) + ";\n" + r"""
+      const oldMath=deferred(),newMath=deferred();mathPass=oldMath.promise;
+      const older=headingBundle('A',null,'reading'),oldReady=applyRoute(older);
+      let newer,newReady;
+      if(lifecycle==='superseded') {
+        currentVersion=2;mathPass=newMath.promise;newer=headingBundle('B',null,false);newReady=applyRoute(newer);
+      } else alive=false;
+      const source=dom$readingBody.children[0];dom$readingBody.scrollTop=65;dom$search.focus({});
+      oldMath.resolve(true);await frame();await oldReady;
+      assert.equal(older.target.attrs['aria-current'],undefined);assert.equal(older.relations.open,false);
+      assert.equal(older.target.classList.contains('bp-reading-current'),false);
+      assert.equal(older.statementHeading.focuses.length,0);assert.equal(older.pageHeading.focuses.length,0);
+      assert.equal(document.activeElement,dom$search);assert.equal(dom$readingBody.scrollTop,65);
+      assert.equal(dom$readingBody.children[0],source);
+      if(newer) {
+        assert.equal(newer.target.attrs['aria-current'],undefined);assert.equal(newer.relations.open,false);
+        newMath.resolve(true);await frame();await newReady;
+        assert.equal(newer.target.attrs['aria-current'],'true');assert.equal(newer.relations.open,true);
+        assert.equal(newer.statementHeading.focuses.length,0);assert.equal(document.activeElement,dom$search);
+        assert.equal(dom$readingBody.scrollTop,276);assert.equal(dom$readingBody.children[0],newer.readingSource);
+      }
+    """)
+
+
+def test_stale_heading_anchor_snapshot_cannot_restore_old_focus_or_scroll_into_a_new_source() -> None:
+    _run(r"""
+      dom$readingBody.focus({});dom$readingBody.scrollTop=211;
+      dom$navigation.scrollTop=44;dom$inventoryScroll.scrollTop=9;const saved=captureState(),savedBefore=JSON.stringify(saved);
+      const older=headingBundle('A',saved),oldReady=applyRoute(older);await frame();await oldReady;
+      const oldRestore=restoreState(saved,older);await queued();
+      currentVersion=2;const math=deferred();mathPass=math.promise;
+      const newer=headingBundle('B',null,false),newReady=applyRoute(newer);
+      dom$readingBody.scrollTop=65;dom$navigation.scrollTop=7;dom$inventoryScroll.scrollTop=8;dom$search.focus({});
+      await frame();await oldRestore;
+      assert.equal(document.activeElement,dom$search);assert.equal(dom$readingBody.focuses.length,1);
+      assert.equal(dom$readingBody.scrollTop,65);assert.equal(dom$navigation.scrollTop,7);assert.equal(dom$inventoryScroll.scrollTop,8);
+      assert.equal(newer.target.attrs['aria-current'],undefined);assert.equal(newer.relations.open,false);
+      assert.equal(older.statementHeading.focuses.length,0);assert.equal(newer.statementHeading.focuses.length,0);
+      math.resolve(true);await frame();await newReady;
+      assert.equal(newer.target.attrs['aria-current'],'true');assert.equal(newer.relations.open,true);
+      assert.equal(document.activeElement,dom$search);assert.equal(dom$readingBody.scrollTop,276);
+      assert.equal(dom$readingBody.children[0],newer.readingSource);assert.equal(JSON.stringify(saved),savedBefore);
+    """)
 
 
 @pytest.mark.parametrize("destination", ["statement_heading", "statement", "page_heading"])
@@ -391,6 +534,17 @@ def test_stale_restore_ticket_cannot_reapply_old_reading_focus_or_scroll() -> No
     """)
 
 
+def test_a_selected_statement_opens_its_own_relations() -> None:
+    """The reader's separate relation strip is gone; the current statement's disclosure opens instead."""
+    _run(r"""
+      const page = bundle('A', null), relations = new Element('details');relations.classList.add('bp-dependencies');
+      page.target.replaceChildren(relations); const ready = applyRoute(page);
+      await frame(); await ready;
+      assert(page.target.classList.contains('bp-reading-current'));
+      assert.equal(relations.open, true);
+    """)
+
+
 def test_article_commit_closes_transient_status_menu_without_losing_keyboard_focus() -> None:
     _run(r"""
       const input=new Element('input'); dom$filterPopover.replaceChildren(input);
@@ -514,5 +668,6 @@ def test_map_intent_on_a_small_pure_overview_never_focuses_the_inert_reader() ->
       assert.equal(ui$overviewOnly,false,'Explicit reading intent still opens the source');
       assert.equal(host.classList.contains('bp-dag-sheet-open'),true);
       await frame();await readingReady;
-      assert.equal(document.activeElement,reading.heading);
+      // With no statement to land on, the page's own title takes focus.
+      assert.equal(document.activeElement,reading.pageHeading);
     """)

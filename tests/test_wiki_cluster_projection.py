@@ -275,13 +275,16 @@ class Canvas {
 function isDark(){return false;}
 """
 
-_DRAW_CALLBACKS = _CALLBACKS + ("draw", "drawRoute", "scopeOverviewFlow", "rounded", "wikiOwnerVisible")
+_DRAW_CALLBACKS = _CALLBACKS + (
+    "draw", "drawRoute", "drawPill", "pill", "edgeRole", "edgeStyle", "atlasSpotlight", "spotlightOf",
+    "scopeOverviewFlow", "rounded", "wikiOwnerVisible",
+)
 _DRAW_PEERS = _PEERS + _CANVAS_PEERS + r"""
-const dom$ctx=new Canvas(),painted=[],flows=[];let overlayUpdates=0;
-function calculateActive(){}function pathSpotlight(){return null;}
+const dom$ctx=new Canvas(),painted=[],flows=[];let overlayUpdates=0;var ui$hovered=null,host={classList:{toggle(){}}};
+function calculateActive(){}function pathSpotlight(){return null;}function mapHeight(){return dom$stage.clientHeight;}
 function drawPlate(){}function updateOverlays(){overlayUpdates++;}
-const actualDrawRoute=drawRoute;drawRoute=function(ctx,route,highlighted){
-  painted.push({kind:route.kind,count:route.count});return actualDrawRoute(ctx,route,highlighted);
+const actualDrawRoute=drawRoute;drawRoute=function(ctx,route,...rest){
+  painted.push({kind:route.kind,count:route.count});return actualDrawRoute(ctx,route,...rest);
 };
 const actualFlow=scopeOverviewFlow;scopeOverviewFlow=function(route,counts,range){
   assert.notEqual(route.kind,'wiki');flows.push({kind:route.kind,counts,range});return actualFlow(route,counts,range);
@@ -301,18 +304,19 @@ def test_wiki_painter_is_dotted_arrowless_and_never_creates_formal_direction_cue
     """
     _run(r"""
       const route=Object.freeze({kind:'wiki',strength:2,points:[{x:40,y:140},{x:450,y:140}],radii:[0,0]});
-      const ctx=new Canvas();drawRoute(ctx,route,true);
+      const ctx=new Canvas();drawRoute(ctx,route,-1);
       assert.equal(ctx.strokes.length,1);assert.equal(ctx.fills.length,0);assert.equal(ctx.stack.length,0);
       assert.deepEqual(ctx.strokes[0].dash,[1.875,6.25]);assert.equal(ctx.strokes[0].alpha,.38);
       assert.equal(drawRoute.$flowSegments,undefined);assert(!ctx.strokes[0].path.some(part=>part[0]==='close'));
       const proof={...route,kind:'proof',arrow:{dx:1,dy:0}},formal=new Canvas(),before=JSON.stringify(proof);
-      drawRoute(formal,proof,true);assert.equal(formal.fills.length,1);assert.equal(formal.strokes.length,2);
-      assert.deepEqual(formal.strokes[0].dash,[7.5,5]);assert.equal(formal.strokes[0].alpha,.65);
+      drawRoute(formal,proof,-1);assert.equal(formal.fills.length,1);assert.equal(formal.strokes.length,2);
+      // A dependency link at rest is a full grey line in the redesign; only concept links stay faint.
+      assert.deepEqual(formal.strokes[0].dash,[7.5,5]);assert.equal(formal.strokes[0].alpha,1);
       assert(drawRoute.$flowSegments instanceof WeakMap);assert.equal(JSON.stringify(proof),before);
-      const cached=drawRoute.$flowSegments,second=new Canvas();drawRoute(second,route,false);
+      const cached=drawRoute.$flowSegments,second=new Canvas();drawRoute(second,route,0);
       assert.strictEqual(drawRoute.$flowSegments,cached);assert.equal(second.strokes.length,1);
       assert.equal(second.fills.length,0);assert.equal(second.strokes[0].alpha,.1);
-    """, callbacks=("drawRoute",), peers=peers)
+    """, callbacks=("drawRoute", "edgeStyle"), peers=peers)
 
 
 def test_actual_draw_keeps_wiki_corridors_outside_scoped_formal_flow_counts() -> None:

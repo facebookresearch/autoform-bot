@@ -32,8 +32,8 @@ function original(name) {
 const names=['element','readingLabel','refreshReadingLabels','safeHref','graphAt','scopeOverviewProjection','structuralScopeProjection','boundaryContextProjection','expandedGroupShelves','scopeOverviewFlow','recordId','mapNode','adoptGraph',
   'neighborIds','neighborhood','regionProjection','updateProjection','semanticParent','routeTrail',
   'currentOverviewGroup','trailList','renderBreadcrumb','syncNavigationSelection','compactRegions','collect','matchesStatus','matchesIsolation','calculateActive',
-  'syncControls','refresh','activateNode','focusNodeControl','setSheet','writeLocation','setMode','zoomAt','closeSearch','sourceNodes','inCurrentScope'];
-const constants=['NODE_W','SEARCH_PAGE','clamp','plural'].map(name=>{
+  'syncControls','refresh','activateNode','focusNodeControl','setSheet','positionMapFeedback','freeArea','writeLocation','setMode','zoomAt','closeSearch','sourceNodes','inCurrentScope'];
+const constants=['NODE_W','SEARCH_PAGE','clamp','plural','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0,'Missing production constant: '+name);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
 }).join('\n');
@@ -53,9 +53,14 @@ function peer(tag='div') {
     classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);},
       contains(name){return classes.has(name);}},
     setAttribute(name,value){attributes.set(name,String(value));},
-    getAttribute(name){return attributes.get(name)||null;},removeAttribute(name){attributes.delete(name);},
+    getAttribute(name){return attributes.has(name)?attributes.get(name):null;},removeAttribute(name){attributes.delete(name);},
+    contains(node){return node===this||this.children.some(child=>child.contains(node));},
+    all(){return this.children.flatMap(child=>[child,...child.all()]);},
+    querySelectorAll(tag){return this.all().filter(child=>child.tagName===tag.toUpperCase());},
+    querySelector(tag){return this.querySelectorAll(tag)[0]||null;},
     addEventListener(type,callback){const callbacks=listeners.get(type)||[];callbacks.push(callback);listeners.set(type,callbacks);},
-    appendChild(child){this.children.push(child);return child;},replaceChildren(...children){this.children=children;},
+    appendChild(child){this.children.push(child);return child;},
+    replaceChildren(...children){this.children=children.map(child=>typeof child==='string'?document.createTextNode(child):child);},
     remove(){this.removed=true;},
     focus(){document.activeElement=this;effects.push({kind:'focus',id:this.dataset.autoformNodeId||'reading'});}};
 }
@@ -69,12 +74,14 @@ function clickPeer(link,settings={}) {
   (link.listeners.get('click')||[]).forEach(callback=>callback(event));return event;
 }
 const host=peer(),dom$body=peer(),dom$sheetHandle=peer('button'),dom$breadcrumb=peer('nav');
+var scene=null;
 const dom$nodeLayer=Object.assign(peer(),{scrollLeft:0,scrollTop:0});
 dom$nodeLayer.querySelector=selector=>{
   assert.equal(selector,'.bp-dag-node[tabindex="0"]');
   return Array.from(overlays.values()).find(control=>control.tabIndex===0)||null;
 };
 const dom$mapContext=peer(),dom$mapKey=peer(),dom$isolated=peer('input'),dom$filterSummary=peer('button');
+const dom$density=peer(),dom$inspector=peer();dom$mapKey.style={};dom$density.style={};
 const dom$graphMode=peer('button'),dom$listMode=peer('button'),dom$sourcesMode=peer('button');
 const dom$stage=Object.assign(peer(),{clientWidth:900,clientHeight:700}),dom$inventory=peer(),inventoryHeading=peer('h2');
 dom$inventory.querySelector=selector=>{assert.equal(selector,'h2');return inventoryHeading;};
@@ -101,11 +108,11 @@ var sharedIndex={nodes:Array.from(records.values()),relations:[]},currentBundle=
   title:'Large scope',graph:contextGraph,dataURL:'https://example.test/dependencies/chapters/chapter.json',isCurrent:()=>alive};
 var data=contextGraph,view,atlas,palette,byId,prerequisites,dependents,statusCounts,presentStatuses,mapAllowed;
 var ui$requestedNode=chapterId,ui$overviewGroup=null,ui$scopeOverview=false,ui$area=null,ui$overviewOnly=false;
-var ui$selected=null,ui$direction='both',ui$active=[],ui$activeIds=new Set(),ui$activeDirty=true,ui$spotlight=null;
+var ui$selected=null,ui$direction='both',ui$active=[],ui$activeIds=new Set(),ui$activeDirty=true,ui$spotlight=null,ui$hovered=null;
 var ui$selectedStatuses=new Set(['fully_proved']),ui$filtersTouched=true,ui$showIsolated=true;
 var ui$mode='graph',ui$mapAllowed=true,ui$listLimit=100,ui$relationIds=null,ui$transform={x:0,y:0,scale:.9};
 var firstResize=false,trail=[],overlays=new Map();
-var ui$wikiProjectionTicket=0,ui$wikiView=null;
+var ui$wikiProjectionTicket=0,ui$wikiView=null,ui$mathJob=null;
 const navigation={checkpoint(method){effects.push({kind:'checkpoint',method:method||'replace',group:ui$overviewGroup});},
   navigateNode(id,options){effects.push({kind:'navigate',id,options});},
   navigate(url,options){effects.push({kind:'navigate-url',url,options});}};
@@ -124,6 +131,8 @@ function fit(){effects.push({kind:'fit'});}
 function centerIfHidden(node){effects.push({kind:'center',id:node.id});}
 function screen(){return {x:0,y:0,w:264,h:148};}
 function labels(){return dom$breadcrumb.children[0].children.map(item=>item.title);}
+// The map header is a title span and its counts, so read it as its parts' text.
+function context(){return dom$mapContext.children.map(child=>typeof child==='string'?child:child.textContent).join('');}
 function areaNode(area){return data.nodes.find(node=>node._overviewGroup==='area:'+area);}
 updateProjection();syncControls();
 """
@@ -181,16 +190,18 @@ def test_group_activation_focuses_an_eligible_member_and_keeps_canonical_navigat
 
 def test_group_context_and_parent_return_identify_the_current_plane() -> None:
     _run(r"""
-      assert.equal(dom$mapContext.textContent,'Large scope');assert.equal(dom$graphMode.hidden,true);
+      assert.equal(context(),'Large scope');assert.equal(dom$graphMode.hidden,true);
+      // On the map neither Browse choice reads as pressed, since neither list is on screen.
+      assert.equal(dom$listMode.getAttribute('aria-pressed'),'false');assert.equal(dom$sourcesMode.getAttribute('aria-pressed'),'false');
       activateNode(areaNode('Authored area A'));flushFrames();
       assert.equal(currentOverviewGroup().area,'Authored area A');
       assert.deepEqual(labels(),['Library','Large scope','Authored area A']);
       assert.equal(dom$breadcrumb.children[0].children.at(-1).getAttribute('aria-current'),'page');
-      assert.equal(dom$mapContext.textContent,'Authored area A');
+      assert.equal(context(),'Authored area A');
       assert.equal(dom$stage.hidden,false);assert.equal(dom$inventory.hidden,true);assert.equal(dom$graphMode.hidden,true);
       setMode('regions',true);
       assert.equal(ui$overviewGroup,null);assert.deepEqual(labels(),['Library','Large scope']);
-      assert.equal(dom$mapContext.textContent,'Large scope');assert.equal(dom$graphMode.hidden,true);
+      assert.equal(context(),'Large scope');assert.equal(dom$graphMode.hidden,true);
       assert(effects.some(event=>event.kind==='checkpoint'&&event.method==='replace'&&event.group==='area:Authored area A'));
       assert(effects.some(event=>event.kind==='checkpoint'&&event.method==='push'&&event.group===null),
         'Returning to this scope overview must preserve the expanded group as a Back destination');
@@ -203,10 +214,12 @@ def test_unassigned_group_uses_a_structural_label_not_an_invented_area() -> None
       contextGraph=structuredClone(contextGraph);contextGraph.nodes[1].area=null;updateProjection();syncControls();
       const group=data.nodes.find(node=>node._overviewGroup==='unassigned');
       assert(group);assert.equal(group.area,undefined);assert.equal(group._region,undefined);
+      // On a phone the unassigned bucket is still an area card, so the overview stays compact and keeps its links.
+      dom$stage.clientWidth=390;assert(compactRegions());dom$stage.clientWidth=900;
       activateNode(group);flushFrames();
       assert.equal(ui$overviewGroup,'unassigned');assert.equal(currentOverviewGroup().area,null);
-      assert.equal(dom$mapContext.textContent,'Unassigned topics');
-      assert.deepEqual(labels(),['Library','Large scope','Unassigned topics']);
+      assert.equal(context(),'Other topics');
+      assert.deepEqual(labels(),['Library','Large scope','Other topics']);
       assert.equal(document.activeElement.dataset.autoformNodeId,'n01');
       assert.equal(dom$graphMode.hidden,true);
     """)
@@ -217,7 +230,7 @@ def test_zoom_out_returns_to_overview_without_changing_members_or_source_rows() 
       const before=JSON.stringify(contextGraph);activateNode(areaNode('Authored area A'));flushFrames();
       ui$transform.scale=.9;zoomAt(.8,450,350);
       assert.equal(ui$overviewGroup,null);assert.equal(ui$scopeOverview,true);
-      assert.deepEqual(labels(),['Library','Large scope']);assert.equal(dom$mapContext.textContent,'Large scope');
+      assert.deepEqual(labels(),['Library','Large scope']);assert.equal(context(),'Large scope');
       assert.equal(dom$graphMode.hidden,true);
       assert.equal(data._scopeOverview.groups.flatMap(group=>group.members).length,42);
       assert.equal(JSON.stringify(contextGraph),before);
@@ -303,7 +316,7 @@ def test_actual_overview_parent_breadcrumb_returns_locally_and_preserves_modifie
       }
       const event=clickPeer(link);assert.equal(event.defaultPrevented,true);
       assert.equal(ui$overviewGroup,null);assert.deepEqual(labels(),['Library','Large scope']);
-      assert.equal(dom$mapContext.textContent,'Large scope');assert.equal(dom$graphMode.hidden,true);
+      assert.equal(context(),'Large scope');assert.equal(dom$graphMode.hidden,true);
       assert(!effects.some(event=>event.kind==='navigate'||event.kind==='navigate-url'));
       assert(effects.some(event=>event.kind==='checkpoint'&&event.method==='push'&&event.group==='area:Authored area A'));
       const returning=effects.slice(untouched).filter(event=>event.kind==='checkpoint');
@@ -340,7 +353,7 @@ def test_actual_atlas_parent_breadcrumb_returns_to_its_own_scope_and_preserves_n
         assert.equal(ui$area,null);assert.equal(ui$scopeOverview,false);assert.equal(ui$mode,'graph');
         assert.equal(currentBundle.scope,scope);assert.equal(window.location.href,owner.route);
         assert.deepEqual(labels(),scope===chapterId?['Library','Large scope']:['Library']);
-        assert.equal(dom$mapContext.textContent,owner.title);assert.equal(dom$graphMode.hidden,true);
+        assert.equal(context(),owner.title);assert.equal(dom$graphMode.hidden,true);
         assert(!effects.some(event=>event.kind==='navigate'||event.kind==='navigate-url'),
           'The authored-area parent must collapse locally, including in a non-root scope');
         assert.deepEqual(effects.filter(event=>event.kind==='checkpoint'),[

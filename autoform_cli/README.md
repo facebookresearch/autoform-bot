@@ -513,7 +513,7 @@ formalized or proved.
 
 Target metrics (the denominator, readiness count, and progress breakdowns in the
 book and `autoform check`) count non-container articles carrying `declaration`,
-never a `catalog: module` record. A scope's status ring, item count, and
+never a `catalog: module` record. A scope's status bar, item count, and
 dependency-map legend also count `not_ready` leaves that declare nothing yet, so
 deferred work holds its scope open, and each catalog under a neutral status,
 `inventory checked` once fully proved and `inventory pending` until then, which
