@@ -108,7 +108,7 @@ date when the release is tagged.
 - **Lake configuration.** A `lakefile.toml` whose `lean_lib` is not an array
   of named tables, such as `[lean_lib]` written for `[[lean_lib]]`, is
   refused as Lake refuses it, instead of crashing or silently reading the
-  package's default library (#NNN).
+  package's default library (#505).
 - **Wiki reading links.** The integrated explorer retains #455's title math
   in its outline, breadcrumbs, paged inventory and related-reading controls, using safe MathJax
   service and project macros. Code stays literal, canonical links keep focus
