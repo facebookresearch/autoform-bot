@@ -20,11 +20,10 @@ if `git worktree list` shows the shared branch elsewhere, ask the user first.
 
 ## Acquire and renew
 
-Acquire the exact `claim_target` returned by `work context` before editing,
-with `--note` naming the worktree's branch on every acquire. A failed acquire
-or renewal means ownership is unproven: stop writing. Confirm a
-claim with `autoform claim renew`, not acquire: about every five minutes, since
-leases expire after 25 minutes, and immediately before integrating.
+Before editing, acquire the exact `claim_target` from `work context`, each time
+with `--note` naming the worktree's branch. A failed acquire or renewal means
+ownership is unproven: stop writing. Confirm a claim with `renew`, not acquire:
+every five minutes (leases expire after 25) and just before integrating.
 
 ## Import edits
 
@@ -70,12 +69,13 @@ can see the verified commit: on the shared branch and, for an `origin` board,
 pushed, since other clones read their frontier from the remote. No message
 grants ownership or completes a leaf. For a handoff, keep the set and report it
 with the worker ID instead of making the leaf look free; when the lead hands it
-to another session and the request covers pushing, push the branch the note
-names where that session can fetch it. The integrator renews, integrates, and
-releases a handed-off set with `--worker-id` set to the reported ID; without a
-report, it waits for the lease to lapse. After a lapse, it reads the note with
-`claim list`, acquires the complete set under its own ID and, before
-integrating, repeats Formalize's pre-edit reload of `work context`. Release the
-complete set once the result is visible that way, or when abandoning the leaf
-without a candidate. For ordinary work that set is just the article; for an
-import edit it also includes the module and any validated expansion.
+to another session and the request covers pushing, push the candidate to
+`origin` on a branch ending with the leaf's `article_id`. The integrator renews,
+integrates, and releases a handed-off set with `--worker-id` set to the reported
+ID; without a report, it waits for the lease to lapse. After a lapse, it reads
+any note left, looks for that branch with `git ls-remote --heads origin` to
+continue it, acquires the complete set under its own ID and, before integrating,
+repeats Formalize's pre-edit reload of `work context`. Release the complete set
+once the result is visible that way, or when abandoning the leaf without a
+candidate. For ordinary work that set is just the article; for an import edit it
+also includes the module and any validated expansion.

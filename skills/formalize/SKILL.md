@@ -35,9 +35,9 @@ the rules below, note why it is resolved or moot, or ask the user; reply on a
 pull request only if the request covers posting. Native subagents may work
 independent leaves in separate Git worktrees; no custom scheduler or provider
 adapter is part of the protocol. A subagent may keep its worktree for a package
-of related leaves, such as a container's, that the lead confirms together: it
-takes each once `work context` shows it ready, after integrating the one before,
-and reports at the first that is not.
+of related leaves, such as a container's, that the lead confirms together. It
+holds only the leaf it has taken, taking the next once `work context` shows it
+ready after integrating; at the first that is not, the rest return to the lead.
 The lead's branch is the shared branch results integrate into; the lead also
 works its own leaves in worktrees, so nothing reaches that branch before its
 default build passes. Before dispatching, commit the roadmap state the frontier

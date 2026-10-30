@@ -53,13 +53,14 @@ date when the release is tagged.
   transport running. Formalize treats a labelled `claim list` failure as an
   unreadable board, not as a board without claims (#432).
 - **Work packages and sessions.** A Formalize subagent may keep its worktree
-  for a package of related leaves that the lead confirms together, taking each
-  once `work context` shows it ready. With claims, each session leads from its
-  own clone and checks `git worktree list` before dispatching. Workers name
-  their branch with `claim acquire --note`, now documented; a handoff to another
-  session pushes that branch when the request covers it, and without the report
-  the integrator waits for the lease to lapse and reads the note from `claim
-  list`. No message grants ownership or completes a leaf (#434).
+  for a package of related leaves that the lead confirms together, holding only
+  the leaf it has taken and taking the next once `work context` shows it ready.
+  With claims, each session leads from its own clone and checks `git worktree
+  list` before dispatching, and workers name their branch with `claim acquire
+  --note`, now documented. A handoff to another session, when the request covers
+  pushing, goes to an `origin` branch ending with the leaf's `article_id`, which
+  `git ls-remote` finds after the lease is gone. No message grants ownership or
+  completes a leaf (#434).
 - **Render.** An article's page lists its `mathlib_declaration` names in a
   Mathlib row, as text without a link, so a `mathlib: true` article names the
   declaration it restates (#388).
