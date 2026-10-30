@@ -91,8 +91,18 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
 
     title = {part: str(by_id[part].get("title") or part) for part in part_parent}
     title[root] = str(by_id[root].get("title") or root)
+    # Results written straight into the root (a flat roadmap, or a few beside the chapters) get a part of their own,
+    # since the root has no file and the map opens on parts.
+    loose = [result for result, part in home.items() if part == root]
+    if loose:
+        holder = f"{root}/~results"
+        has_chapters = any(parent == root for parent in part_parent.values())
+        part_parent[holder] = root
+        title[holder] = "Outside the chapters" if has_chapters else title[root]
+        for result in loose:
+            home[result] = holder
     chapters = sorted(part for part, parent in part_parent.items() if parent == root)
-    area_of = {chapter: str(by_id[chapter]["area"]) for chapter in chapters if by_id[chapter].get("area")}
+    area_of = {chapter: str(by_id[chapter]["area"]) for chapter in chapters if by_id.get(chapter, {}).get("area")}
     if len(set(area_of.values())) >= 2:
         members: dict[str, list[str]] = defaultdict(list)
         for chapter in chapters:

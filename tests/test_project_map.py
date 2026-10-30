@@ -168,6 +168,23 @@ def test_page_escapes_its_links_and_title(tmp_path: Path) -> None:
     assert json.loads((tmp_path / "index.json").read_text(encoding="utf-8"))["schema"] == project_map.SCHEMA
 
 
+def test_results_in_the_root_get_a_part_of_their_own() -> None:
+    flat = [_scope("roadmap", None, "Library"), _result("roadmap/a", "roadmap", "A"), _result("roadmap/b", "roadmap", "B")]
+    files = project_map.build_project_map(flat, [("roadmap/b", "roadmap/a", 1, 0)])
+    # A flat roadmap is one region, named after the project, holding every result.
+    regions = files["index.json"]["regions"]
+    assert [(region["id"], region["title"], region["results"]) for region in regions] == [("roadmap/~results", "Library", 2)]
+    assert [row["id"] for row in _part(files, "roadmap/~results")["results"]] == ["roadmap/a", "roadmap/b"]
+    assert [row[0] for row in files["search.json"]["rows"]] == ["A", "B"]
+    # Beside chapters, the loose results are named for what they are.
+    records, relations = _library()
+    records.append(_result("roadmap/main", "roadmap", "Main theorem"))
+    relations.append(("roadmap/main", "Analysis/WantedExt/series/abel", 1, 0))
+    regions = {region["id"]: region for region in project_map.build_project_map(records, relations)["index.json"]["regions"]}
+    assert regions["roadmap/~results"]["title"] == "Outside the chapters"
+    assert regions["Analysis"]["api_total"] == 1
+
+
 def test_a_map_needs_exactly_one_root() -> None:
     with pytest.raises(ValueError, match="exactly one root"):
         project_map.build_project_map([_scope("a", None, "A"), _scope("b", None, "B")], [])
