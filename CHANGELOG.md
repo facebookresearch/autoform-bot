@@ -184,7 +184,7 @@ date when the release is tagged.
   Lake, where commands that read the library targets took it to build every
   module under its roots. When `work import-impact` refuses a loaded module
   that no library builds, it names the module's source file instead of
-  saying the module has none (#NNN).
+  saying the module has none (#519).
 - **Book navigation.** The generated `SUMMARY.md` nests each book page under
   its chapter's README, written in book order. A landing page that linked a
   deep page before its chapters, or a folder with no README in the book, put a
