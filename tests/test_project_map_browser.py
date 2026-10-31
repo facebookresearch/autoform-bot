@@ -131,7 +131,9 @@ def test_one_click_picks_a_region_in_place_and_a_second_opens_it(webkit_browser:
         playwright.expect(page.locator('.pm-part.pm-picked[data-part="algebra"]')).to_have_count(1)
         playwright.expect(page.locator(".pm-reader .pm-used-by .pm-link-list button")).to_contain_text(["Analysis"])
         playwright.expect(page.locator('.pm-part.pm-used-by[data-part="analysis"]')).to_have_count(1)
-        playwright.expect(page.locator(".pm-link.pm-used-by")).to_have_count(1)
+        # One link out to Analysis, with dots flowing along it.
+        playwright.expect(page.locator(".pm-link:not(.pm-flowing)")).to_have_count(1)
+        playwright.expect(page.locator(".pm-link.pm-flowing")).to_have_count(1)
         assert not page.url.endswith("#part=algebra")
         page.keyboard.press("Escape")
         playwright.expect(page.locator(".pm-part.pm-picked, .pm-link")).to_have_count(0)
