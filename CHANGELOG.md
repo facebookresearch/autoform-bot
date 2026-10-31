@@ -166,8 +166,8 @@ date when the release is tagged.
   the client restores their exact IDs before publication. No content is dropped (#442).
 - **Lake configuration.** A `lakefile.toml` whose `lean_lib` is not an array
   of named tables, such as `[lean_lib]` written for `[[lean_lib]]`, is
-  refused as Lake refuses it, instead of crashing or silently reading the
-  package's default library (#505).
+  refused as Lake refuses it, instead of crashing, reading the package's
+  default library, or skipping the entries that are not named tables (#505).
 - **Wiki reading links.** The integrated explorer retains #455's title math
   in its outline, breadcrumbs, paged inventory and related-reading controls, using safe MathJax
   service and project macros. Code stays literal, canonical links keep focus
@@ -180,6 +180,11 @@ date when the release is tagged.
   builds is now refused with exit 2, and under
   `--module-scope import-closure` an article naming a declaration in such a
   file is listed in `unresolved_articles` (#500).
+- **Empty `globs`.** A `lean_lib` with `globs = []` builds no module, as in
+  Lake, where commands that read the library targets took it to build every
+  module under its roots. When `work import-impact` refuses a loaded module
+  that no library builds, it names the module's source file instead of
+  saying the module has none (#NNN).
 - **Book navigation.** The generated `SUMMARY.md` nests each book page under
   its chapter's README, written in book order. A landing page that linked a
   deep page before its chapters, or a folder with no README in the book, put a

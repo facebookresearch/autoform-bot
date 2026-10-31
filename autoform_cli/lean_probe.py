@@ -636,12 +636,16 @@ def _run_registered_command(
 
 @dataclass(frozen=True, slots=True)
 class LeanLibrary:
-    """One ``lean_lib`` target: where its modules live and what they are called."""
+    """One ``lean_lib`` target: where its modules live and what they are called.
+
+    ``globs`` is ``None`` when the target sets none, so that, as in Lake, each
+    root is its own glob; an empty tuple, from ``globs = []``, selects no module.
+    """
 
     name: str
     src_dir: Path
     roots: tuple[str, ...]
-    globs: tuple[str, ...] = ()
+    globs: tuple[str, ...] | None = None
     artifact_dir: Path | None = None
 
 
@@ -689,7 +693,9 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
     libraries: list[LeanLibrary] = []
     for entry in entries:
         if not isinstance(entry.get("name"), str):
-            raise SkeletonError([f"cannot read the lean_lib targets of {root}: a [[lean_lib]] target has no name"])
+            raise SkeletonError(
+                [f"cannot read the lean_lib targets of {root}: a [[lean_lib]] target has no string name"]
+            )
         name = entry["name"]
         src_dir = package_src / str(entry.get("srcDir", "."))
         roots = entry.get("roots")
@@ -701,13 +707,13 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
         if isinstance(globs, str):
             globs = [globs]
         if not isinstance(globs, list) or not all(isinstance(item, str) for item in globs):
-            globs = []
+            globs = None
         libraries.append(
             LeanLibrary(
                 name=name,
                 src_dir=src_dir.resolve(),
                 roots=tuple(roots),
-                globs=tuple(globs),
+                globs=None if globs is None else tuple(globs),
                 artifact_dir=artifact_dir,
             )
         )
@@ -771,7 +777,7 @@ def builds(library: LeanLibrary, module: str) -> bool:
     Without ``globs``, each root is its own glob.
     """
 
-    globs = library.globs or library.roots
+    globs = library.roots if library.globs is None else library.globs
 
     def globbed(name: str) -> bool:
         for glob in globs:

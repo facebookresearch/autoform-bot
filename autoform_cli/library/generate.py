@@ -177,14 +177,14 @@ def library_sources(root: Path, libraries: Sequence[str] = ()) -> LibrarySources
             base = PurePosixPath(target.src_dir.resolve().relative_to(root).as_posix())
         except ValueError:
             raise GenerateError(f"the source directory of {target.name} is outside the package") from None
-        selecting = [_glob(glob, target.name) for glob in target.globs]
+        selecting = [_glob(glob, target.name) for glob in target.globs or ()]
         for module, mode in selecting:
             if mode != "+" and not (target.src_dir / f"{module.replace('.', '/')}.lean").is_file():
                 raise GenerateError(f"lean_lib {target.name}: module {module} has no source file")
         for module_root in target.roots:
             directory = (base / module_root.replace(".", "/")).as_posix()
             prefixes[directory] = "" if base == PurePosixPath(".") else f"{base.as_posix()}/"
-            if selecting:
+            if target.globs is not None:
                 globs.setdefault(directory, []).extend(selecting)
     source_dirs = tuple(sorted(prefixes))
     digests = _sources(root, source_dirs, GenerateError)

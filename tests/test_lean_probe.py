@@ -25,10 +25,12 @@ from autoform_cli.lean_probe import (
     PROBE_OUTPUT_ENV,
     _PROBE_POOL,
     _PROCESS_TERMINATION_GRACE,
+    LeanLibrary,
     SkeletonError,
     _CommandTimedOut,
     _ProbeEnvironmentError,
     _build_probe_helper,
+    builds,
     _join_readers,
     _leader_has_exited,
     lean_libraries,
@@ -1005,6 +1007,50 @@ def test_a_file_no_library_selects_has_no_module(tmp_path: Path) -> None:
     assert module_of(project / "v1" / "Old.lean", libraries) is None
 
 
+def test_a_library_with_an_empty_globs_array_builds_no_module(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "lakefile.toml").write_text('name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\nglobs = []\n', encoding="utf-8")
+
+    # Lake replaces its default of one glob per root with the array as written,
+    # so no glob matches the root or a module under it.
+    libraries = lean_libraries(project)
+    assert libraries[0].globs == ()
+    assert module_of(project / "Demo.lean", libraries) is None
+    assert module_of(project / "Demo" / "Basic.lean", libraries) is None
+
+
+@pytest.mark.parametrize(
+    ("globs", "module", "expected"),
+    [
+        # Lake's Glob.matches: `M` is M alone, `M.*` M and its submodules, `M.+`
+        # its submodules alone, all by whole name components.
+        (("Demo.Sub",), "Demo.Sub", True),
+        (("Demo.Sub",), "Demo.Sub.Deep", False),
+        (("Demo.Sub.*",), "Demo.Sub", True),
+        (("Demo.Sub.*",), "Demo.Sub.Deep", True),
+        (("Demo.Sub.+",), "Demo.Sub", False),
+        (("Demo.Sub.+",), "Demo.Sub.Deep", True),
+        (("Demo.Sub.*",), "Demo.Subway", False),
+        (("Other.*",), "Other.X", True),
+        # Or root Demo prefixes the module and a glob matches the root.
+        (("Demo",), "Demo.Sub", True),
+        (("Demo",), "DemoTests", False),
+        (("Demo.+",), "Demo", False),
+        (("Other",), "Demo.Sub", False),
+        # No globs key: each root is its own glob. An empty array: no glob.
+        (None, "Demo.Sub", True),
+        ((), "Demo", False),
+    ],
+)
+def test_builds_follows_lakes_buildable_module_rule(
+    globs: tuple[str, ...] | None, module: str, expected: bool
+) -> None:
+    library = LeanLibrary(name="Demo", src_dir=Path("/src"), roots=("Demo",), globs=globs)
+
+    assert builds(library, module) is expected
+
+
 @pytest.mark.parametrize(
     "lakefile",
     [pytest.param('name = "Solo"\n', id="absent"), pytest.param('name = "Solo"\nlean_lib = []\n', id="empty-array")],
@@ -1064,19 +1110,23 @@ def test_lake_toml_1_1_extensions_are_rejected_on_every_python(tmp_path: Path, t
         lean_libraries(project)
 
 
+_NOT_AN_ARRAY = r"lean_lib targets .*: Lake expects an array of tables, written \[\[lean_lib\]\]$"
+_NO_NAME = r"lean_lib targets .*: a \[\[lean_lib\]\] target has no string name$"
+
+
 @pytest.mark.parametrize(
     ("lean_lib", "match"),
     [
-        pytest.param("lean_lib = true\n", r"lean_lib targets .*array of tables", id="boolean"),
-        pytest.param("lean_lib = false\n", r"lean_lib targets .*array of tables", id="false"),
-        pytest.param('lean_lib = "Solo"\n', r"lean_lib targets .*array of tables", id="string"),
-        pytest.param(
-            '[lean_lib]\nname = "Solo"\nroots = ["Other"]\n',
-            r"lean_lib targets .*array of tables",
-            id="single-brackets",
-        ),
-        pytest.param("lean_lib = [1]\n", r"lean_lib targets .*array of tables", id="array-of-int"),
-        pytest.param('[[lean_lib]]\nroots = ["Other"]\n', r"lean_lib targets .*has no name", id="nameless"),
+        pytest.param("lean_lib = true\n", _NOT_AN_ARRAY, id="boolean"),
+        pytest.param("lean_lib = false\n", _NOT_AN_ARRAY, id="false"),
+        pytest.param("lean_lib = 3\n", _NOT_AN_ARRAY, id="number"),
+        pytest.param('lean_lib = "Solo"\n', _NOT_AN_ARRAY, id="string"),
+        pytest.param('[lean_lib]\nname = "Solo"\nroots = ["Other"]\n', _NOT_AN_ARRAY, id="single-brackets"),
+        pytest.param("lean_lib = [1]\n", _NOT_AN_ARRAY, id="array-of-int"),
+        pytest.param('lean_lib = [{name = "A"}, 1]\n', _NOT_AN_ARRAY, id="mixed-array"),
+        pytest.param('[[lean_lib]]\nroots = ["Other"]\n', _NO_NAME, id="nameless"),
+        pytest.param('[[lean_lib]]\nname = "A"\n\n[[lean_lib]]\nroots = ["Other"]\n', _NO_NAME, id="nameless-after-named"),
+        pytest.param("[[lean_lib]]\nname = 1\n", _NO_NAME, id="number-name"),
     ],
 )
 def test_a_lean_lib_that_is_not_an_array_is_refused_as_lake_refuses_it(
