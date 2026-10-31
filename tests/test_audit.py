@@ -2416,3 +2416,75 @@ def test_bundled_example_has_no_statement_or_unclosed_fence_finding(repo_root: P
         "placeholder-statement-text",
         "unclosed-code-fence",
     }
+
+
+def _duplicate_warnings(blueprint: Path) -> dict[str, str]:
+    return {
+        warning.article_path: warning.message
+        for warning in audit_blueprint(blueprint).warnings
+        if warning.code == "duplicate-lean-target"
+    }
+
+
+def test_audit_warns_when_two_articles_take_credit_for_one_declaration(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    # Each pair spells one Lean name two ways: _root_. and «» quoting drop out.
+    _article(blueprint, "a.md", declaration="theorem", statement="formalized", lean="Ns.foo Ns.helper")
+    _article(blueprint, "b.md", declaration="theorem", statement="formalized", proof="formalized", lean="_root_.Ns.«foo»")
+    _article(blueprint, "c.md", declaration="theorem", mathlib="true", mathlib_declaration="Nat.add_comm")
+    _article(blueprint, "d.md", declaration="theorem", mathlib="true", mathlib_declaration="_root_.«Nat».add_comm")
+
+    result = audit_blueprint(blueprint)
+
+    tail = "so one declaration gets credit more than once; keep it first in only one article"
+    assert _duplicate_warnings(blueprint) == {
+        "roadmap/a.md": f"its first lean name, Ns.foo, is also first in roadmap/b.md, {tail}",
+        "roadmap/b.md": f"its first lean name, _root_.Ns.«foo», is also first in roadmap/a.md, {tail}",
+        "roadmap/c.md": f"its first mathlib_declaration name, Nat.add_comm, is also first in roadmap/d.md, {tail}",
+        "roadmap/d.md": f"its first mathlib_declaration name, _root_.«Nat».add_comm, is also first in roadmap/c.md, {tail}",
+    }
+    # A warning never fails the audit.
+    assert not {finding.code for finding in result.findings} & {"duplicate-lean-target"}
+    assert [warning["code"] for warning in json.loads(result.to_json())["warnings"]] == ["duplicate-lean-target"] * 4
+
+
+def test_audit_leaves_supporting_catalog_repeated_distinct_and_placeholder_names_alone(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    formalized = {"declaration": "theorem", "statement": "formalized"}
+    # Names after the first support an article and may recur, even as another article's first name.
+    _article(blueprint, "supporting/a.md", lean="P.a P.shared", **formalized)
+    _article(blueprint, "supporting/b.md", lean="P.b P.shared P.a", **formalized)
+    _article(blueprint, "supporting/c.md", declaration="theorem", mathlib="true", mathlib_declaration="Nat.c Nat.both")
+    _article(blueprint, "supporting/d.md", declaration="theorem", mathlib="true", mathlib_declaration="Nat.d Nat.both")
+    # Progress counts only targets: no module catalog, container or leaf without a declaration.
+    _article(blueprint, "catalog/inventory.md", catalog="module", lean="P.listed", statement="formalized")
+    _article(blueprint, "catalog/article.md", lean="P.listed", **formalized)
+    _article(blueprint, "chapter/README.md", lean="P.chapter", **formalized)
+    _article(blueprint, "chapter/leaf.md", lean="P.chapter", **formalized)
+    _article(blueprint, "undeclared/a.md", statement="formalized", lean="P.undeclared")
+    _article(blueprint, "undeclared/b.md", lean="P.undeclared", **formalized)
+    # One article repeating its own name.
+    _article(blueprint, "repeated/a.md", lean="P.again P.again", **formalized)
+    # Distinct names, including a quoted component that holds a dot.
+    _article(blueprint, "distinct/a.md", lean="P.x.y", **formalized)
+    _article(blueprint, "distinct/b.md", lean="P.«x.y»", **formalized)
+    # A migration keeps the old article as a retracted or planned placeholder naming the same declaration.
+    _article(blueprint, "migration/new.md", lean="P.moved", **formalized)
+    _article(blueprint, "migration/retracted.md", declaration="theorem", statement="retracted", lean="P.moved")
+    _article(blueprint, "migration/planned.md", declaration="theorem", lean="P.moved")
+    _article(blueprint, "migration/upstream.md", declaration="theorem", mathlib="true", mathlib_declaration="Nat.moved")
+    _article(blueprint, "migration/unasserted.md", declaration="theorem", mathlib_declaration="Nat.moved")
+    # Lean credit and Mathlib credit are separate domains.
+    _article(blueprint, "domains/local.md", lean="Nat.both", **formalized)
+    _article(blueprint, "domains/upstream.md", declaration="theorem", mathlib="true", mathlib_declaration="Nat.both")
+
+    assert "invalid-graph" not in {finding.code for finding in audit_blueprint(blueprint).findings}
+    assert _duplicate_warnings(blueprint) == {}
+
+
+def test_bundled_example_takes_credit_for_each_declaration_once(repo_root: Path) -> None:
+    blueprint = repo_root / "skills" / "setup" / "assets" / "cabannes-thesis-project" / "blueprint"
+
+    assert _duplicate_warnings(blueprint) == {}

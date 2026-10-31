@@ -152,6 +152,12 @@ date when the release is tagged.
   run starts or resumes and at each frontier re-read, decides each finding
   against the current head, and repairs the oldest first, after any it is
   stacked on (#483).
+- **Duplicate credit.** `audit` warns `duplicate-lean-target` at each target
+  that takes credit for a declaration another target also takes: the first
+  `lean:` name of a target recording `statement: formalized`, or the first
+  `mathlib_declaration` name of a `mathlib: true` target, compared as Lean
+  names. Later names, catalogs, containers and placeholders recording neither
+  take no credit (#193).
 
 ### Fixed
 

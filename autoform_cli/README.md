@@ -198,7 +198,7 @@ An article asserts only facts a human or agent verified:
 | `mathlib_declaration: Nat.exists_infinite_primes` | Mathlib name(s) the article restates; `audit` requires one on a `mathlib: true` article. Render lists each in a Mathlib row of the article's statement box, as text without a link, since nothing checks it against the pinned Mathlib. |
 | `mathlib_file: Mathlib/Data/Nat/Prime/Infinite.lean` | The Mathlib file that declares the `mathlib_declaration` name(s), as a portable relative path; `search` reports it. |
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
-| `lean: Ns.decl` | Declaration name(s) that discharge the article. |
+| `lean: Ns.decl` | Declaration name(s) that discharge the article. On a target recording `statement: formalized`, the first takes its progress credit, and `audit` warns `duplicate-lean-target` when another target takes credit for the same declaration (see [Warnings](reference/validation-and-audit.md#warnings)). |
 | `discussion: 42` | Issue number or URL where the article is being discussed. |
 | `article_id: af_...` | Durable identity, `af_` plus 24 lowercase hex digits; `autoform work` requires it on unfinished formalizable leaves, `review record` on the article it records, and `review prepare`, `review check`, and `render --review` on every Lean-mapped article but a module catalog. |
 | `review_approved: sha256:<64 hex>` | The hash of the complete review surface someone approved for this article. It shows that surface is unchanged, not who approved it. |
