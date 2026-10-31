@@ -52,6 +52,15 @@ date when the release is tagged.
   listing that runs out of time or is interrupted no longer leaves its
   transport running. Formalize treats a labelled `claim list` failure as an
   unreadable board, not as a board without claims (#432).
+- **Work packages and sessions.** A Formalize subagent may keep its worktree
+  for a package of related leaves that the lead confirms together, holding only
+  the leaf it has taken and taking the next once `work context` shows it ready.
+  With claims, each session leads from its own clone and checks `git worktree
+  list` before dispatching, and workers name their branch with `claim acquire
+  --note`, now documented. A handoff to another session, when the request covers
+  pushing, goes to an `origin` branch ending with the leaf's `article_id`, which
+  `git ls-remote` finds after the lease is gone. No message grants ownership or
+  completes a leaf (#434).
 - **Render.** An article's page lists its `mathlib_declaration` names in a
   Mathlib row, as text without a link, so a `mathlib: true` article names the
   declaration it restates (#388).
@@ -108,11 +117,15 @@ date when the release is tagged.
 
 ### Fixed
 
-- **Large libraries' search index.** The explorer loads JSON up to 64 MiB,
-  and a whole-library index over 32 MiB leaves out statement summaries, so
-  search still matches titles and Lean names; publication warns when it
-  does. ATLAS's index had grown past the old 32 MiB limit, so search and the
-  Topics outline failed on every page.
+- **No size caps on published data.** The explorer loads its own site's
+  search index, map data, pages and concept links whatever their size, and
+  its timeout now measures a stalled transfer rather than a long one. Render
+  keeps the whole concept-links layer, reads any `atlas.json`, and writes and
+  replaces a site whose `publication.json` passes 8 MiB (it lists every site
+  file). It notes a search index over 32 MiB, which every explorer page
+  downloads. ATLAS's
+  42 MB index had passed the old 32 MiB limit, so search and the Topics
+  outline failed on every page.
 - **Explorer reading defaults.** Desktop chapters open with the reader showing
   their text again, and arriving at a shelf or context chapter from the map,
   search or the trail focuses its heading. Only authored-area overviews and
@@ -139,10 +152,9 @@ date when the release is tagged.
   heading; stale projection callbacks cannot steal focus. Outline, filters
   and self-hiding map controls keep native focus. Slash stays scoped; modified
   arrow keys stay native, and empty Escape no longer adds history entries (#442).
-- **Reading and index feedback.** Valid HTML character references keep title
-  math without admitting authored HTML. Publication warns when the exact
-  UTF-8 search index reaches 95% of the unchanged 32 MiB browser limit; nothing
-  is truncated or refused. Directory aliases retain statement fragments (#442).
+- **Reading feedback.** Valid HTML character references keep title math
+  without admitting authored HTML. Directory aliases retain statement
+  fragments (#442).
 - **Wiki references.** Section boundaries come from the site's converter, so
   Setext and formatted Sources headings cannot turn provenance into concept
   links. Formal dependencies, statuses and captured article bytes are unchanged (#442).
@@ -151,6 +163,9 @@ date when the release is tagged.
   and foreign-URL state is not restored. Failures offer a safe native article link (#442).
 - **Explorer builds.** Compiler and publisher share a UTF-8/LF source fingerprint,
   including on CRLF checkouts, without requiring Node in consumer projects (#442).
+- **Lean commands.** A Lake or Lean command Autoform runs that fails just as
+  Ctrl+C or a termination signal arrives is stopped along with Autoform
+  instead of being left running (#510).
 - **Large wiki catalogues.** Validation yields to visible page frames, with
   a bounded fallback for hidden or stalled tabs, rather than relying only on
   timer tasks. Parent references use the same compact node offsets as relations;
@@ -163,6 +178,14 @@ date when the release is tagged.
   in its outline, breadcrumbs, paged inventory and related-reading controls, using safe MathJax
   service and project macros. Code stays literal, canonical links keep focus
   and native modifiers, and graph labels remain as typed (#442).
+- **Import impact.** In `work import-impact`, a library whose `globs` name
+  other modules but not its own root no longer claims the files under that
+  root that no glob matches, which Lake does not build for it. A library
+  nested there no longer makes the command refuse a project Lake builds with
+  "maps to more than one module". A loaded local module that no library
+  builds is now refused with exit 2, and under
+  `--module-scope import-closure` an article naming a declaration in such a
+  file is listed in `unresolved_articles` (#500).
 - **Book navigation.** The generated `SUMMARY.md` nests each book page under
   its chapter's README, written in book order. A landing page that linked a
   deep page before its chapters, or a folder with no README in the book, put a

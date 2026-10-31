@@ -34,16 +34,17 @@ as their reports or the user name them, and decide each finding: fix it under
 the rules below, note why it is resolved or moot, or ask the user; reply on a
 pull request only if the request covers posting. Native subagents may work
 independent leaves in separate Git worktrees; no custom scheduler or provider
-adapter is part of the protocol. A subagent may keep its worktree for several
-related leaves, each once it is ready, integrating one before taking the next;
-the lead dispatches each with fields from the frontier after that integration.
+adapter is part of the protocol. A subagent may keep its worktree for a package
+of related leaves, such as a container's, that the lead confirms together. It
+holds only the leaf it has taken, taking the next once `work context` shows it
+ready after integrating; at the first that is not, the rest return to the lead.
 The lead's branch is the shared branch results integrate into; the lead also
 works its own leaves in worktrees, so nothing reaches that branch before its
 default build passes. Before dispatching, commit the roadmap state the frontier
 was read from and base each worktree on that commit, not on the remote's default
 branch (Claude Code's agent isolation does so only with `worktree.baseRef:
-head`). Give each subagent the `claim_target`, `phase`, `article_revision`,
-`open_statements`, `assumes`, and `revision` it is dispatched for. A new
+head`). Give each subagent each leaf's `claim_target`, `article_revision`,
+`open_statements`, `revision`, and the first leaf's `phase` and `assumes`. A new
 worktree has no `.lake`: in a Mathlib project, run `lake exe cache get` in the
 lead's checkout before creating worktrees, rerunning it once if it fails, then
 in each worktree before its first build or Lean tool call. If the rerun fails
@@ -101,9 +102,8 @@ Bring the worktree up to date with the shared branch (after [acquiring the
 claim](references/claims.md#acquire-and-renew), when the run uses claims) and
 reload `work context`. Before editing, require the same `phase`, `blockers`,
 `dependencies`, `article_revision`, `open_statements`, `assumes`, and `revision`
-as the first read and, for a subagent, the same `phase`, `article_revision`,
-`open_statements`, `assumes`, and `revision` it was dispatched with. Unrelated
-parallel articles may change the graph-wide source revision.
+as the first read and, for a subagent, the same fields it was dispatched with.
+Unrelated parallel articles may change the graph-wide source revision.
 
 Read the complete article, its `blueprint/.implementation-notes/<article_id>.md`
 when present, cited sources, dependency articles, and existing Lean target.

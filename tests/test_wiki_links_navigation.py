@@ -64,7 +64,7 @@ async function wikiApp(extra={}) {
     onCommit(bundle){app.commits.push(bundle);},onError(error){app.errors.push(error);},
     onIndex(value){indexEvents.push(value);},onWikiLinks(value){events.push(value);if(extra.onWikiLinks)extra.onWikiLinks(value);},
     captureState(){return app.getState();},restoreState(saved){app.state(saved);},
-    jsonLimit:extra.jsonLimit,cacheBytes:extra.cacheBytes});
+    jsonLimit:extra.jsonLimit,cacheBytes:extra.cacheBytes,timeout:extra.timeout});
   return Object.assign(app,{layerState:state,events,indexEvents,signals,indexBytes:bytes,indexHash:hash,layerResponse});
 }
 function assertUnavailable(value) {
@@ -100,6 +100,31 @@ def test_wiki_layer_is_lazy_coalesced_sha_bound_and_keeps_math_relations() -> No
       assert.equal(app.fetches.filter(url=>url===wikiURL).length,1);
       assert.equal(JSON.stringify(app.nav.getIndex().relations),before);
       assert.equal(app.indexEvents.length,1);assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+def test_a_slow_steady_transfer_loads_and_only_a_stall_times_out() -> None:
+    _run(r"""
+      // Like a real fetch, aborting the request's signal errors its body.
+      function paced(bytes,gaps,signal) {
+        const size=Math.ceil(bytes.length/gaps.length);
+        return new Response(new ReadableStream({async start(controller){
+          signal.addEventListener('abort',()=>{try{controller.error(new DOMException('Aborted','AbortError'));}catch(_closed){}});
+          for(let part=0;part<gaps.length;part++){
+            await new Promise(resolve=>setTimeout(resolve,gaps[part]));
+            try{controller.enqueue(bytes.slice(part*size,(part+1)*size));}catch(_cancelled){return;}
+          }
+          try{controller.close();}catch(_cancelled){}
+        }}),{status:200});
+      }
+      const layer=app=>new TextEncoder().encode(JSON.stringify(app.layerState.layer));
+      // Three chunks 600 ms apart take 1.8 s in all, past the 1 s timeout, and still load.
+      const steady=await wikiApp({timeout:1000,wikiFetch(_url,settings){return paced(layer(steady),[600,600,600],settings.signal);}});
+      await steady.nav.start();assert.equal((await steady.nav.loadWikiLinks()).availability,'complete');steady.nav.dispose();
+      // A transfer that stops sending for longer than the timeout is reported as timed out.
+      const stalled=await wikiApp({timeout:1000,wikiFetch(_url,settings){return paced(layer(stalled),[0,1600],settings.signal);}});
+      await stalled.nav.start();const late=await stalled.nav.loadWikiLinks();
+      assertUnavailable(late);assert.equal(late.reason,'request_timed_out');stalled.nav.dispose();
     """)
 
 
@@ -283,7 +308,9 @@ def test_optional_callback_error_and_oversized_response_never_disable_math_navig
       const observer=await wikiApp({onWikiLinks(){throw new Error('/Users/private-provider/callback');}});
       const result=await observer.nav.loadWikiLinks();assert.equal(result.availability,'complete');
       assert.equal(observer.errors.length,0);assert.equal((await observer.nav.navigateNode('b')).nodeId,'b');observer.nav.dispose();
-      const oversized=await wikiApp({jsonLimit:1024,wikiFetch(){return new Response('{}',{headers:{'content-length':'4096'}});}});
-      await oversized.nav.start();assertUnavailable(await oversized.nav.loadWikiLinks());
-      assert.equal(oversized.errors.length,0);assert.equal((await oversized.nav.navigateNode('a')).nodeId,'a');oversized.nav.dispose();
+      // No size cap: a 65 MiB layer, past every limit the client had, streams in whole, and the retired jsonLimit option caps nothing.
+      const large=await wikiApp({jsonLimit:1024,wikiFetch(){const text=JSON.stringify(large.layerState.layer)+' '.repeat(65*1024*1024);
+        return new Response(text,{headers:{'content-length':String(Buffer.byteLength(text))}});}});
+      await large.nav.start();const loaded=await large.nav.loadWikiLinks();assert.equal(loaded.availability,'complete');
+      assert.equal(large.errors.length,0);assert.equal((await large.nav.navigateNode('a')).nodeId,'a');large.nav.dispose();
     """)

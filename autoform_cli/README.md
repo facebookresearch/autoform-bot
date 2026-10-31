@@ -879,10 +879,12 @@ declaration when one of its `lean:` names equals it or is a dotted prefix of it,
 so `affected_articles` may list more articles and `article_local` is always
 `false`; `affected_unowned_helpers` keep the parent-chain rule, and
 `unresolved_articles` leaves out a name the source index places outside
-`affected_modules`. A `.lean` file outside the captured sources, as in
-`.lake/packages` or a path dependency, that may import a candidate makes the
-command exit 2 and ask for the default scope; use the default scope too when a
-component of a module name is a common word.
+`affected_modules` but lists one in a file no `lean_lib` builds. A `.lean` file
+outside the captured sources, as in `.lake/packages` or a path dependency, that
+may import a candidate makes the command exit 2 and ask for the default scope;
+use the default scope too when a component of a module name is a common word. In
+either scope, and unlike `work impact`, the probe also refuses a loaded module
+that no `lean_lib` builds, as from a leftover `.olean`.
 
 JSON uses `autoform-module-import-impact/v1`, with `module_graph_revision` and
 `module_scope` (`loaded-root-library-graph` or `import-closure`). `article` is
@@ -964,7 +966,9 @@ does not persist, pass `--worker-id` on every command. Leases expire after 1500
 seconds unless `--ttl` sets another length; renew well within that, and confirm
 a claim with `renew`, not `acquire`, which also succeeds on an expired or
 released lease. Acquire a whole set in one command (see the [claim
-contract](reference/claims-and-revisions.md#claim-contract)).
+contract](reference/claims-and-revisions.md#claim-contract)). `acquire --note
+TEXT` stores free text in each lease, `renew` keeps it, and `claim list` shows
+it as `note`; the key is absent, not empty, after an acquire without `--note`.
 
 Claims are fail-closed compare-and-swap leases under `refs/autoform-claims/` on
 the Git `origin`; pass `--repo` for another board. A failed acquire or renew
