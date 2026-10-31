@@ -1029,6 +1029,12 @@ def _fields(
     column = None
     last = where_index if inline.strip() else None
     depth = _depth(inline)
+    # A field written after `where`, past any constructor, sets the field column.
+    after = inline
+    if (name := _CONSTRUCTOR_NAME.match(inline)) and (rest := _after_binders(inline[name.end() :])).startswith("::"):
+        after = rest[2:]
+    if after.strip():
+        column = len(lines[where_index]) - len(after.lstrip())
     for index in range(start, len(lines)):
         text = lines[index].strip()
         if not text:
@@ -1039,11 +1045,6 @@ def _fields(
         if column is None:
             if indent <= base:
                 break
-            if last is not None and (depth > 0 or _continues(lines[last], literal_line, last, text)):
-                # The field after `where` goes on; a later line sets the field column.
-                depth += _depth(text)
-                last = index
-                continue
             column = indent
         if indent < column:
             break
@@ -1055,8 +1056,9 @@ def _fields(
         ):
             entries.append((index + 1, [text]))
             depth = _depth(text)
-        elif entries:
-            entries[-1][1].append(text)
+        else:
+            if entries:
+                entries[-1][1].append(text)
             depth += _depth(text)
         last = index
     # Attribute lists and modifiers may stand on lines of their own above a field.
@@ -1254,6 +1256,8 @@ _TERM_KEYWORDS = frozenset(
     {"by", "calc", "do", "else", "fun", "have", "if", "let", "match", "nofun", "nomatch", "show", "suffices", "then"}
 )
 _DO_END = re.compile(r"(?:^|\s)do\s*$")
+#: The name of a constructor that may open the text after ``where``, as in ``where mk (T) :: a : Nat``.
+_CONSTRUCTOR_NAME = re.compile(rf"\s*(?:@\[[^\]]*\]\s*)*(?:(?:private|protected)\s+)*{_ID_COMPONENT}")
 #: Mathlib's ``scoped[NS]``, which scopes the command after it to a namespace.
 _SCOPED = re.compile(r"^\s*scoped\s*\[[^\]]*\]")
 _QUOTED_NAME = re.compile(r"«[^»]*»")
