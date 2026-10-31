@@ -131,7 +131,7 @@ date when the release is tagged.
   search or the trail focuses its heading. Only authored-area overviews and
   scopes over 120 nodes that draw cards open map-first, with the 0.9 zoom-out
   floor. On a phone, Back to a result whose reader was closed no longer fails
-  with "Could not open this view" (#507).
+  with "Could not open this view" (#507, #520).
 - **Explorer review follow-ups.** Fit retains a selected unlinked result.
   Deferred list math cancels with its view and falls back to visible text on
   unavailable typesetting. Preview formatting keeps currency and code literal;
