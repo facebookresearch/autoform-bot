@@ -619,7 +619,7 @@
         var partById = new Map(), byId = new Map();
         data.parts.forEach(function (row) { partById.set(row[0], row); });
         var rows = data.rows.map(function (row) {
-          var at = data.parts[row[2]][0], id = row[3].indexOf("/") === 0 || !row[3] || row[3].indexOf(at + "/") === 0 ? row[3] : at + "/" + row[3];
+          var id = typeof row[3] === "string" ? data.parts[row[2]][0] + "/" + row[3] : row[3][0];
           var entry = [row[0], row[1], row[2], id, String(row[0]).toLowerCase(), String(row[1]).toLowerCase()];
           byId.set(id, entry);
           return entry;

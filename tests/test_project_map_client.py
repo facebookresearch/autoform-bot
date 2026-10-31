@@ -127,3 +127,23 @@ def test_titles_with_tex_are_readable_on_the_map(tmp_path: Path) -> None:
       console.log('tex ok');
     """)
     assert "tex ok" in out
+
+
+def test_search_finds_results_in_a_flat_roadmap(tmp_path: Path) -> None:
+    # Results straight under the root live in a generated part whose id they don't extend.
+    flat = tmp_path / "flat"
+    project_map.write_project_map(flat, project_map.build_project_map([
+        {"id": "roadmap", "kind": "scope", "title": "Notes", "parent": None, "result": False},
+        {"id": "flat", "kind": "node", "title": "Flat result", "parent": "roadmap", "result": True, "status": "planned"},
+        {"id": "other", "kind": "node", "title": "Other result", "parent": "roadmap", "result": True, "status": "planned"},
+    ], [("other", "flat", 1, 0)]))
+    out = _walk(tmp_path, r"""
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'flat'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      assert.strictEqual($$('.pm-hit').length, 1);
+      emit(search, 'keydown', {key: 'Enter'}); await wait(40);
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Flat result');
+      assert.strictEqual(location.hash, '#result=flat');
+      console.log('flat ok');
+    """, flat)
+    assert "flat ok" in out

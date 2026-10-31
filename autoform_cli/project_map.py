@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 
 SCHEMA = "autoform-project-map/v1"
@@ -98,6 +98,15 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
                     facet[child] = collection
 
     walk(root, root, None)
+    taken = set(by_id)
+
+    def fresh(base: str) -> str:
+        # A generated part never takes an authored id, or the authored part would become its own parent.
+        key = base
+        while key in taken:
+            key += "~"
+        taken.add(key)
+        return key
 
     title = {part: str(by_id[part].get("title") or part) for part in part_parent}
     title[root] = str(by_id[root].get("title") or root)
@@ -105,7 +114,7 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
     # since the root has no file and the map opens on parts.
     loose = [result for result, part in home.items() if part == root]
     if loose:
-        holder = f"{root}/~results"
+        holder = fresh(f"{root}/~results")
         has_chapters = any(parent == root for parent in part_parent.values())
         part_parent[holder] = root
         title[holder] = "Outside the chapters" if has_chapters else title[root]
@@ -121,7 +130,7 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
             # An area holding a single chapter adds a level without adding structure: the chapter stands for it.
             if len(inside_area) == 1:
                 continue
-            region = _REGION + area
+            region = fresh(_REGION + area)
             part_parent[region] = root
             title[region] = area
             for chapter in inside_area:
@@ -185,7 +194,7 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
         return first
 
     synthetic: set[str] = set()
-    if _group_wide_parts(part_parent, title, inside, pair, synthetic, first_positions()):
+    if _group_wide_parts(part_parent, title, inside, pair, synthetic, first_positions(), fresh):
         chains, inside, exports, imports, pair, internal, boundary = aggregate()
     first = first_positions()
     status = {part: Counter(str(by_id[result].get("status")) for result in results) for part, results in inside.items()}
@@ -256,10 +265,11 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
         "schema": SCHEMA,
         # Each part with its parent's position (-1 under the root), so search can rebuild any path.
         "parts": [[part, title[part], part_file(part), position.get(part_parent[part], -1)] for part in part_ids],
-        # Title, Lean name, the result's own part, and its id (relative to that part when it extends it).
+        # Title, Lean name, the result's own part, and its id: a string relative to that part when it extends it,
+        # otherwise the whole id in a list, so the two never read alike.
         "rows": [
             [by_id[result].get("title"), by_id[result].get("lean") or "", position[at],
-             result[len(at) + 1:] if result.startswith(at + "/") else result]
+             result[len(at) + 1:] if result.startswith(at + "/") else [result]]
             for result, at in sorted(home.items())
         ],
     }
@@ -267,13 +277,14 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
 
 
 def _group_wide_parts(part_parent: dict[str, str], title: dict[str, str], inside: Mapping[str, Sequence[str]],
-                      pair: Mapping[tuple[str, str], Sequence[int]], synthetic: set[str], first: Mapping[str, int]) -> bool:
+                      pair: Mapping[tuple[str, str], Sequence[int]], synthetic: set[str], first: Mapping[str, int],
+                      fresh: Callable[[str], str]) -> bool:
     """Group the children of any part wider than GROUP_LIMIT into linked communities, in place.
 
     Children that link to each other form one community (a weak component of the sibling links), titled by its largest
     member. Children that link to no sibling share one "Standalone topics" group. Groups are numbered in reading order
-    (``first`` is each part's reading position), so each gets a stable id under its parent. Returns whether anything
-    was grouped.
+    (``first`` is each part's reading position), so each gets a stable id under its parent; ``fresh`` reserves it.
+    Returns whether anything was grouped.
     """
     kids: dict[str, list[str]] = defaultdict(list)
     for part, parent in part_parent.items():
@@ -318,7 +329,7 @@ def _group_wide_parts(part_parent: dict[str, str], title: dict[str, str], inside
         if len(everything) >= len(members):
             continue
         for number, group in enumerate(everything, start=1):
-            group_id = f"{parent}/~{number}"
+            group_id = fresh(f"{parent}/~{number}")
             names = [title[m] for m in group[:2]]
             if number <= len(groups):
                 if len(group) > 2:
@@ -368,9 +379,12 @@ def records_from_view(view: object, metadata: Mapping[str, Mapping[str, object]]
     # Without a roadmap contents page the view has no single root; the map gets one titled like the view.
     roots = [record for record in records if record.get("parent") in (None, "")]
     if len(roots) != 1:
+        root = _ROOT
+        while any(record["id"] == root for record in records):
+            root += "~"
         for record in roots:
-            record["parent"] = _ROOT
-        records.insert(0, {"id": _ROOT, "kind": "scope", "title": str(getattr(view, "title", "") or "Roadmap"), "parent": None, "result": False})
+            record["parent"] = root
+        records.insert(0, {"id": root, "kind": "scope", "title": str(getattr(view, "title", "") or "Roadmap"), "parent": None, "result": False})
     # A view edge runs from the dependency to the result that uses it.
     relations = [(edge.target, edge.source, edge.statement_count, edge.proof_count) for edge in view.edges]  # type: ignore[attr-defined]
     return records, relations

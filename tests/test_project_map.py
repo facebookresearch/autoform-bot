@@ -176,6 +176,8 @@ def test_results_in_the_root_get_a_part_of_their_own() -> None:
     assert [(region["id"], region["title"], region["results"]) for region in regions] == [("roadmap/~results", "Library", 2)]
     assert [row["id"] for row in _part(files, "roadmap/~results")["results"]] == ["roadmap/a", "roadmap/b"]
     assert [row[0] for row in files["search.json"]["rows"]] == ["A", "B"]
+    # Their ids don't extend the generated part's, so search keeps them whole.
+    assert [row[3] for row in files["search.json"]["rows"]] == [["roadmap/a"], ["roadmap/b"]]
     # Beside chapters, the loose results are named for what they are.
     records, relations = _library()
     records.append(_result("roadmap/main", "roadmap", "Main theorem"))
@@ -183,6 +185,27 @@ def test_results_in_the_root_get_a_part_of_their_own() -> None:
     regions = {region["id"]: region for region in project_map.build_project_map(records, relations)["index.json"]["regions"]}
     assert regions["roadmap/~results"]["title"] == "Outside the chapters"
     assert regions["Analysis"]["api_total"] == 1
+
+
+def test_generated_parts_never_take_an_authored_id() -> None:
+    # Authored ids that look generated: a group under a wide part, and the root's own results.
+    records = [_scope("roadmap", None, "Library"), _scope("Big", "roadmap", "Big subject"),
+               _scope("Big/~1", "Big", "Authored topic", navigation="module"), _result("Big/~1/r", "Big/~1", "Authored result"),
+               _scope("roadmap/~results", "roadmap", "Authored chapter"), _result("roadmap/~results/r", "roadmap/~results", "In it"),
+               _result("roadmap/loose", "roadmap", "Loose result")]
+    for index in range(40):
+        records.append(_scope(f"Big/t{index:02d}", "Big", f"Topic {index:02d}", navigation="module"))
+        records.append(_result(f"Big/t{index:02d}/r", f"Big/t{index:02d}", f"Result {index:02d}"))
+    files = project_map.build_project_map(records, [("Big/t01/r", "Big/t00/r", 1, 0)])
+    # The linked pair is the first group and the rest stand alone, reading first; the authored part sits in a group,
+    # not in itself.
+    assert [(child["id"], child["title"]) for child in _part(files, "Big")["children"]] == [
+        ("Big/~2", "Standalone topics"), ("Big/~1~", "Topic 00 and Topic 01")]
+    assert [step for step, _title in _part(files, "Big/~1")["path"]] == ["Big", "Big/~2", "Big/~1"]
+    regions = {region["id"]: region["title"] for region in files["index.json"]["regions"]}
+    assert regions == {"Big": "Big subject", "roadmap/~results": "Authored chapter", "roadmap/~results~": "Outside the chapters"}
+    rows = {row[0]: row[3] for row in files["search.json"]["rows"]}
+    assert rows["Loose result"] == ["roadmap/loose"] and rows["In it"] == "r"
 
 
 def test_the_map_writes_only_files_render_can_guard() -> None:
@@ -199,6 +222,10 @@ def test_a_view_without_one_root_gets_one() -> None:
     assert records[0] == {"id": "~roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False}
     regions = project_map.build_project_map(records, relations)["index.json"]["regions"]
     assert [(region["title"], region["results"]) for region in regions] == [("Library", 2)]
+    # Nor does the made-up root take an authored id.
+    clash = GraphView("full", "Library", (*nodes, ViewNode("~roadmap", "Odd name", "node", (), (("planned", 1),))), view.edges)
+    records, _relations = project_map.records_from_view(clash, {})
+    assert records[0]["id"] == "~roadmap~" and {record["parent"] for record in records[1:]} == {"~roadmap~"}
 
 
 def test_a_map_needs_exactly_one_root() -> None:
