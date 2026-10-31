@@ -296,7 +296,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "affect, not the modules a removed import can drop from the build",
     )
     work_import_impact.add_argument("selector", help="path-derived node id or durable article_id")
-    work_import_impact.add_argument("module", help="project module whose imports may change")
+    work_import_impact.add_argument(
+        "module",
+        nargs="?",
+        default=None,
+        help="project module whose imports may change, not the module being imported "
+        "(default: the module holding the article's declarations)",
+    )
     work_import_impact.add_argument(
         "target", nargs="?", default=".", help="project root or blueprint directory"
     )
@@ -1393,10 +1399,14 @@ def _work_impact(args: argparse.Namespace) -> int:
                 timeout=args.timeout,
             )
         else:
+            module, target = args.module, args.target
+            # MODULE is optional before an optional TARGET: a path in its place is the target.
+            if module is not None and target == "." and ("/" in module or module in {".", ".."}):
+                module, target = None, module
             report = module_import_impact(
-                args.target,
+                target,
                 args.selector,
-                args.module,
+                module,
                 lean_root=args.lean_root,
                 timeout=args.timeout,
                 module_scope=args.module_scope,

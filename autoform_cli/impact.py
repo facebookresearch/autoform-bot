@@ -1217,9 +1217,23 @@ def compute_module_import_impact(
 
     # An article also owns, through the parent chain, the helpers it names no
     # declaration for, such as a structure's API lemmas in a later module.
+    # A helper with no such owner belongs to its module's article when exactly
+    # one article names declarations in that module: a worker's own helpers
+    # beside its article's declarations are its own, public or private.
+    module_articles: dict[str, set[str]] = {}
+    for resolved, article_ids in named.items():
+        module_articles.setdefault(records[resolved].module, set()).update(article_ids)
+
+    def module_owner(record: ConstantRecord) -> tuple[str, ...]:
+        in_module = module_articles.get(record.module, set())
+        return tuple(in_module) if len(in_module) == 1 else ()
+
+    def helper_owners(record: ConstantRecord) -> tuple[str, ...]:
+        return _owners(record, records, named) or module_owner(record)
+
     for record in records.values():
         if record.module in affected_set and record.name not in named:
-            for owner in owners(record):
+            for owner in owners(record) or module_owner(record):
                 touched[owner].add(record.module)
     affected_articles = tuple(
         ModuleImpactedArticle(article.id, article.article_id, article.claim_target, tuple(sorted(touched[article.id])))
@@ -1229,7 +1243,7 @@ def compute_module_import_impact(
     unresolved_articles.sort(key=lambda article: article.id)
 
     module_claim_target = _module_claim_target(module)
-    # Helpers keep the parent-chain rule under either scope: a narrowed chain
+    # Helpers keep the default rule under either scope: a narrowed chain
     # is only shorter, so every helper the default scope reports keeps its key.
     affected_helpers = tuple(
         ModuleImpactedHelper(record.name, record.module, _helper_claim_target(record.name))
@@ -1237,7 +1251,7 @@ def compute_module_import_impact(
         if record.module in affected_set
         and not record.internal
         and record.name not in named
-        and not _owners(record, records, named)
+        and not helper_owners(record)
     )
     affected_claim_targets = tuple(
         sorted(
@@ -1463,6 +1477,7 @@ class _ImpactEvidence:
     modules: Mapping[str, ModuleEvidence]
     locate: Locator
     declaration_modules: Mapping[str, str] | None = None
+    module: str | None = None
 
 
 def _load_impact_evidence(
@@ -1473,10 +1488,15 @@ def _load_impact_evidence(
     timeout: float | None,
     require_modules: bool,
     require_default_declarations: bool,
-    module: str | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
+    resolve_module: Callable[[ImpactArticle, Sequence[LeanLibrary], IndexedSourceSnapshot, Collection[str]], str]
+    | None = None,
 ) -> _ImpactEvidence:
-    """Load one freshness-bound roadmap, source, module, and Lean environment."""
+    """Load one freshness-bound roadmap, source, module, and Lean environment.
+
+    ``resolve_module`` names the edited module from the source inventory alone,
+    so a wrong module is refused before the freshness check and the probe.
+    """
 
     runtime = load_runtime_graph(project_or_blueprint)
     source_revision = runtime.source_revision
@@ -1514,11 +1534,12 @@ def _load_impact_evidence(
             source_snapshot,
             strict_module_ownership=require_modules,
         )
+        module = None if resolve_module is None else resolve_module(selected, libraries, source_snapshot, local_modules)
         selected_modules = imports
         declaration_modules = None
         if module_scope == IMPORT_CLOSURE_SCOPE:
-            if module not in local_modules:
-                raise ImpactError(f"not a project module: {module}")
+            # resolve_import_module refused a module outside the project.
+            assert module is not None
             captured = dict(source_snapshot.source_files)
             sources = [
                 (name, captured[path])
@@ -1606,6 +1627,7 @@ def _load_impact_evidence(
         modules=module_evidence,
         locate=_locator(libraries, source_snapshot),
         declaration_modules=declaration_modules,
+        module=module,
     )
 
 
@@ -1648,13 +1670,17 @@ def revision_impact(
 def module_import_impact(
     project_or_blueprint: str | Path,
     selector: str,
-    module: str,
+    module: str | None = None,
     *,
     lean_root: str | Path,
     timeout: float | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
 ) -> ModuleImportImpactReport:
-    """Report, without blocking it, the reverse-import scope of an import edit."""
+    """Report, without blocking it, the reverse-import scope of an import edit.
+
+    ``module`` is the project module whose imports change; without it, the one
+    module that holds the selected article's declarations.
+    """
 
     if module_scope not in (MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE):
         raise ImpactError(f"unknown module scope: {module_scope}")
@@ -1665,20 +1691,60 @@ def module_import_impact(
         timeout=timeout,
         require_modules=True,
         require_default_declarations=False,
-        module=module,
         module_scope=module_scope,
+        resolve_module=lambda selected, libraries, snapshot, local_modules: resolve_import_module(
+            module, selected, _module_source_paths(libraries, snapshot), snapshot, local_modules
+        ),
     )
+    assert evidence.module is not None
     return compute_module_import_impact(
         evidence.records,
         evidence.modules,
         evidence.articles,
         evidence.selected,
-        module,
+        evidence.module,
         source_revision=evidence.source_revision,
         lean_source_revision=evidence.lean_source_revision,
         module_scope=module_scope,
         declaration_modules=evidence.declaration_modules,
     )
+
+
+def resolve_import_module(
+    module: str | None,
+    selected: ImpactArticle,
+    module_paths: Mapping[str, str],
+    snapshot: IndexedSourceSnapshot,
+    local_modules: Collection[str],
+) -> str:
+    """The project module an import edit changes: ``module``, else the selected article's own module.
+
+    Workers often pass the module they mean to import; the refusal says which
+    module the argument names instead.
+    """
+
+    modules_by_path = {path: name for name, path in module_paths.items()}
+    homes = sorted(
+        {
+            modules_by_path[declaration.path.as_posix()]
+            for name in selected.declarations
+            if (declaration := snapshot.index.find(name)) is not None
+            and declaration.path.as_posix() in modules_by_path
+        }
+    )
+    usage = "MODULE is the project module whose imports change, the file that gains or loses the import"
+    if module is None:
+        if len(homes) == 1:
+            return homes[0]
+        found = f"; its declarations are in {', '.join(homes)}" if homes else ""
+        raise ImpactError(f"{usage}; pass it, since {selected.id} has no single module{found}")
+    if module not in local_modules:
+        here = f" (for {selected.id}: {homes[0]})" if len(homes) == 1 else ""
+        raise ImpactError(
+            f"{module} is not a module of this project. {usage}{here}, not the module it imports: "
+            "an import from Mathlib or another dependency is reported for the project file that adds it"
+        )
+    return module
 
 
 def _locator(
@@ -1782,7 +1848,8 @@ def format_module_import_impact(report: ModuleImportImpactReport) -> list[str]:
     ]
     if not report.selected_affected:
         lines.append(
-            "Warning: the selected article has no built declaration in this reverse-import scope."
+            "Warning: the selected article has no built declaration in this reverse-import scope; "
+            "MODULE should be the module whose imports change, usually the one holding the article's declarations."
         )
     other_articles = tuple(
         article for article in report.affected_articles if article.id != report.article.id
