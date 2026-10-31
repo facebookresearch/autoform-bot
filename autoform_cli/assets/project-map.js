@@ -842,9 +842,8 @@
     readerInner.append(el("span", "pm-chip", statusWords(row.status) + (row.facet ? " · " + row.facet : "")));
     if (row.summary) readerInner.append(statement(row.summary, row.title));
     if (row.lean) {
-      var lean = el("div", "pm-lean"), code = el("code", "", row.lean), copy = el("button", "pm-button", "Copy");
-      copy.type = "button"; copy.addEventListener("click", function () { if (navigator.clipboard) navigator.clipboard.writeText(row.lean); });
-      lean.append(code, copy); readerInner.append(lean);
+      var lean = el("div", "pm-lean");
+      lean.append(el("code", "", row.lean)); readerInner.append(lean);
     }
     var actions = el("div", "pm-actions");
     if (row.route) { var read = el("a", "", "Read the statement and proof"); read.href = new URL(row.route, routeBase).href; actions.append(read); }
