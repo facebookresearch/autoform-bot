@@ -259,10 +259,30 @@
   }
   function zoomAt(factor, sx, sy) {
     var range = limits(), k = clamp(camera.k * factor, range.low, range.high);
-    var world = toWorld(sx, sy);
+    var world = factor > 1 ? towardContent(toWorld(sx, sy)) : toWorld(sx, sy);
     camera = {x: world[0] - (sx - size.w / 2) / k, y: world[1] - (sy - size.h / 2) / k, k: k};
     schedule();
   }
+  // Zooming in over a gap or a title heads for what is inside, so a drill lands on content, not between parts: the
+  // point that stays under the pointer moves just inside the nearest child or card of the deepest part around it.
+  function towardContent(at) {
+    var record = part(ROOT);
+    if (!record.box || !inBox(record.box, at)) return at;
+    for (;;) {
+      var targets = [];
+      record.kids.forEach(function (id) { if (part(id).box) targets.push({box: part(id).box, part: part(id)}); });
+      record.results.forEach(function (id) { var entry = model.results.get(id); if (entry && entry.box) targets.push({box: entry.box}); });
+      if (!targets.length) return at;
+      var hit = targets.find(function (target) { return inBox(target.box, at); });
+      if (hit && !hit.part) return at;
+      if (hit) { record = hit.part; continue; }
+      var near = targets.reduce(function (best, target) { return distance(target.box, at) < distance(best.box, at) ? target : best; });
+      var b = near.box, ix = Math.min(12 / camera.k, b.w / 2), iy = Math.min(12 / camera.k, b.h / 2);
+      return [clamp(at[0], b.x + ix, b.x + b.w - ix), clamp(at[1], b.y + iy, b.y + b.h - iy)];
+    }
+  }
+  function inBox(b, at) { return at[0] >= b.x && at[0] <= b.x + b.w && at[1] >= b.y && at[1] <= b.y + b.h; }
+  function distance(b, at) { return Math.hypot(Math.max(b.x - at[0], 0, at[0] - b.x - b.w), Math.max(b.y - at[1], 0, at[1] - b.y - b.h)); }
   function fitProject(instant) {
     var box = part(ROOT).box, k = Math.min(size.w / box.w, size.h / box.h), target = {x: box.x + box.w / 2, y: box.y + box.h / 2, k: k};
     // A world taller than the stage (many regions on a narrow screen) opens at full width, top-aligned, and pans down.

@@ -126,6 +126,23 @@ def test_scrolling_pans_and_control_scrolling_zooms_with_focus_elsewhere(tmp_pat
     assert "wheel ok" in out
 
 
+def test_zooming_into_a_gap_lands_on_the_nearest_content(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      const canvas = app.querySelector('svg');
+      const box = id => ['x', 'y', 'width', 'height'].map(name => +$$('.pm-part').find(n => n.getAttribute('data-part') === id).querySelector('rect').getAttribute(name));
+      const a = box('Algebra'), b = box('Analysis');
+      // Halfway across the gap between the two regions, whichever way they sit.
+      const x = a[0] + a[2] < b[0] ? (a[0] + a[2] + b[0]) / 2 : a[0] + a[2] / 2;
+      const y = a[0] + a[2] < b[0] ? a[1] + a[3] / 2 : (a[1] + a[3] + b[1]) / 2;
+      for (let i = 0; i < 12; i++) { emit(canvas, 'wheel', {deltaX: 0, deltaY: -400, ctrlKey: true, clientX: x, clientY: y}); await wait(4); }
+      await wait(30);
+      assert($$('.pm-card').length >= 1, 'a drill ends on titled results, not between parts');
+      assert(!$('.pm-hint').textContent.includes('between'), $('.pm-hint').textContent);
+      console.log('gap ok');
+    """)
+    assert "gap ok" in out
+
+
 def test_an_empty_roadmap_says_so(tmp_path: Path) -> None:
     empty = tmp_path / "empty"
     project_map.write_project_map(empty, project_map.build_project_map(
