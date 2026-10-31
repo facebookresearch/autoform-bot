@@ -10,7 +10,7 @@ when the root lies in ``GITHUB_WORKSPACE``, and ask Git when the root is
 outside it or the variable is empty; ``repository_top_level`` places the root
 in its working tree. Every Git command here runs without the caller's ``GIT_*``
 variables, so the given directory alone selects the repository; the debrief
-store and ``autoform --version`` run ``git`` too.
+store, ``work import-impact`` and ``autoform --version`` run ``git`` too.
 """
 
 from __future__ import annotations

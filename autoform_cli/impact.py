@@ -22,6 +22,9 @@ from that generation's captured bytes, then recaptures through the same binding
 and refuses any content or source-identity change. ``work import-impact`` takes
 the loaded module graph from Lean and binds every node to its captured root
 source and configured root-package artifact, so a dependency cannot shadow it.
+A module whose file Git attributes mark ``linguist-generated`` is a generated
+import root: its header belongs to the repository's generator, so the import
+edit does not claim it.
 Under ``--module-scope import-closure`` a file is a candidate when its text
 contains every component of a candidate's name, repeated until no new file
 matches (:func:`import_closure`), and Lean loads what the candidates import.
@@ -39,6 +42,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import lean_probe
+from ._repository import git
 from ._tree_snapshot import TreeSnapshotError
 from .claims import author_claim_key
 from .lean import IndexedSourceSnapshot, LeanSourceError, bind_project_source_snapshot, resolve_lean_root
@@ -903,6 +907,7 @@ class ModuleImportImpactReport:
     affected_claim_targets: tuple[str, ...]
     claim_targets: tuple[str, ...]
     module_scope: str = MODULE_IMPORT_SCOPE
+    module_generated: bool = False
 
     @property
     def selected_affected(self) -> bool:
@@ -954,6 +959,7 @@ class ModuleImportImpactReport:
             "module": self.module,
             "module_claim_target": self.module_claim_target,
             "module_claim_key": self.module_claim_key,
+            "module_generated": self.module_generated,
             "selected_affected": self.selected_affected,
             "article_local": self.article_local,
             "affected_modules": list(self.affected_modules),
@@ -1145,6 +1151,7 @@ def compute_module_import_impact(
     lean_source_revision: str = "",
     module_scope: str = MODULE_IMPORT_SCOPE,
     declaration_modules: Mapping[str, str] | None = None,
+    module_generated: bool = False,
 ) -> ModuleImportImpactReport:
     """Return the reverse-import scope of changing ``module`` imports.
 
@@ -1155,7 +1162,8 @@ def compute_module_import_impact(
     roots; this scope does not list them. It never refuses the edit merely
     because the scope is larger than one article. ``declaration_modules`` maps
     a name to the module whose source declares it; an unresolved name it places
-    in an unaffected module is not reported.
+    in an unaffected module is not reported. A ``module_generated`` header
+    belongs to the repository's generator, so it is not a claim target.
     """
 
     if module not in modules:
@@ -1244,10 +1252,11 @@ def compute_module_import_impact(
             }
         )
     )
-    # The import edit itself owns only its selected article and module header.
-    # Other article claims are reported separately: they block only when live,
-    # or become required when validation shows that their content must change.
-    claim_targets = (selected.claim_target, module_claim_target)
+    # The import edit itself owns only its selected article and module header,
+    # unless a generator writes the header. Other article claims are reported
+    # separately: they block only when live, or become required when
+    # validation shows that their content must change.
+    claim_targets = (selected.claim_target,) if module_generated else (selected.claim_target, module_claim_target)
     return ModuleImportImpactReport(
         source_revision=source_revision,
         lean_source_revision=lean_source_revision,
@@ -1263,6 +1272,7 @@ def compute_module_import_impact(
         affected_claim_targets=affected_claim_targets,
         claim_targets=claim_targets,
         module_scope=module_scope,
+        module_generated=module_generated,
     )
 
 
@@ -1456,6 +1466,7 @@ class _ImpactEvidence:
     modules: Mapping[str, ModuleEvidence]
     locate: Locator
     declaration_modules: Mapping[str, str] | None = None
+    module_generated: bool = False
 
 
 def _load_impact_evidence(
@@ -1589,6 +1600,11 @@ def _load_impact_evidence(
             snapshot=source_snapshot,
             required_modules=required_modules,
         )
+    module_generated = False
+    if require_modules and module is not None:
+        paths = _module_source_paths(libraries, source_snapshot, strict=True)
+        relative = {_name_key(name): path for name, path in paths.items()}.get(_name_key(module))
+        module_generated = relative is not None and _linguist_generated(root, relative)
 
     return _ImpactEvidence(
         source_revision=source_revision,
@@ -1599,6 +1615,7 @@ def _load_impact_evidence(
         modules=module_evidence,
         locate=_locator(libraries, source_snapshot),
         declaration_modules=declaration_modules,
+        module_generated=module_generated,
     )
 
 
@@ -1671,7 +1688,24 @@ def module_import_impact(
         lean_source_revision=evidence.lean_source_revision,
         module_scope=module_scope,
         declaration_modules=evidence.declaration_modules,
+        module_generated=evidence.module_generated,
     )
+
+
+def _linguist_generated(root: Path, relative: str) -> bool:
+    """Whether Git attributes set ``linguist-generated``, or make it ``true``, on ``relative`` under ``root``.
+
+    That is how a repository declares a generated import root. ``--cached``
+    reads ``.gitattributes`` from the index, so an unstaged edit does not
+    count; Git's local attribute files still do. A file outside a Git work
+    tree, or one Git cannot be asked about, is not generated.
+    """
+
+    try:
+        output = git(root, "check-attr", "--cached", "linguist-generated", "--", relative)
+    except ValueError:  # Git printed a name that is not UTF-8
+        return False
+    return output is not None and output.rsplit(": ", 1)[-1] in ("set", "true")
 
 
 def _locator(
@@ -1768,7 +1802,8 @@ def format_module_import_impact(report: ModuleImportImpactReport) -> list[str]:
         f"Lean build revision: {report.build_revision}",
         f"Module graph revision: {report.module_graph_revision}",
         f"Module scope: {report.module_scope}",
-        f"Module claim target: {report.module_claim_target} (key {report.module_claim_key})",
+        f"Module claim target: {report.module_claim_target} (key {report.module_claim_key})"
+        + (", not claimed: linguist-generated; regenerate it, don't edit it" if report.module_generated else ""),
         "Affected project modules: " + ", ".join(report.affected_modules),
         "Removing an import can also drop modules that only imports bring into the build; "
         "this reverse-import scope does not list them.",
