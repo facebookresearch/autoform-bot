@@ -171,8 +171,9 @@ def test_a_part_opens_at_the_scale_where_its_parts_can_be_named(tmp_path: Path) 
       assert(big().getAttribute('class').includes('pm-tile'), big().getAttribute('class'));
       assert(titles().includes('Topics'), titles().join('; '));
       assert(!$$('.pm-part').some(n => (n.getAttribute('data-part') || '').startsWith('Big/')), 'no topic is drawn yet');
-      // The tile names what it holds.
-      assert($$('.pm-inside').some(line => line.textContent.startsWith('Topic 00\u00a0· Topic 01')), $$('.pm-inside').map(l => l.textContent).join('; '));
+      // The tile shows its topics faintly, where they will be, with no text but its own title.
+      assert.strictEqual($$('.pm-mini').length, 30);
+      assert(!$$('.pm-meta').some(t => t.textContent.includes('Topic')), 'no list of contents');
       // Closer in, it opens, and its topics carry their names.
       const r = big().querySelector('rect'), x = +r.getAttribute('x') + r.getAttribute('width') / 2, y = +r.getAttribute('y') + r.getAttribute('height') / 2;
       for (let i = 0; i < 4; i++) { emit($('.pm-stage').querySelector('svg'), 'wheel', {deltaX: 0, deltaY: -400, ctrlKey: true, clientX: x, clientY: y}); await wait(10); }
@@ -284,7 +285,13 @@ def test_one_click_picks_a_part_in_place_and_its_neighbours_are_a_row_away(tmp_p
       assert.strictEqual(location.hash, '', 'picking is not navigation');
       assert.deepStrictEqual(names('uses'), ['Algebra']);
       assert(tile('Algebra').getAttribute('class').includes('pm-uses') && tile('Analysis').getAttribute('class').includes('pm-picked'));
-      assert.strictEqual($$('.pm-link').length, 1);
+      assert.strictEqual($$('.pm-link').filter(path => !path.getAttribute('class').includes('pm-flowing')).length, 1);
+      // Dots flow along it from Algebra, which is used, into Analysis.
+      const flows = $$('.pm-flowing'), start = flows[0].getAttribute('d').match(/^M([-\d.]+),([-\d.]+)/).slice(1).map(Number);
+      const gap = id => { const r = tile(id).querySelector('rect'), x = +r.getAttribute('x'), y = +r.getAttribute('y');
+        return Math.hypot(Math.max(x - start[0], 0, start[0] - x - r.getAttribute('width')), Math.max(y - start[1], 0, start[1] - y - r.getAttribute('height'))); };
+      assert.strictEqual(flows.length, 1);
+      assert(gap('Algebra') < gap('Analysis'), 'the flow starts at Algebra');
       // Its row picks Algebra where it sits, used by Analysis.
       emit($('.pm-reader').querySelector('.pm-uses').querySelector('button'), 'click'); await wait(60);
       assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Algebra');
@@ -397,3 +404,30 @@ def test_the_outline_keeps_focus_when_a_region_arrives(tmp_path: Path) -> None:
       console.log('focus ok');
     """.replace("ANALYSIS", analysis), MAP_HOLD=analysis)
     assert "focus ok" in out
+
+
+def test_escape_and_up_go_back_one_level_at_a_time(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      const trail = () => $('.pm-trail').querySelectorAll('li').map(li => li.textContent), escape = async () => { emit(app, 'keydown', {key: 'Escape'}); await wait(30); };
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'Subgroup.card_dvd'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      emit(search, 'keydown', {key: 'Enter'}); await wait(40);
+      search.blur && search.blur(); document.activeElement = null;
+      assert.deepStrictEqual(trail(), ['Library', 'Algebra', 'Groups', "Lagrange's theorem"]);
+      // The first Escape lets go of the result; each one after goes up a level.
+      await escape();
+      assert.deepStrictEqual(trail(), ['Library', 'Algebra', 'Groups']);
+      await escape();
+      assert.deepStrictEqual(trail(), ['Library', 'Algebra']);
+      await escape();
+      assert.deepStrictEqual(trail(), ['Library']);
+      // The Up button goes from a result to its part, then to the part around that.
+      search.value = 'Subgroup.card_dvd'; emit(search, 'input'); await wait(5); emit(search, 'keydown', {key: 'Enter'}); await wait(40);
+      const up = app.querySelectorAll('button').find(b => b.getAttribute('aria-label') === 'Up one level');
+      emit(up, 'click'); await wait(40);
+      assert.deepStrictEqual(trail(), ['Library', 'Algebra', 'Groups']);
+      emit(up, 'click'); await wait(40);
+      assert.deepStrictEqual(trail(), ['Library', 'Algebra']);
+      console.log('up ok');
+    """)
+    assert "up ok" in out

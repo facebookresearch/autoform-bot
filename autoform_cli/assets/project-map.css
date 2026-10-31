@@ -3,7 +3,6 @@
   --pm-bg: #f7f7f5; --pm-panel: #ffffff; --pm-fg: #1d1d1f; --pm-muted: #5f6368; --pm-faint: #9aa0a6; --pm-border: #e3e3e0;
   --pm-link: #1a5fb4; --pm-accent: #1a5fb4; --pm-region: #ffffff; --pm-region-stroke: #c9c9c4; --pm-edge: #7a7f86;
   --pm-proved: #2e7d4f; --pm-progress: #3b82c4; --pm-planned: #b9bdc2; --pm-select: #111111; --pm-dim: .38;
-  --pm-uses: #7b4fd6; --pm-used-by: #c96a12;
   --pm-font: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --pm-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -11,13 +10,13 @@
   :root:not([data-pm-theme=light]) {
     --pm-bg: #16181b; --pm-panel: #1e2024; --pm-fg: #e8eaed; --pm-muted: #a8adb4; --pm-faint: #6b7178; --pm-border: #2e3136;
     --pm-link: #8ab4f8; --pm-accent: #8ab4f8; --pm-region: #1e2024; --pm-region-stroke: #3a3e44; --pm-edge: #8a9099;
-    --pm-proved: #5cc48a; --pm-progress: #6aa8e8; --pm-planned: #565b62; --pm-select: #ffffff; --pm-uses: #b79cff; --pm-used-by: #f0a35e;
+    --pm-proved: #5cc48a; --pm-progress: #6aa8e8; --pm-planned: #565b62; --pm-select: #ffffff;
   }
 }
 :root[data-pm-theme=dark] {
   --pm-bg: #16181b; --pm-panel: #1e2024; --pm-fg: #e8eaed; --pm-muted: #a8adb4; --pm-faint: #6b7178; --pm-border: #2e3136;
   --pm-link: #8ab4f8; --pm-accent: #8ab4f8; --pm-region: #1e2024; --pm-region-stroke: #3a3e44; --pm-edge: #8a9099;
-  --pm-proved: #5cc48a; --pm-progress: #6aa8e8; --pm-planned: #565b62; --pm-select: #ffffff; --pm-uses: #b79cff; --pm-used-by: #f0a35e;
+  --pm-proved: #5cc48a; --pm-progress: #6aa8e8; --pm-planned: #565b62; --pm-select: #ffffff;
 }
 html, body { height: 100%; margin: 0; }
 body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 var(--pm-font); overflow: hidden; }
@@ -77,20 +76,30 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-part:focus-visible > rect, .pm-part.pm-focus > rect { stroke: var(--pm-accent); stroke-width: 2; outline: none; }
 .pm-part.pm-on-path > rect { stroke: var(--pm-select); stroke-width: 1.8; }
 /* The shown part's neighbours: what it builds on, what uses it, or both, in the panel's colours. */
-.pm-uses { --pm-role: var(--pm-uses); }
-.pm-used-by { --pm-role: var(--pm-used-by); }
-.pm-both { --pm-role: color-mix(in srgb, var(--pm-uses) 50%, var(--pm-used-by)); }
+.pm-uses, .pm-used-by, .pm-both { --pm-role: var(--pm-accent); }
 .pm-part.pm-uses > rect, .pm-part.pm-used-by > rect, .pm-part.pm-both > rect { stroke: var(--pm-role); stroke-width: 2.5; }
 .pm-part.pm-link-hover > rect { stroke-width: 4; fill: color-mix(in srgb, var(--pm-role, var(--pm-accent)) 10%, var(--pm-region)); }
 .pm-part.pm-picked > rect { stroke: var(--pm-select); stroke-width: 3; }
 /* A picked part's arrows to its neighbours, over the boxes they cross, with a halo in the page colour. */
-.pm-link { fill: none; stroke: var(--pm-role); stroke-linecap: round; opacity: .9; filter: drop-shadow(0 0 1.5px var(--pm-bg)); pointer-events: stroke; }
+.pm-link { fill: none; stroke: var(--pm-accent); stroke-linecap: round; opacity: .35; filter: drop-shadow(0 0 1.5px var(--pm-bg)); pointer-events: stroke; }
 .pm-link.pm-link-away { opacity: .35; }
 .pm-link.pm-link-hover { opacity: 1; stroke-width: 6px; }
-.pm-arrow-uses path { fill: var(--pm-uses); }
-.pm-arrow-used-by path { fill: var(--pm-used-by); }
+/* Dots flowing along a link, from what is used to what uses it. */
+.pm-flowing { opacity: 1; stroke-dasharray: 0.1 11; stroke-linecap: round; pointer-events: none; animation: pm-flow 1s linear infinite; }
+.pm-route.pm-flowing { stroke-width: 4; }
+@keyframes pm-flow { to { stroke-dashoffset: -11.1; } }
+@media (prefers-reduced-motion: reduce) { .pm-flowing { animation: none; } }
 .pm-title { fill: var(--pm-fg); font: 600 15px var(--pm-font); pointer-events: none; }
 .pm-title.pm-compact { font-size: 13px; }
+/* Over a closed tile's faint parts, text keeps a halo in the tile's own colour. */
+.pm-halo { paint-order: stroke; stroke: var(--pm-region); stroke-width: 4px; stroke-linejoin: round; }
+.pm-mini { pointer-events: none; stroke: var(--pm-region-stroke); stroke-width: .75; fill: var(--pm-region); opacity: .7; }
+.pm-mini-done { fill: color-mix(in srgb, var(--pm-proved) 22%, var(--pm-region)); }
+.pm-mini-progress { fill: color-mix(in srgb, var(--pm-progress) 22%, var(--pm-region)); }
+.pm-seg { pointer-events: none; }
+.pm-seg-done { fill: var(--pm-proved); }
+.pm-seg-progress { fill: var(--pm-progress); }
+.pm-seg-planned { fill: var(--pm-planned); }
 .pm-backdrop { pointer-events: none; fill: var(--pm-region); }
 .pm-backdrop-open { fill: color-mix(in srgb, var(--pm-bg) 55%, var(--pm-region)); }
 .pm-backdrop-done { fill: color-mix(in srgb, var(--pm-proved) 10%, var(--pm-region)); }
@@ -144,14 +153,12 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-list small { flex: none; color: var(--pm-muted); }
 .pm-empty { color: var(--pm-muted); }
 .pm-links h3 { display: flex; align-items: center; gap: 6px; }
-.pm-swatch { flex: none; box-sizing: border-box; width: 11px; height: 11px; border: 2.5px solid var(--pm-role); border-radius: 3px; }
 .pm-link-list button { align-items: center; }
 .pm-link-name { display: flex; flex: 1; flex-direction: column; min-width: 0; }
 .pm-link-name small { font-size: 12px; }
 .pm-meter { flex: none; width: 56px; height: 6px; overflow: hidden; border-radius: 3px; background: var(--pm-border); }
 .pm-meter i { display: block; height: 100%; background: var(--pm-role); }
 .pm-link-note { margin: 8px 0 0; font-size: 12px; }
-.pm-go-inside { margin: 2px 0 10px; }
 .pm-more > summary { margin: 18px 0 6px; color: var(--pm-muted); font-size: 12px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; cursor: pointer; }
 .pm-edge-key { display: grid; gap: 4px; margin: 4px 0 12px; color: var(--pm-muted); font-size: 12px; }
 .pm-edge-key span { display: flex; align-items: center; gap: 8px; }

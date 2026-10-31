@@ -203,9 +203,10 @@
   search.setAttribute("aria-controls", "pm-hits");
   searchBox.append(search, hits);
   var tools = el("div", "pm-tools");
-  var zoomOut = el("button", "", "−"), zoomIn = el("button", "", "+"), fitAll = el("button", "", "Whole project");
+  var zoomOut = el("button", "", "−"), zoomIn = el("button", "", "+"), upLevel = el("button", "", "↑ Up"), fitAll = el("button", "", "Whole project");
   zoomOut.setAttribute("aria-label", "Zoom out"); zoomIn.setAttribute("aria-label", "Zoom in");
-  tools.append(zoomOut, zoomIn, fitAll);
+  upLevel.setAttribute("aria-label", "Up one level"); upLevel.title = "Up one level (Escape)";
+  tools.append(zoomOut, zoomIn, upLevel, fitAll);
   top.append(home, trail, searchBox, tools);
 
   var side = el("aside", "pm-side"); side.setAttribute("aria-label", "Project outline");
@@ -215,16 +216,16 @@
   canvas.setAttribute("tabindex", "0");
   var defs = svg("defs");
   // Markers do not inherit the colour of the line that uses them, so a highlighted route has its own.
-  defs.innerHTML = ["pm-arrow", "pm-arrow-on", "pm-arrow-uses", "pm-arrow-used-by"].map(function (id) {
+  defs.innerHTML = ["pm-arrow", "pm-arrow-on"].map(function (id) {
     return '<marker id="' + id + '" class="' + id + '" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z"/></marker>';
   }).join("");
   // Routes run through the gaps between boxes, so they draw above every box; labels draw last.
   // A picked part's arrows to its neighbours cross other boxes, so they draw above everything but the labels.
   // A title over its box sits on a backdrop; backdrops have a layer of their own below every label, since keep()
   // appends a node only when it first creates it.
-  var partLayer = svg("g"), routeLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), linkLayer = svg("g"),
+  var partLayer = svg("g"), miniLayer = svg("g"), routeLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), linkLayer = svg("g"),
     backdropLayer = svg("g"), labelLayer = svg("g");
-  canvas.append(defs, partLayer, routeLayer, resultLayer, cardRouteLayer, linkLayer, backdropLayer, labelLayer);
+  canvas.append(defs, partLayer, miniLayer, routeLayer, resultLayer, cardRouteLayer, linkLayer, backdropLayer, labelLayer);
   var pin = el("div", "pm-pin"); pin.hidden = true;
   var hint = el("div", "pm-hint", "");
   stage.append(canvas, pin, hint);
@@ -419,6 +420,14 @@
     placeRect(shape, b);
     shape.setAttribute("rx", clamp(Math.min(b.w, b.h) * 0.05, 1.5, 10));
     if (!holder.querySelector("title")) holder.appendChild(svg("title")).textContent = plain(record.summary.title);
+    // Closed, a part shows its parts faintly, sized by their results and tinted by their status, where they will sit
+    // once it opens; the names come then.
+    if (!open && b.w >= 120 && b.h >= 80) record.kids.forEach(function (id) {
+      var kid = part(id);
+      if (!kid.box) return;
+      var mini = keep(miniLayer, "mini:" + id, "rect", {class: "pm-mini pm-mini-" + tileKind(kid.summary.status), rx: 2});
+      placeRect(mini, screenBox(kid.box));
+    });
   }
   // An orthogonal route as a screen path, its corners rounded to radius.
   function routePath(points, radius) {
@@ -471,11 +480,12 @@
         "stroke-width": route.tier === 3 ? 3 : route.tier === 2 ? 2 : 1.25,
         "marker-end": arrow(involved), "marker-start": route.both ? arrow(involved) : "none"});
       setText(path.firstChild || path.appendChild(svg("title")), linkWords(route, function (id) { return plain((part(id) || {summary: {title: id}}).summary.title); }));
+      if (involved && !route.both) keep(routeLayer, "rflow:" + record.id + ":" + route.from + ">" + route.to, "path", {d: path.getAttribute("d"), class: "pm-route pm-involved pm-flowing"});
     });
   }
   // The picked part's arrows, straight to each neighbour the map has a box for: in from what it builds on, out to what
-  // uses it (arrows run from what is used to what uses it), thicker for more results. A pair linked both ways gets two
-  // arrows, bowed apart.
+  // uses it, thicker for more results. Dots flow along each from what is used to what uses it. A pair linked both
+  // ways gets two arrows, bowed apart.
   function drawLinks() {
     var record = !state.selected && state.picked ? part(state.picked) : null, links = record && record.data && record.data.links;
     if (!links || !record.box) return;
@@ -487,9 +497,11 @@
         if (!other || !other.box) return;
         var there = screenBox(other.box), ends = pair[0] === "uses" ? [there, here] : [here, there];
         var away = there.x > size.w || there.y > size.h || there.x + there.w < 0 || there.y + there.h < 0;
+        var d = bow(ends[0], ends[1]), width = (1.5 + 3 * Math.sqrt(row[3] / most)).toFixed(2);
         var path = keep(linkLayer, "link:" + pair[0] + ":" + row[0], "path", {
-          d: bow(ends[0], ends[1]), class: "pm-link pm-" + pair[0] + (state.linkHover === row[0] ? " pm-link-hover" : "") + (away ? " pm-link-away" : ""),
-          "stroke-width": (1.5 + 3 * Math.sqrt(row[3] / most)).toFixed(2), "marker-end": "url(#pm-arrow-" + pair[0] + ")"});
+          d: d, class: "pm-link" + (state.linkHover === row[0] ? " pm-link-hover" : "") + (away ? " pm-link-away" : ""),
+          "stroke-width": width, "marker-end": arrow(true)});
+        keep(linkLayer, "flow:" + pair[0] + ":" + row[0], "path", {d: d, class: "pm-link pm-flowing" + (away ? " pm-link-away" : ""), "stroke-width": width});
         var title = plain(record.summary.title), name = plain(row[1]), count = num(row[3]) + (row[3] === 1 ? " result" : " results");
         setText(path.firstChild || path.appendChild(svg("title")),
           pair[0] === "uses" ? title + " uses " + count + " in " + name : count + " in " + name + " use " + title);
@@ -531,6 +543,7 @@
           class: "pm-route pm-card-route" + (route.kind === "proof" ? " pm-proof" : "") + (involved ? " pm-involved" : "") + (selected && !involved ? " pm-dimmed" : ""),
           "stroke-width": involved ? 2 : 1.25, "marker-end": arrow(involved), "marker-start": route.both ? arrow(involved) : "none"});
         setText(path.firstChild || path.appendChild(svg("title")), linkWords(route, titleOf));
+        if (involved && !route.both) keep(cardRouteLayer, "cflow:" + route.from + ">" + route.to, "path", {d: path.getAttribute("d"), class: "pm-route pm-involved pm-flowing"});
       });
     return shown > 0;
   }
@@ -585,33 +598,38 @@
         });
         return;
       }
-      var lines = slot.lines > 1 ? wrap(title, Math.max(4, Math.floor(slot.w / L.constants.TITLE_EM)), slot.lines) : [clip(title, Math.max(4, Math.floor(slot.w / L.constants.TITLE_EM)))];
-      var y = slot.baseline;
+      // The title as large as its room allows, from 15 to 30 px: the band of an open part, the top half of a closed
+      // tile. At 15 px it keeps the layout module's lines and baseline.
+      var box = screenBox(own ? record.ownBox : record.box), shut = !own && !isOpen(record, box);
+      var room = shut && !slot.overlay ? box.h / 2 : slot.band, meta = slot.detail !== "title" && !own;
+      var size = slot.overlay ? 15 : Math.round(clamp(Math.min(room * 0.4, slot.w / 7), 15, 30));
+      var perLine = Math.max(4, Math.floor(slot.w / (L.constants.TITLE_EM * size / 15)));
+      var step = size === 15 ? L.constants.LINE : Math.round(size * 1.2);
+      var most = size === 15 ? slot.lines : Math.max(1, Math.floor((room - (meta ? 22 : 0)) / step));
+      var lines = most > 1 ? wrap(title, perLine, most) : [clip(title, perLine)];
+      var y = size === 15 ? slot.baseline : slot.y + Math.round(size * 1.2);
       lines.forEach(function (line, index) {
-        setText(keep(labelLayer, "lt:" + slot.id + ":" + index, "text", {x: slot.x, y: y + index * L.constants.LINE, class: "pm-title" + cls}), line);
+        setText(keep(labelLayer, "lt:" + slot.id + ":" + index, "text", {x: slot.x, y: y + index * step,
+          class: "pm-title" + (shut ? " pm-halo" : "") + cls, style: size === 15 ? "" : "font-size:" + size + "px"}), line);
       });
-      if (slot.detail === "title" || own) return;
-      var metaY = y + (lines.length - 1) * L.constants.LINE + 18;
-      setText(keep(labelLayer, "lm:" + slot.id, "text", {x: slot.x, y: metaY, class: "pm-meta" + cls}), clip(progressText(record.summary), Math.floor(slot.w / META_EM)));
-      var api = record.summary.api || [];
-      if (slot.detail === "full" && api.length) {
-        var text = "Used elsewhere: " + api.slice(0, 4).map(function (row) { return plain(row[1]) + " ×" + num(row[2]); }).join(" · ");
-        setText(keep(labelLayer, "la:" + slot.id, "text", {x: slot.x, y: metaY + 18, class: "pm-meta" + cls}), clip(text, Math.floor(slot.w / META_EM)));
-      }
-      // A closed part names the parts it holds, so the overview says what is inside before the part opens.
-      var box = screenBox(record.box);
-      if (record.kids.length && !isOpen(record, box)) {
-        var top = metaY + (slot.detail === "full" && api.length ? 36 : 18), room = Math.floor((box.y + box.h - 6 - top) / 16) + 1;
-        // A no-break space keeps each dot with the title before it, so a line never starts with one.
-        var inside = record.kids.map(function (id) { return plain(part(id).summary.title); }).join("\u00a0· ");
-        if (room > 0) wrap(inside, Math.floor(slot.w / META_EM), room).forEach(function (line, index) {
-          setText(keep(labelLayer, "lk:" + slot.id + ":" + index, "text", {x: slot.x, y: top + index * 16, class: "pm-meta pm-inside" + cls}), line);
-        });
-      }
+      if (!meta) return;
+      // How many results, and a bar for how far along they are.
+      var metaY = y + (lines.length - 1) * step + 18, words = num(record.summary.results) + (record.summary.results === 1 ? " result" : " results");
+      setText(keep(labelLayer, "lm:" + slot.id, "text", {x: slot.x, y: metaY, class: "pm-meta" + (shut ? " pm-halo" : "") + cls}), clip(words, Math.floor(slot.w / META_EM)));
+      var barX = slot.x + words.length * META_EM + 8, barW = Math.min(90, slot.x + slot.w - barX);
+      if (barW >= 24) progressBar("lp:" + slot.id, barX, metaY - 6, barW, record.summary.status, cls);
+    });
+  }
+  function progressBar(key, x, y, width, status, cls) {
+    var counts = mix(status), total = counts.done + counts.progress + counts.planned || 1, at = x;
+    ["done", "progress", "planned"].forEach(function (kind) {
+      var w = width * counts[kind] / total;
+      keep(labelLayer, key + ":" + kind, "rect", {x: at.toFixed(1), y: y.toFixed(1), width: Math.max(0, w).toFixed(1), height: 5, class: "pm-seg pm-seg-" + kind + cls});
+      at += w;
     });
   }
   // Zoomed into a gap, the stage would be blank under the pinned title: say where the reader is and how to get out.
-  var HINT = "Click a part to see what it builds on, and again to go inside. Pinch or Control-scroll to zoom.";
+  var HINT = "Click a part to see its links, again to go inside; Escape goes back up. Pinch or Control-scroll to zoom.";
   function explainEmpty(drawn) {
     var record = viewPart(), text = state.error || HINT;
     if (!state.error && record && record.id !== ROOT && record.data && !state.selected) {
@@ -984,12 +1002,6 @@
     var summary = record.summary;
     readerInner.append(el("p", "pm-kicker", summary.parts ? "Part of the library" : "Topic"), el("h2", "", plain(summary.title)));
     readerInner.append(pathLine(chainOf(record.id).slice(0, -1)));
-    if (state.picked === record.id) {
-      var inside = el("button", "pm-button pm-go-inside", "Go inside");
-      inside.type = "button"; inside.title = "Or click it on the map again";
-      inside.addEventListener("click", function () { flyToPart(record.id).catch(report); });
-      readerInner.append(inside);
-    }
     readerInner.append(el("p", "", num(summary.results) + " results" + (summary.parts ? " in " + num(summary.parts) + " parts" : "") + "."), bar(summary.status));
     if (links) {
       var most = Math.max.apply(null, links.uses.concat(links.used_by).map(function (row) { return row[3]; }).concat([1]));
@@ -1000,7 +1012,7 @@
       readerInner.append(linkList("Used by", "used-by", links.used_by, links.used_by_total, most, home, function (row) {
         return num(row[3]) + (row[3] === 1 ? " result" : " results") + " in " + plain(row[1]) + (row[3] === 1 ? " uses it" : " use it");
       }));
-      if (links.uses.length || links.used_by.length) readerInner.append(el("p", "pm-empty pm-link-note", "On the map, parts in view are outlined: purple for what this builds on, orange for what uses it, mauve for both. Bars count the results involved."));
+      if (links.uses.length || links.used_by.length) readerInner.append(el("p", "pm-empty pm-link-note", "On the map, the parts in view are outlined, and dots flow from what is used to what uses it. Bars count the results involved."));
     }
     if (record.kids.length) { readerInner.append(el("h3", "", "Parts (" + num(record.kids.length) + ")")); readerInner.append(listOfParts(record.kids)); }
     if (summary.api && summary.api.length) {
@@ -1021,7 +1033,7 @@
   // Neighbouring parts for the panel, biggest first, each with a bar for how many results the link involves.
   function linkList(heading, role, rows, total, most, home, describe) {
     var section = el("section", "pm-links pm-" + role), title = el("h3");
-    title.append(el("i", "pm-swatch"), document.createTextNode(heading + (total ? " · " + num(total) + (total === 1 ? " part" : " parts") : "")));
+    title.append(document.createTextNode(heading + (total ? " · " + num(total) + (total === 1 ? " part" : " parts") : "")));
     section.append(title);
     if (!rows.length) { section.append(el("p", "pm-empty", role === "uses" ? "Nothing outside it." : "Nothing outside uses it.")); return section; }
     var list = el("ul", "pm-list pm-link-list");
@@ -1324,7 +1336,7 @@
     else if (event.key === "+" || event.key === "=") zoomAt(1.35, size.w / 2, size.h / 2);
     else if (event.key === "-") zoomAt(1 / 1.35, size.w / 2, size.h / 2);
     else if (event.key === "0") wholeProject();
-    else if (event.key === "Escape") { if (state.selected) select(null); else unpick(); }
+    else if (event.key === "Escape") escape();
     else return;
     if (event.key !== "0" && event.key !== "Escape") release();
     event.preventDefault(); schedule();
@@ -1334,10 +1346,26 @@
   zoomOut.addEventListener("click", function () { release(); zoomAt(1 / 1.5, size.w / 2, size.h / 2); rememberCamera(); });
   function wholeProject() { navigation(); state.focusPart = ROOT; state.picked = null; select(null, {history: false}); remember(); fitProject(); live.textContent = "Whole project"; }
   fitAll.addEventListener("click", wholeProject);
-  document.addEventListener("keydown", function (event) {
-    if (event.key === "/" && document.activeElement !== search && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
-      event.preventDefault(); search.focus(); search.select();
+  // One level up from where the reader is: from a result to its part, from a part to the part around it.
+  function upOneLevel() {
+    if (state.selected) {
+      var home = model.results.get(state.selected) && model.results.get(state.selected).home;
+      select(null, {history: false});
+      if (home) flyToPart(home).catch(report);
+      return;
     }
+    var here = state.focusPart && state.focusPart !== ROOT && part(state.focusPart) || viewPart();
+    if (!here || here.id === ROOT) return;
+    if (here.parent === ROOT || !part(here.parent)) wholeProject(); else flyToPart(here.parent).catch(report);
+  }
+  // Escape lets go of what is chosen first, then goes up a level.
+  function escape() { if (state.selected) select(null); else if (state.picked) unpick(); else upOneLevel(); }
+  upLevel.addEventListener("click", function () { unpick(); upOneLevel(); });
+  document.addEventListener("keydown", function (event) {
+    var active = document.activeElement, typing = !!active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
+    if (event.key === "/" && active !== search && !typing) {
+      event.preventDefault(); search.focus(); search.select();
+    } else if (event.key === "Escape" && !typing && !event.defaultPrevented) { event.preventDefault(); escape(); }
   });
   // The world is packed for the stage's shape: a resize refits the camera, and turning between portrait and landscape repacks.
   if (window.ResizeObserver) new ResizeObserver(function () {
