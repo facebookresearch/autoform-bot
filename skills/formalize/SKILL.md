@@ -29,10 +29,9 @@ commit.
 
 For a direct formalization request, use a compatible native persistent Goal when
 available and complete one useful frontier pass. When a run starts or resumes,
-first read the review threads on the pull requests this project's runs opened,
-as their reports or the user name them, and decide each finding: fix it under
-the rules below, note why it is resolved or moot, or ask the user; reply on a
-pull request only if the request covers posting. Native subagents may work
+and at each later re-read of the frontier, the lead first reads and decides the
+reviews on the project's pull requests as the [review
+steps](references/pull-request-reviews.md) say. Native subagents may work
 independent leaves in separate Git worktrees; no custom scheduler or provider
 adapter is part of the protocol. A subagent may keep its worktree for a package
 of related leaves, such as a container's, that the lead confirms together. It
@@ -246,8 +245,9 @@ handed off, the lead removes its worktree with `git worktree remove` (never
 there; first make sure a branch points at any handed-off commit. Autoform never
 clears Lake's shared artifact cache, so tell the user if disk runs low. Re-read
 the work frontier from the updated shared branch and repeat while independent
-ready leaves and authorized capacity remain. Stop when the frontier is empty or
-every remaining attempt has a concrete mathematical or ownership blocker. Then
+ready leaves and authorized capacity remain. Stop when the frontier is empty and
+no accepted review finding awaits repair, or every remaining attempt has a
+concrete mathematical or ownership blocker. Then
 the lead follows [Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with
 `--skill formalize`. Report changed articles and Lean files, integrated commits,
 branches and commits handed off, pull requests opened, any claims released or
