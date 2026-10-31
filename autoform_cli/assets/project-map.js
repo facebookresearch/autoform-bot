@@ -148,6 +148,7 @@
           if (record.results.indexOf(row.id) < 0) record.results.push(row.id);
         });
         packChildren(record);
+        if (record.parent === ROOT) outlineSoon();
         schedule();
         return record;
       }, function (error) {
@@ -214,8 +215,11 @@
   }).join("");
   // Routes run through the gaps between boxes, so they draw above every box; labels draw last.
   // A picked part's arrows to its neighbours cross other boxes, so they draw above everything but the labels.
-  var partLayer = svg("g"), routeLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), linkLayer = svg("g"), labelLayer = svg("g");
-  canvas.append(defs, partLayer, routeLayer, resultLayer, cardRouteLayer, linkLayer, labelLayer);
+  // A title over its box sits on a backdrop; backdrops have a layer of their own below every label, since keep()
+  // appends a node only when it first creates it.
+  var partLayer = svg("g"), routeLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), linkLayer = svg("g"),
+    backdropLayer = svg("g"), labelLayer = svg("g");
+  canvas.append(defs, partLayer, routeLayer, resultLayer, cardRouteLayer, linkLayer, backdropLayer, labelLayer);
   var pin = el("div", "pm-pin"); pin.hidden = true;
   var hint = el("div", "pm-hint", "");
   stage.append(canvas, pin, hint);
@@ -565,7 +569,7 @@
       var long = short + " directly in " + plain(record.summary.title);
       var title = own ? (!slot.compact && long.length * TITLE_EM <= slot.w ? long : short) : plain(record.summary.title);
       if (slot.overlay) {
-        var b = screenBox(own ? record.ownBox : record.box), backdrop = keep(labelLayer, "lb:" + slot.id, "rect", {
+        var b = screenBox(own ? record.ownBox : record.box), backdrop = keep(backdropLayer, "lb:" + slot.id, "rect", {
           class: "pm-backdrop pm-backdrop-" + (own ? "open" : isOpen(record, b) ? "open" : tileKind(record.summary.status)) + cls, rx: 6});
         placeRect(backdrop, {x: b.x + 1, y: b.y + 1, w: b.w - 2, h: slot.band});
       }
@@ -860,7 +864,8 @@
     return node;
   }
   function renderSide() {
-    var index = model.index;
+    var index = model.index, active = document.activeElement, focused = active && sideInner.contains(active) ? active.dataset.part : null;
+    var scroll = side.scrollTop;
     sideInner.replaceChildren();
     sideInner.append(el("h1", "pm-project", plain(index.title)));
     var stats = el("div", "pm-stats"), counts = mix(index.status);
@@ -916,7 +921,13 @@
       });
       sideInner.append(facets);
     }
+    side.scrollTop = scroll;
+    var again = focused && Array.from(sideInner.querySelectorAll("button")).find(function (button) { return button.dataset.part === focused; });
+    if (again) again.focus();
   }
+  // The outline lists each region's parts once they arrive.
+  var outlineTimer = 0;
+  function outlineSoon() { clearTimeout(outlineTimer); outlineTimer = setTimeout(renderSide, 400); }
   var shownPart = null;
   function pathLine(chain) {
     var line = el("p", "pm-path");
@@ -1306,10 +1317,6 @@
       : Promise.resolve(remember(true));
     start.catch(report);
     schedule();
-    // The outline grows as regions load.
-    var outlineTimer = 0;
-    var observer = new MutationObserver(function () { clearTimeout(outlineTimer); outlineTimer = setTimeout(renderSide, 400); });
-    observer.observe(partLayer, {childList: true});
   }).catch(function (error) {
     readerInner.replaceChildren(el("p", "pm-empty", "The map could not load: " + error.message));
   });

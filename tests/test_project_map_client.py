@@ -145,8 +145,8 @@ def test_zooming_into_a_gap_lands_on_the_nearest_content(tmp_path: Path) -> None
     assert "gap ok" in out
 
 
-def test_a_part_opens_at_the_scale_where_its_parts_can_be_named(tmp_path: Path) -> None:
-    # Thirty one-result topics beside a chapter twenty times their size: at the opening, each topic would be a sliver.
+def _wide(tmp_path: Path) -> Path:
+    """Thirty one-result topics beside a chapter twenty times their size: at the opening, each topic would be a sliver."""
     wide = tmp_path / "wide"
     records: list[dict[str, object]] = [
         {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
@@ -160,6 +160,10 @@ def test_a_part_opens_at_the_scale_where_its_parts_can_be_named(tmp_path: Path) 
     records += [{"id": f"Huge/r{index:03d}", "kind": "node", "title": f"Main {index:03d}", "parent": "Huge", "result": True,
                  "status": "fully_proved"} for index in range(600)]
     project_map.write_project_map(wide, project_map.build_project_map(records, []))
+    return wide
+
+
+def test_a_part_opens_at_the_scale_where_its_parts_can_be_named(tmp_path: Path) -> None:
     out = _walk(tmp_path, r"""
       const big = () => $$('.pm-part').find(n => n.getAttribute('data-part') === 'Big');
       const titles = () => $$('.pm-title').map(t => t.textContent);
@@ -174,7 +178,7 @@ def test_a_part_opens_at_the_scale_where_its_parts_can_be_named(tmp_path: Path) 
       assert(big().getAttribute('class').includes('pm-open'), big().getAttribute('class'));
       assert(titles().filter(t => t.startsWith('Topic ')).length >= 4, titles().join('; '));
       console.log('open ok');
-    """, wide)
+    """, _wide(tmp_path))
     assert "open ok" in out
 
 
@@ -355,3 +359,39 @@ def test_history_holds_one_entry_per_place_and_the_camera_a_flight_ends_at(tmp_p
       console.log('history ok');
     """, MAP_HASH="#result=" + "Algebra%2Fgroups%2Flagrange")
     assert "history ok" in out
+
+
+def test_titles_always_draw_above_backdrops(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      const canvas = $('.pm-stage').querySelector('svg');
+      const check = () => {
+        const nodes = []; (function walk(node) { nodes.push(node); node.children.forEach(walk); })(canvas);
+        const kind = node => (node.getAttribute && node.getAttribute('class') || '');
+        const lastBackdrop = nodes.findLastIndex(node => kind(node).includes('pm-backdrop'));
+        const firstTitle = nodes.findIndex(node => kind(node).includes('pm-title'));
+        assert(lastBackdrop < 0 || firstTitle < 0 || lastBackdrop < firstTitle, 'a backdrop is drawn over a title');
+        return lastBackdrop >= 0;
+      };
+      // Zooming into the topics turns some titles into overlays on backdrops, after others were drawn.
+      const big = $$('.pm-part').find(n => n.getAttribute('data-part') === 'Big').querySelector('rect');
+      const x = +big.getAttribute('x') + big.getAttribute('width') / 2, y = +big.getAttribute('y') + big.getAttribute('height') / 2;
+      let backdrops = check();
+      for (let i = 0; i < 10; i++) { emit(canvas, 'wheel', {deltaX: 0, deltaY: -150, ctrlKey: true, clientX: x, clientY: y}); await wait(10); backdrops = check() || backdrops; }
+      assert(backdrops, 'some title went over its box');
+      console.log('paint ok');
+    """, _wide(tmp_path))
+    assert "paint ok" in out
+
+
+def test_the_outline_keeps_focus_when_a_region_arrives(tmp_path: Path) -> None:
+    analysis = "parts/" + project_map.part_file("Analysis")
+    out = _walk(tmp_path, r"""
+      const button = () => $('.pm-side').querySelectorAll('button').find(b => b.dataset.part === 'Algebra');
+      button().focus();
+      net.release('ANALYSIS'); await wait(40);
+      // The outline now lists Analysis's parts, and focus is still on Algebra's row.
+      assert($('.pm-side').querySelectorAll('button').some(b => b.dataset.part === 'Analysis/series'), 'the outline grew');
+      assert.strictEqual(document.activeElement, button());
+      console.log('focus ok');
+    """.replace("ANALYSIS", analysis), MAP_HOLD=analysis)
+    assert "focus ok" in out

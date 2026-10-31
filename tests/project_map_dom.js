@@ -152,9 +152,9 @@ function emit(node, type, props) { return node.dispatch(type, props); }
 (async () => {
   await wait(20);
   const body = fs.readFileSync(scriptPath, "utf8");
-  const run = new Function("app", "wait", "$", "$$", "emit", "assert", "history", "location", "errors", "net", "return (async () => {" + body + "})();");
+  const run = new Function("app", "wait", "$", "$$", "emit", "assert", "history", "location", "errors", "net", "document", "return (async () => {" + body + "})();");
   try {
-    await run(host, wait, $, $$, emit, assert, history, location, errors, net);
+    await run(host, wait, $, $$, emit, assert, history, location, errors, net, document);
   } catch (e) {
     console.error("SCRIPT FAILED:", e && e.stack || e);
     process.exitCode = 1;
