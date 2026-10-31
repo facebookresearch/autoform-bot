@@ -236,7 +236,7 @@ def build_review_bundle(
     macros = _project_macros(graph.blueprint_dir) if macros is None else macros
     # _report_findings found a record for each, and an article_id.
     return ReviewBundle(
-        tuple(_current_article(graph, node, skeleton.node(node.id), macros) for node in review_nodes)
+        tuple(_current_article(node, skeleton.node(node.id), macros) for node in review_nodes)
     )
 
 
@@ -560,7 +560,7 @@ def _node_findings(
         )
 
 
-def _current_article(graph: Graph, node: Node, record: NodeSkeleton, macros: Mapping[str, object]) -> ReviewArticle:
+def _current_article(node: Node, record: NodeSkeleton, macros: Mapping[str, object]) -> ReviewArticle:
     """The review evidence for ``node`` from its extracted ``record``, with the project ``macros`` it uses."""
 
     statement = canonical_statement(node)
