@@ -118,6 +118,9 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-list button:hover, .pm-list button:focus-visible { color: var(--pm-link); outline: none; }
 .pm-list small { flex: none; color: var(--pm-muted); }
 .pm-empty { color: var(--pm-muted); }
+.pm-edge-key { display: grid; gap: 4px; margin: 4px 0 12px; color: var(--pm-muted); font-size: 12px; }
+.pm-edge-key span { display: flex; align-items: center; gap: 8px; }
+.pm-edge-key svg { flex: none; overflow: visible; }
 .pm-link { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--pm-border); }
 .pm-link small { flex: none; color: var(--pm-muted); }
 .pm-more { margin-top: 6px; padding: 4px 0; border: 0; background: none; color: var(--pm-link); font: inherit; cursor: pointer; }

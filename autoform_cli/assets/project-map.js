@@ -479,8 +479,10 @@
       setText(keep(labelLayer, "ct:" + row.id + ":" + index, "text", {x: b.x + pad, y: b.y + pad + 13 + index * 17, class: "pm-card-title" + cls}), line);
     });
     if (b.h >= 52) {
-      var stub = view.stubs[row.id], meta = statusWords(row.status) + (stub && stub.usedBy ? " · used " + num(stub.usedBy) + "× elsewhere" : "");
-      setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: b.y + b.h - pad, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
+      // The card's fill says it is finished, the common case; the line names any other status.
+      var stub = view.stubs[row.id], meta = [tileKind(row.status) === "done" ? "" : statusWords(row.status),
+        stub && stub.usedBy ? "used " + num(stub.usedBy) + "× elsewhere" : ""].filter(Boolean).join(" · ");
+      if (meta) setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: b.y + b.h - pad, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
     }
     return true;
   }
@@ -735,6 +737,13 @@
       var item = el("span"), swatch = el("i"); swatch.style.background = color(pair[0]); item.append(swatch, document.createTextNode(pair[1])); legend.append(item);
     });
     sideInner.append(legend);
+    var key = el("div", "pm-edge-key");
+    [["", 1.25, "points to what uses it"], [" pm-proof", 1.25, "used only in proofs"], ["", 3, "more links"]].forEach(function (row) {
+      var item = el("span"), sample = svg("svg", {width: 30, height: 10, "aria-hidden": "true"});
+      sample.appendChild(svg("path", {d: "M2,5H24", class: "pm-route" + row[0], "stroke-width": row[1], "marker-end": arrow(false)}));
+      item.append(sample, document.createTextNode(row[2])); key.append(item);
+    });
+    sideInner.append(key);
     var outline = el("ul", "pm-outline");
     index.regions.forEach(function (summary) {
       var item = el("li"), button = el("button");

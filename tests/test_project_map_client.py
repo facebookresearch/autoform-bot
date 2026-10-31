@@ -92,7 +92,7 @@ def test_zooming_into_a_region_opens_it_in_place(tmp_path: Path) -> None:
       assert.deepStrictEqual($('.pm-trail').querySelectorAll('li').map(li => li.textContent), ['Library']);
       assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Library');
       // Zoom towards Lagrange's theorem.
-      const canvas = app.querySelector('svg'), card = $$('.pm-result')[0].querySelector('rect');
+      const canvas = $('.pm-stage').querySelector('svg'), card = $$('.pm-result')[0].querySelector('rect');
       const x = +card.getAttribute('x') + card.getAttribute('width') / 2, y = +card.getAttribute('y') + card.getAttribute('height') / 2;
       for (let i = 0; i < 3; i++) { emit(canvas, 'wheel', {deltaX: 0, deltaY: -320, ctrlKey: true, clientX: x, clientY: y}); await wait(4); }
       await wait(20);
@@ -108,7 +108,7 @@ def test_zooming_into_a_region_opens_it_in_place(tmp_path: Path) -> None:
 
 def test_scrolling_pans_and_control_scrolling_zooms_with_focus_elsewhere(tmp_path: Path) -> None:
     out = _walk(tmp_path, r"""
-      const search = $('.pm-search').querySelector('input'), canvas = app.querySelector('svg');
+      const search = $('.pm-search').querySelector('input'), canvas = $('.pm-stage').querySelector('svg');
       emit(search, 'focus');
       const box = () => ['x', 'y', 'width'].map(name => +$$('.pm-part')[0].querySelector('rect').getAttribute(name));
       const [x, y, w] = box();
@@ -128,7 +128,7 @@ def test_scrolling_pans_and_control_scrolling_zooms_with_focus_elsewhere(tmp_pat
 
 def test_zooming_into_a_gap_lands_on_the_nearest_content(tmp_path: Path) -> None:
     out = _walk(tmp_path, r"""
-      const canvas = app.querySelector('svg');
+      const canvas = $('.pm-stage').querySelector('svg');
       const box = id => ['x', 'y', 'width', 'height'].map(name => +$$('.pm-part').find(n => n.getAttribute('data-part') === id).querySelector('rect').getAttribute(name));
       const a = box('Algebra'), b = box('Analysis');
       // Halfway across the gap between the two regions, whichever way they sit.
@@ -167,7 +167,7 @@ def test_a_part_opens_at_the_scale_where_its_parts_can_be_named(tmp_path: Path) 
       assert(!$$('.pm-part').some(n => (n.getAttribute('data-part') || '').startsWith('Big/')), 'no topic is drawn yet');
       // Closer in, it opens, and its topics carry their names.
       const r = big().querySelector('rect'), x = +r.getAttribute('x') + r.getAttribute('width') / 2, y = +r.getAttribute('y') + r.getAttribute('height') / 2;
-      for (let i = 0; i < 4; i++) { emit(app.querySelector('svg'), 'wheel', {deltaX: 0, deltaY: -400, ctrlKey: true, clientX: x, clientY: y}); await wait(10); }
+      for (let i = 0; i < 4; i++) { emit($('.pm-stage').querySelector('svg'), 'wheel', {deltaX: 0, deltaY: -400, ctrlKey: true, clientX: x, clientY: y}); await wait(10); }
       await wait(30);
       assert(big().getAttribute('class').includes('pm-open'), big().getAttribute('class'));
       assert(titles().filter(t => t.startsWith('Topic ')).length >= 4, titles().join('; '));
