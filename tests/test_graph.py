@@ -1081,11 +1081,13 @@ def test_check_warns_about_a_declaration_command_with_no_caption(
 ) -> None:
     """Issue #485: render captioned such an article "Node", and audit skips its Lean kind, with no sign of either.
 
-    Modifiers before a known command, and a known command in capitals, pass quietly.
+    Modifiers before a known command, including the module system's `public`, and a known command in capitals,
+    pass quietly.
     """
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "chapter/quiet.md", "# Quiet\n", declaration="noncomputable def")
     _node(blueprint, "chapter/hidden.md", "# Hidden\n", declaration="Opaque")
+    _node(blueprint, "chapter/module.md", "# Module\n", declaration="public irreducible_def")
     assert main(["check", str(blueprint)]) == 0
     assert "warning:" not in capsys.readouterr().out
 

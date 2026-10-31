@@ -44,6 +44,7 @@ from autoform_cli.render import (
     PublicationError,
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
+    _declaration_label,
     _dependency_sorted,
     _display_title,
     _document_body,
@@ -583,6 +584,15 @@ def test_statement_headings_and_references_do_not_repeat_the_kind(tmp_path: Path
     # The graph keeps the authored titles.
     chapter = json.loads((tmp_path / "out/dependencies/chapters/roadmap.json").read_text(encoding="utf-8"))
     assert {node["id"]: node["title"] for node in chapter["nodes"]} == titles
+
+
+def test_a_caption_names_the_command_after_its_modifiers_or_reads_node() -> None:
+    def caption(declaration: str | None) -> str:
+        return _declaration_label(SimpleNamespace(catalog=None, declaration=declaration))
+
+    assert [caption(word) for word in ("irreducible_def", "public def", "noncomputable  Opaque", "functor", None)] == [
+        "Definition", "Definition", "Definition", "Functor", "Node"
+    ]
 
 
 def test_a_declaration_with_no_caption_reads_as_written(tmp_path: Path) -> None:

@@ -40,8 +40,8 @@ These pass `check` with a warning:
 - A `declaration` whose command, after modifiers such as `noncomputable`, is
   none of `abbrev`, `axiom`, `class`, `corollary`, `def`, `definition`,
   `example`, `inductive`, `instance`, `irreducible_def`, `lemma`, `opaque`,
-  `proposition`, `structure` and `theorem`: render captions it as written, and
-  `audit` does not compare the Lean target's kind with it.
+  `proposition`, `structure` and `theorem`: render captions it as written,
+  capitalized, and `audit` does not compare the Lean target's kind with it.
 
 `check` also warns, naming the file and the line, about markup a published page
 could use to run script or pass for the site's own markup; each warning says

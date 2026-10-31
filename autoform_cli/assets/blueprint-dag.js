@@ -17,7 +17,7 @@
     lemma: "Lemma", opaque: "Definition", proposition: "Proposition", structure: "Structure", theorem: "Theorem"}));
   // As status.declaration_command reads it: modifiers such as "noncomputable" drop, and a command with no caption reads as written.
   function kindWord(declaration) {
-    var modifiers = ["local", "noncomputable", "partial", "private", "protected", "scoped", "unsafe"];
+    var modifiers = ["local", "noncomputable", "partial", "private", "protected", "public", "scoped", "unsafe"];
     var words = (declaration || "").split(/\s+/).filter(Boolean);
     while (words.length > 1 && modifiers.indexOf(words[0].toLowerCase()) >= 0) words.shift();
     var command = words.join(" ");

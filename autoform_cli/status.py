@@ -40,7 +40,7 @@ DEFINITION_DECLARATIONS = frozenset(
 #: Modifiers that may precede the command without changing what it introduces,
 #: as in ``noncomputable def``.
 _DECLARATION_MODIFIERS = frozenset(
-    {"local", "noncomputable", "partial", "private", "protected", "scoped", "unsafe"}
+    {"local", "noncomputable", "partial", "private", "protected", "public", "scoped", "unsafe"}
 )
 
 
