@@ -320,7 +320,7 @@
     used = new Set();
     deepestAtCenter = part(ROOT);
     var onPath = state.selected && model.results.get(state.selected) ? new Set(chainOf(model.results.get(state.selected).home)) : null;
-    var labelBoxes = {}, opened = [], communities = [], drawn = new Set();
+    var labelBoxes = {}, closed = {}, opened = [], communities = [], drawn = new Set();
     (function visit(record) {
       if (!record.box) return;
       var b = screenBox(record.box);
@@ -332,6 +332,7 @@
         drawPart(record, b, open, onPath);
         drawn.add(record.id);
         if (b.w >= LABEL_MIN_W) labelBoxes[record.id] = record.box;
+        if (!open) closed[record.id] = true;
       }
       if (!open) return;
       opened.push(record);
@@ -340,7 +341,7 @@
       // Beside other children, a part's own results have a band of their own to name them.
       if (record.ownBox && record.ownBox.band && record.kids.length && screenBox(record.ownBox).w >= LABEL_MIN_W) labelBoxes[record.id + "#results"] = record.ownBox;
     })(part(ROOT));
-    var slots = L.placeLabels(labelBoxes, cornerCamera(), size), labelled = new Set(slots.map(function (slot) { return slot.id; }));
+    var slots = L.placeLabels(labelBoxes, cornerCamera(), size, closed), labelled = new Set(slots.map(function (slot) { return slot.id; }));
     opened.forEach(function (record) { drawRoutes(record, labelled); });
     communities.forEach(function (record) { if (drawCommunity(record)) drawn.add(record.id + "#results"); });
     drawLabels(slots);
@@ -457,8 +458,8 @@
     }
     return true;
   }
-  // Titles and progress in each box's header band, at fixed sizes, where the layout module finds room for them. Narrow
-  // boxes get one short title line. A box whose band is still too thin gets its title over its top, on a backdrop in
+  // Titles and progress in each box's header band, at fixed sizes, where the layout module finds room for them. A
+  // closed tile's title wraps down the tile, up to the lines the module allows. A box whose band is still too thin gets its title over its top, on a backdrop in
   // its own fill; nothing inside it is labelled yet, so nothing is covered.
   function drawLabels(slots) {
     slots.forEach(function (slot) {
@@ -475,17 +476,19 @@
         placeRect(backdrop, {x: b.x + 1, y: b.y + 1, w: b.w - 2, h: slot.band});
       }
       if (slot.compact) {
-        setText(keep(labelLayer, "lc:" + slot.id, "text", {x: slot.x, y: slot.y + Math.min(30, slot.band / 2 + 5), class: "pm-title pm-compact" + cls}),
-          clip(title, Math.max(3, Math.floor(slot.w / COMPACT_EM))));
+        wrap(title, Math.max(3, Math.floor(slot.w / COMPACT_EM)), slot.lines).forEach(function (line, index) {
+          setText(keep(labelLayer, "lc:" + slot.id + ":" + index, "text", {x: slot.x, y: slot.y + Math.min(30, slot.band / 2 + 5) + index * L.constants.COMPACT_LINE,
+            class: "pm-title pm-compact" + cls}), line);
+        });
         return;
       }
-      var lines = slot.lines === 2 ? wrap(title, Math.max(4, Math.floor(slot.w / TITLE_EM)), 2) : [clip(title, Math.max(4, Math.floor(slot.w / TITLE_EM)))];
+      var lines = slot.lines > 1 ? wrap(title, Math.max(4, Math.floor(slot.w / TITLE_EM)), slot.lines) : [clip(title, Math.max(4, Math.floor(slot.w / TITLE_EM)))];
       var y = slot.y + Math.min(30, slot.band / 2 + 6);
       lines.forEach(function (line, index) {
-        setText(keep(labelLayer, "lt:" + slot.id + ":" + index, "text", {x: slot.x, y: y + index * 20, class: "pm-title" + cls}), line);
+        setText(keep(labelLayer, "lt:" + slot.id + ":" + index, "text", {x: slot.x, y: y + index * L.constants.LINE, class: "pm-title" + cls}), line);
       });
       if (slot.detail === "title" || own) return;
-      var metaY = y + (lines.length - 1) * 20 + 18;
+      var metaY = y + (lines.length - 1) * L.constants.LINE + 18;
       setText(keep(labelLayer, "lm:" + slot.id, "text", {x: slot.x, y: metaY, class: "pm-meta" + cls}), clip(progressText(record.summary), Math.floor(slot.w / META_EM)));
       var api = record.summary.api || [];
       if (slot.detail === "full" && api.length) {
