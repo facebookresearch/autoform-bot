@@ -591,6 +591,7 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
         ),
         ("structure Pair where\n  fst : Cfg := {\n  a := 1\n  b := 2 }\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
         ("structure Pair where fst : Cfg := {\n  a := 1\n  b := 2 }\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where fst : Nat := (id\n                     x : Nat)\n                     snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
         ("structure Pair (n : Nat) where\n  fst : Int := 1 +\n  (n : Int)\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
         ("structure Pair where\n  fst : Nat := 3 !\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
         (
@@ -661,7 +662,7 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
          "scoped-notation-at-the-field-column", "field-without-a-space", "command-with-binders-at-the-column",
          "command-after-a-header", "unknown-command-after-a-header", "type-at-the-field-column",
          "binders-continuing-a-term", "tactics-at-the-field-column", "structure-instance-at-the-field-column",
-         "structure-instance-after-where", "operator-ending-a-line", "postfix-factorial",
+         "structure-instance-after-where", "ascription-after-where", "operator-ending-a-line", "postfix-factorial",
          "term-after-set-option-in", "bracket-after-where-closing-deeper", "command-after-an-open-line",
          "scoped-command-after-an-open-line", "bracket-closing-after-where", "do-block-in-brackets",
          "identifier-ending-in-do", "guillemet-holding-a-bracket", "do-block-at-the-field-column",
