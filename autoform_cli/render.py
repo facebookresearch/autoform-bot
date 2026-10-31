@@ -2254,7 +2254,11 @@ def _render_landing_page(
             + '">Read the book</a>'
         )
         # The shared shell is attached after all full reading content is final.
-        reading = f'<div class="bp-landing-intro">{hero}{book_link}{next_up}</div>'
+        # The whole-project map sits beside the book.
+        map_link = ('<a class="bp-intro-map" href="'
+                    + html.escape(_as_published(relative_link(destination / MAP_PAGE, page, ".html")), quote=True)
+                    + '">Open the map</a>')
+        reading = f'<div class="bp-landing-intro">{hero}{book_link}{map_link}{next_up}</div>'
         return "\n".join([*front, "  - footer", "---", "", reading]).rstrip() + "\n"
     # A roadmap without articles has nothing to explore, so the hero stands
     # over its status breakdown.
@@ -4240,7 +4244,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-landing-intro.bp-landing-intro .bp-hero-coverage {{ margin-top: 6px; font-size: 12px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero-coverage-link {{ margin-left: 0; }}
-.bp-landing-intro.bp-landing-intro .bp-intro-book {{
+.bp-landing-intro.bp-landing-intro .bp-intro-book,
+.bp-landing-intro.bp-landing-intro .bp-intro-map {{
   display: inline-block;
   margin-top: 14px;
   color: var(--bp-link);
@@ -4248,7 +4253,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-weight: 600;
   text-decoration: none;
 }}
-.bp-intro-book::after {{ content: " →"; }}
+.bp-intro-book::after, .bp-intro-map::after {{ content: " →"; }}
+.bp-intro-book + .bp-intro-map {{ margin-left: 16px; }}
 .bp-landing-intro.bp-landing-intro .bp-next-target {{ margin: 14px 0 0; padding: 10px 12px; }}
 .bp-landing-intro.bp-landing-intro .bp-next-title {{ font-size: 14px; font-weight: 600; }}
 .bp-landing-intro.bp-landing-intro .bp-next-why,
