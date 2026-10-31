@@ -157,6 +157,14 @@ date when the release is tagged.
   in its outline, breadcrumbs, paged inventory and related-reading controls, using safe MathJax
   service and project macros. Code stays literal, canonical links keep focus
   and native modifiers, and graph labels remain as typed (#442).
+- **Import impact.** In `work import-impact`, a library whose `globs` name
+  other modules but not its own root no longer claims the files under that
+  root that no glob matches, which Lake does not build for it. A library
+  nested there no longer makes the command refuse a project Lake builds with
+  "maps to more than one module". A loaded local module that no library
+  builds is now refused with exit 2, and under
+  `--module-scope import-closure` an article naming a declaration in such a
+  file is listed in `unresolved_articles` (#500).
 - **Book navigation.** The generated `SUMMARY.md` nests each book page under
   its chapter's README, written in book order. A landing page that linked a
   deep page before its chapters, or a folder with no README in the book, put a

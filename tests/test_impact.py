@@ -29,6 +29,7 @@ from autoform_cli.impact import (
     format_module_import_impact,
     import_closure,
     module_import_impact,
+    _module_source_paths,
     parse_impact_output,
     parse_module_evidence,
     project_modules,
@@ -1433,6 +1434,28 @@ def test_project_modules_accept_a_library_nested_in_another_srcdir(tmp_path: Pat
     )
 
 
+def test_project_modules_claim_only_modules_lake_can_build(tmp_path: Path) -> None:
+    # Root Foo prefixes Foo.Extra, but Lake builds a module under a root only
+    # when a glob also matches the root, and Foo.Basic does not match Foo. So
+    # Foo/Extra.lean is only the root module of the library nested in Foo/.
+    root = _sources(tmp_path, "Foo", "Foo.Basic", "Foo.Extra")
+    configured = (
+        _library(root, "Foo.Basic", roots=("Foo",)),
+        _library(root / "Foo", roots=("Extra",)),
+    )
+
+    snapshot = snapshot_project_sources(tmp_path)
+    assert project_modules(configured, snapshot, strict_module_ownership=True) == (
+        ("Extra", "Foo.Basic"),
+        ("Basic", "Extra", "Foo", "Foo.Basic", "Foo.Extra"),
+    )
+    # Foo.lean is under root Foo too, but no library builds it, so no claim.
+    assert _module_source_paths(configured, snapshot, strict=True) == {
+        "Foo.Basic": "Foo/Basic.lean",
+        "Extra": "Foo/Extra.lean",
+    }
+
+
 def test_project_modules_match_library_roots_by_whole_components(tmp_path: Path) -> None:
     # Root `Demo` selects `Demo.X` but not `DemoTests.DemoTests`, so
     # DemoTests/DemoTests.lean is only the root module of DemoTests.
@@ -2221,6 +2244,71 @@ def test_cli_import_impact_has_the_probe_walk_each_glob_directory(tmp_path: Path
     directory = str(lean_root.resolve() / "Demo" / "Sub")
     assert _glob_walks(str(calls[0]["probe"])) == [[directory, ["Demo", "Sub"], "Demo.Sub.+"]]
     assert "unless selectedModules.contains (base ++ sub) do" in str(calls[0]["probe"])
+
+
+def _unbuilt_root_lean(tmp_path: Path) -> Path:
+    """Library Foo builds only its glob Foo.Basic; library Extra, nested in Foo/, builds Extra."""
+
+    lean_root = tmp_path / "lean"
+    (lean_root / "Foo").mkdir(parents=True)
+    (lean_root / "lakefile.toml").write_text(
+        'name = "Foo"\n\n[[lean_lib]]\nname = "Foo"\nglobs = ["Foo.Basic"]\n\n'
+        '[[lean_lib]]\nname = "Extra"\nsrcDir = "Foo"\n',
+        encoding="utf-8",
+    )
+    (lean_root / "Foo.lean").write_text("import Foo.Basic\n", encoding="utf-8")
+    (lean_root / "Foo" / "Basic.lean").write_text("def Foo.base (n : Nat) : Nat := n\n", encoding="utf-8")
+    (lean_root / "Foo" / "Extra.lean").write_text("import Foo.Basic\n", encoding="utf-8")
+    return lean_root
+
+
+def test_cli_import_impact_accepts_a_root_lake_does_not_build(tmp_path: Path, monkeypatch, capsys) -> None:
+    # Library Foo builds only its glob Foo.Basic; library Extra, nested in Foo/,
+    # builds Foo/Extra.lean as Extra, so the file has one module.
+    project = _blueprint_project(tmp_path, "Foo")
+    lean_root = _unbuilt_root_lean(tmp_path)
+    _stub_probe(
+        monkeypatch,
+        records=[_payload("Foo.base", kind="def", module="Foo.Basic")],
+        modules=(
+            ModuleEvidence("Foo.Basic", str((lean_root / "Foo/Basic.lean").resolve())),
+            ModuleEvidence("Extra", str((lean_root / "Foo/Extra.lean").resolve()), ("Foo.Basic",)),
+        ),
+    )
+
+    code = cli.main(
+        ["work", "import-impact", _BASE_ID, "Foo.Basic", str(project), "--lean-root", str(lean_root), "--json"]
+    )
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    assert json.loads(output.out)["affected_modules"] == ["Extra", "Foo.Basic"]
+
+
+def test_cli_import_impact_refuses_a_loaded_module_no_library_builds(tmp_path: Path, monkeypatch, capsys) -> None:
+    # Foo.lean is under library Foo's root, but no glob matches Foo, so no
+    # library builds it and Lean could load it only from a leftover .olean or
+    # as the root of a lean_exe.
+    project = _blueprint_project(tmp_path, "Foo")
+    lean_root = _unbuilt_root_lean(tmp_path)
+    _stub_probe(
+        monkeypatch,
+        records=[_payload("Foo.base", kind="def", module="Foo.Basic")],
+        modules=(
+            ModuleEvidence("Foo.Basic", str((lean_root / "Foo/Basic.lean").resolve())),
+            ModuleEvidence("Extra", str((lean_root / "Foo/Extra.lean").resolve()), ("Foo.Basic",)),
+            ModuleEvidence("Foo", str((lean_root / "Foo.lean").resolve()), ("Foo.Basic",)),
+        ),
+    )
+
+    code = cli.main(
+        ["work", "import-impact", _BASE_ID, "Foo.Basic", str(project), "--lean-root", str(lean_root), "--json"]
+    )
+
+    output = capsys.readouterr()
+    assert code == 2
+    assert output.out == ""
+    assert "error: the impact probe loaded Foo without a captured root-project source" in output.err
 
 
 def test_cli_import_impact_reports_an_empty_loaded_module_without_false_locality(

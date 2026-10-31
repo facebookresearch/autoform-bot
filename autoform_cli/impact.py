@@ -45,6 +45,7 @@ from .lean import IndexedSourceSnapshot, LeanSourceError, bind_project_source_sn
 from .lean_probe import (
     LeanLibrary,
     SkeletonError,
+    builds,
     lean_libraries,
     lean_name_components,
     lean_name_parts,
@@ -415,7 +416,7 @@ def _module_source_paths(
             # Lake builds only modules a library selects, so a file under a
             # nested srcDir is one module although the outer srcDir holds it,
             # and a file no library selects claims no module.
-            if not _selects(library, module):
+            if not builds(library, module):
                 continue
             existing_path = paths.get(module)
             if existing_path is not None and existing_path != relative:
@@ -628,18 +629,6 @@ def _glob_directories(libraries: Sequence[LeanLibrary]) -> list[tuple[Path, str,
             if mode:
                 directories.append((library.src_dir.joinpath(*base.split(".")), base, glob))
     return directories
-
-
-def _selects(library: LeanLibrary, module: str) -> bool:
-    """Whether ``library`` holds ``module``, as Lake's ``LeanLib.isLocalModule`` decides."""
-
-    if any(module == root or module.startswith(f"{root}.") for root in library.roots):
-        return True
-    for glob in library.globs:
-        base, mode = _glob(glob, library)
-        if (module == base and mode != "+") or (mode and module.startswith(f"{base}.")):
-            return True
-    return False
 
 
 def _glob(glob: str, library: LeanLibrary) -> tuple[str, str]:
