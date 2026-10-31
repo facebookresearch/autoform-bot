@@ -171,6 +171,8 @@ def test_a_part_opens_at_the_scale_where_its_parts_can_be_named(tmp_path: Path) 
       assert(big().getAttribute('class').includes('pm-tile'), big().getAttribute('class'));
       assert(titles().includes('Topics'), titles().join('; '));
       assert(!$$('.pm-part').some(n => (n.getAttribute('data-part') || '').startsWith('Big/')), 'no topic is drawn yet');
+      // The tile names what it holds.
+      assert($$('.pm-inside').some(line => line.textContent.startsWith('Topic 00\u00a0· Topic 01')), $$('.pm-inside').map(l => l.textContent).join('; '));
       // Closer in, it opens, and its topics carry their names.
       const r = big().querySelector('rect'), x = +r.getAttribute('x') + r.getAttribute('width') / 2, y = +r.getAttribute('y') + r.getAttribute('height') / 2;
       for (let i = 0; i < 4; i++) { emit($('.pm-stage').querySelector('svg'), 'wheel', {deltaX: 0, deltaY: -400, ctrlKey: true, clientX: x, clientY: y}); await wait(10); }

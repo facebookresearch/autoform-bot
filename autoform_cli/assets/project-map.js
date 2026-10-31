@@ -84,7 +84,8 @@
     return getComputedStyle(document.documentElement).getPropertyValue(kind === "done" ? "--pm-proved" : kind === "progress" ? "--pm-progress" : "--pm-planned").trim() || "#999";
   }
   function wrap(text, width, maxLines) {
-    var words = text.split(/\s+/), lines = [], line = "";
+    // Lines break at ordinary spaces only: a no-break space holds its neighbours together.
+    var words = text.split(/[ \t\n]+/), lines = [], line = "";
     words.forEach(function (word) {
       if (!line) line = word;
       else if ((line + " " + word).length <= width) line += " " + word;
@@ -592,6 +593,16 @@
       if (slot.detail === "full" && api.length) {
         var text = "Used elsewhere: " + api.slice(0, 4).map(function (row) { return plain(row[1]) + " ×" + num(row[2]); }).join(" · ");
         setText(keep(labelLayer, "la:" + slot.id, "text", {x: slot.x, y: metaY + 18, class: "pm-meta" + cls}), clip(text, Math.floor(slot.w / META_EM)));
+      }
+      // A closed part names the parts it holds, so the overview says what is inside before the part opens.
+      var box = screenBox(record.box);
+      if (record.kids.length && !isOpen(record, box)) {
+        var top = metaY + (slot.detail === "full" && api.length ? 36 : 18), room = Math.floor((box.y + box.h - 6 - top) / 16) + 1;
+        // A no-break space keeps each dot with the title before it, so a line never starts with one.
+        var inside = record.kids.map(function (id) { return plain(part(id).summary.title); }).join("\u00a0· ");
+        if (room > 0) wrap(inside, Math.floor(slot.w / META_EM), room).forEach(function (line, index) {
+          setText(keep(labelLayer, "lk:" + slot.id + ":" + index, "text", {x: slot.x, y: top + index * 16, class: "pm-meta pm-inside" + cls}), line);
+        });
       }
     });
   }

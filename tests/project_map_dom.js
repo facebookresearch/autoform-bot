@@ -4,6 +4,8 @@
 "use strict";
 const fs = require("fs"), path = require("path"), vm = require("vm"), assert = require("assert");
 const [clientPath, mapDir, scriptPath] = process.argv.slice(2);
+// MAP_STAGE="width,height" sizes every element, the map's stage included (1200 by 800 by default).
+const STAGE = (process.env.MAP_STAGE || "1200,800").split(",").map(Number);
 
 class Node_ {
   constructor(tag, ns) {
@@ -56,7 +58,7 @@ class Node_ {
   closest(selector) { for (let at = this; at && at !== document; at = at.parentNode) if (matches(at, selector)) return at; return null; }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   querySelectorAll(selector) { const out = []; const walk = n => n.children.forEach(c => { if (matches(c, selector)) out.push(c); walk(c); }); walk(this); return out; }
-  getBoundingClientRect() { return {x: 0, y: 0, left: 0, top: 0, width: 1200, height: 800, right: 1200, bottom: 800}; }
+  getBoundingClientRect() { return {x: 0, y: 0, left: 0, top: 0, width: STAGE[0], height: STAGE[1], right: STAGE[0], bottom: STAGE[1]}; }
   focus() { document.activeElement = this; }
   select() {}
   setPointerCapture() {}
@@ -152,9 +154,9 @@ function emit(node, type, props) { return node.dispatch(type, props); }
 (async () => {
   await wait(20);
   const body = fs.readFileSync(scriptPath, "utf8");
-  const run = new Function("app", "wait", "$", "$$", "emit", "assert", "history", "location", "errors", "net", "document", "return (async () => {" + body + "})();");
+  const run = new Function("app", "wait", "$", "$$", "emit", "assert", "history", "location", "errors", "net", "document", "window", "return (async () => {" + body + "})();");
   try {
-    await run(host, wait, $, $$, emit, assert, history, location, errors, net, document);
+    await run(host, wait, $, $$, emit, assert, history, location, errors, net, document, window);
   } catch (e) {
     console.error("SCRIPT FAILED:", e && e.stack || e);
     process.exitCode = 1;
