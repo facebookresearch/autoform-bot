@@ -688,7 +688,6 @@
   }
   function choose(row) {
     hits.hidden = true;
-    search.value = plain(row[0]);
     arrive(row[3], partChainFromSearch(row[2])).catch(report);
   }
   search.addEventListener("focus", function () { loadSearch().catch(function () {}); });
@@ -759,7 +758,7 @@
         box.addEventListener("change", function () {
           var checked = new Set(Array.from(facets.querySelectorAll("input")).filter(function (b) { return b.checked; }).map(function (b) { return b.value; }));
           state.facets = checked.size === index.facets.length ? null : checked;
-          schedule();
+          schedule(); rememberCamera();
         });
         box.value = name; label.append(box, document.createTextNode(" " + name)); facets.append(label);
       });
@@ -782,10 +781,19 @@
     shownPart = record.id;
     readerInner.replaceChildren();
     if (record.id === ROOT) {
-      readerInner.append(el("p", "pm-kicker", "Whole project"), el("h2", "", plain(model.index.title)));
-      readerInner.append(el("p", "", "Each box is a part of the library, sized by its results, with prerequisites placed first. Arrows run from what is used to what uses it: the main links show at rest, and every link of a part shows under the pointer. Zoom in to open a part in place, or search for a theorem by name."));
-      readerInner.append(el("h3", "", "Regions"));
-      readerInner.append(listOfParts(model.index.regions.map(function (s) { return s.id; })));
+      var index = model.index;
+      readerInner.append(el("p", "pm-kicker", "Whole project"), el("h2", "", plain(index.title)));
+      readerInner.append(el("p", "", num(index.results) + " results in " + num(index.regions.length) + (index.regions.length === 1 ? " region." : " regions.")), bar(index.status));
+      var links = (index.region_edges || []).slice().sort(function (a, b) { return b[2] + b[3] - a[2] - a[3]; });
+      if (links.length) {
+        readerInner.append(el("h3", "", "How the regions build on each other"));
+        readerInner.append(paged(links, 8, function (edge) {
+          var li = el("li", "pm-link"), user = part(edge[0]), used = part(edge[1]);
+          li.append(el("span", "", plain(user ? user.summary.title : edge[0]) + " uses " + plain(used ? used.summary.title : edge[1])),
+            el("small", "", num(edge[2] + edge[3]) + (edge[2] + edge[3] === 1 ? " link" : " links")));
+          return li;
+        }));
+      }
       return;
     }
     var summary = record.summary;
@@ -802,21 +810,35 @@
         item.append(button); list.append(item);
       });
       readerInner.append(list);
-      if (summary.api_total > summary.api.length) readerInner.append(el("p", "pm-empty", "and " + num(summary.api_total - summary.api.length) + " more"));
+      if (summary.api_total > summary.api.length) readerInner.append(el("p", "pm-empty", "The " + num(summary.api.length) + " most used are listed."));
     } else readerInner.append(el("p", "pm-empty", "Nothing outside uses these results."));
     readerInner.append(el("h3", "", "Builds on"), el("p", "", summary.imports_total ? num(summary.imports_total) + " results from elsewhere in the library." : "Nothing outside it."));
     if (record.kids.length) { readerInner.append(el("h3", "", "Parts")); readerInner.append(listOfParts(record.kids)); }
   }
   function listOfParts(ids) {
-    var list = el("ul", "pm-list");
-    ids.slice(0, 60).forEach(function (id) {
-      var record = part(id); if (!record) return;
-      var item = el("li"), button = el("button"); button.type = "button";
+    return paged(ids.filter(part), 60, function (id) {
+      var record = part(id), item = el("li"), button = el("button"); button.type = "button";
       button.append(el("span", "", plain(record.summary.title)), el("small", "", num(record.summary.results)));
       button.addEventListener("click", function () { select(null, {history: false}); flyToPart(id).catch(report); });
-      item.append(button); list.append(item);
+      item.append(button);
+      return item;
     });
-    return list;
+  }
+  // A list that shows its first items and pages through the rest, so every entry stays reachable.
+  function paged(items, step, render) {
+    var box = el("div", "pm-paged"), list = el("ul", "pm-list"), more = el("button", "pm-more"), shown = 0;
+    more.type = "button";
+    function page() {
+      items.slice(shown, shown + step).forEach(function (item) { list.append(render(item)); });
+      shown = Math.min(items.length, shown + step);
+      more.textContent = "Show more (" + num(items.length - shown) + " left)";
+      more.hidden = shown >= items.length;
+      typeset(list);
+    }
+    more.addEventListener("click", page);
+    page();
+    box.append(list, more);
+    return box;
   }
   // Formulas go to the site's MathJax runtime (javascripts/mathjax.js), which reads only the spans marked for it.
   function typeset(node) {
@@ -869,18 +891,16 @@
     [["Uses", rel.uses], ["Used by", rel.usedBy]].forEach(function (pair) {
       readerInner.append(el("h3", "", pair[0] + " (" + num(pair[1].length) + ")"));
       if (!pair[1].length) { readerInner.append(el("p", "pm-empty", pair[0] === "Uses" ? "No prerequisites recorded." : "Nothing uses it yet.")); return; }
-      var list = el("ul", "pm-list");
-      pair[1].slice(0, 80).forEach(function (item) {
+      readerInner.append(paged(pair[1], 12, function (item) {
         var other = model.results.get(item.id), outside = rel.outside.get(item.id);
         var titleText = other ? other.row.title : outside ? outside[1] : item.id;
         var where = other ? part(other.home).summary.title : outside && outside[2].length ? (part(outside[2][outside[2].length - 1]) || {summary: {title: ""}}).summary.title || "" : "";
         var li = el("li"), button = el("button"); button.type = "button";
         button.append(el("span", "", plain(titleText)), el("small", "", plain(where) + (item.statement ? "" : " · proof")));
         button.addEventListener("click", function () { arriveById(item.id).catch(report); });
-        li.append(button); list.append(li);
-      });
-      readerInner.append(list);
-      if (pair[1].length > 80) readerInner.append(el("p", "pm-empty", "and " + num(pair[1].length - 80) + " more"));
+        li.append(button);
+        return li;
+      }));
     });
     typeset(readerInner);
   }
@@ -913,20 +933,32 @@
       chain: state.selected && model.results.get(state.selected) ? chainOf(model.results.get(state.selected).home) :
         state.focusPart && state.focusPart !== ROOT ? chainOf(state.focusPart) : []};
   }
+  // What Back restores besides the camera and the selection.
+  function viewState() {
+    return {query: search.value, facets: state.facets ? Array.from(state.facets) : null, readerScroll: reader.scrollTop, sideScroll: side.scrollTop};
+  }
   function remember(replace) {
     var snap = snapshot();
     var hash = snap.selected ? "#result=" + encodeURIComponent(snap.selected) :
       snap.focusPart && snap.focusPart !== ROOT ? "#part=" + encodeURIComponent(snap.focusPart) : location.pathname + location.search;
     // The current entry keeps its camera, so Back returns to exactly where the reader was.
-    try { history.replaceState(Object.assign({}, history.state || {}, {pm: 1, camera: {x: camera.x, y: camera.y, k: camera.k}, selected: history.state && history.state.selected, focusPart: history.state && history.state.focusPart, chain: history.state && history.state.chain}), ""); } catch (_e) { /* ignore */ }
+    try { history.replaceState(Object.assign({}, history.state || {}, {pm: 1, camera: {x: camera.x, y: camera.y, k: camera.k}, selected: history.state && history.state.selected, focusPart: history.state && history.state.focusPart, chain: history.state && history.state.chain}, viewState()), ""); } catch (_e) { /* ignore */ }
     if (replace) history.replaceState(snap, "", hash); else history.pushState(snap, "", hash);
   }
   window.addEventListener("popstate", function (event) {
     var snap = event.state;
-    if (!snap || !snap.pm) { select(null, {history: false}); state.focusPart = ROOT; fitProject(true); return; }
+    if (!snap || !snap.pm) { select(null, {history: false}); state.focusPart = ROOT; fitProject(true); live.textContent = "Whole project"; return; }
     ensureChain(snap.chain || []).then(function () {
       state.focusPart = snap.focusPart || null;
+      search.value = snap.query || "";
+      var facets = snap.facets ? new Set(snap.facets) : null;
+      if (String(facets && Array.from(facets)) !== String(state.facets && Array.from(state.facets))) { state.facets = facets; renderSide(); }
       select(snap.selected || null, {history: false});
+      reader.scrollTop = snap.readerScroll || 0;
+      side.scrollTop = snap.sideScroll || 0;
+      var here = snap.selected && model.results.get(snap.selected);
+      live.textContent = here ? "Showing " + plain(here.row.title) : state.focusPart && state.focusPart !== ROOT && part(state.focusPart) ?
+        "Showing " + plain(part(state.focusPart).summary.title) : "Whole project";
       if (snap.camera) flyTo(snap.camera);
     }).catch(report);
   });
@@ -936,9 +968,11 @@
     clearTimeout(cameraTimer);
     cameraTimer = setTimeout(function () {
       var current = history.state && history.state.pm ? history.state : snapshot();
-      try { history.replaceState(Object.assign({}, current, {camera: {x: camera.x, y: camera.y, k: camera.k}, focusPart: state.focusPart}), ""); } catch (_e) { /* ignore */ }
+      try { history.replaceState(Object.assign({}, current, {camera: {x: camera.x, y: camera.y, k: camera.k}, focusPart: state.focusPart}, viewState()), ""); } catch (_e) { /* ignore */ }
     }, 250);
   }
+  reader.addEventListener("scroll", rememberCamera);
+  side.addEventListener("scroll", rememberCamera);
 
   // ---------------------------------------------------------------- input
   var drag = null;
@@ -1011,7 +1045,7 @@
   });
   zoomIn.addEventListener("click", function () { release(); zoomAt(1.5, size.w / 2, size.h / 2); rememberCamera(); });
   zoomOut.addEventListener("click", function () { release(); zoomAt(1 / 1.5, size.w / 2, size.h / 2); rememberCamera(); });
-  function wholeProject() { state.focusPart = ROOT; select(null, {history: false}); remember(); fitProject(); }
+  function wholeProject() { state.focusPart = ROOT; select(null, {history: false}); remember(); fitProject(); live.textContent = "Whole project"; }
   fitAll.addEventListener("click", wholeProject);
   document.addEventListener("keydown", function (event) {
     if (event.key === "/" && document.activeElement !== search && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {

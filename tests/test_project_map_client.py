@@ -184,3 +184,42 @@ def test_search_finds_results_in_a_flat_roadmap(tmp_path: Path) -> None:
       console.log('flat ok');
     """, flat)
     assert "flat ok" in out
+
+
+def test_lists_page_through_every_entry_and_back_restores_the_search_and_scroll(tmp_path: Path) -> None:
+    hub = tmp_path / "hub"
+    records: list[dict[str, object]] = [
+        {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
+        {"id": "c", "kind": "scope", "title": "Chapter", "parent": "roadmap", "result": False},
+        {"id": "c/hub", "kind": "node", "title": "Hub lemma", "parent": "c", "result": True, "status": "fully_proved"},
+    ]
+    records += [{"id": f"c/u{index:02d}", "kind": "node", "title": f"User {index:02d}", "parent": "c", "result": True,
+                 "status": "planned"} for index in range(20)]
+    project_map.write_project_map(hub, project_map.build_project_map(records, [(f"c/u{index:02d}", "c/hub", 1, 0) for index in range(20)]))
+    out = _walk(tmp_path, r"""
+      const search = $('.pm-search').querySelector('input'), reader = $('.pm-reader');
+      search.value = 'hub'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      emit(search, 'keydown', {key: 'Enter'}); await wait(40);
+      assert.strictEqual(reader.querySelector('h2').textContent, 'Hub lemma');
+      assert.strictEqual(search.value, 'hub', 'the box keeps the query as typed');
+      // Twenty results use it: the first twelve show, and the rest are one button away.
+      const usedBy = () => reader.querySelectorAll('.pm-paged').at(-1);
+      assert.strictEqual(usedBy().querySelectorAll('li').length, 12);
+      emit(usedBy().querySelector('.pm-more'), 'click');
+      assert.strictEqual(usedBy().querySelectorAll('li').length, 20);
+      assert(usedBy().querySelector('.pm-more').hidden, 'nothing is left to show');
+      // Following one and coming Back restores the search box, the reading pane's scroll and the announcement.
+      reader.scrollTop = 140;
+      emit(usedBy().querySelectorAll('button').find(b => b.textContent.includes('User 15')), 'click'); await wait(40);
+      assert.strictEqual(reader.querySelector('h2').textContent, 'User 15');
+      search.value = 'something else'; reader.scrollTop = 0;
+      history.back(); await wait(40);
+      assert.strictEqual(reader.querySelector('h2').textContent, 'Hub lemma');
+      assert.strictEqual(search.value, 'hub');
+      assert.strictEqual(reader.scrollTop, 140);
+      assert.strictEqual($('.pm-sr').textContent, 'Showing Hub lemma');
+      emit(app.querySelectorAll('button').find(b => b.textContent === 'Whole project'), 'click'); await wait(30);
+      assert.strictEqual($('.pm-sr').textContent, 'Whole project');
+      console.log('back ok');
+    """, hub)
+    assert "back ok" in out
