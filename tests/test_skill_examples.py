@@ -707,6 +707,24 @@ def test_roadmap_retracts_against_the_branch_formalize_works_from(repo_root: Pat
         assert required in roadmap
 
 
+
+def test_formalize_copies_the_lead_s_packages_into_each_worktree(repo_root: Path) -> None:
+    """A fresh worktree's `lake exe cache get` re-clones every package and unpacks Mathlib again (#275).
+
+    A copy of the lead's packages downloads nothing, and copy-on-write keeps it
+    almost free; a symbolic link instead makes `library list` refuse the
+    project's libraries.
+    """
+
+    formalize = " ".join((repo_root / "skills/formalize/SKILL.md").read_text(encoding="utf-8").split())
+    for required in (
+        "copy the lead's packages in, never as a symbolic link",
+        "`mkdir -p <WORKTREE>/.lake && cp -Rc .lake/packages <WORKTREE>/.lake/` (`cp -R --reflink=auto` on Linux)",
+        "then run `lake exe cache get` there, which downloads nothing",
+    ):
+        assert required in formalize
+
+
 def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None:
     """The executable example differs only by its concrete immutable pin."""
 

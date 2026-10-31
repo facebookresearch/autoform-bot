@@ -25,7 +25,7 @@ BUDGETS = {
     "skills/agent-review/SKILL.md": 65,
     "skills/debrief-orchestrator/SKILL.md": 47,
     "skills/develop-plugin/SKILL.md": 34,
-    "skills/formalize/SKILL.md": 254,
+    "skills/formalize/SKILL.md": 257,  # The worktree package copy (#275).
     "skills/human-review/SKILL.md": 113,
     "skills/roadmap/SKILL.md": 257,
     "skills/setup/SKILL.md": 170,
