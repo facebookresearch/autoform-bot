@@ -593,6 +593,10 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
         ('structure Pair where\n  fst : String := "x:"\n  snd : Nat\n', ["Pair", "Pair.fst", "Pair.snd"]),
         ('structure Pair where\n  fst : String := "Usage:\n  run"\n  snd : Nat\n', ["Pair", "Pair.fst", "Pair.snd"]),
         ("structure Pair where\n  fst : Nat := x'by\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        (
+            'def s : String := "a\fb"\nstructure Pair where\n  fst : String := "x"\n  snd : Nat\n',
+            ["Pair", "Pair.fst", "Pair.snd", "s"],
+        ),
         ("structure Pair where mk ::\n  fst : Nat\n", ["Pair", "Pair.fst"]),
         ("structure Pair where\n  α : Type*\n  n : ℕ+\n  snd : Nat\n", ["Pair", "Pair.n", "Pair.snd", "Pair.α"]),
         ("structure Pair where\n  /-- doc -/ fst : Nat\n  snd : Nat\n-- no line end", ["Pair", "Pair.fst", "Pair.snd"]),
@@ -626,10 +630,11 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
          "command-with-binders-at-the-column", "command-after-a-header", "unknown-command-after-a-header",
          "type-at-the-field-column", "binders-continuing-a-term", "tactics-at-the-field-column",
          "structure-instance-at-the-field-column", "do-block-at-the-field-column", "literal-ending-a-field",
-         "multi-line-literal-ending-in-a-colon", "identifier-ending-in-by", "inline-constructor", "postfix-types",
-         "comment-without-a-line-end", "separator-before-a-last-comment", "no-where", "no-fields", "assign",
-         "named-parent", "field-named-module", "named-parents-without-where", "unnamed-parents",
-         "comma-inside-a-parent", "guillemet-inside-a-parent", "class-abbrev", "header-default", "defaults"],
+         "multi-line-literal-ending-in-a-colon", "identifier-ending-in-by", "literal-in-a-file-with-a-form-feed",
+         "inline-constructor", "postfix-types", "comment-without-a-line-end", "separator-before-a-last-comment",
+         "no-where", "no-fields", "assign", "named-parent", "field-named-module", "named-parents-without-where",
+         "unnamed-parents", "comma-inside-a-parent", "guillemet-inside-a-parent", "class-abbrev", "header-default",
+         "defaults"],
 )
 def test_structure_fields_follow_the_structure_s_where(tmp_path: Path, source: str, names: list[str]) -> None:
     assert sorted(_index(tmp_path, source).declarations) == names
