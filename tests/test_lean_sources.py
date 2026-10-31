@@ -575,10 +575,12 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
         ('structure Pair where\n  fst : Nat\n  notation3 :max "x" => 1\n', ["Pair", "Pair.fst"]),
         ("structure Pair where\n  fst : Nat\n  recall succ : Nat → Nat\n", ["Pair", "Pair.fst"]),
         ("structure Pair where\n  fst : Nat\n  instance : Inhabited Nat where\n  default := 0\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  fst : Nat\n  local instance : Inhabited Nat where\n  default := 0\n", ["Pair", "Pair.fst"]),
         ("structure Pos (n : Nat) where\n  pos:0 < n\n  snd : Nat\n", ["Pos", "Pos.pos", "Pos.snd"]),
         ("structure Pt where\n  x : Nat\n  theorem Pt.ext' (p q : Pt)\n  (h : p.x = q.x) : p = q := sorry\n",
          ["Pt", "Pt.ext'", "Pt.x"]),
         ("structure Tag\n  instance : Inhabited Nat where\n    default := 0\n", ["Tag"]),
+        ("structure Tag\nmy_command Tag where\n  default : Nat\n", ["Tag"]),
         # A term goes on past an operator, a term keyword, or binders followed by more of it.
         ("structure Pair where\n  fst :\n  (n : Nat) → Fin (n + 1)\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
         ("structure Pair where\n  fst : ∀ (x : Nat)\n  (y : Nat), x = y\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
@@ -586,10 +588,15 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
             "structure Pair where\n  fst : True := by\n  skip\n  have h : True := trivial\n  exact h\n  snd : Nat\n",
             ["Pair", "Pair.fst", "Pair.snd"],
         ),
+        ("structure Pair where\n  fst : Cfg := {\n  a := 1\n  b := 2 }\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where\n  fst : IO Unit := do\n  let mut x := 0\n  x := x + 1\n", ["Pair", "Pair.fst"]),
         ('structure Pair where\n  fst : String := "x:"\n  snd : Nat\n', ["Pair", "Pair.fst", "Pair.snd"]),
+        ('structure Pair where\n  fst : String := "Usage:\n  run"\n  snd : Nat\n', ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where\n  fst : Nat := x'by\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
         ("structure Pair where mk ::\n  fst : Nat\n", ["Pair", "Pair.fst"]),
         ("structure Pair where\n  α : Type*\n  n : ℕ+\n  snd : Nat\n", ["Pair", "Pair.n", "Pair.snd", "Pair.α"]),
         ("structure Pair where\n  /-- doc -/ fst : Nat\n  snd : Nat\n-- no line end", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("-- a\u2028b\nstructure Pair where\n  fst : Nat\n  snd : Nat\n-- end\n", ["Pair", "Pair.fst", "Pair.snd"]),
         ("structure Marker : Type\ninstance : Inhabited Nat where\n  default := 0\n", ["Marker"]),
         ("structure Marker where\ndef after : Nat := 0\n", ["Marker", "after"]),
         ("structure Pair :=\n  (fst : Nat)\n  (snd : Nat)\n", ["Pair", "Pair.fst", "Pair.snd"]),
@@ -615,20 +622,23 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
     ids=["inline", "multiline-header", "keyword-alone", "constructor", "constructor-and-field",
          "constructor-above-deeper-fields", "constructor-at-the-structure-s-column", "deriving", "exit",
          "exit-in-the-header", "command-with-a-precedence", "command-with-a-named-precedence", "mathlib-command",
-         "command-with-fields-at-the-column", "field-without-a-space", "command-with-binders-at-the-column",
-         "command-after-a-header", "type-at-the-field-column", "binders-continuing-a-term",
-         "tactics-at-the-field-column", "literal-ending-a-field", "inline-constructor", "postfix-types",
-         "comment-without-a-line-end", "no-where", "no-fields", "assign", "named-parent", "field-named-module",
-         "named-parents-without-where", "unnamed-parents", "comma-inside-a-parent", "guillemet-inside-a-parent",
-         "class-abbrev", "header-default", "defaults"],
+         "command-with-fields-at-the-column", "local-command-with-fields-at-the-column", "field-without-a-space",
+         "command-with-binders-at-the-column", "command-after-a-header", "unknown-command-after-a-header",
+         "type-at-the-field-column", "binders-continuing-a-term", "tactics-at-the-field-column",
+         "structure-instance-at-the-field-column", "do-block-at-the-field-column", "literal-ending-a-field",
+         "multi-line-literal-ending-in-a-colon", "identifier-ending-in-by", "inline-constructor", "postfix-types",
+         "comment-without-a-line-end", "separator-before-a-last-comment", "no-where", "no-fields", "assign",
+         "named-parent", "field-named-module", "named-parents-without-where", "unnamed-parents",
+         "comma-inside-a-parent", "guillemet-inside-a-parent", "class-abbrev", "header-default", "defaults"],
 )
 def test_structure_fields_follow_the_structure_s_where(tmp_path: Path, source: str, names: list[str]) -> None:
     assert sorted(_index(tmp_path, source).declarations) == names
 
 
 def test_constructor_names_on_one_line_do_not_recurse(tmp_path: Path) -> None:
-    source = "structure Pair where\n  " + "mk :: " * 5000 + "fst : Nat\n"
-    assert sorted(_index(tmp_path, source).declarations) == ["Pair", "Pair.fst"]
+    # A structure has one constructor, so a second `::` on its line names no field.
+    source = "structure Pair where\n  " + "mk :: " * 50000 + "fst : Nat\n  snd : Nat\n"
+    assert sorted(_index(tmp_path, source).declarations) == ["Pair", "Pair.snd"]
 
 
 def test_fields_of_private_and_module_structures_keep_their_structure_s_visibility(tmp_path: Path) -> None:

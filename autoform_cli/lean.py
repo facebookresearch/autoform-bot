@@ -805,17 +805,17 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
     unmasked: list[str] = []
 
     def literal_line(index: int) -> str:
-        """Line ``index`` with its literals, so a field ending in a string does not seem to read on."""
+        """Line ``index`` with its literals, or "" when a literal holds a line separator other than a line end."""
         if not unmasked:
             kept = _without_lean_comments(text).splitlines()
-            unmasked.extend(kept if len(kept) == len(lines) else lines)
+            unmasked.extend(kept if len(kept) == len(lines) else [""] * len(lines))
         return unmasked[index]
 
     # Masking shortens a comment, so a comment before a field on its line would
     # move the field's column: columns come from the text as written, unless a
     # comment or string holds a line separator other than a line end.
     written = text.splitlines()
-    if len(written) == len(lines) + 1 and written[-1].lstrip().startswith(("--", "/-")):
+    if len(written) == len(lines) + 1 and text.endswith(written[-1]) and written[-1].lstrip().startswith(("--", "/-")):
         # A comment on the last line, with no line end after it, masks to nothing.
         written.pop()
     indents = [len(line) - len(line.lstrip()) for line in (written if len(written) == len(lines) else lines)]
@@ -888,8 +888,10 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
             qualified = _qualified(namespaces, name)
             found.append(Declaration(qualified, relative, number, keyword, protected, private))
             # `class abbrev` and `class inductive` read as a class of that name, with no fields.
-            if keyword in ("structure", "class") and name not in _COMMAND_HEADS:
-                found.extend(_fields(lines, literal_line, indents, number - 1, body_index, qualified, relative, private))
+            if keyword in ("structure", "class") and name not in ("abbrev", "inductive"):
+                found.extend(
+                    _fields(lines, literal_line, indents, number - 1, body_index, qualified, relative, private)
+                )
     return found, len(lines)
 
 
@@ -959,14 +961,13 @@ def _fields(
 
     def read(text: str, number: int) -> bool:
         """Record the fields one field line starts; ``False`` once ``deriving`` or a command ends them."""
+        constructor = False
         while True:
             words = _ATTRIBUTE_LIST.sub(" ", text).split()
             modifiers = set()
-            while words and words[0] in _FIELD_MODIFIERS:
+            while words and words[0] in _COMMAND_MODIFIERS:
                 modifiers.add(words.pop(0))
             text = " ".join(words)
-            if text == "deriving" or text.startswith("deriving "):
-                return False
             # Each group of names, with what follows their binders: a type, a default, or neither.
             groups: list[tuple[list[str], str]] = []
             if text[:1] in _BINDER_CLOSERS:
@@ -992,10 +993,11 @@ def _fields(
             if not tail.startswith("::"):
                 groups.append(([name.group()], tail))
                 break
-            # The constructor's name; a field may follow it on its line.
+            # The constructor's name; a field may follow it on its line, but not a second one.
             text = tail[2:].strip()
-            if not text:
+            if not text or constructor:
                 return True
+            constructor = True
         for names, tail in groups:
             if not tail.startswith(":") or (tail.startswith(":=") and extends):
                 continue
@@ -1023,6 +1025,7 @@ def _fields(
     entries: list[tuple[int, list[str]]] = []
     column = None
     last = where_index if inline.strip() else None
+    depth = 0
     for index in range(start, len(lines)):
         text = lines[index].strip()
         if not text:
@@ -1036,10 +1039,17 @@ def _fields(
             column = indent
         if indent < column:
             break
-        if indent == column and not (last is not None and _continues(lines[last], literal_line, last, text)):
+        if indent == column and last is not None and _DO_END.search(lines[last]):
+            # A `do` block at the field column takes every line after it there.
+            break
+        if indent == column and depth <= 0 and not (
+            last is not None and _continues(lines[last], literal_line, last, text)
+        ):
             entries.append((index + 1, [text]))
+            depth = _depth(text)
         elif entries:
             entries[-1][1].append(text)
+            depth += _depth(text)
         last = index
     # Attribute lists and modifiers may stand on lines of their own above a field.
     modifiers = ""
@@ -1119,6 +1129,13 @@ def _constructor_only(line: str) -> bool:
     return name is not None and _after_binders(text[name.end() :]) == "::"
 
 
+def _depth(text: str) -> int:
+    """How many brackets ``text`` leaves open, so that a term such as ``{ a := 1`` goes on past its line."""
+
+    text = _QUOTED_NAME.sub("", text)
+    return sum(map(text.count, "([{⦃⟨")) - sum(map(text.count, ")]}⦄⟩"))
+
+
 def _command_line(line: str) -> bool:
     """Whether ``line`` starts a command that ends a structure, such as ``@[simp] theorem``."""
 
@@ -1131,13 +1148,14 @@ def _command_line(line: str) -> bool:
 def _continues(above: str, literal_line: Callable[[int], str], index: int, text: str) -> bool:
     """Whether a line at the field column continues the field above it instead of starting one.
 
-    Lean reads on into the field above after an operator, a comma or an open
-    bracket, and a field line starts with neither a term keyword nor binders
-    followed by more of a term, as in ``(h : 0 < n) → P n``.
+    Lean reads on into the field above after a comma, an arrow, a relation or
+    an open bracket, and a field line starts with neither a term keyword nor
+    binders followed by more of a term, as in ``(h : 0 < n) → P n``.
     """
 
-    # A masked literal is blank, so only a line that seems to read on needs its literals back.
-    if _OPEN_END.search(above) and _OPEN_END.search(literal_line(index)):
+    # A masked literal is blank, so a line that seems to read on may end in a
+    # literal instead: masking keeps each literal's length.
+    if _OPEN_END.search(above) and len(above.rstrip()) == len(literal_line(index).rstrip()):
         return True
     if text.split(maxsplit=1)[0] in _TERM_KEYWORDS:
         return True
@@ -1223,10 +1241,12 @@ _FIELD_ENDS = (_COMMAND_HEADS - {"module", "prelude", "import"}) | {"notation3",
 _TERM_KEYWORDS = frozenset(
     {"by", "calc", "do", "else", "fun", "have", "if", "let", "match", "nofun", "nomatch", "show", "suffices", "then"}
 )
+_DO_END = re.compile(r"\bdo\s*$")
+_QUOTED_NAME = re.compile(r"«[^»]*»")
 #: The end of a line that a term continues past: a comma, an open bracket, an
 #: arrow or a relation, but not the constructor's ``mk ::`` or a postfix such
 #: as ``Type*`` or ``ℕ+``.
-_OPEN_END = re.compile(r"(?:(?<!:):|[,=(\[{⟨→↔∧∨×∘•≤≥≠∈∉⊆⊂∣≃≅⟶↦]|=>|->|<\||\|>|\bfun|\bby)\s*$")
+_OPEN_END = re.compile(r"(?:(?<!:):|[,=(\[{⟨→↔∧∨×∘•≤≥≠∈∉⊆⊂∣≃≅⟶↦]|=>|->|<\||\|>|(?:^|\s)(?:fun|by))\s*$")
 _BINDER_CLOSERS = {"(": ")", "{": "}", "[": "]", "⦃": "⦄"}
 
 
