@@ -25,6 +25,7 @@
   var ROOT = "#root";
   var OPEN_W = 140, OPEN_H = 90;   // a part shows its children (as tiles at first) once its box is this big on screen (px)
   var LABEL_MIN_W = 60;            // boxes narrower than this on screen never get a label
+  var KID_LABEL_W = 90;            // a part with parts inside opens once its median child is this wide on screen (px)
   var CARD_TEXT_W = 120;           // result cards carry their titles, and their links, once this wide on screen (px)
   var TITLE_EM = 8.4, COMPACT_EM = 7.3, META_EM = 6.6, CARD_EM = 7.2, CARD_META_EM = 6.2;  // mean character advances of the label fonts (px)
 
@@ -161,6 +162,8 @@
     var boxes = L.packPart(record.data, record.box, stageSize);
     record.kids.forEach(function (id) { part(id).box = boxes[id] || null; });
     record.ownBox = boxes[record.id + "#results"] || null;
+    var widths = record.kids.map(function (id) { return part(id).box ? part(id).box.w : 0; }).sort(function (a, b) { return a - b; });
+    record.kidW = widths.length ? widths[widths.length >> 1] : null;
     routesAt.set(record.id, record.kids.length ? L.bundleEdges(boxes, record.data.edges || [], L.contentOf(record.box)) : []);
     var results = record.data.results || [];
     record.view = record.ownBox && results.length ?
@@ -326,7 +329,11 @@
     rect.setAttribute("width", Math.max(1, cx(b.x + b.w) - x)); rect.setAttribute("height", Math.max(1, cy(b.y + b.h) - y));
   }
   function onScreen(b) { return b.x + b.w > -40 && b.x < size.w + 40 && b.y + b.h > -40 && b.y < size.h + 40; }
-  function isOpen(record, b) { return record.id === ROOT || (!!record.data && b.w >= OPEN_W && b.h >= OPEN_H); }
+  // A part with parts inside stays one named tile until most of them could carry a name of their own, so the map
+  // reveals the next level at the scale where it can be read, not wherever a parent happens to be large.
+  function isOpen(record, b) {
+    return record.id === ROOT || (!!record.data && b.w >= OPEN_W && b.h >= OPEN_H && (!record.kidW || record.kidW * camera.k >= KID_LABEL_W));
+  }
   // The part the view is in: the deepest open part under the centre that fills most of the stage.
   function covers(b) {
     return b.x <= size.w / 2 && b.x + b.w >= size.w / 2 && b.y <= size.h / 2 && b.y + b.h >= size.h / 2 &&

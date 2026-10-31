@@ -143,6 +143,39 @@ def test_zooming_into_a_gap_lands_on_the_nearest_content(tmp_path: Path) -> None
     assert "gap ok" in out
 
 
+def test_a_part_opens_at_the_scale_where_its_parts_can_be_named(tmp_path: Path) -> None:
+    # Thirty one-result topics beside a chapter twenty times their size: at the opening, each topic would be a sliver.
+    wide = tmp_path / "wide"
+    records: list[dict[str, object]] = [
+        {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
+        {"id": "Big", "kind": "scope", "title": "Topics", "parent": "roadmap", "result": False},
+        {"id": "Huge", "kind": "scope", "title": "Main chapter", "parent": "roadmap", "result": False},
+    ]
+    for index in range(30):
+        records.append({"id": f"Big/t{index:02d}", "kind": "scope", "title": f"Topic {index:02d}", "parent": "Big", "result": False})
+        records.append({"id": f"Big/t{index:02d}/r", "kind": "node", "title": f"Result {index:02d}", "parent": f"Big/t{index:02d}",
+                        "result": True, "status": "planned"})
+    records += [{"id": f"Huge/r{index:03d}", "kind": "node", "title": f"Main {index:03d}", "parent": "Huge", "result": True,
+                 "status": "fully_proved"} for index in range(600)]
+    project_map.write_project_map(wide, project_map.build_project_map(records, []))
+    out = _walk(tmp_path, r"""
+      const big = () => $$('.pm-part').find(n => n.getAttribute('data-part') === 'Big');
+      const titles = () => $$('.pm-title').map(t => t.textContent);
+      // One named tile, not thirty nameless ones.
+      assert(big().getAttribute('class').includes('pm-tile'), big().getAttribute('class'));
+      assert(titles().includes('Topics'), titles().join('; '));
+      assert(!$$('.pm-part').some(n => (n.getAttribute('data-part') || '').startsWith('Big/')), 'no topic is drawn yet');
+      // Closer in, it opens, and its topics carry their names.
+      const r = big().querySelector('rect'), x = +r.getAttribute('x') + r.getAttribute('width') / 2, y = +r.getAttribute('y') + r.getAttribute('height') / 2;
+      for (let i = 0; i < 4; i++) { emit(app.querySelector('svg'), 'wheel', {deltaX: 0, deltaY: -400, ctrlKey: true, clientX: x, clientY: y}); await wait(10); }
+      await wait(30);
+      assert(big().getAttribute('class').includes('pm-open'), big().getAttribute('class'));
+      assert(titles().filter(t => t.startsWith('Topic ')).length >= 4, titles().join('; '));
+      console.log('open ok');
+    """, wide)
+    assert "open ok" in out
+
+
 def test_an_empty_roadmap_says_so(tmp_path: Path) -> None:
     empty = tmp_path / "empty"
     project_map.write_project_map(empty, project_map.build_project_map(
