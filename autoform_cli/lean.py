@@ -831,20 +831,25 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
             name = _name_token(namespace_match.group(1))
             if name is None:
                 continue
-            namespaces.append(name)
-            scopes.append(name)
+            # Lean opens a scope for each component, and `end B` closes one.
+            for part in _name_parts(name):
+                namespaces.append(part)
+                scopes.append(part)
             continue
 
-        if _SECTION.match(line) or _MUTUAL.match(line):
-            scopes.append(None)
+        section_match = _SECTION.match(line)
+        if section_match or _MUTUAL.match(line):
+            parts = _name_parts(section_match.group(1)) if section_match else []
+            scopes.extend([None] * max(len(parts), 1))
             continue
 
         end_match = _END.match(line)
         if end_match:
-            if scopes:
-                closed = scopes.pop()
-                if closed is not None and namespaces:
-                    namespaces.pop()
+            for _ in range(len(_name_parts(end_match.group(1))) or 1):
+                if scopes:
+                    closed = scopes.pop()
+                    if closed is not None and namespaces:
+                        namespaces.pop()
             continue
 
         declaration_match = _DECLARATION.match(line)
@@ -1219,6 +1224,12 @@ def _qualified(namespaces: list[str], name: str) -> str:
 
 
 _NAME_TOKEN = re.compile(r"(?:«[^«»]*»|[^\s:(){}\[\]⦃⦄,«»])+")
+
+
+def _name_parts(name: str) -> list[str]:
+    """The components of ``name``, where a guillemet may quote dots: ``A.«b.c»`` has two."""
+
+    return re.findall(r"«[^»]*»|[^.«»]+", name)
 
 
 def _name_token(text: str) -> str | None:

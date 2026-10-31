@@ -49,6 +49,8 @@ _SCOPE_OPEN = re.compile(
     r"(?:@\[[^\]]*\]\s*)*(?:(?:public|private|meta|noncomputable)\s+)*section\b|namespace\s|mutual$"
 )
 _SCOPE_CLOSE = re.compile(r"end\b")
+#: One component of a scope's name, where a guillemet may quote dots.
+_COMPONENT = re.compile(r"«[^»]*»|[^.«»\s]+")
 #: Unindented lines that still belong to the declaration above them.
 _CONTINUATION = re.compile(r"(?:termination_by|decreasing_by|where|deriving)\b|\|")
 
@@ -105,6 +107,13 @@ def limits_by_line(lines: Sequence[str], starts: Iterable[int]) -> dict[int, tup
     return {line: found for indent, group in by_indent.items() for line, found in _scan(lines, indent, group).items()}
 
 
+def _components(text: str) -> int:
+    """How many scopes the name at the start of ``text`` opens or closes: one per component, and one for no name."""
+
+    name = text.split(maxsplit=1)
+    return len(_COMPONENT.findall(name[0])) if name else 1
+
+
 def _scan(lines: Sequence[str], indent: int, starts: set[int]) -> dict[int, tuple[LimitSetting, ...]]:
     """Read the limits for the declarations on ``starts``, which all start at ``indent``."""
 
@@ -134,11 +143,12 @@ def _scan(lines: Sequence[str], indent: int, starts: set[int]) -> dict[int, tupl
         if limit is not None and rest is stripped and limit.group(3) is None:
             scope = "file" if len(scopes) == 1 else "section"
             scopes[-1][limit.group(1)] = _setting(limit, number, scope)
-        elif _SCOPE_OPEN.match(rest):
-            # A wrapper before ``mutual`` reaches every declaration in the block.
-            scopes.append({**scopes[-1], **pending})
-        elif _SCOPE_CLOSE.match(rest) and len(scopes) > 1:
-            scopes.pop()
+        elif opened := _SCOPE_OPEN.match(rest):
+            # A wrapper before ``mutual`` reaches every declaration in the block,
+            # and ``namespace A.B`` opens a scope for each component.
+            scopes.extend({**scopes[-1], **pending} for _ in range(_components(rest[opened.end() :])))
+        elif closed := _SCOPE_CLOSE.match(rest):
+            del scopes[max(1, len(scopes) - _components(rest[closed.end() :])) :]
         pending = {}
 
     for line, settings in found.items():

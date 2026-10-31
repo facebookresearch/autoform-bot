@@ -164,6 +164,11 @@ date when the release is tagged.
   structure's limits. For a constructor or other name the index does not read
   directly under a project type, `check` names the type's `path:line` in a
   declaration article instead of pointing to `.lake` (#509).
+- **Dotted namespaces.** The Lean source index and `audit`'s limit scan open
+  a scope for each component of `namespace A.B` or `section A.B`, and `end`
+  closes one per component of its name, as Lean does: `end B` after
+  `namespace A.B` no longer drops the `A.` prefix from later names, and
+  `end C.D` closes both scopes.
 - **Explorer controls.** Closing full phone reading brings a cropped selected
   card back into the map without overriding restored cameras. Isolate/status
   filters use the same eligible original members in maps and native shelves,
