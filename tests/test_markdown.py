@@ -22,6 +22,7 @@ from autoform_cli.markdown import (
     markdown_anchors,
     markdown_links,
     mask_fences_and_comments,
+    outside_fences,
     PublishedTable,
     published_tables,
     render_html,
@@ -256,6 +257,13 @@ def test_a_fence_inside_a_comment_does_not_open_a_code_block() -> None:
     text = "<!--\n```\n-->\n\nvisible\n"
 
     assert [line for line in content_lines(text) if line.strip()] == ["visible"]
+
+
+def test_render_s_line_transforms_read_no_fence_inside_a_comment() -> None:
+    """Issue #527: a fence line in a comment hid every later line from render's link rewriting."""
+    text = "<!--\n```lean\n-->\nafter\n```\n<!--\n```\nlast\n"
+
+    assert outside_fences(text, lambda line: f"+{line}") == "+<!--\n+```lean\n+-->\n+after\n```\n<!--\n```\n+last\n"
 
 
 def test_text_beside_a_comment_on_one_line_survives() -> None:

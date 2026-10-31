@@ -2783,6 +2783,24 @@ def test_source_notes_leave_the_site_for_the_repository(tmp_path: Path) -> None:
     assert expected in (out / "roadmap/README.md").read_text(encoding="utf-8")
 
 
+def test_a_fence_line_in_a_comment_leaves_the_links_after_it_rewritten(tmp_path: Path) -> None:
+    """Issue #527: render read the commented fence line as an open fence and
+    published the link below it as written, to a page the site leaves out."""
+    project = _with_source_notes(tmp_path)
+    readme = project / "blueprint/roadmap/README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8") + "\n<!--\n```lean\n-->\n\nGrounded in [Paper](../sources/paper.md).\n",
+        encoding="utf-8",
+    )
+    ref = _commit_project(project)
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project, repository_url="https://github.com/owner/repo", ref=ref)
+
+    expected = f"Grounded in [Paper](https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.md)."
+    assert expected in (out / "roadmap/README.md").read_text(encoding="utf-8")
+
+
 def test_source_notes_stay_published_when_there_is_nowhere_to_send_readers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
