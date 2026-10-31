@@ -593,6 +593,14 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
         ("structure Pair where fst : Cfg := {\n  a := 1\n  b := 2 }\n", ["Pair", "Pair.fst"]),
         ("structure Pair (n : Nat) where\n  fst : Int := 1 +\n  (n : Int)\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
         ("structure Pair where\n  fst : Nat := 3 !\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        (
+            "structure Pair (n : Nat) where\n  fst : Int :=\n  set_option maxRecDepth 100 in\n  (n : Int)\n  snd : Nat\n",
+            ["Pair", "Pair.fst", "Pair.snd"],
+        ),
+        (
+            "structure Pair where fst : List Nat := [1,\n                         2]\n                     snd : Nat\n",
+            ["Pair", "Pair.fst", "Pair.snd"],
+        ),
         ("structure Pair where\n  fst : Nat := 3 +\n  instance : Inhabited Nat where\n  default := 0\n", ["Pair", "Pair.fst"]),
         ('structure Pair where\n  fst : Nat := 3 +\n  scoped[N] notation "x" y => y\n  (y : Nat)\n', ["Pair", "Pair.fst"]),
         (
@@ -648,13 +656,13 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
          "command-after-a-header", "unknown-command-after-a-header", "type-at-the-field-column",
          "binders-continuing-a-term", "tactics-at-the-field-column", "structure-instance-at-the-field-column",
          "structure-instance-after-where", "operator-ending-a-line", "postfix-factorial",
-         "command-after-an-open-line", "scoped-command-after-an-open-line", "bracket-closing-after-where",
-         "do-block-in-brackets", "identifier-ending-in-do", "guillemet-holding-a-bracket",
-         "do-block-at-the-field-column", "literal-ending-a-field", "multi-line-literal-ending-in-a-colon",
-         "identifier-ending-in-by", "literal-in-a-file-with-a-form-feed",
-         "continuation-in-a-file-with-a-line-separator", "inline-constructor", "postfix-types",
-         "comment-without-a-line-end", "separator-before-a-last-comment", "no-where", "no-fields", "assign",
-         "named-parent", "field-named-module", "named-parents-without-where", "unnamed-parents",
+         "term-after-set-option-in", "bracket-after-where-closing-deeper", "command-after-an-open-line",
+         "scoped-command-after-an-open-line", "bracket-closing-after-where", "do-block-in-brackets",
+         "identifier-ending-in-do", "guillemet-holding-a-bracket", "do-block-at-the-field-column",
+         "literal-ending-a-field", "multi-line-literal-ending-in-a-colon", "identifier-ending-in-by",
+         "literal-in-a-file-with-a-form-feed", "continuation-in-a-file-with-a-line-separator", "inline-constructor",
+         "postfix-types", "comment-without-a-line-end", "separator-before-a-last-comment", "no-where", "no-fields",
+         "assign", "named-parent", "field-named-module", "named-parents-without-where", "unnamed-parents",
          "comma-inside-a-parent", "guillemet-inside-a-parent", "class-abbrev", "header-default", "defaults"],
 )
 def test_structure_fields_follow_the_structure_s_where(tmp_path: Path, source: str, names: list[str]) -> None:

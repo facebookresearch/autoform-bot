@@ -1039,6 +1039,11 @@ def _fields(
         if column is None:
             if indent <= base:
                 break
+            if last is not None and (depth > 0 or _continues(lines[last], literal_line, last, text)):
+                # The field after `where` goes on; a later line sets the field column.
+                depth += _depth(text)
+                last = index
+                continue
             column = indent
         if indent < column:
             break
@@ -1050,9 +1055,8 @@ def _fields(
         ):
             entries.append((index + 1, [text]))
             depth = _depth(text)
-        else:
-            if entries:
-                entries[-1][1].append(text)
+        elif entries:
+            entries[-1][1].append(text)
             depth += _depth(text)
         last = index
     # Attribute lists and modifiers may stand on lines of their own above a field.
@@ -1254,10 +1258,11 @@ _DO_END = re.compile(r"(?:^|\s)do\s*$")
 _SCOPED = re.compile(r"^\s*scoped\s*\[[^\]]*\]")
 _QUOTED_NAME = re.compile(r"«[^»]*»")
 #: The end of a line that a term continues past: a comma, an open bracket, an
-#: arrow, a relation, or an operator after a space, but not the constructor's
-#: ``mk ::`` or a postfix such as ``Type*``, ``ℕ+`` or Mathlib's ``n !``.
+#: arrow, a relation, an operator after a space, or the ``in`` of a term's
+#: ``open … in``, but not the constructor's ``mk ::`` or a postfix such as
+#: ``Type*``, ``ℕ+`` or Mathlib's ``n !``.
 _OPEN_END = re.compile(
-    r"(?:(?<!:):|[,=(\[{⟨→↔∧∨×∘•≤≥≠≈≡∈∉⊆⊂⊇⊃∣≃≅⟶↦]|=>|->|<\||\|>|(?:^|\s)(?:[-+*/^%<>&|$]+|fun|by))\s*$"
+    r"(?:(?<!:):|[,=(\[{⟨→↔∧∨×∘•≤≥≠≈≡∈∉⊆⊂⊇⊃∣≃≅⟶↦]|=>|->|<\||\|>|(?:^|\s)(?:[-+*/^%<>&|$]+|fun|by|in))\s*$"
 )
 _BINDER_CLOSERS = {"(": ")", "{": "}", "[": "]", "⦃": "⦄"}
 
