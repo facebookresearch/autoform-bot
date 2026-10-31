@@ -190,7 +190,7 @@
   var side = el("aside", "pm-side"); side.setAttribute("aria-label", "Project outline");
   var sideInner = el("div", "pm-side-inner"); side.append(sideInner);
   var stage = el("main", "pm-stage");
-  var canvas = svg("svg", {role: "application", "aria-label": "Map of the whole project. Scroll or use plus and minus to zoom, drag or use the arrow keys to move."});
+  var canvas = svg("svg", {role: "application", "aria-label": "Map of the whole project. Drag, scroll or use the arrow keys to move; Control or Command with scroll, or plus and minus, to zoom."});
   canvas.setAttribute("tabindex", "0");
   var defs = svg("defs");
   // Markers do not inherit the colour of the line that uses them, so a highlighted route has its own.
@@ -495,7 +495,7 @@
     });
   }
   // Zoomed into a gap, the stage would be blank under the pinned title: say where the reader is and how to get out.
-  var HINT = "Scroll to zoom into a region. Search to jump to a theorem.";
+  var HINT = "Pinch, or Control or Command with scroll, to zoom into a region. Search to jump to a theorem.";
   function explainEmpty(drawn) {
     var record = currentPart(), text = HINT;
     if (record && record.id !== ROOT && record.data && !state.selected) {
@@ -922,11 +922,18 @@
 
   // ---------------------------------------------------------------- input
   var drag = null;
+  // As in the explorer: scrolling (a two-finger swipe) pans, and Control or Command with scroll zooms. Browsers send a
+  // trackpad pinch as a Control scroll.
   canvas.addEventListener("wheel", function (event) {
     event.preventDefault();
-    var box = canvas.getBoundingClientRect();
+    var box = canvas.getBoundingClientRect(), pixels = event.deltaMode === 1 ? 25 : 1;
     release();
-    zoomAt(Math.exp(-event.deltaY * (event.ctrlKey ? 0.01 : 0.0022)), event.clientX - box.left, event.clientY - box.top);
+    if (event.ctrlKey || event.metaKey) {
+      zoomAt(clamp(Math.exp(-event.deltaY * pixels * 0.002), 0.5, 2), event.clientX - box.left, event.clientY - box.top);
+    } else {
+      camera = {x: camera.x + event.deltaX * pixels / camera.k, y: camera.y + event.deltaY * pixels / camera.k, k: camera.k};
+      schedule();
+    }
     rememberCamera();
   }, {passive: false});
   canvas.addEventListener("pointerdown", function (event) {

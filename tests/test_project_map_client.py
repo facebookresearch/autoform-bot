@@ -94,7 +94,7 @@ def test_zooming_into_a_region_opens_it_in_place(tmp_path: Path) -> None:
       // Zoom towards Lagrange's theorem.
       const canvas = app.querySelector('svg'), card = $$('.pm-result')[0].querySelector('rect');
       const x = +card.getAttribute('x') + card.getAttribute('width') / 2, y = +card.getAttribute('y') + card.getAttribute('height') / 2;
-      for (let i = 0; i < 3; i++) { emit(canvas, 'wheel', {deltaY: -320, clientX: x, clientY: y}); await wait(4); }
+      for (let i = 0; i < 3; i++) { emit(canvas, 'wheel', {deltaX: 0, deltaY: -320, ctrlKey: true, clientX: x, clientY: y}); await wait(4); }
       await wait(20);
       // The same page now reads Groups from inside: its results are cards with titles, and the trail says where we are.
       assert.strictEqual(location.hash, '', 'zooming is not navigation');
@@ -104,6 +104,26 @@ def test_zooming_into_a_region_opens_it_in_place(tmp_path: Path) -> None:
       console.log('zoom ok');
     """)
     assert "zoom ok" in out
+
+
+def test_scrolling_pans_and_control_scrolling_zooms_with_focus_elsewhere(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      const search = $('.pm-search').querySelector('input'), canvas = app.querySelector('svg');
+      emit(search, 'focus');
+      const box = () => ['x', 'y', 'width'].map(name => +$$('.pm-part')[0].querySelector('rect').getAttribute(name));
+      const [x, y, w] = box();
+      emit(canvas, 'wheel', {deltaX: 41, deltaY: 29, clientX: x + 5, clientY: y + 5}); await wait(20);
+      const [x2, y2, w2] = box();
+      assert(Math.abs(x2 - (x - 41)) < 1 && Math.abs(y2 - (y - 29)) < 1 && Math.abs(w2 - w) < 0.01, [x, y, w, x2, y2, w2].join());
+      // A wheel that counts lines, not pixels, moves 25 pixels a line.
+      emit(canvas, 'wheel', {deltaX: 0, deltaY: 2, deltaMode: 1, clientX: x2, clientY: y2}); await wait(20);
+      assert(Math.abs(box()[1] - (y2 - 50)) < 1, box().join());
+      emit(canvas, 'wheel', {deltaX: 0, deltaY: -100, ctrlKey: true, clientX: x2 + w2 / 2, clientY: y2}); await wait(20);
+      assert(box()[2] > w2 * 1.1, 'a Control scroll zooms');
+      assert.strictEqual(location.hash, '', 'moving the map is not navigation');
+      console.log('wheel ok');
+    """)
+    assert "wheel ok" in out
 
 
 def test_an_empty_roadmap_says_so(tmp_path: Path) -> None:
