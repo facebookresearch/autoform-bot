@@ -602,22 +602,32 @@
       // tile. At 15 px it keeps the layout module's lines and baseline.
       var box = screenBox(own ? record.ownBox : record.box), shut = !own && !isOpen(record, box);
       var room = shut && !slot.overlay ? box.h / 2 : slot.band, meta = slot.detail !== "title" && !own;
-      var size = slot.overlay ? 15 : Math.round(clamp(Math.min(room * 0.4, slot.w / 7), 15, 30));
-      var perLine = Math.max(4, Math.floor(slot.w / (L.constants.TITLE_EM * size / 15)));
-      var step = size === 15 ? L.constants.LINE : Math.round(size * 1.2);
+      // A box running off the left of the stage keeps its title on screen, inside the box.
+      var x = slot.x, width = slot.w;
+      if (slot.x < 12 && slot.x + slot.w - 12 >= 80) { x = 12; width = slot.x + slot.w - 12; }
+      function perLine(size) { return Math.max(4, Math.floor(width / (L.constants.TITLE_EM * size / 15))); }
+      function stepOf(size) { return size === 15 ? L.constants.LINE : Math.round(size * 1.2); }
       // The last line's descenders stay inside the room, clear of the parts below an open band.
-      var most = size === 15 ? slot.lines : Math.max(1, Math.floor((room - (meta ? 22 : Math.ceil(size / 4))) / step));
-      var lines = most > 1 ? wrap(title, perLine, most) : [clip(title, perLine)];
+      function mostOf(size) { return size === 15 ? slot.lines : Math.max(1, Math.floor((room - (meta ? 22 : Math.ceil(size / 4))) / stepOf(size))); }
+      function fits(size) {
+        var n = perLine(size);
+        return title.split(/[ \t\n]+/).every(function (word) { return word.length <= n; }) && wrap(title, n, 99).length <= mostOf(size);
+      }
+      // As large as the room allows, then smaller until the whole title fits; at 15 px a long one is clipped.
+      var size = slot.overlay ? 15 : Math.round(clamp(Math.min(room * 0.4, width / 7), 15, 30));
+      while (size > 15 && !fits(size)) size--;
+      var step = stepOf(size), most = mostOf(size);
+      var lines = most > 1 ? wrap(title, perLine(size), most) : [clip(title, perLine(size))];
       var y = size === 15 ? slot.baseline : slot.y + Math.round(size * 1.2);
       lines.forEach(function (line, index) {
-        setText(keep(labelLayer, "lt:" + slot.id + ":" + index, "text", {x: slot.x, y: y + index * step,
+        setText(keep(labelLayer, "lt:" + slot.id + ":" + index, "text", {x: x, y: y + index * step,
           class: "pm-title" + (shut ? " pm-halo" : "") + cls, style: size === 15 ? "" : "font-size:" + size + "px"}), line);
       });
       if (!meta) return;
       // How many results, and a bar for how far along they are.
       var metaY = y + (lines.length - 1) * step + 18, words = num(record.summary.results) + (record.summary.results === 1 ? " result" : " results");
-      setText(keep(labelLayer, "lm:" + slot.id, "text", {x: slot.x, y: metaY, class: "pm-meta" + (shut ? " pm-halo" : "") + cls}), clip(words, Math.floor(slot.w / META_EM)));
-      var barX = slot.x + words.length * META_EM + 8, barW = Math.min(90, slot.x + slot.w - barX);
+      setText(keep(labelLayer, "lm:" + slot.id, "text", {x: x, y: metaY, class: "pm-meta" + (shut ? " pm-halo" : "") + cls}), clip(words, Math.floor(width / META_EM)));
+      var barX = x + words.length * META_EM + 8, barW = Math.min(90, x + width - barX);
       if (barW >= 24) progressBar("lp:" + slot.id, barX, metaY - 6, barW, record.summary.status, cls);
     });
   }
