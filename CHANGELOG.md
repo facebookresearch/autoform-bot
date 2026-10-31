@@ -11,7 +11,7 @@ date when the release is tagged.
 
 ### Changed
 
-- **Explorer delivery.** The approved integrated redesign ships below 144 KB,
+- **Explorer delivery.** The approved integrated redesign ships below 145 KB,
   with the same bounded graph, JSON and frame budgets and pinned safe compiler.
   Touch keeps single-pointer zoom controls; reading handles retain page-owned
   mathematical titles, and typed dependency counts remain accessible descriptions.
@@ -126,6 +126,10 @@ date when the release is tagged.
   downloads. ATLAS's
   42 MB index had passed the old 32 MiB limit, so search and the Topics
   outline failed on every page.
+- **Explorer reading defaults.** Desktop chapters open with the reader showing
+  their text again; only authored-area overviews and scopes over 120 nodes open
+  map-first, with the 0.9 zoom-out floor. On a phone, Back to a result whose
+  reader was closed no longer fails with "Could not open this view" (#507).
 - **Explorer review follow-ups.** Fit retains a selected unlinked result.
   Deferred list math cancels with its view and falls back to visible text on
   unavailable typesetting. Preview formatting keeps currency and code literal;

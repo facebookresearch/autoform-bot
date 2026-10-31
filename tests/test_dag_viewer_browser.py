@@ -1008,13 +1008,7 @@ def test_app_layout_fills_the_browser_viewport(desktop_page: object, explorer_co
     assert rail is not None and stage is not None and reader is not None
     assert rail["x"] + rail["width"] <= stage["x"] + 1
     assert stage["x"] + stage["width"] <= reader["x"] + 1
-    assert stage["width"] >= 550
-    handle = page.locator(".bp-dag-sheet-handle")
-    if handle.get_attribute("aria-expanded") == "false":
-        _assert_hit(page, handle)
-        handle.click()
-    stage, reader = page.locator(".bp-dag-stage").bounding_box(), page.locator(".bp-reading-pane").bounding_box()
-    assert stage is not None and reader is not None and stage["width"] >= 550 and reader["width"] >= 340
+    assert stage["width"] >= 550 and reader["width"] >= 340
 
 
 @pytest.mark.parametrize("page_name", ("chain", "star"))
@@ -1102,9 +1096,6 @@ def test_atlas_hierarchy_keeps_topics_readable_and_details_out_of_the_way(
         assert abs(float(end) - cursor) < .001
     topic.click()
     _consumer_ready(page, explorer_consumer, "atlas/topology")
-    if handle.get_attribute("aria-expanded") == "false":
-        _assert_hit(page, handle)
-        handle.click()
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
     playwright.expect(page.locator(".bp-reading-body")).to_contain_text("continuity, deformation, and invariants")
     assert len(explorer_consumer.graphs["atlas"]["nodes"]) == 30
