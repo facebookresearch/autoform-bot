@@ -452,7 +452,6 @@ def _write_page(
         "hide:",
         "  - navigation",
         "  - toc",
-        "  - footer",
     ]
     if title_text(heading) != heading:
         # MkDocs would take the title from the heading, whose references the

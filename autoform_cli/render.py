@@ -2353,6 +2353,8 @@ def _render_landing_page(
     heading = _first_h1(text) or ""
     title = rendered_visible_text(heading) or "Blueprint"
     scopes = graph_views.group_nodes(graph)
+    book = graph_pages.book_contents(graph, scopes) if scopes else None
+    book_href = _as_published(relative_link(destination / book, page, ".html")) if book else None
     hero = _render_hero(
         title,
         body,
@@ -2363,6 +2365,10 @@ def _render_landing_page(
             relative_link(destination / coverage.source_path, page, ".html")
         ),
         rail=bool(scopes),
+        # The explorer's list view, filtered to the states the figure counts.
+        ready_href=f"{book_href}#view=list&status=can_state,can_prove" if book_href else None,
+        # Without a roadmap contents page the book starts here.
+        book_href=None if book == Path("README.md") else book_href,
     )
     next_up = _next_target(
         graph,
@@ -2385,19 +2391,10 @@ def _render_landing_page(
         "  - navigation",
         "  - toc",
     ]
-    if scopes:
-        book = graph_pages.book_contents(graph, scopes)
-        # Without a roadmap contents page the book starts here.
-        book_link = (
-            ""
-            if book == Path("README.md")
-            else '<a class="bp-intro-book" href="'
-            + html.escape(_as_published(relative_link(destination / book, page, ".html")), quote=True)
-            + '">Read the book</a>'
-        )
+    if book:
         # The shared shell is attached after all full reading content is final.
-        reading = f'<div class="bp-landing-intro">{hero}{book_link}{next_up}</div>'
-        return "\n".join([*front, "  - footer", "---", "", reading]).rstrip() + "\n"
+        reading = f'<div class="bp-landing-intro">{hero}{next_up}</div>'
+        return "\n".join([*front, "---", "", reading]).rstrip() + "\n"
     # A roadmap without articles has nothing to explore, so the hero stands
     # over its status breakdown.
     breakdown = graph_pages.render_legend(
@@ -2431,12 +2428,25 @@ def _completion_percentage(done: int, total: int) -> int:
     return max(1, min(99, round(100 * done / total)))
 
 
+# What each disposition means for a source area, in the reader's words.
+_COVERAGE_WORDS = {
+    "DECOMPOSED": "split into statements",
+    "MAPPED": "not yet settled",
+    "INVENTORIED": "inventoried as Lean modules",
+    "DEFERRED": "left for later",
+    "OUT": "out of scope",
+}
+
+
 def _coverage_summary(coverage: CoverageSummary) -> str:
-    """Describe declared source dispositions without inventing a percentage."""
+    """Count the declared source areas by disposition, without a percentage."""
 
     counts = coverage.counts
-    return " · ".join(
-        f"{counts[disposition]} {disposition.casefold()}"
+    total = len(coverage.entries)
+    if not total:
+        return ""
+    return f"{total:,} source {'area' if total == 1 else 'areas'}: " + " · ".join(
+        f"{counts[disposition]:,} {_COVERAGE_WORDS[disposition]}"
         for disposition in _COVERAGE_SUMMARY_ORDER
         if counts[disposition]
     )
@@ -2451,15 +2461,18 @@ def _render_hero(
     coverage: CoverageSummary,
     coverage_href: str,
     rail: bool = False,
+    ready_href: str | None = None,
+    book_href: str | None = None,
 ) -> str:
     """Open with the project's name, its one-line claim, and where it stands.
 
     The dashboard this replaces was a paragraph of counts in a bordered box.
     The same numbers set as figures answer "how far along is this?" before the
     reader has finished the title, which is the only question the top of a
-    blueprint has to answer. In the explorer's narrow rail (*rail*) the
-    stylesheet keeps only the first two figures, so the topic and inventory
-    counts also come as one plain line under them.
+    blueprint has to answer. The explorer's reading pane (*rail*) gets the
+    two progress figures only, and module inventories as one plain line under
+    them. With *ready_href* the ready figure links the list of what it counts,
+    and *book_href* puts the way into the book right under the claim.
     """
     leaves = _countable(graph)
     selected = {node_id: statuses[node_id] for node_id in leaves}
@@ -2473,58 +2486,85 @@ def _render_hero(
     total = len(leaves)
     inventory_count = len(_module_inventories(graph))
     share = _completion_percentage(done, total)
-    article_label = "article" if total == 1 else "articles"
+    statement_label = "statement" if total == 1 else "statements"
 
     # The labels reuse the status words, so the share reads as the fully
     # proved status it counts and the second figure as "ready to state or
-    # prove"; each note says in plain words what the number counts.
-    figures = [
-        ("Fully proved", f"{share}%", f"{done} of {total} {article_label}", False),
-        ("Ready to start", str(actionable), "nothing they need is blocked", False),
-    ]
+    # prove"; each note says in plain words what the number counts. With no
+    # statements, or all of them fully proved, one sentence says so instead.
+    figures: list[tuple[str, str, str, bool]] = []
+    if done < total:
+        figures.append(("Fully proved", f"{share}%", f"{done:,} of {total:,} {statement_label}", False))
+        figures.append(
+            (
+                "Ready to work on",
+                f"{actionable:,}",
+                f"{'statement' if actionable == 1 else 'statements'} you can state or prove now",
+                False,
+            )
+            if actionable
+            else ("Nothing is ready right now", "", "", False)
+        )
     # The figure counts every catalog, checked or not; a project without
-    # catalogs has no inventory to report.
-    if inventory_count:
+    # catalogs has no inventory to report. The rail counts it in words.
+    if inventory_count and not rail:
         figures.append(
             (
                 "Module inventories",
-                str(inventory_count),
+                f"{inventory_count:,}",
                 "existing Lean modules inventoried",
                 True,
             )
         )
-    chapters = len(graph_views.group_nodes(graph))
-    figures.append(("Topics", str(chapters), "top-level parts of the book", False))
-    stats = "".join(
-        f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">'
-        f'<div class="bp-figure-value">{value}</div>'
-        f'<div class="bp-figure-label">{html.escape(label)}</div>'
-        f'<div class="bp-figure-note">{html.escape(note)}</div></div>'
-        for label, value, note, neutral in figures
-    )
-    counts = [f"{chapters} {'topic' if chapters == 1 else 'topics'}"]
-    if inventory_count:
-        counts.append(f"{inventory_count} module {'inventory' if inventory_count == 1 else 'inventories'}")
-    counts_line = f'<p class="bp-hero-counts">{" · ".join(counts)}</p>' if rail else ""
+
+    def figure(label: str, value: str, note: str, neutral: bool) -> str:
+        # A link is inline, and Markdown's HTML pass breaks blocks inside one
+        # apart, so the linked figure is built from spans the stylesheet stacks.
+        link = label == "Ready to work on" and ready_href
+        tag = "span" if link else "div"
+        inner = (
+            (f'<{tag} class="bp-figure-value">{value}</{tag}>' if value else "")
+            + f'<{tag} class="bp-figure-label">{html.escape(label)}</{tag}>'
+            + (f'<{tag} class="bp-figure-note">{html.escape(note)}</{tag}>' if note else "")
+        )
+        if link:
+            return f'<a class="bp-figure bp-figure-link" href="{html.escape(ready_href, quote=True)}">{inner}</a>'
+        return f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">{inner}</div>'
+
+    sentence = "No statements yet." if not total else "Every statement is fully proved." if done == total else ""
+    stats = "".join(figure(*entry) for entry in figures)
+    inventories = f"{inventory_count:,} module {'inventory' if inventory_count == 1 else 'inventories'}"
+    areas = _coverage_summary(coverage)
     coverage_line = (
         '<div class="bp-hero-coverage">'
-        '<span class="bp-hero-coverage-label">Declared source coverage:</span> '
-        f'<span class="bp-hero-coverage-counts">{html.escape(_coverage_summary(coverage))}</span> '
-        f'<a class="bp-hero-coverage-link" href="{html.escape(coverage_href, quote=True)}">'
+        + (f'<span class="bp-hero-coverage-counts">{html.escape(areas)}</span> ' if areas else "")
+        + f'<a class="bp-hero-coverage-link" href="{html.escape(coverage_href, quote=True)}">'
         "What the sources cover</a>"
         "</div>"
     )
     lead = _lead_sentence(body)
     return (
         '<div class="bp-hero">'
-        '<div class="bp-hero-rule"></div>'
-        '<div class="bp-hero-kicker">Formalization blueprint</div>'
-        f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
+        + ("" if rail else '<div class="bp-hero-kicker">Formalization blueprint</div>')
+        + f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
         + (f'<p class="bp-hero-lead">{lead}</p>' if lead else "")
-        + f'<div class="bp-hero-figures">{stats}</div>'
-        + counts_line
-        + f'<div class="bp-hero-bar" aria-hidden="true">'
-        f'<span style="width: {share}%"></span></div>'
+        # In its own block: Markdown breaks an inline link between blocks apart.
+        + (
+            f'<div><a class="bp-intro-book" href="{html.escape(book_href, quote=True)}">Start reading</a></div>'
+            if book_href
+            else ""
+        )
+        + (f'<p class="bp-hero-status">{sentence}</p>' if sentence else "")
+        + (f'<div class="bp-hero-figures">{stats}</div>' if stats else "")
+        + (f'<p class="bp-hero-counts">{inventories}</p>' if rail and inventory_count else "")
+        # The bar repeats the share for the wide hero, in the fully proved
+        # status colour; with no share to show it goes.
+        + (
+            '<div class="bp-hero-bar" aria-hidden="true">'
+            f'<span class="bp-swatch-fully_proved" style="width: {share}%"></span></div>'
+            if not rail and not sentence
+            else ""
+        )
         + coverage_line
         + "</div>"
     )
@@ -4011,10 +4051,11 @@ def _dependency_disclosure(
     if not rows:
         return ""
 
-    # The summary counts both directions, so a reader can tell from the closed
-    # line whether opening it is worth it.
+    # The summary counts each direction that has any, so a reader can tell
+    # from the closed line whether opening it is worth it.
     uses = len(dict.fromkeys((*node.statement_dependencies, *node.proof_dependencies)))
-    label = f"Uses {uses} · Used by {len(used_by[node.id])}"
+    sides = (f"Uses {uses:,}" if uses else "", f"Used by {len(used_by[node.id]):,}" if used_by[node.id] else "")
+    label = " · ".join(side for side in sides if side)
     body = _render_rows(rows, css_class="bp-dependency-body")
     return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
 
@@ -4118,10 +4159,10 @@ def _discussion_link(discussion: str, linker: SourceLinker) -> str:
 def _stylesheet() -> str:
     """Blueprint styling: amsthm structure over Facebook's product surfaces.
 
-    Both schemes are Facebook's shipped greys with Meta blue and the brand
-    gradient, set in Plus Jakarta Sans with JetBrains Mono for code. Dark is not
-    light dimmed: it is the palette Facebook uses in dark mode, and it hangs off
-    Material's colour scheme attribute so the theme's own toggle drives it.
+    Both schemes are Facebook's shipped greys with Meta blue, set in Plus
+    Jakarta Sans with JetBrains Mono for code. Dark is not light dimmed: it is
+    the palette Facebook uses in dark mode, and it hangs off Material's colour
+    scheme attribute so the theme's own toggle drives it.
     """
     # Dependency dots and swatches are a few pixels wide and carry no word, so
     # every state with a tinted light fill (the four finished states,
@@ -4165,9 +4206,12 @@ def _stylesheet() -> str:
 @import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
 
 /* Facebook's product surfaces, not Material's defaults: the greys are the
-   ones Facebook ships in dark mode, the blue is Meta blue, and the accent
-   sweep is the brand gradient. A blueprint should look like it came from
-   here rather than from any documentation generator. */
+   ones Facebook ships in dark mode and the blue is Meta blue, which light
+   mode's links share with the status strokes. The brand gradient stays off
+   the figures, the progress bar and the header. Dark mode's link blue is
+   lighter than its status blue, so links keep 4.5:1 on every surface.
+   A blueprint should look like it came from here rather than from any
+   documentation generator. */
 :root {{
   --bp-fg: #050505;
   --bp-muted: #65676B;
@@ -4179,9 +4223,6 @@ def _stylesheet() -> str:
   --bp-link: #0064E0;
   --bp-link-hover: #0082FB;
   --bp-blue: #0064E0;
-  --bp-violet: #7B3FE4;
-  --bp-magenta: #E0447B;
-  --bp-sweep: linear-gradient(95deg, #0082FB 0%, #0064E0 32%, #7B3FE4 68%, #E0447B 100%);
   --bp-radius: 12px;
 }}
 [data-md-color-scheme=slate] {{
@@ -4195,8 +4236,6 @@ def _stylesheet() -> str:
   --bp-link: #4A9AFF;
   --bp-link-hover: #7FB8FF;
   --bp-blue: #2D88FF;
-  --bp-violet: #9B6BFF;
-  --bp-magenta: #FF6B9D;
 }}
 /* Material's own tokens take the same blue, so its links, breadcrumbs and
    Previous/Next match the explorer instead of the theme's default indigo.
@@ -4241,15 +4280,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 [data-md-color-scheme=slate] .md-container {{ background-color: #18191A; }}
 [data-md-color-scheme=slate] pre, [data-md-color-scheme=slate] code {{ color: var(--bp-fg); }}
 
-/* The brand sweep as a hairline under the header ties every page together
-   without spending any vertical space on decoration. */
-.md-header {{ box-shadow: none; border-bottom: 1px solid var(--bp-rule); }}
-.md-header::after {{
-  content: "";
-  display: block;
-  height: 3px;
-  background: var(--bp-sweep);
-}}
+.md-header {{ box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35); border-bottom: 1px solid var(--bp-rule); }}
 /* The mobile drawer's title bar and repository strip match the header:
    white on slate's brighter blue is 3.5:1. */
 [data-md-color-scheme=slate] .md-header,
@@ -4257,7 +4288,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 [data-md-color-scheme=slate] .md-nav--primary .md-nav__title[for=__drawer],
 [data-md-color-scheme=slate] .md-nav__source {{ background-color: #242526; }}
 .md-tabs {{ border-bottom: 1px solid var(--bp-rule); }}
-.md-tabs__link {{ font-weight: 600; opacity: 0.72; }}
+.md-tabs__link {{ font-size: 0.72rem; font-weight: 600; opacity: 0.9; margin-top: 0; }}
 .md-tabs__link--active, .md-tabs__link:hover {{ opacity: 1; }}
 
 /* The landing page is a dashboard, not a chapter, so it drops the reading
@@ -4265,14 +4296,13 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
    stylesheet can tell the two apart without a second page template; where it
    is unsupported the page simply stays at reading width. */
 .md-typeset:has(.bp-landing) {{ max-width: 62rem; }}
+/* The explorer's reading pane sets its own width. Only running text keeps the
+   reading measure, so tables, code and cards use the whole pane. The pane's
+   article holds the page's reading source, whose children are the text. */
+.bp-reading-body.md-typeset {{ max-width: none; }}
+.bp-reading-body > .bp-reading-source > :is(p, ul, ol, dl, blockquote) {{ max-width: 72ch; }}
 
 .bp-hero {{ margin: 0 0 2.5rem; }}
-.bp-hero-rule {{
-  height: 4px;
-  width: 84px;
-  border-radius: 4px;
-  background: var(--bp-sweep);
-}}
 .bp-hero-kicker {{
   margin-top: 1.1rem;
   font-size: 0.68rem;
@@ -4312,15 +4342,9 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-weight: 800;
   line-height: 1;
   letter-spacing: -0.04em;
-  background: var(--bp-sweep);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: var(--bp-fg);
 }}
-.bp-figure-neutral .bp-figure-value {{
-  background: none;
-  color: var(--bp-muted);
-}}
+.bp-figure-neutral .bp-figure-value {{ color: var(--bp-muted); }}
 .bp-figure-label {{
   margin-top: 0.45rem;
   font-size: 0.78rem;
@@ -4328,6 +4352,21 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   letter-spacing: 0.01em;
 }}
 .bp-figure-note {{ margin-top: 0.15rem; font-size: 0.7rem; color: var(--bp-muted); }}
+/* The ready figure opens the list of what it counts; it keeps the figure's
+   colours, and an arrow after its label shows it is a link, as on
+   "Start reading". Hover or focus underlines the label. */
+.md-typeset a.bp-figure-link,
+.md-typeset a.bp-figure-link:is(:visited, :hover, :focus-visible) {{ color: var(--bp-fg); text-decoration: none; }}
+.bp-figure-link > span {{ display: block; }}
+.md-typeset a.bp-figure-link:is(:hover, :focus-visible) .bp-figure-label {{ text-decoration: underline; }}
+/* The arrow is decoration, so it stays out of the link's accessible name where
+   the browser supports alt text. The figures clip overflow, so the focus ring
+   is drawn inside the cell. */
+.bp-figure-link .bp-figure-label::after {{ content: " →"; content: " →" / ""; }}
+.md-typeset a.bp-figure-link:focus-visible {{ outline-offset: -2px; }}
+/* With no figures, or all statements fully proved, this one sentence is the
+   hero's status, so it is set at the claim's size. */
+.md-typeset .bp-hero-status {{ margin: 1rem 0 0; color: var(--bp-fg); font-size: 1.05rem; font-weight: 600; }}
 
 .bp-hero-bar {{
   margin-top: 1rem;
@@ -4337,7 +4376,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   border: 1px solid var(--bp-rule);
   overflow: hidden;
 }}
-.bp-hero-bar > span {{ display: block; height: 100%; background: var(--bp-sweep); }}
+.bp-hero-bar > span {{ display: block; height: 100%; }}
 
 .bp-hero-coverage {{
   display: flex;
@@ -4348,7 +4387,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-size: 0.72rem;
   color: var(--bp-muted);
 }}
-.bp-hero-coverage-label {{ font-weight: 700; color: var(--bp-fg); }}
 .bp-hero-coverage-link {{
   margin-left: auto;
   font-weight: 600;
@@ -4356,25 +4394,16 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   text-underline-offset: 0.15em;
 }}
 
-/* On the landing page the hero opens the explorer's hierarchy rail, or its
-   details sheet on phones, so it is set to the rail's width and, like the
-   rail, in px rather than Material's growing rem. Material's typeset rules
+/* On the landing page the hero sits in the explorer's reading pane, or its
+   sheet on phones, so it is set, like the pane's chapters, in px rather
+   than Material's growing rem. Material's typeset rules
    reach the hero's heading, paragraph and links there, so these rules carry
    a doubled class; the explorer's own rules stay in its script. The narrow
-   hero keeps the gradient rule as its one accent and two plain figures,
-   the share fully proved and what is ready to start, each with its
-   one-line note; the topic and inventory counts become one muted line,
-   and coverage its link. */
+   hero keeps two plain figures, the share fully proved and what is ready
+   to work on, each with its one-line note; module inventories become one
+   muted line under them. */
 .bp-landing-intro.bp-landing-intro {{ margin: 0 6px 18px; font-size: 13px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero {{ margin: 0; }}
-.bp-landing-intro.bp-landing-intro .bp-hero-rule {{ width: 56px; height: 3px; }}
-.bp-landing-intro.bp-landing-intro :is(
-  .bp-hero-kicker,
-  .bp-figure:nth-child(n + 3),
-  .bp-hero-bar,
-  .bp-hero-coverage-label,
-  .bp-hero-coverage-counts
-) {{ display: none; }}
 .bp-landing-intro.bp-landing-intro .bp-next-kicker {{
   font-size: 12px;
   font-weight: 500;
@@ -4392,8 +4421,15 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-landing-intro.bp-landing-intro .bp-hero-lead {{
   max-width: none;
   margin: 10px 0 0;
-  font-size: 13px;
+  color: var(--bp-fg);
+  font-size: 16px;
   line-height: 1.5;
+}}
+.bp-landing-intro.bp-landing-intro .bp-hero-status {{
+  margin: 14px 0 0;
+  color: var(--bp-fg);
+  font-size: 16px;
+  font-weight: 600;
 }}
 .bp-landing-intro.bp-landing-intro .bp-hero-figures {{
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4401,8 +4437,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-landing-intro.bp-landing-intro .bp-figure {{ padding: 9px 10px; }}
 .bp-landing-intro.bp-landing-intro .bp-figure-value {{
-  background: none;
-  color: var(--bp-fg);
   font-size: 17px;
   font-weight: 700;
 }}
@@ -4418,9 +4452,9 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-landing-intro.bp-landing-intro .bp-hero-coverage-link {{ margin-left: 0; }}
 .bp-landing-intro.bp-landing-intro .bp-intro-book {{
   display: inline-block;
-  margin-top: 14px;
+  margin-top: 10px;
   color: var(--bp-link);
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 600;
   text-decoration: none;
 }}
@@ -4524,12 +4558,9 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 /* With sticky tabs Material renders them inside <header>, so the title, the
    repository link and the tabs are one bar. These rules only remove the seam
    between the two rows of that bar. */
-.md-header {{ box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35); }}
 .md-tabs {{ background-color: transparent; box-shadow: none; }}
 .md-tabs__list {{ padding-left: 0.2rem; }}
 .md-tabs__item {{ height: 1.9rem; }}
-.md-tabs__link {{ font-size: 0.72rem; opacity: 0.9; margin-top: 0; }}
-.md-tabs__link--active, .md-tabs__link:hover {{ opacity: 1; }}
 
 /* "Next up" is the one card a visitor reads first, so it gets real hierarchy
    and a way into the mathematics rather than three stacked words. */

@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 import html5lib
@@ -34,7 +34,7 @@ from autoform_cli.__main__ import main
 from autoform_cli._repository import _normalize_remote
 from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.audit import audit_blueprint
-from autoform_cli.coverage import COVERAGE_DISPOSITIONS
+from autoform_cli.coverage import COVERAGE_DISPOSITIONS, COVERAGE_SCHEMA, CoverageEntry, CoverageSummary
 from autoform_cli.dashboard import publication_bound_live_state
 from autoform_cli.graph import Graph, GraphValidationError, Node, atlas_omissions, load_graph
 from autoform_cli.lean import LeanSourceError
@@ -741,7 +741,7 @@ def test_cross_references_point_at_anchors_on_the_chapter(tmp_path: Path) -> Non
     assert "Open dependency explorer" not in page
     assert 'data-autoform-node-id="top"' in page and 'id="top"' in page
     assert 'class="bp-reading-source"' in page and 'class="bp-dag-viewer"' in page
-    assert '<details class="bp-dependencies"><summary>Uses 1 · Used by 0</summary>' in page
+    assert '<details class="bp-dependencies"><summary>Uses 1</summary>' in page
     assert '<span class="bp-key">Statement uses</span>' in page
     assert 'href="#base">Definition 1 (Base)' in page
     assert 'href="#top">Theorem 1 (Top)' in page
@@ -783,11 +783,13 @@ def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tm
 
     # A prerequisite of both the statement and the proof is counted once, and
     # the rows inside stay as they were.
-    assert '<details class="bp-dependencies"><summary>Uses 2 · Used by 0</summary>' in top
+    assert '<details class="bp-dependencies"><summary>Uses 2</summary>' in top
     rows = top[top.index("bp-dependency-body"):top.index("</details>")]
     keys = re.findall(r'<span class="bp-key">([^<]+)</span>', rows)
     assert keys == ["Statement uses", "Proof uses"]
-    assert page.count("<summary>Uses 0 · Used by 1</summary>") == 2
+    # A side with nothing on it is left out of the summary.
+    assert page.count("<summary>Used by 1</summary>") == 2
+    assert "Uses 0" not in page and "Used by 0" not in page
     assert "<summary>Dependencies</summary>" not in page
 
     # Material draws a details element as a boxed admonition with a pencil
@@ -811,22 +813,18 @@ def test_overview_carries_the_counts_without_a_separate_progress_page(tmp_path: 
     _render(tmp_path)
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
 
-    # The landing page leads with the figures; a chapter keeps the compact strip.
-    assert overview.index("bp-hero-title") < overview.index("bp-hero-figures")
-    assert 'class="bp-figure-value"' in overview
-    assert '<div class="bp-figure-label">Fully proved</div>' in overview
-    assert '<div class="bp-figure-note">2 of 2 articles</div>' in overview
-    assert '<div class="bp-figure-label">Ready to start</div>' in overview
-    assert '<div class="bp-figure-note">nothing they need is blocked</div>' in overview
-    assert '<div class="bp-figure-label">Topics</div>' in overview
+    # The landing page leads with where it stands; a chapter keeps the compact strip.
+    # Everything is proved, so one sentence says it and no figure, bar or ready list repeats it.
+    assert overview.index("bp-hero-title") < overview.index("bp-hero-status")
+    assert '<p class="bp-hero-status">Every statement is fully proved.</p>' in overview
+    for repeated in ("bp-hero-figures", "bp-hero-bar", "bp-figure-link", "bp-hero-kicker", "bp-hero-counts"):
+        assert repeated not in overview
     # The figures speak the reader's nouns, not the authoring tool's.
     for retired in ("Scoped roadmap", "Ready now", "targets complete", "top-level milestones", "coverage contract</a>"):
         assert retired not in overview
     assert ">What the sources cover</a>" in overview
-    assert "Declared source coverage:" in overview
-    assert "1 mapped" in overview
+    assert '<span class="bp-hero-coverage-counts">1 source area: 1 not yet settled</span>' in overview
     assert 'href="coverage/index.html"' in overview
-    assert '<div class="bp-hero-bar" aria-hidden="true">' in overview
     assert 'role="img"' not in overview
     assert "items settled" not in overview
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
@@ -862,7 +860,7 @@ def test_statement_only_theorems_never_count_as_complete(tmp_path: Path) -> None
 
     render_site(project / "blueprint", tmp_path / "blocked", lean_root=project)
     blocked = (tmp_path / "blocked/README.md").read_text(encoding="utf-8")
-    assert '<div class="bp-figure-note">1 of 3 articles</div>' in blocked
+    assert '<div class="bp-figure-note">1 of 3 statements</div>' in blocked
 
     blocker.write_text(
         "---\ndeclaration: theorem\nstatement: formalized\nproof: formalized\nlean: Project.blocker\n---\n\n"
@@ -874,7 +872,66 @@ def test_statement_only_theorems_never_count_as_complete(tmp_path: Path) -> None
 
     render_site(project / "blueprint", tmp_path / "ready", lean_root=project)
     ready = (tmp_path / "ready/README.md").read_text(encoding="utf-8")
-    assert '<div class="bp-figure-note">2 of 3 articles</div>' in ready
+    assert '<div class="bp-figure-note">2 of 3 statements</div>' in ready
+
+
+def test_the_wide_hero_bar_takes_the_fully_proved_colour(tmp_path: Path) -> None:
+    """The bar measures fully proved work, so it is painted as the status is everywhere else."""
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/next.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Next\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    )
+    graph = load_graph(project / "blueprint")
+    coverage, _issues = render_module.load_coverage(project / "blueprint")
+
+    wide = render_module._render_hero("Book", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
+
+    assert '<span class="bp-swatch-fully_proved" style="width: 67%"></span>' in wide
+    css = render_module._stylesheet()
+    assert re.search(r"\.bp-hero-bar > span \{([^}]+)\}", css).group(1).strip() == "display: block; height: 100%;"
+
+
+def test_the_ready_figure_links_the_list_of_exactly_what_it_counts(tmp_path: Path) -> None:
+    """The figure opens the explorer's list filtered to the states it counts."""
+    project = _project(tmp_path)
+    _edit(project / "blueprint/README.md", "# Overview\n", "# Overview\n\nA short claim.\n")
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "next.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Next\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    )
+    (roadmap / "later.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Later\n\n## Depends on\n\n- [Next](next.md)\n", encoding="utf-8"
+    )
+    # A stated theorem on proved ground is ready to prove, so both ready states are counted.
+    (project / "Project" / "Formal.lean").write_text(
+        "namespace Project\n\ntheorem formal : True := trivial\n\nend Project\n", encoding="utf-8"
+    )
+    (roadmap / "formal.md").write_text(
+        "---\ndeclaration: theorem\nstatement: formalized\nlean: Project.formal\n---\n\n# Formal\n\n"
+        "## Depends on\n\n- [Top](top.md)\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    # Through the site's own Markdown, the links come out whole and add no paragraphs.
+    page = html5lib.parse(
+        site_converter().convert(overview.split("\n---\n", 1)[1]), treebuilder="etree", namespaceHTMLElements=False
+    )
+    hero = next(el for el in page.iter() if el.get("class") == "bp-hero")
+    assert not [el for el in hero.iter() if el.tag == "p" and not el.get("class")]
+    assert [el.get("class") for el in hero.iter() if el.tag in {"p", "a"}][:2] == ["bp-hero-lead", "bp-intro-book"]
+    [link] = [el for el in hero.iter() if "bp-figure-link" in (el.get("class") or "").split()]
+    assert [child.get("class") for child in link] == ["bp-figure-value", "bp-figure-label", "bp-figure-note"]
+    assert link.get("href") == "roadmap/index.html#view=list&status=can_state,can_prove"
+    # The list the link asks for, rebuilt as the explorer filters it, is what the figure counts.
+    states = set(parse_qs(urlsplit(link.get("href")).fragment)["status"][0].split(","))
+    index = json.loads((tmp_path / "out/dependencies/index.json").read_text(encoding="utf-8"))
+    ready = sorted(r["id"] for r in index["nodes"] if r.get("result") and r["status"] in states)
+    assert ready == ["formal", "next"]
+    assert {r["status"] for r in index["nodes"] if r["id"] in ready} == {"can_prove", "can_state"}
+    assert int(link[0].text.replace(",", "")) == len(ready)
 
 
 def test_completion_requires_every_dependency_to_be_fully_proved(tmp_path: Path) -> None:
@@ -891,8 +948,13 @@ def test_completion_requires_every_dependency_to_be_fully_proved(tmp_path: Path)
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert '<div class="bp-figure-note">0 of 1 article</div>' in overview
+    assert '<div class="bp-figure-note">0 of 1 statement</div>' in overview
     assert '<div class="bp-figure-value">0%</div>' in overview
+    # Nothing is ready, so the second figure is a label alone and opens no list.
+    second = overview.split('class="bp-hero-figures">', 1)[1].split('<div class="bp-figure">')[2]
+    assert re.match(r'<div class="bp-figure-label">[^<]+</div></div></div>', second)
+    assert "Ready to work on" not in overview
+    assert "bp-figure-link" not in overview
 
 
 def test_definitions_and_mathlib_marked_targets_count_as_complete(tmp_path: Path) -> None:
@@ -908,8 +970,7 @@ def test_definitions_and_mathlib_marked_targets_count_as_complete(tmp_path: Path
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert '<div class="bp-figure-note">3 of 3 articles</div>' in overview
-    assert '<div class="bp-figure-value">100%</div>' in overview
+    assert '<p class="bp-hero-status">Every statement is fully proved.</p>' in overview
 
 
 def test_a_mathlib_article_shows_its_mathlib_declarations_as_text(tmp_path: Path) -> None:
@@ -952,6 +1013,12 @@ def test_coverage_summary_tracks_every_canonical_disposition() -> None:
     assert set(_COVERAGE_SUMMARY_ORDER) == set(COVERAGE_DISPOSITIONS)
     assert len(_COVERAGE_SUMMARY_ORDER) == len(COVERAGE_DISPOSITIONS)
     assert _COVERAGE_SUMMARY_ORDER[0] == "DECOMPOSED"
+    # Every disposition has its reader's words, so a new one cannot fail render.
+    assert set(render_module._COVERAGE_WORDS) == set(COVERAGE_DISPOSITIONS)
+    # Counts carry thousands separators.
+    entries = tuple(CoverageEntry(f"Area {n}", "MAPPED", "Pending", n) for n in range(1234))
+    summary = render_module._coverage_summary(CoverageSummary(COVERAGE_SCHEMA, "README.md", "0" * 64, entries))
+    assert summary.startswith("1,234 ") and " 1,234 " in summary
 
 
 def test_single_target_uses_singular_completion_copy(tmp_path: Path) -> None:
@@ -960,12 +1027,13 @@ def test_single_target_uses_singular_completion_copy(tmp_path: Path) -> None:
         "---\n---\n\n# Top\n\nNarrative context rather than a Lean target.\n",
         encoding="utf-8",
     )
+    (project / "blueprint/roadmap/base.md").write_text("---\ndeclaration: def\n---\n\n# Base\n", encoding="utf-8")
 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert '<div class="bp-figure-note">1 of 1 article</div>' in overview
-    assert '<div class="bp-figure-note">1 of 1 articles</div>' not in overview
+    assert '<div class="bp-figure-note">0 of 1 statement</div>' in overview
+    assert '<div class="bp-figure-note">0 of 1 statements</div>' not in overview
 
 
 def test_module_catalog_is_separate_from_formalization_progress(
@@ -988,22 +1056,24 @@ def test_module_catalog_is_separate_from_formalization_progress(
         + "| Existing module | INVENTORIED | [Catalog](../roadmap/catalog.md) |\n",
         encoding="utf-8",
     )
+    # One open theorem keeps the figures, so the statement count shows.
+    (project / "blueprint/roadmap/open.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Open\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    )
+    _edit(project / "blueprint/roadmap/README.md", "- [Top](top.md)\n", "- [Top](top.md)\n- [Open](open.md)\n")
 
     render_site(project / "blueprint", tmp_path / "out")
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert '<div class="bp-figure-note">2 of 2 articles</div>' in overview
-    assert '<div class="bp-figure-note">3 of 3 articles</div>' not in overview
-    assert (
-        '<div class="bp-figure bp-figure-neutral"><div class="bp-figure-value">1</div>'
-        '<div class="bp-figure-label">Module inventories</div>'
-        in overview
-    )
+    # The catalog is no statement, so the three targets are all of them.
+    assert '<div class="bp-figure-note">2 of 3 statements</div>' in overview
+    assert "of 4 statements" not in overview
+    assert '<p class="bp-hero-counts">1 module inventory</p>' in overview
     assert not (tmp_path / "out/roadmap/catalog.md").exists()
     project_payload = json.loads((tmp_path / "out/dependencies.json").read_text(encoding="utf-8"))
     roadmap = project_payload["nodes"][0]
-    assert roadmap["member_count"] == 3
-    assert roadmap["status_counts"] == [["fully_proved", 2], ["inventory_checked", 1]]
+    assert roadmap["member_count"] == 4
+    assert roadmap["status_counts"] == [["fully_proved", 2], ["can_state", 1], ["inventory_checked", 1]]
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert (
         '<span class="bp-thmcaption" data-search-exclude>Module</span><span class="bp-thmlabel" data-search-exclude>1</span>'
@@ -1094,14 +1164,17 @@ def test_partial_module_catalog_is_not_reported_as_dispatchable_work(tmp_path: P
         + "| Existing module | INVENTORIED | [Catalog](../roadmap/catalog.md) |\n",
         encoding="utf-8",
     )
+    # One open theorem is the only ready work, so the catalog must not add to it.
+    (project / "blueprint/roadmap/open.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Open\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    )
 
     render_site(project / "blueprint", tmp_path / "out")
 
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert (
-        '<div class="bp-figure-value">0</div>'
-        '<div class="bp-figure-label">Ready to start</div>'
-    ) in overview
+    assert '<div class="bp-figure-note">2 of 3 statements</div>' in overview
+    ready = re.findall(r'class="bp-figure bp-figure-link"[^>]*><span class="bp-figure-value">([^<]*)<', overview)
+    assert ready == ["1"]
 
 
 def test_the_module_inventory_figure_counts_inventories_and_hides_at_zero(tmp_path: Path) -> None:
@@ -1132,14 +1205,19 @@ def test_the_module_inventory_figure_counts_inventories_and_hides_at_zero(tmp_pa
     render_site(project / "blueprint", tmp_path / "inventoried", lean_root=project)
 
     overview = (tmp_path / "inventoried/README.md").read_text(encoding="utf-8")
+    # The rail counts the inventory once, in its line of counts, not as a hidden figure too.
+    assert '<p class="bp-hero-counts">1 module inventory</p>' in overview
+    assert "Module inventories" not in overview
+    # A hero without the rail shows it as a figure.
+    graph = load_graph(project / "blueprint")
+    coverage, _issues = render_module.load_coverage(project / "blueprint")
+    wide = render_module._render_hero("Book", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
     assert (
         '<div class="bp-figure-value">1</div>'
         '<div class="bp-figure-label">Module inventories</div>'
         '<div class="bp-figure-note">existing Lean modules inventoried</div>'
-    ) in overview
-    assert "existing Lean modules checked" not in overview
-    # The rail hides the figure and counts the inventory in its line of counts.
-    assert re.search(r'<p class="bp-hero-counts">\d+ topics? · 1 module inventory</p>', overview)
+    ) in wide
+    assert "bp-hero-counts" not in wide
 
 
 def test_an_unclassified_catalog_warning_names_the_contract_once(tmp_path: Path) -> None:
@@ -1204,10 +1282,8 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
     render_site(blueprint, out)
 
     overview = (out / "README.md").read_text(encoding="utf-8")
-    assert (
-        '<div class="bp-figure-value">3</div>'
-        '<div class="bp-figure-label">Module inventories</div>'
-    ) in overview
+    assert '<p class="bp-hero-status">No statements yet.</p>' in overview
+    assert '<p class="bp-hero-counts">3 module inventories</p>' in overview
     topic = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))["nodes"][0]
     assert topic["id"] == "scope:library"
     assert topic["status_counts"] == [["inventory_pending", 3]]
@@ -1255,13 +1331,16 @@ def test_the_landing_page_preserves_its_full_reading_hero_in_one_integrated_shel
 
     # The sidebar would hold a single "Home" entry here, so the page drops it.
     front = overview.split("---")[1]
-    assert all(f"  - {part}" in front for part in ("navigation", "toc", "footer"))
+    assert all(f"  - {part}" in front for part in ("navigation", "toc"))
+    # The theme replaces Material's footer block, so hiding it would do nothing.
+    assert "footer" not in front
     assert 'data-graph-src="dependencies.json"' in overview
     assert overview.index('class="bp-reading-source"') < overview.index('class="bp-landing-intro"')
     assert overview.index('class="bp-landing-intro"') < overview.index('class="bp-dag-viewer"')
     intro = overview.split('class="bp-landing-intro"', 1)[1]
-    assert intro.index("bp-hero-title") < intro.index("bp-hero-figures") < intro.index("bp-intro-book")
-    assert '<a class="bp-intro-book" href="roadmap/index.html">Read the book</a>' in intro
+    # The way into the book comes straight after the claim, before the progress.
+    assert intro.index("bp-hero-title") < intro.index("bp-intro-book") < intro.index("bp-hero-status")
+    assert '<a class="bp-intro-book" href="roadmap/index.html">Start reading</a>' in intro
     # The hero's title is the page's one heading.
     assert overview.count("<h1") == 1 and "\n# " not in overview
     for retired in ("bp-map", 'class="bp-landing"', "open full-page", "## Status breakdown", "## Contents", "```mermaid"):
@@ -1272,32 +1351,36 @@ def test_the_landing_page_preserves_its_full_reading_hero_in_one_integrated_shel
     assert (tmp_path / "out/dependencies.json").is_file()
 
 
-def test_the_rail_hero_keeps_two_figures_a_counts_line_and_the_coverage_link(tmp_path: Path) -> None:
-    """The compact hero keeps its counts and coverage in the complete reading source.
+def test_the_rail_hero_keeps_two_figures_and_the_coverage_counts_and_hides_nothing(tmp_path: Path) -> None:
+    """The compact hero emits only what it shows, in the complete reading source.
 
     The integrated shell must not restore a second hero inside the legacy rail
     just to retain the compact figures introduced by the standalone explorer.
     """
-    _render(tmp_path)
+    project = _project(tmp_path)
+    (project / "blueprint/roadmap/next.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Next\n\n## Depends on\n\n- [Top](top.md)\n", encoding="utf-8"
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
     assert overview.count('class="bp-reading-source"') == overview.count('class="bp-landing-intro"') == 1
     assert 'class="bp-dag-intro bp-landing-intro"' not in overview
     assert overview.index('class="bp-reading-source"') < overview.index('class="bp-landing-intro"')
     intro = overview.split('class="bp-landing-intro"', 1)[1].split('class="bp-dag-viewer"', 1)[0]
-    # Every figure stays in the no-JavaScript reading source; compact presentation also gives counts in words.
-    assert intro.index("bp-hero-figures") < intro.index('<p class="bp-hero-counts">') < intro.index("bp-hero-bar")
-    counts = re.search(r'<p class="bp-hero-counts">([^<]*)</p>', intro)
-    assert counts is not None and re.fullmatch(r"\d+ topics?( · \d+ module inventor(y|ies))?", counts.group(1))
+    # Two figures, the coverage counts beside their link, and no markup the stylesheet would hide.
+    figures = intro.split('class="bp-hero-figures">', 1)[1]
+    assert re.findall(r'class="bp-figure-label">([^<]+)<', figures) == ["Fully proved", "Ready to work on"]
+    assert intro.index("bp-hero-figures") < intro.index("bp-hero-coverage-counts") < intro.index("bp-hero-coverage-link")
+    for hidden in ("bp-hero-kicker", "bp-hero-bar", "bp-hero-counts"):
+        assert hidden not in intro
     css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
-    assert (
-        ".bp-landing-intro.bp-landing-intro :is(\n  .bp-hero-kicker,\n  .bp-figure:nth-child(n + 3),\n"
-        "  .bp-hero-bar,\n  .bp-hero-coverage-label,\n  .bp-hero-coverage-counts\n) { display: none; }"
-    ) in css
+    assert "display: none" not in css.split(".bp-landing-intro.bp-landing-intro {", 1)[1].split(".bp-legend-grid", 1)[0]
     # Each of the two figures keeps its one-line note, so the number says what it counts.
     assert ".bp-landing-intro.bp-landing-intro .bp-figure-note { margin-top: 2px; font-size: 12px; }" in css
-    # The gradient rule is the narrow hero's one accent; its figures are plain.
-    value = css.split(".bp-landing-intro.bp-landing-intro .bp-figure-value {", 1)[1].split("}", 1)[0]
-    assert "background: none;" in value and "color: var(--bp-fg);" in value
+    # The figures are set in the text colour, with no gradient to undo.
+    value = css.split("\n.bp-figure-value {", 1)[1].split("}", 1)[0]
+    assert "color: var(--bp-fg);" in value and "--bp-sweep" not in value
+    assert "bp-hero-rule" not in css and "bp-hero-rule" not in intro
     assert ".bp-landing-intro.bp-landing-intro .bp-hero-coverage-link { margin-left: 0; }" in css
     assert "last-child:nth-child(odd)" not in css
 
@@ -1399,7 +1482,7 @@ def test_the_legends_beside_the_explorer_count_what_its_rings_count(tmp_path: Pa
         )
     ]
     overview = (out / "README.md").read_text(encoding="utf-8")
-    assert '<div class="bp-figure-note">2 of 2 articles</div>' in overview
+    assert '<p class="bp-hero-status">Every statement is fully proved.</p>' in overview
     # Compatibility entrances have no second legend/body. The standalone API
     # still explains the exact scope-target and inventory counts without JS.
     standalone = tmp_path / "standalone"
@@ -1865,6 +1948,59 @@ def test_authored_mermaid_survives_while_generated_graph_pages_use_the_explorer(
     assert all("```mermaid" not in page.read_text(encoding="utf-8") for page in graph_pages)
 
 
+
+def _relative_luminance(colour: str) -> float:
+    channels = [int(colour[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def test_links_keep_text_contrast_on_every_surface_in_both_schemes() -> None:
+    css = render_module._stylesheet()
+    blocks = {
+        "light": re.search(r":root \{([^}]+)\}", css),
+        "dark": re.search(r"\[data-md-color-scheme=slate\] \{([^}]+)\}", css),
+    }
+    for scheme, block in blocks.items():
+        assert block is not None, scheme
+        colours = dict(re.findall(r"--(bp-[\w-]+): (#[0-9A-Fa-f]{6});", block.group(1)))
+        for background in ("bp-surface", "bp-sunken", "bp-page"):
+            low, high = sorted((_relative_luminance(colours["bp-link"]), _relative_luminance(colours[background])))
+            assert (high + 0.05) / (low + 0.05) >= 4.5, (scheme, background)
+
+
+def test_the_reading_measure_reaches_running_text_in_the_explorer_pane(tmp_path: Path) -> None:
+    """The pane's 72ch rule must select the text the pane actually holds.
+
+    The explorer moves a page's whole `.bp-reading-source` into its
+    `.bp-reading-body` article, so the paragraphs are grandchildren of the
+    article. A rule written against the article's children matched nothing.
+    """
+    _render(tmp_path)
+    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
+    [selector] = [head.strip() for head, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+                  if "bp-reading-body" in head and "72ch" in body]
+    *chain, last = [part.strip() for part in selector.split(">")]
+    assert chain == [".bp-reading-body", ".bp-reading-source"]
+    texts = set(re.fullmatch(r":is\(([^)]*)\)", last).group(1).replace(" ", "").split(","))
+    assert "p" in texts
+
+    # The explorer builds the article and moves the reading source into it; the
+    # browser tests check that DOM, so this only guards the names the rule uses.
+    assets = Path(__file__).resolve().parent.parent / "autoform_cli/assets"
+    dag = (assets / "blueprint-dag.js").read_text(encoding="utf-8")
+    assert "bp-reading-body" in dag and "readingSource" in dag
+    navigation = (assets / "blueprint-navigation.js").read_text(encoding="utf-8")
+    assert ".bp-reading-source" in navigation
+    # In the rendered chapter, the running text sits directly in the reading source.
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    page = html5lib.parse(
+        site_converter().convert(chapter.split("\n---\n", 1)[-1]), treebuilder="etree", namespaceHTMLElements=False
+    )
+    [source] = [el for el in page.iter() if "bp-reading-source" in (el.get("class") or "").split()]
+    assert [child for child in source if child.tag in texts]
+
+
 def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     _render(tmp_path)
     css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
@@ -1889,9 +2025,17 @@ def test_both_colour_schemes_are_published(tmp_path: Path) -> None:
     assert "setTimeout(refresh, pollDelayMs)" in live
     assert 'render({ claims: [], error: "Live overlay unavailable" })' in live
     assert live == packaged_live
-    # The brand sweep is defined once and reused, rather than pasted per rule.
-    assert css.count("--bp-sweep:") == 1
-    assert css.count("var(--bp-sweep)") >= 3
+    # The brand gradient is off the figures, the bar and the header hairline.
+    assert "--bp-sweep" not in css
+    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+    for selector in (".bp-figure-value", ".bp-hero-bar", ".md-header"):
+        bodies = [body for head, body in rules if selector in head]
+        assert bodies and not any("gradient" in body for body in bodies), selector
+    # One rule per theme selector, so no later rule silently overrides an earlier one.
+    for selector in (".md-header", ".md-tabs__link"):
+        assert len(re.findall(rf"(?m)^{re.escape(selector)} \{{", css)) == 1, selector
+    # The reading column's measure does not cap the explorer's reading pane.
+    assert ".bp-reading-body.md-typeset { max-width: none; }" in css
     for state in STATES:
         assert f".bp-{state.key} .bp-mark {{ color: {state.stroke}; }}" in css
         assert f"[data-md-color-scheme=slate] .bp-{state.key} .bp-mark" in css
@@ -3227,10 +3371,9 @@ def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path
     render_site(project / "blueprint", out)
 
     overview = (out / "README.md").read_text(encoding="utf-8")
-    assert '<div class="bp-figure-note">0 of 0 articles</div>' in overview
+    assert '<p class="bp-hero-status">No statements yet.</p>' in overview
     assert "items settled" not in overview
-    assert '<div class="bp-figure-value">0%</div>' in overview
-    assert '<div class="bp-figure-value">0</div>' in overview
+    assert "bp-hero-figures" not in overview and "bp-hero-bar" not in overview
     # The shared shell exists even before any mathematical work is planned.
     # Its empty graph and result index must not invent ready work.
     assert overview.count('class="bp-dag-viewer"') == overview.count('class="bp-reading-source"') == 1

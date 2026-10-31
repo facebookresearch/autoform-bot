@@ -25,7 +25,7 @@ theme:
   icon:
     repo: fontawesome/brands/github
   features:
-    # Book and Graph sit across the top; the sidebar shows the open tab.
+    # The site's top-level sections sit across the top; the sidebar shows the open tab.
     - navigation.tabs
     - navigation.tabs.sticky
     # The chapter tree stays visible, which is what makes a blueprint readable
