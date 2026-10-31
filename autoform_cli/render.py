@@ -66,7 +66,6 @@ from ._tree_snapshot import (
     TreeSelection,
     TreeSnapshot,
     TreeSnapshotError,
-    _read_prefix,
     _update_digest,
     bind_directory_tree,
     descriptor_capture_supported,
@@ -92,7 +91,6 @@ from .graph_views import _containers, _countable, _is_countable, _module_invento
 from .lean import (
     _REPLACEABLE_SCHEMAS,
     PUBLICATION_MANIFEST,
-    PUBLICATION_MANIFEST_MAX_BYTES,
     PUBLICATION_SCHEMA,
     IndexedSourceSnapshot,
     LeanSourceError,
@@ -1435,11 +1433,10 @@ def _destination_state(path: Path) -> _State | None:
     if empty:
         return identity, {}
     manifest = None
-    try:  # bounded, and read before anything below it
+    try:  # read before anything below it
         if stat.S_ISREG(os.lstat(path / PUBLICATION_MANIFEST).st_mode):
             with open(path / PUBLICATION_MANIFEST, "rb") as handle:
-                data = _read_prefix(handle, PUBLICATION_MANIFEST_MAX_BYTES + 1)  # read(n) allocates n bytes first
-            manifest = json.loads(data) if len(data) <= PUBLICATION_MANIFEST_MAX_BYTES else None
+                manifest = json.loads(handle.read())
     except (OSError, ValueError, RecursionError):
         pass
     if isinstance(manifest, dict) and manifest.get("schema") == "autoform-publication/v1":
@@ -1858,10 +1855,6 @@ def _write_publication_manifest(
         "views": ["book", "progress", "project", "chapter", "full"],
     }
     encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    if len(encoded) > PUBLICATION_MANIFEST_MAX_BYTES:  # the next render could not read it
-        raise PublicationError(
-            [f"generated publication manifest exceeds max_file_bytes={PUBLICATION_MANIFEST_MAX_BYTES}"]
-        )
     # Replaced, never truncated in place: a Lean capture that read an empty
     # manifest would index the stage's copies.
     temporary = destination / f".{PUBLICATION_MANIFEST}.{secrets.token_hex(8)}.tmp"
@@ -4714,7 +4707,6 @@ __all__ = [
     "LOGO",
     "MERMAID_SCRIPT",
     "PUBLICATION_MANIFEST",
-    "PUBLICATION_MANIFEST_MAX_BYTES",
     "PUBLICATION_SCHEMA",
     "PublicationError",
     "STYLESHEET",

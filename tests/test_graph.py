@@ -201,6 +201,19 @@ def test_authored_atlas_manifest_groups_nodes_independently_of_paths(tmp_path: P
     assert graph.nodes["topology"].area == "Geometry & Topology"
 
 
+def test_a_large_atlas_manifest_still_assigns_its_areas(tmp_path: Path) -> None:
+    """No size cap: a manifest past the old 1 MB limit is read whole."""
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "algebra.md", "# Algebra\n")
+    manifest = json.dumps({"schema": "autoform-atlas/v1", "areas": {"Algebra": ["algebra"]}})
+    (blueprint / "atlas.json").write_text(manifest + " " * 1_000_001, encoding="utf-8")
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["algebra"].area == "Algebra"
+    assert atlas_omissions(graph) == []
+
+
 def test_atlas_manifest_keeps_the_first_area_and_names_what_it_ignores(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "algebra.md", "# Algebra\n")
@@ -242,7 +255,6 @@ def test_dangling_atlas_manifest_link_is_not_treated_as_absent(tmp_path: Path) -
 @pytest.mark.parametrize(
     ("atlas", "omission"),
     [
-        pytest.param(b" " * 1_000_001, "ignored, since it exceeds 1000000 bytes", id="oversize"),
         pytest.param(b"{", "ignored, since it is not valid JSON: ", id="invalid-json"),
         pytest.param(b"[" * 200_000, "ignored, since it is not valid JSON: ", id="too-deep"),
         pytest.param(
