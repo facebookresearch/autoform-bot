@@ -692,9 +692,9 @@ def _declared_deprecated(declaration: Declaration, sources: dict[Path, list[str]
 
     Only ``@[...]`` lists before the keyword count: on the declaration's line,
     or on the contiguous attribute lines directly above it. Comments are
-    blanked first, so a commented-out attribute does not count. A field has
-    none: Lean puts a structure's attributes on the structure alone, even when
-    a field shares its line.
+    blanked first, so a commented-out attribute does not count. A field takes
+    none from its structure: Lean puts a structure's attributes on the
+    structure alone, even when a field shares its line.
     """
 
     if declaration.keyword == "field":

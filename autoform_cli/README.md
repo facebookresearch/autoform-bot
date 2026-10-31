@@ -141,8 +141,8 @@ ledger under `sources/` draws a `check` warning and fails only `audit` (see
 
 A completed catalog records in `lean:` the full name of every public
 declaration the module writes with a declaration keyword, as the Lean source
-index records them; a structure's fields, which the index records too, may go
-there instead of the ledger. Names Lean generates, such as constructors,
+index records them; a structure field the index records may go there instead
+of the ledger. Names Lean generates, such as constructors,
 derived or unnamed instances, and `@[ext]`, `@[simps]`, or `@[to_additive]`
 results, and declarations the index cannot see yet, behind `nonrec` or `meta`
 or written `class inductive`, go in the ledger as supporting entries, never in
@@ -415,9 +415,12 @@ autoform check blueprint --lean-root .
 
 `check` validates the graph contract ([Validation](reference/validation-and-audit.md#validation)).
 With `--lean-root` it resolves names only in the project's own Lean files, not
-in Mathlib or other dependencies under `.lake`; when a name is not found, a note
-at the end of the output says that a shared library's declaration belongs in
-the article's implementation note.
+in Mathlib or other dependencies under `.lake`. When a declaration article
+names something the index does not read directly under a project structure,
+class or inductive type, such as its constructor, the error gives the type's
+`path:line`; when any other name is not found, a note at the end of the output
+says that a shared library's declaration belongs in the article's
+implementation note.
 
 With `--lean-root`, `check` also warns about each declaration of a usable,
 checked-out shared library (see `autoform library list`) whose own docstring
@@ -552,7 +555,9 @@ or stale artifacts fail the check); the check rewrites Lake's `.hash` files, so
 
 Generated companions, such as constructors, projections, recursors and matchers,
 fold onto the declaration the reader sees, so a structure appears once, as its
-`structure` block. A `partial def` in a trusted closure is refused, and so is an
+`structure` block. A field named in `lean:` keeps its own packet, whose
+signature carries the field's type and whose source is only its name. A
+`partial def` in a trusted closure is refused, and so is an
 ordinary declaration with no source of its own, such as one a metaprogram adds
 under an existing name; a theorem or axiom shows only its type, and an internal
 helper such as `f._unary` is marked `-- source not shown`. A `lean:` name is
