@@ -83,6 +83,9 @@ def test_the_map_walkthrough_overview_search_pivot_back_and_whole_project(webkit
         search.press("Enter")
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Lagrange's theorem")
         playwright.expect(page.locator(".pm-lean code")).to_have_text("Project.Subgroup.card_dvd")
+        # The pane shows the statement from the book's own page, not the index's summary.
+        playwright.expect(page.locator(".pm-reader .pm-math")).to_contain_text("divides the order of")
+        assert page.locator(".pm-reader .pm-math .bp-thmheading, .pm-reader .pm-math script").count() == 0
         playwright.expect(page.locator(".pm-result.pm-selected")).to_have_count(1)
         before = page.locator(".pm-result.pm-selected").bounding_box()
         # Following a prerequisite pivots the selection; Back restores both the selection and the view.

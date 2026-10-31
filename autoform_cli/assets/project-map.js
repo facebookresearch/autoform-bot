@@ -101,17 +101,21 @@
   // One request per file (at most the index, search and 256 part files); a request that fails, or hangs for FETCH_MS,
   // is forgotten, so the next use of the file asks again.
   var cache = new Map(), FETCH_MS = 30000;
+  function request(url, name, read) {
+    var controller = window.AbortController ? new AbortController() : null;
+    var timer = setTimeout(function () { if (controller) controller.abort(); }, FETCH_MS);
+    return fetch(url, controller ? {signal: controller.signal} : undefined).then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status + " for " + name);
+      return read(response);
+    }).then(function (data) { clearTimeout(timer); return data; }, function (error) {
+      clearTimeout(timer);
+      throw controller && controller.signal.aborted ? new Error("loading " + name + " timed out") : error;
+    });
+  }
   function fetchJSON(relative) {
     if (!cache.has(relative)) {
-      var controller = window.AbortController ? new AbortController() : null;
-      var timer = setTimeout(function () { if (controller) controller.abort(); }, FETCH_MS);
-      cache.set(relative, fetch(new URL(relative, mapBase), controller ? {signal: controller.signal} : undefined).then(function (response) {
-        if (!response.ok) throw new Error("HTTP " + response.status + " for " + relative);
-        return response.json();
-      }).then(function (data) { clearTimeout(timer); return data; }, function (error) {
-        clearTimeout(timer); cache.delete(relative);
-        throw controller && controller.signal.aborted ? new Error("loading " + relative + " timed out") : error;
-      }));
+      cache.set(relative, request(new URL(relative, mapBase), relative, function (response) { return response.json(); })
+        .catch(function (error) { cache.delete(relative); throw error; }));
     }
     return cache.get(relative);
   }
@@ -1092,24 +1096,75 @@
     if (title && text.indexOf(title) === 0 && /^[.:]\s/.test(text.slice(title.length))) text = text.slice(title.length + 1).trim();
     return withMath(el("p", "pm-statement"), text);
   }
+  // A link from published data: http(s) only, no credentials; anything else is dropped.
+  function safeLink(value, base) {
+    if (typeof value !== "string" || !value || /[\u0000-\u001f\u007f]/.test(value)) return null;
+    try { var url = new URL(value, base); return /^https?:$/.test(url.protocol) && !url.username && !url.password ? url.href : null; }
+    catch (_error) { return null; }
+  }
+  // The book's page for a result holds its complete statement, proof and sources; the reading pane shows that block
+  // instead of the index's summary. The last PAGES pages stay parsed.
+  var pages = new Map(), PAGES = 6, shownResult = 0;
+  function pageAt(url) {
+    var key = url.split("#")[0];
+    if (!pages.has(key)) {
+      if (pages.size >= PAGES) pages.delete(pages.keys().next().value);
+      pages.set(key, request(key, "the result's page", function (response) { return response.text(); })
+        .then(function (text) { return new DOMParser().parseFromString(text, "text/html"); })
+        .catch(function (error) { pages.delete(key); throw error; }));
+    }
+    return pages.get(key);
+  }
+  // The result's block, cleaned as the explorer cleans what it borrows: no scripts or embeds, no handlers or inline
+  // styles, links rebased to the page and kept only when safe, and no ids to clash with this page's. Its heading and
+  // dependency list go, since the pane has its own.
+  function borrowed(page, id, base) {
+    var block = Array.from(page.querySelectorAll(".bp-thmwrapper")).find(function (node) { return node.getAttribute("data-autoform-node-id") === id; });
+    if (!block) return null;
+    var copy = document.importNode(block, true), source = copy.querySelector(".bp-code-link");
+    source = source && safeLink(source.getAttribute("href"), base);
+    copy.querySelectorAll(".bp-thmheading, .bp-dependencies, script, iframe, object, embed, base, link, style, form").forEach(function (node) { node.remove(); });
+    [copy].concat(Array.from(copy.querySelectorAll("*"))).forEach(function (node) {
+      Array.from(node.attributes).forEach(function (attribute) {
+        var name = attribute.name.toLowerCase();
+        if (/^on/.test(name) || name === "srcdoc" || name === "style" || name === "id") node.removeAttribute(attribute.name);
+      });
+      ["href", "src"].forEach(function (name) {
+        var value = node.getAttribute(name);
+        if (value == null) return;
+        var safe = safeLink(value, base);
+        if (safe) node.setAttribute(name, safe); else node.removeAttribute(name);
+      });
+    });
+    return {block: copy, source: source};
+  }
   function showResult(id) {
     var entry = model.results.get(id);
     if (!entry) return;
     shownPart = null;
-    var row = entry.row, rel = relationsOf(id);
+    var row = entry.row, rel = relationsOf(id), shown = ++shownResult;
     readerInner.replaceChildren();
     readerInner.append(el("p", "pm-kicker", "Result"));
     readerInner.append(withMath(el("h2"), row.title));
     readerInner.append(pathLine(chainOf(entry.home)));
     readerInner.append(el("span", "pm-chip", statusWords(row.status) + (row.facet ? " · " + row.facet : "")));
-    if (row.summary) readerInner.append(statement(row.summary, row.title));
-    if (row.lean) {
-      var lean = el("div", "pm-lean");
-      lean.append(el("code", "", row.lean)); readerInner.append(lean);
-    }
-    var actions = el("div", "pm-actions");
-    if (row.route) { var read = el("a", "", "Read the statement and proof"); read.href = new URL(row.route, routeBase).href; actions.append(read); }
+    var summary = row.summary ? statement(row.summary, row.title) : null;
+    if (summary) readerInner.append(summary);
+    var lean = el("div", "pm-lean");
+    if (row.lean) { lean.append(el("code", "", row.lean)); readerInner.append(lean); }
+    var actions = el("div", "pm-actions"), page = row.route && safeLink(row.route, routeBase);
+    if (page) { var read = el("a", "", "Open in the book"); read.href = page; actions.append(read); }
     readerInner.append(actions);
+    if (page && window.DOMParser) {
+      pageAt(page).then(function (parsed) {
+        var math = shown === shownResult && state.selected === id && borrowed(parsed, id, page);
+        if (!math) return;
+        var holder = el("div", "pm-math"); holder.append(math.block);
+        if (summary) summary.replaceWith(holder); else (lean.parentNode ? lean : actions).before(holder);
+        if (math.source && row.lean) { var link = el("a", "", "Lean source"); link.href = math.source; lean.append(link); }
+        typeset(holder);
+      }).catch(function () { /* the summary and the link to the book stay */ });
+    }
     [["Uses", rel.uses], ["Used by", rel.usedBy]].forEach(function (pair) {
       readerInner.append(el("h3", "", pair[0] + " (" + num(pair[1].length) + ")"));
       if (!pair[1].length) { readerInner.append(el("p", "pm-empty", pair[0] === "Uses" ? "No prerequisites recorded." : "Nothing uses it yet.")); return; }

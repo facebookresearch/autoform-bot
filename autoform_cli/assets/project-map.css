@@ -122,6 +122,17 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-path button { padding: 0; border: 0; background: none; color: var(--pm-link); font: inherit; cursor: pointer; }
 .pm-chip { display: inline-block; margin: 0 0 12px; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--pm-proved) 14%, transparent); color: var(--pm-fg); font-size: 12px; }
 .pm-statement { margin: 0 0 14px; font-size: 15px; line-height: 1.55; }
+/* The result's block from the book: statement and proof first, sources and Lean rows quieter below. */
+.pm-math { margin: 0 0 14px; font-size: 15px; line-height: 1.55; overflow-wrap: anywhere; }
+.pm-math p { margin: 0 0 10px; }
+.pm-math a { color: var(--pm-link); }
+.pm-math code { padding: 1px 4px; border-radius: 4px; background: var(--pm-bg); font: 12.5px var(--pm-mono); }
+.pm-math pre { overflow: auto; padding: 8px; border-radius: 6px; background: var(--pm-bg); font: 12px/1.45 var(--pm-mono); }
+.pm-math .bp-thmnotes, .pm-math .bp-meta { margin-top: 10px; color: var(--pm-muted); font-size: 12.5px; }
+.pm-math .bp-thmnotes h6 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .02em; }
+.pm-math .bp-row { display: flex; gap: 8px; padding: 2px 0; }
+.pm-math .bp-key { flex: none; min-width: 84px; font-weight: 600; }
+.pm-math details > summary { cursor: pointer; }
 .pm-lean { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; }
 .pm-lean code { padding: 3px 6px; overflow: hidden; border-radius: 5px; background: var(--pm-bg); font: 12px var(--pm-mono); text-overflow: ellipsis; white-space: nowrap; }
 .pm-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
