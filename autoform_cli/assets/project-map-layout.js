@@ -206,7 +206,7 @@
     });
     var boxes = {};
     order.forEach(function (id, index) {
-      var r = inset(rects[id], margin.get(rects[id].row) / 2), box = {x: r.x, y: r.y, w: r.w, h: r.h, unit: unit, order: index,
+      var r = inset(rects[id], margin.get(rects[id].row) / 2), box = {x: r.x, y: r.y, w: r.w, h: r.h, unit: unit,
         row: rects[id].row, axis: columns ? "columns" : "rows"};
       // A box too small for a whole band keeps most of its height for its content, so what it
       // holds still opens as the camera closes in; its label waits until the band is tall enough.
@@ -251,7 +251,7 @@
     var id = partData.part.id, ownId = id + "#results", content = contentOf(box), boxes = {};
     var unit = unitsPerPixel(content, stage);
     if (!items.length) {
-      if (own) boxes[ownId] = Object.assign({depth: box.depth + 1, parent: id, own: true, unit: unit, order: 0, row: 0, band: 0, pad: 0}, content);
+      if (own) boxes[ownId] = Object.assign({depth: box.depth + 1, parent: id, own: true, unit: unit, row: 0, band: 0, pad: 0}, content);
       return boxes;
     }
     var order = dependencyOrder(items, partData.edges || []), weights = weightsOf(items), titles = titlesOf(items);
@@ -269,7 +269,7 @@
   // shows the central routes, at most four for every five boxes and never more than MAX_REST:
   // heaviest first, preferring routes that reach boxes no shown route reaches yet. Every route has
   // an orthogonal path through the gaps of area, never in a band.
-  function bundleEdges(boxes, edges, area) {
+  function bundleEdges(boxes, edges, area, everyRoute) {
     var pairs = new Map();
     edges.forEach(function (edge) {
       var user = edge[0], used = edge[1];
@@ -288,7 +288,7 @@
         weight: weight, tier: weight >= 100 ? 3 : weight >= 10 ? 2 : 1, rest: false};
     });
     var byWeight = routes.slice().sort(function (p, q) { return q.weight - p.weight || byKey(p.from + p.to, q.from + q.to); });
-    var budget = Math.min(MAX_REST, Math.max(1, Math.round(Object.keys(boxes).length * 0.8))), shown = 0;
+    var budget = everyRoute ? Infinity : Math.min(MAX_REST, Math.max(1, Math.round(Object.keys(boxes).length * 0.8))), shown = 0;
     var reached = new Set();
     // Routes between two unreached boxes first, then routes reaching one, then the heaviest others.
     [2, 1, 0].forEach(function (fresh) {
@@ -351,16 +351,18 @@
       return list;
     }
     var hSegments = new Map(), vSegments = new Map();
-    function use(map, key, from, to, route, width) {
+    // A route's leg along a corridor or through a passage, in the lane list of its gap; lanes() sets its offset.
+    function leg(route, map, key, a, b, width, step) {
       if (!map.has(key)) map.set(key, {width: width, list: []});
       var entry = map.get(key);
       entry.width = Math.min(entry.width, width);
-      entry.list.push({lo: Math.min(from, to), hi: Math.max(from, to), route: route});
+      Object.assign(step, {lo: Math.min(a, b), hi: Math.max(a, b), route: route, offset: 0});
+      entry.list.push(step); route.legs.push(step);
     }
     routes.forEach(function (route) {
       var a = boxes[route.from], b = boxes[route.to], ra = rowOf.get(route.from), rb = rowOf.get(route.to);
-      var ax = a.x + a.w / 2, bx = b.x + b.w / 2, steps = [];
-      route.legs = steps;
+      var ax = a.x + a.w / 2, bx = b.x + b.w / 2;
+      route.legs = [];
       if (ra === rb) {
         var row = rows[ra].ids, ia = row.indexOf(route.from), ib = row.indexOf(route.to);
         if (Math.abs(ia - ib) === 1) {
@@ -369,8 +371,7 @@
         }
         // Same row, not neighbours: along the corridor below the row.
         route.sides = ["bottom", "bottom"];
-        steps.push({h: ra + 1, from: ax, to: bx});
-        use(hSegments, ra + 1, ax, bx, route, corridorWidth(ra + 1));
+        leg(route, hSegments, ra + 1, ax, bx, corridorWidth(ra + 1), {h: ra + 1, from: ax, to: bx});
         return;
       }
       var down = rb > ra;
@@ -383,25 +384,20 @@
           var d = Math.abs(p.x - x) + Math.abs(p.x - bx);
           if (d < cost - 1e-9) { cost = d; pick = p; }
         });
-        steps.push({h: c, from: x, to: pick.x});
-        use(hSegments, c, x, pick.x, route, corridorWidth(c));
+        leg(route, hSegments, c, x, pick.x, corridorWidth(c), {h: c, from: x, to: pick.x});
         var next = down ? c + 1 : c - 1;
         // A leg reaches halfway into the corridors on either side, so its lane is shared with every leg in the same
         // column, whatever the row: the side margins line up across all rows.
-        var column = pick.x.toFixed(3);
-        steps.push({v: column, x: pick.x, from: c, to: next});
-        use(vSegments, column, corridorY(c), corridorY(next), route, pick.width);
+        leg(route, vSegments, pick.x.toFixed(3), corridorY(c), corridorY(next), pick.width, {x: pick.x, from: c, to: next});
         x = pick.x; c = next;
       }
-      steps.push({h: c, from: x, to: bx});
-      use(hSegments, c, x, bx, route, corridorWidth(c));
+      leg(route, hSegments, c, x, bx, corridorWidth(c), {h: c, from: x, to: bx});
     });
     // Lanes: greedy interval colouring per corridor, centred in it. A crowded corridor can't keep every lane a few
     // pixels apart, so the routes shown at rest take their lanes first and get slots spread across the corridor; the
     // others, drawn only beside a part under the pointer, fill the slots between.
     function lanes(map) {
-      var offsets = new Map();
-      map.forEach(function (entry, key) {
+      map.forEach(function (entry) {
         var tracks = [], resting = 0;
         [true, false].forEach(function (rest) {
           entry.list.filter(function (item) { return !!item.route.rest === rest; })
@@ -419,17 +415,10 @@
         // Resting tracks at evenly spread slots, the rest in the free slots left to right.
         for (var t = 0; t < resting; t++) { slots[t] = Math.round((t + 0.5) * count / resting - 0.5); taken[slots[t]] = true; }
         for (var free = 0; t < count; t++) { while (taken[free]) free++; slots[t] = free; taken[free] = true; }
-        entry.list.forEach(function (item) {
-          offsets.set(key + "\u0000" + item.route.from + "\u0000" + item.route.to + "\u0000" + item.lo, (slots[item.track] - (count - 1) / 2) * spacing);
-        });
+        entry.list.forEach(function (item) { item.offset = (slots[item.track] - (count - 1) / 2) * spacing; });
       });
-      return offsets;
     }
-    var hLane = lanes(hSegments), vLane = lanes(vSegments);
-    function laneY(c, route, lo) {
-      return corridorY(c) + (hLane.get(c + "\u0000" + route.from + "\u0000" + route.to + "\u0000" + lo) || 0);
-    }
-    function laneX(key, route, lo, x) { return x + (vLane.get(key + "\u0000" + route.from + "\u0000" + route.to + "\u0000" + lo) || 0); }
+    lanes(hSegments); lanes(vSegments);
     // Ports: spread over the middle of each side, ordered by where each route goes next.
     var ports = new Map();
     routes.forEach(function (route) {
@@ -480,13 +469,11 @@
         var x = s[0], y0 = null;
         route.legs.forEach(function (leg) {
           if (leg.h !== undefined) {
-            var y1 = laneY(leg.h, route, Math.min(leg.from, leg.to));
-            points.push(x, y1);
-            y0 = y1;
+            y0 = corridorY(leg.h) + leg.offset;
+            points.push(x, y0);
           } else {
-            var lx = laneX(leg.v, route, Math.min(corridorY(leg.from), corridorY(leg.to)), leg.x);
-            points.push(lx, y0);
-            x = lx;
+            x = leg.x + leg.offset;
+            points.push(x, y0);
           }
         });
         points.push(e[0], y0);
@@ -609,15 +596,16 @@
         var fit = Math.min(box.w / (width + 2 * PAD), box.h / height), score = fit * candidate[1];
         if (!best || score > best.score + 1e-9) best = {cols: cols, rows: rows, width: width, height: height, fit: fit, score: score, fold: candidate[2]};
       });
-      if (cols >= n) break;
     }
     var rowsOf = best.rows, rowOf = new Array(n), slot = new Array(n);
     rowsOf.forEach(function (row, r) { row.forEach(function (member, k) { rowOf[member] = r; slot[member] = k; }); });
-    var shown = [];
+    // Direct links run inside a cycle or survive the reduction; the others are implied by them.
+    var direct = [], implied = [];
     links.forEach(function (edge) {
-      var user = at.get(edge[0]), used = at.get(edge[1]), cu = component[user], cv = component[used];
-      if (cu === cv || kept[cv].has(cu)) shown.push([used, user]);
+      var cu = component[at.get(edge[0])], cv = component[at.get(edge[1])];
+      (cu === cv || kept[cv].has(cu) ? direct : implied).push(edge);
     });
+    var shown = direct.map(function (edge) { return [at.get(edge[1]), at.get(edge[0])]; });
     for (var sweep = 0; sweep < (best.fold ? 0 : 4); sweep++) {
       var downward = sweep % 2 === 0;
       for (var r = downward ? 1 : rowsOf.length - 2; downward ? r < rowsOf.length : r >= 0; r += downward ? 1 : -1) {
@@ -643,12 +631,8 @@
       });
     });
     var area = {x: x0, y: y0, w: best.width * scale, h: (rowsOf.length * CARD_H + (rowsOf.length - 1) * ROW_GAP) * scale};
-    var direct = [], implied = [];
-    links.forEach(function (edge) {
-      var user = at.get(edge[0]), used = at.get(edge[1]), cu = component[user], cv = component[used];
-      (cu === cv || kept[cv].has(cu) ? direct : implied).push(edge);
-    });
-    var routes = bundleResults(cards, direct, area), hidden = bundleResults(cards, implied, area);
+    // Every result route shows: the reduction already chose them.
+    var routes = bundleEdges(cards, direct, area, true), hidden = bundleEdges(cards, implied, area, true);
     var stubs = {};
     (boundaryEdges || []).forEach(function (edge) {
       var inside = at.has(edge[0]) ? edge[0] : at.has(edge[1]) ? edge[1] : null;
@@ -656,15 +640,7 @@
       var entry = stubs[inside] || (stubs[inside] = {uses: 0, usedBy: 0});
       if (inside === edge[0]) entry.uses++; else entry.usedBy++;
     });
-    return {cards: cards, routes: routes, implied: hidden, stubs: stubs, cols: best.cols, fold: best.fold};
-  }
-
-  // Result routes: one per linked pair, all shown (the reduction already chose them).
-  function bundleResults(cards, edges, area) {
-    if (!edges.length) return [];
-    var routes = bundleEdges(cards, edges, area);
-    routes.forEach(function (route) { route.rest = true; });
-    return routes;
+    return {cards: cards, routes: routes, implied: hidden, stubs: stubs, fold: best.fold};
   }
 
   // Labels for the boxes on screen at this camera. A box at least MIN_W wide whose band holds a title
@@ -697,9 +673,11 @@
         if (bottom + need > y + h) return;
         Object.assign(label, {y: bottom, band: need, overlay: true, lines: 1, detail: "title"});
       }
+      // The first title line's baseline, where the page draws it.
+      label.baseline = label.y + Math.min(30, label.band / 2 + (compact ? 5 : 6));
       if (closed && closed[id]) {
-        // The first baseline sits where the page draws it, and the details follow the last line.
-        var first = compact ? Math.min(30, label.band / 2 + 5) + 4 : Math.min(30, label.band / 2 + 6) + 5;
+        // The details follow the last line, and a line's descent stays inside the box.
+        var first = label.baseline - label.y + (compact ? 4 : 5);
         var room = y + h - pad - label.y - DETAIL_LINE * (label.detail === "full" ? 2 : label.detail === "meta" ? 1 : 0);
         label.lines = Math.max(label.lines, 1 + Math.floor((room - first) / (compact ? COMPACT_LINE : LINE)));
       }
@@ -733,7 +711,6 @@
 
   var api = {packLevels: packLevels, packPart: packPart, bundleEdges: bundleEdges, layoutCommunity: layoutCommunity,
     placeLabels: placeLabels, fitCamera: fitCamera, focusCamera: focusCamera, contentOf: contentOf, dependencyOrder: dependencyOrder,
-    constants: {BAND: BAND, PAD: PAD, GAP: GAP, MIN_W: MIN_W, MIN_H: MIN_H, LINE: LINE, COMPACT_LINE: COMPACT_LINE}};
-  if (typeof window !== "undefined") window.AutoformMapLayout = api;
-  if (typeof module !== "undefined" && module.exports) module.exports = api;
+    constants: {BAND: BAND, GAP: GAP, MIN_W: MIN_W, MIN_H: MIN_H, LINE: LINE, COMPACT_LINE: COMPACT_LINE, TITLE_EM: TITLE_EM}};
+  window.AutoformMapLayout = api;
 })();
