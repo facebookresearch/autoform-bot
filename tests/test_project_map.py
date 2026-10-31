@@ -127,6 +127,31 @@ def test_links_are_summed_between_the_siblings_below_their_common_ancestor() -> 
     assert _part(files, "region:Algebra & Number Theory")["edges"] == [["NumberTheory", "Algebra", 1, 0]]
 
 
+def test_each_part_names_the_parts_it_builds_on_and_the_parts_that_use_it_at_its_own_depth() -> None:
+    records, relations = _library()
+    records.append(_result("Algebra/basics", "Algebra", "Basics"))
+    relations += [
+        ("NumberTheory/euclid", "Algebra/MathlibExt/part-01/groups/lagrange", 1, 0),
+        ("Analysis/WantedExt/series/abel", "NumberTheory/euclid", 0, 1),
+        # Results in a part's own parent are not another part.
+        ("Algebra/MathlibExt/part-01/groups/cauchy", "Algebra/basics", 1, 0),
+    ]
+    files = project_map.build_project_map(records, relations)
+    # Each row: the other part, its title, its parent's title, and how many of its results are involved.
+    assert _part(files, "Analysis")["links"]["uses"] == [["region:Algebra & Number Theory", "Algebra & Number Theory", None, 2]]
+    series = _part(files, "Analysis/WantedExt/series")["links"]
+    assert series["uses"] == [["Algebra", "Algebra", "Algebra & Number Theory", 1],
+                              ["NumberTheory", "Number Theory", "Algebra & Number Theory", 1]]
+    assert (series["uses_total"], series["used_by"], series["used_by_total"]) == (2, [], 0)
+    algebra = _part(files, "Algebra")["links"]
+    assert algebra["used_by"] == [["NumberTheory", "Number Theory", "Algebra & Number Theory", 1],
+                                  ["Analysis/WantedExt/series", "Series", "Analysis", 1]]
+    # A part deeper than the other side names the other's deepest part.
+    groups = _part(files, "Algebra/MathlibExt/part-01/groups")["links"]
+    assert [row[0] for row in groups["used_by"]] == ["NumberTheory", "Analysis/WantedExt/series"]
+    assert (groups["uses"], groups["uses_total"]) == ([], 0)
+
+
 def test_wide_parts_are_grouped_into_linked_communities_and_one_standalone_group() -> None:
     records = [_scope("roadmap", None, "Library"), _scope("Big", "roadmap", "Big subject")]
     relations = []

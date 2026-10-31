@@ -197,12 +197,13 @@
   canvas.setAttribute("tabindex", "0");
   var defs = svg("defs");
   // Markers do not inherit the colour of the line that uses them, so a highlighted route has its own.
-  defs.innerHTML = ["pm-arrow", "pm-arrow-on"].map(function (id) {
+  defs.innerHTML = ["pm-arrow", "pm-arrow-on", "pm-arrow-uses", "pm-arrow-used-by"].map(function (id) {
     return '<marker id="' + id + '" class="' + id + '" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z"/></marker>';
   }).join("");
   // Routes run through the gaps between boxes, so they draw above every box; labels draw last.
-  var partLayer = svg("g"), routeLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), labelLayer = svg("g");
-  canvas.append(defs, partLayer, routeLayer, resultLayer, cardRouteLayer, labelLayer);
+  // A picked part's arrows to its neighbours cross other boxes, so they draw above everything but the labels.
+  var partLayer = svg("g"), routeLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), linkLayer = svg("g"), labelLayer = svg("g");
+  canvas.append(defs, partLayer, routeLayer, resultLayer, cardRouteLayer, linkLayer, labelLayer);
   var pin = el("div", "pm-pin"); pin.hidden = true;
   var hint = el("div", "pm-hint", "");
   stage.append(canvas, pin, hint);
@@ -296,7 +297,9 @@
   // ---------------------------------------------------------------- state
   // focusPart pins the reading pane and trail to a part the reader asked for (ROOT for the whole project) until they
   // move the map themselves; then both follow the part that fills the view.
-  var state = {selected: null, related: null, focusPart: null, hoverPart: null, facets: null};
+  // picked: a part chosen with one click, shown where it is with its neighbours (a second click goes inside).
+  // links: the shown part's neighbours by role (uses, used-by, both); linkHover: the neighbour under the pointer in the panel.
+  var state = {selected: null, related: null, focusPart: null, hoverPart: null, facets: null, picked: null, links: null, linkHover: null};
   var pending = false;
   function schedule() {
     if (pending) return;
@@ -340,14 +343,16 @@
       Math.min(b.w, size.w) * Math.min(b.h, size.h) >= size.w * size.h * 0.45;
   }
   var deepestAtCenter = null;
-  function currentPart() { return state.focusPart ? part(state.focusPart) || part(ROOT) : deepestAtCenter; }
+  // The part the view is in: the pinned title and the empty-stage hint follow it. The panel and trail follow a picked part.
+  function viewPart() { return state.focusPart ? part(state.focusPart) || part(ROOT) : deepestAtCenter; }
+  function currentPart() { return state.picked && part(state.picked) ? part(state.picked) : viewPart(); }
   function render() {
     if (!part(ROOT) || !part(ROOT).box) return;
     measure();
     used = new Set();
     deepestAtCenter = part(ROOT);
     var onPath = state.selected && model.results.get(state.selected) ? new Set(chainOf(model.results.get(state.selected).home)) : null;
-    var labelBoxes = {}, opened = [], communities = [], drawn = new Set();
+    var labelBoxes = {}, closed = {}, opened = [], communities = [], drawn = new Set();
     (function visit(record) {
       if (!record.box) return;
       var b = screenBox(record.box);
@@ -359,6 +364,7 @@
         drawPart(record, b, open, onPath);
         drawn.add(record.id);
         if (b.w >= LABEL_MIN_W) labelBoxes[record.id] = record.box;
+        if (!open) closed[record.id] = true;
       }
       if (!open) return;
       opened.push(record);
@@ -367,9 +373,10 @@
       // Beside other children, a part's own results have a band of their own to name them.
       if (record.ownBox && record.ownBox.band && record.kids.length && screenBox(record.ownBox).w >= LABEL_MIN_W) labelBoxes[record.id + "#results"] = record.ownBox;
     })(part(ROOT));
-    var slots = L.placeLabels(labelBoxes, cornerCamera(), size), labelled = new Set(slots.map(function (slot) { return slot.id; }));
+    var slots = L.placeLabels(labelBoxes, cornerCamera(), size, closed), labelled = new Set(slots.map(function (slot) { return slot.id; }));
     opened.forEach(function (record) { drawRoutes(record, labelled); });
     communities.forEach(function (record) { if (drawCommunity(record)) drawn.add(record.id + "#results"); });
+    drawLinks();
     drawLabels(slots);
     drawPin();
     explainEmpty(drawn);
@@ -381,7 +388,9 @@
     var dim = state.related && !state.related.parts.has(record.id);
     var holder = keep(partLayer, "part:" + record.id, "g", {
       class: "pm-part " + (open ? "pm-open" : "pm-tile pm-tile-" + tileKind(record.summary.status)) + (dim ? " pm-dimmed" : "") +
-        (state.focusPart === record.id ? " pm-focus" : "") + (onPath && onPath.has(record.id) ? " pm-on-path" : ""),
+        (state.focusPart === record.id ? " pm-focus" : "") + (onPath && onPath.has(record.id) ? " pm-on-path" : "") +
+        (!state.selected && state.links && state.links.has(record.id) ? " pm-" + state.links.get(record.id) : "") +
+        (state.linkHover === record.id ? " pm-link-hover" : "") + (state.picked === record.id ? " pm-picked" : ""),
       tabindex: open ? -1 : 0, role: "button", "data-part": record.id,
       "aria-label": plain(record.summary.title) + ", " + num(record.summary.results) + " results" +
         (record.summary.api_total ? ", " + num(record.summary.api_total) + " used elsewhere" : "")});
@@ -425,12 +434,16 @@
   // two anonymous tiles is noise), and every route of the part in focus or under the pointer.
   function drawRoutes(record, labelled) {
     var routes = routesAt.get(record.id) || [];
+    // With a part in focus, links elsewhere fade, so its own links and its outlined neighbours stand out.
+    var focus = !state.selected && state.focusPart !== ROOT ? state.focusPart : null;
+    var elsewhere = !!focus && record.id !== focus && chainOf(record.id).indexOf(focus) < 0;
     routes.forEach(function (route) {
       // With a result selected, its part's own links to its neighbours are beside the point; the pointer still shows them.
-      var involved = [state.selected ? null : state.focusPart, state.hoverPart].some(function (id) { return id && (route.from === id || route.to === id); });
+      var involved = [state.selected || state.picked ? null : state.focusPart, state.hoverPart].some(function (id) { return id && (route.from === id || route.to === id); });
       var resting = route.rest && labelled.has(route.from) && labelled.has(route.to);
       if ((!resting && !involved) || !route.points || !routeVisible(route.points)) return;
-      var dim = state.related && !(state.related.parts.has(route.from) && state.related.parts.has(route.to));
+      var dim = state.related ? !(state.related.parts.has(route.from) && state.related.parts.has(route.to)) :
+        state.picked ? route.from !== state.hoverPart && route.to !== state.hoverPart : elsewhere && !involved;
       var path = keep(routeLayer, "route:" + record.id + ":" + route.from + ">" + route.to, "path", {
         d: routePath(route.points, route.radius),
         class: "pm-route" + (route.kind === "proof" ? " pm-proof" : "") + (involved ? " pm-involved" : "") + (dim ? " pm-dimmed" : ""),
@@ -438,6 +451,47 @@
         "marker-end": arrow(involved), "marker-start": route.both ? arrow(involved) : "none"});
       setText(path.firstChild || path.appendChild(svg("title")), linkWords(route, function (id) { return plain((part(id) || {summary: {title: id}}).summary.title); }));
     });
+  }
+  // The picked part's arrows, straight to each neighbour the map has a box for: in from what it builds on, out to what
+  // uses it (arrows run from what is used to what uses it), thicker for more results. A pair linked both ways gets two
+  // arrows, bowed apart.
+  function drawLinks() {
+    var record = !state.selected && state.picked ? part(state.picked) : null, links = record && record.data && record.data.links;
+    if (!links || !record.box) return;
+    var here = screenBox(record.box), rows = links.uses.concat(links.used_by);
+    var most = Math.max.apply(null, rows.map(function (row) { return row[3]; }).concat([1]));
+    [["uses", links.uses], ["used-by", links.used_by]].forEach(function (pair) {
+      pair[1].forEach(function (row) {
+        var other = part(row[0]);
+        if (!other || !other.box) return;
+        var there = screenBox(other.box), ends = pair[0] === "uses" ? [there, here] : [here, there];
+        var away = there.x > size.w || there.y > size.h || there.x + there.w < 0 || there.y + there.h < 0;
+        var path = keep(linkLayer, "link:" + pair[0] + ":" + row[0], "path", {
+          d: bow(ends[0], ends[1]), class: "pm-link pm-" + pair[0] + (state.linkHover === row[0] ? " pm-link-hover" : "") + (away ? " pm-link-away" : ""),
+          "stroke-width": (1.5 + 3 * Math.sqrt(row[3] / most)).toFixed(2), "marker-end": "url(#pm-arrow-" + pair[0] + ")"});
+        var title = plain(record.summary.title), name = plain(row[1]), count = num(row[3]) + (row[3] === 1 ? " result" : " results");
+        setText(path.firstChild || path.appendChild(svg("title")),
+          pair[0] === "uses" ? title + " uses " + count + " in " + name : count + " in " + name + " use " + title);
+      });
+    });
+  }
+  // A gentle curve from one box's edge to the other's, bowed to its left, so a reverse arrow bows the other way. Boxes
+  // side by side would leave only a stub in the gap between them, so then the arrow runs between their middles.
+  function bow(a, b) {
+    var p = edgeToward(a, [b.x + b.w / 2, b.y + b.h / 2]), q = edgeToward(b, [a.x + a.w / 2, a.y + a.h / 2]);
+    if (Math.hypot(q[0] - p[0], q[1] - p[1]) < 60) {
+      p = edgeToward(inset(a), [b.x + b.w / 2, b.y + b.h / 2]); q = edgeToward(inset(b), [a.x + a.w / 2, a.y + a.h / 2]);
+    }
+    var dx = q[0] - p[0], dy = q[1] - p[1], length = Math.hypot(dx, dy) || 1, bend = Math.min(90, length * 0.18);
+    var m = [(p[0] + q[0]) / 2 + dy / length * bend, (p[1] + q[1]) / 2 - dx / length * bend];
+    return "M" + cx(p[0]).toFixed(1) + "," + cy(p[1]).toFixed(1) + " Q" + cx(m[0]).toFixed(1) + "," + cy(m[1]).toFixed(1) +
+      " " + cx(q[0]).toFixed(1) + "," + cy(q[1]).toFixed(1);
+  }
+  function inset(box) { return {x: box.x + box.w * 0.3, y: box.y + box.h * 0.3, w: box.w * 0.4, h: box.h * 0.4}; }
+  function edgeToward(box, point) {
+    var c = [box.x + box.w / 2, box.y + box.h / 2], dx = point[0] - c[0], dy = point[1] - c[1];
+    var s = Math.min(dx ? box.w / 2 / Math.abs(dx) : Infinity, dy ? box.h / 2 / Math.abs(dy) : Infinity, 1);
+    return [c[0] + dx * s, c[1] + dy * s];
   }
   // A part's own results: status tiles while small, then cards with their titles and the links between them.
   function drawCommunity(record) {
@@ -486,8 +540,8 @@
     }
     return true;
   }
-  // Titles and progress in each box's header band, at fixed sizes, where the layout module finds room for them. Narrow
-  // boxes get one short title line. A box whose band is still too thin gets its title over its top, on a backdrop in
+  // Titles and progress in each box's header band, at fixed sizes, where the layout module finds room for them. A
+  // closed tile's title wraps down the tile, up to the lines the module allows. A box whose band is still too thin gets its title over its top, on a backdrop in
   // its own fill; nothing inside it is labelled yet, so nothing is covered.
   function drawLabels(slots) {
     slots.forEach(function (slot) {
@@ -504,17 +558,19 @@
         placeRect(backdrop, {x: b.x + 1, y: b.y + 1, w: b.w - 2, h: slot.band});
       }
       if (slot.compact) {
-        setText(keep(labelLayer, "lc:" + slot.id, "text", {x: slot.x, y: slot.y + Math.min(30, slot.band / 2 + 5), class: "pm-title pm-compact" + cls}),
-          clip(title, Math.max(3, Math.floor(slot.w / COMPACT_EM))));
+        wrap(title, Math.max(3, Math.floor(slot.w / COMPACT_EM)), slot.lines).forEach(function (line, index) {
+          setText(keep(labelLayer, "lc:" + slot.id + ":" + index, "text", {x: slot.x, y: slot.y + Math.min(30, slot.band / 2 + 5) + index * L.constants.COMPACT_LINE,
+            class: "pm-title pm-compact" + cls}), line);
+        });
         return;
       }
-      var lines = slot.lines === 2 ? wrap(title, Math.max(4, Math.floor(slot.w / TITLE_EM)), 2) : [clip(title, Math.max(4, Math.floor(slot.w / TITLE_EM)))];
+      var lines = slot.lines > 1 ? wrap(title, Math.max(4, Math.floor(slot.w / TITLE_EM)), slot.lines) : [clip(title, Math.max(4, Math.floor(slot.w / TITLE_EM)))];
       var y = slot.y + Math.min(30, slot.band / 2 + 6);
       lines.forEach(function (line, index) {
-        setText(keep(labelLayer, "lt:" + slot.id + ":" + index, "text", {x: slot.x, y: y + index * 20, class: "pm-title" + cls}), line);
+        setText(keep(labelLayer, "lt:" + slot.id + ":" + index, "text", {x: slot.x, y: y + index * L.constants.LINE, class: "pm-title" + cls}), line);
       });
       if (slot.detail === "title" || own) return;
-      var metaY = y + (lines.length - 1) * 20 + 18;
+      var metaY = y + (lines.length - 1) * L.constants.LINE + 18;
       setText(keep(labelLayer, "lm:" + slot.id, "text", {x: slot.x, y: metaY, class: "pm-meta" + cls}), clip(progressText(record.summary), Math.floor(slot.w / META_EM)));
       var api = record.summary.api || [];
       if (slot.detail === "full" && api.length) {
@@ -524,9 +580,9 @@
     });
   }
   // Zoomed into a gap, the stage would be blank under the pinned title: say where the reader is and how to get out.
-  var HINT = "Pinch, or Control or Command with scroll, to zoom into a region. Search to jump to a theorem.";
+  var HINT = "Click a part to see what it builds on, and again to go inside. Pinch or Control-scroll to zoom.";
   function explainEmpty(drawn) {
-    var record = currentPart(), text = HINT;
+    var record = viewPart(), text = HINT;
     if (record && record.id !== ROOT && record.data && !state.selected) {
       var inside = record.kids.some(function (id) { return drawn.has(id); }) || drawn.has(record.id + "#results");
       if (!inside && (record.kids.length || record.results.length)) text = "You are between the parts of " + plain(record.summary.title) + ". Zoom out, or choose a part in the reading pane.";
@@ -536,7 +592,7 @@
   }
   // Once the part the view is in has its header band scrolled off, its title stays pinned to the top of the stage.
   function drawPin() {
-    var record = currentPart();
+    var record = viewPart();
     if (!record || record.id === ROOT || !record.box) { pin.hidden = true; return; }
     var b = screenBox(record.box), band = (record.box.band || L.constants.BAND) * (record.box.unit || 1) * camera.k;
     // The title line sits at the top of the band, however tall the band has grown: pin once that line is off the stage.
@@ -575,6 +631,7 @@
   }
   function select(id, options) {
     options = options || {};
+    if (id) state.picked = null;
     state.selected = id;
     state.related = id ? relatedSets(id) : null;
     if (id) showResult(id); else showPart(currentPart());
@@ -601,8 +658,59 @@
     for (var at = position; at >= 0; at = rows[at][3]) chain.unshift(rows[at][0]);
     return chain;
   }
+  // Any part, loaded or not, with its chain loaded: search knows every part's chain.
+  function ensurePart(id) {
+    if (part(id)) return ensureChain(chainOf(id));
+    return loadSearch().then(function () {
+      var row = model.search.partById.get(id);
+      if (!row) throw new Error("Unknown part " + id);
+      return ensureChain(partChainFromSearch(model.search.data.parts.indexOf(row)));
+    });
+  }
+  function goToPart(id, options) { return ensurePart(id).then(function () { return flyToPart(id, options); }); }
+  // One click picks a part where it is: the reading pane and the map show what it builds on and what uses it. The
+  // neighbours' parts load too, so the map can draw an arrow to each.
+  function pick(id) {
+    state.picked = id; shownPart = null;
+    select(null, {history: false});
+    return load(id).then(function () {
+      shownPart = null; schedule();
+      var links = part(id) && part(id).data && part(id).data.links;
+      if (!links) return;
+      return Promise.all(links.uses.concat(links.used_by).map(function (row) {
+        return part(row[0]) && part(row[0]).box ? null : ensurePart(row[0]).then(schedule, function () { /* the pane still lists it */ });
+      }));
+    });
+  }
+  function unpick() { if (state.picked) { state.picked = null; shownPart = null; schedule(); } }
+  // From a list: the part where it sits among its siblings, picked, with the view widened to take in its neighbours.
+  function showInContext(id) {
+    return ensurePart(id).then(function () {
+      var record = part(id), parent = part(record.parent);
+      state.focusPart = parent ? parent.id : ROOT;
+      var picking = pick(id);
+      remember();
+      return picking.then(function () { flyToNeighbourhood(record, parent); });
+    });
+  }
+  // Never so far out that the picked part is narrower than this on screen (px): far neighbours' arrows run off the stage.
+  var PICKED_MIN_W = 100;
+  function flyToNeighbourhood(record, parent) {
+    var area = parent && parent.id !== ROOT ? L.contentOf(parent.box) : part(ROOT).box, links = record.data && record.data.links;
+    var x0 = area.x, y0 = area.y, x1 = area.x + area.w, y1 = area.y + area.h;
+    (links ? links.uses.concat(links.used_by) : []).forEach(function (row) {
+      var box = part(row[0]) && part(row[0]).box;
+      if (!box) return;
+      x0 = Math.min(x0, box.x); y0 = Math.min(y0, box.y); x1 = Math.max(x1, box.x + box.w); y1 = Math.max(y1, box.y + box.h);
+    });
+    var wide = {x: x0, y: y0, w: x1 - x0, h: y1 - y0}, k = Math.max(fitK(wide, 0.92), Math.min(fitK(area), PICKED_MIN_W / record.box.w));
+    // Aim at the middle of the neighbourhood, moved only as far as keeps the picked part on the stage.
+    var at = centerOf(wide), b = record.box, halfW = size.w / 2 / k, halfH = size.h / 2 / k, margin = 40 / k;
+    flyTo({x: clamp(at[0], b.x + b.w + margin - halfW, b.x - margin + halfW), y: clamp(at[1], b.y + b.h + margin - halfH, b.y - margin + halfH), k: k});
+  }
   function flyToPart(id, options) {
     options = options || {};
+    if (state.picked) { state.picked = null; shownPart = null; }
     return ensureChain(chainOf(id)).then(function () {
       var record = part(id);
       state.focusPart = id;
@@ -749,7 +857,7 @@
       var item = el("li"), button = el("button");
       button.type = "button"; button.dataset.part = summary.id;
       button.append(el("span", "", plain(summary.title)), el("span", "pm-count", num(summary.results)));
-      button.addEventListener("click", function () { select(null, {history: false}); flyToPart(summary.id).catch(report); });
+      button.addEventListener("click", function () { showInContext(summary.id).catch(report); });
       item.append(button);
       var record = part(summary.id);
       if (record && record.data && record.kids.length) {
@@ -758,7 +866,7 @@
           var child = part(id), li = el("li"), b = el("button");
           b.type = "button"; b.dataset.part = id;
           b.append(el("span", "", plain(child.summary.title)), el("span", "pm-count", num(child.summary.results)));
-          b.addEventListener("click", function () { select(null, {history: false}); flyToPart(id).catch(report); });
+          b.addEventListener("click", function () { showInContext(id).catch(report); });
           li.append(b); sub.append(li);
         });
         item.append(sub);
@@ -795,16 +903,23 @@
   function showPart(record) {
     if (!record || state.selected || shownPart === record.id) return;
     shownPart = record.id;
+    var links = record.id !== ROOT && record.data && record.data.links;
+    state.links = links ? new Map() : null;
+    if (links) {
+      links.uses.forEach(function (row) { state.links.set(row[0], "uses"); });
+      links.used_by.forEach(function (row) { state.links.set(row[0], state.links.has(row[0]) ? "both" : "used-by"); });
+    }
+    schedule();
     readerInner.replaceChildren();
     if (record.id === ROOT) {
       var index = model.index;
       readerInner.append(el("p", "pm-kicker", "Whole project"), el("h2", "", plain(index.title)));
       readerInner.append(el("p", "", num(index.results) + " results in " + num(index.regions.length) + (index.regions.length === 1 ? " region." : " regions.")), bar(index.status));
-      var links = (index.region_edges || []).slice().sort(function (a, b) { return b[2] + b[3] - a[2] - a[3]; });
-      if (links.length) {
+      var flows = (index.region_edges || []).slice().sort(function (a, b) { return b[2] + b[3] - a[2] - a[3]; });
+      if (flows.length) {
         readerInner.append(el("h3", "", "How the regions build on each other"));
-        readerInner.append(paged(links, 8, function (edge) {
-          var li = el("li", "pm-link"), user = part(edge[0]), used = part(edge[1]);
+        readerInner.append(paged(flows, 8, function (edge) {
+          var li = el("li", "pm-flow"), user = part(edge[0]), used = part(edge[1]);
           li.append(el("span", "", plain(user ? user.summary.title : edge[0]) + " uses " + plain(used ? used.summary.title : edge[1])),
             el("small", "", num(edge[2] + edge[3]) + (edge[2] + edge[3] === 1 ? " link" : " links")));
           return li;
@@ -815,34 +930,76 @@
     var summary = record.summary;
     readerInner.append(el("p", "pm-kicker", summary.parts ? "Part of the library" : "Topic"), el("h2", "", plain(summary.title)));
     readerInner.append(pathLine(chainOf(record.id).slice(0, -1)));
+    if (state.picked === record.id) {
+      var inside = el("button", "pm-button pm-go-inside", "Go inside");
+      inside.type = "button"; inside.title = "Or click it on the map again";
+      inside.addEventListener("click", function () { flyToPart(record.id).catch(report); });
+      readerInner.append(inside);
+    }
     readerInner.append(el("p", "", num(summary.results) + " results" + (summary.parts ? " in " + num(summary.parts) + " parts" : "") + "."), bar(summary.status));
-    readerInner.append(el("h3", "", "Used elsewhere (" + num(summary.api_total) + ")"));
+    if (links) {
+      var most = Math.max.apply(null, links.uses.concat(links.used_by).map(function (row) { return row[3]; }).concat([1]));
+      var home = part(record.parent) && record.parent !== ROOT ? part(record.parent).summary.title : null;
+      readerInner.append(linkList("Builds on", "uses", links.uses, links.uses_total, most, home, function (row) {
+        return "Uses " + num(row[3]) + (row[3] === 1 ? " result" : " results") + " in " + plain(row[1]);
+      }));
+      readerInner.append(linkList("Used by", "used-by", links.used_by, links.used_by_total, most, home, function (row) {
+        return num(row[3]) + (row[3] === 1 ? " result" : " results") + " in " + plain(row[1]) + (row[3] === 1 ? " uses it" : " use it");
+      }));
+      if (links.uses.length || links.used_by.length) readerInner.append(el("p", "pm-empty pm-link-note", "On the map, parts in view are outlined: purple for what this builds on, orange for what uses it, mauve for both. Bars count the results involved."));
+    }
+    if (record.kids.length) { readerInner.append(el("h3", "", "Parts (" + num(record.kids.length) + ")")); readerInner.append(listOfParts(record.kids)); }
     if (summary.api && summary.api.length) {
-      var list = el("ul", "pm-list");
+      // Single results come last, folded: the parts above say more about how this one fits.
+      var more = el("details", "pm-more"), list = el("ul", "pm-list");
+      more.append(el("summary", "", "Most-used results (" + num(summary.api_total) + ")"));
       summary.api.forEach(function (row) {
         var item = el("li"), button = el("button"); button.type = "button";
         button.append(el("span", "", plain(row[1])), el("small", "", "used " + num(row[2]) + (row[2] === 1 ? " time" : " times")));
         button.addEventListener("click", function () { arriveById(row[0]).catch(report); });
         item.append(button); list.append(item);
       });
-      readerInner.append(list);
-      if (summary.api_total > summary.api.length) readerInner.append(el("p", "pm-empty", "The " + num(summary.api.length) + " most used are listed."));
-    } else readerInner.append(el("p", "pm-empty", "Nothing outside uses these results."));
-    readerInner.append(el("h3", "", "Builds on"), el("p", "", summary.imports_total ? num(summary.imports_total) + " results from elsewhere in the library." : "Nothing outside it."));
-    if (record.kids.length) { readerInner.append(el("h3", "", "Parts")); readerInner.append(listOfParts(record.kids)); }
+      more.append(list);
+      if (summary.api_total > summary.api.length) more.append(el("p", "pm-empty", "The " + num(summary.api.length) + " most used are listed."));
+      readerInner.append(more);
+    }
+  }
+  // Neighbouring parts for the panel, biggest first, each with a bar for how many results the link involves.
+  function linkList(heading, role, rows, total, most, home, describe) {
+    var section = el("section", "pm-links pm-" + role), title = el("h3");
+    title.append(el("i", "pm-swatch"), document.createTextNode(heading + (total ? " · " + num(total) + (total === 1 ? " part" : " parts") : "")));
+    section.append(title);
+    if (!rows.length) { section.append(el("p", "pm-empty", role === "uses" ? "Nothing outside it." : "Nothing outside uses it.")); return section; }
+    var list = el("ul", "pm-list pm-link-list");
+    rows.forEach(function (row) {
+      var item = el("li"), button = el("button"), name = el("span", "pm-link-name"), meter = el("span", "pm-meter"), fill = el("i");
+      button.type = "button"; button.title = describe(row);
+      name.append(el("span", "", plain(row[1])));
+      // Where a neighbour sits, when that is not beside this part.
+      if (row[2] && row[2] !== home) name.append(el("small", "", plain(row[2])));
+      fill.style.width = Math.max(4, Math.round(100 * row[3] / most)) + "%"; meter.append(fill);
+      button.append(name, meter, el("small", "", num(row[3])));
+      button.addEventListener("click", function () { state.linkHover = null; showInContext(row[0]).catch(report); });
+      button.addEventListener("mouseenter", function () { state.linkHover = row[0]; schedule(); });
+      button.addEventListener("mouseleave", function () { state.linkHover = null; schedule(); });
+      item.append(button); list.append(item);
+    });
+    section.append(list);
+    if (total > rows.length) section.append(el("p", "pm-empty", "The " + num(rows.length) + " with the most links are listed."));
+    return section;
   }
   function listOfParts(ids) {
     return paged(ids.filter(part), 60, function (id) {
       var record = part(id), item = el("li"), button = el("button"); button.type = "button";
       button.append(el("span", "", plain(record.summary.title)), el("small", "", num(record.summary.results)));
-      button.addEventListener("click", function () { select(null, {history: false}); flyToPart(id).catch(report); });
+      button.addEventListener("click", function () { showInContext(id).catch(report); });
       item.append(button);
       return item;
     });
   }
   // A list that shows its first items and pages through the rest, so every entry stays reachable.
   function paged(items, step, render) {
-    var box = el("div", "pm-paged"), list = el("ul", "pm-list"), more = el("button", "pm-more"), shown = 0;
+    var box = el("div", "pm-paged"), list = el("ul", "pm-list"), more = el("button", "pm-show-more"), shown = 0;
     more.type = "button";
     function page() {
       items.slice(shown, shown + step).forEach(function (item) { list.append(render(item)); });
@@ -897,9 +1054,8 @@
     readerInner.append(el("span", "pm-chip", statusWords(row.status) + (row.facet ? " · " + row.facet : "")));
     if (row.summary) readerInner.append(statement(row.summary, row.title));
     if (row.lean) {
-      var lean = el("div", "pm-lean"), code = el("code", "", row.lean), copy = el("button", "pm-button", "Copy");
-      copy.type = "button"; copy.addEventListener("click", function () { if (navigator.clipboard) navigator.clipboard.writeText(row.lean); });
-      lean.append(code, copy); readerInner.append(lean);
+      var lean = el("div", "pm-lean");
+      lean.append(el("code", "", row.lean)); readerInner.append(lean);
     }
     var actions = el("div", "pm-actions");
     if (row.route) { var read = el("a", "", "Read the statement and proof"); read.href = new URL(row.route, routeBase).href; actions.append(read); }
@@ -945,7 +1101,7 @@
 
   // ---------------------------------------------------------------- history
   function snapshot() {
-    return {pm: 1, camera: {x: camera.x, y: camera.y, k: camera.k}, selected: state.selected, focusPart: state.focusPart,
+    return {pm: 1, camera: {x: camera.x, y: camera.y, k: camera.k}, selected: state.selected, focusPart: state.focusPart, picked: state.picked,
       chain: state.selected && model.results.get(state.selected) ? chainOf(model.results.get(state.selected).home) :
         state.focusPart && state.focusPart !== ROOT ? chainOf(state.focusPart) : []};
   }
@@ -963,9 +1119,10 @@
   }
   window.addEventListener("popstate", function (event) {
     var snap = event.state;
-    if (!snap || !snap.pm) { select(null, {history: false}); state.focusPart = ROOT; fitProject(true); live.textContent = "Whole project"; return; }
+    if (!snap || !snap.pm) { state.picked = null; select(null, {history: false}); state.focusPart = ROOT; fitProject(true); live.textContent = "Whole project"; return; }
     ensureChain(snap.chain || []).then(function () {
       state.focusPart = snap.focusPart || null;
+      state.picked = snap.picked && part(snap.picked) ? snap.picked : null;
       search.value = snap.query || "";
       var facets = snap.facets ? new Set(snap.facets) : null;
       if (String(facets && Array.from(facets)) !== String(state.facets && Array.from(state.facets))) { state.facets = facets; renderSide(); }
@@ -1036,8 +1193,12 @@
     var resultNode = target.closest && target.closest("[data-result]");
     if (resultNode) { select(resultNode.getAttribute("data-result")); return; }
     var partNode = target.closest && target.closest("[data-part]");
-    if (partNode) { select(null, {history: false}); flyToPart(partNode.getAttribute("data-part")).catch(report); return; }
-    if (state.selected) select(null);
+    if (partNode) {
+      var id = partNode.getAttribute("data-part");
+      if (state.picked === id) flyToPart(id).catch(report); else pick(id).catch(report);
+      return;
+    }
+    if (state.selected) select(null); else unpick();
   }
   canvas.addEventListener("keydown", function (event) {
     var target = event.target, step = 80;
@@ -1053,7 +1214,7 @@
     else if (event.key === "+" || event.key === "=") zoomAt(1.35, size.w / 2, size.h / 2);
     else if (event.key === "-") zoomAt(1 / 1.35, size.w / 2, size.h / 2);
     else if (event.key === "0") wholeProject();
-    else if (event.key === "Escape") select(null);
+    else if (event.key === "Escape") { if (state.selected) select(null); else unpick(); }
     else return;
     if (event.key !== "0" && event.key !== "Escape") release();
     event.preventDefault(); schedule();
@@ -1061,7 +1222,7 @@
   });
   zoomIn.addEventListener("click", function () { release(); zoomAt(1.5, size.w / 2, size.h / 2); rememberCamera(); });
   zoomOut.addEventListener("click", function () { release(); zoomAt(1 / 1.5, size.w / 2, size.h / 2); rememberCamera(); });
-  function wholeProject() { state.focusPart = ROOT; select(null, {history: false}); remember(); fitProject(); live.textContent = "Whole project"; }
+  function wholeProject() { state.focusPart = ROOT; state.picked = null; select(null, {history: false}); remember(); fitProject(); live.textContent = "Whole project"; }
   fitAll.addEventListener("click", wholeProject);
   document.addEventListener("keydown", function (event) {
     if (event.key === "/" && document.activeElement !== search && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
@@ -1106,12 +1267,7 @@
     renderSide();
     var hash = location.hash.slice(1), params = new URLSearchParams(hash);
     var start = params.get("result") ? arriveById(params.get("result")).then(function () { remember(true); })
-      : params.get("part") ? loadSearch().then(function () {
-          var row = model.search.partById.get(params.get("part"));
-          if (!row) throw new Error("Unknown part");
-          var chain = partChainFromSearch(model.search.data.parts.indexOf(row));
-          return ensureChain(chain).then(function () { return flyToPart(params.get("part"), {replace: true}); });
-        })
+      : params.get("part") ? goToPart(params.get("part"), {replace: true})
       : Promise.resolve(remember(true));
     start.catch(report);
     schedule();

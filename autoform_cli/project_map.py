@@ -26,6 +26,8 @@ from pathlib import Path
 SCHEMA = "autoform-project-map/v1"
 MAP_DIRECTORY = "map/data"
 TOP_EXPORTS = 8
+# A part names at most this many of the parts it builds on, and of the parts that use it.
+TOP_LINKS = 8
 # A part whose subtree holds at most this many results ships them in its own file.
 LEAF_RESULTS = 400
 # A part with more children than this gets them grouped into linked communities, so no level is a field of tiles.
@@ -173,6 +175,9 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
         pair: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
         internal: dict[str, list[list[object]]] = defaultdict(list)
         boundary: dict[str, list[list[object]]] = defaultdict(list)
+        # The other parts each part builds on and is used by, at its own depth, with the results involved there.
+        uses: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+        used_by: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
         for user, used, statement, proof in relations:
             if user not in chains or used not in chains or user == used:
                 continue
@@ -184,8 +189,17 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
             for part in user_parts:
                 if part not in used_set:
                     imports[part].add(used)
-            # The aggregated edge belongs to the two siblings just below the common ancestor.
             top_user, top_used = user_parts[::-1], used_parts[::-1]
+            # Each side names the other's part at its own depth, or the other's deepest when that is shallower.
+            for level, part in enumerate(top_user):
+                other = top_used[min(level, len(top_used) - 1)]
+                if part not in used_set and other not in user_set:
+                    uses[part][other].add(used)
+            for level, part in enumerate(top_used):
+                other = top_user[min(level, len(top_user) - 1)]
+                if part not in user_set and other not in used_set:
+                    used_by[part][other].add(user)
+            # The aggregated edge belongs to the two siblings just below the common ancestor.
             depth = 0
             while depth < min(len(top_user), len(top_used)) and top_user[depth] == top_used[depth]:
                 depth += 1
@@ -199,10 +213,10 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
             else:
                 boundary[home[user]].append(row)
                 boundary[home[used]].append(row)
-        return chains, inside, exports, imports, pair, internal, boundary
+        return chains, inside, exports, imports, pair, internal, boundary, uses, used_by
 
     relations = list(relations)
-    chains, inside, exports, imports, pair, internal, boundary = aggregate()
+    chains, inside, exports, imports, pair, internal, boundary, uses, used_by = aggregate()
 
     def first_positions() -> dict[str, int]:
         # A part reads from where its first record appears: its own scope, or the earliest result inside it.
@@ -214,7 +228,7 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
 
     synthetic: set[str] = set()
     if _group_wide_parts(part_parent, title, inside, pair, synthetic, first_positions(), fresh):
-        chains, inside, exports, imports, pair, internal, boundary = aggregate()
+        chains, inside, exports, imports, pair, internal, boundary, uses, used_by = aggregate()
     first = first_positions()
     status = {part: Counter(str(by_id[result].get("status")) for result in results) for part, results in inside.items()}
 
@@ -234,6 +248,15 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
             "file": part_file(part),
             **({"grouped": True} if part in synthetic else {}),
         }
+
+    def links(part: str) -> dict[str, object]:
+        # Most results first, then reading order; each with its parent's title, since it may sit anywhere in the library.
+        def top(table: Mapping[str, Mapping[str, set[str]]]) -> list[list[object]]:
+            rows = sorted(table.get(part, {}).items(), key=lambda row: (-len(row[1]), first[row[0]], row[0]))
+            return [[other, title[other], title[part_parent[other]] if part_parent[other] != root else None, len(results)]
+                    for other, results in rows[:TOP_LINKS]]
+        return {"uses": top(uses), "uses_total": len(uses.get(part, ())),
+                "used_by": top(used_by), "used_by_total": len(used_by.get(part, ()))}
 
     def among(parts: Sequence[str]) -> list[list[object]]:
         members = set(parts)
@@ -257,6 +280,7 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
             "path": [[step, title[step]] for step in chain(part)[::-1]],
             "children": [summary(child) for child in kids.get(part, ())],
             "edges": among(kids.get(part, ())),
+            "links": links(part),
         }
         if own or len(inside.get(part, ())) <= LEAF_RESULTS and not kids.get(part):
             outside: dict[str, list[object]] = {}

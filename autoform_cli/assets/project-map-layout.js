@@ -16,9 +16,11 @@
   var BAND = 52, BAND2 = 72, PAD = 12, GAP = 16, MIN_W = 150, MIN_H = 120, ASPECT = 1.6, LANE = 5, RADIUS = 6;
   // Mean advance of a 15 px semibold title character, for choosing one or two title lines.
   var TITLE_EM = 8.4;
-  // The band height a lone title line needs, and a compact one: a 13 px title, clipped, in a box at
+  // The band height a lone title line needs, and a compact one: a 13 px title in a box at
   // least COMPACT_W wide, so narrow parts are still named.
   var LABEL_BAND = 36, COMPACT_BAND = 20, COMPACT_W = 60;
+  // The advance between wrapped title lines, and the extra rows the progress and API details take.
+  var LINE = 20, COMPACT_LINE = 16, DETAIL_LINE = 18;
   // The most routes a sibling set shows at rest; the rest appear with their parts.
   var MAX_REST = 18;
 
@@ -631,12 +633,13 @@
   }
 
   // Labels for the boxes on screen at this camera. A box at least MIN_W wide whose band holds a title
-  // line gets a full label; one at least COMPACT_W wide gets a compact one (one clipped 13 px line);
+  // line gets a full label; one at least COMPACT_W wide gets a compact one (13 px lines);
   // deeper boxes gain theirs as the camera closes in. A box whose band is still too thin, but whose
   // height has room for the line, gets it as an overlay over its top. An overlay covers the top of
   // its box's content, so a descendant's label under it moves just below it, or goes when its box
-  // has no room there. Labels come shallowest first.
-  function placeLabels(boxes, camera, stage) {
+  // has no room there. Labels come shallowest first. A box in `closed` (an object keyed by id) shows
+  // nothing inside, so its title may wrap down the whole box: `lines` is the most it can take.
+  function placeLabels(boxes, camera, stage, closed) {
     var labels = [], placed = {};
     Object.keys(boxes).sort(function (a, b) { return (boxes[a].depth || 0) - (boxes[b].depth || 0) || byKey(a, b); }).forEach(function (id) {
       var box = boxes[id];
@@ -658,6 +661,12 @@
         if (label.y >= bottom || label.y + label.band <= cover.y || label.x >= cover.x + cover.w || label.x + label.w <= cover.x) continue;
         if (bottom + need > y + h) return;
         Object.assign(label, {y: bottom, band: need, overlay: true, lines: 1, detail: "title"});
+      }
+      if (closed && closed[id]) {
+        // The first baseline sits where the page draws it, and the details follow the last line.
+        var first = compact ? Math.min(30, label.band / 2 + 5) + 4 : Math.min(30, label.band / 2 + 6) + 5;
+        var room = y + h - pad - label.y - DETAIL_LINE * (label.detail === "full" ? 2 : label.detail === "meta" ? 1 : 0);
+        label.lines = Math.max(label.lines, 1 + Math.floor((room - first) / (compact ? COMPACT_LINE : LINE)));
       }
       labels.push(label); placed[id] = label;
     });
@@ -689,7 +698,7 @@
 
   var api = {packLevels: packLevels, packPart: packPart, bundleEdges: bundleEdges, layoutCommunity: layoutCommunity,
     placeLabels: placeLabels, fitCamera: fitCamera, focusCamera: focusCamera, contentOf: contentOf, dependencyOrder: dependencyOrder,
-    constants: {BAND: BAND, PAD: PAD, GAP: GAP, MIN_W: MIN_W, MIN_H: MIN_H}};
+    constants: {BAND: BAND, PAD: PAD, GAP: GAP, MIN_W: MIN_W, MIN_H: MIN_H, LINE: LINE, COMPACT_LINE: COMPACT_LINE}};
   if (typeof window !== "undefined") window.AutoformMapLayout = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

@@ -238,9 +238,9 @@ def test_lists_page_through_every_entry_and_back_restores_the_search_and_scroll(
       // Twenty results use it: the first twelve show, and the rest are one button away.
       const usedBy = () => reader.querySelectorAll('.pm-paged').at(-1);
       assert.strictEqual(usedBy().querySelectorAll('li').length, 12);
-      emit(usedBy().querySelector('.pm-more'), 'click');
+      emit(usedBy().querySelector('.pm-show-more'), 'click');
       assert.strictEqual(usedBy().querySelectorAll('li').length, 20);
-      assert(usedBy().querySelector('.pm-more').hidden, 'nothing is left to show');
+      assert(usedBy().querySelector('.pm-show-more').hidden, 'nothing is left to show');
       // Following one and coming Back restores the search box, the reading pane's scroll and the announcement.
       reader.scrollTop = 140;
       emit(usedBy().querySelectorAll('button').find(b => b.textContent.includes('User 15')), 'click'); await wait(40);
@@ -256,3 +256,35 @@ def test_lists_page_through_every_entry_and_back_restores_the_search_and_scroll(
       console.log('back ok');
     """, hub)
     assert "back ok" in out
+
+
+def test_one_click_picks_a_part_in_place_and_its_neighbours_are_a_row_away(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      await wait(20);
+      const tile = id => $$('.pm-part').find(node => node.getAttribute('data-part') === id);
+      const tap = async id => {
+        const rect = tile(id).querySelector('rect');
+        emit(rect, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+        emit(rect, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+        await wait(40);
+      };
+      const names = role => $('.pm-reader').querySelector('.pm-' + role).querySelectorAll('button')
+        .map(button => button.querySelector('.pm-link-name').querySelector('span').textContent);
+      // One click picks Analysis where it is: the pane names what it builds on, outlined, with an arrow from it.
+      await tap('Analysis');
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Analysis');
+      assert.strictEqual(location.hash, '', 'picking is not navigation');
+      assert.deepStrictEqual(names('uses'), ['Algebra']);
+      assert(tile('Algebra').getAttribute('class').includes('pm-uses') && tile('Analysis').getAttribute('class').includes('pm-picked'));
+      assert.strictEqual($$('.pm-link').length, 1);
+      // Its row picks Algebra where it sits, used by Analysis.
+      emit($('.pm-reader').querySelector('.pm-uses').querySelector('button'), 'click'); await wait(60);
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Algebra');
+      assert.deepStrictEqual(names('used-by'), ['Analysis']);
+      // A second click on the picked part goes inside.
+      await tap('Algebra');
+      assert.strictEqual(location.hash, '#part=Algebra');
+      assert.strictEqual($$('.pm-link').length, 0);
+      console.log('pick ok');
+    """)
+    assert "pick ok" in out

@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any, Callable
 
-from servers._process import _inherit_clean_env, _kill_subprocesses
+from servers._process import _kill_subprocesses, inherit_clean_env
 
 logger = getLogger(__name__)
 
@@ -737,7 +737,7 @@ class LeanRepl:
         The child leads its own session, and close() retires that whole
         process group through the id published here.
         """
-        env = _inherit_clean_env()
+        env = inherit_clean_env()
         env.update(self.config.env)
         self.process = subprocess.Popen(
             command,

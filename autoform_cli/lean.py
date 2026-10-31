@@ -174,8 +174,6 @@ PUBLICATION_MANIFEST = "publication.json"
 PUBLICATION_SCHEMA = "autoform-publication/v3"
 #: Sites render may replace: each records a file inventory to check first.
 _REPLACEABLE_SCHEMAS = frozenset({"autoform-publication/v2", PUBLICATION_SCHEMA})
-#: Render never writes a larger manifest, so the next render can always read it.
-PUBLICATION_MANIFEST_MAX_BYTES = 8 * 1024 * 1024
 _IGNORED_OUTPUT_SCHEMAS = MANAGED_OUTPUT_SCHEMAS | {("packets", REVIEW_PACKET_SCHEMA)}
 
 @dataclass(frozen=True, slots=True)
@@ -651,7 +649,7 @@ def _lean_tree_selection(
             # mkdocs can copy files into site/ before it copies the manifest.
             OpaqueDirectoryMarker(
                 PUBLICATION_MANIFEST,
-                PUBLICATION_MANIFEST_MAX_BYTES,
+                None,  # it lists every site file, so it grows with the project
                 _is_complete_publication,
             ),
         ),
@@ -1168,7 +1166,6 @@ __all__ = [
     "PACKET_SCHEMA",
     "PASSAGE_SCHEMA",
     "PUBLICATION_MANIFEST",
-    "PUBLICATION_MANIFEST_MAX_BYTES",
     "PUBLICATION_SCHEMA",
     "REVIEW_PACKET_SCHEMA",
     "SourceIndex",

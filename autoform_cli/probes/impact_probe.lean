@@ -1,6 +1,8 @@
 {imports}
 -- Autoform impact probe. This file is a Python-format template: `{{`/`}}` are
--- literal braces and single-brace fields are filled by autoform_cli.impact.
+-- literal braces and single-brace fields are filled by autoform_cli.impact
+-- through lean_probe.render_probe_template, which adds `output_env` and
+-- `output_limit`: the variable naming the records file, and its byte cap.
 -- It is written to a temporary file and run with `lake env lean` inside the
 -- built project; it never modifies the project.
 import Lean.Linter.Deprecated

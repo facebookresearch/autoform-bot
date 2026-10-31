@@ -35,7 +35,7 @@ from autoform_cli.lean import (
     open_project_sources,
     snapshot_project_sources,
 )
-from autoform_cli.skeleton import _output_identity, _replace_outputs
+from autoform_cli._managed_output import output_identity, replace_outputs
 
 _SOURCE = """import Mathlib
 
@@ -989,7 +989,7 @@ def _republish_packets(root: Path) -> None:
     generated = root / "review-packets"
     stage = root / ".review-packets.autoform-stage-1"
     _packets_output(stage, 1)
-    _replace_outputs([(generated, stage, _output_identity(generated))])
+    replace_outputs([(generated, stage, output_identity(generated))])
     assert sorted(path.name for path in root.iterdir()) == ["Proj", "review-packets"]
 
 
@@ -3241,10 +3241,7 @@ def test_oversized_managed_manifest_leaves_its_directory_indexed_at_its_read_bou
     assert index.find("oversizedPacket") is not None
 
 
-def test_only_a_complete_publication_manifest_hides_its_folder(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_only_a_complete_publication_manifest_hides_its_folder(tmp_path: Path) -> None:
     # Render copies a blueprint's Lean files into its site and mkdocs copies the
     # site again, manifest included; both copies go stale when the source changes.
     complete = {"complete": True, "schema": "autoform-publication/v2"}
@@ -3254,7 +3251,8 @@ def test_only_a_complete_publication_manifest_hides_its_folder(
         "legacy": {**complete, "schema": "autoform-publication/v1"},
         "unfinished": {**complete, "complete": False},
         "web": {"name": "web app"},
-        "padded": {**complete, "padding": "x" * 64},
+        # It lists every site file, so a large project's manifest passes the old 8 MiB bound.
+        "large": {**complete, "padding": "x" * (8 * 1024 * 1024)},
         "object-schema": {**complete, "schema": {}},
         "array-schema": {**complete, "schema": []},
     }
@@ -3263,7 +3261,6 @@ def test_only_a_complete_publication_manifest_hides_its_folder(
         (tmp_path / folder / "publication.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / folder / "Copy" / "Proofs.lean").write_text("theorem stale : True := trivial\n")
     (tmp_path / "Proofs.lean").write_text("theorem renamed : True := trivial\n")
-    monkeypatch.setattr(lean_module, "PUBLICATION_MANIFEST_MAX_BYTES", 64, raising=False)
 
     snapshot = snapshot_project_sources(tmp_path)
 
@@ -3271,7 +3268,6 @@ def test_only_a_complete_publication_manifest_hides_its_folder(
         "Proofs.lean",
         "array-schema/Copy/Proofs.lean",
         "object-schema/Copy/Proofs.lean",
-        "padded/Copy/Proofs.lean",
         "unfinished/Copy/Proofs.lean",
         "web/Copy/Proofs.lean",
     ]

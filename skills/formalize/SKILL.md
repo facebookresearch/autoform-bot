@@ -29,21 +29,21 @@ commit.
 
 For a direct formalization request, use a compatible native persistent Goal when
 available and complete one useful frontier pass. When a run starts or resumes,
-first read the review threads on the pull requests this project's runs opened,
-as their reports or the user name them, and decide each finding: fix it under
-the rules below, note why it is resolved or moot, or ask the user; reply on a
-pull request only if the request covers posting. Native subagents may work
+and at each later re-read of the frontier, the lead first reads and decides the
+reviews on the project's pull requests as the [review
+steps](references/pull-request-reviews.md) say. Native subagents may work
 independent leaves in separate Git worktrees; no custom scheduler or provider
-adapter is part of the protocol. A subagent may keep its worktree for several
-related leaves, each once it is ready, integrating one before taking the next;
-the lead dispatches each with fields from the frontier after that integration.
+adapter is part of the protocol. A subagent may keep its worktree for a package
+of related leaves, such as a container's, that the lead confirms together. It
+holds only the leaf it has taken, taking the next once `work context` shows it
+ready after integrating; at the first that is not, the rest return to the lead.
 The lead's branch is the shared branch results integrate into; the lead also
 works its own leaves in worktrees, so nothing reaches that branch before its
 default build passes. Before dispatching, commit the roadmap state the frontier
 was read from and base each worktree on that commit, not on the remote's default
 branch (Claude Code's agent isolation does so only with `worktree.baseRef:
-head`). Give each subagent the `claim_target`, `phase`, `article_revision`,
-`open_statements`, `assumes`, and `revision` it is dispatched for. A new
+head`). Give each subagent each leaf's `claim_target`, `article_revision`,
+`open_statements`, `revision`, and the first leaf's `phase` and `assumes`. A new
 worktree has no `.lake`: in a Mathlib project, run `lake exe cache get` in the
 lead's checkout before creating worktrees, rerunning it once if it fails, then
 in each worktree before its first build or Lean tool call. If the rerun fails
@@ -101,9 +101,8 @@ Bring the worktree up to date with the shared branch (after [acquiring the
 claim](references/claims.md#acquire-and-renew), when the run uses claims) and
 reload `work context`. Before editing, require the same `phase`, `blockers`,
 `dependencies`, `article_revision`, `open_statements`, `assumes`, and `revision`
-as the first read and, for a subagent, the same `phase`, `article_revision`,
-`open_statements`, `assumes`, and `revision` it was dispatched with. Unrelated
-parallel articles may change the graph-wide source revision.
+as the first read and, for a subagent, the same fields it was dispatched with.
+Unrelated parallel articles may change the graph-wide source revision.
 
 Read the complete article, its `blueprint/.implementation-notes/<article_id>.md`
 when present, cited sources, dependency articles, and existing Lean target.
@@ -246,8 +245,9 @@ handed off, the lead removes its worktree with `git worktree remove` (never
 there; first make sure a branch points at any handed-off commit. Autoform never
 clears Lake's shared artifact cache, so tell the user if disk runs low. Re-read
 the work frontier from the updated shared branch and repeat while independent
-ready leaves and authorized capacity remain. Stop when the frontier is empty or
-every remaining attempt has a concrete mathematical or ownership blocker. Then
+ready leaves and authorized capacity remain. Stop when the frontier is empty and
+no accepted review finding awaits repair, or every remaining attempt has a
+concrete mathematical or ownership blocker. Then
 the lead follows [Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with
 `--skill formalize`. Report changed articles and Lean files, integrated commits,
 branches and commits handed off, pull requests opened, any claims released or
