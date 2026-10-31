@@ -82,6 +82,13 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-both { --pm-role: color-mix(in srgb, var(--pm-uses) 50%, var(--pm-used-by)); }
 .pm-part.pm-uses > rect, .pm-part.pm-used-by > rect, .pm-part.pm-both > rect { stroke: var(--pm-role); stroke-width: 2.5; }
 .pm-part.pm-link-hover > rect { stroke-width: 4; fill: color-mix(in srgb, var(--pm-role, var(--pm-accent)) 10%, var(--pm-region)); }
+.pm-part.pm-picked > rect { stroke: var(--pm-select); stroke-width: 3; }
+/* A picked part's arrows to its neighbours, over the boxes they cross, with a halo in the page colour. */
+.pm-link { fill: none; stroke: var(--pm-role); stroke-linecap: round; opacity: .9; filter: drop-shadow(0 0 1.5px var(--pm-bg)); pointer-events: stroke; }
+.pm-link.pm-link-away { opacity: .35; }
+.pm-link.pm-link-hover { opacity: 1; stroke-width: 6px; }
+.pm-arrow-uses path { fill: var(--pm-uses); }
+.pm-arrow-used-by path { fill: var(--pm-used-by); }
 .pm-title { fill: var(--pm-fg); font: 600 15px var(--pm-font); pointer-events: none; }
 .pm-title.pm-compact { font-size: 13px; }
 .pm-backdrop { pointer-events: none; fill: var(--pm-region); }
@@ -133,6 +140,7 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-meter { flex: none; width: 56px; height: 6px; overflow: hidden; border-radius: 3px; background: var(--pm-border); }
 .pm-meter i { display: block; height: 100%; background: var(--pm-role); }
 .pm-link-note { margin: 8px 0 0; font-size: 12px; }
+.pm-go-inside { margin: 2px 0 10px; }
 .pm-more > summary { margin: 18px 0 6px; color: var(--pm-muted); font-size: 12px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; cursor: pointer; }
 .pm-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }

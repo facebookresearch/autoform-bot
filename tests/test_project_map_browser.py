@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 
 import pytest
@@ -116,13 +117,27 @@ def test_zooming_out_keeps_the_theorem_and_shows_its_place(webkit_browser: objec
         assert page.locator(".pm-reader .pm-kicker").inner_text() == "Result"
 
 
-def test_a_region_opens_in_place_without_leaving_the_page(webkit_browser: object, map_url: str) -> None:
+def test_one_click_picks_a_region_in_place_and_a_second_opens_it(webkit_browser: object, map_url: str) -> None:
     with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
         _open_map(page, map_url)
-        # The region's header band, clear of its cards.
-        page.locator('.pm-part[data-part="algebra"] > rect').click(position={"x": 24, "y": 10})
+        # The region's header band, clear of its cards. One click picks it where it is: the pane and an arrow show
+        # what uses it, and the camera stays.
+        band = page.locator('.pm-part[data-part="algebra"] > rect')
+        band.click(position={"x": 24, "y": 10})
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Algebra")
-        assert page.url.endswith("/map/#part=algebra")
+        playwright.expect(page.locator('.pm-part.pm-picked[data-part="algebra"]')).to_have_count(1)
+        playwright.expect(page.locator(".pm-reader .pm-used-by .pm-link-list button")).to_contain_text(["Analysis"])
+        playwright.expect(page.locator('.pm-part.pm-used-by[data-part="analysis"]')).to_have_count(1)
+        playwright.expect(page.locator(".pm-link.pm-used-by")).to_have_count(1)
+        assert not page.url.endswith("#part=algebra")
+        page.keyboard.press("Escape")
+        playwright.expect(page.locator(".pm-part.pm-picked, .pm-link")).to_have_count(0)
+        # Picked again, a second click opens it.
+        band.click(position={"x": 24, "y": 10})
+        playwright.expect(page.locator('.pm-part.pm-picked[data-part="algebra"]')).to_have_count(1)
+        band.click(position={"x": 24, "y": 10})
+        playwright.expect(page).to_have_url(re.compile(r"/map/#part=algebra$"))
+        playwright.expect(page.locator(".pm-reader h2")).to_have_text("Algebra")
         # The region's results are on the same map now, with their titles, and Analysis stays in view below.
         playwright.expect(page.locator('.pm-card[data-result^="algebra/"]')).to_have_count(2)
         playwright.expect(page.locator(".pm-trail li")).to_have_text(["Fixture library", "Algebra"])

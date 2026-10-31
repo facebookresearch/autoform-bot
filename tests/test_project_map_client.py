@@ -127,3 +127,35 @@ def test_titles_with_tex_are_readable_on_the_map(tmp_path: Path) -> None:
       console.log('tex ok');
     """)
     assert "tex ok" in out
+
+
+def test_one_click_picks_a_part_in_place_and_its_neighbours_are_a_row_away(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      await wait(20);
+      const tile = id => $$('.pm-part').find(node => node.getAttribute('data-part') === id);
+      const tap = async id => {
+        const rect = tile(id).querySelector('rect');
+        emit(rect, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+        emit(rect, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+        await wait(40);
+      };
+      const names = role => $('.pm-reader').querySelector('.pm-' + role).querySelectorAll('button')
+        .map(button => button.querySelector('.pm-link-name').querySelector('span').textContent);
+      // One click picks Analysis where it is: the pane names what it builds on, outlined, with an arrow from it.
+      await tap('Analysis');
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Analysis');
+      assert.strictEqual(location.hash, '', 'picking is not navigation');
+      assert.deepStrictEqual(names('uses'), ['Algebra']);
+      assert(tile('Algebra').getAttribute('class').includes('pm-uses') && tile('Analysis').getAttribute('class').includes('pm-picked'));
+      assert.strictEqual($$('.pm-link').length, 1);
+      // Its row picks Algebra where it sits, used by Analysis.
+      emit($('.pm-reader').querySelector('.pm-uses').querySelector('button'), 'click'); await wait(60);
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, 'Algebra');
+      assert.deepStrictEqual(names('used-by'), ['Analysis']);
+      // A second click on the picked part goes inside.
+      await tap('Algebra');
+      assert.strictEqual(location.hash, '#part=Algebra');
+      assert.strictEqual($$('.pm-link').length, 0);
+      console.log('pick ok');
+    """)
+    assert "pick ok" in out
