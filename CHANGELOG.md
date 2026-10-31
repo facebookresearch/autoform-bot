@@ -70,7 +70,7 @@ date when the release is tagged.
   --note`, now documented. A handoff to another session, when the request covers
   pushing, goes to the `origin` branch `handoff/<article_id>`, which whoever
   acquires the lapsed lease continues. With claims, no message grants
-  ownership; none completes a leaf (#434, #NNN).
+  ownership; none completes a leaf (#434, #532).
 - **Generated import roots.** `work import-impact` reports `module_generated`
   when the repository's Git attributes set `linguist-generated` on MODULE's
   file, or make it `true`, normally through a committed `.gitattributes` line
