@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -41,9 +42,11 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
+import types
 from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
@@ -220,6 +223,29 @@ def project_control_snapshot(root: Path) -> tuple[tuple[str, tuple[int, str] | N
 # --------------------------------------------------------------------------- #
 
 
+def _load_process_helpers() -> types.ModuleType:
+    """Load servers/_process.py from beside this package, never as ``servers``.
+
+    Under ``python -m autoform_cli`` the working directory comes first on
+    ``sys.path``, so ``import servers`` could run a consumer's package. Tests
+    patch ``os``, ``psutil`` or ``lean_probe._process_helpers``; patching
+    ``servers._process`` does not reach this copy.
+    """
+
+    path = Path(__file__).resolve().parent.parent / "servers" / "_process.py"
+    spec = importlib.util.spec_from_file_location("autoform_cli._process_helpers", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_process_helpers = _load_process_helpers()
+#: What a servers/_process.py check raises when it cannot rule a process out.
+_INSPECTION_ERRORS = (RuntimeError, OSError, SystemError, psutil.Error)
+
+
 def _remember_descendants(
     process: subprocess.Popen[bytes],
     descendants: dict[tuple[int, float], psutil.Process],
@@ -246,33 +272,32 @@ def _remember_tagged_processes(
     root_pid: int,
     strict: bool = True,
 ) -> None:
-    """Find descendants that escaped the original parent and process group."""
+    """Find descendants that escaped the original parent and process group.
 
-    last_scan_error: BaseException | None = None
+    The scan fails when it cannot rule a process out; one retry absorbs
+    Darwin's transient errors. Cleanup passes ``strict=False`` so a failed
+    scan cannot replace the error that started it.
+    """
+
+    error: BaseException | None = None
     for _attempt in range(2):
-        retry = False
         try:
-            candidates = tuple(psutil.process_iter())
-        except (psutil.Error, OSError, SystemError) as error:
-            last_scan_error = error
+            found = _process_helpers.processes_with_token(_PROCESS_TOKEN_ENV, token)
+        except _INSPECTION_ERRORS as exc:
+            error = exc
             continue
-        for candidate in candidates:
-            if candidate.pid in {os.getpid(), root_pid}:
+        for candidate in found:
+            if candidate.pid == root_pid:
                 continue
             try:
-                if candidate.environ().get(_PROCESS_TOKEN_ENV) == token:
-                    descendants[(candidate.pid, candidate.create_time())] = candidate
-            except (psutil.Error, OSError):
+                descendants[(candidate.pid, candidate.create_time())] = candidate
+            except (psutil.Error, OSError, SystemError):
                 continue
-            except SystemError as error:
-                last_scan_error = error
-                retry = True
-        if not retry:
-            return
-    if strict and last_scan_error is not None:
+        return
+    if strict:
         raise SkeletonError(
             ["cannot safely inspect descendant processes after repeated process-table errors"]
-        ) from last_scan_error
+        ) from error
 
 
 def _process_is_alive(process: psutil.Process) -> bool:
@@ -286,40 +311,6 @@ def _process_is_alive(process: psutil.Process) -> bool:
         # termination is attempted; treating inspection failure as dead could
         # let an escaped descendant survive a successful command.
         return True
-
-
-def _process_group_is_alive(pid: int) -> bool:
-    if os.name != "posix":
-        return False
-    try:
-        os.killpg(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
-
-
-def _process_group_has_live_members(pid: int) -> bool:
-    """Whether the group ``pid`` leads holds a process that is not a zombie.
-
-    Its leader stays unreaped, and so a member, until the group is retired.
-    """
-
-    if not _process_group_is_alive(pid):
-        return False
-    try:
-        for candidate in psutil.process_iter(["pid", "status"]):
-            try:
-                if os.getpgid(candidate.info["pid"]) == pid and candidate.info["status"] != psutil.STATUS_ZOMBIE:
-                    return True
-            except (OSError, psutil.Error):
-                continue
-    except (OSError, psutil.Error, SystemError):
-        return True  # a table that cannot be read proves nothing gone
-    return False
 
 
 def _leader_has_exited(process: subprocess.Popen[bytes]) -> bool:
@@ -586,7 +577,10 @@ def _run_registered_command(
             # Reaped elsewhere, as when C code ignores SIGCHLD where signal.getsignal
             # can't see it. Popen then reports status 0, and the group id is free.
             raise SkeletonError([f"{context} was reaped outside the runner: its exit status is lost"])
-        group_alive = os.name == "posix" and _process_group_has_live_members(process.pid)
+        try:
+            group_alive = os.name == "posix" and _process_helpers.process_group_has_live_members(process.pid)
+        except _INSPECTION_ERRORS as exc:
+            raise SkeletonError([f"{context} could not inspect its process group"]) from exc
         _remember_tagged_processes(token, descendants, root_pid=process.pid)
         if group_alive or any(map(_process_is_alive, descendants.values())):
             raise SkeletonError([f"{context} left descendant processes running"])
@@ -1048,12 +1042,6 @@ def _check_build_freshness(lean_root: Path, modules: tuple[str, ...]) -> None:
     _check_artifacts_fresh(_lake_executable(lean_root), lean_root, modules, timeout=DEFAULT_FRESHNESS_TIMEOUT)
 
 
-def _probe_environment() -> dict[str, str]:
-    env = os.environ.copy()
-    env.pop("PYTHONPATH", None)
-    return env
-
-
 def _build_probe_helper(lean_root: Path, directory: Path, *, timeout: float) -> Path:
     """Compile the probe's helpers into ``directory`` and return it.
 
@@ -1074,7 +1062,7 @@ def _build_probe_helper(lean_root: Path, directory: Path, *, timeout: float) -> 
             cwd=lean_root,
             timeout=timeout,
             context="building the skeleton probe helpers",
-            env=_probe_environment(),
+            env=_process_helpers.inherit_clean_env(),
         )
     except _CommandTimedOut as exc:
         raise _ProbeEnvironmentError([f"{exc.issues[0]}; rerun with --timeout <seconds> for large projects"]) from exc
@@ -1130,7 +1118,7 @@ def run_probe(
     if check_freshness:
         _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout, label=label)
     deadline = time.monotonic() + timeout
-    env = _probe_environment()
+    env = _process_helpers.inherit_clean_env()
     with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
         if f"import «{_PROBE_HELPER_MODULE}»" in probe.splitlines():
             if helper is None:
