@@ -966,7 +966,9 @@ does not persist, pass `--worker-id` on every command. Leases expire after 1500
 seconds unless `--ttl` sets another length; renew well within that, and confirm
 a claim with `renew`, not `acquire`, which also succeeds on an expired or
 released lease. Acquire a whole set in one command (see the [claim
-contract](reference/claims-and-revisions.md#claim-contract)).
+contract](reference/claims-and-revisions.md#claim-contract)). `acquire --note
+TEXT` stores free text in each lease, `renew` keeps it, and `claim list` shows
+it as `note`; the key is absent, not empty, after an acquire without `--note`.
 
 Claims are fail-closed compare-and-swap leases under `refs/autoform-claims/` on
 the Git `origin`; pass `--repo` for another board. A failed acquire or renew
