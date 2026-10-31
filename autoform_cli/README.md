@@ -1062,6 +1062,9 @@ article or chapter-card reading, with bounded maps, authored areas and global se
 Complete published statements, proofs and citations remain the reading content.
 The index `dependencies/index.json`, project payload `dependencies.json`, and
 other `dependencies/` payloads are internal to this viewer; their schemas may change.
+`dependencies/map/` is a second, standalone page, linked from the landing page:
+one zoomable map of the whole project, which loads `dependencies/map/data/` one
+level at a time and shows each result's statement from its article.
 A formal statement links to its canonical article or containing chapter card;
 legacy `#node=<id>`, view and filter links remain aliases, not a second viewer.
 A `lean:` declaration resolving to a repository permalink gets a source link;
