@@ -23,6 +23,7 @@
   var reduceMotion = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
   var SVGNS = "http://www.w3.org/2000/svg";
   var ROOT = "#root";
+  var RETRY_MS = 5000;              // a part whose file failed to load is asked for again on its own after this long
   var OPEN_W = 140, OPEN_H = 90;   // a part shows its children (as tiles at first) once its box is this big on screen (px)
   var LABEL_MIN_W = 60;            // boxes narrower than this on screen never get a label
   var KID_LABEL_W = 90;            // a part with parts inside opens once its median child is this wide on screen (px)
@@ -96,12 +97,19 @@
   function clip(text, width) { return text.length > width ? text.slice(0, Math.max(1, width - 1)) + "…" : text; }
 
   // ---------------------------------------------------------------- data
-  var cache = new Map();
+  // One request per file (at most the index, search and 256 part files); a request that fails, or hangs for FETCH_MS,
+  // is forgotten, so the next use of the file asks again.
+  var cache = new Map(), FETCH_MS = 30000;
   function fetchJSON(relative) {
     if (!cache.has(relative)) {
-      cache.set(relative, fetch(new URL(relative, mapBase)).then(function (response) {
+      var controller = window.AbortController ? new AbortController() : null;
+      var timer = setTimeout(function () { if (controller) controller.abort(); }, FETCH_MS);
+      cache.set(relative, fetch(new URL(relative, mapBase), controller ? {signal: controller.signal} : undefined).then(function (response) {
         if (!response.ok) throw new Error("HTTP " + response.status + " for " + relative);
         return response.json();
+      }).then(function (data) { clearTimeout(timer); return data; }, function (error) {
+        clearTimeout(timer); cache.delete(relative);
+        throw controller && controller.signal.aborted ? new Error("loading " + relative + " timed out") : error;
       }));
     }
     return cache.get(relative);
@@ -129,6 +137,7 @@
     if (record.data) return Promise.resolve(record);
     if (!record.loading) {
       // Parts share files: each holds the parts whose ids hash to it.
+      record.retryAt = 0;
       record.loading = fetchJSON("parts/" + record.summary.file).then(function (shard) {
         var data = shard.parts && shard.parts[record.id];
         if (!data) throw new Error("Part " + record.id + " is missing from parts/" + record.summary.file);
@@ -141,6 +150,9 @@
         packChildren(record);
         schedule();
         return record;
+      }, function (error) {
+        record.loading = null; record.retryAt = performance.now() + RETRY_MS;
+        throw error;
       });
     }
     return record.loading;
@@ -240,7 +252,7 @@
     var range = limits();
     target = {x: target.x, y: target.y, k: clamp(target.k, range.low, range.high)};
     if (flight) cancelAnimationFrame(flight.frame);
-    if (reduceMotion) { camera = target; schedule(); if (done) done(); return; }
+    if (reduceMotion) { camera = target; schedule(); rememberCamera(); if (done) done(); return; }
     var start = {x: camera.x, y: camera.y, k: camera.k}, began = performance.now(), duration = 560;
     flight = {frame: 0};
     var step = function (now) {
@@ -249,7 +261,7 @@
       camera = {x: start.x + (target.x - start.x) * e, y: start.y + (target.y - start.y) * e,
         k: Math.exp(Math.log(start.k) + (Math.log(target.k) - Math.log(start.k)) * e)};
       render();
-      if (t < 1) flight.frame = requestAnimationFrame(step); else { flight = null; if (done) done(); }
+      if (t < 1) flight.frame = requestAnimationFrame(step); else { flight = null; rememberCamera(); if (done) done(); }
     };
     flight.frame = requestAnimationFrame(step);
   }
@@ -299,7 +311,7 @@
   // move the map themselves; then both follow the part that fills the view.
   // picked: a part chosen with one click, shown where it is with its neighbours (a second click goes inside).
   // links: the shown part's neighbours by role (uses, used-by, both); linkHover: the neighbour under the pointer in the panel.
-  var state = {selected: null, related: null, focusPart: null, hoverPart: null, facets: null, picked: null, links: null, linkHover: null};
+  var state = {selected: null, related: null, focusPart: null, hoverPart: null, facets: null, picked: null, links: null, linkHover: null, error: null};
   var pending = false;
   function schedule() {
     if (pending) return;
@@ -357,7 +369,7 @@
       if (!record.box) return;
       var b = screenBox(record.box);
       if (record.id !== ROOT && !onScreen(b)) return;
-      if (record.id !== ROOT && !record.data && b.w >= OPEN_W && b.h >= OPEN_H) load(record.id);
+      if (record.id !== ROOT && !record.data && b.w >= OPEN_W && b.h >= OPEN_H && !(record.retryAt > performance.now())) load(record.id).catch(report);
       var open = isOpen(record, b);
       if (record.id !== ROOT) {
         if (open && covers(b)) deepestAtCenter = record;
@@ -582,8 +594,8 @@
   // Zoomed into a gap, the stage would be blank under the pinned title: say where the reader is and how to get out.
   var HINT = "Click a part to see what it builds on, and again to go inside. Pinch or Control-scroll to zoom.";
   function explainEmpty(drawn) {
-    var record = viewPart(), text = HINT;
-    if (record && record.id !== ROOT && record.data && !state.selected) {
+    var record = viewPart(), text = state.error || HINT;
+    if (!state.error && record && record.id !== ROOT && record.data && !state.selected) {
       var inside = record.kids.some(function (id) { return drawn.has(id); }) || drawn.has(record.id + "#results");
       if (!inside && (record.kids.length || record.results.length)) text = "You are between the parts of " + plain(record.summary.title) + ". Zoom out, or choose a part in the reading pane.";
     }
@@ -640,6 +652,9 @@
   }
 
   // ---------------------------------------------------------------- arriving somewhere
+  // Each navigation takes a number; one whose files arrive after a newer navigation began gives way to it.
+  var navEpoch = 0;
+  function navigation() { state.error = null; return ++navEpoch; }
   function ensureChain(chain) {
     return chain.reduce(function (promise, id, index) {
       return promise.then(function () {
@@ -667,10 +682,14 @@
       return ensureChain(partChainFromSearch(model.search.data.parts.indexOf(row)));
     });
   }
-  function goToPart(id, options) { return ensurePart(id).then(function () { return flyToPart(id, options); }); }
+  function goToPart(id, options) {
+    var epoch = navigation();
+    return ensurePart(id).then(function () { if (epoch === navEpoch) return flyToPart(id, Object.assign({}, options, {epoch: epoch})); });
+  }
   // One click picks a part where it is: the reading pane and the map show what it builds on and what uses it. The
   // neighbours' parts load too, so the map can draw an arrow to each.
   function pick(id) {
+    navigation();
     state.picked = id; shownPart = null;
     select(null, {history: false});
     return load(id).then(function () {
@@ -685,12 +704,15 @@
   function unpick() { if (state.picked) { state.picked = null; shownPart = null; schedule(); } }
   // From a list: the part where it sits among its siblings, picked, with the view widened to take in its neighbours.
   function showInContext(id) {
+    var epoch = navigation();
     return ensurePart(id).then(function () {
+      if (epoch !== navEpoch) return;
       var record = part(id), parent = part(record.parent);
       state.focusPart = parent ? parent.id : ROOT;
       var picking = pick(id);
+      epoch = navEpoch;
       remember();
-      return picking.then(function () { flyToNeighbourhood(record, parent); });
+      return picking.then(function () { if (epoch === navEpoch) flyToNeighbourhood(record, parent); });
     });
   }
   // Never so far out that the picked part is narrower than this on screen (px): far neighbours' arrows run off the stage.
@@ -710,8 +732,10 @@
   }
   function flyToPart(id, options) {
     options = options || {};
+    var epoch = options.epoch || navigation();
     if (state.picked) { state.picked = null; shownPart = null; }
     return ensureChain(chainOf(id)).then(function () {
+      if (epoch !== navEpoch) return;
       var record = part(id);
       state.focusPart = id;
       if (options.history !== false) remember(options.replace);
@@ -721,7 +745,9 @@
   }
   function arrive(resultId, chain, options) {
     options = options || {};
+    var epoch = options.epoch || navigation();
     return ensureChain(chain).then(function () {
+      if (epoch !== navEpoch) return;
       var homeId = chain[chain.length - 1], record = part(homeId), entry = model.results.get(resultId);
       if (!entry || !entry.box) throw new Error("Result not found in its part: " + resultId);
       state.focusPart = homeId;
@@ -738,13 +764,15 @@
     });
   }
   // A result the map has not loaded yet (from a list in the reading pane): find its path through search.
-  function arriveById(resultId) {
-    var entry = model.results.get(resultId);
-    if (entry) return arrive(resultId, chainOf(entry.home));
+  function arriveById(resultId, options) {
+    var entry = model.results.get(resultId), epoch = navigation();
+    options = Object.assign({}, options, {epoch: epoch});
+    if (entry) return arrive(resultId, chainOf(entry.home), options);
     return loadSearch().then(function () {
+      if (epoch !== navEpoch) return;
       var hit = model.search.byId.get(resultId);
       if (!hit) throw new Error("Unknown result " + resultId);
-      return arrive(resultId, partChainFromSearch(hit[2]));
+      return arrive(resultId, partChainFromSearch(hit[2]), options);
     });
   }
 
@@ -1115,12 +1143,17 @@
       snap.focusPart && snap.focusPart !== ROOT ? "#part=" + encodeURIComponent(snap.focusPart) : location.pathname + location.search;
     // The current entry keeps its camera, so Back returns to exactly where the reader was.
     try { history.replaceState(Object.assign({}, history.state || {}, {pm: 1, camera: {x: camera.x, y: camera.y, k: camera.k}, selected: history.state && history.state.selected, focusPart: history.state && history.state.focusPart, chain: history.state && history.state.chain}, viewState()), ""); } catch (_e) { /* ignore */ }
-    if (replace) history.replaceState(snap, "", hash); else history.pushState(snap, "", hash);
+    // Going nowhere new (Whole project from the whole project, Escape with nothing chosen) is not a new entry.
+    var current = history.state, same = current && current.pm && current.selected === snap.selected &&
+      current.focusPart === snap.focusPart && current.picked === snap.picked;
+    if (replace || same) history.replaceState(Object.assign(snap, viewState()), "", hash); else history.pushState(snap, "", hash);
   }
   window.addEventListener("popstate", function (event) {
     var snap = event.state;
+    var epoch = navigation();
     if (!snap || !snap.pm) { state.picked = null; select(null, {history: false}); state.focusPart = ROOT; fitProject(true); live.textContent = "Whole project"; return; }
     ensureChain(snap.chain || []).then(function () {
+      if (epoch !== navEpoch) return;
       state.focusPart = snap.focusPart || null;
       state.picked = snap.picked && part(snap.picked) ? snap.picked : null;
       search.value = snap.query || "";
@@ -1191,7 +1224,7 @@
   canvas.addEventListener("pointercancel", function () { drag = null; canvas.classList.remove("pm-dragging"); });
   function activate(target) {
     var resultNode = target.closest && target.closest("[data-result]");
-    if (resultNode) { select(resultNode.getAttribute("data-result")); return; }
+    if (resultNode) { navigation(); select(resultNode.getAttribute("data-result")); return; }
     var partNode = target.closest && target.closest("[data-part]");
     if (partNode) {
       var id = partNode.getAttribute("data-part");
@@ -1222,7 +1255,7 @@
   });
   zoomIn.addEventListener("click", function () { release(); zoomAt(1.5, size.w / 2, size.h / 2); rememberCamera(); });
   zoomOut.addEventListener("click", function () { release(); zoomAt(1 / 1.5, size.w / 2, size.h / 2); rememberCamera(); });
-  function wholeProject() { state.focusPart = ROOT; state.picked = null; select(null, {history: false}); remember(); fitProject(); live.textContent = "Whole project"; }
+  function wholeProject() { navigation(); state.focusPart = ROOT; state.picked = null; select(null, {history: false}); remember(); fitProject(); live.textContent = "Whole project"; }
   fitAll.addEventListener("click", wholeProject);
   document.addEventListener("keydown", function (event) {
     if (event.key === "/" && document.activeElement !== search && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
@@ -1241,7 +1274,9 @@
     schedule();
   }).observe(stage);
   function report(error) {
-    live.textContent = "Something went wrong: " + (error && error.message ? error.message : error);
+    state.error = "Something went wrong: " + (error && error.message ? error.message : error) + ". Try again, or reload the page.";
+    live.textContent = state.error;
+    schedule();
     if (window.console) console.error(error);
   }
 
@@ -1266,7 +1301,7 @@
     fitProject(true);
     renderSide();
     var hash = location.hash.slice(1), params = new URLSearchParams(hash);
-    var start = params.get("result") ? arriveById(params.get("result")).then(function () { remember(true); })
+    var start = params.get("result") ? arriveById(params.get("result"), {replace: true})
       : params.get("part") ? goToPart(params.get("part"), {replace: true})
       : Promise.resolve(remember(true));
     start.catch(report);

@@ -86,18 +86,36 @@ document.querySelectorAll = s => document.documentElement.querySelectorAll(s);
 document.addEventListener = (type, fn) => { if (!document.listeners.has(type)) document.listeners.set(type, []); document.listeners.get(type).push(fn); };
 
 const frames = [];
-const historyStack = [{state: null, url: "/map/"}];
+// MAP_HASH opens the page at a hash, as a deep link would.
+const historyStack = [{state: null, url: process.env.MAP_HASH || "/map/"}];
 let historyIndex = 0;
-const location = {href: "file:///map/", pathname: "/map/", search: "", hash: ""};
+const location = {href: "file:///map/", pathname: "/map/", search: "", hash: process.env.MAP_HASH || ""};
 function setUrl(url) { if (url) { const hash = url.startsWith("#") ? url : ""; location.hash = hash; } }
 const history = {
   get state() { return historyStack[historyIndex].state; },
   pushState(state, _t, url) { historyStack.splice(historyIndex + 1); historyStack.push({state, url}); historyIndex++; setUrl(url); },
   replaceState(state, _t, url) { historyStack[historyIndex] = {state, url: url || historyStack[historyIndex].url}; setUrl(url); },
+  get length() { return historyStack.length; },
   back() { if (historyIndex > 0) { historyIndex--; setUrl(historyStack[historyIndex].url); (window.listeners.get("popstate") || []).forEach(fn => fn({state: historyStack[historyIndex].state})); } },
+  forward() { if (historyIndex < historyStack.length - 1) { historyIndex++; setUrl(historyStack[historyIndex].url); (window.listeners.get("popstate") || []).forEach(fn => fn({state: historyStack[historyIndex].state})); } },
 };
 const window = {listeners: new Map(), addEventListener(type, fn) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(fn); }};
 const errors = [];
+// The network, for scripts: MAP_HOLD and MAP_FAIL (comma-separated files) hold or fail a file from the start;
+// net.release lets a held file through, and net.log lists every file asked for, in order.
+const held = new Map(), failing = new Map();
+(process.env.MAP_HOLD || "").split(",").filter(Boolean).forEach(name => held.set(name, []));
+(process.env.MAP_FAIL || "").split(",").filter(Boolean).forEach(name => failing.set(name, (failing.get(name) || 0) + 1));
+const net = {
+  log: [],
+  hold(name) { if (!held.has(name)) held.set(name, []); },
+  release(name) { const waiting = held.get(name) || []; held.delete(name); waiting.forEach(go => go()); },
+  fail(name, times) { failing.set(name, times || 1); },
+};
+function respond(relative) {
+  try { const text = fs.readFileSync(path.join(mapDir, relative), "utf8"); return {ok: true, status: 200, json: () => Promise.resolve(JSON.parse(text))}; }
+  catch (e) { return {ok: false, status: 404, json: () => Promise.reject(e)}; }
+}
 const context = {
   document, window, location, history, URL, URLSearchParams, Map, Set, Promise, Math, JSON, Object, Array, String, Number, Infinity, isNaN, encodeURIComponent, decodeURIComponent,
   console: {log: (...a) => console.log(...a), error: (...a) => errors.push(a.map(String).join(" ")), warn: () => {}},
@@ -111,8 +129,10 @@ const context = {
   navigator: {},
   fetch: url => {
     const relative = String(url).replace("file:///map/", "");
-    try { const text = fs.readFileSync(path.join(mapDir, relative), "utf8"); return Promise.resolve({ok: true, status: 200, json: () => Promise.resolve(JSON.parse(text))}); }
-    catch (e) { return Promise.resolve({ok: false, status: 404, json: () => Promise.reject(e)}); }
+    net.log.push(relative);
+    if (failing.get(relative) > 0) { failing.set(relative, failing.get(relative) - 1); return Promise.reject(new TypeError("the network dropped " + relative)); }
+    if (held.has(relative)) return new Promise(resolve => held.get(relative).push(() => resolve(respond(relative))));
+    return Promise.resolve(respond(relative));
   },
 };
 Object.assign(window, context);
@@ -132,9 +152,9 @@ function emit(node, type, props) { return node.dispatch(type, props); }
 (async () => {
   await wait(20);
   const body = fs.readFileSync(scriptPath, "utf8");
-  const run = new Function("app", "wait", "$", "$$", "emit", "assert", "history", "location", "errors", "return (async () => {" + body + "})();");
+  const run = new Function("app", "wait", "$", "$$", "emit", "assert", "history", "location", "errors", "net", "return (async () => {" + body + "})();");
   try {
-    await run(host, wait, $, $$, emit, assert, history, location, errors);
+    await run(host, wait, $, $$, emit, assert, history, location, errors, net);
   } catch (e) {
     console.error("SCRIPT FAILED:", e && e.stack || e);
     process.exitCode = 1;

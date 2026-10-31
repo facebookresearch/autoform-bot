@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -37,7 +38,8 @@ def _library(tmp_path: Path) -> Path:
     return tmp_path / "map"
 
 
-def _walk(tmp_path: Path, script: str, map_dir: Path | None = None) -> str:
+def _walk(tmp_path: Path, script: str, map_dir: Path | None = None, **env: str) -> str:
+    """Run ``script`` against the map at ``map_dir``; ``env`` sets MAP_HASH, MAP_HOLD and MAP_FAIL (see project_map_dom.js)."""
     path = tmp_path / "walk.js"
     path.write_text(script, encoding="utf-8")
     # The page loads the layout module and the controller as one file, in this order.
@@ -45,7 +47,7 @@ def _walk(tmp_path: Path, script: str, map_dir: Path | None = None) -> str:
     client.write_text("\n".join((_ASSETS / name).read_text(encoding="utf-8") for name in ("project-map-layout.js", "project-map.js")),
                       encoding="utf-8")
     run = subprocess.run([_NODE, str(_DOM), str(client), str(map_dir or _library(tmp_path)), str(path)],
-                         capture_output=True, text=True, timeout=60)
+                         capture_output=True, text=True, timeout=60, env={**os.environ, **env})
     assert run.returncode == 0, run.stdout[-2000:] + run.stderr[-4000:]
     return run.stdout
 
@@ -288,3 +290,68 @@ def test_one_click_picks_a_part_in_place_and_its_neighbours_are_a_row_away(tmp_p
       console.log('pick ok');
     """)
     assert "pick ok" in out
+
+
+def test_a_part_file_that_arrives_late_does_not_take_the_map_back(tmp_path: Path) -> None:
+    groups = "parts/" + project_map.part_file("Algebra/groups")
+    assert groups != "parts/" + project_map.part_file("Analysis/series")
+    out = _walk(tmp_path, r"""
+      const search = $('.pm-search').querySelector('input'), go = async query => {
+        search.value = query; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+        emit(search, 'keydown', {key: 'Enter'}); await wait(40);
+      };
+      // The reading pane keeps the title's TeX for MathJax.
+      const ABEL = 'Abel summation for \\(\\mathbb{R}\\)';
+      // Lagrange's part is still loading when the reader asks for Abel summation instead.
+      await go('Subgroup.card_dvd');
+      await go('abel_summation');
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, ABEL);
+      net.release('GROUPS'); await wait(40);
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, ABEL);
+      assert.strictEqual(location.hash, '#result=' + encodeURIComponent('Analysis/series/abel'));
+      console.log('race ok');
+    """.replace("GROUPS", groups), MAP_HOLD=groups)
+    assert "race ok" in out
+
+
+def test_a_file_that_failed_once_loads_when_asked_again(tmp_path: Path) -> None:
+    groups = "parts/" + project_map.part_file("Algebra/groups")
+    out = _walk(tmp_path, r"""
+      // The opening's request for Groups failed: the map says so where it can be seen.
+      assert($('.pm-hint').textContent.startsWith('Something went wrong'), $('.pm-hint').textContent);
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'Subgroup.card_dvd'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      emit(search, 'keydown', {key: 'Enter'}); await wait(40);
+      // Asked again, the file loads, and the warning goes.
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, "Lagrange's theorem");
+      assert.strictEqual(net.log.filter(name => name === 'GROUPS').length, 2);
+      assert(!$('.pm-hint').textContent.startsWith('Something went wrong'), $('.pm-hint').textContent);
+      // The one failure the network caused is the only error logged.
+      assert.deepStrictEqual(errors, ['TypeError: the network dropped GROUPS']); errors.length = 0;
+      console.log('retry ok');
+    """.replace("GROUPS", groups), MAP_FAIL=groups)
+    assert "retry ok" in out
+
+
+def test_history_holds_one_entry_per_place_and_the_camera_a_flight_ends_at(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      // A deep link is one entry, and it shows its result.
+      assert.strictEqual(history.length, 1);
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, "Lagrange's theorem");
+      const card = () => ['x', 'y', 'width'].map(name => Math.round(+$('.pm-result.pm-selected').querySelector('rect').getAttribute(name))).join();
+      // Going to the same place again is not a new entry.
+      const whole = app.querySelectorAll('button').find(b => b.textContent === 'Whole project');
+      emit(whole, 'click'); await wait(30);
+      const entries = history.length;
+      emit(whole, 'click'); await wait(30);
+      for (let i = 0; i < 3; i++) { emit($('.pm-stage').querySelector('svg'), 'keydown', {key: 'Escape'}); await wait(5); }
+      assert.strictEqual(history.length, entries);
+      // Back and Forward return to the camera the flight to Lagrange's theorem ended at.
+      history.back(); await wait(40);
+      const arrived = card();
+      history.forward(); await wait(40);
+      history.back(); await wait(40);
+      assert.strictEqual(card(), arrived);
+      console.log('history ok');
+    """, MAP_HASH="#result=" + "Algebra%2Fgroups%2Flagrange")
+    assert "history ok" in out
