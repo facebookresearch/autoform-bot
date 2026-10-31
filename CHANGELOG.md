@@ -148,6 +148,9 @@ date when the release is tagged.
   and foreign-URL state is not restored. Failures offer a safe native article link (#442).
 - **Explorer builds.** Compiler and publisher share a UTF-8/LF source fingerprint,
   including on CRLF checkouts, without requiring Node in consumer projects (#442).
+- **Lean commands.** A Lake or Lean command Autoform runs that fails just as
+  Ctrl+C or a termination signal arrives is stopped along with Autoform
+  instead of being left running (#510).
 - **Large wiki catalogues.** Validation yields to visible page frames, with
   a bounded fallback for hidden or stalled tabs, rather than relying only on
   timer tasks. Parent references use the same compact node offsets as relations;
