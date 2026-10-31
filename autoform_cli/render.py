@@ -263,7 +263,8 @@ DAG_SCRIPT = dag_viewer.SCRIPT_PATH
 DAG_STYLE = dag_viewer.STYLE_PATH
 MAP_SCRIPT = "javascripts/project-map.js"
 MAP_STYLE = "stylesheets/project-map.css"
-MAP_PAGE = "map/index.html"
+MAP_PAGE = "dependencies/map/index.html"
+_TO_ROOT = "../" * MAP_PAGE.count("/")
 LOGO = "assets/autoform.svg"
 #: The files render writes into every site, whatever the vault holds there.
 _ASSETS = (STYLESHEET, MERMAID_SCRIPT, MATHJAX_SCRIPT, LIVE_SCRIPT, DAG_SCRIPT, DAG_STYLE, LOGO)
@@ -1220,11 +1221,11 @@ def _render_pages(
         # The layout module ships ahead of the controller in one file, so the page makes one request for both.
         (MAP_SCRIPT, _static_asset("project-map-layout.js") + "\n" + _static_asset("project-map.js")),
         (MAP_STYLE, _static_asset("project-map.css")),
-        # The whole-project map: one standalone page over the per-level files in map/data/.
+        # The whole-project map: one standalone page over the per-level files beside it.
         (MAP_PAGE, project_map.render_page(
-            title=graph_views.group_title(graph, "roadmap"), map_base="../" + project_map.MAP_DIRECTORY + "/",
-            routes="../" + graph_pages.SEARCH_INDEX, home="../", script="../" + MAP_SCRIPT, style="../" + MAP_STYLE,
-            mathjax="../" + MATHJAX_SCRIPT,
+            title=graph_views.group_title(graph, "roadmap"), map_base=_TO_ROOT + project_map.MAP_DIRECTORY + "/",
+            routes=_TO_ROOT + graph_pages.SEARCH_INDEX, home=_TO_ROOT, script=_TO_ROOT + MAP_SCRIPT,
+            style=_TO_ROOT + MAP_STYLE, mathjax=_TO_ROOT + MATHJAX_SCRIPT,
         )),
         (LOGO, _logo()),
     ):

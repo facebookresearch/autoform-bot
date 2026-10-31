@@ -29,7 +29,7 @@ import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
 import autoform_cli.render as render_module
 from autoform_cli import _directory_binding as directory_binding_module
-from autoform_cli import dag_viewer, graph_pages
+from autoform_cli import dag_viewer, graph_pages, project_map
 from autoform_cli.__main__ import main
 from autoform_cli._repository import _normalize_remote
 from autoform_cli._tree_snapshot import TreeChangedError
@@ -492,7 +492,9 @@ def test_every_explorer_breadcrumb_reaches_a_published_page(tmp_path: Path) -> N
 
     def book_crumbs() -> set[Path]:
         """Check that every explorer's crumbs are published, and say where its Book crumb leads."""
-        payloads = [out / "dependencies.json", *(out / "dependencies").rglob("*.json")]
+        # The whole-project map's data has a schema of its own.
+        map_data = out / project_map.MAP_DIRECTORY
+        payloads = [out / "dependencies.json", *(path for path in (out / "dependencies").rglob("*.json") if map_data not in path.parents)]
         payloads.remove(out / "dependencies/index.json")
         decoded = {payload: json.loads(payload.read_text(encoding="utf-8")) for payload in payloads}
         assert all(data.get("schema") in {dag_viewer.SCHEMA, dag_viewer.WIKI_LINKS_SCHEMA} for data in decoded.values())

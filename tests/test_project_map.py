@@ -282,3 +282,19 @@ def test_a_view_without_one_root_gets_one() -> None:
 def test_a_map_needs_exactly_one_root() -> None:
     with pytest.raises(ValueError, match="exactly one root"):
         project_map.build_project_map([_scope("a", None, "A"), _scope("b", None, "B")], [])
+
+
+def test_a_blueprint_chapter_named_map_keeps_its_page(tmp_path: Path) -> None:
+    from autoform_cli.render import render_site
+    from autoform_cli.scaffold import scaffold_project
+
+    project = tmp_path / "project"
+    scaffold_project(project, title="Map chapter")
+    (project / "blueprint/map").mkdir()
+    (project / "blueprint/map/README.md").write_text("# Maps\n\nCharts and atlases.\n", encoding="utf-8")
+    render_site(project / "blueprint", project / "site-src")
+    site = project / "site-src"
+    # The chapter's page is the blueprint's; the whole-project map lives under dependencies/, which render owns.
+    assert "# Maps\n\nCharts and atlases." in (site / "map/README.md").read_text(encoding="utf-8")
+    assert not (site / "map/index.html").exists()
+    assert (site / "dependencies/map/index.html").is_file() and (site / project_map.MAP_DIRECTORY / "index.json").is_file()

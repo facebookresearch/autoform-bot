@@ -61,7 +61,7 @@ def map_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 def _open_map(page: object, url: str) -> None:
     # The CDN's MathJax stays off the network; formulas keep their readable source.
     page.route(lambda requested: not requested.startswith(url), lambda route: route.abort())
-    page.goto(f"{url}/map/")
+    page.goto(f"{url}/dependencies/map/")
     page.locator(".pm-part").first.wait_for()
 
 
@@ -136,7 +136,7 @@ def test_one_click_picks_a_region_in_place_and_a_second_opens_it(webkit_browser:
         band.click(position={"x": 24, "y": 10})
         playwright.expect(page.locator('.pm-part.pm-picked[data-part="algebra"]')).to_have_count(1)
         band.click(position={"x": 24, "y": 10})
-        playwright.expect(page).to_have_url(re.compile(r"/map/#part=algebra$"))
+        playwright.expect(page).to_have_url(re.compile(r"/dependencies/map/#part=algebra$"))
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Algebra")
         # The region's results are on the same map now, with their titles, and Analysis stays in view below.
         playwright.expect(page.locator('.pm-card[data-result^="algebra/"]')).to_have_count(2)

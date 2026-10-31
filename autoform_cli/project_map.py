@@ -24,7 +24,8 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 
 SCHEMA = "autoform-project-map/v1"
-MAP_DIRECTORY = "map/data"
+# Under dependencies/, which every site holds and render owns, so a blueprint's own map/ chapter keeps its name.
+MAP_DIRECTORY = "dependencies/map/data"
 TOP_EXPORTS = 8
 # A part names at most this many of the parts it builds on, and of the parts that use it.
 TOP_LINKS = 8
