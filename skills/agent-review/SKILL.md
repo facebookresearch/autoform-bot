@@ -50,8 +50,8 @@ article review hash; the
 [CLI reference](../../autoform_cli/README.md#skeleton-hashes) says what each
 binds. These hashes are provenance evidence, not reviewer authentication or an
 approval key. If the user has paused skeleton evidence during proof development,
-skip it and Formalize's import-edit baselines, say so, and record no skeleton
-hash; still build the target, run `#print axioms` on each recorded declaration
+skip it and Formalize's import-edit baselines, say so, and record none of these
+hashes; still build the target, run `#print axioms` on each recorded declaration
 and `autoform check` and `audit` with `--lean-root`, and compare the compiled
 statement with its source.
 

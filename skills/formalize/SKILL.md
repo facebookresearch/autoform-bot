@@ -84,14 +84,14 @@ rerunning it with `--module-scope import-closure` when the default scope cannot
 build or load every root library. When the run uses claims, follow the [import
 claims](references/claims.md#import-edits) from then on; otherwise send the lead
 the report's `claim_targets` and `affected_claim_targets` and wait for its
-answer. Unless paused, capture baseline skeleton evidence for the report's currently
-built, named affected articles and, when the edit removes an import, for the
-articles of modules only that import kept in the build. The affected articles
-are not a lock: do not acquire or edit them merely because they are listed, and
-treat reported unresolved declarations as unknown validation scope, not proof
-they are unaffected. After rebuilding, repeat the skeleton evidence and use
-Agent Review to judge semantic changes; repair each article that actually needs
-changes under the review gates of the [revision
+answer. Unless the user has paused skeleton evidence, capture baseline skeleton
+evidence for the report's currently built, named affected articles and, when the
+edit removes an import, for the articles of modules only that import kept in the
+build. The affected articles are not a lock: do not acquire or edit them merely
+because they are listed, and treat reported unresolved declarations as unknown
+validation scope, not proof they are unaffected. After rebuilding, repeat any
+baseline skeleton evidence and use Agent Review to judge semantic changes; repair
+each article that actually needs changes under the review gates of the [revision
 contract](../../autoform_cli/reference/claims-and-revisions.md#revision-contract).
 Stop for an active conflict (an affected target another worker holds, or another
 owner's live claim on one) or failed validation, not for a blanket import rule;
