@@ -353,7 +353,9 @@
     var hSegments = new Map(), vSegments = new Map();
     function use(map, key, from, to, route, width) {
       if (!map.has(key)) map.set(key, {width: width, list: []});
-      map.get(key).list.push({lo: Math.min(from, to), hi: Math.max(from, to), route: route});
+      var entry = map.get(key);
+      entry.width = Math.min(entry.width, width);
+      entry.list.push({lo: Math.min(from, to), hi: Math.max(from, to), route: route});
     }
     routes.forEach(function (route) {
       var a = boxes[route.from], b = boxes[route.to], ra = rowOf.get(route.from), rb = rowOf.get(route.to);
@@ -384,27 +386,42 @@
         steps.push({h: c, from: x, to: pick.x});
         use(hSegments, c, x, pick.x, route, corridorWidth(c));
         var next = down ? c + 1 : c - 1;
-        steps.push({v: r + ":" + pick.key, x: pick.x, from: c, to: next});
-        use(vSegments, r + ":" + pick.key, corridorY(c), corridorY(next), route, pick.width);
+        // A leg reaches halfway into the corridors on either side, so its lane is shared with every leg in the same
+        // column, whatever the row: the side margins line up across all rows.
+        var column = pick.x.toFixed(3);
+        steps.push({v: column, x: pick.x, from: c, to: next});
+        use(vSegments, column, corridorY(c), corridorY(next), route, pick.width);
         x = pick.x; c = next;
       }
       steps.push({h: c, from: x, to: bx});
       use(hSegments, c, x, bx, route, corridorWidth(c));
     });
-    // Lanes: greedy interval colouring per corridor, centred in it.
+    // Lanes: greedy interval colouring per corridor, centred in it. A crowded corridor can't keep every lane a few
+    // pixels apart, so the routes shown at rest take their lanes first and get slots spread across the corridor; the
+    // others, drawn only beside a part under the pointer, fill the slots between.
     function lanes(map) {
       var offsets = new Map();
       map.forEach(function (entry, key) {
-        var list = entry.list.slice().sort(function (p, q) { return p.lo - q.lo || q.route.weight - p.route.weight; });
-        var ends = [];
-        list.forEach(function (item) {
-          var lane = 0;
-          while (lane < ends.length && ends[lane] > item.lo - LANE * unit) lane++;
-          ends[lane] = item.hi; item.lane = lane;
+        var tracks = [], resting = 0;
+        [true, false].forEach(function (rest) {
+          entry.list.filter(function (item) { return !!item.route.rest === rest; })
+            .sort(function (p, q) { return p.lo - q.lo || q.route.weight - p.route.weight; })
+            .forEach(function (item) {
+              var track = tracks.find(function (t) {
+                return t.every(function (o) { return o.hi <= item.lo - LANE * unit || o.lo >= item.hi + LANE * unit; });
+              });
+              if (!track) { track = []; tracks.push(track); }
+              track.push(item); item.track = tracks.indexOf(track);
+            });
+          if (rest) resting = tracks.length;
         });
-        var count = ends.length, spacing = Math.min(LANE * unit, entry.width * 0.85 / Math.max(count, 1));
-        list.forEach(function (item) { offsets.set(key + "\u0000" + item.route.from + "\u0000" + item.route.to + "\u0000" + item.lo,
-          (item.lane - (count - 1) / 2) * spacing); });
+        var count = tracks.length, spacing = Math.min(LANE * unit, entry.width * 0.85 / Math.max(count, 1)), slots = [], taken = [];
+        // Resting tracks at evenly spread slots, the rest in the free slots left to right.
+        for (var t = 0; t < resting; t++) { slots[t] = Math.round((t + 0.5) * count / resting - 0.5); taken[slots[t]] = true; }
+        for (var free = 0; t < count; t++) { while (taken[free]) free++; slots[t] = free; taken[free] = true; }
+        entry.list.forEach(function (item) {
+          offsets.set(key + "\u0000" + item.route.from + "\u0000" + item.route.to + "\u0000" + item.lo, (slots[item.track] - (count - 1) / 2) * spacing);
+        });
       });
       return offsets;
     }
@@ -435,6 +452,24 @@
           side === "left" ? [box.x, box.y + box.h * t] : [box.x + box.w, box.y + box.h * t];
         slot.route[slot.end ? "endPort" : "startPort"] = point;
       });
+    });
+    // Boxes above and below a corridor spread their ports independently, so a port on one could meet a port on the
+    // other across it, and the two stubs would read as one line. Each corridor's ports keep a lane apart, inside their
+    // own faces: one sweep pushes right, a second pulls back from the faces' ends.
+    var facing = new Map();
+    ports.forEach(function (list, key) {
+      var parts = key.split("\u0000"), box = boxes[parts[0]], side = parts[1];
+      if (side !== "top" && side !== "bottom") return;
+      var corridor = rowOf.get(parts[0]) + (side === "bottom" ? 1 : 0);
+      if (!facing.has(corridor)) facing.set(corridor, []);
+      list.forEach(function (slot) {
+        facing.get(corridor).push({point: slot.route[slot.end ? "endPort" : "startPort"], lo: box.x + box.w * 0.1, hi: box.x + box.w * 0.9});
+      });
+    });
+    facing.forEach(function (items) {
+      items.sort(function (p, q) { return p.point[0] - q.point[0]; });
+      for (var i = 1; i < items.length; i++) items[i].point[0] = Math.min(items[i].hi, Math.max(items[i].point[0], items[i - 1].point[0] + LANE * unit));
+      for (i = items.length - 2; i >= 0; i--) items[i].point[0] = Math.max(items[i].lo, Math.min(items[i].point[0], items[i + 1].point[0] - LANE * unit));
     });
     routes.forEach(function (route) {
       var s = route.startPort, e = route.endPort, points = [s[0], s[1]];

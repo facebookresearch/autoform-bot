@@ -63,6 +63,24 @@ function checkRoutes(routes, boxes) {
       }
     }
   });
+  // Routes shown at rest between four different boxes never run along one line, or they read as a link between boxes
+  // that aren't linked. Routes sharing a box may bundle beside it.
+  const resting = routes.filter(route => route.rest), segments = resting.map(route => {
+    const p = route.points, out = [];
+    for (let k = 0; k + 3 < p.length; k += 2) {
+      out.push(Math.abs(p[k] - p[k + 2]) < EPS ? {axis: 'x', at: p[k], lo: Math.min(p[k + 1], p[k + 3]), hi: Math.max(p[k + 1], p[k + 3])}
+        : {axis: 'y', at: p[k + 1], lo: Math.min(p[k], p[k + 2]), hi: Math.max(p[k], p[k + 2])});
+    }
+    return out;
+  });
+  for (let i = 0; i < resting.length; i++) for (let j = i + 1; j < resting.length; j++) {
+    if ([resting[j].from, resting[j].to].some(id => id === resting[i].from || id === resting[i].to)) continue;
+    for (const a of segments[i]) for (const b of segments[j]) {
+      // Collinear and closer than a lane end to end still reads as one line.
+      const shared = a.axis === b.axis && Math.abs(a.at - b.at) < 0.5 && Math.min(a.hi, b.hi) - Math.max(a.lo, b.lo) > -5;
+      assert(!shared, [resting[i].from, resting[i].to, 'and', resting[j].from, resting[j].to, 'share', a.axis, '=', a.at.toFixed(1)].join(' '));
+    }
+  }
 }
 """
 
@@ -222,6 +240,11 @@ def test_routes_run_only_through_gaps_and_merge_both_directions() -> None:
       assert(routes.filter(r => r.rest).length <= Math.round(14 * 0.8));
     }
     assert(axes.has('rows') && axes.has('columns'), [...axes].join());
+    // P sits right above Q across a corridor. P's route to T leaves through P's bottom and U's route to Q enters Q's top,
+    // each through the middle of its face: one x for both would draw a line from P to Q, which aren't linked.
+    const box = (x, row) => ({x, y: row ? 140 : 0, w: 100, h: 100, unit: 1, row, axis: 'rows', band: 0, pad: 0});
+    const facing = {U: box(0, 0), P: box(120, 0), Q: box(120, 1), T: box(240, 1)};
+    checkRoutes(L.bundleEdges(facing, [['T', 'P', 1, 0], ['Q', 'U', 1, 0]], {x: 0, y: 0, w: 340, h: 240, margin: 12}), facing);
     // A dense island shows only its central routes at rest; the others wait for their parts.
     const island = sizes(40, 60).map((results, k) => summary('i' + k, results)), links = [];
     for (let a = 0; a < 40; a++) for (let b = 0; b < a; b += 3) links.push(['i' + a, 'i' + b, 1 + (a + b) % 4, 1]);
