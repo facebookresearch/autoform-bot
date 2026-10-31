@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 import hashlib
 import json
 import os
@@ -12,8 +11,8 @@ import subprocess
 import sys
 import threading
 import time
+import tracemalloc
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import replace
 from pathlib import Path
 
@@ -35,29 +34,20 @@ from autoform_cli.lean import (
 from autoform_cli.lean_probe import (
     PROBE_MARKER,
     PROBE_OUTPUT_ENV,
-    _PROBE_POOL,
-    _PROCESS_TERMINATION_GRACE,
     _CommandTimedOut,
     _ProbeEnvironmentError,
-    _build_probe_helper,
-    _join_readers,
     lean_libraries,
-    module_of,
-    path_of,
     _probe_modules,
-    _probe_workers,
-    _process_is_alive,
-    project_control_snapshot,
-    _read_probe_records,
-    _remember_tagged_processes,
     render_probe,
     _render_probe_helper,
-    _run_bounded_command,
-    run_module_probes,
     run_probe,
-    stable_paths,
-    stale_build_said,
-    _terminate_process_tree,
+)
+from autoform_cli._managed_output import (
+    _install_output,
+    _rename_no_replace,
+    remove_output,
+    replace_outputs,
+    stage_output,
 )
 from autoform_cli.skeleton import (
     DeclarationSkeleton,
@@ -70,12 +60,8 @@ from autoform_cli.skeleton import (
     SkeletonError,
     UnresolvedTarget,
     _declaration,
-    _install_output,
-    _remove_output,
-    _rename_no_replace,
-    _replace_outputs,
-    _stage_output,
     _hash_module_files,
+    _json_utf8,
     _local_safety_issue,
     _without_comments,
     _probe_record_issue,
@@ -317,56 +303,85 @@ def _fake_report(tmp_path: Path, output: str | None = None) -> SkeletonReport:
     return extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
 
 
+def _shared_closure(root: Path, articles: dict[str, int], *, closure: int, size: int) -> tuple[Path, Path, str]:
+    """A project whose roots all trust one chain of definitions, its blueprint, and
+    what the probe says about them, written without Lean.
+
+    ``articles`` maps each article to how many roots it names. Each of the
+    ``closure`` definitions carries about ``size`` characters of kernel material,
+    with quotes, escapes, and characters beyond the Basic Multilingual Plane.
+    """
+
+    project = root / "project"
+    (project / "Synth").mkdir(parents=True)
+    (project / "lean-toolchain").write_text("leanprover/lean4:v4.32.2\n", encoding="utf-8")
+    (project / "lakefile.toml").write_text(
+        'name = "Synth"\ndefaultTargets = ["Synth"]\n\n[[lean_lib]]\nname = "Synth"\n', encoding="utf-8"
+    )
+    (project / "Synth.lean").write_text("import Synth.Main\n", encoding="utf-8")
+    roots = {stem: [f"{stem}_{index}" for index in range(count)] for stem, count in articles.items()}
+    names = [name for group in roots.values() for name in group]
+    lean = {stem: ", ".join(f"Synth.{name}" for name in group) for stem, group in roots.items()}
+    (project / "Synth" / "Main.lean").write_text(
+        "\n".join(["namespace Synth", "", *(f"theorem {name} : True := trivial" for name in names), "", "end Synth"])
+        + "\n",
+        encoding="utf-8",
+    )
+    blueprint = _blueprint(root, lean=lean)
+    source = blueprint / "sources" / "book.tex"
+    source.parent.mkdir()
+    source.write_text("Every root is \\emph{true}.\n", encoding="utf-8")
+    first = blueprint / "roadmap" / "basics" / f"{next(iter(articles))}.md"
+    _replace_source(first, "## Depends on", "## Sources\n\n- [book](../../sources/book.tex#L1-L1)\n\n## Depends on")
+
+    def table(kind: str, name: str, value: object) -> str:
+        return PROBE_MARKER + json.dumps({"table": kind, "name": name, "value": value})
+
+    pad = ('"q\\b" ℝ → 𝔽\t' * (size // 12 + 1))[:size]
+    lines: list[str] = []
+    for index in range(closure):
+        name = f"Synth.d{index}"
+        doc, code, comment = f"/-- Step {index} in ℝ. -/\n", f"def d{index} : ℝ → Type := ", "-- a step ⟨x⟩"
+        source_text = f"{doc}{code}{comment}\n  fun _ => Unit"
+        start = len(f"{doc}{code}".encode())
+        material = {"safety": "safe", "type": {"const": [name, pad]}, "value": {"bvar": index}}
+        entry = _trusted(
+            name, "def", [2 * index + 1, 2 * index + 2], f"{name} : ℝ →\n  Type",
+            depends=[f"Synth.d{index - 1}"] if index else [],
+            source=source_text,
+            source_comments=[[0, len(doc.encode()) - 1], [start, start + len(comment.encode())]],
+            module="Synth.Main",
+            semantic=json.dumps({"generated": [], "root": material}, separators=(",", ":"), ensure_ascii=False),
+        )
+        lines.append(table("trusted", name, dict(entry, semantic=[entry["semantic"]])))
+    semantic = _semantic({"type": {"sort": {"zero": None}}})
+    lines += [table("semantic", name, [semantic]) for name in ("Mathlib.Fake", "propext")]
+    lines.append(table("module", "Mathlib.Fake", [["olean", "Synth/Main.lean"]]))
+    for line, name in enumerate(names, start=3):
+        # Every other root's written statement holds a comment Lean could not place, so it is withheld.
+        statement = f"theorem {name} :\n    True" if line % 2 else f"theorem {name} : -- why\n    True"
+        lines.append(
+            PROBE_MARKER
+            + json.dumps(
+                {
+                    "root": f"Synth.{name}", "found": True, "kind": "theorem", "module": "Synth.Main",
+                    "range": [line, line], "signature": f"Synth.{name} : True", "raw_signature": f"Synth.{name} : True",
+                    "semantic_schema": SEMANTIC_SCHEMA, "semantic": [semantic], "lean_version": "4.32.2",
+                    "source": None, "source_comments": None, "statement_source": statement,
+                    "statement_comments": [] if line % 2 else None,
+                    "depends": [f"Synth.d{closure - 1}"], "trusted": [f"Synth.d{index}" for index in range(closure)],
+                    "assumed": ["Mathlib.Fake"], "boundary_modules": ["Mathlib.Fake"],
+                    "statement_assumed": ["Mathlib.Fake"], "statement_boundary_modules": ["Mathlib.Fake"],
+                    "axioms": ["propext"],
+                }
+            )
+        )
+    return project, blueprint, "\n".join(lines)
+
+
 # --------------------------------------------------------------------------- #
 # The probe program
 # --------------------------------------------------------------------------- #
-
-
-def test_probe_spells_names_without_trusting_lean_to_parse_them() -> None:
-    probe = render_probe(
-        imports=("Skel.Main", "Skel.Defs", "Skel.Main"),
-        roots=("Skel.observation_determined",),
-        project_roots=("Skel",),
-    )
-    helper = _render_probe_helper()
-
-    assert probe.startswith("import Skel.Defs\nimport Skel.Main\nimport «autoform-skeleton-helper»\n")
-    assert _requested(probe) == [["Skel.observation_determined", ["Skel", "observation_determined"]]]
-    assert f'"{PROBE_MARKER}' in helper
-    assert "def probeOutputLimit : Nat := 67108864" in helper
-    assert 'Name.str (Name.anonymous) "Init"' in helper
-    assert "info.fromClass" in helper
-    assert "privateToUserName c" in helper
-
-
-def test_probe_elaborates_no_helper_under_the_project_imports() -> None:
-    probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
-
-    # Only this call elaborates with the project in scope, and it opens nothing.
-    assert probe.splitlines() == [
-        "import Skel.Main",
-        "import «autoform-skeleton-helper»",
-        "run_cmd AutoformSkeleton.main "
-        + json.dumps(json.dumps([["Skel", ["Skel"]]]))
-        + " "
-        + json.dumps(json.dumps([["Skel.x", ["Skel", "x"]]])),
-    ]
-    assert "set_option" not in _render_probe_helper()
-
-
-def test_probe_transports_quoted_and_numeric_name_components_structurally() -> None:
-    probe = render_probe(
-        imports=("Skel.Main",),
-        roots=("Skel.«quoted.name with space».2", "Skel.«2»", "Skel.٢"),
-        project_roots=("Skel.«quoted».2",),
-    )
-
-    assert _requested(probe, library_roots=True) == [["Skel.«quoted».2", ["Skel", "quoted", 2]]]
-    assert _requested(probe) == [
-        ["Skel.«quoted.name with space».2", ["Skel", "quoted.name with space", 2]],
-        ["Skel.«2»", ["Skel", "2"]],
-        ["Skel.٢", ["Skel", "٢"]],
-    ]
 
 
 def _requested(probe: str, *, library_roots: bool = False) -> object:
@@ -378,239 +393,10 @@ def _requested(probe: str, *, library_roots: bool = False) -> object:
     return json.loads(json.loads(call.group(1 if library_roots else 2)))
 
 
-def test_probe_refuses_to_render_nothing() -> None:
-    with pytest.raises(SkeletonError):
-        render_probe(imports=("Skel",), roots=(), project_roots=("Skel",))
-    with pytest.raises(SkeletonError):
-        render_probe(imports=(), roots=("Skel.x",), project_roots=("Skel",))
-
-
-@pytest.fixture
-def probe(tmp_path: Path, monkeypatch) -> str:
-    (tmp_path / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr("autoform_cli.lean_probe.shutil.which", lambda executable: "/bin/lake")
-    return render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
-
-
-def test_probe_refuses_stale_artifacts_before_executing_lean(tmp_path: Path, monkeypatch, probe: str) -> None:
-    calls: list[list[str]] = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        return subprocess.CompletedProcess(command, 3, stdout="target is out-of-date", stderr="")
-
-    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
-
-    with pytest.raises(SkeletonError, match=r"run `lake build Skel.Main`"):
-        run_probe(probe, tmp_path)
-
-    assert calls == [["/bin/lake", "--rehash", "--no-build", "build", "Skel.Main"]]
-
-
-def test_probe_reports_a_failed_freshness_check_apart_from_stale_artifacts(
-    tmp_path: Path, monkeypatch, probe: str
-) -> None:
-    def fake_run(command, **kwargs):
-        return subprocess.CompletedProcess(
-            command, 1, stdout="error: permission denied (error code: 13)", stderr=""
-        )
-
-    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
-
-    with pytest.raises(SkeletonError, match="must be writable") as refused:
-        run_probe(probe, tmp_path)
-
-    assert "stale" not in str(refused.value)
-    assert "permission denied" in str(refused.value)
-
-
-def test_a_failed_freshness_check_keeps_only_the_start_of_lake_output(
-    tmp_path: Path, monkeypatch, probe: str
-) -> None:
-    lake = "\n".join(f"error: .lake/build/lib/lean/Skel/M{number}.hash: permission denied" for number in range(5000))
-
-    def fake_run(command, **kwargs):
-        return subprocess.CompletedProcess(command, 1, stdout="", stderr=lake)
-
-    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
-
-    with pytest.raises(SkeletonError) as refused:
-        run_probe(probe, tmp_path)
-
-    [message] = refused.value.issues
-    lines = message.splitlines()
-    assert lines[1] == "error: .lake/build/lib/lean/Skel/M0.hash: permission denied"
-    assert lines[-1] == "(4980 more lines from Lake)"
-    assert len(lines) == 22
-
-
-def test_a_failed_freshness_check_keeps_the_reason_lake_prints_on_stdout(
-    tmp_path: Path, monkeypatch, probe: str
-) -> None:
-    # Lake prints each target's error on stdout and only its summary on stderr.
-    def fake_run(command, **kwargs):
-        return subprocess.CompletedProcess(
-            command, 1, stdout="error: Skel/Main.olean.hash: permission denied\n", stderr="error: build failed\n"
-        )
-
-    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
-
-    with pytest.raises(SkeletonError) as refused:
-        run_probe(probe, tmp_path)
-
-    [message] = refused.value.issues
-    assert message.splitlines()[1:] == ["error: Skel/Main.olean.hash: permission denied", "error: build failed"]
-
-
-def test_a_stale_build_keeps_the_unbuilt_module_lake_prints_on_stdout_beside_a_warning_on_stderr(
-    tmp_path: Path, monkeypatch, probe: str
-) -> None:
-    # Lake prints its build monitor on stdout; a workspace warning still reaches stderr.
-    def fake_run(command, **kwargs):
-        return subprocess.CompletedProcess(
-            command,
-            3,
-            stdout="✖ [2/3] Building Skel.Main\nerror: target is out-of-date and needs to be rebuilt\n",
-            stderr="warning: manifest out of date: packages directory changed\n",
-        )
-
-    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
-
-    with pytest.raises(SkeletonError) as refused:
-        run_probe(probe, tmp_path)
-
-    assert stale_build_said(refused.value) == "✖ [2/3] Building Skel.Main"
-
-
 def test_probe_semantic_schema_matches_the_python_reader() -> None:
     helper = _render_probe_helper()
 
     assert re.findall(r'^def semanticSchema := "([^"]*)"$', helper, re.MULTILINE) == [SEMANTIC_SCHEMA]
-
-
-def _bounded(tmp_path: Path, program: str, **options: object) -> object:
-    options = {"timeout": 10, "context": "test command", **options}
-    return _run_bounded_command([sys.executable, "-c", program], cwd=tmp_path, **options)
-
-
-def _assert_dies(pid: int, what: str, why: str) -> None:
-    deadline = time.monotonic() + 5
-    while _pid_is_live(pid):
-        if time.monotonic() >= deadline:
-            pytest.fail(f"{what} process {pid} survived {why}")
-        time.sleep(0.01)
-
-
-def test_bounded_command_rejects_excess_output(tmp_path: Path) -> None:
-    with pytest.raises(SkeletonError, match="1024-byte output limit"):
-        _bounded(tmp_path, "import os; os.write(1, b'x' * 4096)", output_limit=1024)
-
-
-def test_bounded_command_caps_stdout_and_stderr_together(tmp_path: Path) -> None:
-    program = "import os; os.write(1, b'x' * 700); os.write(2, b'y' * 700)"
-    with pytest.raises(SkeletonError, match="1024-byte output limit"):
-        _bounded(tmp_path, program, output_limit=1024)
-
-
-def test_bounded_command_rejects_invalid_utf8(tmp_path: Path) -> None:
-    with pytest.raises(SkeletonError, match="invalid UTF-8"):
-        _bounded(tmp_path, "import os; os.write(1, b'\\xff')")
-
-
-def test_bounded_command_timeout_kills_descendants(tmp_path: Path) -> None:
-    child_pid = tmp_path / "child.pid"
-    program = (
-        "import pathlib, subprocess, sys, time; "
-        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); "
-        f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid)); "
-        "time.sleep(30)"
-    )
-
-    with pytest.raises(SkeletonError, match="timed out"):
-        _bounded(tmp_path, program, timeout=2)
-
-    _assert_dies(int(child_pid.read_text(encoding="utf-8")), "descendant", "command timeout")
-
-
-def test_bounded_command_rejects_a_successful_parent_with_a_live_descendant(
-    tmp_path: Path,
-) -> None:
-    child_pid = tmp_path / "child.pid"
-    program = (
-        "import pathlib, subprocess, sys; "
-        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
-        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
-        f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid))"
-    )
-
-    with pytest.raises(SkeletonError, match="descendant processes"):
-        _bounded(tmp_path, program)
-    _assert_dies(int(child_pid.read_text(encoding="utf-8")), "descendant", "successful parent exit")
-
-
-_OUTLIVED_BY_A_CHILD = (
-    "import subprocess, sys; "
-    "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
-    "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)"
-)
-
-
-@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-specific")
-@pytest.mark.parametrize("waitid", [True, False], ids=["waitid", "zombie-status"])
-@pytest.mark.parametrize(
-    ("program", "refusal"),
-    [("pass", None), (_OUTLIVED_BY_A_CHILD, "descendant processes"), ("import time; time.sleep(30)", "timed out")],
-    ids=["exits", "outlived", "timed-out"],
-)
-def test_bounded_command_signals_its_group_only_while_the_leader_is_unreaped(
-    tmp_path: Path, monkeypatch, program: str, refusal: str | None, waitid: bool
-) -> None:
-    # A reaped leader's process group id can pass to an unrelated group, which
-    # a later killpg would then signal. Python before 3.13 has no os.waitid on
-    # macOS, where psutil's zombie status stands in.
-    leaders: dict[int, subprocess.Popen[bytes]] = {}
-    popen, killpg = subprocess.Popen, os.killpg
-
-    def remember(*args, **kwargs):
-        process = popen(*args, **kwargs)
-        leaders[process.pid] = process
-        return process
-
-    def unreaped(pid: int) -> bool:
-        try:
-            os.kill(pid, 0)  # a zombie still answers; a reaped process does not
-        except ProcessLookupError:
-            return False
-        return True
-
-    def checked_killpg(pid: int, signal_number: int) -> None:
-        assert pid not in leaders or (leaders[pid].returncode is None and unreaped(pid)), (
-            "signalled a reaped leader's group"
-        )
-        killpg(pid, signal_number)
-
-    monkeypatch.setattr("autoform_cli.lean_probe.subprocess.Popen", remember)
-    monkeypatch.setattr("autoform_cli.lean_probe.os.killpg", checked_killpg)
-    if not waitid:
-        monkeypatch.delattr(os, "waitid", raising=False)
-    if refusal is None:
-        assert _bounded(tmp_path, program).returncode == 0
-    else:
-        with pytest.raises(SkeletonError, match=refusal):
-            _bounded(tmp_path, program, **({"timeout": 1} if refusal == "timed out" else {}))
-    assert all(leader.returncode is not None for leader in leaders.values())
-
-
-@pytest.mark.skipif(os.name != "posix", reason="SIGCHLD is POSIX-specific")
-def test_bounded_command_refuses_to_run_while_sigchld_is_ignored(tmp_path: Path) -> None:
-    # The kernel reaps each child as it exits and Popen reports status 0, so a
-    # failed run, such as Lake's stale-artifact exit 3, would read as a success.
-    previous = signal.signal(signal.SIGCHLD, signal.SIG_IGN)
-    try:
-        with pytest.raises(SkeletonError, match="cannot run while SIGCHLD is ignored"):
-            _bounded(tmp_path, "raise SystemExit(3)")
-    finally:
-        signal.signal(signal.SIGCHLD, previous)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="SIGCHLD is POSIX-specific")
@@ -624,282 +410,6 @@ def test_cli_restores_the_default_sigchld_disposition() -> None:
         assert signal.getsignal(signal.SIGCHLD) == signal.SIG_DFL
     finally:
         signal.signal(signal.SIGCHLD, previous)
-
-
-@pytest.mark.skipif(os.name != "posix", reason="SIGCHLD is POSIX-specific")
-def test_bounded_command_refuses_a_command_reaped_outside_the_runner(tmp_path: Path) -> None:
-    # signal.getsignal can't see a disposition set from C, but the kernel still
-    # reaps the command as it exits, and Popen would report status 0.
-    libc_signal = ctypes.CDLL(None).signal
-    libc_signal.argtypes, libc_signal.restype = [ctypes.c_int, ctypes.c_void_p], ctypes.c_void_p
-    libc_signal(signal.SIGCHLD, 1)  # SIG_IGN
-    try:
-        with pytest.raises(SkeletonError, match="reaped outside the runner"):
-            _bounded(tmp_path, "raise SystemExit(3)")
-    finally:
-        signal.signal(signal.SIGCHLD, signal.getsignal(signal.SIGCHLD))  # back to what Python records
-
-
-@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-specific")
-@pytest.mark.parametrize("waitid", [True, False], ids=["waitid", "zombie-status"])
-def test_bounded_command_kills_a_child_that_only_its_group_reveals(tmp_path: Path, monkeypatch, waitid: bool) -> None:
-    # A child that clears its environment escapes the token scan, and one the
-    # descendant snapshot misses leaves only the process group to find it.
-    child_pid = tmp_path / "child.pid"
-    program = (
-        "import pathlib, subprocess; "
-        "child = subprocess.Popen(['/usr/bin/env', '-i', '/bin/sleep', '30'], "
-        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
-        f"pathlib.Path({str(child_pid)!r}).write_text(str(child.pid))"
-    )
-    monkeypatch.setattr("autoform_cli.lean_probe._remember_descendants", lambda process, descendants: None)
-    if not waitid:
-        monkeypatch.delattr(os, "waitid", raising=False)
-    with pytest.raises(SkeletonError, match="left descendant processes running"):
-        _bounded(tmp_path, program)
-    _assert_dies(int(child_pid.read_text(encoding="utf-8")), "environment-free", "a run that found it")
-
-
-@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-specific")
-def test_bounded_command_defers_a_signal_that_arrives_while_the_leader_is_reaped(tmp_path: Path, monkeypatch) -> None:
-    # A signal between waitpid's reap and Popen's recorded status must not reach
-    # cleanup while the leader still looks unreaped, or cleanup would signal its
-    # freed group id. The signal is handled once the reap is recorded.
-    reaped: set[int] = set()
-    waitpid, killpg = os.waitpid, os.killpg
-
-    def signalled_waitpid(pid: int, options: int) -> tuple[int, int]:
-        result = waitpid(pid, options)
-        if result[0]:
-            reaped.add(result[0])
-            signal.raise_signal(signal.SIGTERM)
-        return result
-
-    def checked_killpg(pid: int, signal_number: int) -> None:
-        assert pid not in reaped, "signalled a reaped leader's group"
-        killpg(pid, signal_number)
-
-    delivered: list[int] = []
-    previous = signal.signal(signal.SIGTERM, lambda signum, frame: delivered.append(signum))
-    try:
-        with monkeypatch.context() as patch:
-            patch.setattr("autoform_cli.lean_probe.os.waitpid", signalled_waitpid)
-            patch.setattr("autoform_cli.lean_probe.os.killpg", checked_killpg)
-            with pytest.raises(SkeletonError, match="interrupted by SIGTERM"):
-                _bounded(tmp_path, "pass")
-    finally:
-        signal.signal(signal.SIGTERM, previous)
-    assert reaped
-    assert delivered == [signal.SIGTERM]
-
-
-@pytest.mark.skipif(os.name != "posix", reason="detached-session assertion is POSIX-specific")
-def test_bounded_command_finds_a_descendant_that_escapes_its_process_group(
-    tmp_path: Path,
-) -> None:
-    child_pid = tmp_path / "detached-child.pid"
-    child_program = (
-        "import os, pathlib, sys, time; os.setsid(); time.sleep(0.1); "
-        f"pathlib.Path({str(child_pid)!r}).write_text(str(os.getpid())); "
-        "ready_fd = int(sys.argv[1]); os.write(ready_fd, b'1'); "
-        "os.close(ready_fd); time.sleep(30)"
-    )
-    parent_program = (
-        "import os, subprocess, sys\n"
-        "read_fd, write_fd = os.pipe()\n"
-        "try:\n"
-        f"    subprocess.Popen([sys.executable, '-c', {child_program!r}, str(write_fd)], "
-        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, pass_fds=(write_fd,))\n"
-        "finally:\n"
-        "    os.close(write_fd)\n"
-        "try:\n"
-        "    ready = os.read(read_fd, 1)\n"
-        "finally:\n"
-        "    os.close(read_fd)\n"
-        "if ready != b'1':\n"
-        "    raise RuntimeError('detached child did not become ready')\n"
-    )
-
-    with pytest.raises(SkeletonError, match="descendant processes"):
-        _bounded(tmp_path, parent_program)
-
-    _assert_dies(int(child_pid.read_text(encoding="utf-8")), "detached descendant", "cleanup")
-
-
-def test_tagged_process_scan_retries_a_transient_system_error(monkeypatch) -> None:
-    class Candidate:
-        pid = 123456
-
-        def environ(self):
-            return {"_AUTOFORM_PROCESS_TOKEN": "owned"}
-
-        def create_time(self):
-            return 7.0
-
-    calls = 0
-
-    def process_iter():
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise SystemError("transient Darwin process state")
-        return [Candidate()]
-
-    monkeypatch.setattr(psutil, "process_iter", process_iter)
-    descendants = {}
-
-    _remember_tagged_processes("owned", descendants, root_pid=654321)
-
-    assert calls == 2
-    assert list(descendants) == [(123456, 7.0)]
-
-
-def test_tagged_process_scan_fails_closed_after_repeated_system_errors(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        psutil,
-        "process_iter",
-        lambda: (_ for _ in ()).throw(SystemError("persistent failure")),
-    )
-
-    with pytest.raises(SkeletonError, match="cannot safely inspect"):
-        _remember_tagged_processes("owned", {}, root_pid=654321)
-
-    # Cleanup mode must still reach process-group termination rather than
-    # allowing a flaky process-table read to mask the original failure.
-    _remember_tagged_processes("owned", {}, root_pid=654321, strict=False)
-
-
-@pytest.mark.parametrize("error", [OSError("scan failed"), psutil.Error("scan failed")])
-def test_tagged_process_scan_fails_closed_when_enumeration_remains_unreadable(
-    monkeypatch,
-    error: BaseException,
-) -> None:
-    monkeypatch.setattr(
-        psutil,
-        "process_iter",
-        lambda: (_ for _ in ()).throw(error),
-    )
-
-    with pytest.raises(SkeletonError, match="repeated process-table errors"):
-        _remember_tagged_processes("owned", {}, root_pid=654321)
-
-    _remember_tagged_processes("owned", {}, root_pid=654321, strict=False)
-
-
-def test_tagged_process_scan_does_not_treat_mixed_failures_as_success(
-    monkeypatch,
-) -> None:
-    errors = iter((SystemError("transient state"), OSError("table unreadable")))
-    monkeypatch.setattr(
-        psutil,
-        "process_iter",
-        lambda: (_ for _ in ()).throw(next(errors)),
-    )
-
-    with pytest.raises(SkeletonError, match="repeated process-table errors"):
-        _remember_tagged_processes("owned", {}, root_pid=654321)
-
-
-def test_tagged_process_scan_retries_a_candidate_system_error(monkeypatch) -> None:
-    calls = 0
-
-    class Candidate:
-        pid = 123456
-
-        def environ(self):
-            nonlocal calls
-            calls += 1
-            if calls == 1:
-                raise SystemError("transient process state")
-            return {"_AUTOFORM_PROCESS_TOKEN": "owned"}
-
-        def create_time(self):
-            return 7.0
-
-    monkeypatch.setattr(psutil, "process_iter", lambda: [Candidate()])
-    descendants = {}
-
-    _remember_tagged_processes("owned", descendants, root_pid=654321)
-
-    assert calls == 2
-    assert list(descendants) == [(123456, 7.0)]
-
-
-def test_process_liveness_fails_closed_on_inspection_uncertainty() -> None:
-    class Uncertain:
-        def is_running(self):
-            raise SystemError("transient process state")
-
-    class Gone:
-        def is_running(self):
-            raise psutil.NoSuchProcess(123456)
-
-    assert _process_is_alive(Uncertain()) is True
-    assert _process_is_alive(Gone()) is False
-
-
-def test_bounded_command_interruption_kills_the_process(tmp_path: Path, monkeypatch) -> None:
-    process_pid = tmp_path / "process.pid"
-    program = (
-        "import os, pathlib, time; "
-        f"pathlib.Path({str(process_pid)!r}).write_text(str(os.getpid())); "
-        "time.sleep(30)"
-    )
-    monotonic = time.monotonic
-    calls = 0
-
-    def interrupt_after_start() -> float:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return monotonic()
-        deadline = monotonic() + 5
-        while not process_pid.exists() and monotonic() < deadline:
-            time.sleep(0.01)
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr("autoform_cli.lean_probe.time.monotonic", interrupt_after_start)
-
-    with pytest.raises(KeyboardInterrupt) as interrupted:
-        _bounded(tmp_path, program)
-
-    pid = int(process_pid.read_text(encoding="utf-8"))
-    deadline = monotonic() + 5
-    while psutil.pid_exists(pid) and monotonic() < deadline:
-        time.sleep(0.01)
-    assert not psutil.pid_exists(pid)
-    assert interrupted.type is KeyboardInterrupt
-
-
-@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
-@pytest.mark.parametrize(
-    "signals",
-    [
-        (signal.SIGTERM,),
-        (getattr(signal, "SIGHUP", signal.SIGTERM),),
-        (signal.SIGINT, signal.SIGINT),
-    ],
-    ids=["term", "hup", "double-int"],
-)
-def test_bounded_command_termination_signal_kills_the_process_group(
-    tmp_path: Path, signals: tuple[int, ...]
-) -> None:
-    pids = tmp_path / "pids"
-    code = "lean_probe._run_bounded_command(sys.argv[1:], cwd=Path.cwd(), timeout=60, context='test command')"
-    _signal_driver(tmp_path, code, [sys.executable, "-c", _sleeping_probe(pids)], [pids], signals)
-
-
-def _sleeping_probe(pids: Path) -> str:
-    """A command that records its pid and its child's, then outlives any test."""
-
-    return (
-        "import os, pathlib, subprocess, sys, time; "
-        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
-        f"pathlib.Path({str(pids)!r}).write_text(f'{{os.getpid()}} {{child.pid}}'); "
-        "time.sleep(60)"
-    )
 
 
 def _assert_no_survivors(pid_files: list[Path]) -> None:
@@ -945,97 +455,6 @@ def _signal_driver(
         if cli.poll() is None:
             cli.kill()
     _assert_no_survivors(pid_files)
-
-
-@pytest.mark.parametrize("workers", [2, 1], ids=["both-running", "one-queued"])
-def test_probe_pool_interruption_kills_running_probes_and_starts_no_queued_one(
-    tmp_path: Path, monkeypatch, workers: int
-) -> None:
-    pid_files = [tmp_path / "a.pids", tmp_path / "b.pids"]
-    interrupted: list[float] = []
-
-    def interrupt_once_the_workers_run(*args, **kwargs):
-        deadline = time.monotonic() + 20
-        running = pid_files[:workers]
-        while not all(path.exists() and len(path.read_text(encoding="utf-8").split()) == 2 for path in running):
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
-        interrupted.append(time.monotonic())
-        raise KeyboardInterrupt
-
-    def probe(module: str) -> object:
-        return _bounded(tmp_path, _sleeping_probe(pid_files["AB".index(module)]), timeout=60)
-
-    monkeypatch.setattr("autoform_cli.lean_probe._probe_workers", lambda jobs: workers)
-    monkeypatch.setattr("autoform_cli.lean_probe.wait", interrupt_once_the_workers_run)
-
-    with pytest.raises(KeyboardInterrupt):
-        run_module_probes(["A", "B"], probe)
-
-    # The probes sleep for a minute; the pool must stop them, not wait them out.
-    assert time.monotonic() - interrupted[0] < 15
-    assert pid_files[1].exists() == (workers == 2)
-    _assert_no_survivors(pid_files)
-
-
-@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
-@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM], ids=["int", "term"])
-def test_probe_pool_termination_signal_kills_every_workers_process_group(tmp_path: Path, signum: int) -> None:
-    pid_files = [tmp_path / "a.pids", tmp_path / "b.pids"]
-    code = (
-        "lean_probe._probe_workers = lambda jobs: jobs; "
-        "programs = dict(zip(('A', 'B'), sys.argv[1:])); "
-        "lean_probe.run_module_probes(list(programs), lambda module: lean_probe._run_bounded_command("
-        "[sys.executable, '-c', programs[module]], cwd=Path.cwd(), timeout=60, context='test probe'))"
-    )
-    _signal_driver(tmp_path, code, [_sleeping_probe(path) for path in pid_files], pid_files, (signum,))
-
-
-@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
-def test_a_signal_during_the_probe_pools_wait_is_handled_outside_it(tmp_path: Path, monkeypatch) -> None:
-    # Raised inside wait(), the signal could leave a future's lock held and
-    # hang the join; the pool must let wait() return, then cancel and join
-    # every worker before the signal ends anything.
-    pid_file = tmp_path / "a.pids"
-    received: list[int] = []
-    returned: list[bool] = []
-    joined: list[bool] = []
-
-    class Pool(ThreadPoolExecutor):
-        def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
-            super().shutdown(wait=wait, cancel_futures=cancel_futures)
-            joined.append(wait)
-
-    def signal_inside_wait(*args, **kwargs):
-        if not returned:
-            deadline = time.monotonic() + 20
-            while not (pid_file.exists() and len(pid_file.read_text(encoding="utf-8").split()) == 2):
-                assert time.monotonic() < deadline
-                time.sleep(0.01)
-            signal.raise_signal(signal.SIGTERM)
-        result = wait(*args, **kwargs)
-        returned.append(True)
-        return result
-
-    def probe(module: str) -> object:
-        return _bounded(tmp_path, _sleeping_probe(pid_file), timeout=60)
-
-    monkeypatch.setattr("autoform_cli.lean_probe.wait", signal_inside_wait)
-    monkeypatch.setattr("autoform_cli.lean_probe.ThreadPoolExecutor", Pool)
-    before = set(threading.enumerate())
-    previous = signal.signal(signal.SIGTERM, lambda signum, frame: received.append(signum))
-    try:
-        with pytest.raises(SkeletonError, match="interrupted by SIGTERM"):
-            run_module_probes(["A"], probe)
-        workers = [thread for thread in threading.enumerate() if thread not in before and thread.is_alive()]
-    finally:
-        signal.signal(signal.SIGTERM, previous)
-
-    assert returned == [True]
-    assert received == [signal.SIGTERM]
-    assert joined == [True]
-    assert workers == []
-    _assert_no_survivors([pid_file])
 
 
 _STALLING_LAKE = """\
@@ -1138,195 +557,12 @@ def test_a_signal_after_the_last_probe_is_delivered_before_the_report_is_built(t
     assert scratch and not scratch[0].exists()
 
 
-def test_a_probe_cancelled_before_its_process_starts_never_starts_it(tmp_path: Path, monkeypatch) -> None:
-    # The pool is cancelled after a worker takes the probe and before it
-    # starts the process.
-    def probe(module: str) -> object:
-        _PROBE_POOL.cancelled.set()
-        return _bounded(tmp_path, "pass")
-
-    def popen(*args, **kwargs):
-        raise AssertionError("a process started after the pool was cancelled")
-
-    monkeypatch.setattr("autoform_cli.lean_probe.subprocess.Popen", popen)
-
-    (result,) = run_module_probes(["A"], probe).values()
-
-    assert isinstance(result, SkeletonError) and result.issues == ("test command was cancelled",)
-
-
-def test_unreadable_probe_records_are_refused(tmp_path: Path) -> None:
-    records = tmp_path / "records.out"
-    records.write_bytes(PROBE_MARKER.encode() + b"\xff\n")
-    with pytest.raises(SkeletonError, match="^the skeleton probe's records are not valid UTF-8$"):
-        _read_probe_records(records, "skeleton probe")
-    records.unlink()
-    records.mkdir()
-    with pytest.raises(SkeletonError, match="^the impact probe's records could not be read: "):
-        _read_probe_records(records, "impact probe")
-
-
-def test_probe_workers_follow_the_cpus_available_to_the_process(monkeypatch) -> None:
-    monkeypatch.setattr(os, "process_cpu_count", lambda: 3, raising=False)
-    assert _probe_workers(10) == 3
-    monkeypatch.delattr(os, "process_cpu_count")
-    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1}, raising=False)
-    assert _probe_workers(10) == 2
-    monkeypatch.delattr(os, "sched_getaffinity")
-    monkeypatch.setattr(os, "cpu_count", lambda: 64)
-    assert _probe_workers(10) == 8
-    assert _probe_workers(2) == 2
-
-
 def _pid_is_live(pid: int) -> bool:
     try:
         process = psutil.Process(pid)
         return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
     except psutil.NoSuchProcess:
         return False
-
-
-@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
-def test_bounded_command_finishes_failure_teardown_when_signalled_during_it(
-    tmp_path: Path, monkeypatch
-) -> None:
-    # A timeout starts teardown and SIGTERM arrives as it begins. Cleanup must still
-    # reach the child that ignores SIGTERM, then report the timeout and re-deliver.
-    parent_pid, child_pid = tmp_path / "parent.pid", tmp_path / "child.pid"
-
-    def publish_pid(path: Path) -> str:
-        return (
-            f"pathlib.Path({str(path)!r} + '.tmp').write_text(str(os.getpid())); "
-            f"os.replace({str(path)!r} + '.tmp', {str(path)!r}); "
-        )
-
-    child = (
-        "import os, pathlib, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-        + publish_pid(child_pid)
-        + "time.sleep(60)"
-    )
-    program = (
-        "import os, pathlib, subprocess, sys, time; "
-        f"subprocess.Popen([sys.executable, '-c', {child!r}]); "
-        + publish_pid(parent_pid)
-        + "time.sleep(60)"
-    )
-    tree: list[psutil.Process] = []
-    monotonic = time.monotonic
-
-    def time_out_once_both_run() -> float:
-        if not tree and parent_pid.exists() and child_pid.exists():
-            tree.extend(psutil.Process(int(path.read_text(encoding="utf-8"))) for path in (parent_pid, child_pid))
-            return monotonic() + 3600
-        return monotonic()
-
-    def signal_then_terminate(*args: object, **kwargs: object) -> None:
-        signal.raise_signal(signal.SIGTERM)
-        _terminate_process_tree(*args, **kwargs)  # type: ignore[arg-type]
-
-    delivered: list[int] = []
-    previous = signal.signal(signal.SIGTERM, lambda signum, frame: delivered.append(signum))
-    survivors = tree
-    try:
-        with monkeypatch.context() as patch:
-            patch.setattr("autoform_cli.lean_probe.time.monotonic", time_out_once_both_run)
-            patch.setattr("autoform_cli.lean_probe._terminate_process_tree", signal_then_terminate)
-            with pytest.raises(SkeletonError) as failure:
-                _bounded(tmp_path, program, timeout=60)
-        deadline = monotonic() + 5
-        while survivors and monotonic() < deadline:
-            survivors = [process for process in survivors if _process_is_alive(process)]
-            time.sleep(0.01)
-        assert len(tree) == 2
-        assert not survivors
-        assert "test command timed out" in str(failure.value)
-        assert delivered == [signal.SIGTERM]
-    finally:
-        signal.signal(signal.SIGTERM, previous)
-        for process in survivors:
-            try:
-                process.kill()
-            except psutil.Error:
-                pass
-
-
-def test_bounded_command_cleanup_reserves_time_and_reuses_final_deadline(
-    tmp_path: Path, monkeypatch
-) -> None:
-    deadlines: list[float] = []
-
-    def report_stuck_readers(readers, *, deadline: float) -> bool:
-        deadlines.append(deadline)
-        _join_readers(readers, deadline=deadline)
-        return False
-
-    monkeypatch.setattr("autoform_cli.lean_probe._join_readers", report_stuck_readers)
-
-    with pytest.raises(SkeletonError, match="output pipes open"):
-        _bounded(tmp_path, "pass")
-
-    assert len(deadlines) == 2
-    assert deadlines[0] < deadlines[1]
-    # The final deadline is fixed before the first join, not renewed after it.
-    assert deadlines[1] - deadlines[0] <= _PROCESS_TERMINATION_GRACE * 0.8
-
-
-def test_probe_freshness_and_execution_have_separate_budgets(tmp_path: Path, monkeypatch, probe: str) -> None:
-    # On a Mathlib project the freshness check alone can take minutes, which
-    # must not come out of the probe's own budget.
-    (tmp_path / "autoform-skeleton-helper.olean").write_bytes(b"")
-    calls: list[float] = []
-
-    def fake_run(command, **kwargs):
-        calls.append(kwargs["timeout"])
-        return subprocess.CompletedProcess(command, 0, stdout="probe output", stderr="")
-
-    times = iter((100.0, 101.0))
-    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", fake_run)
-    monkeypatch.setattr("autoform_cli.lean_probe.time.monotonic", lambda: next(times))
-
-    assert run_probe(probe, tmp_path, timeout=10, freshness_timeout=20, helper=tmp_path) == "probe output"
-    assert calls == [20, 9.0]
-
-
-def test_a_probe_timeout_names_the_flag_that_raises_it(tmp_path: Path, monkeypatch, probe: str) -> None:
-    (tmp_path / "autoform-skeleton-helper.olean").write_bytes(b"")
-    bounded = _run_bounded_command
-
-    def slow_probe(command, **kwargs):
-        return bounded([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
-
-    monkeypatch.setattr("autoform_cli.lean_probe._check_artifacts_fresh", lambda *args, **kwargs: None)
-    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", slow_probe)
-
-    with pytest.raises(SkeletonError) as caught:
-        run_probe(probe, tmp_path, timeout=1, helper=tmp_path)
-    assert caught.value.issues == (
-        "lake env lean timed out after 1 seconds; rerun with --timeout <seconds> for large projects",
-    )
-
-
-def test_probe_records_file_is_held_to_the_output_limit(tmp_path: Path, monkeypatch, probe: str) -> None:
-    (tmp_path / "autoform-skeleton-helper.olean").write_bytes(b"")
-
-    def flooding_probe(command, *, env, **kwargs):
-        Path(env[PROBE_OUTPUT_ENV]).write_text("x" * 2048, encoding="utf-8")
-        return subprocess.CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setattr("autoform_cli.lean_probe._check_artifacts_fresh", lambda *args, **kwargs: None)
-    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", flooding_probe)
-    monkeypatch.setattr("autoform_cli.lean_probe.DEFAULT_PROBE_OUTPUT_LIMIT", 1024)
-
-    with pytest.raises(SkeletonError, match="1024-byte output limit"):
-        run_probe(probe, tmp_path, helper=tmp_path)
-
-
-def test_probe_requires_an_existing_lake_manifest(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("autoform_cli.lean_probe.shutil.which", lambda executable: "/bin/lake")
-    probe = render_probe(imports=("Skel.Main",), roots=("Skel.x",), project_roots=("Skel",))
-
-    with pytest.raises(SkeletonError, match="lake-manifest.json is missing"):
-        run_probe(probe, tmp_path)
 
 
 def test_parse_probe_output_keys_records_by_root_and_ignores_noise() -> None:
@@ -1533,255 +769,6 @@ def test_unparsable_source_is_withheld_not_refused(tmp_path: Path) -> None:
     assert entry["source"] is None and entry["source_withheld"] is True
     assert eligible.start_line is not None
     assert (entry["start_line"], entry["end_line"]) == (eligible.start_line, eligible.end_line)
-
-
-# --------------------------------------------------------------------------- #
-# Project layout
-# --------------------------------------------------------------------------- #
-
-
-def test_libraries_and_modules_follow_the_lake_source_directory(tmp_path: Path) -> None:
-    project = _project(tmp_path, src_dir="src")
-
-    libraries = lean_libraries(project)
-
-    assert [library.name for library in libraries] == ["Skel"]
-    assert libraries[0].src_dir == (project / "src").resolve()
-    assert libraries[0].roots == ("Skel",)
-    assert module_of(project / "src" / "Skel" / "Defs.lean", libraries) == "Skel.Defs"
-    assert module_of(project / "lakefile.toml", libraries) is None
-    assert path_of("Skel.Defs", libraries, project) == "src/Skel/Defs.lean"
-    assert path_of("Skel.Missing", libraries, project) is None
-
-
-def test_a_file_no_library_selects_has_no_module(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "lakefile.toml").write_text(
-        'name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\n\n[[lean_lib]]\nname = "Lib"\nglobs = ["Extra.+"]\n',
-        encoding="utf-8",
-    )
-
-    libraries = lean_libraries(project)
-
-    # Both libraries hold every file under the project, but Lake builds only
-    # what their roots and globs make buildable: Lib's glob leaves out its own root.
-    assert module_of(project / "Demo" / "Basic.lean", libraries) == "Demo.Basic"
-    assert module_of(project / "Extra" / "Sub.lean", libraries) == "Extra.Sub"
-    assert module_of(project / "Extra.lean", libraries) is None
-    assert module_of(project / "Lib" / "Foo.lean", libraries) is None
-    assert module_of(project / "v1" / "Old.lean", libraries) is None
-
-
-def test_a_package_without_library_targets_is_its_own_library(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "lakefile.toml").write_text('name = "Solo"\n', encoding="utf-8")
-
-    (library,) = lean_libraries(project)
-
-    assert (library.name, library.roots) == ("Solo", ("Solo",))
-    assert library.src_dir == project.resolve()
-
-
-@pytest.mark.parametrize(
-    ("lakefile", "src_dir"),
-    [
-        pytest.param(
-            'name = "proj"\nsrcDir = "pkgsrc"\n\n[[lean_lib]]\nname = "Proj"\nsrcDir = "lib"\n',
-            "pkgsrc/lib",
-            id="library",
-        ),
-        pytest.param('name = "Proj"\nsrcDir = "pkgsrc"\n', "pkgsrc", id="package-only"),
-    ],
-)
-def test_libraries_nest_under_the_package_source_directory(tmp_path: Path, lakefile: str, src_dir: str) -> None:
-    project = tmp_path / "project"
-    (project / src_dir).mkdir(parents=True)
-    (project / "lakefile.toml").write_text(lakefile, encoding="utf-8")
-    (project / src_dir / "Proj.lean").write_text("", encoding="utf-8")
-
-    libraries = lean_libraries(project)
-
-    # Lake joins a library's srcDir onto the package's srcDir, not onto the project root.
-    assert libraries[0].src_dir == (project / src_dir).resolve()
-    assert module_of(project / src_dir / "Proj.lean", libraries) == "Proj"
-    assert path_of("Proj", libraries, project) == f"{src_dir}/Proj.lean"
-
-
-@pytest.mark.parametrize(
-    "toml_11",
-    [
-        pytest.param('leanOptions = { autoImplicit = false, }\n', id="inline-trailing-comma"),
-        pytest.param('leanOptions = {\n  autoImplicit = false\n}\n', id="inline-multiline"),
-        pytest.param('note = "\\e"\n', id="escape-e"),
-        pytest.param('note = "\\x41"\n', id="escape-x"),
-    ],
-)
-def test_lake_toml_1_1_extensions_are_rejected_on_every_python(tmp_path: Path, toml_11: str) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "lakefile.toml").write_text('name = "Solo"\n' + toml_11, encoding="utf-8")
-
-    # Lake 4.32.2 reads TOML 1.0 and rejects every spelling in this matrix.
-    with pytest.raises(SkeletonError, match="cannot parse the Lake configuration"):
-        lean_libraries(project)
-
-
-def test_lake_toml_parser_limits_fail_closed(tmp_path: Path) -> None:
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "lakefile.toml").write_text(
-        f'name = "Solo"\nunknown = {"9" * 5_000}\n', encoding="utf-8"
-    )
-
-    with pytest.raises(SkeletonError, match="cannot safely parse.*exceeds the parser's limits"):
-        lean_libraries(project)
-
-
-def _project_with_both_lakefiles(tmp_path: Path) -> Path:
-    """lakefile.toml builds ``Skel`` from ``src``; lakefile.lean builds a differently laid out library."""
-
-    project = _project(tmp_path, src_dir="src")
-    (project / "lakefile.lean").write_text(
-        "import Lake\nopen Lake DSL\n\npackage fromlean\n\n"
-        'lean_lib FromLean where\n  srcDir := "lean-src"\n  roots := #[`LeanRoot]\n',
-        encoding="utf-8",
-    )
-    return project
-
-
-def test_lakefile_lean_wins_when_both_lakefiles_exist(tmp_path: Path, monkeypatch) -> None:
-    project = _project_with_both_lakefiles(tmp_path)
-    translated: list[Path] = []
-
-    def translate(root: Path) -> bytes:
-        translated.append(root)
-        return b'name = "fromlean"\n\n[[lean_lib]]\nname = "FromLean"\nsrcDir = "lean-src"\nroots = ["LeanRoot"]\n'
-
-    monkeypatch.setattr("autoform_cli.lean_probe._translate_lakefile", translate)
-
-    (library,) = lean_libraries(project)
-
-    # Lake builds from lakefile.lean when both exist, so its libraries are the project's.
-    assert translated == [project.resolve()]
-    assert (library.name, library.src_dir, library.roots) == ("FromLean", project.resolve() / "lean-src", ("LeanRoot",))
-
-
-def test_a_project_with_both_lakefiles_is_refused_without_lake(tmp_path: Path, monkeypatch) -> None:
-    project = _project_with_both_lakefiles(tmp_path)
-    monkeypatch.setattr(shutil, "which", lambda _name: None)
-
-    # Lake ignores lakefile.toml here, so reading it instead would describe the wrong build.
-    with pytest.raises(SkeletonError, match="lake is not on PATH"):
-        lean_libraries(project)
-
-
-def test_a_failed_translation_reports_the_error_rather_than_lakes_info_line(tmp_path: Path, monkeypatch) -> None:
-    project = _project_with_both_lakefiles(tmp_path)
-    error = f"error: {project / 'lakefile.lean'}:7:12: Unknown identifier `nonsense`"
-    stderr = "info: [root]: lakefile.lean and lakefile.toml are both present; using lakefile.lean\n" + error + "\n"
-    monkeypatch.setattr(shutil, "which", lambda _name: "lake")
-    monkeypatch.setattr(
-        "autoform_cli.lean_probe._run_bounded_command",
-        lambda command, **_options: subprocess.CompletedProcess(command, 1, "", stderr),
-    )
-
-    with pytest.raises(SkeletonError) as caught:
-        lean_libraries(project)
-
-    assert caught.value.issues == (f"lake translate-config failed: {error}",)
-
-
-def _project_with_a_package_source_directory(tmp_path: Path) -> Path:
-    """lakefile.lean puts the package's sources under ``pkgsrc`` and gives its library no srcDir of its own."""
-
-    project = tmp_path / "project"
-    project.mkdir()
-    shutil.copy(_SKELETON_FIXTURE / "lean-toolchain", project / "lean-toolchain")
-    (project / "lakefile.lean").write_text(
-        'import Lake\nopen Lake DSL\n\npackage proj where\n  srcDir := "pkgsrc"\n\nlean_lib Proj\n', encoding="utf-8"
-    )
-    return project
-
-
-def test_lakefile_lean_libraries_nest_under_the_package_source_directory(tmp_path: Path, monkeypatch) -> None:
-    project = _project_with_a_package_source_directory(tmp_path)
-    # lake translate-config writes the package's srcDir as a top-level key.
-    monkeypatch.setattr(
-        "autoform_cli.lean_probe._translate_lakefile",
-        lambda _root: b'name = "proj"\nsrcDir = "pkgsrc"\n\n[[lean_lib]]\nname = "Proj"\n',
-    )
-
-    (library,) = lean_libraries(project)
-
-    assert (library.name, library.src_dir) == ("Proj", project.resolve() / "pkgsrc")
-
-
-def test_a_project_without_a_lakefile_is_refused(tmp_path: Path) -> None:
-    with pytest.raises(SkeletonError):
-        lean_libraries(tmp_path)
-
-
-@pytest.mark.skipif(os.name != "posix", reason="named pipes are POSIX-specific")
-def test_lake_configuration_snapshot_rejects_a_named_pipe_without_blocking(tmp_path: Path) -> None:
-    os.mkfifo(tmp_path / "lakefile.toml")
-
-    with pytest.raises(SkeletonError, match="not a regular file"):
-        lean_libraries(tmp_path)
-
-
-def test_lake_configuration_snapshot_uses_content_not_file_identity(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project = _project(tmp_path)
-    fstat = os.fstat
-    calls = 0
-
-    def unstable_file_identity(descriptor: int) -> os.stat_result:
-        nonlocal calls
-        calls += 1
-        values = list(fstat(descriptor))
-        values[1] += calls
-        return os.stat_result(values)
-
-    monkeypatch.setattr("autoform_cli.lean_probe.os.fstat", unstable_file_identity)
-
-    (library,) = lean_libraries(project)
-
-    assert library.name == "Skel"
-
-
-def test_project_control_snapshot_retains_only_fingerprints(tmp_path: Path) -> None:
-    project = _project(tmp_path)
-    content = (project / "lakefile.toml").read_bytes()
-
-    snapshot = dict(project_control_snapshot(project))
-
-    assert snapshot["lakefile.toml"] == (len(content), hashlib.sha256(content).hexdigest())
-    assert snapshot["lakefile.lean"] is None
-
-
-def test_lake_configuration_snapshot_rejects_content_changed_between_reads(
-    tmp_path: Path, monkeypatch
-) -> None:
-    project = _project(tmp_path)
-    lakefile = project / "lakefile.toml"
-    open_file = os.open
-    reads = 0
-
-    def change_before_second_read(path, flags, *args):
-        nonlocal reads
-        if Path(path) == lakefile:
-            reads += 1
-            if reads == 2:
-                lakefile.write_text('name = "Changed"\n', encoding="utf-8")
-        return open_file(path, flags, *args)
-
-    monkeypatch.setattr("autoform_cli.lean_probe.os.open", change_before_second_read)
-
-    with pytest.raises(SkeletonError, match="changed while it was read"):
-        lean_libraries(project)
 
 
 # --------------------------------------------------------------------------- #
@@ -2807,12 +1794,6 @@ def test_a_failed_probes_reason_reads_the_same_on_every_run(tmp_path: Path, monk
     assert len(quoted) <= 2000 and dropped and int(dropped.group(1)) > len("trace line\n") * 500 - 2000
 
 
-def test_a_stable_reason_leaves_paths_beside_the_project_as_lean_printed_them(tmp_path: Path) -> None:
-    root = tmp_path / "proj"
-    text = f"{root}/Skel/A.lean:1:0 {root}-old/A.lean {root}ect/A.lean {root}.bak/A.lean {root}: {root}"
-    assert stable_paths(text, root) == f"Skel/A.lean:1:0 {root}-old/A.lean {root}ect/A.lean {root}.bak/A.lean .: ."
-
-
 @pytest.mark.parametrize("noise", [0, 500], ids=["alone", "past-the-quoted-part"])
 def test_a_failure_every_probe_would_share_stops_the_extraction(tmp_path: Path, monkeypatch, noise: int) -> None:
     project = _project(tmp_path)
@@ -2854,23 +1835,6 @@ def test_environmental_failures_still_abort_a_per_module_extraction(tmp_path: Pa
     assert calls == [["/bin/lake", "--rehash", "--no-build", "build", "Skel.Main", "Skel.Uses"]]
 
 
-def test_a_helper_build_that_times_out_states_its_budget_once(tmp_path: Path, monkeypatch) -> None:
-    (tmp_path / "lake-manifest.json").write_text("{}\n", encoding="utf-8")
-
-    def stall(command, *, timeout, context, **kwargs):
-        raise _CommandTimedOut([f"{context} timed out after {timeout:g} seconds"])
-
-    monkeypatch.setattr("autoform_cli.lean_probe.shutil.which", lambda executable: "/bin/lake")
-    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", stall)
-
-    with pytest.raises(_ProbeEnvironmentError) as caught:
-        _build_probe_helper(tmp_path, tmp_path / "helper", timeout=5)
-    assert caught.value.issues == (
-        "building the skeleton probe helpers timed out after 5 seconds; "
-        "rerun with --timeout <seconds> for large projects",
-    )
-
-
 def test_a_root_beside_a_private_twin_is_probed_in_its_public_module(tmp_path: Path) -> None:
     # A private declaration is local to its file, so every other module binds the public one.
     project = _project(tmp_path)
@@ -2905,10 +1869,32 @@ def test_report_bytes_are_pinned(tmp_path: Path) -> None:
     assert digest == "a28525d38295df4e9848c3d1334528a29478678f269272e487d8de98ec41b8e3"
 
 
+def _tree_digest(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            digest.update(path.relative_to(root).as_posix().encode() + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
+def test_shared_closure_outputs_are_pinned(tmp_path: Path) -> None:
+    # Streaming the report and packets must keep every byte, and so every hash, a reader recorded.
+    project, blueprint, output = _shared_closure(tmp_path, {"joint": 3, "single": 1}, closure=4, size=300)
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
+    out = tmp_path / "out"
+
+    write_packets(report, out / "packets", passages=out / "passages", report_path=out / "skeleton.json")
+    write_skeleton_report(report, tmp_path / "alone.json")
+
+    assert report.clean
+    assert _tree_digest(out) == "89ca807ef1aaf2dce369bc5a56699dd831aaa7e0cace3b1a4c2300f0b4b6a92d"
+    assert (tmp_path / "alone.json").read_text(encoding="utf-8") == report.to_json() + "\n"
+    assert (out / "skeleton.json").read_bytes() == (tmp_path / "alone.json").read_bytes()
+
+
 def test_report_serialization_fingerprints_each_declaration_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    report = _fake_report(tmp_path)
     calls: dict[str, int] = {"_fingerprint": 0, "_packet": 0, "_shared_tables": 0}
     for owner, name in (
         (DeclarationSkeleton, "_fingerprint"),
@@ -2922,12 +1908,52 @@ def test_report_serialization_fingerprints_each_declaration_once(
             return _original(*args, **kwargs)
 
         monkeypatch.setattr(owner, name, counted)
+    report = _fake_report(tmp_path)
 
     report.to_json()
     report.to_json()
 
-    # One meaning hash and one statement hash, one packet, and the tables built at construction.
-    assert calls == {"_fingerprint": 2, "_packet": 1, "_shared_tables": 0}
+    # Extraction makes one meaning hash and one statement hash; the packet is
+    # streamed once for its own hash and once in its article's; the tables are
+    # built at construction.
+    assert calls == {"_fingerprint": 2, "_packet": 2, "_shared_tables": 1}
+
+
+def test_writing_holds_no_whole_packet(tmp_path: Path) -> None:
+    # A large shared closure makes a packet gigabytes, so writing holds pieces of it, not all of it.
+    project, blueprint, output = _shared_closure(tmp_path, {"joint": 3}, closure=80, size=20000)
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
+    first, second, _ = report.nodes[0].declarations
+    assert all(item is other for item, other in zip(first.trusted, second.trusted, strict=True))
+
+    tracemalloc.start()
+    try:
+        write_packets(report, tmp_path / "packets", report_path=tmp_path / "skeleton.json")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    article = (tmp_path / "packets" / "basics" / "joint" / "article.lean").stat().st_size
+    assert peak < article / 3, (peak, article)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {},
+        [],
+        "",
+        {"b": [], "a": {}, "é": "\u2028", "A": ["\x00\x1f\x7f", "\"\\/", "𝔽 ℝ\t\n"]},
+        [["x", [], {"z": "1", "y": ["2", "3"]}], "\ud7ff\ue000\uffff"],
+    ],
+)
+def test_fingerprint_encoding_matches_json_dumps(value: object) -> None:
+    escaped: dict[str, bytes] = {}
+    expected = json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")
+
+    # Twice, so a string escaped once encodes the same from the memo.
+    assert b"".join(_json_utf8(value, escaped)) == expected
+    assert b"".join(_json_utf8(value, escaped)) == expected
 
 
 def test_report_record_edits_do_not_reach_the_report(tmp_path: Path) -> None:
@@ -3033,7 +2059,7 @@ def test_a_packet_manifest_that_cannot_be_decoded_is_refused(tmp_path: Path, dam
     packets = tmp_path / "packets"
     packets.mkdir()
     (packets / PACKET_MANIFEST).write_text(text, encoding="utf-8")
-    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform packet output"):
+    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform output"):
         write_packets(_fake_report(tmp_path), packets)
     assert (packets / PACKET_MANIFEST).read_text(encoding="utf-8") == text
 
@@ -3045,7 +2071,7 @@ def test_a_packet_manifest_whose_schema_is_not_a_string_is_refused(tmp_path: Pat
     text = json.dumps({"kind": "packets", "schema": schema, "packets": []})
     (packets / PACKET_MANIFEST).write_text(text, encoding="utf-8")
 
-    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform packet output"):
+    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform output"):
         write_packets(_fake_report(tmp_path), packets)
     assert (packets / PACKET_MANIFEST).read_text(encoding="utf-8") == text
 
@@ -3230,7 +2256,7 @@ def test_cli_reports_unsafe_packet_output_without_a_traceback(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "refusing to overwrite non-Autoform packet output" in captured.err
+    assert "refusing to overwrite non-Autoform output" in captured.err
 
 
 def test_cli_rejects_a_report_path_inside_the_packet_tree(tmp_path: Path, capsys) -> None:
@@ -3268,7 +2294,62 @@ def test_cli_publishes_report_and_packet_trees_together(
     assert (passages / PACKET_MANIFEST).is_file()
     assert json.loads(output.read_text(encoding="utf-8"))["unresolved"] == []
     assert list(tmp_path.glob(".*.autoform-*")) == []
-    assert capsys.readouterr().err == ""
+    assert capsys.readouterr().err == "skeleton: probing 1 module...\nskeleton: assembling...\nskeleton: writing...\n"
+
+
+def test_cli_names_each_phase_on_stderr_as_it_starts(tmp_path: Path, capsys, monkeypatch) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    during_probe: list[str] = []
+
+    def probe(program: str, lean_root: Path) -> str:
+        during_probe.append(capsys.readouterr().err)
+        return _fake_probe_output()
+
+    _fake_default_probe(monkeypatch, probe)
+    output = tmp_path / "skeleton.json"
+
+    assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--output", str(output)]) == 0
+
+    captured = capsys.readouterr()
+    # No probe runs once `assembling` appears, though the build must stay as it is until the command ends.
+    assert during_probe == ["skeleton: probing 1 module...\n"]
+    assert captured.err == "skeleton: assembling...\nskeleton: writing...\n"
+    assert captured.out == f"{output}: 1 skeleton(s) for 1 article(s)\n"
+
+
+def test_cli_json_prints_the_report_bytes(tmp_path: Path, capsys, monkeypatch) -> None:
+    assert _cli(tmp_path, monkeypatch, "--json") == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == _fake_report(tmp_path / "other").to_json() + "\n"
+    assert captured.err == "skeleton: probing 1 module...\nskeleton: assembling...\n"
+
+
+def test_cli_json_stdout_stays_the_report_without_stderr(tmp_path: Path, capsys, monkeypatch) -> None:
+    # Started with fd 2 closed, Python sets sys.stderr to None, and print(file=None) writes to stdout.
+    monkeypatch.setattr(sys, "stderr", None)
+
+    assert _cli(tmp_path, monkeypatch, "--json") == 0
+
+    assert capsys.readouterr().out == _fake_report(tmp_path / "other").to_json() + "\n"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="needs a POSIX pipe")
+def test_cli_progress_on_a_broken_stderr_leaves_nothing_to_fail_at_exit(tmp_path: Path, capsys, monkeypatch) -> None:
+    # A reader that stopped tailing stderr: the write end of a pipe whose read end is closed.
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    broken = open(write_end, "w", encoding="utf-8")
+    monkeypatch.setattr(sys, "stderr", broken)
+    try:
+        assert _cli(tmp_path, monkeypatch, "--json") == 0
+        # The interpreter flushes stderr at exit; a failure there would turn exit 0 into 120.
+        broken.flush()
+    finally:
+        broken.close()
+
+    assert capsys.readouterr().out == _fake_report(tmp_path / "other").to_json() + "\n"
 
 
 def test_cli_does_not_publish_packets_when_report_staging_fails(
@@ -3306,7 +2387,7 @@ def test_cli_rolls_back_packet_trees_when_report_commit_fails(
             raise OSError("simulated report commit failure")
         _install_output(source_path, Path(destination))
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_report_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_report_install)
 
     result = _cli(tmp_path, monkeypatch, "--packets", packets, "--passages", passages, "--output", output)
 
@@ -3343,7 +2424,7 @@ def test_cli_rolls_back_packet_trees_and_report_when_interrupted_after_report_in
             raise KeyboardInterrupt
 
     monkeypatch.setattr(
-        "autoform_cli.skeleton._install_output", interrupt_after_report_install
+        "autoform_cli._managed_output._install_output", interrupt_after_report_install
     )
 
     with pytest.raises(KeyboardInterrupt):
@@ -3380,7 +2461,7 @@ def test_report_publication_preserves_a_concurrent_replacement_before_install(
             output.write_text("concurrent report\n", encoding="utf-8")
         _install_output(stage, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", replace_before_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", replace_before_install)
 
     with pytest.raises(SkeletonError, match="published output changed during rollback"):
         write_skeleton_report(report, output)
@@ -3404,7 +2485,7 @@ def test_report_publication_rolls_back_when_interrupted_after_exclusive_link(
         if "autoform-stage" in Path(source).name and Path(destination) == output:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.link", interrupt_after_link)
+    monkeypatch.setattr("autoform_cli._managed_output.os.link", interrupt_after_link)
 
     with pytest.raises(KeyboardInterrupt):
         write_skeleton_report(report, output)
@@ -3438,24 +2519,6 @@ def test_cli_refuses_a_symlink_report_without_publishing_packets(
 # --------------------------------------------------------------------------- #
 # The real probe
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_lakefile_lean_wins_through_lake_translate_config(tmp_path: Path) -> None:
-    project = _project_with_both_lakefiles(tmp_path)
-
-    (library,) = lean_libraries(project)
-
-    assert (library.name, library.src_dir, library.roots) == ("FromLean", project.resolve() / "lean-src", ("LeanRoot",))
-
-
-@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_package_source_directory_nests_libraries_through_lake_translate_config(tmp_path: Path) -> None:
-    project = _project_with_a_package_source_directory(tmp_path)
-
-    (library,) = lean_libraries(project)
-
-    assert (library.name, library.src_dir) == ("Proj", project.resolve() / "pkgsrc")
 
 
 def test_required_real_lean_tests_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3567,31 +2630,6 @@ def test_probe_records_bypass_the_command_capture_and_other_output(tmp_path: Pat
     records = parse_probe_output(run_probe(probe, project), expected_roots=("Skel.observation_determined",))
 
     assert records["Skel.observation_determined"]["found"] is True
-
-
-@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_probe_stops_before_its_records_file_exceeds_the_limit(tmp_path: Path, monkeypatch) -> None:
-    project = _project(tmp_path)
-    _build(project, "Skel.Main")
-    limit = 1024
-    sizes: list[int] = []
-    bounded = _run_bounded_command
-
-    def inspect_records(command, **kwargs):
-        result = bounded(command, **kwargs)
-        if kwargs.get("context") == "lake env lean":
-            sizes.append(Path(kwargs["env"][PROBE_OUTPUT_ENV]).stat().st_size)
-        return result
-
-    monkeypatch.setattr("autoform_cli.lean_probe.DEFAULT_PROBE_OUTPUT_LIMIT", limit)
-    monkeypatch.setattr("autoform_cli.lean_probe._run_bounded_command", inspect_records)
-    probe = render_probe(
-        imports=("Skel.Main",), roots=("Skel.observation_determined",), project_roots=("Skel",)
-    )
-
-    with pytest.raises(SkeletonError, match=f"{limit}-byte output limit"):
-        run_probe(probe, project)
-    assert sizes and sizes[0] <= limit
 
 
 def _built_module(tmp_path: Path, module: str, source: str) -> Path:
@@ -4244,6 +3282,29 @@ def test_type_and_value_less_roots_show_their_whole_declaration(tmp_path: Path) 
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_structure_field_root_gets_a_skeleton(tmp_path: Path) -> None:
+    """Issue #498: the source index finds a field, so its projection gets a skeleton like any def.
+
+    Lean's range for a projection covers only the field's name, so the shown
+    source is that name and the signature carries the type.
+    """
+    project = _project(tmp_path)
+    _build(project, "Skel.Kinds")
+
+    report = extract_skeletons(_blueprint(tmp_path, lean={"field": "Skel.Kinds.Pair.a"}), lean_root=project)
+
+    assert report.clean
+    (declaration,) = (d for node in report.nodes for d in node.declarations)
+    assert (declaration.name, declaration.kind, declaration.source, declaration.statement) == (
+        "Skel.Kinds.Pair.a",
+        "def",
+        "a",
+        None,
+    )
+    assert "Nat" in declaration.signature
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_local_notation_statement_gets_a_packet_without_its_text(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _build(project, "Skel.Kinds")
@@ -4536,6 +3597,7 @@ def _declaration_of(project: Path, record: dict[str, object]):
         index=index_project(project),
         module_hashes={},
         snapshot_started_ns=None,
+        shared={},
     )
 
 
@@ -5019,7 +4081,7 @@ def test_packet_publication_refuses_unmanaged_or_symlink_output(tmp_path: Path) 
     unmanaged.mkdir()
     (unmanaged / "keep.txt").write_text("mine\n", encoding="utf-8")
 
-    with pytest.raises(SkeletonError, match="non-Autoform packet output"):
+    with pytest.raises(SkeletonError, match="non-Autoform output"):
         write_packets(report, unmanaged)
 
     outside = tmp_path / "outside"
@@ -5028,13 +4090,15 @@ def test_packet_publication_refuses_unmanaged_or_symlink_output(tmp_path: Path) 
     linked.symlink_to(outside, target_is_directory=True)
     with pytest.raises(SkeletonError, match="symlink packet output"):
         write_packets(report, linked)
+    with pytest.raises(SkeletonError, match="symlink passage output"):
+        write_packets(report, tmp_path / "packets", passages=linked)
 
     fake_managed = tmp_path / "fake-managed"
     fake_managed.mkdir()
     (fake_managed / PACKET_MANIFEST).write_text(report.to_json(), encoding="utf-8")
     valuable = fake_managed / "valuable.txt"
     valuable.write_text("keep me\n", encoding="utf-8")
-    with pytest.raises(SkeletonError, match="non-Autoform packet output"):
+    with pytest.raises(SkeletonError, match="non-Autoform output"):
         write_packets(report, fake_managed)
     assert valuable.read_text(encoding="utf-8") == "keep me\n"
 
@@ -5091,9 +4155,9 @@ def test_packet_publication_rolls_back_both_trees_on_commit_failure(
             raise OSError("simulated passage commit failure")
         _install_output(source_path, Path(destination))
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_passage_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_passage_install)
 
-    with pytest.raises(SkeletonError, match="could not publish skeleton output"):
+    with pytest.raises(SkeletonError, match="could not publish output"):
         write_packets(report, packets, passages=passages)
 
     assert (packets / "old-marker").read_text(encoding="utf-8") == "old packets\n"
@@ -5206,7 +4270,7 @@ def test_removing_output_deletes_its_manifest_last(tmp_path: Path, monkeypatch) 
     scandir = os.scandir
     monkeypatch.setattr(os, "scandir", lambda *args, **kwargs: _ManifestFirstListing(scandir(*args, **kwargs)))
 
-    _remove_output(output)
+    remove_output(output)
 
     assert not output.exists()
     assert sorted(removed) == ["Manifest.json", "article.lean", "packet.lean"]
@@ -5224,7 +4288,7 @@ def test_packet_publication_rolls_back_both_trees_when_interrupted(
         if "autoform-stage" in source_path.name and Path(destination) == passages:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", interrupt_passage_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", interrupt_passage_install)
 
     with pytest.raises(KeyboardInterrupt):
         write_packets(report, packets, passages=passages)
@@ -5245,7 +4309,7 @@ def test_packet_publication_rolls_back_when_interrupted_after_backup_rename(
         if Path(source) == packets and "autoform-backup" in Path(destination).name:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.replace", interrupt_after_backup)
+    monkeypatch.setattr("autoform_cli._managed_output.os.replace", interrupt_after_backup)
 
     with pytest.raises(KeyboardInterrupt):
         write_packets(report, packets)
@@ -5267,7 +4331,7 @@ def test_packet_publication_preserves_a_changed_backup_during_cleanup(
             (changed_backup,) = tmp_path.glob(".packets.autoform-backup-*")
             (changed_backup / "concurrent-marker").write_text("keep me\n", encoding="utf-8")
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", change_backup_after_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", change_backup_after_install)
 
     with pytest.warns(RuntimeWarning, match="backup changed.*preserved"):
         write_packets(report, packets)
@@ -5294,7 +4358,7 @@ def test_packet_publication_does_not_delete_a_concurrent_replacement(
             raise OSError("simulated passage commit failure")
         _install_output(source_path, destination_path)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", replace_then_fail)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", replace_then_fail)
 
     with pytest.raises(SkeletonError, match="preserved"):
         write_packets(report, packets, passages=passages)
@@ -5318,7 +4382,7 @@ def test_packet_publication_does_not_replace_a_concurrent_empty_directory(
             concurrent_inode = destination.stat().st_ino
         _install_output(stage, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", create_before_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", create_before_install)
 
     with pytest.raises(SkeletonError, match="published output changed during rollback"):
         write_packets(report, packets)
@@ -5340,7 +4404,7 @@ def test_packet_publication_preflights_no_replace_before_moving_old_tree(
     def unavailable(source: Path, destination: Path) -> None:
         raise SkeletonError(["atomic no-replace rename is unavailable"])
 
-    monkeypatch.setattr("autoform_cli.skeleton._rename_no_replace", unavailable)
+    monkeypatch.setattr("autoform_cli._managed_output._rename_no_replace", unavailable)
 
     with pytest.raises(SkeletonError, match="no-replace rename is unavailable"):
         write_packets(report, packets)
@@ -5362,7 +4426,7 @@ def test_packet_publication_cleans_up_an_interrupted_preflight(
             raise KeyboardInterrupt
 
     monkeypatch.setattr(
-        "autoform_cli.skeleton._install_output", interrupt_after_preflight_install
+        "autoform_cli._managed_output._install_output", interrupt_after_preflight_install
     )
 
     with pytest.raises(KeyboardInterrupt):
@@ -5377,7 +4441,6 @@ def test_packet_publication_restores_old_trees_when_quarantine_cleanup_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
     report, packets, passages = _published(tmp_path)
-    remove_output = _remove_output
 
     def fail_passage_install(stage: Path, destination: Path) -> None:
         if "autoform-stage" in stage.name and destination == passages:
@@ -5389,8 +4452,8 @@ def test_packet_publication_restores_old_trees_when_quarantine_cleanup_fails(
             raise OSError("simulated quarantine cleanup failure")
         remove_output(path)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_passage_install)
-    monkeypatch.setattr("autoform_cli.skeleton._remove_output", fail_quarantine_cleanup)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_passage_install)
+    monkeypatch.setattr("autoform_cli._managed_output.remove_output", fail_quarantine_cleanup)
 
     with pytest.raises(SkeletonError, match="preserved for recovery"):
         write_packets(report, packets, passages=passages)
@@ -5421,10 +4484,10 @@ def test_packet_publication_does_not_overwrite_during_backup_restore(
             concurrent_inode = destination.stat().st_ino
         rename_no_replace(source, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_passage_install)
-    monkeypatch.setattr("autoform_cli.skeleton._rename_no_replace", create_before_restore)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_passage_install)
+    monkeypatch.setattr("autoform_cli._managed_output._rename_no_replace", create_before_restore)
 
-    with pytest.raises(SkeletonError, match="could not restore skeleton output"):
+    with pytest.raises(SkeletonError, match="could not restore output"):
         write_packets(report, packets, passages=passages)
 
     assert concurrent_inode is not None
@@ -5448,7 +4511,7 @@ def test_packet_rollback_restores_backups_when_a_destination_becomes_a_symlink(
             raise OSError("simulated passage install failure")
         _install_output(stage, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", swap_then_fail)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", swap_then_fail)
 
     with pytest.raises(SkeletonError, match="simulated passage install failure") as info:
         write_packets(report, packets, passages=passages)
@@ -5480,7 +4543,6 @@ def test_packet_publication_cleans_up_when_second_stage_fails(
     report = _fake_report(tmp_path)
     packets = tmp_path / "packets"
     passages = tmp_path / "passages"
-    stage_output = _stage_output
     calls = 0
 
     def fail_second_stage(destination: Path) -> Path:
@@ -5490,7 +4552,7 @@ def test_packet_publication_cleans_up_when_second_stage_fails(
             raise OSError("simulated passage staging failure")
         return stage_output(destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._stage_output", fail_second_stage)
+    monkeypatch.setattr("autoform_cli.skeleton.stage_output", fail_second_stage)
 
     with pytest.raises(SkeletonError, match="could not prepare skeleton output"):
         write_packets(report, packets, passages=passages)
@@ -5508,9 +4570,9 @@ def test_packet_publication_detects_a_concurrent_file_edit(tmp_path: Path, monke
 
     def edit_then_replace(outputs) -> None:
         marker.write_text("concurrent edit\n", encoding="utf-8")
-        _replace_outputs(outputs)
+        replace_outputs(outputs)
 
-    monkeypatch.setattr("autoform_cli.skeleton._replace_outputs", edit_then_replace)
+    monkeypatch.setattr("autoform_cli.skeleton.replace_outputs", edit_then_replace)
 
     with pytest.raises(SkeletonError, match="changed during publication"):
         write_packets(report, packets)
@@ -5532,7 +4594,7 @@ def test_packet_publication_checks_the_isolated_old_tree_before_install(
             marker.write_text("concurrent edit\n", encoding="utf-8")
         replace(source, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.replace", edit_before_backup)
+    monkeypatch.setattr("autoform_cli._managed_output.os.replace", edit_before_backup)
 
     with pytest.raises(SkeletonError, match="changed during publication"):
         write_packets(report, packets)

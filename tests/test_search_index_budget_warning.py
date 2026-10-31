@@ -1,4 +1,4 @@
-"""Search-index capacity is diagnostic only; exact bytes and source data survive."""
+"""Search-index size is a note, never a cap: exact bytes and source data always survive."""
 
 from __future__ import annotations
 
@@ -31,8 +31,8 @@ def _write(path: Path, view: GraphView, *, warnings: list[str] | None = None, di
     )
 
 
-@pytest.mark.parametrize(("size", "warns"), [(949, False), (950, True), (1000, True), (1001, True)])
-def test_budget_boundary_warns_without_refusal_truncation_or_wire_changes(
+@pytest.mark.parametrize(("size", "warns"), [(999, False), (1000, False), (1001, True)])
+def test_size_note_boundary_without_refusal_truncation_or_wire_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, size: int, warns: bool,
 ) -> None:
     view = _view()
@@ -43,16 +43,15 @@ def test_budget_boundary_warns_without_refusal_truncation_or_wire_changes(
     view = replace(view, nodes=(replace(view.nodes[0], summary=summary), view.nodes[1]))
     baseline = _write(tmp_path / "baseline.json", view).read_bytes()
     assert len(baseline) == size
-    # Scale only the private diagnostic capacity for tiny exact boundary cases.
-    # Production and the client keep their unchanged 32MiB limit.
-    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_BYTE_LIMIT", 1000)
+    # Scale only the private note threshold for tiny exact boundary cases.
+    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_NOTE_BYTES", 1000)
     warnings, digests = [], []
     emitted = _write(tmp_path / "warned.json", view, warnings=warnings, digests=digests).read_bytes()
     assert emitted == baseline and digests == [hashlib.sha256(emitted).hexdigest()]
     assert len(warnings) == int(warns)
     if warns:
-        assert f"{size:,} bytes" in warnings[0] and "1,000-byte" in warnings[0]
-        assert "browser" in warnings[0] and "limit" in warnings[0]
+        assert f"{size:,} bytes" in warnings[0] and "past 1,000 bytes" in warnings[0]
+        assert "downloads it" in warnings[0] and "limit" not in warnings[0]
     payload = json.loads(emitted)
     assert payload["schema"] == dag_viewer.SEARCH_SCHEMA
     assert [node["id"] for node in payload["nodes"]] == ["a", "b"]
@@ -69,7 +68,7 @@ def test_warning_counts_utf8_bytes_once_without_rereading_source_or_output(
     view = _view()
     baseline = _write(tmp_path / "baseline.json", view).read_bytes()
     assert len(baseline) > len(baseline.decode("utf-8"))
-    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_BYTE_LIMIT", len(baseline))
+    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_NOTE_BYTES", len(baseline) - 1)
     original_read = Path.read_bytes
 
     def forbidden_read(*args: object, **kwargs: object) -> None:
@@ -81,12 +80,12 @@ def test_warning_counts_utf8_bytes_once_without_rereading_source_or_output(
     target = _write(tmp_path / "captured.json", view, warnings=warnings, digests=digests)
     assert original_read(target) == baseline
     assert warnings[0] == "earlier diagnostic" and len(warnings) == 2
-    assert f"{len(baseline):,} bytes" in warnings[1] and "100.0%" in warnings[1]
+    assert f"{len(baseline):,} bytes" in warnings[1] and f"past {len(baseline) - 1:,} bytes" in warnings[1]
     assert digests == [hashlib.sha256(baseline).hexdigest()]
 
 
 def test_unsuccessful_write_does_not_claim_a_published_budget_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_BYTE_LIMIT", 1)
+    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_NOTE_BYTES", 1)
 
     def failed_write(*args: object, **kwargs: object) -> None:
         raise OSError("controlled index write failure")
@@ -114,7 +113,7 @@ def test_graph_publication_forwards_index_warning_without_changing_its_manifest_
 
     quiet, warned = tmp_path / "quiet", tmp_path / "warned"
     baseline = graph_pages.write_graph_pages(graph, states, quiet, node_links=links)
-    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_BYTE_LIMIT", 1)
+    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_NOTE_BYTES", 1)
     warnings: list[str] = []
     produced = graph_pages.write_graph_pages(graph, states, warned, node_links=links, warnings_out=warnings)
     assert warnings and len(warnings) == 1 and "search index" in warnings[0]
@@ -125,5 +124,10 @@ def test_graph_publication_forwards_index_warning_without_changing_its_manifest_
     assert (graph.nodes, states) == before
 
 
-def test_production_warning_limit_is_the_unchanged_browser_default() -> None:
-    assert dag_viewer._SEARCH_INDEX_BYTE_LIMIT == 32 * 1024 * 1024
+def test_nothing_caps_published_data() -> None:
+    assert dag_viewer._SEARCH_INDEX_NOTE_BYTES == 32 * 1024 * 1024
+    assert not hasattr(dag_viewer, "MAX_WIKI_LINK_BYTES")
+    source = (Path(dag_viewer.__file__).parent / "assets" / "blueprint-navigation.js").read_text(encoding="utf-8")
+    # The explorer only fetches its own site's data, so it refuses none of it for size.
+    for cap in ("jsonLimit", "htmlLimit", "WIKI_LIMIT", "Published data is too large"):
+        assert cap not in source, cap

@@ -39,6 +39,7 @@ from __future__ import annotations
 import ctypes
 import errno
 import hashlib
+import heapq
 import html
 import json
 import os
@@ -50,7 +51,7 @@ import sys
 import tempfile
 import time
 import unicodedata
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from html.parser import HTMLParser
@@ -66,7 +67,6 @@ from ._tree_snapshot import (
     TreeSelection,
     TreeSnapshot,
     TreeSnapshotError,
-    _read_prefix,
     _update_digest,
     bind_directory_tree,
     descriptor_capture_supported,
@@ -92,7 +92,6 @@ from .graph_views import _containers, _countable, _is_countable, _module_invento
 from .lean import (
     _REPLACEABLE_SCHEMAS,
     PUBLICATION_MANIFEST,
-    PUBLICATION_MANIFEST_MAX_BYTES,
     PUBLICATION_SCHEMA,
     IndexedSourceSnapshot,
     LeanSourceError,
@@ -106,6 +105,7 @@ from .lean import (
 from .markdown import (
     _BRACKET_ESCAPE,
     _INLINE_MATH,
+    FORMULA_CLASS,
     GENERATED_VIEWS,
     INLINE_CODE,
     NOTES_BOX,
@@ -124,6 +124,7 @@ from .markdown import (
     page_title,
     published_page,
     relative_link,
+    render_tree,
     rendered_visible_text,
     site_converter,
     statement_and_notes,
@@ -131,6 +132,7 @@ from .markdown import (
     yaml_string,
 )
 from .markdown import HEADING as _HEADING
+from .markdown import _LINK_DEFINITION as _SITE_LINK_DEFINITION
 from .markdown import content_lines as _content_lines
 from .markdown import outside_fences as _outside_fences
 from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, TEX_MACROS, mathjax_script, project_macros
@@ -166,10 +168,15 @@ _MARKDOWN_LINK = re.compile(
 _MARKDOWN_IMAGE = re.compile("!" + _MARKDOWN_LINK.pattern.removeprefix("(?<!!)"))
 #: A reference-style link definition, `[label]: target "title"`. Markdown
 #: resolves `[Paper][paper]` through one of these, so a rewrite that only sees
-#: inline links leaves the destination behind and publishes a dead link.
+#: inline links leaves the destination behind and publishes a dead link. As in
+#: Python-Markdown, at most a quoted or parenthesized title follows the target:
+#: a line such as `[^1]: Grounded in [Paper](...)` is prose, not a definition.
+#: Python-Markdown expands tabs before it reads one, so a tab around the title
+#: counts as spaces do.
 _LINK_DEFINITION = re.compile(
     r'^(?P<indent>[ ]{0,3})\[(?P<label>[^\]]+)\]:[ \t]*'
-    r'(?P<target><[^>\r\n]+>|[^\s]+)(?P<rest>[ \t]+.*)?$'
+    r'(?P<target><[^>\r\n]+>|[^\s]+)'
+    r'(?P<rest>[ \t]*(?:(?P<quote>["\'])(?:.*)(?P=quote)[ \t]*|\(.*\)[ \t]*)?)$'
 )
 _ARTICLE_SLOT = re.compile(
     rf"^(?P<indent>[ \t]*)[-*+]\s+\[(?=[^\]]){_LINK_LABEL}\]"
@@ -1029,7 +1036,6 @@ def _render_pages(
     ]
     coverage_warnings += (f"atlas.json: {omission}" for omission in atlas_omissions(graph, unpublished_nodes))
     statuses = status.derive(graph)
-    numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
     # Sources leave the site only for a directory the verified commit holds.
     sources_base = _sources_base(blueprint, repo_root, linker) if sources else None
@@ -1073,6 +1079,15 @@ def _render_pages(
             target.write_bytes(content)
         report.pages += 1
 
+    # One reading order for statement numbers, Next up and the search index.
+    order = _reading_order(
+        graph, targets, _reading_pages(blueprint, destination, graph), _card_positions(
+            groups, group_pages, graph=graph, blueprint=blueprint, node_sources=node_sources,
+            targets=targets, typed=site.typed,
+        ),
+    )
+    numbers = _number_nodes(graph, order)
+
     overview = destination / "README.md"
     # The author's page, as render publishes it when nothing in it is flagged:
     # the hero escapes its title and lead itself, and a page shown as typed has
@@ -1093,6 +1108,7 @@ def _render_pages(
                 page=overview,
                 destination=destination,
                 targets=targets,
+                order=order,
             ),
             encoding="utf-8",
         )
@@ -1162,6 +1178,7 @@ def _render_pages(
         source_paths={node_id: node.path.relative_to(blueprint) for node_id, node in graph.nodes.items()},
         unavailable_source_ids=site.unavailable_source_ids,
         warnings_out=report.warnings,
+        book_order=order,
     )
     report.pages += sum(path != destination / graph_pages.WIKI_LINKS for path in generated_graph_pages)
 
@@ -1246,7 +1263,6 @@ def _integrated_page(
         search_href=relative_link(destination / graph_pages.SEARCH_INDEX, page, ".json"),
         page_href=_as_published(relative_link(page, page, ".html")),
         scope=scope,
-        fallback_links=(("Read the mathematical page", "#"),),
     )
     return (
         header + '\n<div class="bp-explorer-page" markdown="1">\n'
@@ -1428,11 +1444,10 @@ def _destination_state(path: Path) -> _State | None:
     if empty:
         return identity, {}
     manifest = None
-    try:  # bounded, and read before anything below it
+    try:  # read before anything below it
         if stat.S_ISREG(os.lstat(path / PUBLICATION_MANIFEST).st_mode):
             with open(path / PUBLICATION_MANIFEST, "rb") as handle:
-                data = _read_prefix(handle, PUBLICATION_MANIFEST_MAX_BYTES + 1)  # read(n) allocates n bytes first
-            manifest = json.loads(data) if len(data) <= PUBLICATION_MANIFEST_MAX_BYTES else None
+                manifest = json.loads(handle.read())
     except (OSError, ValueError, RecursionError):
         pass
     if isinstance(manifest, dict) and manifest.get("schema") == "autoform-publication/v1":
@@ -1851,10 +1866,6 @@ def _write_publication_manifest(
         "views": ["book", "progress", "project", "chapter", "full"],
     }
     encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    if len(encoded) > PUBLICATION_MANIFEST_MAX_BYTES:  # the next render could not read it
-        raise PublicationError(
-            [f"generated publication manifest exceeds max_file_bytes={PUBLICATION_MANIFEST_MAX_BYTES}"]
-        )
     # Replaced, never truncated in place: a Lean capture that read an empty
     # manifest would index the stage's copies.
     temporary = destination / f".{PUBLICATION_MANIFEST}.{secrets.token_hex(8)}.tmp"
@@ -1895,63 +1906,208 @@ def _group_page(group: str) -> Path:
     )
 
 
-def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
-    """Follow authored container links to recover the book's page order."""
-    ordered: list[Path] = []
-    seen_outputs: set[Path] = set()
-    visited_sources: set[Path] = set()
+def _book_sources(graph: Graph) -> dict[Path, str]:
+    """The book's pages, containers and narrative articles, by resolved source."""
     containers = _containers(graph)
-    book_sources = {
-        node.path.resolve()
+    return {
+        node.path.resolve(): node.id
         for node in graph.nodes.values()
         if node.id in containers or (not node.formalizable and node.catalog is None)
     }
-    pending = [blueprint / "README.md"]
+
+
+def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> list[Path]:
+    """The *targets* *source* links outside code fences, in the order it links them."""
+    linked_sources: list[Path] = []
+
+    def collect(line: str) -> str:
+        for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
+            raw = line[match.start("target") : match.end("target")]
+            bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
+            path = bare.partition("#")[0].partition("?")[0]
+            try:
+                if not path or urlsplit(path).scheme or path.startswith("/"):
+                    continue
+                candidate = (source.parent / unquote(path)).resolve()
+                candidate_relative = candidate.relative_to(blueprint)
+            except ValueError:  # a target outside the vault, an unbalanced IPv6 bracket, or a decoded NUL
+                continue
+            if (
+                not candidate_relative.parts
+                or candidate_relative.parts[0] != "roadmap"
+                or candidate.suffix.lower() != ".md"
+            ):
+                continue
+            if candidate not in targets:
+                continue
+            linked_sources.append(candidate)
+        return line
+
+    try:
+        text = source.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return []  # the site leaves out a page that is not UTF-8, as check warns
+    _outside_fences(text, collect)
+    return linked_sources
+
+
+def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
+    """The landing page, then the book in reading order (:func:`_reading_pages`).
+
+    SUMMARY.md and Previous/Next follow this order, and statement numbers, Next
+    up and the search index follow the same walk, so the book reads one way
+    everywhere."""
+    landing = (destination / "README.md").resolve()
+    pages = _reading_pages(blueprint, destination, graph)
+    return ([landing] if landing.is_file() else []) + [page for page in pages if page != landing]
+
+
+def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
+    """The published book pages in reading order: down the containment tree
+    from the landing page, each page's children in the order it links them,
+    then the ones it does not link. A child the page never links directly
+    takes the place of the page's first link into its subtree, to a section
+    or a result; a direct link wins over that, so a prose shortcut to a deep
+    milestone does not pull its chapter forward. A link to a page elsewhere in
+    the tree does not move it. The children a page does not link at all
+    follow in dependency order, ties by id (:func:`_dependency_sorted`)."""
+    book_sources = _book_sources(graph)
+    node_sources = {node.path.resolve(): node.id for node in graph.nodes.values()}
+    children: dict[str | None, list[str]] = {}
+    for node_id in sorted(graph.nodes):
+        if graph.nodes[node_id].path.resolve() in book_sources:
+            children.setdefault(graph.nodes[node_id].parent, []).append(node_id)
+    precedence: dict[str, set[str]] | None = None
+    ordered: list[Path] = []
+    pending: list[tuple[Path, str | None]] = [(blueprint / "README.md", None)]
     while pending:
-        source = pending.pop().resolve()
-        try:
-            relative = source.relative_to(blueprint)
-        except ValueError:
-            continue
-        output = (destination / relative).resolve()
-        if output.is_file() and output not in seen_outputs:
-            seen_outputs.add(output)
-            ordered.append(output)
-        if source in visited_sources or not source.is_file():
-            continue
-        visited_sources.add(source)
-        linked_sources: list[Path] = []
-
-        def collect(line: str) -> str:
-            for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
-                raw = line[match.start("target") : match.end("target")]
-                bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
-                path = bare.partition("#")[0].partition("?")[0]
-                try:
-                    if not path or urlsplit(path).scheme or path.startswith("/"):
-                        continue
-                    candidate = (source.parent / unquote(path)).resolve()
-                    candidate_relative = candidate.relative_to(blueprint)
-                except ValueError:  # a target outside the vault, an unbalanced IPv6 bracket, or a decoded NUL
-                    continue
-                if (
-                    not candidate_relative.parts
-                    or candidate_relative.parts[0] != "roadmap"
-                    or candidate.suffix.lower() != ".md"
-                ):
-                    continue
-                if candidate not in book_sources:
-                    continue
-                linked_sources.append(candidate)
-            return line
-
-        try:
-            text = source.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue  # the site leaves out a page that is not UTF-8, as check warns
-        _outside_fences(text, collect)
-        pending.extend(reversed(linked_sources))
+        source, parent = pending.pop()
+        output = destination / source.relative_to(blueprint)
+        if parent is not None and output.is_file():
+            ordered.append(output.resolve())
+        own = children.get(parent, [])
+        linked = [node_sources[path] for path in _book_links(source, blueprint, node_sources)] if source.is_file() else []
+        direct: dict[str, int] = {}
+        through: dict[str, int] = {}
+        for index, node_id in enumerate(linked):
+            child = node_id if node_id in own else _child_containing(graph, parent, node_id)
+            if child in own:
+                (direct if child == node_id else through).setdefault(child, index)
+        placed = through | direct
+        unlinked = [node_id for node_id in own if node_id not in placed]
+        if len(unlinked) > 1:
+            if precedence is None:
+                precedence = _sibling_precedence(graph)
+            unlinked = _dependency_sorted(unlinked, precedence)
+        reading = [*sorted(placed, key=placed.__getitem__), *unlinked]
+        pending.extend((graph.nodes[node_id].path, node_id) for node_id in reversed(reading))
     return ordered
+
+
+def _containment_chain(graph: Graph, node_id: str) -> list[str]:
+    """*node_id* and its containers, innermost first."""
+    chain: list[str] = []
+    seen: set[str] = set()
+    current: str | None = node_id
+    while current is not None and current in graph.nodes and current not in seen:
+        chain.append(current)
+        seen.add(current)
+        current = graph.nodes[current].parent
+    return chain
+
+
+def _sibling_precedence(graph: Graph) -> dict[str, set[str]]:
+    """For each node, the siblings whose subtrees must come after its own:
+    sibling B follows sibling A when something in B's subtree depends on
+    something in A's. Each dependency orders the two subtrees that hold its
+    ends just below their nearest common container."""
+    after: dict[str, set[str]] = {}
+    for node in graph.nodes.values():
+        dependent = _containment_chain(graph, node.id)
+        for dependency_id in node.dependencies:
+            if dependency_id not in graph.nodes:
+                continue
+            prerequisite = _containment_chain(graph, dependency_id)
+            shared = set(prerequisite).intersection(dependent)
+            below_dependent = next((i for i, item in enumerate(dependent) if item in shared), len(dependent))
+            below_prerequisite = next((i for i, item in enumerate(prerequisite) if item in shared), len(prerequisite))
+            if below_dependent and below_prerequisite:  # neither end contains the other
+                after.setdefault(prerequisite[below_prerequisite - 1], set()).add(dependent[below_dependent - 1])
+    return after
+
+
+def _dependency_sorted(siblings: list[str], precedence: Mapping[str, set[str]]) -> list[str]:
+    """*siblings* with each subtree after the subtrees it depends on, ties
+    broken by their order in *siblings*. When only cycles are left, the
+    earliest sibling on one of them goes next."""
+    rank = {node_id: index for index, node_id in enumerate(siblings)}
+    later = {node_id: sorted(rank[other] for other in precedence.get(node_id, ()) if other in rank) for node_id in siblings}
+    waiting = [0] * len(siblings)
+    for successors in later.values():
+        for index in successors:
+            waiting[index] += 1
+    ready = [index for index, count in enumerate(waiting) if not count]
+    heapq.heapify(ready)
+    done: set[int] = set()
+
+    def on_cycle(start: int) -> bool:
+        stack, seen = list(later[siblings[start]]), set()
+        while stack:
+            index = stack.pop()
+            if index == start:
+                return True
+            if index not in done and index not in seen:
+                seen.add(index)
+                stack.extend(later[siblings[index]])
+        return False
+
+    ordered: list[str] = []
+    while len(ordered) < len(siblings):
+        if not ready:  # every sibling left waits on one, so some sit on a cycle
+            heapq.heappush(ready, next(i for i in range(len(siblings)) if i not in done and on_cycle(i)))
+        index = heapq.heappop(ready)
+        if index in done:
+            continue
+        done.add(index)
+        ordered.append(siblings[index])
+        for successor in later[siblings[index]]:
+            waiting[successor] -= 1
+            if not waiting[successor] and successor not in done:
+                heapq.heappush(ready, successor)
+    return ordered
+
+
+def _child_containing(graph: Graph, parent: str | None, node_id: str) -> str | None:
+    """The child of *parent* whose containment subtree holds *node_id*, if any."""
+    seen: set[str] = set()
+    while node_id in graph.nodes and node_id not in seen:
+        seen.add(node_id)
+        up = graph.nodes[node_id].parent
+        if up == parent:
+            return node_id
+        if up is None:
+            return None
+        node_id = up
+    return None
+
+
+def _reading_order(
+    graph: Graph,
+    targets: Mapping[str, tuple[Path, str]],
+    pages: list[Path],
+    positions: Mapping[str, int],
+) -> list[str]:
+    """Every node in the order the book reads it: by its page's place in
+    ``pages``, then by its card's place on that page (``positions``; a page's
+    own article comes first), then in dependency order. Nodes on a page not
+    in ``pages`` follow, one page at a time."""
+    page_rank = {page: rank for rank, page in enumerate(pages)}
+
+    def key(node_id: str) -> tuple[int, str, int]:
+        page = targets[node_id][0].resolve() if node_id in targets else None
+        return page_rank.get(page, len(page_rank)), str(page or ""), positions.get(node_id, -1)
+
+    return sorted(status.topological_order(graph), key=key)
 
 
 def _append_book_navigation(pages: list[Path]) -> None:
@@ -2018,19 +2174,20 @@ def _next_target(
     destination: Path,
     group_pages: dict[str, Path] | None = None,
     targets: dict[str, tuple[Path, str]] | None = None,
+    order: Sequence[str] = (),
 ) -> str:
     """Name the result a contributor could pick up right now, with the way in.
 
     A dashboard that only counts is a scoreboard. The useful question on
     arriving is "what is unblocked, and where do I start reading?", which the
-    DAG already answers: the first node in topological order whose
-    prerequisites are met and whose proof is still open. Naming it without
-    linking to it makes the reader hunt, so the card carries the statement, its
-    chapter, and its dependency view.
+    DAG already answers: the first node in reading ``order`` (topological
+    without one) whose prerequisites are met and whose proof is still open.
+    Naming it without linking to it makes the reader hunt, so the card
+    carries the statement, its chapter, and its dependency view.
     """
     containers = _containers(graph)
     links = _anchored_links(targets or {}, page)
-    for node_id in status.topological_order(graph):
+    for node_id in order or status.topological_order(graph):
         node_status = statuses.get(node_id)
         node = graph.nodes[node_id]
         if node_status is None or node_id in containers or not node.formalizable:
@@ -2048,9 +2205,9 @@ def _next_target(
             f'<a href="{html.escape(statement, quote=True)}">{title}</a>' if statement else title
         )
         why = (
-            "Its prerequisites are ready, so the proof can be written now."
+            "Everything it uses is in Lean, so its Lean proof can start."
             if node_status.key == "can_prove"
-            else "Its prerequisites are ready, so the statement can be written down."
+            else "Everything its statement uses is in Lean, so its Lean statement can be written now."
         )
         actions = [f'<a href="{html.escape(graph_href, quote=True)}">Dependencies</a>']
         if chapter_page is not None:
@@ -2089,29 +2246,32 @@ def _render_structure_page(
     page: Path,
     entry: Path | None = None,
 ) -> str:
-    """Keep the old structure route as a bounded doorway into the mathematical wiki.
+    """Keep the old structure route as a bounded doorway into the book.
 
     The explorer owns hierarchy now. Republishing every source path as one raw
     HTML tree made this compatibility page larger than the rest of a small
     site, duplicated the explorer, and became unusable on repository-scale books.
     """
-    explorer = relative_link(entry or page.parent / "dependencies.md", page, ".md")
+    target = entry or page.parent / "dependencies.md"
+    explorer = relative_link(target, page, ".md")
+    text = target.read_text(encoding="utf-8") if target.is_file() else ""
+    # A header title is visible text already, while an H1 is Markdown, as in
+    # the site's nav.
+    named = _header_title(text)
+    title = name_text(named) if named else title_text(_first_h1(text) or "")
     return "\n".join(
         [
             "---",
-            "title: Browse the roadmap",
+            "title: This page moved",
             "search:",
             "  exclude: true",
             "hide:",
             "  - toc",
             "---",
             "",
-            "# Browse the roadmap",
+            "# This page moved",
             "",
-            "The mathematical wiki presents the authored hierarchy and its mathematical",
-            "relations without flattening the repository into a file listing.",
-            "",
-            f"[Open the mathematical wiki]({explorer})",
+            f"The book starts at [{title or 'its contents'}]({explorer}).",
             "",
         ]
     )
@@ -2132,9 +2292,10 @@ def _render_summary_nav(
 
     A chapter's README nests under the nearest README above its folder, any
     other page under the nearest README in its own folder or above, and the
-    tree is written depth first in book order. The book order follows links,
-    so a page can come before its chapter, and indenting by folder depth alone
-    then skipped a level, which literate-nav refuses.
+    tree is written depth first in book order. The book order walks the
+    containment tree (:func:`_reading_pages`), so a page always comes after
+    its chapter. Nesting by folder rather than by depth alone keeps each
+    level one step below its parent, which literate-nav requires.
     """
     # SUMMARY.md is a navigation manifest, not a searchable content page. A
     # repository-wide book can make this one generated page larger than every
@@ -2183,6 +2344,7 @@ def _render_landing_page(
     page: Path,
     destination: Path,
     targets: dict[str, tuple[Path, str]] | None = None,
+    order: Sequence[str] = (),
 ) -> str:
     """The landing page: what this is, how far it has got, and what is next.
 
@@ -2218,6 +2380,7 @@ def _render_landing_page(
         destination=destination,
         group_pages=group_pages,
         targets=targets,
+        order=order,
     )
     front = [
         "---",
@@ -2415,22 +2578,154 @@ def _lead_sentence(body: str) -> str:
 
     Written by a human in `blueprint/README.md`, so it says what the project is
     far better than anything derived from the graph could. Prose only: a
-    heading or a list is structure rather than a claim.
+    heading or a list is structure rather than a claim. The first paragraph
+    with words is read through the site's own converter, so code and formulas
+    keep their contents, a link keeps its words without its target, and an
+    image, such as a badge, is dropped.
     """
-    for block in body.split("\n\n"):
-        line = block.strip()
-        if not line or line.startswith(("#", "-", "*", "<", "|", ">", "!")):
-            continue
-        sentence = line.split(". ")[0].rstrip(".").replace("\n", " ")
-        # The hero is raw HTML, so Markdown never runs over it and a title in
-        # *emphasis* would otherwise show its asterisks. Escaping first means
-        # the substitutions below can only ever produce these two tags.
-        safe = html.escape(sentence)
-        safe = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", safe)
-        safe = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", safe)
-        safe = re.sub(r"`([^`]+)`", r"<code>\1</code>", safe)
-        return safe + "."
+    lines = mask_fences_and_comments(body.splitlines())
+    if _read_page(body)[1]:
+        # Check flags this page, and the landing page then shows only its
+        # title and lead, as text: the first prose block, escaped as typed.
+        for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
+            typed = " ".join(block.split())
+            if typed and not typed.startswith(("#", "-", "*", "<", "|", ">", "!", "[")):
+                return _lead_html([("text", typed)])
+        return ""
+    # Each block is read alone, so raw HTML elsewhere does not hide the lead,
+    # with the reference definitions its links may name. Only lines the site's
+    # converter reads as definitions, so a footnote never becomes a paragraph.
+    definitions = "\n".join(line for line in lines if _SITE_LINK_DEFINITION.match(line))
+    for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
+        tree = render_tree(f"{block}\n\n{definitions}", allow_html=False) if block.strip() else None
+        page = tree.find("body") if tree is not None else None
+        for paragraph in page if page is not None else ():
+            parts = _lead_parts(paragraph) if paragraph.tag == "p" else []
+            if any(kind in {"code", "math"} or (kind == "text" and value.strip()) for kind, value in parts):
+                return _lead_html(parts)
     return ""
+
+
+def _lead_parts(element: object) -> list[tuple[str, str]]:
+    """A converted paragraph as text, code, math and emphasis parts."""
+    parts: list[tuple[str, str]] = []
+
+    def text(value: str | None) -> None:
+        if value:
+            # An Obsidian link reads as its alias, or else its target.
+            value = re.sub(r"\[\[([^\[\]|]*)(?:\|([^\[\]]*))?\]\]", lambda link: link.group(2) or link.group(1), value)
+            parts.append(("text", re.sub(r"\s+", " ", value)))
+
+    def read(node: object) -> None:
+        for child in node:
+            if child.tag == "code":
+                parts.append(("code", "".join(child.itertext())))
+            elif child.tag == "span" and child.get("class") == FORMULA_CLASS:
+                parts.append(("math", "".join(child.itertext())))
+            elif child.tag in {"em", "strong"}:
+                parts.append(("open", child.tag))
+                text(child.text)
+                read(child)
+                parts.append(("close", child.tag))
+            elif child.tag == "br":
+                text(" ")
+            elif child.tag != "img":
+                # A link, or anything else, keeps its words only: an authored
+                # target is relative to blueprint/.
+                text(child.text)
+                read(child)
+            text(child.tail)
+
+    text(element.text)
+    read(element)
+    return parts
+
+
+def _lead_html(parts: list[tuple[str, str]]) -> str:
+    """The first sentence of ``parts`` as escaped HTML.
+
+    The hero is raw HTML, so Markdown never runs over it. Escaping every part
+    means the only tags are the emphasis, code and formula span built here,
+    and a formula is the span the page's MathJax already typesets.
+
+    The sentence ends at the first period in the prose that whitespace and
+    anything but a lowercase ASCII letter follow, unless the period ends an
+    abbreviation such as "i.e." or "Ch." or a name's initial, or "et al."
+    that no capital follows. A period inside code, a formula or a `$$` pair
+    the converter left as text never ends it.
+    """
+    plain, starts = "", []
+    for kind, value in parts:
+        starts.append(len(plain))
+        # Code and formulas stand in as one character no rule below matches.
+        plain += value if kind == "text" else "\x01" if kind in {"code", "math"} else ""
+    cut = len(plain)
+    for stop in re.finditer(r"\.\s+(?![a-z])", plain):
+        before = plain[: stop.start()]
+        words = [word.lstrip("(") for word in before.split()] or [""]
+        word, previous = words[-1], words[-2] if len(words) > 1 else ""
+        after = plain[stop.end() :]
+        # An all-caps word, such as "CH." or "EGA I.", is not an abbreviation.
+        abbreviation = not word.isupper() and word.lower() in _LEAD_ABBREVIATIONS
+        if (
+            before.count("$$") % 2
+            or (abbreviation and not (word.lower() == "al" and after[:1].isupper()))
+            or _is_initial(word, previous, after)
+        ):
+            continue
+        cut = stop.start()
+        break
+    cut = len(plain[:cut].rstrip().rstrip(".").rstrip())
+    begin = len(plain) - len(plain.lstrip())
+    shown: list[str] = []
+    opened: list[str] = []
+    for (kind, value), start in zip(parts, starts):
+        if start >= cut:
+            break
+        if kind == "text":
+            shown.append(html.escape(value[max(begin - start, 0) : cut - start]))
+        elif kind == "code":
+            shown.append(f"<code>{html.escape(value)}</code>")
+        elif kind == "math":
+            shown.append(f'<span class="{FORMULA_CLASS}">{html.escape(value)}</span>')
+        elif kind == "open":
+            opened.append(value)
+            shown.append(f"<{value}>")
+        else:
+            opened.pop()
+            shown.append(f"</{value}>")
+    return "".join(shown) + "".join(f"</{tag}>" for tag in reversed(opened)) + "."
+
+
+#: Words whose period does not end the hero's sentence.
+_LEAD_ABBREVIATIONS = frozenset(
+    {"i.e", "e.g", "cf", "ch", "thm", "al", "prop", "sec", "eq", "fig", "vs", "resp", "def", "lem", "cor"}
+)
+#: Words a single capital names rather than abbreviates, as in "Theorem A.".
+_LEAD_LABELS = frozenset(
+    {"theorem", "lemma", "proposition", "corollary", "conjecture", "definition", "chapter", "part",
+     "section", "appendix", "case", "step", "example", "exercise", "figure", "table", "problem"}
+)
+
+
+def _is_initial(word: str, previous: str, after: str) -> bool:
+    """Whether ``word`` is a name's initial, as in "Luis H. Gallardo" or "J. S.
+    Milne", so its period does not end the sentence. A capital after a
+    lowercase word, an all-caps word or a label ("the group G.", "EGA I.",
+    "Theorem A.") ends one, unless another initial follows it."""
+    previous = previous.rstrip(".")
+    if len(word) != 1 or not word.isupper():
+        return False
+    return bool(
+        re.match(r"[A-Z]\.(?:\s|$)", after)
+        or not previous
+        or (
+            previous[:1].isupper()
+            and not (len(previous) > 1 and previous.isupper())
+            and previous.lower() not in _LEAD_LABELS
+        )
+    )
+
 
 def _render_overview_summary(
     graph: Graph,
@@ -2439,44 +2734,28 @@ def _render_overview_summary(
     containers: frozenset[str],
     node_ids: list[str] | None = None,
 ) -> str:
-    """Render the compact, honest progress strip shown at the start of the book."""
+    """Render a chapter's progress as one line, or nothing for a single statement.
+
+    A lone statement's card already shows its status, and the module
+    inventories have their own section, so neither is counted here.
+    """
     candidates = list(node_ids if node_ids is not None else graph.nodes)
-    selected_ids = [
-        node_id
+    selected = {
+        node_id: statuses[node_id]
         for node_id in candidates
         if _is_countable(graph, node_id, containers)
+    }
+    if len(selected) < 2:
+        return ""
+    parts = [
+        f'<span class="bp-progress-state" title="{html.escape(status.MEANINGS[state.key], quote=True)}">'
+        f'<span class="bp-swatch bp-swatch-{state.key}"></span>'
+        f"<strong>{count:,}</strong> {html.escape(state.label)}</span>"
+        for state, count in status.summarize(selected)
     ]
-    inventory_count = len(
-        _module_inventories(graph, containers=containers, node_ids=candidates)
-    )
-    definitions = sum(is_definition(graph.nodes[node_id]) for node_id in selected_ids)
-    results = len(selected_ids) - definitions
-    item_parts = []
-    if definitions:
-        item_parts.append(f"{definitions} definition{'s' if definitions != 1 else ''}")
-    if results:
-        item_parts.append(f"{results} result{'s' if results != 1 else ''}")
-    if inventory_count:
-        item_parts.append(
-            f"{inventory_count} module "
-            f"{'inventory' if inventory_count == 1 else 'inventories'}"
-        )
-    item_summary = " · ".join(item_parts) or "No decomposed definitions or results yet"
-
-    state_parts = []
-    selected_statuses = {node_id: statuses[node_id] for node_id in selected_ids}
-    for state, count in status.summarize(selected_statuses):
-        state_parts.append(
-            f'<span class="bp-progress-state"><span class="bp-swatch '
-            f'bp-swatch-{state.key}"></span><strong>{count}</strong> '
-            f"{html.escape(state.label)}</span>"
-        )
-    states = "".join(state_parts)
     return (
         '<div class="bp-progress-overview">'
-        '<div class="bp-progress-kicker">Formalization progress</div>'
-        f'<div class="bp-progress-total">{item_summary}</div>'
-        f'<div class="bp-progress-states">{states}</div>'
+        f'<div class="bp-progress-states">{"".join(parts)}</div>'
         "</div>"
     )
 
@@ -2821,11 +3100,12 @@ def _reaches(path: Path, directory: Path) -> bool:
     return False
 
 
-def _number_nodes(graph: Graph) -> dict[str, str]:
-    """Number nodes per declaration kind in dependency order, as a blueprint does."""
+def _number_nodes(graph: Graph, order: Sequence[str] = ()) -> dict[str, str]:
+    """Number nodes per declaration kind in reading ``order`` (topological
+    without one), so numbers rise down each page and across chapters."""
     counters: dict[str, int] = {}
     numbers: dict[str, str] = {}
-    for node_id in status.topological_order(graph):
+    for node_id in order or status.topological_order(graph):
         label = _declaration_label(graph.nodes[node_id])
         counters[label] = counters.get(label, 0) + 1
         numbers[node_id] = f"{label} {counters[label]}"
@@ -2914,14 +3194,52 @@ def _render_chapter(
     chapter = _place_environments(
         narrative, lead, slots, summary=chapter_summary, environments=environments, protect=not typed,
     )
+    for heading, section in _fallback_sections(node_ids, slots, graph):
+        if section:
+            chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(environments[n] for n in section)
+    return chapter.rstrip() + "\n", linked, unresolved
+
+
+def _fallback_sections(
+    node_ids: Iterable[str], slots: Mapping[int, str], graph: Graph
+) -> tuple[tuple[str, list[str]], ...]:
+    """The sections after the narrative for cards no authored slot holds, in page order."""
     placed = set(slots.values())
     remaining = [node_id for node_id in node_ids if node_id not in placed]
     # A catalog inventories Lean that already exists, so it is no formalization target.
-    for heading, catalog in (("Additional formalization targets", None), ("Module inventories", "module")):
-        section = [environments[node_id] for node_id in remaining if graph.nodes[node_id].catalog == catalog]
-        if section:
-            chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(section)
-    return chapter.rstrip() + "\n", linked, unresolved
+    return tuple(
+        (heading, [node_id for node_id in remaining if graph.nodes[node_id].catalog == catalog])
+        for heading, catalog in (("Other statements", None), ("Module inventories", "module"))
+    )
+
+
+def _card_positions(
+    groups: Mapping[str, list[str]],
+    group_pages: Mapping[str, Path],
+    *,
+    graph: Graph,
+    blueprint: Path,
+    node_sources: dict[Path, str],
+    targets: dict[str, tuple[Path, str]],
+    typed: Collection[Path],
+) -> dict[str, int]:
+    """Each card's place on its chapter page, as :func:`_render_chapter` lays
+    it out: authored slots first, then the fallback sections."""
+    positions: dict[str, int] = {}
+    for group, node_ids in groups.items():
+        page = group_pages[group]
+        slots = (
+            _chapter_layout(
+                group, node_ids, page.read_text(encoding="utf-8"),
+                graph=graph, blueprint=blueprint, node_sources=node_sources, targets=targets,
+            )[1]
+            if page.is_file() and page not in typed
+            else {}
+        )
+        cards = [slots[index] for index in sorted(slots)]
+        cards += (node_id for _, section in _fallback_sections(node_ids, slots, graph) for node_id in section)
+        positions.update((node_id, position) for position, node_id in enumerate(cards))
+    return positions
 
 
 def _chapter_layout(
@@ -4619,7 +4937,6 @@ __all__ = [
     "LOGO",
     "MERMAID_SCRIPT",
     "PUBLICATION_MANIFEST",
-    "PUBLICATION_MANIFEST_MAX_BYTES",
     "PUBLICATION_SCHEMA",
     "PublicationError",
     "STYLESHEET",

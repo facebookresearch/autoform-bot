@@ -11,7 +11,7 @@ source of graph state.
 from __future__ import annotations
 
 import html
-from collections.abc import Callable, Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path, PurePath
 from urllib.parse import quote
@@ -120,6 +120,7 @@ def write_graph_pages(
     source_paths: Mapping[str, str | PurePath] | None = None,
     unavailable_source_ids: Iterable[str] = (),
     warnings_out: list[str] | None = None,
+    book_order: Sequence[str] = (),
 ) -> tuple[Path, ...]:
     """Write project, chapter, nested-scope, and shared full-explorer pages.
 
@@ -134,6 +135,8 @@ def write_graph_pages(
     and formal dependencies are unchanged; no authored file is reopened here.
     ``unavailable_source_ids`` forwards already found publication omissions,
     preserving the published articles as possible incoming reference targets.
+    ``book_order`` lists node ids in the book's reading order; the search index
+    follows it, and nodes it leaves out keep their dependency order after it.
     """
     destination = Path(destination).resolve()
     groups = group_nodes(graph)
@@ -146,6 +149,10 @@ def write_graph_pages(
     written: list[Path] = []
 
     complete = full_view(graph, statuses)
+    if book_order:
+        # Search, the outline and Results read the book's order, not the DAG's.
+        rank = {node_id: index for index, node_id in enumerate(book_order)}
+        complete = replace(complete, nodes=tuple(sorted(complete.nodes, key=lambda node: rank.get(node.id, len(rank)))))
     contexts = _publication_contexts(
         graph, destination, (project_page, full_page, chapter_pages, scope_pages),
     )
@@ -460,7 +467,6 @@ def _write_page(
         href = _published_link(canonical, page)
         reading = (
             '<div class="bp-reading-source" markdown="1">\n\n'
-            'This compatibility route opens the same mathematical page and its graph.\n\n'
             f'<a href="{html.escape(href, quote=True)}">Continue to the mathematical page</a>\n\n</div>'
         )
         sections.extend(['<div class="bp-explorer-page" markdown="1">', "", reading, "", explorer, "", "</div>", ""])

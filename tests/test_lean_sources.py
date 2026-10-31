@@ -35,7 +35,7 @@ from autoform_cli.lean import (
     open_project_sources,
     snapshot_project_sources,
 )
-from autoform_cli.skeleton import _output_identity, _replace_outputs
+from autoform_cli._managed_output import output_identity, replace_outputs
 
 _SOURCE = """import Mathlib
 
@@ -196,7 +196,8 @@ def test_declaration_identifier_can_follow_its_keyword_on_the_next_line(
     source = f"import Mathlib\nnamespace Outer\n{keyword}\n  result {body}\nend Outer\n"
     index = _index(tmp_path, source)
 
-    assert set(index.declarations) == {"Outer.result"}
+    # A structure's field is its projection.
+    assert set(index.declarations) == {"Outer.result", *(["Outer.result.value"] if keyword == "structure" else [])}
     declaration = index.find("Outer.result")
     assert declaration.line == 3
     assert declaration.keyword == keyword
@@ -421,7 +422,8 @@ def test_multiline_declaration_names_keep_legal_signature_continuations(
     )
     index = _index(tmp_path, source)
 
-    assert set(index.declarations) == {f"Outer.{name}", "Outer.actual"}
+    fields = {f"Outer.{name}.value"} if keyword == "structure" else set()
+    assert set(index.declarations) == {f"Outer.{name}", "Outer.actual", *fields}
     declaration = index.find(f"Outer.{name}")
     assert declaration.line == 3
     assert declaration.keyword == keyword
@@ -499,6 +501,216 @@ def test_the_scan_indexes_every_declaration_form(tmp_path: Path) -> None:
         "Outer.«dotted.name»",
         "rootLevel",
     ]
+
+
+def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: Path) -> None:
+    """Issue #498: Lean makes each field a projection named under its structure."""
+    source = [
+        "namespace Demo",
+        "/-- An entry. -/",
+        "structure Entry where",
+        "  /-- Its value. -/",
+        "  value : Nat",
+        "  (x y : Int)",
+        "  {a : Nat} [inst : Inhabited Nat]",
+        "  ⦃f : Nat → Nat⦄",
+        "  label (n : Nat) : String := toString n",
+        "  label' n : String := toString n",
+        "  (g (n : Nat) : Nat)",
+        "  /- A comment. -/ private secret : Nat",
+        "  protected guarded : Nat",
+        "  @[simp] tagged : Nat",
+        "  @[simp]",
+        "  private",
+        "  above : Nat",
+        "  sides",
+        "    : Nat",
+        "  (first : Nat)",
+        "    (second : Nat)",
+        "  deriving Repr",
+        "class Shape (α : Type) where",
+        "  area : α → Nat",
+        "end Demo",
+    ]
+    index = _index(tmp_path, "\n".join(source) + "\n")
+
+    fields = (
+        *("value", "x", "y", "a", "inst", "f", "label", "label'", "g", "secret", "guarded"),
+        *("tagged", "above", "sides", "first", "second"),
+    )
+    assert sorted(index.declarations) == sorted(
+        ["Demo.Entry", *(f"Demo.Entry.{name}" for name in fields), "Demo.Shape", "Demo.Shape.area"]
+    )
+    value = index.find("Demo.Entry.value")
+    assert (value.path, value.line, value.keyword, value.private) == (Path("Project/Basic.lean"), 5, "field", False)
+    assert [index.find(f"Demo.Entry.{name}").line for name in ("y", "inst", "secret", "above", "sides")] == [
+        6, 7, 12, 17, 18
+    ]
+    assert index.find("Demo.Shape.area").line == 24
+    secret, guarded = index.find("Demo.Entry.secret"), index.find("Demo.Entry.guarded")
+    assert (secret.private, secret.protected, guarded.private, guarded.protected) == (True, False, False, True)
+    # Modifiers on a line of their own reach only the field below them.
+    assert (index.find("Demo.Entry.above").private, index.find("Demo.Entry.sides").private) == (True, False)
+    linker = SourceLinker(index=index, repository_url="https://github.com/owner/repo", ref="deadbeef")
+    assert linker.url("Demo.Entry.value") == "https://github.com/owner/repo/blob/deadbeef/Project/Basic.lean#L5"
+
+
+@pytest.mark.parametrize(
+    ("source", "names"),
+    [
+        ("structure Pair where (fst snd : Nat)\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair (α : Type)\n    (β : Type) where\n  fst : α\n  snd : β\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure\n  Pair where\n  fst : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  mkPair ::\n  fst : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  mkPair :: fst : Nat\n", ["Pair", "Pair.fst"]),
+        (
+            "structure Trie where\n  node ::\n    values : Nat\n    children : Nat\n",
+            ["Trie", "Trie.children", "Trie.values"],
+        ),
+        ("class HasMap (α : Type) where\nmk' ::\n  map : α\n", ["HasMap", "HasMap.map"]),
+        ("structure Pair where\n  fst : Nat\n  deriving Repr\n  snd : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  fst : Nat\n  #exit\n  snd : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair\n  #exit\n  where fst : Nat\n", ["Pair"]),
+        ('structure Pair where\n  fst : Nat\n  notation3:50 "x" => 1\n', ["Pair", "Pair.fst"]),
+        ('structure Pair where\n  fst : Nat\n  notation3 :max "x" => 1\n', ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  fst : Nat\n  recall succ : Nat → Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  fst : Nat\n  instance : Inhabited Nat where\n  default := 0\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  fst : Nat\n  local instance : Inhabited Nat where\n  default := 0\n", ["Pair", "Pair.fst"]),
+        ('structure Pair where\n  fst : Nat\n  scoped[N] notation "x" y => y\n  (y : Nat)\n', ["Pair", "Pair.fst"]),
+        ("structure Pos (n : Nat) where\n  pos:0 < n\n  snd : Nat\n", ["Pos", "Pos.pos", "Pos.snd"]),
+        ("structure Pt where\n  x : Nat\n  theorem Pt.ext' (p q : Pt)\n  (h : p.x = q.x) : p = q := sorry\n",
+         ["Pt", "Pt.ext'", "Pt.x"]),
+        ("structure Tag\n  instance : Inhabited Nat where\n    default := 0\n", ["Tag"]),
+        ("structure Tag\nmy_command Tag where\n  default : Nat\n", ["Tag"]),
+        # A term goes on past an operator, a term keyword, or binders followed by more of it.
+        ("structure Pair where\n  fst :\n  (n : Nat) → Fin (n + 1)\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where\n  fst : ∀ (x : Nat)\n  (y : Nat), x = y\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        (
+            "structure Pair where\n  fst : True := by\n  skip\n  have h : True := trivial\n  exact h\n  snd : Nat\n",
+            ["Pair", "Pair.fst", "Pair.snd"],
+        ),
+        ("structure Pair where\n  fst : Cfg := {\n  a := 1\n  b := 2 }\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where fst : Cfg := {\n  a := 1\n  b := 2 }\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where fst : Nat := (id\n                     x : Nat)\n                     snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair (n : Nat) where\n  fst : Int := 1 +\n  (n : Int)\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where\n  fst : Nat := 3 !\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        (
+            "structure Pair (n : Nat) where\n  fst : Int :=\n  set_option maxRecDepth 100 in\n  (n : Int)\n  snd : Nat\n",
+            ["Pair", "Pair.fst", "Pair.snd"],
+        ),
+        (
+            "structure Pair where fst : List Nat := [1,\n                         2]\n                     snd : Nat\n",
+            ["Pair", "Pair.fst", "Pair.snd"],
+        ),
+        ("structure Pair where\n  fst : Nat := 3 +\n  instance : Inhabited Nat where\n  default := 0\n", ["Pair", "Pair.fst"]),
+        ('structure Pair where\n  fst : Nat := 3 +\n  scoped[N] notation "x" y => y\n  (y : Nat)\n', ["Pair", "Pair.fst"]),
+        (
+            "structure Pair where fst : List Nat := [1,\n                     2]\n                     snd : Nat\n",
+            ["Pair", "Pair.fst", "Pair.snd"],
+        ),
+        ("structure Pair where\n  fst : IO Unit := ( do\n  pure ())\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where\n  fst : Nat := f'do\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where\n  «a(» : Nat\n  snd : Nat\n", ["Pair", "Pair.snd", "Pair.«a(»"]),
+        ("structure Pair where\n  fst : IO Unit := do\n  let mut x := 0\n  x := x + 1\n", ["Pair", "Pair.fst"]),
+        ('structure Pair where\n  fst : String := "x:"\n  snd : Nat\n', ["Pair", "Pair.fst", "Pair.snd"]),
+        ('structure Pair where\n  fst : String := "Usage:\n  run"\n  snd : Nat\n', ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where\n  fst : Nat := x'by\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        (
+            'def s : String := "a\fb"\nstructure Pair where\n  fst : String := "x"\n  snd : Nat\n',
+            ["Pair", "Pair.fst", "Pair.snd", "s"],
+        ),
+        (
+            'def s : String := "a\u2028b"\nstructure Pair where\n  fst : Cfg :=\n  { x := 1 }\n  snd : Nat\n',
+            ["Pair", "Pair.fst", "Pair.snd", "s"],
+        ),
+        ("structure Pair where mk ::\n  fst : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair (T : Type) where mk (T) ::\n  fst : T\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where mk :: fst : Nat\n                           snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        (
+            "def Foo (x : Nat := 0) : Type := Fin x\nstructure Pair where fst : Foo\n                       (x := 1)\n                     snd : Nat\n",
+            ["Foo", "Pair", "Pair.fst", "Pair.snd"],
+        ),
+        ("structure Pair where\n  α : Type*\n  n : ℕ+\n  snd : Nat\n", ["Pair", "Pair.n", "Pair.snd", "Pair.α"]),
+        ("structure Pair where\n  /-- doc -/ fst : Nat\n  snd : Nat\n-- no line end", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("-- a\u2028b\nstructure Pair where\n  fst : Nat\n  snd : Nat\n-- end\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Marker : Type\ninstance : Inhabited Nat where\n  default := 0\n", ["Marker"]),
+        ("structure Marker where\ndef after : Nat := 0\n", ["Marker", "after"]),
+        ("structure Pair :=\n  (fst : Nat)\n  (snd : Nat)\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Hom extends toBase : Base where\n  w : Nat\n", ["Hom", "Hom.toBase", "Hom.w"]),
+        (
+            "structure Location where\n  module : String\n  range : Nat\n",
+            ["Location", "Location.module", "Location.range"],
+        ),
+        ("structure Tree : Prop extends\n    connected : C, acyclic : A\n", ["Tree", "Tree.acyclic", "Tree.connected"]),
+        ("structure Plain extends Base, Pair (fun x => x, 1) where\n  z : Nat\n", ["Plain", "Plain.z"]),
+        ("structure S extends A { x := 1, y : Nat := 2 }, toB : B where\n  z : Nat\n", ["S", "S.toB", "S.z"]),
+        ("structure S extends «X)», A { x := 1, y : Nat := 2 } where\n  z : Nat\n", ["S", "S.z"]),
+        # `class abbrev` still reads as a class named `abbrev`, but with no fields.
+        ("class abbrev C (α : Type) :=\n  (inst : Add α), Mul α\n", ["abbrev"]),
+        ("structure Sized (n : Nat := 0)\n    (m : Nat) where\n  size : Nat\n", ["Sized", "Sized.size"]),
+        # A default may set an inherited field, which Lean declares nothing for.
+        (
+            "structure Point where\n  x := 0\n  (w := 4)\n"
+            "structure Moved extends Point where\n  x := 1\n  (w := 5)\n  y : Nat := 2\n",
+            ["Moved", "Moved.y", "Point", "Point.w", "Point.x"],
+        ),
+    ],
+    ids=["inline", "multiline-header", "keyword-alone", "constructor", "constructor-and-field",
+         "constructor-above-deeper-fields", "constructor-at-the-structure-s-column", "deriving", "exit",
+         "exit-in-the-header", "command-with-a-precedence", "command-with-a-named-precedence", "mathlib-command",
+         "command-with-fields-at-the-column", "local-command-with-fields-at-the-column",
+         "scoped-notation-at-the-field-column", "field-without-a-space", "command-with-binders-at-the-column",
+         "command-after-a-header", "unknown-command-after-a-header", "type-at-the-field-column",
+         "binders-continuing-a-term", "tactics-at-the-field-column", "structure-instance-at-the-field-column",
+         "structure-instance-after-where", "ascription-after-where", "operator-ending-a-line", "postfix-factorial",
+         "term-after-set-option-in", "bracket-after-where-closing-deeper", "command-after-an-open-line",
+         "scoped-command-after-an-open-line", "bracket-closing-after-where", "do-block-in-brackets",
+         "identifier-ending-in-do", "guillemet-holding-a-bracket", "do-block-at-the-field-column",
+         "literal-ending-a-field", "multi-line-literal-ending-in-a-colon", "identifier-ending-in-by",
+         "literal-in-a-file-with-a-form-feed", "continuation-in-a-file-with-a-line-separator", "inline-constructor",
+         "inline-constructor-with-binders", "inline-constructor-and-field", "argument-after-an-inline-field",
+         "postfix-types", "comment-without-a-line-end", "separator-before-a-last-comment", "no-where", "no-fields",
+         "assign", "named-parent", "field-named-module", "named-parents-without-where", "unnamed-parents",
+         "comma-inside-a-parent", "guillemet-inside-a-parent", "class-abbrev", "header-default", "defaults"],
+)
+def test_structure_fields_follow_the_structure_s_where(tmp_path: Path, source: str, names: list[str]) -> None:
+    assert sorted(_index(tmp_path, source).declarations) == names
+
+
+def test_constructor_names_on_one_line_do_not_recurse(tmp_path: Path) -> None:
+    # A structure has one constructor, so a second `::` on its line names no field.
+    source = "structure Pair where\n  " + "mk :: " * 50000 + "fst : Nat\n  snd : Nat\n"
+    assert sorted(_index(tmp_path, source).declarations) == ["Pair", "Pair.snd"]
+
+
+def test_fields_of_private_and_module_structures_keep_their_structure_s_visibility(tmp_path: Path) -> None:
+    index = _index_files(
+        tmp_path,
+        {
+            "Project/Hidden.lean": "private structure Hidden where\n  inner : Nat\n",
+            "Project/Section.lean": "module\n\npublic section\nnamespace Demo\nstructure Entry where\n"
+            "  value : Nat\nend Demo\nend\n",
+            "Project/Marked.lean": "module\n\nnamespace Demo\npublic structure Record where\n  count : Nat\nend Demo\n",
+        },
+    )
+
+    assert index.find("Hidden.inner").private
+    assert index.find("Demo.Entry.value").path == Path("Project/Section.lean")
+    assert index.find("Demo.Record.count").path == Path("Project/Marked.lean")
+    assert not index.find("Demo.Record.count").private
+
+
+def test_a_field_and_a_declaration_of_its_name_are_ambiguous(tmp_path: Path) -> None:
+    index = _index_files(
+        tmp_path,
+        {
+            "Project/A.lean": "structure Entry where\n  value : Nat\n",
+            "Project/B.lean": "def Entry.value (entry : Entry) : Nat := 0\n",
+        },
+    )
+
+    assert index.find("Entry.value") is None
+    assert index.ambiguity("Entry.value") == "Project/A.lean:2, Project/B.lean:1"
 
 
 def test_every_scope_closes_at_its_own_end(tmp_path: Path) -> None:
@@ -989,7 +1201,7 @@ def _republish_packets(root: Path) -> None:
     generated = root / "review-packets"
     stage = root / ".review-packets.autoform-stage-1"
     _packets_output(stage, 1)
-    _replace_outputs([(generated, stage, _output_identity(generated))])
+    replace_outputs([(generated, stage, output_identity(generated))])
     assert sorted(path.name for path in root.iterdir()) == ["Proj", "review-packets"]
 
 
@@ -3241,10 +3453,7 @@ def test_oversized_managed_manifest_leaves_its_directory_indexed_at_its_read_bou
     assert index.find("oversizedPacket") is not None
 
 
-def test_only_a_complete_publication_manifest_hides_its_folder(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_only_a_complete_publication_manifest_hides_its_folder(tmp_path: Path) -> None:
     # Render copies a blueprint's Lean files into its site and mkdocs copies the
     # site again, manifest included; both copies go stale when the source changes.
     complete = {"complete": True, "schema": "autoform-publication/v2"}
@@ -3254,7 +3463,8 @@ def test_only_a_complete_publication_manifest_hides_its_folder(
         "legacy": {**complete, "schema": "autoform-publication/v1"},
         "unfinished": {**complete, "complete": False},
         "web": {"name": "web app"},
-        "padded": {**complete, "padding": "x" * 64},
+        # It lists every site file, so a large project's manifest passes the old 8 MiB bound.
+        "large": {**complete, "padding": "x" * (8 * 1024 * 1024)},
         "object-schema": {**complete, "schema": {}},
         "array-schema": {**complete, "schema": []},
     }
@@ -3263,7 +3473,6 @@ def test_only_a_complete_publication_manifest_hides_its_folder(
         (tmp_path / folder / "publication.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / folder / "Copy" / "Proofs.lean").write_text("theorem stale : True := trivial\n")
     (tmp_path / "Proofs.lean").write_text("theorem renamed : True := trivial\n")
-    monkeypatch.setattr(lean_module, "PUBLICATION_MANIFEST_MAX_BYTES", 64, raising=False)
 
     snapshot = snapshot_project_sources(tmp_path)
 
@@ -3271,7 +3480,6 @@ def test_only_a_complete_publication_manifest_hides_its_folder(
         "Proofs.lean",
         "array-schema/Copy/Proofs.lean",
         "object-schema/Copy/Proofs.lean",
-        "padded/Copy/Proofs.lean",
         "unfinished/Copy/Proofs.lean",
         "web/Copy/Proofs.lean",
     ]

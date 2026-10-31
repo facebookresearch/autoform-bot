@@ -28,22 +28,29 @@ reference](../../autoform_cli/README.md#articles-and-containment) says, and
 commit.
 
 For a direct formalization request, use a compatible native persistent Goal when
-available and complete one useful frontier pass. Native subagents may work
+available and complete one useful frontier pass. When a run starts or resumes,
+and at each later re-read of the frontier, the lead first reads and decides the
+reviews on the project's pull requests as the [review
+steps](references/pull-request-reviews.md) say. Native subagents may work
 independent leaves in separate Git worktrees; no custom scheduler or provider
-adapter is part of the protocol. The lead's branch is the shared branch results
-integrate into; the lead also works its own leaves in worktrees, so nothing
-reaches that branch before its default build passes. Before dispatching, commit
-the roadmap state the frontier was read from and base each worktree on that
-commit, not on the remote's default branch (Claude Code's agent isolation does
-so only with `worktree.baseRef: head`). Give each subagent the `claim_target`,
-`phase`, `article_revision`, `open_statements`, `assumes`, and `revision` it is
-dispatched for. A new worktree has no `.lake`: in a Mathlib project, run `lake
-exe cache get` in the lead's checkout before creating worktrees, rerunning it
-once if it fails, then in each worktree before its first build or Lean tool
-call. If the rerun fails too, ask the user before creating worktrees, since each
-would then fetch or build Mathlib itself. Builds take no claim: dispatch no more
-workers at once than the machine's memory can build for. If the lakefile lacks
-the artifact cache `project new` writes, Setup offers to add it.
+adapter is part of the protocol. A subagent may keep its worktree for a package
+of related leaves, such as a container's, that the lead confirms together. It
+holds only the leaf it has taken, taking the next once `work context` shows it
+ready after integrating; at the first that is not, the rest return to the lead.
+The lead's branch is the shared branch results integrate into; the lead also
+works its own leaves in worktrees, so nothing reaches that branch before its
+default build passes. Before dispatching, commit the roadmap state the frontier
+was read from and base each worktree on that commit, not on the remote's default
+branch (Claude Code's agent isolation does so only with `worktree.baseRef:
+head`). Give each subagent each leaf's `claim_target`, `article_revision`,
+`open_statements`, `revision`, and the first leaf's `phase` and `assumes`. A new
+worktree has no `.lake`: in a Mathlib project, run `lake exe cache get` in the
+lead's checkout before creating worktrees, rerunning it once if it fails, then
+in each worktree before its first build or Lean tool call. If the rerun fails
+too, ask the user before creating worktrees, since each would then fetch or
+build Mathlib itself. Builds take no claim: dispatch no more workers at once
+than the machine's memory can build for. If the lakefile lacks the artifact
+cache `project new` writes, Setup offers to add it.
 
 Claims are optional. Within one run no one needs them: the lead keeps workers,
 itself included, from holding the same target at once. A worker holds its
@@ -77,14 +84,14 @@ rerunning it with `--module-scope import-closure` when the default scope cannot
 build or load every root library. When the run uses claims, follow the [import
 claims](references/claims.md#import-edits) from then on; otherwise send the lead
 the report's `claim_targets` and `affected_claim_targets` and wait for its
-answer. Capture baseline skeleton evidence for the report's currently
-built, named affected articles and, when the edit removes an import, for the
-articles of modules only that import kept in the build. The affected articles
-are not a lock: do not acquire or edit them merely because they are listed, and
-treat reported unresolved declarations as unknown validation scope, not proof
-they are unaffected. After rebuilding, repeat the skeleton evidence and use
-Agent Review to judge semantic changes; repair each article that actually needs
-changes under the review gates of the [revision
+answer. Unless the user has paused skeleton evidence, capture baseline skeleton
+evidence for the report's currently built, named affected articles and, when the
+edit removes an import, for the articles of modules only that import kept in the
+build. The affected articles are not a lock: do not acquire or edit them merely
+because they are listed, and treat reported unresolved declarations as unknown
+validation scope, not proof they are unaffected. After rebuilding, repeat any
+baseline skeleton evidence and use Agent Review to judge semantic changes; repair
+each article that actually needs changes under the review gates of the [revision
 contract](../../autoform_cli/reference/claims-and-revisions.md#revision-contract).
 Stop for an active conflict (an affected target another worker holds, or another
 owner's live claim on one) or failed validation, not for a blanket import rule;
@@ -94,9 +101,8 @@ Bring the worktree up to date with the shared branch (after [acquiring the
 claim](references/claims.md#acquire-and-renew), when the run uses claims) and
 reload `work context`. Before editing, require the same `phase`, `blockers`,
 `dependencies`, `article_revision`, `open_statements`, `assumes`, and `revision`
-as the first read and, for a subagent, the same `phase`, `article_revision`,
-`open_statements`, `assumes`, and `revision` it was dispatched with. Unrelated
-parallel articles may change the graph-wide source revision.
+as the first read and, for a subagent, the same fields it was dispatched with.
+Unrelated parallel articles may change the graph-wide source revision.
 
 Read the complete article, its `blueprint/.implementation-notes/<article_id>.md`
 when present, cited sources, dependency articles, and existing Lean target.
@@ -219,13 +225,13 @@ review marker, then run `autoform review check` with `--lean-root`, which needs
 that build, and report its findings for every article they name. For an import
 edit, re-run `autoform work import-impact` on the result; if integration brought
 in a change to an article it lists as affected, the candidate changed too:
-capture a fresh baseline of that article on the shared branch.
-In a run without claims, send the lead that report's `affected_claim_targets`
-and land the edit only once the lead confirms that no other worker holds them.
-For a revision, also re-run `autoform work impact` on the rebuilt result and
-repair any new targets before landing. Without authority to update or push the
-shared branch, without the lead's answer, or when integration fails, report the
-branch and commit for handoff. When the run uses claims, the [claim
+capture a fresh baseline of that article on the shared branch. In a run without
+claims, send the lead that report's `affected_claim_targets` and land the edit
+only once the lead confirms that no other worker holds them. For a revision,
+also re-run `autoform work impact` on the rebuilt result and repair any new
+targets before landing. Without authority to update or push the shared branch,
+without the lead's answer, or when integration fails, report the branch and
+commit for handoff. When the run uses claims, the [claim
 rules](references/claims.md#integration-and-handoff) say how to renew, keep,
 hand off, and release the claim set.
 
@@ -233,11 +239,16 @@ When `AUTOFORM_SUBAGENT_DEBRIEF=1`, the agent that worked an attempt then
 follows the [subagent debrief steps](references/debrief-subagent.md) before
 reporting.
 
-Re-read the work frontier from the updated shared branch and repeat while
-independent ready leaves and authorized capacity remain. Stop when the frontier
-is empty or every remaining attempt has a concrete mathematical or ownership
-blocker. Then the lead follows
-[Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with `--skill
-formalize`. Report changed articles and Lean files, integrated commits, branches
-and commits handed off, any claims released or handed off, checks and reviews
-run, and exact remaining goals.
+Once a worker has reported, debrief included, and its result is integrated or
+handed off, the lead removes its worktree with `git worktree remove` (never
+`--force`), unless, after integrating its result, that worker takes another leaf
+there; first make sure a branch points at any handed-off commit. Autoform never
+clears Lake's shared artifact cache, so tell the user if disk runs low. Re-read
+the work frontier from the updated shared branch and repeat while independent
+ready leaves and authorized capacity remain. Stop when the frontier is empty and
+no accepted review finding awaits repair, or every remaining attempt has a
+concrete mathematical or ownership blocker. Then
+the lead follows [Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with
+`--skill formalize`. Report changed articles and Lean files, integrated commits,
+branches and commits handed off, pull requests opened, any claims released or
+handed off, checks and reviews run, and exact remaining goals.

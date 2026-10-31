@@ -85,7 +85,8 @@ jobs:
           tests/test_dag_viewer_browser.py tests/test_integrated_explorer_browser.py
           tests/test_integrated_workspace_browser.py tests/test_integrated_continuity_browser.py
           tests/test_scoped_overview_browser.py tests/test_phone_fit_control.py
-          tests/test_integrated_selected_focus_browser.py
+          tests/test_integrated_selected_focus_browser.py tests/test_integrated_phone_back_browser.py
+          tests/test_integrated_reader_first_browser.py
         env:
           AUTOFORM_REQUIRE_BROWSER_TESTS: "1"
           AUTOFORM_REQUIRE_MATHJAX_TESTS: "1"
@@ -254,6 +255,7 @@ jobs:
         run: >-
           timeout --signal=TERM --kill-after=30s 35m uv run pytest -q
           tests/test_skeleton.py
+          tests/test_lean_probe.py
           tests/test_project_inspect.py::test_stale_inherited_mathlib_is_ignored_by_real_lake
         env:
           AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
@@ -320,12 +322,12 @@ jobs:
           tests/test_scaffold.py::test_scaffold_merges_autoform_rules_into_lake_gitignore
           tests/test_scaffold.py::test_windows_cross_interface_gitignore_identity_ignores_ctime_only
           tests/test_scaffold.py::test_scaffold_refuses_case_variants_of_managed_paths
-          tests/test_skeleton.py::test_bounded_command_rejects_excess_output
-          tests/test_skeleton.py::test_bounded_command_caps_stdout_and_stderr_together
-          tests/test_skeleton.py::test_bounded_command_rejects_invalid_utf8
-          tests/test_skeleton.py::test_bounded_command_timeout_kills_descendants
-          tests/test_skeleton.py::test_bounded_command_rejects_a_successful_parent_with_a_live_descendant
-          tests/test_skeleton.py::test_bounded_command_interruption_kills_the_process
+          tests/test_lean_probe.py::test_bounded_command_rejects_excess_output
+          tests/test_lean_probe.py::test_bounded_command_caps_stdout_and_stderr_together
+          tests/test_lean_probe.py::test_bounded_command_rejects_invalid_utf8
+          tests/test_lean_probe.py::test_bounded_command_timeout_kills_descendants
+          tests/test_lean_probe.py::test_bounded_command_rejects_a_successful_parent_with_a_live_descendant
+          tests/test_lean_probe.py::test_bounded_command_interruption_kills_the_process
           tests/test_skeleton.py::test_packet_publication_rolls_back_both_trees_on_commit_failure
           tests/test_skeleton.py::test_packet_publication_rolls_back_when_interrupted_after_backup_rename
           tests/test_skeleton.py::test_packet_publication_restores_old_trees_when_quarantine_cleanup_fails

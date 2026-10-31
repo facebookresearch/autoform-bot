@@ -730,16 +730,19 @@ def test_a_chapter_cannot_leave_a_fence_open_over_its_statements(
     _with_narrative(blueprint, "## Definitions\n\n````\n\n- [Base](base.md)")
 
     assert main(["check", str(blueprint)]) == 0
-    assert "warning: roadmap: line 10: code fence is not closed" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "warning: roadmap: line 10: code fence is not closed: the site would read it on" in out
+    assert out.count("code fence is not closed") == 1
 
 
 @pytest.mark.parametrize("notes", ["> ```\n> quoted\n", "- item\n\n    ```\n    indented\n"])
 def test_a_fence_the_next_margin_line_ends_is_published(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], notes: str
 ) -> None:
-    """An indented or quoted fence ends at the first line at the margin, and
-    render's markup starts there, so leaving one open, in a leaf's notes or
-    at the end of a page, hides nothing."""
+    """A quoted fence, or one indented four spaces under a list item, is not a
+    fence to autoform, and the site ends it at the first line at the margin,
+    where render's markup starts, so leaving one open, in a leaf's notes or at
+    the end of a page, hides nothing."""
 
     blueprint = _vault(tmp_path)
     _with_base_notes(blueprint, notes)
@@ -751,6 +754,73 @@ def test_a_fence_the_next_margin_line_ends_is_published(
     published = _published(site / "roadmap/README.md")
     assert published.count('<span class="bp-mark"') == 2
     assert "bp-as-typed" not in published + (site / "notes.md").read_text(encoding="utf-8")
+
+
+#: The warning's advice for a fence autoform reads as left open, after its reason.
+_CLOSE = "which the site does not; close it with a line of "
+_OPTIONS = "which the site does not; keep only options the site accepts, such as its language, and close it with a line of "
+
+
+@pytest.mark.parametrize(
+    ("notes", "line", "advice"),
+    [
+        ("  ```\n  indented\n", 3, _CLOSE + "``` indented 2 spaces, as its opening line is\n"),
+        ("- item\n\n  ```lean\n  code\n", 5, _CLOSE + "``` indented 2 spaces, as its opening line is\n"),
+        ("  ~~~~\n  tildes\n", 3, _CLOSE + "~~~~ indented 2 spaces, as its opening line is\n"),
+        (" ~~~\n tildes\n", 3, _CLOSE + "~~~ indented 1 space, as its opening line is\n"),
+        ("  ```{.lean}\n  accepted\n", 3, _CLOSE + "``` indented 2 spaces, as its opening line is\n"),
+        ("  ```lean <!-- aside -->\n  code\n", 3, _CLOSE + "``` indented 2 spaces, as its opening line is\n"),
+        ('  ```lean linenums="x"\n  a\n\n  b\n', 3, _OPTIONS + "``` indented 2 spaces, as its opening line is\n"),
+        ("  ~~~lean!\n  a\n\n  b\n", 3, _OPTIONS + "~~~ indented 2 spaces, as its opening line is\n"),
+        ('```lean linenums="x"\nrejected\n', 3, _OPTIONS + "```\n"),
+        ("```lean!\nrejected\n", 3, _OPTIONS + "```\n"),
+        ('```lean linenums="x"\na\n\n```lean linenums="x"\nb\n', 3, _OPTIONS + "```\n"),
+    ],
+)
+def test_a_fence_autoform_reads_as_open_is_reported_wherever_it_starts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], notes: str, line: int, advice: str
+) -> None:
+    """The site ends a fence indented one to three spaces at the next line at
+    the margin, and reads one with options it rejects as text, but coverage,
+    the link checks and render's link rewriting read a fence left open on to
+    the end of the text. Check reports it, and the site shows the page as
+    typed until it is closed, so nothing those readers skipped is published
+    live (#201)."""
+
+    blueprint = _vault(tmp_path)
+    (blueprint / "notes.md").write_text(f"# Notes\n\n{notes}\nAfter it.\n", encoding="utf-8")
+
+    assert main(["check", str(blueprint)]) == 0
+    out = capsys.readouterr().out
+    assert f"line {line}: code fence is not closed: autoform reads the rest of this text as code" in out
+    assert advice in out and out.count("code fence is not closed") == 1
+    assert "bp-as-typed" in (_render(blueprint) / "notes.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "fence",
+    [
+        "  ```\n  indented\n  ```",
+        " ~~~\n tildes\n ~~~",
+        "- item\n\n  ```lean\n  code\n  ```",
+        "  ```lean\n  a\n\n  b\n  ```",
+        "  ~~~lean\n  a\n\n  b\n  ~~~",
+    ],
+)
+def test_a_fence_closed_as_the_warning_advises_is_not_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], fence: str
+) -> None:
+    """With options the site accepts and closed at the indent of its opening
+    line, as the warning says, a fence ends on the same line for the site as
+    for autoform."""
+
+    blueprint = _vault(tmp_path)
+    (blueprint / "notes.md").write_text(f"# Notes\n\n{fence}\n\nAfter it.\n", encoding="utf-8")
+
+    assert main(["check", str(blueprint)]) == 0
+    assert "code fence is not closed" not in capsys.readouterr().out
+    rendered = " ".join(_rendered_article(f"{fence}\n\nAfter it.\n")[0].split())
+    assert '<div class="highlight">' in rendered and rendered.endswith("<p>After it.</p>")
 
 
 def test_a_statement_after_a_paragraph_is_a_box_of_its_own(tmp_path: Path) -> None:
@@ -1227,7 +1297,7 @@ def test_a_flagged_statement_keeps_its_chapter_in_place(tmp_path: Path, capsys: 
 
     site = _warned(blueprint, capsys, "base: the site shows it as typed until these are fixed")
     published = (site / "roadmap/README.md").read_text(encoding="utf-8")
-    assert "Additional formalization targets" not in published
+    assert "Other statements" not in published
     assert published.count('<pre class="bp-as-typed">') == 1
     definitions, results = published.index("## Definitions"), published.index("## Results")
     assert definitions < published.index("The base &lt;kbd&gt;object&lt;/kbd&gt;.") < results < published.index("The main result.")

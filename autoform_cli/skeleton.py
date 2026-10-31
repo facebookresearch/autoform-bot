@@ -5,9 +5,11 @@ declaration says what the blueprint claims: its statement and, transitively,
 every project definition that statement rests on. Proofs are the kernel's
 problem. The closure comes from elaborated terms, read back from a small probe
 run with ``lake env lean``, never from source text. The output is deterministic
-and path-free, and nothing here writes into the vault. The user-facing contract
-is the ``autoform skeleton`` section of ``autoform_cli/README.md``; the
-mechanics below are what it leaves out.
+and has Lean source paths relative to the project and article and passage paths
+relative to the blueprint; a failure reason quotes other paths as Lean printed
+them. Nothing here writes into the vault. The user-facing
+contract is the ``autoform skeleton`` section of ``autoform_cli/README.md``;
+the mechanics below are what it leaves out.
 
 Probe. For each module that declares a selected target, the probe imports that
 module and the helper module ``autoform-skeleton-helper`` (compiled with the
@@ -97,7 +99,9 @@ through temporary files, hard links, and atomic renames, so a concurrent change
 detected before commit aborts publication instead of being overwritten.
 Combined, they are staged together and a failed commit restores the previous
 set: failure atomicity, not simultaneous visibility, since each rename is
-atomic on its own.
+atomic on its own. Packets, the report, and the trees' identities are hashed
+and written in pieces: a joint packet repeats every closure in its article, and
+can be gigabytes.
 
 Passages. A ``## Sources`` link with a ``#L<start>-L<end>`` fragment that names
 a regular Markdown file in the blueprint, in any letter case, is a note; any
@@ -128,20 +132,15 @@ not load for the file.
 from __future__ import annotations
 
 import contextlib
-import ctypes
 import errno
 import hashlib
+import itertools
 import json
 import os
 import re
-import secrets
-import shutil
 import stat
-import sys
-import tempfile
 import time
-import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import asdict, dataclass, fields
 from dataclasses import field as dataclass_field
 from pathlib import Path
@@ -149,10 +148,16 @@ from urllib.parse import quote, unquote, urlsplit
 
 from . import lean_probe
 from ._fs import resolved_path
-from ._tree_snapshot import _normalized_name
+from ._managed_output import (
+    PACKET_MANIFEST,
+    output_identity,
+    remove_output,
+    replace_outputs,
+    stage_output,
+    validate_managed_output,
+)
 from .graph import Graph, GraphValidationError, Node, load_graph
 from .lean import (
-    MANAGED_OUTPUT_SCHEMAS,
     PACKET_SCHEMA,
     PASSAGE_SCHEMA,
     LeanSourceError,
@@ -258,8 +263,9 @@ class DeclarationSkeleton(TrustedDeclaration):
     statement: str | None = None
     #: UTF-8 byte ranges of the comments in ``statement``.
     statement_comments: tuple[tuple[int, int], ...] = ()
-    #: Hashes and packet text, each computed once: a report states them
-    #: several times, and each fingerprint encodes the whole trusted closure.
+    #: Hashes, each computed once: a report states them several times, and
+    #: each fingerprint encodes the whole trusted closure. The packet text is
+    #: streamed instead, since a large closure makes it gigabytes.
     _cache: dict[str, str] = dataclass_field(default_factory=dict, init=False, repr=False, compare=False)
 
     @property
@@ -304,8 +310,7 @@ class DeclarationSkeleton(TrustedDeclaration):
         """Fingerprint the probe's canonical elaborated meaning and trust boundary."""
 
         if "hash" not in self._cache:
-            modules = {module for module, _, _ in self.boundary_modules}
-            self._cache["hash"] = self._fingerprint(self.trusted, self.assumed, modules, axioms=True)
+            self._fingerprints({})
         return self._cache["hash"]
 
     @property
@@ -315,13 +320,33 @@ class DeclarationSkeleton(TrustedDeclaration):
         proof, ``sorry`` to a proof included, leaves it unchanged."""
 
         if "statement_hash" not in self._cache:
-            self._cache["statement_hash"] = self._fingerprint(
-                self.statement_trusted, self.statement_assumed, set(self.statement_boundary_modules), axioms=False
-            )
+            self._fingerprints({})
         return self._cache["statement_hash"]
 
+    def _fingerprints(self, escaped: dict[str, bytes]) -> None:
+        """Compute :attr:`hash` and :attr:`statement_hash`, escaping each string
+        once per ``escaped``, which roots that share a closure can share."""
+
+        if "hash" not in self._cache:
+            modules = {module for module, _, _ in self.boundary_modules}
+            self._cache["hash"] = self._fingerprint(self.trusted, self.assumed, modules, axioms=True, escaped=escaped)
+        if "statement_hash" not in self._cache:
+            self._cache["statement_hash"] = self._fingerprint(
+                self.statement_trusted,
+                self.statement_assumed,
+                set(self.statement_boundary_modules),
+                axioms=False,
+                escaped=escaped,
+            )
+
     def _fingerprint(
-        self, trusted: tuple[TrustedDeclaration, ...], assumed: tuple[str, ...], modules: set[str], *, axioms: bool
+        self,
+        trusted: tuple[TrustedDeclaration, ...],
+        assumed: tuple[str, ...],
+        modules: set[str],
+        *,
+        axioms: bool,
+        escaped: dict[str, bytes],
     ) -> str:
         names = set(assumed)
         material = {
@@ -338,14 +363,17 @@ class DeclarationSkeleton(TrustedDeclaration):
         }
         if axioms:
             material |= {"axioms": list(self.axioms), "axiom_semantics": [list(item) for item in self.axiom_semantics]}
-        return _sha256_id(json.dumps(material, sort_keys=True, ensure_ascii=False).encode())
+        digest = hashlib.sha256()
+        for piece in _json_utf8(material, escaped):
+            digest.update(piece)
+        return f"sha256:{digest.hexdigest()}"
 
     @property
     def evidence_hash(self) -> str:
         """Fingerprint the exact proof-free text presented to a reviewer."""
 
         if "evidence_hash" not in self._cache:
-            self._cache["evidence_hash"] = _sha256_id(self.blind_text().encode("utf-8"))
+            self._cache["evidence_hash"] = _sha256_pieces(self._packet())
         return self._cache["evidence_hash"]
 
     def blind_text(self) -> str:
@@ -361,45 +389,36 @@ class DeclarationSkeleton(TrustedDeclaration):
         unless it decides whether an equation-style statement can be cut at all.
         """
 
-        if "packet" not in self._cache:
-            self._cache["packet"] = self._packet()
-        return self._cache["packet"]
+        return "".join(self._packet())
 
-    def _packet(self) -> str:
-        lines = [
-            f"-- {self.kind} {self.name}",
-            f"-- assumed from libraries: {', '.join(self.statement_assumed) or 'none'}",
-            "",
-            self.signature,
-            "-- raw signature:",
-            self.raw_signature,
-            f"-- canonical kernel material: {self.semantic}",
-        ]
+    def _packet(self) -> Iterator[str]:
+        """The packet in pieces, each line followed by its newline, so the
+        kernel material is never copied into one string."""
+
+        yield f"-- {self.kind} {self.name}\n"
+        yield f"-- assumed from libraries: {', '.join(self.statement_assumed) or 'none'}\n\n"
+        yield from (self.signature, "\n-- raw signature:\n", self.raw_signature, "\n")
+        yield from ("-- canonical kernel material: ", self.semantic, "\n")
         own = _without_comments(self.source or "", self.source_comments).strip("\n")
         if own:
-            lines.append(own)
+            yield own + "\n"
         elif self.statement:
             written = _without_comments(self.statement, self.statement_comments).strip("\n")
             if written:
-                lines += ["-- as written:", written]
+                yield f"-- as written:\n{written}\n"
         if self.source_withheld or not (own or self.statement):
-            lines.append(_NOT_SHOWN)
+            yield _NOT_SHOWN + "\n"
         for item in self.statement_trusted:
             body = _without_comments(item.source or "", item.source_comments).strip("\n")
             # The elaborated signature restores what `variable` binders and
             # `open` leave implicit in the source, such as the type of `S`.
-            lines += [
-                "",
-                f"-- {item.kind} {item.name}",
-                f"-- signature: {item.signature}",
-                f"-- raw signature: {item.raw_signature}",
-                f"-- canonical kernel material: {item.semantic}",
-            ]
+            yield f"\n-- {item.kind} {item.name}\n"
+            yield from ("-- signature: ", item.signature, "\n-- raw signature: ", item.raw_signature, "\n")
+            yield from ("-- canonical kernel material: ", item.semantic, "\n")
             if body:
-                lines.append(body)
+                yield body + "\n"
             elif item.source_withheld:
-                lines.append(_NOT_SHOWN)
-        return "\n".join(lines) + "\n"
+                yield _NOT_SHOWN + "\n"
 
     def as_dict(self) -> dict[str, object]:
         """The report record, naming what the report's shared tables state once."""
@@ -458,9 +477,13 @@ class NodeSkeleton:
         alone.
         """
 
-        parts = [f"-- article with {len(self.declarations)} declaration(s)"]
-        parts += [declaration.blind_text() for declaration in self.declarations]
-        return "\n".join(parts)
+        return "".join(self._packet())
+
+    def _packet(self) -> Iterator[str]:
+        yield f"-- article with {len(self.declarations)} declaration(s)"
+        for declaration in self.declarations:
+            yield "\n"
+            yield from declaration._packet()
 
     @property
     def hash(self) -> str | None:
@@ -478,7 +501,7 @@ class NodeSkeleton:
         """Fingerprint the exact joint packet presented to a reviewer."""
 
         if "evidence_hash" not in self._cache:
-            self._cache["evidence_hash"] = _sha256_id(self.blind_text().encode("utf-8"))
+            self._cache["evidence_hash"] = _sha256_pieces(self._packet())
         return self._cache["evidence_hash"]
 
     @property
@@ -670,7 +693,12 @@ class SkeletonReport:
         }
 
     def to_json(self) -> str:
-        return json.dumps(self._record(self._tables), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return _REPORT_JSON.encode(self._record(self._tables))
+
+    def _json_pieces(self) -> Iterator[str]:
+        """:meth:`to_json` in pieces, for a report too large to hold twice."""
+
+        return _REPORT_JSON.iterencode(self._record(self._tables))
 
 
 def _share(table: dict[str, object], name: str, value: object, *, table_name: str) -> None:
@@ -680,6 +708,45 @@ def _share(table: dict[str, object], name: str, value: object, *, table_name: st
 
 def _sha256_id(content: bytes) -> str:
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
+def _sha256_pieces(pieces: Iterable[str]) -> str:
+    """The :func:`_sha256_id` of the UTF-8 text ``pieces`` join to, without joining them."""
+
+    digest = hashlib.sha256()
+    for piece in pieces:
+        digest.update(piece.encode("utf-8"))
+    return f"sha256:{digest.hexdigest()}"
+
+
+#: The report's spelling; its ``iterencode`` writes what ``encode`` returns, in pieces.
+_REPORT_JSON = json.JSONEncoder(sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _json_utf8(value: object, escaped: dict[str, bytes]) -> Iterator[bytes]:
+    """``json.dumps(value, sort_keys=True, ensure_ascii=False)`` in UTF-8 pieces,
+    for a value of strings, lists, and dicts, escaping each string once per ``escaped``."""
+
+    if isinstance(value, str):
+        piece = escaped.get(value)
+        if piece is None:
+            piece = escaped[value] = json.encoder.encode_basestring(value).encode("utf-8")
+        yield piece
+    elif isinstance(value, list):
+        yield b"["
+        for index, item in enumerate(value):
+            if index:
+                yield b", "
+            yield from _json_utf8(item, escaped)
+        yield b"]"
+    elif isinstance(value, dict):
+        yield b"{"
+        for index, (key, item) in enumerate(sorted(value.items())):
+            yield from (b", " if index else b"", *_json_utf8(key, escaped), b": ")
+            yield from _json_utf8(item, escaped)
+        yield b"}"
+    else:
+        raise TypeError(f"cannot fingerprint {type(value).__name__}")
 
 
 def _without_comments(text: str, comments: tuple[tuple[int, int], ...]) -> str:
@@ -1059,7 +1126,7 @@ def _require_probe_source(value: object, *, kind: str, context: str) -> None:
         raise SkeletonError([f"the skeleton probe emitted proof-bearing source for {context}"])
 
 
-def _probe_record_issue(record: dict[str, object]) -> str | None:
+def _probe_record_issue(record: dict[str, object], *, safe: set[int] | None = None) -> str | None:
     """Why a validated probe record cannot yield a skeleton, confined to its node.
 
     A declaration whose source cannot be located leaves nothing faithful to
@@ -1068,17 +1135,22 @@ def _probe_record_issue(record: dict[str, object]) -> str | None:
     (for example, a statement that uses `local notation`) is only withheld: the
     signatures and canonical kernel material still state its meaning. A
     partial root or trusted dependency has no kernel meaning to bind, so its
-    node is refused as well.
+    node is refused as well. ``safe`` holds the ids of shared records already
+    found safe, so each is parsed once however many roots trust it.
     """
 
     root = str(record["root"])
     trusted = record["trusted"]
     assert isinstance(trusted, list)
+    safe = set() if safe is None else safe
     safety = [(root, record)] + [(str(item.get("source_name") or ""), item) for item in trusted]
     for source_name, item in safety:
+        if id(item) in safe:
+            continue
         issue = _local_safety_issue(source_name, str(item["semantic"]))
         if issue is not None:
             return issue
+        safe.add(id(item))
     entries = [(root, root, record)]
     entries += [(str(item["name"]), f"{root} trusted declaration {item['name']}", item) for item in trusted]
     for name, context, item in entries:
@@ -1299,6 +1371,7 @@ def extract_skeletons(
     runner: ProbeRunner | None = None,
     node_ids: tuple[str, ...] | None = None,
     timeout: float | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> SkeletonReport:
     """Extract the skeleton of every ``lean:`` declaration the blueprint names.
 
@@ -1311,7 +1384,8 @@ def extract_skeletons(
     so it cannot be combined with ``timeout``, and may be called from several
     threads at once. A declaration the lexical index cannot place is reported
     as unresolved without running Lean, exactly as
-    ``autoform check --lean-root`` reports it.
+    ``autoform check --lean-root`` reports it. ``progress`` hears each phase as
+    it starts, as :func:`extract_graph_skeletons` says.
     """
 
     if runner is not None and timeout is not None:
@@ -1337,7 +1411,14 @@ def extract_skeletons(
         probing, runner = lean_probe.default_runner(root, timeout=DEFAULT_PROBE_TIMEOUT if timeout is None else timeout)
 
     report = extract_graph_skeletons(
-        graph, lean_root=root, libraries=libraries, index=index, runner=runner, node_ids=node_ids, probing=probing
+        graph,
+        lean_root=root,
+        libraries=libraries,
+        index=index,
+        runner=runner,
+        node_ids=node_ids,
+        probing=probing,
+        progress=progress,
     )
     current = check_inputs_unchanged(graph, root, index, inputs, activity=activity)
     if _blueprint_hash(current, _source_passages(current)) != report.blueprint_hash:
@@ -1460,12 +1541,15 @@ def extract_graph_skeletons(
     runner: ProbeRunner,
     node_ids: tuple[str, ...] | None = None,
     probing: Callable[[tuple[str, ...]], contextlib.AbstractContextManager[object]] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> SkeletonReport:
     """Extract skeletons for an already loaded graph.
 
     ``probing``, when given, is entered with every module about to be probed and
     held while the probes run, and only then; the default runner's freshness
     check, helper build, scratch directory and signal guard live there.
+    ``progress``, when given, hears ``probing <n> modules`` before any module
+    is probed, ``probing`` included, and ``assembling`` once no probe runs.
     """
 
     targets, selected, selection = select_lean_targets(graph, node_ids)
@@ -1511,6 +1595,8 @@ def extract_graph_skeletons(
             for module in sorted(groups)
         }
         snapshot_started_ns = time.time_ns()
+        if progress is not None:
+            progress(f"probing {_plural(len(programs), 'module')}")
 
         def probe(module: str) -> dict[str, dict[str, object]]:
             # Parsed in the worker, as soon as the probe ends.
@@ -1526,10 +1612,15 @@ def extract_graph_skeletons(
                     f"probe of module {module} failed: {result}", lean_root
                 )
             else:
-                records.update(result)  # type: ignore[arg-type]
+                records.update(result)
 
+    if progress is not None:
+        progress("assembling")
     nodes: list[NodeSkeleton] = []
     module_hashes: dict[tuple[str, str], str] = {}
+    # A probe states each shared record once; these keep it read once, by id.
+    safe: set[int] = set()
+    shared: dict[int, TrustedDeclaration] = {}
     for node, names in selected:
         declarations: list[DeclarationSkeleton] = []
         for name in names:
@@ -1563,7 +1654,7 @@ def extract_graph_skeletons(
                 reason = f"Lean declares it in module {record.get('module')}, not in {module} where its source was found"
                 unresolved.append(UnresolvedTarget(node.id, name, reason))
                 continue
-            issue = _probe_record_issue(record)
+            issue = _probe_record_issue(record, safe=safe)
             if issue is not None:
                 unresolved.append(UnresolvedTarget(node.id, name, issue))
                 continue
@@ -1575,6 +1666,7 @@ def extract_graph_skeletons(
                     index=index,
                     module_hashes=module_hashes,
                     snapshot_started_ns=snapshot_started_ns,
+                    shared=shared,
                 )
             )
         passage, locator, _ = passages[node.id]
@@ -1588,6 +1680,11 @@ def extract_graph_skeletons(
                 complete={item.name for item in declarations} == set(names),
             )
         )
+    # Roots share most of their closures, so each string is escaped once for all their fingerprints.
+    escaped: dict[str, bytes] = {}
+    for item in nodes:
+        for declaration in item.declarations:
+            declaration._fingerprints(escaped)
     return SkeletonReport(
         blueprint_hash=_blueprint_hash(graph, passages),
         targets=tuple((node.id, names) for node, names in targets),
@@ -1747,8 +1844,13 @@ def _declaration(
     index: SourceIndex,
     module_hashes: dict[tuple[str, str], str],
     snapshot_started_ns: int | None,
+    shared: dict[int, TrustedDeclaration],
 ) -> DeclarationSkeleton:
-    trusted = [_trusted(item, libraries=libraries, lean_root=lean_root, index=index) for item in record["trusted"]]
+    trusted: list[TrustedDeclaration] = []
+    for item in record["trusted"]:  # type: ignore[attr-defined]
+        if id(item) not in shared:
+            shared[id(item)] = _trusted(item, libraries=libraries, lean_root=lean_root, index=index)
+        trusted.append(shared[id(item)])
     name = str(record["root"])
     module = str(record["module"])
     start, end = record["range"] or (None, None)
@@ -1921,68 +2023,8 @@ def format_report(report: SkeletonReport, *, lean_root: Path | None = None) -> s
     return "\n".join(out).rstrip("\n") + "\n"
 
 
-PACKET_MANIFEST = "manifest.json"
 #: The joint packet of an article's declarations, what a faithfulness judge reads.
 ARTICLE_PACKET = "article.lean"
-
-
-def _output_identity(path: Path) -> tuple[int, int, str] | None:
-    """Return the identity of an output path without following its final link."""
-
-    try:
-        metadata = path.lstat()
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        raise SkeletonError([f"cannot inspect skeleton output {path}: {exc}"]) from exc
-    digest = hashlib.sha256()
-    try:
-        for child in [path, *sorted(path.rglob("*"))] if stat.S_ISDIR(metadata.st_mode) else [path]:
-            if child.is_symlink():
-                raise SkeletonError([f"refusing symlink packet output: {child}"])
-            digest.update(child.relative_to(path).as_posix().encode("utf-8") + b"\0")
-            if child.is_dir():
-                digest.update(b"directory\0")
-            elif child.is_file():
-                digest.update(b"file\0" + child.read_bytes() + b"\0")
-            else:
-                raise SkeletonError([f"refusing special file in packet output: {child}"])
-    except OSError as exc:
-        raise SkeletonError([f"cannot inspect skeleton output {path}: {exc}"]) from exc
-    return metadata.st_dev, metadata.st_ino, digest.hexdigest()
-
-
-def _validate_managed_output(path: Path, *, kind: str, schema: str | None = None) -> tuple[int, int, str] | None:
-    """Validate an output tree against its exact producer schema."""
-
-    identity = _output_identity(path)
-    if identity is None:
-        return identity
-    if not path.is_dir():
-        raise SkeletonError([f"packet output exists and is not a directory: {path}"])
-    try:
-        if not any(path.iterdir()):
-            return identity
-    except OSError as exc:
-        raise SkeletonError([f"cannot inspect skeleton output {path}: {exc}"]) from exc
-    manifest = path / PACKET_MANIFEST
-    try:
-        readable = manifest.is_file() and not manifest.is_symlink()
-        payload = json.loads(manifest.read_text(encoding="utf-8")) if readable else None
-    except (OSError, RecursionError, ValueError):
-        payload = None
-    if not (
-        isinstance(payload, dict)
-        and payload.get("kind") == kind
-        and isinstance(payload.get("schema"), str)
-        and (kind, payload.get("schema")) in (MANAGED_OUTPUT_SCHEMAS if schema is None else ((kind, schema),))
-        and isinstance(payload.get(kind), list)
-    ):
-        raise SkeletonError([f"refusing to overwrite non-Autoform packet output: {path}"])
-    return identity
-
-
-validate_managed_output = _validate_managed_output
 
 
 def _safe_node_path(node_id: str) -> Path:
@@ -2022,250 +2064,13 @@ def declaration_filename(name: str, *, suffix: str = ".lean") -> str:
     return f"{encoded}--{digest}{suffix}"
 
 
-def _stage_output(destination: Path, content: str | None = None, *, stages: list[Path] | None = None) -> Path:
-    """Create a same-directory stage, a directory or a file of ``content``, with the old mode.
-
-    With ``stages``, the stage is registered there before it is created, so
-    whoever owns ``stages`` removes it however this call or a later step ends.
-    Without, a stage this call cannot finish is removed before the error leaves.
-    """
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        existing = not destination.is_symlink() and (
-            destination.is_dir() if content is None else destination.is_file()
-        )
-        mode = stat.S_IMODE(destination.stat().st_mode) if existing else None
-    except OSError as exc:
-        raise SkeletonError([f"cannot inspect skeleton output {destination}: {exc}"]) from exc
-    stage = destination.with_name(f".{destination.name}.autoform-stage-{secrets.token_hex(8)}")
-    if stages is not None:
-        stages.append(stage)
-    try:
-        stream = stage.mkdir() if content is None else stage.open("x", encoding="utf-8")
-    except FileExistsError:
-        # Never created here, so the owner of ``stages`` must not remove a foreign path.
-        if stages is not None:
-            stages.remove(stage)
-        raise
-    try:
-        if stream is not None:
-            with stream:
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
-        if mode is not None:
-            stage.chmod(mode)
-    except BaseException:
-        if stages is None:
-            with contextlib.suppress(OSError):
-                _remove_output(stage)
-        raise
-    return stage
-
-
 def _stage_report_output(report: SkeletonReport, destination: Path) -> tuple[Path, tuple[int, int, str] | None]:
     """Write a report to a same-directory stage and capture the old identity."""
 
-    identity = _output_identity(destination)
+    identity = output_identity(destination)
     if identity is not None and not destination.is_file():
         raise SkeletonError([f"report output exists and is not a regular file: {destination}"])
-    return _stage_output(destination, report.to_json() + "\n"), identity
-
-
-def _remove_output(path: Path) -> None:
-    """Remove one transaction-owned file or directory without following links.
-
-    A directory loses its manifest last: Lean source capture skips a folder by
-    that marker, matched by folded name, so no packet may outlive it.
-    """
-
-    if path.is_dir() and not path.is_symlink():
-        with os.scandir(path) as entries:
-            children = [entry for entry in entries if _normalized_name(entry.name) != PACKET_MANIFEST]
-        for child in children:
-            if child.is_dir(follow_symlinks=False):
-                shutil.rmtree(child.path)
-            else:
-                os.unlink(child.path)
-        shutil.rmtree(path)
-    else:
-        path.unlink(missing_ok=True)
-
-
-def _rename_no_replace(source: Path, destination: Path) -> None:
-    """Atomically rename ``source`` only when ``destination`` is absent."""
-
-    if os.name == "nt":  # pragma: no cover - Windows-specific path
-        os.rename(source, destination)
-        return
-
-    library = ctypes.CDLL(None, use_errno=True)
-    source_bytes, destination_bytes = os.fsencode(source), os.fsencode(destination)
-    try:
-        if sys.platform.startswith("linux"):
-            result = library.renameat2(-100, source_bytes, -100, destination_bytes, 1)
-        elif sys.platform == "darwin":
-            result = library.renamex_np(source_bytes, destination_bytes, 0x00000004)
-        else:
-            raise AttributeError(sys.platform)
-    except AttributeError as exc:
-        raise SkeletonError([f"atomic no-replace rename is unavailable on {sys.platform}"]) from exc
-    if result != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error), destination)
-
-
-def _install_output(stage: Path, destination: Path) -> None:
-    """Install a stage without overwriting a concurrent output."""
-
-    metadata = stage.lstat()
-    if stat.S_ISREG(metadata.st_mode):
-        os.link(stage, destination)
-        stage.unlink()
-    else:
-        _rename_no_replace(stage, destination)
-
-
-def _preflight_output_installs(
-    outputs: list[tuple[Path, Path, tuple[int, int, str] | None]],
-) -> None:
-    """Prove each destination filesystem supports its artifact install."""
-
-    checked: set[tuple[int, int]] = set()
-    for destination, stage, _ in outputs:
-        try:
-            key = (stat.S_IFMT(stage.lstat().st_mode), destination.parent.stat().st_dev)
-        except OSError as exc:
-            raise SkeletonError([f"cannot inspect skeleton output stage {stage}: {exc}"]) from exc
-        if key[0] not in {stat.S_IFREG, stat.S_IFDIR}:
-            raise SkeletonError([f"skeleton output stage is not a file or directory: {stage}"])
-        if key in checked:
-            continue
-        checked.add(key)
-        probe_root = Path(tempfile.mkdtemp(prefix=f".{destination.name}.autoform-preflight-", dir=destination.parent))
-        source = probe_root / "source"
-        try:
-            source.touch(exist_ok=False) if key[0] == stat.S_IFREG else source.mkdir()
-            _install_output(source, probe_root / "target")
-        except BaseException:
-            try:
-                _remove_output(probe_root)
-            except OSError as cleanup_exc:
-                warnings.warn(
-                    f"could not remove output preflight artifacts at {probe_root}: {cleanup_exc}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-            raise
-        try:
-            _remove_output(probe_root)
-        except OSError as cleanup_exc:
-            raise SkeletonError(
-                [f"could not remove output preflight artifacts at {probe_root}: {cleanup_exc}"]
-            ) from cleanup_exc
-
-
-def _replace_outputs(
-    outputs: list[tuple[Path, Path, tuple[int, int, str] | None]],
-) -> None:
-    """Commit staged outputs with rollback, but not cross-path linearizability.
-
-    Each rename is atomic. Readers can still observe the interval between the
-    renames; avoiding that requires one shared generation pointer rather than
-    another rollback branch.
-    """
-
-    _preflight_output_installs(outputs)
-    for destination, _, identity in outputs:
-        if _output_identity(destination) != identity:
-            raise SkeletonError([f"packet output changed during publication: {destination}"])
-    backups: dict[Path, tuple[Path, tuple[int, int, str]]] = {}
-    installs: dict[Path, tuple[Path, tuple[int, int, str]]] = {}
-    try:
-        for destination, _, identity in outputs:
-            if identity is None:
-                continue
-            backup = destination.with_name(
-                f".{destination.name}.autoform-backup-{secrets.token_hex(8)}"
-            )
-            backups[destination] = (backup, identity)
-            os.replace(destination, backup)
-            if _output_identity(backup) != identity:
-                raise SkeletonError([f"packet output changed during publication: {destination}"])
-        for destination, stage, _ in outputs:
-            stage_identity = _output_identity(stage)
-            if stage_identity is None:
-                raise SkeletonError([f"skeleton output stage disappeared: {stage}"])
-            installs[destination] = (stage, stage_identity)
-            _install_output(stage, destination)
-    except BaseException as exc:
-        rollback_issues: list[str] = []
-        for destination, (_, expected) in reversed(installs.items()):
-            try:
-                destination_identity = _output_identity(destination)
-                if destination_identity is None:
-                    continue
-                if destination_identity != expected:
-                    rollback_issues.append(
-                        f"published output changed during rollback and was preserved at {destination}"
-                    )
-                    continue
-                quarantine = destination.with_name(
-                    f".{destination.name}.autoform-rollback-{secrets.token_hex(8)}"
-                )
-                os.replace(destination, quarantine)
-                try:
-                    quarantine_identity = _output_identity(quarantine)
-                    if quarantine_identity != expected:
-                        rollback_issues.append(
-                            f"changed rolled-back output was preserved for recovery at {quarantine}"
-                        )
-                        continue
-                    _remove_output(quarantine)
-                except (OSError, SkeletonError) as cleanup_exc:
-                    rollback_issues.append(
-                        f"could not remove rolled-back output preserved for recovery at {quarantine}: {cleanup_exc}"
-                    )
-            except (OSError, SkeletonError) as rollback_exc:
-                rollback_issues.append(
-                    f"could not roll back skeleton output {destination}: {rollback_exc}"
-                )
-        for destination, (backup, expected) in backups.items():
-            try:
-                backup_identity = _output_identity(backup)
-                destination_identity = _output_identity(destination)
-                if backup_identity is not None and destination_identity is None:
-                    _install_output(backup, destination)
-                elif backup_identity is not None:
-                    state = "previous output" if backup_identity == expected else "changed backup"
-                    rollback_issues.append(f"{state} was preserved for recovery at {backup}")
-                elif destination_identity != expected:
-                    rollback_issues.append(
-                        f"could not find previous skeleton output for {destination} during rollback"
-                    )
-            except (OSError, SkeletonError) as rollback_exc:
-                rollback_issues.append(
-                    f"could not restore skeleton output {destination}; previous output remains at {backup}: {rollback_exc}"
-                )
-        if not isinstance(exc, (OSError, SkeletonError)):
-            raise
-        issues = list(exc.issues) if isinstance(exc, SkeletonError) else [f"could not publish skeleton output: {exc}"]
-        raise SkeletonError([*issues, *rollback_issues]) from exc
-    for backup, expected in backups.values():
-        try:
-            backup_identity = _output_identity(backup)
-            if backup_identity == expected:
-                _remove_output(backup)
-                continue
-            message = (
-                f"skeleton output backup disappeared before cleanup: {backup}"
-                if backup_identity is None
-                else f"skeleton output backup changed before cleanup and was preserved at {backup}"
-            )
-        except (OSError, SkeletonError) as cleanup_exc:
-            message = f"could not remove previous skeleton output preserved at {backup}: {cleanup_exc}"
-        warnings.warn(message, RuntimeWarning, stacklevel=2)
+    return stage_output(destination, itertools.chain(report._json_pieces(), "\n")), identity
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:
@@ -2287,13 +2092,13 @@ def write_skeleton_report(report: SkeletonReport, destination: str | Path) -> Pa
     stage: Path | None = None
     try:
         stage, identity = _stage_report_output(report, output)
-        _replace_outputs([(output, stage, identity)])
+        replace_outputs([(output, stage, identity)])
     except OSError as exc:
         raise SkeletonError([f"could not prepare skeleton report output: {exc}"]) from exc
     finally:
         if stage is not None:
             with contextlib.suppress(OSError):
-                _remove_output(stage)
+                remove_output(stage)
     return output
 
 
@@ -2328,7 +2133,7 @@ def write_packets(
         )
 
     root = _output_path(directory, "packet")
-    passages_root = None if passages is None else _output_path(passages, "packet")
+    passages_root = None if passages is None else _output_path(passages, "passage")
     if passages_root is not None and _paths_overlap(root, passages_root):
         raise SkeletonError(["packet and passage output directories must be disjoint"])
     report_destination = None if report_path is None else _output_path(report_path, "report")
@@ -2337,9 +2142,9 @@ def write_packets(
         or (passages_root is not None and _paths_overlap(passages_root, report_destination))
     ):
         raise SkeletonError(["report output must be disjoint from packet and passage directories"])
-    root_identity = _validate_managed_output(root, kind="packets")
+    root_identity = validate_managed_output(root, kind="packets")
     passages_identity = (
-        _validate_managed_output(passages_root, kind="passages")
+        validate_managed_output(passages_root, kind="passages")
         if passages_root is not None
         else None
     )
@@ -2351,11 +2156,12 @@ def write_packets(
     manifest: list[dict[str, str]] = []
     passage_manifest: list[dict[str, str]] = []
     # Written after the manifests: a capture that lists a stage before its
-    # marker is complete then finds no folder to descend into.
-    files: list[tuple[Path, str | bytes]] = []
+    # marker is complete then finds no folder to descend into. Packets are
+    # streamed, so no packet is held whole.
+    files: list[tuple[Path, bytes | Iterable[str]]] = []
     try:
-        packet_stage = _stage_output(root)
-        passages_stage = _stage_output(passages_root) if passages_root is not None else None
+        packet_stage = stage_output(root)
+        passages_stage = stage_output(passages_root) if passages_root is not None else None
         if report_destination is not None:
             report_stage, report_identity = _stage_report_output(report, report_destination)
         for node in report.nodes:
@@ -2375,11 +2181,11 @@ def write_packets(
                 )
             article_relative = node_path / ARTICLE_PACKET
             if node.declarations:
-                files.append((packet_stage / article_relative, node.blind_text()))
+                files.append((packet_stage / article_relative, node._packet()))
                 written.append(root / article_relative)
             for declaration in node.declarations:
                 relative = node_path / declaration_filename(declaration.name)
-                files.append((packet_stage / relative, declaration.blind_text()))
+                files.append((packet_stage / relative, declaration._packet()))
                 written.append(root / relative)
                 entry = {
                     "article_packet": article_relative.as_posix(),
@@ -2403,26 +2209,27 @@ def write_packets(
                 payload = json.dumps({"kind": kind, kind: entries, "schema": schema}, indent=2, sort_keys=True)
                 # Staged under a name that is neither the marker nor Lean source, then
                 # renamed: a capture sees no marker or the whole one, never a partial file.
-                os.replace(_stage_output(stage / PACKET_MANIFEST, payload + "\n"), stage / PACKET_MANIFEST)
+                os.replace(stage_output(stage / PACKET_MANIFEST, payload + "\n"), stage / PACKET_MANIFEST)
         for path, content in files:
             path.parent.mkdir(parents=True, exist_ok=True)
             if isinstance(content, bytes):
                 path.write_bytes(content)
-            else:
-                path.write_text(content, encoding="utf-8")
+                continue
+            with path.open("w", encoding="utf-8") as stream:
+                stream.writelines(content)
         outputs = [(root, packet_stage, root_identity)]
         if passages_root is not None and passages_stage is not None:
             outputs.append((passages_root, passages_stage, passages_identity))
         if report_destination is not None and report_stage is not None:
             outputs.append((report_destination, report_stage, report_identity))
-        _replace_outputs(outputs)
+        replace_outputs(outputs)
     except OSError as exc:
         raise SkeletonError([f"could not prepare skeleton output: {exc}"]) from exc
     finally:
         for stage in (packet_stage, passages_stage, report_stage):
             if stage is not None:
                 with contextlib.suppress(OSError):
-                    _remove_output(stage)
+                    remove_output(stage)
     return written
 
 

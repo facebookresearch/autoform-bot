@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -41,13 +42,16 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
+import types
 from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import psutil
 import tomli
@@ -106,9 +110,9 @@ class SkeletonError(RuntimeError):
 
     This module raises it for Lake configuration, command, probe-run and
     snapshot failures; ``skeleton`` for malformed skeleton-probe records,
-    blueprints, article selections, inputs that change mid-run and managed
-    output; ``impact`` for malformed impact-probe records and its project
-    inventory.
+    blueprints, article selections, inputs that change mid-run and the
+    output it prepares; ``_managed_output`` for output publication;
+    ``impact`` for malformed impact-probe records and its project inventory.
     """
 
     def __init__(self, issues: list[str] | tuple[str, ...]) -> None:
@@ -139,9 +143,9 @@ def _read_snapshot_pass(
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise SkeletonError([f"cannot inspect skeleton input {path}: {exc}"]) from exc
+        raise SkeletonError([f"cannot inspect {path}: {exc}"]) from exc
     if not stat.S_ISREG(path_metadata.st_mode):
-        raise SkeletonError([f"skeleton input is not a regular file: {path}"])
+        raise SkeletonError([f"not a regular file: {path}"])
     flags = (
         os.O_RDONLY
         | getattr(os, "O_BINARY", 0)
@@ -153,11 +157,11 @@ def _read_snapshot_pass(
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise SkeletonError([f"cannot open skeleton input {path}: {exc}"]) from exc
+        raise SkeletonError([f"cannot open {path}: {exc}"]) from exc
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
-            raise SkeletonError([f"skeleton input is not a regular file: {path}"])
+            raise SkeletonError([f"not a regular file: {path}"])
         digest = hashlib.sha256()
         chunks: list[bytes] = []
         size = 0
@@ -168,13 +172,13 @@ def _read_snapshot_pass(
             size += len(block)
             if size > SNAPSHOT_FILE_LIMIT:
                 raise SkeletonError(
-                    [f"skeleton input exceeds the {SNAPSHOT_FILE_LIMIT}-byte limit: {path}"]
+                    [f"over the {SNAPSHOT_FILE_LIMIT}-byte limit: {path}"]
                 )
             digest.update(block)
             if keep_content:
                 chunks.append(block)
     except OSError as exc:
-        raise SkeletonError([f"cannot read skeleton input {path}: {exc}"]) from exc
+        raise SkeletonError([f"cannot read {path}: {exc}"]) from exc
     finally:
         os.close(descriptor)
     return b"".join(chunks), (size, digest.hexdigest())
@@ -194,7 +198,7 @@ def read_snapshot_file(path: Path) -> tuple[bytes, tuple[int, str]] | None:
     captured_fingerprint = None if captured is None else captured[1]
     verified_fingerprint = None if verified is None else verified[1]
     if captured_fingerprint != verified_fingerprint:
-        raise SkeletonError([f"skeleton input changed while it was read: {path}"])
+        raise SkeletonError([f"changed while it was read: {path}"])
     return captured
 
 
@@ -207,22 +211,39 @@ _PROJECT_CONTROL_FILES = (
 )
 
 
-def _snapshot_regular_file(path: Path) -> tuple[int, str] | None:
-    captured = read_snapshot_file(path)
-    return None if captured is None else captured[1]
-
-
 def project_control_snapshot(root: Path) -> tuple[tuple[str, tuple[int, str] | None], ...]:
     """Fingerprint the Lake inputs that select the compiled environment."""
 
-    return tuple(
-        (name, _snapshot_regular_file(root / name)) for name in _PROJECT_CONTROL_FILES
-    )
+    captured = ((name, read_snapshot_file(root / name)) for name in _PROJECT_CONTROL_FILES)
+    return tuple((name, None if snapshot is None else snapshot[1]) for name, snapshot in captured)
 
 
 # --------------------------------------------------------------------------- #
 # Bounded commands
 # --------------------------------------------------------------------------- #
+
+
+def _load_process_helpers() -> types.ModuleType:
+    """Load servers/_process.py from beside this package, never as ``servers``.
+
+    Under ``python -m autoform_cli`` the working directory comes first on
+    ``sys.path``, so ``import servers`` could run a consumer's package. Tests
+    patch ``os``, ``psutil`` or ``lean_probe._process_helpers``; patching
+    ``servers._process`` does not reach this copy.
+    """
+
+    path = Path(__file__).resolve().parent.parent / "servers" / "_process.py"
+    spec = importlib.util.spec_from_file_location("autoform_cli._process_helpers", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_process_helpers = _load_process_helpers()
+#: What a servers/_process.py check raises when it cannot rule a process out.
+_INSPECTION_ERRORS = (RuntimeError, OSError, SystemError, psutil.Error)
 
 
 def _remember_descendants(
@@ -251,33 +272,32 @@ def _remember_tagged_processes(
     root_pid: int,
     strict: bool = True,
 ) -> None:
-    """Find descendants that escaped the original parent and process group."""
+    """Find descendants that escaped the original parent and process group.
 
-    last_scan_error: BaseException | None = None
+    The scan fails when it cannot rule a process out; one retry absorbs
+    Darwin's transient errors. Cleanup passes ``strict=False`` so a failed
+    scan cannot replace the error that started it.
+    """
+
+    error: BaseException | None = None
     for _attempt in range(2):
-        retry = False
         try:
-            candidates = tuple(psutil.process_iter())
-        except (psutil.Error, OSError, SystemError) as error:
-            last_scan_error = error
+            found = _process_helpers.processes_with_token(_PROCESS_TOKEN_ENV, token)
+        except _INSPECTION_ERRORS as exc:
+            error = exc
             continue
-        for candidate in candidates:
-            if candidate.pid in {os.getpid(), root_pid}:
+        for candidate in found:
+            if candidate.pid == root_pid:
                 continue
             try:
-                if candidate.environ().get(_PROCESS_TOKEN_ENV) == token:
-                    descendants[(candidate.pid, candidate.create_time())] = candidate
-            except (psutil.Error, OSError):
+                descendants[(candidate.pid, candidate.create_time())] = candidate
+            except (psutil.Error, OSError, SystemError):
                 continue
-            except SystemError as error:
-                last_scan_error = error
-                retry = True
-        if not retry:
-            return
-    if strict and last_scan_error is not None:
+        return
+    if strict:
         raise SkeletonError(
             ["cannot safely inspect descendant processes after repeated process-table errors"]
-        ) from last_scan_error
+        ) from error
 
 
 def _process_is_alive(process: psutil.Process) -> bool:
@@ -291,40 +311,6 @@ def _process_is_alive(process: psutil.Process) -> bool:
         # termination is attempted; treating inspection failure as dead could
         # let an escaped descendant survive a successful command.
         return True
-
-
-def _process_group_is_alive(pid: int) -> bool:
-    if os.name != "posix":
-        return False
-    try:
-        os.killpg(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
-
-
-def _process_group_has_live_members(pid: int) -> bool:
-    """Whether the group ``pid`` leads holds a process that is not a zombie.
-
-    Its leader stays unreaped, and so a member, until the group is retired.
-    """
-
-    if not _process_group_is_alive(pid):
-        return False
-    try:
-        for candidate in psutil.process_iter(["pid", "status"]):
-            try:
-                if os.getpgid(candidate.info["pid"]) == pid and candidate.info["status"] != psutil.STATUS_ZOMBIE:
-                    return True
-            except (OSError, psutil.Error):
-                continue
-    except (OSError, psutil.Error, SystemError):
-        return True  # a table that cannot be read proves nothing gone
-    return False
 
 
 def _leader_has_exited(process: subprocess.Popen[bytes]) -> bool:
@@ -553,6 +539,7 @@ def _run_registered_command(
     process_env[_PROCESS_TOKEN_ENV] = token
     deadline = time.monotonic() + timeout
     cleanup_deadline: float | None = None
+    succeeded = False
     try:
         if cancelled is not None and cancelled.is_set():
             raise SkeletonError([f"{context} was cancelled"])
@@ -570,12 +557,12 @@ def _run_registered_command(
             )
         except OSError as exc:
             raise SkeletonError([f"{context} failed: {exc}"]) from exc
-        guard.arm()
         assert process.stdout is not None and process.stderr is not None
         for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
             reader = threading.Thread(target=drain, args=(name, stream), daemon=True)
             reader.start()
             readers.append(reader)
+        guard.arm()
         while not _leader_has_exited(process):
             _remember_descendants(process, descendants)
             check_output()
@@ -590,7 +577,10 @@ def _run_registered_command(
             # Reaped elsewhere, as when C code ignores SIGCHLD where signal.getsignal
             # can't see it. Popen then reports status 0, and the group id is free.
             raise SkeletonError([f"{context} was reaped outside the runner: its exit status is lost"])
-        group_alive = os.name == "posix" and _process_group_has_live_members(process.pid)
+        try:
+            group_alive = os.name == "posix" and _process_helpers.process_group_has_live_members(process.pid)
+        except _INSPECTION_ERRORS as exc:
+            raise SkeletonError([f"{context} could not inspect its process group"]) from exc
         _remember_tagged_processes(token, descendants, root_pid=process.pid)
         if group_alive or any(map(_process_is_alive, descendants.values())):
             raise SkeletonError([f"{context} left descendant processes running"])
@@ -607,17 +597,22 @@ def _run_registered_command(
             stderr = b"".join(chunks["stderr"]).decode("utf-8")
         except UnicodeDecodeError as exc:
             raise SkeletonError([f"{context} emitted invalid UTF-8 output"]) from exc
-        return subprocess.CompletedProcess(command, process.returncode, stdout=stdout, stderr=stderr)
+        result = subprocess.CompletedProcess(command, process.returncode, stdout=stdout, stderr=stderr)
+        succeeded = True
+        return result
     except BaseException:
+        # The guard raises at most once, possibly on entry here, before this
+        # disarm; teardown therefore runs in finally, with the guard disarmed.
         guard.disarm()
-        if cleanup_deadline is None:
-            cleanup_deadline = time.perf_counter() + _PROCESS_TERMINATION_GRACE
-        if process is not None:
-            _terminate_process_tree(process, descendants, deadline=cleanup_deadline, token=token)
-        _join_readers(readers, deadline=cleanup_deadline)
         raise
     finally:
         try:
+            if not succeeded:
+                if cleanup_deadline is None:
+                    cleanup_deadline = time.perf_counter() + _PROCESS_TERMINATION_GRACE
+                if process is not None:
+                    _terminate_process_tree(process, descendants, deadline=cleanup_deadline, token=token)
+                _join_readers(readers, deadline=cleanup_deadline)
             if process is not None:
                 for reader, stream in zip(readers + [None, None], (process.stdout, process.stderr)):
                     if stream is not None and not (reader and reader.is_alive()):
@@ -635,12 +630,16 @@ def _run_registered_command(
 
 @dataclass(frozen=True, slots=True)
 class LeanLibrary:
-    """One ``lean_lib`` target: where its modules live and what they are called."""
+    """One ``lean_lib`` target: where its modules live and what they are called.
+
+    ``globs`` is ``None`` when the target sets none, so that, as in Lake, each
+    root is its own glob; an empty tuple, from ``globs = []``, selects no module.
+    """
 
     name: str
     src_dir: Path
     roots: tuple[str, ...]
-    globs: tuple[str, ...] = ()
+    globs: tuple[str, ...] | None = None
     artifact_dir: Path | None = None
 
 
@@ -680,10 +679,17 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
     artifact_dir = (root / build_dir / lean_lib_dir).resolve()
     package_src = root / str(config.get("srcDir", "."))
 
+    entries = config.get("lean_lib", [])
+    if not isinstance(entries, list) or not all(isinstance(entry, dict) for entry in entries):
+        raise SkeletonError(
+            [f"cannot read the lean_lib targets of {root}: Lake expects an array of tables, written [[lean_lib]]"]
+        )
     libraries: list[LeanLibrary] = []
-    for entry in config.get("lean_lib", []) or []:
-        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
-            continue
+    for entry in entries:
+        if not isinstance(entry.get("name"), str):
+            raise SkeletonError(
+                [f"cannot read the lean_lib targets of {root}: a [[lean_lib]] target has no string name"]
+            )
         name = entry["name"]
         src_dir = package_src / str(entry.get("srcDir", "."))
         roots = entry.get("roots")
@@ -695,24 +701,23 @@ def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
         if isinstance(globs, str):
             globs = [globs]
         if not isinstance(globs, list) or not all(isinstance(item, str) for item in globs):
-            globs = []
+            globs = None
         libraries.append(
             LeanLibrary(
                 name=name,
                 src_dir=src_dir.resolve(),
                 roots=tuple(roots),
-                globs=tuple(globs),
+                globs=None if globs is None else tuple(globs),
                 artifact_dir=artifact_dir,
             )
         )
     if not libraries:
         package = config.get("name")
-        if isinstance(package, str) and package:
-            libraries.append(
-                LeanLibrary(name=package, src_dir=package_src.resolve(), roots=(package,), artifact_dir=artifact_dir)
-            )
-    if not libraries:
-        raise SkeletonError([f"the Lake configuration of {root} declares no library"])
+        if not isinstance(package, str) or not package:
+            raise SkeletonError([f"the Lake configuration of {root} declares no library"])
+        libraries.append(
+            LeanLibrary(name=package, src_dir=package_src.resolve(), roots=(package,), artifact_dir=artifact_dir)
+        )
     return tuple(libraries)
 
 
@@ -753,12 +758,12 @@ def module_of(path: Path, libraries: tuple[LeanLibrary, ...]) -> str | None:
     held = [lib for lib in libraries if resolved != lib.src_dir and resolved.is_relative_to(lib.src_dir)]
     for library in sorted(held, key=lambda lib: len(lib.src_dir.parts), reverse=True):
         module = ".".join(resolved.relative_to(library.src_dir).with_suffix("").parts)
-        if _builds(library, module):
+        if builds(library, module):
             return module
     return None
 
 
-def _builds(library: LeanLibrary, module: str) -> bool:
+def builds(library: LeanLibrary, module: str) -> bool:
     """Whether Lake builds ``module`` for ``library``, as ``LeanLibConfig.isBuildableModule`` decides.
 
     Lake finds, imports and builds a module by that rule, not by ``isLocalModule``:
@@ -766,7 +771,7 @@ def _builds(library: LeanLibrary, module: str) -> bool:
     Without ``globs``, each root is its own glob.
     """
 
-    globs = library.globs or library.roots
+    globs = library.roots if library.globs is None else library.globs
 
     def globbed(name: str) -> bool:
         for glob in globs:
@@ -831,21 +836,28 @@ def _stable_detail(text: str, lean_root: Path, *scratch: Path) -> str:
 # The probe
 # --------------------------------------------------------------------------- #
 
-def _probe_template() -> str:
-    """The probe's Lean helpers, kept under probes/ beside this module."""
+def render_probe_template(name: str, **fields: object) -> str:
+    """Fill the probe template ``probes/<name>`` with ``fields`` and the records-file contract.
 
-    return (Path(__file__).parent / "probes" / "skeleton_probe.lean").read_text(encoding="utf-8")
+    Every probe writes its records to the file ``PROBE_OUTPUT_ENV`` names, which
+    ``run_probe`` sets, and stops before its records pass
+    ``DEFAULT_PROBE_OUTPUT_LIMIT`` bytes, which ``_read_probe_records``
+    enforces; ``output_env`` and ``output_limit`` give the template both. Read
+    at call time, so a patched limit applies.
+    """
+
+    template = (Path(__file__).parent / "probes" / name).read_text(encoding="utf-8")
+    return template.format(**fields, output_env=PROBE_OUTPUT_ENV, output_limit=DEFAULT_PROBE_OUTPUT_LIMIT)
 
 
 def _render_probe_helper() -> str:
     """Render the helper module every probe imports; see ``_build_probe_helper``."""
 
-    return _probe_template().format(
+    return render_probe_template(
+        "skeleton_probe.lean",
         core_roots=", ".join(_lean_name(name) for name in _CORE_MODULE_ROOTS),
         error_limit=_FAILURE_DETAIL_LIMIT,
         marker=PROBE_MARKER,
-        output_env=PROBE_OUTPUT_ENV,
-        output_limit=DEFAULT_PROBE_OUTPUT_LIMIT,
     )
 
 
@@ -1024,18 +1036,10 @@ def _lake_executable(lean_root: Path, label: str = "skeleton probe") -> str:
     return lake
 
 
-def _check_build_freshness(
-    lean_root: Path, modules: tuple[str, ...], *, timeout: float = DEFAULT_FRESHNESS_TIMEOUT
-) -> None:
+def _check_build_freshness(lean_root: Path, modules: tuple[str, ...]) -> None:
     """Run the Lake freshness check once over every module about to be probed."""
 
-    _check_artifacts_fresh(_lake_executable(lean_root), lean_root, modules, timeout=timeout)
-
-
-def _probe_environment() -> dict[str, str]:
-    env = os.environ.copy()
-    env.pop("PYTHONPATH", None)
-    return env
+    _check_artifacts_fresh(_lake_executable(lean_root), lean_root, modules, timeout=DEFAULT_FRESHNESS_TIMEOUT)
 
 
 def _build_probe_helper(lean_root: Path, directory: Path, *, timeout: float) -> Path:
@@ -1058,7 +1062,7 @@ def _build_probe_helper(lean_root: Path, directory: Path, *, timeout: float) -> 
             cwd=lean_root,
             timeout=timeout,
             context="building the skeleton probe helpers",
-            env=_probe_environment(),
+            env=_process_helpers.inherit_clean_env(),
         )
     except _CommandTimedOut as exc:
         raise _ProbeEnvironmentError([f"{exc.issues[0]}; rerun with --timeout <seconds> for large projects"]) from exc
@@ -1114,7 +1118,7 @@ def run_probe(
     if check_freshness:
         _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout, label=label)
     deadline = time.monotonic() + timeout
-    env = _probe_environment()
+    env = _process_helpers.inherit_clean_env()
     with _signal_guard(), tempfile.TemporaryDirectory(prefix="autoform-skeleton-") as scratch:
         if f"import «{_PROBE_HELPER_MODULE}»" in probe.splitlines():
             if helper is None:
@@ -1233,7 +1237,10 @@ def _probe_workers(jobs: int) -> int:
     return max(1, min(jobs, _MAX_PROBE_WORKERS, cpus or 1))
 
 
-def run_module_probes(modules: list[str], probe: Callable[[str], object]) -> dict[str, object]:
+_T = TypeVar("_T")
+
+
+def run_module_probes(modules: list[str], probe: Callable[[str], _T]) -> dict[str, _T | SkeletonError]:
     """Run ``probe(module)`` for each module in a bounded pool and collect the results.
 
     A ``SkeletonError`` from one probe is that module's result. Anything else,
@@ -1246,14 +1253,14 @@ def run_module_probes(modules: list[str], probe: Callable[[str], object]) -> dic
 
     cancelled = threading.Event()
 
-    def run(module: str) -> object:
+    def run(module: str) -> _T:
         _PROBE_POOL.cancelled = cancelled
         try:
             return probe(module)
         finally:
             _PROBE_POOL.cancelled = None
 
-    results: dict[str, object] = {}
+    results: dict[str, _T | SkeletonError] = {}
     pool = ThreadPoolExecutor(max_workers=_probe_workers(len(modules)), thread_name_prefix="autoform-probe")
     with _signal_guard() as guard:
         try:
@@ -1288,6 +1295,7 @@ __all__ = [
     "STALE_BUILD",
     "LeanLibrary",
     "SkeletonError",
+    "builds",
     "default_runner",
     "lean_libraries",
     "lean_name_components",
@@ -1298,6 +1306,7 @@ __all__ = [
     "project_control_snapshot",
     "read_snapshot_file",
     "render_probe",
+    "render_probe_template",
     "run_module_probes",
     "run_probe",
     "stable_paths",

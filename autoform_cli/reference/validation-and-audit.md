@@ -53,9 +53,11 @@ left out of the page, and a reference a browser shows as typed, such as the
 to anything but the site's own pages or an `http:`, `https:`, or `mailto:`
 address, in any case, unless shown in code; an attribute list (the braces of a
 code fence may only name its language, as in ```` ```{.lean} ````, and options
-such as `title` or `linenums`); a code fence at the margin left open where an
-article, a statement, its notes, or a stretch of a chapter ends; and a list
-nested hundreds of levels deep, beyond what the site's converter can read.
+such as `title` or `linenums`); a code fence Autoform or the site reads as left
+open where an article, a statement, its notes, or a stretch of a chapter ends,
+except a fence line inside an HTML comment, which render's link rewriting still
+reads as one; and a list nested hundreds of levels deep, beyond what the site's
+converter can read.
 
 `check` also warns about a formula that defines a command, such as
 `\newcommand`, `\def`, or `\DeclareMathOperator`, or uses one the site turns
@@ -97,6 +99,16 @@ or `nonrec`, is not indexed, and neither is an unnamed `instance` or
 `instance_wanted`. `_root_.X` is recorded as `X`. `alias b := a` records `b`,
 and `alias ⟨mp, mpr⟩ := a_iff` each of its names that is not `_`; the `:=` must
 be on the alias's line, and the target on that line or the next nonblank one.
+A `structure` or `class` also records the fields it declares, indented under
+it, after `where` (or `:=`), and each parent it names (`extends toA : A`), as
+`Structure.field`, the projection Lean defines; a field that only gives a
+default, `x := v` or `(x := v)`, counts only when the structure extends
+nothing, since it may set an inherited field. A field is private when it or
+its structure is, and protected when it is. The index reads no constructor,
+recursor, unnamed parent's projection or inherited field; for such a name
+directly under a project type, a declaration article's `check --lean-root`
+error gives the type's `path:line`. `audit` takes a field as a one-line `def`
+or theorem, elaborated under its structure's limits.
 
 A name declared once has that declaration, even a private one. A name declared
 more than once has the one declaration that is neither `private` nor a wanted

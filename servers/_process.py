@@ -1,4 +1,8 @@
-"""Give a Lean child a clean environment, and stop and reap its dedicated POSIX process group."""
+"""Give a Lean child a clean environment, find the processes carrying a token the caller set, and stop and reap its dedicated POSIX process group.
+
+autoform_cli.lean_probe loads this file by path, so it imports only the
+standard library and psutil.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,7 @@ import os
 import signal
 import subprocess
 import time
+from typing import Any
 
 REPL_ABORT_TERM_SECONDS = 0.5
 REPL_ABORT_KILL_SECONDS = 1.0
@@ -28,7 +33,7 @@ def _process_group_exists(process_group_id: int) -> bool:
     return True
 
 
-def _process_group_has_live_members(process_group_id: int) -> bool:
+def process_group_has_live_members(process_group_id: int) -> bool:
     """Treat an all-zombie process group as terminated after SIGKILL."""
     if not _process_group_exists(process_group_id):
         return False
@@ -49,7 +54,7 @@ def _process_group_has_live_members(process_group_id: int) -> bool:
 
 
 def _wait_for_live_process_group_exit(process_group_id: int, deadline: float) -> bool:
-    while _process_group_has_live_members(process_group_id):
+    while process_group_has_live_members(process_group_id):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return False
@@ -77,7 +82,7 @@ def _kill_subprocesses(
 ) -> None:
     """Terminate and verify one dedicated POSIX process group."""
     if getattr(process, "returncode", None) is not None:
-        if _process_group_has_live_members(process_group_id):
+        if process_group_has_live_members(process_group_id):
             raise RuntimeError(
                 "refusing to signal a process group after its leader was reaped"
             )
@@ -98,7 +103,7 @@ def _terminate_process_group(
         term_deadline = min(term_deadline, deadline)
         kill_deadline = min(kill_deadline, deadline)
 
-    if _process_group_has_live_members(process_group_id):
+    if process_group_has_live_members(process_group_id):
         try:
             os.killpg(process_group_id, signal.SIGTERM)
         except ProcessLookupError:
@@ -107,7 +112,7 @@ def _terminate_process_group(
             raise RuntimeError("failed to terminate the Lean process group") from error
 
     _wait_for_live_process_group_exit(process_group_id, term_deadline)
-    if _process_group_has_live_members(process_group_id):
+    if process_group_has_live_members(process_group_id):
         try:
             os.killpg(process_group_id, signal.SIGKILL)
         except ProcessLookupError:
@@ -143,8 +148,44 @@ def _reap_process(
         raise RuntimeError("timed out reaping the Lean process")
 
 
-def _inherit_clean_env() -> dict[str, str]:
+def inherit_clean_env() -> dict[str, str]:
     """Return a copy of the current environment without PYTHONPATH noise."""
     env = os.environ.copy()
     env.pop("PYTHONPATH", None)
     return env
+
+
+def processes_with_token(name: str, token: str) -> list[Any]:
+    """Return the processes whose environment sets ``name`` to ``token``.
+
+    A process whose environment cannot be read is left out, so it is never
+    signalled: nothing shows that it carries the token. Lean and Lake run as
+    the user, who can read their environments; setuid programs the user runs,
+    such as ``login``, are unreadable at all times, so counting them would
+    fail every close. A process table that cannot be read fails the scan.
+    """
+    if not token:
+        # A missing token would match every process without the variable.
+        raise ValueError("a process token must be a nonempty string")
+    import psutil
+
+    try:
+        pids = psutil.pids()
+    except (OSError, psutil.Error) as error:
+        raise RuntimeError(f"cannot read the process table to find the processes carrying {name}") from error
+    found = []
+    for pid in pids:
+        if pid == os.getpid():
+            continue
+        try:
+            # The handle records the creation time before the environment is
+            # read, so it can only name the process that was read or an
+            # earlier one, which psutil then refuses to signal.
+            candidate = psutil.Process(pid)
+            environment = candidate.environ()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            # Exited or unreadable; a zombie reads as exited or empty.
+            continue
+        if environment.get(name) == token:
+            found.append(candidate)
+    return found
