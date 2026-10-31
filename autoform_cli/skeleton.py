@@ -1980,11 +1980,10 @@ def _dependency_order(items: list[TrustedDeclaration]) -> list[TrustedDeclaratio
 # --------------------------------------------------------------------------- #
 
 
-def format_report(report: SkeletonReport, *, lean_root: Path | None = None) -> str:
+def format_report(report: SkeletonReport) -> str:
     """Render the report as the text a reviewer reads.
 
-    Source excerpts captured by the probe travel inside the report. The
-    ``lean_root`` argument remains for call compatibility and is never reread.
+    Source excerpts captured by the probe travel inside the report.
     """
 
     out: list[str] = []

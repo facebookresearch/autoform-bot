@@ -969,7 +969,7 @@ def test_trusted_theorem_source_never_exposes_its_proof(tmp_path: Path) -> None:
 
     assert theorem.source is None
     assert ":= h" not in report.nodes[0].declarations[0].blind_text()
-    assert ":= h" not in format_report(report, lean_root=tmp_path / "project")
+    assert ":= h" not in format_report(report)
 
 
 def test_extraction_reports_names_the_sources_and_the_environment_lack(tmp_path: Path) -> None:
@@ -2117,7 +2117,7 @@ def test_an_incoherent_report_cannot_be_constructed(tmp_path: Path, issue: str) 
 def test_text_report_quotes_the_sources_a_reader_must_trust(tmp_path: Path) -> None:
     report = _fake_report(tmp_path)
 
-    text = format_report(report, lean_root=tmp_path / "project")
+    text = format_report(report)
 
     assert text.startswith("== basics/determined · theorem Skel.observation_determined\n")
     assert "   trusts 3 local declarations, 11 lines to read; the declaration itself spans 4 lines · skeleton " in text
