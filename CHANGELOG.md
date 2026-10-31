@@ -67,7 +67,7 @@ date when the release is tagged.
   scan. A process whose environment cannot be read for any reason but
   permission now fails a probe run instead of being skipped, and a probe
   whose process group cannot be inspected fails with "could not inspect its
-  process group" (#NNN).
+  process group" (#518).
 - **Library results in Roadmap.** When a shared library already proves a
   result, Roadmap lists under the article's `## Proof depends on` only the
   articles that proof uses, and keeps the source's route in the proof sketch,
