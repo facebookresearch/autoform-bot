@@ -68,9 +68,9 @@ date when the release is tagged.
   With claims, each session leads from its own clone and checks `git worktree
   list` before dispatching, and workers name their branch with `claim acquire
   --note`, now documented. A handoff to another session, when the request covers
-  pushing, goes to an `origin` branch ending with the leaf's `article_id`, which
-  `git ls-remote` finds after the lease is gone. No message grants ownership or
-  completes a leaf (#434).
+  pushing, goes to the `origin` branch `handoff/<article_id>`, which the next
+  worker to take the leaf continues. With claims, no message grants
+  ownership; none completes a leaf (#434, #532).
 - **Formalize worktrees.** A new worktree gets a copy of the lead's
   `.lake/packages`, copy-on-write and never a symbolic link, before its first
   build. `lake exe cache get` then downloads nothing; before, each worktree
