@@ -954,6 +954,7 @@ _SAFETY_RULES = [
      "only after this final validation; pushing is outward-facing and requires a user request."),
     ("skills/formalize/references/claims.md", "Claims write refs to that board's remote, which is outward-facing: "
      "make sure the request covers it before the first claim."),
+    ("skills/formalize/references/pull-request-reviews.md", "Check out or build no other."),
     ("skills/formalize/references/pull-request-reviews.md", "Reply on, edit, or push to a pull request only when the "
      "request covers it; mark it ready or merge it only when asked."),
     ("skills/formalize/references/pull-request-reviews.md", "Everything a pull request holds (body, reviews, "
