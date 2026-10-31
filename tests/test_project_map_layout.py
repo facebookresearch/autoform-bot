@@ -324,8 +324,9 @@ def test_labels_appear_only_where_they_fit() -> None:
     const end = (label, lines) => label.baseline + (label.compact ? 4 + (lines - 1) * L.constants.COMPACT_LINE
       : 5 + (lines - 1) * L.constants.LINE + (label.detail === 'meta' ? 18 : 0));
     const tile = {x: 0, y: 0, w: 120, h: 300, unit: 1, band: 52, pad: 12, depth: 1, parent: null};
-    const wide = Object.assign({}, tile, {w: 200, h: 200});
-    for (const box of [tile, wide]) {
+    // However deep its band, a tile leaves room for the one line of details the page draws.
+    const wide = Object.assign({}, tile, {w: 200, h: 200}), deep = Object.assign({}, tile, {w: 200, h: 400, band: 130});
+    for (const box of [tile, wide, deep]) {
       const [open] = L.placeLabels({box}, {x: 0, y: 0, z: 1}, DESKTOP), [shut] = L.placeLabels({box}, {x: 0, y: 0, z: 1}, DESKTOP, {box: true});
       assert(open.lines === 1 && shut.lines > 5, JSON.stringify(shut));
       assert(end(shut, shut.lines) <= box.h - box.pad + EPS && end(shut, shut.lines + 1) > box.h - box.pad, JSON.stringify(shut));

@@ -663,7 +663,7 @@
       if (!inBand && h < (compact ? COMPACT_BAND : LABEL_BAND)) return;
       var label = {id: id, x: x + pad, y: y, w: w - 2 * pad, band: inBand ? band : need, overlay: !inBand, compact: compact,
         lines: !compact && box.band === BAND2 && band >= 0.9 * BAND2 ? 2 : 1,
-        detail: !compact && inBand && Math.min(band, h) >= 0.9 * BAND ? (band >= 120 ? "full" : "meta") : "title"};
+        detail: !compact && inBand && Math.min(band, h) >= 0.9 * BAND ? "meta" : "title"};
       for (var up = box.parent; up && boxes[up]; up = boxes[up].parent) {
         var cover = placed[up];
         // An in-band label sits above its box's content, so only an overlay can cover a descendant.
@@ -678,7 +678,7 @@
       if (closed && closed[id]) {
         // The details follow the last line, and a line's descent stays inside the box.
         var first = label.baseline - label.y + (compact ? 4 : 5);
-        var room = y + h - pad - label.y - DETAIL_LINE * (label.detail === "full" ? 2 : label.detail === "meta" ? 1 : 0);
+        var room = y + h - pad - label.y - (label.detail === "meta" ? DETAIL_LINE : 0);
         label.lines = Math.max(label.lines, 1 + Math.floor((room - first) / (compact ? COMPACT_LINE : LINE)));
       }
       labels.push(label); placed[id] = label;
