@@ -1189,6 +1189,10 @@ def test_oversized_flat_scope_defaults_to_bounded_native_shelves(desktop_page: o
     _open_consumer(page, explorer_consumer, "flat")
     playwright.expect(page.locator(".bp-scope-shelves")).to_be_visible()
     playwright.expect(page.locator(".bp-dag-node")).to_have_count(0)
+    # With no card to draw, the oversized chapter opens with its reader, not a map-first overview.
+    playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(0)
+    reader = page.locator(".bp-reading-pane").bounding_box()
+    assert reader is not None and reader["width"] >= 340, reader
     assert page.locator(".bp-scope-shelves a[data-shelf-node-id]").count() <= 100
     _browse_contents(page, "Statements in this topic")
     playwright.expect(page.get_by_role("button", name="Back to map", exact=True)).to_be_enabled()

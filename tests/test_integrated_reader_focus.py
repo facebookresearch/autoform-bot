@@ -647,6 +647,29 @@ def test_large_scope_landing_never_overrides_explicit_reading_or_saved_sheet_int
     """)
 
 
+def test_map_intent_on_a_shelf_scope_focuses_the_reader_on_desktop_and_the_map_on_a_phone() -> None:
+    _run(r"""
+      const project=updateProjection;
+      // Shelves or context cards make a scope overview that is not coarse.
+      updateProjection=function(){project();ui$scopeOverview=true;ui$coarseOverview=false;};
+      byId.get('A').result=false;
+      dom$nodeLayer={querySelector(selector){
+        assert.equal(selector,'.bp-dag-node[tabindex="0"]');return overlays.get('A');
+      }};
+      const desktop=bundle('A',null,true);desktop.anchor=null;desktop.mapFirst=true;
+      const desktopReady=applyRoute(desktop);
+      assert.equal(host.classList.contains('bp-dag-sheet-open'),true);
+      await frame();await desktopReady;
+      assert.equal(document.activeElement,desktop.pageHeading,'A desktop reader that opens takes the focus');
+      sheetLayout=()=>true;
+      const phone=bundle('A',null,true);phone.anchor=null;phone.mapFirst=true;
+      const phoneReady=applyRoute(phone);
+      assert.equal(host.classList.contains('bp-dag-sheet-open'),false);
+      await frame();await phoneReady;
+      assert.equal(phone.pageHeading.focuses.length,0);assert.equal(document.activeElement,overlays.get('A'));
+    """)
+
+
 def test_map_intent_on_a_small_pure_overview_never_focuses_the_inert_reader() -> None:
     _run(r"""
       byId.get('A').result=false;
