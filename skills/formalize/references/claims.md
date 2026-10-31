@@ -21,7 +21,7 @@ asks the user if `git worktree list` shows the shared branch elsewhere.
 ## Acquire and renew
 
 Before editing, acquire the exact `claim_target` from `work context`, each time
-with `--note` naming the worktree's branch. For a lapsed lease, first continue
+with `--note` naming the worktree's branch. Before the first acquire, continue
 any `handoff/<article_id>` branch on `origin`. A failed acquire or renewal means
 ownership is unproven: stop writing. Confirm a claim with `renew`, not acquire:
 every five minutes (leases expire after 25) and just before integrating.
