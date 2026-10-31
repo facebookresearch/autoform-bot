@@ -31,7 +31,8 @@ TOP_EXPORTS = 8
 TOP_LINKS = 8
 # A part whose subtree holds at most this many results ships them in its own file.
 LEAF_RESULTS = 400
-# A part with more children than this gets them grouped into linked communities, so no level is a field of tiles.
+# No level holds more parts than this: a wider part's children are nested in generated groups, so no level is a field
+# of tiles.
 GROUP_LIMIT = 30
 # Parts share 256 files by the first byte of their id's hash, so the files a site gets are known before the map is
 # built, and render can guard each one.
@@ -41,6 +42,8 @@ _REGION = "region:"
 _ROOT = "~roadmap"
 
 Relation = tuple[str, str, int, int]
+# A part, or a group still to be made: its title and what it holds.
+_Tree = str | tuple[str, list["_Tree"]]
 
 
 def part_file(part_id: str) -> str:
@@ -327,69 +330,96 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
 def _group_wide_parts(part_parent: dict[str, str], title: dict[str, str], inside: Mapping[str, Sequence[str]],
                       pair: Mapping[tuple[str, str], Sequence[int]], synthetic: set[str], first: Mapping[str, int],
                       fresh: Callable[[str], str]) -> bool:
-    """Group the children of any part wider than GROUP_LIMIT into linked communities, in place.
+    """Nest the children of any part wider than GROUP_LIMIT in generated groups, in place, so no level is wider.
 
     Children that link to each other form one community (a weak component of the sibling links), titled by its largest
-    member. Children that link to no sibling share one "Standalone topics" group. Groups are numbered in reading order
-    (``first`` is each part's reading position), so each gets a stable id under its parent; ``fresh`` reserves it.
-    Returns whether anything was grouped.
+    member. Children that link to no sibling share one "Standalone topics" group. A level with more communities than
+    fit keeps the largest and nests the rest under "Smaller linked groups". A group with more members than fit splits
+    into runs: a community's breadth first along its links, which keeps linked topics together, and the standalone
+    topics in reading order (``first`` is each part's reading position). Each level's groups are numbered in order, so
+    each gets a stable id under its parent; ``fresh`` reserves it. Returns whether anything was grouped.
     """
     kids: dict[str, list[str]] = defaultdict(list)
     for part, parent in part_parent.items():
         kids[parent].append(part)
+    # Every aggregated link joins two siblings, so one table serves every parent.
+    neighbours: dict[str, set[str]] = defaultdict(set)
+    for user, used in pair:
+        neighbours[user].add(used)
+        neighbours[used].add(user)
+
+    def reading(part: str) -> tuple[int, str]:
+        return first[part], part
+
+    def members(tree: _Tree) -> list[str]:
+        return [tree] if isinstance(tree, str) else [part for inner in tree[1] for part in members(inner)]
+
+    def weight(tree: _Tree) -> int:
+        return sum(len(inside.get(part, ())) for part in members(tree))
+
+    def linked(trees: Sequence[_Tree]) -> str:
+        group = sorted((part for tree in trees for part in members(tree)), key=lambda m: (-weight(m), title[m], m))
+        names = [title[m] for m in group[:2]]
+        if len(group) > 2:
+            return f"{names[0]} and {len(group) - 1} linked topics"
+        return f"{names[0]} (2 topics)" if names[0] == names[1] else " and ".join(names)
+
+    def fit(trees: Sequence[_Tree], label: Callable[[list[_Tree], int, int], str]) -> list[_Tree]:
+        # Consecutive runs of nearly equal length, as few as fit, nested again while they are still too many.
+        out = list(trees)
+        while len(out) > GROUP_LIMIT:
+            count = -(-len(out) // GROUP_LIMIT)
+            runs = [out[len(out) * k // count:len(out) * (k + 1) // count] for k in range(count)]
+            out = [(label(run, number, count), run) for number, run in enumerate(runs, start=1)]
+        return out
+
+    def crowd(communities: list[_Tree], room: int) -> list[_Tree]:
+        # The largest communities keep their places; the rest share one group, which crowds its own in turn.
+        if len(communities) <= room:
+            return communities
+        stay = set(sorted(range(len(communities)), key=lambda i: (-weight(communities[i]), i))[:room - 1])
+        rest = [tree for i, tree in enumerate(communities) if i not in stay]
+        return [tree for i, tree in enumerate(communities) if i in stay] + [("Smaller linked groups", crowd(rest, GROUP_LIMIT))]
+
+    def attach(parent: str, trees: Sequence[_Tree]) -> None:
+        for number, tree in enumerate(trees, start=1):
+            if isinstance(tree, str):
+                part_parent[tree] = parent
+                continue
+            group_id = fresh(f"{parent}/~{number}")
+            title[group_id], part_parent[group_id] = tree[0], parent
+            synthetic.add(group_id)
+            attach(group_id, tree[1])
+
     changed = False
-    for parent, members in sorted(kids.items()):
-        if len(members) <= GROUP_LIMIT:
+    for parent, children in sorted(kids.items()):
+        if len(children) <= GROUP_LIMIT:
             continue
-        member_set = set(members)
-        neighbours: dict[str, set[str]] = defaultdict(set)
-        for (user, used), _weights in pair.items():
-            if user in member_set and used in member_set:
-                neighbours[user].add(used)
-                neighbours[used].add(user)
-        size = {member: len(inside.get(member, ())) for member in members}
-        order = sorted(members, key=lambda member: (-size[member], title[member], member))
         seen: set[str] = set()
-        islands: list[list[str]] = []
+        communities: list[_Tree] = []
         loners: list[str] = []
-        for member in order:
-            if member in seen:
+        for start in sorted(children, key=reading):
+            if start in seen:
                 continue
-            if not neighbours.get(member):
-                seen.add(member)
-                loners.append(member)
-                continue
-            component, stack = [], [member]
-            seen.add(member)
-            while stack:
-                at = stack.pop()
-                component.append(at)
-                for other in sorted(neighbours[at]):
+            seen.add(start)
+            component = [start]
+            for at in component:  # breadth first: the list grows as it is read
+                for other in sorted(neighbours.get(at, ()), key=reading):
                     if other not in seen:
                         seen.add(other)
-                        stack.append(other)
-            islands.append(sorted(component, key=lambda m: (-size[m], title[m], m)))
-        groups = sorted((island for island in islands if len(island) > 1), key=lambda island: min(first[m] for m in island))
-        loners.extend(island[0] for island in islands if len(island) == 1)
-        # Topics that link to no sibling stay together, in reading order: grouping them by size would invent a structure.
-        loners.sort(key=lambda m: (first[m], m))
-        everything = groups + ([loners] if loners else [])
-        if len(everything) >= len(members):
-            continue
-        for number, group in enumerate(everything, start=1):
-            group_id = fresh(f"{parent}/~{number}")
-            names = [title[m] for m in group[:2]]
-            if number <= len(groups):
-                if len(group) > 2:
-                    title[group_id] = f"{names[0]} and {len(group) - 1} linked topics"
-                else:
-                    title[group_id] = f"{names[0]} (2 topics)" if names[0] == names[1] else " and ".join(names)
+                        component.append(other)
+            if len(component) > 1:
+                communities.append((linked(component), fit(component, lambda run, _number, _count: linked(run))))
             else:
-                title[group_id] = "Standalone topics"
-            part_parent[group_id] = parent
-            synthetic.add(group_id)
-            for member in group:
-                part_parent[member] = group_id
+                loners.append(start)
+        level = crowd(communities, GROUP_LIMIT - (1 if loners else 0))
+        # Topics that link to no sibling stay together, in reading order: grouping them by size would invent a structure.
+        if loners:
+            level.append(("Standalone topics", fit(loners, lambda _run, number, count: f"Standalone topics ({number} of {count})")))
+        only = level[0]
+        if len(level) == 1 and not isinstance(only, str):
+            level = only[1]  # a single group would only repeat its parent, so what it holds takes its place
+        attach(parent, level)
         changed = True
     return changed
 

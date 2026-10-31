@@ -168,12 +168,55 @@ def test_wide_parts_are_grouped_into_linked_communities_and_one_standalone_group
     assert titles["Big/~2"] == "Topic 03 and Topic 04"
     assert titles["Big/~3"] == "Standalone topics"
     assert all(child["grouped"] for child in big["children"])
+    # 35 standalone topics are too many for one level, so they split in reading order.
     standalone = _part(files, "Big/~3")
-    assert [child["title"] for child in standalone["children"]][:3] == ["Topic 05", "Topic 06", "Topic 07"]
+    assert [child["title"] for child in standalone["children"]] == ["Standalone topics (1 of 2)", "Standalone topics (2 of 2)"]
+    assert [child["title"] for child in _part(files, "Big/~3/~1")["children"]][:3] == ["Topic 05", "Topic 06", "Topic 07"]
     # The groups' links survive one level up, summed per pair of groups.
     assert _part(files, "Big/~1")["edges"] == [["Big/t01", "Big/t00", 1, 0], ["Big/t02", "Big/t01", 1, 0]]
     rebuilt = project_map.build_project_map(records, relations)
     assert rebuilt == files, "the same data must give the same groups, ids and files"
+
+
+def test_no_level_holds_more_parts_than_the_group_limit() -> None:
+    # 36 linked pairs and 40 standalone topics: more communities than fit on one level, more loners than fit in one group.
+    records = [_scope("roadmap", None, "Library"), _scope("Big", "roadmap", "Big subject")]
+    for index in range(112):
+        records.append(_scope(f"Big/t{index:03d}", "Big", f"Topic {index:03d}", navigation="module"))
+        # The last pair is the heaviest, so it keeps its place on the level though it reads last.
+        for result in range(3 if index in (70, 71) else 1):
+            records.append(_result(f"Big/t{index:03d}/r{result}", f"Big/t{index:03d}", f"Result {index:03d}.{result}"))
+    relations = [(f"Big/t{index + 1:03d}/r0", f"Big/t{index:03d}/r0", 1, 0) for index in range(0, 72, 2)]
+    files = project_map.build_project_map(records, relations)
+    bodies = {part: body for name, shard in files.items() if name.startswith("parts/") for part, body in shard["parts"].items()}
+    assert max(len(body["children"]) for body in bodies.values()) <= project_map.GROUP_LIMIT
+    big = {child["title"]: child["id"] for child in bodies["Big"]["children"]}
+    assert len(big) == project_map.GROUP_LIMIT
+    assert "Topic 070 and Topic 071" in big and "Topic 054 and Topic 055" not in big
+    assert [child["title"] for child in bodies[big["Smaller linked groups"]]["children"]] == [
+        f"Topic {index:03d} and Topic {index + 1:03d}" for index in range(54, 70, 2)]
+    chunks = {child["title"]: child["id"] for child in bodies[big["Standalone topics"]]["children"]}
+    assert list(chunks) == ["Standalone topics (1 of 2)", "Standalone topics (2 of 2)"]
+    assert [child["title"] for child in bodies[chunks["Standalone topics (1 of 2)"]]["children"]] == [
+        f"Topic {index:03d}" for index in range(72, 92)]
+
+
+def test_a_community_too_big_for_one_level_splits_along_its_links() -> None:
+    # One path through the 70 topics: up the even ones, then back down the odd ones.
+    records = [_scope("roadmap", None, "Library"), _scope("Big", "roadmap", "Big subject")]
+    for index in range(70):
+        records.append(_scope(f"Big/t{index:02d}", "Big", f"Topic {index:02d}", navigation="module"))
+        records.append(_result(f"Big/t{index:02d}/r", f"Big/t{index:02d}", f"Result {index:02d}"))
+    path = [*range(0, 70, 2), *range(69, 0, -2)]
+    relations = [(f"Big/t{later:02d}/r", f"Big/t{earlier:02d}/r", 1, 0) for earlier, later in zip(path, path[1:])]
+    files = project_map.build_project_map(records, relations)
+    big = _part(files, "Big")
+    # A single community would only repeat Big, so its runs take its place: three stretches of the path, cut twice.
+    runs = {child["title"]: child["id"] for child in big["children"]}
+    assert list(runs) == ["Topic 00 and 22 linked topics", "Topic 01 and 23 linked topics", "Topic 46 and 22 linked topics"]
+    for title, stretch in zip(runs, (path[:23], path[46:], path[23:46])):
+        assert {child["id"] for child in _part(files, runs[title])["children"]} == {f"Big/t{index:02d}" for index in stretch}
+    assert len(big["edges"]) == 2
 
 
 def test_search_table_rebuilds_every_path_and_stores_short_ids() -> None:
@@ -252,7 +295,7 @@ def test_generated_parts_never_take_an_authored_id() -> None:
     # not in itself.
     assert [(child["id"], child["title"]) for child in _part(files, "Big")["children"]] == [
         ("Big/~2", "Standalone topics"), ("Big/~1~", "Topic 00 and Topic 01")]
-    assert [step for step, _title in _part(files, "Big/~1")["path"]] == ["Big", "Big/~2", "Big/~1"]
+    assert [step for step, _title in _part(files, "Big/~1")["path"]] == ["Big", "Big/~2", "Big/~2/~1", "Big/~1"]
     regions = {region["id"]: region["title"] for region in files["index.json"]["regions"]}
     assert regions == {"Big": "Big subject", "roadmap/~results": "Authored chapter", "roadmap/~results~": "Outside the chapters"}
     rows = {row[0]: row[3] for row in files["search.json"]["rows"]}
