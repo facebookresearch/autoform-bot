@@ -10,9 +10,11 @@ from types import SimpleNamespace
 
 import pytest
 
+import autoform_cli.impact as impact_module
 import autoform_cli.lean as lean_module
 from autoform_cli import __main__ as cli, claims, lean_probe, runtime
 from autoform_cli import _tree_snapshot as tree_snapshot_module
+from autoform_cli._repository import git
 from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.impact import (
     IMPACT_MARKER,
@@ -2593,6 +2595,41 @@ def test_cli_import_impact_outside_git_reports_no_generated_module(tmp_path: Pat
     report = json.loads(output.out)
     assert report["module_generated"] is False
     assert report["claim_targets"] == [_BASE_ID, report["module_claim_target"]]
+
+
+def test_cli_import_impact_ignores_the_user_s_attribute_file(tmp_path: Path, monkeypatch, capsys) -> None:
+    # A mark there covers every repository of that user, so its workers would
+    # leave the module out of every import edit's claims in every project.
+    home = tmp_path / "home"
+    (home / ".config" / "git").mkdir(parents=True)
+    (home / ".config" / "git" / "attributes").write_text("*.lean linguist-generated\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    _git_repository(lean_root, None)
+    _stub_probe(monkeypatch, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
+
+    code = cli.main(["work", "import-impact", _BASE_ID, "Demo", str(project), "--lean-root", str(lean_root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    assert report["module_generated"] is False
+    assert report["claim_targets"] == [_BASE_ID, report["module_claim_target"]]
+
+
+def test_the_generated_check_skips_the_system_attribute_file(tmp_path: Path, monkeypatch) -> None:
+    # Git reads $(prefix)/etc/gitattributes unless GIT_ATTR_NOSYSTEM is set, and
+    # the runner strips inherited GIT_ variables, so the check passes it itself.
+    _git_repository(tmp_path, None)
+    added = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "example.key", "GIT_CONFIG_VALUE_0": "seen"}
+    assert git(tmp_path, "config", "--get", "example.key", environment=added) == "seen"
+    calls = []
+    monkeypatch.setattr(impact_module, "git", lambda _root, *arguments, environment=None: calls.append(environment))
+
+    assert impact_module._linguist_generated(tmp_path, "Demo.lean") is False
+    assert calls == [{"GIT_ATTR_NOSYSTEM": "1"}]
 
 
 @pytest.mark.parametrize("generated", [True, False])

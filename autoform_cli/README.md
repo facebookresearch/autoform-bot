@@ -901,10 +901,12 @@ JSON uses `autoform-module-import-impact/v1`, with `module_graph_revision` and
 the selected article (`id`, `article_id`, `claim_target`). `claim_targets` holds
 only it and `module_claim_target`, `lean-module/<lowercase-slug>-<sha256[:16]>`,
 whose key is `module_claim_key`, or only it when `module_generated`: Git
-attributes, from the index or local attribute files, set `linguist-generated` on
-MODULE's file, or make it `true`. `affected_claim_targets` are downstream
-warnings, not ownership requirements; `claim_keys` and `affected_claim_keys`
-match the JSON of `autoform claim list --worker-id WORKER` given those targets.
+attributes from the index or the clone's `.git/info/attributes`, not the user's
+or the system's attribute files, set `linguist-generated` on MODULE's file, or
+make it `true`. It is `false` outside a Git work tree or when Git fails.
+`affected_claim_targets` are downstream warnings, not ownership requirements;
+`claim_keys` and `affected_claim_keys` match the JSON of
+`autoform claim list --worker-id WORKER` given those targets.
 `affected_articles` lists each article that names, or owns through the parent
 chain, a declaration in an affected module, with those `modules`, and
 `selected_affected` says whether the selected article is one.
