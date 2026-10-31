@@ -2326,6 +2326,32 @@ def test_cli_json_prints_the_report_bytes(tmp_path: Path, capsys, monkeypatch) -
     assert captured.err == "skeleton: probing 1 module...\nskeleton: assembling...\n"
 
 
+def test_cli_json_stdout_stays_the_report_without_stderr(tmp_path: Path, capsys, monkeypatch) -> None:
+    # Started with fd 2 closed, Python sets sys.stderr to None, and print(file=None) writes to stdout.
+    monkeypatch.setattr(sys, "stderr", None)
+
+    assert _cli(tmp_path, monkeypatch, "--json") == 0
+
+    assert capsys.readouterr().out == _fake_report(tmp_path / "other").to_json() + "\n"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="needs a POSIX pipe")
+def test_cli_progress_on_a_broken_stderr_leaves_nothing_to_fail_at_exit(tmp_path: Path, capsys, monkeypatch) -> None:
+    # A reader that stopped tailing stderr: the write end of a pipe whose read end is closed.
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    broken = open(write_end, "w", encoding="utf-8")
+    monkeypatch.setattr(sys, "stderr", broken)
+    try:
+        assert _cli(tmp_path, monkeypatch, "--json") == 0
+        # The interpreter flushes stderr at exit; a failure there would turn exit 0 into 120.
+        broken.flush()
+    finally:
+        broken.close()
+
+    assert capsys.readouterr().out == _fake_report(tmp_path / "other").to_json() + "\n"
+
+
 def test_cli_does_not_publish_packets_when_report_staging_fails(
     tmp_path: Path, capsys, monkeypatch
 ) -> None:

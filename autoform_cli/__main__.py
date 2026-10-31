@@ -1757,9 +1757,15 @@ def _skeleton(args: argparse.Namespace) -> int:
     stream = sys.stderr if args.json else sys.stdout
 
     def progress(phase: str) -> None:
-        # Information only: a closed or full stderr must not stop the run.
-        with contextlib.suppress(OSError):
+        # Information only. Without fd 2, print(file=None) would write to stdout,
+        # and a line left in a broken stderr's buffer would fail the exit-time flush.
+        if sys.stderr is None:
+            return
+        try:
             print(f"skeleton: {phase}...", file=sys.stderr, flush=True)
+        except OSError:
+            with contextlib.suppress(OSError, ValueError):
+                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stderr.fileno())
 
     try:
         report = extract_skeletons(
