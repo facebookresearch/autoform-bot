@@ -154,6 +154,13 @@ date when the release is tagged.
   Deferred list math cancels with its view and falls back to visible text on
   unavailable typesetting. Preview formatting keeps currency and code literal;
   formal dependency links use converter-validated code and formula labels (#444).
+- **Structure fields.** The Lean source index records the fields a
+  `structure` or `class` declares and the parents it names, as
+  `Structure.field`, so `check`, `render`, `audit` and `skeleton` resolve a
+  `lean:` name for one; `audit` takes it as a `def` or theorem under its
+  structure's limits. For a constructor or other name the index does not read
+  directly under a project type, `check` names the type's `path:line` in a
+  declaration article instead of pointing to `.lake` (#509).
 - **Explorer controls.** Closing full phone reading brings a cropped selected
   card back into the map without overriding restored cameras. Isolate/status
   filters use the same eligible original members in maps and native shelves,

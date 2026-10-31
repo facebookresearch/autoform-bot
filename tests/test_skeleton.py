@@ -3087,6 +3087,29 @@ def test_type_and_value_less_roots_show_their_whole_declaration(tmp_path: Path) 
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_structure_field_root_gets_a_skeleton(tmp_path: Path) -> None:
+    """Issue #498: the source index finds a field, so its projection gets a skeleton like any def.
+
+    Lean's range for a projection covers only the field's name, so the shown
+    source is that name and the signature carries the type.
+    """
+    project = _project(tmp_path)
+    _build(project, "Skel.Kinds")
+
+    report = extract_skeletons(_blueprint(tmp_path, lean={"field": "Skel.Kinds.Pair.a"}), lean_root=project)
+
+    assert report.clean
+    (declaration,) = (d for node in report.nodes for d in node.declarations)
+    assert (declaration.name, declaration.kind, declaration.source, declaration.statement) == (
+        "Skel.Kinds.Pair.a",
+        "def",
+        "a",
+        None,
+    )
+    assert "Nat" in declaration.signature
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_local_notation_statement_gets_a_packet_without_its_text(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _build(project, "Skel.Kinds")
