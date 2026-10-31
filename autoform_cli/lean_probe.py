@@ -224,21 +224,12 @@ def project_control_snapshot(root: Path) -> tuple[tuple[str, tuple[int, str] | N
 
 
 def _load_process_helpers() -> types.ModuleType:
-    """Load servers/_process.py from beside this package.
+    """Load servers/_process.py from beside this package, never as ``servers``.
 
-    ``import servers`` would find a consumer's own package first under
-    ``python -m autoform_cli``, which puts the working directory on
-    ``sys.path``. The module is registered in ``sys.modules`` before it runs,
-    as the importlib recipe does, because dataclasses look their module up
-    there.
-
-    To reach the CLI's copy, tests patch ``os``, ``psutil`` or
-    ``lean_probe._process_helpers``, never ``servers._process``. The package
-    gets no ``_process_helpers`` attribute, so a string-form
-    ``monkeypatch.setattr("autoform_cli._process_helpers.x", ...)`` does not
-    resolve. The module's ``__package__`` is ``autoform_cli``, so
-    ``_process.py`` must use no relative import; tests/test_lean_boundary.py
-    pins that.
+    Under ``python -m autoform_cli`` the working directory comes first on
+    ``sys.path``, so ``import servers`` could run a consumer's package. Tests
+    patch ``os``, ``psutil`` or ``lean_probe._process_helpers``; patching
+    ``servers._process`` does not reach this copy.
     """
 
     path = Path(__file__).resolve().parent.parent / "servers" / "_process.py"
