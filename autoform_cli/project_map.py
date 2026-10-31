@@ -259,9 +259,10 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
         return {"uses": top(uses), "uses_total": len(uses.get(part, ())),
                 "used_by": top(used_by), "used_by_total": len(used_by.get(part, ()))}
 
-    def among(parts: Sequence[str]) -> list[list[object]]:
-        members = set(parts)
-        return [[user, used, w[0], w[1]] for (user, used), w in sorted(pair.items()) if user in members and used in members]
+    # Every aggregated link joins two siblings, so each part's links among its children are filed once under it.
+    among: dict[str, list[list[object]]] = defaultdict(list)
+    for (user, used), weights in sorted(pair.items()):
+        among[part_parent[user]].append([user, used, weights[0], weights[1]])
 
     def result_row(result: str) -> dict[str, object]:
         record = by_id[result]
@@ -273,14 +274,17 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
             row["facet"] = facet[result]
         return row
 
+    owned: dict[str, list[str]] = defaultdict(list)
+    for result, at in home.items():
+        owned[at].append(result)
     files: dict[str, object] = {}
     for part in part_parent:
-        own = sorted((result for result, at in home.items() if at == part), key=order.__getitem__)
+        own = sorted(owned.get(part, ()), key=order.__getitem__)
         body: dict[str, object] = {
             "part": summary(part),
             "path": [[step, title[step]] for step in chain(part)[::-1]],
             "children": [summary(child) for child in kids.get(part, ())],
-            "edges": among(kids.get(part, ())),
+            "edges": among.get(part, []),
             "links": links(part),
         }
         if own or len(inside.get(part, ())) <= LEAF_RESULTS and not kids.get(part):
@@ -302,7 +306,7 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
     files["index.json"] = {
         "schema": SCHEMA, "title": title[root], "results": len(home),
         "status": dict(sorted(Counter(str(by_id[result].get("status")) for result in home).items())),
-        "regions": [summary(region) for region in regions], "region_edges": among(regions),
+        "regions": [summary(region) for region in regions], "region_edges": among.get(root, []),
         "facets": sorted(set(facet.values())),
     }
     files["search.json"] = {
