@@ -183,7 +183,7 @@ class ReviewState:
         return "approved" if self.approved == self.review_hash else "drift"
 
 
-def canonical_statement(graph: Graph, node: Node) -> str:
+def canonical_statement(node: Node) -> str:
     """Return the article's statement as the site's statement box publishes it,
     before the box demotes its headings.
 
@@ -192,7 +192,7 @@ def canonical_statement(graph: Graph, node: Node) -> str:
     audit checks, read after the HTML comments outside code are gone, while a
     comment in a fenced or indented code block stays, as the site shows it.
     Frontmatter and the title identify the article and are bound separately.
-    The text is the one ``graph`` parsed ``node`` from: the article is read
+    The text is the one `load_graph` parsed ``node`` from: the article is read
     again and must still have the bytes `load_graph` hashed, since a statement
     written since would be judged against that parse's approval, a pairing that
     never existed on disk.
@@ -563,7 +563,7 @@ def _node_findings(
 def _current_article(graph: Graph, node: Node, record: NodeSkeleton, macros: Mapping[str, object]) -> ReviewArticle:
     """The review evidence for ``node`` from its extracted ``record``, with the project ``macros`` it uses."""
 
-    statement = canonical_statement(graph, node)
+    statement = canonical_statement(node)
     if not statement.strip():
         reason = "article has no mathematical statement before its first H2"
         raise ReviewError([ReviewFinding(node.id, "review-statement-missing", reason)])

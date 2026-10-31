@@ -1786,7 +1786,7 @@ def _skeleton(args: argparse.Namespace) -> int:
     elif args.json:
         print(report.to_json())
     else:
-        print(format_report(report, lean_root=args.lean_root), end="")
+        print(format_report(report), end="")
     return 0 if report.clean else 1
 
 
