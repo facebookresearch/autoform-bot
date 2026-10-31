@@ -1403,6 +1403,12 @@ def test_the_limit_scan_closes_one_scope_per_name_component() -> None:
         "namespace D",
         "end C.D",
         "theorem later : True := trivial",
+        "namespace O",
+        "namespace «a.b c»",
+        "end «a.b c»",
+        "set_option maxHeartbeats 0",
+        "end O",
+        "theorem last : True := trivial",
     ]
 
     def found(line: int) -> list[tuple[str, int, str]]:
@@ -1411,6 +1417,7 @@ def test_the_limit_scan_closes_one_scope_per_name_component() -> None:
     assert found(4) == [("maxHeartbeats", 0, "section")]
     assert found(6) == []
     assert found(11) == []
+    assert found(17) == []
 
 
 def test_the_limit_scan_reads_several_indentations_in_one_batch() -> None:

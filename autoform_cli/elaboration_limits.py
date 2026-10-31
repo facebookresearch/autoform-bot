@@ -49,7 +49,8 @@ _SCOPE_OPEN = re.compile(
     r"(?:@\[[^\]]*\]\s*)*(?:(?:public|private|meta|noncomputable)\s+)*section\b|namespace\s|mutual$"
 )
 _SCOPE_CLOSE = re.compile(r"end\b")
-#: One component of a scope's name, where a guillemet may quote dots.
+#: A scope's name, and one component of it; a guillemet may quote dots and spaces.
+_SCOPE_NAME = re.compile(r"(?:«[^»]*»|[^\s«»])+")
 _COMPONENT = re.compile(r"«[^»]*»|[^.«»\s]+")
 #: Unindented lines that still belong to the declaration above them.
 _CONTINUATION = re.compile(r"(?:termination_by|decreasing_by|where|deriving)\b|\|")
@@ -110,8 +111,8 @@ def limits_by_line(lines: Sequence[str], starts: Iterable[int]) -> dict[int, tup
 def _components(text: str) -> int:
     """How many scopes the name at the start of ``text`` opens or closes: one per component, and one for no name."""
 
-    name = text.split(maxsplit=1)
-    return len(_COMPONENT.findall(name[0])) if name else 1
+    name = _SCOPE_NAME.match(text.lstrip())
+    return len(_COMPONENT.findall(name.group())) if name else 1
 
 
 def _scan(lines: Sequence[str], indent: int, starts: set[int]) -> dict[int, tuple[LimitSetting, ...]]:
