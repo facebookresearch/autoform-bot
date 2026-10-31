@@ -296,6 +296,19 @@ def test_labels_appear_only_where_they_fit() -> None:
     const cover = stack.find(label => label.id === 'thin'), moved = stack.find(label => label.id === 'tall');
     assert(cover && cover.overlay && moved && moved.overlay && !stack.some(label => label.id === 'flat'), JSON.stringify(stack));
     assert(moved.y >= cover.y + cover.band - EPS && moved.y + moved.band <= tall.y + tall.h + EPS);
+    // A closed tile shows nothing inside, so its title wraps down it: as many lines as fit above its
+    // padding, with the details after them. An open box keeps its title in its band.
+    const end = (label, lines) => label.y + (label.compact ? Math.min(30, label.band / 2 + 5) + 4 + (lines - 1) * L.constants.COMPACT_LINE
+      : Math.min(30, label.band / 2 + 6) + 5 + (lines - 1) * L.constants.LINE + (label.detail === 'meta' ? 18 : 0));
+    const tile = {x: 0, y: 0, w: 120, h: 300, unit: 1, band: 52, pad: 12, depth: 1, parent: null};
+    const wide = Object.assign({}, tile, {w: 200, h: 200});
+    for (const box of [tile, wide]) {
+      const [open] = L.placeLabels({box}, {x: 0, y: 0, z: 1}, DESKTOP), [shut] = L.placeLabels({box}, {x: 0, y: 0, z: 1}, DESKTOP, {box: true});
+      assert(open.lines === 1 && shut.lines > 5, JSON.stringify(shut));
+      assert(end(shut, shut.lines) <= box.h - box.pad + EPS && end(shut, shut.lines + 1) > box.h - box.pad, JSON.stringify(shut));
+    }
+    const [, below] = L.placeLabels({thin, tall}, {x: 0, y: 0, z: 1}, DESKTOP, {tall: true});
+    assert(below.y >= cover.y + cover.band - EPS && below.lines > 1 && end(below, below.lines) <= tall.y + tall.h - tall.pad + EPS, JSON.stringify(below));
     // Opening a crowded part comes closer than its fit, at most twice, until most children are labelled.
     const crowd = Array.from({length: 60}, (_, k) => summary('r1/c' + k, 10 + k % 7));
     const many = L.packPart({part: summary('r1', 300), children: crowd, edges: []}, packed.boxes.r1, DESKTOP);
