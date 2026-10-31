@@ -605,7 +605,8 @@
       var size = slot.overlay ? 15 : Math.round(clamp(Math.min(room * 0.4, slot.w / 7), 15, 30));
       var perLine = Math.max(4, Math.floor(slot.w / (L.constants.TITLE_EM * size / 15)));
       var step = size === 15 ? L.constants.LINE : Math.round(size * 1.2);
-      var most = size === 15 ? slot.lines : Math.max(1, Math.floor((room - (meta ? 22 : 0)) / step));
+      // The last line's descenders stay inside the room, clear of the parts below an open band.
+      var most = size === 15 ? slot.lines : Math.max(1, Math.floor((room - (meta ? 22 : Math.ceil(size / 4))) / step));
       var lines = most > 1 ? wrap(title, perLine, most) : [clip(title, perLine)];
       var y = size === 15 ? slot.baseline : slot.y + Math.round(size * 1.2);
       lines.forEach(function (line, index) {
