@@ -249,7 +249,9 @@ DECLARATION_LABELS = {
     "example": "Example",
     "inductive": "Inductive",
     "instance": "Instance",
+    "irreducible_def": "Definition",
     "lemma": "Lemma",
+    "opaque": "Definition",
     "proposition": "Proposition",
     "structure": "Structure",
     "theorem": "Theorem",
@@ -3072,7 +3074,9 @@ def _number_nodes(graph: Graph, order: Sequence[str] = ()) -> dict[str, str]:
 def _declaration_label(node: Node) -> str:
     if node.catalog == "module":
         return "Module"
-    return DECLARATION_LABELS.get((node.declaration or "").casefold(), "Node")
+    # A command with no label reads as written; check warns about it.
+    command = status.declaration_command(node.declaration)
+    return DECLARATION_LABELS.get(command.casefold()) or command[:1].upper() + command[1:] or "Node"
 
 
 def _reverse_edges(graph: Graph) -> dict[str, list[str]]:

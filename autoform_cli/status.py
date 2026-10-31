@@ -40,7 +40,7 @@ DEFINITION_DECLARATIONS = frozenset(
 #: Modifiers that may precede the command without changing what it introduces,
 #: as in ``noncomputable def``.
 _DECLARATION_MODIFIERS = frozenset(
-    {"local", "noncomputable", "partial", "private", "protected", "scoped", "unsafe"}
+    {"local", "noncomputable", "partial", "private", "protected", "public", "scoped", "unsafe"}
 )
 
 
@@ -181,12 +181,17 @@ class NodeStatus:
         return self.state.label
 
 
+def declaration_command(declaration: str | None) -> str:
+    """The command a ``declaration`` value names, without the modifiers before it: ``def`` in ``noncomputable def``."""
+    words = (declaration or "").split()
+    while len(words) > 1 and words[0].casefold() in _DECLARATION_MODIFIERS:
+        words.pop(0)
+    return " ".join(words)
+
+
 def is_definition(node: Node) -> bool:
     """Whether *node* introduces data instead of a proposition."""
-    words = (node.declaration or "").casefold().split()
-    while len(words) > 1 and words[0] in _DECLARATION_MODIFIERS:
-        words.pop(0)
-    return " ".join(words) in DEFINITION_DECLARATIONS
+    return declaration_command(node.declaration).casefold() in DEFINITION_DECLARATIONS
 
 
 def derive(graph: Graph) -> dict[str, NodeStatus]:
