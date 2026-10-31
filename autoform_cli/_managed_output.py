@@ -39,10 +39,9 @@ PACKET_MANIFEST = "manifest.json"
 def output_identity(path: Path) -> tuple[int, int, str] | None:
     """``(st_dev, st_ino, digest)`` of a file or tree, or None when absent.
 
-    The digest covers the names and file bytes ``Path.rglob`` lists; it skips
-    the contents of a directory, ``path`` included, that the process cannot
-    list, without an error.
-    A symlink or special file it reaches is refused.
+    The digest covers every name in the tree and every file's bytes. A
+    directory the process cannot list, and a symlink or special file, is
+    refused.
     """
 
     try:
@@ -53,7 +52,7 @@ def output_identity(path: Path) -> tuple[int, int, str] | None:
         raise SkeletonError([f"cannot inspect skeleton output {path}: {exc}"]) from exc
     digest = hashlib.sha256()
     try:
-        for child in [path, *sorted(path.rglob("*"))] if stat.S_ISDIR(metadata.st_mode) else [path]:
+        for child in [path, *_tree(path)] if stat.S_ISDIR(metadata.st_mode) else [path]:
             if child.is_symlink():
                 raise SkeletonError([f"refusing symlink packet output: {child}"])
             digest.update(child.relative_to(path).as_posix().encode("utf-8") + b"\0")
@@ -66,6 +65,20 @@ def output_identity(path: Path) -> tuple[int, int, str] | None:
     except OSError as exc:
         raise SkeletonError([f"cannot inspect skeleton output {path}: {exc}"]) from exc
     return metadata.st_dev, metadata.st_ino, digest.hexdigest()
+
+
+def _tree(path: Path) -> list[Path]:
+    """Every path below a directory, sorted, as ``sorted(path.rglob("*"))`` would
+    list them, but raising the error ``rglob`` skips for a directory it cannot list.
+    """
+
+    def fail(error: OSError) -> None:
+        raise error
+
+    found: list[Path] = []
+    for directory, directories, files in os.walk(path, onerror=fail):
+        found.extend(Path(directory, name) for name in (*directories, *files))
+    return sorted(found)
 
 
 def validate_managed_output(path: Path, *, kind: str, schema: str | None = None) -> tuple[int, int, str] | None:
