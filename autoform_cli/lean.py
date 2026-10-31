@@ -1050,8 +1050,9 @@ def _fields(
         ):
             entries.append((index + 1, [text]))
             depth = _depth(text)
-        elif entries:
-            entries[-1][1].append(text)
+        else:
+            if entries:
+                entries[-1][1].append(text)
             depth += _depth(text)
         last = index
     # Attribute lists and modifiers may stand on lines of their own above a field.
@@ -1151,11 +1152,15 @@ def _command_line(line: str) -> bool:
 def _continues(above: str, literal_line: Callable[[int], str], index: int, text: str) -> bool:
     """Whether a line at the field column continues the field above it instead of starting one.
 
-    Lean reads on into the field above after a comma, an arrow, a relation or
-    an open bracket, and a field line starts with neither a term keyword nor
-    binders followed by more of a term, as in ``(h : 0 < n) → P n``.
+    Lean reads on into the field above after a comma, an arrow, a relation,
+    an operator or an open bracket, and a field line starts with neither a
+    term keyword nor binders followed by more of a term, as in
+    ``(h : 0 < n) → P n``. A command starts no term, so it never continues one.
     """
 
+    # A command cannot go on a term, except `open … in` and `set_option … in`.
+    if _command_line(text) and text.split(maxsplit=1)[0] not in ("open", "set_option"):
+        return False
     # A masked literal is blank, so a line that seems to read on may end in a
     # literal instead: masking keeps each literal's length.
     if _OPEN_END.search(above) and len(above.rstrip()) == len(literal_line(index).rstrip()):
@@ -1250,9 +1255,9 @@ _SCOPED = re.compile(r"^\s*scoped\s*\[[^\]]*\]")
 _QUOTED_NAME = re.compile(r"«[^»]*»")
 #: The end of a line that a term continues past: a comma, an open bracket, an
 #: arrow, a relation, or an operator after a space, but not the constructor's
-#: ``mk ::`` or a postfix such as ``Type*`` or ``ℕ+``.
+#: ``mk ::`` or a postfix such as ``Type*``, ``ℕ+`` or Mathlib's ``n !``.
 _OPEN_END = re.compile(
-    r"(?:(?<!:):|[,=(\[{⟨→↔∧∨×∘•≤≥≠≈≡∈∉⊆⊂⊇⊃∣≃≅⟶↦]|=>|->|<\||\|>|(?:^|\s)(?:[-+*/^%<>&|$!]+|fun|by))\s*$"
+    r"(?:(?<!:):|[,=(\[{⟨→↔∧∨×∘•≤≥≠≈≡∈∉⊆⊂⊇⊃∣≃≅⟶↦]|=>|->|<\||\|>|(?:^|\s)(?:[-+*/^%<>&|$]+|fun|by))\s*$"
 )
 _BINDER_CLOSERS = {"(": ")", "{": "}", "[": "]", "⦃": "⦄"}
 
