@@ -593,6 +593,10 @@ check, the helper's build, and each probe have their own 600-second budget;
 run at a time. These limits are resource controls, not a security or
 authenticity boundary.
 
+Each phase is named on stderr as it starts: `skeleton: probing <n> modules...`
+when Lean probes start, `skeleton: assembling...` once none runs (the build must
+still not change), and `skeleton: writing...` before `--output` or `--packets`.
+
 `--packets DIR` writes one comment-stripped packet per skeleton, named after
 its article and declaration, with a manifest of articles and hashes; a blind
 auditor gets the hash-named packets of `review prepare` instead. The

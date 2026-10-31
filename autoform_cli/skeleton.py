@@ -97,7 +97,9 @@ through temporary files, hard links, and atomic renames, so a concurrent change
 detected before commit aborts publication instead of being overwritten.
 Combined, they are staged together and a failed commit restores the previous
 set: failure atomicity, not simultaneous visibility, since each rename is
-atomic on its own.
+atomic on its own. Packets, the report, and the trees' identities are hashed
+and written in pieces: a joint packet repeats every closure in its article, and
+can be gigabytes.
 
 Passages. A ``## Sources`` link with a ``#L<start>-L<end>`` fragment that names
 a regular Markdown file in the blueprint, in any letter case, is a note; any
@@ -130,12 +132,13 @@ from __future__ import annotations
 import contextlib
 import errno
 import hashlib
+import itertools
 import json
 import os
 import re
 import stat
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import asdict, dataclass, fields
 from dataclasses import field as dataclass_field
 from pathlib import Path
@@ -258,8 +261,9 @@ class DeclarationSkeleton(TrustedDeclaration):
     statement: str | None = None
     #: UTF-8 byte ranges of the comments in ``statement``.
     statement_comments: tuple[tuple[int, int], ...] = ()
-    #: Hashes and packet text, each computed once: a report states them
-    #: several times, and each fingerprint encodes the whole trusted closure.
+    #: Hashes, each computed once: a report states them several times, and
+    #: each fingerprint encodes the whole trusted closure. The packet text is
+    #: streamed instead, since a large closure makes it gigabytes.
     _cache: dict[str, str] = dataclass_field(default_factory=dict, init=False, repr=False, compare=False)
 
     @property
@@ -304,8 +308,7 @@ class DeclarationSkeleton(TrustedDeclaration):
         """Fingerprint the probe's canonical elaborated meaning and trust boundary."""
 
         if "hash" not in self._cache:
-            modules = {module for module, _, _ in self.boundary_modules}
-            self._cache["hash"] = self._fingerprint(self.trusted, self.assumed, modules, axioms=True)
+            self._fingerprints({})
         return self._cache["hash"]
 
     @property
@@ -315,13 +318,33 @@ class DeclarationSkeleton(TrustedDeclaration):
         proof, ``sorry`` to a proof included, leaves it unchanged."""
 
         if "statement_hash" not in self._cache:
-            self._cache["statement_hash"] = self._fingerprint(
-                self.statement_trusted, self.statement_assumed, set(self.statement_boundary_modules), axioms=False
-            )
+            self._fingerprints({})
         return self._cache["statement_hash"]
 
+    def _fingerprints(self, escaped: dict[str, bytes]) -> None:
+        """Compute :attr:`hash` and :attr:`statement_hash`, escaping each string
+        once per ``escaped``, which roots that share a closure can share."""
+
+        if "hash" not in self._cache:
+            modules = {module for module, _, _ in self.boundary_modules}
+            self._cache["hash"] = self._fingerprint(self.trusted, self.assumed, modules, axioms=True, escaped=escaped)
+        if "statement_hash" not in self._cache:
+            self._cache["statement_hash"] = self._fingerprint(
+                self.statement_trusted,
+                self.statement_assumed,
+                set(self.statement_boundary_modules),
+                axioms=False,
+                escaped=escaped,
+            )
+
     def _fingerprint(
-        self, trusted: tuple[TrustedDeclaration, ...], assumed: tuple[str, ...], modules: set[str], *, axioms: bool
+        self,
+        trusted: tuple[TrustedDeclaration, ...],
+        assumed: tuple[str, ...],
+        modules: set[str],
+        *,
+        axioms: bool,
+        escaped: dict[str, bytes],
     ) -> str:
         names = set(assumed)
         material = {
@@ -338,14 +361,17 @@ class DeclarationSkeleton(TrustedDeclaration):
         }
         if axioms:
             material |= {"axioms": list(self.axioms), "axiom_semantics": [list(item) for item in self.axiom_semantics]}
-        return _sha256_id(json.dumps(material, sort_keys=True, ensure_ascii=False).encode())
+        digest = hashlib.sha256()
+        for piece in _json_utf8(material, escaped):
+            digest.update(piece)
+        return f"sha256:{digest.hexdigest()}"
 
     @property
     def evidence_hash(self) -> str:
         """Fingerprint the exact proof-free text presented to a reviewer."""
 
         if "evidence_hash" not in self._cache:
-            self._cache["evidence_hash"] = _sha256_id(self.blind_text().encode("utf-8"))
+            self._cache["evidence_hash"] = _sha256_pieces(self._packet())
         return self._cache["evidence_hash"]
 
     def blind_text(self) -> str:
@@ -361,45 +387,36 @@ class DeclarationSkeleton(TrustedDeclaration):
         unless it decides whether an equation-style statement can be cut at all.
         """
 
-        if "packet" not in self._cache:
-            self._cache["packet"] = self._packet()
-        return self._cache["packet"]
+        return "".join(self._packet())
 
-    def _packet(self) -> str:
-        lines = [
-            f"-- {self.kind} {self.name}",
-            f"-- assumed from libraries: {', '.join(self.statement_assumed) or 'none'}",
-            "",
-            self.signature,
-            "-- raw signature:",
-            self.raw_signature,
-            f"-- canonical kernel material: {self.semantic}",
-        ]
+    def _packet(self) -> Iterator[str]:
+        """The packet in pieces, each line followed by its newline, so the
+        kernel material is never copied into one string."""
+
+        yield f"-- {self.kind} {self.name}\n"
+        yield f"-- assumed from libraries: {', '.join(self.statement_assumed) or 'none'}\n\n"
+        yield from (self.signature, "\n-- raw signature:\n", self.raw_signature, "\n")
+        yield from ("-- canonical kernel material: ", self.semantic, "\n")
         own = _without_comments(self.source or "", self.source_comments).strip("\n")
         if own:
-            lines.append(own)
+            yield own + "\n"
         elif self.statement:
             written = _without_comments(self.statement, self.statement_comments).strip("\n")
             if written:
-                lines += ["-- as written:", written]
+                yield f"-- as written:\n{written}\n"
         if self.source_withheld or not (own or self.statement):
-            lines.append(_NOT_SHOWN)
+            yield _NOT_SHOWN + "\n"
         for item in self.statement_trusted:
             body = _without_comments(item.source or "", item.source_comments).strip("\n")
             # The elaborated signature restores what `variable` binders and
             # `open` leave implicit in the source, such as the type of `S`.
-            lines += [
-                "",
-                f"-- {item.kind} {item.name}",
-                f"-- signature: {item.signature}",
-                f"-- raw signature: {item.raw_signature}",
-                f"-- canonical kernel material: {item.semantic}",
-            ]
+            yield f"\n-- {item.kind} {item.name}\n"
+            yield from ("-- signature: ", item.signature, "\n-- raw signature: ", item.raw_signature, "\n")
+            yield from ("-- canonical kernel material: ", item.semantic, "\n")
             if body:
-                lines.append(body)
+                yield body + "\n"
             elif item.source_withheld:
-                lines.append(_NOT_SHOWN)
-        return "\n".join(lines) + "\n"
+                yield _NOT_SHOWN + "\n"
 
     def as_dict(self) -> dict[str, object]:
         """The report record, naming what the report's shared tables state once."""
@@ -458,9 +475,13 @@ class NodeSkeleton:
         alone.
         """
 
-        parts = [f"-- article with {len(self.declarations)} declaration(s)"]
-        parts += [declaration.blind_text() for declaration in self.declarations]
-        return "\n".join(parts)
+        return "".join(self._packet())
+
+    def _packet(self) -> Iterator[str]:
+        yield f"-- article with {len(self.declarations)} declaration(s)"
+        for declaration in self.declarations:
+            yield "\n"
+            yield from declaration._packet()
 
     @property
     def hash(self) -> str | None:
@@ -478,7 +499,7 @@ class NodeSkeleton:
         """Fingerprint the exact joint packet presented to a reviewer."""
 
         if "evidence_hash" not in self._cache:
-            self._cache["evidence_hash"] = _sha256_id(self.blind_text().encode("utf-8"))
+            self._cache["evidence_hash"] = _sha256_pieces(self._packet())
         return self._cache["evidence_hash"]
 
     @property
@@ -670,7 +691,12 @@ class SkeletonReport:
         }
 
     def to_json(self) -> str:
-        return json.dumps(self._record(self._tables), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return _REPORT_JSON.encode(self._record(self._tables))
+
+    def _json_pieces(self) -> Iterator[str]:
+        """:meth:`to_json` in pieces, for a report too large to hold twice."""
+
+        return _REPORT_JSON.iterencode(self._record(self._tables))
 
 
 def _share(table: dict[str, object], name: str, value: object, *, table_name: str) -> None:
@@ -680,6 +706,45 @@ def _share(table: dict[str, object], name: str, value: object, *, table_name: st
 
 def _sha256_id(content: bytes) -> str:
     return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
+def _sha256_pieces(pieces: Iterable[str]) -> str:
+    """The :func:`_sha256_id` of the UTF-8 text ``pieces`` join to, without joining them."""
+
+    digest = hashlib.sha256()
+    for piece in pieces:
+        digest.update(piece.encode("utf-8"))
+    return f"sha256:{digest.hexdigest()}"
+
+
+#: The report's spelling; its ``iterencode`` writes what ``encode`` returns, in pieces.
+_REPORT_JSON = json.JSONEncoder(sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _json_utf8(value: object, escaped: dict[str, bytes]) -> Iterator[bytes]:
+    """``json.dumps(value, sort_keys=True, ensure_ascii=False)`` in UTF-8 pieces,
+    for a value of strings, lists, and dicts, escaping each string once per ``escaped``."""
+
+    if isinstance(value, str):
+        piece = escaped.get(value)
+        if piece is None:
+            piece = escaped[value] = json.encoder.encode_basestring(value).encode("utf-8")
+        yield piece
+    elif isinstance(value, list):
+        yield b"["
+        for index, item in enumerate(value):
+            if index:
+                yield b", "
+            yield from _json_utf8(item, escaped)
+        yield b"]"
+    elif isinstance(value, dict):
+        yield b"{"
+        for index, (key, item) in enumerate(sorted(value.items())):
+            yield from (b", " if index else b"", *_json_utf8(key, escaped), b": ")
+            yield from _json_utf8(item, escaped)
+        yield b"}"
+    else:
+        raise TypeError(f"cannot fingerprint {type(value).__name__}")
 
 
 def _without_comments(text: str, comments: tuple[tuple[int, int], ...]) -> str:
@@ -1059,7 +1124,7 @@ def _require_probe_source(value: object, *, kind: str, context: str) -> None:
         raise SkeletonError([f"the skeleton probe emitted proof-bearing source for {context}"])
 
 
-def _probe_record_issue(record: dict[str, object]) -> str | None:
+def _probe_record_issue(record: dict[str, object], *, safe: set[int] | None = None) -> str | None:
     """Why a validated probe record cannot yield a skeleton, confined to its node.
 
     A declaration whose source cannot be located leaves nothing faithful to
@@ -1068,17 +1133,22 @@ def _probe_record_issue(record: dict[str, object]) -> str | None:
     (for example, a statement that uses `local notation`) is only withheld: the
     signatures and canonical kernel material still state its meaning. A
     partial root or trusted dependency has no kernel meaning to bind, so its
-    node is refused as well.
+    node is refused as well. ``safe`` holds the ids of shared records already
+    found safe, so each is parsed once however many roots trust it.
     """
 
     root = str(record["root"])
     trusted = record["trusted"]
     assert isinstance(trusted, list)
+    safe = set() if safe is None else safe
     safety = [(root, record)] + [(str(item.get("source_name") or ""), item) for item in trusted]
     for source_name, item in safety:
+        if id(item) in safe:
+            continue
         issue = _local_safety_issue(source_name, str(item["semantic"]))
         if issue is not None:
             return issue
+        safe.add(id(item))
     entries = [(root, root, record)]
     entries += [(str(item["name"]), f"{root} trusted declaration {item['name']}", item) for item in trusted]
     for name, context, item in entries:
@@ -1299,6 +1369,7 @@ def extract_skeletons(
     runner: ProbeRunner | None = None,
     node_ids: tuple[str, ...] | None = None,
     timeout: float | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> SkeletonReport:
     """Extract the skeleton of every ``lean:`` declaration the blueprint names.
 
@@ -1311,7 +1382,8 @@ def extract_skeletons(
     so it cannot be combined with ``timeout``, and may be called from several
     threads at once. A declaration the lexical index cannot place is reported
     as unresolved without running Lean, exactly as
-    ``autoform check --lean-root`` reports it.
+    ``autoform check --lean-root`` reports it. ``progress`` hears each phase as
+    it starts, as :func:`extract_graph_skeletons` says.
     """
 
     if runner is not None and timeout is not None:
@@ -1337,7 +1409,14 @@ def extract_skeletons(
         probing, runner = lean_probe.default_runner(root, timeout=DEFAULT_PROBE_TIMEOUT if timeout is None else timeout)
 
     report = extract_graph_skeletons(
-        graph, lean_root=root, libraries=libraries, index=index, runner=runner, node_ids=node_ids, probing=probing
+        graph,
+        lean_root=root,
+        libraries=libraries,
+        index=index,
+        runner=runner,
+        node_ids=node_ids,
+        probing=probing,
+        progress=progress,
     )
     current = check_inputs_unchanged(graph, root, index, inputs, activity=activity)
     if _blueprint_hash(current, _source_passages(current)) != report.blueprint_hash:
@@ -1460,12 +1539,15 @@ def extract_graph_skeletons(
     runner: ProbeRunner,
     node_ids: tuple[str, ...] | None = None,
     probing: Callable[[tuple[str, ...]], contextlib.AbstractContextManager[object]] | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> SkeletonReport:
     """Extract skeletons for an already loaded graph.
 
     ``probing``, when given, is entered with every module about to be probed and
     held while the probes run, and only then; the default runner's freshness
     check, helper build, scratch directory and signal guard live there.
+    ``progress``, when given, hears ``probing <n> modules`` before any module
+    is probed, ``probing`` included, and ``assembling`` once no probe runs.
     """
 
     targets, selected, selection = select_lean_targets(graph, node_ids)
@@ -1511,6 +1593,8 @@ def extract_graph_skeletons(
             for module in sorted(groups)
         }
         snapshot_started_ns = time.time_ns()
+        if progress is not None:
+            progress(f"probing {_plural(len(programs), 'module')}")
 
         def probe(module: str) -> dict[str, dict[str, object]]:
             # Parsed in the worker, as soon as the probe ends.
@@ -1528,8 +1612,13 @@ def extract_graph_skeletons(
             else:
                 records.update(result)
 
+    if progress is not None:
+        progress("assembling")
     nodes: list[NodeSkeleton] = []
     module_hashes: dict[tuple[str, str], str] = {}
+    # A probe states each shared record once; these keep it read once, by id.
+    safe: set[int] = set()
+    shared: dict[int, TrustedDeclaration] = {}
     for node, names in selected:
         declarations: list[DeclarationSkeleton] = []
         for name in names:
@@ -1563,7 +1652,7 @@ def extract_graph_skeletons(
                 reason = f"Lean declares it in module {record.get('module')}, not in {module} where its source was found"
                 unresolved.append(UnresolvedTarget(node.id, name, reason))
                 continue
-            issue = _probe_record_issue(record)
+            issue = _probe_record_issue(record, safe=safe)
             if issue is not None:
                 unresolved.append(UnresolvedTarget(node.id, name, issue))
                 continue
@@ -1575,6 +1664,7 @@ def extract_graph_skeletons(
                     index=index,
                     module_hashes=module_hashes,
                     snapshot_started_ns=snapshot_started_ns,
+                    shared=shared,
                 )
             )
         passage, locator, _ = passages[node.id]
@@ -1588,6 +1678,11 @@ def extract_graph_skeletons(
                 complete={item.name for item in declarations} == set(names),
             )
         )
+    # Roots share most of their closures, so each string is escaped once for all their fingerprints.
+    escaped: dict[str, bytes] = {}
+    for item in nodes:
+        for declaration in item.declarations:
+            declaration._fingerprints(escaped)
     return SkeletonReport(
         blueprint_hash=_blueprint_hash(graph, passages),
         targets=tuple((node.id, names) for node, names in targets),
@@ -1747,8 +1842,13 @@ def _declaration(
     index: SourceIndex,
     module_hashes: dict[tuple[str, str], str],
     snapshot_started_ns: int | None,
+    shared: dict[int, TrustedDeclaration],
 ) -> DeclarationSkeleton:
-    trusted = [_trusted(item, libraries=libraries, lean_root=lean_root, index=index) for item in record["trusted"]]
+    trusted: list[TrustedDeclaration] = []
+    for item in record["trusted"]:  # type: ignore[attr-defined]
+        if id(item) not in shared:
+            shared[id(item)] = _trusted(item, libraries=libraries, lean_root=lean_root, index=index)
+        trusted.append(shared[id(item)])
     name = str(record["root"])
     module = str(record["module"])
     start, end = record["range"] or (None, None)
@@ -1968,7 +2068,7 @@ def _stage_report_output(report: SkeletonReport, destination: Path) -> tuple[Pat
     identity = output_identity(destination)
     if identity is not None and not destination.is_file():
         raise SkeletonError([f"report output exists and is not a regular file: {destination}"])
-    return stage_output(destination, report.to_json() + "\n"), identity
+    return stage_output(destination, itertools.chain(report._json_pieces(), "\n")), identity
 
 
 def _paths_overlap(first: Path, second: Path) -> bool:
@@ -2054,8 +2154,9 @@ def write_packets(
     manifest: list[dict[str, str]] = []
     passage_manifest: list[dict[str, str]] = []
     # Written after the manifests: a capture that lists a stage before its
-    # marker is complete then finds no folder to descend into.
-    files: list[tuple[Path, str | bytes]] = []
+    # marker is complete then finds no folder to descend into. Packets are
+    # streamed, so no packet is held whole.
+    files: list[tuple[Path, bytes | Iterable[str]]] = []
     try:
         packet_stage = stage_output(root)
         passages_stage = stage_output(passages_root) if passages_root is not None else None
@@ -2078,11 +2179,11 @@ def write_packets(
                 )
             article_relative = node_path / ARTICLE_PACKET
             if node.declarations:
-                files.append((packet_stage / article_relative, node.blind_text()))
+                files.append((packet_stage / article_relative, node._packet()))
                 written.append(root / article_relative)
             for declaration in node.declarations:
                 relative = node_path / declaration_filename(declaration.name)
-                files.append((packet_stage / relative, declaration.blind_text()))
+                files.append((packet_stage / relative, declaration._packet()))
                 written.append(root / relative)
                 entry = {
                     "article_packet": article_relative.as_posix(),
@@ -2111,8 +2212,9 @@ def write_packets(
             path.parent.mkdir(parents=True, exist_ok=True)
             if isinstance(content, bytes):
                 path.write_bytes(content)
-            else:
-                path.write_text(content, encoding="utf-8")
+                continue
+            with path.open("w", encoding="utf-8") as stream:
+                stream.writelines(content)
         outputs = [(root, packet_stage, root_identity)]
         if passages_root is not None and passages_stage is not None:
             outputs.append((passages_root, passages_stage, passages_identity))

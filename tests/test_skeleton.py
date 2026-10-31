@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import tracemalloc
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -60,6 +61,7 @@ from autoform_cli.skeleton import (
     UnresolvedTarget,
     _declaration,
     _hash_module_files,
+    _json_utf8,
     _local_safety_issue,
     _without_comments,
     _probe_record_issue,
@@ -299,6 +301,82 @@ def _fake_report(tmp_path: Path, output: str | None = None) -> SkeletonReport:
             runner=lambda _probe, _root: output,
         )
     return extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
+
+
+def _shared_closure(root: Path, articles: dict[str, int], *, closure: int, size: int) -> tuple[Path, Path, str]:
+    """A project whose roots all trust one chain of definitions, its blueprint, and
+    what the probe says about them, written without Lean.
+
+    ``articles`` maps each article to how many roots it names. Each of the
+    ``closure`` definitions carries about ``size`` characters of kernel material,
+    with quotes, escapes, and characters beyond the Basic Multilingual Plane.
+    """
+
+    project = root / "project"
+    (project / "Synth").mkdir(parents=True)
+    (project / "lean-toolchain").write_text("leanprover/lean4:v4.32.2\n", encoding="utf-8")
+    (project / "lakefile.toml").write_text(
+        'name = "Synth"\ndefaultTargets = ["Synth"]\n\n[[lean_lib]]\nname = "Synth"\n', encoding="utf-8"
+    )
+    (project / "Synth.lean").write_text("import Synth.Main\n", encoding="utf-8")
+    roots = {stem: [f"{stem}_{index}" for index in range(count)] for stem, count in articles.items()}
+    names = [name for group in roots.values() for name in group]
+    lean = {stem: ", ".join(f"Synth.{name}" for name in group) for stem, group in roots.items()}
+    (project / "Synth" / "Main.lean").write_text(
+        "\n".join(["namespace Synth", "", *(f"theorem {name} : True := trivial" for name in names), "", "end Synth"])
+        + "\n",
+        encoding="utf-8",
+    )
+    blueprint = _blueprint(root, lean=lean)
+    source = blueprint / "sources" / "book.tex"
+    source.parent.mkdir()
+    source.write_text("Every root is \\emph{true}.\n", encoding="utf-8")
+    first = blueprint / "roadmap" / "basics" / f"{next(iter(articles))}.md"
+    _replace_source(first, "## Depends on", "## Sources\n\n- [book](../../sources/book.tex#L1-L1)\n\n## Depends on")
+
+    def table(kind: str, name: str, value: object) -> str:
+        return PROBE_MARKER + json.dumps({"table": kind, "name": name, "value": value})
+
+    pad = ('"q\\b" ℝ → 𝔽\t' * (size // 12 + 1))[:size]
+    lines: list[str] = []
+    for index in range(closure):
+        name = f"Synth.d{index}"
+        doc, code, comment = f"/-- Step {index} in ℝ. -/\n", f"def d{index} : ℝ → Type := ", "-- a step ⟨x⟩"
+        source_text = f"{doc}{code}{comment}\n  fun _ => Unit"
+        start = len(f"{doc}{code}".encode())
+        material = {"safety": "safe", "type": {"const": [name, pad]}, "value": {"bvar": index}}
+        entry = _trusted(
+            name, "def", [2 * index + 1, 2 * index + 2], f"{name} : ℝ →\n  Type",
+            depends=[f"Synth.d{index - 1}"] if index else [],
+            source=source_text,
+            source_comments=[[0, len(doc.encode()) - 1], [start, start + len(comment.encode())]],
+            module="Synth.Main",
+            semantic=json.dumps({"generated": [], "root": material}, separators=(",", ":"), ensure_ascii=False),
+        )
+        lines.append(table("trusted", name, dict(entry, semantic=[entry["semantic"]])))
+    semantic = _semantic({"type": {"sort": {"zero": None}}})
+    lines += [table("semantic", name, [semantic]) for name in ("Mathlib.Fake", "propext")]
+    lines.append(table("module", "Mathlib.Fake", [["olean", "Synth/Main.lean"]]))
+    for line, name in enumerate(names, start=3):
+        # Every other root's written statement holds a comment Lean could not place, so it is withheld.
+        statement = f"theorem {name} :\n    True" if line % 2 else f"theorem {name} : -- why\n    True"
+        lines.append(
+            PROBE_MARKER
+            + json.dumps(
+                {
+                    "root": f"Synth.{name}", "found": True, "kind": "theorem", "module": "Synth.Main",
+                    "range": [line, line], "signature": f"Synth.{name} : True", "raw_signature": f"Synth.{name} : True",
+                    "semantic_schema": SEMANTIC_SCHEMA, "semantic": [semantic], "lean_version": "4.32.2",
+                    "source": None, "source_comments": None, "statement_source": statement,
+                    "statement_comments": [] if line % 2 else None,
+                    "depends": [f"Synth.d{closure - 1}"], "trusted": [f"Synth.d{index}" for index in range(closure)],
+                    "assumed": ["Mathlib.Fake"], "boundary_modules": ["Mathlib.Fake"],
+                    "statement_assumed": ["Mathlib.Fake"], "statement_boundary_modules": ["Mathlib.Fake"],
+                    "axioms": ["propext"],
+                }
+            )
+        )
+    return project, blueprint, "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -1791,10 +1869,32 @@ def test_report_bytes_are_pinned(tmp_path: Path) -> None:
     assert digest == "a28525d38295df4e9848c3d1334528a29478678f269272e487d8de98ec41b8e3"
 
 
+def _tree_digest(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            digest.update(path.relative_to(root).as_posix().encode() + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
+def test_shared_closure_outputs_are_pinned(tmp_path: Path) -> None:
+    # Streaming the report and packets must keep every byte, and so every hash, a reader recorded.
+    project, blueprint, output = _shared_closure(tmp_path, {"joint": 3, "single": 1}, closure=4, size=300)
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
+    out = tmp_path / "out"
+
+    write_packets(report, out / "packets", passages=out / "passages", report_path=out / "skeleton.json")
+    write_skeleton_report(report, tmp_path / "alone.json")
+
+    assert report.clean
+    assert _tree_digest(out) == "89ca807ef1aaf2dce369bc5a56699dd831aaa7e0cace3b1a4c2300f0b4b6a92d"
+    assert (tmp_path / "alone.json").read_text(encoding="utf-8") == report.to_json() + "\n"
+    assert (out / "skeleton.json").read_bytes() == (tmp_path / "alone.json").read_bytes()
+
+
 def test_report_serialization_fingerprints_each_declaration_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    report = _fake_report(tmp_path)
     calls: dict[str, int] = {"_fingerprint": 0, "_packet": 0, "_shared_tables": 0}
     for owner, name in (
         (DeclarationSkeleton, "_fingerprint"),
@@ -1808,12 +1908,52 @@ def test_report_serialization_fingerprints_each_declaration_once(
             return _original(*args, **kwargs)
 
         monkeypatch.setattr(owner, name, counted)
+    report = _fake_report(tmp_path)
 
     report.to_json()
     report.to_json()
 
-    # One meaning hash and one statement hash, one packet, and the tables built at construction.
-    assert calls == {"_fingerprint": 2, "_packet": 1, "_shared_tables": 0}
+    # Extraction makes one meaning hash and one statement hash; the packet is
+    # streamed once for its own hash and once in its article's; the tables are
+    # built at construction.
+    assert calls == {"_fingerprint": 2, "_packet": 2, "_shared_tables": 1}
+
+
+def test_writing_holds_no_whole_packet(tmp_path: Path) -> None:
+    # A large shared closure makes a packet gigabytes, so writing holds pieces of it, not all of it.
+    project, blueprint, output = _shared_closure(tmp_path, {"joint": 3}, closure=80, size=20000)
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
+    first, second, _ = report.nodes[0].declarations
+    assert all(item is other for item, other in zip(first.trusted, second.trusted, strict=True))
+
+    tracemalloc.start()
+    try:
+        write_packets(report, tmp_path / "packets", report_path=tmp_path / "skeleton.json")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    article = (tmp_path / "packets" / "basics" / "joint" / "article.lean").stat().st_size
+    assert peak < article / 3, (peak, article)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {},
+        [],
+        "",
+        {"b": [], "a": {}, "é": "\u2028", "A": ["\x00\x1f\x7f", "\"\\/", "𝔽 ℝ\t\n"]},
+        [["x", [], {"z": "1", "y": ["2", "3"]}], "\ud7ff\ue000\uffff"],
+    ],
+)
+def test_fingerprint_encoding_matches_json_dumps(value: object) -> None:
+    escaped: dict[str, bytes] = {}
+    expected = json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")
+
+    # Twice, so a string escaped once encodes the same from the memo.
+    assert b"".join(_json_utf8(value, escaped)) == expected
+    assert b"".join(_json_utf8(value, escaped)) == expected
 
 
 def test_report_record_edits_do_not_reach_the_report(tmp_path: Path) -> None:
@@ -2154,7 +2294,62 @@ def test_cli_publishes_report_and_packet_trees_together(
     assert (passages / PACKET_MANIFEST).is_file()
     assert json.loads(output.read_text(encoding="utf-8"))["unresolved"] == []
     assert list(tmp_path.glob(".*.autoform-*")) == []
-    assert capsys.readouterr().err == ""
+    assert capsys.readouterr().err == "skeleton: probing 1 module...\nskeleton: assembling...\nskeleton: writing...\n"
+
+
+def test_cli_names_each_phase_on_stderr_as_it_starts(tmp_path: Path, capsys, monkeypatch) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    during_probe: list[str] = []
+
+    def probe(program: str, lean_root: Path) -> str:
+        during_probe.append(capsys.readouterr().err)
+        return _fake_probe_output()
+
+    _fake_default_probe(monkeypatch, probe)
+    output = tmp_path / "skeleton.json"
+
+    assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--output", str(output)]) == 0
+
+    captured = capsys.readouterr()
+    # No probe runs once `assembling` appears, though the build must stay as it is until the command ends.
+    assert during_probe == ["skeleton: probing 1 module...\n"]
+    assert captured.err == "skeleton: assembling...\nskeleton: writing...\n"
+    assert captured.out == f"{output}: 1 skeleton(s) for 1 article(s)\n"
+
+
+def test_cli_json_prints_the_report_bytes(tmp_path: Path, capsys, monkeypatch) -> None:
+    assert _cli(tmp_path, monkeypatch, "--json") == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == _fake_report(tmp_path / "other").to_json() + "\n"
+    assert captured.err == "skeleton: probing 1 module...\nskeleton: assembling...\n"
+
+
+def test_cli_json_stdout_stays_the_report_without_stderr(tmp_path: Path, capsys, monkeypatch) -> None:
+    # Started with fd 2 closed, Python sets sys.stderr to None, and print(file=None) writes to stdout.
+    monkeypatch.setattr(sys, "stderr", None)
+
+    assert _cli(tmp_path, monkeypatch, "--json") == 0
+
+    assert capsys.readouterr().out == _fake_report(tmp_path / "other").to_json() + "\n"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="needs a POSIX pipe")
+def test_cli_progress_on_a_broken_stderr_leaves_nothing_to_fail_at_exit(tmp_path: Path, capsys, monkeypatch) -> None:
+    # A reader that stopped tailing stderr: the write end of a pipe whose read end is closed.
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    broken = open(write_end, "w", encoding="utf-8")
+    monkeypatch.setattr(sys, "stderr", broken)
+    try:
+        assert _cli(tmp_path, monkeypatch, "--json") == 0
+        # The interpreter flushes stderr at exit; a failure there would turn exit 0 into 120.
+        broken.flush()
+    finally:
+        broken.close()
+
+    assert capsys.readouterr().out == _fake_report(tmp_path / "other").to_json() + "\n"
 
 
 def test_cli_does_not_publish_packets_when_report_staging_fails(
@@ -3402,6 +3597,7 @@ def _declaration_of(project: Path, record: dict[str, object]):
         index=index_project(project),
         module_hashes={},
         snapshot_started_ns=None,
+        shared={},
     )
 
 

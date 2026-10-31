@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -1774,22 +1775,37 @@ def _skeleton(args: argparse.Namespace) -> int:
             print("error: --output must be disjoint from packet and passage directories", file=sys.stderr)
             return 2
     stream = sys.stderr if args.json else sys.stdout
+
+    def progress(phase: str) -> None:
+        # Information only. Without fd 2, print(file=None) would write to stdout,
+        # and a line left in a broken stderr's buffer would fail the exit-time flush.
+        if sys.stderr is None:
+            return
+        try:
+            print(f"skeleton: {phase}...", file=sys.stderr, flush=True)
+        except OSError:
+            with contextlib.suppress(OSError, ValueError):
+                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stderr.fileno())
+
     try:
         report = extract_skeletons(
             args.blueprint_dir,
             lean_root=args.lean_root,
             timeout=args.timeout,
             node_ids=tuple(args.nodes) if args.nodes else None,
+            progress=progress,
         )
         if args.packets is not None and not report.clean:
             print("error: refusing to publish review packets from an incomplete skeleton report", file=sys.stderr)
         elif args.packets is not None:
+            progress("writing")
             written = write_packets(report, args.packets, passages=args.passages, report_path=args.output)
             print(f"{args.packets}: {len(written)} blind packet(s) written", file=stream)
             if args.passages is not None:
                 cited = sum(1 for node in report.nodes if node.passage is not None)
                 print(f"{args.passages}: {cited} source passage(s) written", file=stream)
         if args.output is not None and (args.packets is None or not report.clean):
+            progress("writing")
             write_skeleton_report(report, args.output)
     except SkeletonError as exc:
         for issue in exc.issues:
@@ -1804,7 +1820,9 @@ def _skeleton(args: argparse.Namespace) -> int:
         for issue in report.unresolved:
             print(f"error: {issue.message}", file=stream)
     elif args.json:
-        print(report.to_json())
+        # In pieces, as `--output` writes it: a large report need not be held twice.
+        sys.stdout.writelines(report._json_pieces())
+        sys.stdout.write("\n")
     else:
         print(format_report(report, lean_root=args.lean_root), end="")
     return 0 if report.clean else 1
