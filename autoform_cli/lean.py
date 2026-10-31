@@ -72,10 +72,10 @@ from ._tree_snapshot import (
 _NAMESPACE = re.compile(r"^\s*namespace\s+(.+)$")
 #: ``section`` in every form that opens one, e.g. ``@[expose] public section``.
 _SECTION = re.compile(
-    r"^\s*(?:@\[[^\]]*\]\s*)*(?:(?:public|private|meta|noncomputable)\s+)*section\b\s*(\S*)"
+    r"^\s*(?:@\[[^\]]*\]\s*)*(?:(?:public|private|meta|noncomputable)\s+)*section\b\s*(.*)"
 )
 _MUTUAL = re.compile(r"^\s*mutual\s*$")
-_END = re.compile(r"^\s*end\b\s*(\S*)")
+_END = re.compile(r"^\s*end\b\s*(.*)")
 _EXIT = re.compile(r"^\s*#exit\b")
 # The ``*_wanted`` commands are Batteries' ``Batteries.Util.ProofWanted``: each
 # states a result whose proof or construction is deferred. ``alias`` is
@@ -831,20 +831,25 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
             name = _name_token(namespace_match.group(1))
             if name is None:
                 continue
-            namespaces.append(name)
-            scopes.append(name)
+            # Lean opens a scope for each component, and `end B` closes one.
+            for part in _name_parts(name):
+                namespaces.append(part)
+                scopes.append(part)
             continue
 
-        if _SECTION.match(line) or _MUTUAL.match(line):
-            scopes.append(None)
+        section_match = _SECTION.match(line)
+        if section_match or _MUTUAL.match(line):
+            parts = _name_parts(_name_token(section_match.group(1)) or "") if section_match else []
+            scopes.extend([None] * max(len(parts), 1))
             continue
 
         end_match = _END.match(line)
         if end_match:
-            if scopes:
-                closed = scopes.pop()
-                if closed is not None and namespaces:
-                    namespaces.pop()
+            for _ in range(len(_name_parts(_name_token(end_match.group(1)) or "")) or 1):
+                if scopes:
+                    closed = scopes.pop()
+                    if closed is not None and namespaces:
+                        namespaces.pop()
             continue
 
         declaration_match = _DECLARATION.match(line)
@@ -1221,6 +1226,12 @@ def _qualified(namespaces: list[str], name: str) -> str:
 _NAME_TOKEN = re.compile(r"(?:«[^«»]*»|[^\s:(){}\[\]⦃⦄,«»])+")
 
 
+def _name_parts(name: str) -> list[str]:
+    """The components of ``name``, where a guillemet may quote dots: ``A.«b.c»`` has two."""
+
+    return re.findall(r"«[^»]*»|[^.«»]+", name)
+
+
 def _name_token(text: str) -> str | None:
     """Read one possibly guillemet-quoted Lean identifier from ``text``."""
 
@@ -1358,8 +1369,7 @@ def _aliases(
     elif target.startswith("_root_."):
         candidates = (target.removeprefix("_root_."),)
     else:
-        parts = [part for namespace in namespaces for part in namespace.split(".")]
-        candidates = tuple(".".join([*parts[:depth], target]) for depth in range(len(parts), -1, -1))
+        candidates = tuple(".".join([*namespaces[:depth], target]) for depth in range(len(namespaces), -1, -1))
     atomic = target is not None and _ONE_COMPONENT.fullmatch(target) is not None
     iff = match["name"] is None
     alias = Alias(candidates, atomic, iff)

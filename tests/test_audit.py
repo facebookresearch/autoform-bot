@@ -1389,6 +1389,37 @@ def test_the_limit_scan_reads_commands_at_the_declaration_s_indentation() -> Non
     assert found(6) == [("maxHeartbeats", 0, "declaration"), ("maxRecDepth", 2000, "proof")]
 
 
+def test_the_limit_scan_closes_one_scope_per_name_component() -> None:
+    # `end B` after `namespace A.B` leaves A open, and `end C.D` closes C too.
+    lines = [
+        "namespace A.B",
+        "end B",
+        "set_option maxHeartbeats 0",
+        "theorem inside : True := trivial",
+        "end A",
+        "theorem after : True := trivial",
+        "namespace C",
+        "set_option maxRecDepth 4096",
+        "namespace D",
+        "end C.D",
+        "theorem later : True := trivial",
+        "namespace O",
+        "namespace «a.b c»",
+        "end «a.b c»",
+        "set_option maxHeartbeats 0",
+        "end O",
+        "theorem last : True := trivial",
+    ]
+
+    def found(line: int) -> list[tuple[str, int, str]]:
+        return [(setting.option, setting.value, setting.scope) for setting in limits_in_force(lines, line)]
+
+    assert found(4) == [("maxHeartbeats", 0, "section")]
+    assert found(6) == []
+    assert found(11) == []
+    assert found(17) == []
+
+
 def test_the_limit_scan_reads_several_indentations_in_one_batch() -> None:
     # A catalog asks for all its declarations in a file at once, and this file
     # indents the one inside its namespace.

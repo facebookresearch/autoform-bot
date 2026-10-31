@@ -461,6 +461,26 @@ def test_sections_do_not_add_to_the_namespace(tmp_path: Path) -> None:
     assert index.find("Outer.Helpers.beta") is None
 
 
+def test_a_dotted_scope_opens_and_closes_one_scope_per_component(tmp_path: Path) -> None:
+    # Lean's `namespace A.B` opens A and B, `end B` closes only B, and
+    # `end C.D` closes both C and D; a quoted name is one component.
+    source = (
+        "namespace A.B\ndef inner : Nat := 0\nend B\ndef outer : Nat := 0\n"
+        "structure S where\n  x : Nat\nend A\n"
+        "namespace C\nnamespace D\nend C.D\ndef top : Nat := 0\n"
+        "namespace «E.F»\ndef quoted : Nat := 0\nend «E.F»\n"
+        "namespace G\nsection H.I\nend I\ndef sectioned : Nat := 0\nend H\nend G\ndef last : Nat := 0\n"
+        "namespace O\nnamespace «a.b c».D\nend «a.b c».D\ndef spaced : Nat := 0\nend O\n"
+        "namespace X.«E.F»\nalias moved := t\n"
+    )
+    index = _index(tmp_path, source)
+    assert sorted(index.declarations) == [
+        "A.B.inner", "A.S", "A.S.x", "A.outer", "G.sectioned", "O.spaced", "X.«E.F».moved", "last", "top",
+        "«E.F».quoted",
+    ]
+    assert index.declarations["X.«E.F».moved"].alias.candidates == ("X.«E.F».t", "X.t", "t")
+
+
 def test_the_scan_indexes_every_declaration_form(tmp_path: Path) -> None:
     source = [
         "universe u v w",
