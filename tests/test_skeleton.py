@@ -3871,6 +3871,8 @@ def test_packet_publication_refuses_unmanaged_or_symlink_output(tmp_path: Path) 
     linked.symlink_to(outside, target_is_directory=True)
     with pytest.raises(SkeletonError, match="symlink packet output"):
         write_packets(report, linked)
+    with pytest.raises(SkeletonError, match="symlink passage output"):
+        write_packets(report, tmp_path / "packets", passages=linked)
 
     fake_managed = tmp_path / "fake-managed"
     fake_managed.mkdir()
