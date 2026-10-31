@@ -71,6 +71,11 @@ date when the release is tagged.
   pushing, goes to an `origin` branch ending with the leaf's `article_id`, which
   `git ls-remote` finds after the lease is gone. No message grants ownership or
   completes a leaf (#434).
+- **Formalize worktrees.** A new worktree gets a copy of the lead's
+  `.lake/packages`, copy-on-write and never a symbolic link, before its first
+  build. `lake exe cache get` then downloads nothing; before, each worktree
+  re-cloned about 0.5 GB of packages and unpacked another 7.5 GB Mathlib build
+  (#275).
 - **Generated import roots.** `work import-impact` reports `module_generated`
   when the repository's Git attributes set `linguist-generated` on MODULE's
   file, or make it `true`, normally through a committed `.gitattributes` line
