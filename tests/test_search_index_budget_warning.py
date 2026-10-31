@@ -1,4 +1,4 @@
-"""Search-index capacity is diagnostic only; exact bytes and source data survive."""
+"""Search-index capacity: an over-budget index leaves out summaries; every other field and the source data survive."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def test_budget_boundary_warns_without_refusal_truncation_or_wire_changes(
     baseline = _write(tmp_path / "baseline.json", view).read_bytes()
     assert len(baseline) == size
     # Scale only the private diagnostic capacity for tiny exact boundary cases.
-    # Production and the client keep their unchanged 32MiB limit.
+    # Production and the client keep their 64 MiB limit.
     monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_BYTE_LIMIT", 1000)
     warnings, digests = [], []
     emitted = _write(tmp_path / "warned.json", view, warnings=warnings, digests=digests).read_bytes()
@@ -125,5 +125,43 @@ def test_graph_publication_forwards_index_warning_without_changing_its_manifest_
     assert (graph.nodes, states) == before
 
 
-def test_production_warning_limit_is_the_unchanged_browser_default() -> None:
-    assert dag_viewer._SEARCH_INDEX_BYTE_LIMIT == 32 * 1024 * 1024
+def test_production_limits_match_the_client_default_and_leave_summaries_room() -> None:
+    assert dag_viewer._SEARCH_INDEX_BYTE_LIMIT == 64 * 1024 * 1024
+    assert dag_viewer._SEARCH_INDEX_SUMMARY_BUDGET == 32 * 1024 * 1024
+    source = (Path(dag_viewer.__file__).parent / "assets" / "blueprint-navigation.js").read_text(encoding="utf-8")
+    # The warning measures against the limit the browser actually applies to a JSON fetch.
+    assert "bounded(options.jsonLimit, 64 * 1024 * 1024, 1024, 64 * 1024 * 1024)" in source
+
+
+@pytest.mark.parametrize("collect", [True, False])
+def test_an_index_over_the_summary_budget_is_written_without_summaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, collect: bool,
+) -> None:
+    view = _view()
+    full = _write(tmp_path / "full.json", view).read_bytes()
+    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_SUMMARY_BUDGET", len(full) - 1)
+    warnings: list[str] | None = ["earlier diagnostic"] if collect else None
+    digests: list[str] = ["earlier digest"]
+    emitted = _write(tmp_path / "lean.json", view, warnings=warnings, digests=digests).read_bytes()
+    payload = json.loads(emitted)
+    assert all("summary" not in node for node in payload["nodes"])
+    expected = json.loads(full)
+    for node in expected["nodes"]:
+        node.pop("summary", None)
+    # Titles, Lean names, statuses, containment and relations stay exactly as they were.
+    assert payload == expected and len(emitted) < len(full)
+    assert digests == ["earlier digest", hashlib.sha256(emitted).hexdigest()]
+    if warnings is not None:
+        assert warnings[0] == "earlier diagnostic" and len(warnings) == 2
+        assert "leaves out statement summaries" in warnings[1] and f"{len(full):,} bytes" in warnings[1]
+        assert f"{len(full) - 1:,}-byte budget" in warnings[1] and "titles and Lean names" in warnings[1]
+    assert view.nodes[0].summary == "The identity holds."
+
+
+def test_an_index_at_the_summary_budget_keeps_its_summaries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    view = _view()
+    full = _write(tmp_path / "full.json", view).read_bytes()
+    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_SUMMARY_BUDGET", len(full))
+    warnings: list[str] = []
+    assert _write(tmp_path / "kept.json", view, warnings=warnings).read_bytes() == full
+    assert warnings == []

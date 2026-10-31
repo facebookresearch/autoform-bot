@@ -52,7 +52,7 @@ navigation.navigateNode=(id,options)=>dispatched.push({id,options});
 navigation.declutterReader=(root,ids)=>decluttered.push({root,ids});
 window.AutoformMath={refresh(root){mathRoots.push(root);return Promise.resolve(true);}};
 dom$navigationInner=new Element('div');dom$readingBody=new Element('article');
-dom$homeLink=new Element('a');dom$breadcrumb=new Element('nav');
+dom$breadcrumb=new Element('nav');
 function configureOutline(nodes,id,relations=[]) {
   records.clear();nodes.forEach(node=>records.set(node.id,node));
   sharedIndex={nodes,relations};
@@ -63,7 +63,7 @@ function outlineLinks() {return dom$navigationInner.all().filter(node=>node.tagN
 )
 
 _OUTLINE_CALLBACKS = [
-    "element", "button", "readingLabel", "safeHref", "outlineProjection", "renderOutline", "renderNavigation",
+    "element", "button", "readingLabel", "bindNodeLink", "safeHref", "outlineProjection", "renderOutline", "renderNavigation",
     "refreshReadingLabels", "semanticParent", "routeTrail", "currentOverviewGroup", "trailList", "renderBreadcrumb",
 ]
 
@@ -97,7 +97,7 @@ function setMode(mode,push) {modes.push({mode,push});ui$mode=mode;renderInventor
 """
 
 _INVENTORY_CALLBACKS = [
-    "element", "button", "readingLabel", "refreshReadingLabels", "renderReaderContext", "neighborIds",
+    "element", "button", "readingLabel", "bindNodeLink", "refreshReadingLabels", "renderReaderContext", "neighborIds",
     "relationCounts", "topicPeers", "semanticParent", "sourceNodes", "inCurrentScope", "inventoryNodes", "renderInventory", "statusLabel",
 ]
 
@@ -105,6 +105,56 @@ _INVENTORY_CALLBACKS = [
 def test_qa_runner_rejects_an_unfinished_async_body() -> None:
     with pytest.raises(AssertionError, match="QA callback test body did not complete"):
         _run("await new Promise(()=>{});assert.fail('Must not reach this assertion');", [])
+
+
+@pytest.mark.parametrize("focus_parent", [True, False])
+def test_breadcrumb_refolding_retains_canonical_link_focus_or_the_real_nav_fallback(focus_parent: bool) -> None:
+    _run("const focusParent=" + json.dumps(focus_parent) + ";\n" + r"""
+      const root=scope('roadmap',null),a=scope('A','roadmap'),b=scope('B','A'),c=scope('C','B');
+      const result=page('C/result','C',{scope:'C'});configureOutline([root,a,b,c,result],result.id);
+      dom$breadcrumb.clientWidth=600;dom$breadcrumb.scrollWidth=500;renderBreadcrumb();
+      const href=(focusParent?c:b).route;
+      const old=dom$breadcrumb.querySelectorAll('a').find(link=>link.href===href);assert(old);old.focus();
+      const before=JSON.stringify(sharedIndex);sheetLayout=()=>true;dom$breadcrumb.clientWidth=300;renderBreadcrumb();
+      const first=dom$breadcrumb.querySelector('.bp-dag-book');assert.equal(first.href,homeURL);
+      assert.equal(dom$breadcrumb.firstChild.children.length,4);
+      if(focusParent){
+        const current=dom$breadcrumb.querySelectorAll('a').find(link=>link.href===href);
+        assert(current);assert.notStrictEqual(current,old);assert.equal(document.activeElement,current);
+        assert.deepEqual(current.focuses.at(-1),{preventScroll:true});
+      }else{
+        assert.equal(dom$breadcrumb.querySelectorAll('a').some(link=>link.href===href),false);
+        assert.equal(document.activeElement,dom$breadcrumb);assert.equal(dom$breadcrumb.tagName,'NAV');
+        assert.equal(dom$breadcrumb.tabIndex,-1);assert.deepEqual(dom$breadcrumb.focuses.at(-1),{preventScroll:true});
+      }
+      assert.equal(renderBreadcrumb.$width,300);assert.equal(JSON.stringify(sharedIndex),before);
+    """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
+
+
+def test_actual_resize_refolds_only_for_breadcrumb_width_changes_and_keeps_height_only_focus_identity() -> None:
+    _run(r"""
+      const root=scope('roadmap',null),a=scope('A','roadmap'),b=scope('B','A'),c=scope('C','B');
+      const result=page('C/result','C',{scope:'C'});configureOutline([root,a,b,c,result],result.id);
+      ui$orientation='lr';ui$mode='graph';firstResize=false;draws=0;
+      dom$stage={clientWidth:800,clientHeight:600};dom$canvas={};
+      dom$breadcrumb.clientWidth=600;dom$breadcrumb.scrollWidth=500;renderBreadcrumb();
+      const firstList=dom$breadcrumb.firstChild,first=dom$breadcrumb.querySelectorAll('a').find(link=>link.href===c.route);
+      first.focus();const before=JSON.stringify(sharedIndex),mathCount=mathRoots.length;
+      dom$stage.clientHeight=650;resize();
+      assert.strictEqual(dom$breadcrumb.firstChild,firstList);assert.equal(document.activeElement,first);
+      assert.equal(mathRoots.length,mathCount);assert.equal(dom$canvas.height,650);assert.equal(draws,1);
+      dom$breadcrumb.clientWidth=300;dom$breadcrumb.scrollWidth=700;resize();
+      const secondList=dom$breadcrumb.firstChild,current=dom$breadcrumb.querySelectorAll('a').find(link=>link.href===c.route);
+      assert.notStrictEqual(secondList,firstList);assert.equal(document.activeElement,current);
+      assert.deepEqual(current.focuses.at(-1),{preventScroll:true});assert.equal(mathRoots.length,mathCount+1);
+      assert.strictEqual(mathRoots.at(-1),dom$breadcrumb);assert.equal(renderBreadcrumb.$width,300);
+      resize();assert.strictEqual(dom$breadcrumb.firstChild,secondList);assert.equal(document.activeElement,current);
+      assert.equal(mathRoots.length,mathCount+1);assert.equal(draws,3);assert.equal(JSON.stringify(sharedIndex),before);
+    """, _OUTLINE_CALLBACKS + ["resize", "positionMapFeedback"],
+        _OUTLINE_PEERS.replace("function resize(){}", "") + r"""
+var ui$orientation='lr',ui$mode='graph',firstResize=false,draws=0;
+function draw(){draws++;}
+""")
 
 
 @pytest.mark.parametrize("branch_first", [False, True])
@@ -173,11 +223,12 @@ def test_rendered_outline_preserves_depth_current_leaf_and_native_canonical_link
       const subhead=dom$navigationInner.all().find(node=>node.className==='bp-outline-collection');
       assert(subhead);assert.equal(subhead.textContent,collection.title);
       assert.equal(subhead.tagName,'SPAN');assert.equal(subhead.all().some(node=>['A','BUTTON'].includes(node.tagName)),false);
-      assert.equal(dom$homeLink.href,homeURL);
       assert.deepEqual(decluttered.at(-1).ids,
         ['cohomology','curves','schemes','varieties','fine','deep','deepest','coherent','wrapped-topic']);
       assert.strictEqual(decluttered.at(-1).root,dom$readingBody);
       assert.deepEqual(mathRoots,[dom$navigationInner],'Outline refresh must not re-typeset the mathematical article');
+      renderBreadcrumb();assert.equal(dom$breadcrumb.querySelector('.bp-dag-book').href,homeURL);
+      assert.deepEqual(mathRoots,[dom$navigationInner,dom$breadcrumb]);
       for(const id of ['chapter-zero','varieties']) {
         const link=byId.get(id),record=records.get(id),count=dispatched.length;
         assert.equal(link.href,record.route);
@@ -273,40 +324,6 @@ def test_repeated_fallback_breadcrumbs_do_not_modify_published_provider_entries(
     """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
 
 
-def test_show_all_relations_retains_more_than_five_publisher_marked_math_titles_in_inventory() -> None:
-    _run(r"""
-      const focus=page('F','chapter',{scope:'chapter'});
-      const related=Array.from({length:8},(_,number)=>{
-        const title='Concept '+number+' $V_'+number+'$';
-        return page('P'+number,'chapter',{scope:'chapter',title,summary:'Complete statement '+number,
-          reading_title:{format:'inline-parts-v1',source:title,
-            parts:[['text','Concept '+number+' '],['math','\\(V_'+number+'\\)']]}});
-      });
-      const owner=scope('chapter','roadmap'),root=scope('roadmap',null);
-      sharedIndex={nodes:[root,owner,focus,...related],relations:related.map(node=>[node.id,focus.id,1,2])};
-      records.clear();sharedIndex.nodes.forEach(node=>records.set(node.id,node));
-      currentBundle={nodeId:focus.id,scope:owner.id,url:focus.route,title:focus.title,graph:{view:{}}};
-      const before=JSON.stringify(sharedIndex);renderReaderContext();
-      const relations=dom$readingNeighbors.all().find(node=>node.className==='bp-reading-links');assert(relations);
-      assert.equal(relations.all().filter(node=>node.tagName==='A').length,5);
-      const more=relations.all().find(node=>node.tagName==='BUTTON');assert(more);
-      emit(more,'click');
-      assert.deepEqual(modes,[{mode:'list',push:true}]);
-      assert.deepEqual(ui$relationIds,related.map(node=>node.id));
-      assert.equal(dom$inventoryList.children.length,8);
-      const rows=dom$inventoryList.all().filter(node=>node.className==='bp-dag-inventory-row');
-      assert.deepEqual(rows.map(row=>row.dataset.inventoryNodeId),related.map(node=>node.id));
-      rows.forEach((row,position)=>{
-        const title=row.all().find(node=>node.className==='bp-dag-inventory-title');assert(title);
-        const marked=title.all().filter(node=>node.className==='arithmatex');assert.equal(marked.length,1);
-        assert.equal(marked[0].textContent,related[position].reading_title.parts[1][1]);
-        assert.equal(title.textContent,related[position].reading_title.parts[0][1]+related[position].reading_title.parts[1][1]);
-      });
-      assert.deepEqual(mathRoots,[dom$inventoryList],'The real inventory callback must refresh only its newly marked labels');
-      assert.equal(JSON.stringify(sharedIndex),before,'Opening all formal neighbours must retain their IDs, metadata and typed weights');
-    """, _INVENTORY_CALLBACKS, _INVENTORY_PEERS)
-
-
 @pytest.mark.parametrize("url", [
     "https://example.test/project/scopes/topic.json",
     "https://example.test/project/scopes/topic.json?edition=2#main",
@@ -390,9 +407,10 @@ def test_phone_topic_boundary_overview_peeks_without_overriding_reading_intent(i
         'Phone overview intent must be independent of whether the canonical route supplies a scope node ID');
       await frame();await ready;
       assert.equal(dom$readingBody.children[0],incoming.readingSource,'The complete authored article must remain mounted');
-      assert.equal(incoming.heading.focuses.length,focus?1:0);
+      // With no statement anchor, reading focus goes to the page's own heading.
+      assert.equal(incoming.pageHeading.focuses.length,focus?1:0);
       if(focus) {
-        assert.equal(document.activeElement,incoming.heading);assert.equal(incoming.heading.focuses[0].preventScroll,true);
+        assert.equal(document.activeElement,incoming.pageHeading);assert.equal(incoming.pageHeading.focuses[0].preventScroll,true);
       } else if(intent==='map-first') {
         assert.equal(document.activeElement,overviewControl);
         assert.equal(overviewControl.focuses.length,1);assert.equal(overviewControl.focuses[0].preventScroll,true);

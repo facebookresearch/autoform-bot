@@ -17,7 +17,7 @@ directory path, and the root article's is `roadmap`.
 
 The H1 is the article's title. Container prose is the exposition; a standalone
 list item linking to a formalizable leaf places the leaf there in the published
-chapter. Unplaced leaves appear under “Additional formalization targets”,
+chapter. Unplaced leaves appear under “Other statements”,
 unplaced module catalogs under “Module inventories”. Keep the root article a
 short preface and table of contents, not an inventory of every milestone: large
 inventories belong in coverage, and a detailed container introduces its
@@ -59,19 +59,23 @@ ends that section and resumes the statement; a later H1 stays in its section.
 Headings deeper than `##`, and a `##` line inside a fenced code block or an HTML
 comment, do not end the statement. Close each fence with its own bare line of
 the same character, length and indent: on a chapter page an unclosed fence can
-pair with a later article's fence and hide what lies between, so the audit
-reports `unclosed-code-fence`, and for a fence left open at the margin `check`
-warns and the site shows that page as typed (see
-[Validation](reference/validation-and-audit.md#validation)). The graph and an
-article's statement and sections read an unclosed fence as plain text, even
-where the page pairs its backticks with a later run as inline code, and a later
-bare line of its character at least as long closes it. Coverage files and the
-unpublished-folder link check read it as open to the end of the file, and so
-does render when it rewrites links, orders the book and places a chapter's
-statements. An HTML comment that never closes, even one opened in inline code or
-an indented code block, hides every later heading and dependency link: the graph
-loses those edges, one opened in the statement puts the rest of the article in
-the theorem box, and nothing reports it.
+pair with a later article's fence and hide what lies between, and coverage, the
+link checks and render's link rewriting take everything after it as code
+(below), so `check` warns when Autoform or the site reads a fence as left open,
+the site shows that page as typed (see
+[Validation](reference/validation-and-audit.md#validation)), and the audit
+reports `unclosed-code-fence`. Nothing reports a fence line inside an HTML
+comment, though render's link rewriting still reads it as one. The graph and an
+article's statement and sections
+read an unclosed fence as plain text, even where the page pairs its backticks
+with a later run as inline code, and a later bare line of its character at least
+as long closes it. Coverage files and the unpublished-folder link check read it
+as open to the end of the file, and so does render when it rewrites links,
+orders the book and places a chapter's statements. An HTML comment that never
+closes, even one opened in inline code or an indented code block, hides every
+later heading and dependency link: the graph loses those edges, one opened in
+the statement puts the rest of the article in the theorem box, and nothing
+reports it.
 
 `## Depends on` lists what the article needs to be *stated*;
 `## Proof depends on` lists what only its *proof* needs. Links under them are
@@ -511,14 +515,14 @@ implies the other. It does **not** claim the rows cover the source
 exhaustively, which no local check can judge, nor that linked articles are
 formalized or proved.
 
-Target metrics (the denominator, readiness count, declaration-kind totals, and
-progress breakdowns in the book and `autoform check`) count non-container
-articles carrying `declaration`, never a `catalog: module` record. A scope's
-status ring, item count, and dependency-map legend also count `not_ready`
-leaves that declare nothing yet, so deferred work holds its scope open, and
-each catalog under a neutral status, `inventory checked` once fully proved and
-`inventory pending` until then, which never changes the scope's rolled-up
-status; a target that depends on a catalog still waits for it.
+Target metrics (the denominator, readiness count, and progress breakdowns in the
+book and `autoform check`) count non-container articles carrying `declaration`,
+never a `catalog: module` record. A scope's status bar, item count, and
+dependency-map legend also count `not_ready` leaves that declare nothing yet, so
+deferred work holds its scope open, and each catalog under a neutral status,
+`inventory checked` once fully proved and `inventory pending` until then, which
+never changes the scope's rolled-up status; a target that depends on a catalog
+still waits for it.
 
 ### skeleton
 
@@ -875,10 +879,12 @@ declaration when one of its `lean:` names equals it or is a dotted prefix of it,
 so `affected_articles` may list more articles and `article_local` is always
 `false`; `affected_unowned_helpers` keep the parent-chain rule, and
 `unresolved_articles` leaves out a name the source index places outside
-`affected_modules`. A `.lean` file outside the captured sources, as in
-`.lake/packages` or a path dependency, that may import a candidate makes the
-command exit 2 and ask for the default scope; use the default scope too when a
-component of a module name is a common word.
+`affected_modules` but lists one in a file no `lean_lib` builds. A `.lean` file
+outside the captured sources, as in `.lake/packages` or a path dependency, that
+may import a candidate makes the command exit 2 and ask for the default scope;
+use the default scope too when a component of a module name is a common word. In
+either scope, and unlike `work impact`, the probe also refuses a loaded module
+that no `lean_lib` builds, as from a leftover `.olean`.
 
 JSON uses `autoform-module-import-impact/v1`, with `module_graph_revision` and
 `module_scope` (`loaded-root-library-graph` or `import-closure`). `article` is

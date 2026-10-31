@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import posixpath
+import re
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ from tests.test_integrated_workspace_browser import (
     _frames,
     _math_source,
     _open,
+    _peek_reader,
     _pixels,
     _search,
     _served,
@@ -463,7 +465,7 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     _open(page, consumer.site, workspace_runtime, _SCOPE)
     _committed(page)
     playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(1)
-    handle = page.locator('.bp-reading-pane > button[aria-label="Toggle mathematical reading"]')
+    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     _capture(page, consumer, width, "initial")
     assert 1 <= page.locator(".bp-dag-node[data-overview-group]").count() <= 9
@@ -472,8 +474,9 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     for key in consumer.groups:
         control = _focus_group(page, key)
         box = _geometry(control)
-        assert box["title"] == ("Unassigned topics" if key == "unassigned" else key[5:])
-        assert box["meta"] == "9 topics · 9 items"
+        assert box["title"] == ("Other topics" if key == "unassigned" else key[5:])
+        # An area card counts its fully proved targets; every fixture target is not ready.
+        assert box["meta"] == "9 topics · 0 of 9 fully proved"
         assert box["scale"] >= .9 - 1e-6 and box["width"] >= 180 and box["height"] >= 90
         assert box["titlePx"] >= 15 and box["metaPx"] >= 12
         assert box["hit"] is True
@@ -487,8 +490,8 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     page.mouse.wheel(0, 360)
     reading_scroll = _settled_reading_scroll(reading)
     assert reading_scroll > 0
-    handle.click()
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    # A phone's taps cycle half, full and the peek, so closing can take two.
+    _peek_reader(page, handle)
     key = "area:" + _AREAS[0]
     control = _focus_group(page, key)
     _pan(page)
@@ -517,8 +520,8 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
     playwright.expect(page.locator(".bp-reading-pane > .bp-dag-inspector-inner")).to_be_visible()
     assert _settled_reading_scroll(reading) == pytest.approx(reading_scroll, abs=1)
-    handle.click()
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    # A phone's taps go half, full, then peek, so closing may take two.
+    _peek_reader(page, handle)
     _zoom_group(page, key)
     focused = _focus_graph_node(page, consumer.groups[key][0]["id"])
     playwright.expect(page.locator(".bp-dag-breadcrumb")).to_contain_text(_AREAS[0])
@@ -545,6 +548,8 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     assert page.url == consumer.site.route(_SCOPE), "The group parent is this local scope, not the whole library"
     playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(1)
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    # The trail is rebuilt under the crumb, so focus goes to the group just left rather than to the page.
+    playwright.expect(_group(page, key)).to_be_focused()
     _focus_group(page, key)
     playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id*="remote"]')).to_have_count(0)
     page.go_back()
@@ -601,7 +606,7 @@ def test_exact_lean_search_precedes_groups_and_keeps_complete_math_source_and_sc
     playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(0)
     playwright.expect(page.locator(".bp-dag-node[data-overview-group]")).to_have_count(0)
     playwright.expect(page.locator(f'.bp-dag-node[data-autoform-node-id="{_TARGET}"]')).to_have_attribute("data-selected", "true")
-    handle = page.locator('.bp-reading-pane > button[aria-label="Toggle mathematical reading"]')
+    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
     card = _native_math(page)
     playwright.expect(card).to_contain_text(_END)
@@ -611,6 +616,11 @@ def test_exact_lean_search_precedes_groups_and_keeps_complete_math_source_and_sc
     playwright.expect(source_link).to_have_count(1)
     source_url = urlsplit(urljoin(page.url, source_link.get_attribute("href")))
     assert source_url.path.endswith("/sources/identity-notes.html") and source_url.fragment == "elementary"
+    if width <= 720:
+        # A phone reader opens at half under the map; read the formula's source at full, as a reader would, so MathJax's menu
+        # opens with room rather than at the screen's bottom edge.
+        handle.click()
+        playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-sheet-full\b"))
     formula = card.locator("mjx-container").last
     formula.scroll_into_view_if_needed()
     assert "".join(_math_source(page, formula).split()) == "".join(_TEX[-1].split())
@@ -634,7 +644,7 @@ def test_native_scope_reading_links_open_full_math_and_restore_closed_group_hist
     page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
     _open(page, consumer.site, workspace_runtime, _SCOPE)
     _committed(page)
-    handle = page.locator('.bp-reading-pane > button[aria-label="Toggle mathematical reading"]')
+    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     key = "area:" + _AREAS[0]
     control = _focus_group(page, key)

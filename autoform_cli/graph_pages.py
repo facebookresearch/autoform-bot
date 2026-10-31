@@ -342,7 +342,7 @@ def write_graph_pages(
             links=view_links(project, full_page),
             heading=root_title,
             lead=(
-                f"Search {len(graph.nodes)} roadmap entries without flattening them into one canvas; "
+                f"Search the titles and Lean names of {len(graph.nodes)} articles without flattening them into one canvas; "
                 "a result opens its chapter or nested scope."
             ),
             navigation=_navigation(
@@ -461,7 +461,6 @@ def _write_page(
         href = _published_link(canonical, page)
         reading = (
             '<div class="bp-reading-source" markdown="1">\n\n'
-            'This compatibility route opens the same mathematical page and its graph.\n\n'
             f'<a href="{html.escape(href, quote=True)}">Continue to the mathematical page</a>\n\n</div>'
         )
         sections.extend(['<div class="bp-explorer-page" markdown="1">', "", reading, "", explorer, "", "</div>", ""])

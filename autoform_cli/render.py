@@ -106,6 +106,7 @@ from .lean import (
 from .markdown import (
     _BRACKET_ESCAPE,
     _INLINE_MATH,
+    FORMULA_CLASS,
     GENERATED_VIEWS,
     INLINE_CODE,
     NOTES_BOX,
@@ -124,6 +125,7 @@ from .markdown import (
     page_title,
     published_page,
     relative_link,
+    render_tree,
     rendered_visible_text,
     site_converter,
     statement_and_notes,
@@ -131,6 +133,7 @@ from .markdown import (
     yaml_string,
 )
 from .markdown import HEADING as _HEADING
+from .markdown import _LINK_DEFINITION as _SITE_LINK_DEFINITION
 from .markdown import content_lines as _content_lines
 from .markdown import outside_fences as _outside_fences
 from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, TEX_MACROS, mathjax_script, project_macros
@@ -166,10 +169,15 @@ _MARKDOWN_LINK = re.compile(
 _MARKDOWN_IMAGE = re.compile("!" + _MARKDOWN_LINK.pattern.removeprefix("(?<!!)"))
 #: A reference-style link definition, `[label]: target "title"`. Markdown
 #: resolves `[Paper][paper]` through one of these, so a rewrite that only sees
-#: inline links leaves the destination behind and publishes a dead link.
+#: inline links leaves the destination behind and publishes a dead link. As in
+#: Python-Markdown, at most a quoted or parenthesized title follows the target:
+#: a line such as `[^1]: Grounded in [Paper](...)` is prose, not a definition.
+#: Python-Markdown expands tabs before it reads one, so a tab around the title
+#: counts as spaces do.
 _LINK_DEFINITION = re.compile(
     r'^(?P<indent>[ ]{0,3})\[(?P<label>[^\]]+)\]:[ \t]*'
-    r'(?P<target><[^>\r\n]+>|[^\s]+)(?P<rest>[ \t]+.*)?$'
+    r'(?P<target><[^>\r\n]+>|[^\s]+)'
+    r'(?P<rest>[ \t]*(?:(?P<quote>["\'])(?:.*)(?P=quote)[ \t]*|\(.*\)[ \t]*)?)$'
 )
 _ARTICLE_SLOT = re.compile(
     rf"^(?P<indent>[ \t]*)[-*+]\s+\[(?=[^\]]){_LINK_LABEL}\]"
@@ -1246,7 +1254,6 @@ def _integrated_page(
         search_href=relative_link(destination / graph_pages.SEARCH_INDEX, page, ".json"),
         page_href=_as_published(relative_link(page, page, ".html")),
         scope=scope,
-        fallback_links=(("Read the mathematical page", "#"),),
     )
     return (
         header + '\n<div class="bp-explorer-page" markdown="1">\n'
@@ -2048,9 +2055,9 @@ def _next_target(
             f'<a href="{html.escape(statement, quote=True)}">{title}</a>' if statement else title
         )
         why = (
-            "Its prerequisites are ready, so the proof can be written now."
+            "Everything it uses is in Lean, so its Lean proof can start."
             if node_status.key == "can_prove"
-            else "Its prerequisites are ready, so the statement can be written down."
+            else "Everything its statement uses is in Lean, so its Lean statement can be written now."
         )
         actions = [f'<a href="{html.escape(graph_href, quote=True)}">Dependencies</a>']
         if chapter_page is not None:
@@ -2089,29 +2096,32 @@ def _render_structure_page(
     page: Path,
     entry: Path | None = None,
 ) -> str:
-    """Keep the old structure route as a bounded doorway into the mathematical wiki.
+    """Keep the old structure route as a bounded doorway into the book.
 
     The explorer owns hierarchy now. Republishing every source path as one raw
     HTML tree made this compatibility page larger than the rest of a small
     site, duplicated the explorer, and became unusable on repository-scale books.
     """
-    explorer = relative_link(entry or page.parent / "dependencies.md", page, ".md")
+    target = entry or page.parent / "dependencies.md"
+    explorer = relative_link(target, page, ".md")
+    text = target.read_text(encoding="utf-8") if target.is_file() else ""
+    # A header title is visible text already, while an H1 is Markdown, as in
+    # the site's nav.
+    named = _header_title(text)
+    title = name_text(named) if named else title_text(_first_h1(text) or "")
     return "\n".join(
         [
             "---",
-            "title: Browse the roadmap",
+            "title: This page moved",
             "search:",
             "  exclude: true",
             "hide:",
             "  - toc",
             "---",
             "",
-            "# Browse the roadmap",
+            "# This page moved",
             "",
-            "The mathematical wiki presents the authored hierarchy and its mathematical",
-            "relations without flattening the repository into a file listing.",
-            "",
-            f"[Open the mathematical wiki]({explorer})",
+            f"The book starts at [{title or 'its contents'}]({explorer}).",
             "",
         ]
     )
@@ -2233,7 +2243,7 @@ def _render_landing_page(
             if book == Path("README.md")
             else '<a class="bp-intro-book" href="'
             + html.escape(_as_published(relative_link(destination / book, page, ".html")), quote=True)
-            + '">Explore all mathematics</a>'
+            + '">Read the book</a>'
         )
         # The shared shell is attached after all full reading content is final.
         reading = f'<div class="bp-landing-intro">{hero}{book_link}{next_up}</div>'
@@ -2298,7 +2308,7 @@ def _render_hero(
     The same numbers set as figures answer "how far along is this?" before the
     reader has finished the title, which is the only question the top of a
     blueprint has to answer. In the explorer's narrow rail (*rail*) the
-    stylesheet keeps only the first two figures, so the chapter and inventory
+    stylesheet keeps only the first two figures, so the topic and inventory
     counts also come as one plain line under them.
     """
     leaves = _countable(graph)
@@ -2313,11 +2323,14 @@ def _render_hero(
     total = len(leaves)
     inventory_count = len(_module_inventories(graph))
     share = _completion_percentage(done, total)
-    target_label = "target" if total == 1 else "targets"
+    article_label = "article" if total == 1 else "articles"
 
+    # The labels reuse the status words, so the share reads as the fully
+    # proved status it counts and the second figure as "ready to state or
+    # prove"; each note says in plain words what the number counts.
     figures = [
-        ("Scoped roadmap", f"{share}%", f"{done} of {total} {target_label} complete", False),
-        ("Ready now", str(actionable), "unblocked, waiting for an author", False),
+        ("Fully proved", f"{share}%", f"{done} of {total} {article_label}", False),
+        ("Ready to start", str(actionable), "nothing they need is blocked", False),
     ]
     # The figure counts every catalog, checked or not; a project without
     # catalogs has no inventory to report.
@@ -2331,7 +2344,7 @@ def _render_hero(
             )
         )
     chapters = len(graph_views.group_nodes(graph))
-    figures.append(("Chapters", str(chapters), "top-level milestones", False))
+    figures.append(("Topics", str(chapters), "top-level parts of the book", False))
     stats = "".join(
         f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">'
         f'<div class="bp-figure-value">{value}</div>'
@@ -2339,7 +2352,7 @@ def _render_hero(
         f'<div class="bp-figure-note">{html.escape(note)}</div></div>'
         for label, value, note, neutral in figures
     )
-    counts = [f"{chapters} {'chapter' if chapters == 1 else 'chapters'}"]
+    counts = [f"{chapters} {'topic' if chapters == 1 else 'topics'}"]
     if inventory_count:
         counts.append(f"{inventory_count} module {'inventory' if inventory_count == 1 else 'inventories'}")
     counts_line = f'<p class="bp-hero-counts">{" · ".join(counts)}</p>' if rail else ""
@@ -2348,7 +2361,7 @@ def _render_hero(
         '<span class="bp-hero-coverage-label">Declared source coverage:</span> '
         f'<span class="bp-hero-coverage-counts">{html.escape(_coverage_summary(coverage))}</span> '
         f'<a class="bp-hero-coverage-link" href="{html.escape(coverage_href, quote=True)}">'
-        "View coverage contract</a>"
+        "What the sources cover</a>"
         "</div>"
     )
     lead = _lead_sentence(body)
@@ -2372,22 +2385,154 @@ def _lead_sentence(body: str) -> str:
 
     Written by a human in `blueprint/README.md`, so it says what the project is
     far better than anything derived from the graph could. Prose only: a
-    heading or a list is structure rather than a claim.
+    heading or a list is structure rather than a claim. The first paragraph
+    with words is read through the site's own converter, so code and formulas
+    keep their contents, a link keeps its words without its target, and an
+    image, such as a badge, is dropped.
     """
-    for block in body.split("\n\n"):
-        line = block.strip()
-        if not line or line.startswith(("#", "-", "*", "<", "|", ">", "!")):
-            continue
-        sentence = line.split(". ")[0].rstrip(".").replace("\n", " ")
-        # The hero is raw HTML, so Markdown never runs over it and a title in
-        # *emphasis* would otherwise show its asterisks. Escaping first means
-        # the substitutions below can only ever produce these two tags.
-        safe = html.escape(sentence)
-        safe = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", safe)
-        safe = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", safe)
-        safe = re.sub(r"`([^`]+)`", r"<code>\1</code>", safe)
-        return safe + "."
+    lines = mask_fences_and_comments(body.splitlines())
+    if _read_page(body)[1]:
+        # Check flags this page, and the landing page then shows only its
+        # title and lead, as text: the first prose block, escaped as typed.
+        for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
+            typed = " ".join(block.split())
+            if typed and not typed.startswith(("#", "-", "*", "<", "|", ">", "!", "[")):
+                return _lead_html([("text", typed)])
+        return ""
+    # Each block is read alone, so raw HTML elsewhere does not hide the lead,
+    # with the reference definitions its links may name. Only lines the site's
+    # converter reads as definitions, so a footnote never becomes a paragraph.
+    definitions = "\n".join(line for line in lines if _SITE_LINK_DEFINITION.match(line))
+    for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
+        tree = render_tree(f"{block}\n\n{definitions}", allow_html=False) if block.strip() else None
+        page = tree.find("body") if tree is not None else None
+        for paragraph in page if page is not None else ():
+            parts = _lead_parts(paragraph) if paragraph.tag == "p" else []
+            if any(kind in {"code", "math"} or (kind == "text" and value.strip()) for kind, value in parts):
+                return _lead_html(parts)
     return ""
+
+
+def _lead_parts(element: object) -> list[tuple[str, str]]:
+    """A converted paragraph as text, code, math and emphasis parts."""
+    parts: list[tuple[str, str]] = []
+
+    def text(value: str | None) -> None:
+        if value:
+            # An Obsidian link reads as its alias, or else its target.
+            value = re.sub(r"\[\[([^\[\]|]*)(?:\|([^\[\]]*))?\]\]", lambda link: link.group(2) or link.group(1), value)
+            parts.append(("text", re.sub(r"\s+", " ", value)))
+
+    def read(node: object) -> None:
+        for child in node:
+            if child.tag == "code":
+                parts.append(("code", "".join(child.itertext())))
+            elif child.tag == "span" and child.get("class") == FORMULA_CLASS:
+                parts.append(("math", "".join(child.itertext())))
+            elif child.tag in {"em", "strong"}:
+                parts.append(("open", child.tag))
+                text(child.text)
+                read(child)
+                parts.append(("close", child.tag))
+            elif child.tag == "br":
+                text(" ")
+            elif child.tag != "img":
+                # A link, or anything else, keeps its words only: an authored
+                # target is relative to blueprint/.
+                text(child.text)
+                read(child)
+            text(child.tail)
+
+    text(element.text)
+    read(element)
+    return parts
+
+
+def _lead_html(parts: list[tuple[str, str]]) -> str:
+    """The first sentence of ``parts`` as escaped HTML.
+
+    The hero is raw HTML, so Markdown never runs over it. Escaping every part
+    means the only tags are the emphasis, code and formula span built here,
+    and a formula is the span the page's MathJax already typesets.
+
+    The sentence ends at the first period in the prose that whitespace and
+    anything but a lowercase ASCII letter follow, unless the period ends an
+    abbreviation such as "i.e." or "Ch." or a name's initial, or "et al."
+    that no capital follows. A period inside code, a formula or a `$$` pair
+    the converter left as text never ends it.
+    """
+    plain, starts = "", []
+    for kind, value in parts:
+        starts.append(len(plain))
+        # Code and formulas stand in as one character no rule below matches.
+        plain += value if kind == "text" else "\x01" if kind in {"code", "math"} else ""
+    cut = len(plain)
+    for stop in re.finditer(r"\.\s+(?![a-z])", plain):
+        before = plain[: stop.start()]
+        words = [word.lstrip("(") for word in before.split()] or [""]
+        word, previous = words[-1], words[-2] if len(words) > 1 else ""
+        after = plain[stop.end() :]
+        # An all-caps word, such as "CH." or "EGA I.", is not an abbreviation.
+        abbreviation = not word.isupper() and word.lower() in _LEAD_ABBREVIATIONS
+        if (
+            before.count("$$") % 2
+            or (abbreviation and not (word.lower() == "al" and after[:1].isupper()))
+            or _is_initial(word, previous, after)
+        ):
+            continue
+        cut = stop.start()
+        break
+    cut = len(plain[:cut].rstrip().rstrip(".").rstrip())
+    begin = len(plain) - len(plain.lstrip())
+    shown: list[str] = []
+    opened: list[str] = []
+    for (kind, value), start in zip(parts, starts):
+        if start >= cut:
+            break
+        if kind == "text":
+            shown.append(html.escape(value[max(begin - start, 0) : cut - start]))
+        elif kind == "code":
+            shown.append(f"<code>{html.escape(value)}</code>")
+        elif kind == "math":
+            shown.append(f'<span class="{FORMULA_CLASS}">{html.escape(value)}</span>')
+        elif kind == "open":
+            opened.append(value)
+            shown.append(f"<{value}>")
+        else:
+            opened.pop()
+            shown.append(f"</{value}>")
+    return "".join(shown) + "".join(f"</{tag}>" for tag in reversed(opened)) + "."
+
+
+#: Words whose period does not end the hero's sentence.
+_LEAD_ABBREVIATIONS = frozenset(
+    {"i.e", "e.g", "cf", "ch", "thm", "al", "prop", "sec", "eq", "fig", "vs", "resp", "def", "lem", "cor"}
+)
+#: Words a single capital names rather than abbreviates, as in "Theorem A.".
+_LEAD_LABELS = frozenset(
+    {"theorem", "lemma", "proposition", "corollary", "conjecture", "definition", "chapter", "part",
+     "section", "appendix", "case", "step", "example", "exercise", "figure", "table", "problem"}
+)
+
+
+def _is_initial(word: str, previous: str, after: str) -> bool:
+    """Whether ``word`` is a name's initial, as in "Luis H. Gallardo" or "J. S.
+    Milne", so its period does not end the sentence. A capital after a
+    lowercase word, an all-caps word or a label ("the group G.", "EGA I.",
+    "Theorem A.") ends one, unless another initial follows it."""
+    previous = previous.rstrip(".")
+    if len(word) != 1 or not word.isupper():
+        return False
+    return bool(
+        re.match(r"[A-Z]\.(?:\s|$)", after)
+        or not previous
+        or (
+            previous[:1].isupper()
+            and not (len(previous) > 1 and previous.isupper())
+            and previous.lower() not in _LEAD_LABELS
+        )
+    )
+
 
 def _render_overview_summary(
     graph: Graph,
@@ -2396,44 +2541,28 @@ def _render_overview_summary(
     containers: frozenset[str],
     node_ids: list[str] | None = None,
 ) -> str:
-    """Render the compact, honest progress strip shown at the start of the book."""
+    """Render a chapter's progress as one line, or nothing for a single statement.
+
+    A lone statement's card already shows its status, and the module
+    inventories have their own section, so neither is counted here.
+    """
     candidates = list(node_ids if node_ids is not None else graph.nodes)
-    selected_ids = [
-        node_id
+    selected = {
+        node_id: statuses[node_id]
         for node_id in candidates
         if _is_countable(graph, node_id, containers)
+    }
+    if len(selected) < 2:
+        return ""
+    parts = [
+        f'<span class="bp-progress-state" title="{html.escape(status.MEANINGS[state.key], quote=True)}">'
+        f'<span class="bp-swatch bp-swatch-{state.key}"></span>'
+        f"<strong>{count:,}</strong> {html.escape(state.label)}</span>"
+        for state, count in status.summarize(selected)
     ]
-    inventory_count = len(
-        _module_inventories(graph, containers=containers, node_ids=candidates)
-    )
-    definitions = sum(is_definition(graph.nodes[node_id]) for node_id in selected_ids)
-    results = len(selected_ids) - definitions
-    item_parts = []
-    if definitions:
-        item_parts.append(f"{definitions} definition{'s' if definitions != 1 else ''}")
-    if results:
-        item_parts.append(f"{results} result{'s' if results != 1 else ''}")
-    if inventory_count:
-        item_parts.append(
-            f"{inventory_count} module "
-            f"{'inventory' if inventory_count == 1 else 'inventories'}"
-        )
-    item_summary = " · ".join(item_parts) or "No decomposed definitions or results yet"
-
-    state_parts = []
-    selected_statuses = {node_id: statuses[node_id] for node_id in selected_ids}
-    for state, count in status.summarize(selected_statuses):
-        state_parts.append(
-            f'<span class="bp-progress-state"><span class="bp-swatch '
-            f'bp-swatch-{state.key}"></span><strong>{count}</strong> '
-            f"{html.escape(state.label)}</span>"
-        )
-    states = "".join(state_parts)
     return (
         '<div class="bp-progress-overview">'
-        '<div class="bp-progress-kicker">Formalization progress</div>'
-        f'<div class="bp-progress-total">{item_summary}</div>'
-        f'<div class="bp-progress-states">{states}</div>'
+        f'<div class="bp-progress-states">{"".join(parts)}</div>'
         "</div>"
     )
 
@@ -2874,7 +3003,7 @@ def _render_chapter(
     placed = set(slots.values())
     remaining = [node_id for node_id in node_ids if node_id not in placed]
     # A catalog inventories Lean that already exists, so it is no formalization target.
-    for heading, catalog in (("Additional formalization targets", None), ("Module inventories", "module")):
+    for heading, catalog in (("Other statements", None), ("Module inventories", "module")):
         section = [environments[node_id] for node_id in remaining if graph.nodes[node_id].catalog == catalog]
         if section:
             chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(section)
@@ -3173,14 +3302,17 @@ def _render_environment(
     # preconverted, render both with the shared article context: otherwise its
     # consumed definitions would leave the remaining Markdown links unresolved.
     references = {}
-    affected = converted_alone(statement, remainder)
-    if affected:
+    if converted_alone(statement, remainder):
         context = _body_converter()
         context.convert("\n\n".join((statement, remainder)))
         references = context.references
-    statement, remainder = (
-        _protect_markdown_in_html(part, references=references, force=affected) for part in (statement, remainder)
-    )
+        statement, remainder = (
+            _protect_markdown_in_html(part, references=references, force=True) for part in (statement, remainder)
+        )
+        # Only once converted: inside a container, an author's "<" could close it.
+        remainder = _isolate_converted_headings(remainder)
+    else:
+        remainder = _isolate_notes_headings(remainder)
 
     code_links, implementation_rows, linked, unresolved = _lean_presentation(node, linker)
     source_link = _vault_source_link(node, repo_root=repo_root, linker=linker)
@@ -3219,20 +3351,29 @@ def _render_environment(
     # A checked inventory is fully proved, so it keeps the tick.
     mark = "✓" if node_status.key in {"fully_proved", "mathlib"} else "●"
 
+    shown = _display_title(node.title, caption)
+    title_html = (
+        f'<span class="bp-thmtitle">{html.escape(shown)}</span>' if shown
+        else f'<span hidden>{html.escape(node.title)}</span>'
+    )
+    # The "#" link's only text is "#", so its name says which statement it links to.
+    permalink_label = " ".join(part for part in ("Link to", caption, number) if part)
+
     lines = [
         f'<div class="bp-thmwrapper {style} bp-{display_key}" '
-        f'id="{html.escape(anchor, quote=True)}" '
         f'data-autoform-node-id="{html.escape(node.id, quote=True)}" markdown="1">',
-        '<div class="bp-thmheading">',
-        f'<span class="bp-thmcaption">{html.escape(caption)}</span>'
-        f'<span class="bp-thmlabel">{html.escape(number)}</span>'
-        f'<span class="bp-thmtitle">{html.escape(node.title)}</span>'
+        f'<h4 class="bp-thmheading" id="{html.escape(anchor, quote=True)}">',
+        f'<span class="bp-thmcaption" data-search-exclude>{html.escape(caption)}</span>'
+        f'<span class="bp-thmlabel" data-search-exclude>{html.escape(number)}</span>'
+        f"{title_html}"
         f"{code_links}"
         f"{source_link}"
-        f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}">#</a>'
-        f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}">'
+        f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}" '
+        f'aria-label="{html.escape(permalink_label, quote=True)}" data-search-exclude>#</a>'
+        f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}" data-search-exclude>'
         f'{mark}<span class="bp-mark-label">{html.escape(display_label)}</span></span>',
-        "</div>",
+        "</h4>",
+        *_search_names(node),
         *boxed(statement, STATEMENT_BOX),
     ]
     if remainder:
@@ -3555,6 +3696,71 @@ def _lean_presentation(
     return code_links, rows, linked, unresolved
 
 
+def _search_names(node: Node) -> list[str]:
+    """The card's exact Lean names, as hidden text the site's search indexes.
+
+    A verified name shows only as its code icon's label, and search reads text,
+    not attributes. A catalog's names stay out: it can list hundreds, and its
+    Lean row already shows the first few.
+    """
+    names = declaration_names(node.lean or "") if node.catalog is None else ()
+    if not names:
+        return []
+    return ['<div class="bp-search-names" hidden>' + " ".join(html.escape(name) for name in names) + "</div>"]
+
+
+#: A heading of a card's notes as the body converter writes it, on a line of its own.
+_CONVERTED_HEADING = re.compile(r"<h([1-6])>(.*)</h\1>")
+
+
+def _isolated_heading(level: int, markdown: str, title: str, words: str) -> str:
+    """A notes heading that starts no search record but keeps its words in its card's.
+
+    MkDocs Material's search starts a record at every heading with an id and
+    ends it with the heading's parent. So the heading gets a parent of its own
+    and is kept out of search, and a hidden copy of its words follows that
+    parent, in the card's record. Material removes the attribute's value from
+    the page; without one, a link check would read it as a data: URL.
+    """
+    return (
+        f'\n\n<div class="bp-notes-heading"{markdown}>\n'
+        f'<h{level} data-search-exclude="1"{markdown}>{title}</h{level}>\n</div>\n\n'
+        f'<div class="bp-search-text" hidden>{words}</div>\n\n'
+    )
+
+
+def _isolate_notes_headings(text: str) -> str:
+    """Isolate each heading of notes the site converts itself, which hold no "<".
+
+    The heading stays Markdown that md_in_html reads in its own element, so it
+    looks, links and takes its id as before. Without a "<", none of the
+    author's text can close a container.
+    """
+
+    def isolate(line: str) -> str:
+        match = _HEADING.match(line)
+        if match is None:
+            return line
+        hashes, title = match.groups()
+        return _isolated_heading(len(hashes), ' markdown="1"', title, html.escape(title, quote=False))
+
+    return _outside_fences(text, isolate) if text else text
+
+
+def _isolate_converted_headings(rendered: str) -> str:
+    """Isolate each heading of notes render converted first, as their HTML."""
+
+    def isolate(line: str) -> str:
+        match = _CONVERTED_HEADING.fullmatch(line)
+        if match is None:
+            return line
+        level, title = match.groups()
+        words = html.escape(html.unescape(re.sub(r"<[^>]*>", "", title)), quote=False)
+        return _isolated_heading(int(level), "", title, words).strip("\n")
+
+    return "\n".join(isolate(line) for line in rendered.split("\n"))
+
+
 def _code_icon() -> str:
     """A small dependency-free code icon suitable at theorem-heading size."""
     return (
@@ -3605,8 +3811,11 @@ def _dependency_disclosure(
     """Hide DAG relations behind a native, keyboard-accessible disclosure."""
     rows: list[tuple[str, str]] = []
 
-    def references(node_ids: list[str] | tuple[str, ...]) -> str:
-        return _node_references(node_ids, graph=graph, statuses=statuses, numbers=numbers, links=links)
+    def references(node_ids: list[str] | tuple[str, ...], *, used_by_row: bool = False) -> str:
+        return _node_references(
+            node_ids, graph=graph, statuses=statuses, numbers=numbers, links=links,
+            relation_node=node, used_by_row=used_by_row,
+        )
 
     if node.statement_dependencies:
         rows.append(("Statement uses", references(node.statement_dependencies)))
@@ -3614,12 +3823,36 @@ def _dependency_disclosure(
     if proof_only:
         rows.append(("Proof uses", references(proof_only)))
     if used_by[node.id]:
-        rows.append(("Used by", references(used_by[node.id])))
+        rows.append(("Used by", references(used_by[node.id], used_by_row=True)))
     if not rows:
         return ""
 
+    # The summary counts both directions, so a reader can tell from the closed
+    # line whether opening it is worth it.
+    uses = len(dict.fromkeys((*node.statement_dependencies, *node.proof_dependencies)))
+    label = f"Uses {uses} · Used by {len(used_by[node.id])}"
     body = _render_rows(rows, css_class="bp-dependency-body")
-    return f'<details class="bp-dependencies"><summary>Dependencies</summary>{body}</details>'
+    return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
+
+
+def _display_title(title: str, caption: str) -> str:
+    """Drop a kind the caption already shows: 'Theorem (X)' under 'Theorem 4' reads X.
+
+    Display only; the graph keeps the authored title. A title that is just the
+    kind word shows nothing, and the outer parentheses are only removed when
+    they enclose the whole rest of the title.
+    """
+    if title.casefold() == caption.casefold():
+        return ""
+    prefix = f"{caption} ("
+    if not (title.casefold().startswith(prefix.casefold()) and title.endswith(")")):
+        return title
+    inner, depth = title[len(prefix) : -1], 0
+    for character in inner:
+        depth += (character == "(") - (character == ")")
+        if depth < 0:
+            return title
+    return inner if depth == 0 else title
 
 
 def _node_references(
@@ -3629,21 +3862,50 @@ def _node_references(
     statuses: dict[str, status.NodeStatus],
     numbers: dict[str, str],
     links: Mapping[str, str],
+    relation_node: Node | None = None,
+    used_by_row: bool = False,
 ) -> str:
     """Link each node by number and title, coloured by its derived state.
 
     A catalog is coloured as neutrally as its own environment, checked or not.
+    Dependency rows additionally describe the original pair's typed counts;
+    other callers, including assumed statements, retain their original labels.
     """
     rendered = []
     for other_id in node_ids:
         other = graph.nodes[other_id]
-        label = html.escape(f"{numbers[other_id]} ({other.title})")
+        shown = _display_title(other.title, numbers[other_id].rpartition(" ")[0])
+        text = numbers[other_id] + (f" ({shown})" if shown else "")
+        reading = dag_viewer._reading_label(text, require_math=False)
+        label = html.escape(text)
+        if reading is not None:
+            # Only converter-validated text/code/math enters the native link;
+            # authored HTML, destinations and attributes remain literal.
+            label = "".join(
+                html.escape(value) if kind == "text" else
+                f"<code>{html.escape(value)}</code>" if kind == "code" else
+                f'<span class="arithmatex">{html.escape(value)}</span>'
+                for kind, value in reading["parts"]
+            )
         key = graph_views.display_status_key(other, statuses[other_id])
+        relation_attributes = ""
+        if relation_node is not None:
+            owner, endpoint = (other, relation_node.id) if used_by_row else (relation_node, other_id)
+            counts = (
+                (owner.statement_dependencies.count(endpoint), "statement"),
+                (owner.proof_dependencies.count(endpoint), "proof"),
+            )
+            weights = ", ".join(
+                f"{count} {kind} {'dependency' if count == 1 else 'dependencies'}"
+                for count, kind in counts if count
+            )
+            if weights:
+                relation_attributes = f'title="{html.escape(weights, quote=True)}" '
         rendered.append(
             f'<a class="bp-ref bp-ref-{key}" '
-            f'href="{html.escape(links[other_id], quote=True)}">{label}</a>'
+            f'{relation_attributes}href="{html.escape(links[other_id], quote=True)}">{label}</a>'
         )
-    return " · ".join(rendered)
+    return ' <span class="bp-ref-sep">·</span> '.join(rendered)
 
 
 def _render_rows(rows: list[tuple[str, str]], *, css_class: str) -> str:
@@ -3677,10 +3939,19 @@ def _stylesheet() -> str:
     light dimmed: it is the palette Facebook uses in dark mode, and it hangs off
     Material's colour scheme attribute so the theme's own toggle drives it.
     """
+    # Dependency dots and swatches are a few pixels wide and carry no word, so
+    # every state with a tinted light fill (the four finished states,
+    # conditionally proved, not ready and inventory pending) fills them with
+    # its stroke: the tints are too pale to tell from an outline there. The
+    # light fill decides, so both schemes fill the same states.
+    def dot(state: status.State, dark: bool = False) -> str:
+        fill, stroke = (state.dark_fill, state.dark_stroke) if dark else (state.fill, state.stroke)
+        return f"background: {fill if state.fill == '#FFFFFF' else stroke}; border-color: {stroke};"
+
     light = "\n".join(
         f".bp-{state.key} .bp-mark {{ color: {state.stroke}; }}\n"
         f".bp-{state.key} > .bp-thmcontent {{ border-left-color: {state.stroke}; }}\n"
-        f".bp-ref-{state.key}::before, .bp-swatch-{state.key} {{ background: {state.fill}; border-color: {state.stroke}; }}"
+        f".bp-ref-{state.key}::before, .bp-swatch-{state.key} {{ {dot(state)} }}"
         for state in status.STATES
     )
     dark = "\n".join(
@@ -3689,15 +3960,15 @@ def _stylesheet() -> str:
         f"{{ border-left-color: {state.dark_stroke}; }}\n"
         f"[data-md-color-scheme=slate] .bp-ref-{state.key}::before, "
         f"[data-md-color-scheme=slate] .bp-swatch-{state.key} "
-        f"{{ background: {state.dark_fill}; border-color: {state.dark_stroke}; }}"
+        f"{{ {dot(state, dark=True)} }}"
         for state in status.STATES
     )
     # The legends beside the explorer's rings list module inventories, so
     # their swatches take the colours the explorer draws inventories in.
     inventory = "\n".join(
-        f".bp-swatch-{state.key} {{ background: {state.fill}; border-color: {state.stroke}; }}\n"
+        f".bp-swatch-{state.key} {{ {dot(state)} }}\n"
         f"[data-md-color-scheme=slate] .bp-swatch-{state.key} "
-        f"{{ background: {state.dark_fill}; border-color: {state.dark_stroke}; }}"
+        f"{{ {dot(state, dark=True)} }}"
         for state in status.INVENTORY_STATES
     )
     serif = '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
@@ -3737,12 +4008,32 @@ def _stylesheet() -> str:
   --bp-sunken: #1C1D1F;
   --bp-page: #18191A;
   --bp-scroll-shade: rgba(228, 230, 235, 0.3);
-  --bp-link: #2D88FF;
+  --bp-link: #4A9AFF;
   --bp-link-hover: #7FB8FF;
   --bp-blue: #2D88FF;
   --bp-violet: #9B6BFF;
   --bp-magenta: #FF6B9D;
 }}
+/* Material's own tokens take the same blue, so its links, breadcrumbs and
+   Previous/Next match the explorer instead of the theme's default indigo.
+   The theme sets them on body through data-md-color-primary, and the slate
+   link colour through two attributes, so this selector carries two
+   attributes and wins by coming later. The bp tokens already switch with
+   the scheme, so one rule covers both. The darker and lighter shades follow,
+   or the drawer's repository strip and hover tints stay indigo. */
+[data-md-color-scheme][data-md-color-primary] {{
+  --md-primary-fg-color: var(--bp-blue);
+  --md-primary-fg-color--light: color-mix(in srgb, var(--bp-blue) 80%, #FFFFFF);
+  --md-primary-fg-color--dark: color-mix(in srgb, var(--bp-blue) 80%, #000000);
+  --md-accent-fg-color: var(--bp-link-hover);
+  --md-accent-fg-color--transparent: color-mix(in srgb, var(--bp-link-hover) 10%, transparent);
+  --md-typeset-a-color: var(--bp-link);
+}}
+/* White on the accent is 2.1:1 in slate and 3.8:1 in light, and the
+   back-to-top button shows focus only by that fill. Slate's accent takes the
+   page's near-black text; light's button fills with the link blue. */
+[data-md-color-scheme=slate][data-md-color-accent] {{ --md-accent-bg-color: #18191A; }}
+[data-md-color-scheme=default] .md-top:is(:hover, :focus) {{ background-color: var(--bp-link); }}
 
 body {{ font-family: {sans}; color: var(--bp-fg); }}
 .md-typeset {{
@@ -3775,8 +4066,12 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   height: 3px;
   background: var(--bp-sweep);
 }}
+/* The mobile drawer's title bar and repository strip match the header:
+   white on slate's brighter blue is 3.5:1. */
 [data-md-color-scheme=slate] .md-header,
-[data-md-color-scheme=slate] .md-tabs {{ background-color: #242526; }}
+[data-md-color-scheme=slate] .md-tabs,
+[data-md-color-scheme=slate] .md-nav--primary .md-nav__title[for=__drawer],
+[data-md-color-scheme=slate] .md-nav__source {{ background-color: #242526; }}
 .md-tabs {{ border-bottom: 1px solid var(--bp-rule); }}
 .md-tabs__link {{ font-weight: 600; opacity: 0.72; }}
 .md-tabs__link--active, .md-tabs__link:hover {{ opacity: 1; }}
@@ -3797,9 +4092,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-hero-kicker {{
   margin-top: 1.1rem;
   font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-weight: 600;
   color: var(--bp-muted);
 }}
 .md-typeset .bp-hero-title {{
@@ -3885,15 +4178,15 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
    reach the hero's heading, paragraph and links there, so these rules carry
    a doubled class; the explorer's own rules stay in its script. The narrow
    hero keeps the gradient rule as its one accent and two plain figures,
-   the share complete and what is ready now; the chapter and inventory
-   counts become one muted line, and coverage its link. */
+   the share fully proved and what is ready to start, each with its
+   one-line note; the topic and inventory counts become one muted line,
+   and coverage its link. */
 .bp-landing-intro.bp-landing-intro {{ margin: 0 6px 18px; font-size: 13px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero {{ margin: 0; }}
 .bp-landing-intro.bp-landing-intro .bp-hero-rule {{ width: 56px; height: 3px; }}
 .bp-landing-intro.bp-landing-intro :is(
   .bp-hero-kicker,
   .bp-figure:nth-child(n + 3),
-  .bp-figure-note,
   .bp-hero-bar,
   .bp-hero-coverage-label,
   .bp-hero-coverage-counts
@@ -3930,6 +4223,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-weight: 700;
 }}
 .bp-landing-intro.bp-landing-intro .bp-figure-label {{ margin-top: 5px; font-size: 12px; font-weight: 600; }}
+.bp-landing-intro.bp-landing-intro .bp-figure-note {{ margin-top: 2px; font-size: 12px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero-counts {{
   margin: 8px 0 0;
   color: var(--bp-muted);
@@ -3986,11 +4280,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   background: var(--bp-surface);
 }}
 .bp-progress-kicker {{
-  font-family: {mono};
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--bp-muted);
 }}
 .bp-progress-total {{ margin-top: 0.2rem; font-family: {serif}; font-size: 1.05rem; }}
@@ -4021,11 +4312,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-book-nav-link:hover {{ text-decoration: none; }}
 .bp-book-nav-next {{ margin-left: auto; text-align: right; }}
 .bp-book-nav-direction {{
-  font-family: {mono};
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
   color: var(--bp-muted);
 }}
 .bp-book-nav-title {{ margin-top: 0.15rem; font-family: {serif}; font-size: 1rem; }}
@@ -4042,6 +4330,9 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   line-height: 150%;
   color: var(--bp-fg);
 }}
+/* The heading row is an h4, so search gives each card a record of its own;
+   it keeps the look of the div it was, under Material's and the site's h4 rules. */
+.bp-thmwrapper > .bp-thmheading {{ margin: 0; font-size: inherit; letter-spacing: inherit; }}
 .bp-thmlabel {{ margin-left: 0.4rem; margin-right: 0.5rem; }}
 .bp-thmtitle::before {{ content: "("; }}
 .bp-thmtitle::after {{ content: ")"; }}
@@ -4069,9 +4360,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-next-kicker {{
   font-family: {sans};
   font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-weight: 600;
   color: var(--bp-muted);
 }}
 .bp-next-title {{ font-family: {serif}; font-size: 1.15rem; margin-top: 0.15rem; }}
@@ -4190,16 +4479,29 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   opacity: 0;
   transition: opacity 0.1s ease;
 }}
-.bp-thmwrapper:hover .bp-permalink {{ opacity: 1; }}
+/* A keyboard reaches the permalink too, so focus shows it as hover does. */
+.bp-thmwrapper:hover .bp-permalink, .bp-permalink:focus-visible {{ opacity: 1; }}
 
-.bp-mark {{ margin-left: auto; font-weight: 400; padding-left: 1rem; }}
-.bp-mark-label {{
-  margin-left: 0.3rem;
-  font-family: {mono};
-  font-size: 0.78rem;
-  letter-spacing: 0.02em;
-  color: var(--bp-muted);
+/* The status is a pill on its own line under the title, a dot and a word
+   tinted with the status colour, as in the explorer's drawer. An empty item
+   the full width of the heading breaks the line before it, so the pill sits
+   at the left however long the title runs. */
+.bp-thmheading::after {{ content: ""; order: 1; flex-basis: 100%; }}
+.bp-mark {{
+  order: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  margin-top: 0.3rem;
+  padding: 0.1em 0.6em;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-family: {sans};
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.5;
 }}
+.bp-mark-label {{ color: var(--bp-fg); }}
 
 .bp-thmcontent {{
   font-family: {serif};
@@ -4224,9 +4526,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-thmnotes h6 {{
   font-family: {sans};
   font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  letter-spacing: normal;
   color: var(--bp-muted);
   margin: 0.5rem 0 0.15rem;
 }}
@@ -4238,19 +4539,45 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   line-height: 1.8;
   margin: 0.6rem 0 0 2rem;
 }}
-.bp-dependencies {{
+/* Material styles every details element as a collapsible admonition: a
+   bordered box, a tinted summary and a pencil icon. This one is a quiet line
+   under each statement, so the selectors outrank Material's and take that
+   chrome off, keeping only its chevron, which turns when the line opens. */
+.md-typeset details.bp-dependencies {{
   margin: 0.65rem 0 0 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: none;
   font-family: {sans};
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   color: var(--bp-muted);
 }}
-.bp-dependencies summary {{
+.md-typeset details.bp-dependencies > summary {{
+  display: flex;
+  align-items: center;
   width: fit-content;
+  margin: 0;
+  padding: 0.2rem 0;
+  border: 0;
+  background: none;
+  font-weight: 600;
   cursor: pointer;
-  color: var(--bp-link);
   user-select: none;
 }}
-.bp-dependencies summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+.md-typeset details.bp-dependencies > summary::before {{ display: none; }}
+.md-typeset details.bp-dependencies > summary::after {{
+  position: static;
+  flex: none;
+  width: 1em;
+  height: 1em;
+  margin-left: 0.25em;
+}}
+.md-typeset details.bp-dependencies > summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+@media (pointer: coarse) {{
+  .md-typeset details.bp-dependencies > summary {{ min-height: 44px; }}
+}}
 .bp-dependency-body {{ margin-top: 0.35rem; color: var(--bp-fg); }}
 .bp-review {{
   margin: 0.65rem 0 0 2rem;
@@ -4342,13 +4669,15 @@ mjx-container > svg {{ max-width: none !important; }}
 .bp-row {{ display: flex; gap: 0.75rem; }}
 .bp-key {{
   flex: 0 0 7.5rem;
-  font-family: {mono};
   font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-weight: 600;
   color: var(--bp-muted);
 }}
 .bp-value {{ flex: 1; }}
+/* A reference breaks between entries, never inside one; a long one wraps in its own box. Each starts with its status dot, so
+   the list drops the separators, which ended every wrapped line and could take a line of their own. */
+.bp-dependency-body .bp-ref {{ display: inline-block; max-width: 100%; margin-right: 0.5rem; }}
+.bp-dependency-body .bp-ref-sep {{ display: none; }}
 .bp-lean {{ font-family: {mono}; }}
 .bp-where {{ color: var(--bp-muted); }}
 .bp-missing {{ color: #b91c1c; }}
@@ -4360,14 +4689,14 @@ mjx-container > svg {{ max-width: none !important; }}
   height: 0.6rem;
   margin-right: 0.35rem;
   border: 1px solid var(--bp-rule);
-  border-radius: 2px;
+  border-radius: 50%;
 }}
 .bp-swatch {{
   display: inline-block;
-  width: 0.9rem;
-  height: 0.9rem;
-  border: 1px solid var(--bp-rule);
-  border-radius: 3px;
+  width: 0.6rem;
+  height: 0.6rem;
+  border: 2px solid var(--bp-rule);
+  border-radius: 50%;
   vertical-align: middle;
 }}
 

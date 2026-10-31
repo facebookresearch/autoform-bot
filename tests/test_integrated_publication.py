@@ -120,7 +120,8 @@ def test_complete_book_content_and_authoritative_cards_survive_without_javascrip
     assert "The proof uses reflexivity." in text
     assert len(text) > 420
     cards = _class(reading, "bp-thmwrapper")
-    assert [(card.get("data-autoform-node-id"), card.get("id")) for card in cards] == [
+    # Each card's anchor is on its heading, which search makes a record of.
+    assert [(card.get("data-autoform-node-id"), _class(card, "bp-thmheading")[0].get("id")) for card in cards] == [
         (f"{group}/base", "base"), (f"{group}/main", "main"),
     ]
     assert not (output / "roadmap" / group / "main.md").exists()
@@ -226,7 +227,7 @@ def test_emitted_result_ids_and_book_anchors_preserve_reserved_looking_prefixes(
     for node_id in ids:
         record, card = records[node_id], cards[node_id]
         assert record["id"] == node_id and record["result"] is True
-        assert record["route"] == "../roadmap/index.html#" + card.get("id")
+        assert record["route"] == "../roadmap/index.html#" + _class(card, "bp-thmheading")[0].get("id")
         assert record["scope"] == "roadmap" and type(record["parent"]) is int
         assert index["nodes"][record["parent"]]["id"] == "roadmap"
         assert unquote(urlsplit(record["url"]).fragment) == "node=" + node_id
@@ -328,3 +329,11 @@ def test_typed_page_keeps_its_true_title_and_complete_reading_source(tmp_path: P
     assert reading.get("data-autoform-node-id") == "note"
     assert "All original source remains as typed." in "".join(reading.itertext())
     assert not list(reading.iter("h1"))  # The client has the true title without inventing one from code.
+    # The no-JavaScript fallback offers no link back to this page, and it and
+    # the loading line stay out of search.
+    (fallback,) = _class(tree, "bp-dag-fallback")
+    assert "data-search-exclude" in fallback.attrib
+    (loading,) = _class(tree, "bp-dag-loading")
+    assert "data-search-exclude" in loading.attrib
+    assert not _class(fallback, "bp-dag-fallback-list")
+    assert all(link.get("href") != "#" for link in fallback.iter("a"))

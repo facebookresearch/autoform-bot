@@ -43,7 +43,10 @@ SEARCH_SCHEMA = "autoform-dag-search/v1"
 WIKI_LINKS_SCHEMA = "autoform-wiki-links/v1"
 #: A separate optional reference layer must fit the reader's unchanged data limit.
 MAX_WIKI_LINK_BYTES = 32 * 1024 * 1024
-_SEARCH_INDEX_BYTE_LIMIT = 32 * 1024 * 1024
+_SEARCH_INDEX_BYTE_LIMIT = 64 * 1024 * 1024
+# Above this size the whole-library index leaves out statement summaries,
+# which are a quarter of a large library's index; titles and Lean names stay.
+_SEARCH_INDEX_SUMMARY_BUDGET = 32 * 1024 * 1024
 _WIKI_BLOCK_MATH = re.compile(f"(?:{RE_DOLLAR_BLOCK}|{RE_BRACKET_BLOCK}|{RE_TEX_BLOCK})", re.DOTALL)
 _WIKI_INLINE_MATH = re.compile(f"(?:{RE_SMART_DOLLAR_INLINE}|{RE_BRACKET_INLINE})", re.DOTALL)
 _WIKI_INLINE_CODE = re.compile(BACKTICK_RE, re.DOTALL)
@@ -254,14 +257,15 @@ def write_payload(
 
 
 @lru_cache(maxsize=4096)
-def _reading_label(text: str) -> dict[str, object] | None:
+def _reading_label(text: str, *, require_math: bool = True) -> dict[str, object] | None:
     """Safe, derived inline text/code/math parts for reading-only controls.
 
     Read the same captured label through the site's converter, never a source
     pathname. HTML, links, images and attributes are not a label transport.
     Plain labels keep their existing wire bytes and require no conversion.
     """
-    if len(text) > 16_384 or not re.search(r"\$|\\\(|\\\[", text):
+    triggers = r"\$|\\\(|\\\[" if require_math else r"\$|\\\(|\\\[|`"
+    if len(text) > 16_384 or not re.search(triggers, text):
         return None
     tree = markdown.render_tree(text, allow_html=False)
     if tree is None:
@@ -301,7 +305,7 @@ def _reading_label(text: str) -> dict[str, object] | None:
             append("text", child.tail)
         return True
 
-    if not read(body) or not has_math or len(parts) > 256:
+    if not read(body) or (require_math and not has_math) or len(parts) > 256:
         return None
     return {"format": "inline-parts-v1", "source": text, "parts": parts}
 
@@ -325,8 +329,10 @@ def write_search_index(
     and every typed edge without repeating long article identifiers.
     ``sha256_out`` optionally receives the exact emitted bytes' digest without
     rereading any source or changing the index's wire representation.
-    ``warnings_out`` reports when those bytes reach 95% of the default browser
-    limit, without rejecting publication or removing any index content.
+    An index over ``_SEARCH_INDEX_SUMMARY_BUDGET`` bytes is written again
+    without statement summaries, so search keeps titles and Lean names.
+    ``warnings_out`` reports that omission, and when the emitted bytes reach
+    95% of the default browser limit, without rejecting publication.
     """
     positions = {node.id: position for position, node in enumerate(view.nodes)}
     nodes: list[dict[str, object]] = []
@@ -368,9 +374,20 @@ def write_search_index(
             for edge in view.edges
         ]
     sizes: list[int] = []
-    written = _write_json(
-        path, payload, sha256_out=sha256_out, byte_count_out=sizes if warnings_out is not None else None,
-    )
+    digests = len(sha256_out) if sha256_out is not None else 0
+    written = _write_json(path, payload, sha256_out=sha256_out, byte_count_out=sizes)
+    if sizes[0] > _SEARCH_INDEX_SUMMARY_BUDGET and any("summary" in entry for entry in nodes):
+        full = sizes.pop()
+        for entry in nodes:
+            entry.pop("summary", None)
+        if sha256_out is not None:
+            del sha256_out[digests:]
+        written = _write_json(path, payload, sha256_out=sha256_out, byte_count_out=sizes)
+        if warnings_out is not None:
+            warnings_out.append(
+                f"search index leaves out statement summaries: with them it would use {full:,} bytes, over the "
+                f"{_SEARCH_INDEX_SUMMARY_BUDGET:,}-byte budget; search still matches titles and Lean names"
+            )
     if warnings_out is not None and sizes[0] * 100 >= _SEARCH_INDEX_BYTE_LIMIT * 95:
         warnings_out.append(
             f"search index uses {sizes[0]:,} bytes ({sizes[0] / _SEARCH_INDEX_BYTE_LIMIT:.1%} of the "
@@ -722,9 +739,8 @@ def render_container(
         for label, target in fallback
     )
     inventory = (
-        '  <div class="bp-dag-fallback">\n'
-        "    <p><strong>Dependency explorer fallback.</strong> "
-        "JavaScript is unavailable or the graph data could not be loaded.</p>\n"
+        '  <div class="bp-dag-fallback" data-search-exclude>\n'
+        "    <p>The dependency explorer needs JavaScript and its graph data.</p>\n"
         + (f'    <ul class="bp-dag-fallback-list">\n{items}\n    </ul>\n' if items else "")
         + (
             f"    <p>Showing {len(fallback)} of {total} linked nodes. "
@@ -743,7 +759,7 @@ def render_container(
         style
         + f'<div class="bp-dag-viewer" data-graph-src="{href}"{search_attr}{page_attr}{scope_attr}>\n'
         + (f"  {intro}\n" if intro else "")
-        + '  <p class="bp-dag-loading" role="status" hidden>Loading dependency explorer…</p>\n'
+        + '  <p class="bp-dag-loading" role="status" hidden data-search-exclude>Loading dependency explorer…</p>\n'
         f"{inventory}"
         f"</div>{script}"
     )
@@ -774,7 +790,7 @@ def viewer_script() -> str:
         raise ValueError("Explorer bundle is missing or corrupt; run npm run build:explorer before publication.") from error
     if not contents.startswith(f"/* autoform-explorer-source-sha256:{fingerprint} */\n"):
         raise ValueError("Explorer bundle is stale; run npm run build:explorer before publication.")
-    if len(contents.encode("utf-8")) >= 132_000:
+    if len(contents.encode("utf-8")) >= 144_000:
         raise ValueError("Explorer bundle exceeds the JavaScript budget; run npm run build:explorer before publication.")
     return contents
 

@@ -1527,7 +1527,7 @@ def extract_graph_skeletons(
                     f"probe of module {module} failed: {result}", lean_root
                 )
             else:
-                records.update(result)  # type: ignore[arg-type]
+                records.update(result)
 
     nodes: list[NodeSkeleton] = []
     module_hashes: dict[tuple[str, str], str] = {}

@@ -71,15 +71,21 @@ const context={assert,frames,timers,cancelled,observed,listeners,notify,flushFra
   canvasWrite(){assert(!delivering,'Actual resize wrote canvas during observer delivery');}
 };
 vm.createContext(context);
-vm.runInContext(state[0]+'\n'+['queueResize','schedule','resize','setSheet','compactRegions','sheetLayout','syncSheetAccessibility']
+vm.runInContext(state[0]+'\n'+['queueResize','schedule','resize','setSheet','compactRegions','sheetLayout','syncSheetAccessibility','positionMapFeedback','stopRowMath','fallbackRowMath']
   .map(original).join('\n')+'\nvar dispose='+dispose+';',context,{timeout:1000});
 vm.runInContext(`
 var window={ResizeObserver,devicePixelRatio:2,matchMedia(){return {matches:false};}};
 var classes=new Set(),host={classList:{contains(name){return classes.has(name);},
   toggle(name,on){if(on)classes.add(name);else classes.delete(name);}}};
 var document={activeElement:null},navigation=null,dom$pageHeading=null;
-var dom$inspectorInner={contains(){return false;},setAttribute(){},removeAttribute(){}},dom$sheetHandle={};
+var dom$inspectorInner={contains(){return false;},setAttribute(){},removeAttribute(){}},dom$sheetHandle={replaceChildren(){},setAttribute(){},focus(){}};
+// The redesign's handle names the page, so its accessibility pass reads the route and records.
+var currentBundle=null,records=new Map(),ui$requestedNode=null,ui$selected=null,ui$mathJob=null,scene=null;
+function readingLabel(){return '';} function refreshReadingLabels(){} function swatch(){return '';}
 var dom$stage={clientWidth:800,clientHeight:600},writes=[],canvasWidth=0,canvasHeight=0;
+var dom$breadcrumb={clientWidth:600},dom$mapKey=null,dom$density=null;
+function renderBreadcrumb(){renderBreadcrumb.$width=dom$breadcrumb.clientWidth;}
+renderBreadcrumb.$width=dom$breadcrumb.clientWidth;
 var dom$canvas={
   get width(){return canvasWidth;},set width(value){canvasWrite();writes.push(['width',value]);canvasWidth=value;},
   get height(){return canvasHeight;},set height(value){canvasWrite();writes.push(['height',value]);canvasHeight=value;}
@@ -172,7 +178,7 @@ def test_controlled_tablet_sheet_resize_settles_before_checkpoint_and_trailing_o
       navigation={checkpoint(value){method=value;saved=captureState();return saved;}};
       var currentBundle={title:'Mathematical map',scope:'roadmap',nodeId:'roadmap'},dom$body={offsetTop:178},dom$inspector={offsetTop:0};
       dom$stage={get clientWidth(){return classes.has('bp-dag-sheet-open')?570:952;},clientHeight:722};
-      dom$sheetHandle={setAttribute(name,value){this[name]=value;}};
+      dom$sheetHandle={setAttribute(name,value){this[name]=value;},replaceChildren(){},focus(){}};
       document.createElement=tag=>({tagName:tag.toUpperCase()});host.prepend=()=>{};
       var atlas=true,mapAllowed=true,family='sans-serif',scene,sceneData,sceneDirection,sceneCompact,sceneFamily,sceneAspect,sceneWiki,sceneReduced;
       var ui$active=data.nodes,ui$activeDirty=true,ui$activeIds=new Set(),ui$direction='both',ui$overviewGroup=null;
@@ -186,7 +192,8 @@ def test_controlled_tablet_sheet_resize_settles_before_checkpoint_and_trailing_o
         box.x*ui$transform.scale+ui$transform.x,box.y*ui$transform.scale+ui$transform.y];};
       fit();flushFrame();assert.equal(layouts,2);install();
       setSheet(true,null);assert.equal(ui$orientation,'tb');assert.equal(dom$canvas.width,1140);
-      assert(Math.abs(ui$transform.scale-1.0089285714285714)<1e-9);
+      // Five compact cards and four unchanged 48px gaps fill the caption/key-clear band.
+      assert(Math.abs(ui$transform.scale-(722-72)/(5*88+4*48))<1e-9);
       flushFrame();assert.equal(layouts,4);notify(observed[0]);
       setSheet(false,null);
       assert.equal(ui$orientation,'lr','The owning click must settle the actual new orientation');
@@ -209,7 +216,7 @@ def test_controlled_tablet_sheet_resize_settles_before_checkpoint_and_trailing_o
 
 def test_same_size_sheet_change_and_late_observer_preserve_restored_camera() -> None:
     _run(r"""
-      var dom$body={offsetTop:178};dom$sheetHandle={setAttribute(name,value){this[name]=value;}};
+      var dom$body={offsetTop:178};dom$sheetHandle={setAttribute(name,value){this[name]=value;},replaceChildren(){},focus(){}};
       const saved={x:41,y:-73,scale:1.2},before=JSON.stringify(data);restoring=true;
       setSheet(true,null);setSheet(false,null);
       assert.equal(writes.length,0,'Unchanged dimensions must not add redundant synchronous resize work');

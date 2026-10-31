@@ -43,7 +43,7 @@
     var decluttered = new WeakMap();
     var timeout = bounded(options.timeout, 15000, 1000, 60000);
     var htmlLimit = bounded(options.htmlLimit, 8 * 1024 * 1024, 1024, 32 * 1024 * 1024);
-    var jsonLimit = bounded(options.jsonLimit, 32 * 1024 * 1024, 1024, 64 * 1024 * 1024);
+    var jsonLimit = bounded(options.jsonLimit, 64 * 1024 * 1024, 1024, 64 * 1024 * 1024);
     var cacheLimit = bounded(options.cacheBytes, 48 * 1024 * 1024, 1024, 128 * 1024 * 1024);
     var htmlEntries = bounded(options.htmlEntries, 8, 1, 32), jsonEntries = bounded(options.jsonEntries, 16, 1, 64);
     var sitePrefix = prefix(catalogueURL, initialDataURL, initialCanonical), homeURL = link(sitePrefix + "index.html", initialURL);
@@ -215,8 +215,8 @@
       var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [];
       async function yieldIndex() {
         // Timer tasks can run back-to-back without a WebKit paint while a
-        // large catalogue is normalized. Give visible readers an actual
-        // frame; hidden/stalled frames retain a bounded timer fallback.
+        // large catalogue is normalized. Resume after a second frame so the
+        // first can paint; hidden/stalled frames retain the same timer bound.
         await new Promise(function (resolve) {
           var visible = doc.visibilityState !== "hidden" && typeof win.requestAnimationFrame === "function" &&
             typeof win.cancelAnimationFrame === "function";
@@ -227,7 +227,9 @@
             if (frame !== null) win.cancelAnimationFrame(frame);
             resolve();
           }
-          if (visible) frame = win.requestAnimationFrame(done);
+          if (visible) frame = win.requestAnimationFrame(function () {
+            if (disposed) done(); else if (!finished) frame = win.requestAnimationFrame(done);
+          });
         });
         if (disposed) throw abortError();
       }

@@ -11,6 +11,10 @@ date when the release is tagged.
 
 ### Changed
 
+- **Explorer delivery.** The approved integrated redesign ships below 144 KB,
+  with the same bounded graph, JSON and frame budgets and pinned safe compiler.
+  Touch keeps single-pointer zoom controls; reading handles retain page-owned
+  mathematical titles, and typed dependency counts remain accessible descriptions.
 - **Integrated reading.** The book, theorem search and dependency map share
   one persistent workspace. The outline follows authored containment, includes
   root-level pages and labels collections as subheads; Home returns to the site.
@@ -26,6 +30,11 @@ date when the release is tagged.
   ranks, status and full reading pages remain unchanged (#442).
   Publication keeps card dimensions and authored region counts; the one
   browser engine owns positions and routes, without an unused Python grid.
+- **Book copy.** The landing lead keeps link text, code, formulas and whole
+  sentences. Next up says which Lean step is next. A chapter's progress is one
+  line of counts whose status meanings show on hover, gone when the chapter has
+  fewer than two countable statements. Unplaced statements sit under "Other
+  statements", and the map's fallback stays out of search results (#494).
 - **Docs.** The CLI reference's contracts moved to `autoform_cli/reference/`
   (validation and audit, search, open statements, claims and revisions,
   runtime and publication). The reference, skills and contributor docs keep
@@ -66,17 +75,52 @@ date when the release is tagged.
 - **Dependency explorer.** The rail and the details typeset the TeX in titles
   and summaries, with the articles' input and the project's macros, where the
   explorer's own MathJax calls had typeset nothing on a generated site. Map
-  cards, the Contents list, search and the explorer's head still show a title
-  as typed (#455).
+  cards retain titles as typed (#455). Reading controls, breadcrumbs, search
+  and supported inventory titles now typeset safe title parts; inventory math
+  is deferred and unsupported inputs stay literal (#444).
+- **Theme.** A new project's site opens in the reader's own light or dark
+  setting, with Material's sun or moon to switch it, and the explorer's head
+  carries the same switch (#444). Setup leaves an existing `mkdocs.yml` alone,
+  so an existing site stays dark until the `palette:` and `scheme: slate` lines
+  under `theme:` are replaced with the scaffolded pair:
+
+  ```yaml
+    palette:
+      - media: "(prefers-color-scheme: light)"
+        scheme: default
+        toggle:
+          icon: material/weather-night
+          name: Use dark theme
+      - media: "(prefers-color-scheme: dark)"
+        scheme: slate
+        toggle:
+          icon: material/weather-sunny
+          name: Use light theme
+  ```
 - **Pages.** The generated `blueprint-pages.yml` runs
   `autoform site check site --source site-src` after the MkDocs build. Its
   warnings show in the log and never stop a deploy, and `continue-on-error`
   keeps a check that cannot run from stopping one either. A scaffolded project
   keeps its workflow: delete it and rerun `autoform init`, or add the step by
   hand once its `AUTOFORM_REF` is from 0.6.0 or later (#389).
+- **Check.** `check` also warns about a code fence that autoform reads as left
+  open but the site ends sooner or reads as text: one indented one to three
+  spaces, one inside a list item, or one whose options the site rejects.
+  Coverage, the link checks and render's link rewriting read everything after
+  it as code, so render shows such a page as typed until the fence is closed,
+  at the indent of its opening line, with options the site accepts (#201).
 
 ### Fixed
 
+- **Large libraries' search index.** The explorer loads JSON up to 64 MiB,
+  and a whole-library index over 32 MiB leaves out statement summaries, so
+  search still matches titles and Lean names; publication warns when it
+  does. ATLAS's index had grown past the old 32 MiB limit, so search and the
+  Topics outline failed on every page.
+- **Explorer review follow-ups.** Fit retains a selected unlinked result.
+  Deferred list math cancels with its view and falls back to visible text on
+  unavailable typesetting. Preview formatting keeps currency and code literal;
+  formal dependency links use converter-validated code and formula labels (#444).
 - **Explorer controls.** Closing full phone reading brings a cropped selected
   card back into the map without overriding restored cameras. Isolate/status
   filters use the same eligible original members in maps and native shelves,
@@ -109,16 +153,29 @@ date when the release is tagged.
   a bounded fallback for hidden or stalled tabs, rather than relying only on
   timer tasks. Parent references use the same compact node offsets as relations;
   the client restores their exact IDs before publication. No content is dropped (#442).
+- **Lake configuration.** A `lakefile.toml` whose `lean_lib` is not an array
+  of named tables, such as `[lean_lib]` written for `[[lean_lib]]`, is
+  refused as Lake refuses it, instead of crashing or silently reading the
+  package's default library (#505).
 - **Wiki reading links.** The integrated explorer retains #455's title math
   in its outline, breadcrumbs, paged inventory and related-reading controls, using safe MathJax
   service and project macros. Code stays literal, canonical links keep focus
   and native modifiers, and graph labels remain as typed (#442).
+- **Import impact.** In `work import-impact`, a library whose `globs` name
+  other modules but not its own root no longer claims the files under that
+  root that no glob matches, which Lake does not build for it. A library
+  nested there no longer makes the command refuse a project Lake builds with
+  "maps to more than one module". A loaded local module that no library
+  builds is now refused with exit 2, and under
+  `--module-scope import-closure` an article naming a declaration in such a
+  file is listed in `unresolved_articles` (#500).
 - **Book navigation.** The generated `SUMMARY.md` nests each book page under
   its chapter's README, written in book order. A landing page that linked a
   deep page before its chapters, or a folder with no README in the book, put a
   page a level too deep, and MkDocs refused the nav with a
   `LiterateNavParseError`. Where MkDocs accepted the nav, a page could sit
-  under the wrong chapter (#481).
+  under the wrong chapter. A page beside its chapter's README now sits inside
+  that chapter in the sidebar rather than next to it (#481).
 - **Claims.** `autoform dashboard` runs its claim listing's Git in the
   dashboard's process group again, so Ctrl+C or a signal to that group stops
   Git along with the dashboard (#447). On macOS and Windows, a listing shows
@@ -126,6 +183,14 @@ date when the release is tagged.
   including with Apple's Git, which stored one key's name holding the other's
   lease (#452). The claim contract now says what `--timeout` bounds and which
   listings run Git apart from their caller (#448).
+- **Site search.** Each statement card is a search result of its own, titled
+  by its statement and opening at its anchor, and its exact `lean:` names find
+  it even when they show only as code icons. Notes headings such as Sources
+  are no longer results of their own; their text stays in the card's (#390).
+- **Links on chapter pages.** A definition-like line with more words after
+  its first, such as `[^1]: Grounded in [Paper](../sources/paper.md)`, is
+  prose, as Python-Markdown reads it. Render read it as a definition and left
+  the links after its first word pointing at unpublished pages (#484).
 
 ## 0.6.0 (2026-10-22)
 
