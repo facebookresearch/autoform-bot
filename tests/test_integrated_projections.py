@@ -39,7 +39,7 @@ assert(kinds, 'Production kind words missing');
 const functions = [
   'element', 'readingLabel', 'button', 'bindNodeLink', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
   'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'matchesStatus', 'matchesIsolation', 'calculateActive',
-  'statusLabel', 'finished', 'boundaryMeta', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
+  'statusLabel', 'finished', 'boundaryMeta', 'kindWord', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
   'semanticParent', 'placeOf', 'pendingMath', 'summaryLine', 'refreshReadingLabels', 'inCurrentScope', 'sourceNodes'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');
@@ -165,9 +165,10 @@ def test_cards_lead_with_the_books_kind_word_and_topics_keep_their_count() -> No
       const card = node => makeNodeControl(node), meta = node => card(node).children[1].textContent;
       assert.equal(meta(viewNode('D', {declaration: 'def', status: 'can_state'})), 'Definition · ready to state');
       assert.equal(meta(viewNode('L', {declaration: 'Lemma'})), 'Lemma · planned');
-      // The book captions an unlisted declaration "Node", so the card adds no word; inherited names are not kinds.
-      assert.equal(meta(viewNode('O', {declaration: 'noncomputable def'})), 'planned');
-      assert.equal(meta(viewNode('C', {declaration: 'constructor'})), 'planned');
+      // As in the book, modifiers drop and a command with no caption reads as written.
+      assert.equal(meta(viewNode('O', {declaration: 'noncomputable def'})), 'Definition · planned');
+      assert.equal(meta(viewNode('C', {declaration: 'short exact sequence'})), 'Short exact sequence · planned');
+      assert.equal(meta(viewNode('N', {})), 'planned');
       assert.equal(meta(viewNode('S', {kind: 'scope', declaration: 'theorem', member_count: 2})), '0 of 1 fully proved');
       assert(card(viewNode('T', {declaration: 'theorem'})).getAttribute('aria-label').endsWith(', Theorem, planned'));
       // A title that already names its kind, as ATLAS's do, gets no second kind word.

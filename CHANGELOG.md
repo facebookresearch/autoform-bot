@@ -11,6 +11,12 @@ date when the release is tagged.
 
 ### Changed
 
+- **Declaration captions.** A `declaration` command with no caption, such as
+  `isomorphism`, is captioned as written in the book and on its map card
+  instead of "Node", modifiers such as `noncomputable` no longer hide a known
+  command, and `irreducible_def` and `opaque` read as definitions. `check`
+  warns about such a command, since `audit` cannot compare it with the Lean
+  target's kind (#485).
 - **Explorer delivery.** The approved integrated redesign ships below 145 KB,
   with the same bounded graph, JSON and frame budgets and pinned safe compiler.
   Touch keeps single-pointer zoom controls; reading handles retain page-owned

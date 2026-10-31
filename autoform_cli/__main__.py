@@ -54,7 +54,7 @@ from .library.search import LibraryResult, library_argument, search_with_librari
 from .markdown import local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
 from .readback import Readback, load_readbacks, prepare_readback, publish_readback
-from .render import SOURCES_DIR, PublicationError, publication_issues, render_site
+from .render import DECLARATION_LABELS, SOURCES_DIR, PublicationError, publication_issues, render_site
 from .review import (
     ReviewBundle,
     ReviewError,
@@ -783,6 +783,23 @@ def _formalizable_container_warnings(graph: Graph) -> list[str]:
     ]
 
 
+def _unknown_declaration_warnings(graph: Graph) -> list[str]:
+    """Name each article whose ``declaration`` names a command render has no caption for.
+
+    Render captions such an article with the word as written, and audit, which
+    compares a Lean target's kind with the command, skips it. The site still
+    builds, so ``check`` warns rather than fails.
+    """
+    return [
+        f"{node.id}: declaration {node.declaration!r} is not a Lean declaration command Autoform knows, so render "
+        "captions it as written and audit does not compare it with the Lean target's kind; name the command, "
+        "such as def, structure or theorem"
+        for node in graph.nodes.values()
+        if node.declaration is not None
+        and status.declaration_command(node.declaration).casefold() not in DECLARATION_LABELS
+    ]
+
+
 #: How check ends the reason it gives for a name under one of the project's own types.
 _GENERATED = "and record the name in the article's implementation note"
 
@@ -871,7 +888,12 @@ def _check(args: argparse.Namespace) -> int:
         print(
             f"warning: {node_id}: module catalog links no declaration ledger under blueprint/sources/ from '## Sources'"
         )
-    for warning in _byte_order_mark_warnings(graph) + _formalizable_container_warnings(graph) + source_warnings:
+    for warning in (
+        _byte_order_mark_warnings(graph)
+        + _formalizable_container_warnings(graph)
+        + _unknown_declaration_warnings(graph)
+        + source_warnings
+    ):
         print(f"warning: {warning}")
     # What the site would leave out or show as typed, and what would stop
     # render; none of it fails check.

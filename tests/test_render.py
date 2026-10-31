@@ -585,6 +585,22 @@ def test_statement_headings_and_references_do_not_repeat_the_kind(tmp_path: Path
     assert {node["id"]: node["title"] for node in chapter["nodes"]} == titles
 
 
+def test_a_declaration_with_no_caption_reads_as_written(tmp_path: Path) -> None:
+    """Issue #485: 111 Hartshorne articles read "Node N". Modifiers before a known command drop."""
+    project = _project(tmp_path)
+    roadmap = project / "blueprint" / "roadmap"
+    for node_id, before, after in (("base", "def", "noncomputable def"), ("top", "theorem", "short exact sequence")):
+        path = roadmap / f"{node_id}.md"
+        authored = path.read_text(encoding="utf-8")
+        path.write_text(authored.replace(f"declaration: {before}\n", f"declaration: {after}\n"), encoding="utf-8")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    assert '<span class="bp-thmcaption" data-search-exclude>Definition</span>' in page
+    assert '<span class="bp-thmcaption" data-search-exclude>Short exact sequence</span>' in page
+    assert 'href="#top">Short exact sequence 1 (Top)</a>' in page
+
+
 def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -> None:
     _render(tmp_path)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
