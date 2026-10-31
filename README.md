@@ -104,6 +104,12 @@ authored areas and global search; graphs and pages are derived. See the
 [blueprint format and CLI reference](autoform_cli/README.md), or browse the
 [Cabannes thesis example](skills/setup/assets/cabannes-thesis-project/README.md).
 
+## Search and reuse
+
+Before adding a result, agents search the blueprint and every dependency that publishes a search
+index Autoform can verify, such as [ATLAS](https://github.com/facebookresearch/atlas-lean). The paper
+[*Search Before You Prove*](docs/papers/search-and-reuse/search-and-reuse.pdf) explains and evaluates it.
+
 ## Development
 
 Clone with `git clone https://github.com/facebookresearch/autoform-bot.git`, then
