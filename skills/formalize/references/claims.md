@@ -75,7 +75,7 @@ the candidate to `origin` as `handoff/<article_id>`. The integrator renews,
 integrates, and releases a handed-off set with `--worker-id` set to the reported
 ID; without a report, it waits for the lease to lapse, acquires the complete set
 under its own ID and, before integrating, repeats Formalize's pre-edit reload of
-`work context`. Release the complete set, and delete a pushed handoff branch,
-once the result is visible that way, or when abandoning the leaf without a
-candidate. For ordinary work that set is just the article; for an import edit it
-is the report's `claim_targets` and any validated expansion.
+`work context`. Release the complete set once the result is visible that way, or
+when abandoning the leaf without a candidate; in the first case, also delete a
+pushed handoff branch. For ordinary work that set is just the article; for an
+import edit it is the report's `claim_targets` and any validated expansion.
