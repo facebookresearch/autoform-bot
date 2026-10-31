@@ -801,14 +801,17 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
     namespaces: list[str] = []
     scopes: list[str | None] = []
 
-    lines = _without_lean_comments(text, mask_literals=True).splitlines()
+    masked = _without_lean_comments(text, mask_literals=True)
+    lines = masked.splitlines()
     unmasked: list[str] = []
 
     def literal_line(index: int) -> str:
-        """Line ``index`` with its literals, or "" when a literal holds a line separator other than a line end."""
+        """Line ``index`` with its literals back; masking keeps each literal's length, so the offsets agree."""
         if not unmasked:
-            kept = _without_lean_comments(text).splitlines()
-            unmasked.extend(kept if len(kept) == len(lines) else [""] * len(lines))
+            kept, offset = _without_lean_comments(text), 0
+            for line in masked.splitlines(keepends=True):
+                unmasked.append(kept[offset : offset + len(line)])
+                offset += len(line)
         return unmasked[index]
 
     # Masking shortens a comment, so a comment before a field on its line would
@@ -963,7 +966,7 @@ def _fields(
         """Record the fields one field line starts; ``False`` once ``deriving`` or a command ends them."""
         constructor = False
         while True:
-            words = _ATTRIBUTE_LIST.sub(" ", text).split()
+            words = _SCOPED.sub(" ", _ATTRIBUTE_LIST.sub(" ", text)).split()
             modifiers = set()
             while words and words[0] in _COMMAND_MODIFIERS:
                 modifiers.add(words.pop(0))
@@ -1025,7 +1028,7 @@ def _fields(
     entries: list[tuple[int, list[str]]] = []
     column = None
     last = where_index if inline.strip() else None
-    depth = 0
+    depth = _depth(inline)
     for index in range(start, len(lines)):
         text = lines[index].strip()
         if not text:
@@ -1039,8 +1042,8 @@ def _fields(
             column = indent
         if indent < column:
             break
-        if indent == column and last is not None and _DO_END.search(lines[last]):
-            # A `do` block at the field column takes every line after it there.
+        if indent == column and depth <= 0 and last is not None and _DO_END.search(lines[last]):
+            # A `do` block at the field column, outside brackets, takes every line after it there.
             break
         if indent == column and depth <= 0 and not (
             last is not None and _continues(lines[last], literal_line, last, text)
@@ -1139,7 +1142,7 @@ def _depth(text: str) -> int:
 def _command_line(line: str) -> bool:
     """Whether ``line`` starts a command that ends a structure, such as ``@[simp] theorem``."""
 
-    words = _ATTRIBUTE_LIST.sub(" ", line).split()
+    words = _SCOPED.sub(" ", _ATTRIBUTE_LIST.sub(" ", line)).split()
     while words and words[0] in _COMMAND_MODIFIERS:
         words.pop(0)
     return bool(words) and words[0] in _FIELD_ENDS
@@ -1241,12 +1244,16 @@ _FIELD_ENDS = (_COMMAND_HEADS - {"module", "prelude", "import"}) | {"notation3",
 _TERM_KEYWORDS = frozenset(
     {"by", "calc", "do", "else", "fun", "have", "if", "let", "match", "nofun", "nomatch", "show", "suffices", "then"}
 )
-_DO_END = re.compile(r"\bdo\s*$")
+_DO_END = re.compile(r"(?:^|\s)do\s*$")
+#: Mathlib's ``scoped[NS]``, which scopes the command after it to a namespace.
+_SCOPED = re.compile(r"^\s*scoped\s*\[[^\]]*\]")
 _QUOTED_NAME = re.compile(r"«[^»]*»")
 #: The end of a line that a term continues past: a comma, an open bracket, an
-#: arrow or a relation, but not the constructor's ``mk ::`` or a postfix such
-#: as ``Type*`` or ``ℕ+``.
-_OPEN_END = re.compile(r"(?:(?<!:):|[,=(\[{⟨→↔∧∨×∘•≤≥≠∈∉⊆⊂∣≃≅⟶↦]|=>|->|<\||\|>|(?:^|\s)(?:fun|by))\s*$")
+#: arrow, a relation, or an operator after a space, but not the constructor's
+#: ``mk ::`` or a postfix such as ``Type*`` or ``ℕ+``.
+_OPEN_END = re.compile(
+    r"(?:(?<!:):|[,=(\[{⟨→↔∧∨×∘•≤≥≠≈≡∈∉⊆⊂⊇⊃∣≃≅⟶↦]|=>|->|<\||\|>|(?:^|\s)(?:[-+*/^%<>&|$!]+|fun|by))\s*$"
+)
 _BINDER_CLOSERS = {"(": ")", "{": "}", "[": "]", "⦃": "⦄"}
 
 
