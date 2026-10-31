@@ -1534,7 +1534,7 @@
         return node.kind === "scope" || node.kind === "boundary" || node._region || node._overviewGroup;
       });
       var topicOverview = mapAllowed && data.nodes.length && (chapterOverview || topicCards) && !bundle.focus && !bundle.anchor && !(record && record.result);
-      var mapRequested = Boolean(bundle.mapFirst && (ui$scopeOverview || ui$overviewOnly || mapAllowed && topicCards) && !bundle.anchor && !(record && record.result));
+      var mapRequested = Boolean(bundle.mapFirst && ((sheetLayout() ? ui$scopeOverview : ui$coarseOverview) || ui$overviewOnly || mapAllowed && topicCards) && !bundle.anchor && !(record && record.result));
       var readingRequested = Boolean(bundle.focus && !mapRequested || bundle.anchor || record && record.result);
       setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false && 1 : sheetLayout() && (topicOverview || mapRequested) ? false : readingRequested ||
         !ui$overviewOnly && (sheetLayout() ? !ui$scopeOverview && Boolean(bundle.nodeId) : !ui$coarseOverview), ui$selected);
@@ -1667,8 +1667,8 @@
       var scopeOverview = projected._scopeOverview;
       if (scopeOverview && scopeOverview.groups.some(function (group) { return group.key === ui$overviewGroup; })) scopeOverview.selectedGroup = ui$overviewGroup;
       ui$scopeOverview = Boolean(scopeOverview); ui$overviewGroup = scopeOverview && scopeOverview.selectedGroup || null;
-      // Only authored-area overviews and oversized coarsening open map-first; shelves and context cards keep the reader.
-      ui$coarseOverview = Boolean(overview && (!overview._scopeOverview.$structural || overview._scopeOverview.originalNodes > MAX_MAP_NODES));
+      // Only authored-area overviews and oversized coarsening that draws cards open map-first; shelves and context cards keep the reader.
+      ui$coarseOverview = Boolean(overview && (!overview._scopeOverview.$structural || overview._scopeOverview.originalNodes > MAX_MAP_NODES && overview.nodes.length));
       host.classList.toggle("bp-dag-scope-overview", ui$coarseOverview);
       host.classList.toggle("bp-dag-area-expanded", Boolean(navigation && ui$area));
       adoptGraph(projected); ui$mapAllowed = mapAllowed; ui$activeDirty = true; ui$spotlight = ui$hovered = null;

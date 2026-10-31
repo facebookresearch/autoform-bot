@@ -22,6 +22,7 @@ from tests.test_integrated_explorer_browser import _routes, _served, pinned_runt
 _REPO = Path(__file__).resolve().parents[1]
 _PHONE = {"viewport": {"width": 390, "height": 844}, "is_mobile": True, "has_touch": True, "device_scale_factor": 2}
 _VIEWER = "document.querySelector('.bp-dag-viewer.bp-dag-integrated')"
+_CARDS = ".bp-dag-node[data-autoform-node-id]"
 _OPEN = f"() => {_VIEWER}?.classList.contains('bp-dag-sheet-open') === true"
 _CLOSED = f"() => {_VIEWER}?.classList.contains('bp-dag-sheet-open') === false"
 _STATE = f"""() => {{
@@ -100,6 +101,7 @@ def test_phone_back_after_closing_the_reader_and_opening_an_unrelated_result(
                     break
                 handle.click()
             page.wait_for_function(_CLOSED)
+            first_cards = set(page.eval_on_selector_all(_CARDS, "els => els.map(e => e.dataset.autoformNodeId)"))
             if entry == "search":
                 search = page.locator("input.bp-dag-search")
                 search.click()
@@ -110,6 +112,7 @@ def test_phone_back_after_closing_the_reader_and_opening_an_unrelated_result(
             page.wait_for_function("(title) => document.title === title", arg=b["title"])
             page.wait_for_function(_OPEN)
             page.wait_for_load_state("networkidle")
+            second_cards = set(page.eval_on_selector_all(_CARDS, "els => els.map(e => e.dataset.autoformNodeId)"))
             page.go_back()
             page.wait_for_function("(title) => document.title === title", arg=a["title"])
             page.wait_for_load_state("networkidle")
@@ -118,6 +121,8 @@ def test_phone_back_after_closing_the_reader_and_opening_an_unrelated_result(
         finally:
             context.close()
     assert errors == []
+    # The failure needs B's map to share no card with A's. The index picked them; also check the cards each map draws on screen.
+    assert first_cards and second_cards and not first_cards & second_cards, (first_cards, second_cards)
     assert "Could not open this view" not in back["error"], back
     assert back["readingOpen"] is False, back
     assert back["snapshot"] is True, back

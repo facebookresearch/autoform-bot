@@ -7,7 +7,9 @@ chapter whose three statements depend on three other chapters gets linked
 context cards, and a 14-statement chapter with one unlinked statement gets a
 native shelf; neither is an overview. At 1440x900 both must open with a
 reader at least 340 px wide and the chapter text visible, without the
-overview's collapsed layout or its 0.9 zoom-out floor.
+overview's collapsed layout or its 0.9 zoom-out floor. Arriving from a map
+card focuses the reader's heading. A chapter of 121 linked statements is
+coarsened, so it keeps the collapsed reader and the floor.
 """
 
 from __future__ import annotations
@@ -59,8 +61,11 @@ def chapters_site(tmp_path_factory: pytest.TempPathFactory) -> Path:
     # A chain of 13 statements and one with no local link.
     shelf = [(f"s{k:02d}", f"Shelf {k}", [(f"Shelf {k - 1}", f"s{k - 1:02d}.md")] if 0 < k < 13 else []) for k in range(14)]
     _chapter(roadmap, "shelf", "Shelf", shelf)
+    # Eleven chains of eleven linked statements, one over the map's limit of 120.
+    big = [(f"b{k:03d}", f"Big {k}", [(f"Big {k - 1}", f"b{k - 1:03d}.md")] if k % 11 else []) for k in range(121)]
+    _chapter(roadmap, "big", "Big", big)
     (roadmap / "README.md").write_text(
-        "# Reader first\n\n" + "\n".join(f"- [{slug.title()}]({slug}/README.md)" for slug in ("alpha", "beta", "gamma", "hub", "shelf")) + "\n",
+        "# Reader first\n\n" + "\n".join(f"- [{slug.title()}]({slug}/README.md)" for slug in ("alpha", "beta", "gamma", "hub", "shelf", "big")) + "\n",
         encoding="utf-8",
     )
     render_site(project / "blueprint", project / "site-src")
@@ -112,3 +117,62 @@ def test_desktop_chapter_opens_with_the_reader_and_zooms_out_freely(
             context.close()
     assert errors == []
     assert scale < 0.9 - 1e-6, scale
+
+
+@pytest.mark.parametrize("chapter", ["hub", "shelf"])
+def test_a_map_card_arrival_at_a_reader_first_chapter_focuses_the_reading_heading(
+    webkit_browser: object, pinned_runtime: object, chapters_site: Path, chapter: str,  # noqa: F811
+) -> None:
+    errors: list[str] = []
+    with _served(chapters_site) as url:
+        context = webkit_browser.new_context(viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
+        try:
+            page = context.new_page()
+            page.set_default_timeout(30_000)
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            _routes(page, url, pinned_runtime, graph_client=True)
+            page.goto(f"{url}/roadmap/index.html")
+            page.wait_for_selector(".bp-dag-node", state="visible")
+            page.wait_for_load_state("networkidle")
+            page.locator(".bp-dag-node", has_text=chapter.title()).first.click()
+            page.wait_for_function("(title) => document.querySelector('.bp-reading-body h1')?.textContent.trim().startsWith(title)", arg=chapter.title())
+            # Focus lands after the reader's math pass, so wait up to 10 s for it rather than read it once.
+            where = page.evaluate("""async () => {
+              const heading = () => document.querySelector('.bp-reading-body h1');
+              for (let n = 0; n < 100 && document.activeElement !== heading(); n++) await new Promise(r => setTimeout(r, 100));
+              return document.activeElement === heading() ? null : document.activeElement.outerHTML.slice(0, 120);
+            }""")
+        finally:
+            context.close()
+    assert errors == []
+    assert where is None, where
+
+
+def test_a_chapter_over_the_map_limit_opens_map_first_with_the_zoom_floor(
+    webkit_browser: object, pinned_runtime: object, chapters_site: Path,  # noqa: F811
+) -> None:
+    errors: list[str] = []
+    with _served(chapters_site) as url:
+        context = webkit_browser.new_context(viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
+        try:
+            page = context.new_page()
+            page.set_default_timeout(30_000)
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            _routes(page, url, pinned_runtime, graph_client=True)
+            page.goto(f"{url}/roadmap/big/index.html")
+            page.wait_for_selector(".bp-dag-node", state="visible")
+            page.wait_for_load_state("networkidle")
+            _frames(page)
+            viewer = page.locator(".bp-dag-viewer")
+            assert viewer.evaluate("element => element.classList.contains('bp-dag-scope-overview')") is True
+            reader = page.locator(".bp-reading-pane").bounding_box()
+            assert reader is not None and reader["width"] <= 64, reader
+            zoom_out = page.get_by_role("button", name="Zoom out", exact=True)
+            for _ in range(4):
+                zoom_out.click()
+                _frames(page)
+            scale = _scale(page)
+        finally:
+            context.close()
+    assert errors == []
+    assert scale >= 0.9 - 1e-6, scale

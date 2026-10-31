@@ -239,6 +239,19 @@ def test_zoom_out_returns_to_overview_without_changing_members_or_source_rows() 
     """)
 
 
+def test_only_a_coarse_overview_stops_zoom_out_at_the_readable_scale() -> None:
+    _run(r"""
+      // Authored areas coarsen this scope, so zoom-out stops at 0.9.
+      assert.equal(ui$coarseOverview,true);assert(host.classList.contains('bp-dag-scope-overview'));
+      ui$transform.scale=.9;zoomAt(.8,450,350);assert.equal(ui$transform.scale,.9);
+      // Without areas the same results get structural shelves: a scope overview, but not a coarse one.
+      contextGraph=structuredClone(contextGraph);contextGraph.nodes.forEach(node=>{delete node.area;});updateProjection();
+      assert.equal(ui$scopeOverview,true);assert.equal(ui$coarseOverview,false);
+      assert(!host.classList.contains('bp-dag-scope-overview'));
+      ui$transform.scale=.9;zoomAt(.8,450,350);assert(ui$transform.scale<.9,String(ui$transform.scale));
+    """)
+
+
 def test_hidden_original_endpoints_and_boundary_status_gate_cached_typed_flows() -> None:
     _run(r"""
       contextGraph=structuredClone(contextGraph);
