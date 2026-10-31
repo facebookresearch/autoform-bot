@@ -645,12 +645,6 @@ def _glob(glob: str, library: LeanLibrary) -> tuple[str, str]:
     return base, mode
 
 
-def _impact_template() -> str:
-    """The Lean impact probe source, kept under probes/ beside this module."""
-
-    return (Path(__file__).parent / "probes" / "impact_probe.lean").read_text(encoding="utf-8")
-
-
 def render_impact_probe(
     *,
     imports: Iterable[str],
@@ -678,7 +672,8 @@ def render_impact_probe(
     walks = [
         [str(directory), list(lean_name_components(base)), glob] for directory, base, glob in glob_directories
     ]
-    return _impact_template().format(
+    return lean_probe.render_probe_template(
+        "impact_probe.lean",
         imports="\n".join(f"import {module}" for module in modules),
         marker=IMPACT_MARKER,
         module_marker=IMPACT_MODULE_MARKER,
@@ -686,8 +681,6 @@ def render_impact_probe(
         emit_module_evidence="true" if emit_module_evidence else "false",
         artifact_dir=json.dumps(str(artifact_dir or ""), ensure_ascii=False),
         glob_directories=json.dumps(json.dumps(walks, ensure_ascii=False), ensure_ascii=False),
-        output_env=lean_probe.PROBE_OUTPUT_ENV,
-        output_limit=lean_probe.DEFAULT_PROBE_OUTPUT_LIMIT,
         project_modules=lean_requests(tuple(sorted(set(project_modules)))),
         selected_modules=lean_requests(tuple(sorted(set(selected_modules)))),
     )

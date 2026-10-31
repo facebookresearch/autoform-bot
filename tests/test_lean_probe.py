@@ -18,6 +18,7 @@ from pathlib import Path
 import psutil
 import pytest
 
+from autoform_cli.impact import render_impact_probe
 from autoform_cli.lean_probe import (
     PROBE_MARKER,
     PROBE_OUTPUT_ENV,
@@ -45,6 +46,7 @@ from autoform_cli.lean_probe import (
     stale_build_said,
     _terminate_process_tree,
 )
+from autoform_cli.library.generate import render_library_probe
 from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
 from tests.test_skeleton import _assert_no_survivors, _build, _pid_is_live, _project, _requested, _signal_driver
 
@@ -878,6 +880,22 @@ def test_probe_requires_an_existing_lake_manifest(tmp_path: Path, monkeypatch) -
 
     with pytest.raises(SkeletonError, match="lake-manifest.json is missing"):
         run_probe(probe, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "render",
+    [
+        lambda: _render_probe_helper(),
+        lambda: render_impact_probe(imports=["Demo"], project_modules=["Demo"]),
+        lambda: render_library_probe(("Lib.A",)),
+    ],
+    ids=["skeleton", "impact", "library"],
+)
+def test_every_probe_template_gets_the_records_file_contract(render, monkeypatch) -> None:
+    monkeypatch.setattr("autoform_cli.lean_probe.DEFAULT_PROBE_OUTPUT_LIMIT", 1234)
+    source = render()
+    assert f'IO.getEnv "{PROBE_OUTPUT_ENV}"' in source
+    assert "def probeOutputLimit : Nat := 1234" in source
 
 
 # --------------------------------------------------------------------------- #

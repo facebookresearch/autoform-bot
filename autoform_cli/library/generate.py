@@ -133,12 +133,10 @@ def render_library_probe(modules: Sequence[str]) -> str:
     names = sorted(set(modules))
     if not names:
         raise GenerateError("the indexed libraries hold no Lean module")
-    template = (Path(__file__).parent.parent / "probes" / "library_probe.lean").read_text(encoding="utf-8")
-    return template.format(
+    return lean_probe.render_probe_template(
+        "library_probe.lean",
         imports="\n".join(f"import {module}" for module in names),
         marker=LIBRARY_MARKER,
-        output_env=lean_probe.PROBE_OUTPUT_ENV,
-        output_limit=lean_probe.DEFAULT_PROBE_OUTPUT_LIMIT,
         modules=_module_set(names),
     )
 
