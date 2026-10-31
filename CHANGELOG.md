@@ -111,8 +111,10 @@ date when the release is tagged.
 - **No size caps on published data.** The explorer loads its own site's
   search index, map data, pages and concept links whatever their size, and
   its timeout now measures a stalled transfer rather than a long one. Render
-  keeps the whole concept-links layer and reads any `atlas.json`, and notes a
-  search index over 32 MiB, which every explorer page downloads. ATLAS's
+  keeps the whole concept-links layer, reads any `atlas.json`, and writes and
+  replaces a site whose `publication.json` passes 8 MiB (it lists every site
+  file). It notes a search index over 32 MiB, which every explorer page
+  downloads. ATLAS's
   42 MB index had passed the old 32 MiB limit, so search and the Topics
   outline failed on every page.
 - **Explorer review follow-ups.** Fit retains a selected unlinked result.

@@ -4061,16 +4061,17 @@ def test_a_failed_render_leaves_the_previous_site_and_no_debris(
     assert not _debris(tmp_path)
 
 
-def test_a_manifest_the_next_render_could_not_read_is_never_published(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = _project(tmp_path)
-    monkeypatch.setattr(render_module, "PUBLICATION_MANIFEST_MAX_BYTES", 512)
+def test_a_site_whose_manifest_outgrew_the_old_limit_is_still_replaced(tmp_path: Path) -> None:
+    # The manifest lists every site file, so it grows with the project; render
+    # once refused to read one past 8 MiB and so to replace its own site.
+    project, output, _site = _published(tmp_path)
+    manifest = json.loads((output / "publication.json").read_text(encoding="utf-8"))
+    manifest["padding"] = "x" * (8 * 1024 * 1024)
+    (output / "publication.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-    with pytest.raises(PublicationError, match="manifest exceeds max_file_bytes=512"):
-        render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    render_site(project / "blueprint", output, lean_root=project)
 
-    assert not (tmp_path / "out").exists()
+    assert "padding" not in json.loads((output / "publication.json").read_text(encoding="utf-8"))
     assert not _debris(tmp_path)
 
 

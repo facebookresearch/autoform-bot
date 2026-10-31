@@ -41,7 +41,6 @@ from .status import INVENTORY_STATES, MEANINGS, STATES
 SCHEMA = "autoform-dag-view/v2"
 SEARCH_SCHEMA = "autoform-dag-search/v1"
 WIKI_LINKS_SCHEMA = "autoform-wiki-links/v1"
-#: A separate optional reference layer must fit the reader's unchanged data limit.
 #: Every explorer page downloads the whole search index, so publication notes
 #: when it passes this size. Nothing caps how large it may grow.
 _SEARCH_INDEX_NOTE_BYTES = 32 * 1024 * 1024

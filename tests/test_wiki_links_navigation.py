@@ -308,9 +308,9 @@ def test_optional_callback_error_and_oversized_response_never_disable_math_navig
       const observer=await wikiApp({onWikiLinks(){throw new Error('/Users/private-provider/callback');}});
       const result=await observer.nav.loadWikiLinks();assert.equal(result.availability,'complete');
       assert.equal(observer.errors.length,0);assert.equal((await observer.nav.navigateNode('b')).nodeId,'b');observer.nav.dispose();
-      // No size cap: a layer declaring 65 MiB loads, and the retired jsonLimit option caps nothing.
-      const large=await wikiApp({jsonLimit:1024,wikiFetch(){return new Response(JSON.stringify(large.layerState.layer),
-        {headers:{'content-length':String(65*1024*1024)}});}});
+      // No size cap: a 65 MiB layer, past every limit the client had, streams in whole, and the retired jsonLimit option caps nothing.
+      const large=await wikiApp({jsonLimit:1024,wikiFetch(){const text=JSON.stringify(large.layerState.layer)+' '.repeat(65*1024*1024);
+        return new Response(text,{headers:{'content-length':String(Buffer.byteLength(text))}});}});
       await large.nav.start();const loaded=await large.nav.loadWikiLinks();assert.equal(loaded.availability,'complete');
       assert.equal(large.errors.length,0);assert.equal((await large.nav.navigateNode('a')).nodeId,'a');large.nav.dispose();
     """)

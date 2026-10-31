@@ -136,7 +136,8 @@
       if (cached) return cached;
       var controller = new AbortController(), expired = false, timer = null;
       function abort() { controller.abort(); }
-      // The timeout measures a stall, not the whole transfer: each chunk restarts it, so size never times a request out.
+      // The timeout measures a stall, not the whole transfer: each streamed chunk restarts it, so size never times a stream out.
+      // The whole-body fallbacks below, for peers without streams, run under a single timer.
       function arm() { clearTimeout(timer); timer = setTimeout(function () { expired = true; controller.abort(); }, timeout); }
       if (parentSignal) {
         if (parentSignal.aborted) throw abortError();
