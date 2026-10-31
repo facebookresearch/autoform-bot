@@ -28,7 +28,7 @@
   var LABEL_MIN_W = 60;            // boxes narrower than this on screen never get a label
   var KID_LABEL_W = 90;            // a part with parts inside opens once its median child is this wide on screen (px)
   var CARD_TEXT_W = 120;           // result cards carry their titles, and their links, once this wide on screen (px)
-  var TITLE_EM = 8.4, COMPACT_EM = 7.3, META_EM = 6.6, CARD_EM = 7.2, CARD_META_EM = 6.2;  // mean character advances of the label fonts (px)
+  var COMPACT_EM = 7.3, META_EM = 6.6, CARD_EM = 7.2, CARD_META_EM = 6.2;  // mean character advances of the label fonts (px)
 
   // ---------------------------------------------------------------- small helpers
   function el(tag, cls, text) {
@@ -567,7 +567,7 @@
       var count = own ? record.results.length : 0, short = num(count) + (count === 1 ? " result" : " results");
       // A part's own results say whose they are when the line has room, and just how many when it does not.
       var long = short + " directly in " + plain(record.summary.title);
-      var title = own ? (!slot.compact && long.length * TITLE_EM <= slot.w ? long : short) : plain(record.summary.title);
+      var title = own ? (!slot.compact && long.length * L.constants.TITLE_EM <= slot.w ? long : short) : plain(record.summary.title);
       if (slot.overlay) {
         var b = screenBox(own ? record.ownBox : record.box), backdrop = keep(backdropLayer, "lb:" + slot.id, "rect", {
           class: "pm-backdrop pm-backdrop-" + (own ? "open" : isOpen(record, b) ? "open" : tileKind(record.summary.status)) + cls, rx: 6});
@@ -575,13 +575,13 @@
       }
       if (slot.compact) {
         wrap(title, Math.max(3, Math.floor(slot.w / COMPACT_EM)), slot.lines).forEach(function (line, index) {
-          setText(keep(labelLayer, "lc:" + slot.id + ":" + index, "text", {x: slot.x, y: slot.y + Math.min(30, slot.band / 2 + 5) + index * L.constants.COMPACT_LINE,
+          setText(keep(labelLayer, "lc:" + slot.id + ":" + index, "text", {x: slot.x, y: slot.baseline + index * L.constants.COMPACT_LINE,
             class: "pm-title pm-compact" + cls}), line);
         });
         return;
       }
-      var lines = slot.lines > 1 ? wrap(title, Math.max(4, Math.floor(slot.w / TITLE_EM)), slot.lines) : [clip(title, Math.max(4, Math.floor(slot.w / TITLE_EM)))];
-      var y = slot.y + Math.min(30, slot.band / 2 + 6);
+      var lines = slot.lines > 1 ? wrap(title, Math.max(4, Math.floor(slot.w / L.constants.TITLE_EM)), slot.lines) : [clip(title, Math.max(4, Math.floor(slot.w / L.constants.TITLE_EM)))];
+      var y = slot.baseline;
       lines.forEach(function (line, index) {
         setText(keep(labelLayer, "lt:" + slot.id + ":" + index, "text", {x: slot.x, y: y + index * L.constants.LINE, class: "pm-title" + cls}), line);
       });
