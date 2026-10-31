@@ -3,6 +3,7 @@
   --pm-bg: #f7f7f5; --pm-panel: #ffffff; --pm-fg: #1d1d1f; --pm-muted: #5f6368; --pm-faint: #9aa0a6; --pm-border: #e3e3e0;
   --pm-link: #1a5fb4; --pm-accent: #1a5fb4; --pm-region: #ffffff; --pm-region-stroke: #c9c9c4; --pm-edge: #7a7f86;
   --pm-proved: #2e7d4f; --pm-progress: #3b82c4; --pm-planned: #b9bdc2; --pm-select: #111111; --pm-dim: .38;
+  --pm-uses: #7b4fd6; --pm-used-by: #c96a12;
   --pm-font: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --pm-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -10,13 +11,13 @@
   :root:not([data-pm-theme=light]) {
     --pm-bg: #16181b; --pm-panel: #1e2024; --pm-fg: #e8eaed; --pm-muted: #a8adb4; --pm-faint: #6b7178; --pm-border: #2e3136;
     --pm-link: #8ab4f8; --pm-accent: #8ab4f8; --pm-region: #1e2024; --pm-region-stroke: #3a3e44; --pm-edge: #8a9099;
-    --pm-proved: #5cc48a; --pm-progress: #6aa8e8; --pm-planned: #565b62; --pm-select: #ffffff;
+    --pm-proved: #5cc48a; --pm-progress: #6aa8e8; --pm-planned: #565b62; --pm-select: #ffffff; --pm-uses: #b79cff; --pm-used-by: #f0a35e;
   }
 }
 :root[data-pm-theme=dark] {
   --pm-bg: #16181b; --pm-panel: #1e2024; --pm-fg: #e8eaed; --pm-muted: #a8adb4; --pm-faint: #6b7178; --pm-border: #2e3136;
   --pm-link: #8ab4f8; --pm-accent: #8ab4f8; --pm-region: #1e2024; --pm-region-stroke: #3a3e44; --pm-edge: #8a9099;
-  --pm-proved: #5cc48a; --pm-progress: #6aa8e8; --pm-planned: #565b62; --pm-select: #ffffff;
+  --pm-proved: #5cc48a; --pm-progress: #6aa8e8; --pm-planned: #565b62; --pm-select: #ffffff; --pm-uses: #b79cff; --pm-used-by: #f0a35e;
 }
 html, body { height: 100%; margin: 0; }
 body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 var(--pm-font); overflow: hidden; }
@@ -75,6 +76,12 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-part:hover > rect { stroke: color-mix(in srgb, var(--pm-accent) 55%, var(--pm-region-stroke)); }
 .pm-part:focus-visible > rect, .pm-part.pm-focus > rect { stroke: var(--pm-accent); stroke-width: 2; outline: none; }
 .pm-part.pm-on-path > rect { stroke: var(--pm-select); stroke-width: 1.8; }
+/* The shown part's neighbours: what it builds on, what uses it, or both, in the panel's colours. */
+.pm-uses { --pm-role: var(--pm-uses); }
+.pm-used-by { --pm-role: var(--pm-used-by); }
+.pm-both { --pm-role: color-mix(in srgb, var(--pm-uses) 50%, var(--pm-used-by)); }
+.pm-part.pm-uses > rect, .pm-part.pm-used-by > rect, .pm-part.pm-both > rect { stroke: var(--pm-role); stroke-width: 2.5; }
+.pm-part.pm-link-hover > rect { stroke-width: 4; fill: color-mix(in srgb, var(--pm-role, var(--pm-accent)) 10%, var(--pm-region)); }
 .pm-title { fill: var(--pm-fg); font: 600 15px var(--pm-font); pointer-events: none; }
 .pm-title.pm-compact { font-size: 13px; }
 .pm-backdrop { pointer-events: none; fill: var(--pm-region); }
@@ -118,5 +125,14 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-list button:hover, .pm-list button:focus-visible { color: var(--pm-link); outline: none; }
 .pm-list small { flex: none; color: var(--pm-muted); }
 .pm-empty { color: var(--pm-muted); }
+.pm-links h3 { display: flex; align-items: center; gap: 6px; }
+.pm-swatch { flex: none; box-sizing: border-box; width: 11px; height: 11px; border: 2.5px solid var(--pm-role); border-radius: 3px; }
+.pm-link-list button { align-items: center; }
+.pm-link-name { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.pm-link-name small { font-size: 12px; }
+.pm-meter { flex: none; width: 56px; height: 6px; overflow: hidden; border-radius: 3px; background: var(--pm-border); }
+.pm-meter i { display: block; height: 100%; background: var(--pm-role); }
+.pm-link-note { margin: 8px 0 0; font-size: 12px; }
+.pm-more > summary { margin: 18px 0 6px; color: var(--pm-muted); font-size: 12px; font-weight: 600; letter-spacing: .02em; text-transform: uppercase; cursor: pointer; }
 .pm-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }

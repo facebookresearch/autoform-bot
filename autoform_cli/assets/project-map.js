@@ -273,7 +273,8 @@
   // ---------------------------------------------------------------- state
   // focusPart pins the reading pane and trail to a part the reader asked for (ROOT for the whole project) until they
   // move the map themselves; then both follow the part that fills the view.
-  var state = {selected: null, related: null, focusPart: null, hoverPart: null, facets: null};
+  // links: the shown part's neighbours by role (uses, used-by, both); linkHover: the neighbour under the pointer in the panel.
+  var state = {selected: null, related: null, focusPart: null, hoverPart: null, facets: null, links: null, linkHover: null};
   var pending = false;
   function schedule() {
     if (pending) return;
@@ -355,7 +356,9 @@
     var dim = state.related && !state.related.parts.has(record.id);
     var holder = keep(partLayer, "part:" + record.id, "g", {
       class: "pm-part " + (open ? "pm-open" : "pm-tile pm-tile-" + tileKind(record.summary.status)) + (dim ? " pm-dimmed" : "") +
-        (state.focusPart === record.id ? " pm-focus" : "") + (onPath && onPath.has(record.id) ? " pm-on-path" : ""),
+        (state.focusPart === record.id ? " pm-focus" : "") + (onPath && onPath.has(record.id) ? " pm-on-path" : "") +
+        (!state.selected && state.links && state.links.has(record.id) ? " pm-" + state.links.get(record.id) : "") +
+        (state.linkHover === record.id ? " pm-link-hover" : ""),
       tabindex: open ? -1 : 0, role: "button", "data-part": record.id,
       "aria-label": plain(record.summary.title) + ", " + num(record.summary.results) + " results" +
         (record.summary.api_total ? ", " + num(record.summary.api_total) + " used elsewhere" : "")});
@@ -399,12 +402,15 @@
   // two anonymous tiles is noise), and every route of the part in focus or under the pointer.
   function drawRoutes(record, labelled) {
     var routes = routesAt.get(record.id) || [];
+    // With a part in focus, links elsewhere fade, so its own links and its outlined neighbours stand out.
+    var focus = !state.selected && state.focusPart !== ROOT ? state.focusPart : null;
+    var elsewhere = !!focus && record.id !== focus && chainOf(record.id).indexOf(focus) < 0;
     routes.forEach(function (route) {
       // With a result selected, its part's own links to its neighbours are beside the point; the pointer still shows them.
       var involved = [state.selected ? null : state.focusPart, state.hoverPart].some(function (id) { return id && (route.from === id || route.to === id); });
       var resting = route.rest && labelled.has(route.from) && labelled.has(route.to);
       if ((!resting && !involved) || !route.points || !routeVisible(route.points)) return;
-      var dim = state.related && !(state.related.parts.has(route.from) && state.related.parts.has(route.to));
+      var dim = state.related ? !(state.related.parts.has(route.from) && state.related.parts.has(route.to)) : elsewhere && !involved;
       var path = keep(routeLayer, "route:" + record.id + ":" + route.from + ">" + route.to, "path", {
         d: routePath(route.points, route.radius),
         class: "pm-route" + (route.kind === "proof" ? " pm-proof" : "") + (involved ? " pm-involved" : "") + (dim ? " pm-dimmed" : ""),
@@ -574,6 +580,15 @@
     var rows = model.search.data.parts, chain = [];
     for (var at = position; at >= 0; at = rows[at][3]) chain.unshift(rows[at][0]);
     return chain;
+  }
+  // Any part, loaded or not: search knows every part's chain.
+  function goToPart(id, options) {
+    if (part(id)) return flyToPart(id, options);
+    return loadSearch().then(function () {
+      var row = model.search.partById.get(id);
+      if (!row) throw new Error("Unknown part " + id);
+      return ensureChain(partChainFromSearch(model.search.data.parts.indexOf(row))).then(function () { return flyToPart(id, options); });
+    });
   }
   function flyToPart(id, options) {
     options = options || {};
@@ -763,6 +778,13 @@
   function showPart(record) {
     if (!record || state.selected || shownPart === record.id) return;
     shownPart = record.id;
+    var links = record.id !== ROOT && record.data && record.data.links;
+    state.links = links ? new Map() : null;
+    if (links) {
+      links.uses.forEach(function (row) { state.links.set(row[0], "uses"); });
+      links.used_by.forEach(function (row) { state.links.set(row[0], state.links.has(row[0]) ? "both" : "used-by"); });
+    }
+    schedule();
     readerInner.replaceChildren();
     if (record.id === ROOT) {
       readerInner.append(el("p", "pm-kicker", "Whole project"), el("h2", "", plain(model.index.title)));
@@ -775,20 +797,56 @@
     readerInner.append(el("p", "pm-kicker", summary.parts ? "Part of the library" : "Topic"), el("h2", "", plain(summary.title)));
     readerInner.append(pathLine(chainOf(record.id).slice(0, -1)));
     readerInner.append(el("p", "", num(summary.results) + " results" + (summary.parts ? " in " + num(summary.parts) + " parts" : "") + "."), bar(summary.status));
-    readerInner.append(el("h3", "", "Used elsewhere (" + num(summary.api_total) + ")"));
+    if (links) {
+      var most = Math.max.apply(null, links.uses.concat(links.used_by).map(function (row) { return row[3]; }).concat([1]));
+      var home = part(record.parent) && record.parent !== ROOT ? part(record.parent).summary.title : null;
+      readerInner.append(linkList("Builds on", "uses", links.uses, links.uses_total, most, home, function (row) {
+        return "Uses " + num(row[3]) + (row[3] === 1 ? " result" : " results") + " in " + plain(row[1]);
+      }));
+      readerInner.append(linkList("Used by", "used-by", links.used_by, links.used_by_total, most, home, function (row) {
+        return num(row[3]) + (row[3] === 1 ? " result" : " results") + " in " + plain(row[1]) + (row[3] === 1 ? " uses it" : " use it");
+      }));
+      if (links.uses.length || links.used_by.length) readerInner.append(el("p", "pm-empty pm-link-note", "On the map, parts in view are outlined: purple for what this builds on, orange for what uses it, mauve for both. Bars count the results involved."));
+    }
+    if (record.kids.length) { readerInner.append(el("h3", "", "Parts (" + num(record.kids.length) + ")")); readerInner.append(listOfParts(record.kids)); }
     if (summary.api && summary.api.length) {
-      var list = el("ul", "pm-list");
+      // Single results come last, folded: the parts above say more about how this one fits.
+      var more = el("details", "pm-more"), list = el("ul", "pm-list");
+      more.append(el("summary", "", "Most-used results (" + num(summary.api_total) + ")"));
       summary.api.forEach(function (row) {
         var item = el("li"), button = el("button"); button.type = "button";
         button.append(el("span", "", plain(row[1])), el("small", "", "used " + num(row[2]) + (row[2] === 1 ? " time" : " times")));
         button.addEventListener("click", function () { arriveById(row[0]).catch(report); });
         item.append(button); list.append(item);
       });
-      readerInner.append(list);
-      if (summary.api_total > summary.api.length) readerInner.append(el("p", "pm-empty", "and " + num(summary.api_total - summary.api.length) + " more"));
-    } else readerInner.append(el("p", "pm-empty", "Nothing outside uses these results."));
-    readerInner.append(el("h3", "", "Builds on"), el("p", "", summary.imports_total ? num(summary.imports_total) + " results from elsewhere in the library." : "Nothing outside it."));
-    if (record.kids.length) { readerInner.append(el("h3", "", "Parts")); readerInner.append(listOfParts(record.kids)); }
+      more.append(list);
+      if (summary.api_total > summary.api.length) more.append(el("p", "pm-empty", "and " + num(summary.api_total - summary.api.length) + " more"));
+      readerInner.append(more);
+    }
+  }
+  // Neighbouring parts for the panel, biggest first, each with a bar for how many results the link involves.
+  function linkList(heading, role, rows, total, most, home, describe) {
+    var section = el("section", "pm-links pm-" + role), title = el("h3");
+    title.append(el("i", "pm-swatch"), document.createTextNode(heading + (total ? " · " + num(total) + (total === 1 ? " part" : " parts") : "")));
+    section.append(title);
+    if (!rows.length) { section.append(el("p", "pm-empty", role === "uses" ? "Nothing outside it." : "Nothing outside uses it.")); return section; }
+    var list = el("ul", "pm-list pm-link-list");
+    rows.forEach(function (row) {
+      var item = el("li"), button = el("button"), name = el("span", "pm-link-name"), meter = el("span", "pm-meter"), fill = el("i");
+      button.type = "button"; button.title = describe(row);
+      name.append(el("span", "", plain(row[1])));
+      // Where a neighbour sits, when that is not beside this part.
+      if (row[2] && row[2] !== home) name.append(el("small", "", plain(row[2])));
+      fill.style.width = Math.max(4, Math.round(100 * row[3] / most)) + "%"; meter.append(fill);
+      button.append(name, meter, el("small", "", num(row[3])));
+      button.addEventListener("click", function () { state.linkHover = null; select(null, {history: false}); goToPart(row[0]).catch(report); });
+      button.addEventListener("mouseenter", function () { state.linkHover = row[0]; schedule(); });
+      button.addEventListener("mouseleave", function () { state.linkHover = null; schedule(); });
+      item.append(button); list.append(item);
+    });
+    section.append(list);
+    if (total > rows.length) section.append(el("p", "pm-empty", "and " + num(total - rows.length) + " more"));
+    return section;
   }
   function listOfParts(ids) {
     var list = el("ul", "pm-list");
@@ -1031,12 +1089,7 @@
     renderSide();
     var hash = location.hash.slice(1), params = new URLSearchParams(hash);
     var start = params.get("result") ? arriveById(params.get("result")).then(function () { remember(true); })
-      : params.get("part") ? loadSearch().then(function () {
-          var row = model.search.partById.get(params.get("part"));
-          if (!row) throw new Error("Unknown part");
-          var chain = partChainFromSearch(model.search.data.parts.indexOf(row));
-          return ensureChain(chain).then(function () { return flyToPart(params.get("part"), {replace: true}); });
-        })
+      : params.get("part") ? goToPart(params.get("part"), {replace: true})
       : Promise.resolve(remember(true));
     start.catch(report);
     schedule();
