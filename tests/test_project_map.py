@@ -73,6 +73,32 @@ def test_authored_areas_become_regions_and_projects_without_them_use_chapters() 
         "Algebra", "NumberTheory", "Analysis"]
 
 
+def test_a_part_that_names_another_area_joins_that_area() -> None:
+    records = [
+        _scope("roadmap", None, "Library"),
+        _scope("Geometry", "roadmap", "Geometry", area="Geometry"),
+        _result("Geometry/euclid", "Geometry", "Euclid"),
+        _scope("Geometry/measure", "Geometry", "Measure", area="Analysis", navigation="module"),
+        _result("Geometry/measure/lebesgue", "Geometry/measure", "Lebesgue"),
+        _scope("Geometry/measure/outer", "Geometry/measure", "Outer measure", navigation="module"),
+        _result("Geometry/measure/outer/caratheodory", "Geometry/measure/outer", "Caratheodory"),
+        _scope("Calculus", "roadmap", "Calculus", area="Analysis"),
+        _result("Calculus/ftc", "Calculus", "Fundamental theorem"),
+    ]
+    files = project_map.build_project_map(records, [])
+    regions = {region["id"]: (region["title"], region["results"]) for region in files["index.json"]["regions"]}
+    # Measure sits in the Geometry chapter but is authored as Analysis: it is counted there, with what it holds.
+    assert regions == {"Geometry": ("Geometry", 1), "region:Analysis": ("Analysis", 3)}
+    assert [step for step, _title in _part(files, "Geometry/measure/outer")["path"]] == [
+        "region:Analysis", "Geometry/measure", "Geometry/measure/outer"]
+    # An area no chapter names is a finer one inside the chapter's, so the part stays where it was written.
+    finer = [record for record in records if not str(record["id"]).startswith("Calculus")]
+    files = project_map.build_project_map([*finer, _scope("Algebra", "roadmap", "Algebra", area="Algebra"),
+                                           _result("Algebra/x", "Algebra", "X")], [])
+    assert {region["id"]: region["results"] for region in files["index.json"]["regions"]} == {"Geometry": 3, "Algebra": 1}
+    assert [step for step, _title in _part(files, "Geometry/measure")["path"]] == ["Geometry", "Geometry/measure"]
+
+
 def test_public_api_counts_outside_users_and_imports_count_outside_dependencies() -> None:
     files = project_map.build_project_map(*_library())
     regions = {region["id"]: region for region in files["index.json"]["regions"]}

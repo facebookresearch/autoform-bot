@@ -120,21 +120,40 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
         title[holder] = "Outside the chapters" if has_chapters else title[root]
         for result in loose:
             home[result] = holder
+
+    def own_area(part: str) -> str | None:
+        area = by_id.get(part, {}).get("area")
+        return str(area) if area else None
+
+    def inherited(part: str) -> str | None:
+        # The nearest area set on a part or above it; the root's describes the whole project, not a region.
+        while part != root:
+            if own_area(part):
+                return own_area(part)
+            part = part_parent[part]
+        return None
+
     chapters = sorted(part for part, parent in part_parent.items() if parent == root)
-    area_of = {chapter: str(by_id[chapter]["area"]) for chapter in chapters if by_id.get(chapter, {}).get("area")}
+    # A part deeper down that names another chapter's area belongs to that area, with its subtree. An area no chapter
+    # names is a finer one inside the area around it (ATLAS's geometry chapters name their fields), and stays put.
+    top_areas = {own_area(chapter) for chapter in chapters} - {None}
+    moved = sorted(part for part, parent in part_parent.items()
+                   if parent != root and own_area(part) in top_areas and own_area(part) != inherited(parent))
+    area_of = {part: area for part in chapters + moved if (area := own_area(part))}
     if len(set(area_of.values())) >= 2:
         members: dict[str, list[str]] = defaultdict(list)
-        for chapter in chapters:
-            members[area_of.get(chapter, "Other")].append(chapter)
+        for part in chapters + moved:
+            members[area_of.get(part, "Other")].append(part)
         for area, inside_area in members.items():
-            # An area holding a single chapter adds a level without adding structure: the chapter stands for it.
+            # An area holding a single part adds a level without adding structure: the part stands for it.
             if len(inside_area) == 1:
+                part_parent[inside_area[0]] = root
                 continue
             region = fresh(_REGION + area)
             part_parent[region] = root
             title[region] = area
-            for chapter in inside_area:
-                part_parent[chapter] = region
+            for part in inside_area:
+                part_parent[part] = region
 
     def chain(part: str) -> list[str]:
         out: list[str] = []
