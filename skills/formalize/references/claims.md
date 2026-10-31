@@ -43,14 +43,15 @@ hand off, and release the full import claim set together.
 
 ## Generated import roots
 
-A root is generated only when a committed `.gitattributes` line such as
-`/Lib/Topology.lean linguist-generated` marks it and the repository's CI
-regenerates it and fails on any difference. The user marks roots and adds or
-confirms that check; workers never edit attribute files, and a mark in a
-clone's local attribute files counts only in that clone. `work import-impact`
-reports a marked root as `module_generated` and leaves it out of
-`claim_targets`; without that check, claim its `module_claim_target` under the
-import-edit rules above. No one claims a generated root; another owner's live
+This applies with or without claims. A root is generated only when a committed
+`.gitattributes` line such as `/Lib/Topology.lean linguist-generated` marks it
+and the repository's CI regenerates it and fails on any difference. The user
+marks roots and adds or confirms that check; workers never edit attribute files.
+`work import-impact` reads the mark from the index or the clone's
+`.git/info/attributes`, never the user's or the system's attribute files,
+reports it as `module_generated`, and leaves `module_claim_target` out of
+`claim_targets`; without that check, add it back, claimed or sent to the lead,
+as for any import edit. No one claims a generated root; another owner's live
 claim on it is neither a conflict nor yours to release. Never edit it by hand:
 regenerate it with the command that check runs, from the tree you build and
 again from the merged tree after every rebase or merge; rerunning it must leave

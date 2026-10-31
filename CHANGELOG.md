@@ -61,11 +61,13 @@ date when the release is tagged.
   pushing, goes to an `origin` branch ending with the leaf's `article_id`, which
   `git ls-remote` finds after the lease is gone. No message grants ownership or
   completes a leaf (#434).
-- **Generated import roots.** A root that a committed `.gitattributes` line
-  such as `/Lib.lean linguist-generated` marks, and that CI regenerates and
-  checks, is no one's to claim: `work import-impact` reports `module_generated`
-  and leaves its module target out of `claim_targets`, and Formalize regenerates
-  the root from the merged tree, so independent leaves, other projects'
+- **Generated import roots.** `work import-impact` reports `module_generated`
+  when the repository's Git attributes set `linguist-generated` on MODULE's
+  file, or make it `true`, normally through a committed `.gitattributes` line
+  such as `/Lib.lean linguist-generated`, and leaves its module target out of
+  `claim_targets`. The user's and the system's attribute files do not count.
+  Formalize skips the claim only when CI regenerates and checks the root, and
+  regenerates it from the merged tree, so independent leaves, other projects'
   included, publish without waiting on a claim on it. Any other root keeps the
   import-edit claims (#466, #496).
 - **Render.** An article's page lists its `mathlib_declaration` names in a

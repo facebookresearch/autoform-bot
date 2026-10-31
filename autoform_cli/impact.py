@@ -1695,14 +1695,27 @@ def module_import_impact(
 def _linguist_generated(root: Path, relative: str) -> bool:
     """Whether Git attributes set ``linguist-generated``, or make it ``true``, on ``relative`` under ``root``.
 
-    That is how a repository declares a generated import root. ``--cached``
-    reads ``.gitattributes`` from the index, so an unstaged edit does not
-    count; Git's local attribute files still do. A file outside a Git work
-    tree, or one Git cannot be asked about, is not generated.
+    That is how a repository declares a generated import root. Only the
+    repository's attributes count: ``--cached`` reads ``.gitattributes`` from
+    the index, so an unstaged edit does not count, and the clone's
+    ``.git/info/attributes`` counts in that clone. The user's and the system's
+    attribute files are skipped, since a mark there would cover every
+    repository on the machine. A file outside a Git work tree, or one Git
+    cannot be asked about, is not generated.
     """
 
     try:
-        output = git(root, "check-attr", "--cached", "linguist-generated", "--", relative)
+        output = git(
+            root,
+            "-c",
+            "core.attributesFile=",
+            "check-attr",
+            "--cached",
+            "linguist-generated",
+            "--",
+            relative,
+            environment={"GIT_ATTR_NOSYSTEM": "1"},
+        )
     except ValueError:  # Git printed a name that is not UTF-8
         return False
     return output is not None and output.rsplit(": ", 1)[-1] in ("set", "true")

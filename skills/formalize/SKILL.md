@@ -78,19 +78,20 @@ rules](references/claims.md) at each step.
 
 ### Import edits
 
-Lean imports are allowed; do not pre-block a proof because it needs one. Before
-an effective module header or import change, run `autoform work import-impact`,
+Lean imports are allowed; never pre-block a proof for needing one. Before an
+effective module header or import change, run `autoform work import-impact`,
 rerunning it with `--module-scope import-closure` when the default scope cannot
 build or load every root library. When the run uses claims, follow the [import
 claims](references/claims.md#import-edits) from then on; otherwise send the lead
 the report's `claim_targets` and `affected_claim_targets` and wait for its
-answer. Capture baseline skeleton evidence for the report's currently
-built, named affected articles and, when the edit removes an import, for the
-articles of modules only that import kept in the build. The affected articles
-are not a lock: do not acquire or edit them merely because they are listed, and
-treat reported unresolved declarations as unknown validation scope, not proof
-they are unaffected. After rebuilding, repeat the skeleton evidence and use
-Agent Review to judge semantic changes; repair each article that actually needs
+answer. Either way, a `module_generated` root follows [its
+rules](references/claims.md#generated-import-roots). Capture baseline skeleton
+evidence for the report's currently built, named affected articles and, when the
+edit removes an import, for the articles of modules only that import kept in the
+build. The affected articles are not a lock: do not acquire or edit them because
+they are listed, and treat unresolved declarations as unknown validation scope,
+not proof they are unaffected. After rebuilding, repeat the skeleton evidence
+and use Agent Review to judge semantic changes; repair each article that needs
 changes under the review gates of the [revision
 contract](../../autoform_cli/reference/claims-and-revisions.md#revision-contract).
 Stop for an active conflict (an affected target another worker holds, or another
@@ -235,9 +236,8 @@ commit for handoff. When the run uses claims, the [claim
 rules](references/claims.md#integration-and-handoff) say how to renew, keep,
 hand off, and release the claim set.
 
-When `AUTOFORM_SUBAGENT_DEBRIEF=1`, the agent that worked an attempt then
-follows the [subagent debrief steps](references/debrief-subagent.md) before
-reporting.
+When `AUTOFORM_SUBAGENT_DEBRIEF=1`, the agent that worked an attempt follows
+the [subagent debrief steps](references/debrief-subagent.md) before reporting.
 
 Once a worker has reported, debrief included, and its result is integrated or
 handed off, the lead removes its worktree with `git worktree remove` (never
