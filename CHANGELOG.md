@@ -152,7 +152,7 @@ date when the release is tagged.
   by owner and name, reads their reviews and inline comments when a run starts
   or resumes and at each frontier re-read, decides each finding against the
   current head, and repairs the oldest first, after any it is stacked on. A run
-  does not stop while an accepted finding awaits repair (#483, #NNN).
+  does not stop while an accepted finding awaits repair (#483, #525).
 
 ### Fixed
 
