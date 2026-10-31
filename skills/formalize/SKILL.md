@@ -42,18 +42,20 @@ works its own leaves in worktrees, so nothing reaches that branch before its
 default build passes. Before dispatching, commit the roadmap state the frontier
 was read from and base each worktree on that commit, not on the remote's default
 branch (Claude Code's agent isolation does so only with `worktree.baseRef:
-head`). Give each subagent each leaf's `claim_target`, `article_revision`,
-`open_statements`, `revision`, and the first leaf's `phase` and `assumes`. A new
-worktree has no `.lake`. In a Mathlib project, run `lake exe cache get` in the
-lead's checkout before creating worktrees, once more if it fails; if that fails
-too, ask the user first, since each worktree would fetch Mathlib itself. Before
-a worktree's first build or Lean tool call, while no Lake command runs in the
-lead's checkout, copy the lead's packages in, never as a symbolic link:
-`mkdir -p <WORKTREE>/.lake && cp -Rc .lake/packages <WORKTREE>/.lake/`
-(`cp -R --reflink=auto` on Linux), then run `lake exe cache get` there, which
-downloads nothing; on APFS the copy takes almost no space. Builds take no claim:
-dispatch no more workers at once than the machine's memory can build for. Setup
-offers the artifact cache `project new` writes to a lakefile that lacks it.
+head`). Give each subagent the lead's checkout path, each leaf's
+`claim_target`, `article_revision`, `open_statements`, `revision`, and the first
+leaf's `phase` and `assumes`. A new worktree has no `.lake`: in a Mathlib
+project, run `lake exe cache get` in the lead's checkout before creating
+worktrees, rerunning it once if it fails. If the rerun fails too, ask the user
+before creating worktrees, since each would then fetch or build Mathlib itself.
+Then the lead runs no Lake command in its own checkout while workers may start,
+and each worker, before its first build or Lean tool call, copies the lead's
+packages into its worktree, never as a symbolic link:
+`mkdir -p .lake && cp -Rc <LEAD>/.lake/packages .lake/` (`cp -R --reflink=auto`
+on Linux), then runs `lake exe cache get`, which downloads nothing; on APFS the
+copy takes almost no space. Builds take no claim: dispatch no more workers at
+once than the machine's memory can build for. If the lakefile lacks the
+artifact cache `project new` writes, Setup offers to add it.
 
 Claims are optional. Within one run no one needs them: the lead keeps workers,
 itself included, from holding the same target at once. A worker holds its
