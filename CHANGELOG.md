@@ -68,9 +68,9 @@ date when the release is tagged.
   With claims, each session leads from its own clone and checks `git worktree
   list` before dispatching, and workers name their branch with `claim acquire
   --note`, now documented. A handoff to another session, when the request covers
-  pushing, goes to an `origin` branch ending with the leaf's `article_id`, which
-  `git ls-remote` finds after the lease is gone. No message grants ownership or
-  completes a leaf (#434).
+  pushing, goes to the `origin` branch `handoff/<article_id>`, which whoever
+  acquires the lapsed lease continues. With claims, no message grants
+  ownership; none completes a leaf (#434, #NNN).
 - **Generated import roots.** `work import-impact` reports `module_generated`
   when the repository's Git attributes set `linguist-generated` on MODULE's
   file, or make it `true`, normally through a committed `.gitattributes` line
