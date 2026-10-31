@@ -50,12 +50,12 @@ def output_identity(path: Path) -> tuple[int, int, str] | None:
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise SkeletonError([f"cannot inspect skeleton output {path}: {exc}"]) from exc
+        raise SkeletonError([f"cannot inspect output {path}: {exc}"]) from exc
     digest = hashlib.sha256()
     try:
         for child in [path, *_tree(path)] if stat.S_ISDIR(metadata.st_mode) else [path]:
             if child.is_symlink():
-                raise SkeletonError([f"refusing symlink packet output: {child}"])
+                raise SkeletonError([f"refusing symlink in output: {child}"])
             digest.update(child.relative_to(path).as_posix().encode("utf-8") + b"\0")
             if child.is_dir():
                 digest.update(b"directory\0")
@@ -67,9 +67,9 @@ def output_identity(path: Path) -> tuple[int, int, str] | None:
                         digest.update(block)
                 digest.update(b"\0")
             else:
-                raise SkeletonError([f"refusing special file in packet output: {child}"])
+                raise SkeletonError([f"refusing special file in output: {child}"])
     except OSError as exc:
-        raise SkeletonError([f"cannot inspect skeleton output {path}: {exc}"]) from exc
+        raise SkeletonError([f"cannot inspect output {path}: {exc}"]) from exc
     return metadata.st_dev, metadata.st_ino, digest.hexdigest()
 
 
@@ -97,12 +97,12 @@ def validate_managed_output(path: Path, *, kind: str, schema: str | None = None)
     if identity is None:
         return identity
     if not path.is_dir():
-        raise SkeletonError([f"packet output exists and is not a directory: {path}"])
+        raise SkeletonError([f"output exists and is not a directory: {path}"])
     try:
         if not any(path.iterdir()):
             return identity
     except OSError as exc:
-        raise SkeletonError([f"cannot inspect skeleton output {path}: {exc}"]) from exc
+        raise SkeletonError([f"cannot inspect output {path}: {exc}"]) from exc
     manifest = path / PACKET_MANIFEST
     try:
         readable = manifest.is_file() and not manifest.is_symlink()
@@ -116,7 +116,7 @@ def validate_managed_output(path: Path, *, kind: str, schema: str | None = None)
         and (kind, payload.get("schema")) in (MANAGED_OUTPUT_SCHEMAS if schema is None else ((kind, schema),))
         and isinstance(payload.get(kind), list)
     ):
-        raise SkeletonError([f"refusing to overwrite non-Autoform packet output: {path}"])
+        raise SkeletonError([f"refusing to overwrite non-Autoform output: {path}"])
     return identity
 
 
@@ -139,7 +139,7 @@ def stage_output(
         )
         mode = stat.S_IMODE(destination.stat().st_mode) if existing else None
     except OSError as exc:
-        raise SkeletonError([f"cannot inspect skeleton output {destination}: {exc}"]) from exc
+        raise SkeletonError([f"cannot inspect output {destination}: {exc}"]) from exc
     stage = destination.with_name(f".{destination.name}.autoform-stage-{secrets.token_hex(8)}")
     if stages is not None:
         stages.append(stage)
@@ -230,9 +230,9 @@ def _preflight_output_installs(
         try:
             key = (stat.S_IFMT(stage.lstat().st_mode), destination.parent.stat().st_dev)
         except OSError as exc:
-            raise SkeletonError([f"cannot inspect skeleton output stage {stage}: {exc}"]) from exc
+            raise SkeletonError([f"cannot inspect output stage {stage}: {exc}"]) from exc
         if key[0] not in {stat.S_IFREG, stat.S_IFDIR}:
-            raise SkeletonError([f"skeleton output stage is not a file or directory: {stage}"])
+            raise SkeletonError([f"output stage is not a file or directory: {stage}"])
         if key in checked:
             continue
         checked.add(key)
@@ -272,7 +272,7 @@ def replace_outputs(
     _preflight_output_installs(outputs)
     for destination, _, identity in outputs:
         if output_identity(destination) != identity:
-            raise SkeletonError([f"packet output changed during publication: {destination}"])
+            raise SkeletonError([f"output changed during publication: {destination}"])
     backups: dict[Path, tuple[Path, tuple[int, int, str]]] = {}
     installs: dict[Path, tuple[Path, tuple[int, int, str]]] = {}
     try:
@@ -285,11 +285,11 @@ def replace_outputs(
             backups[destination] = (backup, identity)
             os.replace(destination, backup)
             if output_identity(backup) != identity:
-                raise SkeletonError([f"packet output changed during publication: {destination}"])
+                raise SkeletonError([f"output changed during publication: {destination}"])
         for destination, stage, _ in outputs:
             stage_identity = output_identity(stage)
             if stage_identity is None:
-                raise SkeletonError([f"skeleton output stage disappeared: {stage}"])
+                raise SkeletonError([f"output stage disappeared: {stage}"])
             installs[destination] = (stage, stage_identity)
             _install_output(stage, destination)
     except BaseException as exc:
@@ -322,7 +322,7 @@ def replace_outputs(
                     )
             except (OSError, SkeletonError) as rollback_exc:
                 rollback_issues.append(
-                    f"could not roll back skeleton output {destination}: {rollback_exc}"
+                    f"could not roll back output {destination}: {rollback_exc}"
                 )
         for destination, (backup, expected) in backups.items():
             try:
@@ -335,15 +335,15 @@ def replace_outputs(
                     rollback_issues.append(f"{state} was preserved for recovery at {backup}")
                 elif destination_identity != expected:
                     rollback_issues.append(
-                        f"could not find previous skeleton output for {destination} during rollback"
+                        f"could not find previous output for {destination} during rollback"
                     )
             except (OSError, SkeletonError) as rollback_exc:
                 rollback_issues.append(
-                    f"could not restore skeleton output {destination}; previous output remains at {backup}: {rollback_exc}"
+                    f"could not restore output {destination}; previous output remains at {backup}: {rollback_exc}"
                 )
         if not isinstance(exc, (OSError, SkeletonError)):
             raise
-        issues = list(exc.issues) if isinstance(exc, SkeletonError) else [f"could not publish skeleton output: {exc}"]
+        issues = list(exc.issues) if isinstance(exc, SkeletonError) else [f"could not publish output: {exc}"]
         raise SkeletonError([*issues, *rollback_issues]) from exc
     for backup, expected in backups.values():
         try:
@@ -352,10 +352,10 @@ def replace_outputs(
                 remove_output(backup)
                 continue
             message = (
-                f"skeleton output backup disappeared before cleanup: {backup}"
+                f"output backup disappeared before cleanup: {backup}"
                 if backup_identity is None
-                else f"skeleton output backup changed before cleanup and was preserved at {backup}"
+                else f"output backup changed before cleanup and was preserved at {backup}"
             )
         except (OSError, SkeletonError) as cleanup_exc:
-            message = f"could not remove previous skeleton output preserved at {backup}: {cleanup_exc}"
+            message = f"could not remove previous output preserved at {backup}: {cleanup_exc}"
         warnings.warn(message, RuntimeWarning, stacklevel=2)

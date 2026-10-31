@@ -5,9 +5,11 @@ declaration says what the blueprint claims: its statement and, transitively,
 every project definition that statement rests on. Proofs are the kernel's
 problem. The closure comes from elaborated terms, read back from a small probe
 run with ``lake env lean``, never from source text. The output is deterministic
-and path-free, and nothing here writes into the vault. The user-facing contract
-is the ``autoform skeleton`` section of ``autoform_cli/README.md``; the
-mechanics below are what it leaves out.
+and has Lean source paths relative to the project and article and passage paths
+relative to the blueprint; a failure reason quotes other paths as Lean printed
+them. Nothing here writes into the vault. The user-facing
+contract is the ``autoform skeleton`` section of ``autoform_cli/README.md``;
+the mechanics below are what it leaves out.
 
 Probe. For each module that declares a selected target, the probe imports that
 module and the helper module ``autoform-skeleton-helper`` (compiled with the
@@ -2131,7 +2133,7 @@ def write_packets(
         )
 
     root = _output_path(directory, "packet")
-    passages_root = None if passages is None else _output_path(passages, "packet")
+    passages_root = None if passages is None else _output_path(passages, "passage")
     if passages_root is not None and _paths_overlap(root, passages_root):
         raise SkeletonError(["packet and passage output directories must be disjoint"])
     report_destination = None if report_path is None else _output_path(report_path, "report")

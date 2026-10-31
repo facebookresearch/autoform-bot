@@ -1241,8 +1241,9 @@ def test_a_project_without_a_lakefile_is_refused(tmp_path: Path) -> None:
 def test_lake_configuration_snapshot_rejects_a_named_pipe_without_blocking(tmp_path: Path) -> None:
     os.mkfifo(tmp_path / "lakefile.toml")
 
-    with pytest.raises(SkeletonError, match="not a regular file"):
+    with pytest.raises(SkeletonError) as error:
         lean_libraries(tmp_path)
+    assert error.value.issues == (f"not a regular file: {tmp_path.resolve() / 'lakefile.toml'}",)
 
 
 def test_lake_configuration_snapshot_uses_content_not_file_identity(

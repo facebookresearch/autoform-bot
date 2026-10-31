@@ -578,12 +578,12 @@ A missing `lake`, a failed freshness check or helper build, a dependency library
 rooted at `Init`, `Lean`, or `Std`, or a blueprint or source tree that changes
 during extraction stops the whole command.
 
-`--output` records the `autoform-skeleton/v5` report, with no timestamp or
-absolute path. It names the target set, whether it covers every target or a
-`--node` selection, and the exact blueprint, by a hash of every article and the
-passage each cites; a report whose selection, articles and unresolved
-declarations disagree cannot be built. Only a report that selects every article,
-with the blueprint's `lean:` names as targets, is review evidence.
+`--output` records the `autoform-skeleton/v5` report, with no timestamp; only
+failure reasons quote absolute paths. It names the target set, whether it covers
+every target or a `--node` selection, and the exact blueprint, by a hash of
+every article and the passage each cites; a report whose selection, articles and
+unresolved declarations disagree cannot be built. Only a report selecting every
+article, with the blueprint's `lean:` names as targets, is review evidence.
 
 Run skeleton extraction only in a trusted checkout or an operating-system
 sandbox: Lake evaluates `lakefile.lean`, and the probe imports project code
