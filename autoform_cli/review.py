@@ -35,25 +35,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Mapping
 
+from ._managed_output import (
+    PACKET_MANIFEST,
+    remove_output,
+    replace_outputs,
+    stage_output,
+    validate_managed_output,
+)
 from .graph import Graph, Node
 from .lean import REVIEW_PACKET_SCHEMA, declaration_names
 from .markdown import article_parts, published_page
 from .mathjax import TEX_MACROS, project_macros
 from .readback import Readback, readback_for, readback_keys
 from .skeleton import (
-    PACKET_MANIFEST,
     SEMANTIC_SCHEMA,
     SKELETON_SCHEMA,
     DeclarationSkeleton,
     NodeSkeleton,
     SkeletonReport,
     _article_path,
-    _remove_output,
-    _replace_outputs,
-    _stage_output,
     blueprint_hash,
     source_passage,
-    validate_managed_output,
 )
 
 
@@ -345,7 +347,7 @@ def write_review_packets(bundle: ReviewBundle, directory: str | Path) -> list[Pa
     try:
         try:
             identity = validate_managed_output(root, kind="packets", schema=REVIEW_PACKET_SCHEMA)
-            stage = _stage_output(root, stages=stages)
+            stage = stage_output(root, stages=stages)
         except Exception as exc:
             issues = getattr(exc, "issues", (str(exc),))
             raise ReviewError(
@@ -375,12 +377,12 @@ def write_review_packets(bundle: ReviewBundle, directory: str | Path) -> list[Pa
             json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
-        _replace_outputs([(root, stage, identity)])
+        replace_outputs([(root, stage, identity)])
         stages.clear()
     finally:
         for leftover in stages:
             with contextlib.suppress(OSError):
-                _remove_output(leftover)
+                remove_output(leftover)
     return sorted(written)
 
 
