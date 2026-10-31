@@ -1,8 +1,8 @@
 # Project inspection reference
 
-This is the detailed contract for `autoform project inspect` and
-`autoform project versions`. See the [CLI reference](../README.md#commands) for
-the command synopsis and flags.
+This is the contract for `autoform project inspect` and
+`autoform project versions`; the [CLI reference](../README.md#commands) gives
+their synopsis and flags.
 
 ## Scope and resolver rules
 
@@ -13,56 +13,46 @@ bundled release. `unlisted` means those inputs are known but identify no
 bundled release. `indeterminate` means Autoform cannot establish that
 catalog-comparable identity, for example because a decision file is invalid,
 unreadable, or required but missing, Mathlib is path-based, or a required
-configuration is not evaluated. When Lake can load the root manifest, a
-`.lake/package-overrides.json` entry for Mathlib replaces the manifest's, and
-a `lakefile.toml` that requests a different Mathlib than the lock gets a
-`lake-manifest-stale` warning. Lake resolves every requirement, direct or
-transitive, from the root manifest, but the report certifies Mathlib only when
-`lakefile.toml` requires it directly. An override selects Mathlib's source when
-Mathlib is active; it does not make Mathlib active on its own. Without a direct
-Mathlib requirement, the selected entry is unused for this report, with a
-`mathlib-manifest-unused` warning and an `indeterminate` answer. This includes
-an `inherited` entry: it records prior resolver state and can remain stale after
-a dependency stops requiring Mathlib. Autoform does not inspect dependency
-lakefiles to prove otherwise. A root package named `mathlib` is likewise reused
-instead of the manifest entry.
-A require that neither the manifest nor the overrides record, or any require
-when they record no packages, is a `lake-manifest-incomplete` error, because
-Lake then refuses to build until `lake update`; a require of the root
-package's own name is satisfied by the root and is not looked up.
-`lakefile.lean` takes
-precedence, as in Lake, but is never evaluated, so its projects stay
-`indeterminate`. The decision files are size-bounded and read twice as one
-snapshot; inspection retries or fails if their bytes, identities, presence, or
-case aliases change. As in elan, only the trimmed first line of
-`lean-toolchain` counts.
-Catalog matching treats elan's stable Lean release aliases, URI scheme and host
-case, and Mathlib's explicit `./` root subdirectory as equivalent while
-preserving the authored values in the report.
+configuration is not evaluated.
+
+When Lake can load the root manifest, a `.lake/package-overrides.json` entry for
+Mathlib replaces the manifest's. An override selects Mathlib's source when
+Mathlib is active; it does not make Mathlib active on its own. Lake resolves
+every requirement, direct or transitive, from the root manifest, but the report
+certifies Mathlib only when `lakefile.toml` requires it directly; otherwise the
+selected entry, including an `inherited` one, is unused for this report, with a
+`mathlib-manifest-unused` warning and an `indeterminate` answer. A require of
+the root package's own name is satisfied by the root, so it is never looked up
+in the manifest or overrides. `lakefile.lean` takes precedence, as in Lake, but
+is never evaluated, so its projects stay `indeterminate`. The decision files are
+size-bounded and read as one snapshot; inspection retries or fails if their
+bytes, identities, presence, or case aliases change. Catalog matching treats
+elan's stable Lean release aliases, URI scheme and host case, and Mathlib's
+explicit `./` root subdirectory as equivalent while preserving the authored
+values in the report. A project that `project new` wrote without
+`lake-manifest.json` is `indeterminate`, with `missing-lake-manifest`, until
+`lake update` writes one; then it is `unlisted`, or `supported` when Lake locks
+a catalog commit.
 
 This predicts an ordinary Lake invocation. CLI `--packages` / `--file`
 overrides, `LAKE_PKG_URL_MAP`, and edits inside an already-materialized checkout
 are outside the offline report.
 
-The sections below define the report's exit codes, JSON fields, and diagnostic
-codes.
-
-`supported` certifies only the inspected Lean/Mathlib release identity; it is
-not a full Lake configuration or build-validity check. `ok` means inspection
-produced no error diagnostic; it does not mean compatibility was decidable.
-A missing or legacy manifest can therefore be a warning with `ok: true` and an
-`indeterminate` compatibility result, while an invalid, unreadable, or
-oversized decision file that Lake and the inspection need to consult is an
-error with `ok: false`. Target and package options outside the report are left
-to Lake.
+`supported` certifies only the inspected Lean/Mathlib release identity, not
+the full Lake configuration or build validity; target and package options
+outside the report are left to Lake. `ok` means inspection produced no error
+diagnostic, not that compatibility was decidable: a missing or legacy manifest
+can be a warning with `ok: true` and an `indeterminate` result, while an
+invalid, unreadable, or oversized decision file that Lake and the inspection
+need to consult is an error with `ok: false`.
 
 ## Exit codes, JSON, and diagnostics
 
 `autoform project inspect` exits 0 when the report has no error diagnostic
-(`ok: true`) and 1 when it has at least one (`ok: false`). It also exits 1
-when the bundled release catalog cannot be loaded; with `--json` it then
-prints `{"error": {"code": "project-catalog-invalid", "message": ...},
-"ok": false}` instead of a report. A command-line usage error exits 2.
+(`ok: true`) and 1 when it has any (`ok: false`) or the bundled release catalog
+cannot be loaded; with `--json` the latter prints
+`{"error": {"code": "project-catalog-invalid", "message": ...}, "ok": false}`
+instead of a report. A command-line usage error exits 2.
 
 `--json` prints one object with sorted keys and these fields:
 
@@ -74,7 +64,7 @@ prints `{"error": {"code": "project-catalog-invalid", "message": ...},
 | `lean_toolchain` | the trimmed first line of `lean-toolchain`, or `null` when it is missing or invalid |
 | `lake` | `null` when the Lake configuration is missing, unreadable or invalid; otherwise `config` (`"lakefile.toml"` or `"lakefile.lean"`), the package `name` and `version` (both `null` for `lakefile.lean`, which is not evaluated), and `targets`, a list of `{kind, name}` for each `lean_lib` and `lean_exe` |
 | `mathlib` | the Mathlib entry the manifest or overrides select; `null` when there is none, when either file cannot be decoded, or when Autoform cannot establish that it is active (`lakefile.lean`, or a `mathlib-manifest-unused` warning). It is still reported when another error makes the status `indeterminate`; see below |
-| `compatibility` | `status` (`supported`, `unlisted` or `indeterminate`, defined under [Commands](../README.md#commands)), `release` (the matching catalog id, or `null`), and `recommended_release` (the catalog's recommended id) |
+| `compatibility` | `status` (`supported`, `unlisted` or `indeterminate`, defined under [Scope and resolver rules](#scope-and-resolver-rules)), `release` (the matching catalog id, or `null`), and `recommended_release` (the catalog's recommended id) |
 | `autoform_paths` | which of `blueprint`, `mkdocs.yml`, `.github/workflows/autoform-verify.yml` and `.github/workflows/blueprint-pages.yml` exist under the project root, with that exact spelling |
 | `diagnostics` | a list of `{severity, code, message, path}`, sorted by severity (`error` first), then code, then path; `path` is the file concerned, relative to the project root, or `null` |
 
@@ -95,10 +85,10 @@ catalog that `project versions --json` prints calls the same two values
 `mathlib_rev` and `mathlib_commit`; each v1 schema keeps its own names.
 
 Errors mean Lake would fail on the project, a file Autoform needs cannot be
-read, or Autoform's bounded parser cannot safely decode the input; the last
-case can include a Lake-valid file. Any error makes the status
-`indeterminate`. Warnings mean Lake would work but Autoform cannot decide, or
-wants to point something out.
+read, or Autoform's bounded parser cannot safely decode the input, which can
+include a Lake-valid file. Any error makes the status `indeterminate`. Warnings
+mean Lake would work but Autoform cannot decide, or wants to point something
+out.
 
 | Code | Severity | Meaning |
 |---|---|---|

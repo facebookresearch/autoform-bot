@@ -1,11 +1,8 @@
 # Contributing to autoform-bot
-We want to make contributing to this project as easy and transparent as
-possible.
 
 ## Our Development Process
-Development happens in this repository: changes reach `main` through pull
-requests. You need Python 3.10 or newer, [`uv`](https://docs.astral.sh/uv/),
-Git, and Make. From a clone:
+Changes reach `main` through pull requests. You need Python 3.10 or newer,
+[`uv`](https://docs.astral.sh/uv/), Git, and Make. From a clone:
 
 ```bash
 make setup          # uv sync --extra dev --extra repl
@@ -14,45 +11,39 @@ make test           # uv run pytest -q
 make check-example  # validate, render, and build the bundled example site
 ```
 
-CI (`.github/workflows/tests.yml`) runs the same four steps on Python 3.10 and
-3.13 for every pull request, for pushes to `main`, and for pushes to `scratch/`
-branches, which run CI on a branch with no pull request; a newer commit on a
-pull request cancels the older run. Five more jobs run beside it. `WebKit
-dependency explorer regressions` installs the `browser` extra and WebKit and
-runs `tests/test_dag_viewer_browser.py` with `AUTOFORM_REQUIRE_BROWSER_TESTS=1`,
-so a missing browser fails the job instead of skipping its tests; locally they
-skip without the extra, and `make test-browser` installs both and runs them as
-CI does. `real Lean
-(fixture toolchain)` builds and audits a project from the bundled Mathlib
-release and runs
-the real-Lean suites other than the skeleton suite, which `real Lean skeleton
-suite` runs with one `tests/test_project_inspect.py` test. Another job runs the
-inspection, bounded-subprocess, and transactional-output tests on Windows, and
-the last builds
-`tests/fixtures/repl-smoke` and runs `tests/test_real_repl.py` against the
-pinned upstream REPL, also checking the header parser on the oldest Lean release
-Autoform supports. Locally, tests that need Lean skip when
-`lake` is not on `PATH`. Those in `tests/test_skeleton.py`, `test_impact.py`,
-`test_contract.py`, `test_lake_artifact_audit.py`, `test_lsp_protocol.py` and
-`test_batch_diagnostics.py` also skip when elan is installed but the
-toolchain pinned in `tests/fixtures/skeleton-project/lean-toolchain` is
-missing; only the real-Lake test in `tests/test_project_inspect.py` lets elan
-download it. The `tests/test_library_generate.py`
-ones that run Lean build a fixture that clones Batteries from GitHub, so they
-run only when `AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS=1` is set, as their CI job
-does; a missing toolchain or a failed download then fails them. Run
-`lake build` in `skills/setup/assets/cabannes-thesis-project` when you change
-the example's Lean sources or declarations.
+CI ([`tests.yml`](.github/workflows/tests.yml) lists every job and its tests)
+runs these steps on Python 3.10 and 3.13 for pull requests and for pushes to
+`main` and to `scratch/` branches, which run CI without a pull request. CI sets
+each `AUTOFORM_REQUIRE_*` variable below, so it fails where a local run skips:
 
-The verify workflow's kernel-trust probe is Lean, kept in
-`autoform_cli/probes/audit_probe.lean`. Projects get one self-contained helper,
-`.github/autoform_audit.py`, which carries a verbatim copy of that file, so edit
-the `.lean` file and then run `python3 scripts/sync_audit_probe.py` to rewrite
-the copy in the template and the bundled example. The probe imports only the
-toolchain's Lean, so Lean checks the file without a project:
+- Browser tests skip without the `browser` extra and WebKit; `make test-browser`
+  installs both and runs them as CI does (`AUTOFORM_REQUIRE_BROWSER_TESTS=1`).
+- MathJax tests skip unless `AUTOFORM_MATHJAX_DIR` names an unpacked MathJax
+  3.2.2 package, and the Node ones unless `node` is on `PATH`; CI's MathJax and
+  WebKit jobs unpack it (`AUTOFORM_REQUIRE_MATHJAX_TESTS=1`).
+  `npm ci --ignore-scripts` supplies the locked JSDOM bridge, not a math engine.
+- Lean tests skip without `lake` on `PATH`, and most without the toolchain in
+  `tests/fixtures/skeleton-project/lean-toolchain`, which only the real-Lake
+  test in `tests/test_project_inspect.py` lets elan download
+  (`AUTOFORM_REQUIRE_REAL_LEAN_TESTS=1`).
+- The Lean tests in `tests/test_library_generate.py` clone Batteries from GitHub
+  and run only with `AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS=1`.
+- Run `lake build` in `skills/setup/assets/cabannes-thesis-project` when you
+  change the example's Lean sources or declarations.
+
+`autoform_cli/assets/` holds the book/map's shared JS and CSS.
+With Node 22.23.2, run `make build-explorer`, `make check-explorer`, and browser tests.
+Pinned esbuild/Terser emit one JS response below 145 KB; publication checks the
+UTF-8/LF source fingerprint. CRLF checkouts work too. Consumers need no Node.
+Compression renames only private properties, never graph/index/route/history
+fields, and uses no unsafe transforms or dropped logs.
+See [explorer ownership and failure boundaries](docs/explorer-design.md) before changing the client.
+
+The kernel probe `autoform_cli/probes/audit_probe.lean` is copied verbatim to
+`.github/autoform_audit.py`; after editing it, run `python3 scripts/sync_audit_probe.py`
+to sync the template and example. Check without a project (silent when clean):
 `elan run "$(cat tests/fixtures/library-project/lean-toolchain)" lean
-autoform_cli/probes/audit_probe.lean` prints nothing when it is clean, and the
-real-Lean tests run that check on both fixture toolchains.
+autoform_cli/probes/audit_probe.lean`.
 
 `tests/test_real_repl.py` skips unless `AUTOFORM_RUN_REAL_REPL_TESTS=1`. To run
 it locally, build its fixture and install the oldest supported toolchain first:
@@ -74,28 +65,18 @@ We actively welcome your pull requests.
 6. If you haven't already, complete the Contributor License Agreement ("CLA").
 
 ## Contributor License Agreement ("CLA")
-In order to accept your pull request, we need you to submit a CLA. You only need
-to do this once to work on any of Meta's open source projects.
-
-Complete your CLA here: <https://code.facebook.com/cla>
+Submit the [CLA](https://code.facebook.com/cla) once for Meta's open source projects.
 
 ## Issues
-We use GitHub issues to track public bugs. Please ensure your description is
-clear and has sufficient instructions to be able to reproduce the issue.
-
-Meta has a [bounty program](https://bugbounty.meta.com/) for the safe
-disclosure of security bugs. In those cases, please go through the process
-outlined on that page and do not file a public issue.
+Use GitHub issues for public bugs, with clear reproduction instructions.
+Disclose security bugs through Meta's [bounty program](https://bugbounty.meta.com/),
+following its process, not a public issue.
 
 ## Coding Style
 * Python uses 4-space indentation and a 120-character line length
-  (`[tool.ruff]` in `pyproject.toml`). Ruff's default rules do not check line
-  length, and a few existing lines run longer.
-* `make lint` runs `ruff check` with ruff's default rules on `autoform_cli`,
-  `servers`, and `tests`; CI runs the same check.
-* CI runs no formatter, so match the surrounding code instead of reformatting
-  unrelated lines.
+  (`[tool.ruff]`); `make lint` and CI run only ruff's default rules, which do
+  not enforce them.
+* There is no formatter: match the surrounding code and leave unrelated lines.
 
 ## License
-By contributing to autoform-bot, you agree that your contributions will be licensed
-under the LICENSE file in the root directory of this source tree.
+Contributions are licensed under the root LICENSE file.

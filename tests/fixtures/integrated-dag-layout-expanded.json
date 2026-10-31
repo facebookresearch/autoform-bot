@@ -1,0 +1,238 @@
+{
+  "source_consumer_sha": "85c19875dfd980b9c74dee431fe7e83a231e9412",
+  "nodes": [
+    {
+      "id": "region:Algebra & Number Theory",
+      "width": 264,
+      "height": 148,
+      "title": "Algebra & Number Theory",
+      "status": "planned",
+      "area": "Algebra & Number Theory",
+      "member_count": 6011
+    },
+    {
+      "id": "scope:Combinatorics",
+      "width": 232,
+      "height": 116,
+      "title": "Combinatorics",
+      "status": "planned",
+      "area": "Discrete Mathematics & Computer Science",
+      "member_count": 2351
+    },
+    {
+      "id": "scope:ComputerScience",
+      "width": 232,
+      "height": 116,
+      "title": "Computer Science",
+      "status": "planned",
+      "area": "Discrete Mathematics & Computer Science",
+      "member_count": 3558
+    },
+    {
+      "id": "scope:Computability",
+      "width": 232,
+      "height": 116,
+      "title": "Computability",
+      "status": "fully_proved",
+      "area": "Discrete Mathematics & Computer Science",
+      "member_count": 424
+    },
+    {
+      "id": "scope:Data",
+      "width": 232,
+      "height": 101,
+      "title": "Data",
+      "status": "fully_proved",
+      "area": "Discrete Mathematics & Computer Science",
+      "member_count": 17
+    },
+    {
+      "id": "scope:GameTheory",
+      "width": 232,
+      "height": 107,
+      "title": "Game Theory",
+      "status": "fully_proved",
+      "area": "Discrete Mathematics & Computer Science",
+      "member_count": 49
+    },
+    {
+      "id": "scope:GraphTheory",
+      "width": 232,
+      "height": 109,
+      "title": "Graph Theory",
+      "status": "can_prove",
+      "area": "Discrete Mathematics & Computer Science",
+      "member_count": 70
+    },
+    {
+      "id": "scope:TheoryOfComputation",
+      "width": 232,
+      "height": 116,
+      "title": "Theory of Computation",
+      "status": "planned",
+      "area": "Discrete Mathematics & Computer Science",
+      "member_count": 284
+    },
+    {
+      "id": "region:Geometry & Topology",
+      "width": 264,
+      "height": 148,
+      "title": "Geometry & Topology",
+      "status": "planned",
+      "area": "Geometry & Topology",
+      "member_count": 1474
+    },
+    {
+      "id": "region:Analysis & Probability",
+      "width": 264,
+      "height": 148,
+      "title": "Analysis & Probability",
+      "status": "planned",
+      "area": "Analysis & Probability",
+      "member_count": 2685
+    },
+    {
+      "id": "region:Foundations & Logic",
+      "width": 264,
+      "height": 148,
+      "title": "Foundations & Logic",
+      "status": "planned",
+      "area": "Foundations & Logic",
+      "member_count": 477
+    }
+  ],
+  "edges": [
+    {
+      "source": "region:Algebra & Number Theory",
+      "target": "region:Analysis & Probability",
+      "statement": 10,
+      "proof": 66
+    },
+    {
+      "source": "region:Algebra & Number Theory",
+      "target": "scope:Combinatorics",
+      "statement": 23,
+      "proof": 11
+    },
+    {
+      "source": "region:Analysis & Probability",
+      "target": "scope:Combinatorics",
+      "statement": 3,
+      "proof": 5
+    },
+    {
+      "source": "region:Analysis & Probability",
+      "target": "scope:ComputerScience",
+      "statement": 5,
+      "proof": 8
+    },
+    {
+      "source": "region:Analysis & Probability",
+      "target": "region:Geometry & Topology",
+      "statement": 0,
+      "proof": 9
+    },
+    {
+      "source": "region:Analysis & Probability",
+      "target": "region:Algebra & Number Theory",
+      "statement": 7,
+      "proof": 46
+    },
+    {
+      "source": "scope:Combinatorics",
+      "target": "region:Algebra & Number Theory",
+      "statement": 28,
+      "proof": 23
+    },
+    {
+      "source": "scope:Combinatorics",
+      "target": "region:Analysis & Probability",
+      "statement": 0,
+      "proof": 7
+    },
+    {
+      "source": "scope:Combinatorics",
+      "target": "scope:GraphTheory",
+      "statement": 0,
+      "proof": 11
+    },
+    {
+      "source": "scope:Computability",
+      "target": "scope:Combinatorics",
+      "statement": 1,
+      "proof": 11
+    },
+    {
+      "source": "scope:Computability",
+      "target": "scope:ComputerScience",
+      "statement": 11,
+      "proof": 2
+    },
+    {
+      "source": "scope:Computability",
+      "target": "scope:TheoryOfComputation",
+      "statement": 5,
+      "proof": 0
+    },
+    {
+      "source": "scope:ComputerScience",
+      "target": "scope:Combinatorics",
+      "statement": 0,
+      "proof": 3
+    },
+    {
+      "source": "scope:Data",
+      "target": "scope:ComputerScience",
+      "statement": 0,
+      "proof": 1
+    },
+    {
+      "source": "scope:Data",
+      "target": "region:Geometry & Topology",
+      "statement": 0,
+      "proof": 2
+    },
+    {
+      "source": "scope:Data",
+      "target": "region:Algebra & Number Theory",
+      "statement": 11,
+      "proof": 5
+    },
+    {
+      "source": "region:Geometry & Topology",
+      "target": "region:Analysis & Probability",
+      "statement": 3,
+      "proof": 4
+    },
+    {
+      "source": "region:Geometry & Topology",
+      "target": "scope:Combinatorics",
+      "statement": 0,
+      "proof": 2
+    },
+    {
+      "source": "region:Foundations & Logic",
+      "target": "scope:Computability",
+      "statement": 8,
+      "proof": 5
+    },
+    {
+      "source": "region:Foundations & Logic",
+      "target": "scope:Combinatorics",
+      "statement": 0,
+      "proof": 8
+    },
+    {
+      "source": "region:Foundations & Logic",
+      "target": "scope:GameTheory",
+      "statement": 0,
+      "proof": 14
+    },
+    {
+      "source": "region:Geometry & Topology",
+      "target": "region:Algebra & Number Theory",
+      "statement": 0,
+      "proof": 3
+    }
+  ]
+}

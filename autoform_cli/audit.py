@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from . import status
+from ._fs import directory_path as _directory_path
 from .coverage import CoverageSummary, load_coverage, validate_coverage_roles
 from .dag_viewer import MAX_MAP_NODES
 from .elaboration_limits import LimitSetting, limits_by_line, limits_in_force
@@ -34,6 +35,7 @@ from .lean import (
     Declaration,
     LeanSourceError,
     SourceIndex,
+    _name_prefix,
     _without_lean_comments,
     declaration_names,
     index_failure_message,
@@ -50,7 +52,6 @@ from .markdown import _is_hidden_path
 from .markdown import is_placeholder as _is_placeholder
 from .markdown import local_target_issue as _local_target_issue
 from .markdown import markdown_links as _markdown_links
-from .markdown import directory_path as _directory_path
 from .markdown import visible_prose as _visible_prose
 
 #: More siblings than this at one level is a table of contents, not a chapter.
@@ -66,12 +67,20 @@ _MAX_MODULE_CHILDREN = MAX_MAP_NODES
 #: an absolute floor and a large multiple of this project's own median. The
 #: multiple self-calibrates -- a project whose nodes are routinely long is
 #: measured against itself, and a project with too few finished nodes to have a
-#: meaningful median cannot clear the multiple at all.
+#: meaningful median cannot clear the multiple at all. Every measurement is in
+#: the finding's reason, so ``--json`` over a finished project is the
+#: calibration corpus for the threshold. Nothing authored in an article
+#: predicts size: on the 43 finished nodes of phulin/finite-flat, prose length
+#: correlates with realized Lean length at r = -0.03 and prerequisite count at
+#: r = 0.25, and its largest node is 1344 lines of Lean behind 66 words of
+#: prose, so pre-formalization size estimates were rejected.
 _NODE_SIZE_FLOOR = 200
 _NODE_SIZE_MULTIPLE = 4
 
-_THEOREM_KEYWORDS = frozenset({"lemma", "theorem", "theorem_wanted", "proof_wanted"})
-_DEF_KEYWORDS = frozenset({"def", "def_wanted", "irreducible_def"})
+#: A structure field is a projection Lean defines, a theorem when the field is
+#: a proposition and a definition otherwise, and the index cannot tell which.
+_THEOREM_KEYWORDS = frozenset({"lemma", "theorem", "theorem_wanted", "proof_wanted", "field"})
+_DEF_KEYWORDS = frozenset({"def", "def_wanted", "irreducible_def", "field"})
 
 _DECLARATION_KEYWORDS = {
     "abbrev": frozenset({"abbrev"}),
@@ -618,7 +627,7 @@ def _lean_findings(
         # measured like any other declaration.
         bodies = list(dict.fromkeys(index.reached(declaration) or declaration for declaration in resolved))
         for body in bodies:
-            findings.extend(_limit_findings(article_path, body, sources))
+            findings.extend(_limit_findings(article_path, body, sources, _limit_line(body, index)))
 
         expected = _DECLARATION_KEYWORDS.get((node.declaration or "").casefold())
         # An alias whose target the index cannot place may have any kind.
@@ -640,7 +649,7 @@ def _lean_findings(
 
     findings.extend(_size_findings(graph, sizes))
     if warnings is not None:
-        warnings.extend(_catalog_limit_warnings(catalogs, sources))
+        warnings.extend(_catalog_limit_warnings(catalogs, sources, index))
     return findings
 
 
@@ -683,9 +692,13 @@ def _declared_deprecated(declaration: Declaration, sources: dict[Path, list[str]
 
     Only ``@[...]`` lists before the keyword count: on the declaration's line,
     or on the contiguous attribute lines directly above it. Comments are
-    blanked first, so a commented-out attribute does not count.
+    blanked first, so a commented-out attribute does not count. A field takes
+    none from its structure: Lean puts a structure's attributes on the
+    structure alone, even when a field shares its line.
     """
 
+    if declaration.keyword == "field":
+        return False
     lines = sources.get(declaration.path)
     if lines is None or not 0 < declaration.line <= len(lines):
         return False
@@ -705,10 +718,29 @@ def _declared_deprecated(declaration: Declaration, sources: dict[Path, list[str]
     )
 
 
+def _limit_line(declaration: Declaration, index: SourceIndex) -> int:
+    """The line of the command that elaborates ``declaration``: a field's structure's, otherwise its own."""
+
+    if declaration.keyword == "field":
+        # The structure is the last declaration of its name above the field in
+        # the field's own file, even where the name is declared elsewhere too.
+        above = [
+            item.line
+            for item in index.occurrences(_name_prefix(declaration.name))
+            if item.keyword in ("structure", "class")
+            and item.path == declaration.path
+            and item.line <= declaration.line
+        ]
+        if above:
+            return max(above)
+    return declaration.line
+
+
 def _limit_findings(
     article_path: str,
     declaration: Declaration,
     sources: dict[Path, list[str] | None],
+    line: int,
 ) -> list[AuditFinding]:
     """Flag a target with no elaboration limit, or a raised one it only inherits.
 
@@ -722,7 +754,7 @@ def _limit_findings(
         return []
     location = declaration.path.as_posix()
     findings: list[AuditFinding] = []
-    for setting in limits_in_force(lines, declaration.line):
+    for setting in limits_in_force(lines, line):
         option = f"set_option {setting.option} {setting.value}"
         problem = _limit_problem(setting)
         if problem == "unbounded":
@@ -763,6 +795,7 @@ def _limit_problem(setting: LimitSetting) -> str | None:
 def _catalog_limit_warnings(
     catalogs: dict[str, tuple[Declaration, ...]],
     sources: dict[Path, list[str] | None],
+    index: SourceIndex,
 ) -> list[AuditWarning]:
     """Aggregate what :func:`_limit_findings` reports into one warning per catalog and code.
 
@@ -770,16 +803,16 @@ def _catalog_limit_warnings(
     indentation its catalogued declarations start at, not once per declaration.
     """
 
+    lines = {declaration: _limit_line(declaration, index) for items in catalogs.values() for declaration in items}
     starts: dict[Path, set[int]] = {}
-    for declarations in catalogs.values():
-        for declaration in declarations:
-            starts.setdefault(declaration.path, set()).add(declaration.line)
+    for declaration, line in lines.items():
+        starts.setdefault(declaration.path, set()).add(line)
     in_force = {path: limits_by_line(sources.get(path) or [], numbers) for path, numbers in starts.items()}
     warnings: list[AuditWarning] = []
     for article_path, declarations in catalogs.items():
         affected: dict[str, list[DeclarationLimit]] = {}
         for declaration in declarations:
-            for setting in in_force[declaration.path].get(declaration.line, ()):
+            for setting in in_force[declaration.path].get(lines[declaration], ()):
                 problem = _limit_problem(setting)
                 if problem is None:
                     continue
@@ -822,7 +855,9 @@ def _source_spans(index: SourceIndex) -> dict[Declaration, int]:
     declarations = {*index.declarations.values(), *(item for same in index.duplicates.values() for item in same)}
     starts: dict[Path, list[int]] = {}
     for declaration in declarations:
-        starts.setdefault(declaration.path, []).append(declaration.line)
+        # A field is a line of its structure, which it does not end.
+        if declaration.keyword != "field":
+            starts.setdefault(declaration.path, []).append(declaration.line)
     tails: dict[Path, int] = {}
     for path, lines in starts.items():
         lines.sort()
@@ -830,6 +865,9 @@ def _source_spans(index: SourceIndex) -> dict[Declaration, int]:
 
     spans: dict[Declaration, int] = {}
     for declaration in declarations:
+        if declaration.keyword == "field":
+            spans[declaration] = 1
+            continue
         lines = starts[declaration.path]
         following = bisect_right(lines, declaration.line)
         end = lines[following] - 1 if following < len(lines) else tails[declaration.path]

@@ -7,6 +7,27 @@ names sit in between, and whether the Markdown roadmap records those
 dependencies. The answer is read from the elaborated environment by a Lean
 probe rather than from source text, so uses that only automation such as
 ``simp`` introduces are seen too.
+
+A Markdown path reaches the revised declarations when it ends at the revised
+article, at an article that names one of them, or, when none names it, at one
+of its owners; missing dependency paths are counted the same way. Project
+locality is an exact inventory of regular repository source modules, never a
+namespace-prefix guess. Lake builds every module an ``M.*`` or ``M.+`` glob
+finds even when nothing imports it, so the probe refuses such a module it did
+not load instead of silently leaving out what the module uses.
+
+``work impact`` snapshots and rereads the roadmap around the probe. It retains
+one bound Lean source generation, derives the module inventory and locations
+from that generation's captured bytes, then recaptures through the same binding
+and refuses any content or source-identity change. ``work import-impact`` takes
+the loaded module graph from Lean and binds every node to its captured root
+source and configured root-package artifact, so a dependency cannot shadow it.
+A module whose file Git attributes mark ``linguist-generated`` is a generated
+import root: its header belongs to the repository's generator, so the import
+edit does not claim it.
+Under ``--module-scope import-closure`` a file is a candidate when its text
+contains every component of a candidate's name, repeated until no new file
+matches (:func:`import_closure`), and Lean loads what the candidates import.
 """
 
 from __future__ import annotations
@@ -20,12 +41,21 @@ from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, S
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import skeleton
+from . import lean_probe
+from ._repository import git
 from ._tree_snapshot import TreeSnapshotError
 from .claims import author_claim_key
 from .lean import IndexedSourceSnapshot, LeanSourceError, bind_project_source_snapshot, resolve_lean_root
+from .lean_probe import (
+    LeanLibrary,
+    SkeletonError,
+    builds,
+    lean_libraries,
+    lean_name_components,
+    lean_name_parts,
+    lean_requests,
+)
 from .runtime import load_runtime_graph
-from .skeleton import LeanLibrary, SkeletonError, _lean_name_parts, _lean_requests, lean_libraries
 from .work import select_work_item
 
 IMPACT_SCHEMA = "autoform-impact/v1"
@@ -266,7 +296,7 @@ def _name_key(name: str) -> tuple[object, ...]:
     """Compare names by component, so ``A.«b»`` and ``A.b`` are the same name."""
 
     try:
-        parts = _lean_name_parts(name)
+        parts = lean_name_parts(name)
     except SkeletonError:
         return (name,)
     return tuple((part, not quoted and part.isascii() and part.isdigit()) for part, quoted in parts)
@@ -308,7 +338,7 @@ def project_modules(
         # A glob also selects modules nothing can import; they are refused
         # below like any other non-plain name, not dropped.
         selected = {**unimportable, **sources}
-        for glob in library.globs or library.roots:
+        for glob in library.roots if library.globs is None else library.globs:
             base, mode = _glob(glob, library)
             if mode != "+":
                 if base not in sources:
@@ -390,7 +420,7 @@ def _module_source_paths(
             # Lake builds only modules a library selects, so a file under a
             # nested srcDir is one module although the outer srcDir holds it,
             # and a file no library selects claims no module.
-            if not _selects(library, module):
+            if not builds(library, module):
                 continue
             existing_path = paths.get(module)
             if existing_path is not None and existing_path != relative:
@@ -416,7 +446,7 @@ def _module_source_paths(
 def _may_import(data: bytes, module: str) -> bool:
     """Whether ``data`` could import ``module``: it contains each component, however the import spells it."""
 
-    return all(part.encode("utf-8") in data for part, _quoted in _lean_name_parts(module))
+    return all(part.encode("utf-8") in data for part, _quoted in lean_name_parts(module))
 
 
 def import_closure(
@@ -443,7 +473,7 @@ def import_closure(
             if name not in closure and _may_import(data, target):
                 closure.add(name)
                 work.append(name)
-    firsts = {_lean_name_parts(name)[0][0].encode("utf-8") for name in closure}
+    firsts = {lean_name_parts(name)[0][0].encode("utf-8") for name in closure}
     for path, data in outside:
         if any(first in data for first in firsts):
             for name in sorted(closure):
@@ -531,6 +561,12 @@ def _validated_module_evidence(
         key = _name_key(module)
         relative = expected_paths.get(key)
         if relative is None:
+            # A captured file that no library builds can still load, from a
+            # leftover .olean or as a lean_exe root; say so rather than call it
+            # missing.
+            unbuilt = {_name_key(name): path for name, path in _module_source_paths(libraries, snapshot).items()}
+            if key in unbuilt:
+                raise SkeletonError([f"the impact probe loaded {module} from {unbuilt[key]}, which no lean_lib builds"])
             raise SkeletonError(
                 [f"the impact probe loaded {module} without a captured root-project source"]
             )
@@ -576,7 +612,7 @@ def _module_artifact_paths(
     artifact_dir = _root_artifact_dir(libraries)
     artifacts: dict[tuple[object, ...], Path] = {}
     for module in source_paths:
-        *package, stem = (part for part, _quoted in _lean_name_parts(module))
+        *package, stem = (part for part, _quoted in lean_name_parts(module))
         # Not with_suffix, which would cut the dotted stem of `«a.b»`.
         artifacts[_name_key(module)] = artifact_dir.joinpath(*package, f"{stem}.olean").resolve()
     return artifacts
@@ -598,23 +634,11 @@ def _glob_directories(libraries: Sequence[LeanLibrary]) -> list[tuple[Path, str,
 
     directories: list[tuple[Path, str, str]] = []
     for library in libraries:
-        for glob in library.globs:
+        for glob in library.globs or ():
             base, mode = _glob(glob, library)
             if mode:
                 directories.append((library.src_dir.joinpath(*base.split(".")), base, glob))
     return directories
-
-
-def _selects(library: LeanLibrary, module: str) -> bool:
-    """Whether ``library`` holds ``module``, as Lake's ``LeanLib.isLocalModule`` decides."""
-
-    if any(module == root or module.startswith(f"{root}.") for root in library.roots):
-        return True
-    for glob in library.globs:
-        base, mode = _glob(glob, library)
-        if (module == base and mode != "+") or (mode and module.startswith(f"{base}.")):
-            return True
-    return False
 
 
 def _glob(glob: str, library: LeanLibrary) -> tuple[str, str]:
@@ -629,12 +653,6 @@ def _glob(glob: str, library: LeanLibrary) -> tuple[str, str]:
             ]
         )
     return base, mode
-
-
-def _impact_template() -> str:
-    """The Lean impact probe source, kept under probes/ beside this module."""
-
-    return (Path(__file__).parent / "probes" / "impact_probe.lean").read_text(encoding="utf-8")
 
 
 def render_impact_probe(
@@ -662,9 +680,10 @@ def render_impact_probe(
     if not modules:
         raise SkeletonError(["refusing to render an impact probe with no imports"])
     walks = [
-        [str(directory), list(skeleton._lean_name_components(base)), glob] for directory, base, glob in glob_directories
+        [str(directory), list(lean_name_components(base)), glob] for directory, base, glob in glob_directories
     ]
-    return _impact_template().format(
+    return lean_probe.render_probe_template(
+        "impact_probe.lean",
         imports="\n".join(f"import {module}" for module in modules),
         marker=IMPACT_MARKER,
         module_marker=IMPACT_MODULE_MARKER,
@@ -672,10 +691,8 @@ def render_impact_probe(
         emit_module_evidence="true" if emit_module_evidence else "false",
         artifact_dir=json.dumps(str(artifact_dir or ""), ensure_ascii=False),
         glob_directories=json.dumps(json.dumps(walks, ensure_ascii=False), ensure_ascii=False),
-        output_env=skeleton.PROBE_OUTPUT_ENV,
-        output_limit=skeleton.DEFAULT_PROBE_OUTPUT_LIMIT,
-        project_modules=_lean_requests(tuple(sorted(set(project_modules)))),
-        selected_modules=_lean_requests(tuple(sorted(set(selected_modules)))),
+        project_modules=lean_requests(tuple(sorted(set(project_modules)))),
+        selected_modules=lean_requests(tuple(sorted(set(selected_modules)))),
     )
 
 
@@ -896,6 +913,7 @@ class ModuleImportImpactReport:
     affected_claim_targets: tuple[str, ...]
     claim_targets: tuple[str, ...]
     module_scope: str = MODULE_IMPORT_SCOPE
+    module_generated: bool = False
 
     @property
     def selected_affected(self) -> bool:
@@ -947,6 +965,7 @@ class ModuleImportImpactReport:
             "module": self.module,
             "module_claim_target": self.module_claim_target,
             "module_claim_key": self.module_claim_key,
+            "module_generated": self.module_generated,
             "selected_affected": self.selected_affected,
             "article_local": self.article_local,
             "affected_modules": list(self.affected_modules),
@@ -1138,6 +1157,7 @@ def compute_module_import_impact(
     lean_source_revision: str = "",
     module_scope: str = MODULE_IMPORT_SCOPE,
     declaration_modules: Mapping[str, str] | None = None,
+    module_generated: bool = False,
 ) -> ModuleImportImpactReport:
     """Return the reverse-import scope of changing ``module`` imports.
 
@@ -1148,7 +1168,8 @@ def compute_module_import_impact(
     roots; this scope does not list them. It never refuses the edit merely
     because the scope is larger than one article. ``declaration_modules`` maps
     a name to the module whose source declares it; an unresolved name it places
-    in an unaffected module is not reported.
+    in an unaffected module is not reported. A ``module_generated`` header
+    belongs to the repository's generator, so it is not a claim target.
     """
 
     if module not in modules:
@@ -1237,10 +1258,11 @@ def compute_module_import_impact(
             }
         )
     )
-    # The import edit itself owns only its selected article and module header.
-    # Other article claims are reported separately: they block only when live,
-    # or become required when validation shows that their content must change.
-    claim_targets = (selected.claim_target, module_claim_target)
+    # The import edit itself owns only its selected article and module header,
+    # unless a generator writes the header. Other article claims are reported
+    # separately: they block only when live, or become required when
+    # validation shows that their content must change.
+    claim_targets = (selected.claim_target,) if module_generated else (selected.claim_target, module_claim_target)
     return ModuleImportImpactReport(
         source_revision=source_revision,
         lean_source_revision=lean_source_revision,
@@ -1256,6 +1278,7 @@ def compute_module_import_impact(
         affected_claim_targets=affected_claim_targets,
         claim_targets=claim_targets,
         module_scope=module_scope,
+        module_generated=module_generated,
     )
 
 
@@ -1432,7 +1455,7 @@ def _project_controls(root: Path) -> tuple[tuple[str, tuple[int, str] | None], .
     """Read the Lake inputs that select the environment as one stable snapshot."""
 
     try:
-        return skeleton._project_control_snapshot(root)
+        return lean_probe.project_control_snapshot(root)
     except SkeletonError as exc:
         raise ImpactError(
             "the Lake project controls could not be read consistently; rebuild and rerun the command"
@@ -1449,6 +1472,7 @@ class _ImpactEvidence:
     modules: Mapping[str, ModuleEvidence]
     locate: Locator
     declaration_modules: Mapping[str, str] | None = None
+    module_generated: bool = False
 
 
 def _load_impact_evidence(
@@ -1525,7 +1549,7 @@ def _load_impact_evidence(
             if not imports:
                 raise ImpactError(f"not a loaded project module: {module}")
         try:
-            output = skeleton.run_probe(
+            output = lean_probe.run_probe(
                 render_impact_probe(
                     imports=imports,
                     project_modules=local_modules,
@@ -1535,11 +1559,11 @@ def _load_impact_evidence(
                     emit_module_evidence=require_modules,
                 ),
                 root,
-                timeout=skeleton.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
+                timeout=lean_probe.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
                 label="impact probe",
             )
         except SkeletonError as error:
-            said = skeleton.stale_build_said(error)
+            said = lean_probe.stale_build_said(error)
             if said is None:
                 raise
             if module_scope == IMPORT_CLOSURE_SCOPE:
@@ -1550,7 +1574,7 @@ def _load_impact_evidence(
             checked = f"{len(imports)} module{'' if len(imports) == 1 else 's'}"
             raise SkeletonError(
                 [
-                    f"{skeleton.STALE_BUILD}{names}` before running the impact probe "
+                    f"{lean_probe.STALE_BUILD}{names}` before running the impact probe "
                     f"({checked}" + (f"; Lake: {said})" if said else ")")
                 ]
             ) from None
@@ -1582,6 +1606,11 @@ def _load_impact_evidence(
             snapshot=source_snapshot,
             required_modules=required_modules,
         )
+    module_generated = False
+    if require_modules and module is not None:
+        paths = _module_source_paths(libraries, source_snapshot, strict=True)
+        relative = {_name_key(name): path for name, path in paths.items()}.get(_name_key(module))
+        module_generated = relative is not None and _linguist_generated(root, relative)
 
     return _ImpactEvidence(
         source_revision=source_revision,
@@ -1592,6 +1621,7 @@ def _load_impact_evidence(
         modules=module_evidence,
         locate=_locator(libraries, source_snapshot),
         declaration_modules=declaration_modules,
+        module_generated=module_generated,
     )
 
 
@@ -1607,7 +1637,7 @@ def revision_impact(
 
     ``declarations`` replaces the article's ``lean:`` names as the revised set.
     The Lean project must be built and fresh: the probe runs through
-    ``skeleton.run_probe``, with its freshness check, time limit and output bound.
+    ``lean_probe.run_probe``, with its freshness check, time limit and output bound.
     """
 
     evidence = _load_impact_evidence(
@@ -1664,7 +1694,37 @@ def module_import_impact(
         lean_source_revision=evidence.lean_source_revision,
         module_scope=module_scope,
         declaration_modules=evidence.declaration_modules,
+        module_generated=evidence.module_generated,
     )
+
+
+def _linguist_generated(root: Path, relative: str) -> bool:
+    """Whether Git attributes set ``linguist-generated``, or make it ``true``, on ``relative`` under ``root``.
+
+    That is how a repository declares a generated import root. Only the
+    repository's attributes count: ``--cached`` reads ``.gitattributes`` from
+    the index, so an unstaged edit does not count, and the clone's
+    ``.git/info/attributes`` counts in that clone. The user's and the system's
+    attribute files are skipped, since a mark there would cover every
+    repository on the machine. A file outside a Git work tree, or one Git
+    cannot be asked about, is not generated.
+    """
+
+    try:
+        output = git(
+            root,
+            "-c",
+            "core.attributesFile=",
+            "check-attr",
+            "--cached",
+            "linguist-generated",
+            "--",
+            relative,
+            environment={"GIT_ATTR_NOSYSTEM": "1"},
+        )
+    except ValueError:  # Git printed a name that is not UTF-8
+        return False
+    return output is not None and output.rsplit(": ", 1)[-1] in ("set", "true")
 
 
 def _locator(
@@ -1761,7 +1821,8 @@ def format_module_import_impact(report: ModuleImportImpactReport) -> list[str]:
         f"Lean build revision: {report.build_revision}",
         f"Module graph revision: {report.module_graph_revision}",
         f"Module scope: {report.module_scope}",
-        f"Module claim target: {report.module_claim_target} (key {report.module_claim_key})",
+        f"Module claim target: {report.module_claim_target} (key {report.module_claim_key})"
+        + (", not claimed: linguist-generated; regenerate it, don't edit it" if report.module_generated else ""),
         "Affected project modules: " + ", ".join(report.affected_modules),
         "Removing an import can also drop modules that only imports bring into the build; "
         "this reverse-import scope does not list them.",

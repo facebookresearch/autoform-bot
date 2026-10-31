@@ -1,0 +1,503 @@
+.bp-dag-viewer {
+  --dag-border: var(--bp-rule, #d8dade); --dag-bg: var(--bp-surface, #fff);
+  --dag-panel: color-mix(in srgb, var(--dag-bg) 94%, #64748b 6%); --dag-map: var(--bp-sunken, #f0f2f5); --dag-error: #b42318;
+  --dag-fg: var(--bp-fg, #1c1e21); --dag-muted: var(--bp-muted, #65676b); --dag-link: var(--bp-link, #0064e0);
+  --dag-navigation-width: 288px;
+  --dag-mono: var(--md-code-font-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  --dag-radius-row: 6px; --dag-radius-control: 8px; --dag-radius-panel: var(--bp-radius, 12px);
+  --dag-e1: 0 1px 2px rgb(0 0 0 / .06); --dag-e2: 0 8px 24px rgb(0 0 0 / .16); --dag-overlay-border: transparent;
+  position: relative; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); width: 100%;
+  height: clamp(608px, calc(100svh - 112px), 1024px); min-height: 608px; overflow: hidden;
+  border: 1px solid var(--dag-border); border-radius: var(--dag-radius-panel); background: var(--dag-bg); color: var(--dag-fg);
+  box-shadow: var(--dag-e1); isolation: isolate;
+  font-family: var(--md-text-font-family, ui-sans-serif, system-ui, sans-serif);
+}
+body.bp-dag-app-page .bp-dag-viewer {
+  position: fixed; z-index: 40; inset: 0; width: 100dvw; max-width: none;
+  height: 100dvh !important; min-height: 0; margin: 0; border: 0; border-radius: 0; box-shadow: none;
+}
+/* A phone's reader hangs below the viewer on a transform. Unlike hidden, clip leaves the viewer nothing a fragment link can scroll, so the trail and search stay on screen. */
+body.bp-dag-app-page .bp-dag-viewer { overflow: clip; }
+body.bp-dag-app-page { overflow: hidden; }
+[data-md-color-scheme=slate] .bp-dag-viewer { --dag-overlay-border: var(--dag-border); --dag-map: #18191a; --dag-error: #ff7b72; }
+body.bp-dag-app-page .md-header, body.bp-dag-app-page .md-tabs,
+body.bp-dag-app-page .md-sidebar, body.bp-dag-app-page .md-footer { display: none; }
+/* Material's skip link and back-to-top button sit under the explorer on its pages, so a keyboard reaching them saw nothing. */
+body.bp-dag-app-page :is(.md-skip, .md-top) { display: none; }
+body.bp-dag-app-page .md-main__inner { width: 100%; max-width: none; margin: 0; }
+body.bp-dag-app-page .md-content { max-width: none; }
+body.bp-dag-app-page .md-content__inner { margin: 0; padding: 0; }
+body.bp-dag-app-page .md-content__inner::before,
+body.bp-dag-app-page .md-content__inner > h1,
+body.bp-dag-app-page .md-content__inner > p { display: none; }
+.bp-dag-viewer *, .bp-dag-viewer *::before, .bp-dag-viewer *::after { box-sizing: border-box; }
+.bp-dag-viewer [hidden] { display: none !important; }
+.bp-dag-head { z-index: 13; border-bottom: 1px solid var(--dag-border); background: var(--dag-bg); }
+.bp-dag-context { display: flex; align-items: center; min-height: 28px; padding: 0 16px; }
+.bp-dag-breadcrumb { min-width: 0; flex: 1; color: var(--dag-muted); font-size: 12px; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-dag-breadcrumb ol, .bp-dag-navigation-path) { display: flex; align-items: center; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-dag-breadcrumb, .bp-dag-navigation-path) li { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:is(.bp-dag-breadcrumb, .bp-dag-navigation-path) li + li::before { content: "/"; content: "/" / ""; margin-right: 6px; color: var(--dag-border); }
+:is(.bp-dag-breadcrumb, .bp-dag-navigation-path) li:not(:first-child, [aria-current]) { flex-shrink: 4; }
+.bp-dag-breadcrumb [aria-current=page] { color: var(--dag-fg); font-weight: 600; }
+@media (min-width: 681px) and (max-width: 1100px) { .bp-dag-viewer:has(.bp-dag-navigation-path) .bp-dag-breadcrumb { visibility: hidden; } }
+.bp-dag-book { flex: none; color: var(--dag-link); font-size: 12px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+/* Material's own sun or moon sits in the header this page hides, so the trail row ends in a quiet stand-in. */
+.bp-dag-viewer .bp-dag-theme { position: relative; flex: none; width: 32px; min-height: 32px; margin-left: 8px; padding: 0; border: 0; background: transparent; color: var(--dag-muted); font-size: 16px; line-height: 1; }
+.bp-dag-viewer .bp-dag-theme svg { display: block; width: 18px; height: 18px; margin: auto; color: var(--dag-fg); }
+/* The switch draws a 32px box and reaches 44px through its ::after, so on a phone the trail row stays one line high. */
+.bp-dag-viewer .bp-dag-theme::after { content: ""; position: absolute; inset: -6px; }
+.bp-dag-swatch { flex: none; width: 11px; height: 11px; border: 2px solid var(--dag-swatch-light-stroke); border-radius: 50%; background: var(--dag-swatch-light-fill); }
+[data-md-color-scheme=slate] .bp-dag-swatch { border-color: var(--dag-swatch-dark-stroke); background: var(--dag-swatch-dark-fill); }
+.bp-dag-toolbar { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 4px 16px 12px; font-size: 13px; }
+@media (min-width: 1101px) {
+  .bp-dag-head { display: flex; align-items: center; gap: 12px; padding: 8px 16px; }
+  .bp-dag-context { display: contents; }
+  .bp-dag-breadcrumb { flex: 0 1 auto; max-width: 32%; }
+  .bp-dag-viewer:has(.bp-dag-navigation-path) .bp-dag-breadcrumb { display: none; }
+  .bp-dag-toolbar { flex: 1; min-width: 0; min-height: 36px; padding: 0; }
+}
+.bp-dag-search-wrap { position: relative; flex: 1 1 384px; min-width: 160px; max-width: 672px; }
+.bp-dag-search { display: block; width: 100%; min-height: 36px; margin: 0; padding: 7px 36px 7px 32px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); outline: 0; background: var(--dag-panel); color: var(--dag-fg); font: inherit; }
+.bp-dag-search::placeholder { color: var(--dag-muted); opacity: 1; }
+.bp-dag-search-wrap::before {
+  content: ""; position: absolute; z-index: 2; left: 11px; top: 50%; width: 14px; height: 14px; margin-top: -7px; background: currentColor; color: var(--dag-muted); pointer-events: none;
+  --dag-magnifier: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.75' stroke-linecap='round'%3E%3Ccircle cx='7' cy='7' r='5'/%3E%3Cpath d='m11 11 3.5 3.5'/%3E%3C/svg%3E");
+  -webkit-mask: var(--dag-magnifier) center / 14px no-repeat; mask: var(--dag-magnifier) center / 14px no-repeat;
+}
+.bp-dag-search-wrap::after { content: "/"; position: absolute; z-index: 2; right: 8px; top: 50%; min-width: 20px; height: 20px; margin-top: -10px; padding: 0 5px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-row); background: var(--dag-bg); color: var(--dag-muted); font-family: var(--dag-mono); font-size: 11px; line-height: 18px; text-align: center; pointer-events: none; }
+.bp-dag-search-wrap:focus-within::after { display: none; }
+.bp-dag-search-wrap:has(.bp-dag-search:not(:placeholder-shown))::after { display: none; }
+.bp-dag-search:focus { border-color: var(--dag-link); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dag-link) 18%, transparent); }
+.bp-dag-search-results { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; right: 0; max-height: min(432px, 60vh); overflow: auto; padding: 6px; border: 1px solid var(--dag-overlay-border); border-radius: var(--dag-radius-panel); background: var(--dag-bg); box-shadow: var(--dag-e2); min-width: min(576px, calc(100vw - 24px)); }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-dag-results, .bp-dag-relation-list, .bp-dag-inventory-list) { display: block; margin: 0; padding: 0; list-style: none; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-dag-results, .bp-dag-relation-list, .bp-dag-inventory-list) > li { margin: 0; }
+.bp-dag-result { display: flex; align-items: baseline; width: 100%; gap: 10px; padding: 8px 9px; border: 0; border-radius: var(--dag-radius-row); background: transparent; color: var(--dag-fg); text-align: left; cursor: pointer; }
+.bp-dag-result:hover, .bp-dag-result:focus-visible { background: color-mix(in srgb, var(--dag-link) 9%, transparent); }
+.bp-dag-result-title, .bp-dag-inventory-title { flex: 1 1 auto; min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dag-result-meta, .bp-dag-inventory-meta { min-width: 0; overflow: hidden; color: var(--dag-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+/* A result's place takes a line of its own under its title and status. */
+.bp-dag-result { flex-wrap: wrap; row-gap: 2px; }
+.bp-dag-result-place { flex: 1 0 100%; min-width: 0; overflow: hidden; color: var(--dag-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button, .bp-dag-whole-search, .bp-dag-load-more { min-height: 36px; padding: 6px 10px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-weight: 600; cursor: pointer; }
+.bp-dag-button:not(:disabled):hover, .bp-dag-filter-summary:hover, .bp-dag-load-more:hover { border-color: var(--dag-link); color: var(--dag-link); }
+/* Back to map stays in place when the map is too large to draw, so it reads as unavailable rather than as a live control. */
+.bp-dag-button:disabled { opacity: .45; cursor: default; }
+/* One solid ring for every control, 3.9:1 or more on every surface; rows draw it inside, where the rail or list would clip it, and cards outside their selection ring. */
+.bp-dag-viewer :is(button, a, [tabindex]):focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }
+/* Controls inside a box that clips draw their ring inside it: the reader's handle sits in a pane that hides overflow. */
+.bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body, .bp-dag-sheet-handle):focus-visible { outline-offset: -2px; }
+.bp-dag-viewer .bp-dag-node:focus-visible { outline-offset: 4px; }
+.bp-dag-zoom { display: inline-flex; flex: none; gap: 2px; padding: 2px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); background: var(--dag-bg); }
+.bp-dag-zoom .bp-dag-button { min-height: 30px; padding: 4px 10px; border: 0; border-radius: var(--dag-radius-row); background: transparent; color: var(--dag-muted); }
+/* The zoom buttons act on the map, so they leave with it in the list and sources views; their place stays, so the row keeps its height. */
+.bp-dag-viewer:has(.bp-dag-stage[hidden]) .bp-dag-zoom { visibility: hidden; }
+.bp-dag-zoom .bp-dag-button:hover { background: var(--dag-panel); color: var(--dag-fg); }
+/* Browse marks the list on screen in the pressed look, and its closed toggle carries that look while a list or the sources replace the map. */
+.bp-dag-browse-popover .bp-dag-button[aria-pressed=true], .bp-dag-pivot[aria-pressed=true], .bp-dag-viewer:has(.bp-dag-stage[hidden]) .bp-dag-browse > .bp-dag-button { border-color: var(--dag-link); background: color-mix(in srgb, var(--dag-link) 10%, var(--dag-bg)); color: var(--dag-link); }
+.bp-dag-filters { position: relative; flex: none; }
+.bp-dag-browse { position: relative; flex: none; }
+.bp-dag-browse-popover { position: absolute; z-index: 18; top: calc(100% + 6px); right: 0; display: grid; gap: 5px; width: 220px; max-width: calc(100vw - 32px); padding: 10px; border: 1px solid var(--dag-overlay-border); border-radius: var(--dag-radius-panel); background: var(--dag-bg); box-shadow: var(--dag-e2); }
+.bp-dag-browse-popover .bp-dag-button { text-align: left; }
+.bp-dag-filter-summary { display: flex; align-items: center; white-space: nowrap; }
+.bp-dag-filter-popover { position: absolute; z-index: 18; top: calc(100% + 6px); right: 0; width: 240px; max-height: 368px; overflow: auto; padding: 10px; border: 1px solid var(--dag-overlay-border); border-radius: var(--dag-radius-panel); background: var(--dag-bg); box-shadow: var(--dag-e2); }
+.bp-dag-filter-popover fieldset { display: grid; gap: 3px; margin: 0; padding: 0; border: 0; }
+.bp-dag-filter-popover fieldset + fieldset { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--dag-border); }
+.bp-dag-filter-popover legend { margin-bottom: 6px; }
+.bp-dag-filter-popover legend, .bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-group h2 { color: var(--dag-muted); font-size: 12px; font-weight: 600; letter-spacing: normal; line-height: 1.3; }
+.bp-dag-check { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 3px 5px; border-radius: var(--dag-radius-row); }
+.bp-dag-check:hover { background: var(--dag-panel); }
+.bp-dag-check input { accent-color: var(--dag-link); }
+.bp-dag-check-count { margin-left: auto; color: var(--dag-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.bp-dag-check-text { display: grid; gap: 1px; min-width: 0; }
+.bp-dag-check-meaning { color: var(--dag-muted); font-size: 11.5px; line-height: 1.3; }
+.bp-dag-filter-popover:has(.bp-dag-check-meaning) { width: 300px; max-height: min(560px, calc(100dvh - 140px)); }
+.bp-dag-check:has(.bp-dag-check-meaning) { align-items: flex-start; }
+.bp-dag-check:has(.bp-dag-check-meaning) :is(input, .bp-dag-swatch) { margin-top: 3px; }
+.bp-dag-hidden-button, .bp-dag-whole-search { min-height: 26px; margin: 0; padding: 1px 3px; border: 0; background: transparent; color: var(--dag-link); }
+.bp-dag-hidden-button { flex: none; margin-left: auto; white-space: nowrap; }
+.bp-dag-hidden-button:hover { text-decoration: underline; }
+.bp-dag-body { position: relative; display: grid; grid-template-columns: var(--dag-navigation-width) minmax(0, 1fr); min-height: 0; }
+.bp-dag-navigation { z-index: 6; min-width: 0; min-height: 0; overflow: auto; border-right: 1px solid var(--dag-border); background: var(--dag-bg); }
+.bp-dag-navigation-inner { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; min-height: 100%; padding: 16px 12px 24px; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-title { margin: 0 6px; color: var(--dag-fg); font-size: 22px; font-weight: 700; letter-spacing: -.02em; line-height: 1.2; }
+.bp-dag-navigation-summary { display: -webkit-box; margin: 9px 6px 15px; overflow: hidden; color: var(--dag-muted); font-size: 13px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
+.bp-dag-viewer.bp-dag-viewer ol.bp-dag-navigation-path { margin: 0 6px 6px; color: var(--dag-muted); font-size: 12px; line-height: 1.4; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-path a { color: inherit; text-decoration: none; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-path a:hover { color: var(--dag-link); }
+.bp-dag-navigation-counts { margin: 0 6px 16px; color: var(--dag-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.bp-dag-navigation-group { margin-top: 12px; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-group h2 { margin: 0 6px 5px; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-list { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-navigation-list > li { margin: 0; }
+.bp-dag-navigation-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; width: 100%; gap: 8px; min-height: 36px; padding: 7px 8px; border: 1px solid transparent; border-radius: var(--dag-radius-row); background: transparent; color: var(--dag-fg) !important; font: inherit; font-size: 13px; line-height: 1.25; text-align: left; text-decoration: none !important; cursor: pointer; }
+.bp-dag-navigation-link > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dag-navigation-link:hover { border-color: var(--dag-border); background: var(--dag-panel); }
+.bp-dag-navigation-link[aria-current=true] { border-color: color-mix(in srgb, var(--dag-link) 38%, var(--dag-border)); background: color-mix(in srgb, var(--dag-link) 9%, var(--dag-bg)); color: var(--dag-link) !important; }
+.bp-dag-navigation-meta { color: var(--dag-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bp-dag-navigation-more { width: 100%; margin-top: 7px; border: 0; background: transparent; color: var(--dag-link); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.bp-dag-main { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--dag-map); }
+.bp-dag-stage { position: absolute; inset: 0; overflow: hidden; touch-action: none; cursor: grab; }
+.bp-dag-stage[data-dragging=true] { cursor: grabbing; }
+.bp-dag-canvas, .bp-dag-node-layer { position: absolute; inset: 0; width: 100%; height: 100%; }
+.bp-dag-canvas { display: block; min-height: 0; touch-action: auto; background: transparent; }
+.bp-dag-node-layer { overflow: hidden; pointer-events: none; }
+.bp-dag-node { position: absolute; top: 0; left: 0; display: grid; align-content: center; width: 196px; height: 56px; padding: 6px 10px; overflow: hidden; border: 1.5px solid var(--dag-node-stroke); border-radius: var(--dag-radius-control); background: var(--dag-node-fill); color: var(--dag-node-text); box-shadow: var(--dag-e1); text-align: left; transform-origin: 0 0; pointer-events: auto; cursor: pointer; will-change: transform; }
+.bp-dag-node-title { overflow: hidden; color: var(--dag-fg); font-size: 14px; font-weight: 600; line-height: 1.18; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dag-node-meta { display: flex; overflow: hidden; color: color-mix(in srgb, var(--dag-node-text) 95%, var(--dag-node-fill)); font-size: 12px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+/* Keep the kind or topic count and its separator whole; only the final status or count can elide. */
+.bp-dag-node-meta > span { flex: none; white-space: pre; }
+.bp-dag-node-meta > span:last-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Selection is a neutral ring past a gap in the map colour, since blue marks cards that are ready to state or prove. */
+.bp-dag-node[data-selected=true] { box-shadow: 0 0 0 2px var(--dag-map), 0 0 0 4px var(--dag-fg), var(--dag-e1); }
+/* Subdued cards give up colour, not legibility: fill and border wash towards the map and the words turn a grey that keeps 5.3:1 on
+   every fill, where group opacity had faded status lines to 2.3:1 and a focused card's ring with them. Nothing animates, since an
+   animated filter on every card stalled WebKit. */
+.bp-dag-viewer.bp-dag-viewer .bp-dag-node[data-subdued=true] { border-color: color-mix(in srgb, var(--dag-node-stroke) 40%, var(--dag-map)); }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-node[data-subdued=true]:not([data-kind=boundary]) { background: color-mix(in srgb, var(--dag-node-fill) 40%, var(--dag-map)); }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-node[data-subdued=true] :is(.bp-dag-node-title, .bp-dag-node-meta, .bp-dag-node-summary, .bp-dag-node-share) { color: color-mix(in srgb, var(--dag-muted) 80%, var(--dag-fg)); }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-node[data-subdued=true] .bp-dag-node-core::after { opacity: .45; }
+.bp-dag-node[data-kind=scope] { border-radius: var(--dag-radius-panel); }
+/* Another topic's card is a way out, not this page's content: the map's own surface and text, with its status left to the dashed border. */
+.bp-dag-node[data-kind=boundary] { border-style: dashed; background: var(--dag-map); color: var(--dag-fg); }
+.bp-dag-node[data-kind=boundary] .bp-dag-node-meta { color: var(--dag-muted); }
+/* Its linked results' share in words, under the count, since a planned border is 1.4:1 on the light map; its title keeps to two lines for it. */
+.bp-dag-node-share { overflow: hidden; color: var(--dag-muted); font-size: 12px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dag-integrated .bp-dag-node[data-kind=boundary] .bp-dag-node-title { -webkit-line-clamp: 2; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] { display: block; padding: 0; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-panel); background: var(--dag-node-fill); text-align: left; }
+.bp-dag-node-core { display: grid; align-content: center; width: 100%; height: 100%; padding: 12px 16px; color: var(--dag-node-text); }
+/* Topic and region cards are laid out at a fixed height that a two-line title can fill, so their status bar sits in the bottom padding. */
+.bp-dag-node-core::after { content: ""; position: absolute; right: 16px; bottom: 6px; left: 16px; height: 4px; border-radius: 2px; background: var(--dag-status-ring, var(--dag-border)); }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] .bp-dag-node-title { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: 7px; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node-title { font-size: 17px; }
+.bp-dag-node-relation { display: none; }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=prerequisite],
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=dependent] { box-shadow: 0 0 0 2px color-mix(in srgb, var(--dag-link) 40%, transparent), var(--dag-e1); }
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=prerequisite] .bp-dag-node-relation,
+.bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=dependent] .bp-dag-node-relation { display: block; margin-top: 6px; overflow: hidden; opacity: .75; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dag-density { position: absolute; z-index: 4; left: 16px; bottom: 12px; max-width: calc(100% - 32px); color: var(--dag-muted); font-size: 12px; pointer-events: none; }
+.bp-dag-empty { position: absolute; z-index: 4; top: 50%; left: 50%; padding: 9px 13px; border: 1px solid var(--dag-border); border-radius: 999px; background: var(--dag-bg); color: var(--dag-muted); box-shadow: var(--dag-e1); font-size: 13px; transform: translate(-50%, -50%); pointer-events: none; }
+.bp-dag-inventory { position: absolute; inset: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; background: var(--dag-bg); font-size: 13px; }
+.bp-dag-inventory-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--dag-border); }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-inventory-head h2 { margin: 0; font-size: 14px; font-weight: 700; letter-spacing: normal; line-height: 1.3; }
+.bp-dag-inventory-summary { color: var(--dag-muted); font-size: 12px; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-inventory-note { margin: 0; padding: 12px 16px; color: var(--dag-muted); font-size: 13px; line-height: 1.45; }
+.bp-dag-inventory-scroll { overflow: auto; padding: 7px; }
+.bp-dag-inventory-row { display: flex; align-items: baseline; width: 100%; gap: 13px; padding: 10px 11px; border: 0; border-radius: var(--dag-radius-row); background: transparent; color: var(--dag-fg); text-align: left; cursor: pointer; }
+.bp-dag-inventory-row:hover, .bp-dag-inventory-row:focus-visible { background: var(--dag-panel); }
+.bp-dag-inventory-row[aria-current=true] { background: color-mix(in srgb, var(--dag-link) 10%, var(--dag-bg)); box-shadow: inset 3px 0 0 var(--dag-link); }
+.bp-dag-load-more { justify-self: center; margin: 9px; }
+.bp-dag-inspector { position: absolute; z-index: 10; top: 12px; right: 12px; bottom: 12px; width: min(384px, calc(100% - 24px)); min-width: 0; overflow: auto; border: 1px solid var(--dag-overlay-border); border-radius: var(--dag-radius-panel); font-size: 13px; background: var(--dag-bg); box-shadow: var(--dag-e2); visibility: hidden; opacity: 0; transform: translateX(calc(100% + 24px)); transition: opacity .16s ease, transform .2s ease, visibility 0s linear .2s; }
+.bp-dag-viewer.bp-dag-has-selection.bp-dag-sheet-open .bp-dag-inspector { visibility: visible; opacity: 1; transform: translateX(0); transition-delay: 0s; }
+.bp-dag-inspector-inner { padding: 16px; }
+.bp-dag-sheet-handle { display: none; }
+.bp-dag-inspector-header { padding-right: 32px; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-inspector-header h2 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: normal; line-height: 1.25; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-inspector-inner > h2 { margin: 0 0 8px; font-size: 17px; font-weight: 700; letter-spacing: normal; line-height: 1.25; }
+.bp-dag-close { position: absolute; z-index: 3; top: 10px; right: 10px; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--dag-radius-control); background: transparent; color: var(--dag-muted); font-size: 22px; line-height: 1; cursor: pointer; }
+.bp-dag-close:hover { background: var(--dag-panel); color: var(--dag-fg); }
+.bp-dag-kicker { margin: 0 0 6px; color: var(--dag-muted); font-size: 12px; font-weight: 600; }
+.bp-dag-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 10px 0 12px; }
+.bp-dag-status-pill { display: inline-flex; align-items: center; gap: 6px; color: var(--dag-muted); font-size: 12px; }
+.bp-dag-status-pill::before { content: ""; width: 9px; height: 9px; border: 2px solid var(--dag-pill-stroke); border-radius: 50%; background: var(--dag-pill-fill); }
+.bp-dag-open { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 6px 12px; border-radius: var(--dag-radius-control); background: var(--dag-link); color: #fff !important; font-size: 13px; font-weight: 600; text-decoration: none !important; }
+[data-md-color-scheme=slate] .bp-dag-open { background: #0064e0; }
+.bp-dag-overview { color: var(--dag-muted); font-size: 13px; line-height: 1.55; }
+.bp-dag-overview strong { color: var(--dag-fg); }
+.bp-dag-summary { margin: 13px 0; color: var(--dag-fg); font-size: 14px; line-height: 1.55; }
+.bp-dag-lean { margin: 10px 0 0; overflow-wrap: anywhere; color: var(--dag-muted); font-size: 12px; font-family: var(--dag-mono); }
+.bp-dag-section { margin-top: 20px; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-section h3 { margin: 0 0 7px; font-size: 13px; font-weight: 600; letter-spacing: normal; line-height: 1.3; }
+.bp-dag-pivots { display: flex; gap: 2px; margin-top: 16px; padding: 2px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); }
+.bp-dag-pivot { flex: 1 1 auto; min-width: 0; min-height: 30px; padding: 4px 8px; border: 0; border-radius: var(--dag-radius-row); background: transparent; color: var(--dag-muted); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.bp-dag-pivot:not([aria-pressed=true], :disabled):hover { background: var(--dag-panel); color: var(--dag-fg); }
+.bp-dag-pivot:disabled { opacity: .45; cursor: default; }
+.bp-dag-relation-button { width: 100%; padding: 6px 4px; overflow: hidden; border: 0; background: transparent; color: var(--dag-link); font: inherit; font-size: 13px; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.bp-dag-relation-button:hover { text-decoration: underline; }
+.bp-dag-distribution { display: grid; gap: 5px; margin: 6px 0 0; }
+.bp-dag-distribution-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; color: var(--dag-muted); font-size: 12px; }
+.bp-dag-distribution-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.bp-dag-loading, .bp-dag-error { margin: 0; padding: 16px; }
+.bp-dag-error { color: var(--dag-error); }
+.bp-dag-fallback { min-height: 0; overflow: auto; padding: 0 16px 16px; color: var(--dag-muted); }
+.bp-dag-fallback p { max-width: 768px; }
+.bp-dag-fallback-list { display: grid; gap: 5px; margin: 13px 0; padding-left: 22px; }
+.bp-dag-viewer.bp-dag-enhancing .bp-dag-fallback { display: none; }
+.bp-dag-sr-only, body.bp-dag-app-page .md-content__inner > h1 { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+@media (max-width: 1100px) {
+  .bp-dag-viewer { --dag-navigation-width: 248px; }
+  .bp-dag-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding-top: 8px; }
+  .bp-dag-book { grid-area: 1 / 2; align-self: center; margin-right: 16px; }
+  .bp-dag-toolbar { grid-column: 1 / -1; }
+  .bp-dag-inspector { right: auto; left: 12px; transform: translateX(calc(-100% - 24px)); }
+  .bp-dag-viewer.bp-dag-has-selection.bp-dag-sheet-open .bp-dag-breadcrumb { visibility: visible; }
+  .bp-dag-viewer.bp-dag-has-selection.bp-dag-sheet-open .bp-dag-navigation { visibility: hidden; transition: visibility 0s .2s; }
+  .bp-dag-viewer.bp-dag-has-selection.bp-dag-sheet-open .bp-dag-navigation h1 { visibility: visible; opacity: 0; transition: opacity 0s .2s; }
+}
+@media (min-width: 681px) and (max-width: 1100px) {
+  .bp-dag-viewer.bp-dag-has-selection.bp-dag-sheet-open .bp-dag-inventory { left: calc(408px - var(--dag-navigation-width)); }
+  .bp-dag-viewer:has(.bp-dag-navigation-path):not(.bp-dag-has-selection.bp-dag-sheet-open) .bp-dag-head:not(:has(.bp-dag-book)) .bp-dag-context { display: none; }
+}
+@media (max-width: 900px) {
+  .bp-dag-viewer { --dag-navigation-width: 216px; }
+  .bp-dag-toolbar { flex-wrap: wrap; }
+  .bp-dag-search-wrap { max-width: none; }
+}
+@media (max-width: 680px) {
+  .bp-dag-context { padding-inline: 8px; }
+  .bp-dag-head { grid-template-columns: minmax(0, 1fr); }
+  .bp-dag-head:has(.bp-dag-book) .bp-dag-context { min-height: 0; }
+  .bp-dag-book { grid-area: 2 / 1; justify-self: start; margin: 4px 8px 0; }
+  .bp-dag-toolbar { gap: 6px; padding: 6px 8px 8px; }
+  .bp-dag-search-wrap { flex-basis: calc(100% - 6px); order: -2; }
+  .bp-dag-search-wrap::after { display: none; }
+  .bp-dag-search { padding-right: 12px; }
+  .bp-dag-filter-popover { left: 0; right: auto; max-width: calc(100vw - 16px); }
+  .bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button { min-height: 44px; }
+  .bp-dag-zoom { gap: 0; padding: 0; }
+  .bp-dag-zoom .bp-dag-button { min-height: 42px; }
+  .bp-dag-body { display: block; }
+  .bp-dag-navigation { display: none; }
+  body.bp-dag-app-page .md-content__inner > h1 { display: block; }
+  .bp-dag-main { position: absolute; inset: 0; }
+  .bp-dag-inventory { padding-bottom: 60px; }
+  .bp-dag-inspector { position: absolute; z-index: 12; top: auto; right: 8px; bottom: 8px; left: 8px; width: auto; max-height: min(58%, 480px); overflow: auto; border: 1px solid var(--dag-overlay-border); border-radius: var(--dag-radius-panel); box-shadow: var(--dag-e2); visibility: visible; opacity: 1; transform: translateY(calc(100% - 52px)); transition: transform .2s ease; }
+  .bp-dag-viewer.bp-dag-sheet-open .bp-dag-inspector { transform: translateY(0); }
+  .bp-dag-sheet-handle { display: block; position: sticky; z-index: 2; top: 0; width: 100%; min-height: 50px; padding: 10px 48px 8px 12px; overflow: hidden; border: 0; border-bottom: 1px solid var(--dag-border); background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 13px; font-weight: 600; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .bp-dag-sheet-handle::before { content: ""; position: absolute; top: 6px; left: 50%; width: 32px; height: 3px; border-radius: 2px; background: var(--dag-border); transform: translateX(-50%); }
+  .bp-dag-inspector-inner { padding: 12px; }
+  .bp-dag-viewer:not(.bp-dag-sheet-open) .bp-dag-close { display: none; }
+  .bp-dag-inspector-header { padding-right: 0; }
+  .bp-dag-viewer.bp-dag-viewer .bp-dag-inspector-header h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  .bp-dag-density { bottom: 68px; }
+}
+/* Pinch has a single-pointer alternative: all three zoom controls remain visible and reach 44px. */
+@media (pointer: coarse) {
+  .bp-dag-toolbar :is(.bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button) { min-height: 44px; }
+  .bp-dag-zoom { padding: 0; border: 0; box-shadow: inset 0 0 0 1px var(--dag-border); }
+  .bp-dag-zoom .bp-dag-button { min-width: 44px; min-height: 44px; color: var(--dag-fg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bp-dag-inspector { transition: none; }
+  .bp-dag-node { will-change: auto; }
+}
+
+/* One book and map workspace. The source remains readable until enhancement succeeds. */
+body.bp-dag-app-page .bp-explorer-page > .bp-reading-source { display: none; }
+body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: none !important; }
+.bp-dag-integrated { --dag-navigation-width: 216px; }
+.bp-dag-integrated .bp-dag-body { grid-template-columns: var(--dag-navigation-width) minmax(0, 1fr) minmax(360px, 39%); }
+.bp-dag-integrated .bp-dag-head { display: block; padding: 0; }
+.bp-dag-integrated .bp-dag-context { display: flex; padding: 10px 16px 0; }
+/* The trail has the row to itself: each crumb keeps a few letters, the "…" its glyph, and a parent at most 24ch. */
+.bp-dag-integrated .bp-dag-breadcrumb { display: block; flex: 1 1 auto; max-width: none; visibility: visible !important; }
+.bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li { min-width: 4em; }
+.bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:first-child { flex: none; min-width: 0; }
+.bp-dag-viewer.bp-dag-integrated .bp-dag-breadcrumb li:has(.bp-dag-sr-only) { flex: none; min-width: 0; }
+.bp-dag-integrated .bp-dag-breadcrumb li:not(:first-child, :last-child) { max-width: 24ch; }
+/* A crumb with a link lets its focus ring out; the link still truncates its own text. */
+.bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li:has(> a) { display: flex; align-items: center; overflow: visible; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li > a { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp-dag-viewer.bp-dag-viewer .bp-dag-breadcrumb li::before { flex: none; }
+.bp-dag-integrated .bp-dag-book { grid-area: auto; margin: 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.bp-dag-integrated .bp-dag-toolbar { display: flex; padding: 10px 16px; }
+.bp-dag-integrated .bp-dag-search-wrap { max-width: none; }
+/* The box can span a wide head, but its results stop at 720px, so a row's status stays near its title. */
+.bp-dag-integrated .bp-dag-search-results { max-width: 720px; }
+.bp-dag-integrated .bp-dag-navigation { visibility: visible !important; transition: none; }
+.bp-dag-integrated .bp-dag-navigation-link { display: block; white-space: normal; overflow-wrap: anywhere; }
+.bp-dag-integrated .bp-dag-navigation-link[aria-current=page] { background: var(--dag-panel); color: var(--dag-link) !important; }
+.bp-outline-depth-1 { margin-left: 14px !important; }
+.bp-outline-depth-2 { margin-left: 28px !important; }
+.bp-outline-depth-3 { margin-left: 42px !important; }
+.bp-outline-collection { display: block; padding: 10px 7px 4px; color: var(--dag-muted); font-size: 12px; font-weight: 600; }
+.bp-outline-label { margin: 0 7px 10px !important; font-size: 12px !important; color: var(--dag-muted); font-weight: 600; }
+.bp-dag-integrated .bp-reading-pane { position: relative; inset: auto; width: auto; max-width: none; height: 100%; max-height: none; min-width: 0; min-height: 0; visibility: visible; opacity: 1; transform: none; transition: none; border: 0; border-left: 1px solid var(--dag-border); border-radius: 0; box-shadow: none; overflow: hidden; }
+.bp-dag-integrated .bp-dag-inspector-inner { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; padding: 0; height: 100%; overflow: hidden; }
+.bp-reading-context:empty, .bp-reading-neighbors:empty { display: none; }
+.bp-reading-context { grid-row: 1; min-width: 0; padding: 10px 22px; border-bottom: 1px solid var(--dag-border); overflow-wrap: anywhere; }
+.bp-reading-around { color: var(--dag-link); font-size: 13px; text-decoration: none; }
+.bp-reading-body { grid-row: 2; min-width: 0; min-height: 0; overflow: auto; padding: 24px 26px 60px; font-size: 16px; line-height: 1.6; scroll-padding-top: 24px; }
+.bp-reading-source { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.bp-reading-body h1 { margin: 0 0 22px !important; color: var(--dag-fg); font-size: 22px !important; font-weight: 700; line-height: 1.35; }
+.bp-reading-body h2 { font-size: 22px; line-height: 1.4; }
+.bp-reading-body h3 { font-size: 17px; line-height: 1.4; }
+/* The book sizes notes, totals and labels in rem for Material's body size; beside the pane's 16px statement they would outrank it, so they step down here. */
+.bp-reading-body :is(.bp-thmnotes, .bp-meta, .bp-progress-states), .bp-reading-body details.bp-dependencies { font-size: 14px; }
+.bp-reading-body :is(.bp-thmnotes h6, .bp-key, .bp-mark, .bp-progress-kicker, .bp-book-nav-direction, .bp-next-kicker, .bp-hero-kicker) { font-size: 12px; }
+.bp-reading-body :is(.bp-progress-total, .bp-book-nav-title, .bp-next-title) { font-size: 16px; }
+/* The status rule and the bold head already mark a theorem, so the workspace sets its statement upright. */
+.bp-dag-integrated .theorem-style-plain > .bp-thmcontent { font-style: normal; }
+.bp-reading-body pre, .bp-reading-body table { max-width: 100%; overflow: auto; }
+.bp-reading-body img, .bp-reading-body svg { max-width: 100%; }
+.bp-reading-body .bp-node { border-radius: 8px; }
+/* The current statement takes the contents row's tint and left bar inside the column; an offset outline ran past it. */
+/* The current statement takes a neutral tint: blue is a status colour. */
+.bp-reading-current { padding: 10px 12px 10px 15px; border-radius: 8px; background: color-mix(in srgb, var(--dag-fg) 6%, transparent); box-shadow: inset 3px 0 0 var(--dag-fg); }
+/* Under the statement, only a topic's other pages and its concept links: its relations are in its own Uses / Used by lists. */
+.bp-reading-neighbors { grid-row: 3; padding: 12px 22px; max-height: 192px; overflow: auto; border-top: 1px solid var(--dag-border); background: var(--dag-panel); }
+.bp-reading-related-topics { margin-top: 8px; font-size: 12px; color: var(--dag-muted); }
+.bp-reading-related-topics summary { cursor: pointer; font-weight: 600; }
+.bp-reading-topic-list { display: grid; gap: 5px; margin: 8px 0; padding: 0; list-style: none; }
+.bp-reading-related-topics a { color: var(--dag-link); }
+.bp-reading-wiki-links { margin-top: 8px; font-size: 12px; }
+.bp-reading-wiki-links summary { cursor: pointer; color: var(--dag-muted); font-weight: 600; }
+.bp-reading-wiki-related { display: grid; gap: 5px; margin-top: 10px; min-width: 0; }
+.bp-reading-wiki-related strong { color: var(--dag-muted); font-weight: 600; }
+.bp-reading-wiki-list { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.bp-reading-wiki-list a { color: var(--dag-link); }
+.bp-reading-wiki-notice { margin: 8px 0; color: var(--dag-muted); }
+.bp-reading-wiki-more { justify-self: start; border: 0; padding: 2px 0; background: transparent; color: var(--dag-link); font: inherit; cursor: pointer; }
+.bp-reading-wiki-more:focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) { position: static; margin: 8px 0 0; padding: 0; border: 0; border-top: 1px solid var(--dag-border); border-radius: 0; background: transparent; color: var(--dag-fg); box-shadow: none; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary { position: static; display: list-item; margin: 0; padding: 8px 0; border: 0; background: transparent; color: var(--dag-muted); font: inherit; font-weight: 600; list-style: disclosure-closed inside; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics)[open] > summary { list-style-type: disclosure-open; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary::before,
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary::after { display: none; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary::-webkit-details-marker { display: inline; }
+.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary::marker { display: inline; content: normal; color: var(--dag-muted); }
+.bp-reading-wiki-list a, .bp-reading-topic-list a { overflow-wrap: anywhere; line-height: 1.5; }
+.bp-dag-integrated .bp-dag-node-title { display: -webkit-box; font-size: 17px; line-height: 1.25; -webkit-line-clamp: 3; -webkit-box-orient: vertical; white-space: normal; }
+.bp-dag-integrated .bp-dag-node-meta { font-size: 14px; }
+.bp-dag-integrated.bp-dag-atlas .bp-dag-node-title { font-size: 18px; -webkit-line-clamp: 2; }
+.bp-dag-node-summary { display: -webkit-box; margin-top: 6px; overflow: hidden; font-size: 12px; line-height: 1.3; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+/* "6 topics · 2,070 of 2,485 fully proved" overflowed an area card and cut the topic count to "6 to…"; while the summary shows, it carries the count. */
+.bp-dag-viewer:not(.bp-dag-compact-regions) .bp-dag-node:has(.bp-dag-node-summary) .bp-dag-node-meta > span:not(:last-child) { display: none; }
+.bp-dag-integrated .bp-dag-node[data-kind=scope] .bp-dag-node-core { padding: 12px 16px; }
+.bp-map-context { position: absolute; z-index: 4; top: 20px; left: 22px; right: 22px; display: flex; gap: .3em; overflow: hidden; color: var(--dag-fg); font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.bp-map-context > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.bp-map-key { position: absolute; z-index: 4; right: 20px; bottom: 14px; display: flex; gap: 14px; color: var(--dag-muted); font-size: 11px; pointer-events: none; }
+.bp-map-key span::before { content: ""; display: inline-block; width: 22px; margin: 0 6px 3px 0; border-top: 2px solid currentColor; }
+.bp-map-key .bp-map-key-proof::before { border-top-style: dashed; }
+/* The pan note sits a line above the map key, which shares its bottom edge. */
+.bp-dag-integrated .bp-dag-density { bottom: 36px; }
+/* Text over the map keeps a halo of the map's colour, so it stays readable where a cropped view puts a card under it. */
+.bp-dag-integrated :is(.bp-dag-density, .bp-map-context, .bp-map-key) { text-shadow: 0 0 3px var(--dag-map), 0 0 6px var(--dag-map); }
+/* The map header and its foot, the pan note and key, sit on bands in the map's colour that cards and links pass under,
+   rather than printing over them; fit() leaves the cards clear of both. */
+.bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage::before,
+.bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage::after { content: ""; position: absolute; z-index: 3; right: 0; left: 0; background: var(--dag-map); pointer-events: none; }
+.bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage::before { top: 0; height: 44px; }
+.bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage::after { bottom: 0; height: 56px; }
+/* Without the pan note the foot band only covers the key, and #442's framing keeps cards 32px clear of the stage's foot. */
+.bp-dag-integrated:not(.bp-dag-compact-regions) .bp-dag-stage:has(.bp-dag-density[hidden])::after { height: 32px; }
+.bp-map-key .bp-map-key-wiki::before { border-top-style: dotted; opacity: .38; }
+.bp-map-key .bp-map-key-coverage::before { display: none; }
+/* A quiet area overview at rest draws no links, so its key says how to light them instead of naming line kinds it does not draw. */
+.bp-dag-links-resting .bp-map-key > span { display: none; }
+.bp-dag-links-resting .bp-map-key > details:not([open]):not(:focus-within) { display: none; }
+.bp-dag-links-resting .bp-map-key:has(> details[open], > details:focus-within)::before { content: none; }
+.bp-dag-links-resting .bp-map-key::before { content: "Point at or focus an area to see its links"; }
+.bp-dag-has-shelves .bp-dag-main { display: grid; grid-template-rows: minmax(0, 1fr) minmax(140px, 34%); }
+.bp-dag-has-shelves .bp-dag-stage { position: relative; inset: auto; min-height: 0; }
+.bp-dag-shelves-only .bp-dag-main { grid-template-rows: minmax(0, 1fr); }
+.bp-scope-shelves { min-height: 0; overflow: auto; padding: 16px 22px 24px; border-top: 1px solid var(--dag-border); background: var(--dag-bg); }
+.bp-scope-shelves-heading { margin: 0 0 14px; color: var(--dag-muted); font-size: 13px; font-weight: 600; }
+.bp-scope-shelf { margin-bottom: 18px; }
+.bp-scope-shelf h3 { margin: 0 0 4px; font-size: 17px; font-weight: 600; }
+.bp-scope-shelf-count { margin: 0 0 6px; color: var(--dag-muted); font-size: 12px; }
+.bp-scope-shelf-list { margin: 0; padding: 0; list-style: none; }
+.bp-scope-shelf-list a { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; padding: 6px 0; color: var(--dag-link); font-size: 14px; line-height: 1.4; text-decoration: none; }
+.bp-scope-shelf-title { min-width: 0; overflow-wrap: anywhere; }
+.bp-scope-shelf-list a:hover { text-decoration: underline; }
+.bp-scope-shelf-list a:focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }
+.bp-dag-integrated .bp-dag-node[data-kind=boundary] .bp-dag-node-title { font-size: 14px; }
+.bp-dag-integrated .bp-dag-node[data-kind=boundary] .bp-dag-node-meta { font-size: 12px; }
+.bp-dag-compact-regions :is(.bp-dag-canvas, .bp-dag-node-layer) { clip-path: inset(28px 0 16px); }
+.bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-core { padding: 10px 14px; }
+.bp-dag-viewer.bp-dag-compact-regions .bp-dag-node[data-kind=scope] .bp-dag-node-meta { margin-top: 4px; font-size: 14px; }
+.bp-dag-compact-regions .bp-dag-node .bp-dag-node-summary { display: none; }
+.bp-dag-compact-regions .bp-map-context { top: 8px; left: 18px; right: 18px; line-height: 1.4; }
+.bp-dag-compact-regions .bp-map-key { right: 12px; bottom: 2px; gap: 8px; line-height: 1.1; }
+.bp-dag-compact-regions .bp-dag-density { top: 31px; bottom: auto; left: 18px; max-width: calc(100% - 36px); line-height: 1.2; }
+.bp-dag-integrated .bp-dag-inventory { left: 0 !important; }
+.bp-dag-integrated .bp-dag-inventory-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 16px; padding: 14px 16px; }
+.bp-dag-integrated .bp-dag-inventory-title { font-size: 17px; font-weight: 600; line-height: 1.3; white-space: normal; overflow-wrap: anywhere; }
+.bp-dag-integrated .bp-dag-inventory-meta { font-size: 12px; color: var(--dag-muted); }
+.bp-result-summary { grid-column: 1 / -1; font-size: 13px; color: var(--dag-muted); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* A row's formula stays blank, rather than showing its TeX, until it is typeset as the row scrolls near the view. */
+.bp-dag-inventory-row .bp-math-pending { color: transparent; }
+.bp-dag-outline-toggle { display: none; }
+.bp-reading-map { display: none; }
+@media (min-width: 721px) {
+  .bp-dag-integrated:is(.bp-dag-area-expanded, .bp-dag-overview-only, .bp-dag-scope-overview):not(.bp-dag-sheet-open) .bp-dag-body { grid-template-columns: var(--dag-navigation-width) minmax(0, 1fr) 48px; }
+  .bp-dag-integrated:is(.bp-dag-area-expanded, .bp-dag-overview-only, .bp-dag-scope-overview):not(.bp-dag-sheet-open) .bp-dag-inspector-inner { display: none; }
+  .bp-dag-integrated:is(.bp-dag-area-expanded, .bp-dag-overview-only, .bp-dag-scope-overview):not(.bp-dag-sheet-open) .bp-dag-sheet-handle { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 100%; padding: 14px 10px; border: 0; background: var(--dag-panel); color: var(--dag-fg); font: inherit; font-size: 13px; font-weight: 600; writing-mode: vertical-rl; cursor: pointer; }
+  .bp-dag-integrated:is(.bp-dag-area-expanded, .bp-dag-overview-only, .bp-dag-scope-overview).bp-dag-sheet-open .bp-dag-sheet-handle { display: block; position: absolute; z-index: 2; top: 12px; right: 12px; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--dag-radius-control); background: var(--dag-panel); color: var(--dag-fg); font: inherit; font-size: 22px; line-height: 1; cursor: pointer; }
+  .bp-dag-integrated:is(.bp-dag-area-expanded, .bp-dag-overview-only, .bp-dag-scope-overview).bp-dag-sheet-open .bp-reading-body h1 { padding-right: 32px; }
+}
+@media (max-width: 1100px) {
+  .bp-dag-integrated .bp-dag-body { grid-template-columns: minmax(0, 1fr) minmax(340px, 43%); }
+  .bp-dag-integrated:is(.bp-dag-area-expanded, .bp-dag-overview-only, .bp-dag-scope-overview):not(.bp-dag-sheet-open) .bp-dag-body { grid-template-columns: minmax(0, 1fr) 48px; }
+  .bp-dag-integrated .bp-dag-navigation { display: none; }
+  .bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; align-items: center; }
+  .bp-dag-integrated.bp-dag-outline-open .bp-dag-navigation { display: block; position: absolute; z-index: 18; inset: 0 auto 0 0; width: 264px; box-shadow: var(--dag-e2); }
+  .bp-dag-integrated .bp-dag-toolbar { flex-wrap: wrap; }
+  /* Search and Topics take the first row, and filter, Back to map, Browse, zoom and "Show N filtered out" the second, so a filter never adds a row and moves the map, and the search box keeps room for its placeholder. */
+  .bp-dag-integrated .bp-dag-search-wrap { flex-basis: calc(100% - 96px); }
+  .bp-dag-integrated .bp-dag-filter-popover { left: 0; right: auto; max-width: calc(100dvw - 24px); }
+}
+/* A tablet's or phone's filter grows from 100px to its whole summary in the second row's free space, and cuts the summary short rather than push zoom or "Show N filtered out" onto a third row. */
+@media (max-width: 1100px) {
+  .bp-dag-integrated .bp-dag-filters { flex: 1 1 100px; min-width: 0; max-width: max-content; }
+  .bp-dag-integrated .bp-dag-filter-summary { display: block; max-width: 100%; overflow: hidden; line-height: 22px; text-overflow: ellipsis; }
+}
+@media (max-width: 720px) {
+  .bp-dag-integrated .bp-dag-body { display: block; }
+  .bp-dag-integrated .bp-dag-main { position: absolute; inset: 0 0 56px; }
+  /* The reader peeks 56px, opens to half with the map's top 45% above it (freeArea() uses the same 45%), or covers the map. */
+  .bp-dag-integrated .bp-reading-pane { position: absolute; z-index: 12; inset: 0; height: 100%; border: 0; transform: translateY(calc(100% - 56px)); transition: transform .16s ease; }
+  .bp-dag-viewer.bp-dag-integrated .bp-reading-pane { max-height: none; max-width: none; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-sheet-open .bp-reading-pane { transform: translateY(45%); }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-sheet-full .bp-reading-pane { transform: none; }
+  .bp-dag-integrated .bp-dag-sheet-handle { display: block; width: 100%; height: 56px; min-height: 56px; padding: 16px 20px 12px; overflow: hidden; border: 0; border-bottom: 1px solid var(--dag-border); border-radius: 0; background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 13px; font-weight: 600; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; touch-action: none; }
+  .bp-dag-integrated .bp-dag-sheet-handle .bp-dag-swatch { display: inline-block; margin: 0 8px -1px 0; }
+  .bp-dag-integrated .bp-dag-inspector-inner { height: calc(100% - 56px); }
+  /* At half the reader ends at the screen's bottom, so its last lines can still be scrolled into view. */
+  .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-sheet-full) .bp-dag-inspector-inner { height: calc(55% - 56px); }
+  .bp-dag-integrated.bp-dag-sheet-full .bp-dag-toolbar { display: none; }
+  /* The handle names the page; navigation feedback stays just above the half reader. */
+  .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-compact-regions) .bp-map-context { display: none; }
+  .bp-dag-integrated.bp-dag-sheet-open .bp-dag-stage::before, .bp-dag-integrated.bp-dag-sheet-open .bp-dag-stage::after { display: none; }
+  .bp-dag-integrated .bp-map-key { left: 16px; overflow: visible; white-space: nowrap; }
+  .bp-dag-integrated .bp-map-key span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .bp-dag-viewer .bp-map-key-legend { position: relative; margin: 0 0 0 auto; padding: 0; border: 0; background: none; box-shadow: none; font: inherit; line-height: 1.2; pointer-events: auto; }
+  .bp-dag-viewer .bp-map-key-legend > summary { position: static; min-height: 24px; margin: 0; padding: 4px 8px; border: 1px solid var(--dag-border); border-radius: 6px; background: var(--dag-panel); color: var(--dag-fg); font: inherit; cursor: pointer; list-style: disclosure-closed inside; }
+  .bp-dag-viewer .bp-map-key-legend > summary::before, .bp-dag-viewer .bp-map-key-legend > summary::after { display: none; }
+  .bp-map-key-body { position: absolute; right: 0; bottom: calc(100% + 6px); width: min(280px, calc(100vw - 32px)); padding: 12px; border: 1px solid var(--dag-border); border-radius: 8px; background: var(--dag-panel); box-shadow: var(--dag-e1); white-space: normal; }
+  .bp-dag-integrated .bp-map-key-body span { display: block; overflow: visible; margin: 4px 0; white-space: normal; overflow-wrap: anywhere; }
+  .bp-dag-integrated :is(.bp-map-key-statement, .bp-map-key-proof) { flex: none; }
+  .bp-dag-integrated.bp-dag-sheet-full .bp-reading-map { display: block; position: absolute; z-index: 3; bottom: 16px; left: 50%; padding: 10px 24px; border: 1px solid var(--dag-overlay-border); border-radius: 999px; background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 14px; font-weight: 600; box-shadow: var(--dag-e2); transform: translateX(-50%); cursor: pointer; }
+  .bp-dag-integrated .bp-reading-body { padding: 20px 22px 60px; }
+  .bp-dag-integrated .bp-reading-neighbors { max-height: 136px; }
+  /* Open, the reader shows its heading right under the handle, so the handle keeps only its grabber; its name still says the title. */
+  .bp-dag-integrated.bp-dag-sheet-open .bp-dag-sheet-handle :is(.bp-dag-sheet-title, .bp-dag-swatch) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  /* At half the reader has room for little more than the statement, so its topic and concept-link disclosures wait for full,
+     where they end clear of the Map pill. */
+  .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-sheet-full) .bp-reading-neighbors { display: none; }
+  .bp-dag-integrated.bp-dag-sheet-full .bp-reading-neighbors { max-height: 208px; padding-bottom: 72px; }
+  .bp-dag-integrated .bp-dag-context { padding-inline: 12px; }
+  /* Keep every 44px control and both rows; trim only their outer padding for a readable five-area map. */
+  .bp-dag-integrated .bp-dag-toolbar { padding: 4px 12px; gap: 6px; }
+  /* Secondary labels can elide before any touch target shrinks or the zoom group adds a third row. */
+  .bp-dag-integrated :is(.bp-dag-filters, .bp-dag-browse, .bp-dag-hidden-button) { flex: 1 1 44px; min-width: 44px; max-width: max-content; }
+  .bp-dag-integrated :is(.bp-dag-filter-summary, .bp-dag-browse > .bp-dag-button, .bp-dag-hidden-button) { min-width: 44px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Each of the three zoom controls keeps its own 44px target inside one border. */
+  .bp-dag-integrated .bp-dag-zoom { height: 44px; gap: 0; padding: 0; border: 0; box-shadow: inset 0 0 0 1px var(--dag-border); }
+  .bp-dag-integrated .bp-dag-zoom .bp-dag-button { flex: 0 0 44px; width: 44px; min-width: 44px; max-width: 44px; height: 44px; min-height: 44px; padding: 0; }
+  .bp-dag-integrated .bp-dag-zoom .bp-dag-fit { font-size: 0; }
+  .bp-dag-integrated .bp-dag-fit::before { content: ""; display: block; width: 16px; height: 16px; margin: auto; border: 1.5px solid currentColor; border-radius: 50%; background: radial-gradient(circle, currentColor 0 1.5px, transparent 2px); }
+  .bp-dag-integrated .bp-dag-breadcrumb { min-width: 0; flex: 1; }
+  /* JavaScript folds middle ancestors with their names; CSS must not silently erase them. */
+  .bp-dag-breadcrumb .bp-dag-book { margin: 0; max-width: none; }
+  /* Search and Topics keep the first row, as on a tablet: Topics on the second row pushed a third row once Browse read "Statements". */
+  /* Browse can wrap to the start of a row, where a menu hung from its right edge would open off screen, and the filter's 300px
+     legend ran past a 320px screen from Filter's place, so a phone hangs both from the toolbar. */
+  .bp-dag-integrated .bp-dag-toolbar { position: relative; }
+  .bp-dag-integrated :is(.bp-dag-browse, .bp-dag-filters) { position: static; }
+  .bp-dag-integrated .bp-dag-browse-popover, .bp-dag-viewer.bp-dag-integrated .bp-dag-filter-popover { left: 12px; right: 12px; width: auto; max-width: none; }
+  /* A list has no map to zoom, and a phone's row has no room to keep the zoom buttons' place beside Back to map. */
+  .bp-dag-viewer.bp-dag-integrated:has(.bp-dag-stage[hidden]) .bp-dag-zoom { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .bp-dag-integrated .bp-reading-pane { transition: none; } }

@@ -3,6 +3,34 @@
 The probe reports what only the environment knows. The keyword a declaration
 is written with, the name as written, its header and a wanted result's
 docstring exist only in the source, so they are read here.
+
+A declaration is indexed when all of these hold:
+
+1. It is not a constructor, recursor, projection, auxiliary recursor,
+   ``noConfusion`` or matcher, and its name is not an internal detail.
+2. It has a declaration range.
+3. Its range starts with a declaration keyword, after any docstring,
+   attributes and modifiers. This leaves out what a command or attribute
+   generates beside a declaration, and ``where`` and ``let rec`` helpers.
+4. The source text at its selection range is its name, a dot-separated suffix
+   of it, or the keyword ``instance``. A leading ``_root_.`` is not part of the
+   written name, so ``theorem _root_.Nat.foo`` is indexed as ``Nat.foo``, and
+   the quotes of a component such as ``«odd name»`` are not compared.
+
+A record's ``line`` is that of the declaration's first modifier or, with none,
+of its keyword, not of the docstring or an attribute above it. Its
+``statement`` starts there and ends at the first of these, outside brackets,
+comments, strings and character literals: a ``:=``, unless it belongs to a
+``let`` or ``have`` written in the type; the word ``where``; a ``|`` that
+starts a line, or is followed by a ``=>`` before the next ``:=``, unless it
+belongs to an absolute value (a ``|`` and a closing ``|`` with no space inside,
+as in ``|x|``, or, at the start of a line, a ``|`` that follows a ``:``, a
+comma or an infix sign and has a closing ``|`` before any ``=>``), a ``|`` that
+is part of an operator such as ``<|`` being no bar; and, for an ``inductive``
+type, the first ``|``. The statement may be cut short and never holds a part
+of the body. A wanted placeholder has no alternatives and no ``where``: its
+statement runs to the end of the command, or to its ``:=`` when a
+``def_wanted`` or ``instance_wanted`` is written with a body.
 """
 
 from __future__ import annotations
@@ -211,7 +239,7 @@ def classify(constant: ProbeConstant, source: str) -> IndexDeclaration | str:
     )
     # `_root_.` leaves the current namespace and is no part of the name. Lean prints a name with
     # `«»` around a component only where it needs them, whatever the source has.
-    spelled, name = _unquoted(written.removeprefix("_root_.")), _unquoted(constant.name)
+    spelled, name = _strip_guillemets(written.removeprefix("_root_.")), _strip_guillemets(constant.name)
     # Lean selects the keyword of an anonymous `instance`. Batteries gives the name it makes for an
     # anonymous `instance_wanted` the range of the whole command, so there the selection is the range.
     anonymous = written == "instance" or (keyword == "instance_wanted" and constant.selection == constant.range)
@@ -234,7 +262,7 @@ def classify(constant: ProbeConstant, source: str) -> IndexDeclaration | str:
     )
 
 
-def _unquoted(name: str) -> str:
+def _strip_guillemets(name: str) -> str:
     return name.replace("«", "").replace("»", "")
 
 

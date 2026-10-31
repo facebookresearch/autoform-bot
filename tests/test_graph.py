@@ -20,6 +20,7 @@ from autoform_cli.graph import (
 from autoform_cli.graph_views import project_view
 from autoform_cli.runtime import RuntimeProjectionError, load_runtime_graph
 from autoform_cli.status import derive
+from tests.blueprint_fixture import _ensure_chapter
 
 
 def _node_text(body: str, **metadata: str) -> str:
@@ -32,25 +33,6 @@ def _roadmap_page(blueprint: Path, relative: str, body: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
     return path
-
-
-def _ensure_chapter(blueprint: Path, relative: str) -> None:
-    """Give a chapter directory its chapter page, as every real vault has.
-
-    Containment comes from nested `README.md` articles, so a directory without
-    one is refused at load. Fixtures that only happen to nest are not trying to
-    model that fault; the tests that are do it explicitly.
-    """
-    parts = Path(relative).parts
-    if len(parts) < 2:
-        return
-    chapter = blueprint / "roadmap" / parts[0]
-    page = chapter / "README.md"
-    if not page.exists():
-        chapter.mkdir(parents=True, exist_ok=True)
-        page.write_text(
-            "---\n---\n\n# " + parts[0].replace("-", " ").title() + "\n", encoding="utf-8"
-        )
 
 
 def _node(blueprint: Path, relative: str, body: str, **metadata: str) -> Path:
@@ -219,6 +201,19 @@ def test_authored_atlas_manifest_groups_nodes_independently_of_paths(tmp_path: P
     assert graph.nodes["topology"].area == "Geometry & Topology"
 
 
+def test_a_large_atlas_manifest_still_assigns_its_areas(tmp_path: Path) -> None:
+    """No size cap: a manifest past the old 1 MB limit is read whole."""
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "algebra.md", "# Algebra\n")
+    manifest = json.dumps({"schema": "autoform-atlas/v1", "areas": {"Algebra": ["algebra"]}})
+    (blueprint / "atlas.json").write_text(manifest + " " * 1_000_001, encoding="utf-8")
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["algebra"].area == "Algebra"
+    assert atlas_omissions(graph) == []
+
+
 def test_atlas_manifest_keeps_the_first_area_and_names_what_it_ignores(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "algebra.md", "# Algebra\n")
@@ -260,7 +255,6 @@ def test_dangling_atlas_manifest_link_is_not_treated_as_absent(tmp_path: Path) -
 @pytest.mark.parametrize(
     ("atlas", "omission"),
     [
-        pytest.param(b" " * 1_000_001, "ignored, since it exceeds 1000000 bytes", id="oversize"),
         pytest.param(b"{", "ignored, since it is not valid JSON: ", id="invalid-json"),
         pytest.param(b"[" * 200_000, "ignored, since it is not valid JSON: ", id="too-deep"),
         pytest.param(
@@ -1253,6 +1247,27 @@ def test_a_published_page_may_not_link_into_an_unpublished_folder(tmp_path: Path
     )
 
 
+def test_a_dependency_after_a_fence_that_never_closes_is_left_to_render(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The graph reads the fence as text and keeps the edge, but the check for
+    # links into unpublished folders reads it on to the end of the file and
+    # names nothing. Check warns about a fence left open at the margin, and
+    # render refuses the dependency, as a missing target rather than an
+    # unpublished one; with the fence closed, both name the folder. The split is
+    # known, not a design to keep (#201).
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "drafts/README.md", "# Drafts\n", published="false")
+    _node(blueprint, "drafts/idea.md", "# Idea\n")
+    _node(blueprint, "base.md", "# Base\n\n## Depends on\n\n```lean\nexample : True := trivial\n\n- [Idea](drafts/idea.md)\n")
+
+    assert load_graph(blueprint).nodes["base"].dependencies == ("drafts/idea",)
+    assert main(["check", str(blueprint)]) == 0
+    assert "code fence is not closed" in capsys.readouterr().out
+    assert main(["render", str(blueprint), "--output", str(tmp_path / "site-src")]) == 1
+    assert "base: dependency target does not exist: 'drafts/idea.md'" in capsys.readouterr().out
+
+
 def test_check_rejects_a_sources_link_to_a_generated_view(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1367,6 +1382,61 @@ def test_check_says_where_a_library_declaration_goes_when_a_name_is_not_found(
     expected = [line.format(root=lean_root) for line in expected]
     # The errors, then one note however many names are missing, end the output; a name defined twice gets no note.
     assert [line for line in lines if line.startswith(("error:", "note:"))] == lines[-len(expected) :] == expected
+
+
+def test_check_resolves_a_structure_field_and_says_why_a_generated_name_is_not_found(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Issue #498: a field was not found, and the note sent its author to the dependencies under .lake."""
+    blueprint = tmp_path / "blueprint"
+    article = _node(blueprint, "entry.md", "# Entry\n", declaration="def", lean="Demo.Entry.value")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Demo.lean").write_text(
+        "namespace Demo\nstructure Entry where\n  value : Nat\ninductive Shape where\n  | dot\n"
+        "class Pretty (α : Type) where\n  pretty : α → String\nend Demo\n",
+        encoding="utf-8",
+    )
+
+    assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "    1 declaration name(s) resolved in the Lean sources"
+
+    names = "Demo.Entry.value Demo.Entry.mk Demo.Shape.dot Demo.Pretty.mk"
+    article.write_text(article.read_text(encoding="utf-8").replace("Demo.Entry.value", names), encoding="utf-8")
+    assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 1
+    generated = "the index reads no constructor, recursor or other name Lean generates for it"
+    advice = (
+        "or another project declaration in lean: and record the name in the article's implementation note, "
+        "or check its spelling"
+    )
+    # Only names under the project's own types: the note about .lake is not printed.
+    assert [line for line in capsys.readouterr().out.splitlines() if line.startswith(("error:", "note:"))] == [
+        f"error: entry: declaration not found in {lean_root}: Demo.Entry.mk; Demo.Entry is a structure at "
+        f"Demo.lean:2: {generated}, and no field it inherits, so put Demo.Entry {advice}",
+        f"error: entry: declaration not found in {lean_root}: Demo.Shape.dot; Demo.Shape is an inductive type at "
+        f"Demo.lean:4: {generated}, so put Demo.Shape {advice}",
+        f"error: entry: declaration not found in {lean_root}: Demo.Pretty.mk; Demo.Pretty is a class at "
+        f"Demo.lean:6: {generated}, and no field it inherits, so put Demo.Pretty {advice}",
+    ]
+
+    # A catalog keeps its own reason, and a name of a shared library brings the note back.
+    (blueprint / "sources").mkdir()
+    (blueprint / "sources/catalog.md").write_text("# Catalog declarations\n", encoding="utf-8")
+    _node(
+        blueprint,
+        "catalog.md",
+        "# Existing module\n\n## Sources\n\n- [Ledger](../sources/catalog.md)\n",
+        catalog="module",
+        lean="Demo.Entry.mk",
+    )
+    article.write_text(article.read_text(encoding="utf-8").replace(names, "Demo.Entry.value Lib.base"), encoding="utf-8")
+    assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 1
+    assert [line for line in capsys.readouterr().out.splitlines() if line.startswith(("error:", "note:"))] == [
+        f"error: catalog: declaration not found in {lean_root}: Demo.Entry.mk; "
+        "a name Lean generates is not indexed and belongs in the catalog's ledger",
+        f"error: entry: declaration not found in {lean_root}: Lib.base",
+        _LIBRARY_DECLARATION_NOTE,
+    ]
 
 
 def test_check_prints_its_warnings_after_the_whole_summary(

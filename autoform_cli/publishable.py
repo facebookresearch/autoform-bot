@@ -6,6 +6,7 @@ import html
 import re
 import unicodedata
 from collections import Counter
+from functools import lru_cache
 from html.parser import HTMLParser
 from typing import Iterable
 
@@ -19,8 +20,11 @@ from .markdown import (
     INLINE_CODE,
     PAGE_HEADER,
     content_lines,
+    first_unclosed_fence,
+    frontmatter_end,
     published_markdown,
     published_page,
+    strip_line_comments,
 )
 from .mathjax import NEUTRALISED, TEX_MACROS
 
@@ -149,7 +153,8 @@ def publishable_article(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...
     errors: list[str] = []
     attributes: list[tuple[str, str]] = []
     defining: dict[str, None] = {}
-    for source, markdown in published_markdown(visible):
+    page_fence = False
+    for piece, (source, markdown) in enumerate(published_markdown(visible)):
         rendered, passed, assigned, unclosed, defined = _rendered_article(markdown)
         reading = _RenderedText()
         reading.feed(rendered)
@@ -179,6 +184,7 @@ def publishable_article(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...
                     + f"raw HTML is not allowed: the site would publish {shown} as HTML; write it in Markdown, or in code to show it as typed"
                 )
         if unclosed is not None:
+            page_fence = page_fence or piece == 0
             opener = unclosed.strip()
             numbers = [number for number, line in enumerate(text.splitlines(), start=1) if line.expandtabs(4).strip() == opener]
             fence = re.match(r"[> ]*(`{3,}|~{3,})", unclosed)
@@ -187,6 +193,31 @@ def publishable_article(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...
                 + "code fence is not closed: the site would read it on into what autoform render puts after this "
                 + f"text, to the next fence on the page; close it with a line of {fence.group(1) if fence else '```'}"
             )
+        else:
+            # The site ends an indented fence at the next line at the margin and
+            # reads a fence with options it rejects as text, but coverage, the
+            # link checks and render's link rewriting read every fence left open
+            # on to the end of the text, so the page is shown as typed (#201).
+            source_lines = source.splitlines()
+            at = first_unclosed_fence(source_lines)
+            # The page's own warning already names a fence its statement or notes leave open.
+            if at is not None and not (piece and page_fence):
+                page_fence = page_fence or piece == 0
+                line = _open_fence_line(text, source_lines[at], page=piece == 0)
+                fence = re.match(r"( *)(`{3,}|~{3,})(.*)", source_lines[at])
+                indent, marker, options = fence.groups() if fence else ("", "```", "")
+                # The site reads an opener with options it rejects as text, so alone at
+                # the margin it leaves no fence open; it closes an indented fence only
+                # at the same indent. Each needs its own fix, and both can apply.
+                rejected = _rendered_article(f"{marker}{options}\n")[3] is None
+                spaces = f"{len(indent)} space{'s' if len(indent) > 1 else ''}"
+                found.append(
+                    (f"line {line}: " if line else "")
+                    + "code fence is not closed: autoform reads the rest of this text as code, which the site does not; "
+                    + ("keep only options the site accepts, such as its language, and " if rejected else "")
+                    + f"close it with a line of {marker}"
+                    + (f" indented {spaces}, as its opening line is" if indent else "")
+                )
         schemes = list(dict.fromkeys(filter(None, map(_unsafe_scheme, [*reading.destinations, *defined]))))
         if schemes:
             found.append(
@@ -211,6 +242,28 @@ def publishable_article(text: str) -> tuple[str, tuple[str, ...], tuple[str, ...
     return visible, tuple(dict.fromkeys(errors)), notation
 
 
+def _open_fence_line(text: str, opener: str, *, page: bool) -> int | None:
+    """The line of the file ``text`` that opens the fence ``opener`` left open.
+
+    For the whole page the file's own lines are scanned as content() scans
+    them, with comments masked in place, so the index is exact; a statement
+    or its notes falls back to the last line with the opener's text.
+    """
+
+    lines = text.removeprefix("\ufeff").splitlines()
+    # The opener comes from published text, which has its comments removed.
+    bare = strip_line_comments(opener, False)[0].strip()
+    if page:
+        start = frontmatter_end(lines)
+        if start == len(lines) and (start < 2 or lines[-1].strip() != "---"):
+            start = 0
+        at = first_unclosed_fence(lines[start:])
+        if at is not None and strip_line_comments(lines[start + at], False)[0].strip() == bare:
+            return start + at + 1
+    numbers = [number for number, line in enumerate(lines, start=1) if strip_line_comments(line, False)[0].strip() == bare]
+    return numbers[-1] if numbers else None
+
+
 #: A command a formula would use to change the formulas around it, or one the
 #: site's MathJax turns off; :mod:`~autoform_cli.mathjax` lists why.
 _TEX_DEFINITION = re.compile(
@@ -232,7 +285,12 @@ def shown_as_typed(text: str, *, page: bool = True) -> str:
     as typed: every character escaped in one preformatted block, under a note
     that says why, so none of it becomes markup, a link, or a formula. The
     header that stands for a page's frontmatter is dropped first; with
-    ``page``, the result is a whole page under a header of its own."""
+    ``page``, the result is a whole page under a header of its own.
+
+    Render keeps the title the page's H1 gives, in its header and in the
+    navigation, and a statement shown as typed stays in its section with the
+    chapter's other statements. A flagged landing page shows only its title
+    and opening sentence, as text, above the dashboard."""
 
     note = (
         '<p class="bp-as-typed-note">autoform render shows this text as typed: it holds markup the site does '
@@ -366,55 +424,84 @@ def _rendered_article(
     to a length Python converts first, standing for what they did.
     """
 
-    parser = markdown_renderer.Markdown(extensions=list(SITE_EXTENSIONS), extension_configs=SITE_EXTENSION_CONFIGS)
-    fences = parser.preprocessors["fenced_code_block"]
-    read_fences = fences.run
-    highlighted = 0
-    unclosed: str | None = None
-
-    def counted(lines: list[str]) -> list[str]:
-        nonlocal highlighted, unclosed
-        read = read_fences(lines)
-        # An indented or quoted fence ends at the first line the site puts
-        # after the text, which starts at the margin; one at the margin runs on.
-        if fences.fence is not None and not fences.ws_virtual_len and not fences.quote_level:  # type: ignore[attr-defined]
-            # Every line after the opener is the open fence's content.
-            unclosed = lines[len(lines) - len(fences.code) - 1]  # type: ignore[attr-defined]
-        highlighted = len(parser.htmlStash.rawHtmlBlocks)
-        return read
-
-    fences.run = counted  # type: ignore[method-assign]
-    attribute_lists = parser.treeprocessors["attr_list"]
-    assign = attribute_lists.assign_attrs  # type: ignore[attr-defined]
-    assigned: list[tuple[str, str]] = []
-
-    def recorded(element: object, written: str, *, strict: bool = False) -> str:
-        # A strict list with text it cannot read is left in the text.
-        if not (strict and get_attrs_and_remainder(written)[1]):
-            assigned.append((element.tag, written))  # type: ignore[attr-defined]
-        return assign(element, written, strict=strict)
-
-    attribute_lists.assign_attrs = recorded  # type: ignore[attr-defined]
-    # A fence's braces are an attribute list too: what they set besides the
-    # language lands on the code block's element.
-    read_braces = fences.handle_attrs  # type: ignore[attr-defined]
-
-    def braced(match: re.Match[str]) -> bool:
-        okay = read_braces(match)
-        if okay and (fences.classes or fences.id or fences.attrs):  # type: ignore[attr-defined]
-            assigned.append(("fence", match.group("attrs")))
-        return okay
-
-    fences.handle_attrs = braced  # type: ignore[attr-defined]
-    rendered = parser.convert(_bounded_references(text))
+    converter = _site_converter()
+    parser = converter.parser
+    parser.reset()
+    converter.highlighted, converter.unclosed, converter.assigned = 0, None, []
+    try:
+        rendered = parser.convert(_bounded_references(text))
+    except BaseException:
+        # A conversion that fails midway, as one of a page nested too deep
+        # does, leaves the converter unable to read the next text, and reset
+        # does not repair it.
+        _site_converter.cache_clear()
+        raise
     passed = [
         block if isinstance(block, str) else "<element>"
-        for block in parser.htmlStash.rawHtmlBlocks[highlighted:]
+        for block in parser.htmlStash.rawHtmlBlocks[converter.highlighted :]
         if block != ""
     ]
     return rendered, [
         block for block in passed if not (_LOOSE_HTML_ENTITY.fullmatch(block) and not _live_reference(block))
-    ], assigned, unclosed, [html.unescape(url) for url, _title in parser.references.values()]
+    ], converter.assigned, converter.unclosed, [html.unescape(url) for url, _title in parser.references.values()]
+
+
+class _SiteConverter:
+    """The site's converter, with hooks that record, for the text it is
+    converting, how many blocks its fences stashed, the line that opens a
+    fence the text leaves open at the margin, and each attribute list it
+    applies, for :func:`_rendered_article` to read."""
+
+    def __init__(self) -> None:
+        parser = markdown_renderer.Markdown(extensions=list(SITE_EXTENSIONS), extension_configs=SITE_EXTENSION_CONFIGS)
+        self.parser = parser
+        self.highlighted = 0
+        self.unclosed: str | None = None
+        self.assigned: list[tuple[str, str]] = []
+        fences = parser.preprocessors["fenced_code_block"]
+        read_fences = fences.run
+
+        def counted(lines: list[str]) -> list[str]:
+            read = read_fences(lines)
+            # An indented or quoted fence ends at the first line the site puts
+            # after the text, which starts at the margin; one at the margin runs on.
+            if fences.fence is not None and not fences.ws_virtual_len and not fences.quote_level:  # type: ignore[attr-defined]
+                # Every line after the opener is the open fence's content.
+                self.unclosed = lines[len(lines) - len(fences.code) - 1]  # type: ignore[attr-defined]
+            self.highlighted = len(parser.htmlStash.rawHtmlBlocks)
+            return read
+
+        fences.run = counted  # type: ignore[method-assign]
+        attribute_lists = parser.treeprocessors["attr_list"]
+        assign = attribute_lists.assign_attrs  # type: ignore[attr-defined]
+
+        def recorded(element: object, written: str, *, strict: bool = False) -> str:
+            # A strict list with text it cannot read is left in the text.
+            if not (strict and get_attrs_and_remainder(written)[1]):
+                self.assigned.append((element.tag, written))  # type: ignore[attr-defined]
+            return assign(element, written, strict=strict)
+
+        attribute_lists.assign_attrs = recorded  # type: ignore[attr-defined]
+        # A fence's braces are an attribute list too: what they set besides the
+        # language lands on the code block's element.
+        read_braces = fences.handle_attrs  # type: ignore[attr-defined]
+
+        def braced(match: re.Match[str]) -> bool:
+            okay = read_braces(match)
+            if okay and (fences.classes or fences.id or fences.attrs):  # type: ignore[attr-defined]
+                self.assigned.append(("fence", match.group("attrs")))
+            return okay
+
+        fences.handle_attrs = braced  # type: ignore[attr-defined]
+
+
+@lru_cache(maxsize=1)
+def _site_converter() -> _SiteConverter:
+    """One converter for every text, as :func:`~autoform_cli.markdown.render_html`
+    keeps one; :meth:`~markdown.Markdown.reset` clears what a conversion leaves
+    behind. Texts are converted one at a time, on one thread."""
+
+    return _SiteConverter()
 
 
 class _RenderedText(HTMLParser):

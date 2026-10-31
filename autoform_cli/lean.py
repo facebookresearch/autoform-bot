@@ -9,6 +9,36 @@ The scanner is a lexical pass, not an elaborator. It tracks ``namespace`` and
 comment nesting and stops at ``#exit``, which is enough for declarations
 written in the ordinary way, and deliberately reports nothing it cannot see
 rather than guessing.
+
+Indexing reads the whole Lean root or nothing (the user-facing rules are in
+``autoform_cli/reference/validation-and-audit.md``). Besides ``.lean`` files,
+the walk reads only ``manifest.json``, to recognize skeleton and review packet
+output folders, and ``publication.json``, to recognize rendered sites; every
+command skips the same folders, so ``render`` and the other commands index the
+same files. ``render`` marks the site it is writing before it copies any file
+into it, so a command that indexes during a render skips it too. ``mkdocs
+build`` empties ``site/`` and then copies files in name order, so ``site/`` can
+hold copies before its ``publication.json``, which is why a command that
+indexed during the build must run again. A capture that sees Lean inputs
+change is retried; folders the walk skips and files other than ``.lean``
+sources may change during a capture.
+
+The command may follow ``@[...]`` attribute lists and the modifiers
+``public``, ``private``, ``protected``, ``noncomputable``, ``partial``,
+``unsafe``, ``scoped``, and ``local``. ``alias b := a`` records ``b``, and
+``alias ⟨mp, mpr⟩ := a_iff`` each of its names that is not ``_``; the ``:=``
+must be on the alias's line, and the target on that line or the next nonblank
+one.
+
+A name declared more than once selects its one declaration that is neither
+``private`` nor a wanted command, since every other module sees the public
+one. The rule sees only indexed declarations: a public one behind an unindexed
+prefix such as ``open X in``, or written ``«main»`` where the article writes
+``main``, leaves a private one as the name's only declaration. In a file that
+starts with ``module``, a declaration outside a ``public section`` and without
+``public`` is private to Lean but public to the index, so such a name may be
+reported as defined more than once where Lean accepts it, or selected where
+Lean binds it nowhere outside its file.
 """
 
 from __future__ import annotations
@@ -19,16 +49,16 @@ import json
 import os
 import re
 import stat
-import subprocess
 import time
 import unicodedata
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from urllib.parse import quote_from_bytes, urlsplit, urlunsplit
+from urllib.parse import quote_from_bytes
 
 from . import _directory_binding as directory_binding
+from ._fs import directory_path
 from ._tree_snapshot import (
     BoundDirectoryTree,
     OpaqueDirectoryMarker,
@@ -38,7 +68,6 @@ from ._tree_snapshot import (
     TreeSnapshot,
     TreeSnapshotError,
 )
-from .markdown import directory_path
 
 _NAMESPACE = re.compile(r"^\s*namespace\s+(.+)$")
 #: ``section`` in every form that opens one, e.g. ``@[expose] public section``.
@@ -116,6 +145,9 @@ _IGNORED_DIRECTORIES = frozenset(
 )
 # ``Build`` can be a Lean namespace directory, so only this spelling is ignored.
 _EXACT_IGNORED_DIRECTORIES = frozenset({"build"})
+#: A packet tree still being staged beside its destination, skipped by name,
+#: so a stage an older writer left without its manifest is not project source.
+_OUTPUT_STAGE = re.compile(r"\A\..+\.autoform-stage-[0-9a-f]{16}\Z")
 _MANAGED_OUTPUT_MANIFEST = "manifest.json"
 _MANAGED_OUTPUT_MANIFEST_BYTE_LIMIT = 16 * 1024 * 1024
 # Skeleton manifests grow with the declaration set, and their sorted schema key
@@ -125,6 +157,7 @@ _SNAPSHOT_RETRY_DELAY_SECONDS = 0.05
 #: Known schemas of the skeleton command's packet and passage manifests.
 PACKET_SCHEMA = "autoform-skeleton-packets/v2"
 PASSAGE_SCHEMA = "autoform-skeleton-passages/v2"
+REVIEW_PACKET_SCHEMA = "autoform-review-packets/v1"
 MANAGED_OUTPUT_SCHEMAS = frozenset(
     {
         ("packets", "autoform-skeleton-packets/v1"),
@@ -141,8 +174,7 @@ PUBLICATION_MANIFEST = "publication.json"
 PUBLICATION_SCHEMA = "autoform-publication/v3"
 #: Sites render may replace: each records a file inventory to check first.
 _REPLACEABLE_SCHEMAS = frozenset({"autoform-publication/v2", PUBLICATION_SCHEMA})
-#: Render never writes a larger manifest, so the next render can always read it.
-PUBLICATION_MANIFEST_MAX_BYTES = 8 * 1024 * 1024
+_IGNORED_OUTPUT_SCHEMAS = MANAGED_OUTPUT_SCHEMAS | {("packets", REVIEW_PACKET_SCHEMA)}
 
 @dataclass(frozen=True, slots=True)
 class Alias:
@@ -492,20 +524,6 @@ def _lasting_root_failure(root: str | Path) -> str | None:
     return None
 
 
-def project_source_revision(
-    root: str | Path,
-    *,
-    exclude_roots: Iterable[str | Path] = (),
-    limits: TreeCaptureLimits = TreeCaptureLimits(),
-) -> str:
-    """Hash the exact Lean source set consumed by :func:`index_project`."""
-    return snapshot_project_sources(
-        root,
-        exclude_roots=exclude_roots,
-        limits=limits,
-    ).revision
-
-
 def open_project_sources(
     root: str | Path,
     *,
@@ -631,7 +649,7 @@ def _lean_tree_selection(
             # mkdocs can copy files into site/ before it copies the manifest.
             OpaqueDirectoryMarker(
                 PUBLICATION_MANIFEST,
-                PUBLICATION_MANIFEST_MAX_BYTES,
+                None,  # it lists every site file, so it grows with the project
                 _is_complete_publication,
             ),
         ),
@@ -666,6 +684,7 @@ def _lean_path_is_excluded(
     return (
         bool(_IGNORED_DIRECTORIES.intersection(folded_parts))
         or bool(_EXACT_IGNORED_DIRECTORIES.intersection(relative.parts))
+        or any(_OUTPUT_STAGE.match(part) for part in relative.parts)
         or any(
             len(folded_parts) >= len(prefix_parts)
             and folded_parts[: len(prefix_parts)] == prefix_parts
@@ -734,7 +753,7 @@ def _is_managed_output_manifest_bytes(data: bytes) -> bool:
     return (
         isinstance(kind, str)
         and isinstance(schema, str)
-        and (kind, schema) in MANAGED_OUTPUT_SCHEMAS
+        and (kind, schema) in _IGNORED_OUTPUT_SCHEMAS
         and isinstance(value.get(kind), list)
     )
 
@@ -780,7 +799,27 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
     namespaces: list[str] = []
     scopes: list[str | None] = []
 
-    lines = _without_lean_comments(text, mask_literals=True).splitlines()
+    masked = _without_lean_comments(text, mask_literals=True)
+    lines = masked.splitlines()
+    unmasked: list[str] = []
+
+    def literal_line(index: int) -> str:
+        """Line ``index`` with its literals back; masking keeps each literal's length, so the offsets agree."""
+        if not unmasked:
+            kept, offset = _without_lean_comments(text), 0
+            for line in masked.splitlines(keepends=True):
+                unmasked.append(kept[offset : offset + len(line)])
+                offset += len(line)
+        return unmasked[index]
+
+    # Masking shortens a comment, so a comment before a field on its line would
+    # move the field's column: columns come from the text as written, unless a
+    # comment or string holds a line separator other than a line end.
+    written = text.splitlines()
+    if len(written) == len(lines) + 1 and text.endswith(written[-1]) and written[-1].lstrip().startswith(("--", "/-")):
+        # A comment on the last line, with no line end after it, masks to nothing.
+        written.pop()
+    indents = [len(line) - len(line.lstrip()) for line in (written if len(written) == len(lines) else lines)]
     for number, line in enumerate(lines, start=1):
         if not line.strip():
             continue
@@ -847,8 +886,323 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
             # `_name_token` stops before the `{` in an explicit universe
             # binder, leaving the syntactic separator behind.
             name = name.removesuffix(".")
-            found.append(Declaration(_qualified(namespaces, name), relative, number, keyword, protected, private))
+            qualified = _qualified(namespaces, name)
+            found.append(Declaration(qualified, relative, number, keyword, protected, private))
+            # `class abbrev` and `class inductive` read as a class of that name, with no fields.
+            if keyword in ("structure", "class") and name not in ("abbrev", "inductive"):
+                found.extend(
+                    _fields(lines, literal_line, indents, number - 1, body_index, qualified, relative, private)
+                )
     return found, len(lines)
+
+
+#: What may stand before a structure field's name: modifiers and attribute lists.
+_FIELD_MODIFIERS = frozenset({"private", "protected", "public", "noncomputable", "partial", "unsafe"})
+#: What a structure's header is read by: quoted names, brackets, and what ends it.
+_HEADER_TOKEN = re.compile(r"«[^»]*»|\bwhere\b|:=|[()\[\]{}⦃⦄]")
+
+
+def _fields(
+    lines: list[str],
+    literal_line: Callable[[int], str],
+    indents: list[int],
+    keyword_index: int,
+    header_index: int,
+    structure: str,
+    relative: Path,
+    private: bool,
+) -> list[Declaration]:
+    """The fields a ``structure`` or ``class`` declares after its ``where``, each as ``Structure.field``.
+
+    Lean makes each field a projection constant of that name. The fields
+    follow ``where``, or the older ``:=``, outside the header's binders. A
+    field line starts at the column of the first line after it. A deeper line
+    continues a field, and so does a line at that column that Lean reads on
+    into; a shallower one, ``deriving`` or a command ends them. A
+    bracketed group names each of its fields, a plain field only its first
+    name. A field given only a default, ``x := v`` or ``(x := v)``, may set an
+    inherited field, which Lean declares no constant for, so it is read only
+    when the structure extends nothing. The constructor's ``mk ::`` names no
+    field, and on a line of its own it may stand at any column. A parent the
+    header names, ``extends toA : A``, is a field as well.
+    """
+
+    base = indents[keyword_index]
+    header: list[tuple[int, str]] = []
+    found = None
+    depth = 0
+    for index in range(header_index, len(lines)):
+        line = lines[index]
+        if not line.strip():
+            continue
+        if index > header_index and (indents[index] <= base or _command_line(line)) or _EXIT.match(line):
+            break
+        for token in _HEADER_TOKEN.finditer(line):
+            if token.group() in _BINDER_CLOSERS:
+                depth += 1
+            elif token.group() in _BINDER_CLOSERS.values():
+                depth -= 1
+            elif token.group() in ("where", ":=") and depth <= 0:
+                found = (index, line[token.end() :])
+                break
+        if found is not None:
+            header.append((index, line[: token.start()]))
+            break
+        header.append((index, line))
+    extends, parents = _parents(header)
+    # A parent the header names, `extends toA : A`, is a field too.
+    fields = [
+        Declaration(f"{structure}.{name}", relative, number, "field", False, private)
+        for name, number in parents
+        if name not in _FIELD_FORBIDDEN
+    ]
+    if found is None:
+        return fields
+    where_index, inline = found
+
+    def read(text: str, number: int) -> bool:
+        """Record the fields one field line starts; ``False`` once ``deriving`` or a command ends them."""
+        constructor = False
+        while True:
+            words = _SCOPED.sub(" ", _ATTRIBUTE_LIST.sub(" ", text)).split()
+            modifiers = set()
+            while words and words[0] in _COMMAND_MODIFIERS:
+                modifiers.add(words.pop(0))
+            text = " ".join(words)
+            # Each group of names, with what follows their binders: a type, a default, or neither.
+            groups: list[tuple[list[str], str]] = []
+            if text[:1] in _BINDER_CLOSERS:
+                # `(x y : T)`, `{x : T}`, `[inst : C]`: the names a group starts with are all fields.
+                while text[:1] in _BINDER_CLOSERS:
+                    end = _bracket_end(text)
+                    inner = (text[1 : end - 1] if end > 0 else text[1:]).lstrip()
+                    names = []
+                    while name := _FIELD_NAME.match(inner):
+                        names.append(name.group())
+                        inner = inner[name.end() :].lstrip()
+                    groups.append((names, _after_binders(inner)))
+                    if end < 0:
+                        break
+                    text = text[end:].lstrip()
+                break
+            name = _FIELD_NAME.match(text)
+            if name is None:
+                return True
+            if name.group() in _FIELD_ENDS:
+                return False
+            tail = _after_binders(text[name.end() :])
+            if not tail.startswith("::"):
+                groups.append(([name.group()], tail))
+                break
+            # The constructor's name; a field may follow it on its line, but not a second one.
+            text = tail[2:].strip()
+            if not text or constructor:
+                return True
+            constructor = True
+        for names, tail in groups:
+            if not tail.startswith(":") or (tail.startswith(":=") and extends):
+                continue
+            for member in names:
+                if member not in _FIELD_FORBIDDEN:
+                    fields.append(
+                        Declaration(
+                            f"{structure}.{member}", relative, number, "field",
+                            "protected" in modifiers, private or "private" in modifiers,
+                        )
+                    )
+        return True
+
+    if inline.strip() and not read(inline.strip(), where_index + 1):
+        return fields
+    start = where_index + 1
+    if not inline.strip():
+        # The constructor may stand alone above the fields, even at the
+        # structure's own column, and the fields' column is then the next line's.
+        first = next((index for index in range(start, len(lines)) if lines[index].strip()), None)
+        if first is not None and _constructor_only(lines[first]):
+            start = first + 1
+    # Each field line with the lines that continue it, such as a type on the
+    # next line, a second bracketed group, or the rest of a term at its column.
+    entries: list[tuple[int, list[str]]] = []
+    column = None
+    last = where_index if inline.strip() else None
+    depth = _depth(inline)
+    # A field written after `where`, past any constructor, sets the field column.
+    after = inline
+    if (name := _CONSTRUCTOR_NAME.match(inline)) and (rest := _after_binders(inline[name.end() :])).startswith("::"):
+        after = rest[2:]
+    if after.strip():
+        column = len(lines[where_index]) - len(after.lstrip())
+    for index in range(start, len(lines)):
+        text = lines[index].strip()
+        if not text:
+            continue
+        if _EXIT.match(text):
+            break
+        indent = indents[index]
+        if column is None:
+            if indent <= base:
+                break
+            column = indent
+        if indent < column:
+            break
+        if indent == column and depth <= 0 and last is not None and _DO_END.search(lines[last]):
+            # A `do` block at the field column, outside brackets, takes every line after it there.
+            break
+        if indent == column and depth <= 0 and not (
+            last is not None and _continues(lines[last], literal_line, last, text)
+        ):
+            entries.append((index + 1, [text]))
+            depth = _depth(text)
+        else:
+            if entries:
+                entries[-1][1].append(text)
+            depth += _depth(text)
+        last = index
+    # Attribute lists and modifiers may stand on lines of their own above a field.
+    modifiers = ""
+    for number, parts in entries:
+        text = " ".join(parts)
+        if _MODIFIER_LINE.fullmatch(text):
+            modifiers += f" {text}"
+            continue
+        if not read(f"{modifiers} {text}".strip(), number):
+            break
+        modifiers = ""
+    return fields
+
+
+def _parents(header: list[tuple[int, str]]) -> tuple[bool, list[tuple[str, int]]]:
+    """Whether a structure's header extends anything, and each parent it names, with its line."""
+
+    for position, (index, text) in enumerate(header):
+        extends = re.search(r"\bextends\b", text)
+        if extends is not None:
+            break
+    else:
+        return False, []
+    named: list[tuple[str, int]] = []
+    depth, start = 0, True
+    # The parents are separated by the commas outside brackets.
+    quoted = False
+    for index, text in [(index, text[extends.end() :]), *header[position + 1 :]]:
+        for offset, char in enumerate(text):
+            if start and not char.isspace():
+                if parent := _NAMED_PARENT.match(text, offset):
+                    named.append((parent.group(1), index + 1))
+                start = False
+            if quoted or char == "«":
+                quoted = char != "»"
+            elif char in _BINDER_CLOSERS:
+                depth += 1
+            elif char in _BINDER_CLOSERS.values():
+                depth -= 1
+            elif char == "," and depth == 0:
+                start = True
+    return True, named
+
+
+def _name_prefix(name: str) -> str:
+    """``name`` without its last component, which a guillemet may quote together with dots."""
+
+    if name.endswith("»") and "«" in name:
+        return name[: name.rindex("«")].removesuffix(".")
+    return name.rpartition(".")[0]
+
+
+def _after_binders(text: str) -> str:
+    """What follows a field's binders, as in ``label (n : Nat) m : String``: its type, default or ``::``."""
+
+    while True:
+        text = text.lstrip()
+        if text[:1] in _BINDER_CLOSERS:
+            end = _bracket_end(text)
+            if end < 0:
+                return ""
+            text = text[end:]
+        elif binder := _FIELD_NAME.match(text):
+            text = text[binder.end() :]
+        else:
+            return text
+
+
+def _constructor_only(line: str) -> bool:
+    """Whether ``line`` holds only a structure's constructor, such as ``private mk (n : Nat) ::``."""
+
+    words = _ATTRIBUTE_LIST.sub(" ", line).split()
+    while words and words[0] in _FIELD_MODIFIERS:
+        words.pop(0)
+    text = " ".join(words)
+    name = _FIELD_NAME.match(text)
+    return name is not None and _after_binders(text[name.end() :]) == "::"
+
+
+def _depth(text: str) -> int:
+    """How many brackets ``text`` leaves open, so that a term such as ``{ a := 1`` goes on past its line."""
+
+    text = _QUOTED_NAME.sub("", text)
+    return sum(map(text.count, "([{⦃⟨")) - sum(map(text.count, ")]}⦄⟩"))
+
+
+def _command_line(line: str) -> bool:
+    """Whether ``line`` starts a command that ends a structure, such as ``@[simp] theorem``."""
+
+    words = _SCOPED.sub(" ", _ATTRIBUTE_LIST.sub(" ", line)).split()
+    while words and words[0] in _COMMAND_MODIFIERS:
+        words.pop(0)
+    return bool(words) and words[0] in _FIELD_ENDS
+
+
+def _continues(above: str, literal_line: Callable[[int], str], index: int, text: str) -> bool:
+    """Whether a line at the field column continues the field above it instead of starting one.
+
+    Lean reads on into the field above after a comma, an arrow, a relation,
+    an operator or an open bracket, and a field line starts with neither a
+    term keyword nor binders followed by more of a term, as in
+    ``(h : 0 < n) → P n``. A command starts no term, so it never continues one.
+    """
+
+    # A command cannot go on a term, except `open … in` and `set_option … in`.
+    if _command_line(text) and text.split(maxsplit=1)[0] not in ("open", "set_option"):
+        return False
+    # A masked literal is blank, so a line that seems to read on may end in a
+    # literal instead: masking keeps each literal's length.
+    if _OPEN_END.search(above) and len(above.rstrip()) == len(literal_line(index).rstrip()):
+        return True
+    if text.split(maxsplit=1)[0] in _TERM_KEYWORDS:
+        return True
+    while text[:1] in _BINDER_CLOSERS:
+        end = _bracket_end(text)
+        if end < 0:
+            return False
+        text = text[end:].lstrip()
+        if text and text[:1] not in _BINDER_CLOSERS and not _FIELD_NAME.match(text):
+            return True
+    return False
+
+
+def _bracket_end(text: str) -> int:
+    """The index just past the bracket that closes the one ``text`` opens with, or -1 if this line does not close it."""
+
+    closers: list[str] = []
+    position = 0
+    while position < len(text):
+        char = text[position]
+        if char == "«":
+            end = text.find("»", position + 1)
+            if end == -1:
+                return -1
+            position = end + 1
+            continue
+        if char in _BINDER_CLOSERS:
+            closers.append(_BINDER_CLOSERS[char])
+        elif char in _BINDER_CLOSERS.values():
+            if not closers or char != closers.pop():
+                return -1
+            if not closers:
+                return position + 1
+        position += 1
+    return -1
 
 
 _ATTRIBUTE_LIST = re.compile(r"@\[[^\]]*\]")
@@ -884,8 +1238,34 @@ _ID_LETTER = (
 _ID_REST = rf"[{_ID_LETTER}0-9'!?\u2080-\u2089\u2090-\u209c\u1d62-\u1d6a\u2c7c]*"
 _ID_COMPONENT = rf"(?:«[^«»]*»|[{_ID_LETTER}]{_ID_REST})"
 _CONTINUATION_IDENTIFIER = re.compile(rf"{_ID_COMPONENT}(?:\.{_ID_COMPONENT})*")
+#: One component of a Lean name, such as a structure field's.
+_FIELD_NAME = re.compile(_ID_COMPONENT)
+#: A parent that names its projection, ``toA : A`` in ``extends toA : A``.
+_NAMED_PARENT = re.compile(rf"({_ID_COMPONENT})\s*:(?![:=])")
 _SIGNATURE_WORDS = frozenset({"where", "extends", "requires", "ensures"})
 _NAME_FORBIDDEN = _COMMAND_HEADS | _COMMAND_MODIFIERS | {"where", "extends", "by", "do", "in", "let", "match"}
+#: ``module`` heads a file, not a command, so a field may have that name.
+_FIELD_FORBIDDEN = _NAME_FORBIDDEN - {"module"}
+#: A command at the field column ends the structure: a core one, or one of
+#: Mathlib's that reads like a field, `notation3:max "x" => 1` or `recall f : T`.
+_FIELD_ENDS = (_COMMAND_HEADS - {"module", "prelude", "import"}) | {"notation3", "recall"}
+#: Keywords that start a term, never a field.
+_TERM_KEYWORDS = frozenset(
+    {"by", "calc", "do", "else", "fun", "have", "if", "let", "match", "nofun", "nomatch", "show", "suffices", "then"}
+)
+_DO_END = re.compile(r"(?:^|\s)do\s*$")
+#: The name of a constructor that may open the text after ``where``, as in ``where mk (T) :: a : Nat``.
+_CONSTRUCTOR_NAME = re.compile(rf"\s*(?:@\[[^\]]*\]\s*)*(?:(?:private|protected)\s+)*{_ID_COMPONENT}")
+#: Mathlib's ``scoped[NS]``, which scopes the command after it to a namespace.
+_SCOPED = re.compile(r"^\s*scoped\s*\[[^\]]*\]")
+_QUOTED_NAME = re.compile(r"«[^»]*»")
+#: The end of a line that a term continues past: a comma, an open bracket, an
+#: arrow, a relation, an operator after a space, or the ``in`` of a term's
+#: ``open … in``, but not the constructor's ``mk ::`` or a postfix such as
+#: ``Type*``, ``ℕ+`` or Mathlib's ``n !``.
+_OPEN_END = re.compile(
+    r"(?:(?<!:):|[,=(\[{⟨→↔∧∨×∘•≤≥≠≈≡∈∉⊆⊂⊇⊃∣≃≅⟶↦]|=>|->|<\||\|>|(?:^|\s)(?:[-+*/^%<>&|$]+|fun|by|in))\s*$"
+)
 _BINDER_CLOSERS = {"(": ")", "{": "}", "[": "]", "⦃": "⦄"}
 
 
@@ -1094,14 +1474,6 @@ def _without_lean_comments(text: str, *, mask_literals: bool = False) -> str:
     return "".join(out)
 
 
-def strip_lean_comments(text: str) -> str:
-    """Remove every line and block comment, docstrings included, from Lean source."""
-
-    return "\n".join(
-        line.rstrip() for line in _without_lean_comments(text).splitlines() if line.strip()
-    )
-
-
 _DECLARATION_NAME = re.compile(r"(?:«[^»]*(?:»|$)|[^\s,«])+")
 
 
@@ -1146,282 +1518,6 @@ class SourceLinker:
         return f"{self.repository_url}/blob/{encoded_ref}/{path}#L{declaration.line}"
 
 
-def verify_repository_snapshot(
-    root: str | Path,
-    requested_ref: str,
-    files: Iterable[tuple[Path, bytes]],
-    *,
-    required_directories: Iterable[Path] = (),
-    reasons: list[str] | None = None,
-    spellings: dict[str, str] | None = None,
-) -> str | None:
-    """Return the commit whose tree holds every captured file, byte for byte.
-
-    A clean checkout that Git converts on the way out (LFS, eol attributes) is
-    accepted by hashing the captured bytes through Git's clean filter. Otherwise
-    ``None``, with the first reason appended to *reasons*, naming paths relative
-    to the repository only. The shared Git runner strips ambient overrides.
-    Given *spellings*, a file Git committed under another spelling of its name
-    is accepted too, and its committed path recorded there (``_git_tree_oids``).
-
-    *root* may be any directory of the working tree: files are compared at their
-    paths from its top level.
-    """
-
-    def refuse(reason: str) -> None:
-        if reasons is not None:
-            reasons.append(reason)
-
-    root = Path(root).resolve()
-    commit = _git(root, "rev-parse", "--verify", "--end-of-options", f"{requested_ref}^{{commit}}")
-    algorithm = _git(root, "rev-parse", "--show-object-format")
-    if commit is None or algorithm not in {"sha1", "sha256"}:
-        return refuse(f"{requested_ref!r} does not name a commit in a local Git repository")
-    top_level = repository_top_level(root)  # where tree paths start
-    if top_level is None:
-        return refuse(
-            "the Lean root is outside its Git repository's working tree, or spelled other than as Git spells it"
-        )
-    root = top_level
-    captured: dict[str, bytes] = {}
-    try:
-        for path, data in files:
-            relative = path.relative_to(root).as_posix()
-            if captured.setdefault(relative, data) != data:
-                return refuse(f"two captured files claim {relative}")
-        directories = [path.relative_to(root).as_posix() for path in required_directories]
-    except ValueError:
-        return refuse("a captured file or directory is outside the repository")
-    blobs = _git_tree_oids(root, commit, tuple(sorted(captured)), spellings)
-    if blobs is None:
-        return refuse("the commit's tree could not be read")
-    for path, data in captured.items():
-        if path not in blobs:
-            return refuse(f"{path} is not a file in commit {commit[:12]}")
-        framed = b"blob " + str(len(data)).encode("ascii") + b"\0" + data
-        if hashlib.new(algorithm, framed).hexdigest() != blobs[path] and (
-            _git_clean_blob_id(root, path, data) != blobs[path]
-        ):
-            return refuse(f"{path} differs from commit {commit[:12]}")
-    if any(_git(root, "cat-file", "-t", f"{commit}:{directory}") != "tree" for directory in directories):
-        return refuse(f"a required directory is not in commit {commit[:12]}")
-    return commit
-
-
-def _git_clean_blob_id(root: Path, path: str, data: bytes) -> str | None:
-    """Hash captured bytes as Git would store them at *path* (clean filter, eol)."""
-
-    try:
-        result = subprocess.run(
-            ["git", "hash-object", "--stdin", f"--path={path}"],
-            cwd=str(root),
-            input=data,
-            capture_output=True,
-            env=_git_environment(),
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    output = result.stdout.decode("ascii", "replace").strip()
-    return output if result.returncode == 0 and output else None
-
-
-def _git_tree_oids(
-    root: Path,
-    commit: str,
-    paths: tuple[str, ...],
-    spellings: dict[str, str] | None = None,
-) -> dict[str, str] | None:
-    """Read raw blob IDs of regular files at exact paths without Git's quoting layer.
-
-    macOS Git with ``core.precomposeUnicode`` finds a name decomposed on disk
-    under the composed spelling it committed, which is not always NFC, and
-    prints that spelling. Given *spellings*, such a record is matched to the
-    path asked for by NFC form, and the committed path recorded under it.
-    """
-
-    result: dict[str, str] = {}
-    for start in range(0, len(paths), 128):
-        batch = paths[start : start + 128]
-        if not batch:
-            continue
-        try:
-            completed = subprocess.run(
-                [
-                    "git",
-                    "ls-tree",
-                    "-rz",
-                    "--full-tree",
-                    commit,
-                    "--",
-                    *(f":(literal){path}" for path in batch),
-                ],
-                cwd=str(root),
-                capture_output=True,
-                env=_git_environment(),
-                timeout=10,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if completed.returncode != 0:
-            return None
-        asked = set(batch)
-        composed = {} if spellings is None else {unicodedata.normalize("NFC", path): path for path in batch}
-        for record in completed.stdout.split(b"\0"):
-            if not record:
-                continue
-            header, separator, encoded_path = record.partition(b"\t")
-            fields = header.split()
-            if not separator or len(fields) != 3 or fields[0] not in {b"100644", b"100755"}:
-                continue
-            printed = os.fsdecode(encoded_path)
-            path = printed if printed in asked else composed.get(unicodedata.normalize("NFC", printed), printed)
-            result[path] = fields[2].decode("ascii")
-            if spellings is not None and path != printed:
-                spellings[path] = printed
-    return result
-
-
-def detect_repository_url(root: str | Path) -> str | None:
-    """Find the project's web URL from the CI environment or the git remote."""
-    repository = (
-        os.environ.get("GITHUB_REPOSITORY")
-        if _is_github_workspace(root)
-        else None
-    )
-    if repository:
-        server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
-        return f"{server.rstrip('/')}/{repository}"
-    remote = _git(root, "config", "--local", "--get", "remote.origin.url")
-    return _normalize_remote(remote) if remote else None
-
-
-def repository_top_level(root: str | Path) -> Path | None:
-    """The top level of *root*'s Git working tree, spelled as *root* is.
-
-    *root*'s last parts must spell Git's path to it, compared in NFC, since
-    macOS Git composes names; otherwise, or outside a working tree, the top
-    level is unknown and this is ``None``. *root* should be resolved, as
-    ``resolve_lean_root`` gives it.
-    """
-    try:
-        output = _git(root, "rev-parse", "--is-inside-work-tree", "--show-prefix")
-    except ValueError:  # Git printed a name that is not UTF-8
-        return None
-    lines = output.splitlines() if output is not None else []
-    if not lines or lines[0] != "true":
-        return None
-    parts = lines[1].rstrip("/").split("/") if len(lines) > 1 else []
-    if not parts:
-        return Path(root)
-    spelled = Path(root).parts[-len(parts) :]
-    if [unicodedata.normalize("NFC", part) for part in spelled] != [
-        unicodedata.normalize("NFC", part) for part in parts
-    ]:
-        return None
-    return Path(root).parents[len(parts) - 1]
-
-
-def detect_ref(root: str | Path) -> str | None:
-    """Prefer the exact commit so links keep pointing at the reviewed code."""
-    github_sha = os.environ.get("GITHUB_SHA") if _is_github_workspace(root) else None
-    return github_sha or _git(root, "rev-parse", "HEAD")
-
-
-def _is_github_workspace(root: str | Path) -> bool:
-    workspace = os.environ.get("GITHUB_WORKSPACE")
-    if not workspace:
-        return False
-    try:
-        resolved_root = Path(root).resolve()
-        resolved_workspace = Path(workspace).resolve()
-    except (OSError, RuntimeError):
-        return False
-    return resolved_root == resolved_workspace or resolved_root.is_relative_to(
-        resolved_workspace
-    )
-
-
-def _normalize_remote(remote: str) -> str | None:
-    remote = remote.strip()
-    if remote.startswith("git@"):
-        host, _, path = remote[4:].partition(":")
-        if not path:
-            return None
-        remote = f"https://{host}/{path}"
-    try:
-        parsed = urlsplit(remote)
-    except ValueError:
-        return None
-    if parsed.scheme == "ssh" and parsed.username == "git" and parsed.hostname:
-        host = (
-            f"[{parsed.hostname}]"
-            if ":" in parsed.hostname
-            else parsed.hostname
-        )
-        try:
-            port = parsed.port
-        except ValueError:
-            return None
-        remote = f"https://{host}{f':{port}' if port is not None else ''}{parsed.path}"
-        try:
-            parsed = urlsplit(remote)
-        except ValueError:
-            return None
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
-    ):
-        return None
-    try:
-        port = parsed.port
-    except ValueError:
-        return None
-    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
-    netloc = f"{host}:{port}" if port is not None else host
-    path = parsed.path.rstrip("/")
-    if path.endswith(".git"):
-        path = path[: -len(".git")]
-    if not path or path == "/":
-        return None
-    return urlunsplit((parsed.scheme, netloc, path, "", ""))
-
-
-def _git(root: str | Path, *arguments: str) -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", *arguments],
-            cwd=str(root),
-            capture_output=True,
-            env=_git_environment(),
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    output = result.stdout.strip()
-    return output if result.returncode == 0 and output else None
-
-
-def _git_environment() -> dict[str, str]:
-    """Make the explicit working directory the only Git repository selector."""
-
-    environment = {
-        name: value
-        for name, value in os.environ.items()
-        if not name.startswith("GIT_")
-    }
-    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
-    return environment
-
-
 __all__ = [
     "IndexedSourceSnapshot",
     "Alias",
@@ -1431,20 +1527,14 @@ __all__ = [
     "PACKET_SCHEMA",
     "PASSAGE_SCHEMA",
     "PUBLICATION_MANIFEST",
-    "PUBLICATION_MANIFEST_MAX_BYTES",
     "PUBLICATION_SCHEMA",
+    "REVIEW_PACKET_SCHEMA",
     "SourceIndex",
     "SourceLinker",
     "bind_project_source_snapshot",
     "declaration_names",
-    "detect_ref",
-    "detect_repository_url",
     "index_failure_message",
     "index_project",
-    "project_source_revision",
-    "repository_top_level",
     "resolve_lean_root",
     "snapshot_project_sources",
-    "strip_lean_comments",
-    "verify_repository_snapshot",
 ]

@@ -1,4 +1,10 @@
-"""Read-only formalization frontier derived from the Markdown runtime."""
+"""Read-only formalization frontier derived from the Markdown runtime.
+
+``work list`` uses the readiness rule behind the derived ``can_state`` and
+``can_prove`` states, the runtime projection and the site's Next up card, so
+they agree on what is ready. ``work context`` reports the runtime's source
+targets, so it leaves out those the runtime contract omits.
+"""
 
 from __future__ import annotations
 

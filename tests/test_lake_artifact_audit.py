@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import io
 import json
 import os
@@ -16,32 +15,23 @@ import pytest
 
 from autoform_cli import status
 
-from tests.test_impact import _lean_toolchain_available
+from tests.audit_fixture import (
+    _TEMPLATE,
+    _audit_step,
+    _ends_with_the_success_line,
+    _load_helper,
+    _run,
+    _run_probe,
+    _write,
+)
+from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
 
 
-_TEMPLATE = Path("autoform_cli/templates/github/autoform_audit.py")
 _PROBE_SOURCE = Path("autoform_cli/probes/audit_probe.lean")
 # The toolchain the real-Lean CI job installs.
-_TOOLCHAIN = (Path(__file__).parent / "fixtures" / "skeleton-project" / "lean-toolchain").read_text(
-    encoding="utf-8"
-).strip() + "\n"
+_TOOLCHAIN = (_SKELETON_FIXTURE / "lean-toolchain").read_text(encoding="utf-8").strip() + "\n"
 # Under AUTOFORM_REQUIRE_REAL_LEAN_TESTS=1 this raises instead of returning False.
 _REAL_LEAN = _lean_toolchain_available()
-
-
-def _load_helper(repo_root: Path) -> ModuleType:
-    path = repo_root / _TEMPLATE
-    spec = importlib.util.spec_from_file_location("autoform_audit", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    previous = sys.dont_write_bytecode
-    sys.dont_write_bytecode = True
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.dont_write_bytecode = previous
-    return module
 
 
 @pytest.fixture
@@ -343,30 +333,6 @@ def test_helper_runs_on_python_310(repo_root: Path, tmp_path: Path) -> None:
     assert probe.is_file()
 
 
-def _write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-
-
-def _run(project: Path, *command: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, cwd=project, capture_output=True, text=True, timeout=180)
-
-
-def _run_probe(project: Path, probe: Path, **env: str) -> subprocess.CompletedProcess[str]:
-    """Run *probe* as the audit step does: plain lean, given Lake's search path."""
-
-    clean = {key: value for key, value in os.environ.items() if key != "LEAN_PATH"}
-    lean_path = subprocess.run(
-        ["lake", "env", "printenv", "LEAN_PATH"], cwd=project, env=clean, capture_output=True, text=True, timeout=180
-    )
-    assert lean_path.returncode == 0, lean_path.stdout + lean_path.stderr
-    clean["AUTOFORM_AUDIT_LEAN_PATH"] = lean_path.stdout.rstrip("\n")
-    clean["LEAN_ABORT_ON_PANIC"] = "1"
-    return subprocess.run(
-        ["lean", str(probe)], cwd=project, env={**clean, **env}, capture_output=True, text=True, timeout=180
-    )
-
-
 @pytest.mark.skipif(not _REAL_LEAN, reason="needs lake and the fixture's Lean toolchain")
 def test_real_toml_build_uses_target_src_dir_globs_and_import_closure(
     helper: ModuleType, tmp_path: Path
@@ -528,13 +494,6 @@ lean_lib «PublicApi» where
     assert _ends_with_the_success_line(audited.stdout), audited.stdout
 
 
-def test_example_and_template_helpers_are_identical(repo_root: Path) -> None:
-    template = repo_root / _TEMPLATE
-    example = repo_root / "skills/setup/assets/cabannes-thesis-project/.github/autoform_audit.py"
-
-    assert example.read_bytes() == template.read_bytes()
-
-
 def test_workflows_audit_open_statements_only_when_the_roadmap_allows_them(repo_root: Path) -> None:
     for workflow in (
         repo_root / "autoform_cli/templates/github/workflows/autoform-verify.yml",
@@ -548,30 +507,6 @@ def test_workflows_audit_open_statements_only_when_the_roadmap_allows_them(repo_
         assert 'python3 .github/autoform_audit.py --targets "$contract"' in text
         # Both policies need the contract, so it is written before the branch.
         assert text.index("autoform work assumptions") < text.index('if [ "$policy" = "allowed" ]; then')
-
-
-def _audit_step(workflow: Path) -> str:
-    text = workflow.read_text(encoding="utf-8")
-    _, found, step = text.partition("      - name: Audit every root-package declaration\n        run: |\n")
-    assert found
-    lines = []
-    for line in step.splitlines():
-        if line and not line.startswith(" " * 10):
-            break
-        lines.append(line[10:])
-    return "\n".join(lines) + "\n"
-
-
-_WORKFLOW = Path(__file__).parents[1] / "autoform_cli/templates/github/workflows/autoform-verify.yml"
-
-
-def _ends_with_the_success_line(stdout: str) -> bool:
-    """Whether *stdout* ends as the audit step requires, by the step's own pattern."""
-
-    found = re.search(r"grep -Eq '([^']+)'", _audit_step(_WORKFLOW))
-    assert found
-    lines = stdout.splitlines()
-    return bool(lines) and re.search(found.group(1), lines[-1]) is not None
 
 
 # Stubs for the step's commands: uvx answers as an AUTOFORM_REF with or without

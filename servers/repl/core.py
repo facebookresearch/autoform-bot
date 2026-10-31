@@ -3,15 +3,20 @@
 LeanRepl.run_disposable checks the submitted header with Lean's parser,
 runs the call as the only frame of a fresh REPL process, and retires that
 process before returning.
+
+The header check runs Lean's own header parser (``parse_header.lean``, which
+the REPL also uses) as one extra short Lean process per call. Allowlisted
+imports need plain, nonempty canonical module components: a name that stays
+quoted or path-like after Lean parses it is refused rather than reduced to a
+misleading allowlisted root. Execution names the package-qualified
+``@repl/repl`` target, so a project target cannot shadow it.
 """
 
 from __future__ import annotations
 
-import errno
 import json
 import os
 import select
-import signal
 import subprocess
 import sys
 import threading
@@ -20,12 +25,12 @@ from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any, Callable
 
+from servers._process import _kill_subprocesses, inherit_clean_env
+
 logger = getLogger(__name__)
 
 DEFAULT_MAX_DIAGNOSTICS = 10
 DEFAULT_REPL_CLEANUP_SECONDS = 2.0
-REPL_ABORT_TERM_SECONDS = 0.5
-REPL_ABORT_KILL_SECONDS = 1.0
 
 ALLOWED_IMPORTS = frozenset({"Mathlib", "Aesop", "Batteries", "LeanSearchClient"})
 WARMUP_IMPORTS = frozenset({"Mathlib"})
@@ -78,144 +83,6 @@ def _get_process_memory_gb(process: subprocess.Popen | None) -> float:
         return total / (1024**3)
     except Exception:
         return 0.0
-
-
-def _process_group_exists(process_group_id: int) -> bool:
-    try:
-        os.killpg(process_group_id, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError as error:
-        if error.errno == errno.ESRCH:
-            return False
-        if error.errno == errno.EPERM:
-            return True
-        raise RuntimeError("failed to inspect the Lean process group") from error
-    return True
-
-
-def _process_group_has_live_members(process_group_id: int) -> bool:
-    """Treat an all-zombie process group as terminated after SIGKILL."""
-    if not _process_group_exists(process_group_id):
-        return False
-
-    import psutil
-
-    for candidate in psutil.process_iter(["pid", "status"]):
-        try:
-            if os.getpgid(candidate.info["pid"]) != process_group_id:
-                continue
-            if candidate.info["status"] != psutil.STATUS_ZOMBIE:
-                return True
-        except (ProcessLookupError, PermissionError, psutil.Error):
-            continue
-    # Darwin may report EPERM for killpg(pgid, 0) after the final member exits.
-    # psutil is the authoritative membership check for this same-user group.
-    return False
-
-
-def _wait_for_live_process_group_exit(process_group_id: int, deadline: float) -> bool:
-    while _process_group_has_live_members(process_group_id):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return False
-        time.sleep(min(0.01, remaining))
-    return True
-
-
-def _wait_for_process(process: subprocess.Popen, deadline: float) -> bool:
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        return process.poll() is not None
-    try:
-        process.wait(timeout=remaining)
-    except subprocess.TimeoutExpired:
-        return False
-    except OSError as error:
-        raise RuntimeError("failed to reap the Lean process") from error
-    return True
-
-
-def _kill_subprocesses(
-    process: subprocess.Popen,
-    process_group_id: int,
-    deadline: float | None = None,
-) -> None:
-    """Terminate and verify one dedicated POSIX process group."""
-    if getattr(process, "returncode", None) is not None:
-        if _process_group_has_live_members(process_group_id):
-            raise RuntimeError(
-                "refusing to signal a process group after its leader was reaped"
-            )
-        return
-    _terminate_process_group(process_group_id, deadline)
-    _reap_process(process, deadline)
-
-
-def _terminate_process_group(
-    process_group_id: int,
-    deadline: float | None = None,
-) -> None:
-    """Terminate a dedicated group without reaping its leader."""
-    started = time.monotonic()
-    term_deadline = started + REPL_ABORT_TERM_SECONDS
-    kill_deadline = term_deadline + REPL_ABORT_KILL_SECONDS
-    if deadline is not None:
-        term_deadline = min(term_deadline, deadline)
-        kill_deadline = min(kill_deadline, deadline)
-
-    if _process_group_has_live_members(process_group_id):
-        try:
-            os.killpg(process_group_id, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        except OSError as error:
-            raise RuntimeError("failed to terminate the Lean process group") from error
-
-    _wait_for_live_process_group_exit(process_group_id, term_deadline)
-    if _process_group_has_live_members(process_group_id):
-        try:
-            os.killpg(process_group_id, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except OSError as error:
-            raise RuntimeError("failed to kill the Lean process group") from error
-
-    group_exited = _wait_for_live_process_group_exit(process_group_id, kill_deadline)
-    if not group_exited:
-        raise RuntimeError("timed out terminating the Lean process group")
-
-
-def _reap_process(
-    process: subprocess.Popen,
-    deadline: float | None = None,
-) -> None:
-    """Reap one leader only after its process group is known retired."""
-    if getattr(process, "returncode", None) is not None:
-        return
-    kill_deadline = time.monotonic() + REPL_ABORT_KILL_SECONDS
-    if deadline is not None:
-        kill_deadline = min(kill_deadline, deadline)
-    parent_reaped = _wait_for_process(process, kill_deadline)
-    if not parent_reaped:
-        try:
-            process.kill()
-        except ProcessLookupError:
-            pass
-        except OSError as error:
-            raise RuntimeError("failed to kill the Lean process") from error
-        parent_reaped = _wait_for_process(process, kill_deadline)
-    if not parent_reaped:
-        raise RuntimeError("timed out reaping the Lean process")
-
-
-def _inherit_clean_env() -> dict[str, str]:
-    """Return a copy of the current environment without PYTHONPATH noise."""
-    env = os.environ.copy()
-    env.pop("PYTHONPATH", None)
-    return env
 
 
 def _is_natural_number(value: Any) -> bool:
@@ -870,7 +737,7 @@ class LeanRepl:
         The child leads its own session, and close() retires that whole
         process group through the id published here.
         """
-        env = _inherit_clean_env()
+        env = inherit_clean_env()
         env.update(self.config.env)
         self.process = subprocess.Popen(
             command,

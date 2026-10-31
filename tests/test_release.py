@@ -54,6 +54,20 @@ def test_the_readme_installs_the_release_tag(repo_root: Path) -> None:
         assert command in commands, command
 
 
+def test_the_browser_job_runs_in_the_image_of_the_pinned_playwright(repo_root: Path) -> None:
+    """CI's WebKit job runs in Playwright's image so it installs no browser; the
+    image must be the one built for the pinned playwright, or its browsers
+    would not be the ones that release expects."""
+
+    extras = tomli.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["optional-dependencies"]
+    (pin,) = [requirement for requirement in extras["browser"] if requirement.startswith("playwright==")]
+    workflow = (repo_root / ".github/workflows/tests.yml").read_text(encoding="utf-8")
+
+    assert re.findall(r"mcr\.microsoft\.com/playwright/python:v([\d.]+)-\w+@sha256:[0-9a-f]{64}", workflow) == [
+        pin.removeprefix("playwright==")
+    ]
+
+
 def test_the_changelog_names_the_project_version_as_its_newest_release(repo_root: Path) -> None:
     """A release moves Unreleased under a heading naming the new version, so a
     bump that leaves its changes under Unreleased fails here."""
@@ -88,7 +102,7 @@ def test_version_names_the_installed_release_and_the_checkout_commit(
         return installed
 
     monkeypatch.setattr(importlib.metadata, "version", version)
-    monkeypatch.setattr(debrief_orchestrator, "_git", lambda root, *arguments: commit)
+    monkeypatch.setattr(debrief_orchestrator, "git", lambda root, *arguments: commit)
     with pytest.raises(SystemExit) as exited:
         main(["--version"])
 

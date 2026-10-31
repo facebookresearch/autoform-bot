@@ -10,7 +10,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
-    "fastmcp>=3.4.5,<4",
+    "fastmcp>=3.4.10,<4",
     "psutil>=5.9",
     # Lake 4.32 reads TOML 1.0. Tomli 2.4 enables TOML 1.1 syntax, so use the
     # same pinned 1.0 parser on every supported Python version.
@@ -42,7 +42,6 @@ dev = [
     "mkdocs>=1.6,<2",
     "mkdocs-material>=9.5,<10",
     "mkdocs-literate-nav>=0.6,<1",
-    "pymdown-extensions>=11.0.1,<12",
     "pytest>=7.0",
     "ruff>=0.4",
 ]

@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import quote
@@ -19,7 +20,7 @@ from autoform_cli.__main__ import main
 from autoform_cli.graph import load_graph
 from autoform_cli.markdown import published_page, site_converter, statement_and_notes
 from autoform_cli.mathjax import NEUTRALISED, mathjax_script
-from autoform_cli.publishable import publishable_article, shown_as_typed
+from autoform_cli.publishable import _rendered_article, _site_converter, publishable_article, shown_as_typed
 from autoform_cli.render import _GENERATED_FILES, PublicationError, _site_paths, render_site
 from autoform_cli.scaffold import scaffold_project
 from tests.test_render import _project
@@ -29,6 +30,7 @@ _EXAMPLE = _ROOT / "skills/setup/assets/cabannes-thesis-project"
 _BASE = "https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5"
 _BUNDLE = f"{_BASE}/tex-mml-chtml.js"
 _PAGE_PACKAGES = ["base", "ams", "noundefined", "boldsymbol", "mathtools", "braket", "mhchem", "amscd", "configmacros"]
+_CARD_PACKAGES = ["base", "ams", "noundefined"]
 _MACROS = {"RR": "\\mathbb{R}", "norm": ["\\left\\lVert #1 \\right\\rVert", 1]}
 #: What the page's TeX input maps the commands it turns off to.
 _OFF = {name: "\\notallowed" for name in NEUTRALISED}
@@ -104,6 +106,7 @@ def test_render_writes_the_site_mathjax_configuration(tmp_path: Path) -> None:
     assert settings["bundle"] == _BUNDLE
     assert settings["load"] == ["ui/safe", "[tex]/boldsymbol", "[tex]/mathtools", "[tex]/braket", "[tex]/mhchem", "[tex]/amscd"]
     assert settings["page"]["packages"] == _PAGE_PACKAGES
+    assert settings["card"]["packages"] == _CARD_PACKAGES
     assert settings["safe"] == {"allow": {"URLs": "none", "classes": "none", "cssIDs": "none", "styles": "none"}}
 
 
@@ -116,6 +119,7 @@ def test_the_page_turns_off_tex_that_reaches_past_its_own_formula() -> None:
     settings = _settings(mathjax_script(None, json.dumps(_MACROS).encode())[0])
 
     assert settings["page"]["macros"] == {**_MACROS, **_OFF}
+    assert "macros" not in settings["card"]
     assert {"label", "mmlToken", "DeclareMathOperator", "newtagform", "mathtoolsset"} <= set(NEUTRALISED)
 
 
@@ -581,12 +585,28 @@ _FORGED = '<span class="bp-mark">FORGED MARK</span><script>document.title="INJEC
 
 
 def _published(page: Path) -> str:
-    """``page`` as MkDocs publishes it: its metadata read off, and the rest
-    converted as the site's configuration converts it."""
+    """The complete mathematical content as MkDocs publishes it.
 
+    Validate the one trusted renderer-owned script outside the reader, then
+    inspect the entire reading subtree. Authored scripts remain forbidden;
+    adding a shared application host cannot weaken those inertness checks.
+    """
+
+    import html5lib
     from mkdocs.utils.meta import get_data
 
-    return site_converter().convert(get_data(page.read_text(encoding="utf-8"))[0])
+    rendered = site_converter().convert(get_data(page.read_text(encoding="utf-8"))[0])
+    tree = html5lib.parseFragment(rendered, namespaceHTMLElements=False)
+    readers = [node for node in tree.iter() if "bp-reading-source" in node.get("class", "").split()]
+    assert len(readers) == 1
+    assert list(readers[0].iter("script")) == []
+    scripts = list(tree.iter("script"))
+    assert len(scripts) == 1
+    root = next(parent for parent in page.parents if (parent / "publication.json").is_file())
+    relative_script = Path(os.path.relpath(root / "javascripts/blueprint-dag.js", page.parent)).as_posix()
+    assert scripts[0].attrib == {"defer": "defer", "src": quote(relative_script, safe="/%")}
+    assert not list(scripts[0]) and not (scripts[0].text or "").strip()
+    return html5lib.serialize(readers[0], omit_optional_tags=False, quote_attr_values="always")
 
 
 def test_text_shown_as_typed_is_inert_on_the_site() -> None:
@@ -710,16 +730,19 @@ def test_a_chapter_cannot_leave_a_fence_open_over_its_statements(
     _with_narrative(blueprint, "## Definitions\n\n````\n\n- [Base](base.md)")
 
     assert main(["check", str(blueprint)]) == 0
-    assert "warning: roadmap: line 10: code fence is not closed" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "warning: roadmap: line 10: code fence is not closed: the site would read it on" in out
+    assert out.count("code fence is not closed") == 1
 
 
 @pytest.mark.parametrize("notes", ["> ```\n> quoted\n", "- item\n\n    ```\n    indented\n"])
 def test_a_fence_the_next_margin_line_ends_is_published(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], notes: str
 ) -> None:
-    """An indented or quoted fence ends at the first line at the margin, and
-    render's markup starts there, so leaving one open, in a leaf's notes or
-    at the end of a page, hides nothing."""
+    """A quoted fence, or one indented four spaces under a list item, is not a
+    fence to autoform, and the site ends it at the first line at the margin,
+    where render's markup starts, so leaving one open, in a leaf's notes or at
+    the end of a page, hides nothing."""
 
     blueprint = _vault(tmp_path)
     _with_base_notes(blueprint, notes)
@@ -731,6 +754,73 @@ def test_a_fence_the_next_margin_line_ends_is_published(
     published = _published(site / "roadmap/README.md")
     assert published.count('<span class="bp-mark"') == 2
     assert "bp-as-typed" not in published + (site / "notes.md").read_text(encoding="utf-8")
+
+
+#: The warning's advice for a fence autoform reads as left open, after its reason.
+_CLOSE = "which the site does not; close it with a line of "
+_OPTIONS = "which the site does not; keep only options the site accepts, such as its language, and close it with a line of "
+
+
+@pytest.mark.parametrize(
+    ("notes", "line", "advice"),
+    [
+        ("  ```\n  indented\n", 3, _CLOSE + "``` indented 2 spaces, as its opening line is\n"),
+        ("- item\n\n  ```lean\n  code\n", 5, _CLOSE + "``` indented 2 spaces, as its opening line is\n"),
+        ("  ~~~~\n  tildes\n", 3, _CLOSE + "~~~~ indented 2 spaces, as its opening line is\n"),
+        (" ~~~\n tildes\n", 3, _CLOSE + "~~~ indented 1 space, as its opening line is\n"),
+        ("  ```{.lean}\n  accepted\n", 3, _CLOSE + "``` indented 2 spaces, as its opening line is\n"),
+        ("  ```lean <!-- aside -->\n  code\n", 3, _CLOSE + "``` indented 2 spaces, as its opening line is\n"),
+        ('  ```lean linenums="x"\n  a\n\n  b\n', 3, _OPTIONS + "``` indented 2 spaces, as its opening line is\n"),
+        ("  ~~~lean!\n  a\n\n  b\n", 3, _OPTIONS + "~~~ indented 2 spaces, as its opening line is\n"),
+        ('```lean linenums="x"\nrejected\n', 3, _OPTIONS + "```\n"),
+        ("```lean!\nrejected\n", 3, _OPTIONS + "```\n"),
+        ('```lean linenums="x"\na\n\n```lean linenums="x"\nb\n', 3, _OPTIONS + "```\n"),
+    ],
+)
+def test_a_fence_autoform_reads_as_open_is_reported_wherever_it_starts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], notes: str, line: int, advice: str
+) -> None:
+    """The site ends a fence indented one to three spaces at the next line at
+    the margin, and reads one with options it rejects as text, but coverage,
+    the link checks and render's link rewriting read a fence left open on to
+    the end of the text. Check reports it, and the site shows the page as
+    typed until it is closed, so nothing those readers skipped is published
+    live (#201)."""
+
+    blueprint = _vault(tmp_path)
+    (blueprint / "notes.md").write_text(f"# Notes\n\n{notes}\nAfter it.\n", encoding="utf-8")
+
+    assert main(["check", str(blueprint)]) == 0
+    out = capsys.readouterr().out
+    assert f"line {line}: code fence is not closed: autoform reads the rest of this text as code" in out
+    assert advice in out and out.count("code fence is not closed") == 1
+    assert "bp-as-typed" in (_render(blueprint) / "notes.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "fence",
+    [
+        "  ```\n  indented\n  ```",
+        " ~~~\n tildes\n ~~~",
+        "- item\n\n  ```lean\n  code\n  ```",
+        "  ```lean\n  a\n\n  b\n  ```",
+        "  ~~~lean\n  a\n\n  b\n  ~~~",
+    ],
+)
+def test_a_fence_closed_as_the_warning_advises_is_not_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], fence: str
+) -> None:
+    """With options the site accepts and closed at the indent of its opening
+    line, as the warning says, a fence ends on the same line for the site as
+    for autoform."""
+
+    blueprint = _vault(tmp_path)
+    (blueprint / "notes.md").write_text(f"# Notes\n\n{fence}\n\nAfter it.\n", encoding="utf-8")
+
+    assert main(["check", str(blueprint)]) == 0
+    assert "code fence is not closed" not in capsys.readouterr().out
+    rendered = " ".join(_rendered_article(f"{fence}\n\nAfter it.\n")[0].split())
+    assert '<div class="highlight">' in rendered and rendered.endswith("<p>After it.</p>")
 
 
 def test_a_statement_after_a_paragraph_is_a_box_of_its_own(tmp_path: Path) -> None:
@@ -964,7 +1054,9 @@ def test_the_landing_page_is_checked_without_the_dashboard_render_adds(tmp_path:
     blueprint = _vault(tmp_path)
 
     assert publication_issues(load_graph(blueprint), blueprint) == []
-    assert 'class="bp-dag-intro bp-landing-intro"' in (_render(blueprint) / "README.md").read_text(encoding="utf-8")
+    page = (_render(blueprint) / "README.md").read_text(encoding="utf-8")
+    assert 'class="bp-landing-intro"' in page
+    assert 'class="bp-reading-source"' in page and 'class="bp-explorer-page"' in page
 
 
 def test_a_page_that_is_not_utf8_is_left_out_by_name(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1205,7 +1297,7 @@ def test_a_flagged_statement_keeps_its_chapter_in_place(tmp_path: Path, capsys: 
 
     site = _warned(blueprint, capsys, "base: the site shows it as typed until these are fixed")
     published = (site / "roadmap/README.md").read_text(encoding="utf-8")
-    assert "Additional formalization targets" not in published
+    assert "Other statements" not in published
     assert published.count('<pre class="bp-as-typed">') == 1
     definitions, results = published.index("## Definitions"), published.index("## Results")
     assert definitions < published.index("The base &lt;kbd&gt;object&lt;/kbd&gt;.") < results < published.index("The main result.")
@@ -1451,7 +1543,10 @@ def test_a_landing_page_named_in_lowercase_is_rendered(tmp_path: Path) -> None:
 
     landing = next(path for path in site.iterdir() if path.name.lower() == "readme.md")
     if (site / "README.md").is_file():  # the disk ignores case
-        assert 'class="bp-dag-intro bp-landing-intro"' in landing.read_text(encoding="utf-8")
+        text = landing.read_text(encoding="utf-8")
+        assert text.count('class="bp-reading-source"') == text.count('class="bp-landing-intro"') == 1
+        assert text.index('class="bp-reading-source"') < text.index('class="bp-landing-intro"')
+        assert 'class="bp-dag-intro bp-landing-intro"' not in text
 
 
 def test_a_landing_page_that_is_not_utf8_is_left_out(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1564,8 +1659,8 @@ def test_a_comment_that_fills_a_line_of_indented_code_is_kept(written: str, publ
 def test_every_formula_paints_inside_its_own_band(tmp_path: Path) -> None:
     """No formula can cover a card, a mark, a label, another line, or a side
     column, with either renderer and any theme; a lap keeps the ink beside its
-    box inside the block that holds it; and a wide display scrolls rather than
-    being cut off."""
+    box inside the block that holds it; and a wide display or card scrolls,
+    a card with a shade at the edge, rather than being cut off."""
 
     css = (_render(_vault(tmp_path)) / "stylesheets/blueprint.css").read_text(encoding="utf-8")
     rules = {
@@ -1589,6 +1684,86 @@ def test_every_formula_paints_inside_its_own_band(tmp_path: Path) -> None:
     # draws keeps the size TeX set, rather than shrinking to fit or, on a phone,
     # to nothing.
     assert "max-width: none !important" in rules["mjx-container > svg"]
-    # Across, ink stops at the edge of the block an article formula is in.
-    block = rules[":is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container)"]
+    # Across, ink stops at the edge of the block an article formula is in; a
+    # card's blocks are left to scroll with it.
+    block = rules[":is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *)"]
     assert "overflow-x: clip" in block and "overflow-y" not in block
+    card = rules[".bp-readback"]
+    assert "overflow-x: auto" in card
+    assert card.count(" local") == 2 and card.count(" scroll") == 2
+    # The covers, and the card under them, are the color of the review panel a
+    # card sits in, which in Material's dark scheme is not the page's.
+    assert card.count("var(--md-admonition-bg-color, var(--bp-page))") == 3
+    # Testimony is shown as typed, line ends and spaces included.
+    assert "white-space: pre-wrap" in rules[".bp-readback-body"]
+    assert "overflow-wrap: anywhere" in rules[".bp-review summary"]
+    # A review color reads at 4.5:1 on white, and Material's dark scheme gets its own.
+    for selector in (".bp-review-drift", ".bp-readback-invalid"):
+        assert f"[data-md-color-scheme=slate] {selector}" in rules, selector
+    (drift,) = re.findall(r"color: (#[0-9A-Fa-f]{6})", rules[".bp-review-drift"])
+    assert _contrast(drift, "#FFFFFF") >= 4.5
+    # On the dark page, and on the panels drawn on it.
+    (dark,) = re.findall(r"color: (#[0-9A-Fa-f]{6})", rules["[data-md-color-scheme=slate] .bp-review-drift"])
+    assert min(_contrast(dark, "#18191A"), _contrast(dark, "#242526")) >= 4.5
+    assert "var(--bp-blue)" in rules[".bp-readback"]
+
+
+def _contrast(one: str, other: str) -> float:
+    """The WCAG contrast ratio of two ``#RRGGBB`` colors."""
+
+    def luminance(color: str) -> float:
+        channels = [int(color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+        red, green, blue = (value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4 for value in channels)
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+    lighter, darker = sorted((luminance(one), luminance(other)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+#: Texts that leave something behind in a converter (link definitions, a fence
+#: left open, an attribute list, raw HTML, a conversion that runs out of stack),
+#: and texts that would read differently after one.
+_READ_IN_ANY_ORDER = (
+    "[evil]: javascript:alert(1)\n[ok]: https://example.org\n\nSee [evil] and [ok].\n",
+    "Uses [evil] and [ok][].\n",
+    "```{.lean #frag .extra data-x=1}\ntheorem foo\n",
+    "",
+    "- " * 1000 + "x\n",
+    "Intro paragraph.\n\n- item\n\n    continued <b>bold</b> in the item\n",
+    "First paragraph.\n\nSecond paragraph.\n\n- item\n\n    continued in the item\n\n- tight\n- list\n",
+    "# Top\n\nA remark.\n{: .bp-mark }\n",
+    '<div class="bp-thmcontent" markdown="1">\n\nText with <b>bold</b> and $a<b$.\n\n</div>\n',
+    "```python\nx = 1\n```\n\ntext <span>raw</span> &amp; &#169; &D; here\n",
+)
+
+
+def _read(text: str) -> object:
+    try:
+        return _rendered_article(text)
+    except RecursionError:
+        return RecursionError
+
+
+def test_a_text_reads_the_same_whatever_was_read_before_it() -> None:
+    """One converter reads every text, so nothing a text leaves in it, such as
+    a link definition, an open fence or a conversion that ran out of stack, may
+    change how the next text reads."""
+
+    alone = {}
+    for text in _READ_IN_ANY_ORDER:
+        _site_converter.cache_clear()
+        alone[text] = _read(text)
+    for before in _READ_IN_ANY_ORDER:
+        for text in _READ_IN_ANY_ORDER:
+            _site_converter.cache_clear()
+            _read(before)
+            assert _read(text) == alone[text], (before[:40], text[:40])
+
+
+def test_a_page_reads_the_same_after_more_pages_than_the_recursion_limit() -> None:
+    """The converter's hooks are installed once: installed again for every
+    text, they would stack until a page read as nested too deep."""
+
+    first = publishable_article("Text <b>x</b>.\n")
+    for _ in range(sys.getrecursionlimit() + 100):
+        assert publishable_article("Text <b>x</b>.\n") == first

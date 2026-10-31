@@ -13,7 +13,7 @@ The labels below are validated Autoform dispositions: `MAPPED`, `DECOMPOSED`,
 | --- | --- | --- |
 | Fast Rates for Structured Prediction | `MAPPED` | Listed in the roadmap; source audit pending |
 | Exponential Convergence Rates for SVM | `MAPPED` | Listed in the roadmap; source audit pending |
-| Infimum Loss | `DECOMPOSED` | [Five target nodes](../roadmap/infimum-loss/README.md) plus a [two-node supporting chapter](../roadmap/full-supervision/README.md) |
+| Infimum Loss | `DECOMPOSED` | [Five target nodes and a supporting lemma](../roadmap/infimum-loss/README.md) plus a [one-node supporting chapter](../roadmap/full-supervision/README.md) |
 | Disambiguation Framework | `MAPPED` | Listed in the roadmap; source audit pending |
 | Laplacian Regularization | `MAPPED` | Listed in the roadmap; source audit pending |
 | Streaming Stochastic Gradients | `MAPPED` | Listed in the roadmap; source audit pending |

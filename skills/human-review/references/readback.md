@@ -2,10 +2,8 @@
 
 A **read-back** is a rendering, in mathematical English, of what a Lean
 skeleton *literally asserts*. It is neither a summary nor an explanation, and
-it never guesses at what the author meant. A human reviewer will set it beside
-the statement the author intended to formalize; every difference between the
-two is exactly what they are looking for. This practice follows the blind
-read-back audits used by [Prove2me](https://prove2.me).
+it never guesses at what the author meant. A human reviewer compares it with
+the statement the author intended, looking for every difference.
 
 ## You are working blind, and that is the point
 
@@ -17,9 +15,9 @@ whose source cannot be attributed safely is marked `source not shown`; use its
 signatures and canonical material, and do not infer the missing source.
 
 You have not been given the article, the source text, or any description of
-the intent, and you must not look for them. Do not open the blueprint, the
-Lean project, or the source directory. Do not search for the theorem's name on
-the web. A reader who knows what the code is supposed to say will read that
+the intent, and you must not look for them: do not open the blueprint, the
+Lean project, or the source directory, or search the web for the theorem's
+name. A reader who knows what the code is supposed to say will read that
 meaning into it, and the discrepancies the reviewer needs to see disappear.
 If the packet is ambiguous, say what is ambiguous rather than resolving it.
 
@@ -64,9 +62,12 @@ GitHub shows their TeX. Dollar signs are only for formulas: write
 `costs \$5`, not `costs $5`. `\(x\)` and `\[x\]` are shown as typed, so write
 `$x$` and `$$x$$`.
 
-Everything you write must be visible as written. Do not use invisible
-characters such as zero-width spaces, or stack more than two accents above or
-below one letter: a read-back that does is rejected, however faithful it is.
+Everything you write must be visible as written. Do not use invisible or
+reordering characters, such as zero-width spaces, bidirectional overrides, or
+right-to-left letters; unassigned code points; combining marks with nothing to
+sit on; or more than two accents above or below one letter. Include at least
+one letter or digit. A read-back that breaks these rules is rejected, however
+faithful it is.
 In formulas use standard notation only: letters, symbols, relations,
 operators, arrows, delimiters, `\left` and `\right`, `\frac`, `\binom`,
 `\sqrt`, accents, the fonts `\mathbb`, `\mathcal`, `\mathfrak`, `\mathscr`,
@@ -78,13 +79,15 @@ and so is one with spacing such as `\,`, `\;`, `\quad`, or `~`: MathJax spaces
 a formula itself, so write `$\int f(x) dx$`, not `$\int f(x)\,dx$`. Write
 `\neq` or `\notin` for a negated relation. Never put a bracket right after
 `\begin{aligned}` or `\begin{gathered}`, or a `[` or `*` right after `\\`; in
-`\text`, write one space at a time; never write something with nothing in it,
-such as `\frac{}{}`, `x^{}`, or `\left.\right.`; and never leave two cells, or
-two rows, empty one after the other. In a formula write `\%` for a percent
-sign, never `%`. Keep it to a few kilobytes: a read-back over 32 KiB or 500
-lines is refused.
+`\text`, write braces and one space at a time; never write something with
+nothing in it, such as `$$ $$`, `\frac{}{}`, `x^{}`, or `\left.\right.`; and
+never leave two cells, or two rows, empty one after the other. In a formula
+write `\%` for a percent sign, never `%`. Keep it to a few kilobytes: a
+read-back over 32 KiB or 500 lines is refused.
 
-A read-back testifies about one exact packet. If its bytes change, a
-coordinator must request a new blind read-back; a Lean or Mathlib bump that
-leaves them unchanged keeps the read-back. Never revise old testimony after
+## Return only testimony
+
+Return the read-back and nothing else. Do not create a vault card, copy
+metadata, infer a destination path, or inspect a manifest; the coordinator
+records your response for the exact packet. Never revise old testimony after
 seeing an article or intended statement.

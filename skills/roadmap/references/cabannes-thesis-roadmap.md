@@ -6,57 +6,42 @@ models the start of a formalization project for Vivien Cabannes's thesis,
 ([arXiv:2209.11629](https://arxiv.org/abs/2209.11629)). Confirm the actual
 source revision adopted by the project before relying on its paths or labels.
 
-The example stays intentionally small:
+The example is small:
 
 - the roadmap maps all six mathematical chapters at coarse granularity;
 - two decomposed chapters make the book navigation and cross-chapter DAG
   concrete: “Infimum Loss” contains the source targets, while “Full
-  Supervision” contains two supporting Lean declarations;
-- the coverage page distinguishes mapped, partial, and out-of-scope material;
-- the source page records stable labels from `infimum/core.tex`; and
+  Supervision” contains a supporting Lean definition;
+- the coverage page distinguishes mapped, decomposed, and out-of-scope material;
+- the [source page](../../setup/assets/cabannes-thesis-project/blueprint/sources/thesis.md)
+  records stable labels from `infimum/core.tex`; and
 - seven DAG nodes decompose one representative “Infimum Loss” slice and its
   supporting full-supervision construction.
 
-This is a structural example, not a completion fixture. Its `MAPPED` rows are
-unfinished, so the current vault is not a valid finish state for a complete
-Roadmap invocation over the thesis. Use it to inspect article shape, source
-links, coverage, and dependencies without copying its partial stopping point.
+This is a structural example, not a completion fixture: only one of its six
+chapter clusters has pull-request-sized nodes, and its `MAPPED` rows make the
+vault an invalid finish state for a complete Roadmap pass over the thesis. Use
+it to inspect article shape, source links, coverage, and dependencies, not as a
+stopping point to copy. Its nodes happen to map one-to-one to main public
+artifacts; a node may also carry several supporting declarations under one
+unique main result.
 
-These nodes happen to map one-to-one to main public artifacts. That is not a
-format restriction: a node may carry several supporting definitions or
-statements when one unique main result makes the whole node a coherent pull
-request and review unit.
+The five source targets and the dependencies their articles list:
 
-This asymmetry is deliberate. The six chapter entries are candidate roadmap
-clusters, while only one cluster has pull-request-sized nodes. The example is not a
-completed whole-thesis plan: comparison, consistency, learning-rate results,
-and the other chapters still need source inspection and decomposition.
-
-The detailed slice uses labels verified in `infimum/core.tex` from the public
-[arXiv e-print source](https://export.arxiv.org/e-print/2209.11629):
-
-| Node | Source label | Prerequisites |
+| Node | Depends on | Proof depends on |
 | --- | --- | --- |
-| Eligibility | `il:def:eligibility` | — |
-| Non-ambiguity | `il:def:non-ambiguity` | — |
-| Infimum loss | `il:thm:infimum-loss` | Eligibility |
-| Non-ambiguity determinism | `il:thm:ambiguity` | Non-ambiguity |
-| Supervision recovery | `il:thm:non-ambiguity` | Infimum loss; Non-ambiguity determinism |
+| Eligibility | None | None |
+| Non-ambiguity | Eligibility | None |
+| Infimum loss | Eligibility | None |
+| Non-ambiguity determinism | Non-ambiguity | None |
+| Supervision recovery | Infimum loss; Full supervision | Non-ambiguity determinism; Full supervision is non-ambiguous |
 
-Two supporting nodes are kept in a separate formalization chapter: full
-supervision and the proof that it is non-ambiguous. They are grounded in the
-existing Lean declarations and feed the source-level supervision-recovery
-target without being presented as additional thesis statements.
-
-Use the source locators, explicit coverage contract, coherent nodes, and
-dependency links as the pattern, not the thesis mathematics or the incomplete
-scope. A user-requested staged pass may stop at a named slice; an ordinary
-complete pass continues until its adopted boundary satisfies Roadmap's finish
-contract.
+Two supporting nodes come from existing Lean declarations: full supervision, in
+a separate formalization chapter, and the proof that it is non-ambiguous, filed
+with the Infimum Loss theorems. They feed the supervision-recovery target
+without posing as thesis statements.
 
 Existing and planned mathematics coexist in one book here: five of the seven
 nodes are already formalized, both supporting declarations and three of the
 five source targets, while Infimum loss is ready to state and Supervision
-recovery remains planned. For a repository-wide inventory, generalize that
-pattern by inventorying all in-scope project declarations rather than selecting
-only the future-work slice.
+recovery remains planned.

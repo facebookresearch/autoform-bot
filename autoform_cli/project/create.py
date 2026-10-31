@@ -1,4 +1,24 @@
-"""Create a complete Autoform Lean project and publish it atomically."""
+"""Create a complete Autoform Lean project and publish it atomically.
+
+The project is built in a private sibling stage, validated, and published with
+an atomic no-replace rename. Each caller-supplied path component is opened
+without following links, creations in one parent are serialized with an
+advisory lock, and immediately before publication and after syncing it the
+requested parent is reopened without following links and its device, inode,
+and owner rechecked. A mismatch before publication preserves the stage; a later
+one reports where publication was observed. Platforms without descriptor
+traversal, advisory locking, directory sync, or atomic no-replace rename fail
+closed. A private creation bundle adds generated production-module roots, and
+its release identity is cross-checked with the public catalog and its complete
+Lake manifest before any filesystem state is created.
+
+Exactly one of several concurrent creators of the same target wins. The
+published tree has modes 0755 for directories and executables and 0644 for
+other files, whatever the umask. The generated ``lakefile.toml`` turns on Lake's
+artifact cache with ``restoreAllArtifacts`` so each module's ``.olean`` is
+restored into ``.lake/build``, where Autoform's probes load it. Workflow pins
+are inferred as ``scaffold.plugin_pin`` describes.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +35,7 @@ from importlib.resources import files
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
-from ..claims import _reject_json_constant, _strict_json_object
+from .._strict_json import reject_json_constant, strict_json_object
 from ..graph import _parse_node
 from ..scaffold import (
     ScaffoldError,
@@ -743,10 +763,14 @@ def _build_project_plan(
     autoform_ref: str,
     library: SharedLibrary | None,
 ) -> tuple[_ScaffoldFile, ...]:
+    # Worktrees share builds through Lake's artifact cache; restoring keeps each
+    # module's .olean in .lake/build, where Autoform's probes load it.
     lakefile = (
         f'name = "{package}"\n'
         'version = "0.1.0"\n'
-        f'defaultTargets = ["{package}"]\n\n'
+        f'defaultTargets = ["{package}"]\n'
+        "enableArtifactCache = true\n"
+        "restoreAllArtifacts = true\n\n"
         "[[require]]\n"
         'name = "mathlib"\n'
         f'git = "{version.mathlib_git}"\n'
@@ -932,7 +956,7 @@ def _safe_relative(value: object) -> bool:
 def _load_strict_json(data: bytes) -> object:
     """Parse JSON, rejecting duplicate keys and NaN or Infinity."""
 
-    return json.loads(data, object_pairs_hook=_strict_json_object, parse_constant=_reject_json_constant)
+    return json.loads(data, object_pairs_hook=strict_json_object, parse_constant=reject_json_constant)
 
 
 def _lake_manifest(package: str, bundle: _ReleaseBundle) -> bytes:

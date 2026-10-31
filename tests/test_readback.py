@@ -16,7 +16,6 @@ import pytest
 from autoform_cli.readback import (
     READBACK_HEADING,
     SKELETON_HEADING,
-    formula_problems,
     load_readbacks,
     prepare_readback,
     publish_readback,
@@ -25,6 +24,7 @@ from autoform_cli.readback import (
     readback_path,
 )
 from autoform_cli.skeleton import DeclarationSkeleton, TrustedDeclaration, evidence_hash_of
+from autoform_cli.testimony import formula_problems
 from tests.skeleton_fixtures import SEMANTIC as _PROP
 from tests.skeleton_fixtures import declaration as fixture_declaration
 
@@ -370,7 +370,8 @@ def test_a_second_file_keyed_like_a_card_makes_that_card_invalid(tmp_path: Path)
     card = cards[(_ARTICLE_ID, "Skel.sup_unique")]
     assert card.path == path
     assert card.validate() == (
-        f"multiple cards claim the same declaration identity: {str(path)!r} and {str(stray)!r}",
+        f"multiple cards claim the same declaration identity: 'readbacks/{_ARTICLE_ID}/{path.name}' and "
+        f"'readbacks/{_ARTICLE_ID}/{stray.name}'",
     )
 
 
@@ -389,7 +390,8 @@ def test_a_declaration_with_a_card_under_each_of_its_keys_has_one_invalid_card(t
     found = readback_for({by_name: card, by_filename: other}, *by_name)
     assert found is not None and found.path == card.path
     assert found.validate() == (
-        f"multiple cards claim the same declaration identity: {str(card.path)!r} and {str(other.path)!r}",
+        f"multiple cards claim the same declaration identity: 'readbacks/{_ARTICLE_ID}/{card.path.name}' and "
+        f"'readbacks/{_ARTICLE_ID}/{other.path.name}'",
     )
 
 

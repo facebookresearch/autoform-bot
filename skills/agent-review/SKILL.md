@@ -10,12 +10,10 @@ description: >-
 
 # Judge Autoform work as an agent
 
-There is no `autoform` on `PATH` in a Lean project. Run every `autoform`
-command, from the project under review, as
-`uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform` followed by its arguments,
-where `<AUTOFORM_PLUGIN_ROOT>` is the absolute plugin root: the directory that
-holds this skill's `skills/` folder, along with `pyproject.toml` and
-`autoform_cli/`. Give a subagent that root and this prefix with its task.
+There is no `autoform` on `PATH`. Run it from the project under review as
+`uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform`, where the root is the
+absolute plugin directory holding `skills/` and `pyproject.toml`; give a
+subagent that prefix.
 
 Select the rubric from the artifact under review.
 
@@ -36,28 +34,26 @@ Select the rubric from the artifact under review.
 Keep objective evidence separate from judgment. Never claim compilation,
 declaration resolution, axiom cleanliness, source coverage, or dependency
 correctness without showing how it was checked. If required sources are absent,
-return insufficient evidence rather than guessing. In a project that allows
-open statements, a proof resting on declared open statements is conditional:
-name the statements it assumes and never call it axiom-clean.
+return insufficient evidence rather than guessing. A proof resting on declared
+open statements is conditional: name them and never call it axiom-clean.
 
 Except in the isolated read-back-judge role, regenerate skeleton evidence from
-the exact candidate after its Lean build.
-Do that only in a trusted checkout or an operating-system sandbox: the command
-evaluates Lake configuration and project Lean metaprograms, and its resource
-bounds are not a security boundary.
-A read-back judge must not regenerate or inspect that evidence; its coordinator
-does so before dispatch.
-Treat a stale-build refusal as insufficient evidence; never approve a current
-source excerpt paired with an older compiled declaration. Record the skeleton
-hash as a drift checksum for the elaborated declaration and trust context, and
-the evidence hash for the exact packet that was read. For a
-source-faithfulness verdict, record the article review hash that binds the joint
-packet to the cited passage, its locator, and the skeleton hash. These hashes
-are provenance evidence, not reviewer authentication or an approval key.
-A read-back verdict also copies its raw read-back hashes as specified by its
-rubric.
+the exact candidate after its Lean build. Do that only in a trusted checkout or
+an operating-system sandbox: the command evaluates Lake configuration and
+project Lean metaprograms, and its resource bounds are not a security boundary.
 Candidate code runs during extraction and can forge process output, so treat
-its report as advisory when the checkout is not trusted.
+its report as advisory when the checkout is not trusted. Treat a stale-build
+refusal as insufficient evidence; never approve a current source excerpt paired
+with an older compiled declaration. Record the skeleton hash, the evidence hash
+of the packet that was read, and, for a source-faithfulness verdict, the
+article review hash; the
+[CLI reference](../../autoform_cli/README.md#skeleton-hashes) says what each
+binds. These hashes are provenance evidence, not reviewer authentication or an
+approval key. If the user has paused skeleton evidence during proof development,
+skip it and Formalize's import-edit baselines, say so, and record none of these
+hashes; still build the target, run `#print axioms` on each recorded declaration
+and `autoform check` and `audit` with `--lean-root`, and compare the compiled
+statement with its source.
 
 Report findings first, ordered by severity and tied to files or nodes. Then give
 the rubric scores, weighted verdict, commands run, unresolved questions, and a
@@ -65,5 +61,5 @@ short remediation list. The read-back rubric's exact JSON output replaces this
 general report layout. Do not edit the reviewed work unless the user separately
 asks for fixes.
 
-Use the short [Cabannes thesis review case](references/thesis-review-case.md)
-when a concrete Lean example helps distinguish faithfulness from integrity.
+Score faithfulness and integrity separately: a sorry-free proof that drops a
+source hypothesis still fails faithfulness; report it, do not average it away.

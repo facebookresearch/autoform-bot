@@ -17,26 +17,25 @@ scope against the sources, then inspect the fine DAG and its coarse roadmap.
    its hidden `blueprint/.implementation-notes/<article_id>.md` when present.
 4. Distinguish statement prerequisites from proof-only prerequisites.
 5. Run `autoform search`, described in the
-   [search contract](../../../autoform_cli/README.md#search-contract), for each
-   main result in scope, by a few distinctive words and by its Lean name when
-   it has one, and list the queries run. Each result hits its own article; a
-   second article stating the same result is a duplicate, but a hit whose
-   `catalog` is `module` is an inventory listing the declaration, not a
-   duplicate of the article that expounds it. Finding none, even
-   after a retry with fewer words, is not proof, because matching is literal:
-   also compare the statements read for item 3.
-   Include the project's usable shared libraries, as the
+   [search contract](../../../autoform_cli/reference/search.md#search-contract), for each
+   main result in scope and each intermediate result its proof proves or cites,
+   by a few distinctive words and by its Lean name when it has one, over the
+   blueprint and the project's usable shared libraries, as the
    [library search rules](../../formalize/references/library-search.md)
-   describe, searching by the words of the result, since a library names it
-   differently; a library hit is not a duplicate of an article. Search the
-   intermediate results each proof proves or cites too: a `complete` library
-   hit for one of them, or for a result in scope, is a missed reuse unless the
-   article that states or uses it is proved, its implementation note names the
-   declaration, or the source's page records why it, or its module, does not
-   apply. Read each
-   library declaration a source page names: one named without a reason, or with
-   a reason that does not hold for an article reaching that source, is a missed
-   reuse. List any library refused.
+   describe. List the queries run and any library refused.
+   - Each result hits its own article; a second article stating the same result
+     is a duplicate. A hit whose `catalog` is `module` is an inventory listing
+     the declaration, not a duplicate of the article that expounds it, and a
+     library hit is not a duplicate of an article either.
+   - Matching is literal, so finding none, even after a retry with fewer
+     words, proves nothing: also compare the statements read for item 3.
+   - A `complete` library hit for a result in scope or an intermediate result
+     is a missed reuse unless the article that states or uses it is proved, its
+     implementation note names the declaration, or the source's page records
+     why it, or its module, does not apply.
+   - Read each library declaration a source page names: one named without a
+     reason, or with a reason that does not hold for an article reaching that
+     source, is a missed reuse.
 
 ## Source fidelity and coverage — 40%
 
@@ -68,6 +67,9 @@ scope against the sources, then inspect the fine DAG and its coarse roadmap.
   identified.
 - `## Depends on` contains statement prerequisites; `## Proof depends on`
   contains dependencies needed only by the proof.
+- An article whose result a library already proves lists under
+  `## Proof depends on` only the articles that proof uses, usually none. Links
+  to the source's route there are spurious edges that block it.
 
 ## Usability and status discipline — 20%
 

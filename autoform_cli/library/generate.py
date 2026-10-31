@@ -1,4 +1,24 @@
-"""Generate the index a Lean library publishes, from its built environment and its sources."""
+"""Generate the index a Lean library publishes, from its built environment and its sources.
+
+Lean imports two modules that state one theorem the same way and keeps one
+copy. Such a name is indexed once, under the first of its modules in name
+order, with the line, statement, docstring and status of that module's
+declaration: which copy Lean keeps depends on the order it loads the modules
+in, and the index must not. Each such name is a warning naming the module it is
+indexed under and the others, and the summary line counts them; ``--check``
+does not mention them. A name that is not indexed, such as an equation lemma
+two modules both generate, is no warning. A name whose first module leaves it
+on ``sorry`` or declares it as an axiom is left out and counted with the
+others, with a warning naming that module and the others, since one of them
+may hold a whole proof. If such a name's docstring comes from
+``@[inherit_doc]``, the record has none. A wanted name is private to its
+module, so each module's copy is indexed.
+
+Only the source directories of the indexed ``lean_lib`` targets are read, and
+a target's ``globs`` select its modules as Lake does (see ``_glob``).
+``--check`` finds changed, new and missing source files by reading files,
+before it runs Lean.
+"""
 
 from __future__ import annotations
 
@@ -14,9 +34,10 @@ from pathlib import Path, PurePosixPath
 
 import tomli
 
-from .. import skeleton
+from .. import lean_probe
+from .._managed_output import output_identity, remove_output, replace_outputs, stage_output
+from ..lean_probe import SkeletonError, lean_libraries
 from ..project.catalog import canonical_lean_toolchain
-from ..skeleton import SkeletonError, lean_libraries
 from .declarations import ProbeOutputError, classify, parse_probe_output, starts_with_module
 from .index import (
     INDEX_FILE,
@@ -39,7 +60,8 @@ from .verify import CheckoutPins, _sources, checkout_pins
 LIBRARY_MARKER = "AUTOFORM_LIBRARY "
 #: Raised by any change, here or in the probe, that can alter the bytes of an index.
 PROBE_REVISION = 1
-#: The Lean releases the probe has been run on; its use of Lean internals is checked on each.
+#: The Lean releases the probe has been run on, its use of Lean internals checked when each was added.
+#: CI runs the real-library tests only on the release tests/fixtures/library-project pins.
 VERIFIED_TOOLCHAINS = ("leanprover/lean4:v4.34.1", "leanprover/lean4:v4.35.0")
 _LABEL = "library index probe"
 _DUPLICATE = re.compile(r"import (\S+) failed, environment already contains '([^']+)' from (\S+)")
@@ -111,12 +133,10 @@ def render_library_probe(modules: Sequence[str]) -> str:
     names = sorted(set(modules))
     if not names:
         raise GenerateError("the indexed libraries hold no Lean module")
-    template = (Path(skeleton.__file__).parent / "probes" / "library_probe.lean").read_text(encoding="utf-8")
-    return template.format(
+    return lean_probe.render_probe_template(
+        "library_probe.lean",
         imports="\n".join(f"import {module}" for module in names),
         marker=LIBRARY_MARKER,
-        output_env=skeleton.PROBE_OUTPUT_ENV,
-        output_limit=skeleton.DEFAULT_PROBE_OUTPUT_LIMIT,
         modules=_module_set(names),
     )
 
@@ -157,14 +177,14 @@ def library_sources(root: Path, libraries: Sequence[str] = ()) -> LibrarySources
             base = PurePosixPath(target.src_dir.resolve().relative_to(root).as_posix())
         except ValueError:
             raise GenerateError(f"the source directory of {target.name} is outside the package") from None
-        selecting = [_glob(glob, target.name) for glob in target.globs]
+        selecting = [_glob(glob, target.name) for glob in target.globs or ()]
         for module, mode in selecting:
             if mode != "+" and not (target.src_dir / f"{module.replace('.', '/')}.lean").is_file():
                 raise GenerateError(f"lean_lib {target.name}: module {module} has no source file")
         for module_root in target.roots:
             directory = (base / module_root.replace(".", "/")).as_posix()
             prefixes[directory] = "" if base == PurePosixPath(".") else f"{base.as_posix()}/"
-            if selecting:
+            if target.globs is not None:
                 globs.setdefault(directory, []).extend(selecting)
     source_dirs = tuple(sorted(prefixes))
     digests = _sources(root, source_dirs, GenerateError)
@@ -223,10 +243,10 @@ def generate_index(
         ) from None
 
     try:
-        output = (runner or skeleton.run_probe)(
+        output = (runner or lean_probe.run_probe)(
             render_library_probe(tuple(sources.modules)),
             directory,
-            timeout=skeleton.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
+            timeout=lean_probe.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
             label=_LABEL,
         )
     except SkeletonError as error:
@@ -235,7 +255,7 @@ def generate_index(
         if clash:
             second, name, first = clash.groups()
             raise GenerateError(_clash(first, second, name)) from None
-        said = skeleton.stale_build_said(error)
+        said = lean_probe.stale_build_said(error)
         if said is not None:
             # The probe imports every module, and `run_probe` names each one; the libraries say the same.
             raise GenerateError(
@@ -376,17 +396,17 @@ def write_index(root: str | Path, generated: Generated) -> Path:
             if not stat.S_ISREG(mode):
                 raise GenerateError(f"{INDEX_FILE} exists and is not a regular file")
             previous = True
-        before = skeleton._output_identity(destination)
-        stage = skeleton._stage_output(destination, generated.data.decode("utf-8"))
+        before = output_identity(destination)
+        stage = stage_output(destination, generated.data.decode("utf-8"))
         replacing = True
-        skeleton._replace_outputs([(destination, stage, before)])
+        replace_outputs([(destination, stage, before)])
     except (OSError, SkeletonError) as error:
         cause = "; ".join(error.issues) if isinstance(error, SkeletonError) else _reason(error)
         state = {True: "the previous one is unchanged", False: "none was written", None: "nothing was changed"}[previous]
         if replacing:
             # A failed install is rolled back, and the rollback can fail too: say what is there now.
             try:
-                same = skeleton._output_identity(destination) == before
+                same = output_identity(destination) == before
             except (OSError, SkeletonError):
                 same = False
             if not same:
@@ -395,7 +415,7 @@ def write_index(root: str | Path, generated: Generated) -> Path:
     finally:
         if stage is not None:
             with contextlib.suppress(OSError):
-                skeleton._remove_output(stage)
+                remove_output(stage)
     return destination
 
 

@@ -10,7 +10,7 @@ import pytest
 from autoform_cli.__main__ import main
 from autoform_cli.library.citations import cited_sources
 from tests.library_fixture import declaration, make_library
-from tests.test_search import _article
+from tests.search_fixture import _article
 
 _THEOREM = "Nat.threeSquareRepresentationCount_eq_threeSquareRepresentationCount_div_four"
 _MORTENSON = "DOI 10.1007/s00222-012-0383-5"

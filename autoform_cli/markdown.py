@@ -1,11 +1,7 @@
 """Shared Markdown primitives for the deterministic blueprint checks.
 
 The audit, the coverage contract, and the renderer must agree on what counts as
-published Markdown. When each one carried its own regular expressions they
-disagreed in ways that failed open: a table hidden inside an HTML comment was
-treated as authoritative, and a link missing its closing parenthesis satisfied a
-check even though it never renders as a link. This module is the single place
-those rules live.
+published Markdown, so they share the rules this module holds.
 
 Two ideas run through everything here:
 
@@ -22,6 +18,20 @@ checker that guesses at anchors both rejects valid fragments and accepts
 fragments that never appear on the published page. ``tests/test_markdown.py``
 holds a differential test that compares this module against Python-Markdown
 itself, so the two cannot drift apart unnoticed.
+
+Fences and comments are read differently for an article alone and on a page.
+A fence closes only on a bare fence line; for the graph and the audit, a later
+bare line of the same character and at least the opener's length closes it,
+and a fence that never closes is read as plain text, so it hides no heading or
+dependency link. On a chapter page, where ``pymdownx.superfences`` asks for the
+opener's exact length and indent, an unclosed fence can pair with a later
+article's closing fence and hide everything between them, which is why
+``check`` warns about one and the site shows that page as typed. The page can
+also pair an unclosed backtick fence line with a later backtick run in the same
+paragraph and show the text between as inline code; a link there is no link on
+the page but is still read as a dependency. An HTML comment that never closes
+hides every later heading and dependency link, and the part of the article it
+opens in (statement or section) keeps the rest.
 """
 
 from __future__ import annotations
@@ -39,13 +49,17 @@ from urllib.parse import quote, unquote, urlsplit
 import html5lib
 import markdown as pymarkdown
 from markdown.blockprocessors import ReferenceProcessor
-from markdown.inlinepatterns import ReferenceInlineProcessor
+from markdown.inlinepatterns import ENTITY_RE, ReferenceInlineProcessor
 from pymdownx.arithmatex import RE_BRACKET_INLINE, RE_SMART_DOLLAR_INLINE
 from pymdownx.superfences import fence_div_format
 
+from ._fs import directory_path, is_within, resolved_path
+
 #: The class pymdownx.arithmatex gives each formula it finds in the site's
 #: Markdown. The page's MathJax reads these elements and no other text, so a
-#: title or the navigation shows its TeX as typed.
+#: title or the navigation shows its TeX as typed, but for the titles and
+#: summaries the dependency explorer draws in its rail and details, which it
+#: marks with this class.
 FORMULA_CLASS = "arithmatex"
 
 #: The Markdown extensions the generated `mkdocs.yml` enables, and their
@@ -200,7 +214,9 @@ def content(text: str) -> Content:
 
     Fenced code blocks, indented code blocks, and HTML comments are blanked.
     The result always has exactly as many lines as ``text``, so index ``i``
-    still describes line ``i + 1`` of the source document.
+    still describes line ``i + 1`` of the source document. Unlike
+    :func:`mask_fences_and_comments`, a fence that never closes stays open to
+    the end, so no table or link after it counts (#201).
     """
 
     lines = text.splitlines()
@@ -354,7 +370,7 @@ def render_html(text: str) -> str:
         raise
 
 
-def render_tree(text: str) -> object | None:
+def render_tree(text: str, *, allow_html: bool = True) -> object | None:
     """Render ``text`` and parse the result the way a browser would.
 
     HTML5 tree construction is the point, not tokenising. Browsers repair
@@ -367,6 +383,18 @@ def render_tree(text: str) -> object | None:
 
     try:
         rendered = render_html(text)
+        # The converter also stashes character references. Validate their
+        # original spelling, never entity-decode a raw tag into trusted markup.
+        # HTML5 parses these as text; generated math and escaped code are not
+        # raw HTML. Unknown names and every other stashed fragment stay rejected.
+        if not allow_html and any(
+            not (
+                isinstance(block, str) and re.fullmatch(ENTITY_RE, block)
+                and (block.startswith("&#") or block[1:] in html.entities.html5)
+            )
+            for block in _converter().htmlStash.rawHtmlBlocks
+        ):
+            return None
     except Exception:
         return None
     try:
@@ -939,57 +967,6 @@ GENERATED_VIEWS = RETIRED_VIEWS | {
 }
 
 
-def resolved_path(path: Path) -> Path | None:
-    """``path`` with its symbolic links resolved, or None when the system cannot open it.
-
-    The kernel follows the links first, so a missing part, a symlink loop or a
-    chain past its link limit gives None on every Python, and that limit bounds
-    the work `os.path.realpath` then does. Strict `realpath` also gives None at
-    a link it cannot read, which macOS follows anyway. Windows applies `..` as
-    text before it looks anything up. Callers still check where the result
-    points and whether it is a file.
-    """
-
-    try:
-        os.stat(path)
-        return Path(os.path.realpath(path, strict=True))
-    except (OSError, ValueError):  # ValueError: a NUL in the path
-        return None
-
-
-def directory_path(path: Path) -> Path | None:
-    """``path`` as `resolved_path` gives it, or, for a directory it gives None
-    for, the path the system gives the opened directory; None when neither works.
-
-    For a blueprint root. `resolved_path` gives None at a link the system
-    follows but will not let anyone read, which macOS allows for another
-    user's symlink; above a blueprint such a link changes nothing inside it,
-    so the system is asked for the path of the directory it opened. Links
-    under that path then resolve as usual, and one inside the blueprint that
-    cannot be read still gives None.
-    """
-
-    resolved = resolved_path(path)
-    if resolved is not None or os.name == "nt":
-        return resolved
-    import fcntl
-
-    try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    except (OSError, ValueError):
-        return None
-    try:
-        if hasattr(fcntl, "F_GETPATH"):  # macOS
-            opened = os.fsdecode(fcntl.fcntl(descriptor, fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0])
-        else:  # Linux; elsewhere, without /proc, this fails and gives None
-            opened = os.readlink(f"/proc/self/fd/{descriptor}")
-    except OSError:
-        return None
-    finally:
-        os.close(descriptor)
-    return Path(opened)
-
-
 def blueprint_root(path: str | Path) -> Path:
     """The directory ``path`` names, as `directory_path` gives it, or as written, made absolute."""
 
@@ -1032,17 +1009,17 @@ def local_target_issue(
     # The path the link spells, after its `..` steps. One that leaves the
     # blueprint escapes it, and nothing outside is looked at.
     spelled = Path(os.path.normpath(source_path.parent.resolve() / raw_path))
-    if Path(raw_path).is_absolute() or not _is_within(spelled, boundary):
+    if Path(raw_path).is_absolute() or not is_within(spelled, boundary):
         return f"{label}-escapes-blueprint", f"{label} link escapes the blueprint: {target!r}"
     if spelled.parent == boundary and spelled.name in GENERATED_VIEWS:
         return f"generated-{label}-target", f"{label} link names a generated view, which render omits: {target!r}"
-    if any(_is_within(spelled, folder) for folder in unpublished):
+    if any(is_within(spelled, folder) for folder in unpublished):
         reason = f"{label} link names an unpublished folder, which render omits: {target!r}"
         return f"unpublished-{label}-target", reason
     candidate = resolved_path(source_path.parent / raw_path if raw_path else source_path)
     if candidate is None:
         return f"{label}-not-found", f"{label} link does not resolve to a file: {target!r}"
-    if not _is_within(candidate, boundary):
+    if not is_within(candidate, boundary):
         return f"{label}-escapes-blueprint", f"{label} link escapes the blueprint: {target!r}"
     # Render resolves links in a copy of the vault that has no hidden paths and no
     # symbolic links, so a link on a page it publishes breaks when the path it spells
@@ -1219,17 +1196,9 @@ def _unwrap_target(target: str) -> str:
     return target
 
 
-def _is_within(path: Path, directory: Path) -> bool:
-    try:
-        path.relative_to(directory)
-    except ValueError:
-        return False
-    return True
-
-
 def _is_hidden_path(path: Path, boundary: Path) -> bool:
     """Whether a part of *path* below *boundary* starts with ".", so render omits it (its `_is_hidden`)."""
-    return _is_within(path, boundary) and any(part.startswith(".") for part in path.relative_to(boundary).parts)
+    return is_within(path, boundary) and any(part.startswith(".") for part in path.relative_to(boundary).parts)
 
 
 def relative_link(target: Path, output: Path, link_extension: str) -> str:

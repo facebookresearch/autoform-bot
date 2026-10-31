@@ -49,6 +49,13 @@ def test_a_workspace_lists_its_locked_packages_by_unescaped_name(tmp_path: Path)
     assert workspace.overridden == frozenset()
 
 
+def test_the_toolchain_is_the_first_line_trimmed_of_elan_whitespace_only(tmp_path: Path) -> None:
+    project = _project(tmp_path, [entry("atlas")])
+    (project / "lean-toolchain").write_text("\u3000 leanprover/lean4:v4.34.1\x1c\u00a0\t\nnext\n", encoding="utf-8")
+
+    assert read_workspace(project).lean_toolchain == "leanprover/lean4:v4.34.1\x1c"
+
+
 def test_packages_dir_defaults_and_must_stay_inside_the_project(tmp_path: Path) -> None:
     assert read_workspace(_project(tmp_path, [entry("atlas")], packages_dir=None)).packages_dir == ".lake/packages"
     for index, unsafe in enumerate(("/abs/packages", "../packages", ".lake/../../packages")):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -13,10 +14,12 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Sequence
+from functools import partial
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from . import debrief, debrief_orchestrator, status
+from .approvals import ApprovalStatus, approval_statuses
 from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
 from .audit import audit_blueprint
 from .claims import (
@@ -40,7 +43,8 @@ from .impact import (
     module_import_impact,
     revision_impact,
 )
-from .lean import declaration_names, index_failure_message, index_project
+from .lean import _name_prefix, declaration_names, index_failure_message, index_project
+from .lean_probe import DEFAULT_PROBE_TIMEOUT
 from .library.citations import library_citation_warnings
 from .library.generate import GenerateError, check_index, generate_index, write_index
 from .library.index import INDEX_FILE
@@ -49,19 +53,31 @@ from .library.locate import LibraryError, WorkspaceError
 from .library.search import LibraryResult, library_argument, search_with_libraries
 from .markdown import local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
+from .readback import Readback, load_readbacks, prepare_readback, publish_readback
 from .render import SOURCES_DIR, PublicationError, publication_issues, render_site
+from .review import (
+    ReviewBundle,
+    ReviewError,
+    ReviewFinding,
+    build_review_bundle,
+    read_regular_file,
+    read_review_packet,
+    review_findings,
+    review_states,
+    write_review_packets,
+)
 from .runtime import RuntimeProjectionError, projection_omissions, resolve_runtime_paths
 from .scaffold import ScaffoldError, scaffold_project
 from .search import SearchError, search_blueprint, statement_preview
 from .site_check import SiteCheckError, check_site
 from .skeleton import (
-    DEFAULT_PROBE_TIMEOUT,
     SkeletonError,
     extract_skeletons,
     format_report,
     write_packets,
     write_skeleton_report,
 )
+from .testimony import typesetting_warnings
 from .work import WORK_SCHEMA, WorkError, assumption_contract, list_ready_work, work_context
 
 
@@ -102,9 +118,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     init.add_argument(
         "--autoform-ref",
         default="",
-        help="immutable ref the workflows pin (default: this checkout's HEAD commit)",
+        help=(
+            "full 40-character Autoform commit the workflows pin, not a branch, tag or short sha "
+            "(default: this checkout's HEAD commit; none when --autoform-source is given)"
+        ),
     )
-    init.add_argument("--force", action="store_true", help="overwrite files that already exist")
+    init.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite files that already exist; a case or Unicode variant of a managed path is still refused",
+    )
     init.add_argument("--json", action="store_true", help="write stable machine-readable output")
 
     check = subparsers.add_parser("check", help="validate a Markdown blueprint")
@@ -167,14 +190,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     project_new.add_argument(
         "--lean-toolchain",
         help=(
-            "Lean release tag such as v4.30.0; a pair the catalog does not list is written "
-            "without lake-manifest.json, so run 'lake update' in the project"
+            "Lean release tag such as v4.30.0, not with --release; below v4.27.0 it warns. A pair the catalog "
+            "does not list is written without lake-manifest.json, so run 'lake update' in the project"
         ),
     )
     project_new.add_argument(
         "--mathlib-rev",
         help=(
-            "Mathlib tag, branch, or commit to require with --lean-toolchain "
+            "Mathlib tag, branch, or commit to require with --lean-toolchain, not with --release "
             "(default: the same tag as the toolchain)"
         ),
     )
@@ -294,8 +317,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         choices=(MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE),
         default=MODULE_IMPORT_SCOPE,
         metavar="SCOPE",
-        help=f"{MODULE_IMPORT_SCOPE} (default) loads every root library; {IMPORT_CLOSURE_SCOPE} loads only "
-        "files that may import MODULE, reports affected modules exactly and over-reports articles",
+        help=f"{MODULE_IMPORT_SCOPE} (default) loads every root library; {IMPORT_CLOSURE_SCOPE} loads, and needs "
+        "built, only files that may import MODULE: affected_modules stay exact, affected_articles may over-report",
     )
     search = subparsers.add_parser(
         "search", help="find articles by title, Lean name, or statement text before adding one"
@@ -368,7 +391,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--check", action="store_true", help="write nothing; exit 1 when the index at the root is not current"
     )
     library_index.add_argument(
-        "--timeout", type=_positive_seconds, default=None, metavar="SECONDS", help="time limit for the Lean probe"
+        "--timeout",
+        type=_positive_seconds,
+        default=None,
+        metavar="SECONDS",
+        help=f"seconds the Lean probe may run (default {DEFAULT_PROBE_TIMEOUT:g})",
     )
 
     claim = subparsers.add_parser("claim", help="coordinate temporary node ownership through Git refs")
@@ -378,9 +405,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         command.add_argument("node_id", nargs="+", help="claim target(s); several change all-or-nothing")
         _add_claim_board_arguments(command)
         if operation in {"acquire", "renew"}:
-            command.add_argument("--ttl", type=int, default=CLAIM_TTL_S)
+            command.add_argument(
+                "--ttl",
+                type=int,
+                default=CLAIM_TTL_S,
+                help=f"seconds from now until the lease expires (default {CLAIM_TTL_S})",
+            )
         if operation == "acquire":
-            command.add_argument("--note", default="")
+            command.add_argument("--note", default="", help="free text stored in the lease; renew keeps it")
     claim_list = claim_subparsers.add_parser("list")
     claim_list.add_argument("node_id", nargs="*", help="list only these claim targets")
     _add_claim_board_arguments(claim_list)
@@ -389,7 +421,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=_positive_seconds,
         default=120.0,
         metavar="SECONDS",
-        help="time limit for the whole listing (default: 120)",
+        help="deadline for the listing's Git commands (default: 120)",
     )
     claim_cleanup = claim_subparsers.add_parser("cleanup")
     _add_claim_board_arguments(claim_cleanup)
@@ -491,15 +523,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="DIR",
         help="with --packets: also write each article's cited source passage, for a faithfulness judge",
     )
-    skeleton.add_argument(
-        "--timeout",
-        type=_positive_seconds,
-        metavar="SECONDS",
-        help="seconds the probe helper's build, and each Lean probe, may each run "
-        f"(default {DEFAULT_PROBE_TIMEOUT:g}); "
-        "one probe runs per root module, several in parallel, and the budget is per probe, not a deadline "
-        "for the whole extraction; the Lake freshness check before them has its own budget",
+    _add_probe_timeout_argument(skeleton)
+
+    review = subparsers.add_parser("review", help="prepare and verify statement-review evidence")
+    review_subparsers = review.add_subparsers(dest="review_command", required=True)
+    review_prepare = review_subparsers.add_parser(
+        "prepare",
+        help="write the blind packets of every Lean-mapped article and their manifest",
     )
+    review_prepare.add_argument("blueprint_dir")
+    review_prepare.add_argument("--lean-root", type=Path, required=True, help="the built Lean project")
+    review_prepare.add_argument(
+        "--packets", type=Path, required=True, metavar="DIR", help="directory to write the blind packets to"
+    )
+    _add_probe_timeout_argument(review_prepare)
+
+    review_record = review_subparsers.add_parser(
+        "record",
+        help="validate and file testimony about one packet `review prepare` wrote",
+    )
+    review_record.add_argument("blueprint_dir")
+    review_record.add_argument(
+        "--packets", type=Path, required=True, metavar="DIR", help="blind packet directory from review prepare"
+    )
+    review_record.add_argument("--article-id", required=True, metavar="AF_ID", help="the article's article_id")
+    review_record.add_argument(
+        "--declaration", required=True, metavar="LEAN_NAME", help="the declaration whose packet was read back"
+    )
+    review_record.add_argument(
+        "--testimony", type=Path, required=True, help="the read-back file, at most 32 KiB and 500 lines"
+    )
+    review_record.add_argument(
+        "--model", required=True, help="label of the reviewing model; recorded, not authenticated"
+    )
+    review_record.add_argument(
+        "--expected-card-hash",
+        help="replace an existing different card only if its current content has this hash",
+    )
+
+    review_check = review_subparsers.add_parser(
+        "check",
+        help="check evidence freshness, read-backs, and human approvals",
+    )
+    review_check.add_argument("blueprint_dir")
+    review_check.add_argument("--lean-root", type=Path, required=True, help="the built Lean project")
+    review_check.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    _add_probe_timeout_argument(review_check)
 
     render = subparsers.add_parser("render", help="build the publishable blueprint")
     render.add_argument("blueprint_dir")
@@ -517,6 +586,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="fail when a 'lean:' declaration is not found in the Lean sources, is defined more than once in them, "
         "or cannot be looked up because the sources cannot be read",
     )
+    render.add_argument(
+        "--review",
+        action="store_true",
+        help="add each statement's review, judged as review check judges it (needs --lean-root)",
+    )
+    _add_probe_timeout_argument(render)
 
     args = parser.parse_args(argv)
 
@@ -548,6 +623,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _migrate(args)
     if args.command == "skeleton":
         return _skeleton(args)
+    if args.command == "review":
+        return _review(args)
     if args.command == "render":
         return _render(args)
     return 2
@@ -561,6 +638,18 @@ def _add_claim_board_arguments(parser: argparse.ArgumentParser) -> None:
         help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
     )
     parser.add_argument("--scratch", type=Path, help="local bare Git object cache")
+
+
+def _add_probe_timeout_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--timeout",
+        type=_positive_seconds,
+        metavar="SECONDS",
+        help="seconds the probe helper's build, and each Lean probe, may each run "
+        f"(default {DEFAULT_PROBE_TIMEOUT:g}); "
+        "one probe runs per root module, several in parallel, and the budget is per probe, not a deadline "
+        "for the whole extraction; the Lake freshness check before them has its own budget",
+    )
 
 
 def _init(args: argparse.Namespace) -> int:
@@ -694,6 +783,25 @@ def _formalizable_container_warnings(graph: Graph) -> list[str]:
     ]
 
 
+#: How check ends the reason it gives for a name under one of the project's own types.
+_GENERATED = "and record the name in the article's implementation note"
+
+
+def _generated_name(index, name: str) -> str:
+    """Why a name under one of the project's own structures or inductive types may not be found, or ""."""
+    parent = index.find(_name_prefix(name)) if "." in name else None
+    if parent is None or parent.keyword not in ("structure", "class", "inductive"):
+        return ""
+    kind = "an inductive type" if parent.keyword == "inductive" else f"a {parent.keyword}"
+    # Lean defines no constant for a field inherited through a parent's projection.
+    inherited = "" if parent.keyword == "inductive" else ", and no field it inherits"
+    return (
+        f"; {parent.name} is {kind} at {parent.path.as_posix()}:{parent.line}: the index reads no constructor, "
+        f"recursor or other name Lean generates for it{inherited}, so put {parent.name} or another project "
+        f"declaration in lean: {_GENERATED}, or check its spelling"
+    )
+
+
 def _check(args: argparse.Namespace) -> int:
     try:
         graph = load_graph(args.blueprint_dir)
@@ -739,13 +847,14 @@ def _check(args: argparse.Namespace) -> int:
             if (ambiguous := index.ambiguity(name))
             else f"{node.id}: declaration not found in {args.lean_root}: {name}"
             + ("; a name Lean generates is not indexed and belongs in the catalog's ledger" if node.catalog else "")
+            + ("" if node.catalog else _generated_name(index, name))
             for node in graph.nodes.values()
             for name in declaration_names(node.lean or "")
             if index.find(name) is None
         ]
         for issue in missing:
             print(f"error: {issue}")
-        if any(": declaration not found in " in issue for issue in missing):
+        if any(": declaration not found in " in issue and _GENERATED not in issue for issue in missing):
             print(
                 "note: check resolves lean: names only in the project's own Lean files, not in Mathlib or other "
                 "dependencies under .lake; if a name is a shared library's declaration, record it in the article's "
@@ -1666,22 +1775,37 @@ def _skeleton(args: argparse.Namespace) -> int:
             print("error: --output must be disjoint from packet and passage directories", file=sys.stderr)
             return 2
     stream = sys.stderr if args.json else sys.stdout
+
+    def progress(phase: str) -> None:
+        # Information only. Without fd 2, print(file=None) would write to stdout,
+        # and a line left in a broken stderr's buffer would fail the exit-time flush.
+        if sys.stderr is None:
+            return
+        try:
+            print(f"skeleton: {phase}...", file=sys.stderr, flush=True)
+        except OSError:
+            with contextlib.suppress(OSError, ValueError):
+                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stderr.fileno())
+
     try:
         report = extract_skeletons(
             args.blueprint_dir,
             lean_root=args.lean_root,
             timeout=args.timeout,
             node_ids=tuple(args.nodes) if args.nodes else None,
+            progress=progress,
         )
         if args.packets is not None and not report.clean:
             print("error: refusing to publish review packets from an incomplete skeleton report", file=sys.stderr)
         elif args.packets is not None:
+            progress("writing")
             written = write_packets(report, args.packets, passages=args.passages, report_path=args.output)
             print(f"{args.packets}: {len(written)} blind packet(s) written", file=stream)
             if args.passages is not None:
                 cited = sum(1 for node in report.nodes if node.passage is not None)
                 print(f"{args.passages}: {cited} source passage(s) written", file=stream)
         if args.output is not None and (args.packets is None or not report.clean):
+            progress("writing")
             write_skeleton_report(report, args.output)
     except SkeletonError as exc:
         for issue in exc.issues:
@@ -1696,10 +1820,182 @@ def _skeleton(args: argparse.Namespace) -> int:
         for issue in report.unresolved:
             print(f"error: {issue.message}", file=stream)
     elif args.json:
-        print(report.to_json())
+        # In pieces, as `--output` writes it: a large report need not be held twice.
+        sys.stdout.writelines(report._json_pieces())
+        sys.stdout.write("\n")
     else:
-        print(format_report(report, lean_root=args.lean_root), end="")
+        print(format_report(report), end="")
     return 0 if report.clean else 1
+
+
+def _review(args: argparse.Namespace) -> int:
+    if args.review_command == "prepare":
+        return _review_prepare(args)
+    if args.review_command == "record":
+        return _review_record(args)
+    if args.review_command == "check":
+        return _review_check(args)
+    return 2
+
+
+def _print_refusal(exc: GraphValidationError | PublicationError | ReviewError | SkeletonError, *, stream=None) -> None:
+    """Print why review evidence was refused, naming the article each finding is about."""
+
+    stream = stream or sys.stderr
+    if isinstance(exc, ReviewError):
+        for finding in exc.findings:
+            print(f"error: {_finding_text(finding)}", file=stream)
+        return
+    for issue in exc.issues:
+        print(f"error: {issue}", file=stream)
+
+
+def _review_prepare(args: argparse.Namespace) -> int:
+    try:
+        graph = load_graph(args.blueprint_dir)
+        skeleton = extract_skeletons(args.blueprint_dir, lean_root=args.lean_root, timeout=args.timeout)
+        bundle = build_review_bundle(graph, skeleton)
+        written = write_review_packets(bundle, args.packets)
+    except (GraphValidationError, ReviewError, SkeletonError) as exc:
+        _print_refusal(exc)
+        return 2
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(f"{args.packets}: {len(written)} blind packet(s) for {len(bundle.articles)} review article(s)")
+    return 0
+
+
+def _review_record(args: argparse.Namespace) -> int:
+    """File a card for one packet, without Lean.
+
+    Whether the card is current is ``review check``'s to judge, against its
+    own extraction: a card filed from a stale packet is reported invalid
+    there, and no approval can be computed from it.
+    """
+
+    try:
+        statement_hash, packet_hash, packet = read_review_packet(args.packets, args.article_id, args.declaration)
+        try:
+            testimony = read_regular_file(args.testimony).decode("utf-8")
+        except (OSError, UnicodeError) as exc:
+            reason = f"{args.declaration}: cannot read the testimony {args.testimony}: {exc}"
+            raise ReviewError([ReviewFinding(args.article_id, "review-input-unreadable", reason)]) from exc
+        graph = load_graph(args.blueprint_dir)
+        if not any(node.article_id == args.article_id for node in graph.nodes.values()):
+            reason = f"current graph has no article with article_id {args.article_id}"
+            raise ReviewError([ReviewFinding(args.article_id, "review-article-missing", reason)])
+        card = prepare_readback(
+            args.blueprint_dir,
+            article_id=args.article_id,
+            declaration=args.declaration,
+            statement_hash=statement_hash,
+            packet_hash=packet_hash,
+            model=args.model,
+            text=testimony,
+            packet_text=packet,
+            expected_card_hash=args.expected_card_hash,
+        )
+        path = publish_readback(card)
+    except (GraphValidationError, ReviewError) as exc:
+        for issue in exc.issues:
+            print(f"error: {issue}", file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as exc:
+        print(f"error: {args.declaration}: {exc}", file=sys.stderr)
+        return 2
+    print(f"{path}: recorded read-back for {args.declaration}")
+    # Recorded either way: the site shows such a formula as typed.
+    for warning in typesetting_warnings(testimony):
+        print(f"warning: {args.declaration}: {warning}")
+    return 0
+
+
+def _review_check(args: argparse.Namespace) -> int:
+    try:
+        graph, bundle, cards = _current_review(args.blueprint_dir, lean_root=args.lean_root, timeout=args.timeout)
+    except (GraphValidationError, ReviewError, SkeletonError) as exc:
+        _print_refusal(exc)
+        return 2
+    states = review_states(graph, bundle, cards)
+    findings = review_findings(graph, bundle, cards, states)
+    approvals = approval_statuses(states)
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "approvals": [_approval_json(item) for item in approvals.values()],
+                    "clean": not findings,
+                    "findings": [
+                        {"code": item.code, "node_id": item.node_id, "reason": item.reason}
+                        for item in findings
+                    ],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        return 1 if findings else 0
+    for finding in findings:
+        print(f"error: {_finding_text(finding)}")
+    if not findings:
+        print(f"OK: {len(bundle.articles)} statement review(s) complete and current")
+    for item in approvals.values():
+        print(_approval_line(item))
+    return 1 if findings else 0
+
+
+def _finding_text(finding: ReviewFinding) -> str:
+    """A review finding as one line: the article it is about, when it is about one, then its code and reason."""
+
+    where = f"{finding.node_id}: " if finding.node_id else ""
+    return f"{where}{finding.code}: {finding.reason}"
+
+
+def _approval_line(item: ApprovalStatus) -> str:
+    return f"{item.node_id}: {item.label} · {item.review_hash}"
+
+
+def _approval_json(item: ApprovalStatus) -> dict[str, object]:
+    return {"label": item.label, "node_id": item.node_id, "review_hash": item.review_hash}
+
+
+def _current_review(
+    blueprint_dir: str | Path,
+    *,
+    lean_root: Path,
+    timeout: float | None = None,
+) -> tuple[Graph, ReviewBundle, dict[tuple[str, str], Readback]]:
+    """The graph, review evidence derived from one extraction of it, and the cards.
+
+    Everything returned describes one state of the blueprint. The graph and the
+    read-back cards are read before Lean runs. The extraction refuses a
+    blueprint that changes while it runs, and :func:`build_review_bundle`
+    refuses one whose hash does not name the graph read here, which covers the
+    time before the extraction took its own snapshot. Cards are not articles,
+    so they are read again afterwards and must be unchanged. Callers judge the
+    cards returned here rather than reading the vault again, the statements
+    compared are read again when the evidence is built and must still hash as
+    the graph recorded, and a passage edited since the extraction fails the
+    blueprint-hash comparison.
+    """
+
+    graph = load_graph(blueprint_dir)
+    cards = _review_cards(graph.blueprint_dir)
+    skeleton = extract_skeletons(blueprint_dir, lean_root=lean_root, timeout=timeout)
+    if _review_cards(graph.blueprint_dir) != cards:
+        reason = "a read-back changed while the review evidence was being extracted; rerun once the blueprint is idle"
+        raise ReviewError([ReviewFinding("", "review-snapshot-changed", reason)])
+    return graph, build_review_bundle(graph, skeleton), cards
+
+
+def _review_cards(blueprint_dir: Path) -> dict[tuple[str, str], Readback]:
+    """The vault's read-back cards; a card directory that cannot be listed is a review error, not missing cards."""
+
+    try:
+        return load_readbacks(blueprint_dir)
+    except ValueError as exc:
+        raise ReviewError([ReviewFinding("", "readback-unlistable", str(exc))]) from exc
 
 
 def _claim_board(args: argparse.Namespace) -> ClaimBoard:
@@ -1743,6 +2039,15 @@ def _default_claim_scratch(repo: str, worker_id: str) -> Path:
 
 
 def _render(args: argparse.Namespace) -> int:
+    if not args.review and args.timeout is not None:
+        print("error: --timeout requires --review", file=sys.stderr)
+        return 2
+    if args.review and args.lean_root is None:
+        print("error: --review requires --lean-root", file=sys.stderr)
+        return 2
+    # Render runs the extraction once its checks of the output and the inputs
+    # pass, so a render they refuse costs no Lean.
+    review = partial(extract_skeletons, args.blueprint_dir, lean_root=args.lean_root, timeout=args.timeout)
     try:
         report = render_site(
             args.blueprint_dir,
@@ -1750,10 +2055,10 @@ def _render(args: argparse.Namespace) -> int:
             lean_root=args.lean_root,
             repository_url=args.repository_url,
             ref=args.ref,
+            review=review if args.review else None,
         )
-    except (GraphValidationError, PublicationError) as exc:
-        for issue in exc.issues:
-            print(f"error: {issue}")
+    except (GraphValidationError, PublicationError, ReviewError, SkeletonError) as exc:
+        _print_refusal(exc, stream=sys.stdout)
         return 1
 
     print(f"{report.output_dir}: {report.pages} pages, {report.nodes} nodes, {report.linked} code links")

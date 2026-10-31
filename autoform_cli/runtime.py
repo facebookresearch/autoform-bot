@@ -1,8 +1,31 @@
 """Build a versioned, immutable runtime projection of a Markdown roadmap.
 
-The roadmap Markdown remains authoritative.  This module copies the validated
-canonical graph into a stable in-memory contract for read-only consumers; it
-never reads or writes a second graph artifact or any operational state.
+This module copies the validated canonical graph into a stable in-memory
+contract for read-only consumers. The user-facing rules are the runtime
+contract in ``autoform_cli/reference/runtime-and-publication.md``.
+
+The schema ``autoform-runtime/v4`` is deeply immutable, and its declared
+authority is ``markdown-articles``: the adapter copies hierarchy, typed
+statement and proof dependencies, authored assertions, derived progress,
+provenance, and optional local Lean source locations, but provides no
+persistence or write API. ``RuntimeGraph.as_dict()`` and ``to_json()`` are
+deterministic compatibility snapshots for consumers, not an authored or
+generated graph file.
+
+Every article remains in the view so consumers can preserve the book's
+arbitrary containment hierarchy. A node is dispatchable only when it is both a
+formalizable article and a leaf; narrative containers and prose-only leaves are
+never proof work units, and module inventories are non-formalizable,
+non-dispatchable source records. The source revision hashes exact roadmap
+article paths and bytes, excluding timestamps, absolute paths, Git state, and
+operational state. Optional Lean locations come from a local lexical scan and
+do not by themselves establish compilation or proof correctness.
+
+Projection fails when an article's bytes no longer match the digest recorded
+when the graph was loaded, so a source revision never labels node data parsed
+from older bytes. A hand-built node without a digest makes no snapshot claim:
+its ``source_sha256`` stays null and the revision covers whatever bytes its
+article holds at projection time.
 """
 
 from __future__ import annotations
@@ -13,9 +36,9 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
+from ._fs import directory_path, resolved_path
 from .graph import Graph, load_graph, roadmap_symlink_issues
 from .lean import LeanSourceError, declaration_names, index_failure_message, index_project, resolve_lean_root
-from .markdown import directory_path, resolved_path
 from .status import derive, is_definition
 
 RUNTIME_SCHEMA = "autoform-runtime/v4"

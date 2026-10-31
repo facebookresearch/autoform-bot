@@ -56,30 +56,257 @@ def _raw_contract(blueprint: Path, body: str) -> Path:
     return path
 
 
-def test_a_row_that_exposes_a_table_cannot_supply_its_own_proof(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # The unclosed <style> in the candidate row swallows the table below it, so a
-    # reader sees only the first table and the candidate's values match it.
-    # Replacing the row removes the <style>, exposing a table that then offers the
-    # marker. Substituting rows is only sound if it changes nothing else.
-    _raw_contract(
-        blueprint,
+_HEADER = "| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+_TABLE = "# Coverage\n\n" + _HEADER
+_NO_TABLE = (
+    "coverage table does not render as a table; check for an HTML comment in "
+    "the header or separator, and for a missing blank line above it"
+)
+_NO_CONTENT = "coverage evidence has no substantive content"
+_HTML_HEADER = "<table><thead><tr><th>Area</th><th>Coverage</th><th>Evidence</th></tr></thead>"
+
+# Each row is a coverage file and what load_coverage must report for it: a
+# substring of the first reason, or the reasons, lines or (line, reason) pairs.
+_REJECTED = [
+    # The unclosed <style> swallows the table below it, so a reader sees only the
+    # first table. Replacing the row removes the <style> and exposes a table that
+    # offers the marker; substituting rows is only sound if it changes nothing else.
+    pytest.param(
         "# Coverage\n\n"
-        "<table><thead><tr><th>Area</th><th>Coverage</th><th>Evidence</th></tr></thead>"
-        "<tbody><tr><td>A</td><td>OUT</td><td>reason</td></tr></tbody></table>\n\n"
+        f"{_HTML_HEADER}<tbody><tr><td>A</td><td>OUT</td><td>reason</td></tr></tbody></table>\n\n"
         "Intro with no blank line\n"
         "| Area | Coverage | Evidence |\n"
         "| --- | --- | --- |\n"
         "| A<style> | OUT | reason |\n\n"
-        "<table><thead><tr><th>Area</th><th>Coverage</th><th>Evidence</th></tr></thead>"
-        "<tbody><tr><td>&#97;utoformcoveragerowmarker0</td><td>OUT</td>"
+        f"{_HTML_HEADER}<tbody><tr><td>&#97;utoformcoveragerowmarker0</td><td>OUT</td>"
         "<td>reason</td></tr></tbody></table>\n",
-    )
+        "changes what else the page renders",
+        id="a_row_that_exposes_a_table_cannot_supply_its_own_proof",
+    ),
+    # A reader sees two contract tables: the hidden fourth column is not a column.
+    pytest.param(
+        _TABLE + "| Main | OUT | Not in scope |\n\n"
+        "<table><thead><tr><th>Area</th><th>Coverage</th><th>Evidence</th>"
+        "<th hidden>Notes</th></tr></thead>"
+        "<tbody><tr><td>Other</td><td>OUT</td><td>reason</td>"
+        "<td hidden>aside</td></tr></tbody></table>\n",
+        ["coverage contract has multiple coverage tables"],
+        id="a_hidden_column_does_not_disguise_a_second_contract",
+    ),
+    # The source table renders as a paragraph and the raw-HTML table publishes
+    # byte-identical rows, so provenance has to be established, not inferred.
+    pytest.param(
+        "# Coverage\n\nIntro with no blank line\n" + _HEADER + "| Main | OUT | Not in scope |\n\n"
+        f"{_HTML_HEADER}<tbody><tr><td>Main</td><td>OUT</td><td>Not in scope</td></tr></tbody></table>\n",
+        [
+            "coverage rows are not the rows the page publishes; "
+            "the table a reader sees was not produced by these lines"
+        ],
+        id="identical_rows_cannot_borrow_a_published_table",
+    ),
+    # Matching on headers alone would let the unpublished rows stand as the contract.
+    pytest.param(
+        "# Coverage\n\nIntro with no blank line\n" + _HEADER + "| Main | OUT | Not in scope |\n\n"
+        f"{_HTML_HEADER}<tbody><tr><td>Other</td><td>OUT</td><td>reason</td></tr></tbody></table>\n",
+        "not the rows the page publishes",
+        id="unrendered_rows_cannot_borrow_another_published_table",
+    ),
+    # Self-closing syntax does not apply to a span, so the browser keeps it open.
+    pytest.param(
+        _TABLE + "| Appendix | OUT | <span hidden />Reason |\n",
+        [_NO_CONTENT],
+        id="a_self_closing_hidden_element_still_hides_what_follows",
+    ),
+    # A paragraph runs straight into the header, so no table is published at all.
+    pytest.param(
+        "# Coverage\n\nIntro without a separating blank line\n" + _HEADER
+        + "| Main | OUT | Not in scope |\n",
+        [_NO_TABLE],
+        id="a_table_with_no_blank_line_above_it_is_rejected",
+    ),
+    pytest.param(
+        "# Coverage\n\nArea | Coverage | Evidence\n--- | --- | ---\nMain | OUT | Not in scope\n",
+        ["coverage table must be written with a leading and trailing pipe on every row"],
+        id="a_table_written_without_outer_pipes_is_named",
+    ),
+    pytest.param(
+        "# Coverage\n\n> | Area | Coverage | Evidence |\n> | --- | --- | --- |\n> | Main | OUT | Not in scope |\n",
+        [(3, "coverage table must be a top-level table; remove the blockquote markers")],
+        id="a_blockquoted_table_has_an_actionable_diagnostic",
+    ),
+    # A browser closes the span and keeps hiding what follows it.
+    pytest.param(
+        _TABLE + "| Appendix | OUT | <span hidden>reason |\n",
+        [_NO_CONTENT],
+        id="evidence_hidden_by_a_malformed_element_is_not_evidence",
+    ),
+    # The column count survives the comment but the delimiter syntax does not.
+    pytest.param(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --<!-- note -->- |\n"
+        "| Main | OUT | Not in scope |\n",
+        [_NO_TABLE],
+        id="a_comment_breaking_the_separator_is_rejected",
+    ),
+    # The blank line belongs to the comment, not to the end of the table.
+    pytest.param(
+        _TABLE + "| Narrative | OUT | Not in scope |\n<!-- reviewer note\n\nmore note -->\n"
+        "| Main theorem | MAPPED | Needs roadmap articles |\n",
+        [9],
+        id="a_blank_line_inside_a_comment_cannot_shrink_the_contract",
+    ),
+    pytest.param(
+        _TABLE + "| Narrative | OUT | Not in scope |\n```\n\nexample\n```\n"
+        "| Main theorem | MAPPED | Needs roadmap articles |\n",
+        [10],
+        id="a_blank_line_inside_a_fence_cannot_shrink_the_contract",
+    ),
+    # A four-column row is malformed, but it is still a row somebody declared.
+    pytest.param(
+        _TABLE + "| A | OUT | Not in scope |\n<!-- reviewer note -->\n"
+        "| B | MAPPED | needs roadmap | accidental extra cell |\n",
+        [7],
+        id="a_malformed_row_after_hidden_content_is_still_reported",
+    ),
+    # ```` trailing` is not a closing fence for pymdownx.superfences, so the
+    # table below it renders inside the code block and publishes nothing.
+    pytest.param(
+        "# Coverage\n\n```\nnot a contract\n``` trailing\n" + _HEADER
+        + "| Main | OUT | Not in scope |\n",
+        ["coverage contract has no 'Area | Coverage | Evidence' table"],
+        id="a_table_left_inside_a_fence_is_not_a_contract",
+    ),
+    pytest.param(
+        "# Coverage\n\n| Area | Coverage | Evidence <!-- | hidden --> |\n| --- | --- | --- |\n"
+        "| Main | OUT | Not in scope |\n",
+        [_NO_TABLE],
+        id="a_comment_adding_a_pipe_to_the_header_is_rejected",
+    ),
+    pytest.param(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- <!-- | --> |\n| Main | OUT | Not in scope |\n",
+        [_NO_TABLE],
+        id="a_comment_adding_a_pipe_to_the_separator_is_rejected",
+    ),
+    pytest.param(
+        _TABLE + "| Appendix | DEFERRED | TODO: choose a milestone |\n",
+        ["coverage evidence is a placeholder"],
+        id="rejects_placeholder_evidence_that_carries_a_trailing_promise",
+    ),
+    # A renderer splits cells before stripping comments, so it sees four columns
+    # here while masking leaves three. Parse neither; report the disagreement.
+    pytest.param(
+        _TABLE + "| Appendix | OUT <!-- | --> | narrative only |\n",
+        ["an HTML comment changes this coverage row's column layout"],
+        id="a_comment_that_changes_a_rows_columns_is_rejected",
+    ),
+    pytest.param(
+        _TABLE + "| Malformed | DECOMPOSED | [Bad](../roadmap/bad%00path.md) |\n"
+        "| Unparsable | DECOMPOSED | [Host](http://[oops/a.md) |\n",
+        [
+            "coverage link contains an invalid path: '../roadmap/bad%00path.md'",
+            "coverage link is not a valid URL: 'http://[oops/a.md'",
+        ],
+        id="malformed_evidence_paths_are_reported_without_raising",
+    ),
+    pytest.param(
+        _TABLE + "| Main theorem | DECOMPOSED | [Nodes](../roadmap/main/README.md |\n",
+        ["DECOMPOSED coverage evidence must link to at least one roadmap article"],
+        id="an_unclosed_markdown_link_cannot_certify_decomposition",
+    ),
+    pytest.param(
+        _TABLE + "| Main theorem | DECOMPOSED | "
+        "[Nodes](../roadmap/main/README.md) and [More](../roadmap/absent.md) |\n",
+        ["coverage link does not resolve to a file: '../roadmap/absent.md'"],
+        id="every_decomposition_link_must_resolve_not_merely_one",
+    ),
+    pytest.param(
+        _TABLE + "| Main theorem | DECOMPOSED | [Nodes](../roadmap/main/README.md#absent-section) |\n",
+        ["coverage link fragment does not resolve: '../roadmap/main/README.md#absent-section'"],
+        id="a_decomposition_link_fragment_must_name_a_real_heading",
+    ),
+]
 
-    summary, issues = load_coverage(blueprint)
+# Each row is a coverage file the page publishes as written, and the summary
+# fields load_coverage must report for it.
+_ACCEPTED = [
+    # A second <p> implicitly closes the first, so the reader does see this.
+    pytest.param(
+        _TABLE + "| Appendix | OUT | <p hidden>aside<p>Genuinely out of scope |\n",
+        {},
+        id="an_implicitly_closed_hidden_paragraph_stops_hiding",
+    ),
+    # The renderer accepts this one: the rule is about what publishes, not about
+    # banning comments near the table.
+    pytest.param(
+        "# Coverage\n\n| Area | Coverage <!-- note --> | Evidence |\n| --- | --- | --- |\n"
+        "| Main | OUT | Not in scope |\n",
+        {"areas": ["Main"]},
+        id="a_comment_inside_a_header_cell_still_renders_a_table",
+    ),
+    pytest.param(
+        _TABLE + "| A | OUT | Not in scope |\n<!-- reviewer note -->\nSee the roadmap | for details.\n",
+        {},
+        id="prose_after_a_comment_is_not_mistaken_for_a_row",
+    ),
+    pytest.param(
+        _TABLE + "| Chapter one | MAPPED | Listed in the roadmap; source audit pending |\n",
+        {"complete": False},
+        id="accepts_a_trailing_status_note_beside_real_evidence",
+    ),
+    pytest.param(
+        _TABLE + "| Appendix | DEFERRED | Unknown-variance case, excluded by agreement |\n",
+        {},
+        id="a_status_word_joined_to_the_next_by_a_hyphen_is_not_a_marker",
+    ),
+    pytest.param(
+        _TABLE + "| Appendix | OUT | narrative only <!-- agreed with the author --> |\n",
+        {"evidence": "narrative only"},
+        id="a_comment_that_leaves_the_columns_alone_is_accepted",
+    ),
+    pytest.param(
+        _TABLE + "| Main theorem | DECOMPOSED | [Nodes](../roadmap/main/README.md#roadmap-article) |\n",
+        {"complete": True},
+        id="a_decomposition_link_fragment_naming_a_real_heading_certifies_decomposition",
+    ),
+]
+
+_SUMMARY_FIELDS = {
+    "areas": lambda summary: [entry.area for entry in summary.entries],
+    "evidence": lambda summary: summary.entries[0].evidence,
+    "complete": lambda summary: summary.complete,
+}
+
+
+def _load(tmp_path: Path, contract: str):
+    blueprint = tmp_path / "blueprint"
+    if "../roadmap/main/README.md" in contract:
+        _article(blueprint, "main/README.md")
+    _raw_contract(blueprint, contract)
+    return load_coverage(blueprint)
+
+
+@pytest.mark.parametrize(("contract", "expected"), _REJECTED)
+def test_coverage_contract_is_rejected(tmp_path: Path, contract: str, expected: str | list[object]) -> None:
+    summary, issues = _load(tmp_path, contract)
 
     assert summary is None
-    assert "changes what else the page renders" in issues[0].reason
+    if isinstance(expected, str):
+        assert expected in issues[0].reason
+    elif isinstance(expected[0], int):
+        assert [issue.line for issue in issues] == expected
+    elif isinstance(expected[0], tuple):
+        assert [(issue.line, issue.reason) for issue in issues] == expected
+    else:
+        assert [issue.reason for issue in issues] == expected
+
+
+@pytest.mark.parametrize(("contract", "fields"), _ACCEPTED)
+def test_coverage_contract_is_accepted(tmp_path: Path, contract: str, fields: dict[str, object]) -> None:
+    summary, issues = _load(tmp_path, contract)
+
+    assert issues == ()
+    assert summary is not None
+    for name, value in fields.items():
+        assert _SUMMARY_FIELDS[name](summary) == value, name
 
 
 def test_a_synthesised_marker_cannot_defeat_provenance(tmp_path: Path) -> None:
@@ -131,53 +358,6 @@ def test_a_marker_collision_cannot_defeat_provenance(tmp_path: Path) -> None:
     assert "not the rows the page publishes" in issues[0].reason
 
 
-def test_a_hidden_column_does_not_disguise_a_second_contract(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # A reader sees two contract tables here: the hidden fourth column is not a
-    # column at all, so it cannot excuse the second table from the count.
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "| Area | Coverage | Evidence |\n"
-        "| --- | --- | --- |\n"
-        "| Main | OUT | Not in scope |\n\n"
-        "<table><thead><tr><th>Area</th><th>Coverage</th><th>Evidence</th>"
-        "<th hidden>Notes</th></tr></thead>"
-        "<tbody><tr><td>Other</td><td>OUT</td><td>reason</td>"
-        "<td hidden>aside</td></tr></tbody></table>\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == ["coverage contract has multiple coverage tables"]
-
-
-def test_identical_rows_cannot_borrow_a_published_table(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # The source table renders as a paragraph, and the raw-HTML table below it
-    # publishes byte-identical rows. Comparing values alone cannot tell these
-    # apart, so provenance has to be established rather than inferred.
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "Intro with no blank line\n"
-        "| Area | Coverage | Evidence |\n"
-        "| --- | --- | --- |\n"
-        "| Main | OUT | Not in scope |\n\n"
-        "<table><thead><tr><th>Area</th><th>Coverage</th><th>Evidence</th></tr></thead>"
-        "<tbody><tr><td>Main</td><td>OUT</td><td>Not in scope</td></tr></tbody></table>\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == [
-        "coverage rows are not the rows the page publishes; "
-        "the table a reader sees was not produced by these lines"
-    ]
-
-
 def test_a_hidden_table_does_not_make_the_contract_ambiguous(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     # A reader sees one contract table, so there is nothing ambiguous here even
@@ -203,121 +383,6 @@ def test_a_hidden_table_does_not_make_the_contract_ambiguous(tmp_path: Path) -> 
         assert [entry.area for entry in summary.entries] == ["Main"], wrapper
 
 
-def test_unrendered_rows_cannot_borrow_another_published_table(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # The source table renders as a paragraph, but a raw-HTML table further down
-    # publishes the same headers. Matching on headers alone would let the
-    # unpublished rows stand as the contract.
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "Intro with no blank line\n"
-        "| Area | Coverage | Evidence |\n"
-        "| --- | --- | --- |\n"
-        "| Main | OUT | Not in scope |\n\n"
-        "<table><thead><tr><th>Area</th><th>Coverage</th><th>Evidence</th></tr></thead>"
-        "<tbody><tr><td>Other</td><td>OUT</td><td>reason</td></tr></tbody></table>\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    # Provenance is the more fundamental failure: whatever the rows say, these
-    # lines did not produce the table on the page.
-    assert "not the rows the page publishes" in issues[0].reason
-
-
-def test_a_self_closing_hidden_element_still_hides_what_follows(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # Self-closing syntax does not apply to non-void elements, so a browser keeps
-    # the span open and never draws the text after it.
-    _contract(blueprint, "| Appendix | OUT | <span hidden />Reason |\n")
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == ["coverage evidence has no substantive content"]
-
-
-def test_an_implicitly_closed_hidden_paragraph_stops_hiding(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # A second <p> implicitly closes the first, so the reader does see this.
-    _contract(blueprint, "| Appendix | OUT | <p hidden>aside<p>Genuinely out of scope |\n")
-
-    summary, issues = load_coverage(blueprint)
-
-    assert issues == ()
-    assert summary is not None
-
-
-def test_a_table_with_no_blank_line_above_it_is_rejected(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # Both structural lines are canonical, but a paragraph runs straight into the
-    # header, so the renderer publishes one lazy paragraph and no table at all.
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "Intro without a separating blank line\n"
-        "| Area | Coverage | Evidence |\n"
-        "| --- | --- | --- |\n"
-        "| Main | OUT | Not in scope |\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == [
-        "coverage table does not render as a table; check for an HTML comment in "
-        "the header or separator, and for a missing blank line above it"
-    ]
-
-
-def test_a_table_written_without_outer_pipes_is_named(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # The page does publish a contract table here, so reporting "no table" would
-    # be a lie. Name the form the audit needs instead.
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\nArea | Coverage | Evidence\n--- | --- | ---\nMain | OUT | Not in scope\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == [
-        "coverage table must be written with a leading and trailing pipe on every row"
-    ]
-
-
-def test_a_blockquoted_table_has_an_actionable_diagnostic(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "> | Area | Coverage | Evidence |\n"
-        "> | --- | --- | --- |\n"
-        "> | Main | OUT | Not in scope |\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [(issue.line, issue.reason) for issue in issues] == [
-        (3, "coverage table must be a top-level table; remove the blockquote markers")
-    ]
-
-
-def test_evidence_hidden_by_a_malformed_element_is_not_evidence(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # A browser closes the span and keeps hiding what follows it.
-    _contract(blueprint, "| Appendix | OUT | <span hidden>reason |\n")
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == ["coverage evidence has no substantive content"]
-
-
 def test_the_word_hidden_in_an_attribute_value_is_still_evidence(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     # `title="hidden"` hides nothing, and neither does `aria-hidden` for a
@@ -332,46 +397,6 @@ def test_the_word_hidden_in_an_attribute_value_is_still_evidence(tmp_path: Path)
 
         assert issues == (), evidence
         assert summary is not None, evidence
-
-
-def test_a_comment_breaking_the_separator_is_rejected(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # The column count survives the comment but the delimiter syntax does not, so
-    # the renderer publishes a paragraph rather than a table.
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "| Area | Coverage | Evidence |\n"
-        "| --- | --- | --<!-- note -->- |\n"
-        "| Main | OUT | Not in scope |\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == [
-        "coverage table does not render as a table; check for an HTML comment in "
-        "the header or separator, and for a missing blank line above it"
-    ]
-
-
-def test_a_comment_inside_a_header_cell_still_renders_a_table(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # This one the renderer does accept, so the contract stands. The rule is
-    # about what publishes, not about banning comments near the table.
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "| Area | Coverage <!-- note --> | Evidence |\n"
-        "| --- | --- | --- |\n"
-        "| Main | OUT | Not in scope |\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert issues == ()
-    assert summary is not None
-    assert [entry.area for entry in summary.entries] == ["Main"]
 
 
 def test_a_stranded_row_without_outer_pipes_is_reported(tmp_path: Path) -> None:
@@ -399,24 +424,6 @@ def test_a_stranded_row_without_outer_pipes_is_reported(tmp_path: Path) -> None:
         assert [issue.line for issue in issues] == [7], row
 
 
-def test_prose_after_a_comment_is_not_mistaken_for_a_row(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "| Area | Coverage | Evidence |\n"
-        "| --- | --- | --- |\n"
-        "| A | OUT | Not in scope |\n"
-        "<!-- reviewer note -->\n"
-        "See the roadmap | for details.\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert issues == ()
-    assert summary is not None
-
-
 def test_evidence_hidden_from_the_reader_is_not_evidence(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     # Each of these renders no text a browser will show, so none of them is a
@@ -435,129 +442,6 @@ def test_evidence_hidden_from_the_reader_is_not_evidence(tmp_path: Path) -> None
         assert [issue.reason for issue in issues] == [
             "coverage evidence has no substantive content"
         ], evidence
-
-
-def test_a_blank_line_inside_a_comment_cannot_shrink_the_contract(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # The blank line belongs to the comment, so it must not be mistaken for the
-    # blank line that ends a table -- otherwise the MAPPED row below vanishes.
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "| Area | Coverage | Evidence |\n"
-        "| --- | --- | --- |\n"
-        "| Narrative | OUT | Not in scope |\n"
-        "<!-- reviewer note\n"
-        "\n"
-        "more note -->\n"
-        "| Main theorem | MAPPED | Needs roadmap articles |\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.line for issue in issues] == [9]
-
-
-def test_a_blank_line_inside_a_fence_cannot_shrink_the_contract(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "| Area | Coverage | Evidence |\n"
-        "| --- | --- | --- |\n"
-        "| Narrative | OUT | Not in scope |\n"
-        "```\n"
-        "\n"
-        "example\n"
-        "```\n"
-        "| Main theorem | MAPPED | Needs roadmap articles |\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.line for issue in issues] == [10]
-
-
-def test_a_malformed_row_after_hidden_content_is_still_reported(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # A four-column row is malformed, but it is still a row somebody declared.
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "| Area | Coverage | Evidence |\n"
-        "| --- | --- | --- |\n"
-        "| A | OUT | Not in scope |\n"
-        "<!-- reviewer note -->\n"
-        "| B | MAPPED | needs roadmap | accidental extra cell |\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.line for issue in issues] == [7]
-
-
-def test_a_table_left_inside_a_fence_is_not_a_contract(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # ```` trailing` is not a closing fence for pymdownx.superfences, so the
-    # table below it renders inside the code block and publishes nothing.
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "```\n"
-        "not a contract\n"
-        "``` trailing\n"
-        "| Area | Coverage | Evidence |\n"
-        "| --- | --- | --- |\n"
-        "| Main | OUT | Not in scope |\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == [
-        "coverage contract has no 'Area | Coverage | Evidence' table"
-    ]
-
-
-def test_a_comment_adding_a_pipe_to_the_header_is_rejected(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "| Area | Coverage | Evidence <!-- | hidden --> |\n"
-        "| --- | --- | --- |\n"
-        "| Main | OUT | Not in scope |\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == [
-        "coverage table does not render as a table; check for an HTML comment in "
-        "the header or separator, and for a missing blank line above it"
-    ]
-
-
-def test_a_comment_adding_a_pipe_to_the_separator_is_rejected(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _raw_contract(
-        blueprint,
-        "# Coverage\n\n"
-        "| Area | Coverage | Evidence |\n"
-        "| --- | --- | --- <!-- | --> |\n"
-        "| Main | OUT | Not in scope |\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == [
-        "coverage table does not render as a table; check for an HTML comment in "
-        "the header or separator, and for a missing blank line above it"
-    ]
 
 
 def test_evidence_that_renders_nothing_is_not_evidence(tmp_path: Path) -> None:
@@ -840,6 +724,27 @@ def test_ignores_fenced_tables_and_accepts_escaped_pipes(tmp_path: Path) -> None
     assert summary.entries[0].evidence == "Case A | Case B"
 
 
+def test_a_fence_that_never_closes_keeps_the_table_below_it_out_of_the_contract(tmp_path: Path) -> None:
+    # Coverage keeps the fence open to the end of the file, so the table below
+    # it is not the contract. The page's own table reader sees the table, so the
+    # refusal blames the pipes, not the fence; check's warning names the fence (#201).
+    blueprint = tmp_path / "blueprint"
+    path = blueprint / "coverage/README.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "# Coverage\n\n```markdown\nexample\n\n"
+        "| Area | Coverage | Evidence |\n| --- | --- | --- |\n| Main theorem | OUT | Not in scope |\n",
+        encoding="utf-8",
+    )
+
+    summary, issues = load_coverage(blueprint)
+
+    assert summary is None
+    assert [issue.reason for issue in issues] == [
+        "coverage table must be written with a leading and trailing pipe on every row"
+    ]
+
+
 def test_rejects_placeholder_and_unresolved_decomposed_evidence(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     source = blueprint / "sources" / "README.md"
@@ -915,27 +820,6 @@ def test_rejects_evidence_whose_only_content_is_a_comment_or_code_span(tmp_path:
     assert "coverage evidence is empty" in reasons
 
 
-def test_rejects_placeholder_evidence_that_carries_a_trailing_promise(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _contract(blueprint, "| Appendix | DEFERRED | TODO: choose a milestone |\n")
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == ["coverage evidence is a placeholder"]
-
-
-def test_accepts_a_trailing_status_note_beside_real_evidence(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _contract(blueprint, "| Chapter one | MAPPED | Listed in the roadmap; source audit pending |\n")
-
-    summary, issues = load_coverage(blueprint)
-
-    assert issues == ()
-    assert summary is not None
-    assert not summary.complete
-
-
 def test_a_placeholder_used_as_a_marker_is_rejected(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     for evidence in ("TODO: choose a milestone", "TBD - pick a milestone", "**TODO.**", "Pending"):
@@ -945,16 +829,6 @@ def test_a_placeholder_used_as_a_marker_is_rejected(tmp_path: Path) -> None:
 
         assert summary is None, evidence
         assert [issue.reason for issue in issues] == ["coverage evidence is a placeholder"], evidence
-
-
-def test_a_status_word_joined_to_the_next_by_a_hyphen_is_not_a_marker(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _contract(blueprint, "| Appendix | DEFERRED | Unknown-variance case, excluded by agreement |\n")
-
-    summary, issues = load_coverage(blueprint)
-
-    assert issues == ()
-    assert summary is not None
 
 
 def test_a_status_word_opening_a_sentence_is_not_a_placeholder(tmp_path: Path) -> None:
@@ -968,31 +842,6 @@ def test_a_status_word_opening_a_sentence_is_not_a_placeholder(tmp_path: Path) -
 
         assert issues == (), evidence
         assert summary is not None, evidence
-
-
-def test_a_comment_that_changes_a_rows_columns_is_rejected(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    # A renderer splits cells before stripping comments, so it sees four columns
-    # here while masking leaves three. Parse neither; report the disagreement.
-    _contract(blueprint, "| Appendix | OUT <!-- | --> | narrative only |\n")
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == [
-        "an HTML comment changes this coverage row's column layout"
-    ]
-
-
-def test_a_comment_that_leaves_the_columns_alone_is_accepted(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _contract(blueprint, "| Appendix | OUT | narrative only <!-- agreed with the author --> |\n")
-
-    summary, issues = load_coverage(blueprint)
-
-    assert issues == ()
-    assert summary is not None
-    assert summary.entries[0].evidence == "narrative only"
 
 
 @pytest.mark.parametrize("link", ["alias.md", "figure.txt"], ids=["symlink-to-another-folder", "not-markdown"])
@@ -1045,23 +894,6 @@ def test_coverage_of_a_blueprint_behind_a_link_that_cannot_be_read_matches_the_b
     unreadable_link(tmp_path / "via", tmp_path / "real")
 
     assert load_coverage(tmp_path / "via" / "blueprint") == load_coverage(real)
-
-
-def test_malformed_evidence_paths_are_reported_without_raising(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _contract(
-        blueprint,
-        "| Malformed | DECOMPOSED | [Bad](../roadmap/bad%00path.md) |\n"
-        "| Unparsable | DECOMPOSED | [Host](http://[oops/a.md) |\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == [
-        "coverage link contains an invalid path: '../roadmap/bad%00path.md'",
-        "coverage link is not a valid URL: 'http://[oops/a.md'",
-    ]
 
 
 def test_reports_stable_unreadable_contract_issue(tmp_path: Path) -> None:
@@ -1243,58 +1075,3 @@ def test_notes_after_the_table_do_not_need_to_move(tmp_path: Path) -> None:
     assert issues == ()
     assert summary is not None
     assert [entry.area for entry in summary.entries] == ["Narrative"]
-
-
-def test_an_unclosed_markdown_link_cannot_certify_decomposition(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _article(blueprint, "main/README.md")
-    _contract(blueprint, "| Main theorem | DECOMPOSED | [Nodes](../roadmap/main/README.md |\n")
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == [
-        "DECOMPOSED coverage evidence must link to at least one roadmap article"
-    ]
-
-
-def test_every_decomposition_link_must_resolve_not_merely_one(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _article(blueprint, "main/README.md")
-    _contract(
-        blueprint,
-        "| Main theorem | DECOMPOSED | "
-        "[Nodes](../roadmap/main/README.md) and [More](../roadmap/absent.md) |\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == [
-        "coverage link does not resolve to a file: '../roadmap/absent.md'"
-    ]
-
-
-def test_a_decomposition_link_fragment_must_name_a_real_heading(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _article(blueprint, "main/README.md")
-    _contract(
-        blueprint,
-        "| Main theorem | DECOMPOSED | [Nodes](../roadmap/main/README.md#absent-section) |\n",
-    )
-
-    summary, issues = load_coverage(blueprint)
-
-    assert summary is None
-    assert [issue.reason for issue in issues] == [
-        "coverage link fragment does not resolve: '../roadmap/main/README.md#absent-section'"
-    ]
-
-    _contract(
-        blueprint,
-        "| Main theorem | DECOMPOSED | [Nodes](../roadmap/main/README.md#roadmap-article) |\n",
-    )
-    summary, issues = load_coverage(blueprint)
-    assert issues == ()
-    assert summary is not None
-    assert summary.complete

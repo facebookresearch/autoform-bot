@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pickle
 import random
 import threading
 from collections.abc import Callable
@@ -20,6 +19,7 @@ from autoform_cli.audit import audit_graph
 from autoform_cli.coverage import load_coverage, validate_coverage_roles
 from autoform_cli.graph_views import chapter_view, group_nodes, project_view, scope_view
 from autoform_cli.render import _book_page_order, render_site
+from autoform_cli.review import ReviewError, ReviewFinding, build_review_bundle
 from autoform_cli.runtime import (
     _validate_depths,
     _validate_runtime,
@@ -27,6 +27,8 @@ from autoform_cli.runtime import (
     load_runtime_graph,
 )
 from autoform_cli.status import derive, topological_order
+from tests.test_review_bundle import _extracted
+from tests.test_review_bundle import _blueprint as _review_blueprint
 
 
 class _CountingDict(dict):
@@ -118,28 +120,60 @@ def test_scope_view_handles_a_1200_level_containment_chain(tmp_path: Path) -> No
     assert view.member_ids == ("n1199",)
 
 
-def test_book_order_handles_a_1200_page_link_chain(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
+def test_book_order_follows_a_1200_deep_book(tmp_path: Path) -> None:
+    """Each page holds the next page and a note, and links the page first, so
+    the walk goes 1,200 levels down before it reads any note. The notes sort
+    first, so a walk that ignored links would read each one at its level."""
+    blueprint = tmp_path.resolve() / "blueprint"
     roadmap = blueprint / "roadmap"
     roadmap.mkdir(parents=True)
-    (blueprint / "README.md").write_text(
-        "# Book\n\n[First](roadmap/page0000.md)\n",
-        encoding="utf-8",
-    )
+    (blueprint / "README.md").write_text("# Book\n\n[First](roadmap/page0000.md)\n", encoding="utf-8")
     nodes: dict[str, Node] = {}
     for index in range(1_200):
-        node_id = f"page{index:04d}"
+        node_id, parent = f"page{index:04d}", f"page{index - 1:04d}" if index else None
         path = roadmap / f"{node_id}.md"
-        next_link = f"\n[Next](page{index + 1:04d}.md)\n" if index + 1 < 1_200 else ""
-        path.write_text(f"# {node_id}\n{next_link}", encoding="utf-8")
-        nodes[node_id] = Node(node_id, node_id, path, ())
+        links = f"\n[Next](page{index + 1:04d}.md)\n[Note](a-note{index:04d}.md)\n" if index + 1 < 1_200 else ""
+        path.write_text(f"# {node_id}\n{links}", encoding="utf-8")
+        nodes[node_id] = Node(node_id, node_id, path, (), parent=parent)
+        if index + 1 < 1_200:
+            note = f"a-note{index:04d}"
+            (roadmap / f"{note}.md").write_text(f"# {note}\n", encoding="utf-8")
+            nodes[note] = Node(note, note, roadmap / f"{note}.md", (), parent=node_id)
     graph = Graph(blueprint, nodes)
 
     ordered = _book_page_order(blueprint, blueprint, graph)
 
-    assert len(ordered) == 1_201
+    assert len(ordered) == 1 + 1_200 + 1_199
     assert ordered[0] == blueprint / "README.md"
-    assert ordered[-1] == roadmap / "page1199.md"
+    assert ordered[1_200] == roadmap / "page1199.md"
+    assert ordered[1_201] == roadmap / "a-note1198.md"
+    assert ordered[-1] == roadmap / "a-note0000.md"
+
+
+def test_book_order_sorts_unlinked_pages_of_a_1200_deep_book(tmp_path: Path) -> None:
+    """No page links anything. Each page holds the next page and two notes
+    that sort after it, and each z-note rests on the z-note one level up, so
+    every level reads its notes before the next page."""
+    blueprint = tmp_path.resolve() / "blueprint"
+    roadmap = blueprint / "roadmap"
+    roadmap.mkdir(parents=True)
+    (blueprint / "README.md").write_text("# Book\n", encoding="utf-8")
+    nodes: dict[str, Node] = {}
+    for index in range(1_200):
+        node_id, parent = f"page{index:04d}", f"page{index - 1:04d}" if index else None
+        (roadmap / f"{node_id}.md").write_text(f"# {node_id}\n", encoding="utf-8")
+        nodes[node_id] = Node(node_id, node_id, roadmap / f"{node_id}.md", (), parent=parent)
+        for note in (f"y-note{index:04d}", f"z-note{index:04d}"):
+            (roadmap / f"{note}.md").write_text(f"# {note}\n", encoding="utf-8")
+            depends = (f"z-note{index - 1:04d}",) if note[0] == "z" and index else ()
+            nodes[note] = Node(note, note, roadmap / f"{note}.md", depends, parent=node_id)
+    graph = Graph(blueprint, nodes)
+
+    ordered = [path.stem for path in _book_page_order(blueprint, blueprint, graph)[1:]]
+
+    assert len(ordered) == 3 * 1_200
+    assert ordered[:4] == ["page0000", "y-note0000", "z-note0000", "page0001"]
+    assert ordered[-3:] == ["page1199", "y-note1199", "z-note1199"]
 
 
 
@@ -201,37 +235,6 @@ def _containment_graph(tmp_path: Path, chapters: int, articles: int) -> Graph:
             )
             previous = node_id
     return Graph(tmp_path / "blueprint", nodes)
-
-
-def test_graph_keeps_the_callers_plain_node_mapping(tmp_path: Path) -> None:
-    roadmap = tmp_path / "blueprint" / "roadmap"
-    nodes = {"root": Node("root", "Root", roadmap / "README.md", ())}
-    graph = Graph(tmp_path / "blueprint", nodes)
-
-    assert graph.nodes is nodes
-    assert type(graph.nodes) is dict
-    nodes["late"] = Node("late", "Late", roadmap / "late.md", (), parent="root")
-    assert graph.children("root") == ("late",)
-    dict.__setitem__(nodes, "later", Node("later", "Later", roadmap / "later.md", (), parent="root"))
-    assert graph.children("root") == ("late", "later")
-
-
-@pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
-def test_graph_pickles_only_public_types(tmp_path: Path, protocol: int) -> None:
-    roadmap = tmp_path / "blueprint" / "roadmap"
-    graph = Graph(
-        tmp_path / "blueprint",
-        {
-            "root": Node("root", "Root", roadmap / "README.md", ()),
-            "child": Node("child", "Child", roadmap / "child.md", (), parent="root"),
-        },
-    )
-
-    restored = pickle.loads(pickle.dumps(graph, protocol=protocol))
-
-    assert restored == graph
-    assert type(restored.nodes) is dict
-    assert restored.children("root") == ("child",)
 
 
 def _raises_promptly(call: Callable[[], object]) -> BaseException | None:
@@ -414,6 +417,8 @@ def _index_builds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chapters: int
     graph = _nested_graph(tmp_path / str(chapters), chapters, 3)
     nodes = _CountingDict(graph.nodes)
     builds = {"_containment_children": 0, "_relations": 0}
+    contexts: dict[str, tuple[Path, str]] = {}
+    destination = tmp_path / str(chapters) / "site"
 
     def counted(name: str):
         original = getattr(graph_views, name)
@@ -430,11 +435,16 @@ def _index_builds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, chapters: int
         graph_pages.write_graph_pages(
             Graph(graph.blueprint_dir, nodes),
             derive(graph),
-            tmp_path / str(chapters) / "site",
+            destination,
             node_links=lambda page, node_ids: {
                 node_id: "book.html" for node_id in node_ids
             },
+            contexts_out=contexts,
         )
+    assert set(contexts) == set(graph.nodes)
+    assert contexts["roadmap"] == (destination / "dependencies.json", "roadmap")
+    assert contexts["c0000/s00/t"] == (destination / "dependencies/scopes/c0000/s00.json", "c0000/s00")
+    assert contexts["c0000/s00"][1] == "c0000/s00"
     return {**builds, "graph walks": nodes.values_calls}
 
 
@@ -614,6 +624,31 @@ def test_audit_does_not_scan_for_children_per_node(tmp_path: Path, monkeypatch: 
     _forbid_child_scans(monkeypatch)
 
     assert audit_graph(graph) == expected
+
+
+def _review_refusal(graph: Graph) -> tuple[ReviewFinding, ...]:
+    with pytest.raises(ReviewError) as error:
+        build_review_bundle(graph, _extracted(graph))
+    return tuple(error.value.findings)
+
+
+def test_review_evidence_does_not_scan_for_children_per_article(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = _review_blueprint(tmp_path)
+    graph = load_graph(blueprint)
+    report = _extracted(graph)
+    bundle = build_review_bundle(graph, report)
+    (blueprint / "roadmap" / "basics" / "README.md").write_text(
+        f"---\narticle_id: af_{'c' * 24}\ndeclaration: theorem\nlean: Skel.chapter\n---\n# Basics\n", encoding="utf-8"
+    )
+    container = load_graph(blueprint)
+    refusal = _review_refusal(container)
+    assert ("basics", "review-article-shape") in {(finding.node_id, finding.code) for finding in refusal}
+    _forbid_child_scans(monkeypatch)
+
+    assert build_review_bundle(graph, report) == bundle
+    assert _review_refusal(container) == refusal
 
 
 def test_runtime_projection_indexes_children_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

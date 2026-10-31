@@ -4,6 +4,14 @@ The Markdown graph remains the source of truth.  These views only select or
 aggregate its nodes and edges so the same data can answer project-, chapter-,
 and nested-scope questions, plus a whole-graph node list for search, without
 inventing a second graph format.
+
+An overview, a page with a ``collection``, ``transparent`` (pagination) or
+``source`` child, draws what remains after collections and pagination are
+replaced by their contents. A relation that mentions a collection itself stays
+attached to the collection, so the overview that shows the collection's
+contents in its place does not draw it, while other pages draw it from the
+collection's boundary. Navigation roles never change identity, containment,
+readiness, or edges.
 """
 
 from __future__ import annotations

@@ -216,6 +216,8 @@ def test_a_glob_selects_the_modules_lake_builds(tmp_path: Path, globs: list[str]
         # A glob matches whole name components: `Lib.A.*` is not `Lib.AB`.
         (["Lib", "Lib.A.*"], "Lib/AB.lean"),
         (["Lib", "Lib.A", "Lib.AB", "Lib.A.Inner"], "Lib/A/Inner/Leaf.lean"),
+        # No glob: Lake builds no module, where a missing key builds the root.
+        ([], "Lib.lean, Lib/A.lean, Lib/A/Inner.lean, Lib/A/Inner/Leaf.lean, Lib/AB.lean"),
     ],
 )
 def test_a_file_the_globs_leave_out_is_refused_by_name(tmp_path: Path, globs: list[str], unbuilt: str) -> None:
@@ -616,7 +618,7 @@ def test_a_complete_and_a_wanted_result_with_one_name_in_two_modules_are_both_in
     ]
 
 
-# What `skeleton.run_probe` raises when `lake --rehash --no-build build` says a module needs building.
+# What `lean_probe.run_probe` raises when `lake --rehash --no-build build` says a module needs building.
 def _stale(modules: list[str], detail: str) -> SkeletonError:
     return SkeletonError(
         [f"Lean build artifacts are stale; run `lake build {' '.join(modules)}` before running the library index probe\n{detail}"]
@@ -749,7 +751,7 @@ def test_a_failed_install_leaves_the_previous_index_and_no_stage(tmp_path: Path,
     def fail(outputs: object) -> None:
         raise OSError("interrupted")
 
-    monkeypatch.setattr("autoform_cli.skeleton._replace_outputs", fail)
+    monkeypatch.setattr("autoform_cli.library.generate.replace_outputs", fail)
     with pytest.raises(GenerateError, match=f"^{INDEX_FILE} could not be written: interrupted; the previous one is unchanged$"):
         write_index(root, changed)
     assert path.read_bytes() == before
@@ -772,7 +774,7 @@ def test_a_write_failure_gives_the_reason_the_operating_system_gave(tmp_path: Pa
     def full(destination: Path, content: str | None = None) -> Path:
         raise OSError(errno.ENOSPC, "No space left on device", str(destination))
 
-    monkeypatch.setattr("autoform_cli.skeleton._stage_output", full)
+    monkeypatch.setattr("autoform_cli.library.generate.stage_output", full)
     with pytest.raises(GenerateError) as raised:
         write_index(root, generated)
     assert str(raised.value) == (
@@ -802,21 +804,21 @@ def test_a_failed_rollback_is_not_reported_as_an_unchanged_index(tmp_path: Path,
     backup = root / f".{INDEX_FILE}.autoform-backup-0123"
 
     def fail(outputs: list) -> None:
-        # What `_replace_outputs` does when the install fails and the previous file cannot be put back.
+        # What `replace_outputs` does when the install fails and the previous file cannot be put back.
         os.replace(path, backup)
         raise SkeletonError(
             [
-                "could not publish skeleton output: [Errno 5] Input/output error",
-                f"could not restore skeleton output {path}; previous output remains at {backup}: [Errno 5] Input/output error",
+                "could not publish output: [Errno 5] Input/output error",
+                f"could not restore output {path}; previous output remains at {backup}: [Errno 5] Input/output error",
             ]
         )
 
-    monkeypatch.setattr("autoform_cli.skeleton._replace_outputs", fail)
+    monkeypatch.setattr("autoform_cli.library.generate.replace_outputs", fail)
     with pytest.raises(GenerateError) as raised:
         write_index(root, changed)
     message = str(raised.value)
     assert "unchanged" not in message
-    assert message.startswith(f"{INDEX_FILE} could not be written: could not publish skeleton output: [Errno 5] Input/output error; ")
+    assert message.startswith(f"{INDEX_FILE} could not be written: could not publish output: [Errno 5] Input/output error; ")
     assert f"previous output remains at {backup}" in message
     assert message.endswith(f"; {INDEX_FILE} is not the file it was before")
 
@@ -874,7 +876,7 @@ def test_check_accepts_an_index_checked_out_with_crlf(tmp_path: Path) -> None:
 
 
 def _cli(monkeypatch, runner):
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", runner)
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", runner)
 
 
 def test_the_command_writes_the_index_and_reports_what_it_left_out(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -991,7 +993,7 @@ _REQUIRED = os.environ.get("AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS") == "1"
 # then a missing toolchain or a failed download is a failure, never a skip.
 real_library = pytest.mark.skipif(
     not _REQUIRED,
-    reason="set AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS=1 to run: needs lake, Lean 4.34.1 and a clone of Batteries from GitHub",
+    reason="set AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS=1 to run: needs lake, the fixture's toolchain and a clone of Batteries from GitHub",
 )
 
 
@@ -1304,18 +1306,18 @@ def test_real_signature_of_a_shared_name_is_that_of_the_module_it_is_indexed_und
 def test_a_probe_over_its_budget_is_stopped_and_not_retried(built: Path, tmp_path: Path, monkeypatch) -> None:
     import tempfile
 
-    from autoform_cli import skeleton
+    from autoform_cli import lean_probe
 
     # The probe is written under the temporary directory; make that one only this test uses.
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     calls = []
-    run_probe = skeleton.run_probe
+    run_probe = lean_probe.run_probe
 
     def counted(*args: object, **options: object) -> str:
         calls.append(1)
         return run_probe(*args, **options)
 
-    monkeypatch.setattr("autoform_cli.skeleton.run_probe", counted)
+    monkeypatch.setattr("autoform_cli.lean_probe.run_probe", counted)
     with pytest.raises(GenerateError, match="timed out after 0.01 seconds"):
         generate_index(built, timeout=0.01)
     assert calls == [1]
@@ -1338,7 +1340,7 @@ def test_the_generated_index_is_searched_from_a_consumer(built: Path, tmp_path: 
         subprocess.run([*git, *command], check=True)
     revision = subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
     (consumer / "lake-manifest.json").write_text(manifest([entry("fix", rev=revision)]), encoding="utf-8")
-    (consumer / "lean-toolchain").write_text("leanprover/lean4:v4.34.1\n", encoding="utf-8")
+    shutil.copyfile(_FIXTURE / "lean-toolchain", consumer / "lean-toolchain")
     (consumer / "blueprint" / "roadmap").mkdir(parents=True)
     (consumer / "blueprint" / "roadmap" / "README.md").write_text("---\n---\n\n# Roadmap\n\nNothing yet.\n", encoding="utf-8")
 

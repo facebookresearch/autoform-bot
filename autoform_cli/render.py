@@ -5,6 +5,33 @@ which every node page is wrapped in a numbered statement box carrying its
 derived status, a link to the Lean code that discharges it, and its place in
 the DAG -- the presentation ``leanblueprint`` gives a LaTeX blueprint, driven
 from Markdown instead.
+
+The user-facing rules are the publication contract in
+``autoform_cli/reference/runtime-and-publication.md``. The legacy full route is
+a project-scale compatibility shell backed by a layout-free global search
+index, never an all-repository node cloud. ``autoform-publication/v3`` records
+what v2 records, but the site holds the shared explorer's JSON projections and
+script in place of v2's Mermaid dependency maps, and the blueprint hash is taken
+under a label of its own, so no v2 ``source_revision`` equals a v3 one.
+
+Repository matching: a clean checkout that Git converts on checkout still
+matches its commit. A blueprint outside the repository, or in a submodule or
+other checkout nested in it, gets no blueprint links and no warning.
+
+Committing a site: it is built and synced in a hidden
+``.autoform-publication-*`` directory beside the output, then swapped in with
+one atomic exchange (``renamex_np`` on macOS, ``renameat2`` on Linux); renders
+committing into the same parent directory take turns when it can be locked. On
+filesystems without the exchange (NFS, SMB, 9p or WSL2 ``/mnt/c``, exFAT,
+sshfs) the previous site is first renamed to
+``.autoform-publication-backup-<name>``; if render dies between the two
+renames, the next render moves it back before anything else. macOS metadata
+files are ignored when an existing site is matched against its inventory.
+Render never indexes a leftover staging directory as Lean source. On macOS
+``fsync`` does not flush the drive's cache, so a power loss can still lose the
+newest site. Native Windows has no directory-descriptor traversal: render reads
+the blueprint and the output as two pathname captures that must agree and
+commits through the backup swap without a lock.
 """
 
 from __future__ import annotations
@@ -12,6 +39,7 @@ from __future__ import annotations
 import ctypes
 import errno
 import hashlib
+import heapq
 import html
 import json
 import os
@@ -23,7 +51,7 @@ import sys
 import tempfile
 import time
 import unicodedata
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from html.parser import HTMLParser
@@ -33,16 +61,17 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 from markdown.treeprocessors import Treeprocessor
 
 from . import dag_viewer, graph_pages, graph_views, status
+from ._repository import detect_ref, detect_repository_url, repository_top_level, verify_repository_snapshot
 from ._tree_snapshot import (
     TreeChangedError,
     TreeSelection,
     TreeSnapshot,
     TreeSnapshotError,
-    _read_prefix,
     _update_digest,
     bind_directory_tree,
     descriptor_capture_supported,
 )
+from .approvals import approval_statuses
 from .coverage import (
     COVERAGE_DISPOSITIONS,
     CoverageSummary,
@@ -63,24 +92,20 @@ from .graph_views import _containers, _countable, _is_countable, _module_invento
 from .lean import (
     _REPLACEABLE_SCHEMAS,
     PUBLICATION_MANIFEST,
-    PUBLICATION_MANIFEST_MAX_BYTES,
     PUBLICATION_SCHEMA,
     IndexedSourceSnapshot,
     LeanSourceError,
     SourceIndex,
     SourceLinker,
     declaration_names,
-    detect_ref,
-    detect_repository_url,
     index_failure_message,
-    repository_top_level,
     resolve_lean_root,
     snapshot_project_sources,
-    verify_repository_snapshot,
 )
 from .markdown import (
     _BRACKET_ESCAPE,
     _INLINE_MATH,
+    FORMULA_CLASS,
     GENERATED_VIEWS,
     INLINE_CODE,
     NOTES_BOX,
@@ -99,20 +124,33 @@ from .markdown import (
     page_title,
     published_page,
     relative_link,
+    render_tree,
     rendered_visible_text,
     site_converter,
     statement_and_notes,
     title_text,
     yaml_string,
 )
+from .markdown import HEADING as _HEADING
+from .markdown import _LINK_DEFINITION as _SITE_LINK_DEFINITION
 from .markdown import content_lines as _content_lines
 from .markdown import outside_fences as _outside_fences
-from .mathjax import MATHJAX_SCRIPT, TEX_MACROS, mathjax_script
+from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, TEX_MACROS, mathjax_script, project_macros
 from .publishable import publishable_article, shown_as_typed
-from .readback import READBACKS_DIR
+from .readback import READBACKS_DIR, Readback, load_readbacks, readback_for
+from .review import (
+    ReviewArticle,
+    ReviewError,
+    ReviewFinding,
+    ReviewState,
+    build_review_bundle,
+    readback_errors,
+    review_states,
+)
+from .skeleton import NodeSkeleton, SkeletonReport, _plural, source_passage
 from .status import is_definition
+from .testimony import formula_problems, split_testimony, typesetting_warnings
 
-_HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 # Links are matched in a line masked by _link_mask, where brackets in code such
 # as ``[0,1]^n`` and in math such as ``$(0,1]$`` are blanks. Any other bracket in
 # a label must be paired, so an earlier "[1]" or "[x]" on the line stays text.
@@ -130,10 +168,15 @@ _MARKDOWN_LINK = re.compile(
 _MARKDOWN_IMAGE = re.compile("!" + _MARKDOWN_LINK.pattern.removeprefix("(?<!!)"))
 #: A reference-style link definition, `[label]: target "title"`. Markdown
 #: resolves `[Paper][paper]` through one of these, so a rewrite that only sees
-#: inline links leaves the destination behind and publishes a dead link.
+#: inline links leaves the destination behind and publishes a dead link. As in
+#: Python-Markdown, at most a quoted or parenthesized title follows the target:
+#: a line such as `[^1]: Grounded in [Paper](...)` is prose, not a definition.
+#: Python-Markdown expands tabs before it reads one, so a tab around the title
+#: counts as spaces do.
 _LINK_DEFINITION = re.compile(
     r'^(?P<indent>[ ]{0,3})\[(?P<label>[^\]]+)\]:[ \t]*'
-    r'(?P<target><[^>\r\n]+>|[^\s]+)(?P<rest>[ \t]+.*)?$'
+    r'(?P<target><[^>\r\n]+>|[^\s]+)'
+    r'(?P<rest>[ \t]*(?:(?P<quote>["\'])(?:.*)(?P=quote)[ \t]*|\(.*\)[ \t]*)?)$'
 )
 _ARTICLE_SLOT = re.compile(
     rf"^(?P<indent>[ \t]*)[-*+]\s+\[(?=[^\]]){_LINK_LABEL}\]"
@@ -218,13 +261,14 @@ MERMAID_SCRIPT = "javascripts/blueprint-mermaid.js"
 MERMAID_LIBRARY = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"
 LIVE_SCRIPT = "javascripts/blueprint-live.js"
 DAG_SCRIPT = dag_viewer.SCRIPT_PATH
+DAG_STYLE = dag_viewer.STYLE_PATH
 LOGO = "assets/autoform.svg"
 #: The files render writes into every site, whatever the vault holds there.
-_ASSETS = (STYLESHEET, MERMAID_SCRIPT, MATHJAX_SCRIPT, LIVE_SCRIPT, DAG_SCRIPT, LOGO)
+_ASSETS = (STYLESHEET, MERMAID_SCRIPT, MATHJAX_SCRIPT, LIVE_SCRIPT, DAG_SCRIPT, DAG_STYLE, LOGO)
 #: Paths render writes at fixed places; an authored path differing only in case would collide.
 _GENERATED_PATHS = _GENERATED_ROOT_ENTRIES | set(_ASSETS)
 #: The explorer's files at paths a blueprint may already use for files of its own.
-_EXPLORER_PATHS = (graph_pages.PROJECT_PAYLOAD, DAG_SCRIPT)
+_EXPLORER_PATHS = (graph_pages.PROJECT_PAYLOAD, DAG_SCRIPT, DAG_STYLE)
 _ASSET_DIR = Path(__file__).resolve().parent / "assets"
 
 
@@ -446,6 +490,8 @@ class _Publication:
     warnings: list[str]
     #: The pages shown as typed, by where they are published.
     typed: frozenset[Path]
+    #: Captured articles whose outgoing links are not published as live links.
+    unavailable_source_ids: frozenset[str] = frozenset()
 
 
 def _publication(
@@ -499,6 +545,7 @@ def _publication(
     chapters = {page: group for group, page in group_pages.items()}
     warnings: list[str] = []
     typed: set[Path] = set()
+    unavailable_source_ids: set[str] = set()
     # Render writes its own file where a vault's copy of one of these would go.
     written_over = set(_site_paths(graph))
     # A link to a file the site leaves out keeps only its text, so the strict
@@ -513,6 +560,11 @@ def _publication(
             or (source.suffix.lower() in PAGE_SUFFIXES and not _is_utf8(snapshot[source]))
         )
     )
+    # A chapter's leaves are all published on its page, and pages link the
+    # same files again and again, so each page's links are built, and each
+    # linked path resolved, once for the whole site.
+    page_links: dict[Path, Mapping[str, str]] = {}
+    resolved: dict[str, Path] = {}
 
     def published(text: str, source: Path, page: Path, *, whole: bool = True) -> tuple[str, tuple[str, ...]]:
         """The page ``text`` is published as, or the part of ``page`` it is
@@ -521,6 +573,9 @@ def _publication(
         its lines, so each stretch between is read too, as it sits there. Its
         notation goes straight to the warnings."""
 
+        links = page_links.get(page)
+        if links is None:
+            links = page_links[page] = _anchored_links(targets, page, extension=".md")
         dropped: list[str] = []
         page_text, found, notation = _read_page(
             _rewrite_links(
@@ -535,6 +590,8 @@ def _publication(
                 left_out=left_out,
                 unpublished=unpublished,
                 dropped=dropped,
+                links=links,
+                resolved=resolved,
             )
         )
         group = chapters.get(page) if whole else None
@@ -573,14 +630,16 @@ def _publication(
     articles: dict[Path, str] = {}
     statements: dict[str, tuple[str, str]] = {}
     for node_id, node in graph.nodes.items():
-        # The captured bytes, the state the graph describes once capture checks
-        # it. Check's graph also holds the articles in unpublished folders, which
-        # capture leaves out.
+        # The captured bytes, the state the graph and any review disclosure
+        # describe once capture checks it. Check's graph also holds the
+        # articles in unpublished folders, which capture leaves out.
         captured = snapshot.get(node.path)
         if captured is None:
             continue
         leaf = (node.formalizable or node.catalog is not None) and node_id not in containers
         text, found = published(captured.decode("utf-8"), node.path, targets[node_id][0], whole=not leaf)
+        if found:
+            unavailable_source_ids.add(node_id)
         # Narrative articles remain book pages. Formalizable leaves and module
         # catalogs are consolidated into their containing article with stable anchors.
         if leaf:
@@ -588,7 +647,11 @@ def _publication(
             # A flagged leaf's box shows its statement and notes as typed.
             statements[node_id] = (shown_as_typed("\n\n".join(filter(None, parts)), page=False), "") if found else parts
         else:
-            articles[node.path.resolve()] = shown_as_typed(text) if found else text
+            articles[node.path.resolve()] = (
+                shown_as_typed(text) if found
+                else text if node_id in groups
+                else _protect_narrative_markdown(text)
+            )
 
     files: dict[Path, str | bytes] = {}
     for source in sorted(snapshot):
@@ -597,8 +660,8 @@ def _publication(
         # the repository, so the book has one reference surface rather than two.
         if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
             continue
-        # Read-back cards are testimony about a statement, never pages of
-        # their own.
+        # Read-back cards are testimony about a statement, shown in its review
+        # panel under --review, never pages of their own.
         if relative.parts[:1] == (READBACKS_DIR,):
             continue
         # The graph has read atlas.json, and nothing on the site reads it. It may
@@ -618,7 +681,7 @@ def _publication(
                 )
                 continue
             text, found = published(written, source, destination / relative)
-            files[source] = shown_as_typed(text) if found else text
+            files[source] = shown_as_typed(text) if found else _protect_narrative_markdown(text)
         elif relative.as_posix() in written_over:
             continue
         elif source.suffix.lower() in _STATIC_SUFFIXES:
@@ -636,7 +699,10 @@ def _publication(
         warnings.append(f"{TEX_MACROS}: is a directory, so the site has no project macros; make it a JSON file")
     script, script_warnings = mathjax_script(snapshot.get(blueprint / MATHJAX_SCRIPT), snapshot.get(blueprint / TEX_MACROS))
     warnings.extend(script_warnings)
-    return _Publication(groups, targets, node_sources, files, statements, script, warnings, frozenset(typed))
+    return _Publication(
+        groups, targets, node_sources, files, statements, script, warnings, frozenset(typed),
+        frozenset(unavailable_source_ids),
+    )
 
 
 def _is_utf8(data: bytes) -> bool:
@@ -710,7 +776,7 @@ def _site_paths(graph: Graph) -> tuple[str, ...]:
                 STRUCTURE_PAGE,
                 "SUMMARY.md",
                 *(_group_page(group).as_posix() for group in _group_nodes(graph)),
-                *graph_pages.graph_page_paths(graph),
+                *graph_pages.graph_page_paths(graph, wiki_links=True),
                 *_ASSETS,
             }
         )
@@ -749,15 +815,27 @@ def render_site(
     lean_root: str | Path | None = None,
     repository_url: str | None = None,
     ref: str | None = None,
+    review: Callable[[], SkeletonReport] | None = None,
 ) -> RenderReport:
     """Write deterministic, read-only projections of the Markdown blueprint.
 
-    Authored Markdown remains the only graph authority. The output joins three
-    reader surfaces over it: a book, derived progress, and a multiscale dependency
-    explorer. Publication excludes hidden and operational files, rejects symlinks,
+    Authored Markdown remains the only graph authority. Full mathematical reading,
+    derived progress, and multiscale graph navigation share one published shell.
+    Publication excludes hidden and operational files, rejects symlinks,
     and never embeds timestamps or machine-specific paths. The blueprint and the
     Lean sources are each read once, and every page, link and hash comes from
     those bytes. The site is built beside the output and swapped in whole.
+
+    With ``review``, every Lean-mapped statement shows its review, judged as
+    ``review check`` judges it, from the read-back cards and the
+    ``tex-macros.json`` this render captured. ``review`` extracts the
+    skeletons, reading the vault and the Lean build once more. It is called
+    after the checks of the output, the capture, the graph, the coverage
+    contract and the Lean sources, so a render they refuse costs no Lean. The
+    review is refused unless the articles loaded here, and the sources they
+    cite, are the blueprint the extraction read. It covers the whole vault,
+    folders that are not published included, and each article and passage it
+    shows is the one the site publishes.
     """
     blueprint = blueprint_root(blueprint_dir)
     requested_destination = Path(output_dir).expanduser()
@@ -864,6 +942,22 @@ def render_site(
             spellings=spellings,
             root_prefix=root_prefix,
         )
+        reviews: dict[str, str] = {}
+        review_warnings: list[str] = []
+        if review is not None:
+            # After every check above, and the one _render_pages makes of the
+            # captured files in its way, so a render they refuse runs no Lean.
+            if stops := _in_the_way(copy, graph, _captured_files(snapshot, copy)):
+                raise PublicationError(stops)
+            # The cards and macros the review judges are the ones this render
+            # captured, so the site and publication.json describe one state.
+            try:
+                cards = load_readbacks(graph.blueprint_dir)
+            except ValueError as error:
+                raise ReviewError([ReviewFinding("", "readback-unlistable", str(error))]) from error
+            macros = project_macros(_captured_files(snapshot, copy).get(copy / TEX_MACROS))
+            captured = [name for name, _ in snapshot.files]
+            reviews, review_warnings = _review_disclosures(blueprint, graph, review(), cards, macros, captured)
         source_revision = _source_revision(snapshot)
         report = _publish(
             destination,
@@ -881,9 +975,11 @@ def render_site(
                 unpublished=_unpublished_folders(snapshot, copy),
                 unpublished_nodes=unpublished_nodes,
                 files=_captured_files(snapshot, copy),
+                reviews=reviews,
             ),
         )
     report.warnings[:0] = recovered
+    report.warnings.extend(review_warnings)
     authored = {*dict(snapshot.files), *dict(snapshot.omitted)}
     report.warnings.extend(
         f"{path} is not published: the dependency explorer writes its own file there"
@@ -917,8 +1013,16 @@ def _render_pages(
     unpublished: tuple[Path, ...] = (),
     unpublished_nodes: frozenset[str],
     files: dict[Path, bytes],
+    reviews: dict[str, str],
 ) -> RenderReport:
     """Write the site into *destination* from the private copy at *blueprint*."""
+    # A missing or stale packaged runtime is a publication failure, not an
+    # unhandled CLI exception or a reason to publish a different renderer.
+    # Capture it once before writing any staged files; _publish keeps the old site.
+    try:
+        explorer_script = dag_viewer.viewer_script()
+    except ValueError as error:
+        raise PublicationError([f"packaged explorer runtime is unavailable: {error}"]) from error
     # Audit reports coverage-role issues and the atlas.json entries the loader
     # ignored. A valid contract still publishes with them, as it does with
     # MAPPED rows. An issue without a line already names the contract in its
@@ -932,7 +1036,6 @@ def _render_pages(
     ]
     coverage_warnings += (f"atlas.json: {omission}" for omission in atlas_omissions(graph, unpublished_nodes))
     statuses = status.derive(graph)
-    numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
     # Sources leave the site only for a directory the verified commit holds.
     sources_base = _sources_base(blueprint, repo_root, linker) if sources else None
@@ -976,6 +1079,15 @@ def _render_pages(
             target.write_bytes(content)
         report.pages += 1
 
+    # One reading order for statement numbers, Next up and the search index.
+    order = _reading_order(
+        graph, targets, _reading_pages(blueprint, destination, graph), _card_positions(
+            groups, group_pages, graph=graph, blueprint=blueprint, node_sources=node_sources,
+            targets=targets, typed=site.typed,
+        ),
+    )
+    numbers = _number_nodes(graph, order)
+
     overview = destination / "README.md"
     # The author's page, as render publishes it when nothing in it is flagged:
     # the hero escapes its title and lead itself, and a page shown as typed has
@@ -991,11 +1103,11 @@ def _render_pages(
                 graph=graph,
                 statuses=statuses,
                 coverage=coverage,
-                groups=groups,
                 group_pages=group_pages,
                 page=overview,
                 destination=destination,
                 targets=targets,
+                order=order,
             ),
             encoding="utf-8",
         )
@@ -1017,10 +1129,10 @@ def _render_pages(
             narrative=narrative,
             blueprint=blueprint,
             repo_root=repo_root,
-            destination=destination,
             node_sources=node_sources,
             containers=containers,
             statements=site.statements,
+            reviews=reviews,
             typed=page in site.typed,
         )
         page.write_text(chapter, encoding="utf-8")
@@ -1040,7 +1152,10 @@ def _render_pages(
     _append_book_navigation([p for p in book_pages if p != overview])
     structure = destination / STRUCTURE_PAGE
     structure.write_text(
-        _render_structure_page(page=structure),
+        _render_structure_page(
+            page=structure,
+            entry=destination / graph_pages.book_contents(graph, graph_views.group_nodes(graph)),
+        ),
         encoding="utf-8",
     )
     report.pages += 1
@@ -1049,13 +1164,54 @@ def _render_pages(
         encoding="utf-8",
     )
 
+    contexts: dict[str, tuple[Path, str]] = {}
     generated_graph_pages = graph_pages.write_graph_pages(
         graph,
         statuses,
         destination,
         node_links=lambda page, node_ids: _node_links(targets, page, node_ids),
+        book_targets=targets,
+        contexts_out=contexts,
+        captured_sources={node_id: files[node.path] for node_id, node in graph.nodes.items() if node.path in files},
+        source_paths={node_id: node.path.relative_to(blueprint) for node_id, node in graph.nodes.items()},
+        unavailable_source_ids=site.unavailable_source_ids,
+        warnings_out=report.warnings,
+        book_order=order,
     )
-    report.pages += len(generated_graph_pages)
+    report.pages += sum(path != destination / graph_pages.WIKI_LINKS for path in generated_graph_pages)
+
+    # These are the final safe pages, including generated theorem cards and
+    # their exact anchors. Never reread an authored article to build the reader.
+    page_contexts: dict[Path, tuple[Path, str, str | None]] = {}
+    for node_id, (page, anchor) in targets.items():
+        payload, scope = contexts[node_id]
+        if page not in page_contexts or not anchor:
+            page_contexts[page] = (payload, scope, node_id if not anchor else None)
+    canonical_pages = {
+        destination / source.relative_to(blueprint)
+        for source, content in site.files.items()
+        if isinstance(content, str) and source.suffix.lower() in PAGE_SUFFIXES
+    } | set(group_pages.values()) | {overview}
+    wrapped_files: set[tuple[int, int]] = set()
+    for page in sorted(canonical_pages):
+        if not page.is_file():
+            continue
+        metadata = page.stat()
+        identity = (metadata.st_dev, metadata.st_ino)
+        if identity in wrapped_files:
+            continue
+        wrapped_files.add(identity)
+        payload, scope, owner = page_contexts.get(
+            page, (destination / graph_pages.PROJECT_PAYLOAD, "roadmap", None)
+        )
+        page.write_text(
+            _integrated_page(
+                page.read_text(encoding="utf-8"), page=page, destination=destination,
+                payload=payload, scope=scope, owner=owner,
+                prepared=True,
+            ),
+            encoding="utf-8",
+        )
 
     for relative, contents in (
         (STYLESHEET, _stylesheet()),
@@ -1063,7 +1219,8 @@ def _render_pages(
         # Written here, never kept from the vault.
         (MATHJAX_SCRIPT, site.script),
         (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
-        (DAG_SCRIPT, dag_viewer.viewer_script()),
+        (DAG_SCRIPT, explorer_script),
+        (DAG_STYLE, dag_viewer._STYLE),
         (LOGO, _logo()),
     ):
         asset = destination / relative
@@ -1071,6 +1228,45 @@ def _render_pages(
         asset.write_text(contents, encoding="utf-8")
     _write_publication_manifest(destination, graph, linker, coverage=coverage, **revisions)
     return report
+
+
+def _integrated_page(
+    text: str, *, page: Path, destination: Path, payload: Path, scope: str, owner: str | None = None,
+    prepared: bool = False,
+) -> str:
+    """Keep a complete published page readable before moving it into the shared UI.
+
+    The header and semantic reading content are preserved. Affected Markdown
+    is parsed before adding containers, so literal code, formulas, statement
+    IDs, citations and shown-as-typed boxes retain their rendered meaning.
+    """
+    lines = text.splitlines(keepends=True)
+    end = 0
+    if lines and lines[0].strip() == "---":
+        end = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
+    header, body = "".join(lines[:end]), "".join(lines[end:])
+    # Published pages protect authored ranges before inserting renderer-owned
+    # statement/navigation HTML. Re-converting that assembled page would
+    # consume ordinary Markdown links and reparse existing card/heading IDs.
+    # Direct callers still protect their authored body before introducing HTML.
+    if not prepared:
+        body = _protect_markdown_in_html(body)
+    node = f' data-autoform-node-id="{html.escape(owner, quote=True)}"' if owner else ""
+    title_header = "".join(lines[:2]) + "---\n" if end else text
+    title = _header_title(title_header) or rendered_visible_text(_first_h1(text) or "") or _file_title(page)
+    explorer = dag_viewer.render_container(
+        relative_link(payload, page, ".json"),
+        script_href=relative_link(destination / DAG_SCRIPT, page, ".js"),
+        style_href=relative_link(destination / DAG_STYLE, page, ".css"),
+        search_href=relative_link(destination / graph_pages.SEARCH_INDEX, page, ".json"),
+        page_href=_as_published(relative_link(page, page, ".html")),
+        scope=scope,
+    )
+    return (
+        header + '\n<div class="bp-explorer-page" markdown="1">\n'
+        + f'<div class="bp-reading-source"{node} data-page-title="{html.escape(title, quote=True)}" markdown="1">\n\n'
+        + body + '\n\n</div>\n\n' + explorer + '\n</div>\n'
+    )
 
 
 def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str], frozenset[str]]:
@@ -1246,11 +1442,10 @@ def _destination_state(path: Path) -> _State | None:
     if empty:
         return identity, {}
     manifest = None
-    try:  # bounded, and read before anything below it
+    try:  # read before anything below it
         if stat.S_ISREG(os.lstat(path / PUBLICATION_MANIFEST).st_mode):
             with open(path / PUBLICATION_MANIFEST, "rb") as handle:
-                data = _read_prefix(handle, PUBLICATION_MANIFEST_MAX_BYTES + 1)  # read(n) allocates n bytes first
-            manifest = json.loads(data) if len(data) <= PUBLICATION_MANIFEST_MAX_BYTES else None
+                manifest = json.loads(handle.read())
     except (OSError, ValueError, RecursionError):
         pass
     if isinstance(manifest, dict) and manifest.get("schema") == "autoform-publication/v1":
@@ -1669,10 +1864,6 @@ def _write_publication_manifest(
         "views": ["book", "progress", "project", "chapter", "full"],
     }
     encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    if len(encoded) > PUBLICATION_MANIFEST_MAX_BYTES:  # the next render could not read it
-        raise PublicationError(
-            [f"generated publication manifest exceeds max_file_bytes={PUBLICATION_MANIFEST_MAX_BYTES}"]
-        )
     # Replaced, never truncated in place: a Lean capture that read an empty
     # manifest would index the stage's copies.
     temporary = destination / f".{PUBLICATION_MANIFEST}.{secrets.token_hex(8)}.tmp"
@@ -1713,63 +1904,208 @@ def _group_page(group: str) -> Path:
     )
 
 
-def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
-    """Follow authored container links to recover the book's page order."""
-    ordered: list[Path] = []
-    seen_outputs: set[Path] = set()
-    visited_sources: set[Path] = set()
+def _book_sources(graph: Graph) -> dict[Path, str]:
+    """The book's pages, containers and narrative articles, by resolved source."""
     containers = _containers(graph)
-    book_sources = {
-        node.path.resolve()
+    return {
+        node.path.resolve(): node.id
         for node in graph.nodes.values()
         if node.id in containers or (not node.formalizable and node.catalog is None)
     }
-    pending = [blueprint / "README.md"]
+
+
+def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> list[Path]:
+    """The *targets* *source* links outside code fences, in the order it links them."""
+    linked_sources: list[Path] = []
+
+    def collect(line: str) -> str:
+        for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
+            raw = line[match.start("target") : match.end("target")]
+            bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
+            path = bare.partition("#")[0].partition("?")[0]
+            try:
+                if not path or urlsplit(path).scheme or path.startswith("/"):
+                    continue
+                candidate = (source.parent / unquote(path)).resolve()
+                candidate_relative = candidate.relative_to(blueprint)
+            except ValueError:  # a target outside the vault, an unbalanced IPv6 bracket, or a decoded NUL
+                continue
+            if (
+                not candidate_relative.parts
+                or candidate_relative.parts[0] != "roadmap"
+                or candidate.suffix.lower() != ".md"
+            ):
+                continue
+            if candidate not in targets:
+                continue
+            linked_sources.append(candidate)
+        return line
+
+    try:
+        text = source.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return []  # the site leaves out a page that is not UTF-8, as check warns
+    _outside_fences(text, collect)
+    return linked_sources
+
+
+def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
+    """The landing page, then the book in reading order (:func:`_reading_pages`).
+
+    SUMMARY.md and Previous/Next follow this order, and statement numbers, Next
+    up and the search index follow the same walk, so the book reads one way
+    everywhere."""
+    landing = (destination / "README.md").resolve()
+    pages = _reading_pages(blueprint, destination, graph)
+    return ([landing] if landing.is_file() else []) + [page for page in pages if page != landing]
+
+
+def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
+    """The published book pages in reading order: down the containment tree
+    from the landing page, each page's children in the order it links them,
+    then the ones it does not link. A child the page never links directly
+    takes the place of the page's first link into its subtree, to a section
+    or a result; a direct link wins over that, so a prose shortcut to a deep
+    milestone does not pull its chapter forward. A link to a page elsewhere in
+    the tree does not move it. The children a page does not link at all
+    follow in dependency order, ties by id (:func:`_dependency_sorted`)."""
+    book_sources = _book_sources(graph)
+    node_sources = {node.path.resolve(): node.id for node in graph.nodes.values()}
+    children: dict[str | None, list[str]] = {}
+    for node_id in sorted(graph.nodes):
+        if graph.nodes[node_id].path.resolve() in book_sources:
+            children.setdefault(graph.nodes[node_id].parent, []).append(node_id)
+    precedence: dict[str, set[str]] | None = None
+    ordered: list[Path] = []
+    pending: list[tuple[Path, str | None]] = [(blueprint / "README.md", None)]
     while pending:
-        source = pending.pop().resolve()
-        try:
-            relative = source.relative_to(blueprint)
-        except ValueError:
-            continue
-        output = (destination / relative).resolve()
-        if output.is_file() and output not in seen_outputs:
-            seen_outputs.add(output)
-            ordered.append(output)
-        if source in visited_sources or not source.is_file():
-            continue
-        visited_sources.add(source)
-        linked_sources: list[Path] = []
-
-        def collect(line: str) -> str:
-            for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
-                raw = line[match.start("target") : match.end("target")]
-                bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
-                path = bare.partition("#")[0].partition("?")[0]
-                try:
-                    if not path or urlsplit(path).scheme or path.startswith("/"):
-                        continue
-                    candidate = (source.parent / unquote(path)).resolve()
-                    candidate_relative = candidate.relative_to(blueprint)
-                except ValueError:  # a target outside the vault, an unbalanced IPv6 bracket, or a decoded NUL
-                    continue
-                if (
-                    not candidate_relative.parts
-                    or candidate_relative.parts[0] != "roadmap"
-                    or candidate.suffix.lower() != ".md"
-                ):
-                    continue
-                if candidate not in book_sources:
-                    continue
-                linked_sources.append(candidate)
-            return line
-
-        try:
-            text = source.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue  # the site leaves out a page that is not UTF-8, as check warns
-        _outside_fences(text, collect)
-        pending.extend(reversed(linked_sources))
+        source, parent = pending.pop()
+        output = destination / source.relative_to(blueprint)
+        if parent is not None and output.is_file():
+            ordered.append(output.resolve())
+        own = children.get(parent, [])
+        linked = [node_sources[path] for path in _book_links(source, blueprint, node_sources)] if source.is_file() else []
+        direct: dict[str, int] = {}
+        through: dict[str, int] = {}
+        for index, node_id in enumerate(linked):
+            child = node_id if node_id in own else _child_containing(graph, parent, node_id)
+            if child in own:
+                (direct if child == node_id else through).setdefault(child, index)
+        placed = through | direct
+        unlinked = [node_id for node_id in own if node_id not in placed]
+        if len(unlinked) > 1:
+            if precedence is None:
+                precedence = _sibling_precedence(graph)
+            unlinked = _dependency_sorted(unlinked, precedence)
+        reading = [*sorted(placed, key=placed.__getitem__), *unlinked]
+        pending.extend((graph.nodes[node_id].path, node_id) for node_id in reversed(reading))
     return ordered
+
+
+def _containment_chain(graph: Graph, node_id: str) -> list[str]:
+    """*node_id* and its containers, innermost first."""
+    chain: list[str] = []
+    seen: set[str] = set()
+    current: str | None = node_id
+    while current is not None and current in graph.nodes and current not in seen:
+        chain.append(current)
+        seen.add(current)
+        current = graph.nodes[current].parent
+    return chain
+
+
+def _sibling_precedence(graph: Graph) -> dict[str, set[str]]:
+    """For each node, the siblings whose subtrees must come after its own:
+    sibling B follows sibling A when something in B's subtree depends on
+    something in A's. Each dependency orders the two subtrees that hold its
+    ends just below their nearest common container."""
+    after: dict[str, set[str]] = {}
+    for node in graph.nodes.values():
+        dependent = _containment_chain(graph, node.id)
+        for dependency_id in node.dependencies:
+            if dependency_id not in graph.nodes:
+                continue
+            prerequisite = _containment_chain(graph, dependency_id)
+            shared = set(prerequisite).intersection(dependent)
+            below_dependent = next((i for i, item in enumerate(dependent) if item in shared), len(dependent))
+            below_prerequisite = next((i for i, item in enumerate(prerequisite) if item in shared), len(prerequisite))
+            if below_dependent and below_prerequisite:  # neither end contains the other
+                after.setdefault(prerequisite[below_prerequisite - 1], set()).add(dependent[below_dependent - 1])
+    return after
+
+
+def _dependency_sorted(siblings: list[str], precedence: Mapping[str, set[str]]) -> list[str]:
+    """*siblings* with each subtree after the subtrees it depends on, ties
+    broken by their order in *siblings*. When only cycles are left, the
+    earliest sibling on one of them goes next."""
+    rank = {node_id: index for index, node_id in enumerate(siblings)}
+    later = {node_id: sorted(rank[other] for other in precedence.get(node_id, ()) if other in rank) for node_id in siblings}
+    waiting = [0] * len(siblings)
+    for successors in later.values():
+        for index in successors:
+            waiting[index] += 1
+    ready = [index for index, count in enumerate(waiting) if not count]
+    heapq.heapify(ready)
+    done: set[int] = set()
+
+    def on_cycle(start: int) -> bool:
+        stack, seen = list(later[siblings[start]]), set()
+        while stack:
+            index = stack.pop()
+            if index == start:
+                return True
+            if index not in done and index not in seen:
+                seen.add(index)
+                stack.extend(later[siblings[index]])
+        return False
+
+    ordered: list[str] = []
+    while len(ordered) < len(siblings):
+        if not ready:  # every sibling left waits on one, so some sit on a cycle
+            heapq.heappush(ready, next(i for i in range(len(siblings)) if i not in done and on_cycle(i)))
+        index = heapq.heappop(ready)
+        if index in done:
+            continue
+        done.add(index)
+        ordered.append(siblings[index])
+        for successor in later[siblings[index]]:
+            waiting[successor] -= 1
+            if not waiting[successor] and successor not in done:
+                heapq.heappush(ready, successor)
+    return ordered
+
+
+def _child_containing(graph: Graph, parent: str | None, node_id: str) -> str | None:
+    """The child of *parent* whose containment subtree holds *node_id*, if any."""
+    seen: set[str] = set()
+    while node_id in graph.nodes and node_id not in seen:
+        seen.add(node_id)
+        up = graph.nodes[node_id].parent
+        if up == parent:
+            return node_id
+        if up is None:
+            return None
+        node_id = up
+    return None
+
+
+def _reading_order(
+    graph: Graph,
+    targets: Mapping[str, tuple[Path, str]],
+    pages: list[Path],
+    positions: Mapping[str, int],
+) -> list[str]:
+    """Every node in the order the book reads it: by its page's place in
+    ``pages``, then by its card's place on that page (``positions``; a page's
+    own article comes first), then in dependency order. Nodes on a page not
+    in ``pages`` follow, one page at a time."""
+    page_rank = {page: rank for rank, page in enumerate(pages)}
+
+    def key(node_id: str) -> tuple[int, str, int]:
+        page = targets[node_id][0].resolve() if node_id in targets else None
+        return page_rank.get(page, len(page_rank)), str(page or ""), positions.get(node_id, -1)
+
+    return sorted(status.topological_order(graph), key=key)
 
 
 def _append_book_navigation(pages: list[Path]) -> None:
@@ -1836,19 +2172,20 @@ def _next_target(
     destination: Path,
     group_pages: dict[str, Path] | None = None,
     targets: dict[str, tuple[Path, str]] | None = None,
+    order: Sequence[str] = (),
 ) -> str:
     """Name the result a contributor could pick up right now, with the way in.
 
     A dashboard that only counts is a scoreboard. The useful question on
     arriving is "what is unblocked, and where do I start reading?", which the
-    DAG already answers: the first node in topological order whose
-    prerequisites are met and whose proof is still open. Naming it without
-    linking to it makes the reader hunt, so the card carries the statement, its
-    chapter, and its dependency view.
+    DAG already answers: the first node in reading ``order`` (topological
+    without one) whose prerequisites are met and whose proof is still open.
+    Naming it without linking to it makes the reader hunt, so the card
+    carries the statement, its chapter, and its dependency view.
     """
     containers = _containers(graph)
     links = _anchored_links(targets or {}, page)
-    for node_id in status.topological_order(graph):
+    for node_id in order or status.topological_order(graph):
         node_status = statuses.get(node_id)
         node = graph.nodes[node_id]
         if node_status is None or node_id in containers or not node.formalizable:
@@ -1866,9 +2203,9 @@ def _next_target(
             f'<a href="{html.escape(statement, quote=True)}">{title}</a>' if statement else title
         )
         why = (
-            "Its prerequisites are ready, so the proof can be written now."
+            "Everything it uses is in Lean, so its Lean proof can start."
             if node_status.key == "can_prove"
-            else "Its prerequisites are ready, so the statement can be written down."
+            else "Everything its statement uses is in Lean, so its Lean statement can be written now."
         )
         actions = [f'<a href="{html.escape(graph_href, quote=True)}">Dependencies</a>']
         if chapter_page is not None:
@@ -1905,30 +2242,34 @@ STRUCTURE_PAGE = "structure.md"
 def _render_structure_page(
     *,
     page: Path,
+    entry: Path | None = None,
 ) -> str:
-    """Keep the old structure route as a bounded doorway into the explorer.
+    """Keep the old structure route as a bounded doorway into the book.
 
     The explorer owns hierarchy now. Republishing every source path as one raw
     HTML tree made this compatibility page larger than the rest of a small
     site, duplicated the explorer, and became unusable on repository-scale books.
     """
-    explorer = relative_link(page.parent / "dependencies.md", page, ".md")
+    target = entry or page.parent / "dependencies.md"
+    explorer = relative_link(target, page, ".md")
+    text = target.read_text(encoding="utf-8") if target.is_file() else ""
+    # A header title is visible text already, while an H1 is Markdown, as in
+    # the site's nav.
+    named = _header_title(text)
+    title = name_text(named) if named else title_text(_first_h1(text) or "")
     return "\n".join(
         [
             "---",
-            "title: Browse the roadmap",
+            "title: This page moved",
             "search:",
             "  exclude: true",
             "hide:",
             "  - toc",
             "---",
             "",
-            "# Browse the roadmap",
+            "# This page moved",
             "",
-            "The dependency explorer presents the authored hierarchy and its mathematical",
-            "relations without flattening the repository into a file listing.",
-            "",
-            f"[Open the roadmap explorer]({explorer})",
+            f"The book starts at [{title or 'its contents'}]({explorer}).",
             "",
         ]
     )
@@ -1940,12 +2281,19 @@ def _render_summary_nav(
     destination: Path,
     overview: Path,
 ) -> str:
-    """Write the site nav as Markdown so the Book tab holds real chapters.
+    """Write one mathematical site nav with the book's real chapters.
 
     mkdocs.yml cannot know a project's chapters, and hand-listing them would be
     the second navigation manifest the roadmap skill forbids. mkdocs-literate-nav
     reads this file instead, so the tabs come from the same page order the book
     itself uses.
+
+    A chapter's README nests under the nearest README above its folder, any
+    other page under the nearest README in its own folder or above, and the
+    tree is written depth first in book order. The book order walks the
+    containment tree (:func:`_reading_pages`), so a page always comes after
+    its chapter. Nesting by folder rather than by depth alone keeps each
+    level one step below its parent, which literate-nav requires.
     """
     # SUMMARY.md is a navigation manifest, not a searchable content page. A
     # repository-wide book can make this one generated page larger than every
@@ -1957,17 +2305,23 @@ def _render_summary_nav(
         "---",
         "",
         f"- [Home]({overview.relative_to(destination).as_posix()})",
-        "- Book",
+        "- Mathematics",
     ]
-    for page in book_pages:
-        if page == overview:
-            continue
+    pages = [page for page in book_pages if page != overview]
+    folder_pages = {page.parent: page for page in pages if page.name.casefold() == "readme.md"}
+    children: dict[Path | None, list[Path]] = {}
+    for page in pages:
+        folders = page.parent.parents if folder_pages.get(page.parent) == page else [page.parent, *page.parent.parents]
+        parent = next((folder_pages[folder] for folder in folders if folder in folder_pages), None)
+        children.setdefault(parent, []).append(page)
+    stack = [(page, 1) for page in reversed(children.get(None, []))]
+    while stack:
+        page, depth = stack.pop()
         text = page.read_text(encoding="utf-8")
         named = _header_title(text)
         title = name_text(named) if named else title_text(_first_h1(text) or page.parent.name)
-        depth = len(page.relative_to(destination).parts) - 1
-        indent = "    " * max(depth, 1)
-        lines.append(f"{indent}- [{title}]({page.relative_to(destination).as_posix()})")
+        lines.append(f"{'    ' * depth}- [{title}]({page.relative_to(destination).as_posix()})")
+        stack.extend((child, depth + 1) for child in reversed(children.get(page, [])))
     # What counts as done belongs beside the book it qualifies. The landing
     # page used to be the only route to it, which made the page impossible to
     # simplify without stranding it.
@@ -1975,12 +2329,6 @@ def _render_summary_nav(
     if coverage.is_file():
         title = title_text(_first_h1(coverage.read_text(encoding="utf-8")) or "Coverage")
         lines.append(f"    - [{title}](coverage/README.md)")
-    lines.extend(
-        [
-            "- Graph",
-            "    - [Dependency explorer](dependencies.md)",
-        ]
-    )
     return "\n".join(lines) + "\n"
 
 def _render_landing_page(
@@ -1989,19 +2337,17 @@ def _render_landing_page(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     coverage: CoverageSummary,
-    groups: dict[str, list[str]],
     group_pages: dict[str, Path],
     page: Path,
     destination: Path,
     targets: dict[str, tuple[Path, str]] | None = None,
+    order: Sequence[str] = (),
 ) -> str:
     """The landing page: what this is, how far it has got, and what is next.
 
-    Once the roadmap has articles to draw, the page is the full-page project
-    explorer, on the payload dependencies.md mounts, and the hero opens the
-    explorer's hierarchy rail (its details sheet on phones) in place of the
-    explorer's own title. The page then has one heading, and the map has the
-    rest of the window.
+    Its complete generated hero and next result remain reading content. The
+    shared project graph shell is attached only after all pages are final,
+    so landing pages and mathematical chapters use the same viewer once.
     """
     body = _document_body(text)
     heading = _first_h1(text) or ""
@@ -2025,6 +2371,7 @@ def _render_landing_page(
         destination=destination,
         group_pages=group_pages,
         targets=targets,
+        order=order,
     )
     front = [
         "---",
@@ -2048,15 +2395,9 @@ def _render_landing_page(
             + html.escape(_as_published(relative_link(destination / book, page, ".html")), quote=True)
             + '">Read the book</a>'
         )
-        explorer = dag_viewer.render_container(
-            graph_pages.PROJECT_PAYLOAD,
-            script_href=relative_link(destination / DAG_SCRIPT, page, ".js"),
-            fallback_links=(("Open the dependency explorer", "dependencies.html"),),
-            fallback_total=1,
-            search_href=graph_pages.SEARCH_INDEX,
-            intro=f'<div class="bp-dag-intro bp-landing-intro">{hero}{book_link}{next_up}</div>',
-        )
-        return "\n".join([*front, "  - footer", "---", "", explorer]).rstrip() + "\n"
+        # The shared shell is attached after all full reading content is final.
+        reading = f'<div class="bp-landing-intro">{hero}{book_link}{next_up}</div>'
+        return "\n".join([*front, "  - footer", "---", "", reading]).rstrip() + "\n"
     # A roadmap without articles has nothing to explore, so the hero stands
     # over its status breakdown.
     breakdown = graph_pages.render_legend(
@@ -2117,7 +2458,7 @@ def _render_hero(
     The same numbers set as figures answer "how far along is this?" before the
     reader has finished the title, which is the only question the top of a
     blueprint has to answer. In the explorer's narrow rail (*rail*) the
-    stylesheet keeps only the first two figures, so the chapter and inventory
+    stylesheet keeps only the first two figures, so the topic and inventory
     counts also come as one plain line under them.
     """
     leaves = _countable(graph)
@@ -2132,11 +2473,14 @@ def _render_hero(
     total = len(leaves)
     inventory_count = len(_module_inventories(graph))
     share = _completion_percentage(done, total)
-    target_label = "target" if total == 1 else "targets"
+    article_label = "article" if total == 1 else "articles"
 
+    # The labels reuse the status words, so the share reads as the fully
+    # proved status it counts and the second figure as "ready to state or
+    # prove"; each note says in plain words what the number counts.
     figures = [
-        ("Scoped roadmap", f"{share}%", f"{done} of {total} {target_label} complete", False),
-        ("Ready now", str(actionable), "unblocked, waiting for an author", False),
+        ("Fully proved", f"{share}%", f"{done} of {total} {article_label}", False),
+        ("Ready to start", str(actionable), "nothing they need is blocked", False),
     ]
     # The figure counts every catalog, checked or not; a project without
     # catalogs has no inventory to report.
@@ -2150,7 +2494,7 @@ def _render_hero(
             )
         )
     chapters = len(graph_views.group_nodes(graph))
-    figures.append(("Chapters", str(chapters), "top-level milestones", False))
+    figures.append(("Topics", str(chapters), "top-level parts of the book", False))
     stats = "".join(
         f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">'
         f'<div class="bp-figure-value">{value}</div>'
@@ -2158,7 +2502,7 @@ def _render_hero(
         f'<div class="bp-figure-note">{html.escape(note)}</div></div>'
         for label, value, note, neutral in figures
     )
-    counts = [f"{chapters} {'chapter' if chapters == 1 else 'chapters'}"]
+    counts = [f"{chapters} {'topic' if chapters == 1 else 'topics'}"]
     if inventory_count:
         counts.append(f"{inventory_count} module {'inventory' if inventory_count == 1 else 'inventories'}")
     counts_line = f'<p class="bp-hero-counts">{" · ".join(counts)}</p>' if rail else ""
@@ -2167,7 +2511,7 @@ def _render_hero(
         '<span class="bp-hero-coverage-label">Declared source coverage:</span> '
         f'<span class="bp-hero-coverage-counts">{html.escape(_coverage_summary(coverage))}</span> '
         f'<a class="bp-hero-coverage-link" href="{html.escape(coverage_href, quote=True)}">'
-        "View coverage contract</a>"
+        "What the sources cover</a>"
         "</div>"
     )
     lead = _lead_sentence(body)
@@ -2191,22 +2535,154 @@ def _lead_sentence(body: str) -> str:
 
     Written by a human in `blueprint/README.md`, so it says what the project is
     far better than anything derived from the graph could. Prose only: a
-    heading or a list is structure rather than a claim.
+    heading or a list is structure rather than a claim. The first paragraph
+    with words is read through the site's own converter, so code and formulas
+    keep their contents, a link keeps its words without its target, and an
+    image, such as a badge, is dropped.
     """
-    for block in body.split("\n\n"):
-        line = block.strip()
-        if not line or line.startswith(("#", "-", "*", "<", "|", ">", "!")):
-            continue
-        sentence = line.split(". ")[0].rstrip(".").replace("\n", " ")
-        # The hero is raw HTML, so Markdown never runs over it and a title in
-        # *emphasis* would otherwise show its asterisks. Escaping first means
-        # the substitutions below can only ever produce these two tags.
-        safe = html.escape(sentence)
-        safe = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", safe)
-        safe = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", safe)
-        safe = re.sub(r"`([^`]+)`", r"<code>\1</code>", safe)
-        return safe + "."
+    lines = mask_fences_and_comments(body.splitlines())
+    if _read_page(body)[1]:
+        # Check flags this page, and the landing page then shows only its
+        # title and lead, as text: the first prose block, escaped as typed.
+        for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
+            typed = " ".join(block.split())
+            if typed and not typed.startswith(("#", "-", "*", "<", "|", ">", "!", "[")):
+                return _lead_html([("text", typed)])
+        return ""
+    # Each block is read alone, so raw HTML elsewhere does not hide the lead,
+    # with the reference definitions its links may name. Only lines the site's
+    # converter reads as definitions, so a footnote never becomes a paragraph.
+    definitions = "\n".join(line for line in lines if _SITE_LINK_DEFINITION.match(line))
+    for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
+        tree = render_tree(f"{block}\n\n{definitions}", allow_html=False) if block.strip() else None
+        page = tree.find("body") if tree is not None else None
+        for paragraph in page if page is not None else ():
+            parts = _lead_parts(paragraph) if paragraph.tag == "p" else []
+            if any(kind in {"code", "math"} or (kind == "text" and value.strip()) for kind, value in parts):
+                return _lead_html(parts)
     return ""
+
+
+def _lead_parts(element: object) -> list[tuple[str, str]]:
+    """A converted paragraph as text, code, math and emphasis parts."""
+    parts: list[tuple[str, str]] = []
+
+    def text(value: str | None) -> None:
+        if value:
+            # An Obsidian link reads as its alias, or else its target.
+            value = re.sub(r"\[\[([^\[\]|]*)(?:\|([^\[\]]*))?\]\]", lambda link: link.group(2) or link.group(1), value)
+            parts.append(("text", re.sub(r"\s+", " ", value)))
+
+    def read(node: object) -> None:
+        for child in node:
+            if child.tag == "code":
+                parts.append(("code", "".join(child.itertext())))
+            elif child.tag == "span" and child.get("class") == FORMULA_CLASS:
+                parts.append(("math", "".join(child.itertext())))
+            elif child.tag in {"em", "strong"}:
+                parts.append(("open", child.tag))
+                text(child.text)
+                read(child)
+                parts.append(("close", child.tag))
+            elif child.tag == "br":
+                text(" ")
+            elif child.tag != "img":
+                # A link, or anything else, keeps its words only: an authored
+                # target is relative to blueprint/.
+                text(child.text)
+                read(child)
+            text(child.tail)
+
+    text(element.text)
+    read(element)
+    return parts
+
+
+def _lead_html(parts: list[tuple[str, str]]) -> str:
+    """The first sentence of ``parts`` as escaped HTML.
+
+    The hero is raw HTML, so Markdown never runs over it. Escaping every part
+    means the only tags are the emphasis, code and formula span built here,
+    and a formula is the span the page's MathJax already typesets.
+
+    The sentence ends at the first period in the prose that whitespace and
+    anything but a lowercase ASCII letter follow, unless the period ends an
+    abbreviation such as "i.e." or "Ch." or a name's initial, or "et al."
+    that no capital follows. A period inside code, a formula or a `$$` pair
+    the converter left as text never ends it.
+    """
+    plain, starts = "", []
+    for kind, value in parts:
+        starts.append(len(plain))
+        # Code and formulas stand in as one character no rule below matches.
+        plain += value if kind == "text" else "\x01" if kind in {"code", "math"} else ""
+    cut = len(plain)
+    for stop in re.finditer(r"\.\s+(?![a-z])", plain):
+        before = plain[: stop.start()]
+        words = [word.lstrip("(") for word in before.split()] or [""]
+        word, previous = words[-1], words[-2] if len(words) > 1 else ""
+        after = plain[stop.end() :]
+        # An all-caps word, such as "CH." or "EGA I.", is not an abbreviation.
+        abbreviation = not word.isupper() and word.lower() in _LEAD_ABBREVIATIONS
+        if (
+            before.count("$$") % 2
+            or (abbreviation and not (word.lower() == "al" and after[:1].isupper()))
+            or _is_initial(word, previous, after)
+        ):
+            continue
+        cut = stop.start()
+        break
+    cut = len(plain[:cut].rstrip().rstrip(".").rstrip())
+    begin = len(plain) - len(plain.lstrip())
+    shown: list[str] = []
+    opened: list[str] = []
+    for (kind, value), start in zip(parts, starts):
+        if start >= cut:
+            break
+        if kind == "text":
+            shown.append(html.escape(value[max(begin - start, 0) : cut - start]))
+        elif kind == "code":
+            shown.append(f"<code>{html.escape(value)}</code>")
+        elif kind == "math":
+            shown.append(f'<span class="{FORMULA_CLASS}">{html.escape(value)}</span>')
+        elif kind == "open":
+            opened.append(value)
+            shown.append(f"<{value}>")
+        else:
+            opened.pop()
+            shown.append(f"</{value}>")
+    return "".join(shown) + "".join(f"</{tag}>" for tag in reversed(opened)) + "."
+
+
+#: Words whose period does not end the hero's sentence.
+_LEAD_ABBREVIATIONS = frozenset(
+    {"i.e", "e.g", "cf", "ch", "thm", "al", "prop", "sec", "eq", "fig", "vs", "resp", "def", "lem", "cor"}
+)
+#: Words a single capital names rather than abbreviates, as in "Theorem A.".
+_LEAD_LABELS = frozenset(
+    {"theorem", "lemma", "proposition", "corollary", "conjecture", "definition", "chapter", "part",
+     "section", "appendix", "case", "step", "example", "exercise", "figure", "table", "problem"}
+)
+
+
+def _is_initial(word: str, previous: str, after: str) -> bool:
+    """Whether ``word`` is a name's initial, as in "Luis H. Gallardo" or "J. S.
+    Milne", so its period does not end the sentence. A capital after a
+    lowercase word, an all-caps word or a label ("the group G.", "EGA I.",
+    "Theorem A.") ends one, unless another initial follows it."""
+    previous = previous.rstrip(".")
+    if len(word) != 1 or not word.isupper():
+        return False
+    return bool(
+        re.match(r"[A-Z]\.(?:\s|$)", after)
+        or not previous
+        or (
+            previous[:1].isupper()
+            and not (len(previous) > 1 and previous.isupper())
+            and previous.lower() not in _LEAD_LABELS
+        )
+    )
+
 
 def _render_overview_summary(
     graph: Graph,
@@ -2215,44 +2691,28 @@ def _render_overview_summary(
     containers: frozenset[str],
     node_ids: list[str] | None = None,
 ) -> str:
-    """Render the compact, honest progress strip shown at the start of the book."""
+    """Render a chapter's progress as one line, or nothing for a single statement.
+
+    A lone statement's card already shows its status, and the module
+    inventories have their own section, so neither is counted here.
+    """
     candidates = list(node_ids if node_ids is not None else graph.nodes)
-    selected_ids = [
-        node_id
+    selected = {
+        node_id: statuses[node_id]
         for node_id in candidates
         if _is_countable(graph, node_id, containers)
+    }
+    if len(selected) < 2:
+        return ""
+    parts = [
+        f'<span class="bp-progress-state" title="{html.escape(status.MEANINGS[state.key], quote=True)}">'
+        f'<span class="bp-swatch bp-swatch-{state.key}"></span>'
+        f"<strong>{count:,}</strong> {html.escape(state.label)}</span>"
+        for state, count in status.summarize(selected)
     ]
-    inventory_count = len(
-        _module_inventories(graph, containers=containers, node_ids=candidates)
-    )
-    definitions = sum(is_definition(graph.nodes[node_id]) for node_id in selected_ids)
-    results = len(selected_ids) - definitions
-    item_parts = []
-    if definitions:
-        item_parts.append(f"{definitions} definition{'s' if definitions != 1 else ''}")
-    if results:
-        item_parts.append(f"{results} result{'s' if results != 1 else ''}")
-    if inventory_count:
-        item_parts.append(
-            f"{inventory_count} module "
-            f"{'inventory' if inventory_count == 1 else 'inventories'}"
-        )
-    item_summary = " · ".join(item_parts) or "No decomposed definitions or results yet"
-
-    state_parts = []
-    selected_statuses = {node_id: statuses[node_id] for node_id in selected_ids}
-    for state, count in status.summarize(selected_statuses):
-        state_parts.append(
-            f'<span class="bp-progress-state"><span class="bp-swatch '
-            f'bp-swatch-{state.key}"></span><strong>{count}</strong> '
-            f"{html.escape(state.label)}</span>"
-        )
-    states = "".join(state_parts)
     return (
         '<div class="bp-progress-overview">'
-        '<div class="bp-progress-kicker">Formalization progress</div>'
-        f'<div class="bp-progress-total">{item_summary}</div>'
-        f'<div class="bp-progress-states">{states}</div>'
+        f'<div class="bp-progress-states">{"".join(parts)}</div>'
         "</div>"
     )
 
@@ -2407,6 +2867,8 @@ def _rewrite_links(
     left_out: frozenset[Path] = frozenset(),
     unpublished: tuple[Path, ...] = (),
     dropped: list[str] | None = None,
+    links: Mapping[str, str] | None = None,
+    resolved: dict[str, Path] | None = None,
 ) -> str:
     """Resolve a page's relative links against where it is being published.
 
@@ -2419,10 +2881,17 @@ def _rewrite_links(
     The site holds only the blueprint, so an inline link to a file outside it,
     such as a source note's evidence link to a Lean file, keeps its text and
     loses its target instead of dangling.
+
+    A caller rewriting several texts from one capture may share work between
+    them: *links*, which must be :func:`_anchored_links` for this *page*, and
+    *resolved*, each path written so far with what it resolved to.
     """
     # A coverage page can name most of the graph, so one mapping serves the
     # whole text and links each target page it reaches once.
-    links = _anchored_links(targets, page, extension=".md")
+    if links is None:
+        links = _anchored_links(targets, page, extension=".md")
+    if resolved is None:
+        resolved = {}
 
     def moved_target(raw: str) -> str | None:
         """Where *raw* should point once published, or None to leave it alone."""
@@ -2434,7 +2903,13 @@ def _rewrite_links(
         try:
             if not path or urlsplit(path).scheme or path.startswith("/"):
                 return None
-            candidate = (source_dir / unquote(path)).resolve()
+            written = source_dir / unquote(path)
+            # Keyed by the text written: Windows compares paths without
+            # regard to case, and a missing file resolves in the case written.
+            key = str(written)
+            candidate = resolved.get(key)
+            if candidate is None:
+                candidate = resolved[key] = written.resolve()
         except ValueError:
             # An unbalanced IPv6 bracket or a decoded NUL names no file to
             # point at, so the link is published as written, like a URL.
@@ -2500,6 +2975,10 @@ def _rewrite_links(
         return f"<{href}>" if re.search(r"[\s()]", href) else href
 
     def rewrite(line: str) -> str:
+        # A link, an image and a definition each contain a bracket, which
+        # masking never adds, so a line without one has nothing to move.
+        if "[" not in line:
+            return line
         # A reference definition carries the destination for every `[x][label]`
         # on the page. Rewriting only inline links leaves it pointing at the
         # unpublished path and the rendered link dangles.
@@ -2578,11 +3057,12 @@ def _reaches(path: Path, directory: Path) -> bool:
     return False
 
 
-def _number_nodes(graph: Graph) -> dict[str, str]:
-    """Number nodes per declaration kind in dependency order, as a blueprint does."""
+def _number_nodes(graph: Graph, order: Sequence[str] = ()) -> dict[str, str]:
+    """Number nodes per declaration kind in reading ``order`` (topological
+    without one), so numbers rise down each page and across chapters."""
     counters: dict[str, int] = {}
     numbers: dict[str, str] = {}
-    for node_id in status.topological_order(graph):
+    for node_id in order or status.topological_order(graph):
         label = _declaration_label(graph.nodes[node_id])
         counters[label] = counters.get(label, 0) + 1
         numbers[node_id] = f"{label} {counters[label]}"
@@ -2617,10 +3097,10 @@ def _render_chapter(
     narrative: str | None,
     blueprint: Path,
     repo_root: Path,
-    destination: Path,
     node_sources: dict[Path, str],
     containers: frozenset[str],
     statements: dict[str, tuple[str, str]],
+    reviews: dict[str, str],
     typed: bool = False,
 ) -> tuple[str, int, list[str]]:
     """Render one narrative article with statements at its authored link slots."""
@@ -2638,10 +3118,9 @@ def _render_chapter(
             used_by=used_by,
             linker=linker,
             links=links,
-            page=page,
             repo_root=repo_root,
-            destination=destination,
             statements=statements,
+            reviews=reviews,
         )
         environments[node_id] = environment
         linked += node_linked
@@ -2666,15 +3145,55 @@ def _render_chapter(
             group, node_ids, narrative, graph=graph, blueprint=blueprint, node_sources=node_sources, targets=targets
         )
     )
-    chapter = _place_environments(narrative, lead, slots, summary=chapter_summary, environments=environments)
+    chapter = _place_environments(
+        narrative, lead, slots, summary=chapter_summary, environments=environments, protect=not typed,
+    )
+    for heading, section in _fallback_sections(node_ids, slots, graph):
+        if section:
+            chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(environments[n] for n in section)
+    return chapter.rstrip() + "\n", linked, unresolved
+
+
+def _fallback_sections(
+    node_ids: Iterable[str], slots: Mapping[int, str], graph: Graph
+) -> tuple[tuple[str, list[str]], ...]:
+    """The sections after the narrative for cards no authored slot holds, in page order."""
     placed = set(slots.values())
     remaining = [node_id for node_id in node_ids if node_id not in placed]
     # A catalog inventories Lean that already exists, so it is no formalization target.
-    for heading, catalog in (("Additional formalization targets", None), ("Module inventories", "module")):
-        section = [environments[node_id] for node_id in remaining if graph.nodes[node_id].catalog == catalog]
-        if section:
-            chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(section)
-    return chapter.rstrip() + "\n", linked, unresolved
+    return tuple(
+        (heading, [node_id for node_id in remaining if graph.nodes[node_id].catalog == catalog])
+        for heading, catalog in (("Other statements", None), ("Module inventories", "module"))
+    )
+
+
+def _card_positions(
+    groups: Mapping[str, list[str]],
+    group_pages: Mapping[str, Path],
+    *,
+    graph: Graph,
+    blueprint: Path,
+    node_sources: dict[Path, str],
+    targets: dict[str, tuple[Path, str]],
+    typed: Collection[Path],
+) -> dict[str, int]:
+    """Each card's place on its chapter page, as :func:`_render_chapter` lays
+    it out: authored slots first, then the fallback sections."""
+    positions: dict[str, int] = {}
+    for group, node_ids in groups.items():
+        page = group_pages[group]
+        slots = (
+            _chapter_layout(
+                group, node_ids, page.read_text(encoding="utf-8"),
+                graph=graph, blueprint=blueprint, node_sources=node_sources, targets=targets,
+            )[1]
+            if page.is_file() and page not in typed
+            else {}
+        )
+        cards = [slots[index] for index in sorted(slots)]
+        cards += (node_id for _, section in _fallback_sections(node_ids, slots, graph) for node_id in section)
+        positions.update((node_id, position) for position, node_id in enumerate(cards))
+    return positions
 
 
 def _chapter_layout(
@@ -2734,7 +3253,8 @@ def _chapter_layout(
 
 
 def _place_environments(
-    narrative: str, lead: int, slots: dict[int, str], *, summary: str, environments: dict[str, str]
+    narrative: str, lead: int, slots: dict[int, str], *, summary: str, environments: dict[str, str],
+    protect: bool = False,
 ) -> str:
     """The chapter page: ``narrative`` with the progress ``summary`` before
     line ``lead`` and each slot line replaced by its statement's environment.
@@ -2743,13 +3263,33 @@ def _place_environments(
 
     lines = narrative.splitlines()
     output: list[str] = []
+    pending: list[str] = []
+    affected = protect and "<" in _document_body(narrative)
+    references = None
+    if affected:
+        context = _body_converter()
+        context.convert(_document_body(narrative))
+        references = context.references
+
+    def flush() -> None:
+        if pending:
+            chunk = "\n".join(pending)
+            output.append(
+                _protect_narrative_markdown(chunk, references=references, force=affected, page_header=not output)
+                if protect else chunk
+            )
+            pending.clear()
+
     for index, line in enumerate(lines):
         if index == lead:
+            flush()
             output.extend(["", summary.rstrip(), ""])
         if index in slots:
+            flush()
             output.append(environments[slots[index]])
         else:
-            output.append(line)
+            pending.append(line)
+    flush()
     chapter = "\n".join(output)
     if lead == len(lines):
         chapter = chapter.rstrip() + "\n\n" + summary.rstrip()
@@ -2903,6 +3443,25 @@ def _protect_markdown_in_html(
     return rendered
 
 
+def _protect_narrative_markdown(
+    text: str, *, references: Mapping[str, tuple[str, str]] | None = None, force: bool = False,
+    page_header: bool = True,
+) -> str:
+    """Protect authored narrative, never an already assembled renderer page.
+
+    Metadata remains metadata. The canonical converter handles only affected
+    authored ranges; normal Markdown retains MkDocs' own link/anchor processing.
+    """
+    if not force and "<" not in text:
+        return text
+    lines = text.splitlines(keepends=True)
+    end = 0
+    if page_header and lines and lines[0].strip() == "---":
+        end = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
+    header, body = "".join(lines[:end]), "".join(lines[end:])
+    return header + _protect_markdown_in_html(body, references=references, force=force)
+
+
 def _render_environment(
     node: Node,
     *,
@@ -2913,10 +3472,9 @@ def _render_environment(
     used_by: dict[str, list[str]],
     linker: SourceLinker,
     links: Mapping[str, str],
-    page: Path,
     repo_root: Path,
-    destination: Path,
     statements: dict[str, tuple[str, str]],
+    reviews: dict[str, str],
 ) -> tuple[str, int, list[str]]:
     node_status = statuses[node.id]
     caption, _, number = numbers[node.id].rpartition(" ")
@@ -2928,19 +3486,24 @@ def _render_environment(
     # preconverted, render both with the shared article context: otherwise its
     # consumed definitions would leave the remaining Markdown links unresolved.
     references = {}
-    affected = converted_alone(statement, remainder)
-    if affected:
+    if converted_alone(statement, remainder):
         context = _body_converter()
         context.convert("\n\n".join((statement, remainder)))
         references = context.references
-    statement, remainder = (
-        _protect_markdown_in_html(part, references=references, force=affected) for part in (statement, remainder)
-    )
+        statement, remainder = (
+            _protect_markdown_in_html(part, references=references, force=True) for part in (statement, remainder)
+        )
+        # Only once converted: inside a container, an author's "<" could close it.
+        remainder = _isolate_converted_headings(remainder)
+    else:
+        remainder = _isolate_notes_headings(remainder)
 
     code_links, implementation_rows, linked, unresolved = _lean_presentation(node, linker)
-    context_link = _graph_context_link(node, page=page, destination=destination)
     source_link = _vault_source_link(node, repo_root=repo_root, linker=linker)
     meta_rows = implementation_rows
+    if mathlib_names := declaration_names(node.mathlib_declaration or ""):
+        # As text: nothing checks these names against the pinned Mathlib.
+        meta_rows.append(("Mathlib", " · ".join(f"<code>{html.escape(name)}</code>" for name in mathlib_names)))
     if node_status.key == "conditional":
         # A conditional proof must never read as finished, so the open
         # statements it rests on are named on the statement itself.
@@ -2972,21 +3535,29 @@ def _render_environment(
     # A checked inventory is fully proved, so it keeps the tick.
     mark = "✓" if node_status.key in {"fully_proved", "mathlib"} else "●"
 
+    shown = _display_title(node.title, caption)
+    title_html = (
+        f'<span class="bp-thmtitle">{html.escape(shown)}</span>' if shown
+        else f'<span hidden>{html.escape(node.title)}</span>'
+    )
+    # The "#" link's only text is "#", so its name says which statement it links to.
+    permalink_label = " ".join(part for part in ("Link to", caption, number) if part)
+
     lines = [
         f'<div class="bp-thmwrapper {style} bp-{display_key}" '
-        f'id="{html.escape(anchor, quote=True)}" '
         f'data-autoform-node-id="{html.escape(node.id, quote=True)}" markdown="1">',
-        '<div class="bp-thmheading">',
-        f'<span class="bp-thmcaption">{html.escape(caption)}</span>'
-        f'<span class="bp-thmlabel">{html.escape(number)}</span>'
-        f'<span class="bp-thmtitle">{html.escape(node.title)}</span>'
+        f'<h4 class="bp-thmheading" id="{html.escape(anchor, quote=True)}">',
+        f'<span class="bp-thmcaption" data-search-exclude>{html.escape(caption)}</span>'
+        f'<span class="bp-thmlabel" data-search-exclude>{html.escape(number)}</span>'
+        f"{title_html}"
         f"{code_links}"
-        f"{context_link}"
         f"{source_link}"
-        f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}">#</a>'
-        f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}">'
+        f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}" '
+        f'aria-label="{html.escape(permalink_label, quote=True)}" data-search-exclude>#</a>'
+        f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}" data-search-exclude>'
         f'{mark}<span class="bp-mark-label">{html.escape(display_label)}</span></span>',
-        "</div>",
+        "</h4>",
+        *_search_names(node),
         *boxed(statement, STATEMENT_BOX),
     ]
     if remainder:
@@ -2995,8 +3566,264 @@ def _render_environment(
         lines.append(meta)
     if dependencies:
         lines.append(dependencies)
+    if node.id in reviews:
+        lines.extend(["", reviews[node.id], ""])
     lines.append("</div>")
     return "\n".join(lines), linked, unresolved
+
+
+def _review_disclosures(
+    blueprint: Path,
+    graph: Graph,
+    skeleton: SkeletonReport,
+    readbacks: Mapping[tuple[str, str], Readback],
+    macros: Mapping[str, object],
+    captured: Iterable[str],
+) -> tuple[dict[str, str], list[str]]:
+    """Each Lean-mapped statement ``graph`` publishes, by node id, with its
+    review: what a reviewer must trust, what a blind auditor says it means, and
+    where its approval stands; and a warning for each formula a current card
+    of a published statement shows as typed.
+
+    ``skeleton`` covers the whole vault, a folder that says ``published:
+    false`` included, which the copy ``graph`` was loaded from lacks. So the
+    evidence is derived from the vault at ``blueprint`` as it is now, which
+    refuses a ``skeleton`` extracted from another state, and every article
+    ``graph`` publishes must still be the one it was derived from. The
+    approval is judged by :func:`~autoform_cli.review.review_states`, as
+    ``review check`` judges it, with ``readbacks`` and ``macros`` as the site
+    has them. A passage shown must come from a file the site publishes, judged
+    by its name in ``captured``, the captured files' names.
+    """
+
+    changed = "while the site was being rendered; rerun once the blueprint is idle"
+    try:
+        whole = load_graph(blueprint)
+    except GraphValidationError as error:
+        reason = f"the blueprint changed {changed}: {'; '.join(error.issues)}"
+        raise ReviewError([ReviewFinding("", "review-snapshot-changed", reason)]) from error
+    published = {
+        node_id
+        for node_id, node in whole.nodes.items()
+        if not any(node.path.is_relative_to(folder) for folder in whole.unpublished)
+    }
+    edited = [
+        ReviewFinding(node_id, "review-snapshot-changed", f"the article changed {changed}")
+        for node_id in sorted(published | set(graph.nodes))
+        if node_id not in graph.nodes
+        or node_id not in whole.nodes
+        or whole.nodes[node_id].source_sha256 != graph.nodes[node_id].source_sha256
+    ]
+    if edited:
+        raise ReviewError(edited)
+    bundle = build_review_bundle(whole, skeleton, macros=macros)
+    # A link resolved on a disk that ignores case and Unicode form keeps the
+    # spelling it was written in; capture refuses two names that differ only
+    # in case or Unicode form.
+    spellings = {_folded(name): name for name in captured}
+    # A passage shown must be the one the copy cuts, from a file the site holds.
+    for article in bundle.articles:
+        if article.node_id not in graph.nodes:
+            continue
+        issues: list[str] = []
+        shown = source_passage(graph.nodes[article.node_id], graph.blueprint_dir, issues=issues)
+        if shown == (article.passage, article.passage_locator):
+            if article.passage_locator is not None:
+                # The locator ends in its line range; a file's name may hold a #.
+                cited = article.passage_locator.rpartition("#")[0]
+                cited = spellings.get(_folded(cited), cited)
+                if _left_out(PurePosixPath(cited), graph):
+                    reason = f"cites a passage from {cited}, a file the site leaves out"
+                    edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
+            continue
+        if shown[0] is None and issues:
+            reason = f"cites a passage the site does not publish: {issues[0]}"
+            edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
+        else:
+            edited.append(ReviewFinding(article.node_id, "review-snapshot-changed", f"the cited passage changed {changed}"))
+    if edited:
+        raise ReviewError(edited)
+    states = review_states(whole, bundle, readbacks)
+    labels = approval_statuses(states)
+    disclosures: dict[str, str] = {}
+    warnings: list[str] = []
+    for article in bundle.articles:
+        # Only what the site publishes: neither the page nor a warning names
+        # a statement in a folder it leaves out.
+        if article.node_id not in graph.nodes:
+            continue
+        disclosures[article.node_id] = _review_disclosure(
+            article,
+            skeleton.node(article.node_id),
+            states[article.node_id],
+            labels[article.node_id].label if article.node_id in labels else None,
+            readbacks,
+        )
+        for declaration in article.declarations:
+            card = readback_for(readbacks, article.article_id, declaration.name)
+            if card is not None and not readback_errors(declaration, card):
+                warnings.extend(
+                    f"{article.node_id}: read-back for {declaration.name}: {warning}"
+                    for warning in typesetting_warnings(card.text)
+                )
+    return disclosures, warnings
+
+
+def _folded(name: str) -> str:
+    """``name`` as capture compares names for a collision."""
+
+    return unicodedata.normalize("NFC", name).casefold()
+
+
+def _left_out(cited: PurePosixPath, graph: Graph) -> bool:
+    """Whether the site leaves out the captured file at ``cited``, a path in
+    the blueprint as captured, as :func:`_publication` does: a file under
+    ``readbacks/``, the atlas, a file render writes its own over, or one that
+    is neither a page nor a file the site copies. Notes under ``sources/``
+    count as published, on the site or at the verified commit."""
+
+    return (
+        cited.parts[:1] == (READBACKS_DIR,)
+        or cited.as_posix().casefold() == "atlas.json"
+        or cited.as_posix() in _site_paths(graph)
+        or cited.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
+    )
+
+
+def _review_disclosure(
+    article: ReviewArticle,
+    record: NodeSkeleton,
+    state: ReviewState,
+    label: str | None,
+    readbacks: Mapping[tuple[str, str], Readback],
+) -> str:
+    count = len(record.declarations)
+    lines_to_trust = sum(item.skeleton_lines for item in record.declarations)
+    approval = {
+        "incomplete": ("open", "not yet approved"),
+        "unapproved": ("open", "ready to approve"),
+        "unverifiable": ("drift", "approval cannot be verified because testimony is incomplete or invalid"),
+        "drift": ("drift", "the recorded approval is not the current complete review"),
+        "approved": (label, label),
+    }
+    kind, shown = approval[state.status]
+    # The summary is not selectable, so the hash to copy into review_approved
+    # is a row of the panel.
+    rows = [("Prepared evidence", f"<code>{html.escape(article.evidence_hash)}</code>")]
+    if state.review_hash is not None:
+        rows.append(("Review hash", f"<code>{html.escape(state.review_hash)}</code>"))
+    if state.approved is not None:
+        rows.append(("Approved", f"<code>{_typed(state.approved, one_line=True)}</code>"))
+    # Excluded from search: the panel holds packets and testimony, which would
+    # fill the index, as #90 keeps large pages out of it.
+    parts = [
+        '<details class="bp-review" markdown="1" data-search-exclude>',
+        f"<summary>Review · {_plural(count, 'skeleton')}, {_plural(lines_to_trust, 'line')} to trust · "
+        f'<span class="bp-review-{kind}">{html.escape(shown)}</span></summary>',
+        "",
+        _render_rows(rows, css_class="bp-skeleton-meta"),
+        "",
+    ]
+    if article.passage is not None:
+        locator = article.passage_locator or "cited source"
+        parts.extend(
+            [
+                '<div class="bp-skeleton">',
+                f'<div class="bp-skeleton-title">Source passage · {_typed(locator, one_line=True)}</div>',
+                f"<pre><code>{_typed(article.passage)}</code></pre>",
+                "</div>",
+                "",
+            ]
+        )
+    for declaration, prepared in zip(record.declarations, article.declarations):
+        # The packet shown is the one whose hash the card records, never a
+        # friendlier reconstruction that could hold text the auditor never saw.
+        # The approval binds the packet alone, so each other row says so: they
+        # describe the declaration as built now, its proof included.
+        assumed = ", ".join(f"<code>{_typed(name, one_line=True)}</code>" for name in declaration.assumed)
+        axioms = ", ".join(f"<code>{_typed(name, one_line=True)}</code>" for name in declaration.axioms)
+        rows = [
+            ("Packet", f"<code>{html.escape(prepared.packet_hash)}</code> · what the approval binds"),
+            ("Statement hash", f"<code>{html.escape(declaration.statement_hash)}</code> · a record, not bound"),
+            ("Assumes", f"{assumed or 'nothing beyond Lean core'} · proof included, not bound"),
+            ("Axioms", f"{axioms or 'none'} · proof included, not bound"),
+        ]
+        packet = _typed(prepared.packet.rstrip("\n"))
+        card = readback_for(readbacks, article.article_id, declaration.name)
+        errors = () if card is None else readback_errors(prepared, card)
+        # The read-back before the packet, as Human Review walks a person
+        # through them, so the Lean does not frame the testimony.
+        parts.extend(
+            [
+                '<div class="bp-skeleton">',
+                f'<div class="bp-skeleton-title">{_typed(declaration.kind, one_line=True)} '
+                f"<code>{_typed(declaration.name, one_line=True)}</code></div>",
+                "</div>",
+                "",
+                _readback_block(card, errors),
+                "",
+                '<div class="bp-skeleton">',
+                f'<pre class="bp-lean"><code>{packet}</code></pre>',
+                _render_rows(rows, css_class="bp-skeleton-meta"),
+                "</div>",
+                "",
+            ]
+        )
+    parts.append("</details>")
+    return "\n".join(parts)
+
+
+#: How render marks a card's formulas for the card's TeX input.
+_CARD_DELIMITERS = {"inline": ("\\(", "\\)"), "display": ("\\[", "\\]")}
+
+
+def _readback_block(card: Readback | None, errors: tuple[str, ...]) -> str:
+    """A card as one line of HTML, which the page's Markdown leaves alone.
+
+    The testimony is shown as typed, with line ends kept as character
+    references. A current card's formulas are the pieces
+    :func:`~autoform_cli.testimony.split_testimony` finds: each that
+    :func:`~autoform_cli.testimony.formula_problems` accepts is marked for the
+    card's own TeX input, and any other is shown as typed, dollar signs and
+    all. An invalid card's are all left as typed.
+    """
+
+    if card is None:
+        return f'<div class="{CARD_CLASS} bp-readback-missing">No read-back filed for this skeleton yet.</div>'
+    pieces = [("text", card.text)] if errors else split_testimony(card.text)
+    shown = []
+    for kind, piece in pieces:
+        if kind == "text":
+            shown.append(html.escape(piece))
+        elif formula_problems(piece):
+            delimiter = "$$" if kind == "display" else "$"
+            shown.append(html.escape(delimiter + piece + delimiter))
+        else:
+            opening, closing = _CARD_DELIMITERS[kind]
+            shown.append(f'<span class="{CARD_FORMULA_CLASS}">{opening}{html.escape(piece)}{closing}</span>')
+    body = "".join(shown)
+    model = f" · {html.escape(card.model)}" if card.model else ""
+    status = "invalid · " + "; ".join(errors) if errors else "current"
+    return (
+        f'<div class="{CARD_CLASS} bp-readback-{"invalid" if errors else "current"}">'
+        f'<div class="bp-readback-title">Read-back{model} · <span class="bp-readback-status">{html.escape(status)}</span></div>'
+        f'<div class="bp-readback-body">{body}</div></div>'
+    ).translate(_ONE_LINE)
+
+
+#: What the page's Markdown would act on in raw HTML: it ends a line at a
+#: carriage return as at a line feed, and expands tabs from its own columns.
+#: Character references for them it leaves alone.
+_AS_TYPED = str.maketrans({"\r": "&#13;", "\t": "&#9;"})
+_ONE_LINE = str.maketrans({"\r": "&#13;", "\n": "&#10;", "\t": "&#9;"})
+
+
+def _typed(text: str, *, one_line: bool = False) -> str:
+    """``text`` as HTML the page's Markdown leaves as typed: escaped, with
+    fence markers, carriage returns and tabs as character references, and
+    with ``one_line`` its line feeds too."""
+
+    return _FenceSafeHtml.escaped(html.escape(text)).translate(_ONE_LINE if one_line else _AS_TYPED)
 
 
 def _lean_presentation(
@@ -3053,6 +3880,71 @@ def _lean_presentation(
     return code_links, rows, linked, unresolved
 
 
+def _search_names(node: Node) -> list[str]:
+    """The card's exact Lean names, as hidden text the site's search indexes.
+
+    A verified name shows only as its code icon's label, and search reads text,
+    not attributes. A catalog's names stay out: it can list hundreds, and its
+    Lean row already shows the first few.
+    """
+    names = declaration_names(node.lean or "") if node.catalog is None else ()
+    if not names:
+        return []
+    return ['<div class="bp-search-names" hidden>' + " ".join(html.escape(name) for name in names) + "</div>"]
+
+
+#: A heading of a card's notes as the body converter writes it, on a line of its own.
+_CONVERTED_HEADING = re.compile(r"<h([1-6])>(.*)</h\1>")
+
+
+def _isolated_heading(level: int, markdown: str, title: str, words: str) -> str:
+    """A notes heading that starts no search record but keeps its words in its card's.
+
+    MkDocs Material's search starts a record at every heading with an id and
+    ends it with the heading's parent. So the heading gets a parent of its own
+    and is kept out of search, and a hidden copy of its words follows that
+    parent, in the card's record. Material removes the attribute's value from
+    the page; without one, a link check would read it as a data: URL.
+    """
+    return (
+        f'\n\n<div class="bp-notes-heading"{markdown}>\n'
+        f'<h{level} data-search-exclude="1"{markdown}>{title}</h{level}>\n</div>\n\n'
+        f'<div class="bp-search-text" hidden>{words}</div>\n\n'
+    )
+
+
+def _isolate_notes_headings(text: str) -> str:
+    """Isolate each heading of notes the site converts itself, which hold no "<".
+
+    The heading stays Markdown that md_in_html reads in its own element, so it
+    looks, links and takes its id as before. Without a "<", none of the
+    author's text can close a container.
+    """
+
+    def isolate(line: str) -> str:
+        match = _HEADING.match(line)
+        if match is None:
+            return line
+        hashes, title = match.groups()
+        return _isolated_heading(len(hashes), ' markdown="1"', title, html.escape(title, quote=False))
+
+    return _outside_fences(text, isolate) if text else text
+
+
+def _isolate_converted_headings(rendered: str) -> str:
+    """Isolate each heading of notes render converted first, as their HTML."""
+
+    def isolate(line: str) -> str:
+        match = _CONVERTED_HEADING.fullmatch(line)
+        if match is None:
+            return line
+        level, title = match.groups()
+        words = html.escape(html.unescape(re.sub(r"<[^>]*>", "", title)), quote=False)
+        return _isolated_heading(int(level), "", title, words).strip("\n")
+
+    return "\n".join(isolate(line) for line in rendered.split("\n"))
+
+
 def _code_icon() -> str:
     """A small dependency-free code icon suitable at theorem-heading size."""
     return (
@@ -3091,22 +3983,6 @@ def _vault_source_link(node: Node, *, repo_root: Path, linker) -> str:
     )
 
 
-def _graph_context_link(node: Node, *, page: Path, destination: Path) -> str:
-    """Link a textbook statement to its hash-focused dependency explorer."""
-    href = graph_pages.scope_page_href(destination, node.id, page, parent=node.parent)
-    label = html.escape(f"Open dependency explorer for {node.title}", quote=True)
-    icon = (
-        '<svg class="bp-context-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
-        '<circle cx="6" cy="12" r="2.25"/><circle cx="18" cy="6" r="2.25"/>'
-        '<circle cx="18" cy="18" r="2.25"/><path d="m8 11 7.8-4M8 13l7.8 4"/>'
-        "</svg>"
-    )
-    return (
-        f'<a class="bp-context-link" href="{html.escape(href, quote=True)}" '
-        f'aria-label="{label}" title="{label}">{icon}</a>'
-    )
-
-
 def _dependency_disclosure(
     node: Node,
     *,
@@ -3119,8 +3995,11 @@ def _dependency_disclosure(
     """Hide DAG relations behind a native, keyboard-accessible disclosure."""
     rows: list[tuple[str, str]] = []
 
-    def references(node_ids: list[str] | tuple[str, ...]) -> str:
-        return _node_references(node_ids, graph=graph, statuses=statuses, numbers=numbers, links=links)
+    def references(node_ids: list[str] | tuple[str, ...], *, used_by_row: bool = False) -> str:
+        return _node_references(
+            node_ids, graph=graph, statuses=statuses, numbers=numbers, links=links,
+            relation_node=node, used_by_row=used_by_row,
+        )
 
     if node.statement_dependencies:
         rows.append(("Statement uses", references(node.statement_dependencies)))
@@ -3128,12 +4007,36 @@ def _dependency_disclosure(
     if proof_only:
         rows.append(("Proof uses", references(proof_only)))
     if used_by[node.id]:
-        rows.append(("Used by", references(used_by[node.id])))
+        rows.append(("Used by", references(used_by[node.id], used_by_row=True)))
     if not rows:
         return ""
 
+    # The summary counts both directions, so a reader can tell from the closed
+    # line whether opening it is worth it.
+    uses = len(dict.fromkeys((*node.statement_dependencies, *node.proof_dependencies)))
+    label = f"Uses {uses} · Used by {len(used_by[node.id])}"
     body = _render_rows(rows, css_class="bp-dependency-body")
-    return f'<details class="bp-dependencies"><summary>Dependencies</summary>{body}</details>'
+    return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
+
+
+def _display_title(title: str, caption: str) -> str:
+    """Drop a kind the caption already shows: 'Theorem (X)' under 'Theorem 4' reads X.
+
+    Display only; the graph keeps the authored title. A title that is just the
+    kind word shows nothing, and the outer parentheses are only removed when
+    they enclose the whole rest of the title.
+    """
+    if title.casefold() == caption.casefold():
+        return ""
+    prefix = f"{caption} ("
+    if not (title.casefold().startswith(prefix.casefold()) and title.endswith(")")):
+        return title
+    inner, depth = title[len(prefix) : -1], 0
+    for character in inner:
+        depth += (character == "(") - (character == ")")
+        if depth < 0:
+            return title
+    return inner if depth == 0 else title
 
 
 def _node_references(
@@ -3143,21 +4046,50 @@ def _node_references(
     statuses: dict[str, status.NodeStatus],
     numbers: dict[str, str],
     links: Mapping[str, str],
+    relation_node: Node | None = None,
+    used_by_row: bool = False,
 ) -> str:
     """Link each node by number and title, coloured by its derived state.
 
     A catalog is coloured as neutrally as its own environment, checked or not.
+    Dependency rows additionally describe the original pair's typed counts;
+    other callers, including assumed statements, retain their original labels.
     """
     rendered = []
     for other_id in node_ids:
         other = graph.nodes[other_id]
-        label = html.escape(f"{numbers[other_id]} ({other.title})")
+        shown = _display_title(other.title, numbers[other_id].rpartition(" ")[0])
+        text = numbers[other_id] + (f" ({shown})" if shown else "")
+        reading = dag_viewer._reading_label(text, require_math=False)
+        label = html.escape(text)
+        if reading is not None:
+            # Only converter-validated text/code/math enters the native link;
+            # authored HTML, destinations and attributes remain literal.
+            label = "".join(
+                html.escape(value) if kind == "text" else
+                f"<code>{html.escape(value)}</code>" if kind == "code" else
+                f'<span class="arithmatex">{html.escape(value)}</span>'
+                for kind, value in reading["parts"]
+            )
         key = graph_views.display_status_key(other, statuses[other_id])
+        relation_attributes = ""
+        if relation_node is not None:
+            owner, endpoint = (other, relation_node.id) if used_by_row else (relation_node, other_id)
+            counts = (
+                (owner.statement_dependencies.count(endpoint), "statement"),
+                (owner.proof_dependencies.count(endpoint), "proof"),
+            )
+            weights = ", ".join(
+                f"{count} {kind} {'dependency' if count == 1 else 'dependencies'}"
+                for count, kind in counts if count
+            )
+            if weights:
+                relation_attributes = f'title="{html.escape(weights, quote=True)}" '
         rendered.append(
             f'<a class="bp-ref bp-ref-{key}" '
-            f'href="{html.escape(links[other_id], quote=True)}">{label}</a>'
+            f'{relation_attributes}href="{html.escape(links[other_id], quote=True)}">{label}</a>'
         )
-    return " · ".join(rendered)
+    return ' <span class="bp-ref-sep">·</span> '.join(rendered)
 
 
 def _render_rows(rows: list[tuple[str, str]], *, css_class: str) -> str:
@@ -3191,10 +4123,19 @@ def _stylesheet() -> str:
     light dimmed: it is the palette Facebook uses in dark mode, and it hangs off
     Material's colour scheme attribute so the theme's own toggle drives it.
     """
+    # Dependency dots and swatches are a few pixels wide and carry no word, so
+    # every state with a tinted light fill (the four finished states,
+    # conditionally proved, not ready and inventory pending) fills them with
+    # its stroke: the tints are too pale to tell from an outline there. The
+    # light fill decides, so both schemes fill the same states.
+    def dot(state: status.State, dark: bool = False) -> str:
+        fill, stroke = (state.dark_fill, state.dark_stroke) if dark else (state.fill, state.stroke)
+        return f"background: {fill if state.fill == '#FFFFFF' else stroke}; border-color: {stroke};"
+
     light = "\n".join(
         f".bp-{state.key} .bp-mark {{ color: {state.stroke}; }}\n"
         f".bp-{state.key} > .bp-thmcontent {{ border-left-color: {state.stroke}; }}\n"
-        f".bp-ref-{state.key}::before, .bp-swatch-{state.key} {{ background: {state.fill}; border-color: {state.stroke}; }}"
+        f".bp-ref-{state.key}::before, .bp-swatch-{state.key} {{ {dot(state)} }}"
         for state in status.STATES
     )
     dark = "\n".join(
@@ -3203,15 +4144,15 @@ def _stylesheet() -> str:
         f"{{ border-left-color: {state.dark_stroke}; }}\n"
         f"[data-md-color-scheme=slate] .bp-ref-{state.key}::before, "
         f"[data-md-color-scheme=slate] .bp-swatch-{state.key} "
-        f"{{ background: {state.dark_fill}; border-color: {state.dark_stroke}; }}"
+        f"{{ {dot(state, dark=True)} }}"
         for state in status.STATES
     )
     # The legends beside the explorer's rings list module inventories, so
     # their swatches take the colours the explorer draws inventories in.
     inventory = "\n".join(
-        f".bp-swatch-{state.key} {{ background: {state.fill}; border-color: {state.stroke}; }}\n"
+        f".bp-swatch-{state.key} {{ {dot(state)} }}\n"
         f"[data-md-color-scheme=slate] .bp-swatch-{state.key} "
-        f"{{ background: {state.dark_fill}; border-color: {state.dark_stroke}; }}"
+        f"{{ {dot(state, dark=True)} }}"
         for state in status.INVENTORY_STATES
     )
     serif = '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
@@ -3233,6 +4174,8 @@ def _stylesheet() -> str:
   --bp-rule: #CED0D4;
   --bp-surface: #FFFFFF;
   --bp-sunken: #F0F2F5;
+  --bp-page: #FFFFFF;
+  --bp-scroll-shade: rgba(5, 5, 5, 0.22);
   --bp-link: #0064E0;
   --bp-link-hover: #0082FB;
   --bp-blue: #0064E0;
@@ -3247,12 +4190,34 @@ def _stylesheet() -> str:
   --bp-rule: #3E4042;
   --bp-surface: #242526;
   --bp-sunken: #1C1D1F;
-  --bp-link: #2D88FF;
+  --bp-page: #18191A;
+  --bp-scroll-shade: rgba(228, 230, 235, 0.3);
+  --bp-link: #4A9AFF;
   --bp-link-hover: #7FB8FF;
   --bp-blue: #2D88FF;
   --bp-violet: #9B6BFF;
   --bp-magenta: #FF6B9D;
 }}
+/* Material's own tokens take the same blue, so its links, breadcrumbs and
+   Previous/Next match the explorer instead of the theme's default indigo.
+   The theme sets them on body through data-md-color-primary, and the slate
+   link colour through two attributes, so this selector carries two
+   attributes and wins by coming later. The bp tokens already switch with
+   the scheme, so one rule covers both. The darker and lighter shades follow,
+   or the drawer's repository strip and hover tints stay indigo. */
+[data-md-color-scheme][data-md-color-primary] {{
+  --md-primary-fg-color: var(--bp-blue);
+  --md-primary-fg-color--light: color-mix(in srgb, var(--bp-blue) 80%, #FFFFFF);
+  --md-primary-fg-color--dark: color-mix(in srgb, var(--bp-blue) 80%, #000000);
+  --md-accent-fg-color: var(--bp-link-hover);
+  --md-accent-fg-color--transparent: color-mix(in srgb, var(--bp-link-hover) 10%, transparent);
+  --md-typeset-a-color: var(--bp-link);
+}}
+/* White on the accent is 2.1:1 in slate and 3.8:1 in light, and the
+   back-to-top button shows focus only by that fill. Slate's accent takes the
+   page's near-black text; light's button fills with the link blue. */
+[data-md-color-scheme=slate][data-md-color-accent] {{ --md-accent-bg-color: #18191A; }}
+[data-md-color-scheme=default] .md-top:is(:hover, :focus) {{ background-color: var(--bp-link); }}
 
 body {{ font-family: {sans}; color: var(--bp-fg); }}
 .md-typeset {{
@@ -3285,8 +4250,12 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   height: 3px;
   background: var(--bp-sweep);
 }}
+/* The mobile drawer's title bar and repository strip match the header:
+   white on slate's brighter blue is 3.5:1. */
 [data-md-color-scheme=slate] .md-header,
-[data-md-color-scheme=slate] .md-tabs {{ background-color: #242526; }}
+[data-md-color-scheme=slate] .md-tabs,
+[data-md-color-scheme=slate] .md-nav--primary .md-nav__title[for=__drawer],
+[data-md-color-scheme=slate] .md-nav__source {{ background-color: #242526; }}
 .md-tabs {{ border-bottom: 1px solid var(--bp-rule); }}
 .md-tabs__link {{ font-weight: 600; opacity: 0.72; }}
 .md-tabs__link--active, .md-tabs__link:hover {{ opacity: 1; }}
@@ -3307,9 +4276,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-hero-kicker {{
   margin-top: 1.1rem;
   font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-weight: 600;
   color: var(--bp-muted);
 }}
 .md-typeset .bp-hero-title {{
@@ -3395,15 +4362,15 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
    reach the hero's heading, paragraph and links there, so these rules carry
    a doubled class; the explorer's own rules stay in its script. The narrow
    hero keeps the gradient rule as its one accent and two plain figures,
-   the share complete and what is ready now; the chapter and inventory
-   counts become one muted line, and coverage its link. */
+   the share fully proved and what is ready to start, each with its
+   one-line note; the topic and inventory counts become one muted line,
+   and coverage its link. */
 .bp-landing-intro.bp-landing-intro {{ margin: 0 6px 18px; font-size: 13px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero {{ margin: 0; }}
 .bp-landing-intro.bp-landing-intro .bp-hero-rule {{ width: 56px; height: 3px; }}
 .bp-landing-intro.bp-landing-intro :is(
   .bp-hero-kicker,
   .bp-figure:nth-child(n + 3),
-  .bp-figure-note,
   .bp-hero-bar,
   .bp-hero-coverage-label,
   .bp-hero-coverage-counts
@@ -3440,6 +4407,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-weight: 700;
 }}
 .bp-landing-intro.bp-landing-intro .bp-figure-label {{ margin-top: 5px; font-size: 12px; font-weight: 600; }}
+.bp-landing-intro.bp-landing-intro .bp-figure-note {{ margin-top: 2px; font-size: 12px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero-counts {{
   margin: 8px 0 0;
   color: var(--bp-muted);
@@ -3496,11 +4464,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   background: var(--bp-surface);
 }}
 .bp-progress-kicker {{
-  font-family: {mono};
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--bp-muted);
 }}
 .bp-progress-total {{ margin-top: 0.2rem; font-family: {serif}; font-size: 1.05rem; }}
@@ -3531,11 +4496,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-book-nav-link:hover {{ text-decoration: none; }}
 .bp-book-nav-next {{ margin-left: auto; text-align: right; }}
 .bp-book-nav-direction {{
-  font-family: {mono};
   font-size: 0.72rem;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
   color: var(--bp-muted);
 }}
 .bp-book-nav-title {{ margin-top: 0.15rem; font-family: {serif}; font-size: 1rem; }}
@@ -3552,6 +4514,9 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   line-height: 150%;
   color: var(--bp-fg);
 }}
+/* The heading row is an h4, so search gives each card a record of its own;
+   it keeps the look of the div it was, under Material's and the site's h4 rules. */
+.bp-thmwrapper > .bp-thmheading {{ margin: 0; font-size: inherit; letter-spacing: inherit; }}
 .bp-thmlabel {{ margin-left: 0.4rem; margin-right: 0.5rem; }}
 .bp-thmtitle::before {{ content: "("; }}
 .bp-thmtitle::after {{ content: ")"; }}
@@ -3579,9 +4544,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-next-kicker {{
   font-family: {sans};
   font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-weight: 600;
   color: var(--bp-muted);
 }}
 .bp-next-title {{ font-family: {serif}; font-size: 1.15rem; margin-top: 0.15rem; }}
@@ -3691,24 +4654,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   stroke-linecap: round;
   stroke-linejoin: round;
 }}
-.bp-context-link {{
-  display: inline-flex;
-  align-items: center;
-  margin-left: 0.3rem;
-  color: var(--bp-muted);
-  text-decoration: none;
-}}
-.bp-context-link:visited {{ color: var(--bp-muted); }}
-.bp-context-link:hover, .bp-context-link:visited:hover {{ color: var(--bp-link-hover); text-decoration: none; }}
-.bp-context-icon {{
-  width: 1rem;
-  height: 1rem;
-  fill: var(--bp-surface);
-  stroke: currentColor;
-  stroke-width: 1.7;
-  stroke-linecap: round;
-}}
-
 .bp-permalink {{
   margin-left: 0.5rem;
   font-family: {mono};
@@ -3718,16 +4663,29 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   opacity: 0;
   transition: opacity 0.1s ease;
 }}
-.bp-thmwrapper:hover .bp-permalink {{ opacity: 1; }}
+/* A keyboard reaches the permalink too, so focus shows it as hover does. */
+.bp-thmwrapper:hover .bp-permalink, .bp-permalink:focus-visible {{ opacity: 1; }}
 
-.bp-mark {{ margin-left: auto; font-weight: 400; padding-left: 1rem; }}
-.bp-mark-label {{
-  margin-left: 0.3rem;
-  font-family: {mono};
-  font-size: 0.78rem;
-  letter-spacing: 0.02em;
-  color: var(--bp-muted);
+/* The status is a pill on its own line under the title, a dot and a word
+   tinted with the status colour, as in the explorer's drawer. An empty item
+   the full width of the heading breaks the line before it, so the pill sits
+   at the left however long the title runs. */
+.bp-thmheading::after {{ content: ""; order: 1; flex-basis: 100%; }}
+.bp-mark {{
+  order: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  margin-top: 0.3rem;
+  padding: 0.1em 0.6em;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-family: {sans};
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.5;
 }}
+.bp-mark-label {{ color: var(--bp-fg); }}
 
 .bp-thmcontent {{
   font-family: {serif};
@@ -3752,9 +4710,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-thmnotes h6 {{
   font-family: {sans};
   font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  letter-spacing: normal;
   color: var(--bp-muted);
   margin: 0.5rem 0 0.15rem;
 }}
@@ -3766,27 +4723,108 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   line-height: 1.8;
   margin: 0.6rem 0 0 2rem;
 }}
-.bp-dependencies {{
+/* Material styles every details element as a collapsible admonition: a
+   bordered box, a tinted summary and a pencil icon. This one is a quiet line
+   under each statement, so the selectors outrank Material's and take that
+   chrome off, keeping only its chevron, which turns when the line opens. */
+.md-typeset details.bp-dependencies {{
+  margin: 0.65rem 0 0 2rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: none;
+  font-family: {sans};
+  font-size: 0.72rem;
+  color: var(--bp-muted);
+}}
+.md-typeset details.bp-dependencies > summary {{
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  margin: 0;
+  padding: 0.2rem 0;
+  border: 0;
+  background: none;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}}
+.md-typeset details.bp-dependencies > summary::before {{ display: none; }}
+.md-typeset details.bp-dependencies > summary::after {{
+  position: static;
+  flex: none;
+  width: 1em;
+  height: 1em;
+  margin-left: 0.25em;
+}}
+.md-typeset details.bp-dependencies > summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+@media (pointer: coarse) {{
+  .md-typeset details.bp-dependencies > summary {{ min-height: 44px; }}
+}}
+.bp-dependency-body {{ margin-top: 0.35rem; color: var(--bp-fg); }}
+.bp-review {{
   margin: 0.65rem 0 0 2rem;
   font-family: {sans};
   font-size: 0.82rem;
   color: var(--bp-muted);
 }}
-.bp-dependencies summary {{
+.bp-review summary {{
   width: fit-content;
+  overflow-wrap: anywhere;
   cursor: pointer;
   color: var(--bp-link);
   user-select: none;
 }}
-.bp-dependencies summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
-.bp-dependency-body {{ margin-top: 0.35rem; color: var(--bp-fg); }}
+.bp-review summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+.bp-review-self-approved {{ color: var(--bp-muted); font-style: italic; }}
+.bp-review-open {{ color: var(--bp-muted); }}
+/* Each text color reads at 4.5:1 or more on its scheme's background. */
+.bp-review-drift {{ color: #946200; font-weight: 600; }}
+[data-md-color-scheme=slate] .bp-review-drift {{ color: #F0B429; }}
+.bp-skeleton {{ margin-top: 0.6rem; color: var(--bp-fg); }}
+.bp-skeleton-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
+.bp-lean {{
+  margin: 0 0 0.4rem;
+  padding: 0.6rem 0.8rem;
+  font-family: {mono};
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  border-left: 3px solid var(--bp-rule);
+}}
+.bp-skeleton-meta {{ margin-bottom: 0.5rem; }}
+/* A card too wide for the page scrolls, with a shade at each edge it can
+   scroll toward: covers in the review panel's color scroll with the content
+   and hide the shade at the end it has reached. */
+.bp-readback {{
+  margin: 0.4rem 0 1rem;
+  padding: 0.6rem 0.8rem;
+  color: var(--bp-fg);
+  border-left: 3px solid var(--bp-blue);
+  overflow-x: auto;
+  background:
+    linear-gradient(to right, var(--md-admonition-bg-color, var(--bp-page)) 40%, transparent) left / 1.5rem 100% no-repeat local,
+    linear-gradient(to left, var(--md-admonition-bg-color, var(--bp-page)) 40%, transparent) right / 1.5rem 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, var(--bp-scroll-shade), transparent) left / 0.6rem 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--bp-scroll-shade), transparent) right / 0.6rem 100% no-repeat scroll;
+  background-color: var(--md-admonition-bg-color, var(--bp-page));
+}}
+.bp-readback-title {{ font-weight: 600; margin-bottom: 0.3rem; }}
+.bp-readback-body {{ white-space: pre-wrap; }}
+.bp-readback-status {{ font-weight: 400; color: var(--bp-muted); }}
+.bp-readback-invalid {{ border-left-color: #B42318; }}
+[data-md-color-scheme=slate] .bp-readback-invalid {{ border-left-color: #F97066; }}
+.bp-readback-missing {{ border-left-color: var(--bp-rule); font-style: italic; }}
 /* A formula paints only within its own band, its box plus the slack its
    glyphs need, which a negative margin gives back. Across, it paints as TeX
    sets it, laps included, but only inside the block that holds it, and a
    display scrolls in its own; so no article formula can cover a card, a mark,
    a label, another line, or the side columns, whatever the renderer or theme.
-   Inline formulas become inline blocks to have a box to clip, and the display
-   selector outranks MathJax's own sheets, which are added after this one. */
+   A card scrolls instead, so nothing in it is cut. Inline formulas become
+   inline blocks to have a box to clip, and the display selector outranks
+   MathJax's own sheets, which are added after this one. */
 mjx-container {{
   overflow-x: visible !important;
   overflow-y: clip !important;
@@ -3805,7 +4843,7 @@ div.arithmatex {{ overflow-x: auto; }}
 /* Material caps every svg at its container's width, which would shrink a wide
    SVG formula until it cannot be read; it keeps the size TeX set instead. */
 mjx-container > svg {{ max-width: none !important; }}
-:is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container) {{
+:is(p, h1, h2, h3, h4, h5, h6, ul, ol, td, th):has(mjx-container):not(.bp-readback *) {{
   overflow-x: clip;
 }}
 /* A page or statement published as typed: its text wraps, and nothing in it
@@ -3815,13 +4853,15 @@ mjx-container > svg {{ max-width: none !important; }}
 .bp-row {{ display: flex; gap: 0.75rem; }}
 .bp-key {{
   flex: 0 0 7.5rem;
-  font-family: {mono};
   font-size: 0.78rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-weight: 600;
   color: var(--bp-muted);
 }}
 .bp-value {{ flex: 1; }}
+/* A reference breaks between entries, never inside one; a long one wraps in its own box. Each starts with its status dot, so
+   the list drops the separators, which ended every wrapped line and could take a line of their own. */
+.bp-dependency-body .bp-ref {{ display: inline-block; max-width: 100%; margin-right: 0.5rem; }}
+.bp-dependency-body .bp-ref-sep {{ display: none; }}
 .bp-lean {{ font-family: {mono}; }}
 .bp-where {{ color: var(--bp-muted); }}
 .bp-missing {{ color: #b91c1c; }}
@@ -3833,14 +4873,14 @@ mjx-container > svg {{ max-width: none !important; }}
   height: 0.6rem;
   margin-right: 0.35rem;
   border: 1px solid var(--bp-rule);
-  border-radius: 2px;
+  border-radius: 50%;
 }}
 .bp-swatch {{
   display: inline-block;
-  width: 0.9rem;
-  height: 0.9rem;
-  border: 1px solid var(--bp-rule);
-  border-radius: 3px;
+  width: 0.6rem;
+  height: 0.6rem;
+  border: 2px solid var(--bp-rule);
+  border-radius: 50%;
   vertical-align: middle;
 }}
 
@@ -3858,7 +4898,6 @@ __all__ = [
     "LOGO",
     "MERMAID_SCRIPT",
     "PUBLICATION_MANIFEST",
-    "PUBLICATION_MANIFEST_MAX_BYTES",
     "PUBLICATION_SCHEMA",
     "PublicationError",
     "STYLESHEET",

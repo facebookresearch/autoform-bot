@@ -1,4 +1,4 @@
-"""Presentation roles must reveal mathematics without rewriting its evidence."""
+"""Presentation roles and scope projections must reveal mathematics without rewriting its evidence."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 from autoform_cli import dag_viewer
 from autoform_cli.graph import Graph, GraphValidationError, Node, load_graph
 from autoform_cli.graph_pages import _dependency_heading, write_graph_pages
-from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode, scope_view, scope_views
+from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode, full_view, project_view, scope_view, scope_views
 from autoform_cli.status import derive
 
 
@@ -212,3 +212,139 @@ def test_an_overview_whose_only_child_is_a_source_book_maps_the_book(tmp_path: P
 
     assert [node["id"] for node in payload["nodes"] if node["map"]] == ["scope:roadmap/chapter/book"]
 
+
+@pytest.mark.parametrize("role", ("collection", "transparent"))
+def test_deep_role_flattening_preserves_topic_boundaries_source_order_and_edges(
+    tmp_path: Path, role: str
+) -> None:
+    nodes: dict[str, Node] = {}
+
+    def add(node_id: str, parent: str | None, **facts: object) -> None:
+        dependencies = facts.pop("statement_dependencies", ())
+        nodes[node_id] = Node(
+            node_id, node_id, tmp_path / f"{node_id}.md", dependencies,
+            parent=parent, statement_dependencies=dependencies, **facts,
+        )
+
+    add("Math", None)
+    add("before", "Math", declaration="def")
+    parent = "Math"
+    for index in range(1_200):
+        node_id = f"wrapper{index:04d}"
+        add(node_id, parent, navigation=role)
+        parent = node_id
+    deepest_wrapper = parent
+    for index in range(1_200):
+        node_id = f"topic{index:04d}"
+        add(node_id, parent)
+        parent = node_id
+    add("result", parent, declaration="theorem")
+    add("source", deepest_wrapper, navigation="source")
+    add("source-result", "source", declaration="theorem")
+    add("direct-result", deepest_wrapper, declaration="lemma")
+    add("after", "Math", declaration="theorem", statement_dependencies=("result", "wrapper0000"))
+    graph = Graph(tmp_path, nodes)
+    original = nodes.copy()
+
+    view = scope_view(graph, derive(graph), "Math", include_external=False)
+
+    assert [node.id for node in view.nodes] == [
+        "before", "scope:topic0000", "scope:source", "direct-result", "after", "scope:wrapper0000",
+    ]
+    assert view.overview
+    assert next(node for node in view.nodes if node.id == "scope:topic0000").members == ("result",)
+    assert next(node for node in view.nodes if node.id == "scope:source").navigation == "source"
+    assert {(edge.source, edge.target, edge.statement_count, edge.proof_count) for edge in view.edges} == {
+        ("scope:topic0000", "after", 1, 0),
+        ("scope:wrapper0000", "after", 1, 0),
+    }
+    assert graph.nodes == original
+
+
+def _graph(tmp_path: Path) -> Graph:
+    blueprint = tmp_path / "blueprint"
+    roadmap = blueprint / "roadmap"
+
+    def node(node_id: str, title: str, parent: str | None, **kwargs) -> Node:
+        return Node(id=node_id, title=title, path=roadmap / f"{node_id}.md", dependencies=(), parent=parent, **kwargs)
+
+    proved = {"declaration": "theorem", "statement_formalized": True, "proof_formalized": True}
+    nodes = {
+        "roadmap": node("roadmap", "Roadmap", None),
+        "done": node("done", "Finished chapter", "roadmap"),
+        "done/sec": node("done/sec", "Finished section", "done"),
+        "done/sec/a": node("done/sec/a", "Proved result", "done/sec", **proved),
+        # A note declares nothing and is not marked not ready, so it is not a target.
+        "done/note": node("done/note", "Note", "done"),
+        "open": node("open", "Open chapter", "roadmap"),
+        "open/b": node("open/b", "Proved result", "open", **proved),
+        "open/c": node("open/c", "Stated result", "open", declaration="theorem", statement_formalized=True),
+    }
+    return Graph(blueprint_dir=blueprint, nodes=nodes)
+
+
+def test_scope_is_complete_only_when_every_target_beneath_it_is_fully_proved(tmp_path: Path) -> None:
+    graph = _graph(tmp_path)
+    statuses = derive(graph)
+
+    project = {node.id: node for node in project_view(graph, statuses).nodes}
+    assert project["scope:done"].complete
+    assert project["scope:done"].item_count == 1
+    assert project["scope:done"].members == ("done/sec/a",)
+    assert not project["scope:open"].complete
+    assert project["scope:open"].item_count == 2
+
+    nested = {node.id: node for node in scope_view(graph, statuses, "done").nodes}
+    assert nested["scope:done/sec"].complete
+
+
+def test_node_level_views_draw_containers_as_scopes(tmp_path: Path) -> None:
+    graph = _graph(tmp_path)
+    statuses = derive(graph)
+
+    nodes = {node.id: node for node in full_view(graph, statuses).nodes}
+    assert nodes["done"].kind == "scope"
+    assert nodes["done"].complete
+    assert nodes["done"].members == ("done",)
+    assert nodes["done"].status_counts == (("fully_proved", 1),)
+    assert nodes["open"].kind == "scope" and not nodes["open"].complete
+    assert nodes["done/sec/a"].kind == "node"
+    assert nodes["done/note"].kind == "node"
+
+
+def test_open_work_holds_a_scope_open(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+
+    def node(node_id: str, parent: str | None, *dependencies: str, **kwargs) -> Node:
+        path = blueprint / "roadmap" / f"{node_id}.md"
+        return Node(
+            id=node_id,
+            title=node_id,
+            path=path,
+            dependencies=dependencies,
+            statement_dependencies=dependencies,
+            parent=parent,
+            **kwargs,
+        )
+
+    proved = {"declaration": "theorem", "statement_formalized": True, "proof_formalized": True}
+    nodes = {
+        "roadmap": node("roadmap", None),
+        "partial": node("partial", "roadmap"),
+        "partial/a": node("partial/a", "partial", **proved),
+        "partial/later": node("partial/later", "partial", not_ready=True),
+        "notes": node("notes", "roadmap"),
+        "notes/n": node("notes/n", "notes"),
+        "base": node("base", "roadmap"),
+        "base/d": node("base/d", "base", declaration="def"),
+        "lib": node("lib", "roadmap"),
+        "lib/m": node("lib/m", "lib", "base/d", declaration="theorem", mathlib=True),
+    }
+    graph = Graph(blueprint_dir=blueprint, nodes=nodes)
+    project = {node.id: node for node in project_view(graph, derive(graph)).nodes}
+    # A section still marked not ready, a chapter of notes, and a Mathlib
+    # result whose prerequisite is open each leave their scope unfinished.
+    assert not project["scope:partial"].complete
+    assert project["scope:partial"].status_counts == (("fully_proved", 1), ("not_ready", 1))
+    assert not project["scope:notes"].complete
+    assert not project["scope:lib"].complete

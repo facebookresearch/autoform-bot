@@ -634,6 +634,18 @@ def test_a_fence_that_never_closes_hides_no_heading() -> None:
     assert parts.sections == (ArticleSection("Depends on", "## Depends on", "- [Base](base.md)"),)
 
 
+def test_coverage_and_link_checks_read_a_fence_that_never_closes_to_the_end() -> None:
+    # Headings and dependencies read it as text, so an article keeps its
+    # sections and edges. Coverage files and the link checks keep it open, so
+    # nothing after it counts: the site shows a page whose fence is left open
+    # at the margin as typed (#201).
+    text = "```lean\nexample\n\n[Base](base.md)\n\n| Area | Coverage | Evidence |\n"
+
+    assert mask_fences_and_comments(text.splitlines()) == text.splitlines()
+    assert markdown_links(text) == []
+    assert not any(line.strip() for line in content(text).lines)
+
+
 def test_inline_code_starting_with_three_backticks_is_not_a_fence() -> None:
     # Read as an opener, the first line would pair with the later fence and hide the heading.
     lines = ["```x``` is inline code here.", "## Shown", "```", "hidden", "```"]

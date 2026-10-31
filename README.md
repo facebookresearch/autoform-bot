@@ -1,8 +1,8 @@
 # AutoformBot
 
-A plugin for Claude Code and Codex that helps turn mathematical papers and
-notes into Lean 4 formalizations: plan the work, write proofs, and review
-progress from your coding assistant.
+A plugin for Claude Code, Codex, and Muse Code that helps turn mathematical
+papers and notes into Lean 4 formalizations: plan the work, write proofs, and
+review progress from your coding assistant.
 
 ## Installation
 
@@ -30,22 +30,23 @@ muse plugins marketplace add autoform 'https://github.com/facebookresearch/autof
 muse plugins install autoform@autoform
 ```
 
-These commands install release 0.6.0. Claude Code reads the `@v0.6.0` form from
-version 2.1.71; older versions take `'facebookresearch/autoform-bot#v0.6.0'`,
-quoted for shells that read `#`. To move an install that follows `main` onto the
-release, remove the `autoform` marketplace first, with `claude plugin
-marketplace remove autoform`, `codex plugin marketplace remove autoform`, or
-`muse plugins remove autoform` and then `muse plugins marketplace remove
-autoform`, and run the commands again. To follow `main` instead, drop the
-`@v0.6.0` or `#v0.6.0` suffix, and give Codex `--ref main`.
+These commands install release 0.6.0 ([changelog](CHANGELOG.md)).
 
-After installing, start a new session in the repository you want to inspect or
-set up.
+- Claude Code before 2.1.71 takes `'facebookresearch/autoform-bot#v0.6.0'`
+  instead of the `@v0.6.0` form, quoted for shells that read `#`.
+- To move an install that follows `main` onto the release, remove the `autoform`
+  marketplace first (`claude plugin marketplace remove autoform`, `codex plugin
+  marketplace remove autoform`, or `muse plugins remove autoform` and then
+  `muse plugins marketplace remove autoform`), then run the commands again.
+- To follow `main` instead, drop the `@v0.6.0` or `#v0.6.0` suffix, and give
+  Codex `--ref main`.
+
+After installing, start a new session in the repository to inspect or set up.
 
 ## Quick start
 
-Use these skills from your agent window; users do not need to learn or run its
-commands:
+Use these skills from your agent window (in Muse Code, as commands of the same
+names); you need not learn or run Autoform's CLI:
 
 | Task | Claude Code | Codex |
 | --- | --- | --- |
@@ -55,19 +56,19 @@ commands:
 | Review the roadmap and progress | `/autoform:human-review` | `$autoform:human-review` |
 | Request an independent AI review | `/autoform:agent-review` | `$autoform:agent-review` |
 
-Start with `setup`, then use `roadmap` to plan your formalization and
-`formalize` to work through it. Use either review command to inspect the plan
-or the resulting formalization.
+Start with `setup`, then `roadmap`, then `formalize`; either review skill
+inspects the plan or the formalization.
 
-For example, invoke `roadmap` and ask:
+For example, invoke `roadmap` and ask (keep the source in your project or give
+an accessible path):
 
 > Build a complete roadmap for Sections 2–4 of `paper.pdf`.
 
-Keep the source file in your project or provide an accessible path.
-
 Setup changes local files by default. Creating or pushing a remote repository,
 enabling GitHub Pages, and publishing blueprint content require an explicit
-request; content published through Pages is public.
+request; content published through Pages is public. Each Setup, Roadmap, and
+Formalize run includes a debrief, and a run that hit AutoformBot friction
+drafts an issue, usually in `.git/autoform/`; `AUTOFORM_DEBRIEF=0` turns it off.
 
 ## Run several sessions
 
@@ -97,15 +98,11 @@ describes.
 
 ## Blueprint model
 
-Autoform keeps the roadmap and dependency graph as Markdown under
-`blueprint/`; publication graphs and pages are derived. See the
-[blueprint format and CLI reference](autoform_cli/README.md) for the complete
-format and command contracts, or browse the
+Autoform keeps the roadmap and dependency graph as Markdown under `blueprint/`.
+Its publication is one full-page mathematical reader and dependency map with
+authored areas and global search; graphs and pages are derived. See the
+[blueprint format and CLI reference](autoform_cli/README.md), or browse the
 [Cabannes thesis example](skills/setup/assets/cabannes-thesis-project/README.md).
-
-The browser publication presents large roadmaps as a full-page mathematics
-atlas: authored areas and bounded hierarchy preserve readable context, while
-dependency edges remain distinct from containment and repository provenance.
 
 ## Search and reuse
 
@@ -123,18 +120,8 @@ index.
 
 ## Development
 
-```bash
-git clone https://github.com/facebookresearch/autoform-bot.git
-cd autoform-bot
-make setup
-make lint
-make test
-make check-example
-make test-browser  # the dependency explorer in WebKit
-```
-
-Lean server architecture and operations are documented in
-[`servers/README.md`](servers/README.md).
+Clone with `git clone https://github.com/facebookresearch/autoform-bot.git`, then
+follow [CONTRIBUTING.md](CONTRIBUTING.md); [`servers/README.md`](servers/README.md) covers Lean servers.
 
 ## License
 

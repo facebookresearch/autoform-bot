@@ -32,9 +32,9 @@ from .markdown import (
     mask_code_and_comments,
     resolved_path,
 )
+from .markdown import HEADING as _HEADING
 
 
-_HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
 #: An inline link or image; its label may hold bracket pairs, as the page reads it.
 _MARKDOWN_LINK_TEXT = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\([^)]*\)")
 #: A full, collapsed or shortcut reference link: ``[text][label]``, ``[label][]`` or ``[label]``.
@@ -61,6 +61,7 @@ _FRONTMATTER_KEYS = frozenset(
         "not_ready",
         "origin",
         "discussion",
+        "review_approved",
         "open_statements",
         "published",
     }
@@ -80,7 +81,6 @@ _STATEMENT_SECTION = "depends on"
 _PROOF_SECTION = "proof depends on"
 _SOURCES_SECTION = "sources"
 ATLAS_SCHEMA = "autoform-atlas/v1"
-_MAX_ATLAS_BYTES = 1_000_000
 IMPLEMENTATION_NOTES_DIR = ".implementation-notes"
 
 
@@ -134,6 +134,11 @@ class Node:
     #: Presentation only: a collection is transparent in a mathematical
     #: overview; a source is a book or other provenance, not a peer topic.
     navigation: str | None = None
+    #: Hash of the complete review surface a person approved. Unlike the
+    #: skeleton alone, this binds the article, source, and read-backs. Kept as
+    #: written: ``review check`` reports a value that is not the current hash,
+    #: malformed or not, so loading never refuses one.
+    review_approved: str | None = None
 
     @property
     def formalizable(self) -> bool:
@@ -311,6 +316,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             summary=parsed_node.summary,
             navigation=metadata.get("navigation"),
             area=metadata.get("area"),
+            review_approved=metadata.get("review_approved"),
         )
 
     for node_id, area in _atlas_assignments(blueprint, nodes)[0].items():
@@ -408,13 +414,11 @@ def _atlas_assignments(
         if not stat.S_ISREG(os.lstat(path).st_mode):
             return {}, ["ignored, since it is not a regular file inside the blueprint"]
         with path.open("rb") as handle:
-            raw = handle.read(_MAX_ATLAS_BYTES + 1)
+            raw = handle.read()
     except FileNotFoundError:
         return {}, []
     except OSError as error:
         return {}, [f"ignored, since it cannot be read: {error.strerror}"]
-    if len(raw) > _MAX_ATLAS_BYTES:
-        return {}, [f"ignored, since it exceeds {_MAX_ATLAS_BYTES} bytes"]
     try:
         payload = json.loads(raw)
     except (ValueError, RecursionError) as error:
