@@ -41,6 +41,13 @@ from autoform_cli.lean_probe import (
     _render_probe_helper,
     run_probe,
 )
+from autoform_cli._managed_output import (
+    _install_output,
+    _rename_no_replace,
+    remove_output,
+    replace_outputs,
+    stage_output,
+)
 from autoform_cli.skeleton import (
     DeclarationSkeleton,
     NodeSkeleton,
@@ -52,11 +59,6 @@ from autoform_cli.skeleton import (
     SkeletonError,
     UnresolvedTarget,
     _declaration,
-    _install_output,
-    _remove_output,
-    _rename_no_replace,
-    _replace_outputs,
-    _stage_output,
     _hash_module_files,
     _local_safety_issue,
     _without_comments,
@@ -2190,7 +2192,7 @@ def test_cli_rolls_back_packet_trees_when_report_commit_fails(
             raise OSError("simulated report commit failure")
         _install_output(source_path, Path(destination))
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_report_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_report_install)
 
     result = _cli(tmp_path, monkeypatch, "--packets", packets, "--passages", passages, "--output", output)
 
@@ -2227,7 +2229,7 @@ def test_cli_rolls_back_packet_trees_and_report_when_interrupted_after_report_in
             raise KeyboardInterrupt
 
     monkeypatch.setattr(
-        "autoform_cli.skeleton._install_output", interrupt_after_report_install
+        "autoform_cli._managed_output._install_output", interrupt_after_report_install
     )
 
     with pytest.raises(KeyboardInterrupt):
@@ -2264,7 +2266,7 @@ def test_report_publication_preserves_a_concurrent_replacement_before_install(
             output.write_text("concurrent report\n", encoding="utf-8")
         _install_output(stage, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", replace_before_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", replace_before_install)
 
     with pytest.raises(SkeletonError, match="published output changed during rollback"):
         write_skeleton_report(report, output)
@@ -2288,7 +2290,7 @@ def test_report_publication_rolls_back_when_interrupted_after_exclusive_link(
         if "autoform-stage" in Path(source).name and Path(destination) == output:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.link", interrupt_after_link)
+    monkeypatch.setattr("autoform_cli._managed_output.os.link", interrupt_after_link)
 
     with pytest.raises(KeyboardInterrupt):
         write_skeleton_report(report, output)
@@ -3932,7 +3934,7 @@ def test_packet_publication_rolls_back_both_trees_on_commit_failure(
             raise OSError("simulated passage commit failure")
         _install_output(source_path, Path(destination))
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_passage_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_passage_install)
 
     with pytest.raises(SkeletonError, match="could not publish skeleton output"):
         write_packets(report, packets, passages=passages)
@@ -4047,7 +4049,7 @@ def test_removing_output_deletes_its_manifest_last(tmp_path: Path, monkeypatch) 
     scandir = os.scandir
     monkeypatch.setattr(os, "scandir", lambda *args, **kwargs: _ManifestFirstListing(scandir(*args, **kwargs)))
 
-    _remove_output(output)
+    remove_output(output)
 
     assert not output.exists()
     assert sorted(removed) == ["Manifest.json", "article.lean", "packet.lean"]
@@ -4065,7 +4067,7 @@ def test_packet_publication_rolls_back_both_trees_when_interrupted(
         if "autoform-stage" in source_path.name and Path(destination) == passages:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", interrupt_passage_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", interrupt_passage_install)
 
     with pytest.raises(KeyboardInterrupt):
         write_packets(report, packets, passages=passages)
@@ -4086,7 +4088,7 @@ def test_packet_publication_rolls_back_when_interrupted_after_backup_rename(
         if Path(source) == packets and "autoform-backup" in Path(destination).name:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.replace", interrupt_after_backup)
+    monkeypatch.setattr("autoform_cli._managed_output.os.replace", interrupt_after_backup)
 
     with pytest.raises(KeyboardInterrupt):
         write_packets(report, packets)
@@ -4108,7 +4110,7 @@ def test_packet_publication_preserves_a_changed_backup_during_cleanup(
             (changed_backup,) = tmp_path.glob(".packets.autoform-backup-*")
             (changed_backup / "concurrent-marker").write_text("keep me\n", encoding="utf-8")
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", change_backup_after_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", change_backup_after_install)
 
     with pytest.warns(RuntimeWarning, match="backup changed.*preserved"):
         write_packets(report, packets)
@@ -4135,7 +4137,7 @@ def test_packet_publication_does_not_delete_a_concurrent_replacement(
             raise OSError("simulated passage commit failure")
         _install_output(source_path, destination_path)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", replace_then_fail)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", replace_then_fail)
 
     with pytest.raises(SkeletonError, match="preserved"):
         write_packets(report, packets, passages=passages)
@@ -4159,7 +4161,7 @@ def test_packet_publication_does_not_replace_a_concurrent_empty_directory(
             concurrent_inode = destination.stat().st_ino
         _install_output(stage, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", create_before_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", create_before_install)
 
     with pytest.raises(SkeletonError, match="published output changed during rollback"):
         write_packets(report, packets)
@@ -4181,7 +4183,7 @@ def test_packet_publication_preflights_no_replace_before_moving_old_tree(
     def unavailable(source: Path, destination: Path) -> None:
         raise SkeletonError(["atomic no-replace rename is unavailable"])
 
-    monkeypatch.setattr("autoform_cli.skeleton._rename_no_replace", unavailable)
+    monkeypatch.setattr("autoform_cli._managed_output._rename_no_replace", unavailable)
 
     with pytest.raises(SkeletonError, match="no-replace rename is unavailable"):
         write_packets(report, packets)
@@ -4203,7 +4205,7 @@ def test_packet_publication_cleans_up_an_interrupted_preflight(
             raise KeyboardInterrupt
 
     monkeypatch.setattr(
-        "autoform_cli.skeleton._install_output", interrupt_after_preflight_install
+        "autoform_cli._managed_output._install_output", interrupt_after_preflight_install
     )
 
     with pytest.raises(KeyboardInterrupt):
@@ -4218,7 +4220,6 @@ def test_packet_publication_restores_old_trees_when_quarantine_cleanup_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
     report, packets, passages = _published(tmp_path)
-    remove_output = _remove_output
 
     def fail_passage_install(stage: Path, destination: Path) -> None:
         if "autoform-stage" in stage.name and destination == passages:
@@ -4230,8 +4231,8 @@ def test_packet_publication_restores_old_trees_when_quarantine_cleanup_fails(
             raise OSError("simulated quarantine cleanup failure")
         remove_output(path)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_passage_install)
-    monkeypatch.setattr("autoform_cli.skeleton._remove_output", fail_quarantine_cleanup)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_passage_install)
+    monkeypatch.setattr("autoform_cli._managed_output.remove_output", fail_quarantine_cleanup)
 
     with pytest.raises(SkeletonError, match="preserved for recovery"):
         write_packets(report, packets, passages=passages)
@@ -4262,8 +4263,8 @@ def test_packet_publication_does_not_overwrite_during_backup_restore(
             concurrent_inode = destination.stat().st_ino
         rename_no_replace(source, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_passage_install)
-    monkeypatch.setattr("autoform_cli.skeleton._rename_no_replace", create_before_restore)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_passage_install)
+    monkeypatch.setattr("autoform_cli._managed_output._rename_no_replace", create_before_restore)
 
     with pytest.raises(SkeletonError, match="could not restore skeleton output"):
         write_packets(report, packets, passages=passages)
@@ -4289,7 +4290,7 @@ def test_packet_rollback_restores_backups_when_a_destination_becomes_a_symlink(
             raise OSError("simulated passage install failure")
         _install_output(stage, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", swap_then_fail)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", swap_then_fail)
 
     with pytest.raises(SkeletonError, match="simulated passage install failure") as info:
         write_packets(report, packets, passages=passages)
@@ -4321,7 +4322,6 @@ def test_packet_publication_cleans_up_when_second_stage_fails(
     report = _fake_report(tmp_path)
     packets = tmp_path / "packets"
     passages = tmp_path / "passages"
-    stage_output = _stage_output
     calls = 0
 
     def fail_second_stage(destination: Path) -> Path:
@@ -4331,7 +4331,7 @@ def test_packet_publication_cleans_up_when_second_stage_fails(
             raise OSError("simulated passage staging failure")
         return stage_output(destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._stage_output", fail_second_stage)
+    monkeypatch.setattr("autoform_cli.skeleton.stage_output", fail_second_stage)
 
     with pytest.raises(SkeletonError, match="could not prepare skeleton output"):
         write_packets(report, packets, passages=passages)
@@ -4349,9 +4349,9 @@ def test_packet_publication_detects_a_concurrent_file_edit(tmp_path: Path, monke
 
     def edit_then_replace(outputs) -> None:
         marker.write_text("concurrent edit\n", encoding="utf-8")
-        _replace_outputs(outputs)
+        replace_outputs(outputs)
 
-    monkeypatch.setattr("autoform_cli.skeleton._replace_outputs", edit_then_replace)
+    monkeypatch.setattr("autoform_cli.skeleton.replace_outputs", edit_then_replace)
 
     with pytest.raises(SkeletonError, match="changed during publication"):
         write_packets(report, packets)
@@ -4373,7 +4373,7 @@ def test_packet_publication_checks_the_isolated_old_tree_before_install(
             marker.write_text("concurrent edit\n", encoding="utf-8")
         replace(source, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.replace", edit_before_backup)
+    monkeypatch.setattr("autoform_cli._managed_output.os.replace", edit_before_backup)
 
     with pytest.raises(SkeletonError, match="changed during publication"):
         write_packets(report, packets)

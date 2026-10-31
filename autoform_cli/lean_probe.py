@@ -107,9 +107,9 @@ class SkeletonError(RuntimeError):
 
     This module raises it for Lake configuration, command, probe-run and
     snapshot failures; ``skeleton`` for malformed skeleton-probe records,
-    blueprints, article selections, inputs that change mid-run and managed
-    output; ``impact`` for malformed impact-probe records and its project
-    inventory.
+    blueprints, article selections, inputs that change mid-run and the
+    output it prepares; ``_managed_output`` for output publication;
+    ``impact`` for malformed impact-probe records and its project inventory.
     """
 
     def __init__(self, issues: list[str] | tuple[str, ...]) -> None:
