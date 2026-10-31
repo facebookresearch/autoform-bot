@@ -135,6 +135,9 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Output checks.** `skeleton`, `review prepare` and `library index` refuse
+  to replace an output folder that holds a subfolder they cannot list, where
+  they skipped it, so an edit inside it could be published over (#521).
 - **No size caps on published data.** The explorer loads its own site's
   search index, map data, pages and concept links whatever their size, and
   its timeout now measures a stalled transfer rather than a long one. Render
