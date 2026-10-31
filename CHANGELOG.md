@@ -25,6 +25,11 @@ date when the release is tagged.
   shrinking their labels. Dense unselected maps show an explicitly counted
   connection backbone; all typed dependencies remain in article lists, and
   selected results restore full routes in their bounded neighborhoods (#442).
+- **Book order.** Previous/Next, the site nav, statement numbers, Next up and
+  the explorer's outline and search follow one reading order, down the
+  containment tree, so a landing-page shortcut no longer reorders the book and
+  sites get new statement numbers. Pages their parent does not link now join
+  the site nav and Previous/Next, after the pages it links (#495).
 - **Wiki map.** Authored concept links cluster intact formal developments,
   with distinct dotted associations and bounded local corridors. Proof edges,
   ranks, status and full reading pages remain unchanged (#442).
@@ -76,6 +81,14 @@ date when the release is tagged.
 - **Check and render.** One reused converter reads every page, and each linked
   path is resolved once per run, so `check` uses about a fifth less CPU on an
   1,806-article vault; neither command's output changes (#415).
+- **Large skeletons.** Packets, the report, and the check that guards their
+  publication are hashed and written in pieces, so writing a large report no
+  longer holds every packet in memory, and shared closure material is no longer
+  parsed and escaped again for every root; output bytes and hashes are unchanged.
+  `skeleton` names each phase on stderr as it starts (`skeleton: probing <n>
+  modules...`, then `assembling` once no probe runs, then `writing`). Agent
+  Review and Formalize say what a user's pause of skeleton evidence during proof
+  development still requires (#497).
 - **Builds.** `project new` turns on Lake's artifact cache with
   `enableArtifactCache` and `restoreAllArtifacts`, so checkouts and worktrees
   on one toolchain reuse each other's builds; Setup offers the same two lines
@@ -132,6 +145,9 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Output checks.** `skeleton`, `review prepare` and `library index` refuse
+  to replace an output folder that holds a subfolder they cannot list, where
+  they skipped it, so an edit inside it could be published over (#521).
 - **No size caps on published data.** The explorer loads its own site's
   search index, map data, pages and concept links whatever their size, and
   its timeout now measures a stalled transfer rather than a long one. Render
@@ -151,6 +167,13 @@ date when the release is tagged.
   Deferred list math cancels with its view and falls back to visible text on
   unavailable typesetting. Preview formatting keeps currency and code literal;
   formal dependency links use converter-validated code and formula labels (#444).
+- **Structure fields.** The Lean source index records the fields a
+  `structure` or `class` declares and the parents it names, as
+  `Structure.field`, so `check`, `render`, `audit` and `skeleton` resolve a
+  `lean:` name for one; `audit` takes it as a `def` or theorem under its
+  structure's limits. For a constructor or other name the index does not read
+  directly under a project type, `check` names the type's `path:line` in a
+  declaration article instead of pointing to `.lake` (#509).
 - **Explorer controls.** Closing full phone reading brings a cropped selected
   card back into the map without overriding restored cameras. Isolate/status
   filters use the same eligible original members in maps and native shelves,
@@ -187,8 +210,8 @@ date when the release is tagged.
   the client restores their exact IDs before publication. No content is dropped (#442).
 - **Lake configuration.** A `lakefile.toml` whose `lean_lib` is not an array
   of named tables, such as `[lean_lib]` written for `[[lean_lib]]`, is
-  refused as Lake refuses it, instead of crashing or silently reading the
-  package's default library (#505).
+  refused as Lake refuses it, instead of crashing, reading the package's
+  default library, or skipping the entries that are not named tables (#505).
 - **Wiki reading links.** The integrated explorer retains #455's title math
   in its outline, breadcrumbs, paged inventory and related-reading controls, using safe MathJax
   service and project macros. Code stays literal, canonical links keep focus
@@ -201,6 +224,11 @@ date when the release is tagged.
   builds is now refused with exit 2, and under
   `--module-scope import-closure` an article naming a declaration in such a
   file is listed in `unresolved_articles` (#500).
+- **Empty `globs`.** A `lean_lib` with `globs = []` builds no module, as in
+  Lake, where commands that read the library targets took it to build every
+  module under its roots. When `work import-impact` refuses a loaded module
+  that no library builds, it names the module's source file instead of
+  saying the module has none (#519).
 - **Book navigation.** The generated `SUMMARY.md` nests each book page under
   its chapter's README, written in book order. A landing page that linked a
   deep page before its chapters, or a folder with no README in the book, put a

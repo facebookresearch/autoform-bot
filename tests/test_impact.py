@@ -1350,7 +1350,7 @@ def _sources(root: Path, *modules: str) -> Path:
 
 
 def _library(src: Path, *globs: str, roots: tuple[str, ...] = ("Demo",)) -> LeanLibrary:
-    return LeanLibrary(name="Demo", src_dir=src, roots=roots, globs=globs)
+    return LeanLibrary(name="Demo", src_dir=src, roots=roots, globs=globs or None)
 
 
 def test_project_modules_accept_more_than_ten_thousand_source_files(tmp_path: Path) -> None:
@@ -1464,6 +1464,27 @@ def test_project_modules_accept_a_library_nested_in_another_srcdir(tmp_path: Pat
         ("Demo", "Extra"),
         ("Demo", "Extra", "extra.Demo", "extra.Extra"),
     )
+    assert _module_source_paths(configured, snapshot, strict=True) == {
+        "Demo": "Demo.lean",
+        "Extra": "extra/Extra.lean",
+    }
+
+
+def test_project_modules_claim_nothing_for_an_empty_globs_array(tmp_path: Path) -> None:
+    # `globs = []` replaces Lake's default of one glob per root, so Lake
+    # builds no module of Empty, though its root has a source file.
+    root = _sources(tmp_path, "Demo", "Empty", "Empty.Sub")
+    configured = (
+        _library(root, roots=("Demo",)),
+        LeanLibrary(name="Empty", src_dir=root, roots=("Empty",), globs=()),
+    )
+
+    snapshot = snapshot_project_sources(tmp_path)
+    assert project_modules(configured, snapshot, strict_module_ownership=True) == (
+        ("Demo",),
+        ("Demo", "Empty", "Empty.Sub"),
+    )
+    assert _module_source_paths(configured, snapshot, strict=True) == {"Demo": "Demo.lean"}
 
 
 def test_project_modules_claim_only_modules_lake_can_build(tmp_path: Path) -> None:
@@ -1573,7 +1594,8 @@ def test_project_modules_read_a_dotted_file_stem_as_one_component(tmp_path: Path
         ("Demo.Empty.+", "the Lake configuration selects no modules"),
     ],
 )
-def test_project_modules_fail_closed(tmp_path: Path, glob: str, message: str) -> None:
+@pytest.mark.parametrize("strict", [False, True], ids=["inventory", "strict-ownership"])
+def test_project_modules_fail_closed(tmp_path: Path, glob: str, message: str, strict: bool) -> None:
     src = _sources(tmp_path, "Demo", "Demo.Odd.Fine")
     (tmp_path / "Demo" / "Odd" / "bad-name.lean").write_text("", encoding="utf-8")
     for name in ("Quoted/«Foo».lean", "Unquotable/x»y.lean"):
@@ -1583,7 +1605,7 @@ def test_project_modules_fail_closed(tmp_path: Path, glob: str, message: str) ->
     snapshot = snapshot_project_sources(tmp_path)
 
     with pytest.raises(SkeletonError, match=message):
-        project_modules([_library(src, glob)], snapshot)
+        project_modules([_library(src, glob)], snapshot, strict_module_ownership=strict)
 
 
 def test_import_closure_over_approximates_every_spelling_of_an_import() -> None:
@@ -1614,6 +1636,7 @@ def test_lean_libraries_read_one_glob_or_an_array(tmp_path: Path) -> None:
         '[[lean_lib]]\nname = "One"\nglobs = "One.+"\n\n'
         '[[lean_lib]]\nname = "Many"\nglobs = ["Many", "Many.Sub.*"]\n\n'
         '[[lean_lib]]\nname = "Plain"\n\n'
+        '[[lean_lib]]\nname = "Empty"\nglobs = []\n\n'
         '[[lean_lib]]\nname = "Odd"\nglobs = [1]\n',
         encoding="utf-8",
     )
@@ -1621,8 +1644,9 @@ def test_lean_libraries_read_one_glob_or_an_array(tmp_path: Path) -> None:
     assert {library.name: (library.roots, library.globs) for library in lean_libraries(tmp_path)} == {
         "One": (("One",), ("One.+",)),
         "Many": (("Many",), ("Many", "Many.Sub.*")),
-        "Plain": (("Plain",), ()),
-        "Odd": (("Odd",), ()),
+        "Plain": (("Plain",), None),
+        "Empty": (("Empty",), ()),
+        "Odd": (("Odd",), None),
     }
     assert {library.artifact_dir for library in lean_libraries(tmp_path)} == {
         (tmp_path / "output/compiled").resolve()
@@ -1927,6 +1951,35 @@ def test_import_closure_scope_leaves_out_unresolved_names_the_index_places_outsi
     # Demo.loose is in the unaffected Demo.Apart; Demo.uses and Demo.inlines are declared nowhere.
     assert [names for article in report.unresolved_articles for names in article.declarations] == [
         "Demo.inlines",
+        "Demo.uses",
+    ]
+
+
+def test_import_closure_scope_lists_an_unresolved_name_in_a_file_no_library_builds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "lakefile.toml").write_text(
+        'name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\nglobs = ["Demo.A", "Demo.B"]\n', encoding="utf-8"
+    )
+    (lean_root / "Demo" / "Apart.lean").write_text("theorem Demo.loose : True := trivial\n", encoding="utf-8")
+    _stub_probe(
+        monkeypatch,
+        records=[_payload("Demo.base", kind="def", module="Demo.A")],
+        modules=(
+            ModuleEvidence("Demo.A", str((lean_root / "Demo/A.lean").resolve())),
+            ModuleEvidence("Demo.B", str((lean_root / "Demo/B.lean").resolve()), ("Demo.A",)),
+        ),
+    )
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    # No glob builds Demo/Apart.lean, so it is in no module the scope can rule
+    # out, and Demo.loose is listed with the names declared nowhere.
+    assert [names for article in report.unresolved_articles for names in article.declarations] == [
+        "Demo.inlines",
+        "Demo.loose",
         "Demo.uses",
     ]
 
@@ -2342,7 +2395,7 @@ def test_cli_import_impact_refuses_a_loaded_module_no_library_builds(tmp_path: P
     output = capsys.readouterr()
     assert code == 2
     assert output.out == ""
-    assert "error: the impact probe loaded Foo without a captured root-project source" in output.err
+    assert "error: the impact probe loaded Foo from Foo.lean, which no lean_lib builds" in output.err
 
 
 def test_cli_import_impact_reports_an_empty_loaded_module_without_false_locality(

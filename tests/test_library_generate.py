@@ -216,6 +216,8 @@ def test_a_glob_selects_the_modules_lake_builds(tmp_path: Path, globs: list[str]
         # A glob matches whole name components: `Lib.A.*` is not `Lib.AB`.
         (["Lib", "Lib.A.*"], "Lib/AB.lean"),
         (["Lib", "Lib.A", "Lib.AB", "Lib.A.Inner"], "Lib/A/Inner/Leaf.lean"),
+        # No glob: Lake builds no module, where a missing key builds the root.
+        ([], "Lib.lean, Lib/A.lean, Lib/A/Inner.lean, Lib/A/Inner/Leaf.lean, Lib/AB.lean"),
     ],
 )
 def test_a_file_the_globs_leave_out_is_refused_by_name(tmp_path: Path, globs: list[str], unbuilt: str) -> None:

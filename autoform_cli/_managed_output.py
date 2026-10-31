@@ -27,6 +27,7 @@ import stat
 import sys
 import tempfile
 import warnings
+from collections.abc import Iterable
 from pathlib import Path
 
 from ._tree_snapshot import _normalized_name
@@ -39,10 +40,9 @@ PACKET_MANIFEST = "manifest.json"
 def output_identity(path: Path) -> tuple[int, int, str] | None:
     """``(st_dev, st_ino, digest)`` of a file or tree, or None when absent.
 
-    The digest covers the names and file bytes ``Path.rglob`` lists; it skips
-    the contents of a directory, ``path`` included, that the process cannot
-    list, without an error.
-    A symlink or special file it reaches is refused.
+    The digest covers every name in the tree and every file's bytes. A
+    directory the process cannot list, and a symlink or special file, is
+    refused.
     """
 
     try:
@@ -53,19 +53,38 @@ def output_identity(path: Path) -> tuple[int, int, str] | None:
         raise SkeletonError([f"cannot inspect skeleton output {path}: {exc}"]) from exc
     digest = hashlib.sha256()
     try:
-        for child in [path, *sorted(path.rglob("*"))] if stat.S_ISDIR(metadata.st_mode) else [path]:
+        for child in [path, *_tree(path)] if stat.S_ISDIR(metadata.st_mode) else [path]:
             if child.is_symlink():
                 raise SkeletonError([f"refusing symlink packet output: {child}"])
             digest.update(child.relative_to(path).as_posix().encode("utf-8") + b"\0")
             if child.is_dir():
                 digest.update(b"directory\0")
             elif child.is_file():
-                digest.update(b"file\0" + child.read_bytes() + b"\0")
+                # In blocks: one packet of a large closure can be gigabytes.
+                digest.update(b"file\0")
+                with child.open("rb") as stream:
+                    while block := stream.read(1 << 20):
+                        digest.update(block)
+                digest.update(b"\0")
             else:
                 raise SkeletonError([f"refusing special file in packet output: {child}"])
     except OSError as exc:
         raise SkeletonError([f"cannot inspect skeleton output {path}: {exc}"]) from exc
     return metadata.st_dev, metadata.st_ino, digest.hexdigest()
+
+
+def _tree(path: Path) -> list[Path]:
+    """Every path below a directory, sorted, as ``sorted(path.rglob("*"))`` would
+    list them, but raising the error ``rglob`` skips for a directory it cannot list.
+    """
+
+    def fail(error: OSError) -> None:
+        raise error
+
+    found: list[Path] = []
+    for directory, directories, files in os.walk(path, onerror=fail):
+        found.extend(Path(directory, name) for name in (*directories, *files))
+    return sorted(found)
 
 
 def validate_managed_output(path: Path, *, kind: str, schema: str | None = None) -> tuple[int, int, str] | None:
@@ -101,8 +120,12 @@ def validate_managed_output(path: Path, *, kind: str, schema: str | None = None)
     return identity
 
 
-def stage_output(destination: Path, content: str | None = None, *, stages: list[Path] | None = None) -> Path:
+def stage_output(
+    destination: Path, content: str | Iterable[str] | None = None, *, stages: list[Path] | None = None
+) -> Path:
     """Create a same-directory stage, a directory or a file of ``content``, with the old mode.
+
+    ``content`` may come in pieces, which are written as they come.
 
     With ``stages``, the stage is registered there before it is created, so
     whoever owns ``stages`` removes it however this call or a later step ends.
@@ -130,7 +153,7 @@ def stage_output(destination: Path, content: str | None = None, *, stages: list[
     try:
         if stream is not None:
             with stream:
-                stream.write(content)
+                stream.writelines((content,) if isinstance(content, str) else content)
                 stream.flush()
                 os.fsync(stream.fileno())
         if mode is not None:

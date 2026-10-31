@@ -36,7 +36,7 @@ from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS
 from autoform_cli.dashboard import publication_bound_live_state
-from autoform_cli.graph import GraphValidationError, atlas_omissions, load_graph
+from autoform_cli.graph import Graph, GraphValidationError, Node, atlas_omissions, load_graph
 from autoform_cli.lean import LeanSourceError
 from autoform_cli.markdown import site_converter
 from autoform_cli.render import (
@@ -44,6 +44,7 @@ from autoform_cli.render import (
     PublicationError,
     _COVERAGE_SUMMARY_ORDER,
     _completion_percentage,
+    _dependency_sorted,
     _display_title,
     _document_body,
     _first_h1,
@@ -1465,10 +1466,11 @@ def test_links_naming_a_node_file_follow_it_onto_the_chapter(tmp_path: Path) -> 
 
 
 def test_the_book_nav_nests_each_page_under_its_folder_whatever_the_book_order(tmp_path: Path) -> None:
-    """The book order follows links, so a landing page that links a deep page
-    first put it before its chapters; indented by folder depth alone, it then
-    skipped a level, and MkDocs refused the nav. Each page now nests under the
-    nearest chapter above it, a page beside a chapter's README under that one."""
+    """A landing page that links a deep page first, and a chapter that links
+    a sibling chapter first, move neither: the book walks the containment
+    tree, so each page comes after its chapter. Each page nests under the
+    nearest chapter above it, a page beside a chapter's README under that one,
+    and siblings keep the book order."""
     from mkdocs_literate_nav import parser
 
     project = _project(tmp_path)
@@ -1481,12 +1483,15 @@ def test_the_book_nav_nests_each_page_under_its_folder_whatever_the_book_order(t
     roadmap = blueprint / "roadmap"
     roadmap_readme = roadmap / "README.md"
     roadmap_readme.write_text(
-        roadmap_readme.read_text(encoding="utf-8") + "\n## Chapters\n\n- [Homology](homology/README.md)\n",
+        roadmap_readme.read_text(encoding="utf-8")
+        + "\n## Chapters\n\n- [Homology](homology/README.md)\n- [Cohomology](cohomology/README.md)\n",
         encoding="utf-8",
     )
     (roadmap / "homology").mkdir()
+    # Homology links Cohomology first, but Cohomology belongs to the roadmap, so it reads after Notes.
     (roadmap / "homology/README.md").write_text(
-        "---\n---\n\n# Homology\n\n- [Notes](notes.md)\n- [Local degree](computations/local-degree/README.md)\n",
+        "---\n---\n\n# Homology\n\n- [Cohomology](../cohomology/README.md)\n"
+        "- [Local degree](computations/local-degree/README.md)\n- [Notes](notes.md)\n",
         encoding="utf-8",
     )
     (roadmap / "homology/notes.md").write_text("---\n---\n\n# Notes\n\nA narrative page.\n", encoding="utf-8")
@@ -1494,16 +1499,19 @@ def test_the_book_nav_nests_each_page_under_its_folder_whatever_the_book_order(t
     (roadmap / "homology/computations/local-degree/README.md").write_text(
         "---\n---\n\n# Local degree\n", encoding="utf-8"
     )
+    (roadmap / "cohomology").mkdir()
+    (roadmap / "cohomology/README.md").write_text("---\n---\n\n# Cohomology\n", encoding="utf-8")
 
     render_site(blueprint, tmp_path / "out", lean_root=project)
 
     nav = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
     book = [line for line in nav.splitlines() if line.startswith("    ")]
-    assert book[:4] == [
+    assert book[:5] == [
         "    - [Roadmap](roadmap/README.md)",
         "        - [Homology](roadmap/homology/README.md)",
         "            - [Local degree](roadmap/homology/computations/local-degree/README.md)",
         "            - [Notes](roadmap/homology/notes.md)",
+        "        - [Cohomology](roadmap/cohomology/README.md)",
     ]
 
     class Globber:
@@ -3435,6 +3443,228 @@ def test_the_hierarchical_explorer_indexes_nodes_without_a_full_graph(tmp_path: 
     }
 
 
+def _book_order_project(tmp_path: Path) -> Path:
+    """A zeta(7)-shaped book: chapters zeta, alpha, then the irrationality
+    proof, which comes first by path but the roadmap lists last. Each chapter
+    lists its second result before its first."""
+    project = _project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text(
+        "---\n---\n\n# Roadmap\n\n## Chapters\n\n"
+        "- [Zeta](zeta/README.md)\n- [Alpha](alpha/README.md)\n- [Irrationality proof](irrationality-proof/README.md)\n",
+        encoding="utf-8",
+    )
+    for name in ("base.md", "top.md"):
+        (roadmap / name).unlink()
+    for chapter, title, depends in (
+        ("zeta", "Zeta", ""),
+        ("alpha", "Alpha", ""),
+        ("irrationality-proof", "Irrationality proof", "- [Zeta](../zeta/first.md)\n- [Alpha](../alpha/first.md)\n"),
+    ):
+        (roadmap / chapter).mkdir()
+        (roadmap / chapter / "README.md").write_text(
+            f"---\n---\n\n# {title}\n\n## Results\n\n- [Second](second.md)\n- [First](first.md)\n",
+            encoding="utf-8",
+        )
+        (roadmap / chapter / "first.md").write_text(
+            f"---\ndeclaration: theorem\n---\n\n# {title} first\n\nA result.\n\n## Depends on\n\n"
+            f"{depends or 'This node has no prerequisites.'}\n",
+            encoding="utf-8",
+        )
+        (roadmap / chapter / "second.md").write_text(
+            f"---\ndeclaration: theorem\n---\n\n# {title} second\n\nAnother result.\n", encoding="utf-8"
+        )
+    return project
+
+
+def test_the_search_index_follows_the_book_order(tmp_path: Path) -> None:
+    project = _book_order_project(tmp_path)
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    index = json.loads((out / "dependencies/index.json").read_text(encoding="utf-8"))
+    ids = [node["id"] for node in index["nodes"]]
+    scopes = list(dict.fromkeys(node["scope"] for node in index["nodes"] if node["scope"] != "roadmap"))
+    assert scopes == ["zeta", "alpha", "irrationality-proof"]
+    assert ids.index("zeta/second") < ids.index("zeta/first")
+    # Reordering the nodes keeps every relation on the same two articles.
+    graph = load_graph(project / "blueprint")
+    assert {tuple(row[:2]) for row in _decoded_relations(index)} == {
+        (source, node.id) for node in graph.nodes.values() for source in node.dependencies
+    }
+    summary = (out / "SUMMARY.md").read_text(encoding="utf-8")
+    chapters = re.findall(r"\(roadmap/([^)]+)/README\.md\)", summary)
+    assert chapters == [node_id for node_id in ids if node_id in chapters]
+    assert chapters[-1] == "irrationality-proof"
+
+
+def _summary_chapters(out: Path) -> list[str]:
+    return re.findall(r"\(roadmap/([^)]+)/README\.md\)", (out / "SUMMARY.md").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("contents", "section", "chapters"),
+    (
+        # The roadmap lists alpha's section but never alpha itself.
+        (
+            "- [Zeta](zeta/README.md)\n- [Beta](alpha/beta/README.md)\n"
+            "- [Irrationality proof](irrationality-proof/README.md)\n",
+            "alpha/beta",
+            ["zeta", "alpha", "alpha/beta", "irrationality-proof"],
+        ),
+        # The roadmap lists one of alpha's results but never alpha itself.
+        (
+            "- [Zeta](zeta/README.md)\n- [Alpha second](alpha/second.md)\n"
+            "- [Irrationality proof](irrationality-proof/README.md)\n",
+            "alpha/beta",
+            ["zeta", "alpha", "alpha/beta", "irrationality-proof"],
+        ),
+        # A shortcut into the proof comes first, but the chapter's own link decides.
+        (
+            "New: [beta](irrationality-proof/beta/README.md).\n\n- [Zeta](zeta/README.md)\n"
+            "- [Alpha](alpha/README.md)\n- [Irrationality proof](irrationality-proof/README.md)\n",
+            "irrationality-proof/beta",
+            ["zeta", "alpha", "irrationality-proof", "irrationality-proof/beta"],
+        ),
+    ),
+)
+def test_a_chapter_linked_only_through_its_sections_reads_at_that_link(
+    tmp_path: Path, contents: str, section: str, chapters: list[str]
+) -> None:
+    project = _book_order_project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text(f"---\n---\n\n# Roadmap\n\n{contents}", encoding="utf-8")
+    (roadmap / section).mkdir()
+    (roadmap / section / "README.md").write_text("---\n---\n\n# Beta\n\nA section.\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    assert _summary_chapters(out) == chapters
+
+
+@pytest.mark.parametrize(
+    ("alpha_depends", "chapters"),
+    (
+        # The proof rests on alpha and omega, so it reads after both.
+        ("", ["zeta", "alpha", "omega", "irrationality-proof"]),
+        # Alpha and the proof also rest on each other; omega is free, then the
+        # cycle is broken by id.
+        ("- [Proof](../irrationality-proof/second.md)\n", ["zeta", "omega", "alpha", "irrationality-proof"]),
+    ),
+)
+def test_unlinked_chapters_read_after_the_chapters_they_rest_on(
+    tmp_path: Path, alpha_depends: str, chapters: list[str]
+) -> None:
+    project = _book_order_project(tmp_path)
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text("---\n---\n\n# Roadmap\n\n- [Zeta](zeta/README.md)\n", encoding="utf-8")
+    (roadmap / "omega").mkdir()
+    (roadmap / "omega/README.md").write_text("---\n---\n\n# Omega\n\n- [First](first.md)\n", encoding="utf-8")
+    (roadmap / "omega/first.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Omega first\n\nA result.\n", encoding="utf-8"
+    )
+    proof = roadmap / "irrationality-proof/first.md"
+    proof.write_text(
+        proof.read_text(encoding="utf-8").rstrip() + "\n- [Omega](../omega/first.md)\n", encoding="utf-8"
+    )
+    if alpha_depends:
+        second = roadmap / "alpha/second.md"
+        second.write_text(
+            second.read_text(encoding="utf-8") + f"\n## Depends on\n\n{alpha_depends}", encoding="utf-8"
+        )
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    assert _summary_chapters(out) == chapters
+
+
+def test_a_cycle_releases_a_sibling_on_it_not_one_waiting_behind_it() -> None:
+    # A rests on C; B and C rest on each other.
+    assert _dependency_sorted(["A", "B", "C"], {"C": {"A", "B"}, "B": {"C"}}) == ["B", "C", "A"]
+
+
+@pytest.mark.parametrize(
+    "variant",
+    ("as-written", "landing-shortcut", "only-zeta-linked", "no-landing-page", "unlinked-scope", "unlisted-result"),
+)
+def test_statement_numbers_rise_down_each_page_and_across_chapters(tmp_path: Path, variant: str) -> None:
+    """A landing-page shortcut does not reorder the book. A page or result
+    its parent does not list follows the listed ones, as one run."""
+    project = _book_order_project(tmp_path)
+    blueprint = project / "blueprint"
+    roadmap = blueprint / "roadmap"
+    pages = ["zeta", "alpha", "irrationality-proof"]
+    theorem = "---\ndeclaration: theorem\n---\n\n# {}\n\nA result.\n"
+    if variant == "landing-shortcut":
+        (blueprint / "README.md").write_text(
+            "---\nkind: blueprint\n---\n\n# Overview\n\nNew: [the proof](roadmap/irrationality-proof/README.md).\n\n"
+            "- [Roadmap](roadmap/README.md)\n",
+            encoding="utf-8",
+        )
+    elif variant == "only-zeta-linked":
+        (roadmap / "README.md").write_text("---\n---\n\n# Roadmap\n\n- [Zeta](zeta/README.md)\n", encoding="utf-8")
+    elif variant == "no-landing-page":
+        (blueprint / "README.md").unlink()
+    elif variant == "unlinked-scope":
+        (roadmap / "zeta/beta").mkdir()
+        (roadmap / "zeta/beta/README.md").write_text(
+            "---\n---\n\n# Beta\n\n- [B2](b2.md)\n- [B1](b1.md)\n", encoding="utf-8"
+        )
+        for name in ("b1", "b2"):
+            (roadmap / "zeta/beta" / f"{name}.md").write_text(theorem.format(name), encoding="utf-8")
+        pages.insert(1, "zeta/beta")
+    elif variant == "unlisted-result":
+        (roadmap / "zeta/third.md").write_text(theorem.format("Zeta third"), encoding="utf-8")
+    out = tmp_path / "out"
+
+    render_site(blueprint, out, lean_root=project)
+
+    numbers = [
+        int(number)
+        for page in pages
+        for number in re.findall(
+            r'class="bp-thmlabel"[^>]*>(\d+)<', (out / "roadmap" / page / "README.md").read_text(encoding="utf-8")
+        )
+    ]
+    assert numbers == list(range(1, 7 + (variant == "unlisted-result") + 2 * (variant == "unlinked-scope")))
+    if variant == "landing-shortcut":
+        # The nav and Previous/Next read the same book: the shortcut moves neither.
+        assert _summary_chapters(out) == ["zeta", "alpha", "irrationality-proof"]
+        assert _next_chain(out / "roadmap/README.md") == [
+            out / "roadmap" / page / "README.md" for page in ("", "zeta", "alpha", "irrationality-proof")
+        ]
+
+
+def _next_chain(page: Path) -> list[Path]:
+    """*page*, then every page its Next links lead to, in turn."""
+    chain = [page]
+    while match := re.search(r'bp-book-nav-next" href="([^"]+)"', chain[-1].read_text(encoding="utf-8")):
+        target = Path(os.path.normpath(chain[-1].parent / unquote(match.group(1))))
+        chain.append(target.with_name("README.md") if target.name == "index.html" else target.with_suffix(".md"))
+        assert len(chain) <= 50, chain
+    return chain
+
+
+def test_nodes_on_pages_outside_the_book_follow_one_page_at_a_time(tmp_path: Path) -> None:
+    """Dependency order interleaves the two pages; each still reads as one run."""
+    first, second = tmp_path / "p.md", tmp_path / "q.md"
+    nodes = {
+        "x1": Node("x1", "x1", first, ()),
+        "x2": Node("x2", "x2", first, ("y1",)),
+        "y1": Node("y1", "y1", second, ()),
+        "y2": Node("y2", "y2", second, ()),
+    }
+    targets = {node_id: (node.path, node_id) for node_id, node in nodes.items()}
+    positions = {"x1": 0, "x2": 1, "y1": 0, "y2": 1}
+
+    order = render_module._reading_order(Graph(tmp_path, nodes), targets, [], positions)
+
+    assert order == ["x1", "x2", "y1", "y2"]
+
+
 def test_a_root_article_and_search_share_its_generated_canonical_book_route(tmp_path: Path) -> None:
     """Even without an authored contents page, search opens the generated full
     chapter and exact theorem anchor, not a second explorer-only page."""
@@ -3614,6 +3844,17 @@ def test_next_up_links_the_published_statement_and_chapter(
     published = _published_pages(out)
     for href in re.findall(r'href="([^"]+)"', card):
         assert Path(os.path.normpath(out / unquote(href.partition("#")[0]))) in published, href
+
+
+def test_next_up_is_the_first_ready_result_in_book_order(tmp_path: Path) -> None:
+    """Dependency order would pick alpha/first; the book opens with zeta and
+    lists its second result first."""
+    project = _book_order_project(tmp_path)
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    landing = (tmp_path / "out/README.md").read_text(encoding="utf-8")
+    assert '<div class="bp-next-target" data-autoform-node-id="zeta/second">' in landing
 
 
 def _statement_box(page: str, node_id: str) -> str:

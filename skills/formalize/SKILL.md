@@ -84,19 +84,19 @@ rerunning it with `--module-scope import-closure` when the default scope cannot
 build or load every root library. When the run uses claims, follow the [import
 claims](references/claims.md#import-edits) from then on; otherwise send the lead
 the report's `claim_targets` and `affected_claim_targets` and wait for its
-answer. Either way, a `module_generated` root follows [its
-rules](references/claims.md#generated-import-roots). Capture baseline skeleton
+answer. Unless the user has paused skeleton evidence, capture baseline skeleton
 evidence for the report's currently built, named affected articles and, when the
 edit removes an import, for the articles of modules only that import kept in the
 build. The affected articles are not a lock: do not acquire or edit them because
 they are listed, and treat unresolved declarations as unknown validation scope,
-not proof they are unaffected. After rebuilding, repeat the skeleton evidence
-and use Agent Review to judge semantic changes; repair each article that needs
-changes under the review gates of the [revision
+not proof they are unaffected. After rebuilding, repeat any baseline skeleton
+evidence and use Agent Review to judge semantic changes; repair each article
+that needs changes under the review gates of the [revision
 contract](../../autoform_cli/reference/claims-and-revisions.md#revision-contract).
 Stop for an active conflict (an affected target another worker holds, or another
 owner's live claim on one) or failed validation, not for a blanket import rule;
-disclosure alone is neither.
+disclosure alone is neither. With or without claims, a `module_generated` root
+follows [its rules](references/claims.md#generated-import-roots).
 
 Bring the worktree up to date with the shared branch (after [acquiring the
 claim](references/claims.md#acquire-and-renew), when the run uses claims) and

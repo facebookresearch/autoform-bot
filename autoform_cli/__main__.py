@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -42,7 +43,7 @@ from .impact import (
     module_import_impact,
     revision_impact,
 )
-from .lean import declaration_names, index_failure_message, index_project
+from .lean import _name_prefix, declaration_names, index_failure_message, index_project
 from .lean_probe import DEFAULT_PROBE_TIMEOUT
 from .library.citations import library_citation_warnings
 from .library.generate import GenerateError, check_index, generate_index, write_index
@@ -782,6 +783,25 @@ def _formalizable_container_warnings(graph: Graph) -> list[str]:
     ]
 
 
+#: How check ends the reason it gives for a name under one of the project's own types.
+_GENERATED = "and record the name in the article's implementation note"
+
+
+def _generated_name(index, name: str) -> str:
+    """Why a name under one of the project's own structures or inductive types may not be found, or ""."""
+    parent = index.find(_name_prefix(name)) if "." in name else None
+    if parent is None or parent.keyword not in ("structure", "class", "inductive"):
+        return ""
+    kind = "an inductive type" if parent.keyword == "inductive" else f"a {parent.keyword}"
+    # Lean defines no constant for a field inherited through a parent's projection.
+    inherited = "" if parent.keyword == "inductive" else ", and no field it inherits"
+    return (
+        f"; {parent.name} is {kind} at {parent.path.as_posix()}:{parent.line}: the index reads no constructor, "
+        f"recursor or other name Lean generates for it{inherited}, so put {parent.name} or another project "
+        f"declaration in lean: {_GENERATED}, or check its spelling"
+    )
+
+
 def _check(args: argparse.Namespace) -> int:
     try:
         graph = load_graph(args.blueprint_dir)
@@ -827,13 +847,14 @@ def _check(args: argparse.Namespace) -> int:
             if (ambiguous := index.ambiguity(name))
             else f"{node.id}: declaration not found in {args.lean_root}: {name}"
             + ("; a name Lean generates is not indexed and belongs in the catalog's ledger" if node.catalog else "")
+            + ("" if node.catalog else _generated_name(index, name))
             for node in graph.nodes.values()
             for name in declaration_names(node.lean or "")
             if index.find(name) is None
         ]
         for issue in missing:
             print(f"error: {issue}")
-        if any(": declaration not found in " in issue for issue in missing):
+        if any(": declaration not found in " in issue and _GENERATED not in issue for issue in missing):
             print(
                 "note: check resolves lean: names only in the project's own Lean files, not in Mathlib or other "
                 "dependencies under .lake; if a name is a shared library's declaration, record it in the article's "
@@ -1754,22 +1775,37 @@ def _skeleton(args: argparse.Namespace) -> int:
             print("error: --output must be disjoint from packet and passage directories", file=sys.stderr)
             return 2
     stream = sys.stderr if args.json else sys.stdout
+
+    def progress(phase: str) -> None:
+        # Information only. Without fd 2, print(file=None) would write to stdout,
+        # and a line left in a broken stderr's buffer would fail the exit-time flush.
+        if sys.stderr is None:
+            return
+        try:
+            print(f"skeleton: {phase}...", file=sys.stderr, flush=True)
+        except OSError:
+            with contextlib.suppress(OSError, ValueError):
+                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stderr.fileno())
+
     try:
         report = extract_skeletons(
             args.blueprint_dir,
             lean_root=args.lean_root,
             timeout=args.timeout,
             node_ids=tuple(args.nodes) if args.nodes else None,
+            progress=progress,
         )
         if args.packets is not None and not report.clean:
             print("error: refusing to publish review packets from an incomplete skeleton report", file=sys.stderr)
         elif args.packets is not None:
+            progress("writing")
             written = write_packets(report, args.packets, passages=args.passages, report_path=args.output)
             print(f"{args.packets}: {len(written)} blind packet(s) written", file=stream)
             if args.passages is not None:
                 cited = sum(1 for node in report.nodes if node.passage is not None)
                 print(f"{args.passages}: {cited} source passage(s) written", file=stream)
         if args.output is not None and (args.packets is None or not report.clean):
+            progress("writing")
             write_skeleton_report(report, args.output)
     except SkeletonError as exc:
         for issue in exc.issues:
@@ -1784,7 +1820,9 @@ def _skeleton(args: argparse.Namespace) -> int:
         for issue in report.unresolved:
             print(f"error: {issue.message}", file=stream)
     elif args.json:
-        print(report.to_json())
+        # In pieces, as `--output` writes it: a large report need not be held twice.
+        sys.stdout.writelines(report._json_pieces())
+        sys.stdout.write("\n")
     else:
         print(format_report(report, lean_root=args.lean_root), end="")
     return 0 if report.clean else 1

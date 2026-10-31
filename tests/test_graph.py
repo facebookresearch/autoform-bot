@@ -1384,6 +1384,61 @@ def test_check_says_where_a_library_declaration_goes_when_a_name_is_not_found(
     assert [line for line in lines if line.startswith(("error:", "note:"))] == lines[-len(expected) :] == expected
 
 
+def test_check_resolves_a_structure_field_and_says_why_a_generated_name_is_not_found(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Issue #498: a field was not found, and the note sent its author to the dependencies under .lake."""
+    blueprint = tmp_path / "blueprint"
+    article = _node(blueprint, "entry.md", "# Entry\n", declaration="def", lean="Demo.Entry.value")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Demo.lean").write_text(
+        "namespace Demo\nstructure Entry where\n  value : Nat\ninductive Shape where\n  | dot\n"
+        "class Pretty (α : Type) where\n  pretty : α → String\nend Demo\n",
+        encoding="utf-8",
+    )
+
+    assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "    1 declaration name(s) resolved in the Lean sources"
+
+    names = "Demo.Entry.value Demo.Entry.mk Demo.Shape.dot Demo.Pretty.mk"
+    article.write_text(article.read_text(encoding="utf-8").replace("Demo.Entry.value", names), encoding="utf-8")
+    assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 1
+    generated = "the index reads no constructor, recursor or other name Lean generates for it"
+    advice = (
+        "or another project declaration in lean: and record the name in the article's implementation note, "
+        "or check its spelling"
+    )
+    # Only names under the project's own types: the note about .lake is not printed.
+    assert [line for line in capsys.readouterr().out.splitlines() if line.startswith(("error:", "note:"))] == [
+        f"error: entry: declaration not found in {lean_root}: Demo.Entry.mk; Demo.Entry is a structure at "
+        f"Demo.lean:2: {generated}, and no field it inherits, so put Demo.Entry {advice}",
+        f"error: entry: declaration not found in {lean_root}: Demo.Shape.dot; Demo.Shape is an inductive type at "
+        f"Demo.lean:4: {generated}, so put Demo.Shape {advice}",
+        f"error: entry: declaration not found in {lean_root}: Demo.Pretty.mk; Demo.Pretty is a class at "
+        f"Demo.lean:6: {generated}, and no field it inherits, so put Demo.Pretty {advice}",
+    ]
+
+    # A catalog keeps its own reason, and a name of a shared library brings the note back.
+    (blueprint / "sources").mkdir()
+    (blueprint / "sources/catalog.md").write_text("# Catalog declarations\n", encoding="utf-8")
+    _node(
+        blueprint,
+        "catalog.md",
+        "# Existing module\n\n## Sources\n\n- [Ledger](../sources/catalog.md)\n",
+        catalog="module",
+        lean="Demo.Entry.mk",
+    )
+    article.write_text(article.read_text(encoding="utf-8").replace(names, "Demo.Entry.value Lib.base"), encoding="utf-8")
+    assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 1
+    assert [line for line in capsys.readouterr().out.splitlines() if line.startswith(("error:", "note:"))] == [
+        f"error: catalog: declaration not found in {lean_root}: Demo.Entry.mk; "
+        "a name Lean generates is not indexed and belongs in the catalog's ledger",
+        f"error: entry: declaration not found in {lean_root}: Lib.base",
+        _LIBRARY_DECLARATION_NOTE,
+    ]
+
+
 def test_check_prints_its_warnings_after_the_whole_summary(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

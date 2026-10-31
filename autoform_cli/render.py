@@ -39,6 +39,7 @@ from __future__ import annotations
 import ctypes
 import errno
 import hashlib
+import heapq
 import html
 import json
 import os
@@ -50,7 +51,7 @@ import sys
 import tempfile
 import time
 import unicodedata
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from html.parser import HTMLParser
@@ -1035,7 +1036,6 @@ def _render_pages(
     ]
     coverage_warnings += (f"atlas.json: {omission}" for omission in atlas_omissions(graph, unpublished_nodes))
     statuses = status.derive(graph)
-    numbers = _number_nodes(graph)
     used_by = _reverse_edges(graph)
     # Sources leave the site only for a directory the verified commit holds.
     sources_base = _sources_base(blueprint, repo_root, linker) if sources else None
@@ -1079,6 +1079,15 @@ def _render_pages(
             target.write_bytes(content)
         report.pages += 1
 
+    # One reading order for statement numbers, Next up and the search index.
+    order = _reading_order(
+        graph, targets, _reading_pages(blueprint, destination, graph), _card_positions(
+            groups, group_pages, graph=graph, blueprint=blueprint, node_sources=node_sources,
+            targets=targets, typed=site.typed,
+        ),
+    )
+    numbers = _number_nodes(graph, order)
+
     overview = destination / "README.md"
     # The author's page, as render publishes it when nothing in it is flagged:
     # the hero escapes its title and lead itself, and a page shown as typed has
@@ -1099,6 +1108,7 @@ def _render_pages(
                 page=overview,
                 destination=destination,
                 targets=targets,
+                order=order,
             ),
             encoding="utf-8",
         )
@@ -1168,6 +1178,7 @@ def _render_pages(
         source_paths={node_id: node.path.relative_to(blueprint) for node_id, node in graph.nodes.items()},
         unavailable_source_ids=site.unavailable_source_ids,
         warnings_out=report.warnings,
+        book_order=order,
     )
     report.pages += sum(path != destination / graph_pages.WIKI_LINKS for path in generated_graph_pages)
 
@@ -1895,63 +1906,208 @@ def _group_page(group: str) -> Path:
     )
 
 
-def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
-    """Follow authored container links to recover the book's page order."""
-    ordered: list[Path] = []
-    seen_outputs: set[Path] = set()
-    visited_sources: set[Path] = set()
+def _book_sources(graph: Graph) -> dict[Path, str]:
+    """The book's pages, containers and narrative articles, by resolved source."""
     containers = _containers(graph)
-    book_sources = {
-        node.path.resolve()
+    return {
+        node.path.resolve(): node.id
         for node in graph.nodes.values()
         if node.id in containers or (not node.formalizable and node.catalog is None)
     }
-    pending = [blueprint / "README.md"]
+
+
+def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> list[Path]:
+    """The *targets* *source* links outside code fences, in the order it links them."""
+    linked_sources: list[Path] = []
+
+    def collect(line: str) -> str:
+        for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
+            raw = line[match.start("target") : match.end("target")]
+            bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
+            path = bare.partition("#")[0].partition("?")[0]
+            try:
+                if not path or urlsplit(path).scheme or path.startswith("/"):
+                    continue
+                candidate = (source.parent / unquote(path)).resolve()
+                candidate_relative = candidate.relative_to(blueprint)
+            except ValueError:  # a target outside the vault, an unbalanced IPv6 bracket, or a decoded NUL
+                continue
+            if (
+                not candidate_relative.parts
+                or candidate_relative.parts[0] != "roadmap"
+                or candidate.suffix.lower() != ".md"
+            ):
+                continue
+            if candidate not in targets:
+                continue
+            linked_sources.append(candidate)
+        return line
+
+    try:
+        text = source.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return []  # the site leaves out a page that is not UTF-8, as check warns
+    _outside_fences(text, collect)
+    return linked_sources
+
+
+def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
+    """The landing page, then the book in reading order (:func:`_reading_pages`).
+
+    SUMMARY.md and Previous/Next follow this order, and statement numbers, Next
+    up and the search index follow the same walk, so the book reads one way
+    everywhere."""
+    landing = (destination / "README.md").resolve()
+    pages = _reading_pages(blueprint, destination, graph)
+    return ([landing] if landing.is_file() else []) + [page for page in pages if page != landing]
+
+
+def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
+    """The published book pages in reading order: down the containment tree
+    from the landing page, each page's children in the order it links them,
+    then the ones it does not link. A child the page never links directly
+    takes the place of the page's first link into its subtree, to a section
+    or a result; a direct link wins over that, so a prose shortcut to a deep
+    milestone does not pull its chapter forward. A link to a page elsewhere in
+    the tree does not move it. The children a page does not link at all
+    follow in dependency order, ties by id (:func:`_dependency_sorted`)."""
+    book_sources = _book_sources(graph)
+    node_sources = {node.path.resolve(): node.id for node in graph.nodes.values()}
+    children: dict[str | None, list[str]] = {}
+    for node_id in sorted(graph.nodes):
+        if graph.nodes[node_id].path.resolve() in book_sources:
+            children.setdefault(graph.nodes[node_id].parent, []).append(node_id)
+    precedence: dict[str, set[str]] | None = None
+    ordered: list[Path] = []
+    pending: list[tuple[Path, str | None]] = [(blueprint / "README.md", None)]
     while pending:
-        source = pending.pop().resolve()
-        try:
-            relative = source.relative_to(blueprint)
-        except ValueError:
-            continue
-        output = (destination / relative).resolve()
-        if output.is_file() and output not in seen_outputs:
-            seen_outputs.add(output)
-            ordered.append(output)
-        if source in visited_sources or not source.is_file():
-            continue
-        visited_sources.add(source)
-        linked_sources: list[Path] = []
-
-        def collect(line: str) -> str:
-            for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
-                raw = line[match.start("target") : match.end("target")]
-                bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
-                path = bare.partition("#")[0].partition("?")[0]
-                try:
-                    if not path or urlsplit(path).scheme or path.startswith("/"):
-                        continue
-                    candidate = (source.parent / unquote(path)).resolve()
-                    candidate_relative = candidate.relative_to(blueprint)
-                except ValueError:  # a target outside the vault, an unbalanced IPv6 bracket, or a decoded NUL
-                    continue
-                if (
-                    not candidate_relative.parts
-                    or candidate_relative.parts[0] != "roadmap"
-                    or candidate.suffix.lower() != ".md"
-                ):
-                    continue
-                if candidate not in book_sources:
-                    continue
-                linked_sources.append(candidate)
-            return line
-
-        try:
-            text = source.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue  # the site leaves out a page that is not UTF-8, as check warns
-        _outside_fences(text, collect)
-        pending.extend(reversed(linked_sources))
+        source, parent = pending.pop()
+        output = destination / source.relative_to(blueprint)
+        if parent is not None and output.is_file():
+            ordered.append(output.resolve())
+        own = children.get(parent, [])
+        linked = [node_sources[path] for path in _book_links(source, blueprint, node_sources)] if source.is_file() else []
+        direct: dict[str, int] = {}
+        through: dict[str, int] = {}
+        for index, node_id in enumerate(linked):
+            child = node_id if node_id in own else _child_containing(graph, parent, node_id)
+            if child in own:
+                (direct if child == node_id else through).setdefault(child, index)
+        placed = through | direct
+        unlinked = [node_id for node_id in own if node_id not in placed]
+        if len(unlinked) > 1:
+            if precedence is None:
+                precedence = _sibling_precedence(graph)
+            unlinked = _dependency_sorted(unlinked, precedence)
+        reading = [*sorted(placed, key=placed.__getitem__), *unlinked]
+        pending.extend((graph.nodes[node_id].path, node_id) for node_id in reversed(reading))
     return ordered
+
+
+def _containment_chain(graph: Graph, node_id: str) -> list[str]:
+    """*node_id* and its containers, innermost first."""
+    chain: list[str] = []
+    seen: set[str] = set()
+    current: str | None = node_id
+    while current is not None and current in graph.nodes and current not in seen:
+        chain.append(current)
+        seen.add(current)
+        current = graph.nodes[current].parent
+    return chain
+
+
+def _sibling_precedence(graph: Graph) -> dict[str, set[str]]:
+    """For each node, the siblings whose subtrees must come after its own:
+    sibling B follows sibling A when something in B's subtree depends on
+    something in A's. Each dependency orders the two subtrees that hold its
+    ends just below their nearest common container."""
+    after: dict[str, set[str]] = {}
+    for node in graph.nodes.values():
+        dependent = _containment_chain(graph, node.id)
+        for dependency_id in node.dependencies:
+            if dependency_id not in graph.nodes:
+                continue
+            prerequisite = _containment_chain(graph, dependency_id)
+            shared = set(prerequisite).intersection(dependent)
+            below_dependent = next((i for i, item in enumerate(dependent) if item in shared), len(dependent))
+            below_prerequisite = next((i for i, item in enumerate(prerequisite) if item in shared), len(prerequisite))
+            if below_dependent and below_prerequisite:  # neither end contains the other
+                after.setdefault(prerequisite[below_prerequisite - 1], set()).add(dependent[below_dependent - 1])
+    return after
+
+
+def _dependency_sorted(siblings: list[str], precedence: Mapping[str, set[str]]) -> list[str]:
+    """*siblings* with each subtree after the subtrees it depends on, ties
+    broken by their order in *siblings*. When only cycles are left, the
+    earliest sibling on one of them goes next."""
+    rank = {node_id: index for index, node_id in enumerate(siblings)}
+    later = {node_id: sorted(rank[other] for other in precedence.get(node_id, ()) if other in rank) for node_id in siblings}
+    waiting = [0] * len(siblings)
+    for successors in later.values():
+        for index in successors:
+            waiting[index] += 1
+    ready = [index for index, count in enumerate(waiting) if not count]
+    heapq.heapify(ready)
+    done: set[int] = set()
+
+    def on_cycle(start: int) -> bool:
+        stack, seen = list(later[siblings[start]]), set()
+        while stack:
+            index = stack.pop()
+            if index == start:
+                return True
+            if index not in done and index not in seen:
+                seen.add(index)
+                stack.extend(later[siblings[index]])
+        return False
+
+    ordered: list[str] = []
+    while len(ordered) < len(siblings):
+        if not ready:  # every sibling left waits on one, so some sit on a cycle
+            heapq.heappush(ready, next(i for i in range(len(siblings)) if i not in done and on_cycle(i)))
+        index = heapq.heappop(ready)
+        if index in done:
+            continue
+        done.add(index)
+        ordered.append(siblings[index])
+        for successor in later[siblings[index]]:
+            waiting[successor] -= 1
+            if not waiting[successor] and successor not in done:
+                heapq.heappush(ready, successor)
+    return ordered
+
+
+def _child_containing(graph: Graph, parent: str | None, node_id: str) -> str | None:
+    """The child of *parent* whose containment subtree holds *node_id*, if any."""
+    seen: set[str] = set()
+    while node_id in graph.nodes and node_id not in seen:
+        seen.add(node_id)
+        up = graph.nodes[node_id].parent
+        if up == parent:
+            return node_id
+        if up is None:
+            return None
+        node_id = up
+    return None
+
+
+def _reading_order(
+    graph: Graph,
+    targets: Mapping[str, tuple[Path, str]],
+    pages: list[Path],
+    positions: Mapping[str, int],
+) -> list[str]:
+    """Every node in the order the book reads it: by its page's place in
+    ``pages``, then by its card's place on that page (``positions``; a page's
+    own article comes first), then in dependency order. Nodes on a page not
+    in ``pages`` follow, one page at a time."""
+    page_rank = {page: rank for rank, page in enumerate(pages)}
+
+    def key(node_id: str) -> tuple[int, str, int]:
+        page = targets[node_id][0].resolve() if node_id in targets else None
+        return page_rank.get(page, len(page_rank)), str(page or ""), positions.get(node_id, -1)
+
+    return sorted(status.topological_order(graph), key=key)
 
 
 def _append_book_navigation(pages: list[Path]) -> None:
@@ -2018,19 +2174,20 @@ def _next_target(
     destination: Path,
     group_pages: dict[str, Path] | None = None,
     targets: dict[str, tuple[Path, str]] | None = None,
+    order: Sequence[str] = (),
 ) -> str:
     """Name the result a contributor could pick up right now, with the way in.
 
     A dashboard that only counts is a scoreboard. The useful question on
     arriving is "what is unblocked, and where do I start reading?", which the
-    DAG already answers: the first node in topological order whose
-    prerequisites are met and whose proof is still open. Naming it without
-    linking to it makes the reader hunt, so the card carries the statement, its
-    chapter, and its dependency view.
+    DAG already answers: the first node in reading ``order`` (topological
+    without one) whose prerequisites are met and whose proof is still open.
+    Naming it without linking to it makes the reader hunt, so the card
+    carries the statement, its chapter, and its dependency view.
     """
     containers = _containers(graph)
     links = _anchored_links(targets or {}, page)
-    for node_id in status.topological_order(graph):
+    for node_id in order or status.topological_order(graph):
         node_status = statuses.get(node_id)
         node = graph.nodes[node_id]
         if node_status is None or node_id in containers or not node.formalizable:
@@ -2135,9 +2292,10 @@ def _render_summary_nav(
 
     A chapter's README nests under the nearest README above its folder, any
     other page under the nearest README in its own folder or above, and the
-    tree is written depth first in book order. The book order follows links,
-    so a page can come before its chapter, and indenting by folder depth alone
-    then skipped a level, which literate-nav refuses.
+    tree is written depth first in book order. The book order walks the
+    containment tree (:func:`_reading_pages`), so a page always comes after
+    its chapter. Nesting by folder rather than by depth alone keeps each
+    level one step below its parent, which literate-nav requires.
     """
     # SUMMARY.md is a navigation manifest, not a searchable content page. A
     # repository-wide book can make this one generated page larger than every
@@ -2186,6 +2344,7 @@ def _render_landing_page(
     page: Path,
     destination: Path,
     targets: dict[str, tuple[Path, str]] | None = None,
+    order: Sequence[str] = (),
 ) -> str:
     """The landing page: what this is, how far it has got, and what is next.
 
@@ -2215,6 +2374,7 @@ def _render_landing_page(
         destination=destination,
         group_pages=group_pages,
         targets=targets,
+        order=order,
     )
     front = [
         "---",
@@ -2900,11 +3060,12 @@ def _reaches(path: Path, directory: Path) -> bool:
     return False
 
 
-def _number_nodes(graph: Graph) -> dict[str, str]:
-    """Number nodes per declaration kind in dependency order, as a blueprint does."""
+def _number_nodes(graph: Graph, order: Sequence[str] = ()) -> dict[str, str]:
+    """Number nodes per declaration kind in reading ``order`` (topological
+    without one), so numbers rise down each page and across chapters."""
     counters: dict[str, int] = {}
     numbers: dict[str, str] = {}
-    for node_id in status.topological_order(graph):
+    for node_id in order or status.topological_order(graph):
         label = _declaration_label(graph.nodes[node_id])
         counters[label] = counters.get(label, 0) + 1
         numbers[node_id] = f"{label} {counters[label]}"
@@ -2993,14 +3154,52 @@ def _render_chapter(
     chapter = _place_environments(
         narrative, lead, slots, summary=chapter_summary, environments=environments, protect=not typed,
     )
+    for heading, section in _fallback_sections(node_ids, slots, graph):
+        if section:
+            chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(environments[n] for n in section)
+    return chapter.rstrip() + "\n", linked, unresolved
+
+
+def _fallback_sections(
+    node_ids: Iterable[str], slots: Mapping[int, str], graph: Graph
+) -> tuple[tuple[str, list[str]], ...]:
+    """The sections after the narrative for cards no authored slot holds, in page order."""
     placed = set(slots.values())
     remaining = [node_id for node_id in node_ids if node_id not in placed]
     # A catalog inventories Lean that already exists, so it is no formalization target.
-    for heading, catalog in (("Other statements", None), ("Module inventories", "module")):
-        section = [environments[node_id] for node_id in remaining if graph.nodes[node_id].catalog == catalog]
-        if section:
-            chapter = chapter.rstrip() + f"\n\n## {heading}\n\n" + "\n\n".join(section)
-    return chapter.rstrip() + "\n", linked, unresolved
+    return tuple(
+        (heading, [node_id for node_id in remaining if graph.nodes[node_id].catalog == catalog])
+        for heading, catalog in (("Other statements", None), ("Module inventories", "module"))
+    )
+
+
+def _card_positions(
+    groups: Mapping[str, list[str]],
+    group_pages: Mapping[str, Path],
+    *,
+    graph: Graph,
+    blueprint: Path,
+    node_sources: dict[Path, str],
+    targets: dict[str, tuple[Path, str]],
+    typed: Collection[Path],
+) -> dict[str, int]:
+    """Each card's place on its chapter page, as :func:`_render_chapter` lays
+    it out: authored slots first, then the fallback sections."""
+    positions: dict[str, int] = {}
+    for group, node_ids in groups.items():
+        page = group_pages[group]
+        slots = (
+            _chapter_layout(
+                group, node_ids, page.read_text(encoding="utf-8"),
+                graph=graph, blueprint=blueprint, node_sources=node_sources, targets=targets,
+            )[1]
+            if page.is_file() and page not in typed
+            else {}
+        )
+        cards = [slots[index] for index in sorted(slots)]
+        cards += (node_id for _, section in _fallback_sections(node_ids, slots, graph) for node_id in section)
+        positions.update((node_id, position) for position, node_id in enumerate(cards))
+    return positions
 
 
 def _chapter_layout(

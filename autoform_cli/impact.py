@@ -338,7 +338,7 @@ def project_modules(
         # A glob also selects modules nothing can import; they are refused
         # below like any other non-plain name, not dropped.
         selected = {**unimportable, **sources}
-        for glob in library.globs or library.roots:
+        for glob in library.roots if library.globs is None else library.globs:
             base, mode = _glob(glob, library)
             if mode != "+":
                 if base not in sources:
@@ -561,6 +561,12 @@ def _validated_module_evidence(
         key = _name_key(module)
         relative = expected_paths.get(key)
         if relative is None:
+            # A captured file that no library builds can still load, from a
+            # leftover .olean or as a lean_exe root; say so rather than call it
+            # missing.
+            unbuilt = {_name_key(name): path for name, path in _module_source_paths(libraries, snapshot).items()}
+            if key in unbuilt:
+                raise SkeletonError([f"the impact probe loaded {module} from {unbuilt[key]}, which no lean_lib builds"])
             raise SkeletonError(
                 [f"the impact probe loaded {module} without a captured root-project source"]
             )
@@ -628,7 +634,7 @@ def _glob_directories(libraries: Sequence[LeanLibrary]) -> list[tuple[Path, str,
 
     directories: list[tuple[Path, str, str]] = []
     for library in libraries:
-        for glob in library.globs:
+        for glob in library.globs or ():
             base, mode = _glob(glob, library)
             if mode:
                 directories.append((library.src_dir.joinpath(*base.split(".")), base, glob))
