@@ -71,6 +71,11 @@ date when the release is tagged.
   pushing, goes to the `origin` branch `handoff/<article_id>`, which whoever
   acquires the lapsed lease continues. With claims, no message grants
   ownership; none completes a leaf (#434, #532).
+- **Formalize worktrees.** A new worktree gets a copy of the lead's
+  `.lake/packages`, copy-on-write and never a symbolic link, before its first
+  build. `lake exe cache get` then downloads nothing; before, each worktree
+  re-cloned about 0.5 GB of packages and unpacked another 7.5 GB Mathlib build
+  (#275).
 - **Generated import roots.** `work import-impact` reports `module_generated`
   when the repository's Git attributes set `linguist-generated` on MODULE's
   file, or make it `true`, normally through a committed `.gitattributes` line
@@ -155,6 +160,10 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Fences in comments.** Render no longer reads a fence line inside an HTML
+  comment as opening a code block. It had left every later line of the page
+  unrewritten, so a link to a source note after it was published as written,
+  to a page the site leaves out, and `check` said nothing (#527).
 - **Output checks.** `skeleton`, `review prepare` and `library index` refuse
   to replace an output folder that holds a subfolder they cannot list, where
   they skipped it, so an edit inside it could be published over (#521).
