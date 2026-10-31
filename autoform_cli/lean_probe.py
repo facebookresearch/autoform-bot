@@ -107,9 +107,9 @@ class SkeletonError(RuntimeError):
 
     This module raises it for Lake configuration, command, probe-run and
     snapshot failures; ``skeleton`` for malformed skeleton-probe records,
-    blueprints, article selections, inputs that change mid-run and managed
-    output; ``impact`` for malformed impact-probe records and its project
-    inventory.
+    blueprints, article selections, inputs that change mid-run and the
+    output it prepares; ``_managed_output`` for output publication;
+    ``impact`` for malformed impact-probe records and its project inventory.
     """
 
     def __init__(self, issues: list[str] | tuple[str, ...]) -> None:
@@ -548,6 +548,7 @@ def _run_registered_command(
     process_env[_PROCESS_TOKEN_ENV] = token
     deadline = time.monotonic() + timeout
     cleanup_deadline: float | None = None
+    succeeded = False
     try:
         if cancelled is not None and cancelled.is_set():
             raise SkeletonError([f"{context} was cancelled"])
@@ -565,12 +566,12 @@ def _run_registered_command(
             )
         except OSError as exc:
             raise SkeletonError([f"{context} failed: {exc}"]) from exc
-        guard.arm()
         assert process.stdout is not None and process.stderr is not None
         for name, stream in (("stdout", process.stdout), ("stderr", process.stderr)):
             reader = threading.Thread(target=drain, args=(name, stream), daemon=True)
             reader.start()
             readers.append(reader)
+        guard.arm()
         while not _leader_has_exited(process):
             _remember_descendants(process, descendants)
             check_output()
@@ -602,17 +603,22 @@ def _run_registered_command(
             stderr = b"".join(chunks["stderr"]).decode("utf-8")
         except UnicodeDecodeError as exc:
             raise SkeletonError([f"{context} emitted invalid UTF-8 output"]) from exc
-        return subprocess.CompletedProcess(command, process.returncode, stdout=stdout, stderr=stderr)
+        result = subprocess.CompletedProcess(command, process.returncode, stdout=stdout, stderr=stderr)
+        succeeded = True
+        return result
     except BaseException:
+        # The guard raises at most once, possibly on entry here, before this
+        # disarm; teardown therefore runs in finally, with the guard disarmed.
         guard.disarm()
-        if cleanup_deadline is None:
-            cleanup_deadline = time.perf_counter() + _PROCESS_TERMINATION_GRACE
-        if process is not None:
-            _terminate_process_tree(process, descendants, deadline=cleanup_deadline, token=token)
-        _join_readers(readers, deadline=cleanup_deadline)
         raise
     finally:
         try:
+            if not succeeded:
+                if cleanup_deadline is None:
+                    cleanup_deadline = time.perf_counter() + _PROCESS_TERMINATION_GRACE
+                if process is not None:
+                    _terminate_process_tree(process, descendants, deadline=cleanup_deadline, token=token)
+                _join_readers(readers, deadline=cleanup_deadline)
             if process is not None:
                 for reader, stream in zip(readers + [None, None], (process.stdout, process.stderr)):
                     if stream is not None and not (reader and reader.is_alive()):
@@ -752,12 +758,12 @@ def module_of(path: Path, libraries: tuple[LeanLibrary, ...]) -> str | None:
     held = [lib for lib in libraries if resolved != lib.src_dir and resolved.is_relative_to(lib.src_dir)]
     for library in sorted(held, key=lambda lib: len(lib.src_dir.parts), reverse=True):
         module = ".".join(resolved.relative_to(library.src_dir).with_suffix("").parts)
-        if _builds(library, module):
+        if builds(library, module):
             return module
     return None
 
 
-def _builds(library: LeanLibrary, module: str) -> bool:
+def builds(library: LeanLibrary, module: str) -> bool:
     """Whether Lake builds ``module`` for ``library``, as ``LeanLibConfig.isBuildableModule`` decides.
 
     Lake finds, imports and builds a module by that rule, not by ``isLocalModule``:
@@ -830,21 +836,28 @@ def _stable_detail(text: str, lean_root: Path, *scratch: Path) -> str:
 # The probe
 # --------------------------------------------------------------------------- #
 
-def _probe_template() -> str:
-    """The probe's Lean helpers, kept under probes/ beside this module."""
+def render_probe_template(name: str, **fields: object) -> str:
+    """Fill the probe template ``probes/<name>`` with ``fields`` and the records-file contract.
 
-    return (Path(__file__).parent / "probes" / "skeleton_probe.lean").read_text(encoding="utf-8")
+    Every probe writes its records to the file ``PROBE_OUTPUT_ENV`` names, which
+    ``run_probe`` sets, and stops before its records pass
+    ``DEFAULT_PROBE_OUTPUT_LIMIT`` bytes, which ``_read_probe_records``
+    enforces; ``output_env`` and ``output_limit`` give the template both. Read
+    at call time, so a patched limit applies.
+    """
+
+    template = (Path(__file__).parent / "probes" / name).read_text(encoding="utf-8")
+    return template.format(**fields, output_env=PROBE_OUTPUT_ENV, output_limit=DEFAULT_PROBE_OUTPUT_LIMIT)
 
 
 def _render_probe_helper() -> str:
     """Render the helper module every probe imports; see ``_build_probe_helper``."""
 
-    return _probe_template().format(
+    return render_probe_template(
+        "skeleton_probe.lean",
         core_roots=", ".join(_lean_name(name) for name in _CORE_MODULE_ROOTS),
         error_limit=_FAILURE_DETAIL_LIMIT,
         marker=PROBE_MARKER,
-        output_env=PROBE_OUTPUT_ENV,
-        output_limit=DEFAULT_PROBE_OUTPUT_LIMIT,
     )
 
 
@@ -1288,6 +1301,7 @@ __all__ = [
     "STALE_BUILD",
     "LeanLibrary",
     "SkeletonError",
+    "builds",
     "default_runner",
     "lean_libraries",
     "lean_name_components",
@@ -1298,6 +1312,7 @@ __all__ = [
     "project_control_snapshot",
     "read_snapshot_file",
     "render_probe",
+    "render_probe_template",
     "run_module_probes",
     "run_probe",
     "stable_paths",

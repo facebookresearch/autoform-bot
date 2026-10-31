@@ -23,7 +23,7 @@ _PEERS = (
     .replace("function schedule(){}", "function schedule(){scheduled++;}")
     .replace("function resize(){}", "function resize(){resized++;}")
     + _CONSTANTS + r"""
-var ui$selected=null,ui$scopeOverview=false,ui$overviewOnly=false,ui$direction='both';
+var ui$selected=null,ui$scopeOverview=false,ui$coarseOverview=false,ui$overviewOnly=false,ui$direction='both';
 var ui$active=[],ui$requestedNode=null,ui$outlineLimit=120,ui$transform={x:0,y:0,scale:1};
 var ui$pointers=new Map(),ui$moved=false,ui$pinch=null;
 var firstResize=false,atlas=false,alive=true,ui$phone=false,palette={planned:{label:'Planned'}},overlays=new Map();

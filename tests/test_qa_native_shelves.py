@@ -41,7 +41,7 @@ window.matchMedia=()=>({matches:false});
 window.AutoformMath={refresh(root){mathRoots.push(root);return Promise.resolve(true);}};
 var atlas,palette,byId=new Map(),prerequisites,dependents,statusCounts;
 var ui$active=[],ui$activeIds=new Set(),ui$activeDirty=true,ui$direction='both',ui$selected=null,ui$requestedNode='chapter';
-var ui$query='',ui$relationIds=null,ui$listLimit=100,ui$outlineLimit=120,ui$scopeOverview=false,ui$overviewOnly=false,ui$filtersTouched=false;
+var ui$query='',ui$relationIds=null,ui$listLimit=100,ui$outlineLimit=120,ui$scopeOverview=false,ui$coarseOverview=false,ui$overviewOnly=false,ui$filtersTouched=false;
 var ui$spotlight=null,ui$transform={x:35,y:-20,scale:1.1},ui$reading=true;
 var ui$wikiProjectionTicket=0,alive=true,restoring=false,restoration=0,checkpointTimer=0,firstResize=false;
 var contextGraph,overlays=new Map(),readingReady=Promise.resolve(true);

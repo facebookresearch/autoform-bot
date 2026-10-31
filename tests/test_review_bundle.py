@@ -733,7 +733,7 @@ def test_packet_writer_removes_its_stage_when_interrupted(
     if step == "packet":
         monkeypatch.setattr(Path, "write_bytes", interrupted)
     else:
-        monkeypatch.setattr("autoform_cli.review._replace_outputs", interrupted)
+        monkeypatch.setattr("autoform_cli.review.replace_outputs", interrupted)
 
     with pytest.raises(KeyboardInterrupt):
         write_review_packets(bundle, tmp_path / "packets")

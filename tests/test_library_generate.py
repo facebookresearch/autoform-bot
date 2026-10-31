@@ -749,7 +749,7 @@ def test_a_failed_install_leaves_the_previous_index_and_no_stage(tmp_path: Path,
     def fail(outputs: object) -> None:
         raise OSError("interrupted")
 
-    monkeypatch.setattr("autoform_cli.skeleton._replace_outputs", fail)
+    monkeypatch.setattr("autoform_cli.library.generate.replace_outputs", fail)
     with pytest.raises(GenerateError, match=f"^{INDEX_FILE} could not be written: interrupted; the previous one is unchanged$"):
         write_index(root, changed)
     assert path.read_bytes() == before
@@ -772,7 +772,7 @@ def test_a_write_failure_gives_the_reason_the_operating_system_gave(tmp_path: Pa
     def full(destination: Path, content: str | None = None) -> Path:
         raise OSError(errno.ENOSPC, "No space left on device", str(destination))
 
-    monkeypatch.setattr("autoform_cli.skeleton._stage_output", full)
+    monkeypatch.setattr("autoform_cli.library.generate.stage_output", full)
     with pytest.raises(GenerateError) as raised:
         write_index(root, generated)
     assert str(raised.value) == (
@@ -802,7 +802,7 @@ def test_a_failed_rollback_is_not_reported_as_an_unchanged_index(tmp_path: Path,
     backup = root / f".{INDEX_FILE}.autoform-backup-0123"
 
     def fail(outputs: list) -> None:
-        # What `_replace_outputs` does when the install fails and the previous file cannot be put back.
+        # What `replace_outputs` does when the install fails and the previous file cannot be put back.
         os.replace(path, backup)
         raise SkeletonError(
             [
@@ -811,7 +811,7 @@ def test_a_failed_rollback_is_not_reported_as_an_unchanged_index(tmp_path: Path,
             ]
         )
 
-    monkeypatch.setattr("autoform_cli.skeleton._replace_outputs", fail)
+    monkeypatch.setattr("autoform_cli.library.generate.replace_outputs", fail)
     with pytest.raises(GenerateError) as raised:
         write_index(root, changed)
     message = str(raised.value)
