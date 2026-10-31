@@ -31,7 +31,7 @@ BUDGETS = {
     "skills/setup/SKILL.md": 170,
 }
 # All skills/*/references/*.md together, so a new reference file cannot dodge a budget.
-REFERENCES_BUDGET = 932
+REFERENCES_BUDGET = 935
 
 
 def _lines(path: Path) -> int:

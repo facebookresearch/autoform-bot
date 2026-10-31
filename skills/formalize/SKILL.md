@@ -250,9 +250,9 @@ handed off, the lead removes its worktree with `git worktree remove` (never
 there; first make sure a branch points at any handed-off commit. Autoform never
 clears Lake's shared artifact cache, so tell the user if disk runs low. Re-read
 the work frontier from the updated shared branch and repeat while independent
-ready leaves and authorized capacity remain. Stop when the frontier is empty and
-no accepted review finding awaits repair, or every remaining attempt has a
-concrete mathematical or ownership blocker. Then
+ready leaves or accepted review findings and authorized capacity remain. Stop
+when the frontier is empty and no accepted review finding awaits repair, or
+every remaining attempt has a concrete mathematical or ownership blocker. Then
 the lead follows [Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with
 `--skill formalize`. Report changed articles and Lean files, integrated commits,
 branches and commits handed off, pull requests opened, any claims released or

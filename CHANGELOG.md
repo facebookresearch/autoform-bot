@@ -151,12 +151,13 @@ date when the release is tagged.
   Coverage, the link checks and render's link rewriting read everything after
   it as code, so render shows such a page as typed until the fence is closed,
   at the indent of its opening line, with options the site accepts (#201).
-- **Pull request reviews.** Formalize ends each pull request a run opens with an
-  `Autoform project:` line. On any machine, the lead finds the open ones that
-  carry it and come from the project's repository, reads their reviews when a
-  run starts or resumes and at each frontier re-read, decides each finding
-  against the current head, and repairs the oldest first, after any it is
-  stacked on (#483).
+- **Pull request reviews.** Formalize ends each pull request a run opens, or
+  adopts and may edit, with an `Autoform project:` line. On any machine, the
+  lead finds the open ones that carry it and come from the project's repository,
+  by owner and name, reads their reviews and inline comments when a run starts
+  or resumes and at each frontier re-read, decides each finding against the
+  current head, and repairs the oldest first, after any it is stacked on. A run
+  does not stop while an accepted finding awaits repair (#483, #525).
 
 ### Fixed
 
