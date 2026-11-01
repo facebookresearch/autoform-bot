@@ -278,6 +278,18 @@ def test_render_s_line_transforms_read_a_comment_that_never_closes_as_text() -> 
     assert outside_fences(reopened, lambda line: f"+{line}") == "+<!--\n+```\n+--> text <!-- open\n+see [x](a.md)\n"
 
 
+def test_render_s_line_transforms_read_a_comment_opener_in_code_as_text() -> None:
+    """A `<!--` in a code span or an indented code block opens no comment on the site, though a later `-->` would
+    close one for the graph's reader; the fenced block between them is code and stays as typed."""
+    pairs = (("Write `<!--` to open a comment.", "Close it with `-->`."), ("    <!-- in code", "    --> too"))
+    for opener, closer in pairs:
+        text = f"{opener}\n\n```text\nsee [x](a.md)\n# not a heading\n```\n\n{closer}\n"
+
+        assert outside_fences(text, lambda line: f"+{line}") == (
+            f"+{opener}\n+\n```text\nsee [x](a.md)\n# not a heading\n```\n+\n+{closer}\n"
+        )
+
+
 def test_text_beside_a_comment_on_one_line_survives() -> None:
     assert content_lines("| OUT | real <!-- aside --> reason |\n") == [
         "| OUT | real  reason |"

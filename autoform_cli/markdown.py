@@ -819,7 +819,18 @@ def published_page(text: str) -> str:
     start = frontmatter_end(lines)
     if start == len(lines) and (start < 2 or lines[-1].strip() != "---"):
         start = 0  # a first line of --- that nothing closes is no frontmatter
-    body = lines[start:]
+    return PAGE_HEADER + "\n" * start + published_lines(_without_comments(lines[start:]))
+
+
+def _without_comments(body: list[str], *, keep_lines: bool = False) -> str:
+    """``body`` joined with ``\\n``, without the HTML comments outside code.
+
+    A comment in a code span or a fenced or indented code block is shown as
+    typed, so it stays, as does a comment that never closes. With
+    ``keep_lines``, a comment leaves its line breaks, so every line stays
+    where it was.
+    """
+
     code: set[int] = set()
     continued: set[int] = set()
     masked = _mask_fences_and_comments(body, set(), unclosed_fence_is_text=True, fenced=code, continued=continued)
@@ -831,11 +842,17 @@ def published_page(text: str) -> str:
             if line.lstrip().startswith("<!--") and _indent(line) >= _CODE_INDENT:
                 masked[index] = line
     _mask_indented_code(masked, code)
+
+    def removed(found: re.Match[str]) -> str:
+        if found[1]:
+            return found.group()
+        return "\n" * found.group().count("\n") if keep_lines else ""
+
     kept: list[str] = []
     for in_code, run in groupby(enumerate(body), key=lambda numbered: numbered[0] in code):
         block = "\n".join(line for _, line in run)
-        kept.append(block if in_code else _CODE_OR_COMMENT.sub(lambda found: found.group() if found[1] else "", block))
-    return PAGE_HEADER + "\n" * start + published_lines("\n".join(kept))
+        kept.append(block if in_code else _CODE_OR_COMMENT.sub(removed, block))
+    return "\n".join(kept)
 
 
 def published_markdown(text: str) -> list[tuple[str, str]]:
@@ -894,20 +911,15 @@ def statement_and_notes(text: str) -> tuple[str, str]:
 def outside_fences(text: str, transform) -> str:
     """Apply *transform* to every line that is not inside a code fence.
 
-    A fence line inside an HTML comment opens nothing, as on the site and in
-    :func:`first_unclosed_fence`. A comment that never closes is text on the
-    site, so the fences after the line it opens on count.
+    Fences are read with the comments the site leaves out blanked, as
+    :func:`published_page` finds them: a fence line inside a comment opens
+    nothing, and a ``<!--`` in a code span or a code block, or one that never
+    closes, hides no fence.
     """
     lines = text.splitlines()
+    shown = _without_comments(lines, keep_lines=True).split("\n") if lines else []
     fenced: set[int] = set()
-    opened: list[int] = []
-    _mask_fences_and_comments(lines, set(), fenced=fenced, unclosed_comment=opened)
-    if opened:
-        # No comment closes after it either, so the rest is read with none.
-        start = opened[0] + 1
-        rest: set[int] = set()
-        _mask_fences_and_comments(lines[start:], set(), fenced=rest, comments=False)
-        fenced = {index for index in fenced if index < start} | {start + index for index in rest}
+    _mask_fences_and_comments(shown, set(), fenced=fenced, comments=False)
     out = [line if index in fenced else transform(line) for index, line in enumerate(lines)]
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
@@ -1086,7 +1098,6 @@ def _mask_fences_and_comments(
     fenced: set[int] | None = None,
     continued: set[int] | None = None,
     comments: bool = True,
-    unclosed_comment: list[int] | None = None,
 ) -> list[str]:
     fenced = set() if fenced is None else fenced
     # The lines that start inside a comment opened on an earlier line.
@@ -1097,8 +1108,6 @@ def _mask_fences_and_comments(
     # Where the open fence began and the comment state there, to go back to
     # when the fence turns out to have no closing line.
     opened: tuple[int, bool] = (0, False)
-    # The line the open comment began on, reported in ``unclosed_comment`` if it never closes.
-    comment_start = 0
     # Per fence character, the shortest opener known to find no closing line.
     # A later one at least as long cannot close either.
     unclosed: dict[str, int] = {}
@@ -1135,8 +1144,6 @@ def _mask_fences_and_comments(
         if opened_in_comment:
             continued.add(index)
         line, in_comment = strip_line_comments(raw, in_comment) if comments else (raw, False)
-        if in_comment and (not opened_in_comment or "-->" in raw):
-            comment_start = index
         match = FENCE.match(line)
         if match is not None and len(match.group(1)) < unclosed.get(match.group(1)[0], len(line) + 1):
             marker = match.group(1)
@@ -1153,8 +1160,6 @@ def _mask_fences_and_comments(
             hidden.add(index)
         masked.append(line)
         index += 1
-    if in_comment and unclosed_comment is not None:
-        unclosed_comment.append(comment_start)
     return masked
 
 

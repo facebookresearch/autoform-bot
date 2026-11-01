@@ -2849,6 +2849,27 @@ def test_a_comment_that_never_closes_leaves_the_code_after_it_as_typed(tmp_path:
     assert "see [Paper](https://" not in page
 
 
+def test_a_comment_opener_in_code_leaves_a_later_code_block_as_typed(tmp_path: Path) -> None:
+    """A review of #528 and #534: render read a `<!--` in a code span as a comment
+    up to a later `-->` in another, and rewrote the link in the code block between."""
+    project = _with_source_notes(tmp_path)
+    readme = project / "blueprint/roadmap/README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8")
+        + "\nWrite `<!--` to open a comment.\n\n```text\nsee [Paper](../sources/paper.md)\n```\n\n"
+        "Close it with `-->`.\n",
+        encoding="utf-8",
+    )
+    ref = _commit_project(project)
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project, repository_url="https://github.com/owner/repo", ref=ref)
+
+    page = (out / "roadmap/README.md").read_text(encoding="utf-8")
+    assert "see [Paper](../sources/paper.md)" in page
+    assert "see [Paper](https://" not in page
+
+
 def test_source_notes_stay_published_when_there_is_nowhere_to_send_readers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
