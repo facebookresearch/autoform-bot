@@ -188,6 +188,12 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Search index load.** The explorer prepares its search index in 10 ms
+  slices rather than 512-row batches, and resolves each page's links once
+  rather than every row's. On ATLAS (38,661 rows), search, the Topics outline
+  and concept links were ready 5.3 s after the index was parsed, most of it
+  spent waiting between batches; they are now ready after 1.0 s in WebKit and
+  0.7 s in Chrome.
 - **Fences in comments.** Render no longer reads a fence line inside an HTML
   comment as opening a code block. It had left every later line of the page
   unrewritten, so a link to a source note after it was published as written,
