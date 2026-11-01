@@ -65,7 +65,7 @@ dom$filterPopover.hidden = true;
 var dom$browsePopover = new Element('div'), dom$browseToggle = new Element('button');
 dom$browsePopover.hidden = true;
 var hostClasses = new Set(['bp-dag-sheet-open']);
-var host = {classList: {contains: name => hostClasses.has(name),
+var host = {dataset: {}, classList: {contains: name => hostClasses.has(name),
   toggle(name, enabled) { if (enabled) hostClasses.add(name); else hostClasses.delete(name); }},
   closest() { return {querySelector() {return null;}}; }};
 var ui$selected, ui$requestedNode = 'A', ui$mode = 'graph', ui$direction = 'both';
@@ -81,7 +81,7 @@ var overlays = new Map(['A','B'].map(id => {
 ui$selected = byId.get('A');
 var alive = true, restoration = 0, restoring = false, checkpointTimer = 0, currentVersion = 1;
 var readingReady = Promise.resolve(true), mathPass = Promise.resolve(true), mathRoots = [], frames = [];
-var data, contextGraph, currentBundle, trail, firstResize = false, mapAllowed = true;
+var data, contextGraph, currentBundle, trail, firstResize = false, mapAllowed = true, ui$mapAllowed = true;
 var palette = {fully_proved: {}, planned: {}}, presentStatuses = ['fully_proved', 'planned'];
 var navigation = {loadIndex() { return Promise.resolve(null); }};
 var window = {AutoformMath: {refresh(root) {mathRoots.push(root); return mathPass;}}};

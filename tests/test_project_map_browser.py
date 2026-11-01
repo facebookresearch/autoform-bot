@@ -53,6 +53,10 @@ def map_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
                                           encoding="utf-8")
         for name, kind, lean, title, body, uses in rows:
             (folder / f"{name}.md").write_text(_ARTICLE.format(kind=kind, lean=lean, title=title, body=body, uses=uses), encoding="utf-8")
+    # An article that states nothing, as a library's reading notes are.
+    with (roadmap / "algebra/README.md").open("a", encoding="utf-8") as readme:
+        readme.write("- [Reading notes](notes.md)\n")
+    (roadmap / "algebra/notes.md").write_text("# Reading notes\n\nRead the index before Lagrange's theorem.\n", encoding="utf-8")
     render_site(project / "blueprint", project / "site-src")
     build(load_config(config_file=str(project / "mkdocs.yml")))
     with _served(project / "site") as url:
@@ -168,3 +172,107 @@ def test_one_click_picks_a_region_in_place_and_a_second_opens_it(webkit_browser:
         # The region's results are on the same map now, with their titles, and Analysis stays in view below.
         playwright.expect(page.locator('.pm-card[data-result^="algebra/"]')).to_have_count(2)
         playwright.expect(page.locator(".pm-trail li")).to_have_text(["Fixture library", "Algebra"])
+
+
+def _open_book(page: object, url: str, path: str) -> None:
+    page.route(lambda requested: not requested.startswith(url), lambda route: route.abort())
+    page.goto(f"{url}/{path}")
+    page.locator(".bp-whole-map .pm-part").first.wait_for(state="attached")
+
+
+def _reading(page: object) -> object:
+    return page.locator(".bp-reading-body .bp-reading-current")
+
+
+def test_the_book_shows_the_map_beside_the_page_and_opens_what_is_picked_on_it(webkit_browser: object, map_url: str) -> None:
+    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        _open_book(page, map_url, "roadmap/algebra/index.html")
+        book = page.locator(".bp-dag-viewer")
+        # A chapter's page sends the map to its part. The book keeps its own outline, search and reader, so the map
+        # shows none of its own.
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra")
+        playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+        assert page.locator(".bp-whole-map :is(.pm-search, .pm-side, .pm-reader)").evaluate_all(
+            "nodes => nodes.length === 3 && nodes.every(node => getComputedStyle(node).display === 'none')")
+        # A result picked on the map opens in the reader, and Back returns to the one before.
+        page.locator('.bp-whole-map .pm-result[data-result="algebra/lagrange"]').click()
+        playwright.expect(_reading(page)).to_have_attribute("data-autoform-node-id", "algebra/lagrange")
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra/lagrange")
+        page.locator('.bp-whole-map .pm-result[data-result="algebra/index"]').click()
+        playwright.expect(_reading(page)).to_have_attribute("data-autoform-node-id", "algebra/index")
+        page.go_back()
+        playwright.expect(_reading(page)).to_have_attribute("data-autoform-node-id", "algebra/lagrange")
+        playwright.expect(page.locator('.bp-whole-map .pm-result.pm-selected[data-result="algebra/lagrange"]')).to_have_count(1)
+        # A click between the cards of the part in view keeps the reader where it is and adds no history entry.
+        entries = page.evaluate("""() => {
+            window.mapPicks = [];
+            document.addEventListener('autoform-map-select', event => window.mapPicks.push(event.detail.id), true);
+            return history.length;
+        }""")
+        spot = page.evaluate("""() => {
+            const stage = document.querySelector('.bp-whole-map .pm-stage').getBoundingClientRect();
+            for (let y = stage.top + 20; y < stage.bottom - 20; y += 16) for (let x = stage.left + 20; x < stage.right - 20; x += 16) {
+                const hit = document.elementFromPoint(x, y);
+                if (hit && hit.closest('.pm-part[data-part="algebra"]') && !hit.closest('[data-result], .pm-top, .pm-hint')) return [x, y];
+            }
+            return null;
+        }""")
+        assert spot is not None
+        page.mouse.click(*spot)
+        playwright.expect(_reading(page)).to_have_attribute("data-autoform-node-id", "algebra/lagrange")
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra/lagrange")
+        assert page.evaluate("() => history.length") == entries and page.evaluate("() => window.mapPicks") == []
+        # The book owns the address: the map never writes its own history entries inside it.
+        assert page.evaluate("() => !(history.state && history.state.pm)")
+        # The book's status filter dims the map's results whose status it leaves out.
+        page.locator(".bp-dag-filter-summary").click()
+        boxes = page.locator(".bp-dag-filter-popover fieldset:not(.bp-dag-isolated) input[type=checkbox]")
+        for index in range(boxes.count()):
+            boxes.nth(index).uncheck()
+        cards = page.locator(".bp-whole-map .pm-result").count()
+        assert cards > 0
+        playwright.expect(page.locator(".bp-whole-map .pm-result.pm-dimmed")).to_have_count(cards)
+        for index in range(boxes.count()):
+            boxes.nth(index).check()
+        playwright.expect(page.locator(".bp-whole-map .pm-result.pm-dimmed")).to_have_count(0)
+        page.keyboard.press("Escape")
+        # The map takes the site's scheme from its toggle, over the system's.
+        page.evaluate("() => document.body.setAttribute('data-md-color-scheme', 'slate')")
+        assert page.locator(".bp-whole-map .pm-app").evaluate("node => getComputedStyle(node).getPropertyValue('--pm-bg').trim()") == "#16181b"
+
+
+def test_a_page_that_states_nothing_opens_the_map_on_its_part(webkit_browser: object, map_url: str) -> None:
+    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        _open_book(page, map_url, "roadmap/algebra/notes.html")
+        playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-start", "algebra/notes")
+        # The map has no card for it, so it opens the chapter the notes are in, not the whole library.
+        playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+
+
+def test_a_part_picked_on_the_map_opens_its_chapter_in_the_reader(webkit_browser: object, map_url: str) -> None:
+    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        _open_book(page, map_url, "index.html")
+        book, heading = page.locator(".bp-dag-viewer"), page.locator(".bp-reading-body h1")
+        # One click on Algebra's band picks it where it is, and the reader turns to the chapter's page.
+        page.locator('.bp-whole-map .pm-part[data-part="algebra"] > rect').click(position={"x": 24, "y": 10})
+        playwright.expect(heading).to_have_text(re.compile(r"^Algebra"))
+        playwright.expect(book).to_have_attribute("data-map-start", "algebra")
+        playwright.expect(page.locator('.bp-whole-map .pm-part.pm-picked[data-part="algebra"]')).to_have_count(1)
+        # Focus doesn't jump to the reader once the page has landed, so a second click or Enter opens the part on the map.
+        page.evaluate("() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))")
+        assert page.evaluate("() => !document.activeElement.closest('.bp-reading-body')")
+        page.go_back()
+        playwright.expect(heading).not_to_have_text(re.compile(r"^Algebra"))
+        playwright.expect(book).to_have_attribute("data-map-start", "roadmap")
+
+
+def test_the_statement_being_read_lights_up_on_the_map(webkit_browser: object, map_url: str) -> None:
+    # A short window, so the chapter's statements scroll past the top of the reader.
+    with _page(webkit_browser, viewport={"width": 1440, "height": 420}, reduced_motion="reduce") as page:
+        _open_book(page, map_url, "roadmap/algebra/index.html")
+        # The first statement scrolls just past the top, so the next one is the one being read.
+        page.locator(".bp-reading-body").evaluate("""body => {
+            const first = body.querySelector('.bp-thmwrapper[data-autoform-node-id="algebra/index"]');
+            body.scrollTop += first.getBoundingClientRect().bottom - body.getBoundingClientRect().top;
+        }""")
+        playwright.expect(page.locator('.bp-whole-map .pm-result.pm-reading[data-result="algebra/lagrange"]')).to_have_count(1)

@@ -104,6 +104,22 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
                     facet[child] = collection
 
     walk(root, root, None)
+    # A source text's track is provenance, which the book lists under Browse: the map draws one only when it holds results.
+    holding: set[str] = set()
+    for part in home.values():
+        while part != root and part not in holding:
+            holding.add(part)
+            part = part_parent[part]
+
+    def sourced(part: str) -> bool:
+        while part != root:
+            if by_id[part].get("navigation") == "source":
+                return True
+            part = part_parent[part]
+        return False
+
+    for part in [part for part in part_parent if part not in holding and sourced(part)]:
+        del part_parent[part]
     taken = set(by_id)
 
     def fresh(base: str) -> str:

@@ -1045,7 +1045,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
       let release,mathReady; function deferMath() { mathReady=new Promise(resolve=>{release=resolve;}); }
       const window=app.win,document=app.initial.doc,host=app.initial.host;
       window.AutoformMath={refresh(){return mathReady;}};
-      host.classList={toggle(){}};
+      host.classList={toggle(){}}; host.dataset={};
       const heading={focus(){calls.push('heading-focus');}};
       const section={classList:{add(){}},scrollIntoView(){calls.push('old-section-scroll');}};
       document.getElementById=()=>section;
@@ -1061,7 +1061,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
         dom$breadcrumb=refs.$breadcrumb,dom$navigation=refs.$navigation,dom$inventoryScroll=refs.$inventoryScroll;
       let dom$outlineToggle;
       const records=new Map(),byId=new Map(),overlays=new Map(),dom$inventoryRows=new Map(),navigation=app.nav;
-      const mapAllowed=true,presentStatuses=['planned'],palette={planned:{}},LIST_PAGE=100;
+      const mapAllowed=true,ui$mapAllowed=true,presentStatuses=['planned'],palette={planned:{}},LIST_PAGE=100;
       const updateProjection=()=>{data=contextGraph;},closeSearch=()=>{},setFilters=()=>{},setBrowse=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
       const resize=()=>{},center=()=>{},centerIfHidden=()=>{},showError=()=>{},trailList=()=>[],routeTrail=()=>[],sheetLayout=()=>false;
       const requestAnimationFrame=callback=>setImmediate(callback);
@@ -1105,7 +1105,7 @@ def test_results_restoration_renders_saved_page_before_restoring_scroll_and_focu
         const following=/\n    function [A-Za-z_$][A-Za-z0-9_$]*\(/.exec(viewer.slice(start+4));
         assert(following); return viewer.slice(start+4,start+4+following.index).trim();
       }
-      const calls=[],LIST_PAGE=100,presentStatuses=['planned'],mapAllowed=false;
+      const calls=[],LIST_PAGE=100,presentStatuses=['planned'],mapAllowed=false,ui$mapAllowed=false;
       let alive=true,restoration=0,restoring=false,checkpointTimer,readingReady=Promise.resolve();
       let ui$filtersTouched,ui$area,ui$requestedNode,ui$selected,ui$selectedStatuses,ui$showIsolated,
         ui$mode='list',ui$listLimit=100,ui$relationIds,ui$outlineLimit,ui$direction,ui$query,ui$activeDirty,ui$transform;

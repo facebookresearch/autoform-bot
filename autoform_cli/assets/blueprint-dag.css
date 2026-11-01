@@ -504,3 +504,13 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-viewer.bp-dag-integrated:has(.bp-dag-stage[hidden]) .bp-dag-zoom { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .bp-dag-integrated .bp-reading-pane { transition: none; } }
+
+/* The whole-project map fills the stage, over the explorer's own drawing, its controls, its unlinked-cards switch and its
+   shelves of what it could not draw; they go once the map has replaced them, and stay if the map fails to mount. The
+   status filter dims the map. */
+.bp-whole-map { position: absolute; inset: 0; z-index: 5; }
+.bp-dag-stage:has(> .bp-whole-map) { position: absolute !important; inset: 0 !important; }
+.bp-dag-integrated:has(.bp-whole-map) :is(.bp-dag-canvas, .bp-dag-node-layer, .bp-map-context, .bp-map-key, .bp-dag-density, .bp-dag-empty, .bp-dag-zoom, .bp-dag-fit, .bp-dag-isolated, .bp-scope-shelves) { display: none !important; }
+/* The map dims what the filter leaves out and hides nothing; a list still offers what it hid. */
+.bp-dag-integrated:has(.bp-dag-stage:not([hidden]) > .bp-whole-map) .bp-dag-hidden-button { display: none !important; }
+.bp-dag-integrated:has(.bp-whole-map) .bp-dag-stage::before, .bp-dag-integrated:has(.bp-whole-map) .bp-dag-stage::after { display: none; }

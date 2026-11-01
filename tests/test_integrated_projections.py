@@ -61,7 +61,7 @@ class Element {
 var document = {createElement: tag => new Element(tag)};
 var window = {location: {href: 'https://example.test/math/roadmap/chapter/index.html', origin: 'https://example.test'}};
 var location = window.location;
-var host = {classList: {toggle() {}}};
+var host = {dataset: {}, classList: {toggle() {}}};
 var dom$hiddenButton = new Element('button'), dom$empty = new Element('p'), dom$searchResults = new Element('div');
 var dom$inventory = new Element('section'), dom$inventoryList = new Element('ul'), dom$inventoryRows;
 var dom$inventorySummary = new Element('span'), dom$loadMore = new Element('button'), dom$inventoryScroll = new Element('div');

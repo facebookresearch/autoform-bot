@@ -73,6 +73,26 @@ def test_authored_areas_become_regions_and_projects_without_them_use_chapters() 
         "Algebra", "NumberTheory", "Analysis"]
 
 
+def test_a_source_text_track_is_drawn_only_when_it_holds_results() -> None:
+    records = [
+        _scope("roadmap", None, "Library"),
+        _scope("Geometry", "roadmap", "Geometry", area="Geometry"),
+        _result("Geometry/euclid", "Geometry", "Euclid"),
+        _scope("Analysis", "roadmap", "Analysis", area="Analysis"),
+        _result("Analysis/ftc", "Analysis", "Fundamental theorem"),
+        _scope("notes", "roadmap", "Reading notes", navigation="source"),
+        _scope("notes/week-1", "notes", "Week 1"),
+        {"id": "notes/week-1/summary", "kind": "node", "title": "Summary", "parent": "notes/week-1", "result": False},
+        _scope("appendix", "roadmap", "Appendix", navigation="source"),
+        _result("appendix/lemma", "appendix", "Appendix lemma"),
+    ]
+    files = project_map.build_project_map(records, [])
+    regions = [region["id"] for region in files["index.json"]["regions"]]
+    # The notes hold no results, so they stay in Browse and the chapters with areas don't gain an "Other" region for them.
+    assert "notes" not in regions and not any(region.startswith("notes/") for region in regions), regions
+    assert regions == ["Geometry", "Analysis", "appendix"], regions
+
+
 def test_a_part_that_names_another_area_joins_that_area() -> None:
     records = [
         _scope("roadmap", None, "Library"),
