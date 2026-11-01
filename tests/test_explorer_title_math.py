@@ -188,7 +188,7 @@ _BOOT = r"""
   var bindNodeLink=original('bindNodeLink');
   var sheetLayout=original('sheetLayout');
   var safeHref=original('safeHref'),graphAt=original('graphAt');
-  var refreshReadingLabels=original('refreshReadingLabels'),semanticParent=original('semanticParent');
+  var refreshReadingLabels=original('refreshReadingLabels'),tooltip=original('tooltip'),semanticParent=original('semanticParent');
   var routeTrail=original('routeTrail'),currentOverviewGroup=original('currentOverviewGroup');
   var trailList=original('trailList'),renderBreadcrumb=original('renderBreadcrumb');
   var showError=original('showError');

@@ -353,7 +353,7 @@ def test_shelf_cache_retains_link_focus_scroll_and_all_underlying_members() -> N
 
 def test_authored_collection_math_parts_remain_safe_in_group_breadcrumb_and_map_heading() -> None:
     peers=_PEERS.replace("function renderBreadcrumb(){}", "").replace("function trailList() {return new Element('ol');}", "")
-    callbacks=[*_CALLBACKS,"buildShell","semanticParent","routeTrail","trailList","renderBreadcrumb"]
+    callbacks=[*_CALLBACKS,"buildShell","semanticParent","routeTrail","trailList","tooltip","renderBreadcrumb"]
     _execute(r"""
       const state=fixture(13),title='Collection $C$ and `x<y`';
       state.collection.title=title;state.collection.reading_title={format:'inline-parts-v1',source:title,

@@ -78,6 +78,8 @@ function index() { return {schema:'autoform-dag-search/v1',nodes:[
 const rootSpec = {title:'Root',route:absolute('roadmap/index.html'),data:'../dependencies.json',scope:'roadmap'};
 const aSpec = {title:'A topic',route:absolute('roadmap/a.html'),data:'../dependencies/a.json',scope:'a'};
 const bSpec = {title:'B topic',route:absolute('roadmap/b.html'),data:'../dependencies/b.json',scope:'b'};
+// The index normalizer ends a batch once 10 ms have passed; this clock passes them every 512 reads.
+function steppedClock(app) { let tick=0; app.win.performance={now:()=>tick++*10/512}; return app; }
 function setup(extra = {}) {
   const initial = page(extra.initial || rootSpec), listeners = new Map(), commits = [], errors = [], restored = [], fetches = [];
   let state = {mode:'map',readingScroll:0}, pointer = 0;
@@ -131,6 +133,7 @@ function addLargeScope(app) {
 
 _PAINT_PEERS = r"""
 function paintCatalogue(app) {
+  steppedClock(app);
   const nodes=Array.from({length:1025},(_,n)=>({id:'paint-'+n,title:'Paint item '+n,kind:'node',scope:'roadmap',
     route:'../roadmap/paint-'+n+'.html',status:'planned'}));
   const payload={schema:'autoform-dag-search/v1',nodes,relations:[[0,1024,2,3],[512,0,0,1]]};
@@ -316,7 +319,7 @@ def test_invalid_late_parent_offset_never_publishes_partial_index_and_coalesced_
     _run("const badParent=" + json.dumps(bad_parent) + ";\n" + r"""
       const payload=index();for(let n=0;n<513;n++)payload.nodes.push({id:'parent-'+n,title:'Parent '+n,parent:0});
       payload.nodes.at(-1).parent=badParent;const before=JSON.stringify(payload),published=[];
-      const app=setup({onIndex(value){published.push(value);}}),key=absolute('dependencies/index.json');
+      const app=steppedClock(setup({onIndex(value){published.push(value);}})),key=absolute('dependencies/index.json');
       app.contents.set(key,payload);const first=app.nav.loadIndex(),second=app.nav.loadIndex();assert.strictEqual(first,second);
       await assert.rejects(first,error=>error.message==='Invalid search parent endpoint');
       assert.equal(app.nav.getIndex(),null);assert.equal(published.length,0);
@@ -839,7 +842,7 @@ def test_large_index_yields_and_commits_only_after_all_rows_validate() -> None:
       const payload=index();
       for(let n=0;n<1024;n++) payload.nodes.push({id:'leaf-'+n,title:'Leaf '+n,route:'../roadmap/leaf-'+n+'.html'});
       const before=JSON.stringify(payload),published=[];
-      const app=setup({onIndex(index){published.push(index);}});
+      const app=steppedClock(setup({onIndex(index){published.push(index);}}));
       const key=absolute('dependencies/index.json'); app.contents.set(key,payload);
       const nativeTimer=global.setTimeout; let yields=0;
       global.setTimeout=(callback,delay,...args)=>{
@@ -856,7 +859,7 @@ def test_large_index_yields_and_commits_only_after_all_rows_validate() -> None:
       } finally {global.setTimeout=nativeTimer;app.nav.dispose();}
 
       // A failure after earlier batches must not expose a partial index or poison retry.
-      const rejected=[],invalid=setup({onIndex(index){rejected.push(index);}}),broken=structuredClone(payload);
+      const rejected=[],invalid=steppedClock(setup({onIndex(index){rejected.push(index);}})),broken=structuredClone(payload);
       broken.nodes.at(-1).id=broken.nodes[0].id; invalid.contents.set(key,broken);
       await assert.rejects(invalid.nav.loadIndex(),/Invalid search node/);
       assert.equal(invalid.nav.getIndex(),null);assert.equal(rejected.length,0);
@@ -866,10 +869,62 @@ def test_large_index_yields_and_commits_only_after_all_rows_validate() -> None:
     """)
 
 
+def test_index_batches_end_on_elapsed_time_not_on_a_row_count() -> None:
+    _run(r"""
+      for(const [step,pause,size,expected] of [[0,0,2000,0],[10,0,40,44],[10/512,50,1100,2]]) {
+        // A frozen clock never ends a batch; one that passes a whole slice per read ends one after every row.
+        // The 50 ms spent in each pause must not count toward the next batch.
+        const payload=index();for(let n=0;n<size;n++) payload.nodes.push({id:'leaf-'+n,title:'Leaf '+n});
+        const app=setup();app.contents.set(absolute('dependencies/index.json'),payload);
+        let now=0;app.win.performance={now:()=>now+=step};
+        const nativeTimer=global.setTimeout;let yields=0;
+        global.setTimeout=(callback,delay,...args)=>{if(delay===0){yields++;now+=pause;}return nativeTimer(callback,delay,...args);};
+        try {const result=await app.nav.loadIndex();assert.equal(result.nodes.length,size+3);assert.equal(yields,expected);}
+        finally {global.setTimeout=nativeTimer;app.nav.dispose();}
+      }
+    """)
+
+
+def test_index_links_resolved_once_per_page_match_parsing_each_whole_value() -> None:
+    _run(r"""
+      // Earlier rows leave the other two fields absent, so a literal "undefined" must not reuse their result.
+      const indexURL=absolute('dependencies/index.json'),whole=value=>new URL(value,indexURL).href;
+      const cases=[['route','a.html#x',1],['route','a.html#y',1],['route','a.html #x',1],['route','a.html#\u00e9',1],
+        ['route','a.html#a b',1],['route','a.html#x#y',1],['route','a.html#%zz',1],['route','a.html#',1],['route','#only',1],
+        ['route','../roadmap/b.html?q=1#n',1],['route','undefined',1],
+        ['route','https://outside.test/p#a',0],['url','https://outside.test/p#b',1],
+        ['url','https://outside.test/q#a',1],['route','https://outside.test/q#b',0],
+        ['route','javascript:alert(1)#x',0],['url','https://user:pw@outside.test/p#x',0]];
+      const payload=index();
+      cases.forEach(([field,value],n)=>payload.nodes.push({id:'case-'+n,title:'Case '+n,[field]:value}));
+      const app=setup();app.contents.set(indexURL,payload);
+      const result=await app.nav.loadIndex();
+      cases.forEach(([field,value,kept],n)=>assert.strictEqual(result.nodes[n+3][field],kept?whole(value):null,value));
+      app.nav.dispose();
+    """)
+
+
+def test_a_routed_page_outside_the_roadmap_is_a_site_document_without_its_fragment() -> None:
+    _run(r"""
+      // Neither page is under roadmap/ or dependencies/, so only the search row's route makes the first one internal.
+      const payload=index();payload.nodes.push({id:'guide',title:'Guide',route:'../guide/intro.html#setup'});
+      const app=setup();app.contents.set(absolute('dependencies/index.json'),payload);
+      await app.nav.start();const root=(await app.nav.navigateNode('a')).readingSource;
+      const routed=new Element('a',{href:absolute('guide/intro.html')},[],'Guide'),
+        unrouted=new Element('a',{href:absolute('guide/other.html')},[],'Other');
+      root.children.push(routed,unrouted);routed.parent=root;unrouted.parent=root;
+      app.nav.bindReader(root);const click=root.listeners.get('click');
+      const event=target=>({target,button:0,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;},stopPropagation(){}});
+      const outside=event(unrouted);click(outside);assert.equal(outside.defaultPrevented,false);
+      const inside=event(routed);click(inside);assert.equal(inside.defaultPrevented,true);
+      app.nav.dispose();
+    """)
+
+
 def test_disposal_during_index_batch_never_commits_or_reports_a_partial_index() -> None:
     _run(r"""
       const payload=index();for(let n=0;n<600;n++) payload.nodes.push({id:'leaf-'+n,title:'Leaf '+n});
-      const published=[],app=setup({onIndex(index){published.push(index);}});
+      const published=[],app=steppedClock(setup({onIndex(index){published.push(index);}}));
       app.contents.set(absolute('dependencies/index.json'),payload);
       const nativeTimer=global.setTimeout;let yielded=false;
       global.setTimeout=(callback,delay,...args)=>{
@@ -888,7 +943,7 @@ def test_relation_only_batches_yield_validate_late_rows_and_honor_disposal() -> 
       for(const kind of ['valid','invalid','disposed']) {
         const payload=index();payload.relations=Array.from({length:2050},()=>[1,2,1,0]);
         if(kind==='invalid') payload.relations.at(-1)[1]='missing';
-        const published=[],app=setup({onIndex(index){published.push(index);}});
+        const published=[],app=steppedClock(setup({onIndex(index){published.push(index);}}));
         app.contents.set(absolute('dependencies/index.json'),payload);
         const nativeTimer=global.setTimeout;let yields=0;
         global.setTimeout=(callback,delay,...args)=>{
@@ -898,13 +953,13 @@ def test_relation_only_batches_yield_validate_late_rows_and_honor_disposal() -> 
         };
         try {
           if(kind==='valid') {
-            const result=await app.nav.loadIndex();assert(yields>=2);assert.equal(published.length,1);
+            const result=await app.nav.loadIndex();assert.equal(yields,4);assert.equal(published.length,1);
             assert.equal(result.relations.length,2050);
             assert(result.relations.every(row=>JSON.stringify(row)===JSON.stringify(['a','b',1,0])));
           } else {
             await assert.rejects(app.nav.loadIndex(),error=>kind==='disposed' ? error.name==='AbortError' :
               error.message==='Invalid search relation endpoint');
-            assert(yields>=(kind==='disposed'?1:2));assert.equal(app.nav.getIndex(),null);
+            assert.equal(yields,kind==='disposed'?1:4);assert.equal(app.nav.getIndex(),null);
             assert.equal(published.length,0);assert.equal(app.errors.length,kind==='disposed'?0:1);
           }
         } finally {global.setTimeout=nativeTimer;app.nav.dispose();}

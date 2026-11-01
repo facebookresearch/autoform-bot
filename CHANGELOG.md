@@ -11,13 +11,21 @@ date when the release is tagged.
 
 ### Added
 
+- **Worktrees.** `autoform project worktrees` reports which linked worktrees
+  are safe to remove after a run and what protects the rest: changes, Git
+  operations, unintegrated commits, processes, recent activity and live leases
+  from this host. `--remove` takes a saved report, rechecks each entry, removes
+  it with `git worktree remove`, never `--force`, and reports the free space
+  recovered and how to re-create the checkout; ignored files such as `.lake`
+  are not kept (#435).
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project, linked from the landing page beside the
   book. Regions (authored areas, or the top-level chapters) open into their
   parts and parts into their results as the camera closes in, and a part opens
   once its parts can be named. Search reaches any result by title or Lean name;
-  the reading pane shows the result's statement and proof from its page, and
-  what it uses and what uses it. One click picks a part and shows the parts it
+  the reading pane names the result's kind, such as Theorem or Definition, and
+  shows its statement and proof from its page, and what it uses and what uses
+  it. One click picks a part and shows the parts it
   builds on and the parts that use it, with links flowing between them; a second
   click goes inside, and Up or Escape goes back a level. The data loads one level
   at a time from `dependencies/map/data/` (#517).
@@ -188,6 +196,17 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Import-closure scan.** `work import-impact --module-scope import-closure`
+  reads uncaptured `.lean` files only in the root libraries' module trees and
+  in dependency packages. It no longer reads other nested checkouts, such as
+  worker worktrees with their own `.lake`, the root's build output or a
+  package's `.lake`, which could stall the run before its probe (#429).
+- **Search index load.** The explorer prepares its search index in 10 ms
+  slices rather than 512-row batches, and resolves each page's links once
+  rather than every row's. On ATLAS (38,661 rows), search, the Topics outline
+  and concept links were ready 5.3 s after the index was parsed, most of it
+  spent waiting between batches; they are now ready after 1.0 s in WebKit and
+  0.7 s in Chrome.
 - **Book order.** A link inside an HTML comment no longer places its page in
   the book's order: a commented-out chapter link moved that chapter forward in
   `SUMMARY.md`, though the page showed it later (#535).
