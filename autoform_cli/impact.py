@@ -508,7 +508,7 @@ def _outside_sources(
     # Each top is a directory or file to read, with the depth of the packages it holds.
     tops: dict[Path, int | None] = {}
     for library in libraries:
-        bases = (*library.roots, *(_glob(glob, library)[0] for glob in library.globs))
+        bases = (*library.roots, *(_glob(glob, library)[0] for glob in library.globs or ()))
         try:
             firsts: set[str] | None = {_normalized_name(lean_name_parts(base)[0][0]) for base in bases}
         except SkeletonError:
