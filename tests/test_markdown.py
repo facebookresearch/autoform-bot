@@ -273,6 +273,10 @@ def test_render_s_line_transforms_read_a_comment_that_never_closes_as_text() -> 
 
         assert outside_fences(text, lambda line: f"+{line}") == f"+{opener}\n+\n```text\nsee [x](a.md)\n```\n+after\n"
 
+    # The comment left open is the one reopened on the line that closes the first, so the fence line is no fence.
+    reopened = "<!--\n```\n--> text <!-- open\nsee [x](a.md)\n"
+    assert outside_fences(reopened, lambda line: f"+{line}") == "+<!--\n+```\n+--> text <!-- open\n+see [x](a.md)\n"
+
 
 def test_text_beside_a_comment_on_one_line_survives() -> None:
     assert content_lines("| OUT | real <!-- aside --> reason |\n") == [
