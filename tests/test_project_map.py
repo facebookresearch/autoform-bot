@@ -170,7 +170,7 @@ def test_wide_parts_are_grouped_into_linked_communities_and_one_standalone_group
     assert all(child["grouped"] for child in big["children"])
     # 35 standalone topics are too many for one level, so they split in reading order.
     standalone = _part(files, "Big/~3")
-    assert [child["title"] for child in standalone["children"]] == ["Standalone topics (1 of 2)", "Standalone topics (2 of 2)"]
+    assert [child["title"] for child in standalone["children"]] == ["Topic 05 and 17 other topics", "Topic 23 and 16 other topics"]
     assert [child["title"] for child in _part(files, "Big/~3/~1")["children"]][:3] == ["Topic 05", "Topic 06", "Topic 07"]
     # The groups' links survive one level up, summed per pair of groups.
     assert _part(files, "Big/~1")["edges"] == [["Big/t01", "Big/t00", 1, 0], ["Big/t02", "Big/t01", 1, 0]]
@@ -196,8 +196,8 @@ def test_no_level_holds_more_parts_than_the_group_limit() -> None:
     assert [child["title"] for child in bodies[big["Smaller linked groups"]]["children"]] == [
         f"Topic {index:03d} and Topic {index + 1:03d}" for index in range(54, 70, 2)]
     chunks = {child["title"]: child["id"] for child in bodies[big["Standalone topics"]]["children"]}
-    assert list(chunks) == ["Standalone topics (1 of 2)", "Standalone topics (2 of 2)"]
-    assert [child["title"] for child in bodies[chunks["Standalone topics (1 of 2)"]]["children"]] == [
+    assert list(chunks) == ["Topic 072 and 19 other topics", "Topic 092 and 19 other topics"]
+    assert [child["title"] for child in bodies[chunks["Topic 072 and 19 other topics"]]["children"]] == [
         f"Topic {index:03d}" for index in range(72, 92)]
 
 
