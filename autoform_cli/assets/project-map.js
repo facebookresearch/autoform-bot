@@ -48,7 +48,8 @@
   var GREEK = {alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε", varepsilon: "ε", zeta: "ζ", eta: "η", theta: "θ",
     lambda: "λ", mu: "μ", nu: "ν", xi: "ξ", pi: "π", rho: "ρ", sigma: "σ", tau: "τ", phi: "φ", varphi: "φ", chi: "χ", psi: "ψ",
     omega: "ω", Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ", Pi: "Π", Sigma: "Σ", Phi: "Φ", Psi: "Ψ", Omega: "Ω",
-    infty: "∞", to: "→", le: "≤", ge: "≥", leq: "≤", geq: "≥", ne: "≠", times: "×", cdot: "·", in: "∈", subset: "⊂", ell: "ℓ"};
+    infty: "∞", to: "→", le: "≤", ge: "≥", leq: "≤", geq: "≥", ne: "≠", times: "×", cdot: "·", in: "∈", subset: "⊂", ell: "ℓ",
+    Vert: "‖", lVert: "‖", rVert: "‖"};
   // A label for places that cannot typeset (map text): TeX source made readable, never shown with its dollar signs.
   function plain(text) {
     return String(text || "").replace(/\$([^$]*)\$|\\\(([\s\S]*?)\\\)/g, function (_m, a, b) {
@@ -56,7 +57,9 @@
         .replace(/\\mathbb\{([A-Za-z])\}/g, function (_x, letter) { return DOUBLE[letter] || letter; })
         .replace(/\\(?:mathrm|mathcal|mathfrak|operatorname|text|mathbf|mathsf)\{([^}]*)\}/g, "$1")
         .replace(/\\([A-Za-z]+)/g, function (_x, name) { return GREEK[name] || name; })
-        .replace(/\^\{([^}]*)\}/g, "^$1").replace(/_\{([^}]*)\}/g, "_$1").replace(/[{}]/g, "");
+        .replace(/\^\{([^}]*)\}/g, "^$1").replace(/_\{([^}]*)\}/g, "_$1")
+        // \{ and \} are braces the reader sees, \| a norm's bars; other braces only group.
+        .replace(/\\\|/g, "‖").replace(/(\\?)([{}])/g, function (_x, escaped, brace) { return escaped ? brace : ""; });
     }).replace(/`([^`]*)`/g, "$1");
   }
   var DONE = {fully_proved: 1, proved: 1, defined: 1, mathlib: 1};

@@ -208,6 +208,27 @@ def test_titles_with_tex_are_readable_on_the_map(tmp_path: Path) -> None:
     assert "tex ok" in out
 
 
+def test_escaped_braces_and_norm_bars_stay_in_titles(tmp_path: Path) -> None:
+    braces = tmp_path / "braces"
+    project_map.write_project_map(braces, project_map.build_project_map([
+        {"id": "roadmap", "kind": "scope", "title": "Notes", "parent": None, "result": False},
+        {"id": "set", "kind": "node", "title": r"Braces of $\{$not, and, or$\}$", "parent": "roadmap", "result": True,
+         "status": "planned"},
+        {"id": "union", "kind": "node", "title": r"Braces of Γ ∪ $\{\gamma\}$", "parent": "roadmap", "result": True,
+         "status": "planned"},
+        {"id": "norm", "kind": "node", "title": r"Braces of $\|x\| = \lVert{x}\rVert$", "parent": "roadmap", "result": True,
+         "status": "planned"},
+    ], []))
+    out = _walk(tmp_path, r"""
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'braces'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      assert.deepStrictEqual($$('.pm-hit-title').map(title => title.textContent).sort(),
+        ['Braces of {not, and, or}', 'Braces of Γ ∪ {γ}', 'Braces of ‖x‖ = ‖x‖']);
+      console.log('braces ok');
+    """, braces)
+    assert "braces ok" in out
+
+
 def test_search_finds_results_in_a_flat_roadmap(tmp_path: Path) -> None:
     # Results straight under the root live in a generated part whose id they don't extend.
     flat = tmp_path / "flat"
