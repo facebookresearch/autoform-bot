@@ -37,6 +37,11 @@ These pass `check` with a warning:
   article's H1 title fails `check`, as a missing title.
 - A `declaration` on a container article, which nothing counts or schedules;
   `audit` reports it as `formalizable-container`.
+- A `declaration` whose command, after modifiers such as `noncomputable`, is
+  none of `abbrev`, `axiom`, `class`, `corollary`, `def`, `definition`,
+  `example`, `inductive`, `instance`, `irreducible_def`, `lemma`, `opaque`,
+  `proposition`, `structure` and `theorem`: render captions it as written,
+  capitalized, and `audit` does not compare the Lean target's kind with it.
 
 `check` also warns, naming the file and the line, about markup a published page
 could use to run script or pass for the site's own markup; each warning says
@@ -171,10 +176,17 @@ and `declarations`, one object per affected declaration and setting with its
 `name`, `option`, `value`, `location` (the `set_option` as `path:line` relative
 to the Lean root), and `scope` (`file`, `section`, `declaration`, or `proof`),
 sorted by name. The catalog limit warnings under [Elaboration
-limits](#elaboration-limits) fill `declarations`. Two warnings leave it empty:
-`atlas-omission`, at `atlas.json`, names what loading ignored in that file, and
+limits](#elaboration-limits) fill `declarations`. Three warnings leave it empty:
+`atlas-omission`, at `atlas.json`, names what loading ignored in that file;
 `decomposed-without-declaration`, at `coverage/README.md`, names a `DECOMPOSED`
-row's links that reach no declaration leaf.
+row's links that reach no declaration leaf; and `duplicate-lean-target`, at
+each target involved, names the others taking the same credit. A target (a leaf
+carrying `declaration:`) recording `statement: formalized` takes progress
+credit for its first `lean:` name, and a `mathlib: true` one Mathlib credit for
+its first `mathlib_declaration` name, compared as Lean names: `_root_.` and
+`«»` quoting drop out, and `«x.y»` stays one component. Later names, catalogs,
+containers and a target recording neither, such as a `statement: retracted`
+placeholder left by a migration, take no credit.
 
 ### Structure
 

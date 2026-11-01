@@ -20,6 +20,7 @@ from ._fs import directory_path as _directory_path
 from .coverage import CoverageSummary, load_coverage, validate_coverage_roles
 from .dag_viewer import MAX_MAP_NODES
 from .elaboration_limits import LimitSetting, limits_by_line, limits_in_force
+from .graph_views import _countable
 from .graph import (
     IMPLEMENTATION_NOTES_DIR,
     Graph,
@@ -31,6 +32,7 @@ from .graph import (
 )
 from .lean import (
     _DECLARATION,
+    _ONE_COMPONENT,
     _WANTED_KEYWORDS,
     Declaration,
     LeanSourceError,
@@ -395,6 +397,7 @@ def audit_graph(
         coverage, coverage_findings = _coverage_findings(graph.blueprint_dir, graph.unpublished)
     findings.extend(coverage_findings)
     warnings = [AuditWarning("atlas.json", "atlas-omission", omission, ()) for omission in atlas_omissions(graph)]
+    warnings.extend(_duplicate_target_warnings(graph))
     for issue in () if coverage is None else validate_coverage_roles(graph, coverage):
         reason = f"{issue.reason}{f' (line {issue.line})' if issue.line else ''}"
         if issue.code == "decomposed-without-declaration":
@@ -873,6 +876,54 @@ def _source_spans(index: SourceIndex) -> dict[Declaration, int]:
         end = lines[following] - 1 if following < len(lines) else tails[declaration.path]
         spans[declaration] = max(1, end - declaration.line + 1)
     return spans
+
+
+def _duplicate_target_warnings(graph: Graph) -> list[AuditWarning]:
+    """Warn at each target that takes credit for a declaration another target also takes.
+
+    Progress counts targets, leaves that carry ``declaration:`` (never a module
+    catalog). A target recording ``statement: formalized`` takes progress credit
+    for its first ``lean:`` name, and a ``mathlib: true`` one Mathlib credit for
+    its first ``mathlib_declaration`` name. Later names support it and may recur,
+    and a target recording neither, such as a ``statement: retracted``
+    placeholder during a migration, takes no credit.
+    """
+
+    claims: dict[tuple[str, tuple[str, ...]], list[tuple[str, str]]] = {}
+    for node_id in _countable(graph):
+        node = graph.nodes[node_id]
+        owned = []
+        if node.statement_formalized:
+            owned.append(("lean", declaration_names(node.lean or "")[:1]))
+        if node.mathlib:
+            owned.append(("mathlib_declaration", declaration_names(node.mathlib_declaration or "")[:1]))
+        for key, names in owned:
+            for name in names:
+                article_path = _relative_path(node.path, graph.blueprint_dir)
+                claims.setdefault((key, _name_key(name)), []).append((article_path, name))
+    warnings = []
+    for (key, _), owners in claims.items():
+        if len(owners) < 2:
+            continue
+        for article_path, name in owners:
+            others = ", ".join(sorted(other for other, _ in owners if other != article_path))
+            warnings.append(
+                AuditWarning(
+                    article_path,
+                    "duplicate-lean-target",
+                    f"its first {key} name, {name}, is also first in {others}, so one declaration "
+                    "gets credit more than once; keep it first in only one article",
+                    (),
+                )
+            )
+    return warnings
+
+
+def _name_key(name: str) -> tuple[str, ...]:
+    """The components of the Lean name *name* spells; ``«»`` quoting and a leading ``_root_`` drop out."""
+
+    parts = [part[1:-1] if part[:1] == "«" and part[-1:] == "»" else part for part in _ONE_COMPONENT.findall(name)]
+    return tuple(parts[1:] if len(parts) > 1 and parts[0] == "_root_" else parts)
 
 
 def _size_findings(graph: Graph, sizes: dict[str, int]) -> list[AuditFinding]:
