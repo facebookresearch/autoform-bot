@@ -319,6 +319,16 @@ def test_labels_appear_only_where_they_fit() -> None:
     const cover = stack.find(label => label.id === 'thin'), moved = stack.find(label => label.id === 'tall');
     assert(cover && cover.overlay && moved && moved.overlay && !stack.some(label => label.id === 'flat'), JSON.stringify(stack));
     assert(moved.y >= cover.y + cover.band - EPS && moved.y + moved.band <= tall.y + tall.h + EPS);
+    // A box running above the stage's top, here under a 40 px pinned title, keeps its title just
+    // below it while the box has room; a child's title there moves below that one.
+    const pinned = Object.assign({top: 40}, DESKTOP), still = {x: 0, y: 0, z: 1};
+    const scrolled = {x: 0, y: -200, w: 400, h: 500, unit: 1, band: 52, pad: 12, depth: 1, parent: null};
+    const inner = {x: 20, y: -150, w: 200, h: 300, unit: 1, band: 52, pad: 12, depth: 2, parent: 'scrolled'};
+    const [held, below] = L.placeLabels({scrolled, inner}, still, pinned);
+    assert(held.id === 'scrolled' && held.y === 40 && held.overlay && held.lines === 1, JSON.stringify(held));
+    assert(below.id === 'inner' && below.y >= held.y + held.band - EPS && below.y + below.band <= inner.y + inner.h + EPS, JSON.stringify(below));
+    assert.equal(L.placeLabels({ending: Object.assign({}, scrolled, {h: 260})}, still, pinned).length, 0);
+    assert.equal(L.placeLabels({scrolled}, still, DESKTOP)[0].y, 0);
     // A closed tile shows nothing inside, so its title wraps down it: as many lines as fit above its
     // padding, with the details after them. An open box keeps its title in its band.
     const end = (label, lines) => label.baseline + (label.compact ? 4 + (lines - 1) * L.constants.COMPACT_LINE

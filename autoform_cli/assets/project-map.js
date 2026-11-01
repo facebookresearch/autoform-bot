@@ -395,7 +395,9 @@
       // Beside other children, a part's own results have a band of their own to name them.
       if (record.ownBox && record.ownBox.band && record.kids.length && screenBox(record.ownBox).w >= LABEL_MIN_W) labelBoxes[record.id + "#results"] = record.ownBox;
     })(part(ROOT));
-    var slots = L.placeLabels(labelBoxes, cornerCamera(), size, closed), labelled = new Set(slots.map(function (slot) { return slot.id; }));
+    // Titles keep below the pinned title, whose height is known once it has shown.
+    var under = pinned() ? {w: size.w, h: size.h, top: pin.offsetHeight || 40} : size;
+    var slots = L.placeLabels(labelBoxes, cornerCamera(), under, closed), labelled = new Set(slots.map(function (slot) { return slot.id; }));
     opened.forEach(function (record) { drawRoutes(record, labelled); });
     communities.forEach(function (record) { if (drawCommunity(record)) drawn.add(record.id + "#results"); });
     drawLinks();
@@ -589,7 +591,7 @@
       if (slot.overlay) {
         var b = screenBox(own ? record.ownBox : record.box), backdrop = keep(backdropLayer, "lb:" + slot.id, "rect", {
           class: "pm-backdrop pm-backdrop-" + (own ? "open" : isOpen(record, b) ? "open" : tileKind(record.summary.status)) + cls, rx: 6});
-        placeRect(backdrop, {x: b.x + 1, y: b.y + 1, w: b.w - 2, h: slot.band});
+        placeRect(backdrop, {x: b.x + 1, y: slot.y + 1, w: b.w - 2, h: slot.band});
       }
       if (slot.compact) {
         wrap(title, Math.max(3, Math.floor(slot.w / COMPACT_EM)), slot.lines).forEach(function (line, index) {
@@ -651,13 +653,17 @@
     hint.classList.toggle("pm-hint-strong", text !== HINT);
   }
   // Once the part the view is in has its header band scrolled off, its title stays pinned to the top of the stage.
-  function drawPin() {
+  function pinned() {
     var record = viewPart();
-    if (!record || record.id === ROOT || !record.box) { pin.hidden = true; return; }
+    if (!record || record.id === ROOT || !record.box) return null;
     var b = screenBox(record.box), band = (record.box.band || L.constants.BAND) * (record.box.unit || 1) * camera.k;
     // The title line sits at the top of the band, however tall the band has grown: pin once that line is off the stage.
-    if (b.y + Math.min(30, band / 2 + 6) >= 12 || b.y + b.h < 60) { pin.hidden = true; return; }
-    pin.hidden = false;
+    return b.y + Math.min(30, band / 2 + 6) >= 12 || b.y + b.h < 60 ? null : record;
+  }
+  function drawPin() {
+    var record = pinned();
+    pin.hidden = !record;
+    if (!record) return;
     if (pin.dataset.part !== record.id) {
       pin.dataset.part = record.id;
       pin.replaceChildren(el("strong", "", plain(record.summary.title)), el("span", "", progressText(record.summary)));

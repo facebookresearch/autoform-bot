@@ -648,15 +648,17 @@
   // deeper boxes gain theirs as the camera closes in. A box whose band is still too thin, but whose
   // height has room for the line, gets it as an overlay over its top. An overlay covers the top of
   // its box's content, so a descendant's label under it moves just below it, or goes when its box
-  // has no room there. Labels come shallowest first. A box in `closed` (an object keyed by id) shows
-  // nothing inside, so its title may wrap down the whole box: `lines` is the most it can take.
+  // has no room there. A box running above the stage's top (`stage.top`, below whatever the page
+  // pins there) keeps its title in view there, as an overlay, while the box has room for it. Labels
+  // come shallowest first. A box in `closed` (an object keyed by id) shows nothing inside, so its
+  // title may wrap down the whole box: `lines` is the most it can take.
   function placeLabels(boxes, camera, stage, closed) {
-    var labels = [], placed = {};
+    var labels = [], placed = {}, top = stage.top || 0;
     Object.keys(boxes).sort(function (a, b) { return (boxes[a].depth || 0) - (boxes[b].depth || 0) || byKey(a, b); }).forEach(function (id) {
       var box = boxes[id];
       var x = (box.x - camera.x) * camera.z, y = (box.y - camera.y) * camera.z;
       var w = box.w * camera.z, h = box.h * camera.z, band = box.band * box.unit * camera.z, pad = box.pad * box.unit * camera.z;
-      if (x >= stage.w || y >= stage.h || x + w <= 0 || y + h <= 0 || !box.band) return;
+      if (x >= stage.w || y >= stage.h || x + w <= 0 || y + h <= top || !box.band) return;
       var compact = w < 0.9 * MIN_W, need = compact ? COMPACT_BAND : 0.9 * LABEL_BAND;
       if (w < COMPACT_W) return;
       var inBand = band >= need;
@@ -664,6 +666,10 @@
       var label = {id: id, x: x + pad, y: y, w: w - 2 * pad, band: inBand ? band : need, overlay: !inBand, compact: compact,
         lines: !compact && box.band === BAND2 && band >= 0.9 * BAND2 ? 2 : 1,
         detail: !compact && inBand && Math.min(band, h) >= 0.9 * BAND ? "meta" : "title"};
+      if (y < top) {
+        if (top + need > y + h) return;
+        Object.assign(label, {y: top, band: need, overlay: true, lines: 1, detail: "title"});
+      }
       for (var up = box.parent; up && boxes[up]; up = boxes[up].parent) {
         var cover = placed[up];
         // An in-band label sits above its box's content, so only an overlay can cover a descendant.
