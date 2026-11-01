@@ -166,15 +166,13 @@
 
   // ---------------------------------------------------------------- layout (from the layout module)
   var stageSize = null;      // the stage the world was packed for
-  var routesAt = new Map();  // part id -> routes between its children, in world units
   function packRoot() {
     var root = part(ROOT), top = L.packLevels(model.index, stageSize);
     root.box = top.root;
     root.kids.forEach(function (id) { part(id).box = top.boxes[id] || null; });
-    routesAt.set(ROOT, L.bundleEdges(top.boxes, model.index.region_edges || [], top.content));
     root.kids.forEach(function (id) { packChildren(part(id)); });
   }
-  // A part's children, its own results and the routes between them, once both its box and its file are known.
+  // A part's children and its own results, once both its box and its file are known.
   function packChildren(record) {
     if (!record || !record.box || !record.data) return;
     var boxes = L.packPart(record.data, record.box, stageSize);
@@ -182,7 +180,6 @@
     record.ownBox = boxes[record.id + "#results"] || null;
     var widths = record.kids.map(function (id) { return part(id).box ? part(id).box.w : 0; }).sort(function (a, b) { return a - b; });
     record.kidW = widths.length ? widths[widths.length >> 1] : null;
-    routesAt.set(record.id, record.kids.length ? L.bundleEdges(boxes, record.data.edges || [], L.contentOf(record.box)) : []);
     var results = record.data.results || [];
     record.view = record.ownBox && results.length ?
       L.layoutCommunity(results, record.data.result_edges || [], record.data.boundary_edges || [], record.ownBox) : null;
@@ -219,13 +216,12 @@
   defs.innerHTML = ["pm-arrow", "pm-arrow-on"].map(function (id) {
     return '<marker id="' + id + '" class="' + id + '" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z"/></marker>';
   }).join("");
-  // Routes run through the gaps between boxes, so they draw above every box; labels draw last.
-  // A picked part's arrows to its neighbours cross other boxes, so they draw above everything but the labels.
-  // A title over its box sits on a backdrop; backdrops have a layer of their own below every label, since keep()
-  // appends a node only when it first creates it.
-  var partLayer = svg("g"), miniLayer = svg("g"), routeLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), linkLayer = svg("g"),
+  // Labels draw last. A picked part's arrows to its neighbours cross other boxes, so they draw above everything but
+  // the labels. A title over its box sits on a backdrop; backdrops have a layer of their own below every label, since
+  // keep() appends a node only when it first creates it.
+  var partLayer = svg("g"), miniLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), linkLayer = svg("g"),
     backdropLayer = svg("g"), labelLayer = svg("g");
-  canvas.append(defs, partLayer, miniLayer, routeLayer, resultLayer, cardRouteLayer, linkLayer, backdropLayer, labelLayer);
+  canvas.append(defs, partLayer, miniLayer, resultLayer, cardRouteLayer, linkLayer, backdropLayer, labelLayer);
   var pin = el("div", "pm-pin"); pin.hidden = true;
   var hint = el("div", "pm-hint", "");
   stage.append(canvas, pin, hint);
@@ -321,7 +317,7 @@
   // move the map themselves; then both follow the part that fills the view.
   // picked: a part chosen with one click, shown where it is with its neighbours (a second click goes inside).
   // links: the shown part's neighbours by role (uses, used-by, both); linkHover: the neighbour under the pointer in the panel.
-  var state = {selected: null, related: null, focusPart: null, hoverPart: null, facets: null, picked: null, links: null, linkHover: null, error: null};
+  var state = {selected: null, related: null, focusPart: null, facets: null, picked: null, links: null, linkHover: null, error: null};
   var pending = false;
   function schedule() {
     if (pending) return;
@@ -397,8 +393,7 @@
     })(part(ROOT));
     // Titles keep below the pinned title, whose height is known once it has shown.
     var under = pinned() ? {w: size.w, h: size.h, top: pin.offsetHeight || 40} : size;
-    var slots = L.placeLabels(labelBoxes, cornerCamera(), under, closed), labelled = new Set(slots.map(function (slot) { return slot.id; }));
-    opened.forEach(function (record) { drawRoutes(record, labelled); });
+    var slots = L.placeLabels(labelBoxes, cornerCamera(), under, closed);
     communities.forEach(function (record) { if (drawCommunity(record)) drawn.add(record.id + "#results"); });
     drawLinks();
     drawLabels(slots);
@@ -462,31 +457,9 @@
     return titleOf(route.to) + " uses " + titleOf(route.from) + ": " + num(main) + (main === 1 ? " link" : " links") +
       (route.both ? "; " + titleOf(route.from) + " uses " + titleOf(route.to) + ": " + num(back) + (back === 1 ? " link" : " links") : "");
   }
-  // The routes between an open part's children: the central ones at rest, once both ends carry a label (a route between
-  // two anonymous tiles is noise), and every route of the part in focus or under the pointer.
-  function drawRoutes(record, labelled) {
-    var routes = routesAt.get(record.id) || [];
-    // With a part in focus, links elsewhere fade, so its own links and its outlined neighbours stand out.
-    var focus = !state.selected && state.focusPart !== ROOT ? state.focusPart : null;
-    var elsewhere = !!focus && record.id !== focus && chainOf(record.id).indexOf(focus) < 0;
-    routes.forEach(function (route) {
-      // With a result selected, its part's own links to its neighbours are beside the point; the pointer still shows them.
-      var involved = [state.selected || state.picked ? null : state.focusPart, state.hoverPart].some(function (id) { return id && (route.from === id || route.to === id); });
-      var resting = route.rest && labelled.has(route.from) && labelled.has(route.to);
-      if ((!resting && !involved) || !route.points || !routeVisible(route.points)) return;
-      var dim = state.related ? !(state.related.parts.has(route.from) && state.related.parts.has(route.to)) :
-        state.picked ? route.from !== state.hoverPart && route.to !== state.hoverPart : elsewhere && !involved;
-      var path = keep(routeLayer, "route:" + record.id + ":" + route.from + ">" + route.to, "path", {
-        d: routePath(route.points, route.radius),
-        class: "pm-route" + (route.kind === "proof" ? " pm-proof" : "") + (involved ? " pm-involved" : "") + (dim ? " pm-dimmed" : ""),
-        "stroke-width": route.tier === 3 ? 3 : route.tier === 2 ? 2 : 1.25,
-        "marker-end": arrow(involved), "marker-start": route.both ? arrow(involved) : "none"});
-      setText(path.firstChild || path.appendChild(svg("title")), linkWords(route, function (id) { return plain((part(id) || {summary: {title: id}}).summary.title); }));
-      if (involved && !route.both) keep(routeLayer, "rflow:" + record.id + ":" + route.from + ">" + route.to, "path", {d: path.getAttribute("d"), class: "pm-route pm-involved pm-flowing"});
-    });
-  }
-  // The picked part's arrows, straight to each neighbour the map has a box for: in from what it builds on, out to what
-  // uses it, thicker for more results. Dots flow along each from what is used to what uses it. A pair linked both
+  // The picked part's arrows, the only links the map draws between parts, so the overview stays quiet until a reader
+  // asks: straight to each neighbour the map has a box for, in from what it builds on, out to what uses it, thicker for
+  // more results. Dots flow along each from what is used to what uses it. A pair linked both
   // ways gets two arrows, bowed apart.
   function drawLinks() {
     var record = !state.selected && state.picked ? part(state.picked) : null, links = record && record.data && record.data.links;
@@ -1310,19 +1283,13 @@
     drag = {x: event.clientX, y: event.clientY, cx: camera.x, cy: camera.y, moved: false, id: event.pointerId};
   });
   canvas.addEventListener("pointermove", function (event) {
-    if (!drag) { hover(event.target); return; }
+    if (!drag) return;
     var dx = event.clientX - drag.x, dy = event.clientY - drag.y;
     if (!drag.moved && Math.hypot(dx, dy) < 4) return;
     if (!drag.moved) { drag.moved = true; canvas.setPointerCapture(drag.id); canvas.classList.add("pm-dragging"); release(); }
     camera = {x: drag.cx - dx / camera.k, y: drag.cy - dy / camera.k, k: camera.k};
     schedule();
   });
-  canvas.addEventListener("pointerleave", function () { hover(null); });
-  // The part under the pointer shows all of its routes, not only the central ones.
-  function hover(target) {
-    var node = target && target.closest ? target.closest("[data-part]") : null, id = node ? node.getAttribute("data-part") : null;
-    if (id !== state.hoverPart) { state.hoverPart = id; schedule(); }
-  }
   function endDrag(event) {
     if (!drag) return;
     var moved = drag.moved; drag = null; canvas.classList.remove("pm-dragging");
