@@ -200,8 +200,8 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert len(search_index["nodes"]) == 3
     assert search_index["schema"] == "autoform-dag-search/v1"
     records = {node["id"]: node for node in search_index["nodes"]}
-    # Legacy context URLs remain compatible; canonical routes carry the full mathematics.
-    assert records["roadmap"]["url"] == "../dependencies.html"
+    # Canonical routes carry the full mathematics, so a routed row repeats no context URL.
+    assert "url" not in records["roadmap"] and "url" not in records["top"]
     assert records["roadmap"]["route"] == "../roadmap/index.html"
     assert records["roadmap"]["scope"] == "roadmap"
     assert records["top"]["route"] == "../roadmap/index.html#top"
@@ -3920,7 +3920,7 @@ def test_a_root_article_and_search_share_its_generated_canonical_book_route(tmp_
 
     index = json.loads((out / "dependencies/index.json").read_text(encoding="utf-8"))
     top = {node["id"]: node for node in index["nodes"]}["top"]
-    assert top["url"] == "chapters/roadmap.html#node=top"
+    assert "url" not in top  # Its route reaches the statement; no context link is repeated.
     assert top["route"] == "../roadmap/index.html#top"
     assert top["scope"] == "roadmap"
     chapter = (out / "roadmap/README.md").read_text(encoding="utf-8")

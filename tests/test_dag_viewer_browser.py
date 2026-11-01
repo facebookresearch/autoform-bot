@@ -114,9 +114,6 @@ class _ExplorerConsumer:
     def route(self, node_id: str) -> str:
         return urljoin(self.url + "/dependencies/index.json", self.records[node_id]["route"])
 
-    def alias(self, node_id: str) -> str:
-        return urljoin(self.url + "/dependencies/index.json", self.records[node_id]["url"])
-
     def heading(self, node_id: str) -> str:
         return self.headings[urlsplit(self.route(node_id)).path]
 
@@ -2541,9 +2538,8 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     playwright.expect(relations.locator("summary")).to_have_text("Uses 1 · Used by 55")
     playwright.expect(relations.locator("a.bp-ref")).to_have_count(56)
     last_id = "topology/later-54"
-    graph_url = urljoin(
-        site_url + "/dependencies/index.json", _site_record(page, site_url, "topology/result")["data_url"]
-    )
+    scope = _site_record(page, site_url, "topology/result")["scope"]
+    graph_url = urljoin(site_url + "/dependencies/index.json", _site_record(page, site_url, scope)["data_url"])
     graph_response = page.request.get(graph_url, timeout=10_000)
     assert graph_response.ok
     last_card = _reading_card(page, last_id)

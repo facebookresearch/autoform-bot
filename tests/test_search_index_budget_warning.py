@@ -67,7 +67,8 @@ def test_warning_counts_utf8_bytes_once_without_rereading_source_or_output(
 ) -> None:
     view = _view()
     baseline = _write(tmp_path / "baseline.json", view).read_bytes()
-    assert len(baseline) > len(baseline.decode("utf-8"))
+    # The index is ASCII: the title's accents travel as escapes, which the byte count includes.
+    assert baseline.isascii() and b"\\u00c9galit\\u00e9" in baseline
     monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_NOTE_BYTES", len(baseline) - 1)
     original_read = Path.read_bytes
 

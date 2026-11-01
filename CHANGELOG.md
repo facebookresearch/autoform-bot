@@ -32,6 +32,14 @@ date when the release is tagged.
 
 ### Changed
 
+- **Search index size.** `dependencies/index.json` no longer repeats links the
+  explorer doesn't read. A row whose route the explorer opens drops its context
+  `url`, and only container rows keep `data_url`, since every page names its
+  own graph data. The file is written as ASCII, so one symbol above U+00FF no
+  longer doubles the memory of the decoded text. ATLAS's index goes from
+  42.1 MB to 32.2 MB, and on one CI runner search and the outline were ready
+  2.1 s after Home started loading instead of 2.8 s in WebKit, and 1.6 s
+  instead of 1.9 s in Chrome.
 - **Landing.** The ready figure links the list of what it counts, each count
   shows once with thousands separators, and the brand gradient is off the
   figures, bar and header hairline. Source coverage reads in plain words

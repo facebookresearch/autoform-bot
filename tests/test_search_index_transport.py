@@ -55,10 +55,10 @@ def test_index_offsets_preserve_node_order_metadata_and_every_typed_edge(tmp_pat
     assert {key: value for key, value in payload.items() if key != "relations"} == baseline
     expected_nodes = [
         {"id": node_id, "kind": "node", "status": "fully_proved", "title": f"Result {position}",
-         "url": links[node_id], "lean": f"Project.result{position}",
+         "lean": f"Project.result{position}",
          "summary": "The complete searchable statement uses $V$ over ℝ.",
          "route": f"../roadmap/topic/index.html#result-{position}", "scope": "topic",
-         "data_url": "scopes/topic.json", "parent": (1, 0, 2)[position], "area": "Analysis", "result": True}
+         "parent": (1, 0, 2)[position], "area": "Analysis", "result": True}
         for position, node_id in enumerate(ids)
     ]
     assert payload["schema"] == "autoform-dag-search/v1"
@@ -73,8 +73,8 @@ def test_index_offsets_preserve_node_order_metadata_and_every_typed_edge(tmp_pat
     assert compact.read_bytes().endswith(b"\n")
     assert digests == [sha256(compact.read_bytes()).hexdigest()]
     expanded = {**payload, "nodes": logical_nodes}
-    expanded_bytes = (json.dumps(expanded, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
-    expected_savings = sum(len(json.dumps(parent, ensure_ascii=False).encode()) - len(str(offset))
+    expanded_bytes = (json.dumps(expanded, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    expected_savings = sum(len(json.dumps(parent).encode()) - len(str(offset))
                            for parent, offset in zip(parents, (1, 0, 2)))
     assert len(expanded_bytes) - len(compact.read_bytes()) == expected_savings > 0
     again = write_search_index(tmp_path / "again.json", view, context_links=links, metadata=metadata, include_relations=True)
@@ -175,8 +175,8 @@ def test_parent_offsets_keep_full_summary_math_label_and_authored_fields(tmp_pat
     expected_nodes = []
     for position, node in enumerate(view.nodes):
         expected = {"id": node.id, "kind": "node", "status": "planned" if position == 0 else "fully_proved",
-                    "title": node.title, "url": links[node.id], "lean": node.lean, "summary": node.summary,
-                    "route": metadata[node.id]["route"], "scope": "topic", "data_url": "scopes/topic.json",
+                    "title": node.title, "lean": node.lean, "summary": node.summary,
+                    "route": metadata[node.id]["route"], "scope": "topic",
                     "parent": (1, "unindexed/authored-parent", 2)[position],
                     "area": "Authored Analysis", "result": position != 1,
                     "navigation": "transparent" if position == 1 else "normal"}
@@ -205,7 +205,7 @@ def test_long_article_identifiers_are_not_repeated_in_dependency_rows(tmp_path: 
     path = write_search_index(tmp_path / "index.json", view, context_links={}, include_relations=True)
     payload = json.loads(path.read_text(encoding="utf-8"))
     strings = {**payload, "relations": _decoded(payload)}
-    previous = (json.dumps(strings, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    previous = (json.dumps(strings, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
     assert len(path.read_bytes()) < len(previous) / 2
     assert _decoded(payload) == [[edge.source, edge.target, edge.statement_count, edge.proof_count] for edge in view.edges]
@@ -217,3 +217,41 @@ def test_an_unknown_dependency_endpoint_is_not_encoded_as_an_unchecked_offset(tm
     with pytest.raises(KeyError, match="absent"):
         write_search_index(tmp_path / "index.json", view, context_links={}, include_relations=True)
     assert not (tmp_path / "index.json").exists()
+
+
+def test_a_row_keeps_its_context_url_only_without_a_route_the_reader_opens(tmp_path: Path) -> None:
+    kept = {"unrouted": None, "empty": "", "tab": "../roadmap/topic/index.html#a\tb",
+            "newline": "../roadmap/topic/index.html#a\nb", "delete": "../roadmap/topic/index.html#a\x7fb",
+            "outside": "https://outside.test/topic.html#a", "mail": "mailto:someone@example.test",
+            "rooted": "/roadmap/topic/index.html#a", "backslash": "\\\\outside.test/topic.html",
+            "spaced": "  //outside.test/topic.html"}
+    ids = ("routed", *kept, "topic")
+    view = _view(ids)
+    view = replace(view, nodes=view.nodes[:-1] + (replace(view.nodes[-1], kind="scope"),))
+    links = {node_id: f"scopes/topic.html#node={node_id}" for node_id in ids}
+    routes = {**kept, "routed": "../roadmap/topic/index.html#routed", "topic": "../roadmap/topic/index.html"}
+    metadata = {node_id: {"route": routes[node_id], "scope": "topic", "data_url": "scopes/topic.json"} for node_id in ids}
+    path = write_search_index(tmp_path / "index.json", view, context_links=links, metadata=metadata)
+    records = {node["id"]: node for node in json.loads(path.read_text(encoding="utf-8"))["nodes"]}
+
+    # The reader opens route || url. Its link() refuses control characters and keeps routes on the site,
+    # so only a relative route without them lets the row drop its url.
+    assert "url" not in records["routed"] and "url" not in records["topic"]
+    assert {node_id: records[node_id]["url"] for node_id in kept} == {node_id: links[node_id] for node_id in kept}
+    # Every published page names its own graph data; only container rows keep the address.
+    assert records["topic"]["data_url"] == "scopes/topic.json"
+    assert all("data_url" not in records[node_id] for node_id in ids[:-1])
+
+
+def test_the_index_is_written_as_ascii_and_reads_back_unchanged(tmp_path: Path) -> None:
+    ids = ("z/topic/résultat", "a/topic/lemma", "unused/topic")
+    digests: list[str] = []
+    path = write_search_index(tmp_path / "index.json", _view(ids), context_links={}, include_relations=True,
+                              sha256_out=digests)
+    raw = path.read_bytes()
+    payload = json.loads(raw.decode("ascii"))
+
+    assert payload["nodes"][0]["id"] == "z/topic/résultat"
+    assert payload["nodes"][0]["summary"] == "The complete searchable statement uses $V$ over ℝ."
+    assert raw == (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+    assert digests == [sha256(raw).hexdigest()]

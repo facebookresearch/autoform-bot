@@ -368,8 +368,8 @@ def test_optional_asset_binds_exact_index_bytes_and_leaves_dependencies_and_stat
 
     assert baseline.read_bytes() == indexed.read_bytes()
     assert indexed.read_bytes() == (
-        b'{"nodes":[{"id":"b","kind":"node","route":"../roadmap/b.html","status":"planned","title":"b","url":"b.html"},'
-        b'{"id":"a","kind":"node","route":"../roadmap/a.html","status":"planned","title":"a","url":"a.html"}],'
+        b'{"nodes":[{"id":"b","kind":"node","route":"../roadmap/b.html","status":"planned","title":"b"},'
+        b'{"id":"a","kind":"node","route":"../roadmap/a.html","status":"planned","title":"a"}],'
         b'"relations":[[0,1,2,3]],"schema":"autoform-dag-search/v1"}\n'
     )
     assert digests == [hashlib.sha256(indexed.read_bytes()).hexdigest()]

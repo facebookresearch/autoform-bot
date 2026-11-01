@@ -136,15 +136,15 @@ def _display_status(node: ViewNode) -> str:
     return key if key in _PALETTE_KEYS else "planned"
 
 
-def _json_text(payload: Mapping[str, object]) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+def _json_text(payload: Mapping[str, object], *, ascii_only: bool = False) -> str:
+    return json.dumps(payload, ensure_ascii=ascii_only, sort_keys=True, separators=(",", ":")) + "\n"
 
 
 def _write_json(
     path: Path, payload: Mapping[str, object], *, sha256_out: list[str] | None = None,
-    byte_count_out: list[int] | None = None,
+    byte_count_out: list[int] | None = None, ascii_only: bool = False,
 ) -> Path:
-    text = _json_text(payload)
+    text = _json_text(payload, ascii_only=ascii_only)
     if sha256_out is not None or byte_count_out is not None:
         encoded = text.encode("utf-8")
         if sha256_out is not None:
@@ -307,6 +307,18 @@ def _reading_label(text: str, *, require_math: bool = True) -> dict[str, object]
     return {"format": "inline-parts-v1", "source": text, "parts": parts}
 
 
+def _openable_route(route: object) -> bool:
+    """Whether the explorer's ``link()`` surely accepts *route*.
+
+    Render writes relative routes. A route with a control character, a scheme
+    or a leading slash may be refused or leave the site, so its row keeps the url.
+    """
+    if not isinstance(route, str) or not route or re.search(r"[\x00-\x1f\x7f]", route):
+        return False
+    # The URL parser skips leading spaces before it reads a scheme or a slash.
+    return not re.match(r"[A-Za-z][A-Za-z0-9+.-]*:|[/\\]", route.lstrip(" "))
+
+
 def write_search_index(
     path: Path,
     view: GraphView,
@@ -321,6 +333,8 @@ def write_search_index(
 
     Existing search fields retain their meanings. Integrated publication can
     add canonical book routes, authored containment, and compact dependencies.
+    A row whose route the reader accepts omits its context ``url``, and only
+    container rows carry ``data_url``, since pages name their own graphs.
     Parents and relations can reference positions in the emitted node array;
     the reader also accepts older string endpoints. This retains containment
     and every typed edge without repeating long article identifiers.
@@ -337,7 +351,6 @@ def write_search_index(
             "kind": node.kind,
             "status": _display_status(node),
             "title": node.title,
-            "url": context_links.get(node.id),
         }
         # Search matches statements and Lean names as well as titles.
         if node.lean:
@@ -355,12 +368,19 @@ def write_search_index(
             details = metadata.get(node.id, {})
             for key in ("route", "scope", "data_url", "parent", "navigation", "area"):
                 value = details.get(key)
+                if key == "data_url" and node.kind != "scope":
+                    # Every published page names its own graph data, so the reader needs no row's data_url.
+                    continue
                 if key == "parent" and isinstance(value, str):
                     value = positions.get(value, value)
                 if value is not None:
                     entry[key] = value
             if type(details.get("result")) is bool:
                 entry["result"] = details["result"]
+        # Readers open a row's route and fall back to its url, so a row only needs
+        # the url when it has no route the reader would accept.
+        if not _openable_route(entry.get("route")):
+            entry["url"] = context_links.get(node.id)
         nodes.append(entry)
     payload: dict[str, object] = {"nodes": nodes, "schema": SEARCH_SCHEMA}
     if include_relations:
@@ -369,8 +389,10 @@ def write_search_index(
             for edge in view.edges
         ]
     sizes: list[int] = []
+    # ASCII text decodes into a one-byte string, half the memory of the two-byte string one symbol forces.
     written = _write_json(
         path, payload, sha256_out=sha256_out, byte_count_out=sizes if warnings_out is not None else None,
+        ascii_only=True,
     )
     if warnings_out is not None and sizes[0] > _SEARCH_INDEX_NOTE_BYTES:
         warnings_out.append(
