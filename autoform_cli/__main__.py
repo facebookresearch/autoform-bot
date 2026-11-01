@@ -808,8 +808,9 @@ def _unknown_declaration_warnings(graph: Graph) -> list[str]:
 
     Render captions such an article with the word as written, and audit, whose
     commands are among those render captions, does not check its Lean target's
-    kind. A project may use one such word on purpose in many articles, so each
-    word is one line. The site still builds, so ``check`` warns rather than fails.
+    kind. A blank value is captioned "Node". A project may use one such word on
+    purpose in many articles, so each word is one line. The site still builds,
+    so ``check`` warns rather than fails.
     """
     articles: dict[str, list[str]] = {}
     for node in graph.nodes.values():
@@ -820,10 +821,14 @@ def _unknown_declaration_warnings(graph: Graph) -> list[str]:
     for command, ids in articles.items():
         shown = ", ".join(ids[:3]) + (", ..." if len(ids) > 3 else "")
         where = ids[0] if len(ids) == 1 else f"{len(ids)} articles: {shown}"
+        caption = (
+            f"declaration {command!r} has no caption, so render captions it as written"
+            if command
+            else 'declaration is blank, so render captions it "Node"'
+        )
         warnings.append(
-            f"declaration {command!r} has no caption, so render captions it as written and audit does not check "
-            f"its Lean target's kind, on {where}; to have both, name a Lean declaration command, such as def, "
-            "structure or theorem"
+            f"{caption} and audit does not check its Lean target's kind, on {where}; use a command render "
+            "captions, such as def, structure or theorem"
         )
     return warnings
 
