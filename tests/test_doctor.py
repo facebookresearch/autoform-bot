@@ -274,7 +274,7 @@ def test_an_unindexable_lean_source_fails_only_the_lean_targets_check(tmp_path: 
     assert str(tmp_path) not in result.to_json()
 
 
-def test_an_oversized_node_fails_the_lean_targets_check_not_the_audit(tmp_path: Path) -> None:
+def test_an_oversized_node_fails_neither_the_lean_targets_check_nor_the_audit(tmp_path: Path) -> None:
     project = _clean_project(tmp_path)
     lean_root = tmp_path / "lean"
     lean_root.mkdir()
@@ -287,7 +287,7 @@ def test_an_oversized_node_fails_the_lean_targets_check_not_the_audit(tmp_path: 
     result = diagnose_project(project, lean_root=lean_root)
 
     assert _checks(result)["audit"] == (True, "roadmap audit passed")
-    assert _checks(result)["lean targets"] == (False, "1 finding(s): node-too-large")
+    assert _checks(result)["lean targets"] == (True, "all asserted local Lean targets resolve")
 
 
 def test_doctor_captures_the_lean_sources_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -15,9 +15,9 @@ targets. It exits zero only when every required check passes. Omitting
 `--lean-root` records an explicit advisory pass; supplying it performs only a
 lexical local-source check, not a Lean build, kernel check, or proof-honesty
 review. The `lean targets` check holds every finding that needs the Lean root,
-including `node-too-large`, and an unusable Lean root or unreadable source fails
-only that check. The bundled example intentionally exits nonzero while its
-declared coverage still holds `MAPPED` rows. The doctor is read-only and local:
+and an unusable Lean root or unreadable source fails only that check. The
+bundled example intentionally exits nonzero while its declared coverage still
+holds `MAPPED` rows. The doctor is read-only and local:
 it does not invoke Git, GitHub, subprocesses, network services, claims,
 renderers, or dashboards, and it writes no file.
 

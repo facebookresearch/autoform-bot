@@ -219,6 +219,10 @@ date when the release is tagged.
   `mathlib_declaration` name of a `mathlib: true` target, compared as Lean
   names. Later names, catalogs, containers and placeholders recording neither
   take no credit (#193).
+- **Node size.** `autoform audit` reports `node-too-large` as a warning, not
+  a finding, so it no longer fails the audit or the doctor's `lean targets`
+  check. Its limit is four times the project's median, so finished work
+  landing elsewhere could fail the audit of a node nobody edited (#429).
 
 ### Fixed
 

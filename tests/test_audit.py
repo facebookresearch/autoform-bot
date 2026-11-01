@@ -71,6 +71,14 @@ def _finding_map(blueprint: Path, *, lean_root: Path | None = None) -> dict[str,
     return findings
 
 
+def _warning_map(blueprint: Path, *, lean_root: Path | None = None) -> dict[str, list[tuple[str, str]]]:
+    result = audit_blueprint(blueprint, lean_root=lean_root)
+    warnings: dict[str, list[tuple[str, str]]] = {}
+    for warning in result.warnings:
+        warnings.setdefault(warning.article_path, []).append((warning.code, warning.message))
+    return warnings
+
+
 def test_clean_audit_has_stable_machine_readable_representation(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
@@ -1161,7 +1169,8 @@ def test_audit_measures_an_alias_by_its_target_s_span(tmp_path: Path) -> None:
     with (lean_root / "big.lean").open("a", encoding="utf-8") as source:
         source.write("alias Project.bigAlias := Project.big\n")
 
-    assert _finding_map(blueprint, lean_root=lean_root) == {
+    assert _finding_map(blueprint, lean_root=lean_root) == {}
+    assert _warning_map(blueprint, lean_root=lean_root) == {
         "roadmap/big.md": [
             (
                 "node-too-large",
@@ -1962,7 +1971,7 @@ def test_audit_limits_the_root_as_a_subject_index_only_when_every_child_is_a_cha
     ]
 
 
-def test_audit_reports_nodes_that_are_large_outliers_for_their_project(tmp_path: Path) -> None:
+def test_audit_warns_about_nodes_that_are_large_outliers_for_their_project(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     _article(blueprint, "README.md", depends=False)
@@ -1979,9 +1988,8 @@ def test_audit_reports_nodes_that_are_large_outliers_for_their_project(tmp_path:
         )
     lean_root = _lean_project(tmp_path, spans)
 
-    findings = _finding_map(blueprint, lean_root=lean_root)
-
-    assert findings == {
+    assert audit_blueprint(blueprint, lean_root=lean_root).clean
+    assert _warning_map(blueprint, lean_root=lean_root) == {
         "roadmap/big.md": [
             (
                 "node-too-large",
@@ -1990,6 +1998,48 @@ def test_audit_reports_nodes_that_are_large_outliers_for_their_project(tmp_path:
             )
         ]
     }
+
+
+def test_unrelated_small_nodes_never_fail_the_audit_of_an_unchanged_node(tmp_path: Path) -> None:
+    # Finished work landing elsewhere lowers the median, so a node nobody
+    # touched crosses the limit, as in issue #429 (an unchanged 413-line node).
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    spans = {f"Project.mid{index}": 107 + index % 2 for index in range(10)} | {"Project.big": 413}
+    for name in spans:
+        _article(
+            blueprint,
+            f"{name.rsplit('.', 1)[-1]}.md",
+            declaration="theorem",
+            statement="formalized",
+            proof="formalized",
+            lean=name,
+        )
+    lean_root = _lean_project(tmp_path, spans)
+    before = audit_blueprint(blueprint, lean_root=lean_root)
+    for index in range(11):
+        name = f"Project.cohort{index}"
+        _article(
+            blueprint,
+            f"cohort{index}.md",
+            declaration="theorem",
+            statement="formalized",
+            proof="formalized",
+            lean=name,
+        )
+        (lean_root / f"cohort{index}.lean").write_text(
+            f"theorem {name} : True := by\n" + "  trivial\n" * 39, encoding="utf-8"
+        )
+
+    after = audit_blueprint(blueprint, lean_root=lean_root)
+
+    assert before.findings == after.findings
+    assert before.clean and after.clean
+    assert [warning.code for warning in before.warnings] == []
+    assert [(warning.article_path, warning.code) for warning in after.warnings] == [
+        ("roadmap/big.md", "node-too-large")
+    ]
 
 
 def test_audit_measures_source_spans_from_the_captured_index(
@@ -2021,9 +2071,9 @@ def test_audit_measures_source_spans_from_the_captured_index(
 
     monkeypatch.setattr(audit_module, "snapshot_project_sources", snapshot_then_mutate)
 
-    findings = _finding_map(blueprint, lean_root=lean_root)
+    warnings = _warning_map(blueprint, lean_root=lean_root)
 
-    assert findings["roadmap/big.md"] == [
+    assert warnings["roadmap/big.md"] == [
         (
             "node-too-large",
             "node's Lean declarations span 420 lines against this project's "
