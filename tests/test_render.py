@@ -2804,6 +2804,25 @@ def test_a_fence_line_in_a_comment_leaves_the_links_after_it_rewritten(tmp_path:
     assert expected in (out / "roadmap/README.md").read_text(encoding="utf-8")
 
 
+def test_a_comment_that_never_closes_leaves_the_code_after_it_as_typed(tmp_path: Path) -> None:
+    """Review of #528: render read the rest of the page as comment and rewrote
+    a link inside the code block, which the page shown as typed then displayed."""
+    project = _with_source_notes(tmp_path)
+    readme = project / "blueprint/roadmap/README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8") + "\n<!-- note\n\n```text\nsee [Paper](../sources/paper.md)\n```\n",
+        encoding="utf-8",
+    )
+    ref = _commit_project(project)
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project, repository_url="https://github.com/owner/repo", ref=ref)
+
+    page = (out / "roadmap/README.md").read_text(encoding="utf-8")
+    assert "see [Paper](../sources/paper.md)" in page
+    assert "see [Paper](https://" not in page
+
+
 def test_source_notes_stay_published_when_there_is_nowhere_to_send_readers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

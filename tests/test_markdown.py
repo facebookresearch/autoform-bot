@@ -266,6 +266,14 @@ def test_render_s_line_transforms_read_no_fence_inside_a_comment() -> None:
     assert outside_fences(text, lambda line: f"+{line}") == "+<!--\n+```lean\n+-->\n+after\n```\n<!--\n```\n+last\n"
 
 
+def test_render_s_line_transforms_read_a_comment_that_never_closes_as_text() -> None:
+    """The site shows such a comment, and the code after it, as typed; so is one opened in a code span."""
+    for opener in ("<!-- note", "Write `<!--` to open one."):
+        text = f"{opener}\n\n```text\nsee [x](a.md)\n```\nafter\n"
+
+        assert outside_fences(text, lambda line: f"+{line}") == f"+{opener}\n+\n```text\nsee [x](a.md)\n```\n+after\n"
+
+
 def test_text_beside_a_comment_on_one_line_survives() -> None:
     assert content_lines("| OUT | real <!-- aside --> reason |\n") == [
         "| OUT | real  reason |"
