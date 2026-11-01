@@ -135,6 +135,7 @@ from .markdown import HEADING as _HEADING
 from .markdown import _LINK_DEFINITION as _SITE_LINK_DEFINITION
 from .markdown import content_lines as _content_lines
 from .markdown import outside_fences as _outside_fences
+from .markdown import visible_lines as _visible_lines
 from .mathjax import CARD_CLASS, CARD_FORMULA_CLASS, MATHJAX_SCRIPT, TEX_MACROS, mathjax_script, project_macros
 from .publishable import publishable_article, shown_as_typed
 from .readback import READBACKS_DIR, Readback, load_readbacks, readback_for
@@ -1932,10 +1933,10 @@ def _book_sources(graph: Graph) -> dict[Path, str]:
 
 
 def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> list[Path]:
-    """The *targets* *source* links outside code fences, in the order it links them."""
+    """The *targets* *source* links outside code fences and HTML comments, in the order it links them."""
     linked_sources: list[Path] = []
 
-    def collect(line: str) -> str:
+    def collect(line: str) -> None:
         for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
             raw = line[match.start("target") : match.end("target")]
             bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
@@ -1956,13 +1957,13 @@ def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> lis
             if candidate not in targets:
                 continue
             linked_sources.append(candidate)
-        return line
 
     try:
         text = source.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return []  # the site leaves out a page that is not UTF-8, as check warns
-    _outside_fences(text, collect)
+    for line in _visible_lines(text):
+        collect(line)
     return linked_sources
 
 

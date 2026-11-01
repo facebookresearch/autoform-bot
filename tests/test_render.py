@@ -3569,6 +3569,25 @@ def _summary_chapters(out: Path) -> list[str]:
     return re.findall(r"\(roadmap/([^)]+)/README\.md\)", (out / "SUMMARY.md").read_text(encoding="utf-8"))
 
 
+def test_a_commented_out_link_leaves_the_book_order_alone(tmp_path: Path) -> None:
+    """Issue #535: the book read links inside HTML comments, so a commented-out
+    link, on its own lines or beside another link, moved its chapter forward."""
+    project = _book_order_project(tmp_path)
+    roadmap = project / "blueprint/roadmap/README.md"
+    proof = "[Irrationality proof](irrationality-proof/README.md)"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8")
+        .replace("## Chapters\n\n", f"## Chapters\n\n<!--\n- {proof}\n-->\n\n")
+        .replace("- [Zeta](zeta/README.md)\n", f"- [Zeta](zeta/README.md) <!-- {proof} -->\n"),
+        encoding="utf-8",
+    )
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    assert _summary_chapters(out) == ["zeta", "alpha", "irrationality-proof"]
+
+
 @pytest.mark.parametrize(
     ("contents", "section", "chapters"),
     (

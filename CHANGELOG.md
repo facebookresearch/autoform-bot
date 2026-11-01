@@ -188,6 +188,9 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Book order.** A link inside an HTML comment no longer places its page in
+  the book's order: a commented-out chapter link moved that chapter forward in
+  `SUMMARY.md`, though the page showed it later (#535).
 - **Fences in comments.** Render no longer reads a fence line inside an HTML
   comment as opening a code block. It had left every later line of the page
   unrewritten, so a link to a source note after it was published as written,

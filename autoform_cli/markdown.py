@@ -891,25 +891,37 @@ def statement_and_notes(text: str) -> tuple[str, str]:
     return _demote_headings(parts.statement), _demote_headings(notes)
 
 
-def outside_fences(text: str, transform) -> str:
-    """Apply *transform* to every line that is not inside a code fence.
+def _site_lines(lines: list[str]) -> tuple[list[str], set[int]]:
+    """Each line with its HTML comments removed and code fences blank, and the fenced lines.
 
     A fence line inside an HTML comment opens nothing, as on the site and in
     :func:`first_unclosed_fence`. A comment that never closes is text on the
-    site, so the fences after the line it opens on count.
+    site, so the lines after the one it opens on are read as written, and the
+    fences there count.
     """
-    lines = text.splitlines()
     fenced: set[int] = set()
     opened: list[int] = []
-    _mask_fences_and_comments(lines, set(), fenced=fenced, unclosed_comment=opened)
+    shown = _mask_fences_and_comments(lines, set(), fenced=fenced, unclosed_comment=opened)
     if opened:
         # No comment closes after it either, so the rest is read with none.
         start = opened[0] + 1
         rest: set[int] = set()
-        _mask_fences_and_comments(lines[start:], set(), fenced=rest, comments=False)
+        shown[start:] = _mask_fences_and_comments(lines[start:], set(), fenced=rest, comments=False)
         fenced = {index for index in fenced if index < start} | {start + index for index in rest}
+    return shown, fenced
+
+
+def outside_fences(text: str, transform) -> str:
+    """Apply *transform* to every line that is not inside a code fence, as :func:`_site_lines` finds them."""
+    lines = text.splitlines()
+    fenced = _site_lines(lines)[1]
     out = [line if index in fenced else transform(line) for index, line in enumerate(lines)]
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def visible_lines(text: str) -> list[str]:
+    """The lines of *text* as the site shows them: HTML comments removed and code fences blank."""
+    return _site_lines(text.splitlines())[0]
 
 
 def _demote_headings(text: str) -> str:
@@ -1254,6 +1266,7 @@ __all__ = [
     "PublishedTable",
     "markdown_links",
     "outside_fences",
+    "visible_lines",
     "PAGE_HEADER",
     "published_markdown",
     "published_page",
