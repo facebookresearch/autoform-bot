@@ -11,6 +11,13 @@ date when the release is tagged.
 
 ### Added
 
+- **Worktrees.** `autoform project worktrees` reports which linked worktrees
+  are safe to remove after a run and what protects the rest: changes, Git
+  operations, unintegrated commits, processes, recent activity and live leases
+  from this host. `--remove` takes a saved report, rechecks each entry, removes
+  it with `git worktree remove`, never `--force`, and reports the free space
+  recovered and how to re-create the checkout; ignored files such as `.lake`
+  are not kept (#435).
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project, linked from the landing page beside the
   book. Regions (authored areas, or the top-level chapters) open into their

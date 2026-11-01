@@ -277,8 +277,8 @@ default ref. Without a ref the CI workflows are omitted.
 
 ### project
 
-Create or inspect a Lean project and list Autoform's bundled known-good release
-pairs:
+Create or inspect a Lean project, report its worktrees, and list Autoform's
+bundled known-good release pairs:
 
 ```bash
 autoform project versions
@@ -349,6 +349,22 @@ and exit 2 invalid CLI usage. The
 [project-inspection reference](project/README.md) defines the statuses, JSON
 fields, and diagnostic codes. `project versions` lists the bundled pairs, the
 ones `project new` can lock offline.
+
+`autoform project worktrees --json` runs Git and reads the claim board (`origin`
+or `--repo`; else `board` is null) to list, as `autoform-project-worktrees/v1`,
+each linked worktree but the main one and the target's with its `protected_by`
+codes; none means removable, and an unknown code protects: `locked`, `in-use`,
+`git-operation`, `contains-worktree`, `dirty` (hidden or unreadable status too),
+`unintegrated` (the target's HEAD lacks a commit by ancestry and non-merge patch
+ID, or only its own reflog or refs reach one), `recent` (index, HEAD reflog or
+`.lake` itself changed in 25 minutes), `claimed` (a live lease naming this
+hostname, which a Mac without a fixed HostName changes), `liveness-unknown` (an
+uninspectable process of yours begun after it, an unreadable board or lease). A
+report's removable entries get sizes; `freeable_bytes` (an upper bound) omits
+hard-linked blocks. `--remove MANIFEST` rechecks each such entry (`changed` if
+it moved or went, or the target's HEAD moved), runs `git worktree remove` (else
+`git-refused`), and prints them with `removed` and measured `freed_bytes`. Exit
+1: no checkout, bad manifest, or a refusal.
 
 ### Publishing and the dashboard
 
