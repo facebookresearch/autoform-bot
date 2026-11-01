@@ -188,6 +188,11 @@ date when the release is tagged.
 
 ### Fixed
 
+- **`\pmod`, `\bmod` and `\mod` on the site.** Site formulas typeset `\pmod`,
+  `\bmod`, `\mod` and amsmath's `\varliminf`, `\varlimsup`, `\varinjlim` and
+  `\varprojlim`. MathJax builds them from `\mmlToken`, which the page's TeX input
+  turns off, so each showed a red `\notallowed`; they are now written without
+  it, and a project macro of the same name still replaces one (#544).
 - **Fences in comments.** Render no longer reads a fence line inside an HTML
   comment as opening a code block. It had left every later line of the page
   unrewritten, so a link to a source note after it was published as written,

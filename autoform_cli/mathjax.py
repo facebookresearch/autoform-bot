@@ -70,6 +70,20 @@ NEUTRALISED = (
     "DeclarePairedDelimiterXPP", "DeclarePairedDelimiters", "DeclarePairedDelimitersX",
     "DeclarePairedDelimitersXPP", "newtagform", "renewtagform", "usetagform", "mathtoolsset",
 )
+#: The base and ams commands MathJax builds from ``\mmlToken``, which would
+#: show in red with it turned off, written as MathJax writes them with
+#: ``\mathrm`` in place of ``\mmlToken``. ``\bmod``'s thick spaces on either
+#: side become kerns of the same width. A project macro of the same name
+#: replaces one.
+REBUILT: dict[str, object] = {
+    "bmod": "\\kern5mu\\mathrm{mod}\\kern5mu",
+    "mod": ["\\mathchoice{\\kern18mu}{\\kern12mu}{\\kern12mu}{\\kern12mu}\\mathrm{mod}\\,\\,#1", 1],
+    "pmod": ["\\pod{\\mathrm{mod}\\kern 6mu #1}", 1],
+    "varinjlim": "\\mathop{\\underrightarrow{\\mathrm{lim}}}",
+    "varliminf": "\\mathop{\\underline{\\mathrm{lim}}}",
+    "varlimsup": "\\mathop{\\overline{\\mathrm{lim}}}",
+    "varprojlim": "\\mathop{\\underleftarrow{\\mathrm{lim}}}",
+}
 
 #: The ``javascripts/mathjax.js`` ``autoform init`` put in vaults before the
 #: renderer wrote its own, by SHA-256. An unedited copy is replaced on the site
@@ -176,7 +190,11 @@ def _script(macros: dict[str, object]) -> str:
         "safe": _SAFE,
         "page": {
             "packages": list(PAGE_PACKAGES),
-            "macros": {**dict(sorted(macros.items())), **{name: "\\notallowed" for name in NEUTRALISED}},
+            "macros": {
+                **REBUILT,
+                **dict(sorted(macros.items())),
+                **{name: "\\notallowed" for name in NEUTRALISED},
+            },
             "inlineMath": [["$", "$"], ["\\(", "\\)"]],
             "displayMath": [["$$", "$$"], ["\\[", "\\]"]],
         },
@@ -590,6 +608,7 @@ __all__ = [
     "MATHJAX_SCRIPT",
     "MATHJAX_VERSION",
     "NEUTRALISED",
+    "REBUILT",
     "TEX_MACROS",
     "project_macros",
     "mathjax_script",

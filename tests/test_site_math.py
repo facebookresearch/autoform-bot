@@ -19,7 +19,7 @@ import pytest
 from autoform_cli.__main__ import main
 from autoform_cli.graph import load_graph
 from autoform_cli.markdown import published_page, site_converter, statement_and_notes
-from autoform_cli.mathjax import NEUTRALISED, mathjax_script
+from autoform_cli.mathjax import NEUTRALISED, REBUILT, mathjax_script
 from autoform_cli.publishable import _rendered_article, _site_converter, publishable_article, shown_as_typed
 from autoform_cli.render import _GENERATED_FILES, PublicationError, _site_paths, render_site
 from autoform_cli.scaffold import scaffold_project
@@ -34,6 +34,15 @@ _CARD_PACKAGES = ["base", "ams", "noundefined"]
 _MACROS = {"RR": "\\mathbb{R}", "norm": ["\\left\\lVert #1 \\right\\rVert", 1]}
 #: What the page's TeX input maps the commands it turns off to.
 _OFF = {name: "\\notallowed" for name in NEUTRALISED}
+
+
+def _page_macros(project: dict[str, object] | None = None) -> dict[str, object]:
+    """The page input's macros beside ``project``'s: the commands it writes
+    again without \\mmlToken, which a project macro replaces, and the ones it
+    turns off, which none does."""
+
+    return {**REBUILT, **(project or {}), **_OFF}
+
 
 #: The javascripts/mathjax.js ``autoform init`` wrote before render wrote its own.
 _SCAFFOLDED = """window.MathJax = {
@@ -118,7 +127,7 @@ def test_the_page_turns_off_tex_that_reaches_past_its_own_formula() -> None:
 
     settings = _settings(mathjax_script(None, json.dumps(_MACROS).encode())[0])
 
-    assert settings["page"]["macros"] == {**_MACROS, **_OFF}
+    assert settings["page"]["macros"] == _page_macros(_MACROS)
     assert "macros" not in settings["card"]
     assert {"label", "mmlToken", "DeclareMathOperator", "newtagform", "mathtoolsset"} <= set(NEUTRALISED)
 
@@ -168,7 +177,7 @@ def test_an_edited_configuration_is_replaced_with_a_warning(tmp_path: Path, caps
     blueprint = _vault(tmp_path, kept=kept)
 
     site = _warned(blueprint, capsys, "move any tex.macros to tex-macros.json and delete it")
-    assert _settings((site / "javascripts/mathjax.js").read_text(encoding="utf-8"))["page"]["macros"] == _OFF
+    assert _settings((site / "javascripts/mathjax.js").read_text(encoding="utf-8"))["page"]["macros"] == _page_macros()
 
 
 def _changed_after_capture(monkeypatch: pytest.MonkeyPatch, change: Callable[[], object]) -> None:
@@ -204,7 +213,7 @@ def test_check_and_render_use_the_macros_they_captured(
 
     published = json.loads((site / "tex-macros.json").read_text(encoding="utf-8"))
     assert published == _MACROS
-    assert _settings((site / "javascripts/mathjax.js").read_text(encoding="utf-8"))["page"]["macros"] == {**published, **_OFF}
+    assert _settings((site / "javascripts/mathjax.js").read_text(encoding="utf-8"))["page"]["macros"] == _page_macros(published)
 
 
 def test_macros_made_valid_after_capture_are_still_left_out(
@@ -225,7 +234,7 @@ def test_macros_made_valid_after_capture_are_still_left_out(
     site = report.output_dir
     assert any("tex-macros.json: not valid JSON" in warning for warning in report.warnings)
     assert (site / "tex-macros.json").read_text(encoding="utf-8") == "{"
-    assert _settings((site / "javascripts/mathjax.js").read_text(encoding="utf-8"))["page"]["macros"] == _OFF
+    assert _settings((site / "javascripts/mathjax.js").read_text(encoding="utf-8"))["page"]["macros"] == _page_macros()
 
 
 # Deeper than the JSON decoder goes on Python 3.10 to 3.13. From 3.14 it goes as
@@ -260,7 +269,21 @@ def test_the_macros_that_can_be_used_are_kept_beside_one_left_out() -> None:
     script, warnings = mathjax_script(None, json.dumps({**_MACROS, "R R": "x", "label": "y"}).encode())
 
     assert len(warnings) == 2
-    assert _settings(script)["page"]["macros"] == {**_MACROS, **_OFF}
+    assert _settings(script)["page"]["macros"] == _page_macros(_MACROS)
+
+
+def test_the_commands_mathjax_builds_from_mmltoken_are_written_without_it() -> None:
+    """MathJax 3.2.2 writes \\bmod, \\pmod, \\mod and amsmath's \\varlim
+    commands with \\mmlToken, which the page turns off, so each showed in red.
+    The page writes them again from commands it keeps, and a project macro of
+    the same name replaces one."""
+
+    turned_off = re.compile(r"\\(?:" + "|".join(NEUTRALISED) + r")(?![A-Za-z])")
+    for name, definition in REBUILT.items():
+        assert not turned_off.search(definition if isinstance(definition, str) else definition[0]), name
+    project = {"pmod": ["\\ (\\operatorname{mod} #1)", 1]}
+
+    assert _settings(mathjax_script(None, json.dumps(project).encode())[0])["page"]["macros"] == _page_macros(project)
 
 
 def _directory_with_a_file(path: Path) -> None:
@@ -1512,7 +1535,7 @@ def test_a_macros_file_that_is_a_directory_leaves_the_site_without_project_macro
     _directory_with_a_file(blueprint / "tex-macros.json")
 
     site = _warned(blueprint, capsys, "tex-macros.json: is a directory, so the site has no project macros")
-    assert _settings((site / "javascripts/mathjax.js").read_text(encoding="utf-8"))["page"]["macros"] == _OFF
+    assert _settings((site / "javascripts/mathjax.js").read_text(encoding="utf-8"))["page"]["macros"] == _page_macros()
 
 
 def test_an_obsidian_canvas_stays_in_the_vault_without_a_warning(
