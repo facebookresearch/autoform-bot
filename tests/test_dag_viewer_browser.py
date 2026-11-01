@@ -2706,6 +2706,32 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     assert documents == [urlsplit(first)._replace(fragment="").geturl()]
 
 
+def test_explorer_title_math_has_no_raw_tex_tooltips_or_clipped_focus_rings(
+    desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
+) -> None:
+    """A tooltip shows a title's TeX as typed, and the site's clip on a list holding a formula cut its links' rings."""
+    from tests.test_integrated_explorer_browser import _routes
+
+    page, site_url = desktop_page, marked_math_site_url
+    _routes(page, site_url, marked_math_runtime, graph_client=True)
+    foundation_route = _site_route(page, site_url, "algebra/title-foundation")
+    page.goto(_site_route(page, site_url, "algebra/title-target"))
+    _ready_site(page)
+    related = page.locator('.bp-reading-topic-list a[href="' + foundation_route + '"]')
+    playwright.expect(related.locator("mjx-container")).to_have_count(1)
+    outline = page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')
+    ancestor = page.locator(".bp-dag-breadcrumb a").filter(has=page.locator(".arithmatex"))
+    for control in (outline, ancestor):
+        assert control.get_attribute("title") is None
+    assert ancestor.evaluate("node => node.parentElement.hasAttribute('title')") is False
+    # A title without a formula keeps its tooltip.
+    plain = page.locator(".bp-dag-navigation-link:not(:has(.arithmatex))").first
+    assert plain.evaluate("node => node.title !== '' && node.title === node.textContent")
+    # The link's ring is drawn 2px outside it, at the list's edge.
+    assert related.evaluate("node => getComputedStyle(node.closest('ul')).overflowX") == "visible"
+
+
+
 def test_failed_reader_reconciliation_opens_current_permalink_in_fresh_native_tab(
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
 ) -> None:

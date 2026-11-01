@@ -51,6 +51,12 @@
     return root;
   }
 
+  // A title attribute shows text as typed, so a label holding a formula gets
+  // no tooltip: it would show the TeX source, and the label itself is typeset.
+  function tooltip(node, text) {
+    if (text && !node.querySelector(".arithmatex")) node.title = text;
+  }
+
   function refreshReadingLabels(root) {
     if (root && window.AutoformMath && typeof window.AutoformMath.refresh === "function") {
       try { Promise.resolve(window.AutoformMath.refresh(root)).catch(function () {}); } catch (_error) {}
@@ -1730,7 +1736,7 @@
         var node = entry.node, item = element("li", "bp-outline-depth-" + entry.depth);
         if (entry.collection) { item.appendChild(readingLabel("span", "bp-outline-collection", node.title, node.reading_title)); list.appendChild(item); return; }
         var link = readingLabel("a", "bp-dag-navigation-link", node.title, node.reading_title);
-        link.href = node.route || node.url; link.title = node.title; link.dataset.navigationNodeId = node.id;
+        link.href = node.route || node.url; tooltip(link, node.title); link.dataset.navigationNodeId = node.id;
         if (node.id === (currentBundle && currentBundle.nodeId || key)) link.setAttribute("aria-current", "page");
         item.appendChild(link); list.appendChild(item);
         bindNodeLink(link, node.id, {history: "push", focus: true});
@@ -1942,9 +1948,11 @@
       if (!className && !whole && entries.length > 3) entries = [entries[0], {label: "…", hidden: entries.slice(1, -2).map(function (entry) { return entry.label; }).join(" / ")}].concat(entries.slice(-2));
       entries.forEach(function (entry, index) {
         var href = safeHref(entry.url), item = href ? element("li") : readingLabel("li", "", entry.label, entry.reading_title);
-        item.title = entry.hidden || entry.label;
+        // The link, when there is one, carries the tooltip; the "…" names the ancestors it folds.
+        if (entry.hidden) item.title = entry.hidden;
+        else if (!href) tooltip(item, entry.label);
         if (href) {
-          var link = readingLabel("a", !className && index === 0 ? "bp-dag-book" : "", entry.label, entry.reading_title); link.href = href; link.title = entry.label;
+          var link = readingLabel("a", !className && index === 0 ? "bp-dag-book" : "", entry.label, entry.reading_title); link.href = href; tooltip(link, entry.label);
           link.addEventListener("click", function (event) {
             if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
                 new URL(href).origin !== window.location.origin) return;
