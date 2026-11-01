@@ -231,7 +231,8 @@ def report_worktrees(target: str | os.PathLike[str] = ".", *, repo: str | None =
     repository = _read_repository(Path(target))
     machine = _read_machine(repository, repo)
     candidates = sorted(repository.candidates, key=lambda worktree: str(worktree.path))
-    entries = tuple(_evaluate(repository, worktree, machine, sizes=True) for worktree in candidates)
+    identities: dict[Path, tuple[int, int] | None] = {}  # one walk of each process's folders serves every entry
+    entries = tuple(_evaluate(repository, worktree, machine, identities, sizes=True) for worktree in candidates)
     return WorktreeReport(repository.common_dir, repository.integration, machine.board, entries)
 
 
@@ -293,7 +294,7 @@ def _remove_one(
         now = _describe_checkout(current.branch, current.head)
         entry.protect("changed", f"now {now}, not {_describe_checkout(item['branch'], item['head'])}")
     else:
-        entry = _evaluate(repository, current, _rescan(machine), sizes=False)
+        entry = _evaluate(repository, current, _rescan(machine), {}, sizes=False)
         if entry.removable:
             _remove(target, repository.top, current, entry)
     return entry
@@ -443,23 +444,30 @@ def _rescan(machine: _Machine) -> _Machine:
     return _Machine(processes, uninspected, machine.board, machine.claims)
 
 
-def _evaluate(repository: _Repository, worktree: _Worktree, machine: _Machine, *, sizes: bool) -> WorktreeEntry:
+def _evaluate(
+    repository: _Repository,
+    worktree: _Worktree,
+    machine: _Machine,
+    identities: dict[Path, tuple[int, int] | None],
+    *,
+    sizes: bool,
+) -> WorktreeEntry:
     entry = WorktreeEntry(worktree.path, worktree.head, worktree.branch)
     if worktree.locked is not None:
         entry.protect("locked", worktree.locked or "locked without a reason")
     present = os.path.isdir(worktree.path)
     if present:
         _check_status(worktree, entry)
-        identities: dict[Path, tuple[int, int] | None] = {}
+        place = (Path(os.path.realpath(worktree.path)), _identity(worktree.path))
         nested = [
             str(other.path)
             for other in repository.worktrees
             if other is not worktree
             and not _same(other.path, worktree.path)
-            and _inside(other.path, worktree.path, identities)
+            and _inside(Path(os.path.realpath(other.path)), place, identities)
         ]
         entry.protect("contains-worktree", ", ".join(nested))
-        entry.protect("in-use", _users(worktree.path, machine.processes, identities))
+        entry.protect("in-use", _users(place, machine.processes, identities))
     entry.protect("git-operation", _git_operation(repository, worktree))
     entry.protect("unintegrated", _unintegrated(repository, worktree))
     entry.protect("recent", _recent(worktree))
@@ -636,7 +644,9 @@ def _recent(worktree: _Worktree) -> str | None:
 
 
 def _users(
-    worktree: Path, processes: tuple[_Process, ...], identities: dict[Path, tuple[int, int] | None]
+    worktree: tuple[Path, tuple[int, int] | None],
+    processes: tuple[_Process, ...],
+    identities: dict[Path, tuple[int, int] | None],
 ) -> str | None:
     users = []
     for process in processes:
@@ -764,11 +774,16 @@ def _same(one: Path, other: Path) -> bool:
     return os.path.realpath(one) == os.path.realpath(other)
 
 
-def _inside(path: Path, directory: Path, identities: dict[Path, tuple[int, int] | None]) -> bool:
-    """Whether ``path`` is ``directory`` or lies under it, under any spelling of either."""
-    if is_within(Path(os.path.realpath(path)), Path(os.path.realpath(directory))):
+def _inside(
+    path: Path, directory: tuple[Path, tuple[int, int] | None], identities: dict[Path, tuple[int, int] | None]
+) -> bool:
+    """Whether the real ``path`` is the directory, given by real path and identity, or lies under it.
+
+    ``identities`` caches each folder's identity, since every process is checked against every worktree.
+    """
+    real, wanted = directory
+    if is_within(path, real):
         return True
-    wanted = _identity(directory)
     if wanted is None:
         return False
     for ancestor in (path, *path.parents):
@@ -862,13 +877,19 @@ def _git(
     cwd: Path, *arguments: str, stdin: bytes | None = None, timeout: float | None = _GIT_TIMEOUT_S
 ) -> subprocess.CompletedProcess[bytes]:
     """Run Git; one that cannot start or runs out of time fails with exit status -1, so its caller protects."""
-    command = ["git", "--no-optional-locks", *arguments]
     try:
         return subprocess.run(
-            command, cwd=cwd, input=stdin, capture_output=True, env=_git_environment(), timeout=timeout, check=False
+            ["git", "--no-optional-locks", *arguments],
+            cwd=cwd,
+            input=stdin,
+            capture_output=True,
+            env=_git_environment(),
+            timeout=timeout,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        return subprocess.CompletedProcess(command, -1, b"", os.fsencode(f"git {arguments[0]} could not run: {error}"))
+        failure = os.fsencode(f"git {arguments[0]} could not run: {error}")
+        return subprocess.CompletedProcess(["git", *arguments], -1, b"", failure)
 
 
 def _git_line(cwd: Path, *arguments: str) -> str | None:

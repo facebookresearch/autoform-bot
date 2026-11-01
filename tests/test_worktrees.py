@@ -443,6 +443,28 @@ def test_a_process_inside_at_removal_refuses_it_even_under_a_pid_seen_before(
     assert worker.is_dir()
 
 
+def test_each_removal_scans_the_processes_again(
+    repo: Path, tmp_path: Path, processes: list[object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = _add_worktree(repo, "first")
+    second = _add_worktree(repo, "second")
+    _age(repo)
+    manifest = _manifest(repo, tmp_path)
+    real_git = worktrees._git
+
+    def git(cwd: Path, *arguments: str, **options: object) -> subprocess.CompletedProcess[bytes]:
+        if arguments[:2] == ("worktree", "remove") and arguments[-1] == str(first):
+            processes.append(_Process(78, second))  # a worker starts in the second while the first goes
+        return real_git(cwd, *arguments, **options)
+
+    monkeypatch.setattr(worktrees, "_git", git)
+    result = worktrees.remove_worktrees(repo, manifest)
+
+    entries = {entry.path.name: entry for entry in result.entries}
+    assert entries["first"].removed and not first.exists()
+    assert list(_codes(entries["second"].as_dict())) == ["in-use"] and second.is_dir()
+
+
 def test_a_live_lease_from_this_host_protects_every_worktree(repo: Path, board: Path) -> None:
     _add_worktree(repo, "first")
     _add_worktree(repo, "second")
