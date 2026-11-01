@@ -166,8 +166,10 @@ class Graph:
     #: Folders whose ``README.md`` says ``published: false``: check validates
     #: them, and render leaves them out of the site.
     unpublished: tuple[Path, ...] = ()
-    #: The ``## Informally uses`` links check warns about: ones that do not
-    #: resolve to another article, and ones whose target depends on the article.
+    #: What check warns about ``## Informally uses`` links: ones that do not
+    #: resolve to another article, and the heading written below a dependency
+    #: heading, where its links count. :func:`informal_cycle_warnings` adds the
+    #: links whose target depends on the article.
     informal_warnings: tuple[str, ...] = ()
 
     @property
@@ -194,6 +196,7 @@ class _ParsedNode:
     metadata: dict[str, str]
     summary: str | None
     informal_targets: tuple[str, ...] = ()
+    informal_warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,6 +283,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     informal_warnings: list[str] = []
     nodes: dict[str, Node] = {}
     for parsed_node in parsed:
+        informal_warnings.extend(parsed_node.informal_warnings)
 
         def resolve(targets: tuple[str, ...], node: _ParsedNode = parsed_node) -> list[str]:
             resolved: list[str] = []
@@ -347,7 +351,6 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         issues.extend(_find_cycles(nodes))
     if issues:
         raise GraphValidationError(issues)
-    informal_warnings.extend(_informal_cycles(nodes))
     return Graph(
         blueprint_dir=blueprint,
         nodes=nodes,
@@ -782,6 +785,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         _SOURCES_SECTION: [],
     }
     section: str | None = None
+    misplaced: list[str] = []
 
     # Fences, comments and indented code are read as the page and the audit
     # read them, so a section a reader sees never loses its links here, and a
@@ -801,6 +805,12 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
             if level <= 2:
                 heading_key = heading_text.casefold()
                 section = heading_key if level == 2 and heading_key in targets else None
+            elif section in (_STATEMENT_SECTION, _PROOF_SECTION) and heading_text.casefold() == _INFORMAL_SECTION:
+                # A deeper heading stays inside the section above it, so these links count.
+                misplaced.append(
+                    f"{node_id}: '{heading.group(1)} {heading_text}' is read as part of '## {section.capitalize()}', "
+                    "so its links count; write it as '## Informally uses'"
+                )
             continue
         if section is not None:
             targets[section].extend(link_targets(line, references))
@@ -821,6 +831,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         metadata,
         _extract_summary(body, references),
         tuple(targets[_INFORMAL_SECTION]),
+        tuple(misplaced),
     )
     return parsed, []
 
@@ -1105,12 +1116,14 @@ def _find_cycles(nodes: dict[str, Node]) -> list[str]:
     return issues
 
 
-def _informal_cycles(nodes: dict[str, Node]) -> list[str]:
+def informal_cycle_warnings(graph: Graph) -> list[str]:
     """Name each informal link whose target depends on its article, through counted edges.
 
     Status never reads the link, so it closes no cycle there; drawn beside the
-    dependencies, it would.
+    dependencies, it would. Only check reports these, so loading does not pay
+    for the searches.
     """
+    nodes = graph.nodes
     issues: list[str] = []
     for node in nodes.values():
         for target in node.informal_dependencies:

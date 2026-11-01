@@ -17,6 +17,7 @@ from autoform_cli.graph import (
     _containment_cycles,
     atlas_omissions,
     catalogs_without_ledger,
+    informal_cycle_warnings,
     load_graph,
 )
 from autoform_cli.graph_views import project_view
@@ -653,13 +654,38 @@ def test_an_informal_link_whose_target_depends_on_its_article_is_a_warning(tmp_p
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "a.md", "# A\n## Informally uses\n[C](c.md)\n")
     _node(blueprint, "b.md", "# B\n## Depends on\n[A](a.md)\n")
-    _node(blueprint, "c.md", "# C\n## Proof depends on\n[B](b.md)\n## Informally uses\n[A](a.md)\n")
+    _node(blueprint, "d.md", "# D\n## Depends on\n[E](e.md)\n")
+    _node(blueprint, "e.md", "# E\n## Depends on\n[A](a.md)\n")
+    _node(
+        blueprint,
+        "c.md",
+        "# C\n## Depends on\n[D](d.md)\n## Proof depends on\n[B](b.md)\n## Informally uses\n[A](a.md)\n",
+    )
 
     graph = load_graph(blueprint)
 
-    # C informally using A closes no cycle: A only informally uses C back.
+    # Loading leaves the search to check. C informally using A closes no cycle:
+    # A only informally uses C back. Of C's two routes to A, the shorter is named.
+    assert graph.informal_warnings == ()
     assert graph.nodes["a"].informal_dependencies == ("c",)
-    assert graph.informal_warnings == ("a: informally uses c, which depends on it: c -> b -> a",)
+    assert informal_cycle_warnings(graph) == ["a: informally uses c, which depends on it: c -> b -> a"]
+
+
+@pytest.mark.parametrize("heading", ("Depends on", "Proof depends on"))
+def test_informally_uses_below_a_dependency_heading_is_a_warning(tmp_path: Path, heading: str) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "top.md", f"# Top\n## {heading}\n### Informally uses\n[Base](base.md)\n")
+
+    graph = load_graph(blueprint)
+
+    # The deeper heading stays inside the dependency section, as before.
+    assert graph.nodes["top"].dependencies == ("base",)
+    assert graph.nodes["top"].informal_dependencies == ()
+    assert graph.informal_warnings == (
+        f"top: '### Informally uses' is read as part of '## {heading}', so its links count; "
+        "write it as '## Informally uses'",
+    )
 
 
 def test_accepts_cycle_created_only_by_chapter_contraction(tmp_path: Path) -> None:

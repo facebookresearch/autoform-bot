@@ -32,7 +32,14 @@ from .claims import (
 )
 from .doctor import diagnose_project
 from .dashboard import publication_bound_live_state, serve_dashboard
-from .graph import Graph, GraphValidationError, atlas_omissions, catalogs_without_ledger, load_graph
+from .graph import (
+    Graph,
+    GraphValidationError,
+    atlas_omissions,
+    catalogs_without_ledger,
+    informal_cycle_warnings,
+    load_graph,
+)
 from .graph_views import _countable, _module_inventories
 from .impact import (
     IMPORT_CLOSURE_SCOPE,
@@ -926,6 +933,7 @@ def _check(args: argparse.Namespace) -> int:
         + _formalizable_container_warnings(graph)
         + _unknown_declaration_warnings(graph)
         + list(graph.informal_warnings)
+        + informal_cycle_warnings(graph)
         + source_warnings
     ):
         print(f"warning: {warning}")

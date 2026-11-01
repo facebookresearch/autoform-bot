@@ -4,11 +4,12 @@ This module copies the validated canonical graph into a stable in-memory
 contract for read-only consumers. The user-facing rules are the runtime
 contract in ``autoform_cli/reference/runtime-and-publication.md``.
 
-The schema ``autoform-runtime/v4`` is deeply immutable, and its declared
+The schema ``autoform-runtime/v5`` is deeply immutable, and its declared
 authority is ``markdown-articles``: the adapter copies hierarchy, typed
 statement, proof and informal dependencies, authored assertions, derived
 progress, provenance, and optional local Lean source locations, but provides no
-persistence or write API. ``RuntimeGraph.as_dict()`` and ``to_json()`` are
+persistence or write API. A node's informal dependencies keep a link ``check``
+warns closes a cycle. ``RuntimeGraph.as_dict()`` and ``to_json()`` are
 deterministic compatibility snapshots for consumers, not an authored or
 generated graph file.
 
@@ -41,7 +42,7 @@ from .graph import Graph, load_graph, roadmap_symlink_issues
 from .lean import LeanSourceError, declaration_names, index_failure_message, index_project, resolve_lean_root
 from .status import derive, is_definition
 
-RUNTIME_SCHEMA = "autoform-runtime/v4"
+RUNTIME_SCHEMA = "autoform-runtime/v5"
 RUNTIME_AUTHORITY = "markdown-articles"
 
 

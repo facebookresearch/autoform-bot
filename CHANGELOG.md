@@ -31,10 +31,12 @@ date when the release is tagged.
   at a time from `dependencies/map/data/` (#517).
 - **Informal dependencies.** Under `## Informally uses`, an article can list
   what its source's proof cites but its Lean proof need not use. The links
-  resolve like dependencies and appear in the runtime projection as
-  `informal_dependencies`, but derived status, readiness and
-  `work assumptions` never count them; a link that does not resolve, or whose
-  target depends on the article, is a `check` warning (#541).
+  resolve like dependencies and appear in the runtime projection, now
+  `autoform-runtime/v5`, as `informal_dependencies`, but derived status,
+  readiness and `work assumptions` never count them, and the article's summary
+  skips the section. `check` warns about a link that does not resolve, one whose
+  target depends on the article (it stays listed), and the heading written below
+  a dependency heading, where its links count (#541).
 
 ### Changed
 

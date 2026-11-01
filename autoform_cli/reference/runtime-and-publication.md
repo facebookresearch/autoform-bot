@@ -24,12 +24,12 @@ renderers, or dashboards, and it writes no file.
 ## Runtime contract
 
 `autoform_cli.runtime` projects the Markdown graph into the read-only,
-in-memory schema `autoform-runtime/v4`; the Markdown stays the authority, and
+in-memory schema `autoform-runtime/v5`; the Markdown stays the authority, and
 Autoform never creates, synchronizes, or treats `graph.json` as an authority. A
 source target that is neither an http(s) link nor a path inside the blueprint,
 and a `mathlib_file` that is not a portable relative path, are left out of the
 projection ([Validation](validation-and-audit.md#validation) says how `check`
-reports them). Each v4 node carries `article_id`, a nullable `catalog`,
+reports them). Each v5 node carries `article_id`, a nullable `catalog`,
 `informal_dependencies`, `assertions.statement_retracted`, and `status.assumes`
 and `status.waiting_on`, and the graph its `open_statements` policy. Temporary
 claims and local dashboard hooks may fall back to an article's path-derived

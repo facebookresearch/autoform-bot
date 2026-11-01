@@ -112,7 +112,7 @@ def test_loads_identical_runtime_from_project_or_blueprint(tmp_path: Path) -> No
     from_project = load_runtime_graph(project)
     from_blueprint = load_runtime_graph(project / "blueprint")
 
-    assert RUNTIME_SCHEMA == "autoform-runtime/v4"
+    assert RUNTIME_SCHEMA == "autoform-runtime/v5"
     assert from_project == from_blueprint
     assert from_project.schema == RUNTIME_SCHEMA
     assert from_project.authority == RUNTIME_AUTHORITY
