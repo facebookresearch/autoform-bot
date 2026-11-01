@@ -924,6 +924,22 @@ def test_a_routed_page_outside_the_roadmap_is_a_site_document_without_its_fragme
     """)
 
 
+def test_the_index_text_does_not_take_the_page_cache_budget() -> None:
+    _run(r"""
+      // Room for the start (index text, root graph and a snapshot) and for the walk, but not for the text
+      // and the walk: a cached text would evict a page once the walk begins, which the fetch counts show.
+      const payload=index();for(let n=0;n<24;n++) payload.nodes.push({id:'leaf-'+n,title:'Leaf '+n});
+      const size=value=>new TextEncoder().encode(JSON.stringify(value)).byteLength;
+      const walk=3*size(graph)+size(aSpec)+size(bSpec),text=size(payload),budget=text+size(graph)+64;
+      assert(walk+4*32<=budget&&budget<text+walk,'The walk and its snapshots must fit, and the text with them must not');
+      const app=setup({cacheBytes:budget});app.contents.set(absolute('dependencies/index.json'),payload);
+      await app.nav.start();await app.nav.navigateNode('a');await app.nav.navigateNode('b');await app.nav.navigateNode('a');
+      assert.equal(app.fetches.filter(url=>url===aSpec.route).length,1);
+      assert.equal(app.fetches.filter(url=>url===absolute('dependencies/a.json')).length,1);
+      assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
 def test_disposal_during_index_batch_never_commits_or_reports_a_partial_index() -> None:
     _run(r"""
       const payload=index();for(let n=0;n<600;n++) payload.nodes.push({id:'leaf-'+n,title:'Leaf '+n});

@@ -49,6 +49,10 @@ async function wikiApp(extra={}) {
     app.fetches.push(url);
     if(url===catalogue) {
       if(extra.transport==='text') return app.reply(catalog,url);
+      // WebKit hands a large body over as one chunk, here a view into a larger buffer.
+      if(extra.transport==='single') return new Response(new ReadableStream({start(controller){
+        const padded=new Uint8Array(bytes.length+8);padded.set(bytes,4);
+        controller.enqueue(padded.subarray(4,4+bytes.length));controller.close();}}),{status:200});
       if(extra.transport==='arrayBuffer') return {ok:true,status:200,url,headers:{get(){return null;}},
         arrayBuffer:async()=>bytes.slice().buffer,text:async()=>{throw new Error('Raw bytes must not become text first');}};
       return streamed(bytes);
@@ -128,7 +132,7 @@ def test_a_slow_steady_transfer_loads_and_only_a_stall_times_out() -> None:
     """)
 
 
-@pytest.mark.parametrize("transport", ("stream", "arrayBuffer"))
+@pytest.mark.parametrize("transport", ("stream", "single", "arrayBuffer"))
 def test_index_digest_is_original_bom_bytes_not_decoded_text(transport: str) -> None:
     _run("const transport=" + json.dumps(transport) + ";\n" + r"""
       const app=await wikiApp({bom:true,transport});await app.nav.start();
@@ -137,6 +141,66 @@ def test_index_digest_is_original_bom_bytes_not_decoded_text(transport: str) -> 
       const result=await app.nav.loadWikiLinks();assert.equal(result.availability,'complete');
       assert.equal(result.index_sha256,app.indexHash);assert.equal(app.nav.getIndex().nodes[0].id,'roadmap');
       assert.deepEqual(app.nav.getIndex().relations,[['a','b',1,0]]);assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+_READ_EVENTS = r"""
+// Record the index's decode and parse, and each 0 ms timer: without animation frames, a pause is one.
+// Each decode advances the clock by SLOW ms. Each read of a body advances it by 20 ms, which is
+// waiting for the network, not work.
+const text=new TextDecoder().decode(app.indexBytes),events=[];let now=0;app.win.performance={now:()=>now};
+const nativeTimer=global.setTimeout,nativeClear=global.clearTimeout,nativeParse=JSON.parse,nativeDecode=TextDecoder.prototype.decode;
+const nativeRead=ReadableStreamDefaultReader.prototype.read;
+global.setTimeout=(callback,delay,...args)=>{if(delay===0)events.push('pause');return nativeTimer(callback,delay,...args);};
+TextDecoder.prototype.decode=function(...args){const value=nativeDecode.apply(this,args);now+=SLOW;if(value===text)events.push('decode');return value;};
+ReadableStreamDefaultReader.prototype.read=function(...args){now+=20;return nativeRead.apply(this,args);};
+JSON.parse=function(value,...rest){if(value===text)events.push('parse');return nativeParse.call(this,value,...rest);};
+function restore(){global.setTimeout=nativeTimer;global.clearTimeout=nativeClear;JSON.parse=nativeParse;
+  TextDecoder.prototype.decode=nativeDecode;ReadableStreamDefaultReader.prototype.read=nativeRead;}
+"""
+
+
+@pytest.mark.parametrize("transport", ("stream", "single"))
+@pytest.mark.parametrize(("slow", "expected"), ((10, ["decode", "pause", "parse"]), (9, ["decode", "parse"])))
+def test_a_slow_index_read_pauses_before_the_parse(transport: str, slow: int, expected: list[str]) -> None:
+    _run(f"const transport={json.dumps(transport)},SLOW={slow},expected={json.dumps(expected)};\n" + r"""
+      const app=await wikiApp({transport});
+    """ + _READ_EVENTS + r"""
+      try {
+        assert.equal((await app.nav.loadIndex()).nodes.length,3);assert.deepEqual(events,expected);
+        // Only the index pauses: the wiki layer's decode goes straight on.
+        assert.equal((await app.nav.loadWikiLinks()).availability,'complete');assert.deepEqual(events,expected);
+      } finally {restore();}
+      assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+def test_a_visible_page_paints_two_frames_between_reading_and_parsing_the_index() -> None:
+    _run("const SLOW=10;\nconst app=await wikiApp();\n" + _READ_EVENTS + r"""
+      const frames=[];app.initial.doc.visibilityState='visible';app.win.cancelAnimationFrame=()=>{};
+      app.win.requestAnimationFrame=callback=>{events.push('frame');frames.push(callback);return frames.length;};
+      // Hold the 50 ms fallback, so only the frames can end the pause.
+      global.setTimeout=(callback,delay,...args)=>delay===50?{held:true}:nativeTimer(callback,delay,...args);
+      global.clearTimeout=token=>{if(!(token&&token.held))nativeClear(token);};
+      try {
+        const loading=app.nav.loadIndex();await until(()=>events.length===2);
+        assert.deepEqual(events,['decode','frame']);frames[0](16);assert.deepEqual(events,['decode','frame','frame']);
+        frames[1](32);assert.equal((await loading).nodes.length,3);assert.deepEqual(events,['decode','frame','frame','parse']);
+      } finally {restore();}
+      assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+def test_a_single_chunk_index_is_hashed_and_decoded_where_it_arrived() -> None:
+    _run(r"""
+      // The single transport's chunk is a view at offset 4 into a buffer 8 bytes longer than the index.
+      const app=await wikiApp({transport:'single'}),hashed=[],decoded=[],nativeDecode=TextDecoder.prototype.decode;
+      app.win.crypto={subtle:{digest(algorithm,data){hashed.push(data);return webcrypto.subtle.digest(algorithm,data);}}};
+      TextDecoder.prototype.decode=function(input,...rest){decoded.push(input);return nativeDecode.call(this,input,...rest);};
+      try {assert.equal((await app.nav.loadIndex()).nodes.length,3);} finally {TextDecoder.prototype.decode=nativeDecode;}
+      assert.equal(hashed.length,1);assert.equal(hashed[0].byteOffset,4);
+      assert.equal(hashed[0].buffer.byteLength,app.indexBytes.length+8);assert.strictEqual(decoded[0],hashed[0]);
+      assert.equal(app.errors.length,0);app.nav.dispose();
     """)
 
 
