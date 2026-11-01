@@ -24,6 +24,14 @@ date when the release is tagged.
 
 ### Changed
 
+- **Declaration captions.** A `declaration` command with no caption, such as
+  `isomorphism`, is captioned as written, first letter capitalized, in the book
+  instead of "Node", and named on its map card, which showed no kind. Modifiers
+  such as `noncomputable` and now `public` no longer hide a known command, so
+  `public def` also counts as a definition, and `irreducible_def` and `opaque`
+  read as definitions. `check` names each command with no caption once, with
+  the articles that use it; `audit` does not check those articles' Lean target
+  kind either (#485).
 - **Explorer delivery.** The approved integrated redesign ships below 145 KB,
   with the same bounded graph, JSON and frame budgets and pinned safe compiler.
   Touch keeps single-pointer zoom controls; reading handles retain page-owned
@@ -171,6 +179,12 @@ date when the release is tagged.
   or resumes and at each frontier re-read, decides each finding against the
   current head, and repairs the oldest first, after any it is stacked on. A run
   does not stop while an accepted finding awaits repair (#483, #525).
+- **Duplicate credit.** `audit` warns `duplicate-lean-target` at each target
+  that takes credit for a declaration another target also takes: the first
+  `lean:` name of a target recording `statement: formalized`, or the first
+  `mathlib_declaration` name of a `mathlib: true` target, compared as Lean
+  names. Later names, catalogs, containers and placeholders recording neither
+  take no credit (#193).
 
 ### Fixed
 
@@ -179,6 +193,12 @@ date when the release is tagged.
   in dependency packages. It no longer reads other nested checkouts, such as
   worker worktrees with their own `.lake`, the root's build output or a
   package's `.lake`, which could stall the run before its probe (#429).
+- **Search index load.** The explorer prepares its search index in 10 ms
+  slices rather than 512-row batches, and resolves each page's links once
+  rather than every row's. On ATLAS (38,661 rows), search, the Topics outline
+  and concept links were ready 5.3 s after the index was parsed, most of it
+  spent waiting between batches; they are now ready after 1.0 s in WebKit and
+  0.7 s in Chrome.
 - **Fences in comments.** Render no longer reads a fence line inside an HTML
   comment as opening a code block. It had left every later line of the page
   unrewritten, so a link to a source note after it was published as written,

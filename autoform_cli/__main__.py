@@ -54,7 +54,7 @@ from .library.search import LibraryResult, library_argument, search_with_librari
 from .markdown import local_target_issue
 from .project import ProjectCatalogError, ProjectCreateError, create_project, inspect_project, load_release_catalog
 from .readback import Readback, load_readbacks, prepare_readback, publish_readback
-from .render import SOURCES_DIR, PublicationError, publication_issues, render_site
+from .render import DECLARATION_LABELS, SOURCES_DIR, PublicationError, publication_issues, render_site
 from .review import (
     ReviewBundle,
     ReviewError,
@@ -783,6 +783,31 @@ def _formalizable_container_warnings(graph: Graph) -> list[str]:
     ]
 
 
+def _unknown_declaration_warnings(graph: Graph) -> list[str]:
+    """Name each ``declaration`` command render has no caption for, once, with the articles that use it.
+
+    Render captions such an article with the word as written, and audit, whose
+    commands are among those render captions, does not check its Lean target's
+    kind. A project may use one such word on purpose in many articles, so each
+    word is one line. The site still builds, so ``check`` warns rather than fails.
+    """
+    articles: dict[str, list[str]] = {}
+    for node in graph.nodes.values():
+        command = status.declaration_command(node.declaration)
+        if node.declaration is not None and command.casefold() not in DECLARATION_LABELS:
+            articles.setdefault(command, []).append(node.id)
+    warnings = []
+    for command, ids in articles.items():
+        shown = ", ".join(ids[:3]) + (", ..." if len(ids) > 3 else "")
+        where = ids[0] if len(ids) == 1 else f"{len(ids)} articles: {shown}"
+        warnings.append(
+            f"declaration {command!r} has no caption, so render captions it as written and audit does not check "
+            f"its Lean target's kind, on {where}; to have both, name a Lean declaration command, such as def, "
+            "structure or theorem"
+        )
+    return warnings
+
+
 #: How check ends the reason it gives for a name under one of the project's own types.
 _GENERATED = "and record the name in the article's implementation note"
 
@@ -871,7 +896,12 @@ def _check(args: argparse.Namespace) -> int:
         print(
             f"warning: {node_id}: module catalog links no declaration ledger under blueprint/sources/ from '## Sources'"
         )
-    for warning in _byte_order_mark_warnings(graph) + _formalizable_container_warnings(graph) + source_warnings:
+    for warning in (
+        _byte_order_mark_warnings(graph)
+        + _formalizable_container_warnings(graph)
+        + _unknown_declaration_warnings(graph)
+        + source_warnings
+    ):
         print(f"warning: {warning}")
     # What the site would leave out or show as typed, and what would stop
     # render; none of it fails check.
