@@ -119,7 +119,7 @@ def test_zooming_out_keeps_the_theorem_and_shows_its_place(webkit_browser: objec
         # Still selected, and the region that holds it is outlined among the dimmed rest.
         playwright.expect(page.locator(".pm-result.pm-selected")).to_have_count(1)
         playwright.expect(page.locator('.pm-part.pm-on-path[data-part="analysis"]')).to_have_count(1)
-        assert page.locator(".pm-reader .pm-kicker").inner_text() == "Result"
+        assert page.locator(".pm-reader .pm-kicker").inner_text() == "Theorem"
 
 
 def test_one_click_picks_a_region_in_place_and_a_second_opens_it(webkit_browser: object, map_url: str) -> None:

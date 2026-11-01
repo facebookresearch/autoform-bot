@@ -270,7 +270,7 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
     def result_row(result: str) -> dict[str, object]:
         record = by_id[result]
         row: dict[str, object] = {"id": result, "title": record.get("title"), "status": record.get("status")}
-        for key in ("lean", "summary", "reading_title", "route"):
+        for key in ("caption", "lean", "summary", "reading_title", "route"):
             if record.get(key):
                 row[key] = record[key]
         if result in facet:
@@ -437,7 +437,7 @@ def write_project_map(directory: Path, files: Mapping[str, object]) -> tuple[Pat
 
 def records_from_view(view: object, metadata: Mapping[str, Mapping[str, object]]) -> tuple[list[dict[str, object]], list[Relation]]:
     """The map's records and (user, used) relations from the publisher's complete view and its index metadata."""
-    from . import dag_viewer  # local import: dag_viewer imports the renderer stack
+    from . import dag_viewer, render  # local import: render imports this module, and dag_viewer the renderer stack
 
     records: list[dict[str, object]] = []
     for node in view.nodes:  # type: ignore[attr-defined]
@@ -446,6 +446,9 @@ def records_from_view(view: object, metadata: Mapping[str, Mapping[str, object]]
             record["lean"] = node.lean
         if node.summary:
             record["summary"] = node.summary
+        # The book's caption, such as "Theorem" or "Definition"; the map calls anything without one a result.
+        if node.declaration or node.catalog == "module":
+            record["caption"] = render._declaration_label(node)
         label = dag_viewer._reading_label(node.title)
         if label is not None:
             record["reading_title"] = label
