@@ -82,6 +82,11 @@ graph edges, except in a code block (fenced or indented) or an HTML comment;
 other links are navigation or citations. Dependencies resolve relative to the
 article and must point at another roadmap article.
 
+`## Informally uses` lists what the source's argument cites but the Lean proof
+need not use. Its links resolve like dependencies but never count in derived
+status; one that does not resolve, or whose target depends on the article, is a
+`check` warning.
+
 The optional `declaration` field marks a formalizable leaf and names its
 intended Lean declaration command, any one, such as `def`, `theorem`,
 `structure`, or `instance`; containers and exposition articles omit it. A

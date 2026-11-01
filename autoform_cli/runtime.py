@@ -6,8 +6,8 @@ contract in ``autoform_cli/reference/runtime-and-publication.md``.
 
 The schema ``autoform-runtime/v4`` is deeply immutable, and its declared
 authority is ``markdown-articles``: the adapter copies hierarchy, typed
-statement and proof dependencies, authored assertions, derived progress,
-provenance, and optional local Lean source locations, but provides no
+statement, proof and informal dependencies, authored assertions, derived
+progress, provenance, and optional local Lean source locations, but provides no
 persistence or write API. ``RuntimeGraph.as_dict()`` and ``to_json()`` are
 deterministic compatibility snapshots for consumers, not an authored or
 generated graph file.
@@ -147,6 +147,7 @@ class RuntimeNode:
     mathlib_declarations: tuple[str, ...]
     mathlib_file: str | None
     catalog: str | None = None
+    informal_dependencies: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -160,6 +161,7 @@ class RuntimeNode:
             "dispatchable": self.dispatchable,
             "formalizable": self.formalizable,
             "id": self.id,
+            "informal_dependencies": list(self.informal_dependencies),
             "lean_targets": [target.as_dict() for target in self.lean_targets],
             "mathlib": self.mathlib,
             "mathlib_declarations": list(self.mathlib_declarations),
@@ -306,7 +308,12 @@ def build_runtime_graph(
         expected_dependencies = _ordered_union(node.statement_dependencies, node.proof_dependencies)
         if node.dependencies != expected_dependencies:
             issues.append(f"{node.id}: dependency union does not match typed dependencies")
-        for dependency in (*node.statement_dependencies, *node.proof_dependencies, *node.dependencies):
+        for dependency in (
+            *node.statement_dependencies,
+            *node.proof_dependencies,
+            *node.dependencies,
+            *node.informal_dependencies,
+        ):
             if dependency not in node_ids:
                 issues.append(f"{node.id}: dependency does not name a runtime node: {dependency}")
 
@@ -388,6 +395,7 @@ def build_runtime_graph(
                 statement_dependencies=node.statement_dependencies,
                 proof_dependencies=node.proof_dependencies,
                 dependencies=node.dependencies,
+                informal_dependencies=node.informal_dependencies,
                 assertions=RuntimeAssertions(
                     statement_formalized=node.statement_formalized,
                     statement_retracted=node.statement_retracted,
@@ -581,7 +589,7 @@ def _validate_runtime(runtime: RuntimeGraph) -> None:
             issues.append(f"{node.id}: runtime parent does not resolve")
         if node.dependencies != _ordered_union(node.statement_dependencies, node.proof_dependencies):
             issues.append(f"{node.id}: runtime dependency union is inconsistent")
-        if any(dependency not in nodes for dependency in node.dependencies):
+        if any(dependency not in nodes for dependency in (*node.dependencies, *node.informal_dependencies)):
             issues.append(f"{node.id}: runtime dependency does not resolve")
         has_children = node.id in parents_with_children
         if node.dispatchable and (not node.formalizable or has_children):

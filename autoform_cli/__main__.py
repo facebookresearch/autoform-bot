@@ -900,6 +900,7 @@ def _check(args: argparse.Namespace) -> int:
         _byte_order_mark_warnings(graph)
         + _formalizable_container_warnings(graph)
         + _unknown_declaration_warnings(graph)
+        + list(graph.informal_warnings)
         + source_warnings
     ):
         print(f"warning: {warning}")

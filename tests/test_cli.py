@@ -290,6 +290,15 @@ def _with_body(blueprint: Path, body: str) -> Path:
     return blueprint
 
 
+def test_check_warns_about_an_informal_link_it_cannot_use_and_still_passes(tmp_path: Path, capsys) -> None:
+    blueprint = _with_body(_clean_blueprint(tmp_path), "## Informally uses\n\n- [Gap](gap.md)")
+
+    assert main(["check", str(blueprint)]) == 0
+    out = capsys.readouterr().out
+    assert "OK: 1 articles, 0 dependencies" in out
+    assert "warning: result: informal target does not exist: 'gap.md'" in out
+
+
 def test_check_warns_about_markup_the_site_shows_as_typed(tmp_path: Path, capsys) -> None:
     """Markup a published page could run is reported, and check still passes:
     the site shows the page as typed until it is fixed."""

@@ -14,6 +14,7 @@ import json
 import os
 import re
 import stat
+from collections import deque
 from dataclasses import dataclass, replace
 from html import unescape
 from pathlib import Path
@@ -79,6 +80,10 @@ _CATALOG_DECLARATION_KEYS = frozenset(
 #: Both are graph edges, mirroring where leanblueprint places ``\uses``.
 _STATEMENT_SECTION = "depends on"
 _PROOF_SECTION = "proof depends on"
+#: ``## Informally uses`` names what the source's argument cites but the Lean
+#: proof need not use. Its links resolve like dependencies, but derived status
+#: never counts them, and one that cannot be used is a check warning.
+_INFORMAL_SECTION = "informally uses"
 _SOURCES_SECTION = "sources"
 ATLAS_SCHEMA = "autoform-atlas/v1"
 IMPLEMENTATION_NOTES_DIR = ".implementation-notes"
@@ -108,6 +113,8 @@ class Node:
     dependencies: tuple[str, ...]
     statement_dependencies: tuple[str, ...] = ()
     proof_dependencies: tuple[str, ...] = ()
+    #: ``## Informally uses`` links, less any already among ``dependencies``.
+    informal_dependencies: tuple[str, ...] = ()
     kind: str = "node"
     lean: str | None = None
     declaration: str | None = None
@@ -159,6 +166,9 @@ class Graph:
     #: Folders whose ``README.md`` says ``published: false``: check validates
     #: them, and render leaves them out of the site.
     unpublished: tuple[Path, ...] = ()
+    #: The ``## Informally uses`` links check warns about: ones that do not
+    #: resolve to another article, and ones whose target depends on the article.
+    informal_warnings: tuple[str, ...] = ()
 
     @property
     def edge_count(self) -> int:
@@ -183,6 +193,7 @@ class _ParsedNode:
     source_targets: tuple[str, ...]
     metadata: dict[str, str]
     summary: str | None
+    informal_targets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,6 +277,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         raise GraphValidationError(issues)
     unpublished = tuple(sorted(node.path.parent for node in parsed if node.metadata.get("published") in _FALSE))
     issues.extend(_unpublished_link_issues(sources, unpublished))
+    informal_warnings: list[str] = []
     nodes: dict[str, Node] = {}
     for parsed_node in parsed:
 
@@ -287,6 +299,15 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         dependencies.extend(
             dependency for dependency in proof_dependencies if dependency not in dependencies
         )
+        informal_dependencies: list[str] = []
+        for target in parsed_node.informal_targets:
+            dependency, issue = _resolve_target(parsed_node, target, blueprint, canonical_ids, "informal target")
+            if issue:
+                informal_warnings.append(issue)
+            elif dependency == parsed_node.id:
+                informal_warnings.append(f"{parsed_node.id}: informally uses itself")
+            elif dependency not in dependencies and dependency not in informal_dependencies:
+                informal_dependencies.append(dependency)
         metadata = parsed_node.metadata
         nodes[parsed_node.id] = Node(
             id=parsed_node.id,
@@ -295,6 +316,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             dependencies=tuple(dependencies),
             statement_dependencies=tuple(statement_dependencies),
             proof_dependencies=tuple(proof_dependencies),
+            informal_dependencies=tuple(informal_dependencies),
             kind="article",
             declaration=metadata.get("declaration"),
             catalog=metadata.get("catalog"),
@@ -325,7 +347,14 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         issues.extend(_find_cycles(nodes))
     if issues:
         raise GraphValidationError(issues)
-    return Graph(blueprint_dir=blueprint, nodes=nodes, open_statements=open_statements, unpublished=unpublished)
+    informal_warnings.extend(_informal_cycles(nodes))
+    return Graph(
+        blueprint_dir=blueprint,
+        nodes=nodes,
+        open_statements=open_statements,
+        unpublished=unpublished,
+        informal_warnings=tuple(informal_warnings),
+    )
 
 
 def _unpublished_link_issues(sources: list[_NodeSource], unpublished: tuple[Path, ...]) -> list[str]:
@@ -749,6 +778,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
     targets: dict[str, list[str]] = {
         _STATEMENT_SECTION: [],
         _PROOF_SECTION: [],
+        _INFORMAL_SECTION: [],
         _SOURCES_SECTION: [],
     }
     section: str | None = None
@@ -790,6 +820,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         tuple(targets[_SOURCES_SECTION]),
         metadata,
         _extract_summary(body, references),
+        tuple(targets[_INFORMAL_SECTION]),
     )
     return parsed, []
 
@@ -817,6 +848,7 @@ def _extract_summary(body: list[str], references: dict[str, str], *, limit: int 
             excluded = len(heading.group(1)) == 2 and heading.group(2).strip().casefold() in {
                 _STATEMENT_SECTION,
                 _PROOF_SECTION,
+                _INFORMAL_SECTION,
                 _SOURCES_SECTION,
             }
             continue
@@ -992,42 +1024,43 @@ def _resolve_target(
     target: str,
     blueprint: Path,
     canonical_ids: dict[Path, str],
+    label: str = "dependency target",
 ) -> tuple[str | None, str | None]:
     try:
         split = urlsplit(target)
     except ValueError:
-        return None, f"{node.id}: dependency target must be a relative Markdown path: {target!r}"
+        return None, f"{node.id}: {label} must be a relative Markdown path: {target!r}"
     if split.scheme or split.netloc or split.query:
-        return None, f"{node.id}: dependency target must be a relative Markdown path: {target!r}"
+        return None, f"{node.id}: {label} must be a relative Markdown path: {target!r}"
     raw_path = unquote(split.path)
     if not raw_path:
-        return None, f"{node.id}: dependency target must name a Markdown file: {target!r}"
+        return None, f"{node.id}: {label} must name a Markdown file: {target!r}"
     if "\x00" in raw_path:
-        return None, f"{node.id}: dependency target contains an invalid path: {target!r}"
+        return None, f"{node.id}: {label} contains an invalid path: {target!r}"
     relative = Path(raw_path)
     if relative.is_absolute() or relative.suffix != ".md":
-        return None, f"{node.id}: dependency target must be a relative .md file: {target!r}"
+        return None, f"{node.id}: {label} must be a relative .md file: {target!r}"
 
     # A path that leaves the blueprint as spelled escapes it; nothing outside is looked at.
     spelled = Path(os.path.normpath(node.path.parent / relative))
     if not _is_within(spelled, blueprint):
-        return None, f"{node.id}: dependency target escapes the blueprint directory: {target!r}"
+        return None, f"{node.id}: {label} escapes the blueprint directory: {target!r}"
     # Render's copy has no hidden folder, so it cannot step through one and back out either.
     if any(part.startswith(".") and part != ".." for part in relative.parts):
-        return None, f"{node.id}: dependency target names a hidden path, which render omits: {target!r}"
+        return None, f"{node.id}: {label} names a hidden path, which render omits: {target!r}"
     resolved = resolved_path(node.path.parent / relative)
     if resolved is None:
         # The kernel reaches a file behind a link only `readlink` refuses.
         why = "cannot be resolved" if os.path.exists(node.path.parent / relative) else "does not exist"
-        return None, f"{node.id}: dependency target {why}: {target!r}"
+        return None, f"{node.id}: {label} {why}: {target!r}"
     if not _is_within(resolved, blueprint):
-        return None, f"{node.id}: dependency target escapes the blueprint directory: {target!r}"
+        return None, f"{node.id}: {label} escapes the blueprint directory: {target!r}"
     # Before Python 3.14, `Path.is_file` raises under an unreadable directory.
     if not os.path.isfile(resolved):
-        return None, f"{node.id}: dependency target does not exist: {target!r}"
+        return None, f"{node.id}: {label} does not exist: {target!r}"
     dependency = canonical_ids.get(resolved)
     if dependency is None:
-        return None, f"{node.id}: dependency target is not a node: {target!r}"
+        return None, f"{node.id}: {label} is not a node: {target!r}"
     return dependency, None
 
 
@@ -1069,6 +1102,34 @@ def _find_cycles(nodes: dict[str, Node]) -> list[str]:
                 if message not in seen_issues:
                     seen_issues.add(message)
                     issues.append(message)
+    return issues
+
+
+def _informal_cycles(nodes: dict[str, Node]) -> list[str]:
+    """Name each informal link whose target depends on its article, through counted edges.
+
+    Status never reads the link, so it closes no cycle there; drawn beside the
+    dependencies, it would.
+    """
+    issues: list[str] = []
+    for node in nodes.values():
+        for target in node.informal_dependencies:
+            # Breadth first from the target, so the path named is a shortest one.
+            previous: dict[str, str | None] = {target: None}
+            queue = deque([target])
+            while queue and node.id not in previous:
+                current = queue.popleft()
+                for dependency in nodes[current].dependencies:
+                    if dependency not in previous:
+                        previous[dependency] = current
+                        queue.append(dependency)
+            if node.id in previous:
+                path: list[str] = []
+                step: str | None = node.id
+                while step is not None:
+                    path.append(step)
+                    step = previous[step]
+                issues.append(f"{node.id}: informally uses {target}, which depends on it: {' -> '.join(reversed(path))}")
     return issues
 
 

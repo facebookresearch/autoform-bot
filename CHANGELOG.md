@@ -21,6 +21,12 @@ date when the release is tagged.
   builds on and the parts that use it, with links flowing between them; a second
   click goes inside, and Up or Escape goes back a level. The data loads one level
   at a time from `dependencies/map/data/` (#517).
+- **Informal dependencies.** Under `## Informally uses`, an article can list
+  what its source's proof cites but its Lean proof need not use. The links
+  resolve like dependencies and appear in the runtime projection as
+  `informal_dependencies`, but derived status, readiness and
+  `work assumptions` never count them; a link that does not resolve, or whose
+  target depends on the article, is a `check` warning (#387).
 
 ### Changed
 

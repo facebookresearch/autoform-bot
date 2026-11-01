@@ -604,6 +604,64 @@ def test_rejects_cycle(tmp_path: Path) -> None:
         load_graph(blueprint)
 
 
+def test_informally_uses_links_resolve_without_becoming_dependencies(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "lemma.md", "# Lemma\n")
+    _node(
+        blueprint,
+        "top.md",
+        "# Top\n## Depends on\n[Lemma](lemma.md)\n## Informally uses\n"
+        "- [Base](base.md)\n- [Base again](base.md)\n- [Lemma](lemma.md)\n",
+    )
+
+    graph = load_graph(blueprint)
+
+    # A target already among the dependencies stays a counted dependency only.
+    assert graph.nodes["top"].informal_dependencies == ("base",)
+    assert graph.nodes["top"].dependencies == ("lemma",)
+    assert graph.edge_count == 1
+    assert graph.informal_warnings == ()
+
+
+def test_an_informal_link_that_cannot_be_used_is_a_warning_not_an_error(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    paper = blueprint / "sources" / "paper.md"
+    paper.parent.mkdir(parents=True)
+    paper.write_text("# Paper\n", encoding="utf-8")
+    _node(
+        blueprint,
+        "top.md",
+        "# Top\n## Informally uses\n"
+        "As in [the paper](../sources/paper.md), by [Base](base.md), [a gap](missing.md),\n"
+        "[the survey](https://example.invalid/survey) and [this article](top.md).\n",
+    )
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["top"].informal_dependencies == ("base",)
+    assert graph.informal_warnings == (
+        "top: informal target is not a node: '../sources/paper.md'",
+        "top: informal target does not exist: 'missing.md'",
+        "top: informal target must be a relative Markdown path: 'https://example.invalid/survey'",
+        "top: informally uses itself",
+    )
+
+
+def test_an_informal_link_whose_target_depends_on_its_article_is_a_warning(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "a.md", "# A\n## Informally uses\n[C](c.md)\n")
+    _node(blueprint, "b.md", "# B\n## Depends on\n[A](a.md)\n")
+    _node(blueprint, "c.md", "# C\n## Proof depends on\n[B](b.md)\n## Informally uses\n[A](a.md)\n")
+
+    graph = load_graph(blueprint)
+
+    # C informally using A closes no cycle: A only informally uses C back.
+    assert graph.nodes["a"].informal_dependencies == ("c",)
+    assert graph.informal_warnings == ("a: informally uses c, which depends on it: c -> b -> a",)
+
+
 def test_accepts_cycle_created_only_by_chapter_contraction(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _roadmap_page(blueprint, "a/README.md", "# A\n")

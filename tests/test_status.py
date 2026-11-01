@@ -41,6 +41,24 @@ def test_a_node_waiting_on_an_unstated_prerequisite_is_only_planned(tmp_path: Pa
     assert _states(blueprint)["top"] == "planned"
 
 
+@pytest.mark.parametrize(("heading", "top"), (("Informally uses", "fully_proved"), ("Proof depends on", "proved")))
+def test_an_informal_prerequisite_changes_no_derived_status(tmp_path: Path, heading: str, top: str) -> None:
+    """A book's proof may cite a result the Lean proof never uses; only a dependency heading holds it back."""
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "gap.md", declaration="theorem")
+    _node(blueprint, "user.md", "## Depends on\n\n- [Top](top.md)\n", declaration="theorem")
+    _node(blueprint, "top.md", declaration="theorem", statement="formalized", proof="formalized")
+    without = derive(load_graph(blueprint))
+    _node(blueprint, "top.md", f"## {heading}\n\n- [Gap](gap.md)\n", declaration="theorem", statement="formalized", proof="formalized")
+
+    statuses = derive(load_graph(blueprint))
+
+    assert statuses["top"].key == top
+    if heading == "Informally uses":
+        assert statuses == without
+        assert summarize(statuses) == summarize(without)
+
+
 def test_definitions_need_no_proof(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "d.md", declaration="def", statement="formalized")
