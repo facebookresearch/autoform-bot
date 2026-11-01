@@ -41,6 +41,14 @@ date when the release is tagged.
 
 ### Changed
 
+- **Import closure.** `work import-impact --module-scope import-closure` tests
+  each module only against the files that hold its last component, which one
+  pass over each file finds, and reads a file that libraries sharing a `srcDir`
+  all map once. It tested every file, once per such library, for each module it
+  added: on a generated root whose libraries all share one `srcDir`, a hub
+  module took 69 s at 1,491 files and is now 0.15 s, and 0.9 s at 7,000 files,
+  where one test of each file per module took 105 s. The modules it finds are
+  unchanged (#429).
 - **Search index size.** `dependencies/index.json` no longer repeats links the
   explorer doesn't read. A row whose route the explorer opens drops its context
   `url`, and only container rows keep `data_url`, since every page names its

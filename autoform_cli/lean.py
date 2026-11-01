@@ -739,6 +739,48 @@ def _indexed_source_snapshot(root: Path, snapshot: TreeSnapshot) -> IndexedSourc
     )
 
 
+def _longest_spellings(spellings: Iterable[bytes]) -> tuple[re.Pattern[bytes], dict[bytes, tuple[bytes, ...]]]:
+    """Match the longest of ``spellings`` starting where a search finds one, and list each one's prefixes.
+
+    The spellings form a trie, so a search costs about the same however many
+    there are. A match also holds the spellings that are its prefixes, which
+    the map lists for each spelling, itself included; searching again from the
+    byte after a match's start finds those that start inside it. With no
+    spellings the pattern matches nothing.
+    """
+
+    spellings = set(spellings)
+    trie: dict = {}
+    for spelling in spellings:
+        node = trie
+        for byte in spelling:
+            node = node.setdefault(byte, {})
+        node[None] = {}
+    prefixes: dict[bytes, tuple[bytes, ...]] = {}
+    for spelling in spellings:
+        node, held = trie, [b""] if None in trie else []
+        for end, byte in enumerate(spelling, 1):
+            node = node[byte]
+            if None in node:
+                held.append(spelling[:end])
+        prefixes[spelling] = tuple(held)
+    return re.compile(_trie_expression(trie) if trie else rb"(?!)"), prefixes
+
+
+def _trie_expression(node: dict) -> bytes:
+    """The spellings below ``node`` as one expression, which takes the longest one present."""
+
+    expression = b""
+    while None not in node and len(node) == 1:
+        ((byte, node),) = node.items()
+        expression += re.escape(bytes([byte]))
+    branches = [re.escape(bytes([byte])) + _trie_expression(child) for byte, child in node.items() if byte is not None]
+    if not branches:
+        return expression
+    group = b"(?:" + b"|".join(branches) + b")"
+    return expression + (group + b"?" if None in node else group)
+
+
 def _is_managed_output_manifest_bytes(data: bytes) -> bool:
     if len(data) > _MANAGED_OUTPUT_MANIFEST_BYTE_LIMIT:
         return False
