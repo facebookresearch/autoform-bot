@@ -205,6 +205,11 @@ date when the release is tagged.
 
 ### Fixed
 
+- **`\pmod`, `\bmod` and `\mod` on the site.** Site formulas typeset `\pmod`,
+  `\bmod`, `\mod` and amsmath's `\varliminf`, `\varlimsup`, `\varinjlim` and
+  `\varprojlim`. MathJax builds them from `\mmlToken`, which the page's TeX input
+  turns off, so each showed a red `\notallowed`; they are now written without
+  it, and a project macro of the same name still replaces one (#544).
 - **Import-closure scan.** `work import-impact --module-scope import-closure`
   reads uncaptured `.lean` files only in the root libraries' module trees and
   in dependency packages. It no longer reads other nested checkouts, such as

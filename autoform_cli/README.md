@@ -1157,7 +1157,10 @@ color, html, unicode, action, newcommand, extpfeil, verb, and bussproofs. So
 `\unicode`, and any other command those packages do not define show in red and
 do nothing, however a formula or macro reaches them. A macro may not take one of
 their names; `check` and `render` warn about a macro they leave out, judging the
-copy of `tex-macros.json` that `render` reads once and publishes. Each read-back
+copy of `tex-macros.json` that `render` reads once and publishes. `\bmod`,
+`\pmod`, `\mod`, `\varliminf`, `\varlimsup`, `\varinjlim` and `\varprojlim`,
+which MathJax builds from `\mmlToken`, are written again without it, and a
+project macro of the same name replaces one. Each read-back
 card has its own TeX input with only base, ams, and noundefined. Only renderer-marked
 formulas, such as `$...$` in Markdown, are typeset. Formulas in links, controls and
 navigation get no extra MathJax tab stop, menu or accessibility explorer. Refreshes
