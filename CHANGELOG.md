@@ -9,6 +9,19 @@ date when the release is tagged.
 
 ## Unreleased
 
+### Added
+
+- **Whole-project map.** Every rendered site gets `dependencies/map/`, one
+  zoomable page for the whole project, linked from the landing page beside the
+  book. Regions (authored areas, or the top-level chapters) open into their
+  parts and parts into their results as the camera closes in, and a part opens
+  once its parts can be named. Search reaches any result by title or Lean name;
+  the reading pane shows the result's statement and proof from its page, and
+  what it uses and what uses it. One click picks a part and shows the parts it
+  builds on and the parts that use it, with links flowing between them; a second
+  click goes inside, and Up or Escape goes back a level. The data loads one level
+  at a time from `dependencies/map/data/` (#517).
+
 ### Changed
 
 - **Declaration captions.** A `declaration` command with no caption, such as
@@ -76,9 +89,14 @@ date when the release is tagged.
   With claims, each session leads from its own clone and checks `git worktree
   list` before dispatching, and workers name their branch with `claim acquire
   --note`, now documented. A handoff to another session, when the request covers
-  pushing, goes to an `origin` branch ending with the leaf's `article_id`, which
-  `git ls-remote` finds after the lease is gone. No message grants ownership or
-  completes a leaf (#434).
+  pushing, goes to the `origin` branch `handoff/<article_id>`, which the next
+  worker to take the leaf continues. With claims, no message grants
+  ownership; none completes a leaf (#434, #532).
+- **Formalize worktrees.** A new worktree gets a copy of the lead's
+  `.lake/packages`, copy-on-write and never a symbolic link, before its first
+  build. `lake exe cache get` then downloads nothing; before, each worktree
+  re-cloned about 0.5 GB of packages and unpacked another 7.5 GB Mathlib build
+  (#275).
 - **Generated import roots.** `work import-impact` reports `module_generated`
   when the repository's Git attributes set `linguist-generated` on MODULE's
   file, or make it `true`, normally through a committed `.gitattributes` line
@@ -154,15 +172,20 @@ date when the release is tagged.
   Coverage, the link checks and render's link rewriting read everything after
   it as code, so render shows such a page as typed until the fence is closed,
   at the indent of its opening line, with options the site accepts (#201).
-- **Pull request reviews.** Formalize ends each pull request a run opens with an
-  `Autoform project:` line. On any machine, the lead finds the open ones that
-  carry it and come from the project's repository, reads their reviews when a
-  run starts or resumes and at each frontier re-read, decides each finding
-  against the current head, and repairs the oldest first, after any it is
-  stacked on (#483).
+- **Pull request reviews.** Formalize ends each pull request a run opens, or
+  adopts and may edit, with an `Autoform project:` line. On any machine, the
+  lead finds the open ones that carry it and come from the project's repository,
+  by owner and name, reads their reviews and inline comments when a run starts
+  or resumes and at each frontier re-read, decides each finding against the
+  current head, and repairs the oldest first, after any it is stacked on. A run
+  does not stop while an accepted finding awaits repair (#483, #525).
 
 ### Fixed
 
+- **Fences in comments.** Render no longer reads a fence line inside an HTML
+  comment as opening a code block. It had left every later line of the page
+  unrewritten, so a link to a source note after it was published as written,
+  to a page the site leaves out, and `check` said nothing (#527).
 - **Output checks.** `skeleton`, `review prepare` and `library index` refuse
   to replace an output folder that holds a subfolder they cannot list, where
   they skipped it, so an edit inside it could be published over (#521).
@@ -192,6 +215,11 @@ date when the release is tagged.
   structure's limits. For a constructor or other name the index does not read
   directly under a project type, `check` names the type's `path:line` in a
   declaration article instead of pointing to `.lake` (#509).
+- **Dotted namespaces.** The Lean source index and `audit`'s limit scan open
+  a scope for each component of `namespace A.B` or `section A.B`, and `end`
+  closes one per component of its name, as Lean does: `end B` after
+  `namespace A.B` no longer drops the `A.` prefix from later names, and
+  `end C.D` closes both scopes (#524).
 - **Explorer controls.** Closing full phone reading brings a cropped selected
   card back into the map without overriding restored cameras. Isolate/status
   filters use the same eligible original members in maps and native shelves,
