@@ -1288,6 +1288,9 @@
 
   // ---------------------------------------------------------------- input
   var drag = null;
+  // Zoom per pixel of Control scroll or pinch: a wheel notch (100 px) zooms 2.2 times and a full trackpad pinch about
+  // 5, so a reader crosses the library's levels in a few gestures. A key or button press zooms twice.
+  var ZOOM_PER_PIXEL = 0.008, ZOOM_STEP = 2;
   // As in the explorer: scrolling (a two-finger swipe) pans, and Control or Command with scroll zooms. Browsers send a
   // trackpad pinch as a Control scroll.
   canvas.addEventListener("wheel", function (event) {
@@ -1295,7 +1298,7 @@
     var box = canvas.getBoundingClientRect(), pixels = event.deltaMode === 1 ? 25 : 1;
     release();
     if (event.ctrlKey || event.metaKey) {
-      zoomAt(clamp(Math.exp(-event.deltaY * pixels * 0.002), 0.5, 2), event.clientX - box.left, event.clientY - box.top);
+      zoomAt(clamp(Math.exp(-event.deltaY * pixels * ZOOM_PER_PIXEL), 0.25, 4), event.clientX - box.left, event.clientY - box.top);
     } else {
       camera = {x: camera.x + event.deltaX * pixels / camera.k, y: camera.y + event.deltaY * pixels / camera.k, k: camera.k};
       schedule();
@@ -1350,8 +1353,8 @@
     else if (event.key === "ArrowRight") camera.x += step / camera.k;
     else if (event.key === "ArrowUp") camera.y -= step / camera.k;
     else if (event.key === "ArrowDown") camera.y += step / camera.k;
-    else if (event.key === "+" || event.key === "=") zoomAt(1.35, size.w / 2, size.h / 2);
-    else if (event.key === "-") zoomAt(1 / 1.35, size.w / 2, size.h / 2);
+    else if (event.key === "+" || event.key === "=") zoomAt(ZOOM_STEP, size.w / 2, size.h / 2);
+    else if (event.key === "-") zoomAt(1 / ZOOM_STEP, size.w / 2, size.h / 2);
     else if (event.key === "0") wholeProject();
     else if (event.key === "Escape") escape();
     else return;
@@ -1359,8 +1362,8 @@
     event.preventDefault(); schedule();
     if (event.key !== "0") rememberCamera();
   });
-  zoomIn.addEventListener("click", function () { release(); zoomAt(1.5, size.w / 2, size.h / 2); rememberCamera(); });
-  zoomOut.addEventListener("click", function () { release(); zoomAt(1 / 1.5, size.w / 2, size.h / 2); rememberCamera(); });
+  zoomIn.addEventListener("click", function () { release(); zoomAt(ZOOM_STEP, size.w / 2, size.h / 2); rememberCamera(); });
+  zoomOut.addEventListener("click", function () { release(); zoomAt(1 / ZOOM_STEP, size.w / 2, size.h / 2); rememberCamera(); });
   function wholeProject() { navigation(); state.focusPart = ROOT; state.picked = null; select(null, {history: false}); remember(); fitProject(); live.textContent = "Whole project"; }
   fitAll.addEventListener("click", wholeProject);
   // One level up from where the reader is: from a result to its part, from a part to the part around it.
