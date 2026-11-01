@@ -11,6 +11,13 @@ date when the release is tagged.
 
 ### Added
 
+- **Worktrees.** `autoform project worktrees` reports which linked worktrees
+  are safe to remove after a run and what protects the rest: changes, Git
+  operations, unintegrated commits, processes, recent activity and live leases
+  from this host. `--remove` takes a saved report, rechecks each entry, removes
+  it with `git worktree remove`, never `--force`, and reports the free space
+  recovered and how to re-create the checkout; ignored files such as `.lake`
+  are not kept (#435).
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project, linked from the landing page beside the
   book. Regions (authored areas, or the top-level chapters) open into their
@@ -193,6 +200,17 @@ date when the release is tagged.
   `\varprojlim`. MathJax builds them from `\mmlToken`, which the page's TeX input
   turns off, so each showed a red `\notallowed`; they are now written without
   it, and a project macro of the same name still replaces one (#544).
+- **Import-closure scan.** `work import-impact --module-scope import-closure`
+  reads uncaptured `.lean` files only in the root libraries' module trees and
+  in dependency packages. It no longer reads other nested checkouts, such as
+  worker worktrees with their own `.lake`, the root's build output or a
+  package's `.lake`, which could stall the run before its probe (#429).
+- **Search index load.** The explorer prepares its search index in 10 ms
+  slices rather than 512-row batches, and resolves each page's links once
+  rather than every row's. On ATLAS (38,661 rows), search, the Topics outline
+  and concept links were ready 5.3 s after the index was parsed, most of it
+  spent waiting between batches; they are now ready after 1.0 s in WebKit and
+  0.7 s in Chrome.
 - **Fences in comments.** Render no longer reads a fence line inside an HTML
   comment as opening a code block. It had left every later line of the page
   unrewritten, so a link to a source note after it was published as written,
