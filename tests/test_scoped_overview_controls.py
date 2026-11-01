@@ -29,7 +29,7 @@ function original(name) {
   }
   assert.fail('Unparseable production callback: '+name);
 }
-const names=['element','readingLabel','refreshReadingLabels','safeHref','graphAt','scopeOverviewProjection','structuralScopeProjection','boundaryContextProjection','expandedGroupShelves','scopeOverviewFlow','recordId','mapNode','adoptGraph',
+const names=['element','readingLabel','refreshReadingLabels','tooltip','safeHref','graphAt','scopeOverviewProjection','structuralScopeProjection','boundaryContextProjection','expandedGroupShelves','scopeOverviewFlow','recordId','mapNode','adoptGraph',
   'neighborIds','neighborhood','regionProjection','updateProjection','semanticParent','routeTrail',
   'currentOverviewGroup','trailList','renderBreadcrumb','syncNavigationSelection','compactRegions','collect','matchesStatus','matchesIsolation','calculateActive',
   'syncControls','refresh','activateNode','focusNodeControl','setSheet','positionMapFeedback','freeArea','writeLocation','setMode','zoomAt','closeSearch','sourceNodes','inCurrentScope'];

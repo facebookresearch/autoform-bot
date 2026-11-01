@@ -59,7 +59,7 @@ function card(id,x,y){
 _CALLBACKS = [
     "element", "button", "readingLabel", "bindNodeLink", "safeHref", "buildShell", "bindEvents", "syncControls", "wrapMapKey",
     "setBrowse", "setFilters", "currentOverviewGroup", "trailList", "renderBreadcrumb", "routeTrail", "semanticParent",
-    "refreshReadingLabels", "sourceNodes", "inCurrentScope", "focusNodeControl", "clearSelection",
+    "refreshReadingLabels", "tooltip", "sourceNodes", "inCurrentScope", "focusNodeControl", "clearSelection",
     "revealAll", "kindWord", "makeNodeControl", "finished", "boundaryMeta", "nearest", "zoomAt", "statusLabel",
     "pointerDown", "grab", "pinchState", "positionMapFeedback", "freeArea",
 ]
