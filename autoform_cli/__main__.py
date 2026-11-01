@@ -807,8 +807,8 @@ def _unknown_declaration_warnings(graph: Graph) -> list[str]:
             else 'declaration is blank, so render captions it "Node"'
         )
         warnings.append(
-            f"{caption} and audit does not check its Lean target's kind, on {where}; name a Lean declaration "
-            "command, such as def, structure or theorem"
+            f"{caption} and audit does not check its Lean target's kind, on {where}; use a command render "
+            "captions, such as def, structure or theorem"
         )
     return warnings
 

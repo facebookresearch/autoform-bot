@@ -1097,17 +1097,21 @@ def test_check_warns_about_a_declaration_command_with_no_caption(
         _node(blueprint, f"chapter/iso_{name}.md", f"# Iso {name}\n", declaration="isomorphism")
     _node(blueprint, "chapter/functor.md", "# Functor\n", declaration="noncomputable functor")
     _node(blueprint, "chapter/blank.md", "# Blank\n", declaration='" "')
+    _node(blueprint, "chapter/modifier.md", "# Modifier\n", declaration="noncomputable")
 
     assert main(["check", str(blueprint)]) == 0
     assert sorted(line for line in capsys.readouterr().out.splitlines() if line.startswith("warning:")) == [
         "warning: declaration 'functor' has no caption, so render captions it as written and audit does not check "
-        "its Lean target's kind, on chapter/functor; name a Lean declaration command, such as def, structure or "
+        "its Lean target's kind, on chapter/functor; use a command render captions, such as def, structure or "
         "theorem",
         "warning: declaration 'isomorphism' has no caption, so render captions it as written and audit does not "
-        "check its Lean target's kind, on 4 articles: chapter/iso_a, chapter/iso_b, chapter/iso_c, ...; name a Lean "
-        "declaration command, such as def, structure or theorem",
+        "check its Lean target's kind, on 4 articles: chapter/iso_a, chapter/iso_b, chapter/iso_c, ...; use a "
+        "command render captions, such as def, structure or theorem",
+        "warning: declaration 'noncomputable' has no caption, so render captions it as written and audit does not "
+        "check its Lean target's kind, on chapter/modifier; use a command render captions, such as def, structure "
+        "or theorem",
         'warning: declaration is blank, so render captions it "Node" and audit does not check its Lean target\'s '
-        "kind, on chapter/blank; name a Lean declaration command, such as def, structure or theorem",
+        "kind, on chapter/blank; use a command render captions, such as def, structure or theorem",
     ]
 
 
