@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -2037,6 +2038,172 @@ def test_import_closure_scope_refuses_a_path_dependency_file_outside_the_lean_ro
     _stub_probe(monkeypatch)
 
     with pytest.raises(ImpactError, match=r"D/X\.lean may import Demo\.B"):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+
+def _closure_probe(monkeypatch: pytest.MonkeyPatch, lean_root: Path) -> list[dict[str, object]]:
+    return _stub_probe(
+        monkeypatch,
+        records=[_payload("Demo.base", kind="def", module="Demo.A")],
+        modules=(
+            ModuleEvidence("Demo.A", str((lean_root / "Demo/A.lean").resolve())),
+            ModuleEvidence("Demo.B", str((lean_root / "Demo/B.lean").resolve()), ("Demo.A",)),
+        ),
+    )
+
+
+def test_import_closure_scope_reads_only_where_lake_can_find_a_module(tmp_path: Path, monkeypatch) -> None:
+    # No package loads the root's build output or a .lake in a package, so none
+    # of them is read or refuses.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "lake-manifest.json").write_text(
+        json.dumps({"packagesDir": "../pkgs", "packages": [{"type": "path", "dir": "../P", "name": "P"}]}),
+        encoding="utf-8",
+    )
+    for relative in (
+        ".lake/build/ir/Demo/C.lean",
+        "build/Demo/C.lean",
+        ".lake/packages/D/.lake/packages/E/E.lean",
+        "../pkgs/D/.lake/build/X.lean",
+        "../pkgs/D/sub/.lake/build/X.lean",
+        "../P/.lake/build/X.lean",
+    ):
+        (lean_root / relative).parent.mkdir(parents=True)
+        (lean_root / relative).write_text("import Demo.B\n", encoding="utf-8")
+    calls = _closure_probe(monkeypatch, lean_root)
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    assert report.affected_modules == ("Demo.A", "Demo.B")
+    imports = [line for line in calls[0]["probe"].splitlines() if line.startswith("import Demo")]
+    assert imports == ["import Demo.A", "import Demo.B"]
+
+
+def test_import_closure_scope_never_walks_a_nested_checkout(tmp_path: Path, monkeypatch) -> None:
+    # A worker's worktree under the Lean root carries its own .lake, a whole
+    # dependency tree; walking each one stalled the run before its probe (#429).
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path).resolve()
+    checkouts = [
+        lean_root / ".claude/worktrees/w",
+        lean_root / "Demo/.worktrees/w",
+        lean_root / ".lake/packages/D/vendor/w",
+    ]
+    for checkout in checkouts:
+        for folder in ("Demo", ".lake/packages/mathlib/Mathlib"):
+            (checkout / folder).mkdir(parents=True)
+            for index in range(40):
+                (checkout / folder / f"M{index}.lean").write_text("import Demo.B\n", encoding="utf-8")
+        (checkout / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    visited: list[Path] = []
+    scandir, read_bytes = os.scandir, Path.read_bytes
+
+    def listing(path="."):
+        if not isinstance(path, int):  # the source snapshot lists by descriptor
+            visited.append(Path(path))
+        return scandir(path)
+
+    def reading(path: Path) -> bytes:
+        visited.append(path)
+        return read_bytes(path)
+
+    monkeypatch.setattr(os, "scandir", listing)
+    monkeypatch.setattr(Path, "read_bytes", reading)
+    _closure_probe(monkeypatch, lean_root)
+
+    report = module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    assert report.affected_modules == ("Demo.A", "Demo.B")
+    assert [path for path in visited for checkout in checkouts if path.is_relative_to(checkout / "Demo")] == []
+    assert [path for path in visited for checkout in checkouts if path.is_relative_to(checkout / ".lake")] == []
+
+
+@pytest.mark.parametrize(
+    ("relative", "libraries"),
+    [
+        # An ignored folder inside a library's tree can hold a module Lake builds.
+        ("Demo/build/X.lean", ""),
+        # A case-insensitive volume finds library Other's modules under OTHER/.
+        ("OTHER/build/X.lean", '\n[[lean_lib]]\nname = "Other"\nglobs = ["Other.+"]\n'),
+        # A root this parser cannot read may name any entry, so every one is read.
+        ("build/X.lean", '\n[[lean_lib]]\nname = "Odd"\nroots = ["Odd name"]\nglobs = ["Odd.+"]\n'),
+    ],
+)
+def test_import_closure_scope_refuses_an_uncaptured_file_in_a_library_tree(
+    tmp_path: Path, monkeypatch, relative: str, libraries: str
+) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    with (lean_root / "lakefile.toml").open("a", encoding="utf-8") as lakefile:
+        lakefile.write(libraries)
+    (lean_root / relative).parent.mkdir(parents=True)
+    (lean_root / relative).write_text("import Demo.B\n", encoding="utf-8")
+    _stub_probe(monkeypatch)
+
+    with pytest.raises(ImpactError, match=rf"{re.escape(relative)} may import Demo\.B"):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+
+@pytest.mark.parametrize(
+    ("checkout", "libraries", "path_package"),
+    [
+        # Lake builds the modules of a Git submodule in a library's tree.
+        ("Demo/Sub", "", None),
+        # A root this parser cannot read sends the library walk through .lake/packages,
+        # which must still read each package, a clone.
+        (".lake/packages/D", '\n[[lean_lib]]\nname = "Odd"\nroots = ["Odd name"]\nglobs = ["Odd.+"]\n', None),
+        # A path package is the user's own checkout, whose submodules Lake builds.
+        ("vendor/P/P/Sub", "", "vendor/P"),
+    ],
+)
+def test_import_closure_scope_reads_a_checkout_lake_loads_modules_from(
+    tmp_path: Path, monkeypatch, checkout: str, libraries: str, path_package: str | None
+) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    with (lean_root / "lakefile.toml").open("a", encoding="utf-8") as lakefile:
+        lakefile.write(libraries)
+    if path_package is not None:
+        (lean_root / "lake-manifest.json").write_text(
+            json.dumps({"packages": [{"type": "path", "dir": path_package, "name": "P"}]}), encoding="utf-8"
+        )
+    (lean_root / checkout / "D").mkdir(parents=True)
+    (lean_root / checkout / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    (lean_root / checkout / "D" / "X.lean").write_text("import Demo.B\n", encoding="utf-8")
+    _stub_probe(monkeypatch)
+
+    with pytest.raises(ImpactError, match=rf"{re.escape(checkout)}/D/X\.lean may import Demo\.B"):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+
+def test_import_closure_scope_reads_a_package_the_workspace_overrides(tmp_path: Path, monkeypatch) -> None:
+    # Lake takes a package from .lake/package-overrides.json over the manifest's entry.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / ".lake").mkdir(exist_ok=True)
+    (lean_root / ".lake" / "package-overrides.json").write_text(
+        json.dumps({"schemaVersion": "1.1.0", "packages": [{"type": "path", "dir": "vendor/D", "name": "D"}]}),
+        encoding="utf-8",
+    )
+    (lean_root / "vendor" / "D" / "D").mkdir(parents=True)
+    (lean_root / "vendor" / "D" / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    (lean_root / "vendor" / "D" / "D" / "X.lean").write_text("import Demo.B\n", encoding="utf-8")
+    _stub_probe(monkeypatch)
+
+    with pytest.raises(ImpactError, match=r"vendor/D/D/X\.lean may import Demo\.B"):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+
+def test_import_closure_scope_refuses_a_file_in_the_manifest_packages_dir(tmp_path: Path, monkeypatch) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / "lake-manifest.json").write_text(json.dumps({"packagesDir": "../pkgs"}), encoding="utf-8")
+    (tmp_path / "pkgs" / "D" / "D").mkdir(parents=True)
+    (tmp_path / "pkgs" / "D" / "D" / "X.lean").write_text("import Demo.B\n", encoding="utf-8")
+    _stub_probe(monkeypatch)
+
+    with pytest.raises(ImpactError, match=r"pkgs/D/D/X\.lean may import Demo\.B"):
         module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
 
 

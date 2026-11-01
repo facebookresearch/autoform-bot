@@ -188,6 +188,11 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Import-closure scan.** `work import-impact --module-scope import-closure`
+  reads uncaptured `.lean` files only in the root libraries' module trees and
+  in dependency packages. It no longer reads other nested checkouts, such as
+  worker worktrees with their own `.lake`, the root's build output or a
+  package's `.lake`, which could stall the run before its probe (#429).
 - **Search index load.** The explorer prepares its search index in 10 ms
   slices rather than 512-row batches, and resolves each page's links once
   rather than every row's. On ATLAS (38,661 rows), search, the Topics outline
