@@ -319,6 +319,43 @@ def test_labels_appear_only_where_they_fit() -> None:
     const cover = stack.find(label => label.id === 'thin'), moved = stack.find(label => label.id === 'tall');
     assert(cover && cover.overlay && moved && moved.overlay && !stack.some(label => label.id === 'flat'), JSON.stringify(stack));
     assert(moved.y >= cover.y + cover.band - EPS && moved.y + moved.band <= tall.y + tall.h + EPS);
+    // A box running above the stage's top, here under a 40 px pinned title, keeps its title just
+    // below it while the box has room; a child's title there moves below that one.
+    const pinned = Object.assign({top: 40}, DESKTOP), still = {x: 0, y: 0, z: 1};
+    const scrolled = {x: 0, y: -200, w: 400, h: 500, unit: 1, band: 52, pad: 12, depth: 1, parent: null};
+    const inner = {x: 20, y: -150, w: 200, h: 300, unit: 1, band: 52, pad: 12, depth: 2, parent: 'scrolled'};
+    const [held, beneath] = L.placeLabels({scrolled, inner}, still, pinned);
+    assert(held.id === 'scrolled' && held.y === 40 && held.overlay && held.lines === 1, JSON.stringify(held));
+    assert(beneath.id === 'inner' && beneath.y >= held.y + held.band - EPS && beneath.y + beneath.band <= inner.y + inner.h + EPS, JSON.stringify(beneath));
+    assert(!beneath.held, 'a title moved below another one is an ordinary overlay');
+    assert.equal(L.placeLabels({ending: Object.assign({}, scrolled, {h: 260})}, still, pinned).length, 0);
+    // A held title keeps its band's height and its results line while its box has room, so the page draws it as in its
+    // band, and gives them up as the box leaves.
+    assert(held.band === 52 && held.detail === 'meta', JSON.stringify(held));
+    const going = L.placeLabels({going: Object.assign({}, scrolled, {h: 290})}, still, pinned)[0];
+    assert(going.y === 40 && Math.abs(going.band - 50) < EPS && going.held && going.detail === 'meta', JSON.stringify(going));
+    const leaving = L.placeLabels({leaving: Object.assign({}, scrolled, {h: 280})}, still, pinned)[0];
+    assert(leaving.held && Math.abs(leaving.band - 40) < EPS && leaving.detail === 'title', JSON.stringify(leaving));
+    assert.equal(L.placeLabels({scrolled}, still, DESKTOP)[0].y, 0);
+    // A box around the stage's centre holds the view, which the trail and the pin name: its title scrolls away as before,
+    // and the children in its top row keep their own bands.
+    const view = {x: -50, y: -300, w: 1000, h: 1200, unit: 1, band: 52, pad: 12, depth: 1, parent: null};
+    const row = {x: 20, y: 60, w: 300, h: 200, unit: 1, band: 52, pad: 12, depth: 2, parent: 'view'};
+    const [away, kept] = L.placeLabels({view, row}, still, pinned);
+    assert(away.y < 0 && kept.y === 60 && !kept.overlay, JSON.stringify([away, kept]));
+    // The pinned part and the parts around it are named in the pin, so their titles are not held even when they end above
+    // the centre, as a one-row part does when a result in it arrives; a part beside it keeps its title.
+    const region = {x: 0, y: -300, w: 900, h: 550, unit: 1, band: 52, pad: 12, depth: 1, parent: null};
+    const small = {x: 20, y: -250, w: 400, h: 300, unit: 1, band: 52, pad: 12, depth: 2, parent: 'region'};
+    const beside = {x: 440, y: -250, w: 400, h: 400, unit: 1, band: 52, pad: 12, depth: 2, parent: 'region'};
+    const unheld = L.placeLabels({region, small, beside}, still, Object.assign({pinned: 'small'}, pinned));
+    assert.deepEqual(unheld.filter(label => label.y >= 40).map(label => label.id), ['beside'], JSON.stringify(unheld));
+    // Held titles nested three deep stack in order, none over another.
+    const outer = {x: 0, y: -400, w: 300, h: 900, unit: 1, band: 52, pad: 12, depth: 1, parent: null};
+    const middle = {x: 10, y: -300, w: 280, h: 700, unit: 1, band: 52, pad: 12, depth: 2, parent: 'outer'};
+    const inmost = {x: 20, y: -200, w: 260, h: 500, unit: 1, band: 52, pad: 12, depth: 3, parent: 'middle'};
+    const tower = L.placeLabels({outer, middle, inmost}, still, pinned).map(label => label.y);
+    assert(tower[0] === 40 && tower[1] >= tower[0] + 32 - EPS && tower[2] >= tower[1] + 32 - EPS, JSON.stringify(tower));
     // A closed tile shows nothing inside, so its title wraps down it: as many lines as fit above its
     // padding, with the details after them. An open box keeps its title in its band.
     const end = (label, lines) => label.baseline + (label.compact ? 4 + (lines - 1) * L.constants.COMPACT_LINE

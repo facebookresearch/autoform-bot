@@ -176,7 +176,8 @@ def test_a_part_opens_at_the_scale_where_its_parts_can_be_named(tmp_path: Path) 
       assert(!$$('.pm-meta').some(t => t.textContent.includes('Topic')), 'no list of contents');
       // Closer in, it opens, and its topics carry their names.
       const r = big().querySelector('rect'), x = +r.getAttribute('x') + r.getAttribute('width') / 2, y = +r.getAttribute('y') + r.getAttribute('height') / 2;
-      for (let i = 0; i < 4; i++) { emit($('.pm-stage').querySelector('svg'), 'wheel', {deltaX: 0, deltaY: -400, ctrlKey: true, clientX: x, clientY: y}); await wait(10); }
+      // Four steps, each twice as close.
+      for (let i = 0; i < 4; i++) { emit($('.pm-stage').querySelector('svg'), 'wheel', {deltaX: 0, deltaY: -Math.log(2) / 0.008, ctrlKey: true, clientX: x, clientY: y}); await wait(10); }
       await wait(30);
       assert(big().getAttribute('class').includes('pm-open'), big().getAttribute('class'));
       assert(titles().filter(t => t.startsWith('Topic ')).length >= 4, titles().join('; '));
@@ -206,6 +207,27 @@ def test_titles_with_tex_are_readable_on_the_map(tmp_path: Path) -> None:
       console.log('tex ok');
     """)
     assert "tex ok" in out
+
+
+def test_escaped_braces_and_norm_bars_stay_in_titles(tmp_path: Path) -> None:
+    braces = tmp_path / "braces"
+    project_map.write_project_map(braces, project_map.build_project_map([
+        {"id": "roadmap", "kind": "scope", "title": "Notes", "parent": None, "result": False},
+        {"id": "set", "kind": "node", "title": r"Braces of $\{$not, and, or$\}$", "parent": "roadmap", "result": True,
+         "status": "planned"},
+        {"id": "union", "kind": "node", "title": r"Braces of Γ ∪ $\{\gamma\}$", "parent": "roadmap", "result": True,
+         "status": "planned"},
+        {"id": "norm", "kind": "node", "title": r"Braces of $\|x\| = \lVert{x}\rVert$", "parent": "roadmap", "result": True,
+         "status": "planned"},
+    ], []))
+    out = _walk(tmp_path, r"""
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'braces'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      assert.deepStrictEqual($$('.pm-hit-title').map(title => title.textContent).sort(),
+        ['Braces of {not, and, or}', 'Braces of Γ ∪ {γ}', 'Braces of ‖x‖ = ‖x‖']);
+      console.log('braces ok');
+    """, braces)
+    assert "braces ok" in out
 
 
 def test_search_finds_results_in_a_flat_roadmap(tmp_path: Path) -> None:
@@ -254,7 +276,8 @@ def test_lists_page_through_every_entry_and_back_restores_the_search_and_scroll(
       reader.scrollTop = 140;
       emit(usedBy().querySelectorAll('button').find(b => b.textContent.includes('User 15')), 'click'); await wait(40);
       assert.strictEqual(reader.querySelector('h2').textContent, 'User 15');
-      search.value = 'something else'; reader.scrollTop = 0;
+      assert.strictEqual(reader.scrollTop, 0, 'a new result opens at its top');
+      search.value = 'something else';
       history.back(); await wait(40);
       assert.strictEqual(reader.querySelector('h2').textContent, 'Hub lemma');
       assert.strictEqual(search.value, 'hub');
@@ -365,9 +388,52 @@ def test_history_holds_one_entry_per_place_and_the_camera_a_flight_ends_at(tmp_p
       history.forward(); await wait(40);
       history.back(); await wait(40);
       assert.strictEqual(card(), arrived);
+      // Back before the camera write lands, then Forward: the entry was pushed before the flight, and still ends there.
+      history.forward(); await wait(40);
+      emit(whole, 'click'); await wait(30);
+      const before = history.length, input = $('.pm-search').querySelector('input');
+      input.value = 'Lagrange'; emit(input, 'focus'); emit(input, 'input'); await wait(20); emit(input, 'input'); await wait(5);
+      emit(input, 'keydown', {key: 'Enter'});
+      for (let i = 0; i < 50 && history.length === before; i++) await new Promise(resolve => setImmediate(resolve));
+      history.back(); await wait(40);
+      history.forward(); await wait(40);
+      assert.strictEqual(card(), arrived);
       console.log('history ok');
     """, MAP_HASH="#result=" + "Algebra%2Fgroups%2Flagrange")
     assert "history ok" in out
+
+
+def test_a_title_held_at_the_top_is_drawn_as_in_its_band(tmp_path: Path) -> None:
+    sections = ["Sylow theorems and their applications", "Group actions", "Sylow subgroups of finite groups and their normalisers",
+                "Solvable and nilpotent groups", "The structure of finite abelian groups and their duals", "Representations of finite groups"]
+    records: list[dict[str, object]] = [
+        {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
+        {"id": "A", "kind": "scope", "title": "Algebra", "parent": "roadmap", "result": False},
+        {"id": "B", "kind": "scope", "title": "Analysis", "parent": "roadmap", "result": False},
+    ]
+    for index, title in enumerate(sections):
+        records.append({"id": f"A/s{index}", "kind": "scope", "title": title, "parent": "A", "result": False})
+        records += [{"id": f"A/s{index}/r{n}", "kind": "node", "title": f"Result {n}", "parent": f"A/s{index}", "result": True,
+                     "status": "planned"} for n in range(8)]
+    records += [{"id": f"B/r{n}", "kind": "node", "title": f"Result {n}", "parent": "B", "result": True, "status": "planned"} for n in range(5)]
+    sectioned = tmp_path / "sectioned"
+    project_map.write_project_map(sectioned, project_map.build_project_map(records, []))
+    out = _walk(tmp_path, r"""
+      // Its size, lines and results line; a long title in a one-line band, and one wrapped in a two-line band.
+      const drawn = id => {
+        const lines = $$('.pm-title').filter(t => (t.dataset.key || '').startsWith('lt:' + id + ':'));
+        return {size: (/font-size:(\d+)px/.exec(lines[0].getAttribute('style') || '') || [0, '15'])[1], lines: lines.map(t => t.textContent),
+          meta: $$('.pm-meta').some(m => m.dataset.key === 'lm:' + id)};
+      };
+      const ids = ['A/s0', 'A/s2'], before = ids.map(drawn);
+      assert(before.every(title => title.size > 15 && title.meta), JSON.stringify(before));
+      // Panned until the top row runs above the stage, under the pinned "Algebra", where their titles are held.
+      emit($('.pm-stage').querySelector('svg'), 'wheel', {deltaX: 0, deltaY: 120, clientX: 10, clientY: 10}); await wait(20);
+      assert(ids.every(id => $$('.pm-backdrop').some(b => b.dataset.key === 'lb:' + id)), 'the titles are held');
+      assert.deepStrictEqual(ids.map(drawn), before);
+      console.log('held ok');
+    """, sectioned, MAP_HASH="#part=A")
+    assert "held ok" in out
 
 
 def test_titles_always_draw_above_backdrops(tmp_path: Path) -> None:
@@ -431,3 +497,26 @@ def test_escape_and_up_go_back_one_level_at_a_time(tmp_path: Path) -> None:
       console.log('up ok');
     """)
     assert "up ok" in out
+
+
+def test_a_pinch_zooms_and_back_from_an_outline_part_keeps_the_pane(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      const canvas = $('.pm-stage').querySelector('svg'), reader = $('.pm-reader');
+      const width = () => +$$('.pm-part').find(n => n.getAttribute('data-part') === 'Algebra').querySelector('rect').getAttribute('width');
+      // Two fingers spreading from 100 to 200 px apart zoom twice as close, and lifting them picks nothing.
+      const touch = (type, id, x) => emit(canvas, type, {button: 0, pointerType: 'touch', pointerId: id, clientX: x, clientY: 300});
+      const before = width();
+      touch('pointerdown', 1, 300); touch('pointerdown', 2, 400); touch('pointermove', 2, 500); await wait(10);
+      assert(Math.abs(width() / before - 2) < 0.01, String(width() / before));
+      touch('pointerup', 2, 500); touch('pointerup', 1, 300); await wait(10);
+      assert.strictEqual($$('.pm-part').filter(n => n.getAttribute('class').includes('pm-picked')).length, 0);
+      // Back from a part chosen in the outline returns the reading pane to where it was scrolled.
+      emit(app.querySelectorAll('button').find(b => b.textContent === 'Whole project'), 'click'); await wait(30);
+      reader.scrollTop = 120;
+      emit($('.pm-side').querySelectorAll('button').find(b => b.dataset.part === 'Analysis'), 'click'); await wait(40);
+      assert.strictEqual(reader.scrollTop, 0, 'the part opens at the top of its pane');
+      history.back(); await wait(40);
+      assert.strictEqual(reader.scrollTop, 120);
+      console.log('pinch ok');
+    """)
+    assert "pinch ok" in out
