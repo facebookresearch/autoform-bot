@@ -124,6 +124,16 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-pin strong { font-size: 15px; }
 .pm-pin span { color: var(--pm-muted); font-size: 12px; }
 .pm-reader { min-height: 0; overflow: auto; border-left: 1px solid var(--pm-border); background: var(--pm-panel); }
+/* A narrow screen gives the map its whole width, with the reader under it and search on a row of its own. The side panel
+   (outline, legend and source filter) makes way; the trail and Up still lead out. Three columns leave the map under
+   440 px below 1100 px. */
+@media (max-width: 1100px) {
+  .pm-app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) minmax(0, 40%); height: 100dvh; }
+  .pm-top { flex-wrap: wrap; gap: 8px 12px; padding: 8px 12px; }
+  .pm-search { order: 1; flex: 1 1 100%; min-width: 0; }
+  .pm-side { display: none; }
+  .pm-reader { border-left: 0; border-top: 1px solid var(--pm-border); }
+}
 .pm-reader-inner { padding: 18px 18px 40px; }
 .pm-kicker { margin: 0 0 4px; color: var(--pm-muted); font-size: 12px; }
 .pm-reader h2 { margin: 0 0 6px; font-size: 20px; line-height: 1.3; }
@@ -163,6 +173,7 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-edge-key { display: grid; gap: 4px; margin: 4px 0 12px; color: var(--pm-muted); font-size: 12px; }
 .pm-edge-key span { display: flex; align-items: center; gap: 8px; }
 .pm-edge-key svg { flex: none; overflow: visible; }
+.pm-key-link { fill: none; stroke: var(--pm-accent); stroke-linecap: round; }
 .pm-flow { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--pm-border); }
 .pm-flow small { flex: none; color: var(--pm-muted); }
 .pm-show-more { margin-top: 6px; padding: 4px 0; border: 0; background: none; color: var(--pm-link); font: inherit; cursor: pointer; }

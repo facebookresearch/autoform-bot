@@ -27,8 +27,9 @@ date when the release is tagged.
   shows its statement and proof from its page, and what it uses and what uses
   it. One click picks a part and shows the parts it
   builds on and the parts that use it, with links flowing between them; a second
-  click goes inside, and Up or Escape goes back a level. The data loads one level
-  at a time from `dependencies/map/data/` (#517).
+  click goes inside, and Up or Escape goes back a level. On a narrow screen the
+  map takes the width, with the reading pane under it. The data loads one level
+  at a time from `dependencies/map/data/` (#517, #545).
 
 ### Changed
 

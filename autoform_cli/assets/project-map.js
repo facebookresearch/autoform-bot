@@ -166,15 +166,13 @@
 
   // ---------------------------------------------------------------- layout (from the layout module)
   var stageSize = null;      // the stage the world was packed for
-  var routesAt = new Map();  // part id -> routes between its children, in world units
   function packRoot() {
     var root = part(ROOT), top = L.packLevels(model.index, stageSize);
     root.box = top.root;
     root.kids.forEach(function (id) { part(id).box = top.boxes[id] || null; });
-    routesAt.set(ROOT, L.bundleEdges(top.boxes, model.index.region_edges || [], top.content));
     root.kids.forEach(function (id) { packChildren(part(id)); });
   }
-  // A part's children, its own results and the routes between them, once both its box and its file are known.
+  // A part's children and its own results, once both its box and its file are known.
   function packChildren(record) {
     if (!record || !record.box || !record.data) return;
     var boxes = L.packPart(record.data, record.box, stageSize);
@@ -182,7 +180,6 @@
     record.ownBox = boxes[record.id + "#results"] || null;
     var widths = record.kids.map(function (id) { return part(id).box ? part(id).box.w : 0; }).sort(function (a, b) { return a - b; });
     record.kidW = widths.length ? widths[widths.length >> 1] : null;
-    routesAt.set(record.id, record.kids.length ? L.bundleEdges(boxes, record.data.edges || [], L.contentOf(record.box)) : []);
     var results = record.data.results || [];
     record.view = record.ownBox && results.length ?
       L.layoutCommunity(results, record.data.result_edges || [], record.data.boundary_edges || [], record.ownBox) : null;
@@ -219,13 +216,12 @@
   defs.innerHTML = ["pm-arrow", "pm-arrow-on"].map(function (id) {
     return '<marker id="' + id + '" class="' + id + '" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,1 L10,5 L0,9 z"/></marker>';
   }).join("");
-  // Routes run through the gaps between boxes, so they draw above every box; labels draw last.
-  // A picked part's arrows to its neighbours cross other boxes, so they draw above everything but the labels.
-  // A title over its box sits on a backdrop; backdrops have a layer of their own below every label, since keep()
-  // appends a node only when it first creates it.
-  var partLayer = svg("g"), miniLayer = svg("g"), routeLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), linkLayer = svg("g"),
+  // Labels draw last. A picked part's arrows to its neighbours cross other boxes, so they draw above everything but
+  // the labels. A title over its box sits on a backdrop; backdrops have a layer of their own below every label, since
+  // keep() appends a node only when it first creates it.
+  var partLayer = svg("g"), miniLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), linkLayer = svg("g"),
     backdropLayer = svg("g"), labelLayer = svg("g");
-  canvas.append(defs, partLayer, miniLayer, routeLayer, resultLayer, cardRouteLayer, linkLayer, backdropLayer, labelLayer);
+  canvas.append(defs, partLayer, miniLayer, resultLayer, cardRouteLayer, linkLayer, backdropLayer, labelLayer);
   var pin = el("div", "pm-pin"); pin.hidden = true;
   var hint = el("div", "pm-hint", "");
   stage.append(canvas, pin, hint);
@@ -262,9 +258,13 @@
     var range = limits();
     target = {x: target.x, y: target.y, k: clamp(target.k, range.low, range.high)};
     if (flight) cancelAnimationFrame(flight.frame);
-    if (reduceMotion) { camera = target; schedule(); rememberCamera(); if (done) done(); return; }
+    // The current entry takes the flight's end at once, so Back and Forward straight after a jump keep each place.
+    clearTimeout(cameraTimer);
+    try { if (history.state && history.state.pm) history.replaceState(Object.assign({}, history.state, {camera: target}), ""); } catch (_e) { /* ignore */ }
+    // Drawn at once, so `done` sees the parts at the target, as at a flight's last frame.
+    if (reduceMotion) { camera = target; render(); rememberCamera(); if (done) done(); return; }
     var start = {x: camera.x, y: camera.y, k: camera.k}, began = performance.now(), duration = 560;
-    flight = {frame: 0};
+    flight = {frame: 0, target: target};
     var step = function (now) {
       var t = Math.min(1, (now - began) / duration), e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
       // Interpolate the scale geometrically, so a deep zoom does not rush its last screens.
@@ -321,7 +321,7 @@
   // move the map themselves; then both follow the part that fills the view.
   // picked: a part chosen with one click, shown where it is with its neighbours (a second click goes inside).
   // links: the shown part's neighbours by role (uses, used-by, both); linkHover: the neighbour under the pointer in the panel.
-  var state = {selected: null, related: null, focusPart: null, hoverPart: null, facets: null, picked: null, links: null, linkHover: null, error: null};
+  var state = {selected: null, related: null, focusPart: null, facets: null, picked: null, links: null, linkHover: null, error: null};
   var pending = false;
   function schedule() {
     if (pending) return;
@@ -374,7 +374,7 @@
     used = new Set();
     deepestAtCenter = part(ROOT);
     var onPath = state.selected && model.results.get(state.selected) ? new Set(chainOf(model.results.get(state.selected).home)) : null;
-    var labelBoxes = {}, closed = {}, opened = [], communities = [], drawn = new Set();
+    var labelBoxes = {}, closed = {}, communities = [], drawn = new Set();
     (function visit(record) {
       if (!record.box) return;
       var b = screenBox(record.box);
@@ -389,18 +389,18 @@
         if (!open) closed[record.id] = true;
       }
       if (!open) return;
-      opened.push(record);
       record.kids.forEach(function (id) { visit(part(id)); });
       if (record.view) communities.push(record);
       // Beside other children, a part's own results have a band of their own to name them.
       if (record.ownBox && record.ownBox.band && record.kids.length && screenBox(record.ownBox).w >= LABEL_MIN_W) labelBoxes[record.id + "#results"] = record.ownBox;
     })(part(ROOT));
-    var slots = L.placeLabels(labelBoxes, cornerCamera(), size, closed), labelled = new Set(slots.map(function (slot) { return slot.id; }));
-    opened.forEach(function (record) { drawRoutes(record, labelled); });
+    // Titles keep below the pinned title, in the room the layout module leaves for it.
+    var pinnedPart = pinned(), slots = L.placeLabels(labelBoxes, cornerCamera(),
+      pinnedPart ? {w: size.w, h: size.h, top: L.constants.TITLE_ROOM, pinned: pinnedPart.id} : size, closed);
     communities.forEach(function (record) { if (drawCommunity(record)) drawn.add(record.id + "#results"); });
     drawLinks();
     drawLabels(slots);
-    drawPin();
+    drawPin(pinnedPart);
     explainEmpty(drawn);
     keyed.forEach(function (node, key) { if (!used.has(key)) { node.remove(); keyed.delete(key); } });
     updateTrail();
@@ -460,32 +460,10 @@
     return titleOf(route.to) + " uses " + titleOf(route.from) + ": " + num(main) + (main === 1 ? " link" : " links") +
       (route.both ? "; " + titleOf(route.from) + " uses " + titleOf(route.to) + ": " + num(back) + (back === 1 ? " link" : " links") : "");
   }
-  // The routes between an open part's children: the central ones at rest, once both ends carry a label (a route between
-  // two anonymous tiles is noise), and every route of the part in focus or under the pointer.
-  function drawRoutes(record, labelled) {
-    var routes = routesAt.get(record.id) || [];
-    // With a part in focus, links elsewhere fade, so its own links and its outlined neighbours stand out.
-    var focus = !state.selected && state.focusPart !== ROOT ? state.focusPart : null;
-    var elsewhere = !!focus && record.id !== focus && chainOf(record.id).indexOf(focus) < 0;
-    routes.forEach(function (route) {
-      // With a result selected, its part's own links to its neighbours are beside the point; the pointer still shows them.
-      var involved = [state.selected || state.picked ? null : state.focusPart, state.hoverPart].some(function (id) { return id && (route.from === id || route.to === id); });
-      var resting = route.rest && labelled.has(route.from) && labelled.has(route.to);
-      if ((!resting && !involved) || !route.points || !routeVisible(route.points)) return;
-      var dim = state.related ? !(state.related.parts.has(route.from) && state.related.parts.has(route.to)) :
-        state.picked ? route.from !== state.hoverPart && route.to !== state.hoverPart : elsewhere && !involved;
-      var path = keep(routeLayer, "route:" + record.id + ":" + route.from + ">" + route.to, "path", {
-        d: routePath(route.points, route.radius),
-        class: "pm-route" + (route.kind === "proof" ? " pm-proof" : "") + (involved ? " pm-involved" : "") + (dim ? " pm-dimmed" : ""),
-        "stroke-width": route.tier === 3 ? 3 : route.tier === 2 ? 2 : 1.25,
-        "marker-end": arrow(involved), "marker-start": route.both ? arrow(involved) : "none"});
-      setText(path.firstChild || path.appendChild(svg("title")), linkWords(route, function (id) { return plain((part(id) || {summary: {title: id}}).summary.title); }));
-      if (involved && !route.both) keep(routeLayer, "rflow:" + record.id + ":" + route.from + ">" + route.to, "path", {d: path.getAttribute("d"), class: "pm-route pm-involved pm-flowing"});
-    });
-  }
-  // The picked part's arrows, straight to each neighbour the map has a box for: in from what it builds on, out to what
-  // uses it, thicker for more results. Dots flow along each from what is used to what uses it. A pair linked both
-  // ways gets two arrows, bowed apart.
+  // The picked part's arrows, the only links the map draws between parts, so the overview stays quiet until a reader
+  // asks: straight to each neighbour the map has a box for, in from what it builds on, out to what uses it, thicker for
+  // more results. Dots flow along each from what is used to what uses it. A pair linked both ways gets two arrows,
+  // bowed apart.
   function drawLinks() {
     var record = !state.selected && state.picked ? part(state.picked) : null, links = record && record.data && record.data.links;
     if (!links || !record.box) return;
@@ -574,9 +552,9 @@
     }
     return true;
   }
-  // Titles and progress in each box's header band, at fixed sizes, where the layout module finds room for them. A
-  // closed tile's title wraps down the tile, up to the lines the module allows. A box whose band is still too thin gets its title over its top, on a backdrop in
-  // its own fill; nothing inside it is labelled yet, so nothing is covered.
+  // Titles and progress in each box's header band, where the layout module finds room for them. A closed tile's title
+  // wraps down the tile, up to the lines the module allows. A title the module puts over a box's content (its band still
+  // too thin, the box running above the stage, or the title moved below another) sits on a backdrop in the box's fill.
   function drawLabels(slots) {
     slots.forEach(function (slot) {
       var own = /#results$/.test(slot.id), record = part(own ? slot.id.slice(0, -"#results".length) : slot.id);
@@ -589,7 +567,7 @@
       if (slot.overlay) {
         var b = screenBox(own ? record.ownBox : record.box), backdrop = keep(backdropLayer, "lb:" + slot.id, "rect", {
           class: "pm-backdrop pm-backdrop-" + (own ? "open" : isOpen(record, b) ? "open" : tileKind(record.summary.status)) + cls, rx: 6});
-        placeRect(backdrop, {x: b.x + 1, y: b.y + 1, w: b.w - 2, h: slot.band});
+        placeRect(backdrop, {x: b.x + 1, y: slot.y + 1, w: b.w - 2, h: slot.band});
       }
       if (slot.compact) {
         wrap(title, Math.max(3, Math.floor(slot.w / COMPACT_EM)), slot.lines).forEach(function (line, index) {
@@ -651,13 +629,16 @@
     hint.classList.toggle("pm-hint-strong", text !== HINT);
   }
   // Once the part the view is in has its header band scrolled off, its title stays pinned to the top of the stage.
-  function drawPin() {
+  function pinned() {
     var record = viewPart();
-    if (!record || record.id === ROOT || !record.box) { pin.hidden = true; return; }
+    if (!record || record.id === ROOT || !record.box) return null;
     var b = screenBox(record.box), band = (record.box.band || L.constants.BAND) * (record.box.unit || 1) * camera.k;
     // The title line sits at the top of the band, however tall the band has grown: pin once that line is off the stage.
-    if (b.y + Math.min(30, band / 2 + 6) >= 12 || b.y + b.h < 60) { pin.hidden = true; return; }
-    pin.hidden = false;
+    return b.y + Math.min(30, band / 2 + 6) >= 12 || b.y + b.h < 60 ? null : record;
+  }
+  function drawPin(record) {
+    pin.hidden = !record;
+    if (!record) return;
     if (pin.dataset.part !== record.id) {
       pin.dataset.part = record.id;
       pin.replaceChildren(el("strong", "", plain(record.summary.title)), el("span", "", progressText(record.summary)));
@@ -691,11 +672,12 @@
   }
   function select(id, options) {
     options = options || {};
+    var leaving = viewState();
     if (id) state.picked = null;
     state.selected = id;
     state.related = id ? relatedSets(id) : null;
     if (id) showResult(id); else showPart(currentPart());
-    if (options.history !== false) remember(options.replace);
+    if (options.history !== false) remember(options.replace, leaving);
     schedule();
   }
 
@@ -757,9 +739,9 @@
       if (epoch !== navEpoch) return;
       var record = part(id), parent = part(record.parent);
       state.focusPart = parent ? parent.id : ROOT;
-      var picking = pick(id);
+      var leaving = viewState(), picking = pick(id);
       epoch = navEpoch;
-      remember();
+      remember(false, leaving);
       return picking.then(function () { if (epoch === navEpoch) flyToNeighbourhood(record, parent); });
     });
   }
@@ -778,6 +760,12 @@
     var at = centerOf(wide), b = record.box, halfW = size.w / 2 / k, halfH = size.h / 2 / k, margin = 40 / k;
     flyTo({x: clamp(at[0], b.x + b.w + margin - halfW, b.x - margin + halfW), y: clamp(at[1], b.y + b.h + margin - halfH, b.y - margin + halfH), k: k});
   }
+  // Back from a part opened this way returns to the reading pane as it was, though the pane changes before the part loads.
+  function leaveFor(id) {
+    var leaving = viewState();
+    select(null, {history: false});
+    return flyToPart(id, {leaving: leaving});
+  }
   function flyToPart(id, options) {
     options = options || {};
     var epoch = options.epoch || navigation();
@@ -786,7 +774,7 @@
       if (epoch !== navEpoch) return;
       var record = part(id);
       state.focusPart = id;
-      if (options.history !== false) remember(options.replace);
+      if (options.history !== false) remember(options.replace, options.leaving);
       flyToContent(record);
       showPart(record);
     });
@@ -799,8 +787,9 @@
       var homeId = chain[chain.length - 1], record = part(homeId), entry = model.results.get(resultId);
       if (!entry || !entry.box) throw new Error("Result not found in its part: " + resultId);
       state.focusPart = homeId;
+      var leaving = viewState();
       select(resultId, {history: false});
-      if (options.history !== false) remember(options.replace);
+      if (options.history !== false) remember(options.replace, leaving);
       // Close enough that the result's card carries its title, with as much of its part around it as fits. The card
       // sits in the upper third, under the pinned title, so its part's band scrolls off and more of its neighbours
       // show below it. A card the layout left without area gets its part's view instead of an endless zoom.
@@ -922,10 +911,11 @@
       var item = el("span"), swatch = el("i"); swatch.style.background = color(pair[0]); item.append(swatch, document.createTextNode(pair[1])); legend.append(item);
     });
     sideInner.append(legend);
+    // The links the map draws: a picked part's arrows to its neighbours, and the routes between a part's results.
     var key = el("div", "pm-edge-key");
-    [["", 1.25, "points to what uses it"], [" pm-proof", 1.25, "used only in proofs"], ["", 3, "more links"]].forEach(function (row) {
+    [["pm-key-link", 2.5, "a picked part, to what uses it"], ["pm-route", 1.25, "a result, to what uses it"], ["pm-route pm-proof", 1.25, "used only in proofs"]].forEach(function (row) {
       var item = el("span"), sample = svg("svg", {width: 30, height: 10, "aria-hidden": "true"});
-      sample.appendChild(svg("path", {d: "M2,5H24", class: "pm-route" + row[0], "stroke-width": row[1], "marker-end": arrow(false)}));
+      sample.appendChild(svg("path", {d: "M2,5H24", class: row[0], "stroke-width": row[1], "marker-end": arrow(row[0] === "pm-key-link")}));
       item.append(sample, document.createTextNode(row[2])); key.append(item);
     });
     sideInner.append(key);
@@ -978,7 +968,7 @@
     chain.forEach(function (id, index) {
       if (index) line.append(document.createTextNode(" / "));
       var button = el("button", "", plain(part(id) ? part(id).summary.title : id)); button.type = "button";
-      button.addEventListener("click", function () { select(null, {history: false}); flyToPart(id).catch(report); });
+      button.addEventListener("click", function () { leaveFor(id).catch(report); });
       line.append(button);
     });
     return line;
@@ -986,6 +976,7 @@
   function showPart(record) {
     if (!record || state.selected || shownPart === record.id) return;
     shownPart = record.id;
+    reader.scrollTop = 0;
     var links = record.id !== ROOT && record.data && record.data.links;
     state.links = links ? new Map() : null;
     if (links) {
@@ -1023,7 +1014,7 @@
       readerInner.append(linkList("Used by", "used-by", links.used_by, links.used_by_total, most, home, function (row) {
         return num(row[3]) + (row[3] === 1 ? " result" : " results") + " in " + plain(row[1]) + (row[3] === 1 ? " uses it" : " use it");
       }));
-      if (links.uses.length || links.used_by.length) readerInner.append(el("p", "pm-empty pm-link-note", "On the map, the parts in view are outlined, and dots flow from what is used to what uses it. Bars count the results involved."));
+      if (links.uses.length || links.used_by.length) readerInner.append(el("p", "pm-empty pm-link-note", "On the map, the parts in view are outlined, and while this part is picked, arrows run to them with dots flowing from what is used to what uses it. Bars count the results involved."));
     }
     if (record.kids.length) { readerInner.append(el("h3", "", "Parts (" + num(record.kids.length) + ")")); readerInner.append(listOfParts(record.kids)); }
     if (summary.api && summary.api.length) {
@@ -1092,7 +1083,7 @@
   }
   // Formulas go to the site's MathJax runtime (javascripts/mathjax.js), which reads only the spans marked for it.
   function typeset(node) {
-    if (window.AutoformMath && typeof window.AutoformMath.refresh === "function") window.AutoformMath.refresh(node);
+    return Promise.resolve(window.AutoformMath && typeof window.AutoformMath.refresh === "function" ? window.AutoformMath.refresh(node) : null);
   }
   // The explorer's reading of a summary: closed code spans and unambiguous inline formulas; anything else stays literal.
   var MARKUP = /\\([\\`$])|(?<![\\`])(`+)(?!`)([^\n]*?)(?<!`)\2(?!`)|(?<![\\$])\$(?![\s$])((?:\\.|[^\\$\n])+?)(?<!\s)\$(?![$\d])|(?<!\\)\\\(((?:\\[^)]|[^\\\n])+?)\\\)/g;
@@ -1161,10 +1152,13 @@
     });
     return {block: copy, source: source};
   }
+  // Settles once the shown result's statement from its book page and its formulas are in the reading pane.
+  var readerReady = Promise.resolve();
   function showResult(id) {
     var entry = model.results.get(id);
     if (!entry) return;
     shownPart = null;
+    reader.scrollTop = 0;
     var row = entry.row, rel = relationsOf(id), shown = ++shownResult;
     readerInner.replaceChildren();
     readerInner.append(el("p", "pm-kicker", row.caption || "Result"));
@@ -1178,16 +1172,14 @@
     var actions = el("div", "pm-actions"), page = row.route && safeLink(row.route, routeBase);
     if (page) { var read = el("a", "", "Open in the book"); read.href = page; actions.append(read); }
     readerInner.append(actions);
-    if (page && window.DOMParser) {
-      pageAt(page).then(function (parsed) {
-        var math = shown === shownResult && state.selected === id && borrowed(parsed, id, page);
-        if (!math) return;
-        var holder = el("div", "pm-math"); holder.append(math.block);
-        if (summary) summary.replaceWith(holder); else (lean.parentNode ? lean : actions).before(holder);
-        if (math.source && row.lean) { var link = el("a", "", "Lean source"); link.href = math.source; lean.append(link); }
-        typeset(holder);
-      }).catch(function () { /* the summary and the link to the book stay */ });
-    }
+    var book = page && window.DOMParser ? pageAt(page).then(function (parsed) {
+      var math = shown === shownResult && state.selected === id && borrowed(parsed, id, page);
+      if (!math) return;
+      var holder = el("div", "pm-math"); holder.append(math.block);
+      if (summary) summary.replaceWith(holder); else (lean.parentNode ? lean : actions).before(holder);
+      if (math.source && row.lean) { var link = el("a", "", "Lean source"); link.href = math.source; lean.append(link); }
+      return typeset(holder);
+    }).catch(function () { /* the summary and the link to the book stay */ }) : null;
     [["Uses", rel.uses], ["Used by", rel.usedBy]].forEach(function (pair) {
       readerInner.append(el("h3", "", pair[0] + " (" + num(pair[1].length) + ")"));
       if (!pair[1].length) { readerInner.append(el("p", "pm-empty", pair[0] === "Uses" ? "No prerequisites recorded." : "Nothing uses it yet.")); return; }
@@ -1202,7 +1194,7 @@
         return li;
       }));
     });
-    typeset(readerInner);
+    readerReady = Promise.all([book, typeset(readerInner)]);
   }
 
   // ---------------------------------------------------------------- trail
@@ -1222,14 +1214,16 @@
     }
     step(plain(model.index.title), wholeProject, !chain.length && !state.selected);
     chain.forEach(function (id, index) {
-      step(plain(part(id).summary.title), function () { select(null, {history: false}); flyToPart(id).catch(report); }, index === chain.length - 1 && !state.selected);
+      step(plain(part(id).summary.title), function () { leaveFor(id).catch(report); }, index === chain.length - 1 && !state.selected);
     });
     if (state.selected) step(plain(model.results.get(state.selected).row.title), null, true);
   }
 
   // ---------------------------------------------------------------- history
+  // Where the camera is, or where it is going during a flight: history never records a pose halfway along one.
+  function settled() { var at = flight ? flight.target : camera; return {x: at.x, y: at.y, k: at.k}; }
   function snapshot() {
-    return {pm: 1, camera: {x: camera.x, y: camera.y, k: camera.k}, selected: state.selected, focusPart: state.focusPart, picked: state.picked,
+    return {pm: 1, camera: settled(), selected: state.selected, focusPart: state.focusPart, picked: state.picked,
       chain: state.selected && model.results.get(state.selected) ? chainOf(model.results.get(state.selected).home) :
         state.focusPart && state.focusPart !== ROOT ? chainOf(state.focusPart) : []};
   }
@@ -1237,12 +1231,13 @@
   function viewState() {
     return {query: search.value, facets: state.facets ? Array.from(state.facets) : null, readerScroll: reader.scrollTop, sideScroll: side.scrollTop};
   }
-  function remember(replace) {
+  // `leaving` is the view state of the entry being left, when the reading pane has already changed under it.
+  function remember(replace, leaving) {
     var snap = snapshot();
     var hash = snap.selected ? "#result=" + encodeURIComponent(snap.selected) :
       snap.focusPart && snap.focusPart !== ROOT ? "#part=" + encodeURIComponent(snap.focusPart) : location.pathname + location.search;
     // The current entry keeps its camera, so Back returns to exactly where the reader was.
-    try { history.replaceState(Object.assign({}, history.state || {}, {pm: 1, camera: {x: camera.x, y: camera.y, k: camera.k}, selected: history.state && history.state.selected, focusPart: history.state && history.state.focusPart, chain: history.state && history.state.chain}, viewState()), ""); } catch (_e) { /* ignore */ }
+    try { history.replaceState(Object.assign({}, history.state || {}, {pm: 1, camera: settled(), selected: history.state && history.state.selected, focusPart: history.state && history.state.focusPart, chain: history.state && history.state.chain}, leaving || viewState()), ""); } catch (_e) { /* ignore */ }
     // Going nowhere new (Whole project from the whole project, Escape with nothing chosen) is not a new entry.
     var current = history.state, same = current && current.pm && current.selected === snap.selected &&
       current.focusPart === snap.focusPart && current.picked === snap.picked;
@@ -1250,6 +1245,7 @@
   }
   window.addEventListener("popstate", function (event) {
     var snap = event.state;
+    clearTimeout(cameraTimer);  // a camera write still pending belongs to the entry just left
     var epoch = navigation();
     if (!snap || !snap.pm) { state.picked = null; select(null, {history: false}); state.focusPart = ROOT; fitProject(true); live.textContent = "Whole project"; return; }
     ensureChain(snap.chain || []).then(function () {
@@ -1260,12 +1256,17 @@
       var facets = snap.facets ? new Set(snap.facets) : null;
       if (String(facets && Array.from(facets)) !== String(state.facets && Array.from(state.facets))) { state.facets = facets; renderSide(); }
       select(snap.selected || null, {history: false});
-      reader.scrollTop = snap.readerScroll || 0;
       side.scrollTop = snap.sideScroll || 0;
+      // The reading pane may change again as the view arrives, and a result's statement and formulas land after it
+      // opens. Its scroll comes back once both have, or a shorter pane would cut it short.
+      var scrolled = function () {
+        var restore = function () { if (epoch === navEpoch) reader.scrollTop = snap.readerScroll || 0; };
+        readerReady.then(restore, restore);
+      };
       var here = snap.selected && model.results.get(snap.selected);
       live.textContent = here ? "Showing " + plain(here.row.title) : state.focusPart && state.focusPart !== ROOT && part(state.focusPart) ?
         "Showing " + plain(part(state.focusPart).summary.title) : "Whole project";
-      if (snap.camera) flyTo(snap.camera);
+      if (snap.camera) flyTo(snap.camera, scrolled); else scrolled();
     }).catch(report);
   });
   // Keep the camera of the current entry up to date as the reader moves around.
@@ -1274,7 +1275,7 @@
     clearTimeout(cameraTimer);
     cameraTimer = setTimeout(function () {
       var current = history.state && history.state.pm ? history.state : snapshot();
-      try { history.replaceState(Object.assign({}, current, {camera: {x: camera.x, y: camera.y, k: camera.k}, focusPart: state.focusPart}, viewState()), ""); } catch (_e) { /* ignore */ }
+      try { history.replaceState(Object.assign({}, current, {camera: settled(), focusPart: state.focusPart}, viewState()), ""); } catch (_e) { /* ignore */ }
     }, 250);
   }
   reader.addEventListener("scroll", rememberCamera);
@@ -1282,6 +1283,9 @@
 
   // ---------------------------------------------------------------- input
   var drag = null;
+  // Zoom per pixel of Control scroll or pinch: a wheel notch (100 px) zooms 2.2 times and a full trackpad pinch about
+  // 5, so a reader crosses the library's levels in a few gestures. A key or button press zooms twice.
+  var ZOOM_PER_PIXEL = 0.008, ZOOM_STEP = 2;
   // As in the explorer: scrolling (a two-finger swipe) pans, and Control or Command with scroll zooms. Browsers send a
   // trackpad pinch as a Control scroll.
   canvas.addEventListener("wheel", function (event) {
@@ -1289,39 +1293,56 @@
     var box = canvas.getBoundingClientRect(), pixels = event.deltaMode === 1 ? 25 : 1;
     release();
     if (event.ctrlKey || event.metaKey) {
-      zoomAt(clamp(Math.exp(-event.deltaY * pixels * 0.002), 0.5, 2), event.clientX - box.left, event.clientY - box.top);
+      zoomAt(clamp(Math.exp(-event.deltaY * pixels * ZOOM_PER_PIXEL), 0.25, 4), event.clientX - box.left, event.clientY - box.top);
     } else {
       camera = {x: camera.x + event.deltaX * pixels / camera.k, y: camera.y + event.deltaY * pixels / camera.k, k: camera.k};
       schedule();
     }
     rememberCamera();
   }, {passive: false});
+  // A second finger turns a drag into a pinch, which zooms about the fingers' midpoint and pans with it; nothing is
+  // activated when the fingers lift.
+  var touches = new Map(), pinch = null;
+  function spread() {
+    var p = Array.from(touches.values()), box = canvas.getBoundingClientRect();
+    return {d: Math.max(1, Math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1])), x: (p[0][0] + p[1][0]) / 2 - box.left, y: (p[0][1] + p[1][1]) / 2 - box.top};
+  }
+  function lift(event) {
+    touches.delete(event.pointerId);
+    if (pinch && touches.size < 2) { pinch = null; rememberCamera(); }
+  }
   canvas.addEventListener("pointerdown", function (event) {
     if (event.button !== 0) return;
+    if (event.pointerType === "touch") touches.set(event.pointerId, [event.clientX, event.clientY]);
+    if (touches.size === 2) { drag = null; canvas.classList.remove("pm-dragging"); release(); pinch = spread(); return; }
+    if (touches.size > 2) return;
     drag = {x: event.clientX, y: event.clientY, cx: camera.x, cy: camera.y, moved: false, id: event.pointerId};
   });
   canvas.addEventListener("pointermove", function (event) {
-    if (!drag) { hover(event.target); return; }
+    if (touches.has(event.pointerId)) touches.set(event.pointerId, [event.clientX, event.clientY]);
+    if (pinch) {
+      var now = spread();
+      camera = {x: camera.x - (now.x - pinch.x) / camera.k, y: camera.y - (now.y - pinch.y) / camera.k, k: camera.k};
+      zoomAt(now.d / pinch.d, now.x, now.y);
+      pinch = now;
+      return;
+    }
+    if (!drag || event.pointerId !== drag.id) return;
     var dx = event.clientX - drag.x, dy = event.clientY - drag.y;
     if (!drag.moved && Math.hypot(dx, dy) < 4) return;
     if (!drag.moved) { drag.moved = true; canvas.setPointerCapture(drag.id); canvas.classList.add("pm-dragging"); release(); }
     camera = {x: drag.cx - dx / camera.k, y: drag.cy - dy / camera.k, k: camera.k};
     schedule();
   });
-  canvas.addEventListener("pointerleave", function () { hover(null); });
-  // The part under the pointer shows all of its routes, not only the central ones.
-  function hover(target) {
-    var node = target && target.closest ? target.closest("[data-part]") : null, id = node ? node.getAttribute("data-part") : null;
-    if (id !== state.hoverPart) { state.hoverPart = id; schedule(); }
-  }
   function endDrag(event) {
-    if (!drag) return;
+    lift(event);
+    if (!drag || event.pointerId !== drag.id) return;
     var moved = drag.moved; drag = null; canvas.classList.remove("pm-dragging");
     if (moved) { rememberCamera(); return; }
     activate(event.target);
   }
   canvas.addEventListener("pointerup", endDrag);
-  canvas.addEventListener("pointercancel", function () { drag = null; canvas.classList.remove("pm-dragging"); });
+  canvas.addEventListener("pointercancel", function (event) { lift(event); drag = null; canvas.classList.remove("pm-dragging"); });
   function activate(target) {
     var resultNode = target.closest && target.closest("[data-result]");
     if (resultNode) { navigation(); select(resultNode.getAttribute("data-result")); return; }
@@ -1344,8 +1365,8 @@
     else if (event.key === "ArrowRight") camera.x += step / camera.k;
     else if (event.key === "ArrowUp") camera.y -= step / camera.k;
     else if (event.key === "ArrowDown") camera.y += step / camera.k;
-    else if (event.key === "+" || event.key === "=") zoomAt(1.35, size.w / 2, size.h / 2);
-    else if (event.key === "-") zoomAt(1 / 1.35, size.w / 2, size.h / 2);
+    else if (event.key === "+" || event.key === "=") zoomAt(ZOOM_STEP, size.w / 2, size.h / 2);
+    else if (event.key === "-") zoomAt(1 / ZOOM_STEP, size.w / 2, size.h / 2);
     else if (event.key === "0") wholeProject();
     else if (event.key === "Escape") escape();
     else return;
@@ -1353,16 +1374,18 @@
     event.preventDefault(); schedule();
     if (event.key !== "0") rememberCamera();
   });
-  zoomIn.addEventListener("click", function () { release(); zoomAt(1.5, size.w / 2, size.h / 2); rememberCamera(); });
-  zoomOut.addEventListener("click", function () { release(); zoomAt(1 / 1.5, size.w / 2, size.h / 2); rememberCamera(); });
-  function wholeProject() { navigation(); state.focusPart = ROOT; state.picked = null; select(null, {history: false}); remember(); fitProject(); live.textContent = "Whole project"; }
+  zoomIn.addEventListener("click", function () { release(); zoomAt(ZOOM_STEP, size.w / 2, size.h / 2); rememberCamera(); });
+  zoomOut.addEventListener("click", function () { release(); zoomAt(1 / ZOOM_STEP, size.w / 2, size.h / 2); rememberCamera(); });
+  function wholeProject() {
+    var leaving = viewState();
+    navigation(); state.focusPart = ROOT; state.picked = null; select(null, {history: false}); remember(false, leaving); fitProject(); live.textContent = "Whole project";
+  }
   fitAll.addEventListener("click", wholeProject);
   // One level up from where the reader is: from a result to its part, from a part to the part around it.
   function upOneLevel() {
     if (state.selected) {
       var home = model.results.get(state.selected) && model.results.get(state.selected).home;
-      select(null, {history: false});
-      if (home) flyToPart(home).catch(report);
+      if (home) leaveFor(home).catch(report); else select(null, {history: false});
       return;
     }
     var here = state.focusPart && state.focusPart !== ROOT && part(state.focusPart) || viewPart();
