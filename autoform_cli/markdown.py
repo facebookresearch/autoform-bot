@@ -892,20 +892,15 @@ def statement_and_notes(text: str) -> tuple[str, str]:
 
 
 def outside_fences(text: str, transform) -> str:
-    """Apply *transform* to every line that is not inside a code fence."""
-    fence: tuple[str, int] | None = None
-    out: list[str] = []
-    for line in text.splitlines():
-        match = FENCE.match(line) if fence is None else FENCE_CLOSE.match(line)
-        if match:
-            marker = match.group(1)
-            if fence is None:
-                fence = (marker[0], len(marker))
-            elif marker[0] == fence[0] and len(marker) >= fence[1]:
-                fence = None
-            out.append(line)
-            continue
-        out.append(line if fence is not None else transform(line))
+    """Apply *transform* to every line that is not inside a code fence.
+
+    A fence line inside an HTML comment opens nothing, as on the site and in
+    :func:`first_unclosed_fence`.
+    """
+    lines = text.splitlines()
+    fenced: set[int] = set()
+    _mask_fences_and_comments(lines, set(), fenced=fenced)
+    out = [line if index in fenced else transform(line) for index, line in enumerate(lines)]
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 

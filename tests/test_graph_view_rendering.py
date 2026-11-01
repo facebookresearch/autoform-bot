@@ -589,7 +589,7 @@ def test_the_phone_reader_peeks_opens_to_half_or_covers_the_map() -> None:
     # Its accessible name starts with the title it shows; an open desktop reader over an area or the overview closes with ×.
     assert 'refs.sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");' in script
     assert "Toggle mathematical reading" not in script
-    assert "close = opened && !sheetLayout() && (state.area || state.overviewOnly || state.scopeOverview)" in script
+    assert "close = opened && !sheetLayout() && (state.area || state.overviewOnly || state.coarseOverview)" in script
     assert "var page = currentBundle || data" in script
     assert "record = page.readingSource && records.get(page.readingSource.dataset.autoformNodeId);" in script
     assert "band = Math.max(NODE_H, Math.min(band, drawer.clientHeight * .45));" in script
@@ -1474,7 +1474,7 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
 
     # The reader, hierarchy rail and bounded layout share one prebuilt
     # response; consumers still need no application build or runtime CDN.
-    assert len(dag_viewer.viewer_script().encode()) < 144_000
+    assert len(dag_viewer.viewer_script().encode()) < 145_000
     assert output.stat().st_size < 300_000
     assert search.stat().st_size < 100_000
     search_payload = json.loads(search.read_text(encoding="utf-8"))

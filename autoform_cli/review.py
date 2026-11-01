@@ -35,25 +35,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Mapping
 
+from ._managed_output import (
+    PACKET_MANIFEST,
+    remove_output,
+    replace_outputs,
+    stage_output,
+    validate_managed_output,
+)
 from .graph import Graph, Node
 from .lean import REVIEW_PACKET_SCHEMA, declaration_names
 from .markdown import article_parts, published_page
 from .mathjax import TEX_MACROS, project_macros
 from .readback import Readback, readback_for, readback_keys
 from .skeleton import (
-    PACKET_MANIFEST,
     SEMANTIC_SCHEMA,
     SKELETON_SCHEMA,
     DeclarationSkeleton,
     NodeSkeleton,
     SkeletonReport,
     _article_path,
-    _remove_output,
-    _replace_outputs,
-    _stage_output,
     blueprint_hash,
     source_passage,
-    validate_managed_output,
 )
 
 
@@ -181,7 +183,7 @@ class ReviewState:
         return "approved" if self.approved == self.review_hash else "drift"
 
 
-def canonical_statement(graph: Graph, node: Node) -> str:
+def canonical_statement(node: Node) -> str:
     """Return the article's statement as the site's statement box publishes it,
     before the box demotes its headings.
 
@@ -190,7 +192,7 @@ def canonical_statement(graph: Graph, node: Node) -> str:
     audit checks, read after the HTML comments outside code are gone, while a
     comment in a fenced or indented code block stays, as the site shows it.
     Frontmatter and the title identify the article and are bound separately.
-    The text is the one ``graph`` parsed ``node`` from: the article is read
+    The text is the one `load_graph` parsed ``node`` from: the article is read
     again and must still have the bytes `load_graph` hashed, since a statement
     written since would be judged against that parse's approval, a pairing that
     never existed on disk.
@@ -234,7 +236,7 @@ def build_review_bundle(
     macros = _project_macros(graph.blueprint_dir) if macros is None else macros
     # _report_findings found a record for each, and an article_id.
     return ReviewBundle(
-        tuple(_current_article(graph, node, skeleton.node(node.id), macros) for node in review_nodes)
+        tuple(_current_article(node, skeleton.node(node.id), macros) for node in review_nodes)
     )
 
 
@@ -345,7 +347,7 @@ def write_review_packets(bundle: ReviewBundle, directory: str | Path) -> list[Pa
     try:
         try:
             identity = validate_managed_output(root, kind="packets", schema=REVIEW_PACKET_SCHEMA)
-            stage = _stage_output(root, stages=stages)
+            stage = stage_output(root, stages=stages)
         except Exception as exc:
             issues = getattr(exc, "issues", (str(exc),))
             raise ReviewError(
@@ -375,12 +377,12 @@ def write_review_packets(bundle: ReviewBundle, directory: str | Path) -> list[Pa
             json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n",
             encoding="utf-8",
         )
-        _replace_outputs([(root, stage, identity)])
+        replace_outputs([(root, stage, identity)])
         stages.clear()
     finally:
         for leftover in stages:
             with contextlib.suppress(OSError):
-                _remove_output(leftover)
+                remove_output(leftover)
     return sorted(written)
 
 
@@ -558,10 +560,10 @@ def _node_findings(
         )
 
 
-def _current_article(graph: Graph, node: Node, record: NodeSkeleton, macros: Mapping[str, object]) -> ReviewArticle:
+def _current_article(node: Node, record: NodeSkeleton, macros: Mapping[str, object]) -> ReviewArticle:
     """The review evidence for ``node`` from its extracted ``record``, with the project ``macros`` it uses."""
 
-    statement = canonical_statement(graph, node)
+    statement = canonical_statement(node)
     if not statement.strip():
         reason = "article has no mathematical statement before its first H2"
         raise ReviewError([ReviewFinding(node.id, "review-statement-missing", reason)])

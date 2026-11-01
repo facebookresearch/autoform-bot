@@ -215,6 +215,25 @@ def test_live_overlay_projects_claims_onto_the_bytes_it_compared(
     assert [(item["node_id"], item["title"]) for item in state["claims"]] == [("roadmap", "Roadmap")]
 
 
+def test_live_overlay_reads_a_large_project_manifest(tmp_path: Path) -> None:
+    # The manifest lists every site file, so a large project's passes the old 8 MiB bound.
+    article = tmp_path / "blueprint/roadmap/README.md"
+    article.parent.mkdir(parents=True)
+    article.write_text("# Roadmap\n", encoding="utf-8")
+    site = tmp_path / "site"
+    site.mkdir()
+    revision = publication_source_revision(tmp_path / "blueprint")
+    manifest = {"schema": "autoform-publication/v3", "complete": True, "source_revision": revision}
+    manifest["padding"] = "x" * (8 * 1024 * 1024)
+    (site / "publication.json").write_text(json.dumps(manifest), encoding="utf-8")
+    claims = SimpleNamespace(list=lambda: [])
+
+    state = publication_bound_live_state(claims, blueprint_dir=tmp_path / "blueprint", site_dir=site)()
+
+    assert state["source_revision"] == revision
+    assert "error" not in state
+
+
 def test_live_overlay_reports_a_publication_manifest_nested_too_deep_to_decode(tmp_path: Path) -> None:
     site = tmp_path / "site"
     site.mkdir()

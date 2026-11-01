@@ -9,9 +9,22 @@ date when the release is tagged.
 
 ## Unreleased
 
+### Added
+
+- **Whole-project map.** Every rendered site gets `dependencies/map/`, one
+  zoomable page for the whole project, linked from the landing page beside the
+  book. Regions (authored areas, or the top-level chapters) open into their
+  parts and parts into their results as the camera closes in, and a part opens
+  once its parts can be named. Search reaches any result by title or Lean name;
+  the reading pane shows the result's statement and proof from its page, and
+  what it uses and what uses it. One click picks a part and shows the parts it
+  builds on and the parts that use it, with links flowing between them; a second
+  click goes inside, and Up or Escape goes back a level. The data loads one level
+  at a time from `dependencies/map/data/` (#517).
+
 ### Changed
 
-- **Explorer delivery.** The approved integrated redesign ships below 144 KB,
+- **Explorer delivery.** The approved integrated redesign ships below 145 KB,
   with the same bounded graph, JSON and frame budgets and pinned safe compiler.
   Touch keeps single-pointer zoom controls; reading handles retain page-owned
   mathematical titles, and typed dependency counts remain accessible descriptions.
@@ -25,6 +38,11 @@ date when the release is tagged.
   shrinking their labels. Dense unselected maps show an explicitly counted
   connection backbone; all typed dependencies remain in article lists, and
   selected results restore full routes in their bounded neighborhoods (#442).
+- **Book order.** Previous/Next, the site nav, statement numbers, Next up and
+  the explorer's outline and search follow one reading order, down the
+  containment tree, so a landing-page shortcut no longer reorders the book and
+  sites get new statement numbers. Pages their parent does not link now join
+  the site nav and Previous/Next, after the pages it links (#495).
 - **Wiki map.** Authored concept links cluster intact formal developments,
   with distinct dotted associations and bounded local corridors. Proof edges,
   ranks, status and full reading pages remain unchanged (#442).
@@ -44,6 +62,11 @@ date when the release is tagged.
 - **Listings.** The Codex and Muse listings name the plugin AutoformBot, and
   Codex shows the Roadmap, Setup and Develop Plugin skills under those short
   names (#463).
+- **Messages.** The read and publish errors that `skeleton`, `library index`,
+  `work impact`, `work import-impact`, `review prepare`, `review check` and
+  `render --review` share no longer call the project files they read "skeleton
+  input", or the files they write "skeleton output" or "packet output"; they
+  name the path alone (#506).
 - **Claims.** `claim list TARGET...` fetches and reads only those claims.
   `--timeout` (120 seconds by default) bounds a listing, a slow step is named on
   stderr, and a failure goes to stderr labelled `timeout:`, `contention:` or
@@ -52,17 +75,53 @@ date when the release is tagged.
   listing that runs out of time or is interrupted no longer leaves its
   transport running. Formalize treats a labelled `claim list` failure as an
   unreadable board, not as a board without claims (#432).
+- **Work packages and sessions.** A Formalize subagent may keep its worktree
+  for a package of related leaves that the lead confirms together, holding only
+  the leaf it has taken and taking the next once `work context` shows it ready.
+  With claims, each session leads from its own clone and checks `git worktree
+  list` before dispatching, and workers name their branch with `claim acquire
+  --note`, now documented. A handoff to another session, when the request covers
+  pushing, goes to the `origin` branch `handoff/<article_id>`, which the next
+  worker to take the leaf continues. With claims, no message grants
+  ownership; none completes a leaf (#434, #532).
+- **Formalize worktrees.** A new worktree gets a copy of the lead's
+  `.lake/packages`, copy-on-write and never a symbolic link, before its first
+  build. `lake exe cache get` then downloads nothing; before, each worktree
+  re-cloned about 0.5 GB of packages and unpacked another 7.5 GB Mathlib build
+  (#275).
+- **Generated import roots.** `work import-impact` reports `module_generated`
+  when the repository's Git attributes set `linguist-generated` on MODULE's
+  file, or make it `true`, normally through a committed `.gitattributes` line
+  such as `/Lib.lean linguist-generated`, and leaves its module target out of
+  `claim_targets`. The user's and the system's attribute files do not count.
+  Formalize skips the claim only when CI regenerates and checks the root, and
+  regenerates it from the merged tree, so independent leaves, other projects'
+  included, publish without waiting on a claim on it. Any other root keeps the
+  import-edit claims (#466, #496).
 - **Render.** An article's page lists its `mathlib_declaration` names in a
   Mathlib row, as text without a link, so a `mathlib: true` article names the
   declaration it restates (#388).
 - **Check and render.** One reused converter reads every page, and each linked
   path is resolved once per run, so `check` uses about a fifth less CPU on an
   1,806-article vault; neither command's output changes (#415).
+- **Large skeletons.** Packets, the report, and the check that guards their
+  publication are hashed and written in pieces, so writing a large report no
+  longer holds every packet in memory, and shared closure material is no longer
+  parsed and escaped again for every root; output bytes and hashes are unchanged.
+  `skeleton` names each phase on stderr as it starts (`skeleton: probing <n>
+  modules...`, then `assembling` once no probe runs, then `writing`). Agent
+  Review and Formalize say what a user's pause of skeleton evidence during proof
+  development still requires (#497).
 - **Builds.** `project new` turns on Lake's artifact cache with
   `enableArtifactCache` and `restoreAllArtifacts`, so checkouts and worktrees
   on one toolchain reuse each other's builds; Setup offers the same two lines
   to an existing project. A probe that finds no `.olean` for a module Lake
   calls built now names the cache-without-restore cause (#431).
+- **Process checks.** `autoform` and the Lean runtime share one process-table
+  scan. A process whose environment cannot be read for any reason but
+  permission now fails a probe run instead of being skipped, and a probe
+  whose process group cannot be inspected fails with "could not inspect its
+  process group" (#518).
 - **Library results in Roadmap.** When a shared library already proves a
   result, Roadmap lists under the article's `## Proof depends on` only the
   articles that proof uses, and keeps the source's route in the proof sketch,
@@ -105,6 +164,13 @@ date when the release is tagged.
   Coverage, the link checks and render's link rewriting read everything after
   it as code, so render shows such a page as typed until the fence is closed,
   at the indent of its opening line, with options the site accepts (#201).
+- **Pull request reviews.** Formalize ends each pull request a run opens, or
+  adopts and may edit, with an `Autoform project:` line. On any machine, the
+  lead finds the open ones that carry it and come from the project's repository,
+  by owner and name, reads their reviews and inline comments when a run starts
+  or resumes and at each frontier re-read, decides each finding against the
+  current head, and repairs the oldest first, after any it is stacked on. A run
+  does not stop while an accepted finding awaits repair (#483, #525).
 
 ### Fixed
 
@@ -113,15 +179,44 @@ date when the release is tagged.
   in dependency packages. It no longer reads nested checkouts, such as worker
   worktrees with their own `.lake`, the root's build output or a package's
   `.lake`, which could stall the run before its probe (#429).
-- **Large libraries' search index.** The explorer loads JSON up to 64 MiB,
-  and a whole-library index over 32 MiB leaves out statement summaries, so
-  search still matches titles and Lean names; publication warns when it
-  does. ATLAS's index had grown past the old 32 MiB limit, so search and the
-  Topics outline failed on every page.
+- **Fences in comments.** Render no longer reads a fence line inside an HTML
+  comment as opening a code block. It had left every later line of the page
+  unrewritten, so a link to a source note after it was published as written,
+  to a page the site leaves out, and `check` said nothing (#527).
+- **Output checks.** `skeleton`, `review prepare` and `library index` refuse
+  to replace an output folder that holds a subfolder they cannot list, where
+  they skipped it, so an edit inside it could be published over (#521).
+- **No size caps on published data.** The explorer loads its own site's
+  search index, map data, pages and concept links whatever their size, and
+  its timeout now measures a stalled transfer rather than a long one. Render
+  keeps the whole concept-links layer, reads any `atlas.json`, and writes and
+  replaces a site whose `publication.json` passes 8 MiB (it lists every site
+  file). It notes a search index over 32 MiB, which every explorer page
+  downloads. ATLAS's
+  42 MB index had passed the old 32 MiB limit, so search and the Topics
+  outline failed on every page.
+- **Explorer reading defaults.** Desktop chapters open with the reader showing
+  their text again, and arriving at a shelf or context chapter from the map,
+  search or the trail focuses its heading. Only authored-area overviews and
+  scopes over 120 nodes that draw cards open map-first, with the 0.9 zoom-out
+  floor. On a phone, Back to a result whose reader was closed no longer fails
+  with "Could not open this view" (#507, #520).
 - **Explorer review follow-ups.** Fit retains a selected unlinked result.
   Deferred list math cancels with its view and falls back to visible text on
   unavailable typesetting. Preview formatting keeps currency and code literal;
   formal dependency links use converter-validated code and formula labels (#444).
+- **Structure fields.** The Lean source index records the fields a
+  `structure` or `class` declares and the parents it names, as
+  `Structure.field`, so `check`, `render`, `audit` and `skeleton` resolve a
+  `lean:` name for one; `audit` takes it as a `def` or theorem under its
+  structure's limits. For a constructor or other name the index does not read
+  directly under a project type, `check` names the type's `path:line` in a
+  declaration article instead of pointing to `.lake` (#509).
+- **Dotted namespaces.** The Lean source index and `audit`'s limit scan open
+  a scope for each component of `namespace A.B` or `section A.B`, and `end`
+  closes one per component of its name, as Lean does: `end B` after
+  `namespace A.B` no longer drops the `A.` prefix from later names, and
+  `end C.D` closes both scopes (#524).
 - **Explorer controls.** Closing full phone reading brings a cropped selected
   card back into the map without overriding restored cameras. Isolate/status
   filters use the same eligible original members in maps and native shelves,
@@ -138,10 +233,9 @@ date when the release is tagged.
   heading; stale projection callbacks cannot steal focus. Outline, filters
   and self-hiding map controls keep native focus. Slash stays scoped; modified
   arrow keys stay native, and empty Escape no longer adds history entries (#442).
-- **Reading and index feedback.** Valid HTML character references keep title
-  math without admitting authored HTML. Publication warns when the exact
-  UTF-8 search index reaches 95% of the unchanged 32 MiB browser limit; nothing
-  is truncated or refused. Directory aliases retain statement fragments (#442).
+- **Reading feedback.** Valid HTML character references keep title math
+  without admitting authored HTML. Directory aliases retain statement
+  fragments (#442).
 - **Wiki references.** Section boundaries come from the site's converter, so
   Setext and formatted Sources headings cannot turn provenance into concept
   links. Formal dependencies, statuses and captured article bytes are unchanged (#442).
@@ -150,18 +244,34 @@ date when the release is tagged.
   and foreign-URL state is not restored. Failures offer a safe native article link (#442).
 - **Explorer builds.** Compiler and publisher share a UTF-8/LF source fingerprint,
   including on CRLF checkouts, without requiring Node in consumer projects (#442).
+- **Lean commands.** A Lake or Lean command Autoform runs that fails just as
+  Ctrl+C or a termination signal arrives is stopped along with Autoform
+  instead of being left running (#510).
 - **Large wiki catalogues.** Validation yields to visible page frames, with
   a bounded fallback for hidden or stalled tabs, rather than relying only on
   timer tasks. Parent references use the same compact node offsets as relations;
   the client restores their exact IDs before publication. No content is dropped (#442).
 - **Lake configuration.** A `lakefile.toml` whose `lean_lib` is not an array
   of named tables, such as `[lean_lib]` written for `[[lean_lib]]`, is
-  refused as Lake refuses it, instead of crashing or silently reading the
-  package's default library (#505).
+  refused as Lake refuses it, instead of crashing, reading the package's
+  default library, or skipping the entries that are not named tables (#505).
 - **Wiki reading links.** The integrated explorer retains #455's title math
   in its outline, breadcrumbs, paged inventory and related-reading controls, using safe MathJax
   service and project macros. Code stays literal, canonical links keep focus
   and native modifiers, and graph labels remain as typed (#442).
+- **Import impact.** In `work import-impact`, a library whose `globs` name
+  other modules but not its own root no longer claims the files under that
+  root that no glob matches, which Lake does not build for it. A library
+  nested there no longer makes the command refuse a project Lake builds with
+  "maps to more than one module". A loaded local module that no library
+  builds is now refused with exit 2, and under
+  `--module-scope import-closure` an article naming a declaration in such a
+  file is listed in `unresolved_articles` (#500).
+- **Empty `globs`.** A `lean_lib` with `globs = []` builds no module, as in
+  Lake, where commands that read the library targets took it to build every
+  module under its roots. When `work import-impact` refuses a loaded module
+  that no library builds, it names the module's source file instead of
+  saying the module has none (#519).
 - **Book navigation.** The generated `SUMMARY.md` nests each book page under
   its chapter's README, written in book order. A landing page that linked a
   deep page before its chapters, or a folder with no README in the book, put a

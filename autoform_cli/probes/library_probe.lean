@@ -1,6 +1,8 @@
 {imports}
 -- Autoform library index probe. This file is a Python-format template: `{{`/`}}` are
--- literal braces and single-brace fields are filled by autoform_cli.library.generate.
+-- literal braces and single-brace fields are filled by autoform_cli.library.generate
+-- through lean_probe.render_probe_template, which adds `output_env` and
+-- `output_limit`: the variable naming the records file, and its byte cap.
 -- It is written to a temporary file and run with `lake env lean` inside the built
 -- library; it never modifies the library. It is deliberately not a module file: only
 -- a plain importer sees module and non-module files together, private placeholders,

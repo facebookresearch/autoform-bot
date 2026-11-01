@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import _thread
 import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -18,16 +20,20 @@ from pathlib import Path
 import psutil
 import pytest
 
+from autoform_cli.impact import render_impact_probe
 from autoform_cli.lean_probe import (
     PROBE_MARKER,
     PROBE_OUTPUT_ENV,
     _PROBE_POOL,
     _PROCESS_TERMINATION_GRACE,
+    LeanLibrary,
     SkeletonError,
     _CommandTimedOut,
     _ProbeEnvironmentError,
     _build_probe_helper,
+    builds,
     _join_readers,
+    _leader_has_exited,
     lean_libraries,
     module_of,
     path_of,
@@ -45,6 +51,7 @@ from autoform_cli.lean_probe import (
     stale_build_said,
     _terminate_process_tree,
 )
+from autoform_cli.library.generate import render_library_probe
 from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
 from tests.test_skeleton import _assert_no_survivors, _build, _pid_is_live, _project, _requested, _signal_driver
 
@@ -442,14 +449,15 @@ def test_tagged_process_scan_retries_a_transient_system_error(monkeypatch) -> No
 
     calls = 0
 
-    def process_iter():
+    def pids():
         nonlocal calls
         calls += 1
         if calls == 1:
             raise SystemError("transient Darwin process state")
-        return [Candidate()]
+        return [123456]
 
-    monkeypatch.setattr(psutil, "process_iter", process_iter)
+    monkeypatch.setattr(psutil, "pids", pids)
+    monkeypatch.setattr(psutil, "Process", lambda pid: Candidate())
     descendants = {}
 
     _remember_tagged_processes("owned", descendants, root_pid=654321)
@@ -463,7 +471,7 @@ def test_tagged_process_scan_fails_closed_after_repeated_system_errors(
 ) -> None:
     monkeypatch.setattr(
         psutil,
-        "process_iter",
+        "pids",
         lambda: (_ for _ in ()).throw(SystemError("persistent failure")),
     )
 
@@ -482,7 +490,7 @@ def test_tagged_process_scan_fails_closed_when_enumeration_remains_unreadable(
 ) -> None:
     monkeypatch.setattr(
         psutil,
-        "process_iter",
+        "pids",
         lambda: (_ for _ in ()).throw(error),
     )
 
@@ -498,7 +506,7 @@ def test_tagged_process_scan_does_not_treat_mixed_failures_as_success(
     errors = iter((SystemError("transient state"), OSError("table unreadable")))
     monkeypatch.setattr(
         psutil,
-        "process_iter",
+        "pids",
         lambda: (_ for _ in ()).throw(next(errors)),
     )
 
@@ -522,13 +530,74 @@ def test_tagged_process_scan_retries_a_candidate_system_error(monkeypatch) -> No
         def create_time(self):
             return 7.0
 
-    monkeypatch.setattr(psutil, "process_iter", lambda: [Candidate()])
+    monkeypatch.setattr(psutil, "pids", lambda: [123456])
+    monkeypatch.setattr(psutil, "Process", lambda pid: Candidate())
     descendants = {}
 
     _remember_tagged_processes("owned", descendants, root_pid=654321)
 
     assert calls == 2
     assert list(descendants) == [(123456, 7.0)]
+
+
+def test_tagged_process_scan_fails_closed_on_an_unreadable_environment(monkeypatch) -> None:
+    class Unreadable:
+        def environ(self):
+            raise OSError(errno.EIO, "environment unreadable")
+
+    monkeypatch.setattr(psutil, "pids", lambda: [123456])
+    monkeypatch.setattr(psutil, "Process", lambda pid: Unreadable())
+
+    with pytest.raises(SkeletonError, match="repeated process-table errors"):
+        _remember_tagged_processes("owned", {}, root_pid=654321)
+    _remember_tagged_processes("owned", {}, root_pid=654321, strict=False)
+
+    # A denied process is still left out.
+    class Denied:
+        def environ(self):
+            raise psutil.AccessDenied(123456)
+
+    class Tagged:
+        pid = 123457
+
+        def environ(self):
+            return {"_AUTOFORM_PROCESS_TOKEN": "owned"}
+
+        def create_time(self):
+            return 7.0
+
+    candidates = {123456: Denied, 123457: Tagged}
+    monkeypatch.setattr(psutil, "pids", lambda: list(candidates))
+    monkeypatch.setattr(psutil, "Process", lambda pid: candidates[pid]())
+    descendants = {}
+
+    _remember_tagged_processes("owned", descendants, root_pid=654321)
+
+    assert list(descendants) == [(123457, 7.0)]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-specific")
+@pytest.mark.parametrize("failure", ["process-table", "killpg"])
+def test_bounded_command_reports_a_process_group_it_cannot_inspect(tmp_path: Path, monkeypatch, failure: str) -> None:
+    if failure == "process-table":
+        monkeypatch.setattr(
+            psutil,
+            "process_iter",
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("table unreadable")),
+        )
+    else:
+        killpg = os.killpg
+
+        def probe_fails(pid: int, signal_number: int) -> None:
+            if signal_number == 0:
+                raise OSError(errno.EINVAL, "invalid argument")
+            killpg(pid, signal_number)
+
+        monkeypatch.setattr(os, "killpg", probe_fails)
+
+    # Neither error may reach the caller as anything but a SkeletonError.
+    with pytest.raises(SkeletonError, match="could not inspect its process group"):
+        _bounded(tmp_path, "pass")
 
 
 def test_process_liveness_fails_closed_on_inspection_uncertainty() -> None:
@@ -801,6 +870,73 @@ def test_bounded_command_finishes_failure_teardown_when_signalled_during_it(
                 pass
 
 
+@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
+def test_bounded_command_tears_down_when_a_signal_is_pending_as_it_fails(tmp_path: Path, monkeypatch) -> None:
+    # A signal pending as the command fails is handled on entry to the failure
+    # path (3.10) or at its first call (3.11+), while the guard is still armed.
+    # Teardown must still reach the command and its child.
+    pids = tmp_path / "pids"
+    tripped: list[bool] = []
+
+    def fail_with_sigterm_pending(process: subprocess.Popen[bytes]) -> bool:
+        if not tripped:
+            deadline = time.monotonic() + 20
+            while not (pids.exists() and len(pids.read_text(encoding="utf-8").split()) == 2):
+                assert time.monotonic() < deadline
+                time.sleep(0.01)
+            tripped.append(True)
+            # interrupt_main marks SIGTERM pending without running its handler;
+            # the second item fails inside the same C call, so the handler first
+            # runs once this TypeError has reached the runner's failure path.
+            list(map(_thread.interrupt_main, [signal.SIGTERM, "not a signal"]))
+        return _leader_has_exited(process)
+
+    delivered: list[int] = []
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: delivered.append(signum))
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr("autoform_cli.lean_probe._leader_has_exited", fail_with_sigterm_pending)
+            with pytest.raises(SkeletonError, match="interrupted by SIGTERM"):
+                _bounded(tmp_path, _sleeping_probe(pids), timeout=60)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert tripped == [True]
+    assert delivered == [signal.SIGTERM]
+    _assert_no_survivors([pids])
+
+
+@pytest.mark.skipif(os.name != "posix", reason="termination signals are POSIX-specific")
+def test_bounded_command_joins_a_reader_started_as_a_signal_arrives(tmp_path: Path, monkeypatch) -> None:
+    # A signal while a reader starts must not leave it unjoined, with its stream
+    # closed under it.
+    started: list[threading.Thread] = []
+    joined: list[threading.Thread] = []
+
+    class SignalledThread(threading.Thread):
+        def start(self) -> None:
+            super().start()
+            started.append(self)
+            if len(started) == 1:
+                signal.raise_signal(signal.SIGTERM)
+
+    def recording_join(readers: list[threading.Thread], *, deadline: float) -> bool:
+        joined.extend(readers)
+        return _join_readers(readers, deadline=deadline)
+
+    delivered: list[int] = []
+    previous = signal.signal(signal.SIGTERM, lambda signum, frame: delivered.append(signum))
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr("autoform_cli.lean_probe.threading.Thread", SignalledThread)
+            patch.setattr("autoform_cli.lean_probe._join_readers", recording_join)
+            with pytest.raises(SkeletonError, match="interrupted by SIGTERM"):
+                _bounded(tmp_path, "import time; time.sleep(60)", timeout=60)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    assert len(started) == 2 and set(joined) == set(started)
+    assert delivered == [signal.SIGTERM]
+
+
 def test_bounded_command_cleanup_reserves_time_and_reuses_final_deadline(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -880,6 +1016,22 @@ def test_probe_requires_an_existing_lake_manifest(tmp_path: Path, monkeypatch) -
         run_probe(probe, tmp_path)
 
 
+@pytest.mark.parametrize(
+    "render",
+    [
+        lambda: _render_probe_helper(),
+        lambda: render_impact_probe(imports=["Demo"], project_modules=["Demo"]),
+        lambda: render_library_probe(("Lib.A",)),
+    ],
+    ids=["skeleton", "impact", "library"],
+)
+def test_every_probe_template_gets_the_records_file_contract(render, monkeypatch) -> None:
+    monkeypatch.setattr("autoform_cli.lean_probe.DEFAULT_PROBE_OUTPUT_LIMIT", 1234)
+    source = render()
+    assert f'IO.getEnv "{PROBE_OUTPUT_ENV}"' in source
+    assert "def probeOutputLimit : Nat := 1234" in source
+
+
 # --------------------------------------------------------------------------- #
 # Project layout
 # --------------------------------------------------------------------------- #
@@ -916,6 +1068,50 @@ def test_a_file_no_library_selects_has_no_module(tmp_path: Path) -> None:
     assert module_of(project / "Extra.lean", libraries) is None
     assert module_of(project / "Lib" / "Foo.lean", libraries) is None
     assert module_of(project / "v1" / "Old.lean", libraries) is None
+
+
+def test_a_library_with_an_empty_globs_array_builds_no_module(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "lakefile.toml").write_text('name = "Demo"\n\n[[lean_lib]]\nname = "Demo"\nglobs = []\n', encoding="utf-8")
+
+    # Lake replaces its default of one glob per root with the array as written,
+    # so no glob matches the root or a module under it.
+    libraries = lean_libraries(project)
+    assert libraries[0].globs == ()
+    assert module_of(project / "Demo.lean", libraries) is None
+    assert module_of(project / "Demo" / "Basic.lean", libraries) is None
+
+
+@pytest.mark.parametrize(
+    ("globs", "module", "expected"),
+    [
+        # Lake's Glob.matches: `M` is M alone, `M.*` M and its submodules, `M.+`
+        # its submodules alone, all by whole name components.
+        (("Demo.Sub",), "Demo.Sub", True),
+        (("Demo.Sub",), "Demo.Sub.Deep", False),
+        (("Demo.Sub.*",), "Demo.Sub", True),
+        (("Demo.Sub.*",), "Demo.Sub.Deep", True),
+        (("Demo.Sub.+",), "Demo.Sub", False),
+        (("Demo.Sub.+",), "Demo.Sub.Deep", True),
+        (("Demo.Sub.*",), "Demo.Subway", False),
+        (("Other.*",), "Other.X", True),
+        # Or root Demo prefixes the module and a glob matches the root.
+        (("Demo",), "Demo.Sub", True),
+        (("Demo",), "DemoTests", False),
+        (("Demo.+",), "Demo", False),
+        (("Other",), "Demo.Sub", False),
+        # No globs key: each root is its own glob. An empty array: no glob.
+        (None, "Demo.Sub", True),
+        ((), "Demo", False),
+    ],
+)
+def test_builds_follows_lakes_buildable_module_rule(
+    globs: tuple[str, ...] | None, module: str, expected: bool
+) -> None:
+    library = LeanLibrary(name="Demo", src_dir=Path("/src"), roots=("Demo",), globs=globs)
+
+    assert builds(library, module) is expected
 
 
 @pytest.mark.parametrize(
@@ -977,19 +1173,23 @@ def test_lake_toml_1_1_extensions_are_rejected_on_every_python(tmp_path: Path, t
         lean_libraries(project)
 
 
+_NOT_AN_ARRAY = r"lean_lib targets .*: Lake expects an array of tables, written \[\[lean_lib\]\]$"
+_NO_NAME = r"lean_lib targets .*: a \[\[lean_lib\]\] target has no string name$"
+
+
 @pytest.mark.parametrize(
     ("lean_lib", "match"),
     [
-        pytest.param("lean_lib = true\n", r"lean_lib targets .*array of tables", id="boolean"),
-        pytest.param("lean_lib = false\n", r"lean_lib targets .*array of tables", id="false"),
-        pytest.param('lean_lib = "Solo"\n', r"lean_lib targets .*array of tables", id="string"),
-        pytest.param(
-            '[lean_lib]\nname = "Solo"\nroots = ["Other"]\n',
-            r"lean_lib targets .*array of tables",
-            id="single-brackets",
-        ),
-        pytest.param("lean_lib = [1]\n", r"lean_lib targets .*array of tables", id="array-of-int"),
-        pytest.param('[[lean_lib]]\nroots = ["Other"]\n', r"lean_lib targets .*has no name", id="nameless"),
+        pytest.param("lean_lib = true\n", _NOT_AN_ARRAY, id="boolean"),
+        pytest.param("lean_lib = false\n", _NOT_AN_ARRAY, id="false"),
+        pytest.param("lean_lib = 3\n", _NOT_AN_ARRAY, id="number"),
+        pytest.param('lean_lib = "Solo"\n', _NOT_AN_ARRAY, id="string"),
+        pytest.param('[lean_lib]\nname = "Solo"\nroots = ["Other"]\n', _NOT_AN_ARRAY, id="single-brackets"),
+        pytest.param("lean_lib = [1]\n", _NOT_AN_ARRAY, id="array-of-int"),
+        pytest.param('lean_lib = [{name = "A"}, 1]\n', _NOT_AN_ARRAY, id="mixed-array"),
+        pytest.param('[[lean_lib]]\nroots = ["Other"]\n', _NO_NAME, id="nameless"),
+        pytest.param('[[lean_lib]]\nname = "A"\n\n[[lean_lib]]\nroots = ["Other"]\n', _NO_NAME, id="nameless-after-named"),
+        pytest.param("[[lean_lib]]\nname = 1\n", _NO_NAME, id="number-name"),
     ],
 )
 def test_a_lean_lib_that_is_not_an_array_is_refused_as_lake_refuses_it(
@@ -1104,8 +1304,9 @@ def test_a_project_without_a_lakefile_is_refused(tmp_path: Path) -> None:
 def test_lake_configuration_snapshot_rejects_a_named_pipe_without_blocking(tmp_path: Path) -> None:
     os.mkfifo(tmp_path / "lakefile.toml")
 
-    with pytest.raises(SkeletonError, match="not a regular file"):
+    with pytest.raises(SkeletonError) as error:
         lean_libraries(tmp_path)
+    assert error.value.issues == (f"not a regular file: {tmp_path.resolve() / 'lakefile.toml'}",)
 
 
 def test_lake_configuration_snapshot_uses_content_not_file_identity(

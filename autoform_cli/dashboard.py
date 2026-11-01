@@ -16,7 +16,6 @@ from .graph import GraphValidationError, Node
 from .render import (
     LIVE_SCRIPT,
     PUBLICATION_MANIFEST,
-    PUBLICATION_MANIFEST_MAX_BYTES,
     PUBLICATION_SCHEMA,
     load_publication_source,
 )
@@ -167,10 +166,7 @@ def publication_bound_live_state(
     manifest_path = Path(site_dir) / PUBLICATION_MANIFEST
 
     def runtime() -> _PublicationLiveGraph:
-        encoded = manifest_path.read_bytes()
-        if len(encoded) > PUBLICATION_MANIFEST_MAX_BYTES:
-            raise ValueError("publication manifest is too large")
-        manifest = json.loads(encoded)
+        manifest = json.loads(manifest_path.read_bytes())
         revision, graph = load_publication_source(blueprint_dir)
         if (
             not isinstance(manifest, dict)

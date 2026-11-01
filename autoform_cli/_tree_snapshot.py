@@ -145,16 +145,16 @@ class TreeSelection:
 
 @dataclass(frozen=True, slots=True)
 class OpaqueDirectoryMarker:
-    """A bounded marker that makes its containing directory opaque.
+    """A marker that makes its containing directory opaque.
 
-    The capture engine reads this small, bounded surface before it visits any
-    descendants.  A recognized marker is not kept: each later look recognizes
-    it afresh.  A presence-only marker accepts any entry kind without reading
+    The capture engine reads this surface, through ``max_bytes`` or whole when
+    that is ``None``, before it visits any descendants.  A recognized marker is
+    not kept: each later look recognizes it afresh.  A presence-only marker accepts any entry kind without reading
     it; this is for directory sentinels such as a nested checkout's ``.git``.
     """
 
     name: str
-    max_bytes: int
+    max_bytes: int | None
     recognizes: Callable[[bytes], bool]
     presence_only: bool = False
 
@@ -163,8 +163,8 @@ class OpaqueDirectoryMarker:
             raise ValueError("opaque marker name must be one portable path component")
         if not isinstance(self.presence_only, bool):
             raise ValueError("opaque marker presence_only must be a boolean")
-        if _invalid_limit(self.max_bytes):
-            raise ValueError("opaque marker max_bytes must be a non-negative integer")
+        if self.max_bytes is not None and _invalid_limit(self.max_bytes):
+            raise ValueError("opaque marker max_bytes must be a non-negative integer or None")
 
 
 ALL_ENTRIES = TreeSelection(
@@ -889,7 +889,7 @@ def _opaque_marker(
             if _vanished_in_selected_capture(error, selection):
                 continue
             raise
-        if size <= marker.max_bytes and marker.recognizes(data):
+        if (marker.max_bytes is None or size <= marker.max_bytes) and marker.recognizes(data):
             budget.add_file_bytes(size)
             return None
     return names
