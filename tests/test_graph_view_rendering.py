@@ -648,7 +648,7 @@ def test_rail_rows_show_a_status_swatch_and_a_lone_group_no_heading() -> None:
       assert.equal(tree.entries.find(entry=>entry.node===child).depth,1);
       assert.strictEqual(tree.root,root);assert.equal(JSON.stringify(nodes),before);
     """, ["outlineProjection"], _PROJECTION_PEERS)
-    assert 'link.title = node.title; link.dataset.navigationNodeId = node.id;' in script
+    assert 'tooltip(link, node.title); link.dataset.navigationNodeId = node.id;' in script
     assert "function renderNavigation() {" in script and "renderOutline()" in script
     assert "bp-dag-navigation-group" not in script
     assert '(node.member_count || 0).toLocaleString() : statusLabel(node.status)' not in script

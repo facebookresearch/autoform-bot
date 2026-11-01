@@ -64,7 +64,7 @@ function outlineLinks() {return dom$navigationInner.all().filter(node=>node.tagN
 
 _OUTLINE_CALLBACKS = [
     "element", "button", "readingLabel", "bindNodeLink", "safeHref", "outlineProjection", "renderOutline", "renderNavigation",
-    "refreshReadingLabels", "semanticParent", "routeTrail", "currentOverviewGroup", "trailList", "renderBreadcrumb",
+    "refreshReadingLabels", "tooltip", "semanticParent", "routeTrail", "currentOverviewGroup", "trailList", "renderBreadcrumb",
 ]
 
 _PHONE_PEERS = (

@@ -282,8 +282,8 @@ default ref. Without a ref the CI workflows are omitted.
 
 ### project
 
-Create or inspect a Lean project and list Autoform's bundled known-good release
-pairs:
+Create or inspect a Lean project, report its worktrees, and list Autoform's
+bundled known-good release pairs:
 
 ```bash
 autoform project versions
@@ -354,6 +354,22 @@ and exit 2 invalid CLI usage. The
 [project-inspection reference](project/README.md) defines the statuses, JSON
 fields, and diagnostic codes. `project versions` lists the bundled pairs, the
 ones `project new` can lock offline.
+
+`autoform project worktrees --json` runs Git and reads the claim board (`origin`
+or `--repo`; else `board` is null) to list, as `autoform-project-worktrees/v1`,
+each linked worktree but the main one and the target's with its `protected_by`
+codes; none means removable, and an unknown code protects: `locked`, `in-use`,
+`git-operation`, `contains-worktree`, `dirty` (hidden or unreadable status too),
+`unintegrated` (the target's HEAD lacks a commit by ancestry and non-merge patch
+ID, or only its own reflog or refs reach one), `recent` (index, HEAD reflog or
+`.lake` itself changed in 25 minutes), `claimed` (a live lease naming this
+hostname, which a Mac without a fixed HostName changes), `liveness-unknown` (an
+uninspectable process of yours begun after it, an unreadable board or lease). A
+report's removable entries get sizes; `freeable_bytes` (an upper bound) omits
+hard-linked blocks. `--remove MANIFEST` rechecks each such entry (`changed` if
+it moved or went, or the target's HEAD moved), runs `git worktree remove` (else
+`git-refused`), and prints them with `removed` and measured `freed_bytes`. Exit
+1: no checkout, bad manifest, or a refusal.
 
 ### Publishing and the dashboard
 
@@ -893,12 +909,13 @@ declaration when one of its `lean:` names equals it or is a dotted prefix of it,
 so `affected_articles` may list more articles and `article_local` is always
 `false`; `affected_unowned_helpers` keep the parent-chain rule, and
 `unresolved_articles` leaves out a name the source index places outside
-`affected_modules` but lists one in a file no `lean_lib` builds. A `.lean` file
-outside the captured sources, as in `.lake/packages` or a path dependency, that
-may import a candidate makes the command exit 2 and ask for the default scope;
-use the default scope too when a component of a module name is a common word. In
-either scope, and unlike `work impact`, the probe also refuses a loaded module
-that no `lean_lib` builds, as from a leftover `.olean`.
+`affected_modules` but lists one in a file no `lean_lib` builds. An uncaptured
+`.lean` file that may import a candidate, in a root library's module tree or a
+dependency package (outside its `.lake`, and in a clone outside nested
+checkouts), makes the command exit 2 and ask for the default scope; use the
+default scope too when a component of a module name is a common word. In either
+scope, and unlike `work impact`, the probe also refuses a loaded module that no
+`lean_lib` builds, as from a leftover `.olean`.
 
 JSON uses `autoform-module-import-impact/v1`, with `module_graph_revision` and
 `module_scope` (`loaded-root-library-graph` or `import-closure`). `article` is
@@ -1145,7 +1162,10 @@ color, html, unicode, action, newcommand, extpfeil, verb, and bussproofs. So
 `\unicode`, and any other command those packages do not define show in red and
 do nothing, however a formula or macro reaches them. A macro may not take one of
 their names; `check` and `render` warn about a macro they leave out, judging the
-copy of `tex-macros.json` that `render` reads once and publishes. Each read-back
+copy of `tex-macros.json` that `render` reads once and publishes. `\bmod`,
+`\pmod`, `\mod`, `\varliminf`, `\varlimsup`, `\varinjlim` and `\varprojlim`,
+which MathJax builds from `\mmlToken`, are written again without it, and a
+project macro of the same name replaces one. Each read-back
 card has its own TeX input with only base, ams, and noundefined. Only renderer-marked
 formulas, such as `$...$` in Markdown, are typeset. Formulas in links, controls and
 navigation get no extra MathJax tab stop, menu or accessibility explorer. Refreshes

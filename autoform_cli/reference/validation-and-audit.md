@@ -41,7 +41,7 @@ These pass `check` with a warning:
   none of `abbrev`, `axiom`, `class`, `corollary`, `def`, `definition`,
   `example`, `inductive`, `instance`, `irreducible_def`, `lemma`, `opaque`,
   `proposition`, `structure` and `theorem`: render captions it as written,
-  capitalized, and `audit` does not compare the Lean target's kind with it.
+  capitalized, or "Node" if blank, and `audit` skips its Lean kind check.
 
 `check` also warns, naming the file and the line, about markup a published page
 could use to run script or pass for the site's own markup; each warning says

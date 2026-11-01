@@ -25,10 +25,10 @@ BUDGETS = {
     "skills/agent-review/SKILL.md": 65,
     "skills/debrief-orchestrator/SKILL.md": 47,
     "skills/develop-plugin/SKILL.md": 34,
-    "skills/formalize/SKILL.md": 259,  # The worktree package copy (#275).
+    "skills/formalize/SKILL.md": 262,  # The worktree package copy (#275), leftover worktrees (#435).
     "skills/human-review/SKILL.md": 113,
     "skills/roadmap/SKILL.md": 257,
-    "skills/setup/SKILL.md": 170,
+    "skills/setup/SKILL.md": 175,  # A named donor's packages (#275).
 }
 # All skills/*/references/*.md together, so a new reference file cannot dodge a budget.
 REFERENCES_BUDGET = 935
