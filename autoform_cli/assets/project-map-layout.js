@@ -673,10 +673,18 @@
         Object.assign(label, {y: at, band: need, overlay: true, lines: 1, detail: "title"});
         return true;
       }
+      // A title held at the stage's top keeps its band's height, up to BAND2, while the box has room, and gives it up as
+      // the box leaves, so the page draws it no smaller than in its band until the box is going.
+      function hold(at) {
+        if (!moveTo(at)) return false;
+        if (inBand && !compact) label.band = Math.max(need, Math.min(band, BAND2, y + h - at));
+        label.held = true;
+        return true;
+      }
       // The pinned part, the parts around it and the box around the stage's centre hold the view, which the page's trail
       // and pinned title name, so only the boxes beside it keep their titles at the top.
       var around = pinned[id] || x <= stage.w / 2 && x + w >= stage.w / 2 && y <= stage.h / 2 && y + h >= stage.h / 2;
-      if (y < top && !around && !moveTo(top)) return;
+      if (y < top && !around && !hold(top)) return;
       // Outermost first, so a title moved below one cover is then checked against the covers inside it.
       var chain = [];
       for (var up = box.parent; up && boxes[up]; up = boxes[up].parent) chain.unshift(up);
