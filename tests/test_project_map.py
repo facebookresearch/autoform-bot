@@ -170,7 +170,7 @@ def test_wide_parts_are_grouped_into_linked_communities_and_one_standalone_group
     assert all(child["grouped"] for child in big["children"])
     # 35 standalone topics are too many for one level, so they split in reading order.
     standalone = _part(files, "Big/~3")
-    assert [child["title"] for child in standalone["children"]] == ["Topic 05 and 17 other topics", "Topic 23 and 16 other topics"]
+    assert [child["title"] for child in standalone["children"]] == ["Topic 05 and 16 other topics", "Topic 22 and 17 other topics"]
     assert [child["title"] for child in _part(files, "Big/~3/~1")["children"]][:3] == ["Topic 05", "Topic 06", "Topic 07"]
     # The groups' links survive one level up, summed per pair of groups.
     assert _part(files, "Big/~1")["edges"] == [["Big/t01", "Big/t00", 1, 0], ["Big/t02", "Big/t01", 1, 0]]

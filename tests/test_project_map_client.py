@@ -176,7 +176,8 @@ def test_a_part_opens_at_the_scale_where_its_parts_can_be_named(tmp_path: Path) 
       assert(!$$('.pm-meta').some(t => t.textContent.includes('Topic')), 'no list of contents');
       // Closer in, it opens, and its topics carry their names.
       const r = big().querySelector('rect'), x = +r.getAttribute('x') + r.getAttribute('width') / 2, y = +r.getAttribute('y') + r.getAttribute('height') / 2;
-      for (let i = 0; i < 4; i++) { emit($('.pm-stage').querySelector('svg'), 'wheel', {deltaX: 0, deltaY: -400, ctrlKey: true, clientX: x, clientY: y}); await wait(10); }
+      // Four steps, each twice as close.
+      for (let i = 0; i < 4; i++) { emit($('.pm-stage').querySelector('svg'), 'wheel', {deltaX: 0, deltaY: -Math.log(2) / 0.008, ctrlKey: true, clientX: x, clientY: y}); await wait(10); }
       await wait(30);
       assert(big().getAttribute('class').includes('pm-open'), big().getAttribute('class'));
       assert(titles().filter(t => t.startsWith('Topic ')).length >= 4, titles().join('; '));
