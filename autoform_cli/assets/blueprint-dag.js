@@ -1948,9 +1948,6 @@
       if (!className && !whole && entries.length > 3) entries = [entries[0], {label: "…", hidden: entries.slice(1, -2).map(function (entry) { return entry.label; }).join(" / ")}].concat(entries.slice(-2));
       entries.forEach(function (entry, index) {
         var href = safeHref(entry.url), item = href ? element("li") : readingLabel("li", "", entry.label, entry.reading_title);
-        // The link, when there is one, carries the tooltip; the "…" names the ancestors it folds.
-        if (entry.hidden) item.title = entry.hidden;
-        else if (!href) tooltip(item, entry.label);
         if (href) {
           var link = readingLabel("a", !className && index === 0 ? "bp-dag-book" : "", entry.label, entry.reading_title); link.href = href; tooltip(link, entry.label);
           link.addEventListener("click", function (event) {
@@ -1969,6 +1966,8 @@
         }
         else if (entry.hidden) item.appendChild(element("span", "bp-dag-sr-only", entry.hidden));
         else if (!className && index === entries.length - 1) item.setAttribute("aria-current", "page");
+        // Set once the item holds its label, so a formula in its link leaves both untitled.
+        if (entry.hidden) item.title = entry.hidden; else tooltip(item, entry.label);
         list.appendChild(item);
       });
       return list;
