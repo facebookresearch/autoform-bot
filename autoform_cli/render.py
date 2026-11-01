@@ -60,7 +60,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from markdown.treeprocessors import Treeprocessor
 
-from . import dag_viewer, graph_pages, graph_views, status
+from . import dag_viewer, graph_pages, graph_views, project_map, status
 from ._repository import detect_ref, detect_repository_url, repository_top_level, verify_repository_snapshot
 from ._tree_snapshot import (
     TreeChangedError,
@@ -262,6 +262,10 @@ MERMAID_LIBRARY = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.
 LIVE_SCRIPT = "javascripts/blueprint-live.js"
 DAG_SCRIPT = dag_viewer.SCRIPT_PATH
 DAG_STYLE = dag_viewer.STYLE_PATH
+MAP_SCRIPT = "javascripts/project-map.js"
+MAP_STYLE = "stylesheets/project-map.css"
+MAP_PAGE = "dependencies/map/index.html"
+_TO_ROOT = "../" * MAP_PAGE.count("/")
 LOGO = "assets/autoform.svg"
 #: The files render writes into every site, whatever the vault holds there.
 _ASSETS = (STYLESHEET, MERMAID_SCRIPT, MATHJAX_SCRIPT, LIVE_SCRIPT, DAG_SCRIPT, DAG_STYLE, LOGO)
@@ -777,6 +781,8 @@ def _site_paths(graph: Graph) -> tuple[str, ...]:
                 "SUMMARY.md",
                 *(_group_page(group).as_posix() for group in _group_nodes(graph)),
                 *graph_pages.graph_page_paths(graph, wiki_links=True),
+                *project_map.map_paths(),
+                MAP_SCRIPT, MAP_STYLE, MAP_PAGE,
                 *_ASSETS,
             }
         )
@@ -1221,6 +1227,15 @@ def _render_pages(
         (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
         (DAG_SCRIPT, explorer_script),
         (DAG_STYLE, dag_viewer._STYLE),
+        # The layout module ships ahead of the controller in one file, so the page makes one request for both.
+        (MAP_SCRIPT, _static_asset("project-map-layout.js") + "\n" + _static_asset("project-map.js")),
+        (MAP_STYLE, _static_asset("project-map.css")),
+        # The whole-project map: one standalone page over the per-level files beside it.
+        (MAP_PAGE, project_map.render_page(
+            title=graph_views.group_title(graph, "roadmap"), map_base=_TO_ROOT + project_map.MAP_DIRECTORY + "/",
+            routes=_TO_ROOT + graph_pages.SEARCH_INDEX, home=_TO_ROOT, script=_TO_ROOT + MAP_SCRIPT,
+            style=_TO_ROOT + MAP_STYLE, mathjax=_TO_ROOT + MATHJAX_SCRIPT,
+        )),
         (LOGO, _logo()),
     ):
         asset = destination / relative
@@ -2396,7 +2411,11 @@ def _render_landing_page(
             + '">Read the book</a>'
         )
         # The shared shell is attached after all full reading content is final.
-        reading = f'<div class="bp-landing-intro">{hero}{book_link}{next_up}</div>'
+        # The whole-project map sits beside the book.
+        map_link = ('<a class="bp-intro-map" href="'
+                    + html.escape(_as_published(relative_link(destination / MAP_PAGE, page, ".html")), quote=True)
+                    + '">Open the map</a>')
+        reading = f'<div class="bp-landing-intro">{hero}{book_link}{map_link}{next_up}</div>'
         return "\n".join([*front, "  - footer", "---", "", reading]).rstrip() + "\n"
     # A roadmap without articles has nothing to explore, so the hero stands
     # over its status breakdown.
@@ -4416,7 +4435,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-landing-intro.bp-landing-intro .bp-hero-coverage {{ margin-top: 6px; font-size: 12px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero-coverage-link {{ margin-left: 0; }}
-.bp-landing-intro.bp-landing-intro .bp-intro-book {{
+.bp-landing-intro.bp-landing-intro .bp-intro-book,
+.bp-landing-intro.bp-landing-intro .bp-intro-map {{
   display: inline-block;
   margin-top: 14px;
   color: var(--bp-link);
@@ -4424,7 +4444,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-weight: 600;
   text-decoration: none;
 }}
-.bp-intro-book::after {{ content: " →"; }}
+.bp-intro-book::after, .bp-intro-map::after {{ content: " →"; }}
+.bp-intro-book + .bp-intro-map {{ margin-left: 16px; }}
 .bp-landing-intro.bp-landing-intro .bp-next-target {{ margin: 14px 0 0; padding: 10px 12px; }}
 .bp-landing-intro.bp-landing-intro .bp-next-title {{ font-size: 14px; font-weight: 600; }}
 .bp-landing-intro.bp-landing-intro .bp-next-why,

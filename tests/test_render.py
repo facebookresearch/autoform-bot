@@ -29,7 +29,7 @@ import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
 import autoform_cli.render as render_module
 from autoform_cli import _directory_binding as directory_binding_module
-from autoform_cli import dag_viewer, graph_pages
+from autoform_cli import dag_viewer, graph_pages, project_map
 from autoform_cli.__main__ import main
 from autoform_cli._repository import _normalize_remote
 from autoform_cli._tree_snapshot import TreeChangedError
@@ -493,7 +493,9 @@ def test_every_explorer_breadcrumb_reaches_a_published_page(tmp_path: Path) -> N
 
     def book_crumbs() -> set[Path]:
         """Check that every explorer's crumbs are published, and say where its Book crumb leads."""
-        payloads = [out / "dependencies.json", *(out / "dependencies").rglob("*.json")]
+        # The whole-project map's data has a schema of its own.
+        map_data = out / project_map.MAP_DIRECTORY
+        payloads = [out / "dependencies.json", *(path for path in (out / "dependencies").rglob("*.json") if map_data not in path.parents)]
         payloads.remove(out / "dependencies/index.json")
         decoded = {payload: json.loads(payload.read_text(encoding="utf-8")) for payload in payloads}
         assert all(data.get("schema") in {dag_viewer.SCHEMA, dag_viewer.WIKI_LINKS_SCHEMA} for data in decoded.values())
@@ -1262,6 +1264,7 @@ def test_the_landing_page_preserves_its_full_reading_hero_in_one_integrated_shel
     intro = overview.split('class="bp-landing-intro"', 1)[1]
     assert intro.index("bp-hero-title") < intro.index("bp-hero-figures") < intro.index("bp-intro-book")
     assert '<a class="bp-intro-book" href="roadmap/index.html">Read the book</a>' in intro
+    assert '<a class="bp-intro-map" href="dependencies/map/index.html">Open the map</a>' in intro
     # The hero's title is the page's one heading.
     assert overview.count("<h1") == 1 and "\n# " not in overview
     for retired in ("bp-map", 'class="bp-landing"', "open full-page", "## Status breakdown", "## Contents", "```mermaid"):
