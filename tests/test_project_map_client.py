@@ -443,3 +443,26 @@ def test_escape_and_up_go_back_one_level_at_a_time(tmp_path: Path) -> None:
       console.log('up ok');
     """)
     assert "up ok" in out
+
+
+def test_a_pinch_zooms_and_back_from_an_outline_part_keeps_the_pane(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      const canvas = $('.pm-stage').querySelector('svg'), reader = $('.pm-reader');
+      const width = () => +$$('.pm-part').find(n => n.getAttribute('data-part') === 'Algebra').querySelector('rect').getAttribute('width');
+      // Two fingers spreading from 100 to 200 px apart zoom twice as close, and lifting them picks nothing.
+      const touch = (type, id, x) => emit(canvas, type, {button: 0, pointerType: 'touch', pointerId: id, clientX: x, clientY: 300});
+      const before = width();
+      touch('pointerdown', 1, 300); touch('pointerdown', 2, 400); touch('pointermove', 2, 500); await wait(10);
+      assert(Math.abs(width() / before - 2) < 0.01, String(width() / before));
+      touch('pointerup', 2, 500); touch('pointerup', 1, 300); await wait(10);
+      assert.strictEqual($$('.pm-part').filter(n => n.getAttribute('class').includes('pm-picked')).length, 0);
+      // Back from a part chosen in the outline returns the reading pane to where it was scrolled.
+      emit(app.querySelectorAll('button').find(b => b.textContent === 'Whole project'), 'click'); await wait(30);
+      reader.scrollTop = 120;
+      emit($('.pm-side').querySelectorAll('button').find(b => b.dataset.part === 'Analysis'), 'click'); await wait(40);
+      assert.strictEqual(reader.scrollTop, 0, 'the part opens at the top of its pane');
+      history.back(); await wait(40);
+      assert.strictEqual(reader.scrollTop, 120);
+      console.log('pinch ok');
+    """)
+    assert "pinch ok" in out

@@ -226,8 +226,8 @@
 
   // The regions, from index.json, at their native size: the opening pose is zoom 1, top-aligned.
   // When the stage is too short for every region at a readable size (a phone with many regions),
-  // the world grows downward and the map scrolls. The returned content box is the area to pass to
-  // bundleEdges for the region routes.
+  // the world grows downward and the map scrolls. The returned content box is the area the regions
+  // are packed in.
   function packLevels(index, stage) {
     var regions = summaries(index.regions), order = dependencyOrder(regions, index.region_edges || []);
     var height = stage.h, root, content, packed;
@@ -245,7 +245,7 @@
   // A part's children inside its box, when its file loads. A part that also holds results of its
   // own opens with an "own results" box, keyed by the part id with "#results" appended; beside
   // other children it has a band for the page's title for it, and alone it is the part's whole
-  // content. The area for this part's routes is contentOf(box).
+  // content.
   function packPart(partData, box, stage) {
     var items = summaries(partData.children || []), own = (partData.results || []).length;
     var id = partData.part.id, ownId = id + "#results", content = contentOf(box), boxes = {};
@@ -265,10 +265,10 @@
   }
 
   // One route per linked sibling pair, from the used part to its user; a pair linked both ways is
-  // one route with a head at each end, its source the heavier side's used part. At rest the map
-  // shows the central routes, at most four for every five boxes and never more than MAX_REST:
-  // heaviest first, preferring routes that reach boxes no shown route reaches yet. Every route has
-  // an orthogonal path through the gaps of area, never in a band.
+  // one route with a head at each end, its source the heavier side's used part. Unless everyRoute
+  // is set, only the central routes are marked `rest`, at most four for every five boxes and never
+  // more than MAX_REST: heaviest first, preferring routes that reach boxes no such route reaches
+  // yet. Every route has an orthogonal path through the gaps of area, never in a band.
   function bundleEdges(boxes, edges, area, everyRoute) {
     var pairs = new Map();
     edges.forEach(function (edge) {
@@ -285,7 +285,7 @@
       var weight = forward + backward;
       return {from: flip ? pair.b : pair.a, to: flip ? pair.a : pair.b, both: forward > 0 && backward > 0,
         weights: [main[0], main[1], other[0], other[1]], kind: main[0] + other[0] > 0 ? "statement" : "proof",
-        weight: weight, tier: weight >= 100 ? 3 : weight >= 10 ? 2 : 1, rest: false};
+        weight: weight, rest: false};
     });
     var byWeight = routes.slice().sort(function (p, q) { return q.weight - p.weight || byKey(p.from + p.to, q.from + q.to); });
     var budget = everyRoute ? Infinity : Math.min(MAX_REST, Math.max(1, Math.round(Object.keys(boxes).length * 0.8))), shown = 0;
@@ -394,8 +394,8 @@
       leg(route, hSegments, c, x, bx, corridorWidth(c), {h: c, from: x, to: bx});
     });
     // Lanes: greedy interval colouring per corridor, centred in it. A crowded corridor can't keep every lane a few
-    // pixels apart, so the routes shown at rest take their lanes first and get slots spread across the corridor; the
-    // others, drawn only beside a part under the pointer, fill the slots between.
+    // pixels apart, so the `rest` routes take their lanes first and get slots spread across the corridor; the others
+    // fill the slots between.
     function lanes(map) {
       map.forEach(function (entry) {
         var tracks = [], resting = 0;
@@ -649,8 +649,8 @@
   // height has room for the line, gets it as an overlay over its top. An overlay covers the top of
   // its box's content, so a descendant's label under it moves just below it, or goes when its box
   // has no room there. A box running above the stage's top (`stage.top`, below whatever the page
-  // pins there) keeps its title in view there, as an overlay, while the box has room for it. Labels
-  // come shallowest first. A box in `closed` (an object keyed by id) shows nothing inside, so its
+  // pins there) keeps its title in view there, as an overlay, while the box has room for it, unless
+  // it holds the stage's centre. Labels come shallowest first. A box in `closed` (an object keyed by id) shows nothing inside, so its
   // title may wrap down the whole box: `lines` is the most it can take.
   function placeLabels(boxes, camera, stage, closed) {
     var labels = [], placed = {}, top = stage.top || 0;
@@ -666,18 +666,26 @@
       var label = {id: id, x: x + pad, y: y, w: w - 2 * pad, band: inBand ? band : need, overlay: !inBand, compact: compact,
         lines: !compact && box.band === BAND2 && band >= 0.9 * BAND2 ? 2 : 1,
         detail: !compact && inBand && Math.min(band, h) >= 0.9 * BAND ? "meta" : "title"};
-      if (y < top) {
-        if (top + need > y + h) return;
-        Object.assign(label, {y: top, band: need, overlay: true, lines: 1, detail: "title"});
+      // The title as an overlay at `at`, when the box has room for it there.
+      function moveTo(at) {
+        if (at + need > y + h) return false;
+        Object.assign(label, {y: at, band: need, overlay: true, lines: 1, detail: "title"});
+        return true;
       }
-      for (var up = box.parent; up && boxes[up]; up = boxes[up].parent) {
-        var cover = placed[up];
+      // A box around the stage's centre holds the view, which the page's trail and pinned title name, so only the boxes
+      // beside it keep their titles at the top.
+      var around = x <= stage.w / 2 && x + w >= stage.w / 2 && y <= stage.h / 2 && y + h >= stage.h / 2;
+      if (y < top && !around && !moveTo(top)) return;
+      // Outermost first, so a title moved below one cover is then checked against the covers inside it.
+      var chain = [];
+      for (var up = box.parent; up && boxes[up]; up = boxes[up].parent) chain.unshift(up);
+      for (var i = 0; i < chain.length; i++) {
+        var cover = placed[chain[i]];
         // An in-band label sits above its box's content, so only an overlay can cover a descendant.
         if (!cover || !cover.overlay) continue;
         var bottom = cover.y + cover.band;
         if (label.y >= bottom || label.y + label.band <= cover.y || label.x >= cover.x + cover.w || label.x + label.w <= cover.x) continue;
-        if (bottom + need > y + h) return;
-        Object.assign(label, {y: bottom, band: need, overlay: true, lines: 1, detail: "title"});
+        if (!moveTo(bottom)) return;
       }
       // The first title line's baseline, where the page draws it.
       label.baseline = label.y + Math.min(30, label.band / 2 + (compact ? 5 : 6));
@@ -717,6 +725,7 @@
 
   var api = {packLevels: packLevels, packPart: packPart, bundleEdges: bundleEdges, layoutCommunity: layoutCommunity,
     placeLabels: placeLabels, fitCamera: fitCamera, focusCamera: focusCamera, contentOf: contentOf, dependencyOrder: dependencyOrder,
-    constants: {BAND: BAND, GAP: GAP, MIN_W: MIN_W, MIN_H: MIN_H, LINE: LINE, COMPACT_LINE: COMPACT_LINE, TITLE_EM: TITLE_EM}};
+    constants: {BAND: BAND, GAP: GAP, MIN_W: MIN_W, MIN_H: MIN_H, LINE: LINE, COMPACT_LINE: COMPACT_LINE, TITLE_EM: TITLE_EM,
+      TITLE_ROOM: TITLE_ROOM}};
   window.AutoformMapLayout = api;
 })();

@@ -337,8 +337,8 @@ def _group_wide_parts(part_parent: dict[str, str], title: dict[str, str], inside
     fit keeps the largest and nests the rest under "Smaller linked groups". A group with more members than fit splits
     into runs: a community's breadth first along its links, which keeps linked topics together, and the standalone
     topics in reading order (``first`` is each part's reading position); each run is titled by its largest member too.
-    Each level's groups are numbered in order, so
-    each gets a stable id under its parent; ``fresh`` reserves it. Returns whether anything was grouped.
+    Each level's groups are numbered in order, so each gets a stable id under its parent; ``fresh`` reserves it.
+    Returns whether anything was grouped.
     """
     kids: dict[str, list[str]] = defaultdict(list)
     for part, parent in part_parent.items():
@@ -365,13 +365,13 @@ def _group_wide_parts(part_parent: dict[str, str], title: dict[str, str], inside
             return f"{names[0]} and {len(group) - 1} {kind} topics"
         return f"{names[0]} (2 topics)" if names[0] == names[1] else " and ".join(names)
 
-    def fit(trees: Sequence[_Tree], label: Callable[[list[_Tree], int, int], str]) -> list[_Tree]:
+    def fit(trees: Sequence[_Tree], kind: str) -> list[_Tree]:
         # Consecutive runs of nearly equal length, as few as fit, nested again while they are still too many.
         out = list(trees)
         while len(out) > GROUP_LIMIT:
             count = -(-len(out) // GROUP_LIMIT)
             runs = [out[len(out) * k // count:len(out) * (k + 1) // count] for k in range(count)]
-            out = [(label(run, number, count), run) for number, run in enumerate(runs, start=1)]
+            out = [(named(run, kind), run) for run in runs]
         return out
 
     def crowd(communities: list[_Tree], room: int) -> list[_Tree]:
@@ -410,13 +410,13 @@ def _group_wide_parts(part_parent: dict[str, str], title: dict[str, str], inside
                         seen.add(other)
                         component.append(other)
             if len(component) > 1:
-                communities.append((named(component), fit(component, lambda run, _number, _count: named(run))))
+                communities.append((named(component), fit(component, "linked")))
             else:
                 loners.append(start)
         level = crowd(communities, GROUP_LIMIT - (1 if loners else 0))
         # Topics that link to no sibling stay together, in reading order: grouping them by size would invent a structure.
         if loners:
-            level.append(("Standalone topics", fit(loners, lambda run, _number, _count: named(run, "other"))))
+            level.append(("Standalone topics", fit(loners, "other")))
         only = level[0]
         if len(level) == 1 and not isinstance(only, str):
             level = only[1]  # a single group would only repeat its parent, so what it holds takes its place

@@ -261,9 +261,10 @@
     // The current entry takes the flight's end at once, so Back and Forward straight after a jump keep each place.
     clearTimeout(cameraTimer);
     try { if (history.state && history.state.pm) history.replaceState(Object.assign({}, history.state, {camera: target}), ""); } catch (_e) { /* ignore */ }
-    if (reduceMotion) { camera = target; schedule(); rememberCamera(); if (done) done(); return; }
+    // Drawn at once, so `done` sees the parts at the target, as at a flight's last frame.
+    if (reduceMotion) { camera = target; render(); rememberCamera(); if (done) done(); return; }
     var start = {x: camera.x, y: camera.y, k: camera.k}, began = performance.now(), duration = 560;
-    flight = {frame: 0};
+    flight = {frame: 0, target: target};
     var step = function (now) {
       var t = Math.min(1, (now - began) / duration), e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
       // Interpolate the scale geometrically, so a deep zoom does not rush its last screens.
@@ -373,7 +374,7 @@
     used = new Set();
     deepestAtCenter = part(ROOT);
     var onPath = state.selected && model.results.get(state.selected) ? new Set(chainOf(model.results.get(state.selected).home)) : null;
-    var labelBoxes = {}, closed = {}, opened = [], communities = [], drawn = new Set();
+    var labelBoxes = {}, closed = {}, communities = [], drawn = new Set();
     (function visit(record) {
       if (!record.box) return;
       var b = screenBox(record.box);
@@ -388,19 +389,18 @@
         if (!open) closed[record.id] = true;
       }
       if (!open) return;
-      opened.push(record);
       record.kids.forEach(function (id) { visit(part(id)); });
       if (record.view) communities.push(record);
       // Beside other children, a part's own results have a band of their own to name them.
       if (record.ownBox && record.ownBox.band && record.kids.length && screenBox(record.ownBox).w >= LABEL_MIN_W) labelBoxes[record.id + "#results"] = record.ownBox;
     })(part(ROOT));
-    // Titles keep below the pinned title, whose height is known once it has shown.
-    var under = pinned() ? {w: size.w, h: size.h, top: pin.offsetHeight || 40} : size;
-    var slots = L.placeLabels(labelBoxes, cornerCamera(), under, closed);
+    // Titles keep below the pinned title, in the room the layout module leaves for it.
+    var pinnedPart = pinned(), slots = L.placeLabels(labelBoxes, cornerCamera(),
+      pinnedPart ? {w: size.w, h: size.h, top: L.constants.TITLE_ROOM} : size, closed);
     communities.forEach(function (record) { if (drawCommunity(record)) drawn.add(record.id + "#results"); });
     drawLinks();
     drawLabels(slots);
-    drawPin();
+    drawPin(pinnedPart);
     explainEmpty(drawn);
     keyed.forEach(function (node, key) { if (!used.has(key)) { node.remove(); keyed.delete(key); } });
     updateTrail();
@@ -462,8 +462,8 @@
   }
   // The picked part's arrows, the only links the map draws between parts, so the overview stays quiet until a reader
   // asks: straight to each neighbour the map has a box for, in from what it builds on, out to what uses it, thicker for
-  // more results. Dots flow along each from what is used to what uses it. A pair linked both
-  // ways gets two arrows, bowed apart.
+  // more results. Dots flow along each from what is used to what uses it. A pair linked both ways gets two arrows,
+  // bowed apart.
   function drawLinks() {
     var record = !state.selected && state.picked ? part(state.picked) : null, links = record && record.data && record.data.links;
     if (!links || !record.box) return;
@@ -552,9 +552,9 @@
     }
     return true;
   }
-  // Titles and progress in each box's header band, at fixed sizes, where the layout module finds room for them. A
-  // closed tile's title wraps down the tile, up to the lines the module allows. A box whose band is still too thin gets its title over its top, on a backdrop in
-  // its own fill; nothing inside it is labelled yet, so nothing is covered.
+  // Titles and progress in each box's header band, where the layout module finds room for them. A closed tile's title
+  // wraps down the tile, up to the lines the module allows. A title the module puts over a box's content (its band still
+  // too thin, the box running above the stage, or the title moved below another) sits on a backdrop in the box's fill.
   function drawLabels(slots) {
     slots.forEach(function (slot) {
       var own = /#results$/.test(slot.id), record = part(own ? slot.id.slice(0, -"#results".length) : slot.id);
@@ -636,8 +636,7 @@
     // The title line sits at the top of the band, however tall the band has grown: pin once that line is off the stage.
     return b.y + Math.min(30, band / 2 + 6) >= 12 || b.y + b.h < 60 ? null : record;
   }
-  function drawPin() {
-    var record = pinned();
+  function drawPin(record) {
     pin.hidden = !record;
     if (!record) return;
     if (pin.dataset.part !== record.id) {
@@ -740,9 +739,9 @@
       if (epoch !== navEpoch) return;
       var record = part(id), parent = part(record.parent);
       state.focusPart = parent ? parent.id : ROOT;
-      var picking = pick(id);
+      var leaving = viewState(), picking = pick(id);
       epoch = navEpoch;
-      remember();
+      remember(false, leaving);
       return picking.then(function () { if (epoch === navEpoch) flyToNeighbourhood(record, parent); });
     });
   }
@@ -913,7 +912,7 @@
     });
     sideInner.append(legend);
     var key = el("div", "pm-edge-key");
-    [["", 1.25, "points to what uses it"], [" pm-proof", 1.25, "used only in proofs"], ["", 3, "more links"]].forEach(function (row) {
+    [["", 1.25, "points to what uses it"], [" pm-proof", 1.25, "used only in proofs"]].forEach(function (row) {
       var item = el("span"), sample = svg("svg", {width: 30, height: 10, "aria-hidden": "true"});
       sample.appendChild(svg("path", {d: "M2,5H24", class: "pm-route" + row[0], "stroke-width": row[1], "marker-end": arrow(false)}));
       item.append(sample, document.createTextNode(row[2])); key.append(item);
@@ -1220,8 +1219,10 @@
   }
 
   // ---------------------------------------------------------------- history
+  // Where the camera is, or where it is going during a flight: history never records a pose halfway along one.
+  function settled() { var at = flight ? flight.target : camera; return {x: at.x, y: at.y, k: at.k}; }
   function snapshot() {
-    return {pm: 1, camera: {x: camera.x, y: camera.y, k: camera.k}, selected: state.selected, focusPart: state.focusPart, picked: state.picked,
+    return {pm: 1, camera: settled(), selected: state.selected, focusPart: state.focusPart, picked: state.picked,
       chain: state.selected && model.results.get(state.selected) ? chainOf(model.results.get(state.selected).home) :
         state.focusPart && state.focusPart !== ROOT ? chainOf(state.focusPart) : []};
   }
@@ -1235,7 +1236,7 @@
     var hash = snap.selected ? "#result=" + encodeURIComponent(snap.selected) :
       snap.focusPart && snap.focusPart !== ROOT ? "#part=" + encodeURIComponent(snap.focusPart) : location.pathname + location.search;
     // The current entry keeps its camera, so Back returns to exactly where the reader was.
-    try { history.replaceState(Object.assign({}, history.state || {}, {pm: 1, camera: {x: camera.x, y: camera.y, k: camera.k}, selected: history.state && history.state.selected, focusPart: history.state && history.state.focusPart, chain: history.state && history.state.chain}, leaving || viewState()), ""); } catch (_e) { /* ignore */ }
+    try { history.replaceState(Object.assign({}, history.state || {}, {pm: 1, camera: settled(), selected: history.state && history.state.selected, focusPart: history.state && history.state.focusPart, chain: history.state && history.state.chain}, leaving || viewState()), ""); } catch (_e) { /* ignore */ }
     // Going nowhere new (Whole project from the whole project, Escape with nothing chosen) is not a new entry.
     var current = history.state, same = current && current.pm && current.selected === snap.selected &&
       current.focusPart === snap.focusPart && current.picked === snap.picked;
@@ -1254,12 +1255,13 @@
       var facets = snap.facets ? new Set(snap.facets) : null;
       if (String(facets && Array.from(facets)) !== String(state.facets && Array.from(state.facets))) { state.facets = facets; renderSide(); }
       select(snap.selected || null, {history: false});
-      reader.scrollTop = snap.readerScroll || 0;
       side.scrollTop = snap.sideScroll || 0;
+      // The reading pane may change again as the view arrives, so its scroll comes back when the flight lands.
+      var scrolled = function () { reader.scrollTop = snap.readerScroll || 0; };
       var here = snap.selected && model.results.get(snap.selected);
       live.textContent = here ? "Showing " + plain(here.row.title) : state.focusPart && state.focusPart !== ROOT && part(state.focusPart) ?
         "Showing " + plain(part(state.focusPart).summary.title) : "Whole project";
-      if (snap.camera) flyTo(snap.camera);
+      if (snap.camera) flyTo(snap.camera, scrolled); else scrolled();
     }).catch(report);
   });
   // Keep the camera of the current entry up to date as the reader moves around.
@@ -1268,7 +1270,7 @@
     clearTimeout(cameraTimer);
     cameraTimer = setTimeout(function () {
       var current = history.state && history.state.pm ? history.state : snapshot();
-      try { history.replaceState(Object.assign({}, current, {camera: {x: camera.x, y: camera.y, k: camera.k}, focusPart: state.focusPart}, viewState()), ""); } catch (_e) { /* ignore */ }
+      try { history.replaceState(Object.assign({}, current, {camera: settled(), focusPart: state.focusPart}, viewState()), ""); } catch (_e) { /* ignore */ }
     }, 250);
   }
   reader.addEventListener("scroll", rememberCamera);
@@ -1293,12 +1295,34 @@
     }
     rememberCamera();
   }, {passive: false});
+  // A second finger turns a drag into a pinch, which zooms about the fingers' midpoint and pans with it; nothing is
+  // activated when the fingers lift.
+  var touches = new Map(), pinch = null;
+  function spread() {
+    var p = Array.from(touches.values()), box = canvas.getBoundingClientRect();
+    return {d: Math.max(1, Math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1])), x: (p[0][0] + p[1][0]) / 2 - box.left, y: (p[0][1] + p[1][1]) / 2 - box.top};
+  }
+  function lift(event) {
+    touches.delete(event.pointerId);
+    if (pinch && touches.size < 2) { pinch = null; rememberCamera(); }
+  }
   canvas.addEventListener("pointerdown", function (event) {
     if (event.button !== 0) return;
+    if (event.pointerType === "touch") touches.set(event.pointerId, [event.clientX, event.clientY]);
+    if (touches.size === 2) { drag = null; canvas.classList.remove("pm-dragging"); release(); pinch = spread(); return; }
+    if (touches.size > 2) return;
     drag = {x: event.clientX, y: event.clientY, cx: camera.x, cy: camera.y, moved: false, id: event.pointerId};
   });
   canvas.addEventListener("pointermove", function (event) {
-    if (!drag) return;
+    if (touches.has(event.pointerId)) touches.set(event.pointerId, [event.clientX, event.clientY]);
+    if (pinch) {
+      var now = spread();
+      camera = {x: camera.x - (now.x - pinch.x) / camera.k, y: camera.y - (now.y - pinch.y) / camera.k, k: camera.k};
+      zoomAt(now.d / pinch.d, now.x, now.y);
+      pinch = now;
+      return;
+    }
+    if (!drag || event.pointerId !== drag.id) return;
     var dx = event.clientX - drag.x, dy = event.clientY - drag.y;
     if (!drag.moved && Math.hypot(dx, dy) < 4) return;
     if (!drag.moved) { drag.moved = true; canvas.setPointerCapture(drag.id); canvas.classList.add("pm-dragging"); release(); }
@@ -1306,13 +1330,14 @@
     schedule();
   });
   function endDrag(event) {
-    if (!drag) return;
+    lift(event);
+    if (!drag || event.pointerId !== drag.id) return;
     var moved = drag.moved; drag = null; canvas.classList.remove("pm-dragging");
     if (moved) { rememberCamera(); return; }
     activate(event.target);
   }
   canvas.addEventListener("pointerup", endDrag);
-  canvas.addEventListener("pointercancel", function () { drag = null; canvas.classList.remove("pm-dragging"); });
+  canvas.addEventListener("pointercancel", function (event) { lift(event); drag = null; canvas.classList.remove("pm-dragging"); });
   function activate(target) {
     var resultNode = target.closest && target.closest("[data-result]");
     if (resultNode) { navigation(); select(resultNode.getAttribute("data-result")); return; }

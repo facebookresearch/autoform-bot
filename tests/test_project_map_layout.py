@@ -329,6 +329,18 @@ def test_labels_appear_only_where_they_fit() -> None:
     assert(beneath.id === 'inner' && beneath.y >= held.y + held.band - EPS && beneath.y + beneath.band <= inner.y + inner.h + EPS, JSON.stringify(beneath));
     assert.equal(L.placeLabels({ending: Object.assign({}, scrolled, {h: 260})}, still, pinned).length, 0);
     assert.equal(L.placeLabels({scrolled}, still, DESKTOP)[0].y, 0);
+    // A box around the stage's centre holds the view, which the trail and the pin name: its title scrolls away as before,
+    // and the children in its top row keep their own bands.
+    const view = {x: -50, y: -300, w: 1000, h: 1200, unit: 1, band: 52, pad: 12, depth: 1, parent: null};
+    const row = {x: 20, y: 60, w: 300, h: 200, unit: 1, band: 52, pad: 12, depth: 2, parent: 'view'};
+    const [away, kept] = L.placeLabels({view, row}, still, pinned);
+    assert(away.y < 0 && kept.y === 60 && !kept.overlay, JSON.stringify([away, kept]));
+    // Held titles nested three deep stack in order, none over another.
+    const outer = {x: 0, y: -400, w: 300, h: 900, unit: 1, band: 52, pad: 12, depth: 1, parent: null};
+    const middle = {x: 10, y: -300, w: 280, h: 700, unit: 1, band: 52, pad: 12, depth: 2, parent: 'outer'};
+    const deep = {x: 20, y: -200, w: 260, h: 500, unit: 1, band: 52, pad: 12, depth: 3, parent: 'middle'};
+    const tower = L.placeLabels({outer, middle, deep}, still, pinned).map(label => label.y);
+    assert(tower[0] === 40 && tower[1] >= tower[0] + 32 - EPS && tower[2] >= tower[1] + 32 - EPS, JSON.stringify(tower));
     // A closed tile shows nothing inside, so its title wraps down it: as many lines as fit above its
     // padding, with the details after them. An open box keeps its title in its band.
     const end = (label, lines) => label.baseline + (label.compact ? 4 + (lines - 1) * L.constants.COMPACT_LINE
