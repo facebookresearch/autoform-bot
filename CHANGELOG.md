@@ -84,6 +84,10 @@ date when the release is tagged.
   pushing, goes to the `origin` branch `handoff/<article_id>`, which the next
   worker to take the leaf continues. With claims, no message grants
   ownership; none completes a leaf (#434, #532).
+- **Setup donor.** When the user names an existing Lake project, Setup copies
+  each package locked at the same revision from it, copy-on-write and never a
+  symbolic link, before validation fetches the rest, and reports what it
+  copied and fetched (#275).
 - **Formalize worktrees.** A new worktree gets a copy of the lead's
   `.lake/packages`, copy-on-write and never a symbolic link, before its first
   build. `lake exe cache get` then downloads nothing; before, each worktree

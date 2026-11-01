@@ -131,7 +131,12 @@ or enabling Pages are separate outward-facing actions; perform them only when
 the user requests them. Pin third-party Actions and the Autoform CLI source to
 immutable commits.
 
-Validate the prepared repository before reporting it ready. Build Lean first:
+Validate the prepared repository before reporting it ready. If the user names a
+Lake project as a donor (never search for one), first copy each `git` package
+whose `rev` in the new `lake-manifest.json` matches the donor's from its
+`.lake/packages` into the project's, with `cp -Rc` (`cp -R --reflink=auto` on
+Linux), never as a symbolic link, while no Lake command runs in the donor;
+report what was copied, and what was fetched and why. Then build Lean:
 
 ```bash
 lake update          # only when the project has no lake-manifest.json

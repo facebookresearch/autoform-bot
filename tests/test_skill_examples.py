@@ -727,6 +727,25 @@ def test_formalize_copies_the_lead_s_packages_into_each_worktree(repo_root: Path
         assert required in formalize
 
 
+def test_setup_copies_a_named_donor_s_matching_packages(repo_root: Path) -> None:
+    """A new project re-clones every package even when another project on disk locks the same ones (#275).
+
+    Setup copies only what the user's donor locks at the same revision, as
+    Formalize does for a worktree, and never searches the disk for a donor; a
+    symbolic link would make `library list` refuse the project's libraries.
+    """
+
+    setup = " ".join((repo_root / "skills/setup/SKILL.md").read_text(encoding="utf-8").split())
+    for required in (
+        "If the user names a Lake project as a donor (never search for one),",
+        "first copy each `git` package whose `rev` in the new `lake-manifest.json` matches the donor's",
+        "with `cp -Rc` (`cp -R --reflink=auto` on Linux), never as a symbolic link,",
+        "while no Lake command runs in the donor;",
+        "report what was copied, and what was fetched and why. Then build Lean:",
+    ):
+        assert required in setup
+
+
 def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None:
     """The executable example differs only by its concrete immutable pin."""
 
