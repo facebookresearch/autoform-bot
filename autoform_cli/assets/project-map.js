@@ -1525,11 +1525,20 @@
     var shown = book.getAttribute("data-map-statuses");
     statuses = shown === null ? null : new Set(shown.split(" ").filter(Boolean));
   }
+  // The book also marks on its host whether it has a result selected. When it lets go of the page's result (Escape in
+  // its reader, or a filter that leaves its status out) the map does too, and Back to the selection selects it again.
+  var bookSelects = embedded && book.classList.contains("bp-dag-has-selection");
   if (embedded && window.MutationObserver) new MutationObserver(function (records) {
     var changed = function (name) { return records.some(function (record) { return record.attributeName === name; }); };
+    var start = book.getAttribute("data-map-start") || "", selects = book.classList.contains("bp-dag-has-selection");
+    var letGo = bookSelects && !selects, regained = !bookSelects && selects;
+    bookSelects = selects;
     if (changed("data-map-statuses")) { readStatuses(); schedule(); }
-    if (changed("data-map-start") && model.parts.has(ROOT)) show(book.getAttribute("data-map-start") || "");
-  }).observe(book, {attributes: true, attributeFilter: ["data-map-start", "data-map-statuses"]});
+    if (!model.parts.has(ROOT)) return;
+    if (changed("data-map-start")) show(start);
+    else if (letGo && state.selected === start) { fromBook = null; select(null, {history: false}); }
+    else if (regained && state.selected !== start) show(start);
+  }).observe(book, {attributes: true, attributeFilter: ["data-map-start", "data-map-statuses", "class"]});
   if (embedded) readStatuses();
   // Embedded, the statement being read lights up on the map: the first one in the book's reading pane that reaches below
   // the pane's top, as the reader scrolls a chapter. One the map has drawn off the stage comes into view.
