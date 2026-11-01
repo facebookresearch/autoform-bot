@@ -9,7 +9,7 @@ import pytest
 
 from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
-from tests.test_dag_viewer_browser import _REQUIRED, _page, _served, playwright
+from tests.test_dag_viewer_browser import _REQUIRED, _page, _paint_frame, _served, playwright
 
 _ARTICLE = "---\ndeclaration: {kind}\nstatement: formalized\nlean: {lean}\n---\n\n# {title}\n\n{body}\n\n## Depends on\n\n{uses}\n"
 
@@ -93,6 +93,8 @@ def test_the_map_walkthrough_overview_search_pivot_back_and_whole_project(webkit
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Index of a subgroup")
         page.go_back()
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Lagrange's theorem")
+        # The reading pane changes at once, but the map draws on the next animation frame.
+        _paint_frame(page)
         after = page.locator(".pm-result.pm-selected").bounding_box()
         assert before is not None and after is not None
         assert abs(after["x"] - before["x"]) < 2 and abs(after["y"] - before["y"]) < 2 and abs(after["width"] - before["width"]) < 2
@@ -117,7 +119,7 @@ def test_zooming_out_keeps_the_theorem_and_shows_its_place(webkit_browser: objec
         # Still selected, and the region that holds it is outlined among the dimmed rest.
         playwright.expect(page.locator(".pm-result.pm-selected")).to_have_count(1)
         playwright.expect(page.locator('.pm-part.pm-on-path[data-part="analysis"]')).to_have_count(1)
-        assert page.locator(".pm-reader .pm-kicker").inner_text() == "Result"
+        assert page.locator(".pm-reader .pm-kicker").inner_text() == "Theorem"
 
 
 def test_one_click_picks_a_region_in_place_and_a_second_opens_it(webkit_browser: object, map_url: str) -> None:

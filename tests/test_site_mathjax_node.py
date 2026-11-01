@@ -22,11 +22,13 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
 import pytest
 
+from autoform_cli.mathjax import _LOADED, REBUILT
 from tests.test_site_math import _BASE, _BUNDLE, _CARD_PACKAGES, _MACROS, _PAGE_PACKAGES, _render, _vault
 
 MATHJAX_VERSION = "3.2.2"
@@ -494,6 +496,79 @@ def test_no_card_formula_gives_its_output_a_class_style_id_or_link(tmp_path: Pat
     assert card["card"] == "c1"
     assert len(card["math"]) == 1
     assert "<mi>x</mi>" in card["math"][0]["mml"], card["math"][0]["mml"]
+
+
+#: Each command :data:`~autoform_cli.mathjax.REBUILT` writes again, as an
+#: article uses it, \\bmod in a superscript too.
+_REBUILT_FORMULAS = [
+    "a \\bmod b",
+    "x^{a \\bmod b}",
+    "a \\equiv b \\pmod{n}",
+    "a \\equiv b \\mod n",
+    "\\varliminf_{n} a_n",
+    "\\varlimsup_{n} a_n",
+    "\\varinjlim A_i",
+    "\\varprojlim A_i",
+]
+
+
+def _tags(mml: str) -> str:
+    """``mml`` without the whitespace between its tags."""
+
+    return re.sub(r">\s+<", "><", mml.strip())
+
+
+def test_the_commands_the_page_writes_again_typeset_as_mathjax_writes_them(tmp_path: Path) -> None:
+    """With \\mmlToken off, these showed a red \\notallowed and spelled out
+    \\bmod's attributes as letters. A card's input keeps \\mmlToken, so it
+    typesets MathJax's own definitions; the page's give the same MathML but for
+    the group \\mathrm puts a word in, and \\bmod's kerns where MathJax gives
+    its operator thick spaces, which are as wide."""
+
+    spans = " ".join(f'<span class="arithmatex">\\({tex}\\)</span>' for tex in _REBUILT_FORMULAS)
+    cards = " ".join(f'<span class="bp-card-formula">\\({tex}\\)</span>' for tex in _REBUILT_FORMULAS)
+    page = (
+        f'<html><head></head><body><article><p id="a1">{spans}</p>'
+        f'<div class="bp-readback bp-readback-current" id="c1"><div class="bp-readback-body">{cards}</div></div>'
+        "</article></body></html>"
+    )
+
+    report = _node_report(tmp_path, _node_script(tmp_path), "new", first=page, second=page)
+
+    assert report["errors"] == []
+    article, card = report["passes"][0]
+    assert [math["tex"] for math in article["math"]] == [math["tex"] for math in card["math"]] == _REBUILT_FORMULAS
+    for written, own in zip(article["math"], card["math"]):
+        assert "notallowed" not in written["mml"] and 'mathcolor="red"' not in written["mml"], written
+        as_mathjax_writes_it = re.sub(
+            r'<mrow data-mjx-texclass="ORD"><mi data-mjx-auto-op="false">(mod|lim)</mi></mrow>',
+            r"<mi>\1</mi>",
+            _tags(written["mml"]),
+        ).replace(
+            '<mspace width="0.278em"></mspace><mi>mod</mi><mspace width="0.278em"></mspace>',
+            '<mo lspace="thickmathspace" rspace="thickmathspace">mod</mo>',
+        )
+        assert as_mathjax_writes_it == _tags(own["mml"]), written["tex"]
+
+
+def test_every_command_mathjax_builds_from_mmltoken_is_written_again() -> None:
+    """Every macro of MathJax's bundle and of the extensions the page loads
+    that is written with \\mmlToken, which the page turns off, is one the page
+    writes again, so a MathJax release that adds one fails here."""
+
+    es5 = mathjax_package() / "es5"
+    extensions = [name.removeprefix("[tex]/") for name in _LOADED if name.startswith("[tex]/")]
+    sources = [es5 / "tex-mml-chtml.js", *(es5 / f"input/tex/extensions/{name}.js" for name in extensions)]
+    macro = re.compile(r"""(\w+):\["Macro",(["'])((?:\\.|(?!\2).)*?)\2""")
+
+    found = {
+        match.group(1)
+        for source in sources
+        for match in macro.finditer(source.read_text(encoding="utf-8"))
+        if "mmlToken" in match.group(3)
+    }
+
+    assert found == set(REBUILT)
 
 
 def test_scoped_marked_controls_keep_their_keys_and_earlier_glyph_styles(tmp_path: Path) -> None:

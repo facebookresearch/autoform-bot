@@ -11,27 +11,40 @@ date when the release is tagged.
 
 ### Added
 
+- **Worktrees.** `autoform project worktrees` reports which linked worktrees
+  are safe to remove after a run and what protects the rest: changes, Git
+  operations, unintegrated commits, processes, recent activity and live leases
+  from this host. `--remove` takes a saved report, rechecks each entry, removes
+  it with `git worktree remove`, never `--force`, and reports the free space
+  recovered and how to re-create the checkout; ignored files such as `.lake`
+  are not kept (#435).
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project, linked from the landing page beside the
   book. Regions (authored areas, or the top-level chapters) open into their
   parts and parts into their results as the camera closes in, and a part opens
   once its parts can be named. Search reaches any result by title or Lean name;
-  the reading pane shows the result's statement and proof from its page, and
-  what it uses and what uses it. One click picks a part and shows the parts it
+  the reading pane names the result's kind, such as Theorem or Definition, and
+  shows its statement and proof from its page, and what it uses and what uses
+  it. One click picks a part and shows the parts it
   builds on and the parts that use it, with links flowing between them; a second
   click goes inside, and Up or Escape goes back a level. The data loads one level
   at a time from `dependencies/map/data/` (#517).
 
 ### Changed
 
+- **Landing.** The ready figure links the list of what it counts, each count
+  shows once with thousands separators, and the brand gradient is off the
+  figures, bar and header hairline. Source coverage reads in plain words
+  (#503).
 - **Declaration captions.** A `declaration` command with no caption, such as
   `isomorphism`, is captioned as written, first letter capitalized, in the book
   instead of "Node", and named on its map card, which showed no kind. Modifiers
-  such as `noncomputable` and now `public` no longer hide a known command, so
-  `public def` also counts as a definition, and `irreducible_def` and `opaque`
-  read as definitions. `check` names each command with no caption once, with
-  the articles that use it; `audit` does not check those articles' Lean target
-  kind either (#485).
+  such as `noncomputable` and now `public` no longer hide a known command from
+  the caption or from progress, so `public def` also counts as a definition,
+  and `irreducible_def` and `opaque` read as definitions; `audit`'s kind check
+  still reads the whole value. `check` names each command with no caption once,
+  with the articles that use it; `audit` does not check those articles' Lean
+  target kind either (#485).
 - **Explorer delivery.** The approved integrated redesign ships below 145 KB,
   with the same bounded graph, JSON and frame budgets and pinned safe compiler.
   Touch keeps single-pointer zoom controls; reading handles retain page-owned
@@ -92,11 +105,15 @@ date when the release is tagged.
   pushing, goes to the `origin` branch `handoff/<article_id>`, which the next
   worker to take the leaf continues. With claims, no message grants
   ownership; none completes a leaf (#434, #532).
+- **Setup donor.** When the user names an existing Lake project or packages
+  folder, Setup copies each package the new project locks that the donor holds
+  clean at that revision, copy-on-write where the file system supports it and
+  never as a symbolic link, before any Lake command fetches the rest (#275).
 - **Formalize worktrees.** A new worktree gets a copy of the lead's
-  `.lake/packages`, copy-on-write and never a symbolic link, before its first
-  build. `lake exe cache get` then downloads nothing; before, each worktree
-  re-cloned about 0.5 GB of packages and unpacked another 7.5 GB Mathlib build
-  (#275).
+  `.lake/packages`, copy-on-write where the file system supports it and never
+  a symbolic link, before its first build. `lake exe cache get` then downloads
+  nothing; before, each worktree re-cloned about 0.5 GB of packages and
+  unpacked another 7.5 GB Mathlib build (#275).
 - **Generated import roots.** `work import-impact` reports `module_generated`
   when the repository's Git attributes set `linguist-generated` on MODULE's
   file, or make it `true`, normally through a committed `.gitattributes` line
@@ -188,6 +205,25 @@ date when the release is tagged.
 
 ### Fixed
 
+- **`\pmod`, `\bmod` and `\mod` on the site.** Site formulas typeset `\pmod`,
+  `\bmod`, `\mod` and amsmath's `\varliminf`, `\varlimsup`, `\varinjlim` and
+  `\varprojlim`. MathJax builds them from `\mmlToken`, which the page's TeX input
+  turns off, so each showed a red `\notallowed`; they are now written without
+  it, and a project macro of the same name still replaces one (#544).
+- **Import-closure scan.** `work import-impact --module-scope import-closure`
+  reads uncaptured `.lean` files only in the root libraries' module trees and
+  in dependency packages. It no longer reads other nested checkouts, such as
+  worker worktrees with their own `.lake`, the root's build output or a
+  package's `.lake`, which could stall the run before its probe (#429).
+- **Search index load.** The explorer prepares its search index in 10 ms
+  slices rather than 512-row batches, and resolves each page's links once
+  rather than every row's. On ATLAS (38,661 rows), search, the Topics outline
+  and concept links were ready 5.3 s after the index was parsed, most of it
+  spent waiting between batches; they are now ready after 1.0 s in WebKit and
+  0.7 s in Chrome.
+- **Book order.** A link inside an HTML comment no longer places its page in
+  the book's order: a commented-out chapter link moved that chapter forward in
+  `SUMMARY.md`, though the page showed it later (#535).
 - **Fences in comments.** Render no longer reads a fence line inside an HTML
   comment as opening a code block. It had left every later line of the page
   unrewritten, so a link to a source note after it was published as written,

@@ -398,6 +398,9 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-scope-shelf h3 { margin: 0 0 4px; font-size: 17px; font-weight: 600; }
 .bp-scope-shelf-count { margin: 0 0 6px; color: var(--dag-muted); font-size: 12px; }
 .bp-scope-shelf-list { margin: 0; padding: 0; list-style: none; }
+/* The site clips a list holding a formula; these lists' links reach the list's
+   edges, so the clip would cut the sides of their focus rings. */
+.bp-dag-viewer.bp-dag-viewer :is(.bp-scope-shelf-list, .bp-reading-topic-list, .bp-reading-wiki-list):has(mjx-container) { overflow-x: visible; }
 .bp-scope-shelf-list a { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; padding: 6px 0; color: var(--dag-link); font-size: 14px; line-height: 1.4; text-decoration: none; }
 .bp-scope-shelf-title { min-width: 0; overflow-wrap: anywhere; }
 .bp-scope-shelf-list a:hover { text-decoration: underline; }

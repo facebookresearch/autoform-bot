@@ -365,6 +365,7 @@ __all__ = [
     "STATES",
     "NodeStatus",
     "State",
+    "declaration_command",
     "derive",
     "is_definition",
     "summarize",
