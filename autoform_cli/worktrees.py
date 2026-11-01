@@ -15,9 +15,11 @@ What protects a worktree is evidence, never inference. Git's own command
 refuses only a worktree that its configured status shows dirty, or a locked one:
 it removes one holding a Git lock file, one containing another worktree, untracked
 files a configuration hides, and commits only the worktree's reflog reaches, and
-it never looks at processes or claims, so each is checked here. Every check scans
-the process table again and names each process by its PID and start time, never
-trusting a PID seen earlier. An agent between commands has no process inside its
+it never looks at processes or claims, so each is checked here. A removal scans
+the process table again before each worktree and names each process by its PID
+and start time, never trusting a PID seen earlier. Paths are compared as the
+files they name, since ``realpath`` keeps a case-insensitive volume's spelling
+and macOS firmlinks. An agent between commands has no process inside its
 worktree, so a worktree whose index, HEAD reflog or ``.lake`` changed within a
 lease's lifetime is protected too. A process running as the caller that cannot
 be inspected protects every worktree created before it started, since it may
@@ -87,10 +89,6 @@ class _Worktree:
     admin: Path | None
 
     @property
-    def real(self) -> Path:
-        return Path(os.path.realpath(self.path))
-
-    @property
     def created(self) -> float | None:
         """The earliest time its Git directory records: creation, or earlier than it, never later."""
         if self.admin is None:
@@ -137,7 +135,7 @@ class _Repository:
 
     def is_candidate(self, worktree: _Worktree) -> bool:
         """Every linked worktree is one except the one the target is in; the main worktree comes first."""
-        return worktree in self.worktrees[1:] and str(worktree.real) != os.path.realpath(self.top)
+        return worktree in self.worktrees[1:] and not _same(worktree.path, self.top)
 
     @property
     def candidates(self) -> tuple[_Worktree, ...]:
@@ -279,7 +277,7 @@ def _remove_one(
 ) -> WorktreeEntry:
     path = Path(str(item["path"]))
     repository = _read_repository(target)
-    current = next((tree for tree in repository.worktrees if str(tree.real) == os.path.realpath(path)), None)
+    current = next((tree for tree in repository.worktrees if _same(tree.path, path)), None)
     entry = WorktreeEntry(path, item["head"], item["branch"])
     if current is None:
         entry.protect("changed", "no longer a linked worktree of this repository")
@@ -350,9 +348,12 @@ def _remove(target: Path, top: Path, worktree: _Worktree, entry: WorktreeEntry) 
     free_before = _free_bytes(worktree.path.parent)
     result = _git(top, "worktree", "remove", "--", str(worktree.path), timeout=None)
     if result.returncode != 0:
-        remaining = _read_repository(target).worktrees
-        if any(other.real == worktree.real for other in remaining):
-            entry.protect("git-refused", _text(result.stderr).strip() or f"exit status {result.returncode}")
+        reason = _text(result.stderr).strip() or f"exit status {result.returncode}"
+        if any(other.path == worktree.path for other in _read_repository(target).worktrees):
+            entry.protect("git-refused", reason)
+            return
+        if os.path.lexists(worktree.path):
+            entry.protect("git-refused", f"Git stopped after unregistering it and left {worktree.path}: {reason}")
             return
     free_after = _free_bytes(worktree.path.parent)
     entry.removed = True
@@ -360,8 +361,8 @@ def _remove(target: Path, top: Path, worktree: _Worktree, entry: WorktreeEntry) 
 
 
 def _read_repository(target: Path) -> _Repository:
-    start = target if target.is_dir() else target.parent
-    if not start.is_dir():
+    start = target if os.path.isdir(target) else target.parent
+    if not os.path.isdir(start):
         raise WorktreeError(f"{target} is not a directory in a Git checkout")
     top = _git_line(start, "rev-parse", "--show-toplevel")
     common = _git_line(start, "rev-parse", "--path-format=absolute", "--git-common-dir")
@@ -411,7 +412,7 @@ def _admin_directory(worktree: Path) -> Path | None:
     if not pointer.startswith("gitdir: "):
         return None
     admin = worktree / pointer.removeprefix("gitdir: ")
-    return Path(os.path.realpath(admin)) if admin.is_dir() else None
+    return Path(os.path.realpath(admin)) if os.path.isdir(admin) else None
 
 
 def _admin_directories(common_dir: Path) -> dict[str, Path]:
@@ -446,16 +447,19 @@ def _evaluate(repository: _Repository, worktree: _Worktree, machine: _Machine, *
     entry = WorktreeEntry(worktree.path, worktree.head, worktree.branch)
     if worktree.locked is not None:
         entry.protect("locked", worktree.locked or "locked without a reason")
-    present = worktree.path.is_dir()
+    present = os.path.isdir(worktree.path)
     if present:
         _check_status(worktree, entry)
+        identities: dict[Path, tuple[int, int] | None] = {}
         nested = [
-            str(other.real)
+            str(other.path)
             for other in repository.worktrees
-            if other.real != worktree.real and is_within(other.real, worktree.real)
+            if other is not worktree
+            and not _same(other.path, worktree.path)
+            and _inside(other.path, worktree.path, identities)
         ]
         entry.protect("contains-worktree", ", ".join(nested))
-        entry.protect("in-use", _users(worktree.real, machine.processes))
+        entry.protect("in-use", _users(worktree.path, machine.processes, identities))
     entry.protect("git-operation", _git_operation(repository, worktree))
     entry.protect("unintegrated", _unintegrated(repository, worktree))
     entry.protect("recent", _recent(worktree))
@@ -464,7 +468,7 @@ def _evaluate(repository: _Repository, worktree: _Worktree, machine: _Machine, *
         entry.protect(code, detail)
     if sizes and entry.removable:
         # Walking a Lake build tree is slow, so only what removal would free is measured.
-        entry.logical_bytes, entry.freeable_bytes = (_sizes(worktree.real) or (None, None)) if present else (0, 0)
+        entry.logical_bytes, entry.freeable_bytes = (_sizes(Path(os.path.realpath(worktree.path))) or (None, None)) if present else (0, 0)
     return entry
 
 
@@ -474,6 +478,11 @@ def _check_status(worktree: _Worktree, entry: WorktreeEntry) -> None:
     The options override a configuration that hides untracked files or submodule
     changes, which ``git worktree remove`` would then delete.
     """
+    # A directory whose `.git` is gone would show the status of whatever repository holds it.
+    git_dir = _git_line(worktree.path, "rev-parse", "--absolute-git-dir")
+    if worktree.admin is None or git_dir is None or not _same(Path(git_dir), worktree.admin):
+        entry.protect("dirty", f"its status cannot be read: {worktree.path} does not lead to its Git directory")
+        return
     options = ("--porcelain", "-z", "--ignored", "--untracked-files=normal", "--ignore-submodules=none")
     result = _git(worktree.path, "status", *options)
     if result.returncode != 0:
@@ -626,10 +635,12 @@ def _recent(worktree: _Worktree) -> str | None:
     return "; ".join(changed) or None
 
 
-def _users(worktree: Path, processes: tuple[_Process, ...]) -> str | None:
+def _users(
+    worktree: Path, processes: tuple[_Process, ...], identities: dict[Path, tuple[int, int] | None]
+) -> str | None:
     users = []
     for process in processes:
-        kinds = [kind for kind, place in process.places if is_within(place, worktree)]
+        kinds = [kind for kind, place in process.places if _inside(place, worktree, identities)]
         if kinds:
             users.append(f"{process.describe()}: {', '.join(kinds)}")
     return "; ".join(users) or None
@@ -702,7 +713,7 @@ def _read_claims(top: Path, repo: str | None) -> tuple[str | None, tuple[tuple[s
             repo = str((top / Path(repo).expanduser()).resolve())
     elif not _repository_is_remote(repo):
         repo = str(Path(repo).expanduser().resolve())  # relative to the working directory, as for `dashboard`
-    shown = _without_password(repo)
+    shown = _without_credentials(repo)
     try:
         with tempfile.TemporaryDirectory(prefix="autoform-worktrees-") as temporary:
             board = ClaimBoard(repo, "autoform-worktrees", Path(temporary) / "claims.git")
@@ -728,12 +739,44 @@ def _read_claims(top: Path, repo: str | None) -> tuple[str | None, tuple[tuple[s
     return shown, tuple(protections)
 
 
-def _without_password(url: str) -> str:
-    """``url`` without the credentials a saved report must not carry."""
+def _without_credentials(url: str) -> str:
+    """``url`` without the user name and password a saved report must not carry; a token may be either."""
     parts = urllib.parse.urlsplit(url)
-    if not parts.password:
+    if "@" not in parts.netloc:
         return url
     return urllib.parse.urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
+
+
+def _identity(path: Path) -> tuple[int, int] | None:
+    """The file ``path`` names, as its device and inode; None when it cannot be read."""
+    try:
+        status = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    return status.st_dev, status.st_ino
+
+
+def _same(one: Path, other: Path) -> bool:
+    """Whether two paths name one file, under any spelling; their real paths decide when either is missing."""
+    first, second = _identity(one), _identity(other)
+    if first is not None and second is not None:
+        return first == second
+    return os.path.realpath(one) == os.path.realpath(other)
+
+
+def _inside(path: Path, directory: Path, identities: dict[Path, tuple[int, int] | None]) -> bool:
+    """Whether ``path`` is ``directory`` or lies under it, under any spelling of either."""
+    if is_within(Path(os.path.realpath(path)), Path(os.path.realpath(directory))):
+        return True
+    wanted = _identity(directory)
+    if wanted is None:
+        return False
+    for ancestor in (path, *path.parents):
+        if ancestor not in identities:
+            identities[ancestor] = _identity(ancestor)
+        if identities[ancestor] == wanted:
+            return True
+    return False
 
 
 def _sizes(root: Path) -> tuple[int, int] | None:
@@ -794,6 +837,7 @@ def _load_manifest(path: Path) -> tuple[dict[str, str | None], list[dict[str, st
         if not (
             isinstance(entry, dict)
             and isinstance(entry.get("path"), str)
+            and "\0" not in entry["path"]
             and isinstance(entry.get("protected_by"), list)
             and _optional_text(entry.get("head"))
             and _optional_text(entry.get("branch"))
@@ -801,9 +845,11 @@ def _load_manifest(path: Path) -> tuple[dict[str, str | None], list[dict[str, st
             raise WorktreeError(f"the manifest {path} has a malformed worktree entry")
         if not entry["protected_by"] and not entry.get("removed"):
             wanted.append({"path": entry["path"], "head": entry.get("head"), "branch": entry.get("branch")})
-    unique: dict[str, dict[str, str | None]] = {}
+    unique: dict[object, dict[str, str | None]] = {}
     for entry in wanted:
-        unique.setdefault(os.path.realpath(str(entry["path"])), entry)  # one worktree listed twice is removed once
+        # One worktree listed twice, under any spelling, is removed once.
+        path = str(entry["path"])
+        unique.setdefault(_identity(Path(path)) or os.path.realpath(path), entry)
     wanted = list(unique.values())
     return {"repository": repository, "integration": integration}, wanted
 

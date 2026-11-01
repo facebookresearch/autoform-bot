@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import time
@@ -363,6 +364,33 @@ def test_a_running_process_in_a_worktree_marks_it_in_use(repo: Path, monkeypatch
     assert "working directory" in evidence["in-use"]
 
 
+def test_another_spelling_of_a_worktree_still_protects_it(
+    repo: Path, tmp_path: Path, processes: list[object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # On macOS `realpath` keeps a case-insensitive volume's spelling and firmlinks, while
+    # the kernel reports a process's directory in the canonical one. A symbolic link
+    # stands in for the second spelling, with `realpath` reduced to what it does there.
+    busy = _add_worktree(repo, "busy")
+    outer = _add_worktree(repo, "outer")
+    inner = outer / ".lake" / "inner"
+    _git("worktree", "add", "--quiet", "-b", "inner", str(inner), cwd=repo)
+    alias = tmp_path / "alias"
+    alias.symlink_to(tmp_path, target_is_directory=True)
+    for worktree in (busy, inner):
+        (_admin(worktree) / "gitdir").write_text(f"{alias / worktree.relative_to(tmp_path)}/.git\n", encoding="utf-8")
+    _age(repo)
+    monkeypatch.setattr(os.path, "realpath", os.path.abspath)
+    processes.append(_Process(51, busy))
+
+    entries = _entries(repo)
+
+    assert _codes(entries["busy"]) == {"in-use": "pid 51 (fake-51) started 1970-01-01T00:16:40Z: working directory"}
+    assert _codes(entries["outer"]) == {"contains-worktree": str(alias / "outer" / ".lake" / "inner")}
+    lead = _add_worktree(repo, "lead")
+    (_admin(lead) / "gitdir").write_text(f"{alias / 'lead'}/.git\n", encoding="utf-8")
+    assert "lead" not in _entries(lead)
+
+
 def test_an_uninspectable_process_protects_only_worktrees_created_before_it_started(
     repo: Path, processes: list[object]
 ) -> None:
@@ -447,9 +475,11 @@ def test_repo_names_the_board_instead_of_origin(repo: Path, board: Path, tmp_pat
     assert list(_codes(report["worktrees"][0])) == ["claimed"]
 
 
-def test_a_board_url_is_reported_without_its_password() -> None:
-    assert worktrees._without_password("https://me:secret@example.com/r.git") == "https://example.com/r.git"
-    assert worktrees._without_password("git@example.com:r.git") == "git@example.com:r.git"
+def test_a_board_url_is_reported_without_its_credentials() -> None:
+    assert worktrees._without_credentials("https://me:secret@example.com/r.git") == "https://example.com/r.git"
+    # A token often goes where the user name does.
+    assert worktrees._without_credentials("https://ghp_token@example.com/r.git") == "https://example.com/r.git"
+    assert worktrees._without_credentials("git@example.com:r.git") == "git@example.com:r.git"
 
 
 def test_a_lease_expiring_past_the_calendar_does_not_stop_the_report(repo: Path, board: Path) -> None:
@@ -593,6 +623,53 @@ def test_remove_reports_git_refusing_and_removes_a_worktree_listed_twice_once(
     assert [entry.path.name for entry in result.refused] == ["second"]
 
 
+def test_remove_refuses_a_worktree_git_stopped_removing_partway(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Git can unregister a worktree and then fail to delete a file in it.
+    worker = _add_worktree(repo, "worker")
+    _age(repo)
+    manifest = _manifest(repo, tmp_path)
+    admin = _admin(worker)
+    real_git = worktrees._git
+
+    def git(cwd: Path, *arguments: str, **options: object) -> subprocess.CompletedProcess[bytes]:
+        if arguments[:2] == ("worktree", "remove"):
+            shutil.rmtree(admin)
+            return subprocess.CompletedProcess(arguments, 255, b"", b"error: failed to delete 'd': Permission denied")
+        return real_git(cwd, *arguments, **options)
+
+    monkeypatch.setattr(worktrees, "_git", git)
+    result = worktrees.remove_worktrees(repo, manifest)
+
+    [entry] = result.entries
+    assert not entry.removed and worker.is_dir()
+    assert entry.protected_by == [
+        (
+            "git-refused",
+            f"Git stopped after unregistering it and left {worker}: error: failed to delete 'd': Permission denied",
+        )
+    ]
+    assert result.refused == (entry,)
+
+
+def test_a_directory_whose_git_file_is_gone_is_not_read_as_a_worktree(repo: Path, tmp_path: Path) -> None:
+    # Inside the main worktree, Git would otherwise report the main worktree's status for it.
+    outside = _add_worktree(repo, "outside")
+    inside = repo / ".worktrees" / "inside"
+    _git("worktree", "add", "--quiet", "-b", "inside", str(inside), cwd=repo)
+    for worktree in (outside, inside):
+        (worktree / ".git").unlink()
+        (worktree / "notes.txt").write_text("kept\n", encoding="utf-8")
+    _age(repo)
+
+    entries = _entries(repo)
+
+    for worktree in (outside, inside):
+        detail = f"its status cannot be read: {worktree} does not lead to its Git directory"
+        assert _codes(entries[worktree.name])["dirty"] == detail
+
+
 def test_remove_refuses_after_a_lease_is_renewed(repo: Path, board: Path, tmp_path: Path) -> None:
     worker = _add_worktree(repo, "worker")
     _age(repo)
@@ -617,10 +694,12 @@ def test_remove_rejects_a_manifest_for_another_repository_or_a_malformed_one(rep
         worktrees.remove_worktrees(repo, manifest)
 
     data["repository"] = str(Path(_git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=repo)))
-    data["worktrees"][0]["protected_by"] = "none"
-    manifest.write_text(json.dumps(data), encoding="utf-8")
-    with pytest.raises(worktrees.WorktreeError, match="malformed worktree entry"):
-        worktrees.remove_worktrees(repo, manifest)
+    for key, value in (("protected_by", "none"), ("path", "worker\0")):
+        broken = json.loads(json.dumps(data))
+        broken["worktrees"][0][key] = value
+        manifest.write_text(json.dumps(broken), encoding="utf-8")
+        with pytest.raises(worktrees.WorktreeError, match="malformed worktree entry"):
+            worktrees.remove_worktrees(repo, manifest)
 
     manifest.write_text('{"schema": "autoform-project-worktrees/v1", "schema": "x"}', encoding="utf-8")
     with pytest.raises(worktrees.WorktreeError, match="cannot read the manifest"):

@@ -244,11 +244,14 @@ hand off, and release the claim set.
 When `AUTOFORM_SUBAGENT_DEBRIEF=1`, the agent that worked an attempt follows
 the [subagent debrief steps](references/debrief-subagent.md) before reporting.
 
-Once a worker has reported and its result is integrated or handed off (branch
-any handed-off commit first), the lead removes its worktree with `git worktree
-remove`, never `--force`, unless the worker takes another leaf there. Lake's
-cache only grows; tell the user if disk runs low. `autoform project worktrees`
-lists leftovers; remove them only when the user asks and no worker runs. Re-read
+Once a worker has reported, debrief included, and its result is integrated or
+handed off, the lead removes its worktree with `git worktree remove` (never
+`--force`), unless, after integrating its result, that worker takes another leaf
+there; first make sure a branch points at any handed-off commit. Autoform never
+clears Lake's shared artifact cache, so tell the user if disk runs low. After
+the run, `autoform project worktrees` lists leftover worktrees; pass it
+`--remove` only when the user asks and every session using this clone has
+stopped its workers. Re-read
 the work frontier from the updated shared branch and repeat while independent
 ready leaves or accepted review findings and authorized capacity remain. Stop
 when the frontier is empty and no accepted review finding awaits repair, or
