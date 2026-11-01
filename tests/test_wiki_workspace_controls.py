@@ -187,7 +187,7 @@ def _run(body: str) -> None:
 def _run_controls(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
     script += "const controls=['element','button','readingLabel','bindNodeLink','safeHref','buildShell','bindEvents','setBrowse','syncControls','wrapMapKey','currentOverviewGroup',"
-    script += "'trailList','renderBreadcrumb','routeTrail','semanticParent','refreshReadingLabels','sourceNodes','inCurrentScope'].map(original).join('\\n');\n"
+    script += "'trailList','renderBreadcrumb','routeTrail','semanticParent','refreshReadingLabels','tooltip','sourceNodes','inCurrentScope'].map(original).join('\\n');\n"
     script += "const start=source.indexOf('    var dom$announcement,');assert(start>=0);\n"
     script += "const domDeclarations=source.slice(start,source.indexOf(';',start)+1);\n"
     program = _CONTROL_PEERS + "\n" + body

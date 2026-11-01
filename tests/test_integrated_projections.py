@@ -40,7 +40,7 @@ const functions = [
   'element', 'readingLabel', 'button', 'bindNodeLink', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
   'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'matchesStatus', 'matchesIsolation', 'calculateActive',
   'statusLabel', 'finished', 'boundaryMeta', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
-  'semanticParent', 'placeOf', 'pendingMath', 'summaryLine', 'refreshReadingLabels', 'inCurrentScope', 'sourceNodes'
+  'semanticParent', 'placeOf', 'pendingMath', 'summaryLine', 'refreshReadingLabels', 'tooltip', 'inCurrentScope', 'sourceNodes'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');
 const sandbox = {assert, URL, fixtureText}; vm.createContext(sandbox);
