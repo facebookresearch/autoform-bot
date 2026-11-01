@@ -9,7 +9,7 @@ import pytest
 
 from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
-from tests.test_dag_viewer_browser import _REQUIRED, _page, _served, playwright
+from tests.test_dag_viewer_browser import _REQUIRED, _page, _paint_frame, _served, playwright
 
 _ARTICLE = "---\ndeclaration: {kind}\nstatement: formalized\nlean: {lean}\n---\n\n# {title}\n\n{body}\n\n## Depends on\n\n{uses}\n"
 
@@ -93,6 +93,8 @@ def test_the_map_walkthrough_overview_search_pivot_back_and_whole_project(webkit
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Index of a subgroup")
         page.go_back()
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Lagrange's theorem")
+        # The reading pane changes at once, but the map draws on the next animation frame.
+        _paint_frame(page)
         after = page.locator(".pm-result.pm-selected").bounding_box()
         assert before is not None and after is not None
         assert abs(after["x"] - before["x"]) < 2 and abs(after["y"] - before["y"]) < 2 and abs(after["width"] - before["width"]) < 2

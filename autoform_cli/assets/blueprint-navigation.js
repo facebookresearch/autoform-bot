@@ -17,7 +17,7 @@
   if (window.AutoformNavigation) return;
 
   var HISTORY_KEY = "autoformNavigation", GRAPH_SCHEMA = "autoform-dag-view/v2", INDEX_SCHEMA = "autoform-dag-search/v1";
-  var WIKI_SCHEMA = "autoform-wiki-links/v1";
+  var WIKI_SCHEMA = "autoform-wiki-links/v1", INDEX_SLICE_MS = 10;
 
   function create(options) {
     options = options || {};
@@ -51,6 +51,7 @@
       return Number.isSafeInteger(value) ? Math.max(low, Math.min(high, value)) : fallback;
     }
     function attribute(first, second, name) { return first.getAttribute(name) || second && second.getAttribute(name); }
+    function clock() { return win.performance ? win.performance.now() : Date.now(); }
     function link(value, base, outside) {
       if (typeof value !== "string" || !value || /[\u0000-\u001f\u007f]/.test(value)) return null;
       try {
@@ -207,7 +208,22 @@
     }
     async function normalizeIndex(payload, base) {
       if (!payload || payload.schema !== INDEX_SCHEMA || !Array.isArray(payload.nodes)) throw new Error("Unsupported search index");
-      var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [];
+      // Batches end on time, not on a row count: each pause waits two frames, so
+      // short fixed batches spent most of a large index's load waiting.
+      var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [], slice = clock();
+      // Rows on one page share the part before "#", so resolve it once. A fragment
+      // made of characters the URL parser keeps as written is appended. Other
+      // fragments, and paths ending in a space (which the parser would trim
+      // alone), go through link() whole.
+      var resolved = new Map();
+      function cached(value, outside) {
+        if (typeof value !== "string") return null;
+        var cut = value.indexOf("#"), path = cut > 0 ? value.slice(0, cut) : value, hash = cut > 0 ? value.slice(cut) : "";
+        if (hash && (/ $/.test(path) || !/^#[\w.~:@!$&'()*+,;=\/?%-]*$/.test(hash))) return link(value, base, outside);
+        var key = (outside ? "+" : "-") + path, href = resolved.get(key);
+        if (href === undefined) resolved.set(key, href = link(path, base, outside));
+        return href && href + hash;
+      }
       async function yieldIndex() {
         // Timer tasks can run back-to-back without a WebKit paint while a
         // large catalogue is normalized. Resume after a second frame so the
@@ -227,13 +243,14 @@
           });
         });
         if (disposed) throw abortError();
+        slice = clock();
       }
       for (var position = 0; position < payload.nodes.length; position++) {
         var node = payload.nodes[position];
         if (!node || typeof node.id !== "string" || typeof node.title !== "string" || ids.has(node.id))
           throw new Error("Invalid search node");
-        var copy = Object.assign({}, node, {_index: position, url: link(node.url, base, true), route: link(node.route, base),
-          data_url: link(node.data_url, base)});
+        var copy = Object.assign({}, node, {_index: position, url: cached(node.url, true), route: cached(node.route),
+          data_url: cached(node.data_url)});
         // Parent offsets use the same node order as compact relation endpoints.
         // Decode before publication; absent and legacy string parents stay intact.
         if (typeof node.parent === "number") {
@@ -242,9 +259,10 @@
           copy.parent = parent.id;
         }
         ids.set(copy.id, copy);
-        if (copy.route) { byRoute.set(copy.route, copy); knownDocuments.add(resource(copy.route)); }
+        // A serialized URL's first "#" starts its fragment, so this is resource(copy.route) without a parse.
+        if (copy.route) { byRoute.set(copy.route, copy); knownDocuments.add(copy.route.split("#")[0]); }
         nodes.push(copy);
-        if ((position + 1) % 512 === 0) await yieldIndex();
+        if (clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
       }
       var relations;
       if (payload.relations !== undefined) {
@@ -258,7 +276,7 @@
           if (!ids.has(from) || !ids.has(to) || !Number.isSafeInteger(row[2]) || !Number.isSafeInteger(row[3]) ||
               row[2] < 0 || row[3] < 0 || row[2] + row[3] === 0) throw new Error("Invalid search relation endpoint");
           relations.push([from, to, row[2], row[3]]);
-          if ((edge + 1) % 1024 === 0) await yieldIndex();
+          if (clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
         }
       }
       if (disposed) throw abortError();
