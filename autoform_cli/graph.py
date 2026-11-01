@@ -66,6 +66,7 @@ _FRONTMATTER_KEYS = frozenset(
         "review_approved",
         "open_statements",
         "published",
+        "tracks_lean",
     }
 )
 _FORMALIZED = "formalized"
@@ -172,6 +173,12 @@ class Graph:
     #: heading, where its links count. :func:`informal_cycle_warnings` adds the
     #: links whose target depends on the article.
     informal_warnings: tuple[str, ...] = ()
+    #: ``tracks_lean: false`` in ``roadmap/README.md``: the project writes no
+    #: Lean, so the site shows no Lean progress.
+    tracks_lean: bool = True
+    #: What check warns about from loading without failing: a project setting
+    #: it ignores because it is misplaced or has an unknown value.
+    warnings: tuple[str, ...] = ()
 
     @property
     def edge_count(self) -> int:
@@ -229,6 +236,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     source_hashes = {source.id: source.source_sha256 for source in sources}
     policy_page = (blueprint / "roadmap" / "README.md").resolve()
     open_statements = False
+    tracks_lean = True
+    warnings: list[str] = []
 
     for source in sources:
         canonical = source.path.resolve()
@@ -264,6 +273,18 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     )
                 else:
                     open_statements = policy == "allowed"
+            # Unlike open_statements and published, this setting never refuses a vault (#325): misplaced, or with a
+            # value other than true or false, it is ignored with a warning.
+            tracked = node.metadata.get("tracks_lean")
+            if tracked is not None:
+                if canonical != policy_page:
+                    warnings.append(
+                        f"{node.id}: tracks_lean is a project setting, read only in roadmap/README.md; ignored here"
+                    )
+                elif tracked.casefold() not in _TRUE | _FALSE:
+                    warnings.append(f"{node.id}: tracks_lean accepts only true or false; ignored")
+                else:
+                    tracks_lean = tracked.casefold() in _TRUE
             if "published" in node.metadata and (canonical.name != "README.md" or canonical == policy_page):
                 issues.append(
                     f"{node.id}: published is a folder setting; set it in a folder's README.md below roadmap/"
@@ -358,6 +379,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         open_statements=open_statements,
         unpublished=unpublished,
         informal_warnings=tuple(informal_warnings),
+        tracks_lean=tracks_lean,
+        warnings=tuple(warnings),
     )
 
 
