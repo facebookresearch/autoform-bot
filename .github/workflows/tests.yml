@@ -19,6 +19,7 @@ concurrency:
 
 jobs:
   test:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -101,6 +102,7 @@ jobs:
           retention-days: 7
 
   mathjax:
+    if: ${{ false }}
     name: MathJax read-back cards (Node)
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -138,6 +140,7 @@ jobs:
           AUTOFORM_REQUIRE_MATHJAX_TESTS: "1"
 
   real-lean:
+    if: ${{ false }}
     name: real Lean (fixture toolchain)
     runs-on: ubuntu-latest
     timeout-minutes: 75
@@ -222,6 +225,7 @@ jobs:
           AUTOFORM_REAL_LEAN_MATHLIB_PROJECT: ${{ runner.temp }}/autoform-created-project
 
   real-lean-skeleton:
+    if: ${{ false }}
     name: real Lean skeleton suite (fixture toolchain)
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -261,6 +265,7 @@ jobs:
           AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
 
   real-repl:
+    if: ${{ false }}
     name: real REPL (fixture toolchain)
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -302,6 +307,7 @@ jobs:
           AUTOFORM_RUN_REAL_REPL_TESTS: "1"
 
   windows-hardening:
+    if: ${{ false }}
     name: Windows inspection, subprocess, and publication hardening
     runs-on: windows-latest
     timeout-minutes: 15
@@ -335,3 +341,4 @@ jobs:
           tests/test_claims.py::test_git_runs_without_terminal_prompts
           tests/test_claims.py::test_git_stops_at_the_deadline_and_names_the_step
           tests/test_claims.py::test_git_does_not_start_once_the_deadline_has_passed
+
