@@ -2731,7 +2731,6 @@ def test_explorer_title_math_has_no_raw_tex_tooltips_or_clipped_focus_rings(
     assert related.evaluate("node => getComputedStyle(node.closest('ul')).overflowX") == "visible"
 
 
-
 def test_failed_reader_reconciliation_opens_current_permalink_in_fresh_native_tab(
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
 ) -> None:
