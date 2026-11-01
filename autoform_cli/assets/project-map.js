@@ -1376,6 +1376,8 @@
       return;
     }
     if (!drag || event.pointerId !== drag.id) return;
+    // A press released off the map sent no pointerup here, so the drag ends at the next move with no button down.
+    if (!event.buttons) { drag = null; canvas.classList.remove("pm-dragging"); return; }
     var dx = event.clientX - drag.x, dy = event.clientY - drag.y;
     if (!drag.moved && Math.hypot(dx, dy) < 4) return;
     if (!drag.moved) { drag.moved = true; canvas.setPointerCapture(drag.id); canvas.classList.add("pm-dragging"); release(); }
@@ -1405,6 +1407,8 @@
     if (state.selected) select(null); else unpick();
   }
   canvas.addEventListener("keydown", function (event) {
+    // With a modifier the keys are the browser's: Command-Left goes Back, Command-0 resets its zoom.
+    if (event.altKey || event.metaKey || event.ctrlKey) return;
     var target = event.target, step = 80;
     if (event.key === "Enter" || event.key === " ") {
       if (target !== canvas) { event.preventDefault(); activate(target); }
