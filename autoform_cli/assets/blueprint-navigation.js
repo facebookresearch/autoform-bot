@@ -17,7 +17,7 @@
   if (window.AutoformNavigation) return;
 
   var HISTORY_KEY = "autoformNavigation", GRAPH_SCHEMA = "autoform-dag-view/v2", INDEX_SCHEMA = "autoform-dag-search/v1";
-  var WIKI_SCHEMA = "autoform-wiki-links/v1";
+  var WIKI_SCHEMA = "autoform-wiki-links/v1", INDEX_SLICE_MS = 10;
 
   function create(options) {
     options = options || {};
@@ -51,6 +51,7 @@
       return Number.isSafeInteger(value) ? Math.max(low, Math.min(high, value)) : fallback;
     }
     function attribute(first, second, name) { return first.getAttribute(name) || second && second.getAttribute(name); }
+    function clock() { return win.performance ? win.performance.now() : Date.now(); }
     function link(value, base, outside) {
       if (typeof value !== "string" || !value || /[\u0000-\u001f\u007f]/.test(value)) return null;
       try {
@@ -207,7 +208,10 @@
     }
     async function normalizeIndex(payload, base) {
       if (!payload || payload.schema !== INDEX_SCHEMA || !Array.isArray(payload.nodes)) throw new Error("Unsupported search index");
-      var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [];
+      // Batches end on time, not on a row count: rows cost several times more in
+      // WebKit, and each pause waits two frames, so fixed batches made a large
+      // index take seconds to publish.
+      var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [], slice = clock();
       async function yieldIndex() {
         // Timer tasks can run back-to-back without a WebKit paint while a
         // large catalogue is normalized. Resume after a second frame so the
@@ -227,6 +231,7 @@
           });
         });
         if (disposed) throw abortError();
+        slice = clock();
       }
       for (var position = 0; position < payload.nodes.length; position++) {
         var node = payload.nodes[position];
@@ -244,7 +249,7 @@
         ids.set(copy.id, copy);
         if (copy.route) { byRoute.set(copy.route, copy); knownDocuments.add(resource(copy.route)); }
         nodes.push(copy);
-        if ((position + 1) % 512 === 0) await yieldIndex();
+        if (clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
       }
       var relations;
       if (payload.relations !== undefined) {
@@ -258,7 +263,7 @@
           if (!ids.has(from) || !ids.has(to) || !Number.isSafeInteger(row[2]) || !Number.isSafeInteger(row[3]) ||
               row[2] < 0 || row[3] < 0 || row[2] + row[3] === 0) throw new Error("Invalid search relation endpoint");
           relations.push([from, to, row[2], row[3]]);
-          if ((edge + 1) % 1024 === 0) await yieldIndex();
+          if (clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
         }
       }
       if (disposed) throw abortError();
