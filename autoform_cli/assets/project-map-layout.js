@@ -664,20 +664,23 @@
       if (w < COMPACT_W) return;
       var inBand = band >= need;
       if (!inBand && h < (compact ? COMPACT_BAND : LABEL_BAND)) return;
-      var label = {id: id, x: x + pad, y: y, w: w - 2 * pad, band: inBand ? band : need, overlay: !inBand, compact: compact,
-        lines: !compact && box.band === BAND2 && band >= 0.9 * BAND2 ? 2 : 1,
-        detail: !compact && inBand && Math.min(band, h) >= 0.9 * BAND ? "meta" : "title"};
+      // How many lines the title takes in a band `b` tall, and whether the results line shows under it.
+      function fill(b) {
+        return {lines: !compact && box.band === BAND2 && b >= 0.9 * BAND2 ? 2 : 1,
+          detail: !compact && inBand && Math.min(b, h) >= 0.9 * BAND ? "meta" : "title"};
+      }
+      var label = Object.assign({id: id, x: x + pad, y: y, w: w - 2 * pad, band: inBand ? band : need, overlay: !inBand, compact: compact}, fill(band));
       // The title as an overlay at `at`, when the box has room for it there.
       function moveTo(at) {
         if (at + need > y + h) return false;
-        Object.assign(label, {y: at, band: need, overlay: true, lines: 1, detail: "title"});
+        Object.assign(label, {y: at, band: need, overlay: true, lines: 1, detail: "title", held: false});
         return true;
       }
-      // A title held at the stage's top keeps its band's height, up to BAND2, while the box has room, and gives it up as
-      // the box leaves, so the page draws it no smaller than in its band until the box is going.
+      // A title held at the stage's top keeps its band's height, up to BAND2, and its lines and results line, while the
+      // box has room, and gives them up as the box leaves, so the page draws it as in its band until the box is going.
       function hold(at) {
         if (!moveTo(at)) return false;
-        if (inBand && !compact) label.band = Math.max(need, Math.min(band, BAND2, y + h - at));
+        if (inBand && !compact) Object.assign(label, fill(label.band = Math.max(need, Math.min(band, BAND2, y + h - at))));
         label.held = true;
         return true;
       }

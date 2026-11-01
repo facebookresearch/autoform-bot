@@ -327,12 +327,15 @@ def test_labels_appear_only_where_they_fit() -> None:
     const [held, beneath] = L.placeLabels({scrolled, inner}, still, pinned);
     assert(held.id === 'scrolled' && held.y === 40 && held.overlay && held.lines === 1, JSON.stringify(held));
     assert(beneath.id === 'inner' && beneath.y >= held.y + held.band - EPS && beneath.y + beneath.band <= inner.y + inner.h + EPS, JSON.stringify(beneath));
+    assert(!beneath.held, 'a title moved below another one is an ordinary overlay');
     assert.equal(L.placeLabels({ending: Object.assign({}, scrolled, {h: 260})}, still, pinned).length, 0);
-    // A held title keeps its band's height while its box has room, so the page draws it no smaller than in its band, and
-    // gives the height up as the box leaves.
-    assert.equal(held.band, 52);
+    // A held title keeps its band's height and its results line while its box has room, so the page draws it as in its
+    // band, and gives them up as the box leaves.
+    assert(held.band === 52 && held.detail === 'meta', JSON.stringify(held));
     const going = L.placeLabels({going: Object.assign({}, scrolled, {h: 290})}, still, pinned)[0];
-    assert(going.y === 40 && Math.abs(going.band - 50) < EPS && going.held, JSON.stringify(going));
+    assert(going.y === 40 && Math.abs(going.band - 50) < EPS && going.held && going.detail === 'meta', JSON.stringify(going));
+    const leaving = L.placeLabels({leaving: Object.assign({}, scrolled, {h: 280})}, still, pinned)[0];
+    assert(leaving.held && Math.abs(leaving.band - 40) < EPS && leaving.detail === 'title', JSON.stringify(leaving));
     assert.equal(L.placeLabels({scrolled}, still, DESKTOP)[0].y, 0);
     // A box around the stage's centre holds the view, which the trail and the pin name: its title scrolls away as before,
     // and the children in its top row keep their own bands.

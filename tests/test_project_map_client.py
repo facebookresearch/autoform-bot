@@ -382,6 +382,39 @@ def test_history_holds_one_entry_per_place_and_the_camera_a_flight_ends_at(tmp_p
     assert "history ok" in out
 
 
+def test_a_title_held_at_the_top_is_drawn_as_in_its_band(tmp_path: Path) -> None:
+    sections = ["Sylow theorems and their applications", "Group actions", "Sylow subgroups of finite groups and their normalisers",
+                "Solvable and nilpotent groups", "The structure of finite abelian groups and their duals", "Representations of finite groups"]
+    records: list[dict[str, object]] = [
+        {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
+        {"id": "A", "kind": "scope", "title": "Algebra", "parent": "roadmap", "result": False},
+        {"id": "B", "kind": "scope", "title": "Analysis", "parent": "roadmap", "result": False},
+    ]
+    for index, title in enumerate(sections):
+        records.append({"id": f"A/s{index}", "kind": "scope", "title": title, "parent": "A", "result": False})
+        records += [{"id": f"A/s{index}/r{n}", "kind": "node", "title": f"Result {n}", "parent": f"A/s{index}", "result": True,
+                     "status": "planned"} for n in range(8)]
+    records += [{"id": f"B/r{n}", "kind": "node", "title": f"Result {n}", "parent": "B", "result": True, "status": "planned"} for n in range(5)]
+    sectioned = tmp_path / "sectioned"
+    project_map.write_project_map(sectioned, project_map.build_project_map(records, []))
+    out = _walk(tmp_path, r"""
+      // Its size, lines and results line; a long title in a one-line band, and one wrapped in a two-line band.
+      const drawn = id => {
+        const lines = $$('.pm-title').filter(t => (t.dataset.key || '').startsWith('lt:' + id + ':'));
+        return {size: (/font-size:(\d+)px/.exec(lines[0].getAttribute('style') || '') || [0, '15'])[1], lines: lines.map(t => t.textContent),
+          meta: $$('.pm-meta').some(m => m.dataset.key === 'lm:' + id)};
+      };
+      const ids = ['A/s0', 'A/s2'], before = ids.map(drawn);
+      assert(before.every(title => title.size > 15 && title.meta), JSON.stringify(before));
+      // Panned until the top row runs above the stage, under the pinned "Algebra", where their titles are held.
+      emit($('.pm-stage').querySelector('svg'), 'wheel', {deltaX: 0, deltaY: 120, clientX: 10, clientY: 10}); await wait(20);
+      assert(ids.every(id => $$('.pm-backdrop').some(b => b.dataset.key === 'lb:' + id)), 'the titles are held');
+      assert.deepStrictEqual(ids.map(drawn), before);
+      console.log('held ok');
+    """, sectioned, MAP_HASH="#part=A")
+    assert "held ok" in out
+
+
 def test_titles_always_draw_above_backdrops(tmp_path: Path) -> None:
     out = _walk(tmp_path, r"""
       const canvas = $('.pm-stage').querySelector('svg');
