@@ -286,7 +286,8 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert '<a class="bp-context-link"' not in chapter
     assert 'class="bp-reading-source"' in chapter and 'class="bp-explorer-page"' in chapter
     assert 'data-graph-src="../../dependencies/chapters/infimum-loss.json"' in chapter
-    assert re.search(r'<details class="bp-dependencies"><summary>Uses \d+ · Used by \d+</summary>', chapter)
+    assert re.search(r'<details class="bp-dependencies"><summary>(Uses [1-9]\d*|Used by [1-9]\d*)', chapter)
+    assert "Uses 0" not in chapter and "Used by 0" not in chapter
     assert '<nav class="bp-book-nav" aria-label="Blueprint chapters">' in chapter
     assert (
         'class="bp-book-nav-link bp-book-nav-previous" '
@@ -386,10 +387,9 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'data-graph-src="dependencies.json"' in overview
     # The landing page states progress as figures; the chapters keep the strip.
     assert '<div class="bp-figure-label">Fully proved</div>' in overview
-    assert '<div class="bp-figure-note">5 of 7 articles</div>' in overview
+    assert '<div class="bp-figure-note">5 of 7 statements</div>' in overview
     assert ">71%<" in overview
-    assert "Declared source coverage:" in overview
-    assert "1 decomposed · 5 mapped · 1 out" in overview
+    assert "7 source areas: 1 split into statements · 5 not yet settled · 1 out of scope" in overview
     assert 'href="coverage/index.html"' in overview
     assert "items settled" not in overview
     assert "bp-progress-link" not in overview
