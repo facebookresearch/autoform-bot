@@ -254,7 +254,8 @@ def test_lists_page_through_every_entry_and_back_restores_the_search_and_scroll(
       reader.scrollTop = 140;
       emit(usedBy().querySelectorAll('button').find(b => b.textContent.includes('User 15')), 'click'); await wait(40);
       assert.strictEqual(reader.querySelector('h2').textContent, 'User 15');
-      search.value = 'something else'; reader.scrollTop = 0;
+      assert.strictEqual(reader.scrollTop, 0, 'a new result opens at its top');
+      search.value = 'something else';
       history.back(); await wait(40);
       assert.strictEqual(reader.querySelector('h2').textContent, 'Hub lemma');
       assert.strictEqual(search.value, 'hub');
@@ -364,6 +365,16 @@ def test_history_holds_one_entry_per_place_and_the_camera_a_flight_ends_at(tmp_p
       const arrived = card();
       history.forward(); await wait(40);
       history.back(); await wait(40);
+      assert.strictEqual(card(), arrived);
+      // Back before the camera write lands, then Forward: the entry was pushed before the flight, and still ends there.
+      history.forward(); await wait(40);
+      emit(whole, 'click'); await wait(30);
+      const before = history.length, input = $('.pm-search').querySelector('input');
+      input.value = 'Lagrange'; emit(input, 'focus'); emit(input, 'input'); await wait(20); emit(input, 'input'); await wait(5);
+      emit(input, 'keydown', {key: 'Enter'});
+      for (let i = 0; i < 50 && history.length === before; i++) await new Promise(resolve => setImmediate(resolve));
+      history.back(); await wait(40);
+      history.forward(); await wait(40);
       assert.strictEqual(card(), arrived);
       console.log('history ok');
     """, MAP_HASH="#result=" + "Algebra%2Fgroups%2Flagrange")

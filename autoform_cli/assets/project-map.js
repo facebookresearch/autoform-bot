@@ -258,6 +258,9 @@
     var range = limits();
     target = {x: target.x, y: target.y, k: clamp(target.k, range.low, range.high)};
     if (flight) cancelAnimationFrame(flight.frame);
+    // The current entry takes the flight's end at once, so Back and Forward straight after a jump keep each place.
+    clearTimeout(cameraTimer);
+    try { if (history.state && history.state.pm) history.replaceState(Object.assign({}, history.state, {camera: target}), ""); } catch (_e) { /* ignore */ }
     if (reduceMotion) { camera = target; schedule(); rememberCamera(); if (done) done(); return; }
     var start = {x: camera.x, y: camera.y, k: camera.k}, began = performance.now(), duration = 560;
     flight = {frame: 0};
@@ -670,11 +673,12 @@
   }
   function select(id, options) {
     options = options || {};
+    var leaving = viewState();
     if (id) state.picked = null;
     state.selected = id;
     state.related = id ? relatedSets(id) : null;
     if (id) showResult(id); else showPart(currentPart());
-    if (options.history !== false) remember(options.replace);
+    if (options.history !== false) remember(options.replace, leaving);
     schedule();
   }
 
@@ -757,6 +761,12 @@
     var at = centerOf(wide), b = record.box, halfW = size.w / 2 / k, halfH = size.h / 2 / k, margin = 40 / k;
     flyTo({x: clamp(at[0], b.x + b.w + margin - halfW, b.x - margin + halfW), y: clamp(at[1], b.y + b.h + margin - halfH, b.y - margin + halfH), k: k});
   }
+  // Back from a part opened this way returns to the reading pane as it was, though the pane changes before the part loads.
+  function leaveFor(id) {
+    var leaving = viewState();
+    select(null, {history: false});
+    return flyToPart(id, {leaving: leaving});
+  }
   function flyToPart(id, options) {
     options = options || {};
     var epoch = options.epoch || navigation();
@@ -765,7 +775,7 @@
       if (epoch !== navEpoch) return;
       var record = part(id);
       state.focusPart = id;
-      if (options.history !== false) remember(options.replace);
+      if (options.history !== false) remember(options.replace, options.leaving);
       flyToContent(record);
       showPart(record);
     });
@@ -778,8 +788,9 @@
       var homeId = chain[chain.length - 1], record = part(homeId), entry = model.results.get(resultId);
       if (!entry || !entry.box) throw new Error("Result not found in its part: " + resultId);
       state.focusPart = homeId;
+      var leaving = viewState();
       select(resultId, {history: false});
-      if (options.history !== false) remember(options.replace);
+      if (options.history !== false) remember(options.replace, leaving);
       // Close enough that the result's card carries its title, with as much of its part around it as fits. The card
       // sits in the upper third, under the pinned title, so its part's band scrolls off and more of its neighbours
       // show below it. A card the layout left without area gets its part's view instead of an endless zoom.
@@ -957,7 +968,7 @@
     chain.forEach(function (id, index) {
       if (index) line.append(document.createTextNode(" / "));
       var button = el("button", "", plain(part(id) ? part(id).summary.title : id)); button.type = "button";
-      button.addEventListener("click", function () { select(null, {history: false}); flyToPart(id).catch(report); });
+      button.addEventListener("click", function () { leaveFor(id).catch(report); });
       line.append(button);
     });
     return line;
@@ -965,6 +976,7 @@
   function showPart(record) {
     if (!record || state.selected || shownPart === record.id) return;
     shownPart = record.id;
+    reader.scrollTop = 0;
     var links = record.id !== ROOT && record.data && record.data.links;
     state.links = links ? new Map() : null;
     if (links) {
@@ -1144,6 +1156,7 @@
     var entry = model.results.get(id);
     if (!entry) return;
     shownPart = null;
+    reader.scrollTop = 0;
     var row = entry.row, rel = relationsOf(id), shown = ++shownResult;
     readerInner.replaceChildren();
     readerInner.append(el("p", "pm-kicker", "Result"));
@@ -1201,7 +1214,7 @@
     }
     step(plain(model.index.title), wholeProject, !chain.length && !state.selected);
     chain.forEach(function (id, index) {
-      step(plain(part(id).summary.title), function () { select(null, {history: false}); flyToPart(id).catch(report); }, index === chain.length - 1 && !state.selected);
+      step(plain(part(id).summary.title), function () { leaveFor(id).catch(report); }, index === chain.length - 1 && !state.selected);
     });
     if (state.selected) step(plain(model.results.get(state.selected).row.title), null, true);
   }
@@ -1216,12 +1229,13 @@
   function viewState() {
     return {query: search.value, facets: state.facets ? Array.from(state.facets) : null, readerScroll: reader.scrollTop, sideScroll: side.scrollTop};
   }
-  function remember(replace) {
+  // `leaving` is the view state of the entry being left, when the reading pane has already changed under it.
+  function remember(replace, leaving) {
     var snap = snapshot();
     var hash = snap.selected ? "#result=" + encodeURIComponent(snap.selected) :
       snap.focusPart && snap.focusPart !== ROOT ? "#part=" + encodeURIComponent(snap.focusPart) : location.pathname + location.search;
     // The current entry keeps its camera, so Back returns to exactly where the reader was.
-    try { history.replaceState(Object.assign({}, history.state || {}, {pm: 1, camera: {x: camera.x, y: camera.y, k: camera.k}, selected: history.state && history.state.selected, focusPart: history.state && history.state.focusPart, chain: history.state && history.state.chain}, viewState()), ""); } catch (_e) { /* ignore */ }
+    try { history.replaceState(Object.assign({}, history.state || {}, {pm: 1, camera: {x: camera.x, y: camera.y, k: camera.k}, selected: history.state && history.state.selected, focusPart: history.state && history.state.focusPart, chain: history.state && history.state.chain}, leaving || viewState()), ""); } catch (_e) { /* ignore */ }
     // Going nowhere new (Whole project from the whole project, Escape with nothing chosen) is not a new entry.
     var current = history.state, same = current && current.pm && current.selected === snap.selected &&
       current.focusPart === snap.focusPart && current.picked === snap.picked;
@@ -1229,6 +1243,7 @@
   }
   window.addEventListener("popstate", function (event) {
     var snap = event.state;
+    clearTimeout(cameraTimer);  // a camera write still pending belongs to the entry just left
     var epoch = navigation();
     if (!snap || !snap.pm) { state.picked = null; select(null, {history: false}); state.focusPart = ROOT; fitProject(true); live.textContent = "Whole project"; return; }
     ensureChain(snap.chain || []).then(function () {
@@ -1331,14 +1346,16 @@
   });
   zoomIn.addEventListener("click", function () { release(); zoomAt(ZOOM_STEP, size.w / 2, size.h / 2); rememberCamera(); });
   zoomOut.addEventListener("click", function () { release(); zoomAt(1 / ZOOM_STEP, size.w / 2, size.h / 2); rememberCamera(); });
-  function wholeProject() { navigation(); state.focusPart = ROOT; state.picked = null; select(null, {history: false}); remember(); fitProject(); live.textContent = "Whole project"; }
+  function wholeProject() {
+    var leaving = viewState();
+    navigation(); state.focusPart = ROOT; state.picked = null; select(null, {history: false}); remember(false, leaving); fitProject(); live.textContent = "Whole project";
+  }
   fitAll.addEventListener("click", wholeProject);
   // One level up from where the reader is: from a result to its part, from a part to the part around it.
   function upOneLevel() {
     if (state.selected) {
       var home = model.results.get(state.selected) && model.results.get(state.selected).home;
-      select(null, {history: false});
-      if (home) flyToPart(home).catch(report);
+      if (home) leaveFor(home).catch(report); else select(null, {history: false});
       return;
     }
     var here = state.focusPart && state.focusPart !== ROOT && part(state.focusPart) || viewPart();
