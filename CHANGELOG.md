@@ -41,6 +41,15 @@ date when the release is tagged.
 
 ### Changed
 
+- **Formalize without claims.** Workers run `work list` and `work context`
+  without `--lean-root`, and the lead dispatches each leaf's `work list` item.
+  The skill suggests habits for sharing a project without claims: a
+  `work/<article_id>` branch per leaf, which Git refuses twice in one clone,
+  and landing as a fast-forward that rebases and rechecks when the shared
+  branch moved. A worker that has landed may take its next leaf itself,
+  preferring one its landing unlocked, in place of packages of leaves the lead
+  confirmed. Claims are used only when the user asks for them or another
+  session already does (#429).
 - **Search index size.** `dependencies/index.json` no longer repeats links the
   explorer doesn't read. A row whose route the explorer opens drops its context
   `url`, and only container rows keep `data_url`, since every page names its

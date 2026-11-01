@@ -718,7 +718,7 @@ def test_formalize_copies_the_lead_s_packages_into_each_worktree(repo_root: Path
 
     formalize = " ".join((repo_root / "skills/formalize/SKILL.md").read_text(encoding="utf-8").split())
     for required in (
-        "Give each subagent the lead's checkout path,",
+        "Give each subagent the lead's checkout path",
         "the lead runs no Lake command in its own checkout while workers may start",
         "copies the lead's packages into its worktree, never as a symbolic link",
         "`mkdir -p .lake && cp -Rc <LEAD>/.lake/packages .lake/` (`cp -R --reflink=auto` on Linux)",
