@@ -335,6 +335,13 @@ def test_labels_appear_only_where_they_fit() -> None:
     const row = {x: 20, y: 60, w: 300, h: 200, unit: 1, band: 52, pad: 12, depth: 2, parent: 'view'};
     const [away, kept] = L.placeLabels({view, row}, still, pinned);
     assert(away.y < 0 && kept.y === 60 && !kept.overlay, JSON.stringify([away, kept]));
+    // The pinned part and the parts around it are named in the pin, so their titles are not held even when they end above
+    // the centre, as a one-row part does when a result in it arrives; a part beside it keeps its title.
+    const region = {x: 0, y: -300, w: 900, h: 550, unit: 1, band: 52, pad: 12, depth: 1, parent: null};
+    const small = {x: 20, y: -250, w: 400, h: 300, unit: 1, band: 52, pad: 12, depth: 2, parent: 'region'};
+    const beside = {x: 440, y: -250, w: 400, h: 400, unit: 1, band: 52, pad: 12, depth: 2, parent: 'region'};
+    const unheld = L.placeLabels({region, small, beside}, still, Object.assign({pinned: 'small'}, pinned));
+    assert.deepEqual(unheld.filter(label => label.y >= 40).map(label => label.id), ['beside'], JSON.stringify(unheld));
     // Held titles nested three deep stack in order, none over another.
     const outer = {x: 0, y: -400, w: 300, h: 900, unit: 1, band: 52, pad: 12, depth: 1, parent: null};
     const middle = {x: 10, y: -300, w: 280, h: 700, unit: 1, band: 52, pad: 12, depth: 2, parent: 'outer'};

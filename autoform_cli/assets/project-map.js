@@ -396,7 +396,7 @@
     })(part(ROOT));
     // Titles keep below the pinned title, in the room the layout module leaves for it.
     var pinnedPart = pinned(), slots = L.placeLabels(labelBoxes, cornerCamera(),
-      pinnedPart ? {w: size.w, h: size.h, top: L.constants.TITLE_ROOM} : size, closed);
+      pinnedPart ? {w: size.w, h: size.h, top: L.constants.TITLE_ROOM, pinned: pinnedPart.id} : size, closed);
     communities.forEach(function (record) { if (drawCommunity(record)) drawn.add(record.id + "#results"); });
     drawLinks();
     drawLabels(slots);

@@ -650,10 +650,11 @@
   // its box's content, so a descendant's label under it moves just below it, or goes when its box
   // has no room there. A box running above the stage's top (`stage.top`, below whatever the page
   // pins there) keeps its title in view there, as an overlay, while the box has room for it, unless
-  // it holds the stage's centre. Labels come shallowest first. A box in `closed` (an object keyed by id) shows nothing inside, so its
+  // it holds the stage's centre or is the pinned part (`stage.pinned`) or around it. Labels come shallowest first. A box in `closed` (an object keyed by id) shows nothing inside, so its
   // title may wrap down the whole box: `lines` is the most it can take.
   function placeLabels(boxes, camera, stage, closed) {
-    var labels = [], placed = {}, top = stage.top || 0;
+    var labels = [], placed = {}, top = stage.top || 0, pinned = {};
+    for (var at = stage.pinned; at && boxes[at]; at = boxes[at].parent) pinned[at] = true;
     Object.keys(boxes).sort(function (a, b) { return (boxes[a].depth || 0) - (boxes[b].depth || 0) || byKey(a, b); }).forEach(function (id) {
       var box = boxes[id];
       var x = (box.x - camera.x) * camera.z, y = (box.y - camera.y) * camera.z;
@@ -672,9 +673,9 @@
         Object.assign(label, {y: at, band: need, overlay: true, lines: 1, detail: "title"});
         return true;
       }
-      // A box around the stage's centre holds the view, which the page's trail and pinned title name, so only the boxes
-      // beside it keep their titles at the top.
-      var around = x <= stage.w / 2 && x + w >= stage.w / 2 && y <= stage.h / 2 && y + h >= stage.h / 2;
+      // The pinned part, the parts around it and the box around the stage's centre hold the view, which the page's trail
+      // and pinned title name, so only the boxes beside it keep their titles at the top.
+      var around = pinned[id] || x <= stage.w / 2 && x + w >= stage.w / 2 && y <= stage.h / 2 && y + h >= stage.h / 2;
       if (y < top && !around && !moveTo(top)) return;
       // Outermost first, so a title moved below one cover is then checked against the covers inside it.
       var chain = [];
