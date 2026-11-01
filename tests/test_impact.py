@@ -2146,22 +2146,28 @@ def test_import_closure_scope_refuses_an_uncaptured_file_in_a_library_tree(
 
 
 @pytest.mark.parametrize(
-    ("checkout", "libraries"),
+    ("checkout", "libraries", "path_package"),
     [
         # Lake builds the modules of a Git submodule in a library's tree.
-        ("Demo/Sub", ""),
+        ("Demo/Sub", "", None),
         # A root this parser cannot read sends the library walk through .lake/packages,
         # which must still read each package, a clone.
-        (".lake/packages/D", '\n[[lean_lib]]\nname = "Odd"\nroots = ["Odd name"]\nglobs = ["Odd.+"]\n'),
+        (".lake/packages/D", '\n[[lean_lib]]\nname = "Odd"\nroots = ["Odd name"]\nglobs = ["Odd.+"]\n', None),
+        # A path package is the user's own checkout, whose submodules Lake builds.
+        ("vendor/P/P/Sub", "", "vendor/P"),
     ],
 )
 def test_import_closure_scope_reads_a_checkout_lake_loads_modules_from(
-    tmp_path: Path, monkeypatch, checkout: str, libraries: str
+    tmp_path: Path, monkeypatch, checkout: str, libraries: str, path_package: str | None
 ) -> None:
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _closure_lean_root(tmp_path)
     with (lean_root / "lakefile.toml").open("a", encoding="utf-8") as lakefile:
         lakefile.write(libraries)
+    if path_package is not None:
+        (lean_root / "lake-manifest.json").write_text(
+            json.dumps({"packages": [{"type": "path", "dir": path_package, "name": "P"}]}), encoding="utf-8"
+        )
     (lean_root / checkout / "D").mkdir(parents=True)
     (lean_root / checkout / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
     (lean_root / checkout / "D" / "X.lean").write_text("import Demo.B\n", encoding="utf-8")

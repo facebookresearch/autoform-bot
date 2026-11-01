@@ -558,12 +558,16 @@ def _outside_sources(
                 real = os.path.realpath(directory)
                 depth = len(folder.relative_to(top).parts)
                 # A nested checkout, such as a worktree with its own `.lake`, is another
-                # source tree, as the captured inventory treats it; a package root is a clone.
-                # In a library tree it is read, since Lake builds a Git submodule's modules,
-                # unless a hidden folder, which no unquoted module name reaches, holds it.
-                checkout = (packages_at is None or depth > packages_at) and (".git" in names or ".git" in files)
-                if checkout and packages_at is None:
-                    checkout = any(part.startswith(".") for part in (top.name, *folder.relative_to(top).parts))
+                # source tree, as the captured inventory treats it. Lake clones a dependency
+                # into the packages directory without its submodules, so one below a clone
+                # is skipped. A library tree or a path package is the user's own checkout,
+                # whose Git submodules Lake builds, so there a checkout is read unless a
+                # hidden folder, which no unquoted module name reaches, holds it.
+                nested = ".git" in names or ".git" in files
+                if packages_at:
+                    checkout = nested and depth > packages_at
+                else:
+                    checkout = nested and any(part.startswith(".") for part in (top.name, *folder.relative_to(top).parts))
                 if real in seen or checkout:
                     names[:] = []
                     continue

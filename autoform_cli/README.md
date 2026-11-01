@@ -890,11 +890,11 @@ so `affected_articles` may list more articles and `article_local` is always
 `unresolved_articles` leaves out a name the source index places outside
 `affected_modules` but lists one in a file no `lean_lib` builds. An uncaptured
 `.lean` file that may import a candidate, in a root library's module tree or a
-dependency package (outside its `.lake` and nested checkouts), makes the command
-exit 2 and ask for the default scope; use the default scope too when a component
-of a module name is a common word. In either scope, and unlike `work impact`,
-the probe also refuses a loaded module that no `lean_lib` builds, as from a
-leftover `.olean`.
+dependency package (outside its `.lake`, and in a clone outside nested
+checkouts), makes the command exit 2 and ask for the default scope; use the
+default scope too when a component of a module name is a common word. In either
+scope, and unlike `work impact`, the probe also refuses a loaded module that no
+`lean_lib` builds, as from a leftover `.olean`.
 
 JSON uses `autoform-module-import-impact/v1`, with `module_graph_revision` and
 `module_scope` (`loaded-root-library-graph` or `import-closure`). `article` is
