@@ -223,7 +223,7 @@ def test_canonical_statement_is_the_span_the_audit_and_the_box_read(
     graph = load_graph(blueprint)
     node = graph.nodes["basics/result"]
     codes = {finding.code for finding in audit_blueprint(blueprint).findings}
-    assert canonical_statement(graph, node) == statement
+    assert canonical_statement(node) == statement
     assert statement_and_notes(publishable_article(node.path.read_text(encoding="utf-8"))[0])[0] == statement
     assert not codes & {"missing-statement-text", "empty-statement-text", "placeholder-statement-text"}
 
@@ -241,7 +241,7 @@ def test_the_statement_box_shows_exactly_the_approved_statement(tmp_path: Path) 
     )
 
     graph = load_graph(blueprint)
-    statement = canonical_statement(graph, graph.nodes["basics/result"])
+    statement = canonical_statement(graph.nodes["basics/result"])
     files = render._captured_files(render._capture_blueprint(blueprint)[0], blueprint)
     site = render._publication(graph, blueprint, files, destination=blueprint, sources_base=None)
     assert site.statements["basics/result"][0] == statement
