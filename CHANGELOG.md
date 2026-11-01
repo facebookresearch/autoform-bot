@@ -100,11 +100,15 @@ date when the release is tagged.
   pushing, goes to the `origin` branch `handoff/<article_id>`, which the next
   worker to take the leaf continues. With claims, no message grants
   ownership; none completes a leaf (#434, #532).
+- **Setup donor.** When the user names an existing Lake project or packages
+  folder, Setup copies each package the new project locks that the donor holds
+  clean at that revision, copy-on-write where the file system supports it and
+  never as a symbolic link, before any Lake command fetches the rest (#275).
 - **Formalize worktrees.** A new worktree gets a copy of the lead's
-  `.lake/packages`, copy-on-write and never a symbolic link, before its first
-  build. `lake exe cache get` then downloads nothing; before, each worktree
-  re-cloned about 0.5 GB of packages and unpacked another 7.5 GB Mathlib build
-  (#275).
+  `.lake/packages`, copy-on-write where the file system supports it and never
+  a symbolic link, before its first build. `lake exe cache get` then downloads
+  nothing; before, each worktree re-cloned about 0.5 GB of packages and
+  unpacked another 7.5 GB Mathlib build (#275).
 - **Generated import roots.** `work import-impact` reports `module_generated`
   when the repository's Git attributes set `linguist-generated` on MODULE's
   file, or make it `true`, normally through a committed `.gitattributes` line
