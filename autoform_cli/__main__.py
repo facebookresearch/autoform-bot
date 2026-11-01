@@ -1824,7 +1824,7 @@ def _skeleton(args: argparse.Namespace) -> int:
         sys.stdout.writelines(report._json_pieces())
         sys.stdout.write("\n")
     else:
-        print(format_report(report, lean_root=args.lean_root), end="")
+        print(format_report(report), end="")
     return 0 if report.clean else 1
 
 

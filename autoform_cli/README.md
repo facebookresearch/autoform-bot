@@ -64,9 +64,8 @@ link checks and render's link rewriting take everything after it as code
 (below), so `check` warns when Autoform or the site reads a fence as left open,
 the site shows that page as typed (see
 [Validation](reference/validation-and-audit.md#validation)), and the audit
-reports `unclosed-code-fence`. Nothing reports a fence line inside an HTML
-comment, though render's link rewriting still reads it as one. The graph and an
-article's statement and sections
+reports `unclosed-code-fence`. A fence line inside an HTML comment opens no
+fence, in render too. The graph and an article's statement and sections
 read an unclosed fence as plain text, even where the page pairs its backticks
 with a later run as inline code, and a later bare line of its character at least
 as long closes it. Coverage files and the unpublished-folder link check read it
@@ -901,10 +900,12 @@ JSON uses `autoform-module-import-impact/v1`, with `module_graph_revision` and
 the selected article (`id`, `article_id`, `claim_target`). `claim_targets` holds
 only it and `module_claim_target`, `lean-module/<lowercase-slug>-<sha256[:16]>`,
 whose key is `module_claim_key`, or only it when `module_generated`: Git
-attributes, from the index or local attribute files, set `linguist-generated` on
-MODULE's file, or make it `true`. `affected_claim_targets` are downstream
-warnings, not ownership requirements; `claim_keys` and `affected_claim_keys`
-match the JSON of `autoform claim list --worker-id WORKER` given those targets.
+attributes from the index or the clone's `.git/info/attributes`, not the user's
+or the system's attribute files, set `linguist-generated` on MODULE's file, or
+make it `true`. It is `false` outside a Git work tree or when Git fails.
+`affected_claim_targets` are downstream warnings, not ownership requirements;
+`claim_keys` and `affected_claim_keys` match the JSON of
+`autoform claim list --worker-id WORKER` given those targets.
 `affected_articles` lists each article that names, or owns through the parent
 chain, a declaration in an affected module, with those `modules`, and
 `selected_affected` says whether the selected article is one.
@@ -1072,6 +1073,9 @@ article or chapter-card reading, with bounded maps, authored areas and global se
 Complete published statements, proofs and citations remain the reading content.
 The index `dependencies/index.json`, project payload `dependencies.json`, and
 other `dependencies/` payloads are internal to this viewer; their schemas may change.
+`dependencies/map/` is a second, standalone page, linked from the landing page:
+one zoomable map of the whole project, which loads `dependencies/map/data/` one
+level at a time and shows each result's statement from its article.
 A formal statement links to its canonical article or containing chapter card;
 legacy `#node=<id>`, view and filter links remain aliases, not a second viewer.
 A `lean:` declaration resolving to a repository permalink gets a source link;

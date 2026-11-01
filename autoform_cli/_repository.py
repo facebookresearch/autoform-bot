@@ -19,7 +19,7 @@ import hashlib
 import os
 import subprocess
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -271,13 +271,15 @@ def _normalize_remote(remote: str) -> str | None:
     return urlunsplit((parsed.scheme, netloc, path, "", ""))
 
 
-def git(root: str | Path, *arguments: str) -> str | None:
+def git(root: str | Path, *arguments: str, environment: Mapping[str, str] | None = None) -> str | None:
+    """Run Git in ``root``; ``environment`` adds variables to the stripped environment."""
+
     try:
         result = subprocess.run(
             ["git", *arguments],
             cwd=str(root),
             capture_output=True,
-            env=_git_environment(),
+            env={**_git_environment(), **(environment or {})},
             text=True,
             timeout=10,
             check=False,

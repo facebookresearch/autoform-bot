@@ -60,7 +60,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from markdown.treeprocessors import Treeprocessor
 
-from . import dag_viewer, graph_pages, graph_views, status
+from . import dag_viewer, graph_pages, graph_views, project_map, status
 from ._repository import detect_ref, detect_repository_url, repository_top_level, verify_repository_snapshot
 from ._tree_snapshot import (
     TreeChangedError,
@@ -262,6 +262,10 @@ MERMAID_LIBRARY = "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.
 LIVE_SCRIPT = "javascripts/blueprint-live.js"
 DAG_SCRIPT = dag_viewer.SCRIPT_PATH
 DAG_STYLE = dag_viewer.STYLE_PATH
+MAP_SCRIPT = "javascripts/project-map.js"
+MAP_STYLE = "stylesheets/project-map.css"
+MAP_PAGE = "dependencies/map/index.html"
+_TO_ROOT = "../" * MAP_PAGE.count("/")
 LOGO = "assets/autoform.svg"
 #: The files render writes into every site, whatever the vault holds there.
 _ASSETS = (STYLESHEET, MERMAID_SCRIPT, MATHJAX_SCRIPT, LIVE_SCRIPT, DAG_SCRIPT, DAG_STYLE, LOGO)
@@ -777,6 +781,8 @@ def _site_paths(graph: Graph) -> tuple[str, ...]:
                 "SUMMARY.md",
                 *(_group_page(group).as_posix() for group in _group_nodes(graph)),
                 *graph_pages.graph_page_paths(graph, wiki_links=True),
+                *project_map.map_paths(),
+                MAP_SCRIPT, MAP_STYLE, MAP_PAGE,
                 *_ASSETS,
             }
         )
@@ -1103,7 +1109,6 @@ def _render_pages(
                 graph=graph,
                 statuses=statuses,
                 coverage=coverage,
-                groups=groups,
                 group_pages=group_pages,
                 page=overview,
                 destination=destination,
@@ -1130,7 +1135,6 @@ def _render_pages(
             narrative=narrative,
             blueprint=blueprint,
             repo_root=repo_root,
-            destination=destination,
             node_sources=node_sources,
             containers=containers,
             statements=site.statements,
@@ -1223,6 +1227,15 @@ def _render_pages(
         (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
         (DAG_SCRIPT, explorer_script),
         (DAG_STYLE, dag_viewer._STYLE),
+        # The layout module ships ahead of the controller in one file, so the page makes one request for both.
+        (MAP_SCRIPT, _static_asset("project-map-layout.js") + "\n" + _static_asset("project-map.js")),
+        (MAP_STYLE, _static_asset("project-map.css")),
+        # The whole-project map: one standalone page over the per-level files beside it.
+        (MAP_PAGE, project_map.render_page(
+            title=graph_views.group_title(graph, "roadmap"), map_base=_TO_ROOT + project_map.MAP_DIRECTORY + "/",
+            routes=_TO_ROOT + graph_pages.SEARCH_INDEX, home=_TO_ROOT, script=_TO_ROOT + MAP_SCRIPT,
+            style=_TO_ROOT + MAP_STYLE, mathjax=_TO_ROOT + MATHJAX_SCRIPT,
+        )),
         (LOGO, _logo()),
     ):
         asset = destination / relative
@@ -2339,7 +2352,6 @@ def _render_landing_page(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     coverage: CoverageSummary,
-    groups: dict[str, list[str]],
     group_pages: dict[str, Path],
     page: Path,
     destination: Path,
@@ -2372,6 +2384,8 @@ def _render_landing_page(
         ready_href=f"{book_href}#view=list&status=can_state,can_prove" if book_href else None,
         # Without a roadmap contents page the book starts here.
         book_href=None if book == Path("README.md") else book_href,
+        # The whole-project map sits beside the book.
+        map_href=_as_published(relative_link(destination / MAP_PAGE, page, ".html")) if book else None,
     )
     next_up = _next_target(
         graph,
@@ -2466,6 +2480,7 @@ def _render_hero(
     rail: bool = False,
     ready_href: str | None = None,
     book_href: str | None = None,
+    map_href: str | None = None,
 ) -> str:
     """Open with the project's name, its one-line claim, and where it stands.
 
@@ -2475,7 +2490,8 @@ def _render_hero(
     blueprint has to answer. The explorer's reading pane (*rail*) gets the
     two progress figures only, and module inventories as one plain line under
     them. With *ready_href* the ready figure links the list of what it counts,
-    and *book_href* puts the way into the book right under the claim.
+    and *book_href* puts the way into the book right under the claim, with
+    *map_href*'s way into the whole-project map beside it.
     """
     leaves = _countable(graph)
     selected = {node_id: statuses[node_id] for node_id in leaves}
@@ -2534,6 +2550,9 @@ def _render_hero(
             return f'<a class="bp-figure bp-figure-link" href="{html.escape(ready_href, quote=True)}">{inner}</a>'
         return f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">{inner}</div>'
 
+    ways_in = (f'<a class="bp-intro-book" href="{html.escape(book_href, quote=True)}">Start reading</a>' if book_href else "") + (
+        f'<a class="bp-intro-map" href="{html.escape(map_href, quote=True)}">Open the map</a>' if map_href else ""
+    )
     sentence = "No statements yet." if not total else "Every statement is fully proved." if done == total else ""
     stats = "".join(figure(*entry) for entry in figures)
     inventories = f"{inventory_count:,} module {'inventory' if inventory_count == 1 else 'inventories'}"
@@ -2552,11 +2571,7 @@ def _render_hero(
         + f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
         + (f'<p class="bp-hero-lead">{lead}</p>' if lead else "")
         # In its own block: Markdown breaks an inline link between blocks apart.
-        + (
-            f'<div><a class="bp-intro-book" href="{html.escape(book_href, quote=True)}">Start reading</a></div>'
-            if book_href
-            else ""
-        )
+        + (f"<div>{ways_in}</div>" if ways_in else "")
         + (f'<p class="bp-hero-status">{sentence}</p>' if sentence else "")
         + (f'<div class="bp-hero-figures">{stats}</div>' if stats else "")
         + (f'<p class="bp-hero-counts">{inventories}</p>' if rail and inventory_count else "")
@@ -3140,7 +3155,6 @@ def _render_chapter(
     narrative: str | None,
     blueprint: Path,
     repo_root: Path,
-    destination: Path,
     node_sources: dict[Path, str],
     containers: frozenset[str],
     statements: dict[str, tuple[str, str]],
@@ -3162,9 +3176,7 @@ def _render_chapter(
             used_by=used_by,
             linker=linker,
             links=links,
-            page=page,
             repo_root=repo_root,
-            destination=destination,
             statements=statements,
             reviews=reviews,
         )
@@ -3518,9 +3530,7 @@ def _render_environment(
     used_by: dict[str, list[str]],
     linker: SourceLinker,
     links: Mapping[str, str],
-    page: Path,
     repo_root: Path,
-    destination: Path,
     statements: dict[str, tuple[str, str]],
     reviews: dict[str, str],
 ) -> tuple[str, int, list[str]]:
@@ -4458,7 +4468,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-landing-intro.bp-landing-intro .bp-hero-coverage {{ margin-top: 6px; font-size: 12px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero-coverage-link {{ margin-left: 0; }}
-.bp-landing-intro.bp-landing-intro .bp-intro-book {{
+.bp-landing-intro.bp-landing-intro .bp-intro-book,
+.bp-landing-intro.bp-landing-intro .bp-intro-map {{
   display: inline-block;
   margin-top: 10px;
   color: var(--bp-link);
@@ -4466,7 +4477,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-weight: 600;
   text-decoration: none;
 }}
-.bp-intro-book::after {{ content: " →"; }}
+.bp-intro-book::after, .bp-intro-map::after {{ content: " →"; }}
+.bp-intro-book + .bp-intro-map {{ margin-left: 16px; }}
 .bp-landing-intro.bp-landing-intro .bp-next-target {{ margin: 14px 0 0; padding: 10px 12px; }}
 .bp-landing-intro.bp-landing-intro .bp-next-title {{ font-size: 14px; font-weight: 600; }}
 .bp-landing-intro.bp-landing-intro .bp-next-why,
