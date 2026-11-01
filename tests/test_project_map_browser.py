@@ -153,3 +153,4 @@ def test_one_click_picks_a_region_in_place_and_a_second_opens_it(webkit_browser:
         # The region's results are on the same map now, with their titles, and Analysis stays in view below.
         playwright.expect(page.locator('.pm-card[data-result^="algebra/"]')).to_have_count(2)
         playwright.expect(page.locator(".pm-trail li")).to_have_text(["Fixture library", "Algebra"])
+# fix run 2
