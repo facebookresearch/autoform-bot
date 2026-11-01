@@ -22,7 +22,7 @@ date when the release is tagged.
   overview draws no other links. A second click goes inside, and Up or Escape
   goes back a level. On a narrow screen the map takes the width, with the
   reading pane under it. The data loads one level at a time from
-  `dependencies/map/data/` (#517).
+  `dependencies/map/data/` (#517, #545).
 
 ### Changed
 
