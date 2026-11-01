@@ -81,7 +81,6 @@ _STATEMENT_SECTION = "depends on"
 _PROOF_SECTION = "proof depends on"
 _SOURCES_SECTION = "sources"
 ATLAS_SCHEMA = "autoform-atlas/v1"
-_MAX_ATLAS_BYTES = 1_000_000
 IMPLEMENTATION_NOTES_DIR = ".implementation-notes"
 
 
@@ -415,13 +414,11 @@ def _atlas_assignments(
         if not stat.S_ISREG(os.lstat(path).st_mode):
             return {}, ["ignored, since it is not a regular file inside the blueprint"]
         with path.open("rb") as handle:
-            raw = handle.read(_MAX_ATLAS_BYTES + 1)
+            raw = handle.read()
     except FileNotFoundError:
         return {}, []
     except OSError as error:
         return {}, [f"ignored, since it cannot be read: {error.strerror}"]
-    if len(raw) > _MAX_ATLAS_BYTES:
-        return {}, [f"ignored, since it exceeds {_MAX_ATLAS_BYTES} bytes"]
     try:
         payload = json.loads(raw)
     except (ValueError, RecursionError) as error:

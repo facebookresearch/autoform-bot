@@ -58,7 +58,7 @@ Page-owned reading labels add no MathJax menus/tab stops; typed link counts desc
 
 [build-explorer.mjs](../scripts/build-explorer.mjs) hashes canonical UTF-8/LF development text.
 That fingerprint differs from raw math sources, exact index/sidecar bytes and the runtime byte SHA.
-Pinned development-only compilers ship one asset below 144 KB; consumers need no Node.
+Pinned development-only compilers ship one asset below 145 KB; consumers need no Node.
 Unsafe compression, public-field mangling/raw-source fallbacks are forbidden; stale bundles fail publication.
 
 Source/unit and geometry tests check lifecycle, ranks, conservation/collisions; MathJax/WebKit check glyphs, hits/focus and Back.

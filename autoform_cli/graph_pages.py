@@ -11,12 +11,12 @@ source of graph state.
 from __future__ import annotations
 
 import html
-from collections.abc import Callable, Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path, PurePath
 from urllib.parse import quote
 
-from . import dag_viewer
+from . import dag_viewer, project_map
 from .graph import Graph
 from .graph_views import (
     FLATTENED_ROLES,
@@ -120,6 +120,7 @@ def write_graph_pages(
     source_paths: Mapping[str, str | PurePath] | None = None,
     unavailable_source_ids: Iterable[str] = (),
     warnings_out: list[str] | None = None,
+    book_order: Sequence[str] = (),
 ) -> tuple[Path, ...]:
     """Write project, chapter, nested-scope, and shared full-explorer pages.
 
@@ -134,6 +135,8 @@ def write_graph_pages(
     and formal dependencies are unchanged; no authored file is reopened here.
     ``unavailable_source_ids`` forwards already found publication omissions,
     preserving the published articles as possible incoming reference targets.
+    ``book_order`` lists node ids in the book's reading order; the search index
+    follows it, and nodes it leaves out keep their dependency order after it.
     """
     destination = Path(destination).resolve()
     groups = group_nodes(graph)
@@ -146,6 +149,10 @@ def write_graph_pages(
     written: list[Path] = []
 
     complete = full_view(graph, statuses)
+    if book_order:
+        # Search, the outline and Results read the book's order, not the DAG's.
+        rank = {node_id: index for index, node_id in enumerate(book_order)}
+        complete = replace(complete, nodes=tuple(sorted(complete.nodes, key=lambda node: rank.get(node.id, len(rank)))))
     contexts = _publication_contexts(
         graph, destination, (project_page, full_page, chapter_pages, scope_pages),
     )
@@ -184,6 +191,10 @@ def write_graph_pages(
         search_index, complete, context_links=context_links, metadata=metadata, include_relations=True,
         sha256_out=index_digests if captured_sources is not None else None, warnings_out=warnings_out,
     )
+    # The whole-project map reads the same records and typed relations, one level per file.
+    # Data beside the search index, not pages: like the index, these files are not among the pages returned.
+    map_records, map_relations = project_map.records_from_view(complete, metadata)
+    project_map.write_project_map(destination / project_map.MAP_DIRECTORY, project_map.build_project_map(map_records, map_relations))
     if captured_sources is not None:
         references = dag_viewer.extract_wiki_links(
             complete, captured_sources=captured_sources, source_paths=source_paths, metadata=metadata,

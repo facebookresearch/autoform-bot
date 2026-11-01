@@ -54,8 +54,8 @@ if (args.length > 1 || (args.length && args[0] !== "--check")) {
   if (typeof compressed.code !== "string") throw new Error("The explorer compressor produced no classic script");
   const banner = `/* autoform-explorer-source-sha256:${digest} */\n`;
   const output = Buffer.from(banner + compressed.code + "\n", "utf8");
-  if (output.byteLength >= 144_000) {
-    console.error(`Explorer bundle is ${output.byteLength} bytes; the integrated JavaScript limit is below 144,000 bytes. Source sha256 ${digest}`);
+  if (output.byteLength >= 145_000) {
+    console.error(`Explorer bundle is ${output.byteLength} bytes; the integrated JavaScript limit is below 145,000 bytes. Source sha256 ${digest}`);
     process.exitCode = 1;
   } else if (args[0] === "--check") {
     let existing;

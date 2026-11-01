@@ -34,7 +34,8 @@ from pathlib import Path, PurePosixPath
 
 import tomli
 
-from .. import lean_probe, skeleton
+from .. import lean_probe
+from .._managed_output import output_identity, remove_output, replace_outputs, stage_output
 from ..lean_probe import SkeletonError, lean_libraries
 from ..project.catalog import canonical_lean_toolchain
 from .declarations import ProbeOutputError, classify, parse_probe_output, starts_with_module
@@ -132,12 +133,10 @@ def render_library_probe(modules: Sequence[str]) -> str:
     names = sorted(set(modules))
     if not names:
         raise GenerateError("the indexed libraries hold no Lean module")
-    template = (Path(__file__).parent.parent / "probes" / "library_probe.lean").read_text(encoding="utf-8")
-    return template.format(
+    return lean_probe.render_probe_template(
+        "library_probe.lean",
         imports="\n".join(f"import {module}" for module in names),
         marker=LIBRARY_MARKER,
-        output_env=lean_probe.PROBE_OUTPUT_ENV,
-        output_limit=lean_probe.DEFAULT_PROBE_OUTPUT_LIMIT,
         modules=_module_set(names),
     )
 
@@ -178,14 +177,14 @@ def library_sources(root: Path, libraries: Sequence[str] = ()) -> LibrarySources
             base = PurePosixPath(target.src_dir.resolve().relative_to(root).as_posix())
         except ValueError:
             raise GenerateError(f"the source directory of {target.name} is outside the package") from None
-        selecting = [_glob(glob, target.name) for glob in target.globs]
+        selecting = [_glob(glob, target.name) for glob in target.globs or ()]
         for module, mode in selecting:
             if mode != "+" and not (target.src_dir / f"{module.replace('.', '/')}.lean").is_file():
                 raise GenerateError(f"lean_lib {target.name}: module {module} has no source file")
         for module_root in target.roots:
             directory = (base / module_root.replace(".", "/")).as_posix()
             prefixes[directory] = "" if base == PurePosixPath(".") else f"{base.as_posix()}/"
-            if selecting:
+            if target.globs is not None:
                 globs.setdefault(directory, []).extend(selecting)
     source_dirs = tuple(sorted(prefixes))
     digests = _sources(root, source_dirs, GenerateError)
@@ -397,17 +396,17 @@ def write_index(root: str | Path, generated: Generated) -> Path:
             if not stat.S_ISREG(mode):
                 raise GenerateError(f"{INDEX_FILE} exists and is not a regular file")
             previous = True
-        before = skeleton._output_identity(destination)
-        stage = skeleton._stage_output(destination, generated.data.decode("utf-8"))
+        before = output_identity(destination)
+        stage = stage_output(destination, generated.data.decode("utf-8"))
         replacing = True
-        skeleton._replace_outputs([(destination, stage, before)])
+        replace_outputs([(destination, stage, before)])
     except (OSError, SkeletonError) as error:
         cause = "; ".join(error.issues) if isinstance(error, SkeletonError) else _reason(error)
         state = {True: "the previous one is unchanged", False: "none was written", None: "nothing was changed"}[previous]
         if replacing:
             # A failed install is rolled back, and the rollback can fail too: say what is there now.
             try:
-                same = skeleton._output_identity(destination) == before
+                same = output_identity(destination) == before
             except (OSError, SkeletonError):
                 same = False
             if not same:
@@ -416,7 +415,7 @@ def write_index(root: str | Path, generated: Generated) -> Path:
     finally:
         if stage is not None:
             with contextlib.suppress(OSError):
-                skeleton._remove_output(stage)
+                remove_output(stage)
     return destination
 
 

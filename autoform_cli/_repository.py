@@ -10,7 +10,7 @@ when the root lies in ``GITHUB_WORKSPACE``, and ask Git when the root is
 outside it or the variable is empty; ``repository_top_level`` places the root
 in its working tree. Every Git command here runs without the caller's ``GIT_*``
 variables, so the given directory alone selects the repository; the debrief
-store and ``autoform --version`` run ``git`` too.
+store, ``work import-impact`` and ``autoform --version`` run ``git`` too.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import hashlib
 import os
 import subprocess
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -271,13 +271,15 @@ def _normalize_remote(remote: str) -> str | None:
     return urlunsplit((parsed.scheme, netloc, path, "", ""))
 
 
-def git(root: str | Path, *arguments: str) -> str | None:
+def git(root: str | Path, *arguments: str, environment: Mapping[str, str] | None = None) -> str | None:
+    """Run Git in ``root``; ``environment`` adds variables to the stripped environment."""
+
     try:
         result = subprocess.run(
             ["git", *arguments],
             cwd=str(root),
             capture_output=True,
-            env=_git_environment(),
+            env={**_git_environment(), **(environment or {})},
             text=True,
             timeout=10,
             check=False,

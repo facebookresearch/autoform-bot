@@ -64,9 +64,8 @@ link checks and render's link rewriting take everything after it as code
 (below), so `check` warns when Autoform or the site reads a fence as left open,
 the site shows that page as typed (see
 [Validation](reference/validation-and-audit.md#validation)), and the audit
-reports `unclosed-code-fence`. Nothing reports a fence line inside an HTML
-comment, though render's link rewriting still reads it as one. The graph and an
-article's statement and sections
+reports `unclosed-code-fence`. A fence line inside an HTML comment opens no
+fence, in render too. The graph and an article's statement and sections
 read an unclosed fence as plain text, even where the page pairs its backticks
 with a later run as inline code, and a later bare line of its character at least
 as long closes it. Coverage files and the unpublished-folder link check read it
@@ -145,11 +144,12 @@ ledger under `sources/` draws a `check` warning and fails only `audit` (see
 
 A completed catalog records in `lean:` the full name of every public
 declaration the module writes with a declaration keyword, as the Lean source
-index records them. Names Lean generates, such as constructors, structure
-fields, derived or unnamed instances, and `@[ext]`, `@[simps]`, or
-`@[to_additive]` results, and declarations the index cannot see yet, behind
-`nonrec` or `meta` or written `class inductive`, go in the ledger as
-supporting entries, never in `lean:`; a `private` name never goes in `lean:`.
+index records them; a structure field the index records may go there instead
+of the ledger. Names Lean generates, such as constructors,
+derived or unnamed instances, and `@[ext]`, `@[simps]`, or `@[to_additive]`
+results, and declarations the index cannot see yet, behind `nonrec` or `meta`
+or written `class inductive`, go in the ledger as supporting entries, never in
+`lean:`; a `private` name never goes in `lean:`.
 A completed catalog may assert `statement: formalized` and `proof: formalized`
 once the complete module has been checked. Like any prerequisite, a catalog
 linked under `## Depends on` or `## Proof depends on` holds its dependents back
@@ -434,9 +434,12 @@ autoform check blueprint --lean-root .
 
 `check` validates the graph contract ([Validation](reference/validation-and-audit.md#validation)).
 With `--lean-root` it resolves names only in the project's own Lean files, not
-in Mathlib or other dependencies under `.lake`; when a name is not found, a note
-at the end of the output says that a shared library's declaration belongs in
-the article's implementation note.
+in Mathlib or other dependencies under `.lake`. When a declaration article
+names something the index does not read directly under a project structure,
+class or inductive type, such as its constructor, the error gives the type's
+`path:line`; when any other name is not found, a note at the end of the output
+says that a shared library's declaration belongs in the article's
+implementation note.
 
 With `--lean-root`, `check` also warns about each declaration of a usable,
 checked-out shared library (see `autoform library list`) whose own docstring
@@ -571,7 +574,9 @@ or stale artifacts fail the check); the check rewrites Lake's `.hash` files, so
 
 Generated companions, such as constructors, projections, recursors and matchers,
 fold onto the declaration the reader sees, so a structure appears once, as its
-`structure` block. A `partial def` in a trusted closure is refused, and so is an
+`structure` block. A field named in `lean:` keeps its own packet, whose
+signature carries the field's type and whose source is only its name. A
+`partial def` in a trusted closure is refused, and so is an
 ordinary declaration with no source of its own, such as one a metaprogram adds
 under an existing name; a theorem or axiom shows only its type, and an internal
 helper such as `f._unary` is marked `-- source not shown`. A `lean:` name is
@@ -588,12 +593,12 @@ A missing `lake`, a failed freshness check or helper build, a dependency library
 rooted at `Init`, `Lean`, or `Std`, or a blueprint or source tree that changes
 during extraction stops the whole command.
 
-`--output` records the `autoform-skeleton/v5` report, with no timestamp or
-absolute path. It names the target set, whether it covers every target or a
-`--node` selection, and the exact blueprint, by a hash of every article and the
-passage each cites; a report whose selection, articles and unresolved
-declarations disagree cannot be built. Only a report that selects every article,
-with the blueprint's `lean:` names as targets, is review evidence.
+`--output` records the `autoform-skeleton/v5` report, with no timestamp; only
+failure reasons quote absolute paths. It names the target set, whether it covers
+every target or a `--node` selection, and the exact blueprint, by a hash of
+every article and the passage each cites; a report whose selection, articles and
+unresolved declarations disagree cannot be built. Only a report selecting every
+article, with the blueprint's `lean:` names as targets, is review evidence.
 
 Run skeleton extraction only in a trusted checkout or an operating-system
 sandbox: Lake evaluates `lakefile.lean`, and the probe imports project code
@@ -602,6 +607,10 @@ check, the helper's build, and each probe have their own 600-second budget;
 `--timeout SECONDS` sets the helper's and each probe's. At most eight probes
 run at a time. These limits are resource controls, not a security or
 authenticity boundary.
+
+Each phase is named on stderr as it starts: `skeleton: probing <n> modules...`
+when Lean probes start, `skeleton: assembling...` once none runs (the build must
+still not change), and `skeleton: writing...` before `--output` or `--packets`.
 
 `--packets DIR` writes one comment-stripped packet per skeleton, named after
 its article and declaration, with a manifest of articles and hashes; a blind
@@ -895,18 +904,24 @@ declaration when one of its `lean:` names equals it or is a dotted prefix of it,
 so `affected_articles` may list more articles and `article_local` is always
 `false`; `affected_unowned_helpers` keep the parent-chain rule, and
 `unresolved_articles` leaves out a name the source index places outside
-`affected_modules`. A `.lean` file outside the captured sources, as in
-`.lake/packages` or a path dependency, that may import a candidate makes the
-command exit 2 and ask for the default scope; use the default scope too when a
-component of a module name is a common word.
+`affected_modules` but lists one in a file no `lean_lib` builds. A `.lean` file
+outside the captured sources, as in `.lake/packages` or a path dependency, that
+may import a candidate makes the command exit 2 and ask for the default scope;
+use the default scope too when a component of a module name is a common word. In
+either scope, and unlike `work impact`, the probe also refuses a loaded module
+that no `lean_lib` builds, as from a leftover `.olean`.
 
 JSON uses `autoform-module-import-impact/v1`, with `module_graph_revision` and
 `module_scope` (`loaded-root-library-graph` or `import-closure`). `article` is
 the selected article (`id`, `article_id`, `claim_target`). `claim_targets` holds
 only it and `module_claim_target`, `lean-module/<lowercase-slug>-<sha256[:16]>`,
-whose key is `module_claim_key`. `affected_claim_targets` are downstream
-warnings, not ownership requirements; `claim_keys` and `affected_claim_keys`
-match the JSON of `autoform claim list --worker-id WORKER` given those targets.
+whose key is `module_claim_key`, or only it when `module_generated`: Git
+attributes from the index or the clone's `.git/info/attributes`, not the user's
+or the system's attribute files, set `linguist-generated` on MODULE's file, or
+make it `true`. It is `false` outside a Git work tree or when Git fails.
+`affected_claim_targets` are downstream warnings, not ownership requirements;
+`claim_keys` and `affected_claim_keys` match the JSON of
+`autoform claim list --worker-id WORKER` given those targets.
 `affected_articles` lists each article that names, or owns through the parent
 chain, a declaration in an affected module, with those `modules`, and
 `selected_affected` says whether the selected article is one.
@@ -980,7 +995,9 @@ does not persist, pass `--worker-id` on every command. Leases expire after 1500
 seconds unless `--ttl` sets another length; renew well within that, and confirm
 a claim with `renew`, not `acquire`, which also succeeds on an expired or
 released lease. Acquire a whole set in one command (see the [claim
-contract](reference/claims-and-revisions.md#claim-contract)).
+contract](reference/claims-and-revisions.md#claim-contract)). `acquire --note
+TEXT` stores free text in each lease, `renew` keeps it, and `claim list` shows
+it as `note`; the key is absent, not empty, after an acquire without `--note`.
 
 Claims are fail-closed compare-and-swap leases under `refs/autoform-claims/` on
 the Git `origin`; pass `--repo` for another board. A failed acquire or renew
@@ -1072,6 +1089,9 @@ article or chapter-card reading, with bounded maps, authored areas and global se
 Complete published statements, proofs and citations remain the reading content.
 The index `dependencies/index.json`, project payload `dependencies.json`, and
 other `dependencies/` payloads are internal to this viewer; their schemas may change.
+`dependencies/map/` is a second, standalone page, linked from the landing page:
+one zoomable map of the whole project, which loads `dependencies/map/data/` one
+level at a time and shows each result's statement from its article.
 A formal statement links to its canonical article or containing chapter card;
 legacy `#node=<id>`, view and filter links remain aliases, not a second viewer.
 A `lean:` declaration resolving to a repository permalink gets a source link;

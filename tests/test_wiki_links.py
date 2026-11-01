@@ -383,32 +383,20 @@ def test_optional_asset_binds_exact_index_bytes_and_leaves_dependencies_and_stat
     }
 
 
-def test_oversized_optional_layer_is_explicitly_omitted_not_truncated_or_index_failing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(dag_viewer, "MAX_WIKI_LINK_BYTES", 500)
+def test_a_large_layer_is_published_whole(tmp_path: Path) -> None:
+    """No size cap: every reference is written, however many there are."""
     names = tuple(f"n{index}" for index in range(120))
     view = _view(*names)
     paths, sources, metadata = _inputs(*names)
     sources["n0"] = ("# First\n\n" + " ".join(f"[N]({name}.md)" for name in names[1:])).encode()
     links = dag_viewer.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
-    assert links.reason and "exceeds 500 bytes" in links.reason and links.references == ()
+    assert links.reason is None and links.references == tuple((0, index) for index in range(1, 120))
     warnings: list[str] = []
     output = tmp_path / "wiki-links.json"
     dag_viewer.write_wiki_links(output, links, index_sha256="a" * 64, warnings_out=warnings)
     payload = json.loads(output.read_bytes())
-    assert payload["availability"] == "unavailable" and payload["references"] == []
-    assert payload["reason"] and warnings and output.stat().st_size < 500
-
-    # The writer also protects callers supplying an already-derived layer.
-    warnings.clear()
-    dag_viewer.write_wiki_links(
-        output, dag_viewer.WikiLinks(tuple((index, index + 1) for index in range(120))),
-        index_sha256="b" * 64, warnings_out=warnings,
-    )
-    payload = json.loads(output.read_bytes())
-    assert payload["availability"] == "unavailable" and payload["references"] == []
-    assert "exceeds 500 bytes" in payload["reason"] and len(warnings) == 1
+    assert payload["availability"] == "complete" and len(payload["references"]) == 119
+    assert "reason" not in payload and warnings == []
 
 
 def _blueprint(tmp_path: Path) -> Path:

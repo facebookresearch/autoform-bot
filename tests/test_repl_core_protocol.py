@@ -206,7 +206,7 @@ def test_process_group_cleanup_escalates_and_reports_timeout(monkeypatch):
     )
     monkeypatch.setattr(
         process_group,
-        "_process_group_has_live_members",
+        "process_group_has_live_members",
         lambda process_group_id: next(live_results),
     )
     monkeypatch.setattr(
@@ -242,7 +242,7 @@ def test_process_group_cleanup_does_not_signal_an_all_zombie_group(monkeypatch):
     )
     monkeypatch.setattr(
         process_group,
-        "_process_group_has_live_members",
+        "process_group_has_live_members",
         lambda process_group_id: next(live_results),
     )
     monkeypatch.setattr(
@@ -267,7 +267,7 @@ def test_process_group_cleanup_refuses_a_pre_reaped_leader_with_live_members(
     process = SimpleNamespace(returncode=0)
     monkeypatch.setattr(
         process_group,
-        "_process_group_has_live_members",
+        "process_group_has_live_members",
         lambda process_group_id: True,
     )
     monkeypatch.setattr(
@@ -1417,7 +1417,7 @@ def test_header_check_reaps_descendants_after_success(tmp_path):
 
     assert _header_modules([sys.executable, "-c", script]) == ["Mathlib"]
     process_ids = json.loads(process_record.read_text())
-    assert not process_group._process_group_has_live_members(process_ids["group"])
+    assert not process_group.process_group_has_live_members(process_ids["group"])
 
 
 # Answers one frame, then waits for the next as the REPL does.

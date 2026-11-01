@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import tracemalloc
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -41,6 +42,13 @@ from autoform_cli.lean_probe import (
     _render_probe_helper,
     run_probe,
 )
+from autoform_cli._managed_output import (
+    _install_output,
+    _rename_no_replace,
+    remove_output,
+    replace_outputs,
+    stage_output,
+)
 from autoform_cli.skeleton import (
     DeclarationSkeleton,
     NodeSkeleton,
@@ -52,12 +60,8 @@ from autoform_cli.skeleton import (
     SkeletonError,
     UnresolvedTarget,
     _declaration,
-    _install_output,
-    _remove_output,
-    _rename_no_replace,
-    _replace_outputs,
-    _stage_output,
     _hash_module_files,
+    _json_utf8,
     _local_safety_issue,
     _without_comments,
     _probe_record_issue,
@@ -297,6 +301,82 @@ def _fake_report(tmp_path: Path, output: str | None = None) -> SkeletonReport:
             runner=lambda _probe, _root: output,
         )
     return extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
+
+
+def _shared_closure(root: Path, articles: dict[str, int], *, closure: int, size: int) -> tuple[Path, Path, str]:
+    """A project whose roots all trust one chain of definitions, its blueprint, and
+    what the probe says about them, written without Lean.
+
+    ``articles`` maps each article to how many roots it names. Each of the
+    ``closure`` definitions carries about ``size`` characters of kernel material,
+    with quotes, escapes, and characters beyond the Basic Multilingual Plane.
+    """
+
+    project = root / "project"
+    (project / "Synth").mkdir(parents=True)
+    (project / "lean-toolchain").write_text("leanprover/lean4:v4.32.2\n", encoding="utf-8")
+    (project / "lakefile.toml").write_text(
+        'name = "Synth"\ndefaultTargets = ["Synth"]\n\n[[lean_lib]]\nname = "Synth"\n', encoding="utf-8"
+    )
+    (project / "Synth.lean").write_text("import Synth.Main\n", encoding="utf-8")
+    roots = {stem: [f"{stem}_{index}" for index in range(count)] for stem, count in articles.items()}
+    names = [name for group in roots.values() for name in group]
+    lean = {stem: ", ".join(f"Synth.{name}" for name in group) for stem, group in roots.items()}
+    (project / "Synth" / "Main.lean").write_text(
+        "\n".join(["namespace Synth", "", *(f"theorem {name} : True := trivial" for name in names), "", "end Synth"])
+        + "\n",
+        encoding="utf-8",
+    )
+    blueprint = _blueprint(root, lean=lean)
+    source = blueprint / "sources" / "book.tex"
+    source.parent.mkdir()
+    source.write_text("Every root is \\emph{true}.\n", encoding="utf-8")
+    first = blueprint / "roadmap" / "basics" / f"{next(iter(articles))}.md"
+    _replace_source(first, "## Depends on", "## Sources\n\n- [book](../../sources/book.tex#L1-L1)\n\n## Depends on")
+
+    def table(kind: str, name: str, value: object) -> str:
+        return PROBE_MARKER + json.dumps({"table": kind, "name": name, "value": value})
+
+    pad = ('"q\\b" ℝ → 𝔽\t' * (size // 12 + 1))[:size]
+    lines: list[str] = []
+    for index in range(closure):
+        name = f"Synth.d{index}"
+        doc, code, comment = f"/-- Step {index} in ℝ. -/\n", f"def d{index} : ℝ → Type := ", "-- a step ⟨x⟩"
+        source_text = f"{doc}{code}{comment}\n  fun _ => Unit"
+        start = len(f"{doc}{code}".encode())
+        material = {"safety": "safe", "type": {"const": [name, pad]}, "value": {"bvar": index}}
+        entry = _trusted(
+            name, "def", [2 * index + 1, 2 * index + 2], f"{name} : ℝ →\n  Type",
+            depends=[f"Synth.d{index - 1}"] if index else [],
+            source=source_text,
+            source_comments=[[0, len(doc.encode()) - 1], [start, start + len(comment.encode())]],
+            module="Synth.Main",
+            semantic=json.dumps({"generated": [], "root": material}, separators=(",", ":"), ensure_ascii=False),
+        )
+        lines.append(table("trusted", name, dict(entry, semantic=[entry["semantic"]])))
+    semantic = _semantic({"type": {"sort": {"zero": None}}})
+    lines += [table("semantic", name, [semantic]) for name in ("Mathlib.Fake", "propext")]
+    lines.append(table("module", "Mathlib.Fake", [["olean", "Synth/Main.lean"]]))
+    for line, name in enumerate(names, start=3):
+        # Every other root's written statement holds a comment Lean could not place, so it is withheld.
+        statement = f"theorem {name} :\n    True" if line % 2 else f"theorem {name} : -- why\n    True"
+        lines.append(
+            PROBE_MARKER
+            + json.dumps(
+                {
+                    "root": f"Synth.{name}", "found": True, "kind": "theorem", "module": "Synth.Main",
+                    "range": [line, line], "signature": f"Synth.{name} : True", "raw_signature": f"Synth.{name} : True",
+                    "semantic_schema": SEMANTIC_SCHEMA, "semantic": [semantic], "lean_version": "4.32.2",
+                    "source": None, "source_comments": None, "statement_source": statement,
+                    "statement_comments": [] if line % 2 else None,
+                    "depends": [f"Synth.d{closure - 1}"], "trusted": [f"Synth.d{index}" for index in range(closure)],
+                    "assumed": ["Mathlib.Fake"], "boundary_modules": ["Mathlib.Fake"],
+                    "statement_assumed": ["Mathlib.Fake"], "statement_boundary_modules": ["Mathlib.Fake"],
+                    "axioms": ["propext"],
+                }
+            )
+        )
+    return project, blueprint, "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -889,7 +969,7 @@ def test_trusted_theorem_source_never_exposes_its_proof(tmp_path: Path) -> None:
 
     assert theorem.source is None
     assert ":= h" not in report.nodes[0].declarations[0].blind_text()
-    assert ":= h" not in format_report(report, lean_root=tmp_path / "project")
+    assert ":= h" not in format_report(report)
 
 
 def test_extraction_reports_names_the_sources_and_the_environment_lack(tmp_path: Path) -> None:
@@ -1789,10 +1869,32 @@ def test_report_bytes_are_pinned(tmp_path: Path) -> None:
     assert digest == "a28525d38295df4e9848c3d1334528a29478678f269272e487d8de98ec41b8e3"
 
 
+def _tree_digest(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            digest.update(path.relative_to(root).as_posix().encode() + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
+def test_shared_closure_outputs_are_pinned(tmp_path: Path) -> None:
+    # Streaming the report and packets must keep every byte, and so every hash, a reader recorded.
+    project, blueprint, output = _shared_closure(tmp_path, {"joint": 3, "single": 1}, closure=4, size=300)
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
+    out = tmp_path / "out"
+
+    write_packets(report, out / "packets", passages=out / "passages", report_path=out / "skeleton.json")
+    write_skeleton_report(report, tmp_path / "alone.json")
+
+    assert report.clean
+    assert _tree_digest(out) == "89ca807ef1aaf2dce369bc5a56699dd831aaa7e0cace3b1a4c2300f0b4b6a92d"
+    assert (tmp_path / "alone.json").read_text(encoding="utf-8") == report.to_json() + "\n"
+    assert (out / "skeleton.json").read_bytes() == (tmp_path / "alone.json").read_bytes()
+
+
 def test_report_serialization_fingerprints_each_declaration_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    report = _fake_report(tmp_path)
     calls: dict[str, int] = {"_fingerprint": 0, "_packet": 0, "_shared_tables": 0}
     for owner, name in (
         (DeclarationSkeleton, "_fingerprint"),
@@ -1806,12 +1908,52 @@ def test_report_serialization_fingerprints_each_declaration_once(
             return _original(*args, **kwargs)
 
         monkeypatch.setattr(owner, name, counted)
+    report = _fake_report(tmp_path)
 
     report.to_json()
     report.to_json()
 
-    # One meaning hash and one statement hash, one packet, and the tables built at construction.
-    assert calls == {"_fingerprint": 2, "_packet": 1, "_shared_tables": 0}
+    # Extraction makes one meaning hash and one statement hash; the packet is
+    # streamed once for its own hash and once in its article's; the tables are
+    # built at construction.
+    assert calls == {"_fingerprint": 2, "_packet": 2, "_shared_tables": 1}
+
+
+def test_writing_holds_no_whole_packet(tmp_path: Path) -> None:
+    # A large shared closure makes a packet gigabytes, so writing holds pieces of it, not all of it.
+    project, blueprint, output = _shared_closure(tmp_path, {"joint": 3}, closure=80, size=20000)
+    report = extract_skeletons(blueprint, lean_root=project, runner=lambda probe, root: output)
+    first, second, _ = report.nodes[0].declarations
+    assert all(item is other for item, other in zip(first.trusted, second.trusted, strict=True))
+
+    tracemalloc.start()
+    try:
+        write_packets(report, tmp_path / "packets", report_path=tmp_path / "skeleton.json")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    article = (tmp_path / "packets" / "basics" / "joint" / "article.lean").stat().st_size
+    assert peak < article / 3, (peak, article)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {},
+        [],
+        "",
+        {"b": [], "a": {}, "é": "\u2028", "A": ["\x00\x1f\x7f", "\"\\/", "𝔽 ℝ\t\n"]},
+        [["x", [], {"z": "1", "y": ["2", "3"]}], "\ud7ff\ue000\uffff"],
+    ],
+)
+def test_fingerprint_encoding_matches_json_dumps(value: object) -> None:
+    escaped: dict[str, bytes] = {}
+    expected = json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")
+
+    # Twice, so a string escaped once encodes the same from the memo.
+    assert b"".join(_json_utf8(value, escaped)) == expected
+    assert b"".join(_json_utf8(value, escaped)) == expected
 
 
 def test_report_record_edits_do_not_reach_the_report(tmp_path: Path) -> None:
@@ -1917,7 +2059,7 @@ def test_a_packet_manifest_that_cannot_be_decoded_is_refused(tmp_path: Path, dam
     packets = tmp_path / "packets"
     packets.mkdir()
     (packets / PACKET_MANIFEST).write_text(text, encoding="utf-8")
-    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform packet output"):
+    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform output"):
         write_packets(_fake_report(tmp_path), packets)
     assert (packets / PACKET_MANIFEST).read_text(encoding="utf-8") == text
 
@@ -1929,7 +2071,7 @@ def test_a_packet_manifest_whose_schema_is_not_a_string_is_refused(tmp_path: Pat
     text = json.dumps({"kind": "packets", "schema": schema, "packets": []})
     (packets / PACKET_MANIFEST).write_text(text, encoding="utf-8")
 
-    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform packet output"):
+    with pytest.raises(SkeletonError, match="refusing to overwrite non-Autoform output"):
         write_packets(_fake_report(tmp_path), packets)
     assert (packets / PACKET_MANIFEST).read_text(encoding="utf-8") == text
 
@@ -1975,7 +2117,7 @@ def test_an_incoherent_report_cannot_be_constructed(tmp_path: Path, issue: str) 
 def test_text_report_quotes_the_sources_a_reader_must_trust(tmp_path: Path) -> None:
     report = _fake_report(tmp_path)
 
-    text = format_report(report, lean_root=tmp_path / "project")
+    text = format_report(report)
 
     assert text.startswith("== basics/determined · theorem Skel.observation_determined\n")
     assert "   trusts 3 local declarations, 11 lines to read; the declaration itself spans 4 lines · skeleton " in text
@@ -2114,7 +2256,7 @@ def test_cli_reports_unsafe_packet_output_without_a_traceback(
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "refusing to overwrite non-Autoform packet output" in captured.err
+    assert "refusing to overwrite non-Autoform output" in captured.err
 
 
 def test_cli_rejects_a_report_path_inside_the_packet_tree(tmp_path: Path, capsys) -> None:
@@ -2152,7 +2294,62 @@ def test_cli_publishes_report_and_packet_trees_together(
     assert (passages / PACKET_MANIFEST).is_file()
     assert json.loads(output.read_text(encoding="utf-8"))["unresolved"] == []
     assert list(tmp_path.glob(".*.autoform-*")) == []
-    assert capsys.readouterr().err == ""
+    assert capsys.readouterr().err == "skeleton: probing 1 module...\nskeleton: assembling...\nskeleton: writing...\n"
+
+
+def test_cli_names_each_phase_on_stderr_as_it_starts(tmp_path: Path, capsys, monkeypatch) -> None:
+    project = _project(tmp_path)
+    blueprint = _blueprint(tmp_path, lean={"determined": "Skel.observation_determined"})
+    during_probe: list[str] = []
+
+    def probe(program: str, lean_root: Path) -> str:
+        during_probe.append(capsys.readouterr().err)
+        return _fake_probe_output()
+
+    _fake_default_probe(monkeypatch, probe)
+    output = tmp_path / "skeleton.json"
+
+    assert main(["skeleton", str(blueprint), "--lean-root", str(project), "--output", str(output)]) == 0
+
+    captured = capsys.readouterr()
+    # No probe runs once `assembling` appears, though the build must stay as it is until the command ends.
+    assert during_probe == ["skeleton: probing 1 module...\n"]
+    assert captured.err == "skeleton: assembling...\nskeleton: writing...\n"
+    assert captured.out == f"{output}: 1 skeleton(s) for 1 article(s)\n"
+
+
+def test_cli_json_prints_the_report_bytes(tmp_path: Path, capsys, monkeypatch) -> None:
+    assert _cli(tmp_path, monkeypatch, "--json") == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == _fake_report(tmp_path / "other").to_json() + "\n"
+    assert captured.err == "skeleton: probing 1 module...\nskeleton: assembling...\n"
+
+
+def test_cli_json_stdout_stays_the_report_without_stderr(tmp_path: Path, capsys, monkeypatch) -> None:
+    # Started with fd 2 closed, Python sets sys.stderr to None, and print(file=None) writes to stdout.
+    monkeypatch.setattr(sys, "stderr", None)
+
+    assert _cli(tmp_path, monkeypatch, "--json") == 0
+
+    assert capsys.readouterr().out == _fake_report(tmp_path / "other").to_json() + "\n"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="needs a POSIX pipe")
+def test_cli_progress_on_a_broken_stderr_leaves_nothing_to_fail_at_exit(tmp_path: Path, capsys, monkeypatch) -> None:
+    # A reader that stopped tailing stderr: the write end of a pipe whose read end is closed.
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    broken = open(write_end, "w", encoding="utf-8")
+    monkeypatch.setattr(sys, "stderr", broken)
+    try:
+        assert _cli(tmp_path, monkeypatch, "--json") == 0
+        # The interpreter flushes stderr at exit; a failure there would turn exit 0 into 120.
+        broken.flush()
+    finally:
+        broken.close()
+
+    assert capsys.readouterr().out == _fake_report(tmp_path / "other").to_json() + "\n"
 
 
 def test_cli_does_not_publish_packets_when_report_staging_fails(
@@ -2190,7 +2387,7 @@ def test_cli_rolls_back_packet_trees_when_report_commit_fails(
             raise OSError("simulated report commit failure")
         _install_output(source_path, Path(destination))
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_report_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_report_install)
 
     result = _cli(tmp_path, monkeypatch, "--packets", packets, "--passages", passages, "--output", output)
 
@@ -2227,7 +2424,7 @@ def test_cli_rolls_back_packet_trees_and_report_when_interrupted_after_report_in
             raise KeyboardInterrupt
 
     monkeypatch.setattr(
-        "autoform_cli.skeleton._install_output", interrupt_after_report_install
+        "autoform_cli._managed_output._install_output", interrupt_after_report_install
     )
 
     with pytest.raises(KeyboardInterrupt):
@@ -2264,7 +2461,7 @@ def test_report_publication_preserves_a_concurrent_replacement_before_install(
             output.write_text("concurrent report\n", encoding="utf-8")
         _install_output(stage, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", replace_before_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", replace_before_install)
 
     with pytest.raises(SkeletonError, match="published output changed during rollback"):
         write_skeleton_report(report, output)
@@ -2288,7 +2485,7 @@ def test_report_publication_rolls_back_when_interrupted_after_exclusive_link(
         if "autoform-stage" in Path(source).name and Path(destination) == output:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.link", interrupt_after_link)
+    monkeypatch.setattr("autoform_cli._managed_output.os.link", interrupt_after_link)
 
     with pytest.raises(KeyboardInterrupt):
         write_skeleton_report(report, output)
@@ -3085,6 +3282,29 @@ def test_type_and_value_less_roots_show_their_whole_declaration(tmp_path: Path) 
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
+def test_a_structure_field_root_gets_a_skeleton(tmp_path: Path) -> None:
+    """Issue #498: the source index finds a field, so its projection gets a skeleton like any def.
+
+    Lean's range for a projection covers only the field's name, so the shown
+    source is that name and the signature carries the type.
+    """
+    project = _project(tmp_path)
+    _build(project, "Skel.Kinds")
+
+    report = extract_skeletons(_blueprint(tmp_path, lean={"field": "Skel.Kinds.Pair.a"}), lean_root=project)
+
+    assert report.clean
+    (declaration,) = (d for node in report.nodes for d in node.declarations)
+    assert (declaration.name, declaration.kind, declaration.source, declaration.statement) == (
+        "Skel.Kinds.Pair.a",
+        "def",
+        "a",
+        None,
+    )
+    assert "Nat" in declaration.signature
+
+
+@pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
 def test_local_notation_statement_gets_a_packet_without_its_text(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _build(project, "Skel.Kinds")
@@ -3377,6 +3597,7 @@ def _declaration_of(project: Path, record: dict[str, object]):
         index=index_project(project),
         module_hashes={},
         snapshot_started_ns=None,
+        shared={},
     )
 
 
@@ -3860,7 +4081,7 @@ def test_packet_publication_refuses_unmanaged_or_symlink_output(tmp_path: Path) 
     unmanaged.mkdir()
     (unmanaged / "keep.txt").write_text("mine\n", encoding="utf-8")
 
-    with pytest.raises(SkeletonError, match="non-Autoform packet output"):
+    with pytest.raises(SkeletonError, match="non-Autoform output"):
         write_packets(report, unmanaged)
 
     outside = tmp_path / "outside"
@@ -3869,13 +4090,15 @@ def test_packet_publication_refuses_unmanaged_or_symlink_output(tmp_path: Path) 
     linked.symlink_to(outside, target_is_directory=True)
     with pytest.raises(SkeletonError, match="symlink packet output"):
         write_packets(report, linked)
+    with pytest.raises(SkeletonError, match="symlink passage output"):
+        write_packets(report, tmp_path / "packets", passages=linked)
 
     fake_managed = tmp_path / "fake-managed"
     fake_managed.mkdir()
     (fake_managed / PACKET_MANIFEST).write_text(report.to_json(), encoding="utf-8")
     valuable = fake_managed / "valuable.txt"
     valuable.write_text("keep me\n", encoding="utf-8")
-    with pytest.raises(SkeletonError, match="non-Autoform packet output"):
+    with pytest.raises(SkeletonError, match="non-Autoform output"):
         write_packets(report, fake_managed)
     assert valuable.read_text(encoding="utf-8") == "keep me\n"
 
@@ -3932,9 +4155,9 @@ def test_packet_publication_rolls_back_both_trees_on_commit_failure(
             raise OSError("simulated passage commit failure")
         _install_output(source_path, Path(destination))
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_passage_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_passage_install)
 
-    with pytest.raises(SkeletonError, match="could not publish skeleton output"):
+    with pytest.raises(SkeletonError, match="could not publish output"):
         write_packets(report, packets, passages=passages)
 
     assert (packets / "old-marker").read_text(encoding="utf-8") == "old packets\n"
@@ -4047,7 +4270,7 @@ def test_removing_output_deletes_its_manifest_last(tmp_path: Path, monkeypatch) 
     scandir = os.scandir
     monkeypatch.setattr(os, "scandir", lambda *args, **kwargs: _ManifestFirstListing(scandir(*args, **kwargs)))
 
-    _remove_output(output)
+    remove_output(output)
 
     assert not output.exists()
     assert sorted(removed) == ["Manifest.json", "article.lean", "packet.lean"]
@@ -4065,7 +4288,7 @@ def test_packet_publication_rolls_back_both_trees_when_interrupted(
         if "autoform-stage" in source_path.name and Path(destination) == passages:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", interrupt_passage_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", interrupt_passage_install)
 
     with pytest.raises(KeyboardInterrupt):
         write_packets(report, packets, passages=passages)
@@ -4086,7 +4309,7 @@ def test_packet_publication_rolls_back_when_interrupted_after_backup_rename(
         if Path(source) == packets and "autoform-backup" in Path(destination).name:
             raise KeyboardInterrupt
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.replace", interrupt_after_backup)
+    monkeypatch.setattr("autoform_cli._managed_output.os.replace", interrupt_after_backup)
 
     with pytest.raises(KeyboardInterrupt):
         write_packets(report, packets)
@@ -4108,7 +4331,7 @@ def test_packet_publication_preserves_a_changed_backup_during_cleanup(
             (changed_backup,) = tmp_path.glob(".packets.autoform-backup-*")
             (changed_backup / "concurrent-marker").write_text("keep me\n", encoding="utf-8")
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", change_backup_after_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", change_backup_after_install)
 
     with pytest.warns(RuntimeWarning, match="backup changed.*preserved"):
         write_packets(report, packets)
@@ -4135,7 +4358,7 @@ def test_packet_publication_does_not_delete_a_concurrent_replacement(
             raise OSError("simulated passage commit failure")
         _install_output(source_path, destination_path)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", replace_then_fail)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", replace_then_fail)
 
     with pytest.raises(SkeletonError, match="preserved"):
         write_packets(report, packets, passages=passages)
@@ -4159,7 +4382,7 @@ def test_packet_publication_does_not_replace_a_concurrent_empty_directory(
             concurrent_inode = destination.stat().st_ino
         _install_output(stage, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", create_before_install)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", create_before_install)
 
     with pytest.raises(SkeletonError, match="published output changed during rollback"):
         write_packets(report, packets)
@@ -4181,7 +4404,7 @@ def test_packet_publication_preflights_no_replace_before_moving_old_tree(
     def unavailable(source: Path, destination: Path) -> None:
         raise SkeletonError(["atomic no-replace rename is unavailable"])
 
-    monkeypatch.setattr("autoform_cli.skeleton._rename_no_replace", unavailable)
+    monkeypatch.setattr("autoform_cli._managed_output._rename_no_replace", unavailable)
 
     with pytest.raises(SkeletonError, match="no-replace rename is unavailable"):
         write_packets(report, packets)
@@ -4203,7 +4426,7 @@ def test_packet_publication_cleans_up_an_interrupted_preflight(
             raise KeyboardInterrupt
 
     monkeypatch.setattr(
-        "autoform_cli.skeleton._install_output", interrupt_after_preflight_install
+        "autoform_cli._managed_output._install_output", interrupt_after_preflight_install
     )
 
     with pytest.raises(KeyboardInterrupt):
@@ -4218,7 +4441,6 @@ def test_packet_publication_restores_old_trees_when_quarantine_cleanup_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
     report, packets, passages = _published(tmp_path)
-    remove_output = _remove_output
 
     def fail_passage_install(stage: Path, destination: Path) -> None:
         if "autoform-stage" in stage.name and destination == passages:
@@ -4230,8 +4452,8 @@ def test_packet_publication_restores_old_trees_when_quarantine_cleanup_fails(
             raise OSError("simulated quarantine cleanup failure")
         remove_output(path)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_passage_install)
-    monkeypatch.setattr("autoform_cli.skeleton._remove_output", fail_quarantine_cleanup)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_passage_install)
+    monkeypatch.setattr("autoform_cli._managed_output.remove_output", fail_quarantine_cleanup)
 
     with pytest.raises(SkeletonError, match="preserved for recovery"):
         write_packets(report, packets, passages=passages)
@@ -4262,10 +4484,10 @@ def test_packet_publication_does_not_overwrite_during_backup_restore(
             concurrent_inode = destination.stat().st_ino
         rename_no_replace(source, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", fail_passage_install)
-    monkeypatch.setattr("autoform_cli.skeleton._rename_no_replace", create_before_restore)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", fail_passage_install)
+    monkeypatch.setattr("autoform_cli._managed_output._rename_no_replace", create_before_restore)
 
-    with pytest.raises(SkeletonError, match="could not restore skeleton output"):
+    with pytest.raises(SkeletonError, match="could not restore output"):
         write_packets(report, packets, passages=passages)
 
     assert concurrent_inode is not None
@@ -4289,7 +4511,7 @@ def test_packet_rollback_restores_backups_when_a_destination_becomes_a_symlink(
             raise OSError("simulated passage install failure")
         _install_output(stage, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._install_output", swap_then_fail)
+    monkeypatch.setattr("autoform_cli._managed_output._install_output", swap_then_fail)
 
     with pytest.raises(SkeletonError, match="simulated passage install failure") as info:
         write_packets(report, packets, passages=passages)
@@ -4321,7 +4543,6 @@ def test_packet_publication_cleans_up_when_second_stage_fails(
     report = _fake_report(tmp_path)
     packets = tmp_path / "packets"
     passages = tmp_path / "passages"
-    stage_output = _stage_output
     calls = 0
 
     def fail_second_stage(destination: Path) -> Path:
@@ -4331,7 +4552,7 @@ def test_packet_publication_cleans_up_when_second_stage_fails(
             raise OSError("simulated passage staging failure")
         return stage_output(destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton._stage_output", fail_second_stage)
+    monkeypatch.setattr("autoform_cli.skeleton.stage_output", fail_second_stage)
 
     with pytest.raises(SkeletonError, match="could not prepare skeleton output"):
         write_packets(report, packets, passages=passages)
@@ -4349,9 +4570,9 @@ def test_packet_publication_detects_a_concurrent_file_edit(tmp_path: Path, monke
 
     def edit_then_replace(outputs) -> None:
         marker.write_text("concurrent edit\n", encoding="utf-8")
-        _replace_outputs(outputs)
+        replace_outputs(outputs)
 
-    monkeypatch.setattr("autoform_cli.skeleton._replace_outputs", edit_then_replace)
+    monkeypatch.setattr("autoform_cli.skeleton.replace_outputs", edit_then_replace)
 
     with pytest.raises(SkeletonError, match="changed during publication"):
         write_packets(report, packets)
@@ -4373,7 +4594,7 @@ def test_packet_publication_checks_the_isolated_old_tree_before_install(
             marker.write_text("concurrent edit\n", encoding="utf-8")
         replace(source, destination)
 
-    monkeypatch.setattr("autoform_cli.skeleton.os.replace", edit_before_backup)
+    monkeypatch.setattr("autoform_cli._managed_output.os.replace", edit_before_backup)
 
     with pytest.raises(SkeletonError, match="changed during publication"):
         write_packets(report, packets)

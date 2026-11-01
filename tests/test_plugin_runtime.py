@@ -204,6 +204,7 @@ def test_wheel_contains_only_the_minimal_runtime(repo_root, tmp_path):
             "autoform_cli/project/release-manifest-lean-v4.34.1-mathlib-v4.34.1.json",
             "autoform_cli/project/libraries.json",
             "autoform_cli/project/releases.json",
+            "servers/_process.py",
             "servers/lean_client.py",
             "servers/lean_runtime.py",
             "servers/lsp/server.py",
@@ -237,11 +238,12 @@ import sys
 from pathlib import Path
 site = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(site))
-from autoform_cli import graph, visualize
+from autoform_cli import graph, lean_probe, visualize
 from servers import lean_client, lean_runtime
 from servers.lsp import server as lsp_server
 from servers.repl import server as repl_server
 assert Path(graph.__file__).resolve().is_relative_to(site)
+assert Path(lean_probe._process_helpers.__file__).resolve().is_relative_to(site)
 assert Path(lean_client.__file__).resolve().is_relative_to(site)
 assert Path(lean_runtime.__file__).resolve().is_relative_to(site)
 assert Path(lsp_server.__file__).resolve().is_relative_to(site)

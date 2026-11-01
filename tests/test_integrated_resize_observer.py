@@ -90,7 +90,7 @@ var dom$canvas={
   get width(){return canvasWidth;},set width(value){canvasWrite();writes.push(['width',value]);canvasWidth=value;},
   get height(){return canvasHeight;},set height(value){canvasWrite();writes.push(['height',value]);canvasHeight=value;}
 };
-var ui$area=null,ui$overviewOnly=false,ui$scopeOverview=false,ui$orientation='lr',ui$mode='graph',firstResize=false;
+var ui$area=null,ui$overviewOnly=false,ui$scopeOverview=false,ui$coarseOverview=false,ui$orientation='lr',ui$mode='graph',firstResize=false;
 var ui$transform={x:41,y:-73,scale:1.2},scheduled=false,data={nodes:[{id:'actual-topic',status:'fully_proved'}],edges:[]};
 var ui$wikiProjectionTicket=0,ui$wikiProjectionCache=new WeakMap(),drawCalls=0,fitCalls=0,onDraw=null;
 function draw(){drawCalls++;if(onDraw)onDraw();}

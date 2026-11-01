@@ -1187,6 +1187,46 @@ def test_a_source_span_ends_at_its_own_file_s_next_declaration(tmp_path: Path) -
     assert audit_module._source_spans(index)[index.find("X.bar")] == 9
 
 
+def test_a_field_does_not_end_its_structure_s_source_span(tmp_path: Path) -> None:
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Entry.lean").write_text(
+        "structure Entry where\n  value : Nat\n  label : String\n\ntheorem after : True := trivial\n",
+        encoding="utf-8",
+    )
+
+    spans = audit_module._source_spans(index_project(lean_root))
+    assert {declaration.name: span for declaration, span in spans.items()} == {
+        "Entry": 4,
+        "Entry.value": 1,
+        "Entry.label": 1,
+        "after": 1,
+    }
+
+
+def test_a_field_s_limits_come_from_the_structure_in_its_own_file(tmp_path: Path) -> None:
+    """The structure's name may be declared elsewhere too, and a quoted field name may hold a dot."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "value.md", declaration="def", statement="formalized", lean="Big.value")
+    _article(blueprint, "quoted.md", declaration="def", statement="formalized", lean="Big.«a.b»")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "A.lean").write_text(
+        "set_option maxHeartbeats 0 in\nstructure Big where\n  value : Nat\n  «a.b» : Nat\n", encoding="utf-8"
+    )
+    # B.lean's structure starts below A.lean's, but it is not the field's.
+    (lean_root / "B.lean").write_text(
+        "theorem pad : True := trivial\n\nstructure Big where\n  other : Nat\n", encoding="utf-8"
+    )
+
+    reason = "lean target {} has no maxHeartbeats limit: `set_option maxHeartbeats 0` at A.lean:1; set a finite limit"
+    assert _finding_map(blueprint, lean_root=lean_root) == {
+        "roadmap/value.md": [("lean-target-unbounded-limit", reason.format("Big.value"))],
+        "roadmap/quoted.md": [("lean-target-unbounded-limit", reason.format("Big.«a.b»"))],
+    }
+
+
 def test_an_alias_with_no_sure_target_reads_no_limit(tmp_path: Path) -> None:
     # B.lean declares its `N.aux` only after the alias and A.lean declares one
     # too, so the index cannot place the alias and reads no limit for it.
@@ -1347,6 +1387,37 @@ def test_the_limit_scan_reads_commands_at_the_declaration_s_indentation() -> Non
 
     assert found(3) == [("maxHeartbeats", 800000, "section")]
     assert found(6) == [("maxHeartbeats", 0, "declaration"), ("maxRecDepth", 2000, "proof")]
+
+
+def test_the_limit_scan_closes_one_scope_per_name_component() -> None:
+    # `end B` after `namespace A.B` leaves A open, and `end C.D` closes C too.
+    lines = [
+        "namespace A.B",
+        "end B",
+        "set_option maxHeartbeats 0",
+        "theorem inside : True := trivial",
+        "end A",
+        "theorem after : True := trivial",
+        "namespace C",
+        "set_option maxRecDepth 4096",
+        "namespace D",
+        "end C.D",
+        "theorem later : True := trivial",
+        "namespace O",
+        "namespace «a.b c»",
+        "end «a.b c»",
+        "set_option maxHeartbeats 0",
+        "end O",
+        "theorem last : True := trivial",
+    ]
+
+    def found(line: int) -> list[tuple[str, int, str]]:
+        return [(setting.option, setting.value, setting.scope) for setting in limits_in_force(lines, line)]
+
+    assert found(4) == [("maxHeartbeats", 0, "section")]
+    assert found(6) == []
+    assert found(11) == []
+    assert found(17) == []
 
 
 def test_the_limit_scan_reads_several_indentations_in_one_batch() -> None:
@@ -1536,6 +1607,73 @@ def test_audit_reads_deprecation_from_the_captured_source_generation(
             "lean target Project.result is deprecated; point lean: at its replacement",
         )
     ]
+
+
+def test_audit_takes_a_structure_field_as_a_definition_or_a_theorem(tmp_path: Path) -> None:
+    """Issue #498: a field's projection is a theorem when the field is a proposition, which the index cannot see."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    kinds = (("def", "value"), ("definition", "value"), ("theorem", "pos"), ("lemma", "pos"), ("structure", "value"))
+    for declaration, field in kinds:
+        lean = f"Project.Entry.{field}"
+        _article(blueprint, f"{declaration}.md", declaration=declaration, statement="formalized", lean=lean)
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Entry.lean").write_text(
+        "structure Project.Entry where\n  value : Nat\n  pos : 0 < value\n", encoding="utf-8"
+    )
+
+    assert _finding_map(blueprint, lean_root=lean_root) == {
+        "roadmap/structure.md": [
+            ("lean-target-kind-mismatch", "Lean target kind field does not match declaration intent structure")
+        ]
+    }
+
+
+def test_audit_reads_a_field_s_elaboration_limits_at_its_structure(tmp_path: Path) -> None:
+    """Lean elaborates a field with its structure, so the structure's `set_option ... in` covers it."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "value.md", declaration="def", statement="formalized", lean="P.Big.value")
+    _article(blueprint, "catalog.md", catalog="module", lean="P.Big.value")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Big.lean").write_text(
+        "namespace P\nset_option maxHeartbeats 0 in\nstructure Big where\n  value : Nat\nend P\n", encoding="utf-8"
+    )
+
+    result = audit_blueprint(blueprint, lean_root=lean_root)
+    # The catalog's ledger and inventory findings are not this test's.
+    assert [(item.code, item.reason) for item in result.findings if item.article_path == "roadmap/value.md"] == [
+        (
+            "lean-target-unbounded-limit",
+            "lean target P.Big.value has no maxHeartbeats limit: `set_option maxHeartbeats 0` at Big.lean:2; "
+            "set a finite limit",
+        )
+    ]
+    limit = (DeclarationLimit("P.Big.value", "maxHeartbeats", 0, "Big.lean:2", "declaration"),)
+    assert [(warning.code, warning.declarations) for warning in result.warnings] == [("catalog-unbounded-limit", limit)]
+
+
+def test_a_field_does_not_take_its_structure_s_deprecation(tmp_path: Path) -> None:
+    """Lean puts a structure's attributes on the structure alone, even when a field shares its line."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "b.md", declaration="structure", statement="formalized", lean="P.B")
+    for name in ("B.toA", "B.b", "Q.q"):
+        _article(blueprint, f"{name.lower()}.md", declaration="def", statement="formalized", lean=f"P.{name}")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    deprecated = '@[deprecated "use C" (since := "2026-01-01")]'
+    (lean_root / "D.lean").write_text(
+        f"namespace P\n{deprecated}\nstructure B extends toA : A where\n  b : Nat\n"
+        f"{deprecated}\nstructure Q where q : Nat\nend P\n",
+        encoding="utf-8",
+    )
+
+    assert _finding_map(blueprint, lean_root=lean_root) == {
+        "roadmap/b.md": [("lean-target-deprecated", "lean target P.B is deprecated; point lean: at its replacement")]
+    }
 
 
 def test_audit_checks_irreducible_def_kinds(tmp_path: Path) -> None:
