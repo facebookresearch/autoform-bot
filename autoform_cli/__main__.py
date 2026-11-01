@@ -784,20 +784,28 @@ def _formalizable_container_warnings(graph: Graph) -> list[str]:
 
 
 def _unknown_declaration_warnings(graph: Graph) -> list[str]:
-    """Name each article whose ``declaration`` names a command render has no caption for.
+    """Name each ``declaration`` command render has no caption for, once, with the articles that use it.
 
-    Render captions such an article with the word as written, and audit, which
-    compares a Lean target's kind with the command, skips it. The site still
-    builds, so ``check`` warns rather than fails.
+    Render captions such an article with the word as written, and audit, whose
+    commands are among those render captions, does not check its Lean target's
+    kind. A project may use one such word on purpose in many articles, so each
+    word is one line. The site still builds, so ``check`` warns rather than fails.
     """
-    return [
-        f"{node.id}: declaration {node.declaration!r} is not a Lean declaration command Autoform knows, so render "
-        "captions it as written and audit does not compare it with the Lean target's kind; name the command, "
-        "such as def, structure or theorem"
-        for node in graph.nodes.values()
-        if node.declaration is not None
-        and status.declaration_command(node.declaration).casefold() not in DECLARATION_LABELS
-    ]
+    articles: dict[str, list[str]] = {}
+    for node in graph.nodes.values():
+        command = status.declaration_command(node.declaration)
+        if node.declaration is not None and command.casefold() not in DECLARATION_LABELS:
+            articles.setdefault(command, []).append(node.id)
+    warnings = []
+    for command, ids in articles.items():
+        shown = ", ".join(ids[:3]) + (", ..." if len(ids) > 3 else "")
+        where = ids[0] if len(ids) == 1 else f"{len(ids)} articles: {shown}"
+        warnings.append(
+            f"declaration {command!r} has no caption, so render captions it as written and audit does not check "
+            f"its Lean target's kind, on {where}; to have both, name a Lean declaration command, such as def, "
+            "structure or theorem"
+        )
+    return warnings
 
 
 #: How check ends the reason it gives for a name under one of the project's own types.

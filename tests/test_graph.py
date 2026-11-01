@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -10,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli.__main__ import main
+from autoform_cli.render import DECLARATION_LABELS
 from autoform_cli.graph import (
     GraphValidationError,
     _containment_cycles,
@@ -1082,7 +1084,7 @@ def test_check_warns_about_a_declaration_command_with_no_caption(
     """Issue #485: render captioned such an article "Node", and audit skips its Lean kind, with no sign of either.
 
     Modifiers before a known command, including the module system's `public`, and a known command in capitals,
-    pass quietly.
+    pass quietly. Hartshorne writes `isomorphism` 79 times, so each word is one line.
     """
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "chapter/quiet.md", "# Quiet\n", declaration="noncomputable def")
@@ -1091,14 +1093,27 @@ def test_check_warns_about_a_declaration_command_with_no_caption(
     assert main(["check", str(blueprint)]) == 0
     assert "warning:" not in capsys.readouterr().out
 
-    _node(blueprint, "chapter/iso.md", "# Iso\n", declaration="isomorphism")
+    for name in ("a", "b", "c", "d"):
+        _node(blueprint, f"chapter/iso_{name}.md", f"# Iso {name}\n", declaration="isomorphism")
+    _node(blueprint, "chapter/functor.md", "# Functor\n", declaration="noncomputable functor")
 
     assert main(["check", str(blueprint)]) == 0
-    assert [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning:")] == [
-        "warning: chapter/iso: declaration 'isomorphism' is not a Lean declaration command Autoform knows, so render "
-        "captions it as written and audit does not compare it with the Lean target's kind; name the command, "
-        "such as def, structure or theorem"
+    assert sorted(line for line in capsys.readouterr().out.splitlines() if line.startswith("warning:")) == [
+        "warning: declaration 'functor' has no caption, so render captions it as written and audit does not check "
+        "its Lean target's kind, on chapter/functor; to have both, name a Lean declaration command, such as def, "
+        "structure or theorem",
+        "warning: declaration 'isomorphism' has no caption, so render captions it as written and audit does not "
+        "check its Lean target's kind, on 4 articles: chapter/iso_a, chapter/iso_b, chapter/iso_c, ...; to have "
+        "both, name a Lean declaration command, such as def, structure or theorem",
     ]
+
+
+def test_the_validation_reference_lists_every_command_render_captions(repo_root: Path) -> None:
+    """New PR Reviewer on #526: a label added later would leave the reference's list stale."""
+    reference = (repo_root / "autoform_cli/reference/validation-and-audit.md").read_text(encoding="utf-8")
+    listed = re.search(r"is\s+none of (.*?): render captions", reference, re.S)
+    assert listed is not None
+    assert set(re.findall(r"`(\w+)`", listed.group(1))) == set(DECLARATION_LABELS)
 
 
 def test_check_rejects_sources_links_that_name_no_file_in_the_blueprint(
