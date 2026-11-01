@@ -26,7 +26,7 @@ date when the release is tagged.
   resolve like dependencies and appear in the runtime projection as
   `informal_dependencies`, but derived status, readiness and
   `work assumptions` never count them; a link that does not resolve, or whose
-  target depends on the article, is a `check` warning (#387).
+  target depends on the article, is a `check` warning (#541).
 
 ### Changed
 
