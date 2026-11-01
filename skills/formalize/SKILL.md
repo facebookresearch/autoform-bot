@@ -58,17 +58,17 @@ once than the machine's memory can build for. If the lakefile lacks the
 artifact cache `project new` writes, Setup offers to add it.
 
 Claims are optional. Within one run no one needs them: the lead keeps workers,
-itself included, from holding the same target at once. A worker holds its
-article's `claim_target` and the `claim_targets` the lead confirmed until its
-work lands or it abandons the leaf without a candidate; a handoff keeps them. To
-edit beyond them (an import edit, a revision or its grown `claim_targets`, or an
-article its import edit broke), a subagent reports the new targets and waits
-until the lead confirms no other worker holds them; one that cannot wait
-commits, stops, and reports, and the lead answers when it dispatches the leaf
-again from that commit. The lead checks an import edit's
-`affected_claim_targets` when confirming and before the edit lands; one another
-worker holds is an active conflict. If workers would wait on each other, the
-lead has one of them give up what it holds.
+itself included, from holding the same target, or a leaf of another worker's
+package, at once. A worker holds its article's `claim_target` and the
+`claim_targets` the lead confirmed until its work lands or it abandons the leaf
+without a candidate; a handoff keeps them. To edit beyond them (an import edit,
+a revision or its grown `claim_targets`, or an article its import edit broke), a
+subagent reports the new targets and waits until the lead confirms no other
+worker holds them; one that cannot wait commits, stops, and reports, and the
+lead answers when it dispatches the leaf again from that commit. The lead checks
+an import edit's `affected_claim_targets` when confirming and before the edit
+lands; one another worker holds is an active conflict. If workers would wait on
+each other, the lead has one of them give up what it holds.
 
 Use claims only when other people or sessions may work on the project
 concurrently, or the user asks for them. Before choosing none, run `autoform
