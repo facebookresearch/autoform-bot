@@ -176,9 +176,9 @@ date when the release is tagged.
 
 - **Import-closure scan.** `work import-impact --module-scope import-closure`
   reads uncaptured `.lean` files only in the root libraries' module trees and
-  in dependency packages. It no longer reads nested checkouts, such as worker
-  worktrees with their own `.lake`, the root's build output or a package's
-  `.lake`, which could stall the run before its probe (#429).
+  in dependency packages. It no longer reads other nested checkouts, such as
+  worker worktrees with their own `.lake`, the root's build output or a
+  package's `.lake`, which could stall the run before its probe (#429).
 - **Fences in comments.** Render no longer reads a fence line inside an HTML
   comment as opening a code block. It had left every later line of the page
   unrewritten, so a link to a source note after it was published as written,

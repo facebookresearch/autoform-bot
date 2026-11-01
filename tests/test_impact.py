@@ -2145,6 +2145,50 @@ def test_import_closure_scope_refuses_an_uncaptured_file_in_a_library_tree(
         module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
 
 
+@pytest.mark.parametrize(
+    ("checkout", "libraries"),
+    [
+        # Lake builds the modules of a Git submodule in a library's tree.
+        ("Demo/Sub", ""),
+        # A root this parser cannot read sends the library walk through .lake/packages,
+        # which must still read each package, a clone.
+        (".lake/packages/D", '\n[[lean_lib]]\nname = "Odd"\nroots = ["Odd name"]\nglobs = ["Odd.+"]\n'),
+    ],
+)
+def test_import_closure_scope_reads_a_checkout_lake_loads_modules_from(
+    tmp_path: Path, monkeypatch, checkout: str, libraries: str
+) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    with (lean_root / "lakefile.toml").open("a", encoding="utf-8") as lakefile:
+        lakefile.write(libraries)
+    (lean_root / checkout / "D").mkdir(parents=True)
+    (lean_root / checkout / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    (lean_root / checkout / "D" / "X.lean").write_text("import Demo.B\n", encoding="utf-8")
+    _stub_probe(monkeypatch)
+
+    with pytest.raises(ImpactError, match=rf"{re.escape(checkout)}/D/X\.lean may import Demo\.B"):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+
+def test_import_closure_scope_reads_a_package_the_workspace_overrides(tmp_path: Path, monkeypatch) -> None:
+    # Lake takes a package from .lake/package-overrides.json over the manifest's entry.
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    (lean_root / ".lake").mkdir(exist_ok=True)
+    (lean_root / ".lake" / "package-overrides.json").write_text(
+        json.dumps({"schemaVersion": "1.1.0", "packages": [{"type": "path", "dir": "vendor/D", "name": "D"}]}),
+        encoding="utf-8",
+    )
+    (lean_root / "vendor" / "D" / "D").mkdir(parents=True)
+    (lean_root / "vendor" / "D" / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    (lean_root / "vendor" / "D" / "D" / "X.lean").write_text("import Demo.B\n", encoding="utf-8")
+    _stub_probe(monkeypatch)
+
+    with pytest.raises(ImpactError, match=r"vendor/D/D/X\.lean may import Demo\.B"):
+        module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+
 def test_import_closure_scope_refuses_a_file_in_the_manifest_packages_dir(tmp_path: Path, monkeypatch) -> None:
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _closure_lean_root(tmp_path)

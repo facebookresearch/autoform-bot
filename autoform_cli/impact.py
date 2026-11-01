@@ -498,11 +498,12 @@ def _outside_sources(
     """Every ``.lean`` file the captured inventory lacks where Lake can find a module.
 
     Lake finds a root-package module only in a library's ``srcDir``, under the
-    first component of one of its roots or globs (``LeanLib.isLocalModule``),
-    and a dependency's module in its package directory. Nothing else under
-    ``root``, such as build output, is ever loaded, so it is not read; nor is
-    a ``.lake`` in a package, or a nested checkout, which the captured
-    inventory leaves out too.
+    first component of one of its roots or globs (``Workspace.findModule?``
+    through ``LeanLib.isBuildableModule``), and a dependency's module in its
+    package directory, which ``.lake/package-overrides.json`` may move. Nothing
+    else under ``root``, such as build output, is ever loaded, so it is not
+    read; nor is a ``.lake`` in a package, or a nested checkout outside a
+    library tree, which the captured inventory leaves out too.
     """
 
     # Each top is a directory or file to read, with the depth of the packages it holds.
@@ -523,28 +524,30 @@ def _outside_sources(
             # Matched loosely, since a case-insensitive volume finds `Demo/` under `demo/`.
             if entry != ".git" and (firsts is None or _normalized_name(entry.removesuffix(".lean")) in firsts):
                 tops.setdefault(library.src_dir / entry, None)
-    manifest_path = root / "lake-manifest.json"
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
-    except (OSError, ValueError) as error:
-        raise ImpactError(f"cannot read {manifest_path}{_RERUN_DEFAULT_SCOPE}") from error
     dirs: list[tuple[object, int]] = [(".lake/packages", 1)]
-    if isinstance(manifest, dict):
-        dirs.append((manifest.get("packagesDir"), 1))
-        packages = manifest.get("packages")
-        if isinstance(packages, list):
-            dirs += [
-                (package.get("dir"), 0)
-                for package in packages
-                if isinstance(package, dict) and package.get("type") == "path"
-            ]
+    # Lake replaces a manifest entry with the workspace override of the same name.
+    for manifest_path in (root / "lake-manifest.json", root / ".lake/package-overrides.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+        except (OSError, ValueError) as error:
+            raise ImpactError(f"cannot read {manifest_path}{_RERUN_DEFAULT_SCOPE}") from error
+        if isinstance(manifest, dict):
+            dirs.append((manifest.get("packagesDir"), 1))
+            packages = manifest.get("packages")
+            if isinstance(packages, list):
+                dirs += [
+                    (package.get("dir"), 0)
+                    for package in packages
+                    if isinstance(package, dict) and package.get("type") == "path"
+                ]
     for entry, packages_at in dirs:
         if isinstance(entry, str):
             top = Path(os.path.normpath(root / entry))
             if top.is_dir():
                 tops.setdefault(top, packages_at)
     seen: set[str] = set()
-    for top, packages_at in tops.items():
+    # Packages first, so a library walk that reaches one, as from an unreadable root, leaves it to them.
+    for top, packages_at in sorted(tops.items(), key=lambda item: item[1] is None):
         walked = top.is_dir()
         # An unreadable directory raises rather than hiding a file that may import the closure.
         # A top that is no directory is a library's `<root>.lean`, or a link to read and refuse.
@@ -556,8 +559,11 @@ def _outside_sources(
                 depth = len(folder.relative_to(top).parts)
                 # A nested checkout, such as a worktree with its own `.lake`, is another
                 # source tree, as the captured inventory treats it; a package root is a clone.
-                # A module in one, such as a library's Git submodule, goes unread.
+                # In a library tree it is read, since Lake builds a Git submodule's modules,
+                # unless a hidden folder, which no unquoted module name reaches, holds it.
                 checkout = (packages_at is None or depth > packages_at) and (".git" in names or ".git" in files)
+                if checkout and packages_at is None:
+                    checkout = any(part.startswith(".") for part in (top.name, *folder.relative_to(top).parts))
                 if real in seen or checkout:
                     names[:] = []
                     continue
