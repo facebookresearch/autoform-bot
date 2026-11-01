@@ -1932,7 +1932,11 @@ def _book_sources(graph: Graph) -> dict[Path, str]:
 
 
 def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> list[Path]:
-    """The *targets* *source* links outside code fences, in the order it links them."""
+    """The *targets* *source* links outside code fences, in the order it links them, on the page render publishes.
+
+    That page leaves out the HTML comments outside code, so a commented-out link
+    places nothing, while a ``<!--`` in a code span stays text, as on the site.
+    """
     linked_sources: list[Path] = []
 
     def collect(line: str) -> str:
@@ -1962,7 +1966,7 @@ def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> lis
         text = source.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return []  # the site leaves out a page that is not UTF-8, as check warns
-    _outside_fences(text, collect)
+    _outside_fences(published_page(text), collect)
     return linked_sources
 
 

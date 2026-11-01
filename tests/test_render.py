@@ -3712,6 +3712,41 @@ def _summary_chapters(out: Path) -> list[str]:
     return re.findall(r"\(roadmap/([^)]+)/README\.md\)", (out / "SUMMARY.md").read_text(encoding="utf-8"))
 
 
+def test_a_commented_out_link_leaves_the_book_order_alone(tmp_path: Path) -> None:
+    """Issue #535: the book read links inside HTML comments, so a commented-out
+    link, on its own lines or beside another link, moved its chapter forward."""
+    project = _book_order_project(tmp_path)
+    roadmap = project / "blueprint/roadmap/README.md"
+    proof = "[Irrationality proof](irrationality-proof/README.md)"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8")
+        .replace("## Chapters\n\n", f"## Chapters\n\n<!--\n- {proof}\n-->\n\n")
+        .replace("- [Zeta](zeta/README.md)\n", f"- [Zeta](zeta/README.md) <!-- {proof} -->\n"),
+        encoding="utf-8",
+    )
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    assert _summary_chapters(out) == ["zeta", "alpha", "irrationality-proof"]
+
+
+def test_a_comment_opener_in_code_hides_no_link_from_the_book_order(tmp_path: Path) -> None:
+    """Review of #540: reading the page's comments as the graph does, a `<!--`
+    in a code span hid every link up to a later comment, and the book fell back
+    to path order."""
+    project = _book_order_project(tmp_path)
+    roadmap = project / "blueprint/roadmap/README.md"
+    authored = roadmap.read_text(encoding="utf-8")
+    aside = "## Chapters\n\nHide a line with `<!--` before it.\n\n"
+    roadmap.write_text(authored.replace("## Chapters\n\n", aside) + "\n<!-- TODO -->\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    assert _summary_chapters(out) == ["zeta", "alpha", "irrationality-proof"]
+
+
 @pytest.mark.parametrize(
     ("contents", "section", "chapters"),
     (

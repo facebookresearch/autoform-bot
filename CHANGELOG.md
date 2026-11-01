@@ -221,6 +221,9 @@ date when the release is tagged.
   and concept links were ready 5.3 s after the index was parsed, most of it
   spent waiting between batches; they are now ready after 1.0 s in WebKit and
   0.7 s in Chrome.
+- **Book order.** A link inside an HTML comment no longer places its page in
+  the book's order: a commented-out chapter link moved that chapter forward in
+  `SUMMARY.md`, though the page showed it later (#535).
 - **Fences in comments.** Render no longer reads a fence line inside an HTML
   comment as opening a code block. It had left every later line of the page
   unrewritten, so a link to a source note after it was published as written,
