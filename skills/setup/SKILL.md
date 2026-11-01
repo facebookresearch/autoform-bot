@@ -52,6 +52,15 @@ version (at least v4.27.0). On macOS use `/private/tmp`, not the `/tmp` alias.
 On `project-parent-unsafe`, choose another parent or, with the user's
 agreement, run `chmod g-w,o-w` on it.
 
+If the user names a donor (never search for one), let `<PKGS>` be its
+`.lake/packages`, or the donor itself if it is a packages folder. Before any
+Lake command runs in the new project, `lake update repl` included, and only
+while `pgrep -x lake` finds no Lake process, copy each `git` package of the new
+`lake-manifest.json` (with none, copy nothing) that `.lake/packages` lacks and
+whose `<PKGS>/<NAME>` is no symbolic link, prints that `rev` for `git rev-parse
+HEAD`, and prints nothing for `git status --porcelain`: `mkdir -p .lake/packages
+&& cp -Rc <PKGS>/<NAME> .lake/packages/` (`cp -R --reflink=auto` on Linux).
+
 Autoform's library catalog,
 `$AUTOFORM_PLUGIN_ROOT/autoform_cli/project/libraries.json`, lists shared Lean
 libraries that `project new --library <NAME>` adds, required and locked. Offer
@@ -131,12 +140,7 @@ or enabling Pages are separate outward-facing actions; perform them only when
 the user requests them. Pin third-party Actions and the Autoform CLI source to
 immutable commits.
 
-Validate the prepared repository before reporting it ready. If the user names a
-Lake project as a donor (never search for one), first copy each `git` package
-whose `rev` in the new `lake-manifest.json` matches the donor's from its
-`.lake/packages` into the project's, with `cp -Rc` (`cp -R --reflink=auto` on
-Linux), never as a symbolic link, while no Lake command runs in the donor;
-report what was copied, and what was fetched and why. Then build Lean:
+Validate the prepared repository before reporting it ready. Build Lean first:
 
 ```bash
 lake update          # only when the project has no lake-manifest.json
@@ -164,7 +168,8 @@ follow [the shared Zulip workflow](references/zulip.md). Do not infer consent
 to post from repository setup, roadmap work, or permission to search.
 
 Before reporting, follow [Debrief Orchestrator](../debrief-orchestrator/SKILL.md)
-with `--skill setup`. Report the Lean toolchain, vault path, CI and Pages files,
-validation results, the publication decision, and any one-time GitHub setting
-the user must still apply. State that no sources were scoped, roadmap nodes
-created, or proofs started, then hand the repository to Roadmap.
+with `--skill setup`. Report the Lean toolchain, the packages copied from a
+donor, vault path, CI and Pages files, validation results, the publication
+decision, and any one-time GitHub setting the user must still apply. State that
+no sources were scoped, roadmap nodes created, or proofs started, then hand the
+repository to Roadmap.
