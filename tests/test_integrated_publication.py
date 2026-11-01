@@ -142,8 +142,8 @@ def test_routes_preserve_encoded_book_anchors_and_real_scope_metadata(tmp_path: 
     theorem = records[f"{group}/main"]
     assert theorem["result"] is True and records[f"{group}/base"]["result"] is True
     assert theorem["route"] == "../roadmap/Analysis%20%25%20caf%C3%A9/part-01/index.html#main"
-    assert theorem["url"].startswith("scopes/Analysis%20%25%20caf%C3%A9/part-01.html#node=")
-    assert theorem["data_url"] == "scopes/Analysis%20%25%20caf%C3%A9/part-01.json"
+    assert "url" not in theorem and "data_url" not in theorem  # The route and the page's own graph cover both.
+    assert records[group]["data_url"] == "scopes/Analysis%20%25%20caf%C3%A9/part-01.json"
     assert theorem["scope"] == group and type(theorem["parent"]) is int
     assert index["nodes"][theorem["parent"]]["id"] == group
     assert "area" not in theorem  # No area guessed from the directory name.
@@ -153,7 +153,9 @@ def test_routes_preserve_encoded_book_anchors_and_real_scope_metadata(tmp_path: 
     assert all(records[node_id]["result"] is False for node_id in ("roadmap", topic, group, f"{topic}/note"))
     assert _decoded_relations(index) == [[f"{group}/base", f"{group}/main", 1, 0]]
     for record in records.values():
-        assert (index_path.parent / unquote(record["data_url"])).resolve().is_file()
+        assert ("data_url" in record) == (record["kind"] == "scope")
+        if record["kind"] == "scope":
+            assert (index_path.parent / unquote(record["data_url"])).resolve().is_file()
     alias = _tree(output / "dependencies/scopes" / f"{group}.md")
     (viewer,) = _class(alias, "bp-dag-viewer")
     assert viewer.get("data-page-href") == "../../../roadmap/Analysis%20%25%20caf%C3%A9/part-01/index.html"
@@ -230,7 +232,7 @@ def test_emitted_result_ids_and_book_anchors_preserve_reserved_looking_prefixes(
         assert record["route"] == "../roadmap/index.html#" + _class(card, "bp-thmheading")[0].get("id")
         assert record["scope"] == "roadmap" and type(record["parent"]) is int
         assert index["nodes"][record["parent"]]["id"] == "roadmap"
-        assert unquote(urlsplit(record["url"]).fragment) == "node=" + node_id
+        assert "url" not in record
         assert f"The distinct statement belonging to {node_id}." in "".join(card.itertext())
 
 

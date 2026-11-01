@@ -204,8 +204,10 @@ def parent_wires(tmp_path: Path):
     links = {node.id: f"scopes/{node.id}.html#node={node.id}" for node in nodes}
     legacy_nodes = []
     for node in nodes:
-        entry = {"id": node.id, "kind": node.kind, "status": node.status_key, "title": node.title, "url": links[node.id]}
-        entry.update({key: value for key, value in metadata[node.id].items() if value is not None})
+        # Every row has a route, so none repeats its context url; only containers name their graph data.
+        entry = {"id": node.id, "kind": node.kind, "status": node.status_key, "title": node.title}
+        entry.update({key: value for key, value in metadata[node.id].items()
+                      if value is not None and (key != "data_url" or node.kind == "scope")})
         if node.summary:
             entry.update(summary=node.summary, lean=node.lean)
         legacy_nodes.append(entry)
@@ -267,7 +269,8 @@ def test_coalesced_parent_offset_index_matches_legacy_and_wiki_binds_received_no
         'zero-offset-child','literal-zero-child','scope:authored']);
       assert.deepEqual(normalized.nodes.map(node=>node._index),[0,1,2,3,4,5,6,7,8,9]);
       assert.equal(normalized.nodes[0].route,absolute('roadmap/a.html#canonical-0'));
-      assert.equal(normalized.nodes[0].data_url,absolute('dependencies/scopes/a.json'));
+      assert.equal(normalized.nodes[0].data_url,null);assert.equal(normalized.nodes[0].url,null);
+      assert.equal(normalized.nodes[4].data_url,absolute('dependencies/scopes/topic.json'));
       assert.deepEqual(normalized.relations,[['a','b',2,3],['0','a',0,1]]);
       assert.equal(normalized.nodes[0].parent,'topic');assert.equal(normalized.nodes[7].parent,'a');
       assert.equal(normalized.nodes[8].parent,'0');assert.equal(normalized.nodes[5].parent,'self');
