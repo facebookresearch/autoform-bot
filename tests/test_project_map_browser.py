@@ -9,7 +9,7 @@ import pytest
 
 from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
-from tests.test_dag_viewer_browser import _REQUIRED, _page, _served, playwright
+from tests.test_dag_viewer_browser import _REQUIRED, _page, _paint_frame, _served, playwright
 
 _ARTICLE = "---\ndeclaration: {kind}\nstatement: formalized\nlean: {lean}\n---\n\n# {title}\n\n{body}\n\n## Depends on\n\n{uses}\n"
 
@@ -65,11 +65,6 @@ def _open_map(page: object, url: str) -> None:
     page.locator(".pm-part").first.wait_for()
 
 
-def _wait_for_frame(page: object) -> None:
-    # The reading pane changes at once, but the map draws on the next animation frame.
-    page.evaluate("() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))")
-
-
 def _reader_title(page: object) -> str:
     return page.locator(".pm-reader h2").inner_text()
 
@@ -92,14 +87,14 @@ def test_the_map_walkthrough_overview_search_pivot_back_and_whole_project(webkit
         playwright.expect(page.locator(".pm-reader .pm-math")).to_contain_text("divides the order of")
         assert page.locator(".pm-reader .pm-math .bp-thmheading, .pm-reader .pm-math script").count() == 0
         playwright.expect(page.locator(".pm-result.pm-selected")).to_have_count(1)
-        _wait_for_frame(page)
         before = page.locator(".pm-result.pm-selected").bounding_box()
         # Following a prerequisite pivots the selection; Back restores both the selection and the view.
         page.locator(".pm-reader .pm-list button", has_text="Index of a subgroup").click()
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Index of a subgroup")
         page.go_back()
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Lagrange's theorem")
-        _wait_for_frame(page)
+        # The reading pane changes at once, but the map draws on the next animation frame.
+        _paint_frame(page)
         after = page.locator(".pm-result.pm-selected").bounding_box()
         assert before is not None and after is not None
         assert abs(after["x"] - before["x"]) < 2 and abs(after["y"] - before["y"]) < 2 and abs(after["width"] - before["width"]) < 2
