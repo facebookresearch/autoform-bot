@@ -809,6 +809,25 @@ def test_audit_validates_lean_targets_only_when_root_is_supplied(tmp_path: Path)
     ]
 
 
+def test_audit_checks_the_lean_target_kind_past_the_declaration_s_modifiers(tmp_path: Path) -> None:
+    """Render and progress read `def` in `noncomputable def`; audit looked up the whole value, found no
+    command, and skipped the kind check without a word."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "wrong-kind.md", declaration="noncomputable def", statement="formalized", lean="Project.fact")
+    _article(blueprint, "right-kind.md", declaration="public theorem", statement="formalized", lean="Project.fact")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Fact.lean").write_text("theorem Project.fact : True := trivial\n", encoding="utf-8")
+
+    findings = _finding_map(blueprint, lean_root=lean_root)
+
+    assert findings["roadmap/wrong-kind.md"] == [
+        ("lean-target-kind-mismatch", "Lean target kind theorem does not match declaration intent noncomputable def")
+    ]
+    assert "roadmap/right-kind.md" not in findings
+
+
 def test_audit_checks_the_public_declaration_beside_an_earlier_private_twin(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)

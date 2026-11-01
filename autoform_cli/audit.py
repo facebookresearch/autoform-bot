@@ -632,7 +632,7 @@ def _lean_findings(
         for body in bodies:
             findings.extend(_limit_findings(article_path, body, sources, _limit_line(body, index)))
 
-        expected = _DECLARATION_KEYWORDS.get((node.declaration or "").casefold())
+        expected = _DECLARATION_KEYWORDS.get(status.declaration_command(node.declaration).casefold())
         # An alias whose target the index cannot place may have any kind.
         if expected and resolved and not any(kind is None or kind in expected for kind in kinds):
             described = {

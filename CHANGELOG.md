@@ -40,11 +40,11 @@ date when the release is tagged.
   `isomorphism`, is captioned as written, first letter capitalized, in the book
   instead of "Node", and named on its map card, which showed no kind. Modifiers
   such as `noncomputable` and now `public` no longer hide a known command from
-  the caption or from progress, so `public def` also counts as a definition,
-  and `irreducible_def` and `opaque` read as definitions; `audit`'s kind check
-  still reads the whole value. `check` names each command with no caption once,
-  with the articles that use it; `audit` does not check those articles' Lean
-  target kind either (#485).
+  the caption, from progress or from `audit`'s check of the Lean target's kind,
+  which skipped `noncomputable def`; `public def` also counts as a definition,
+  and `irreducible_def` and `opaque` read as definitions. `check` names each
+  command with no caption once, with the articles that use it; `audit` does not
+  check those articles' Lean target kind either (#485).
 - **Explorer delivery.** The approved integrated redesign ships below 145 KB,
   with the same bounded graph, JSON and frame budgets and pinned safe compiler.
   Touch keeps single-pointer zoom controls; reading handles retain page-owned
