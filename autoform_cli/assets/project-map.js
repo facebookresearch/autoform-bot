@@ -577,7 +577,7 @@
         return;
       }
       // The title as large as its room allows, from 15 to 30 px: the band of an open part, the top half of a closed
-      // tile. At 15 px it keeps the layout module's lines and baseline.
+      // tile, or the band a held title keeps. At 15 px it keeps the layout module's lines and baseline.
       var box = screenBox(own ? record.ownBox : record.box), shut = !own && !isOpen(record, box);
       var room = shut && !slot.overlay ? box.h / 2 : slot.band, meta = slot.detail !== "title" && !own;
       // A box running off the left of the stage keeps its title on screen, inside the box.
@@ -592,7 +592,7 @@
         return title.split(/[ \t\n]+/).every(function (word) { return word.length <= n; }) && wrap(title, n, 99).length <= mostOf(size);
       }
       // As large as the room allows, then smaller until the whole title fits; at 15 px a long one is clipped.
-      var size = slot.overlay ? 15 : Math.round(clamp(Math.min(room * 0.4, width / 7), 15, 30));
+      var size = slot.overlay && !slot.held ? 15 : Math.round(clamp(Math.min(room * 0.4, width / 7), 15, 30));
       while (size > 15 && !fits(size)) size--;
       var step = stepOf(size), most = mostOf(size);
       var lines = most > 1 ? wrap(title, perLine(size), most) : [clip(title, perLine(size))];
