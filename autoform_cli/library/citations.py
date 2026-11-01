@@ -34,7 +34,7 @@ from urllib.parse import unquote, urlsplit
 from .. import status
 from .._fs import resolved_path
 from ..graph import IMPLEMENTATION_NOTES_DIR, Graph
-from ..lean import _CONTINUATION_IDENTIFIER, resolve_lean_root, snapshot_project_sources
+from ..lean import _CONTINUATION_IDENTIFIER, IndexedSourceSnapshot
 from ..render import SOURCES_DIR
 from .index import INDEX_FILE, LibraryIndex, LibraryIndexError, parse_index
 from .listing import indexed_packages
@@ -101,7 +101,7 @@ class _Hit:
     own: bool
 
 
-def library_citation_warnings(graph: Graph, lean_root: str | Path) -> list[str]:
+def library_citation_warnings(graph: Graph, lean_root: str | Path, snapshot: IndexedSourceSnapshot) -> list[str]:
     """Warn about usable libraries' complete declarations whose docstrings cite a source the blueprint cites.
 
     A declaration counts as named when an implementation note, a Markdown page under
@@ -109,7 +109,7 @@ def library_citation_warnings(graph: Graph, lean_root: str | Path) -> list[str]:
     full. A project Lean file may also name, by its last component, a declaration whose own docstring
     cites a source, since ``open`` shortens names. A hit only in a module's docstring is reported once
     for the module, which naming the module, or in full one of its declarations citing that source,
-    silences.
+    silences. ``snapshot`` is the caller's capture of the project's Lean sources.
     """
 
     citing, pages, containers = _blueprint_sources(graph)
@@ -152,10 +152,6 @@ def library_citation_warnings(graph: Graph, lean_root: str | Path) -> list[str]:
     lean_prefixes: set[str] = set()
     lean_components: set[str] = set()
     if any(hit.name not in prose for hit in hits):
-        try:
-            snapshot = snapshot_project_sources(resolve_lean_root(lean_root))
-        except OSError:
-            return warnings  # check's own index build reads the same files, reports why, and fails
         lean_names, lean_prefixes, lean_components = _lean_names(
             data.decode("utf-8", "replace") for _, data in snapshot.source_files
         )

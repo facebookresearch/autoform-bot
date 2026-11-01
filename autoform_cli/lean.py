@@ -297,9 +297,9 @@ class BoundProjectSources:
     root: Path
     tree: BoundDirectoryTree
 
-    def capture(self) -> IndexedSourceSnapshot:
+    def capture(self, *, names: frozenset[str] | None = None) -> IndexedSourceSnapshot:
         snapshot = self.tree.capture()
-        return _indexed_source_snapshot(self.root, snapshot)
+        return _indexed_source_snapshot(self.root, snapshot, names=names)
 
     def verify(self) -> None:
         self.tree.verify()
@@ -378,6 +378,17 @@ def index_project(
     ).index
 
 
+def index_project_names(root: str | Path, names: Iterable[str]) -> SourceIndex:
+    """Index the declarations ``names`` could be, scanning only the sources that spell one of their last components.
+
+    The scanner indexes a name only where its source writes it, so ``find`` and
+    ``occurrences`` answer for these names as ``index_project``'s do. Other names
+    may be missing: use it only to locate the names given.
+    """
+
+    return snapshot_project_sources(resolve_lean_root(root), names=frozenset(names)).index
+
+
 def _remap_resolved_root_exclusion(
     requested_root: Path,
     resolved_root: Path,
@@ -446,17 +457,20 @@ def snapshot_project_sources(
     *,
     exclude_roots: Iterable[str | Path] = (),
     limits: TreeCaptureLimits = TreeCaptureLimits(),
+    names: frozenset[str] | None = None,
 ) -> IndexedSourceSnapshot:
     """Read each Lean source once and derive its index and revision together.
 
     A bind or capture that races a concurrent edit is retried a bounded number
-    of times.
+    of times. Given ``names``, the index holds only what ``index_project_names``
+    describes; the revision still covers every source.
     """
 
     bound, snapshot = _open_stable_project_sources(
         root,
         exclude_roots=tuple(exclude_roots),
         limits=limits,
+        names=names,
     )
     bound.close()
     return snapshot
@@ -467,6 +481,7 @@ def _open_stable_project_sources(
     *,
     exclude_roots: tuple[str | Path, ...],
     limits: TreeCaptureLimits,
+    names: frozenset[str] | None = None,
 ) -> tuple[BoundProjectSources, IndexedSourceSnapshot]:
     """Open and capture a Lean root, retrying a bounded number of changed attempts.
 
@@ -486,7 +501,7 @@ def _open_stable_project_sources(
                 exclude_roots=exclude_roots,
                 limits=limits,
             )
-            return bound, bound.capture()
+            return bound, bound.capture(names=names)
         except BaseException as error:
             if bound is not None:
                 bound.close()
@@ -698,7 +713,9 @@ def _folded_path(path: PurePosixPath) -> tuple[str, ...]:
     return tuple(unicodedata.normalize("NFC", part).casefold() for part in path.parts)
 
 
-def _indexed_source_snapshot(root: Path, snapshot: TreeSnapshot) -> IndexedSourceSnapshot:
+def _indexed_source_snapshot(
+    root: Path, snapshot: TreeSnapshot, *, names: frozenset[str] | None = None
+) -> IndexedSourceSnapshot:
     # The Lean selection captures only .lean entries outside excluded folders,
     # so every captured entry is a source and the snapshot's own revisions
     # cover exactly the Lean inputs and the folders holding them.
@@ -711,10 +728,13 @@ def _indexed_source_snapshot(root: Path, snapshot: TreeSnapshot) -> IndexedSourc
     line_counts: dict[Path, int] = {}
     source_files: list[tuple[Path, bytes]] = []
     digest = hashlib.sha256(b"autoform-lean-source-index/v1\0")
+    spellings = None if names is None else _spelling_pattern(names)
     for relative_text, data in snapshot.files:
         relative_path = Path(relative_text)
         _update_source_digest(digest, relative_path, data)
         source_files.append((relative_path, data))
+        if spellings is not None and not spellings.search(data):
+            continue
         try:
             text = data.decode("utf-8")
         except UnicodeError:
@@ -737,6 +757,12 @@ def _indexed_source_snapshot(root: Path, snapshot: TreeSnapshot) -> IndexedSourc
         snapshot.generation_revision,
         tuple(source_files),
     )
+
+
+def _spelling_pattern(names: Iterable[str]) -> re.Pattern[bytes]:
+    """Find what a source declaring one of ``names`` must hold: a name's last component, unquoted, in UTF-8."""
+
+    return _longest_spellings(parts[-1].strip("«»").encode("utf-8") for parts in map(_name_parts, names) if parts)[0]
 
 
 def _longest_spellings(spellings: Iterable[bytes]) -> tuple[re.Pattern[bytes], dict[bytes, tuple[bytes, ...]]]:
