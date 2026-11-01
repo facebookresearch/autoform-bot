@@ -241,14 +241,17 @@ def test_search_table_rebuilds_every_path_and_stores_short_ids() -> None:
 def test_records_from_view_turn_dependency_edges_into_user_used_relations() -> None:
     nodes = (
         ViewNode("roadmap", "Library", "scope", (), (("planned", 1),)),
-        ViewNode("a", "A", "node", (), (("fully_proved", 1),), status_key="fully_proved", lean="A.a"),
+        ViewNode("a", "A", "node", (), (("fully_proved", 1),), declaration="noncomputable def", status_key="fully_proved", lean="A.a"),
         ViewNode("b", "B", "node", (), (("planned", 1),), status_key="planned"),
     )
     view = GraphView("full", "Library", nodes, (ViewEdge("a", "b", statement_count=1),))  # b depends on a
     records, relations = project_map.records_from_view(view, {"a": {"parent": "roadmap", "result": True}, "b": {"parent": "roadmap", "result": True}})
     assert relations == [("b", "a", 1, 0)]
-    assert records[1] == {"id": "a", "kind": "node", "title": "A", "status": "fully_proved", "lean": "A.a",
+    assert records[1] == {"id": "a", "kind": "node", "title": "A", "status": "fully_proved", "lean": "A.a", "caption": "Definition",
                           "parent": "roadmap", "result": True}
+    # The book's caption reaches the reading pane's row; a result that declares nothing has none.
+    rows = _part(project_map.build_project_map(records, relations), "roadmap/~results")["results"]
+    assert [row.get("caption") for row in rows] == ["Definition", None]
 
 
 def test_page_escapes_its_links_and_title(tmp_path: Path) -> None:

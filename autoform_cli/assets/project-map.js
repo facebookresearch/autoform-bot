@@ -1167,7 +1167,7 @@
     shownPart = null;
     var row = entry.row, rel = relationsOf(id), shown = ++shownResult;
     readerInner.replaceChildren();
-    readerInner.append(el("p", "pm-kicker", "Result"));
+    readerInner.append(el("p", "pm-kicker", row.caption || "Result"));
     readerInner.append(withMath(el("h2"), row.title));
     readerInner.append(pathLine(chainOf(entry.home)));
     readerInner.append(el("span", "pm-chip", statusWords(row.status) + (row.facet ? " · " + row.facet : "")));
