@@ -60,6 +60,25 @@
       } catch (_error) { return null; }
     }
     function resource(value) { var url = new URL(value); url.hash = ""; return url.href; }
+    function frames() {
+      // Timer tasks can run back-to-back without a WebKit paint while a
+      // large catalogue is read and normalized. Resume after a second frame so
+      // the first can paint; hidden/stalled frames retain the same timer bound.
+      return new Promise(function (resolve) {
+        var visible = doc.visibilityState !== "hidden" && typeof win.requestAnimationFrame === "function" &&
+          typeof win.cancelAnimationFrame === "function";
+        var frame = null, timer = setTimeout(done, visible ? 50 : 0), finished = false;
+        function done() {
+          if (finished) return;
+          finished = true; clearTimeout(timer);
+          if (frame !== null) win.cancelAnimationFrame(frame);
+          resolve();
+        }
+        if (visible) frame = win.requestAnimationFrame(function () {
+          if (disposed) done(); else if (!finished) frame = win.requestAnimationFrame(done);
+        });
+      });
+    }
     function prefix() {
       for (var n = 0; n < arguments.length; n++) {
         if (!arguments[n]) continue;
@@ -157,11 +176,16 @@
             arm(); total += chunk.value.byteLength;
             chunks.push(chunk.value);
           }
-          var bytes = new Uint8Array(total), offset = 0;
-          chunks.forEach(function (part) { bytes.set(part, offset); offset += part.byteLength; });
+          var began = clock();
+          // WebKit hands a large body over as one chunk: use it rather than copy it.
+          var bytes = chunks.length === 1 ? chunks[0] : new Uint8Array(total), offset = 0;
+          if (chunks.length > 1) chunks.forEach(function (part) { bytes.set(part, offset); offset += part.byteLength; });
           if (isCatalogue) digest = captureIndexDigest(bytes);
           text = new TextDecoder("utf-8", {fatal: true}).decode(bytes); length = total;
           bytes = null; chunks = null;
+          // Reading and parsing a large index are each long tasks: let a frame paint between them.
+          // The body is complete, so its stall timer stops first.
+          if (isCatalogue && clock() - began >= INDEX_SLICE_MS) { clearTimeout(timer); await frames(); }
         } else if (isCatalogue && typeof response.arrayBuffer === "function") {
           var raw = new Uint8Array(await response.arrayBuffer());
           digest = captureIndexDigest(raw);
@@ -172,7 +196,9 @@
         }
         if (parentSignal && parentSignal.aborted) throw abortError();
         var entry = {text: text, url: responseURL, bytes: length, indexDigest: digest};
-        cachePut(cache, key, entry, type === "html" ? htmlEntries : jsonEntries); return entry;
+        // loadIndex keeps the normalized index, never this text: caching it took the pages' budget.
+        if (!isCatalogue) cachePut(cache, key, entry, type === "html" ? htmlEntries : jsonEntries);
+        return entry;
       } catch (error) {
         if (expired) throw new Error("Published data request timed out");
         throw error;
@@ -225,23 +251,7 @@
         return href && href + hash;
       }
       async function yieldIndex() {
-        // Timer tasks can run back-to-back without a WebKit paint while a
-        // large catalogue is normalized. Resume after a second frame so the
-        // first can paint; hidden/stalled frames retain the same timer bound.
-        await new Promise(function (resolve) {
-          var visible = doc.visibilityState !== "hidden" && typeof win.requestAnimationFrame === "function" &&
-            typeof win.cancelAnimationFrame === "function";
-          var frame = null, timer = setTimeout(done, visible ? 50 : 0), finished = false;
-          function done() {
-            if (finished) return;
-            finished = true; clearTimeout(timer);
-            if (frame !== null) win.cancelAnimationFrame(frame);
-            resolve();
-          }
-          if (visible) frame = win.requestAnimationFrame(function () {
-            if (disposed) done(); else if (!finished) frame = win.requestAnimationFrame(done);
-          });
-        });
+        await frames();
         if (disposed) throw abortError();
         slice = clock();
       }
@@ -292,15 +302,17 @@
       indexController = new AbortController();
       indexPromise = fetchText(catalogueURL, "json", indexController.signal).then(async function (loaded) {
         if (disposed) throw abortError();
-        var normalized = await normalizeIndex(JSON.parse(loaded.text), loaded.url);
+        // Drop the text before normalizing, which takes many frames.
+        var payload = JSON.parse(loaded.text), base = loaded.url, digest = loaded.indexDigest; loaded = null;
+        var normalized = await normalizeIndex(payload, base);
         if (disposed) throw abortError();
-        index = normalized; indexDigest = loaded.indexDigest;
+        index = normalized; indexDigest = digest;
         if (typeof options.onIndex === "function") {
           try { options.onIndex(index); } catch (error) { report(error, catalogueURL); }
         }
         return index;
       }).catch(function (error) {
-        indexPromise = null; cacheDelete(jsonCache, resource(catalogueURL));
+        indexPromise = null;
         if (!disposed) report(error, catalogueURL); throw error;
       }).finally(function () { indexController = null; });
       return indexPromise;

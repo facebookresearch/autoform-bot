@@ -221,6 +221,14 @@ date when the release is tagged.
   and concept links were ready 5.3 s after the index was parsed, most of it
   spent waiting between batches; they are now ready after 1.0 s in WebKit and
   0.7 s in Chrome.
+- **Search index memory.** The explorer no longer keeps the search index's
+  text in its page cache after preparing the index. ATLAS's 42 MB index took
+  40 of the cache's 48 MiB, so pages and graphs already read were dropped and
+  fetched again. A body WebKit hands over in one piece is hashed and decoded
+  without a copy, and when reading the index takes at least 10 ms, a frame
+  paints before it is parsed. On ATLAS, on one CI runner, the longest frame
+  while the index was read and parsed went from 217 ms to 142 ms in Chrome
+  and from 199 ms to 164 ms in WebKit.
 - **Book order.** A link inside an HTML comment no longer places its page in
   the book's order: a commented-out chapter link moved that chapter forward in
   `SUMMARY.md`, though the page showed it later (#535).
