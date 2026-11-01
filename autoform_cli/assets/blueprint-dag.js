@@ -13,8 +13,16 @@
   var pressed = function (control, value) { control.setAttribute("aria-pressed", String(value)); };
   // The book's caption for each declaration (render.DECLARATION_LABELS), so a card reads "Definition · defined" beside "Definition 1".
   var KINDS = new Map(Object.entries({abbrev: "Abbreviation", axiom: "Axiom", class: "Class", corollary: "Corollary", def: "Definition",
-    definition: "Definition", example: "Example", inductive: "Inductive", instance: "Instance", lemma: "Lemma", proposition: "Proposition",
-    structure: "Structure", theorem: "Theorem"}));
+    definition: "Definition", example: "Example", inductive: "Inductive", instance: "Instance", irreducible_def: "Definition",
+    lemma: "Lemma", opaque: "Definition", proposition: "Proposition", structure: "Structure", theorem: "Theorem"}));
+  // As status.declaration_command reads it: modifiers such as "noncomputable" drop, and a command with no caption reads as written.
+  function kindWord(declaration) {
+    var modifiers = ["local", "noncomputable", "partial", "private", "protected", "public", "scoped", "unsafe"];
+    var words = (declaration || "").split(/\s+/).filter(Boolean);
+    while (words.length > 1 && modifiers.indexOf(words[0].toLowerCase()) >= 0) words.shift();
+    var command = words.join(" ");
+    return KINDS.get(command.toLowerCase()) || command.charAt(0).toUpperCase() + command.slice(1);
+  }
 
   function element(tag, className, text) {
     var node = document.createElement(tag);
@@ -2869,7 +2877,7 @@
         num(count[0]) + " of " + num(count[1]) + " fully proved" : plural(node.member_count || 0, "article", "articles") :
         node.kind === "boundary" ? boundaryMeta(node) : null;
       // ATLAS titles such as "Theorem (Crystallographic Restriction)" already name their kind, so the meta does not repeat it.
-      var kind = KINDS.get((node.declaration || "").toLowerCase());
+      var kind = kindWord(node.declaration);
       if (kind && (node.title || "").indexOf(kind) === 0) kind = "";
       // A scope overview's group card is an area card, including its bucket of topics with no area.
       var area = node._region || node._overviewGroup;

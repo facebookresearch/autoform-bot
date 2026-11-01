@@ -1269,7 +1269,10 @@ def test_card_kind_words_match_the_book_captions() -> None:
     kinds = re.search(r"var KINDS = new Map\(Object\.entries\(\{(.*?)\}\)\);", script, re.S)
     assert kinds is not None
     assert dict(re.findall(r'(\w+): "([^"]+)"', kinds.group(1))) == render.DECLARATION_LABELS
-    assert 'var kind = KINDS.get((node.declaration || "").toLowerCase())' in script
+    modifiers = re.search(r"var modifiers = \[(.*?)\];", script)
+    assert modifiers is not None
+    assert set(re.findall(r'"(\w+)"', modifiers.group(1))) == status._DECLARATION_MODIFIERS
+    assert "var kind = kindWord(node.declaration);" in script
     # An ATLAS title such as "Theorem (Crystallographic Restriction)" names its kind already.
     assert 'if (kind && (node.title || "").indexOf(kind) === 0) kind = "";' in script
 

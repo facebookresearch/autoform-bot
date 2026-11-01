@@ -60,7 +60,7 @@ _CALLBACKS = [
     "element", "button", "readingLabel", "bindNodeLink", "safeHref", "buildShell", "bindEvents", "syncControls", "wrapMapKey",
     "setBrowse", "setFilters", "currentOverviewGroup", "trailList", "renderBreadcrumb", "routeTrail", "semanticParent",
     "refreshReadingLabels", "sourceNodes", "inCurrentScope", "focusNodeControl", "clearSelection",
-    "revealAll", "makeNodeControl", "finished", "boundaryMeta", "nearest", "zoomAt", "statusLabel",
+    "revealAll", "kindWord", "makeNodeControl", "finished", "boundaryMeta", "nearest", "zoomAt", "statusLabel",
     "pointerDown", "grab", "pinchState", "positionMapFeedback", "freeArea",
 ]
 
