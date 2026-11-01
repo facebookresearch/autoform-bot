@@ -885,6 +885,42 @@ def test_index_batches_end_on_elapsed_time_not_on_a_row_count() -> None:
     """)
 
 
+def test_index_links_resolved_once_per_page_match_parsing_each_whole_value() -> None:
+    _run(r"""
+      // Earlier rows leave the other two fields absent, so a literal "undefined" must not reuse their result.
+      const indexURL=absolute('dependencies/index.json'),whole=value=>new URL(value,indexURL).href;
+      const cases=[['route','a.html#x',1],['route','a.html#y',1],['route','a.html #x',1],['route','a.html#\u00e9',1],
+        ['route','a.html#a b',1],['route','a.html#x#y',1],['route','a.html#%zz',1],['route','a.html#',1],['route','#only',1],
+        ['route','../roadmap/b.html?q=1#n',1],['route','undefined',1],
+        ['route','https://outside.test/p#a',0],['url','https://outside.test/p#b',1],
+        ['url','https://outside.test/q#a',1],['route','https://outside.test/q#b',0],
+        ['route','javascript:alert(1)#x',0],['url','https://user:pw@outside.test/p#x',0]];
+      const payload=index();
+      cases.forEach(([field,value],n)=>payload.nodes.push({id:'case-'+n,title:'Case '+n,[field]:value}));
+      const app=setup();app.contents.set(indexURL,payload);
+      const result=await app.nav.loadIndex();
+      cases.forEach(([field,value,kept],n)=>assert.strictEqual(result.nodes[n+3][field],kept?whole(value):null,value));
+      app.nav.dispose();
+    """)
+
+
+def test_a_routed_page_outside_the_roadmap_is_a_site_document_without_its_fragment() -> None:
+    _run(r"""
+      // Neither page is under roadmap/ or dependencies/, so only the search row's route makes the first one internal.
+      const payload=index();payload.nodes.push({id:'guide',title:'Guide',route:'../guide/intro.html#setup'});
+      const app=setup();app.contents.set(absolute('dependencies/index.json'),payload);
+      await app.nav.start();const root=(await app.nav.navigateNode('a')).readingSource;
+      const routed=new Element('a',{href:absolute('guide/intro.html')},[],'Guide'),
+        unrouted=new Element('a',{href:absolute('guide/other.html')},[],'Other');
+      root.children.push(routed,unrouted);routed.parent=root;unrouted.parent=root;
+      app.nav.bindReader(root);const click=root.listeners.get('click');
+      const event=target=>({target,button:0,defaultPrevented:false,preventDefault(){this.defaultPrevented=true;},stopPropagation(){}});
+      const outside=event(unrouted);click(outside);assert.equal(outside.defaultPrevented,false);
+      const inside=event(routed);click(inside);assert.equal(inside.defaultPrevented,true);
+      app.nav.dispose();
+    """)
+
+
 def test_disposal_during_index_batch_never_commits_or_reports_a_partial_index() -> None:
     _run(r"""
       const payload=index();for(let n=0;n<600;n++) payload.nodes.push({id:'leaf-'+n,title:'Leaf '+n});
