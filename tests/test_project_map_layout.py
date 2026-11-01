@@ -338,8 +338,8 @@ def test_labels_appear_only_where_they_fit() -> None:
     // Held titles nested three deep stack in order, none over another.
     const outer = {x: 0, y: -400, w: 300, h: 900, unit: 1, band: 52, pad: 12, depth: 1, parent: null};
     const middle = {x: 10, y: -300, w: 280, h: 700, unit: 1, band: 52, pad: 12, depth: 2, parent: 'outer'};
-    const deep = {x: 20, y: -200, w: 260, h: 500, unit: 1, band: 52, pad: 12, depth: 3, parent: 'middle'};
-    const tower = L.placeLabels({outer, middle, deep}, still, pinned).map(label => label.y);
+    const inmost = {x: 20, y: -200, w: 260, h: 500, unit: 1, band: 52, pad: 12, depth: 3, parent: 'middle'};
+    const tower = L.placeLabels({outer, middle, inmost}, still, pinned).map(label => label.y);
     assert(tower[0] === 40 && tower[1] >= tower[0] + 32 - EPS && tower[2] >= tower[1] + 32 - EPS, JSON.stringify(tower));
     // A closed tile shows nothing inside, so its title wraps down it: as many lines as fit above its
     // padding, with the details after them. An open box keeps its title in its band.

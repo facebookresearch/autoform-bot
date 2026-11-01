@@ -40,7 +40,8 @@ def map_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
                                        encoding="utf-8")
     articles = {
         "algebra": [("index", "def", "Project.Subgroup.index", "Index of a subgroup", "The index of $H$ in $G$.", "No prerequisites."),
-                    ("lagrange", "theorem", "Project.Subgroup.card_dvd", "Lagrange's theorem", "The order of $H$ divides the order of $G$.",
+                    ("lagrange", "theorem", "Project.Subgroup.card_dvd", "Lagrange's theorem",
+                     "The order of $H$ divides the order of $G$.\n\nThe quotient is the index.\n\nSo the order of an element divides it.",
                      "- [Index of a subgroup](index.md)")],
         "analysis": [("abel", "theorem", "Project.abel_summation", r"Abel summation for $\mathbb{R}$", "Summation by parts.",
                       "- [Lagrange's theorem](../algebra/lagrange.md)")],
@@ -101,6 +102,25 @@ def test_the_map_walkthrough_overview_search_pivot_back_and_whole_project(webkit
         page.get_by_role("button", name="Whole project").click()
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Fixture library")
         playwright.expect(page.locator(".pm-trail li")).to_have_text(["Fixture library"])
+
+
+def test_back_returns_the_reading_pane_to_where_it_was_scrolled(webkit_browser: object, map_url: str) -> None:
+    # A short window, so the pane scrolls. The theorem's statement from its book page is longer than its summary.
+    with _page(webkit_browser, viewport={"width": 1440, "height": 400}, reduced_motion="reduce") as page:
+        _open_map(page, map_url)
+        search = page.get_by_role("searchbox", name="Search theorems by name or Lean name")
+        search.fill("Subgroup.card_dvd")
+        playwright.expect(page.locator(".pm-hit")).to_have_count(1)
+        search.press("Enter")
+        playwright.expect(page.locator(".pm-reader .pm-math")).to_contain_text("divides it")
+        bottom = page.locator(".pm-reader").evaluate("node => { node.scrollTop = node.scrollHeight; return node.scrollTop; }")
+        assert bottom > 0
+        # Clicked where it is, as a reader would, without scrolling it into view first.
+        page.locator(".pm-reader .pm-list button", has_text="Index of a subgroup").evaluate("button => button.click()")
+        playwright.expect(page.locator(".pm-reader h2")).to_have_text("Index of a subgroup")
+        page.go_back()
+        playwright.expect(page.locator(".pm-reader .pm-math")).to_contain_text("divides it")
+        page.wait_for_function("want => document.querySelector('.pm-reader').scrollTop === want", arg=bottom, timeout=5000)
 
 
 def test_zooming_out_keeps_the_theorem_and_shows_its_place(webkit_browser: object, map_url: str) -> None:

@@ -911,10 +911,11 @@
       var item = el("span"), swatch = el("i"); swatch.style.background = color(pair[0]); item.append(swatch, document.createTextNode(pair[1])); legend.append(item);
     });
     sideInner.append(legend);
+    // The links the map draws: a picked part's arrows to its neighbours, and the routes between a part's results.
     var key = el("div", "pm-edge-key");
-    [["", 1.25, "points to what uses it"], [" pm-proof", 1.25, "used only in proofs"]].forEach(function (row) {
+    [["pm-key-link", 2.5, "a picked part, to what uses it"], ["pm-route", 1.25, "a result, to what uses it"], ["pm-route pm-proof", 1.25, "used only in proofs"]].forEach(function (row) {
       var item = el("span"), sample = svg("svg", {width: 30, height: 10, "aria-hidden": "true"});
-      sample.appendChild(svg("path", {d: "M2,5H24", class: "pm-route" + row[0], "stroke-width": row[1], "marker-end": arrow(false)}));
+      sample.appendChild(svg("path", {d: "M2,5H24", class: row[0], "stroke-width": row[1], "marker-end": arrow(row[0] === "pm-key-link")}));
       item.append(sample, document.createTextNode(row[2])); key.append(item);
     });
     sideInner.append(key);
@@ -1013,7 +1014,7 @@
       readerInner.append(linkList("Used by", "used-by", links.used_by, links.used_by_total, most, home, function (row) {
         return num(row[3]) + (row[3] === 1 ? " result" : " results") + " in " + plain(row[1]) + (row[3] === 1 ? " uses it" : " use it");
       }));
-      if (links.uses.length || links.used_by.length) readerInner.append(el("p", "pm-empty pm-link-note", "On the map, the parts in view are outlined, and dots flow from what is used to what uses it. Bars count the results involved."));
+      if (links.uses.length || links.used_by.length) readerInner.append(el("p", "pm-empty pm-link-note", "On the map, the parts in view are outlined, and while this part is picked, arrows run to them with dots flowing from what is used to what uses it. Bars count the results involved."));
     }
     if (record.kids.length) { readerInner.append(el("h3", "", "Parts (" + num(record.kids.length) + ")")); readerInner.append(listOfParts(record.kids)); }
     if (summary.api && summary.api.length) {
@@ -1082,7 +1083,7 @@
   }
   // Formulas go to the site's MathJax runtime (javascripts/mathjax.js), which reads only the spans marked for it.
   function typeset(node) {
-    if (window.AutoformMath && typeof window.AutoformMath.refresh === "function") window.AutoformMath.refresh(node);
+    return Promise.resolve(window.AutoformMath && typeof window.AutoformMath.refresh === "function" ? window.AutoformMath.refresh(node) : null);
   }
   // The explorer's reading of a summary: closed code spans and unambiguous inline formulas; anything else stays literal.
   var MARKUP = /\\([\\`$])|(?<![\\`])(`+)(?!`)([^\n]*?)(?<!`)\2(?!`)|(?<![\\$])\$(?![\s$])((?:\\.|[^\\$\n])+?)(?<!\s)\$(?![$\d])|(?<!\\)\\\(((?:\\[^)]|[^\\\n])+?)\\\)/g;
@@ -1151,6 +1152,8 @@
     });
     return {block: copy, source: source};
   }
+  // Settles once the shown result's statement from its book page and its formulas are in the reading pane.
+  var readerReady = Promise.resolve();
   function showResult(id) {
     var entry = model.results.get(id);
     if (!entry) return;
@@ -1169,16 +1172,14 @@
     var actions = el("div", "pm-actions"), page = row.route && safeLink(row.route, routeBase);
     if (page) { var read = el("a", "", "Open in the book"); read.href = page; actions.append(read); }
     readerInner.append(actions);
-    if (page && window.DOMParser) {
-      pageAt(page).then(function (parsed) {
-        var math = shown === shownResult && state.selected === id && borrowed(parsed, id, page);
-        if (!math) return;
-        var holder = el("div", "pm-math"); holder.append(math.block);
-        if (summary) summary.replaceWith(holder); else (lean.parentNode ? lean : actions).before(holder);
-        if (math.source && row.lean) { var link = el("a", "", "Lean source"); link.href = math.source; lean.append(link); }
-        typeset(holder);
-      }).catch(function () { /* the summary and the link to the book stay */ });
-    }
+    var book = page && window.DOMParser ? pageAt(page).then(function (parsed) {
+      var math = shown === shownResult && state.selected === id && borrowed(parsed, id, page);
+      if (!math) return;
+      var holder = el("div", "pm-math"); holder.append(math.block);
+      if (summary) summary.replaceWith(holder); else (lean.parentNode ? lean : actions).before(holder);
+      if (math.source && row.lean) { var link = el("a", "", "Lean source"); link.href = math.source; lean.append(link); }
+      return typeset(holder);
+    }).catch(function () { /* the summary and the link to the book stay */ }) : null;
     [["Uses", rel.uses], ["Used by", rel.usedBy]].forEach(function (pair) {
       readerInner.append(el("h3", "", pair[0] + " (" + num(pair[1].length) + ")"));
       if (!pair[1].length) { readerInner.append(el("p", "pm-empty", pair[0] === "Uses" ? "No prerequisites recorded." : "Nothing uses it yet.")); return; }
@@ -1193,7 +1194,7 @@
         return li;
       }));
     });
-    typeset(readerInner);
+    readerReady = Promise.all([book, typeset(readerInner)]);
   }
 
   // ---------------------------------------------------------------- trail
@@ -1256,8 +1257,12 @@
       if (String(facets && Array.from(facets)) !== String(state.facets && Array.from(state.facets))) { state.facets = facets; renderSide(); }
       select(snap.selected || null, {history: false});
       side.scrollTop = snap.sideScroll || 0;
-      // The reading pane may change again as the view arrives, so its scroll comes back when the flight lands.
-      var scrolled = function () { reader.scrollTop = snap.readerScroll || 0; };
+      // The reading pane may change again as the view arrives, and a result's statement and formulas land after it
+      // opens. Its scroll comes back once both have, or a shorter pane would cut it short.
+      var scrolled = function () {
+        var restore = function () { if (epoch === navEpoch) reader.scrollTop = snap.readerScroll || 0; };
+        readerReady.then(restore, restore);
+      };
       var here = snap.selected && model.results.get(snap.selected);
       live.textContent = here ? "Showing " + plain(here.row.title) : state.focusPart && state.focusPart !== ROOT && part(state.focusPart) ?
         "Showing " + plain(part(state.focusPart).summary.title) : "Whole project";
