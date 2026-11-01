@@ -816,10 +816,17 @@ def published_page(text: str) -> str:
 
     # A byte-order mark would sit after render's header, where MkDocs no longer strips it.
     lines = text.removeprefix("\ufeff").splitlines()
+    start = _page_start(lines)
+    return PAGE_HEADER + "\n" * start + published_lines(_without_comments(lines[start:]))
+
+
+def _page_start(lines: list[str]) -> int:
+    """The first line after the frontmatter, as :func:`frontmatter_end` reads it."""
+
     start = frontmatter_end(lines)
     if start == len(lines) and (start < 2 or lines[-1].strip() != "---"):
-        start = 0  # a first line of --- that nothing closes is no frontmatter
-    return PAGE_HEADER + "\n" * start + published_lines(_without_comments(lines[start:]))
+        return 0  # a first line of --- that nothing closes is no frontmatter
+    return start
 
 
 def _without_comments(body: list[str], *, keep_lines: bool = False) -> str:
@@ -853,6 +860,14 @@ def _without_comments(body: list[str], *, keep_lines: bool = False) -> str:
         block = "\n".join(line for _, line in run)
         kept.append(block if in_code else _CODE_OR_COMMENT.sub(removed, block))
     return "\n".join(kept)
+
+
+def _comments_blanked(lines: list[str]) -> list[str]:
+    """``lines`` with the comments :func:`published_page` leaves out blanked, each line where it was."""
+
+    if not any("<!--" in line for line in lines):
+        return list(lines)
+    return _without_comments(lines, keep_lines=True).split("\n")
 
 
 def published_markdown(text: str) -> list[tuple[str, str]]:
@@ -908,16 +923,18 @@ def statement_and_notes(text: str) -> tuple[str, str]:
     return _demote_headings(parts.statement), _demote_headings(notes)
 
 
-def outside_fences(text: str, transform) -> str:
+def outside_fences(text: str, transform, *, page: bool = False) -> str:
     """Apply *transform* to every line that is not inside a code fence.
 
     Fences are read with the comments the site leaves out blanked, as
     :func:`published_page` finds them: a fence line inside a comment opens
     nothing, and a ``<!--`` in a code span or a code block, or one that never
-    closes, hides no fence.
+    closes, hides no fence. A *page*'s frontmatter, which the site does not
+    read as Markdown, takes no part in that reading.
     """
     lines = text.splitlines()
-    shown = _without_comments(lines, keep_lines=True).split("\n") if lines else []
+    start = _page_start(text.removeprefix("\ufeff").splitlines()) if page else 0
+    shown = [""] * start + _comments_blanked(lines[start:])
     fenced: set[int] = set()
     _mask_fences_and_comments(shown, set(), fenced=fenced, comments=False)
     out = [line if index in fenced else transform(line) for index, line in enumerate(lines)]
@@ -1071,14 +1088,19 @@ def mask_fences_and_comments(lines: list[str]) -> list[str]:
 
 
 def first_unclosed_fence(lines: list[str]) -> int | None:
-    """Return the index of the first fence line that never closes, if any."""
+    """Return the index of the first fence line that never closes, if any.
+
+    Comments are read as :func:`outside_fences` reads them, so a fence render
+    reads on to the end is one this finds.
+    """
 
     unclosed: set[int] = set()
     _mask_fences_and_comments(
-        lines,
+        _comments_blanked(lines),
         set(),
         unclosed_fence_is_text=True,
         unclosed_openers=unclosed,
+        comments=False,
     )
     return min(unclosed, default=None)
 

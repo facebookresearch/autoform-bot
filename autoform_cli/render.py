@@ -1962,7 +1962,7 @@ def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> lis
         text = source.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return []  # the site leaves out a page that is not UTF-8, as check warns
-    _outside_fences(text, collect)
+    _outside_fences(text, collect, page=True)
     return linked_sources
 
 
@@ -3036,7 +3036,7 @@ def _rewrite_links(
             end = match.end()
         return "".join(pieces) + line[end:]
 
-    return _outside_fences(text, rewrite)
+    return _outside_fences(text, rewrite, page=True)
 
 
 def _is_within(path: Path, directory: Path) -> bool:

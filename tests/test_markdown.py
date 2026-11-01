@@ -290,6 +290,18 @@ def test_render_s_line_transforms_read_a_comment_opener_in_code_as_text() -> Non
         )
 
 
+def test_render_s_line_transforms_pair_no_code_span_across_a_page_s_frontmatter() -> None:
+    """Review of #542: a backtick run in the frontmatter, which the site doesn't read as Markdown, paired with one in
+    the body and kept the comment between, so the comment's fence line hid every line after it."""
+    for text in (
+        "---\ntitle: a ` b\n---\nThe `x` value.\n<!--\n```\n-->\nUse ` and see [x](a.md).\n",
+        "---\n# use ``` here\n---\n<!--\n```\n-->\nsee [x](a.md)\n",
+    ):
+        assert outside_fences(text, lambda line: f"+{line}", page=True) == "".join(
+            f"+{line}\n" for line in text.splitlines()
+        )
+
+
 def test_text_beside_a_comment_on_one_line_survives() -> None:
     assert content_lines("| OUT | real <!-- aside --> reason |\n") == [
         "| OUT | real  reason |"

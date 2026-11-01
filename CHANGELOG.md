@@ -191,7 +191,10 @@ date when the release is tagged.
 - **Fences in comments.** Render no longer reads a fence line inside an HTML
   comment as opening a code block. It had left every later line of the page
   unrewritten, so a link to a source note after it was published as written,
-  to a page the site leaves out, and `check` said nothing (#527).
+  to a page the site leaves out, and `check` said nothing (#527). `check`,
+  `audit` and the explorer now read comments as the site does too, so a `<!--`
+  in a code span no longer hides a fence that never closes from them, nor makes
+  a closed code block after it read as unclosed.
 - **Output checks.** `skeleton`, `review prepare` and `library index` refuse
   to replace an output folder that holds a subfolder they cannot list, where
   they skipped it, so an edit inside it could be published over (#521).
