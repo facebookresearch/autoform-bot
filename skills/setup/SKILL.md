@@ -52,14 +52,14 @@ version (at least v4.27.0). On macOS use `/private/tmp`, not the `/tmp` alias.
 On `project-parent-unsafe`, choose another parent or, with the user's
 agreement, run `chmod g-w,o-w` on it.
 
-If the user names a donor (never search for one), let `<PKGS>` be its
-`.lake/packages`, or the donor itself if it is a packages folder. Before any
-Lake command runs in the new project, `lake update repl` included, and only
-while `pgrep -x lake` finds no Lake process, copy each `git` package of the new
-`lake-manifest.json` (with none, copy nothing) that `.lake/packages` lacks and
-whose `<PKGS>/<NAME>` is no symbolic link, prints that `rev` for `git rev-parse
-HEAD`, and prints nothing for `git status --porcelain`: `mkdir -p .lake/packages
-&& cp -Rc <PKGS>/<NAME> .lake/packages/` (`cp -R --reflink=auto` on Linux).
+If the user names a donor (never search for one), `<PKGS>` is its
+`.lake/packages`, or the donor if it is a packages folder. Before any Lake
+command runs in the new project, `lake update repl` included, copy each `git`
+package the new `lake-manifest.json` locks that `.lake/packages` lacks and whose
+`<PKGS>/<NAME>` is no symbolic link, prints that `rev` for `git rev-parse HEAD`,
+and prints nothing for `git --no-optional-locks status --porcelain`: `mkdir -p
+.lake/packages && cp -Rc <PKGS>/<NAME> .lake/packages/` (`cp -R --reflink=auto`
+on Linux). If `pgrep -x lake` finds a Lake process, copy nothing and say why.
 
 Autoform's library catalog,
 `$AUTOFORM_PLUGIN_ROOT/autoform_cli/project/libraries.json`, lists shared Lean
@@ -169,7 +169,7 @@ to post from repository setup, roadmap work, or permission to search.
 
 Before reporting, follow [Debrief Orchestrator](../debrief-orchestrator/SKILL.md)
 with `--skill setup`. Report the Lean toolchain, the packages copied from a
-donor, vault path, CI and Pages files, validation results, the publication
-decision, and any one-time GitHub setting the user must still apply. State that
-no sources were scoped, roadmap nodes created, or proofs started, then hand the
-repository to Roadmap.
+donor and those fetched instead, with why, vault path, CI and Pages files,
+validation results, the publication decision, and any one-time GitHub setting
+the user must still apply. State that no sources were scoped, roadmap nodes
+created, or proofs started, then hand the repository to Roadmap.
