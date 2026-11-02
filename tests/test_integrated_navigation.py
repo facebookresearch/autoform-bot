@@ -34,6 +34,7 @@ class Element {
   removeAttribute(name) { delete this.attrs[name]; }
   hasAttribute(name) { return this.attrs[name] !== undefined; }
   matches(selector) {
+    if (selector === ':target') return this.targeted === true;
     if (selector === 'a[href]') return this.tagName === 'A' && this.hasAttribute('href');
     if (selector.startsWith('.')) return (this.attrs.class || '').split(' ').includes(selector.slice(1));
     return this.tagName.toLowerCase() === selector;
@@ -45,8 +46,14 @@ class Element {
   }
   closest(selector) { return this.matches(selector) ? this : this.parent && this.parent.closest(selector); }
   contains(node) { return node === this || this.all().includes(node); }
-  cloneNode() { return new Element(this.tagName, this.attrs, this.children.map(child => child.cloneNode()), this.text); }
+  cloneNode(deep) { return deep ? new Element(this.tagName, this.attrs, this.children.map(child => child.cloneNode(true)), this.text) :
+    new Element(this.tagName, this.attrs); }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); }
+  get firstChild() { return this.children[0] || null; }
+  appendChild(node) { node.remove(); node.parent = this; this.children.push(node); return node; }
+  replaceWith(node) {
+    node.remove(); node.parent = this.parent; this.parent.children.splice(this.parent.children.indexOf(this), 1, node); this.parent = null;
+  }
   addEventListener(type, callback) { this.listeners.set(type, callback); }
   removeEventListener(type) { this.listeners.delete(type); }
 }
@@ -491,6 +498,33 @@ def test_the_loaded_page_hands_over_its_own_reading_sanitized_in_place() -> None
       const copied=again.readingSource.querySelector('mjx-container').querySelector('a');
       assert.equal(copied.getAttribute('onclick'),null); assert.equal(copied.href,absolute('roadmap/c.html'));
       app.nav.dispose();
+    """)
+
+
+def test_the_element_the_address_names_stays_behind_and_its_copy_takes_its_children() -> None:
+    _run(r"""
+      const app=setup(), reading=app.initial.reading;
+      const glyph=new Element('mjx-container',{},[],'0=0'), formula=new Element('span',{'class':'arithmatex'},[glyph]);
+      const named=new Element('h2',{id:'theorem-main','class':'bp-thmheading',onclick:'bad()'},[new Element('span',{},[],'Main'),formula]);
+      named.parent=reading; reading.children.splice(1,0,named); named.targeted=true;
+      const opened=await app.nav.start();
+      assert.strictEqual(opened.readingSource,reading,'the reading itself is still handed over');
+      const copy=reading.children[1];
+      assert.notStrictEqual(copy,named); assert(!app.initial.doc.contains(named),'the named element is left detached');
+      assert.deepEqual(copy.attrs,{id:'theorem-main','class':'bp-thmheading'}); assert.equal(named.children.length,0);
+      assert.strictEqual(formula.parent,copy); assert(copy.contains(glyph),'its typeset formulas move into the copy');
+      app.nav.dispose();
+      // A reading that is itself the named element is replaced by its copy where it stood.
+      const whole=setup(), page=whole.initial.reading, heading=page.querySelector('h1'); page.targeted=true;
+      const moved=(await whole.nav.start()).readingSource;
+      assert.notStrictEqual(moved,page); assert(!whole.initial.doc.contains(page)); assert(whole.initial.root.contains(moved));
+      assert.equal(moved.getAttribute('class'),'bp-reading-source'); assert.strictEqual(moved.querySelector('h1'),heading);
+      whole.nav.dispose();
+      // What MathJax drew is left as it drew it, even when the address names a part of it.
+      const inner=setup(), part=new Element('mjx-mtd',{id:'mjx-eqn:1'}), drawn=new Element('mjx-container',{},[part]);
+      drawn.parent=inner.initial.reading; inner.initial.reading.children.push(drawn); part.targeted=true;
+      await inner.nav.start(); assert.strictEqual(part.parent,drawn); assert(inner.initial.doc.contains(part));
+      inner.nav.dispose();
     """)
 
 

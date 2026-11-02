@@ -465,6 +465,18 @@
           if (candidates.length) node.setAttribute("srcset", candidates.join(", ")); else node.removeAttribute("srcset");
         }
       });
+      // Until a page has loaded, WebKit scrolls the element its address's fragment
+      // names back into view after every layout. In the reader that would undo every
+      // other scroll, so that element is left detached, and a shallow copy of it
+      // takes its children, typeset formulas included. It is found as :target, which
+      // can stop matching once the element moves, so this runs before the reading does.
+      var anchored = inPlace && (reading.matches(":target") ? reading : reading.querySelector(":target"));
+      if (anchored && sanitized(anchored)) {
+        var stand = anchored.cloneNode(false);
+        while (anchored.firstChild) stand.appendChild(anchored.firstChild);
+        anchored.replaceWith(stand);
+        if (anchored === reading) reading = stand;
+      }
       return reading;
     }
     function parsedPage(text, base) {
