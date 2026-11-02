@@ -24,7 +24,8 @@ uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project inspect "$PROJECT" --j
 
 Infer safe local defaults from the request and repository. If a material choice
 is missing, ask once for the run type (new, repair, or inspect), UpperCamelCase
-package name, target directory, and whether publication is wanted.
+package name, target directory, and whether publication is wanted. Without
+explicit publication approval, make no remote changes.
 
 The [Cabannes thesis project](assets/cabannes-thesis-project/README.md) shows a
 set-up project with a deliberately partial DAG. Read it, but do not copy it:

@@ -69,7 +69,8 @@ identical inputs produce identical output files. The dashboard accepts only a v3
 site and reports an older one as stale until render replaces it. Render reads
 the blueprint and the Lean sources once each; an edit saved during a render
 waits for the next one, and until then the dashboard reports the built site as
-stale; under `--review` it fails the render ([review](../README.md#review)).
+stale. Under `--review`, an article or cited passage edited during extraction
+fails the render instead ([review](../README.md#review)).
 
 Repository links appear only when the Lean bytes match one locally available Git
 commit, recorded by its full object ID; a clean checkout that Git converts on

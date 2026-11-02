@@ -43,7 +43,8 @@ and `Init` alone provides file and process IO, as in `#eval IO.Process.run`.
 A REPL call whose header does not start with `module` or `prelude` imports
 Mathlib, so it takes at least as long as `import Mathlib` on the node. The REPL
 `timeout` is one total budget for waiting for an idle slot, the header check,
-child startup, imports, and the submitted code. `get_repl_status` reports a
+child startup, imports, and the submitted code; admitting the project counts
+against `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT` instead. `get_repl_status` reports a
 project as `cold`, `warming`, `warm`, or `retiring`; `warm` means its slot pool
 is cached, not that a REPL subprocess remains resident.
 
