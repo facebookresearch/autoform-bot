@@ -48,7 +48,7 @@ from typing import Any
 import psutil
 
 from ._fs import is_within
-from ._repository import _git_environment
+from ._repository import run_git
 from ._strict_json import reject_json_constant, strict_json_object
 from .claims import CLAIM_TTL_S, ClaimBoard, ClaimTransportError, _repository_is_remote
 
@@ -877,19 +877,7 @@ def _git(
     cwd: Path, *arguments: str, stdin: bytes | None = None, timeout: float | None = _GIT_TIMEOUT_S
 ) -> subprocess.CompletedProcess[bytes]:
     """Run Git; one that cannot start or runs out of time fails with exit status -1, so its caller protects."""
-    try:
-        return subprocess.run(
-            ["git", "--no-optional-locks", *arguments],
-            cwd=cwd,
-            input=stdin,
-            capture_output=True,
-            env=_git_environment(),
-            timeout=timeout,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        failure = os.fsencode(f"git {arguments[0]} could not run: {error}")
-        return subprocess.CompletedProcess(["git", *arguments], -1, b"", failure)
+    return run_git(cwd, *arguments, stdin=stdin, timeout=timeout)
 
 
 def _git_line(cwd: Path, *arguments: str) -> str | None:

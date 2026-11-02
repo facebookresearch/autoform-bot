@@ -10,7 +10,8 @@ when the root lies in ``GITHUB_WORKSPACE``, and ask Git when the root is
 outside it or the variable is empty; ``repository_top_level`` places the root
 in its working tree. Every Git command here runs without the caller's ``GIT_*``
 variables, so the given directory alone selects the repository; the debrief
-store, ``work import-impact`` and ``autoform --version`` run ``git`` too.
+store, ``work import-impact``, ``autoform --version``, the scaffold's pin and
+``worktrees`` run Git through ``git`` and ``run_git`` too.
 """
 
 from __future__ import annotations
@@ -89,18 +90,7 @@ def verify_repository_snapshot(
 def _git_clean_blob_id(root: Path, path: str, data: bytes) -> str | None:
     """Hash captured bytes as Git would store them at *path* (clean filter, eol)."""
 
-    try:
-        result = subprocess.run(
-            ["git", "hash-object", "--stdin", f"--path={path}"],
-            cwd=str(root),
-            input=data,
-            capture_output=True,
-            env=_git_environment(),
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
+    result = run_git(root, "hash-object", "--stdin", f"--path={path}", stdin=data)
     output = result.stdout.decode("ascii", "replace").strip()
     return output if result.returncode == 0 and output else None
 
@@ -124,25 +114,9 @@ def _git_tree_oids(
         batch = paths[start : start + 128]
         if not batch:
             continue
-        try:
-            completed = subprocess.run(
-                [
-                    "git",
-                    "ls-tree",
-                    "-rz",
-                    "--full-tree",
-                    commit,
-                    "--",
-                    *(f":(literal){path}" for path in batch),
-                ],
-                cwd=str(root),
-                capture_output=True,
-                env=_git_environment(),
-                timeout=10,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
+        completed = run_git(
+            root, "ls-tree", "-rz", "--full-tree", commit, "--", *(f":(literal){path}" for path in batch)
+        )
         if completed.returncode != 0:
             return None
         asked = set(batch)
@@ -272,22 +246,43 @@ def _normalize_remote(remote: str) -> str | None:
 
 
 def git(root: str | Path, *arguments: str, environment: Mapping[str, str] | None = None) -> str | None:
-    """Run Git in ``root``; ``environment`` adds variables to the stripped environment."""
+    """Git's output in ``root``, stripped, or ``None`` if it failed or printed nothing.
+
+    ``environment`` adds variables to the stripped environment. Output that is
+    not UTF-8 raises ``UnicodeDecodeError``, a ``ValueError``.
+    """
+
+    result = run_git(root, *arguments, environment=environment)
+    output = result.stdout.decode().strip()
+    return output if result.returncode == 0 and output else None
+
+
+def run_git(
+    root: str | Path,
+    *arguments: str,
+    stdin: bytes | None = None,
+    timeout: float | None = 10,
+    environment: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run Git in ``root`` without the caller's ``GIT_*`` variables.
+
+    Git that cannot start or runs out of time comes back with exit status -1 and
+    the reason on stderr, so callers handle one shape of failure.
+    """
 
     try:
-        result = subprocess.run(
-            ["git", *arguments],
+        return subprocess.run(
+            ["git", "--no-optional-locks", *arguments],
             cwd=str(root),
+            input=stdin,
             capture_output=True,
             env={**_git_environment(), **(environment or {})},
-            text=True,
-            timeout=10,
+            timeout=timeout,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    output = result.stdout.strip()
-    return output if result.returncode == 0 and output else None
+    except (OSError, subprocess.SubprocessError) as error:
+        failure = os.fsencode(f"git {arguments[0]} could not run: {error}")
+        return subprocess.CompletedProcess(["git", *arguments], -1, b"", failure)
 
 
 def _git_environment() -> dict[str, str]:
@@ -307,5 +302,6 @@ __all__ = [
     "detect_repository_url",
     "git",
     "repository_top_level",
+    "run_git",
     "verify_repository_snapshot",
 ]

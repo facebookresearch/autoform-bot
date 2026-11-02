@@ -5496,10 +5496,8 @@ def _print_composed_names(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def composed(command, *args, **kwargs):
         completed = run(command, *args, **kwargs)
-        if command[:2] == ["git", "ls-tree"]:
+        if "ls-tree" in command or ("rev-parse" in command and "--show-prefix" in command):
             completed.stdout = completed.stdout.replace("e\u0301".encode(), "\u00e9".encode())
-        elif command[:2] == ["git", "rev-parse"] and "--show-prefix" in command:
-            completed.stdout = completed.stdout.replace("e\u0301", "\u00e9")
         return completed
 
     monkeypatch.setattr(repository_module.subprocess, "run", composed)

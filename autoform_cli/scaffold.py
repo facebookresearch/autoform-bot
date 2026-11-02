@@ -15,13 +15,14 @@ import json
 import os
 import re
 import stat
-import subprocess
 import tempfile
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from ._repository import git, run_git
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
 _MAX_GITIGNORE_BYTES = 1024 * 1024
@@ -85,17 +86,9 @@ def _git(*args: str, root: Path | None = None) -> str | None:
     """Read a value from an Autoform checkout, defaulting to this one."""
 
     try:
-        done = subprocess.run(
-            ["git", "--no-replace-objects", "-C", str(root or _here()), *args],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return git(root or _here(), *args)
+    except UnicodeError:
         return None
-    value = done.stdout.strip()
-    return value if done.returncode == 0 and value else None
 
 
 def _checkout_root(directory: Path) -> Path | None:
@@ -202,37 +195,17 @@ def _normalize_autoform_source(source: str, *, allow_github_scp: bool = False) -
 def _git_checkout_clean(root: Path) -> bool:
     """Whether *root* has no tracked or staged changes from ``HEAD``."""
 
-    git = ["git", "--no-optional-locks", "--no-replace-objects", "-c", "core.fsmonitor=false"]
     options = ["--quiet", "--no-ext-diff", "--no-textconv", "HEAD", "--"]
-    try:
-        return all(
-            subprocess.run(
-                [*git, "-C", str(root), "diff", *cached, *options],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-                check=False,
-            ).returncode
-            == 0
-            for cached in ((), ("--cached",))
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
+    return all(
+        run_git(root, "-c", "core.fsmonitor=false", "diff", *cached, *options).returncode == 0
+        for cached in ((), ("--cached",))
+    )
 
 
 def _git_bytes(root: Path, *args: str, limit: int) -> bytes | None:
     """Run a bounded local Git object query."""
 
-    try:
-        done = subprocess.run(
-            ["git", "--no-optional-locks", "--no-replace-objects", "-C", str(root), *args],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
+    done = run_git(root, *args)
     if done.returncode != 0 or len(done.stdout) > limit:
         return None
     return done.stdout

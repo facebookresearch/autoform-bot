@@ -1342,6 +1342,28 @@ def test_direct_checkout_pin_requires_a_matching_tracked_surface(
     assert scaffold_module.plugin_pin() == ("", "")
 
 
+def test_checkout_pin_ignores_git_variables_that_name_another_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = tmp_path / "checkout"
+    head = _autoform_checkout(checkout, "https://example.test/autoform.git")
+    hooked = tmp_path / "hooked"
+    hooked.mkdir()
+    _git_output(hooked, "init", "-q")
+    _git_output(hooked, "commit", "-q", "--allow-empty", "-m", "the hook's repository")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    _run_from(monkeypatch, checkout)
+    # A Git hook runs with GIT_DIR and GIT_INDEX_FILE naming its own repository.
+    # Before, Git took any directory for that repository's work tree.
+    monkeypatch.setenv("GIT_DIR", str(hooked / ".git"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(hooked / ".git" / "index"))
+
+    assert scaffold_module._checkout_root(plain) is None
+    assert scaffold_module._git_checkout_clean(checkout)
+    assert scaffold_module.plugin_pin() == ("https://example.test/autoform.git", head)
+
+
 def test_direct_checkout_pin_ignores_unrelated_untracked_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
