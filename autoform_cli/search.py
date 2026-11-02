@@ -12,7 +12,14 @@ from functools import lru_cache
 from pathlib import Path
 
 from .graph import load_graph
-from .lean import LeanSourceError, SourceIndex, index_failure_message, index_project_names, resolve_lean_root
+from .lean import (
+    LeanSourceError,
+    SourceIndex,
+    _unquoted_parts,
+    index_failure_message,
+    index_project_names,
+    resolve_lean_root,
+)
 from .markdown import ArticleParts, article_parts, visible_prose
 from .runtime import RuntimeNode, build_runtime_graph, resolve_runtime_paths
 
@@ -341,7 +348,7 @@ def lean_name(name: str) -> str:
 def unquoted(name: str) -> str:
     """Return a Lean name without ``_root_.`` and its quoting marks, its ending kept."""
 
-    return name.removeprefix("_root_.").replace("\u00ab", "").replace("\u00bb", "")
+    return ".".join(_unquoted_parts(name))
 
 
 def typed_words(query: str, words: tuple[str, ...]) -> frozenset[str]:

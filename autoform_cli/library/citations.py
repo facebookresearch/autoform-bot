@@ -34,7 +34,7 @@ from urllib.parse import unquote, urlsplit
 from .. import status
 from .._fs import resolved_path
 from ..graph import IMPLEMENTATION_NOTES_DIR, Graph
-from ..lean import _CONTINUATION_IDENTIFIER, IndexedSourceSnapshot
+from ..lean import _CONTINUATION_IDENTIFIER, _QUOTED_COMPONENT, IndexedSourceSnapshot
 from ..render import SOURCES_DIR
 from .index import INDEX_FILE, LibraryIndex, LibraryIndexError, parse_index
 from .listing import indexed_packages
@@ -58,8 +58,6 @@ _DOI = re.compile(
 _ARXIV_DOI = "10.48550/arxiv."
 #: Larger linked files are not pages Roadmap writes about a source.
 _PAGE_LIMIT = 4 * 1024 * 1024
-#: A «quoted» name component.
-_QUOTED = re.compile(r"«([^«»]*)»")
 
 
 def cited_sources(text: str | None) -> frozenset[str]:
@@ -395,10 +393,10 @@ def _drop_needless_quotes(name: str) -> str:
     """``name`` with each ``«x»`` that needs no quotes written as ``x``."""
 
     def plain(part: re.Match[str]) -> str:
-        inner = part[1]
+        inner = part[0][1:-1]
         return inner if "." not in inner and _CONTINUATION_IDENTIFIER.fullmatch(inner) else part[0]
 
-    return _QUOTED.sub(plain, name) if "«" in name else name
+    return re.sub(_QUOTED_COMPONENT, plain, name) if "«" in name else name
 
 
 __all__ = ["cited_sources", "library_citation_warnings"]

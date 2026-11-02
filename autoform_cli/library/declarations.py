@@ -40,6 +40,7 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+from ..lean import _unquoted_parts
 from .index import KINDS, IndexDeclaration
 
 #: Axioms a complete declaration may rest on.
@@ -239,7 +240,7 @@ def classify(constant: ProbeConstant, source: str) -> IndexDeclaration | str:
     )
     # `_root_.` leaves the current namespace and is no part of the name. Lean prints a name with
     # `«»` around a component only where it needs them, whatever the source has.
-    spelled, name = _strip_guillemets(written.removeprefix("_root_.")), _strip_guillemets(constant.name)
+    spelled, name = ".".join(_unquoted_parts(written)), ".".join(_unquoted_parts(constant.name))
     # Lean selects the keyword of an anonymous `instance`. Batteries gives the name it makes for an
     # anonymous `instance_wanted` the range of the whole command, so there the selection is the range.
     anonymous = written == "instance" or (keyword == "instance_wanted" and constant.selection == constant.range)
@@ -260,10 +261,6 @@ def classify(constant: ProbeConstant, source: str) -> IndexDeclaration | str:
         mentions=tuple(sorted(set(constant.mentions))),
         auto_named=anonymous,
     )
-
-
-def _strip_guillemets(name: str) -> str:
-    return name.replace("«", "").replace("»", "")
 
 
 def starts_with_module(source: str) -> bool:
