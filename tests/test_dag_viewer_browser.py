@@ -1178,7 +1178,8 @@ def test_legacy_node_hash_resolves_through_the_global_index(desktop_page: object
     playwright.expect(page.locator(".bp-dag-search")).not_to_have_attribute("aria-busy", "true")
     assert page.url.endswith("#node=unknown%2Fitem")
     assert len(navigations) == 1
-    # Nothing is selected, in the book or on the map.
+    # Nothing is selected, in the book or on the map, once the map has drawn.
+    playwright.expect(page.locator(".bp-whole-map .pm-part").first).to_be_visible()
     playwright.expect(page.locator(".bp-dag-has-selection")).to_have_count(0)
     playwright.expect(page.locator(".bp-whole-map .pm-result.pm-selected")).to_have_count(0)
 
@@ -2301,8 +2302,12 @@ def _assert_sheet_state(page: object, *, selected: str | None, opened: bool) -> 
     inner = page.locator(".bp-dag-inspector-inner")
     assert inner.get_attribute("inert") == (None if opened else "")
     assert inner.get_attribute("aria-hidden") == (None if opened else "true")
+    # The map follows the book's selection mark, so it lets go of its card when the book does.
+    card = page.locator(".bp-whole-map .pm-result.pm-selected")
     if selected is not None:
-        playwright.expect(page.locator(".bp-whole-map .pm-result.pm-selected")).to_have_attribute("data-result", selected)
+        playwright.expect(card).to_have_attribute("data-result", selected)
+    else:
+        playwright.expect(card).to_have_count(0)
 
 
 
