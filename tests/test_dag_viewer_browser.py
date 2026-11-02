@@ -1369,8 +1369,8 @@ def test_no_javascript_keeps_the_linked_fallback(webkit_browser: object, explore
         playwright.expect(fallback).to_be_visible()
         download = fallback.get_by_role("link", name="Download the complete graph data")
         playwright.expect(download).to_be_visible()
-        assert page.request.get(download.get_attribute("href") if download.get_attribute("href").startswith("http")
-                                else urljoin(page.url, download.get_attribute("href"))).json()["schema"] == "autoform-dag-view/v2"
+        data = page.request.get(urljoin(page.url, download.get_attribute("href"))).json()
+        assert data["schema"] == site_index.SEARCH_SCHEMA and len(data["nodes"]) == len(explorer_consumer.records)
         reference = _open_dependency(card, explorer_consumer, "chapter/middle")
         assert urljoin(page.url, reference.get_attribute("href")) == explorer_consumer.route("chapter/middle")
         reference.click()

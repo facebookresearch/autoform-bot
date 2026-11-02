@@ -924,6 +924,12 @@ def test_payload_rejects_duplicate_nodes_and_unknown_edges(tmp_path: Path) -> No
         dag_viewer.write_payload(tmp_path / "unknown.json", unknown)
 
 
+def test_the_fallback_offers_the_search_index_as_the_complete_graph_data() -> None:
+    with_index = dag_viewer.render_container("chapter.json", search_href="../index.json")
+    assert '<a href="../index.json">Download the complete graph data</a>' in with_index
+    assert '<a href="chapter.json">Download the complete graph data</a>' in dag_viewer.render_container("chapter.json")
+
+
 def test_an_explorer_page_encodes_a_literal_percent_in_its_payload_name(tmp_path: Path) -> None:
     """render_container keeps % for hrefs that arrive encoded, so the page encodes the payload's name."""
     page = tmp_path / "100%25 results.md"

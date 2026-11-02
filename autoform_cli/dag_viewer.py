@@ -176,7 +176,8 @@ def render_container(
             if total > len(fallback)
             else "    <p>"
         )
-        + f'<a href="{href}">Download the complete graph data</a>.</p>\n'
+        # A scope's payload holds what its page lists; the search index holds every record and relation.
+        + f'<a href="{search or href}">Download the complete graph data</a>.</p>\n'
         "  </div>\n"
     )
     style = (
