@@ -228,7 +228,7 @@ def test_the_book_shows_the_map_beside_the_page_and_opens_what_is_picked_on_it(w
         assert page.evaluate("() => !(history.state && history.state.pm)")
         # The book's status filter dims the map's results whose status it leaves out.
         page.locator(".bp-dag-filter-summary").click()
-        boxes = page.locator(".bp-dag-filter-popover fieldset:not(.bp-dag-isolated) input[type=checkbox]")
+        boxes = page.locator(".bp-dag-filter-popover fieldset input[type=checkbox]")
         for index in range(boxes.count()):
             boxes.nth(index).uncheck()
         cards = page.locator(".bp-whole-map .pm-result").count()

@@ -130,7 +130,7 @@ def test_cold_mount_takes_the_full_page_and_error_restores_native_reading() -> N
     """, {})
 
 
-@pytest.mark.parametrize("outcome", ["error", "load-without-map", "load-with-map"])
+@pytest.mark.parametrize("outcome", ["error", "load-without-map", "load-before-set-up", "load-with-map"])
 def test_a_map_script_that_fails_or_draws_nothing_leaves_one_notice_in_the_stage(outcome: str) -> None:
     """Execute the real start() and notice; the mounted shell around them is a seam."""
     _run(r"""
@@ -142,7 +142,10 @@ def test_a_map_script_that_fails_or_draws_nothing_leaves_one_notice_in_the_stage
       const attributes=new Map([['data-catalog-src','../../dependencies/search-index.json']]);let drawn=null;
       const host={isConnected:true,dataset:{},classList:{add(){},remove(){}},closest(){return {};},addEventListener(){},
         getAttribute(name){return attributes.get(name)||null;},setAttribute(name,value){attributes.set(name,value);},
-        querySelector(selector){return selector==='.bp-whole-map'?drawn:null;}};
+        querySelector(selector){
+          if(selector==='.bp-whole-map')return drawn;
+          return selector==='.bp-whole-map[data-pm-ready]'&&drawn&&drawn.dataset.pmReady?drawn:null;
+        }};
       const clients=new Map(),window={AutoformNavigation:{create(options){return {
         start(){options.onCommit({graph:{},readingSource:{}});},dispose(){}};}}};
       let alive=true;const dom$stage=stage,dom$announcement={textContent:''};
@@ -150,8 +153,10 @@ def test_a_map_script_that_fails_or_draws_nothing_leaves_one_notice_in_the_stage
       function mount(){return {ready:Promise.resolve(),mapUnavailable};}
       start(host);
       assert.equal(scripts.length,1);assert.equal(scripts[0].src,'https://example.test/project/javascripts/project-map.js');
-      // The map mounts its host in the stage as its script runs, so a load without it drew nothing.
-      if(fixture.outcome==='load-with-map')drawn={className:'bp-whole-map'};
+      // The map makes its host in the stage as its script starts and marks it set up as the script ends, so a load
+      // without the host drew nothing and one without the mark stopped partway.
+      if(fixture.outcome.startsWith('load-')&&fixture.outcome!=='load-without-map')drawn={className:'bp-whole-map',dataset:{}};
+      if(fixture.outcome==='load-with-map')drawn.dataset.pmReady='1';
       const report=scripts[0][fixture.outcome==='error'?'onerror':'onload'];
       assert.equal(typeof report,'function','The map script reports how it went');report();
       const notices=()=>stage.children.filter(child=>child.className==='bp-dag-map-unavailable');
@@ -165,6 +170,21 @@ def test_a_map_script_that_fails_or_draws_nothing_leaves_one_notice_in_the_stage
         mapUnavailable();assert.equal(notices().length,1,'A second report keeps the one notice');
       }
     """, {"outcome": outcome})
+
+
+def test_without_a_resize_observer_a_window_resize_resizes_at_once() -> None:
+    """Execute the real fallback binding from bindEvents; the resize itself is a seam."""
+    _run(r"""
+      const listeners=[],window={},dom$stage={};let resized=0;
+      function globalListen(target,type,callback){listeners.push({target,type,callback});}
+      function resize(){resized++;}
+      function queueResize(){assert.fail('Without an observer no resize waits for a frame');}
+      const bind=original('bindEvents'),begin=bind.indexOf('if (window.ResizeObserver)');
+      eval(bind.slice(begin,bind.indexOf('globalListen(window, "resize", syncSheetAccessibility)',begin)));
+      assert.equal(listeners.length,1);assert.strictEqual(listeners[0].target,window);assert.equal(listeners[0].type,'resize');
+      assert.strictEqual(listeners[0].callback,resize);
+      listeners[0].callback();assert.equal(resized,1);
+    """, {})
 
 
 def test_resize_notifications_wait_for_one_frame_and_dispose_cancels_a_pending_one() -> None:
