@@ -86,11 +86,15 @@
   }
   var DONE = {fully_proved: 1, proved: 1, defined: 1, mathlib: 1};
   var PROGRESS = {can_prove: 1, stated: 1, can_state: 1, conditional: 1, statement_formalized: 1};
-  function group(status) { return DONE[status] ? "done" : PROGRESS[status] ? "progress" : "planned"; }
+  // A project that tracks no Lean says so in its index: every result then looks alike, and the map shows no progress.
+  function tracked() { return !model.index || model.index.tracks_lean !== false; }
+  function group(status) { return !tracked() ? "planned" : DONE[status] ? "done" : PROGRESS[status] ? "progress" : "planned"; }
   var STATUS_WORDS = {fully_proved: "fully proved", proved: "proved", defined: "defined", mathlib: "in Mathlib",
     can_prove: "ready to prove", stated: "stated", can_state: "ready to state", conditional: "conditional",
     not_ready: "not ready", planned: "planned"};
   function statusWords(status) { return STATUS_WORDS[status] || String(status || "").replace(/_/g, " "); }
+  // What a card says of its result: its status, or where the project tracks no Lean, its kind if it has one.
+  function standing(row) { return tracked() ? statusWords(row.status) : row.caption || ""; }
   function mix(status) {
     var out = {done: 0, progress: 0, planned: 0};
     for (var key in status || {}) out[group(key)] += status[key];
@@ -611,11 +615,11 @@
     if (!onScreen(b) || b.w < 1) return false;
     var row = entry.row, isSelected = row.id === state.selected;
     var dim = (state.related ? !state.related.results.has(row.id) : state.facets && row.facet && !state.facets.has(row.facet)) ||
-      Boolean(statuses && !statuses.has(row.status));
+      Boolean(statuses && tracked() && !statuses.has(row.status));
     var holder = keep(resultLayer, "result:" + row.id, "g", {
       class: "pm-result pm-" + group(row.status) + (text ? " pm-card" : "") + (isSelected ? " pm-selected" : "") +
         (row.id === reading && !isSelected ? " pm-reading" : "") + (dim ? " pm-dimmed" : ""),
-      tabindex: 0, role: "button", "aria-label": plain(row.title) + ", " + statusWords(row.status), "data-result": row.id});
+      tabindex: 0, role: "button", "aria-label": [plain(row.title), standing(row)].filter(Boolean).join(", "), "data-result": row.id});
     var card = holder.firstChild || holder.appendChild(svg("rect"));
     placeRect(card, b);
     card.setAttribute("rx", clamp(b.w * 0.04, 1, 8));
@@ -629,7 +633,7 @@
     });
     if (b.h >= 52) {
       // The card's fill says it is finished, the common case; the line names any other status.
-      var stub = view.stubs[row.id], meta = [tileKind(row.status) === "done" ? "" : statusWords(row.status),
+      var stub = view.stubs[row.id], meta = [tracked() && tileKind(row.status) === "done" ? "" : standing(row),
         stub && stub.usedBy ? "used " + num(stub.usedBy) + "× elsewhere" : ""].filter(Boolean).join(" · ");
       if (meta) setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: b.y + b.h - pad, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
     }
@@ -692,7 +696,7 @@
       var metaY = y + (lines.length - 1) * step + 18, words = num(record.summary.results) + (record.summary.results === 1 ? " result" : " results");
       setText(keep(labelLayer, "lm:" + slot.id, "text", {x: x, y: metaY, class: "pm-meta" + (shut ? " pm-halo" : "") + cls}), clip(words, Math.floor(width / META_EM)));
       var barX = x + words.length * META_EM + 8, barW = Math.min(90, x + width - barX);
-      if (barW >= 24) progressBar("lp:" + slot.id, barX, metaY - 6, barW, record.summary.status, cls);
+      if (barW >= 24 && tracked()) progressBar("lp:" + slot.id, barX, metaY - 6, barW, record.summary.status, cls);
     });
   }
   function progressBar(key, x, y, width, status, cls) {
@@ -730,8 +734,8 @@
     if (pin.dataset.part !== record.id) {
       pin.dataset.part = record.id;
       var tex = hasMath(record.summary.title);
-      pin.replaceChildren(tex ? withMath(el("strong"), record.summary.title) : el("strong", "", plain(record.summary.title)),
-        el("span", "", progressText(record.summary)));
+      pin.replaceChildren(tex ? withMath(el("strong"), record.summary.title) : el("strong", "", plain(record.summary.title)));
+      if (tracked()) pin.append(el("span", "", progressText(record.summary)));
       if (tex) typesetHidden(pin);
     }
   }
@@ -983,7 +987,9 @@
   document.addEventListener("pointerdown", function (event) { if (!searchBox.contains(event.target)) hits.hidden = true; });
 
   // ---------------------------------------------------------------- side panel and reading pane
+  // A project that tracks no Lean has no progress to draw: the empty string appends nothing visible.
   function bar(status) {
+    if (!tracked()) return "";
     var counts = mix(status), total = counts.done + counts.progress + counts.planned || 1, node = el("div", "pm-bar");
     ["done", "progress", "planned"].forEach(function (kind) {
       var span = el("span"); span.style.width = (100 * counts[kind] / total) + "%"; span.style.background = color(kind); node.append(span);
@@ -998,7 +1004,7 @@
     sideInner.replaceChildren();
     sideInner.append(el("h1", "pm-project", plain(index.title)));
     var stats = el("div", "pm-stats"), counts = mix(index.status);
-    [[num(index.results), "results"], [num(index.regions.length), index.regions.length === 1 ? "region" : "regions"], [num(counts.done), "finished"]].forEach(function (pair) {
+    [[num(index.results), "results"], [num(index.regions.length), index.regions.length === 1 ? "region" : "regions"]].concat(tracked() ? [[num(counts.done), "finished"]] : []).forEach(function (pair) {
       var stat = el("div", "pm-stat"); stat.append(el("strong", "", pair[0]), el("span", "", pair[1])); stats.append(stat);
     });
     sideInner.append(stats, bar(index.status));
@@ -1006,7 +1012,7 @@
     [["done", "finished"], ["progress", "in progress"], ["planned", "planned"]].forEach(function (pair) {
       var item = el("span"), swatch = el("i"); swatch.style.background = color(pair[0]); item.append(swatch, document.createTextNode(pair[1])); legend.append(item);
     });
-    sideInner.append(legend);
+    if (tracked()) sideInner.append(legend);
     // The links the map draws: a picked part's arrows to its neighbours, and the routes between a part's results.
     var key = el("div", "pm-edge-key");
     [["pm-key-link", 2.5, "a picked part, to what uses it"], ["pm-route", 1.25, "a result, to what uses it"], ["pm-route pm-proof", 1.25, "used only in proofs"]].forEach(function (row) {
@@ -1260,7 +1266,8 @@
     readerInner.append(el("p", "pm-kicker", row.caption || "Result"));
     readerInner.append(withMath(el("h2"), row.title));
     readerInner.append(pathLine(chainOf(entry.home)));
-    readerInner.append(el("span", "pm-chip", statusWords(row.status) + (row.facet ? " · " + row.facet : "")));
+    var chip = [tracked() ? statusWords(row.status) : "", row.facet].filter(Boolean).join(" · ");
+    if (chip) readerInner.append(el("span", "pm-chip", chip));
     var summary = row.summary ? statement(row.summary, row.title) : null;
     if (summary) readerInner.append(summary);
     var lean = el("div", "pm-lean");
@@ -1574,7 +1581,8 @@
     // Focus stays on the map, so the part can be opened there next.
     host.dispatchEvent(new CustomEvent("autoform-map-select", {bubbles: true, detail: {id: id, history: "push", focus: false}}));
   }
-  // The book's status filter, as the statuses it shows (space-separated; absent for all of them): the map dims the rest.
+  // The book's status filter, as the statuses it shows (space-separated; absent for all of them): the map dims the rest,
+  // unless the project tracks no Lean.
   var statuses = null;
   function readStatuses() {
     var shown = book.getAttribute("data-map-statuses");

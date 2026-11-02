@@ -385,3 +385,7 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-viewer.bp-dag-viewer .bp-dag-map-unavailable { position: absolute; top: 50%; left: 50%; width: max-content; max-width: calc(100% - 32px); margin: 0; padding: 10px 14px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); background: var(--dag-bg); color: var(--dag-muted); box-shadow: var(--dag-e1); font-size: 14px; line-height: 1.45; text-align: center; transform: translate(-50%, -50%); }
 /* The map dims what the filter leaves out and hides nothing; a list still offers what it hid. */
 .bp-dag-integrated:has(.bp-dag-stage:not([hidden]) > .bp-whole-map) .bp-dag-hidden-button { display: none !important; }
+
+/* A project that tracks no Lean (render marks its pages data-tracks-lean="false"): no status filter, and no status on
+   search hits, Browse rows or the phone's reading handle. */
+[data-tracks-lean="false"] :is(.bp-dag-filters, .bp-dag-result-meta, .bp-dag-inventory-meta, .bp-dag-sheet-handle .bp-dag-swatch) { display: none !important; }

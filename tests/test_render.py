@@ -1033,6 +1033,41 @@ def test_a_project_that_tracks_no_lean_shows_no_lean_progress(tmp_path: Path, tr
     assert "Lagrange" in site and "Why subgroups come first." in site
 
 
+@pytest.mark.parametrize("tracked", [True, False])
+def test_a_project_that_tracks_no_lean_tells_the_shell_and_the_map(tmp_path: Path, tracked: bool) -> None:
+    """Every page's shell container carries the attribute the explorer's stylesheet keys on, and the map's index a flag."""
+    blueprint = _informal_project(tmp_path, "" if tracked else "tracks_lean: false\n")
+
+    render_site(blueprint, tmp_path / "out")
+
+    shells = [
+        text for page in sorted((tmp_path / "out").rglob("*.md"))
+        if 'class="bp-explorer-page"' in (text := page.read_text(encoding="utf-8"))
+    ]
+    # The book's pages; the explorer's old pages only send readers on to them.
+    assert any("Why subgroups come first." in text for text in shells) and len(shells) > 2
+    marked = [text for text in shells if '<div class="bp-explorer-page" data-tracks-lean="false" markdown="1">' in text]
+    assert len(marked) == (0 if tracked else len(shells))
+    index = json.loads((tmp_path / "out" / project_map.MAP_DIRECTORY / "index.json").read_text(encoding="utf-8"))
+    assert index.get("tracks_lean", "absent") == ("absent" if tracked else False)
+
+
+def test_the_shell_keys_its_hidden_progress_on_the_page_attribute() -> None:
+    # The explorer's stylesheet hides the status filter and status words, in one block at the end of the file that
+    # keys every rule on the attribute render sets.
+    css = dag_viewer._STYLE
+    start = css.index("/* A project that tracks no Lean")
+    assert "data-tracks-lean" not in css[:start]
+    rules = re.findall(r"([^{}]+)\{([^{}]+)\}", re.sub(r"/\*.*?\*/", "", css[start:], flags=re.DOTALL))
+    assert rules
+    for selectors, body in rules:
+        assert selectors.strip().startswith('[data-tracks-lean="false"] '), selectors
+        assert body.strip() == "display: none !important;", body
+    hidden = " ".join(selectors for selectors, _ in rules)
+    for surface in (".bp-dag-filters", ".bp-dag-result-meta", ".bp-dag-inventory-meta", ".bp-dag-sheet-handle .bp-dag-swatch"):
+        assert surface in hidden, surface
+
+
 def test_a_hero_that_tracks_no_lean_keeps_its_claim_and_ways_in(tmp_path: Path) -> None:
     blueprint = _informal_project(tmp_path, "tracks_lean: false\n")
     graph = load_graph(blueprint)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from autoform_cli import project_map, render
 from tests.dom_fixture import run_dom
 
@@ -69,7 +71,7 @@ await wait(20);
 """
 
 
-def _library(tmp_path: Path) -> Path:
+def _library(tmp_path: Path, *, captions: dict[str, str] | None = None, tracks_lean: bool = True) -> Path:
     records: list[dict[str, object]] = [
         {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
         {"id": "Algebra", "kind": "scope", "title": "Algebra", "parent": "roadmap", "result": False, "area": "Algebra"},
@@ -85,8 +87,10 @@ def _library(tmp_path: Path) -> Path:
     for node_id, parent, title, lean, status in results:
         records.append({"id": node_id, "kind": "node", "title": title, "parent": parent, "result": True, "status": status,
                         "lean": lean, "summary": f"{title} holds.", "route": f"../roadmap/{parent}/index.html#{node_id.rsplit('/', 1)[1]}"})
+        if captions and node_id in captions:
+            records[-1]["caption"] = captions[node_id]
     relations = [("Algebra/groups/cauchy", "Algebra/groups/lagrange", 1, 0), ("Analysis/series/abel", "Algebra/groups/lagrange", 0, 1)]
-    project_map.write_project_map(tmp_path / "map", project_map.build_project_map(records, relations))
+    project_map.write_project_map(tmp_path / "map", project_map.build_project_map(records, relations, tracks_lean=tracks_lean))
     return tmp_path / "map"
 
 
@@ -295,6 +299,43 @@ def test_a_part_as_wide_as_the_stage_is_marked_stage_wide(tmp_path: Path) -> Non
       console.log('stage-wide ok');
     """)
     assert "stage-wide ok" in out
+
+
+@pytest.mark.parametrize("tracks_lean", [True, False])
+def test_a_project_that_tracks_no_lean_shows_no_progress(tmp_path: Path, tracks_lean: bool) -> None:
+    # Two results with a kind and one without; the library holds a finished, a ready and a planned result.
+    captions = {"Algebra/groups/lagrange": "Theorem", "Algebra/groups/cauchy": "Lemma"}
+    out = _walk(tmp_path, f"const tracked = {str(tracks_lean).lower()};" + r"""
+      // Cards are tinted by their status and named with it; or all alike, and named with their kind if they have one.
+      const labels = $$('.pm-result').map(node => node.getAttribute('aria-label')).sort();
+      assert.deepStrictEqual(labels, tracked
+        ? ['Abel summation for ℝ, planned', "Cauchy's theorem, ready to prove", "Lagrange's theorem, fully proved"]
+        : ['Abel summation for ℝ', "Cauchy's theorem, Lemma", "Lagrange's theorem, Theorem"]);
+      const tinted = $$('.pm-done, .pm-progress, .pm-tile-done, .pm-tile-progress, .pm-mini-done, .pm-mini-progress, .pm-backdrop-done, .pm-backdrop-progress');
+      assert.strictEqual(tinted.length > 0, tracked, tinted.map(node => node.getAttribute('class')).join('; '));
+      // The outline's finished count, bar and legend, and the reading pane's bar.
+      assert.deepStrictEqual($$('.pm-stat').map(stat => stat.querySelector('span').textContent),
+        tracked ? ['results', 'regions', 'finished'] : ['results', 'regions']);
+      assert.strictEqual($$('.pm-legend').length, tracked ? 1 : 0);
+      assert.strictEqual($('.pm-reader').querySelectorAll('.pm-bar').length, tracked ? 1 : 0);
+      assert.strictEqual($$('.pm-bar').length, tracked ? 2 : 0);
+      // A selected result's chip says its status; with nothing to say, there is no chip.
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'Subgroup.card_dvd'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      emit(search, 'keydown', {key: 'Enter'}); await wait(40);
+      assert.strictEqual($('.pm-reader').querySelector('h2').textContent, "Lagrange's theorem");
+      assert.deepStrictEqual($$('.pm-chip', $('.pm-reader')).map(chip => chip.textContent), tracked ? ['fully proved'] : []);
+      if (!tracked) {
+        // No status words anywhere on the map, no bars in the header bands, and a card's line names only its kind.
+        const said = $$('text').map(node => node.textContent).filter(text => /fully proved|ready to prove|planned|finished/.test(text));
+        assert.deepStrictEqual(said, []);
+        assert.strictEqual($$('.pm-seg').length, 0);
+        const lines = $$('.pm-card-meta').map(node => node.textContent);
+        assert(lines.every(line => /^(Theorem|Lemma)( · |$)/.test(line)), lines.join('; '));
+      }
+      console.log('progress ok');
+    """, _library(tmp_path, captions=captions, tracks_lean=tracks_lean))
+    assert "progress ok" in out
 
 
 def test_search_finds_results_in_a_flat_roadmap(tmp_path: Path) -> None:

@@ -67,7 +67,9 @@ date when the release is tagged.
 - **Projects that track no Lean.** `tracks_lean: false` in
   `roadmap/README.md` takes Lean progress out of the book's pages: the landing
   page's figures and Next up, the statement status marks, the status dots on
-  dependency references and the chapter progress lines. Check warns about the
+  dependency references and the chapter progress lines. The explorer drops its
+  status filter and status words, and the whole-project map its tints, progress
+  bars and status words; its cards name their kind instead. Check warns about the
   setting anywhere else under `roadmap/`, or with a value other than true or
   false, and ignores it.
 
