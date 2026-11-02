@@ -956,6 +956,24 @@ def test_index_batches_end_on_elapsed_time_not_on_a_row_count() -> None:
     """)
 
 
+def test_a_parse_as_long_as_a_slice_ends_the_first_index_batch() -> None:
+    _run(r"""
+      // The first batch's slice begins with the parse. After a parse of a whole slice, the first clock read, 128 rows
+      // in, pauses; a clock frozen otherwise never pauses again, and without that parse never at all.
+      const payload=index();for(let n=0;n<1277;n++) payload.nodes.push({id:'leaf-'+n,title:'Leaf '+n});
+      for(const [parse,expected] of [[0,0],[25,1]]) {
+        const app=setup();app.contents.set(absolute('dependencies/index.json'),payload);
+        let now=0;app.win.performance={now:()=>now};
+        const nativeParse=JSON.parse,nativeTimer=global.setTimeout;let yields=0;
+        JSON.parse=(...args)=>{now+=parse;return nativeParse(...args);};
+        global.setTimeout=(callback,delay,...rest)=>{if(delay===0)yields++;return nativeTimer(callback,delay,...rest);};
+        try {
+          const result=await app.nav.loadIndex();assert.equal(result.nodes.length,1280);assert.equal(yields,expected);
+        } finally {JSON.parse=nativeParse;global.setTimeout=nativeTimer;app.nav.dispose();}
+      }
+    """)
+
+
 def test_index_links_resolved_once_per_page_match_parsing_each_whole_value() -> None:
     _run(r"""
       // Earlier rows leave the other two fields absent, so a literal "undefined" must not reuse their result.

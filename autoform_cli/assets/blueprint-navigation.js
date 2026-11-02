@@ -233,12 +233,14 @@
       try { return resolvedGraph(JSON.parse(loaded.text), loaded.url); }
       catch (error) { cacheDelete(jsonCache, resource(url)); throw error; }
     }
-    async function normalizeIndex(payload, base) {
+    async function normalizeIndex(payload, base, began) {
       if (!payload || payload.schema !== INDEX_SCHEMA || !Array.isArray(payload.nodes)) throw new Error("Unsupported search index");
       // Batches end on time, not on a row count: each pause waits two frames, so
       // short fixed batches spent most of a large index's load waiting. The clock
       // is read every 128 rows or relations, a small fraction of a slice's work.
-      var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [], slice = clock();
+      // The first batch's slice began with the parse, so a long parse pauses at
+      // the first read rather than run a slice more in the same task.
+      var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [], slice = began;
       // Rows on one page share the part before "#", so resolve it once. A fragment
       // made of characters the URL parser keeps as written is appended. Other
       // fragments, and paths ending in a space (which the parser would trim
@@ -305,8 +307,8 @@
       indexPromise = fetchText(catalogueURL, "json", indexController.signal).then(async function (loaded) {
         if (disposed) throw abortError();
         // Drop the text before normalizing, which takes many frames.
-        var payload = JSON.parse(loaded.text), base = loaded.url, digest = loaded.indexDigest; loaded = null;
-        var normalized = await normalizeIndex(payload, base);
+        var began = clock(), payload = JSON.parse(loaded.text), base = loaded.url, digest = loaded.indexDigest; loaded = null;
+        var normalized = await normalizeIndex(payload, base, began);
         if (disposed) throw abortError();
         index = normalized; indexDigest = digest;
         if (typeof options.onIndex === "function") {
