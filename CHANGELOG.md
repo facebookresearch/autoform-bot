@@ -39,7 +39,7 @@ date when the release is tagged.
   target depends on the article (it stays listed), and the heading written below
   a dependency heading, where its links count (#541). The Roadmap skill puts
   under it what a source's proof cites but the planned Lean proof will not use,
-  as when a library proof is reused (#NNN).
+  as when a library proof is reused (#556).
 
 ### Changed
 
