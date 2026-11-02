@@ -18,7 +18,6 @@ from pathlib import Path
 from . import status
 from ._fs import directory_path as _directory_path
 from .coverage import CoverageSummary, load_coverage, validate_coverage_roles
-from .dag_viewer import MAX_MAP_NODES
 from .elaboration_limits import LimitSetting, limits_by_line, limits_in_force
 from .graph_views import _countable
 from .graph import (
@@ -62,8 +61,8 @@ _MAX_DIRECT_CHILDREN = 24
 #: wider than a readable mathematical chapter while remaining navigable.
 _MAX_ROOT_CHILDREN = 64
 #: A module page lists one Lean module's declarations, so its width is the
-#: module's; it may hold as many as the explorer still draws as a map.
-_MAX_MODULE_CHILDREN = MAX_MAP_NODES
+#: module's: up to 120, the number the explorer's map was sized for.
+_MAX_MODULE_CHILDREN = 120
 
 #: A node is warned about as oversized only once its finished Lean work clears both
 #: an absolute floor and a large multiple of this project's own median. The
