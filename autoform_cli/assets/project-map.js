@@ -1607,4 +1607,6 @@
     readerInner.replaceChildren(el("p", "pm-empty", "The map could not load: " + error.message));
     hint.textContent = "The map could not load: " + error.message; hint.classList.add("pm-hint-strong");
   });
+  // Set up: a book whose map script ends without this mark, as when it throws before here, shows a notice of its own.
+  host.dataset.pmReady = "1";
 })();

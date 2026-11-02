@@ -38,15 +38,15 @@ mismatches. A new-tab canonical article provides fresh server-rendered reading.
 ## Rendering and mathematics
 
 [blueprint-dag.js](../autoform_cli/assets/blueprint-dag.js) owns the outline, search, status
-filter, statement lists and reader state; its stage hosts the whole-project map,
-[project-map.js](../autoform_cli/assets/project-map.js). They share only the book's host:
-`data-map-start` names the page's node or scope, `data-map-statuses` the statuses the
-filter keeps (the map dims the rest), and `bp-dag-has-selection` whether the book holds a
-result; a pick on the map is an `autoform-map-select` event, and the book owns the address
-and history. A map that cannot load leaves a notice; outline, search and lists still work.
-A page whose reader only lists its children opens map-first, as chapters and Home do on
-phones; statements open in the reader. Server-produced pages contain complete mathematical
-reading and theorem anchors without JavaScript; enhancement uses published fragments, never graph summaries.
+filter, statement lists and reader state; its stage hosts [project-map.js](../autoform_cli/assets/project-map.js).
+On the book's host, `data-map-start` names the page's node or scope, `data-map-statuses` the
+statuses the filter keeps (the map dims the rest), and `bp-dag-has-selection` whether the book
+holds a result; a pick on the map is an `autoform-map-select` event, and the book owns the
+address and history. A map script that fails before marking its host `data-pm-ready` leaves a
+notice; outline, search and lists still work. A page whose reader only lists its children opens
+map-first, as chapters and Home do when a phone lands on them; statements open in the reader.
+Server-produced pages contain complete mathematical reading and theorem anchors without
+JavaScript; enhancement uses published fragments, never graph summaries.
 
 [mathjax.py](../autoform_cli/mathjax.py) owns marked formulas: ordinary reading uses
 project macros; read-back cards use fresh isolated inputs without them. Reading

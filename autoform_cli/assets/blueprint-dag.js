@@ -92,8 +92,9 @@
           client = mount(host, bundle.graph, instance, bundle, navigation); clients.set(host, client); ready = client.ready;
           if (catalog) {
             var map = element("script"); map.src = new URL("../javascripts/project-map.js", host.dataset.wholeMap).href;
-            // A map that cannot load leaves the stage to a notice; the outline, search and lists still work.
-            map.onload = map.onerror = function () { if (!host.querySelector(".bp-whole-map")) client.mapUnavailable(); };
+            // A map that cannot load, or that fails before it marks its host set up, leaves the stage to a notice; the
+            // outline, search and lists still work.
+            map.onload = map.onerror = function () { if (!host.querySelector(".bp-whole-map[data-pm-ready]")) client.mapUnavailable(); };
             document.head.appendChild(map);
             host.addEventListener("autoform-map-select", function (event) { navigation.navigateNode(event.detail.id, event.detail); });
           }

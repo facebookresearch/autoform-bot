@@ -1017,6 +1017,32 @@ def test_a_map_that_cannot_load_leaves_one_notice_and_back_to_map_focuses_the_fi
     playwright.expect(notice).to_be_visible()
 
 
+def test_a_map_that_stops_after_making_its_host_still_leaves_the_notice(
+    webkit_browser: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """The map makes its host in the stage first, so a script that throws after that never marks it set up."""
+    stub = (
+        "(function () { var host = document.createElement('div'); host.className = 'bp-whole-map';"
+        " document.querySelector('[data-whole-map] .bp-dag-stage').appendChild(host);"
+        " throw new Error('the map stopped partway'); })();"
+    )
+    # Its own page: the shared one fails on any uncaught page error, and this script throws one on purpose.
+    context = webkit_browser.new_context(viewport={"width": 1280, "height": 900})
+    errors: list[str] = []
+    page = context.new_page()
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.route("**/javascripts/project-map.js", lambda route: route.fulfill(content_type="text/javascript", body=stub))
+    try:
+        _open_consumer(page, explorer_consumer, "chapter/middle")
+        notice = page.locator(".bp-dag-stage > .bp-dag-map-unavailable")
+        playwright.expect(notice).to_have_count(1)
+        playwright.expect(notice).to_be_visible()
+        playwright.expect(page.locator(".bp-whole-map")).to_have_count(1)
+    finally:
+        context.close()
+    assert len(errors) == 1 and "the map stopped partway" in errors[0], errors
+
+
 def test_back_restores_a_phone_reader_at_half_rather_than_carrying_full_over(
     mobile_page: object, explorer_consumer: _ExplorerConsumer,
 ) -> None:
