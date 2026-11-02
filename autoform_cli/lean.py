@@ -70,21 +70,30 @@ from ._tree_snapshot import (
 )
 
 _NAMESPACE = re.compile(r"^\s*namespace\s+(.+)$")
+_SECTION_MODIFIERS = r"public|private|meta|noncomputable"
 #: ``section`` in every form that opens one, e.g. ``@[expose] public section``.
-_SECTION = re.compile(
-    r"^\s*(?:@\[[^\]]*\]\s*)*(?:(?:public|private|meta|noncomputable)\s+)*section\b\s*(.*)"
-)
+_SECTION = re.compile(rf"^\s*(?:@\[[^\]]*\]\s*)*(?:(?:{_SECTION_MODIFIERS})\s+)*section\b\s*(.*)")
 _MUTUAL = re.compile(r"^\s*mutual\s*$")
 _END = re.compile(r"^\s*end\b\s*(.*)")
 _EXIT = re.compile(r"^\s*#exit\b")
+_DECLARATION_MODIFIERS = r"public|private|protected|noncomputable|partial|unsafe|scoped|local"
 # The ``*_wanted`` commands are Batteries' ``Batteries.Util.ProofWanted``: each
 # states a result whose proof or construction is deferred. ``alias`` is
 # Batteries' ``Batteries.Tactic.Alias``.
+_DECLARATION_KEYWORDS = (
+    r"theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom|irreducible_def"
+    r"|theorem_wanted|proof_wanted|def_wanted|instance_wanted|alias"
+)
 _DECLARATION = re.compile(
     r"^\s*(?:@\[[^\]]*\]\s*)*"
-    r"(?:(?:public|private|protected|noncomputable|partial|unsafe|scoped|local)\s+)*"
-    r"(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom|irreducible_def"
-    r"|theorem_wanted|proof_wanted|def_wanted|instance_wanted|alias)\b(?:\s+(.*))?$"
+    rf"(?:(?:{_DECLARATION_MODIFIERS})\s+)*"
+    rf"({_DECLARATION_KEYWORDS})\b(?:\s+(.*))?$"
+)
+#: How every line the six patterns above can match starts, after its indent.
+#: Most lines are proofs, which this one match turns away before they try all six.
+_SCANNED_LINE = re.compile(
+    rf"\s*(?:#exit|namespace|section|mutual|end|@\[|{_SECTION_MODIFIERS}|{_DECLARATION_MODIFIERS}"
+    rf"|{_DECLARATION_KEYWORDS})"
 )
 # Core command heads and their modifiers cannot supply a declaration's name.
 # Compare complete identifiers: `open'`, `Qualified.open` and `«open»` are names.
@@ -889,7 +898,7 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
         written.pop()
     indents = [len(line) - len(line.lstrip()) for line in (written if len(written) == len(lines) else lines)]
     for number, line in enumerate(lines, start=1):
-        if not line.strip():
+        if not _SCANNED_LINE.match(line):
             continue
         if _EXIT.match(line):
             return found, number - 1
