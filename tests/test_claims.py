@@ -766,6 +766,34 @@ def test_read_offers_the_board_no_local_refs_to_negotiate_from(
     assert len(traces) == 1 and "packet:" in traces[0] and "> have " not in traces[0]
 
 
+@pytest.mark.parametrize("work_tree", [False, True])
+def test_the_board_ignores_git_variables_that_name_another_repository(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch, work_tree: bool
+) -> None:
+    owner = _board(tmp_path, board_repo, "worker-a")
+    assert owner.acquire_many(["a"], ttl=600)
+    rival = _board(tmp_path, board_repo, "worker-b")
+    rival._ensure_scratch()
+    # A Git hook runs with GIT_DIR, and sometimes GIT_WORK_TREE, naming its own
+    # repository. Before, the board's Git wrote its objects there, or, with a
+    # work tree, could not prepare its scratch at all.
+    hooked = tmp_path / "hooked"
+    _git("init", "--quiet", str(hooked))
+    monkeypatch.setenv("GIT_DIR", str(hooked / ".git"))
+    if work_tree:
+        monkeypatch.setenv("GIT_WORK_TREE", str(hooked))
+
+    assert [lease["owner"] for lease in rival.list()] == ["worker-a"]
+    assert rival.acquire_many(["a"], ttl=600).blocking == ("a",)
+    assert rival.acquire_many(["b"], ttl=600)
+    assert rival.release_many(["b"])
+
+    monkeypatch.delenv("GIT_DIR")
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    assert _refs(hooked) == {}
+    assert _git("count-objects", cwd=hooked).startswith("0 objects")
+
+
 def test_list_reads_a_lease_through_an_annotated_tag_as_read_does(tmp_path: Path, board_repo: Path) -> None:
     owner = _board(tmp_path, board_repo, "worker-a")
     assert owner.acquire("a", ttl=600)
