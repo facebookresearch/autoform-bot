@@ -41,6 +41,9 @@ date when the release is tagged.
 
 ### Changed
 
+- **Titles typeset their math.** Statement headings, Next up and the
+  Previous/Next links typeset a title's formulas, as the reader's dependency
+  references already did, instead of showing its TeX as typed.
 - **Search index size.** `dependencies/index.json` no longer repeats links the
   explorer doesn't read. A row whose route the explorer opens drops its context
   `url`, and only container rows keep `data_url`, since every page names its

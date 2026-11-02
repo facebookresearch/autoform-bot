@@ -603,6 +603,26 @@ def test_titles_typeset_their_math_in_headings(tmp_path: Path) -> None:
     assert f'<span class="bp-thmtitle">{typeset}</span>' in heading
 
 
+def test_previous_next_and_next_up_typeset_a_chapter_title_once(tmp_path: Path) -> None:
+    """A chapter page's header holds its title's visible text, so converting that read a code `$literal$` as math."""
+    project = _project(tmp_path)
+    folder = project / "blueprint/roadmap/chapter"
+    folder.mkdir()
+    authored = "Groups $\\mathbb{Z}/n$ and code `$literal$`"
+    (folder / "README.md").write_text(f"# {authored}\n\n- [Deep](deep.md)\n", encoding="utf-8")
+    (folder / "deep.md").write_text("---\ndeclaration: theorem\n---\n\n# Deep\n\nA result still to state.\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    title = render_module._title_html(authored)
+    assert "<code>$literal$</code>" in title and '<span class="arithmatex">\\(\\mathbb{Z}/n\\)</span>' in title
+    assert f'<a href="roadmap/chapter/index.html">{title}</a>' in (out / "README.md").read_text(encoding="utf-8")
+    pages = [page.read_text(encoding="utf-8") for page in out.rglob("*.md")]
+    assert any(f'<span class="bp-book-nav-title">{title}</span>' in page for page in pages)
+    assert not any("\\(literal\\)" in page for page in pages)
+
+
 def test_a_caption_names_the_command_after_its_modifiers_or_reads_node() -> None:
     def caption(declaration: str | None) -> str:
         return _declaration_label(SimpleNamespace(catalog=None, declaration=declaration))

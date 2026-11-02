@@ -1156,8 +1156,15 @@ def _render_pages(
         graph,
     )
     # The landing page is a dashboard, not chapter one. Previous/next belongs
-    # to the book, so the strip starts at the contents page.
-    _append_book_navigation([p for p in book_pages if p != overview])
+    # to the book, so the strip starts at the contents page. Each page is named
+    # by its node's title as authored: its header holds the visible text, which
+    # a second pass through Markdown would read differently.
+    authored = {
+        (destination / node.path.relative_to(blueprint)).resolve(): node.title
+        for node in graph.nodes.values()
+        if node.path.is_relative_to(blueprint)
+    }
+    _append_book_navigation([p for p in book_pages if p != overview], authored)
     structure = destination / STRUCTURE_PAGE
     structure.write_text(
         _render_structure_page(
@@ -2129,11 +2136,15 @@ def _reading_order(
     return sorted(status.topological_order(graph), key=key)
 
 
-def _append_book_navigation(pages: list[Path]) -> None:
+def _append_book_navigation(pages: list[Path], authored: dict[Path, str]) -> None:
     """Add previous/next links to the bottom of Blueprint pages, never global nav."""
     if len(pages) < 2:
         return
-    titles = [_page_heading(page.read_text(encoding="utf-8")) or page.stem for page in pages]
+    titles = [
+        _title_html(authored[page.resolve()]) if page.resolve() in authored
+        else html.escape(_page_heading(page.read_text(encoding="utf-8")) or page.stem)
+        for page in pages
+    ]
     for index, page in enumerate(pages):
         links: list[str] = []
         if index:
@@ -2168,7 +2179,7 @@ def _append_book_navigation(pages: list[Path]) -> None:
 def _book_navigation_link(
     target: Path,
     page: Path,
-    title: str,
+    title_html: str,
     *,
     direction: str,
 ) -> str:
@@ -2180,7 +2191,7 @@ def _book_navigation_link(
         f'href="{html.escape(href, quote=True)}">'
         f'<span class="bp-book-nav-direction"><span aria-hidden="true">{arrow}</span> '
         f"{label}</span>"
-        f'<span class="bp-book-nav-title">{_title_html(title)}</span>'
+        f'<span class="bp-book-nav-title">{title_html}</span>'
         "</a>"
     )
 
@@ -2230,11 +2241,14 @@ def _next_target(
         )
         actions = [f'<a href="{html.escape(graph_href, quote=True)}">Dependencies</a>']
         if chapter_page is not None:
-            chapter_title = _page_heading(chapter_page.read_text(encoding="utf-8")) or "chapter"
-            href = _as_published(relative_link(chapter_page, page, ".html"))
-            actions.insert(
-                0, f'<a href="{html.escape(href, quote=True)}">{_title_html(chapter_title)}</a>'
+            # The chapter's title as authored: its page's header holds the visible text.
+            chapter = graph.nodes.get(chapter_id)
+            chapter_title = (
+                _title_html(chapter.title) if chapter is not None
+                else html.escape(_page_heading(chapter_page.read_text(encoding="utf-8")) or "chapter")
             )
+            href = _as_published(relative_link(chapter_page, page, ".html"))
+            actions.insert(0, f'<a href="{html.escape(href, quote=True)}">{chapter_title}</a>')
         blockers = [
             graph.nodes[dep].title
             for dep in node.dependencies
