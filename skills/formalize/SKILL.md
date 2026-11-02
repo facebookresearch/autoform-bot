@@ -14,17 +14,19 @@ absolute plugin directory holding `skills/` and `pyproject.toml`; give a
 subagent that prefix.
 
 Treat `blueprint/roadmap/**/*.md` as the sole durable work graph; the [CLI
-reference](../../autoform_cli/README.md#commands) documents the commands.
+reference](../../autoform_cli/README.md#work) documents the `work` commands.
 `<PROJECT>` is the absolute path of the checkout being edited (for a subagent,
 its own worktree). First run `autoform work list <PROJECT> --json`, whose items
 hold every field a dispatch needs; a worker inspects its leaf with `autoform
-work context <NODE> <PROJECT> --json`. The phase is derived; never author ready,
-running, retrying, failed, or blocked scheduler states. If a command refuses for
-a missing `article_id` or an orphaned implementation note, make the repair its
-message names, validate, and commit before starting work.
+work context <NODE> <PROJECT> --json` and, before its first edit, saves the
+output of `autoform audit <PROJECT>/blueprint --lean-root <PROJECT> --json` as
+its baseline audit. The phase is derived; never author ready, running, retrying,
+failed, or blocked scheduler states. If a command refuses for a missing
+`article_id` or an orphaned implementation note, make the repair its message
+names, validate, and commit before starting work.
 
 For a direct formalization request, use a compatible native persistent Goal when
-available and complete one useful frontier pass. When a run starts or resumes,
+available and repeat frontier passes as below. When a run starts or resumes,
 and at each later re-read of the frontier, the lead first reads and decides the
 reviews on the project's pull requests as the [review
 steps](references/pull-request-reviews.md) say. Native subagents may work
@@ -168,9 +170,11 @@ also run Batteries' `unusedArguments` linter and resolve each finding, both as
 the [unused-hypothesis rules](references/unused-hypotheses.md) say.
 
 After the focused build passes, require an independent Agent Review of every
-changed statement or proof for source faithfulness, dependency correctness, and
-proof integrity. The reviewer does not edit the candidate. Record progress only
-when every required rubric passes; report insufficient evidence or any failing
+changed statement or proof under its
+[faithfulness](../agent-review/references/faithfulness.md) and [proof
+integrity](../agent-review/references/proof-integrity.md) rubrics, the second
+covering the proof's dependencies. The reviewer does not edit the candidate.
+Record progress only when both pass; report insufficient evidence or any failing
 score instead.
 
 On acceptance, update only the selected article with the exact compiled
@@ -191,8 +195,8 @@ it back: report it, and neither keep the note nor edit a source page for it.
 Run `autoform check <PROJECT>/blueprint --lean-root <PROJECT>` and `autoform
 audit <PROJECT>/blueprint --lean-root <PROJECT>`. Resolve every finding this
 work introduced on the selected article (match `article_path` and `code`, not
-`reason`, with the starting commit's audit), except a `lean-target-deprecated`
-that the revision contract expects. Delete every note the audit reports as
+`reason`, with the baseline audit), except a `lean-target-deprecated` that the
+revision contract expects. Delete every note the audit reports as
 `stale-implementation-note`, including another article's, such as a container's
 this proof completed or one an earlier commit left behind; the audit fails until
 they are all gone. Report other pre-existing findings instead of fixing them. A
