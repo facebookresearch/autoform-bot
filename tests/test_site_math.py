@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PosixPath
 from urllib.parse import quote
 
 import pytest
@@ -321,6 +321,20 @@ def test_the_guarded_paths_are_every_file_render_writes(tmp_path: Path) -> None:
         if path.is_file() and not (blueprint / path.relative_to(site)).is_file()
     }
     assert written <= set(_site_paths(load_graph(blueprint)))
+
+
+def test_the_guarded_paths_do_not_depend_on_how_the_site_root_resolves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On Windows "/" resolves to the drive's root, and the plan must still name
+    every payload render writes, such as a root article's chapter payload."""
+    graph = load_graph(_vault(tmp_path))
+    plain = set(_site_paths(graph))
+    original = PosixPath.resolve
+    monkeypatch.setattr(
+        PosixPath, "resolve", lambda self, strict=False: PosixPath("/C:") if str(self) == "/" else original(self, strict)
+    )
+    assert set(_site_paths(graph)) == plain
 
 
 @pytest.mark.parametrize("make", [_directory_with_a_file, _symlink, _fifo], ids=["directory", "symlink", "fifo"])
@@ -1247,9 +1261,9 @@ def test_a_fence_header_that_sets_more_than_a_language_is_reported(article: str,
     ids=["raw", "code", "formula"],
 )
 def test_a_title_reaches_the_places_render_writes_it_as_text(tmp_path: Path, heading: str) -> None:
-    """Render writes article titles into explorer page headings, the
-    navigation, and page metadata, and the theme prints the last two as they
-    are, so a title reaches each as text, whatever markup or code it holds."""
+    """Render writes article titles into the navigation and page metadata,
+    and the theme prints both as they are, so a title reaches each as text,
+    whatever markup or code it holds."""
 
     blueprint = _vault(tmp_path)
     for path in (blueprint / "roadmap/top.md", blueprint / "README.md", blueprint / "roadmap/README.md"):
@@ -1260,12 +1274,8 @@ def test_a_title_reaches_the_places_render_writes_it_as_text(tmp_path: Path, hea
 
     from mkdocs.utils.meta import get_data
 
-    graph_heading = next(
-        line for line in (site / "dependencies.md").read_text(encoding="utf-8").splitlines() if line.startswith("# ")
-    )
     summary = (site / "SUMMARY.md").read_text(encoding="utf-8")
     published = [
-        site_converter().convert(graph_heading),
         summary,
         get_data((site / "README.md").read_text(encoding="utf-8"))[1]["title"],
         # A chapter shown as typed keeps its title in its header.
@@ -1405,9 +1415,9 @@ def test_a_page_named_with_markup_is_titled_as_text(tmp_path: Path) -> None:
     assert get_data(published)[1] == {"title": "&lt;svg onload=alert(1)&gt;"}
 
 
-def test_a_graph_page_is_published_under_its_title_as_text(tmp_path: Path) -> None:
-    """Render writes the roadmap's title into its explorer page's heading, so
-    that page names the title in its header too."""
+def test_a_graph_page_is_published_under_a_fixed_title(tmp_path: Path) -> None:
+    """An old dependency page only redirects, under a title of its own, so a
+    roadmap title holding markup never reaches it."""
 
     from mkdocs.utils.meta import get_data
 
@@ -1420,10 +1430,10 @@ def test_a_graph_page_is_published_under_its_title_as_text(tmp_path: Path) -> No
 
     site = _render(blueprint)
 
-    meta = get_data((site / "dependencies.md").read_text(encoding="utf-8"))[1]
-    assert meta["title"].startswith("Roadmap &lt;/title&gt;&lt;svg onload=alert(1)&gt;")
-    # A heading render writes in full keeps the title its navigation entry gives.
-    assert "title" not in get_data((site / "dependencies/chapters/roadmap.md").read_text(encoding="utf-8"))[1]
+    for page in ("dependencies.md", "dependencies/chapters/roadmap.md"):
+        text = (site / page).read_text(encoding="utf-8")
+        assert get_data(text)[1]["title"] == "This page moved"
+        assert "svg" not in text
 
 
 def test_a_title_holding_a_backslash_escape_is_read_back_as_written(tmp_path: Path) -> None:

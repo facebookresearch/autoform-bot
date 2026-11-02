@@ -2,15 +2,16 @@
 
 One Markdown DAG supports several reading scales: chapters collapsed into a
 project overview, declarations within one chapter with external chapters
-collapsed to boundaries, and nested scopes. A search index over every article
-jumps to the smallest scope that holds it. Every projection uses the same
-explorer, links to the same book anchors, and never becomes another
-source of graph state.
+collapsed to boundaries, and nested scopes. Book pages read each scale's
+payload, and a search index over every article jumps to the smallest scope that
+holds it. The old dependency pages send their visitors on to the book, so no
+projection becomes a second renderer or another source of graph state.
 """
 
 from __future__ import annotations
 
 import html
+import json
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path, PurePath
@@ -52,13 +53,16 @@ def book_contents(graph: Graph, groups: Collection[str]) -> Path:
 
 
 def graph_page_paths(graph: Graph, *, wiki_links: bool = False) -> tuple[str, ...]:
-    """Every file :func:`write_graph_pages` writes for ``graph``, relative to
-    the site's root: each page, the payload beside it, and the search index."""
+    """Every page, payload and index file :func:`write_graph_pages` writes for
+    ``graph`` with book targets, as render publishes it, relative to the site's
+    root: each page, the payloads reader contexts name, and the search index."""
 
-    root = Path("/")
-    project_page, full_page, chapter_pages, scope_pages = _pages(graph, root, group_nodes(graph))
+    # Resolved as scope_page_path resolves its destination: on Windows "/" is the drive's root.
+    root = Path("/").resolve()
+    planned = _pages(graph, root, group_nodes(graph))
+    project_page, full_page, chapter_pages, scope_pages = planned
     pages = {project_page, full_page, *chapter_pages.values(), *scope_pages.values()}
-    files = {*pages, *(page.with_suffix(".json") for page in pages), root / SEARCH_INDEX}
+    files = {*pages, *_read_payloads(_publication_contexts(graph, root, planned), project_page), root / SEARCH_INDEX}
     if wiki_links:
         files.add(root / WIKI_LINKS)
     return tuple(sorted(path.relative_to(root).as_posix() for path in files))
@@ -108,6 +112,13 @@ def _publication_contexts(
     return result
 
 
+def _read_payloads(contexts: Mapping[str, tuple[Path, str]], project_page: Path) -> set[Path]:
+    """The payloads reader contexts name, from which book pages and the
+    index's ``data_url`` take theirs, and the project's, which a page with no
+    context reads."""
+    return {payload for payload, _ in contexts.values()} | {project_page.with_suffix(".json")}
+
+
 def write_graph_pages(
     graph: Graph,
     statuses: dict[str, NodeStatus],
@@ -127,9 +138,10 @@ def write_graph_pages(
     ``node_links`` resolves theorem ids to their published textbook anchors for
     each generated page.  Keeping that callback in the site renderer avoids
     duplicating its URL and chapter-anchor policy here. With ``book_targets``,
-    pages are compatibility entrances to canonical full-text book routes.
-    ``contexts_out`` receives the same reader-context map used for this index;
-    it is transient publication data, not another authored graph or cache.
+    each page redirects to its canonical full-text book route, and only the
+    payloads reader contexts name are written. ``contexts_out`` receives the same
+    reader-context map used for this index; it is transient publication data,
+    not another authored graph or cache.
     ``captured_sources`` opts into a separate authored-reference layer from
     already captured bytes and blueprint-relative ``source_paths``. The index
     and formal dependencies are unchanged; no authored file is reopened here.
@@ -158,6 +170,8 @@ def write_graph_pages(
     )
     if contexts_out is not None:
         contexts_out.update(contexts)
+    # Standalone pages read their own payloads; redirects to the book read none.
+    read = None if book_targets is None else _read_payloads(contexts, project_page)
     context_links: dict[str, str] = {}
     metadata: dict[str, dict[str, object]] = {}
     # One bounded whole-index request, not one whole-graph request per page.
@@ -252,6 +266,7 @@ def write_graph_pages(
                 (root_title, None),
             ),
             canonical=canonical(),
+            read=read,
         )
     )
 
@@ -301,6 +316,7 @@ def write_graph_pages(
                     book_root=book_root,
                 ),
                 canonical=canonical(group),
+                read=read,
             )
         )
 
@@ -340,11 +356,11 @@ def write_graph_pages(
                     book_root=book_root,
                 ),
                 canonical=canonical(scope),
+                read=read,
             )
         )
-    # Keep the old full route as a compatibility shell, but never fit every
-    # leaf into one unreadable canvas. Its global index redirects legacy
-    # ``#node=`` links into the nearest hierarchical scope.
+    # The old full route. Published with the book, it redirects there, where the
+    # global index resolves legacy ``#node=`` links, and no book page reads its payload.
     written.append(
         _write_page(
             full_page,
@@ -353,7 +369,7 @@ def write_graph_pages(
             links=view_links(project, full_page),
             heading=root_title,
             lead=(
-                f"Search the titles and Lean names of {len(graph.nodes)} articles without flattening them into one canvas; "
+                f"Search the titles and Lean names of {len(graph.nodes)} articles; "
                 "a result opens its chapter or nested scope."
             ),
             navigation=_navigation(
@@ -372,6 +388,7 @@ def write_graph_pages(
                 ("Explorer", None),
             ),
             canonical=canonical(),
+            read=read,
         )
     )
 
@@ -420,20 +437,24 @@ def _write_page(
     navigation: str = "",
     searchable: bool = True,
     canonical: Path | None = None,
+    read: Collection[Path] | None = None,
 ) -> Path:
-    # Every projection is one payload and one explorer host, so readers get one
-    # interaction model and no second renderer can drift from it. The explorer
-    # names the page by its bare *title*, defaulting to *heading*; the suffixed
-    # heading stays in the Markdown, where it tells the browser tab and site
-    # search apart from the book page of the same name.
+    # Every projection is one payload. The explorer names the page by its bare
+    # *title*, defaulting to *heading*; the suffixed heading stays in the
+    # Markdown, where it tells the browser tab and site search apart from the
+    # book page of the same name. A page with a *canonical* book page only
+    # redirects there, and its payload is written only if *read* names it.
     payload = page.with_suffix(".json")
-    dag_viewer.write_payload(
-        payload,
-        replace(view, title=title or heading),
-        links=links,
-        breadcrumbs=breadcrumbs,
-        book=book,
-    )
+    if read is None or payload in read:
+        dag_viewer.write_payload(
+            payload,
+            replace(view, title=title or heading),
+            links=links,
+            breadcrumbs=breadcrumbs,
+            book=book,
+        )
+    if canonical is not None:
+        return _write_moved(page, _published_link(canonical, page))
     explorer = dag_viewer.render_container(
         quote(payload.name),
         script_href=_viewer_script_link(page, site_root),
@@ -445,14 +466,13 @@ def _write_page(
         ),
         fallback_total=len(view.nodes),
         search_href=search_href,
-        page_href=_published_link(canonical, page) if canonical is not None else None,
         scope=view.scope or "roadmap",
     )
     sections = [
         "---",
         "kind: graph",
         f"graph_view: {view.kind}",
-        *(() if searchable and canonical is None else ("search:", "  exclude: true")),
+        *(() if searchable else ("search:", "  exclude: true")),
         "hide:",
         "  - navigation",
         "  - toc",
@@ -462,22 +482,41 @@ def _write_page(
         # theme reads back as characters in <title>, so it is named here.
         sections.append(header_title(rendered_visible_text(heading)))
     sections.extend(["---", "", f"# {title_text(heading)}", ""])
-    if navigation and canonical is None:
+    if navigation:
         sections.extend([navigation, ""])
     # The legend rides on the lead sentence rather than sitting under the
     # explorer: it answers a question the reader asks once, not on every page.
     tip = render_legend_tip(statuses, _view_inventories(view))
-    if canonical is not None:
-        href = _published_link(canonical, page)
-        reading = (
-            '<div class="bp-reading-source" markdown="1">\n\n'
-            f'<a href="{html.escape(href, quote=True)}">Continue to the mathematical page</a>\n\n</div>'
-        )
-        sections.extend(['<div class="bp-explorer-page" markdown="1">', "", reading, "", explorer, "", "</div>", ""])
-    else:
-        sections.extend([f"{lead} {tip}".rstrip(), "", explorer, ""])
+    sections.extend([f"{lead} {tip}".rstrip(), "", explorer, ""])
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text("\n".join(sections).rstrip() + "\n", encoding="utf-8")
+    return page
+
+
+def _write_moved(page: Path, href: str) -> Path:
+    """Write an old dependency page that sends its visitors on to *href*, their book page.
+
+    The script keeps the fragment, where the book reads a ``#node=`` selection
+    and old view and filter links; without script, the refresh drops it. The
+    hidden host is the router's alias marker, which it follows when it opens
+    this page in place. *href* comes percent-encoded from
+    :func:`_published_link`, so one string serves the marker, the link, the
+    script and the refresh.
+    """
+    target = html.escape(href, quote=True)
+    script = "(function(){var to=new URL(" + json.dumps(href) + ",location.href);to.hash=location.hash;location.replace(to.href);})();"
+    lines = [
+        "---", "title: This page moved", "search:", "  exclude: true", "hide:", "  - navigation", "  - toc", "---", "",
+        "# This page moved", "",
+        '<div class="bp-moved">',
+        f'<div class="bp-dag-viewer" data-page-href="{target}" hidden></div>',
+        f'<p><a href="{target}">Continue to the mathematical page</a></p>',
+        f"<script>{script}</script>",
+        f'<noscript><meta http-equiv="refresh" content="0; url={target}"></noscript>',
+        "</div>",
+    ]
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return page
 
 

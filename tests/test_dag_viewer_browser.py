@@ -1209,7 +1209,9 @@ def test_legacy_node_hash_resolves_through_the_global_index(desktop_page: object
     # The router loaded the whole-roadmap index before this commit, so no retry is in flight.
     playwright.expect(page.locator(".bp-dag-search")).not_to_have_attribute("aria-busy", "true")
     assert page.url.endswith("#node=unknown%2Fitem")
-    assert len(navigations) == 1
+    # The old page, then the book page its script replaces it with.
+    assert len(navigations) == 2 and "/dependencies/chapters/chapter.html" in navigations[0]
+    assert "/roadmap/" in navigations[1]
     # Nothing is selected, in the book or on the map, once the map has drawn.
     playwright.expect(page.locator(".bp-whole-map .pm-part").first).to_be_visible()
     playwright.expect(page.locator(".bp-dag-has-selection")).to_have_count(0)
@@ -1874,15 +1876,12 @@ def test_a_published_app_page_without_script_keeps_the_site_chrome(webkit_browse
         )
         _assert_site_chrome_is_reachable(page)
         playwright.expect(page.locator(".bp-dag-integrated")).to_have_count(0)
-        # A legacy entrance is still a usable native notice, not a blank graph without JavaScript.
+        # Without JavaScript, a legacy entrance refreshes to its canonical page.
         page.goto(f"{site_url}/dependencies/chapters/algebra.html")
-        notice = page.locator(".bp-reading-source")
-        playwright.expect(notice).to_be_visible()
-        link = notice.get_by_role("link").first
-        href = link.get_attribute("href")
-        assert isinstance(href, str)
-        assert urljoin(page.url, href) == _site_route(page, site_url, "algebra")
-        link.click(trial=True)
+        page.wait_for_url(_site_route(page, site_url, "algebra"))
+        playwright.expect(page.locator('.bp-reading-source .bp-thmwrapper[data-autoform-node-id="algebra/result"]')).to_contain_text(
+            "The main result."
+        )
 
 
 def test_a_published_app_page_restores_the_site_chrome_when_its_data_fails(

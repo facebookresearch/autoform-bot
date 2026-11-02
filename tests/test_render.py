@@ -140,7 +140,8 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert (out / "dependencies/chapters/roadmap.json").is_file()
     assert not (out / "dependencies/nodes").exists()
     assert (out / "dependencies/full.md").is_file()
-    assert (out / "dependencies/full.json").is_file()
+    # Only the old full page read this payload, and it now redirects.
+    assert not (out / "dependencies/full.json").exists()
     assert (out / "dependencies/index.json").is_file()
     assert (out / "stylesheets/blueprint.css").is_file()
     assert (out / "stylesheets/blueprint-dag.css").is_file()
@@ -158,19 +159,16 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     graph_pages = [out / "dependencies.md", *(out / "dependencies").rglob("*.md")]
     for graph_page in graph_pages:
         document = graph_page.read_text(encoding="utf-8")
-        assert 'class="bp-dag-viewer"' in document
+        # An old dependency page only sends its visitors on to the book: no explorer and no data of its own.
+        assert document.count('class="bp-dag-viewer"') == 1 and "data-graph-src" not in document
         assert "```mermaid" not in document
         assert "blueprint-mermaid.js" not in document
-        assert document.count("blueprint-dag.js") == 1
-        assert document.count('class="bp-reading-source"') == 1
+        assert "blueprint-dag.js" not in document
+        assert 'class="bp-reading-source"' not in document
         assert "Continue to the mathematical page" in document
-        assert '<style data-autoform-dag-style>' not in document
-        assert graph_page.with_suffix(".json").is_file()
+        assert "location.replace(" in document and '<meta http-equiv="refresh"' in document
 
     project_page = (out / "dependencies.md").read_text(encoding="utf-8")
-    assert "graph_view: project" in project_page
-    assert 'data-graph-src="dependencies.json"' in project_page
-    assert 'data-catalog-src="dependencies/index.json"' in project_page
     assert 'data-page-href="roadmap/index.html"' in project_page
     assert "data-search-src" not in project_page  # Material reserves and strips this prefix.
     assert "Explore all nodes" not in project_page
@@ -182,20 +180,13 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     chapter_payload = json.loads(
         (out / "dependencies/chapters/roadmap.json").read_text(encoding="utf-8")
     )
-    # The explorer names the scope; the page's own H1 adds what it draws, for the tab and site search.
+    # The book names the scope by the payload's bare title.
     assert chapter_payload["title"] == "Top level"
-    assert "\n# Top level dependencies\n" in (out / "dependencies/chapters/roadmap.md").read_text(encoding="utf-8")
     assert chapter_payload["view"]["breadcrumbs"][-1] == {"label": "Top level", "url": None}
     full_page = (out / "dependencies/full.md").read_text(encoding="utf-8")
-    assert 'data-graph-src="full.json"' in full_page
+    assert 'data-page-href="../roadmap/index.html"' in full_page
     assert "search:\n  exclude: true" in full_page
     assert "search:\n  exclude: true" in project_page
-    payload = json.loads((out / "dependencies/full.json").read_text(encoding="utf-8"))
-    assert payload["schema"] == "autoform-dag-view/v2"
-    assert payload["title"] == "Roadmap"
-    assert len(payload["nodes"]) == 1
-    assert payload["edge_count"] == 0
-    assert all(node["url"] for node in payload["nodes"])
     search_index = json.loads((out / "dependencies/index.json").read_text(encoding="utf-8"))
     assert len(search_index["nodes"]) == 3
     assert search_index["schema"] == "autoform-dag-search/v1"
@@ -279,7 +270,7 @@ def test_a_card_heading_keeps_the_look_of_the_div_it_replaced() -> None:
 
 
 @pytest.mark.parametrize("node_count", (2, 502), ids=("small", "large"))
-def test_small_and_large_chapters_use_the_same_json_explorer(
+def test_small_and_large_chapters_use_the_same_json_payload(
     tmp_path: Path,
     node_count: int,
 ) -> None:
@@ -310,10 +301,14 @@ def test_small_and_large_chapters_use_the_same_json_explorer(
     render_site(blueprint, tmp_path / "out")
 
     page = (tmp_path / "out/dependencies/chapters/large.md").read_text(encoding="utf-8")
-    assert 'class="bp-dag-viewer"' in page
-    assert 'data-graph-src="large.json"' in page
+    assert 'data-page-href="../../roadmap/large/index.html"' in page
+    assert "data-graph-src" not in page
     assert "```mermaid" not in page
-    assert page.count("blueprint-dag.js") == 1
+    assert "blueprint-dag.js" not in page
+    # The chapter's book page reads this payload.
+    assert 'data-graph-src="../../dependencies/chapters/large.json"' in (
+        tmp_path / "out/roadmap/large/README.md"
+    ).read_text(encoding="utf-8")
     payload = json.loads((tmp_path / "out/dependencies/chapters/large.json").read_text(encoding="utf-8"))
     assert len(payload["nodes"]) == node_count
     assert payload["edge_count"] == node_count - 1
@@ -421,7 +416,7 @@ def _project_book_links(page: Path) -> set[str]:
 
 
 def test_the_home_page_and_legacy_entrance_share_canonical_book_routes(tmp_path: Path) -> None:
-    """The full landing page and old entrance consume the same project payload.
+    """The landing page reads the project payload, and the old entrance redirects to its book route.
 
     A project-view node is a chapter, so its id is namespaced `scope:<group>`,
     and only the old explorer stripped that before naming the page. The old home
@@ -433,7 +428,7 @@ def test_the_home_page_and_legacy_entrance_share_canonical_book_routes(tmp_path:
     overview = (out / "README.md").read_text(encoding="utf-8")
     dependencies = (out / "dependencies.md").read_text(encoding="utf-8")
     assert 'data-graph-src="dependencies.json"' in overview
-    assert 'data-graph-src="dependencies.json"' in dependencies
+    assert "data-graph-src" not in dependencies
     assert overview.count("blueprint-dag.js") == 1
     assert 'class="bp-reading-source"' in overview
     assert 'data-page-href="index.html"' in overview

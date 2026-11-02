@@ -325,9 +325,9 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
 
     graph_page = (site / "dependencies.md").read_text(encoding="utf-8")
     assert "```mermaid" not in graph_page
-    assert 'class="bp-dag-viewer"' in graph_page
-    assert 'data-graph-src="dependencies.json"' in graph_page
-    assert "graph_view: project" in graph_page
+    # The old dependency pages redirect to the book, which reads their payloads.
+    assert 'data-page-href="roadmap/index.html"' in graph_page
+    assert "data-graph-src" not in graph_page
     project_payload = json.loads((site / "dependencies.json").read_text(encoding="utf-8"))
     assert project_payload["view"]["presentation"] == "atlas"
     assert {region["label"] for region in project_payload["regions"]} == {
@@ -346,8 +346,8 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     support_graph = (site / "dependencies/chapters/full-supervision.md").read_text(
         encoding="utf-8"
     )
-    assert "graph_view: chapter" in chapter_graph
-    assert "graph_view: chapter" in support_graph
+    assert 'data-page-href="../../roadmap/infimum-loss/index.html"' in chapter_graph
+    assert 'data-page-href="../../roadmap/full-supervision/index.html"' in support_graph
     chapter_payloads = {
         group: json.loads((site / f"dependencies/chapters/{group}.json").read_text(encoding="utf-8"))
         for group in ("infimum-loss", "full-supervision")
@@ -364,14 +364,12 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
         document = generated_page.read_text(encoding="utf-8")
         assert "```mermaid" not in document
         assert 'class="bp-dag-viewer"' in document
-        assert document.count("blueprint-dag.js") == 1
+        assert "blueprint-dag.js" not in document
 
     full_graph = (site / "dependencies/full.md").read_text(encoding="utf-8")
-    assert "graph_view: project" in full_graph
-    assert 'class="bp-dag-viewer"' in full_graph
+    assert 'data-page-href="../roadmap/index.html"' in full_graph
     assert "```mermaid" not in full_graph
-    payload = json.loads((site / "dependencies/full.json").read_text(encoding="utf-8"))
-    assert len(payload["nodes"]) < len(graph.nodes)
+    assert not (site / "dependencies/full.json").exists()
     search_index = json.loads((site / "dependencies/index.json").read_text(encoding="utf-8"))
     assert {node["id"] for node in search_index["nodes"]} == set(graph.nodes)
     statement_page = (site / "roadmap/infimum-loss/README.md").read_text(encoding="utf-8")

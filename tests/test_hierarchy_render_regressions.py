@@ -107,9 +107,10 @@ def test_render_publishes_dependencies_between_the_roadmap_root_and_a_chapter(
     assert boundary["title"] == "Top level"
     assert boundary["url"] == "../../roadmap/index.html"
     assert 'data-page-href="../../roadmap/chapter/index.html"' in chapter_page
-    assert 'class="bp-dag-viewer"' in full_page
-    full_payload = json.loads((output / "dependencies/full.json").read_text(encoding="utf-8"))
-    assert {node["title"] for node in full_payload["nodes"]} == {
+    # The old full page redirects too, and the project payload holds the overview it showed.
+    assert 'data-page-href="../roadmap/index.html"' in full_page
+    assert not (output / "dependencies/full.json").exists()
+    assert {node["title"] for node in project_payload["nodes"]} == {
         "Top level",
         "Chapter",
     }
@@ -364,12 +365,11 @@ def test_dependency_map_legends_leave_out_containers(tmp_path: Path) -> None:
     output = tmp_path / "site-src"
     _render(blueprint, output)
 
-    # Alias shells hold no second legend. Scope counts still include only the
+    # Redirects hold no second legend. Scope counts still include only the
     # theorem, and the standalone API preserves its no-JS legend.
-    for payload in ("dependencies.json", "dependencies/full.json"):
-        data = json.loads((output / payload).read_text(encoding="utf-8"))
-        assert sum(node["member_count"] for node in data["nodes"]) == 1
-        assert [pair for node in data["nodes"] for pair in node["status_counts"]] == [["can_state", 1]]
+    data = json.loads((output / "dependencies.json").read_text(encoding="utf-8"))
+    assert sum(node["member_count"] for node in data["nodes"]) == 1
+    assert [pair for node in data["nodes"] for pair in node["status_counts"]] == [["can_state", 1]]
     for page in ("dependencies.md", "dependencies/full.md"):
         rendered = (output / page).read_text(encoding="utf-8")
         assert 'class="bp-legend-count"' not in rendered

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -248,12 +249,12 @@ def test_shared_style_is_planned_written_and_not_duplicated_in_pages(tmp_path: P
     assert style.read_text(encoding="utf-8") == dag_viewer._STYLE
     manifest = json.loads((output / render.PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
     assert dag_viewer.STYLE_PATH in manifest["files"]
-    for page in (output / "roadmap" / group / "README.md", output / "dependencies.md"):
-        text = page.read_text(encoding="utf-8")
-        assert '<style data-autoform-dag-style>' not in text
-        tree = _tree(page)
-        links = [element for element in tree.iter("link") if element.get("data-autoform-dag-style") is not None]
-        assert len(links) == 1
+    page = output / "roadmap" / group / "README.md"
+    assert '<style data-autoform-dag-style>' not in page.read_text(encoding="utf-8")
+    links = [element for element in _tree(page).iter("link") if element.get("data-autoform-dag-style") is not None]
+    assert len(links) == 1
+    # An old dependency page only redirects, so it loads no stylesheet.
+    assert "data-autoform-dag-style" not in (output / "dependencies.md").read_text(encoding="utf-8")
     summary = (output / "SUMMARY.md").read_text(encoding="utf-8")
     assert "- Mathematics" in summary and "- Graph" not in summary
     assert "Dependency explorer" not in summary
@@ -282,9 +283,15 @@ def test_legacy_aliases_keep_exact_canonical_links_in_a_strict_mkdocs_build(tmp_
     ):
         tree = html5lib.parse((built / relative).read_text(encoding="utf-8"), treebuilder="etree", namespaceHTMLElements=False)
         (viewer,) = _class(tree, "bp-dag-viewer")
-        assert viewer.get("data-page-href") == href
+        assert viewer.get("data-page-href") == href and viewer.get("data-graph-src") is None
         assert any(link.get("href") == href and "Continue to the mathematical page" in "".join(link.itertext()) for link in tree.iter("a"))
+        # The site check reads only the link, so the script and the refresh are checked against it here.
+        (script,) = [element for element in tree.iter("script") if "location.replace(" in (element.text or "")]
+        assert json.loads(re.search(r'new URL\(("[^"]*"),location\.href\)', script.text)[1]) == href
+        (refresh,) = [element for element in tree.iter("meta") if element.get("http-equiv") == "refresh"]
+        assert refresh.get("content") == f"0; url={href}"
         assert (built / relative).parent.joinpath(href).resolve().is_file()
+    assert not (built / "dependencies/full.json").exists()
 
 
 def test_unpublished_reading_and_route_data_never_enter_the_site(tmp_path: Path) -> None:
