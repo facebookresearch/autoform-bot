@@ -145,7 +145,7 @@ def test_a_map_script_that_fails_or_draws_nothing_leaves_one_notice_in_the_stage
         querySelector(selector){return selector==='.bp-whole-map'?drawn:null;}};
       const clients=new Map(),window={AutoformNavigation:{create(options){return {
         start(){options.onCommit({graph:{},readingSource:{}});},dispose(){}};}}};
-      let alive=true;const dom$stage=stage;
+      let alive=true;const dom$stage=stage,dom$announcement={textContent:''};
       eval(original('element'));eval(original('mapUnavailable'));eval(original('start'));
       function mount(){return {ready:Promise.resolve(),mapUnavailable};}
       start(host);
@@ -156,9 +156,12 @@ def test_a_map_script_that_fails_or_draws_nothing_leaves_one_notice_in_the_stage
       assert.equal(typeof report,'function','The map script reports how it went');report();
       const notices=()=>stage.children.filter(child=>child.className==='bp-dag-map-unavailable');
       assert.equal(notices().length,fixture.outcome==='load-with-map'?0:1);
+      if(fixture.outcome==='load-with-map')assert.equal(dom$announcement.textContent,'');
       if(fixture.outcome!=='load-with-map'){
         const [notice]=notices();assert.equal(notice.tagName,'P');assert.equal(notice.attributes.get('role'),'status');
         assert.equal(notice.textContent,'The map could not load. Topics, search and the statement lists still work.');
+        // A status region inserted with its text already in it is often not spoken, so the book's live region says it too.
+        assert.equal(dom$announcement.textContent,notice.textContent);
         mapUnavailable();assert.equal(notices().length,1,'A second report keeps the one notice');
       }
     """, {"outcome": outcome})

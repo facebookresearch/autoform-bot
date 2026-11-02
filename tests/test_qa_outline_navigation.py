@@ -75,7 +75,7 @@ window.matchMedia=()=>({matches:true});
 )
 
 _PHONE_CALLBACKS = [
-    "captureState", "snapshotForRoute", "applyRoute", "restoreState", "setFilters", "setBrowse", "sheetLayout", "mapControl",
+    "captureState", "snapshotForRoute", "applyRoute", "selection", "restoreState", "setFilters", "setBrowse", "sheetLayout", "mapControl",
 ]
 
 _INVENTORY_PEERS = _OUTLINE_PEERS + r"""
@@ -425,7 +425,8 @@ def test_phone_topic_boundary_overview_peeks_without_overriding_reading_intent(i
       if(saved) {
         const restored=restoreState(saved,incoming);await frame();await restored;
         assert.equal(hostClasses.has('bp-dag-sheet-open'),opened);
-        assert.equal(ui$requestedNode,topic.id);assert.equal(ui$selected.id,topic.id);
+        // A topic is a place on the map, never the selection, even when its view lists it under its own id.
+        assert.equal(ui$requestedNode,topic.id);assert.equal(ui$selected,null);
         assert.equal(dom$readingBody.scrollTop,155);assert.equal(dom$navigation.scrollTop,42);assert.equal(dom$inventoryScroll.scrollTop,8);
         assert.equal(document.activeElement,opened?dom$readingBody:dom$search);
         assert.equal(document.activeElement.focuses.at(-1).preventScroll,true);

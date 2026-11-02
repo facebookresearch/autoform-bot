@@ -144,7 +144,7 @@ function headingBundle(id, snapshot, focus = true) {
 def _run(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
     script += "\nObject.assign(sandbox, {clearTimeout});\n"
-    script += "const callbacks=['captureState','snapshotForRoute','applyRoute','restoreState','setFilters','setBrowse','mapControl']"
+    script += "const callbacks=['captureState','snapshotForRoute','applyRoute','selection','restoreState','setFilters','setBrowse','mapControl']"
     script += ".map(original).join('\\n');\n"
     script += "let testBodyComplete=false;\n"
     script += "process.once('beforeExit',()=>{if(!testBodyComplete){"

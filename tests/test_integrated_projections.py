@@ -35,7 +35,7 @@ function original(name) {
 const constants = source.match(/\bvar LIST_PAGE =[^;]+;/);
 assert(constants, 'Production list page size missing');
 const functions = [
-  'element', 'readingLabel', 'button', 'bindNodeLink', 'safeHref', 'graphAt', 'recordId', 'listed', 'adoptGraph',
+  'element', 'readingLabel', 'button', 'bindNodeLink', 'safeHref', 'graphAt', 'recordId', 'listed', 'selection', 'adoptGraph',
   'statusLabel', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
   'semanticParent', 'placeOf', 'pendingMath', 'summaryLine', 'refreshReadingLabels', 'tooltip', 'inCurrentScope', 'sourceNodes'
 ].map(original).join('\n');
@@ -291,3 +291,24 @@ def test_a_deep_trail_keeps_first_parent_and_current_and_names_what_the_ellipsis
       assert.deepEqual(whole.map(item => item.title), trail.map(entry => entry.label));
       assert.equal(whole[4].getAttribute('aria-current'), 'page');
     """)
+
+
+def test_a_statement_is_selected_from_the_index_whatever_view_its_page_carries() -> None:
+    _run(r"""
+      // A statement placed directly under the roadmap is published with the project's view, which lists only topics.
+      const root = scope('roadmap', {parent: undefined}), chapter = scope('chapter');
+      const top = Object.assign(leaf('top'), {scope: 'roadmap', parent: 'roadmap'});
+      configure([root, chapter, top, leaf('A')], graph([viewNode('scope:chapter', {kind: 'scope'}), viewNode('A')]));
+      adoptGraph(contextGraph);
+      assert.equal(byId.has('top'), false);
+      assert.strictEqual(selection('top'), records.get('top'));
+      // A statement the page lists is still the index's record, and a topic is never the selection.
+      assert.strictEqual(selection('A'), records.get('A'));
+      assert.strictEqual(selection('chapter'), null);
+      assert.strictEqual(selection(undefined), null);
+      // Before the index loads, the page's own entries decide.
+      records = new Map(); sharedIndex = null; adoptGraph(graph([viewNode('B')]));
+      assert.equal(selection('B').id, 'B');
+      assert.strictEqual(selection('top'), null);
+    """)
+

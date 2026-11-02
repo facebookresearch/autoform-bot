@@ -188,6 +188,12 @@
       var record = records.get(recordId(node));
       return node.map !== false && !(node.kind === "scope" && record && record.navigation === "source");
     }
+    // A statement is selected from the index, since its page may carry another view's payload (one placed directly
+    // under the roadmap gets the project's); a topic is never the selection. Before the index, the payload decides.
+    function selection(id) {
+      var record = id && records.get(id);
+      return record ? (record.scope !== record.id ? record : null) : id && byId.get(id) || null;
+    }
     function adoptGraph(payload) {
     data = graphAt(payload, currentBundle && currentBundle.dataURL);
     data.nodes = data.nodes.filter(listed);
@@ -271,7 +277,7 @@
       var ticket = ++restoration, isCurrent = bundle && bundle.isCurrent; restoring = true; clearTimeout(checkpointTimer);
       ui$filtersTouched = true;
       ui$requestedNode = saved.requestedNode === undefined ? saved.node || null : saved.requestedNode;
-      updateProjection(); ui$selected = saved.node && byId.get(saved.node) || null;
+      updateProjection(); ui$selected = selection(saved.node);
       ui$selectedStatuses = new Set(saved.statuses || presentStatuses);
       ui$mode = ["graph", "list", "sources"].indexOf(saved.mode) >= 0 ? saved.mode : "graph";
       ui$listLimit = Math.max(LIST_PAGE, Number(saved.listLimit) || LIST_PAGE); ui$relationIds = saved.relationIds || null;
@@ -445,7 +451,7 @@
     }
     function updateProjection() {
       adoptGraph(currentBundle.graph);
-      ui$selected = byId.get(ui$requestedNode) || null;
+      ui$selected = selection(ui$requestedNode);
       if (!ui$filtersTouched) ui$selectedStatuses = new Set(presentStatuses);
       if (dom$statusFieldset) renderStatusFields();
       renderBreadcrumb();
@@ -869,10 +875,11 @@
       if (ui$mode === "graph" && ui$mathJob) stopRowMath();
       syncNavigationSelection();
       dom$statusInputs.forEach(function (input, key) { input.checked = ui$selectedStatuses.has(key); });
-      var enabled = ui$selectedStatuses.size;
+      // A link may name statuses this page doesn't have; the summary and the map count the present ones it shows.
+      var shown = presentStatuses.filter(function (key) { return ui$selectedStatuses.has(key); }), enabled = shown.length;
       dom$filterSummary.textContent = "Filter: " + (enabled === presentStatuses.length ? "all" : enabled + " of " + presentStatuses.length) + " statuses";
       // The whole map dims the results whose status the filter leaves out.
-      if (enabled < presentStatuses.length) host.dataset.mapStatuses = Array.from(ui$selectedStatuses).join(" "); else delete host.dataset.mapStatuses;
+      if (enabled < presentStatuses.length) host.dataset.mapStatuses = shown.join(" "); else delete host.dataset.mapStatuses;
       dom$graphMode.hidden = ui$mode === "graph";
       dom$listMode.textContent = currentBundle && currentBundle.scope === "roadmap" ? "All statements" : "Statements in this topic";
       var hasSources = sourceNodes().length > 0;
@@ -1032,7 +1039,7 @@
     function mapUnavailable() {
       if (!alive || dom$stage.querySelector(".bp-dag-map-unavailable")) return;
       var note = element("p", "bp-dag-map-unavailable", "The map could not load. Topics, search and the statement lists still work.");
-      note.setAttribute("role", "status"); dom$stage.appendChild(note);
+      note.setAttribute("role", "status"); dom$stage.appendChild(note); dom$announcement.textContent = note.textContent;
     }
 
     function clearSelection(updateHistory, returnFocus) {

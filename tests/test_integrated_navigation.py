@@ -1067,7 +1067,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
       const requestAnimationFrame=callback=>setImmediate(callback);
       const snapshotForRoute=eval('('+callback('snapshotForRoute')+')');
       const applyRoute=eval('('+callback('applyRoute')+')');
-      const restoreState=eval('('+callback('restoreState')+')');
+      const selection=eval('('+callback('selection')+')'),restoreState=eval('('+callback('restoreState')+')');
       hooks.commit=bundle=>bundle.nodeId==='a' ? applyRoute(bundle) : undefined;
       let restorePending; hooks.restore=(saved,bundle)=>{restorePending=restoreState(saved,bundle);return restorePending;};
       await app.nav.start(); deferMath();
@@ -1123,7 +1123,7 @@ def test_results_restoration_renders_saved_page_before_restoring_scroll_and_focu
       }
       const requestAnimationFrame=callback=>setImmediate(callback);
       const snapshotForRoute=eval('('+callback('snapshotForRoute')+')');
-      const refresh=eval('('+callback('refresh')+')'),restoreState=eval('('+callback('restoreState')+')');
+      const refresh=eval('('+callback('refresh')+')'),selection=eval('('+callback('selection')+')'),restoreState=eval('('+callback('restoreState')+')');
       const saved={mode:'list',listLimit:200,inventoryScroll:1800,outlineScroll:37,readingScroll:71,
         focus:'result-150',camera:{x:12,y:24,scale:1.2},readingOpen:false};
       await restoreState(saved,{isCurrent:()=>true});

@@ -11,7 +11,7 @@ pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for bounde
 
 _CALLBACKS = [
     "element", "button", "readingLabel", "refreshReadingLabels", "safeHref", "graphAt", "recordId", "listed",
-    "adoptGraph", "updateProjection",
+    "adoptGraph", "selection", "updateProjection",
     "statusLabel", "swatch", "solid", "syncControls", "activateNode", "setMode", "refresh",
     "setSheet", "sheetLayout", "syncSheetAccessibility", "captureState", "snapshotForRoute", "restoreState", "sourceNodes", "inCurrentScope",
 ]
@@ -137,3 +137,15 @@ def test_source_or_module_scope_activation_keeps_reading_intent_without_forcing_
       records.set(topic.id,topic);activateNode(topic);
       assert.deepEqual(navigationCalls.at(-1),{id:topic.id,options:{history:'push',focus:'reading',mapFirst:true}});
     """,[*_CALLBACKS,"buildShell"],_PEERS)
+
+
+def test_a_link_naming_absent_statuses_counts_only_the_present_ones_it_shows() -> None:
+    _run(r"""
+      fixture();assert.deepEqual(presentStatuses.slice().sort(),['fully_proved','planned']);
+      // Home's "Ready to work on" link asks for statuses this page may not have.
+      ui$selectedStatuses=new Set(['planned','fully_proved','can_prove']);syncControls();
+      assert.equal(dom$filterSummary.textContent,'Filter: all statuses');assert.equal(host.dataset.mapStatuses,undefined);
+      ui$selectedStatuses=new Set(['planned','can_prove']);syncControls();
+      assert.equal(dom$filterSummary.textContent,'Filter: 1 of 2 statuses');assert.equal(host.dataset.mapStatuses,'planned');
+    """)
+
