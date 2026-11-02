@@ -110,3 +110,13 @@ def is_within(path: Path, directory: Path) -> bool:
     # path's parents, which is slow enough to show up in loading a large blueprint.
     parts = directory.parts
     return path.parts[: len(parts)] == parts if parts else not path.anchor
+
+
+def relative(path: Path, directory: Path) -> Path:
+    """``path.relative_to(directory)``, read off the parts as :func:`is_within` compares them.
+
+    A path outside ``directory`` still raises relative_to's ValueError."""
+
+    if os.name == "nt" or not is_within(path, directory):
+        return path.relative_to(directory)
+    return Path(*path.parts[len(directory.parts) :])

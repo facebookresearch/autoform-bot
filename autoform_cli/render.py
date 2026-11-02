@@ -61,6 +61,8 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 from markdown.treeprocessors import Treeprocessor
 
 from . import dag_viewer, graph_pages, graph_views, project_map, status
+from ._fs import is_within as _is_within
+from ._fs import relative as _relative
 from ._fs import resolve as _resolve
 from ._fs import resolving_once
 from ._repository import detect_ref, detect_repository_url, repository_top_level, verify_repository_snapshot
@@ -542,7 +544,7 @@ def _publication(
     }
     targets.update(
         {
-            node_id: (destination / node.path.relative_to(blueprint), "")
+            node_id: (destination / _relative(node.path, blueprint), "")
             for node_id, node in graph.nodes.items()
             if node_id in containers or (not node.formalizable and node.catalog is None)
         }
@@ -562,9 +564,9 @@ def _publication(
     left_out = frozenset(
         _resolve(source)
         for source in snapshot
-        if source.relative_to(blueprint).as_posix() not in written_over
+        if _relative(source, blueprint).as_posix() not in written_over
         and (
-            source.relative_to(blueprint).parts[:1] == (READBACKS_DIR,)
+            _relative(source, blueprint).parts[:1] == (READBACKS_DIR,)
             or source.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
             or (source.suffix.lower() in PAGE_SUFFIXES and not _is_utf8(snapshot[source]))
         )
@@ -619,7 +621,7 @@ def _publication(
             for stretch in _chapter_stretches(narrative, *layout):
                 found += _read_page(stretch)[1]
         found = tuple(dict.fromkeys(found))
-        label = node_sources.get(source.resolve()) or source.relative_to(blueprint).as_posix()
+        label = node_sources.get(_resolve(source)) or _relative(source, blueprint).as_posix()
         warnings.extend(f"{label}: {issue}" for issue in (*found, *notation))
         warnings.extend(
             f"{label}: links to {target!r}, which is hidden or in an unpublished folder, so the site keeps only "
@@ -656,7 +658,7 @@ def _publication(
             # A flagged leaf's box shows its statement and notes as typed.
             statements[node_id] = (shown_as_typed("\n\n".join(filter(None, parts)), page=False), "") if found else parts
         else:
-            articles[node.path.resolve()] = (
+            articles[_resolve(node.path)] = (
                 shown_as_typed(text) if found
                 else text if node_id in groups
                 else _protect_narrative_markdown(text)
@@ -664,7 +666,7 @@ def _publication(
 
     files: dict[Path, str | bytes] = {}
     for source in sorted(snapshot):
-        relative = source.relative_to(blueprint)
+        relative = _relative(source, blueprint)
         # Source notes leave the site entirely once readers can reach them in
         # the repository, so the book has one reference surface rather than two.
         if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
@@ -677,9 +679,9 @@ def _publication(
         # name articles in unpublished folders, so it stays out of the site.
         if relative.as_posix().casefold() == "atlas.json":
             continue
-        if source.resolve() in node_sources:
-            if source.resolve() in articles:
-                files[source] = articles[source.resolve()]
+        if _resolve(source) in node_sources:
+            if _resolve(source) in articles:
+                files[source] = articles[_resolve(source)]
         elif source.suffix.lower() in PAGE_SUFFIXES:
             try:
                 written = snapshot[source].decode("utf-8")
@@ -704,7 +706,7 @@ def _publication(
                 "save it as an image (PNG, JPEG, GIF, WebP), a PDF or plain text, "
                 "or keep it outside blueprint/"
             )
-    if blueprint / TEX_MACROS not in snapshot and any(source.is_relative_to(blueprint / TEX_MACROS) for source in snapshot):
+    if blueprint / TEX_MACROS not in snapshot and any(_is_within(source, blueprint / TEX_MACROS) for source in snapshot):
         warnings.append(f"{TEX_MACROS}: is a directory, so the site has no project macros; make it a JSON file")
     script, script_warnings = mathjax_script(snapshot.get(blueprint / MATHJAX_SCRIPT), snapshot.get(blueprint / TEX_MACROS))
     warnings.extend(script_warnings)
@@ -800,7 +802,7 @@ def _in_the_way(blueprint: Path, graph: Graph, snapshot: dict[Path, bytes]) -> l
     names the path before writing anything; capture has already refused a
     symlink or a special file anywhere."""
 
-    captured = {source.relative_to(blueprint).as_posix() for source in snapshot}
+    captured = {_relative(source, blueprint).as_posix() for source in snapshot}
     folders = {"/".join(parts[:end]) for parts in (path.split("/") for path in captured) for end in range(1, len(parts))}
     blocked: dict[str, str] = {}
     for relative in _site_paths(graph):
@@ -1080,7 +1082,7 @@ def _render_pages(
     containers = _containers(graph)
     group_pages = {group: destination / _group_page(group) for group in groups}
     for source, content in site.files.items():
-        target = destination / source.relative_to(blueprint)
+        target = destination / _relative(source, blueprint)
         # Directories are created on demand, so a directory holding nothing
         # but absorbed nodes leaves no empty shell behind.
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1164,9 +1166,9 @@ def _render_pages(
     # a second pass through Markdown would read differently. A title with no
     # math or code keeps that visible text, emphasis and links already read.
     authored = {
-        (destination / node.path.relative_to(blueprint)).resolve(): node.title
+        _resolve(destination / _relative(node.path, blueprint)): node.title
         for node in graph.nodes.values()
-        if node.path.is_relative_to(blueprint)
+        if _is_within(node.path, blueprint)
     }
     _append_book_navigation([p for p in book_pages if p != overview], authored)
     structure = destination / STRUCTURE_PAGE
@@ -1192,7 +1194,7 @@ def _render_pages(
         book_targets=targets,
         contexts_out=contexts,
         captured_sources={node_id: files[node.path] for node_id, node in graph.nodes.items() if node.path in files},
-        source_paths={node_id: node.path.relative_to(blueprint) for node_id, node in graph.nodes.items()},
+        source_paths={node_id: _relative(node.path, blueprint) for node_id, node in graph.nodes.items()},
         unavailable_source_ids=site.unavailable_source_ids,
         warnings_out=report.warnings,
         book_order=order,
@@ -1207,7 +1209,7 @@ def _render_pages(
         if page not in page_contexts or not anchor:
             page_contexts[page] = (payload, scope, node_id if not anchor else None)
     canonical_pages = {
-        destination / source.relative_to(blueprint)
+        destination / _relative(source, blueprint)
         for source, content in site.files.items()
         if isinstance(content, str) and source.suffix.lower() in PAGE_SUFFIXES
     } | set(group_pages.values()) | {overview}
@@ -1866,7 +1868,7 @@ def _write_publication_manifest(
     source_revision: str,
     lean_source_revision: str,
 ) -> None:
-    paths = sorted(path.relative_to(destination).as_posix() for path in destination.rglob("*"))
+    paths = sorted(_relative(path, destination).as_posix() for path in destination.rglob("*"))
     manifest = {
         "complete": True,
         "coverage": {
@@ -1959,7 +1961,7 @@ def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> lis
                 if not path or urlsplit(path).scheme or path.startswith("/"):
                     continue
                 candidate = _resolve(source.parent / unquote(path))
-                candidate_relative = candidate.relative_to(blueprint)
+                candidate_relative = _relative(candidate, blueprint)
             except ValueError:  # a target outside the vault, an unbalanced IPv6 bracket, or a decoded NUL
                 continue
             if (
@@ -2134,7 +2136,7 @@ def _reading_order(
     page_rank = {page: rank for rank, page in enumerate(pages)}
 
     def key(node_id: str) -> tuple[int, str, int]:
-        page = targets[node_id][0].resolve() if node_id in targets else None
+        page = _resolve(targets[node_id][0]) if node_id in targets else None
         return page_rank.get(page, len(page_rank)), str(page or ""), positions.get(node_id, -1)
 
     return sorted(status.topological_order(graph), key=key)
@@ -2146,7 +2148,7 @@ def _append_book_navigation(pages: list[Path], authored: dict[Path, str]) -> Non
         return
     visible = [_page_heading(page.read_text(encoding="utf-8")) or page.stem for page in pages]
     titles = [
-        _title_html(authored[page.resolve()], fallback=shown) if page.resolve() in authored else html.escape(shown)
+        _title_html(authored[_resolve(page)], fallback=shown) if _resolve(page) in authored else html.escape(shown)
         for page, shown in zip(pages, visible)
     ]
     for index, page in enumerate(pages):
@@ -2357,7 +2359,7 @@ def _render_summary_nav(
         text = page.read_text(encoding="utf-8")
         named = _header_title(text)
         title = name_text(named) if named else title_text(_first_h1(text) or page.parent.name)
-        lines.append(f"{'    ' * depth}- [{title}]({page.relative_to(destination).as_posix()})")
+        lines.append(f"{'    ' * depth}- [{title}]({_relative(page, destination).as_posix()})")
         stack.extend((child, depth + 1) for child in reversed(children.get(page, [])))
     # What counts as done belongs beside the book it qualifies. The landing
     # page used to be the only route to it, which made the page impossible to
@@ -2991,10 +2993,13 @@ def _rewrite_links(
         # Capture leaves out hidden paths and unpublished folders, so the site has
         # no page there, though check's graph knows the articles in such a folder.
         # A hidden source note is reached through the repository instead.
-        inside = candidate.relative_to(blueprint) if _is_within(candidate, blueprint) else None
-        if inside is not None and (
+        try:
+            relative = _relative(candidate, blueprint)
+        except ValueError:
+            relative = None
+        if relative is not None and (
             any(_is_within(candidate, folder) for folder in unpublished)
-            or (_is_hidden(inside) and inside.parts[:1] != (SOURCES_DIR,))
+            or (_is_hidden(relative) and relative.parts[:1] != (SOURCES_DIR,))
         ):
             unlinked.add(raw)
             if dropped is not None:
@@ -3007,14 +3012,13 @@ def _rewrite_links(
                 href = f"{'' if href == '#' else href}#{fragment}"
             before, hashed, anchor = href.partition("#")  # the query goes before the anchor
             return f"{before}{asked}{query}{hashed}{anchor}"
-        if not _is_within(candidate, blueprint):
+        if relative is None:
             # Nothing outside the blueprint is published: "" keeps only the text.
             return ""
         if candidate in left_out:
             # Nor is a file the site leaves out; its image or definition goes too.
             unlinked.add(raw)
             return ""
-        relative = candidate.relative_to(blueprint)
         # atlas.json stays off the site, so a link to it keeps only its text.
         if relative.as_posix().casefold() == "atlas.json":
             return ""
@@ -3090,14 +3094,6 @@ def _rewrite_links(
         return "".join(pieces) + line[end:]
 
     return _outside_fences(text, rewrite, page=True)
-
-
-def _is_within(path: Path, directory: Path) -> bool:
-    try:
-        path.relative_to(directory)
-    except ValueError:
-        return False
-    return True
 
 
 def _in_working_tree(path: Path, root: Path) -> bool:
@@ -3319,7 +3315,7 @@ def _chapter_layout(
             elif not path or urlsplit(path).scheme or path.startswith("/"):
                 node_id = None
             else:
-                node_id = node_sources.get((source_dir / unquote(path)).resolve())
+                node_id = node_sources.get(_resolve(source_dir / unquote(path)))
         except ValueError:  # an unbalanced IPv6 bracket or a decoded NUL names no article
             node_id = None
         if node_id is None or node_id not in slotted or node_id in slots.values():
@@ -3681,7 +3677,7 @@ def _review_disclosures(
     published = {
         node_id
         for node_id, node in whole.nodes.items()
-        if not any(node.path.is_relative_to(folder) for folder in whole.unpublished)
+        if not any(_is_within(node.path, folder) for folder in whole.unpublished)
     }
     edited = [
         ReviewFinding(node_id, "review-snapshot-changed", f"the article changed {changed}")
@@ -4039,7 +4035,7 @@ def _vault_source_link(node: Node, *, repo_root: Path, linker) -> str:
     if not linker.repository_url or not linker.ref or not linker.links_blueprint:
         return ""
     try:
-        relative = node.path.resolve().relative_to(repo_root).as_posix()
+        relative = _relative(_resolve(node.path), repo_root).as_posix()
     except ValueError:
         return ""
     relative = linker.spellings.get(relative, relative)

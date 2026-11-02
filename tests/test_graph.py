@@ -13,7 +13,7 @@ import pytest
 import autoform_cli.__main__ as cli_module
 from autoform_cli import lean as lean_module
 from autoform_cli.__main__ import main
-from autoform_cli._fs import is_within
+from autoform_cli._fs import is_within, relative
 from autoform_cli.render import DECLARATION_LABELS
 from autoform_cli.graph import (
     GraphValidationError,
@@ -539,15 +539,18 @@ def test_a_blueprint_with_no_unpublished_folder_reads_no_links_for_one(
         ("a", "/a"), ("/a", "a"), ("a/../b", "a"), ("../a", ".."), ("a", ".."),
     ],
 )
-def test_is_within_agrees_with_relative_to(path: str, directory: str) -> None:
+def test_is_within_and_relative_agree_with_relative_to(path: str, directory: str) -> None:
     try:
-        Path(path).relative_to(Path(directory))
+        expected = Path(path).relative_to(Path(directory))
     except ValueError:
-        expected = False
-    else:
-        expected = True
+        expected = None
 
-    assert is_within(Path(path), Path(directory)) is expected
+    assert is_within(Path(path), Path(directory)) is (expected is not None)
+    if expected is None:
+        with pytest.raises(ValueError):
+            relative(Path(path), Path(directory))
+    else:
+        assert relative(Path(path), Path(directory)) == expected
 
 
 @pytest.mark.parametrize(
