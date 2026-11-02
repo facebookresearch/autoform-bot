@@ -894,6 +894,33 @@ def test_indexing_some_names_scans_only_the_sources_that_spell_one(
     assert scanned == ["Project/Basic.lean"]
 
 
+def test_the_scan_skips_only_lines_that_open_close_and_declare_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Each way a command the scan reads can start, where a line it skipped wrongly would change a name or drop one.
+    keywords = [keyword for keyword in lean_module._DECLARATION_KEYWORDS.split("|") if keyword != "alias"]
+    lines = ["namespace Outer", "@[expose] public section Inner"]
+    for m, modifier in enumerate(["", *lean_module._DECLARATION_MODIFIERS.split("|")]):
+        lines += [f"  {modifier} {keyword} m{m}k{k} : True := trivial" for k, keyword in enumerate(keywords)]
+    lines += ["@[simp] theorem attributed : True := by", "  simp", "  exact trivial", "end Inner"]
+    lines += ["mutual", "def even : Bool := true", "end", "def after_mutual : Nat := 0"]
+    for s, modifier in enumerate(["", *lean_module._SECTION_MODIFIERS.split("|")]):
+        lines += [f"{modifier} section S{s}", f"def in_section{s} : Nat := {s}", f"end S{s}"]
+    lines += ["alias aliased := attributed", "end Outer", "proof_wanted wanted : True"]
+    lines += ["#exit", "def after_exit : Nat := 0"]
+    root = Path(__file__).resolve().parents[1]
+    sources = {Path("Synthetic.lean"): "\n".join(lines) + "\n"}
+    for path in sorted([*(root / "tests/fixtures").rglob("*.lean"), *(root / "skills").rglob("*.lean")]):
+        if not any(part.startswith(".") for part in path.relative_to(root).parts):  # not a fixture's own build, .lake
+            sources[path.relative_to(root)] = path.read_text(encoding="utf-8")
+
+    skipping = [lean_module._scan(text, relative) for relative, text in sources.items()]
+    monkeypatch.setattr(lean_module, "_SCANNED_LINE", re.compile(""))
+
+    assert [lean_module._scan(text, relative) for relative, text in sources.items()] == skipping
+    names = {declaration.name for declaration in skipping[0][0]}
+    assert {"Outer.m8k14", "Outer.attributed", "Outer.after_mutual", "Outer.in_section4", "Outer.aliased"} <= names
+    assert "wanted" in names and "after_exit" not in names and len(sources) > 30
+
+
 @pytest.mark.parametrize("parent", ["", "Nested/"])
 @pytest.mark.parametrize(
     "directory",

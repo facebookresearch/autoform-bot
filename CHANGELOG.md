@@ -66,6 +66,14 @@ date when the release is tagged.
   root once where a shared library's citations made it read it twice, and
   again only when a name is declared nowhere, for the error about its parent.
   `audit` strips comments only from files that hold a resolved target (#429).
+- **Lean scan.** Reading a Lean file's declarations tries its six command
+  patterns only on a line that starts the way one of them can: with `#exit`,
+  `namespace`, `section`, `mutual`, `end`, an attribute list, a modifier or a
+  declaration keyword. It tried all six on every line, though almost every
+  line is a proof. Each line's indent is measured only in a file with a
+  structure or class, whose fields need it. On one CI runner, indexing
+  ATLAS's 13,698 Lean files took 9.2 s instead of 13.0 s; the declarations
+  found are the same.
 - **Search index size.** `dependencies/index.json` no longer repeats links the
   explorer doesn't read. A row whose route the explorer opens drops its context
   `url`, and only container rows keep `data_url`, since every page names its
