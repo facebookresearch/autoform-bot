@@ -53,7 +53,7 @@ from markdown.inlinepatterns import ENTITY_RE, ReferenceInlineProcessor
 from pymdownx.arithmatex import RE_BRACKET_INLINE, RE_SMART_DOLLAR_INLINE
 from pymdownx.superfences import fence_div_format
 
-from ._fs import directory_path, is_within, resolved_path
+from ._fs import directory_path, is_within, resolve, resolved_path
 
 #: The class pymdownx.arithmatex gives each formula it finds in the site's
 #: Markdown. The page's MathJax reads these elements and no other text, so the
@@ -1241,7 +1241,7 @@ def _is_hidden_path(path: Path, boundary: Path) -> bool:
 
 def relative_link(target: Path, output: Path, link_extension: str) -> str:
     """Relative link from the page at *output* to *target*, with its suffix swapped."""
-    relative = Path(os.path.relpath(target.resolve(), output.resolve().parent))
+    relative = Path(os.path.relpath(resolve(target), resolve(output).parent))
     if not relative.name:
         # The page's own directory is ``.``, which has no name to take a suffix.
         return quote(relative.as_posix(), safe="/")

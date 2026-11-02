@@ -3650,6 +3650,70 @@ def test_node_links_resolve_each_target_page_once(tmp_path: Path, monkeypatch: p
     assert resolved.count(chapter) <= 2
 
 
+def test_a_render_resolves_each_path_once_and_forgets_it_afterwards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pages and nodes are resolved many times in one render, so resolving_once
+    remembers each spelling until the block ends; a nested block shares it."""
+    from autoform_cli._fs import resolve, resolving_once
+
+    page = tmp_path / "page.md"
+    resolved: list[Path] = []
+    original = Path.resolve
+
+    def counting_resolve(self: Path, strict: bool = False) -> Path:
+        resolved.append(self)
+        return original(self, strict)
+
+    monkeypatch.setattr(Path, "resolve", counting_resolve)
+
+    with resolving_once():
+        assert resolve(page) == resolve(page) == original(page)
+        with resolving_once():
+            assert resolve(page) == original(page)
+        assert resolved == [page]
+    assert resolve(page) == original(page)
+    assert resolved == [page, page]
+
+
+def test_a_render_and_checks_reading_of_the_site_each_resolve_in_one_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = _project(tmp_path)
+    scopes: list[str] = []
+    original = render_module.resolving_once
+
+    @contextmanager
+    def recording():
+        scopes.append("entered")
+        with original():
+            yield
+
+    monkeypatch.setattr(render_module, "resolving_once", recording)
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    assert scopes == ["entered"]
+    render_module.publication_issues(load_graph(project / "blueprint"), project / "blueprint")
+    assert scopes == ["entered", "entered"]
+
+
+def test_a_later_render_sees_a_link_retargeted_after_an_earlier_one(tmp_path: Path) -> None:
+    from autoform_cli._fs import resolve, resolving_once
+
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(tmp_path / "a", target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    with resolving_once():
+        assert resolve(link / "page.md") == (tmp_path / "a").resolve() / "page.md"
+    link.unlink()
+    link.symlink_to(tmp_path / "b", target_is_directory=True)
+    with resolving_once():
+        assert resolve(link / "page.md") == (tmp_path / "b").resolve() / "page.md"
+
+
 def test_the_same_link_from_two_folders_reaches_each_folders_file(tmp_path: Path) -> None:
     """Render resolves each linked path once for the whole site, so a link two
     leaves write alike must still lead from each to its own folder's file."""

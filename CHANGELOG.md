@@ -188,6 +188,10 @@ date when the release is tagged.
 - **Check and render.** One reused converter reads every page, and each linked
   path is resolved once per run, so `check` uses about a fifth less CPU on an
   1,806-article vault; neither command's output changes (#415).
+- **Render paths.** A render resolves each page and node path once and
+  remembers it until the render ends, instead of asking the disk again for
+  every link to it; `check` does the same while it reads the site's pages. On
+  one CI runner ATLAS rendered in 418 s instead of 441 s, with the same output.
 - **Large skeletons.** Packets, the report, and the check that guards their
   publication are hashed and written in pieces, so writing a large report no
   longer holds every packet in memory, and shared closure material is no longer
