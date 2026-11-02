@@ -2104,6 +2104,10 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     # The breadcrumb's math refresh must not move the stage the map draws in.
     stage_before = page.locator(".bp-dag-stage").bounding_box()
     assert stage_before is not None
+    # The map sets its own formula titles, and the breadcrumb's refresh must not set them again. A title keeps its
+    # node while it is off screen, so each formula is checked in its title, not in the map.
+    playwright.expect(page.locator(".bp-whole-map .pm-tex mjx-container").first).to_be_attached()
+    page.evaluate("() => { window.__titleMathMapGlyphs = Array.from(document.querySelectorAll('.bp-whole-map .pm-tex mjx-container')); }")
     ancestor.focus()
     assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-dag-breadcrumb'))") is True
     playwright.expect(ancestor).to_be_focused()
@@ -2120,8 +2124,7 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
         assert crumb.locator("mjx-merror, merror, script, iframe, img").count() == 0
         assert crumb.evaluate("node=>!node.classList.contains('arithmatex')")
     assert page.locator(".bp-dag-stage").bounding_box() == stage_before
-    # The map writes its titles as plain text, which no refresh of the book typesets.
-    assert page.locator(".bp-whole-map .arithmatex, .bp-whole-map mjx-container").count() == 0
+    assert page.evaluate("() => __titleMathMapGlyphs.every(glyph => glyph.closest('.pm-tex') !== null)")
     ancestor.locator("mjx-container").click(button="right")
     playwright.expect(page.get_by_role("menu")).to_have_count(0)
     page.keyboard.press("Escape")
