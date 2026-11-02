@@ -92,9 +92,10 @@ result and for each intermediate result its proof proves or cites, as the
 
 - If a library already proves a result, the result keeps its article and reuses
   that proof: its `## Proof depends on` lists only the articles that proof uses,
-  usually none, and its proof sketch gives the source's own route. A proof that
-  needs a library result with no article yet gets an article for it, proved from
-  the library and linked under `## Proof depends on`.
+  usually none; its proof sketch gives the source's own route, and
+  `## Informally uses` links what that route cites. A proof that needs a library
+  result with no article yet gets an article for it, proved from the library and
+  linked under `## Proof depends on`.
 - Name a reused library declaration in the implementation note, not the article,
   and leave `lean:` unset until Formalize declares the result in the project:
   `lean:` names only a declaration in the project's own Lean files.
@@ -124,10 +125,12 @@ then one fine article per coherent unit with one unique main result. For an
 existing repository, coherent grouping is allowed only when the exact ledger
 still reconciles every public declaration. Do not turn existing formalization
 into fictional future work. Put genuine statement prerequisites under
-`## Depends on` and proof-only prerequisites under `## Proof depends on`. Never
-delete or reverse a genuine article edge to make a chapter-level or scope-level
-projection acyclic. After creating pages, run `autoform migrate article-ids
-blueprint --write` to give new articles a durable `article_id`.
+`## Depends on`, proof-only prerequisites under `## Proof depends on`, and a
+result the source's proof cites that the planned Lean proof will not use under
+`## Informally uses`, which no status counts. Never delete or reverse a genuine
+article edge to make a chapter-level or scope-level projection acyclic. After
+creating pages, run `autoform migrate article-ids blueprint --write` to give new
+articles a durable `article_id`.
 
 ### Articles and implementation notes
 
