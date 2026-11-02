@@ -10,7 +10,6 @@ import os
 import shlex
 import signal
 import socket
-import subprocess
 import sys
 import tempfile
 from collections.abc import Sequence
@@ -19,6 +18,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from . import debrief, debrief_orchestrator, status
+from ._repository import git
 from .approvals import ApprovalStatus, approval_statuses
 from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
 from .audit import audit_blueprint
@@ -2110,18 +2110,10 @@ def _claim_board(args: argparse.Namespace) -> ClaimBoard:
 
 
 def _origin_url(root: Path | None = None) -> str:
-    try:
-        result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=10,
-            cwd=root,
-        )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise ValueError("--repo is required outside a Git checkout with an origin remote") from exc
-    return result.stdout.strip()
+    url = git(root or ".", "remote", "get-url", "origin")
+    if url is None:
+        raise ValueError("--repo is required outside a Git checkout with an origin remote")
+    return url
 
 
 def _port(value: str) -> int:

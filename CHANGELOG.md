@@ -323,6 +323,13 @@ date when the release is tagged.
   Git wrote objects, and on a refused acquire a claim ref, into the hook's
   repository; with `GIT_WORK_TREE` too, every claim command failed. `git -c`
   settings still reach the board.
+- **Other commands inside a Git hook.** In a hook, `init` and `project new`
+  pin CI to the Autoform checkout they run from, and `claim` and `dashboard`
+  without `--repo` use the origin of the checkout they run in. Before, the
+  hook's `GIT_DIR` and `GIT_INDEX_FILE` made Git take any directory for the
+  hook's repository, so CI was written without a pin, and the default board was
+  the hook repository's origin. Autoform's local Git commands now share one
+  runner that drops the caller's `GIT_*` variables.
 - **`\pmod`, `\bmod` and `\mod` on the site.** Site formulas typeset `\pmod`,
   `\bmod`, `\mod` and amsmath's `\varliminf`, `\varlimsup`, `\varinjlim` and
   `\varprojlim`. MathJax builds them from `\mmlToken`, which the page's TeX input

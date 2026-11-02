@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from autoform_cli import claims
-from autoform_cli.__main__ import main
+from autoform_cli.__main__ import _origin_url, main
 
 
 def _git(*args: str, cwd: Path | None = None, input_text: str | None = None) -> str:
@@ -792,6 +792,21 @@ def test_the_board_ignores_git_variables_that_name_another_repository(
     monkeypatch.delenv("GIT_WORK_TREE", raising=False)
     assert _refs(hooked) == {}
     assert _git("count-objects", cwd=hooked).startswith("0 objects")
+
+
+def test_the_default_board_is_the_origin_of_the_checkout_even_under_a_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without --repo, claims go to the origin of the checkout they run in. A Git
+    # hook's GIT_DIR names the hook's repository, whose origin is another board.
+    checkout = tmp_path / "checkout"
+    hooked = tmp_path / "hooked"
+    for repository in (checkout, hooked):
+        _git("init", "--quiet", str(repository))
+        _git("remote", "add", "origin", f"https://example.test/{repository.name}.git", cwd=repository)
+    monkeypatch.setenv("GIT_DIR", str(hooked / ".git"))
+
+    assert _origin_url(checkout) == "https://example.test/checkout.git"
 
 
 def test_list_reads_a_lease_through_an_annotated_tag_as_read_does(tmp_path: Path, board_repo: Path) -> None:
