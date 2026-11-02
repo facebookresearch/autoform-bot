@@ -2180,7 +2180,7 @@ def _book_navigation_link(
         f'href="{html.escape(href, quote=True)}">'
         f'<span class="bp-book-nav-direction"><span aria-hidden="true">{arrow}</span> '
         f"{label}</span>"
-        f'<span class="bp-book-nav-title">{html.escape(title)}</span>'
+        f'<span class="bp-book-nav-title">{_title_html(title)}</span>'
         "</a>"
     )
 
@@ -2219,7 +2219,7 @@ def _next_target(
         statement = links.get(node_id)
         graph_href = graph_pages.scope_page_href(destination, node.id, page, parent=node.parent)
 
-        title = html.escape(node.title)
+        title = _title_html(node.title)
         heading = (
             f'<a href="{html.escape(statement, quote=True)}">{title}</a>' if statement else title
         )
@@ -2233,7 +2233,7 @@ def _next_target(
             chapter_title = _page_heading(chapter_page.read_text(encoding="utf-8")) or "chapter"
             href = _as_published(relative_link(chapter_page, page, ".html"))
             actions.insert(
-                0, f'<a href="{html.escape(href, quote=True)}">{html.escape(chapter_title)}</a>'
+                0, f'<a href="{html.escape(href, quote=True)}">{_title_html(chapter_title)}</a>'
             )
         blockers = [
             graph.nodes[dep].title
@@ -2241,7 +2241,7 @@ def _next_target(
             if statuses.get(dep) and statuses[dep].key not in {"fully_proved", "mathlib"}
         ]
         rests = (
-            f'<div class="bp-next-rests">Rests on {html.escape(", ".join(blockers[:3]))}</div>'
+            f'<div class="bp-next-rests">Rests on {", ".join(_title_html(title) for title in blockers[:3])}</div>'
             if blockers
             else ""
         )
@@ -3603,7 +3603,7 @@ def _render_environment(
 
     shown = _display_title(node.title, caption)
     title_html = (
-        f'<span class="bp-thmtitle">{html.escape(shown)}</span>' if shown
+        f'<span class="bp-thmtitle">{_title_html(shown)}</span>' if shown
         else f'<span hidden>{html.escape(node.title)}</span>'
     )
     # The "#" link's only text is "#", so its name says which statement it links to.
@@ -4086,6 +4086,23 @@ def _dependency_disclosure(
     return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
 
 
+def _title_html(text: str) -> str:
+    """A title as HTML whose TeX and code the site typesets, not as the source's dollar signs.
+
+    Only converter-validated text, code and math enter the page; authored HTML,
+    destinations and attributes stay literal.
+    """
+    reading = dag_viewer._reading_label(text, require_math=False)
+    if reading is None:
+        return html.escape(text)
+    return "".join(
+        html.escape(value) if kind == "text" else
+        f"<code>{html.escape(value)}</code>" if kind == "code" else
+        f'<span class="arithmatex">{html.escape(value)}</span>'
+        for kind, value in reading["parts"]
+    )
+
+
 def _display_title(title: str, caption: str) -> str:
     """Drop a kind the caption already shows: 'Theorem (X)' under 'Theorem 4' reads X.
 
@@ -4127,17 +4144,7 @@ def _node_references(
         other = graph.nodes[other_id]
         shown = _display_title(other.title, numbers[other_id].rpartition(" ")[0])
         text = numbers[other_id] + (f" ({shown})" if shown else "")
-        reading = dag_viewer._reading_label(text, require_math=False)
-        label = html.escape(text)
-        if reading is not None:
-            # Only converter-validated text/code/math enters the native link;
-            # authored HTML, destinations and attributes remain literal.
-            label = "".join(
-                html.escape(value) if kind == "text" else
-                f"<code>{html.escape(value)}</code>" if kind == "code" else
-                f'<span class="arithmatex">{html.escape(value)}</span>'
-                for kind, value in reading["parts"]
-            )
+        label = _title_html(text)
         key = graph_views.display_status_key(other, statuses[other_id])
         relation_attributes = ""
         if relation_node is not None:

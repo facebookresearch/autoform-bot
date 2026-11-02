@@ -588,6 +588,21 @@ def test_statement_headings_and_references_do_not_repeat_the_kind(tmp_path: Path
     assert {node["id"]: node["title"] for node in chapter["nodes"]} == titles
 
 
+def test_titles_typeset_their_math_in_headings(tmp_path: Path) -> None:
+    """A title's TeX showed as typed, dollar signs and all, everywhere but the reader's references."""
+    typeset = 'Top on <span class="arithmatex">\\(\\mathbb{R}^n\\)</span>'
+    assert render_module._title_html("Top on $\\mathbb{R}^n$") == typeset
+    assert render_module._title_html("Plain <b>title</b>") == "Plain &lt;b&gt;title&lt;/b&gt;"
+    project = _project(tmp_path)
+    top = project / "blueprint/roadmap/top.md"
+    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Top on $\\mathbb{R}^n$\n"), encoding="utf-8")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    heading = page[page.index('id="top"') : page.index("</h4>", page.index('id="top"'))]
+
+    assert f'<span class="bp-thmtitle">{typeset}</span>' in heading
+
+
 def test_a_caption_names_the_command_after_its_modifiers_or_reads_node() -> None:
     def caption(declaration: str | None) -> str:
         return _declaration_label(SimpleNamespace(catalog=None, declaration=declaration))
