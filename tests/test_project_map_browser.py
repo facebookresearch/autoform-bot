@@ -301,7 +301,15 @@ def test_the_map_typesets_a_title_with_a_formula_over_its_card(webkit_browser: o
         playwright.expect(title).to_contain_text("Abel summation for")
         assert "\\(" not in title.inner_text() and "mathbb" not in title.inner_text()
         playwright.expect(page.locator(".bp-whole-map svg text", has_text="Abel summation")).to_have_count(0)
-        card = page.locator('.bp-whole-map .pm-result[data-result="analysis/abel"] > rect').bounding_box()
-        box = title.bounding_box()
-        assert card["x"] < box["x"] and box["x"] + box["width"] < card["x"] + card["width"], (card, box)
-        assert card["y"] < box["y"] and box["y"] + box["height"] < card["y"] + card["height"], (card, box)
+        # The layer is inert, though MathJax makes each formula a tab stop: the card's own label already names it.
+        assert title.locator("mjx-container").evaluate("node => { node.focus(); return document.activeElement !== node; }")
+        # The title stays on its card when the camera moves.
+        for move in (None, 40):
+            if move:
+                page.locator(".bp-whole-map .pm-stage > svg").hover()
+                page.mouse.wheel(0, move)
+                page.wait_for_timeout(300)
+            card = page.locator('.bp-whole-map .pm-result[data-result="analysis/abel"] > rect').bounding_box()
+            box = title.bounding_box()
+            assert card["x"] < box["x"] and box["x"] + box["width"] < card["x"] + card["width"], (card, box)
+            assert card["y"] < box["y"] and box["y"] + box["height"] < card["y"] + card["height"], (card, box)

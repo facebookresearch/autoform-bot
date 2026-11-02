@@ -247,8 +247,9 @@
   var partLayer = svg("g"), miniLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), linkLayer = svg("g"),
     backdropLayer = svg("g"), labelLayer = svg("g");
   canvas.append(defs, partLayer, miniLayer, resultLayer, cardRouteLayer, linkLayer, backdropLayer, labelLayer);
-  // Titles with formulas, which SVG text cannot typeset; the part's own label already names them to assistive technology.
-  var mathLayer = el("div", "pm-tex-layer"); mathLayer.setAttribute("aria-hidden", "true");
+  // Titles with formulas, which SVG text cannot typeset. The layer is inert: each part's and card's own label already
+  // names them, and MathJax would make every formula a tab stop.
+  var mathLayer = el("div", "pm-tex-layer"); mathLayer.inert = true;
   var pin = el("div", "pm-pin"); pin.hidden = true;
   var hint = el("div", "pm-hint", "");
   stage.append(canvas, mathLayer, pin, hint);
@@ -385,7 +386,21 @@
   // A title with a formula is HTML over the canvas, set by the site's MathJax; other titles stay SVG text. Its node
   // outlives the frames it is off screen, so a typeset title comes back without typesetting again.
   var mathNodes = new Map(), mathUsed = new Set(), mathPending = false;
-  function hasMath(text) { return Boolean(window.AutoformMath) && /\$|\\\(/.test(text); }
+  function hasMath(text) {
+    if (!window.AutoformMath) return false;
+    // A formula as withMath reads one: a lone dollar sign keeps the title SVG text.
+    MARKUP.lastIndex = 0;
+    for (var match; (match = MARKUP.exec(text));) if (match[4] !== undefined || match[5] !== undefined) return true;
+    return false;
+  }
+  // New formulas wait hidden while MathJax sets them, until every pass started on the node has settled; one MathJax
+  // could not set then shows as typed, as in the book.
+  function typesetHidden(node) {
+    node.texPasses = (node.texPasses || 0) + 1;
+    node.classList.add("pm-tex-waiting");
+    var settled = function () { if (!--node.texPasses) node.classList.remove("pm-tex-waiting"); };
+    typeset(node).then(settled, settled);
+  }
   function mathTitle(key, text, cls, x, baseline, width, size, step, lines) {
     var node = mathNodes.get(key);
     if (!node) { node = withMath(el("div"), text); mathNodes.set(key, node); }
@@ -459,13 +474,7 @@
     explainEmpty(drawn);
     keyed.forEach(function (node, key) { if (!used.has(key)) { node.remove(); keyed.delete(key); } });
     mathNodes.forEach(function (node, key) { if (!mathUsed.has(key)) node.remove(); });
-    // New formulas wait hidden while MathJax sets them; one it could not set then shows as typed, as in the book.
-    if (mathPending) {
-      mathPending = false;
-      mathLayer.classList.add("pm-tex-waiting");
-      var shown = function () { mathLayer.classList.remove("pm-tex-waiting"); };
-      typeset(mathLayer).then(shown, shown);
-    }
+    if (mathPending) { mathPending = false; typesetHidden(mathLayer); }
     updateTrail();
     if (!state.selected) showPart(currentPart());
   }
@@ -713,7 +722,7 @@
       var tex = hasMath(record.summary.title);
       pin.replaceChildren(tex ? withMath(el("strong"), record.summary.title) : el("strong", "", plain(record.summary.title)),
         el("span", "", progressText(record.summary)));
-      if (tex) typeset(pin);
+      if (tex) typesetHidden(pin);
     }
   }
 

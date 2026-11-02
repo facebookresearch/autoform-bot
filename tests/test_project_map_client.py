@@ -533,6 +533,8 @@ def test_titles_with_formulas_are_typeset_once_by_the_sites_mathjax(tmp_path: Pa
          "result": True, "status": "planned"},
         {"id": "Algebra/order/lagrange", "kind": "node", "title": "Lagrange's theorem", "parent": "Algebra/order", "result": True,
          "status": "planned"},
+        {"id": "Algebra/order/price", "kind": "node", "title": "A $5 bound", "parent": "Algebra/order", "result": True,
+         "status": "planned"},
     ], []))
     out = _walk(tmp_path, r"""
       const canvas = $('.pm-stage').querySelector('svg'), layer = $('.pm-tex-layer');
@@ -554,7 +556,7 @@ def test_titles_with_formulas_are_typeset_once_by_the_sites_mathjax(tmp_path: Pa
       assert(card, 'the card title is HTML');
       assert.deepStrictEqual(card.querySelectorAll('.arithmatex').map(node => node.textContent), ['\\(\\mathbb{R}\\)']);
       assert(!svgText().includes('Abel summation'), svgText());
-      assert(svgText().includes("Lagrange's theorem"), svgText());
+      assert(svgText().includes("Lagrange's theorem") && svgText().includes('A $5 bound'), svgText());
       assert($$('.pm-tex').every(node => node.querySelector('.arithmatex')), 'only titles with formulas are HTML');
       assert(asked.includes(layer), 'the layer is handed to MathJax');
       // Out of view the title leaves the stage; back in view the same node returns without another pass.
