@@ -38,7 +38,7 @@ refusal as insufficient evidence; never approve a current source excerpt paired
 with an older compiled declaration. Record the skeleton hash, the evidence hash
 of the packet that was read, and, for a source-faithfulness verdict, the
 article review hash; the
-[CLI reference](../../autoform_cli/README.md#skeleton-hashes) says what each
+[skeleton reference](../../autoform_cli/reference/skeleton-and-review.md#skeleton-hashes) says what each
 binds. These hashes are provenance evidence, not reviewer authentication or an
 approval key. If the user has paused skeleton evidence during proof development,
 skip it and Formalize's import-edit baselines, say so, and record none of these
