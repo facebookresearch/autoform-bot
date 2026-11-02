@@ -46,7 +46,7 @@ const heading=new Element('h2',{id:'an-authored-catalog'},[],'Any authored catal
 const list=new Element('ul',{},[item('topic-a'),item('topic-b')]);
 const original=new Element('div',{'class':'bp-reading-source','data-autoform-node-id':'roadmap'},[
   new Element('h1',{id:'original-title'},[],'Root'), new Element('p',{},[],'Keep the complete mathematical exposition.'),
-  heading,list,new Element('nav',{'class':'bp-book-nav'},[],'Keep the original chapter navigation.')
+  heading,list
 ]);
 const reading=original.cloneNode(true), body=new Element('article',{'class':'bp-reading-body'},[reading]);
 app.initial.host.children.push(body); body.parent=app.initial.host; app.nav.bindReader(body);
@@ -67,7 +67,6 @@ def test_projection_hides_only_complete_represented_child_index_and_never_change
       assert.equal(projectedHeading.id,'an-authored-catalog'); assert.equal(projectedList.querySelectorAll('a').length,2);
       assert.equal(original.querySelector('h2').hidden,false); assert.equal(original.querySelector('ul').hidden,false);
       assert(reading.textContent.includes('Keep the complete mathematical exposition.'));
-      assert(reading.textContent.includes('Keep the original chapter navigation.'));
       assert.equal(app.nav.declutterReader(original,represented),0); // Never mutate the SSR source.
       assert.equal(app.nav.declutterReader(body,represented),1);
       assert.equal(JSON.stringify(app.win.history.state),history); assert.equal(JSON.stringify(app.nav.getIndex()),indexBefore);
@@ -139,17 +138,7 @@ def test_exact_authored_prefix_ids_and_loose_ordered_child_index_are_supported()
 
 
 _OVERVIEW = r"""
-reading.querySelector('p').remove();reading.querySelector('nav').remove();
-function chapter(direction,id) {
-  return new Element('a',{class:'bp-book-nav-link bp-book-nav-'+direction,href:absolute('roadmap/'+id+'.html')},[
-    new Element('span',{class:'bp-book-nav-direction'},[
-      new Element('span',{'aria-hidden':'true'},[],direction==='previous'?'←':'→'),
-      new ReaderText(direction==='previous'?' Previous':' Next')
-    ]),new Element('span',{class:'bp-book-nav-title'},[],id)
-  ]);
-}
-const chapterNav=new Element('nav',{class:'bp-book-nav','aria-label':'Blueprint chapters'},[chapter('next','topic-a')]);
-reading.children.push(chapterNav);chapterNav.parent=reading;
+reading.querySelector('p').remove();
 function appendContent(node) { reading.children.push(node);node.parent=reading; }
 function sourceState(node) {
   return node.nodeType===3?{text:node.textContent}:{tag:node.tagName,attrs:node.attrs,text:node.text,children:node.children.map(sourceState)};
@@ -167,8 +156,6 @@ def test_overview_requires_real_duplicate_index_proof_and_preserves_every_owned_
       assert.equal(JSON.stringify(sourceState(reading)),before);assert.equal(JSON.stringify(sourceState(original)),ssr);
       assert.equal(JSON.stringify(app.win.history.state),history);assert.equal(JSON.stringify(app.nav.getIndex()),catalogue);
       assert.equal(app.fetches.length,requests);
-      chapterNav.children.unshift(chapter('previous','topic-b'));chapterNav.children[0].parent=chapterNav;
-      assert.equal(app.nav.readerIsOverview(body),true,'Exact previous/next publisher markup is navigation');
       app.nav.dispose();assert.equal(app.nav.readerIsOverview(body),false);
     """)
 
@@ -176,7 +163,7 @@ def test_overview_requires_real_duplicate_index_proof_and_preserves_every_owned_
 @pytest.mark.parametrize("scenario", [
     "prose", "hidden_prose", "untrusted_hidden", "hidden_title", "hidden_source", "math_h1", "math_source",
     "sources", "proof", "mixed_list", "list_math", "code", "citation", "native_anchor", "unknown_heading",
-    "fake_nav", "nav_prose", "nav_math", "unknown_nav_target", "extra_nav", "wrong_owner", "nested_source",
+    "wrong_owner", "nested_source",
 ])
 def test_overview_never_treats_authored_content_or_untrusted_navigation_markers_as_empty(scenario: str) -> None:
     mutation = {
@@ -195,11 +182,6 @@ def test_overview_never_treats_authored_content_or_untrusted_navigation_markers_
         "citation": "appendContent(new Element('cite',{},[],'Original reference'));",
         "native_anchor": "projectedList.children[0].children[0].attrs.href+='#retained-formula';",
         "unknown_heading": "appendContent(new Element('h2',{id:'retained-section'},[],'Authored section'));",
-        "fake_nav": "chapterNav.setAttribute('hidden','');",
-        "nav_prose": "chapterNav.text='Additional authored prose.';",
-        "nav_math": "chapterNav.children[0].children[1].children.push(new Element('span',{class:'arithmatex'},[],'\\(x=0\\)'));",
-        "unknown_nav_target": "chapterNav.children[0].setAttribute('href',absolute('roadmap/unindexed.html'));",
-        "extra_nav": "appendContent(new Element('nav',chapterNav.attrs,[chapter('next','topic-a')]));",
         "wrong_owner": "reading.setAttribute('data-autoform-node-id','topic-a');",
         "nested_source": "const wrapper=new Element('section',{},[reading]);body.children=[wrapper];wrapper.parent=body;",
     }[scenario]

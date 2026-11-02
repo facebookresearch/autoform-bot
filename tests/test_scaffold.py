@@ -661,7 +661,7 @@ def test_scaffolded_theme_defers_navigation_to_the_book(tmp_path: Path) -> None:
 
     # Material renders previous/next in its footer partial; overriding the
     # whole footer suppresses it, because Autoform derives reading order from
-    # the vault and prints it at the bottom of book pages only.
+    # the vault and shows it in the sidebar.
     assert '{% block footer %}' in theme
     assert "md-footer" in theme
     assert "md-footer__link" not in theme

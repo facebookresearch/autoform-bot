@@ -1175,17 +1175,6 @@ def _render_pages(
         destination,
         graph,
     )
-    # The landing page is a dashboard, not chapter one. Previous/next belongs
-    # to the book, so the strip starts at the contents page. Each page is named
-    # by its node's title as authored: its header holds the visible text, which
-    # a second pass through Markdown would read differently. A title with no
-    # math or code keeps that visible text, emphasis and links already read.
-    authored = {
-        (destination / node.path.relative_to(blueprint)).resolve(): node.title
-        for node in graph.nodes.values()
-        if node.path.is_relative_to(blueprint)
-    }
-    _append_book_navigation([p for p in book_pages if p != overview], authored)
     structure = destination / STRUCTURE_PAGE
     structure.write_text(
         _render_structure_page(
@@ -2001,9 +1990,8 @@ def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> lis
 def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
     """The landing page, then the book in reading order (:func:`_reading_pages`).
 
-    SUMMARY.md and Previous/Next follow this order, and statement numbers, Next
-    up and the search index follow the same walk, so the book reads one way
-    everywhere."""
+    SUMMARY.md follows this order, and statement numbers, Next up and the
+    search index follow the same walk, so the book reads one way everywhere."""
     landing = (destination / "README.md").resolve()
     pages = _reading_pages(blueprint, destination, graph)
     return ([landing] if landing.is_file() else []) + [page for page in pages if page != landing]
@@ -2155,66 +2143,6 @@ def _reading_order(
         return page_rank.get(page, len(page_rank)), str(page or ""), positions.get(node_id, -1)
 
     return sorted(status.topological_order(graph), key=key)
-
-
-def _append_book_navigation(pages: list[Path], authored: dict[Path, str]) -> None:
-    """Add previous/next links to the bottom of Blueprint pages, never global nav."""
-    if len(pages) < 2:
-        return
-    visible = [_page_heading(page.read_text(encoding="utf-8")) or page.stem for page in pages]
-    titles = [
-        _title_html(authored[page.resolve()], fallback=shown) if page.resolve() in authored else html.escape(shown)
-        for page, shown in zip(pages, visible)
-    ]
-    for index, page in enumerate(pages):
-        links: list[str] = []
-        if index:
-            links.append(
-                _book_navigation_link(
-                    pages[index - 1],
-                    page,
-                    titles[index - 1],
-                    direction="previous",
-                )
-            )
-        if index + 1 < len(pages):
-            links.append(
-                _book_navigation_link(
-                    pages[index + 1],
-                    page,
-                    titles[index + 1],
-                    direction="next",
-                )
-            )
-        navigation = (
-            '<nav class="bp-book-nav" aria-label="Blueprint chapters">'
-            + "".join(links)
-            + "</nav>"
-        )
-        page.write_text(
-            page.read_text(encoding="utf-8").rstrip() + "\n\n" + navigation + "\n",
-            encoding="utf-8",
-        )
-
-
-def _book_navigation_link(
-    target: Path,
-    page: Path,
-    title_html: str,
-    *,
-    direction: str,
-) -> str:
-    href = _as_published(relative_link(target, page, ".html"))
-    label = "Previous" if direction == "previous" else "Next"
-    arrow = "←" if direction == "previous" else "→"
-    return (
-        f'<a class="bp-book-nav-link bp-book-nav-{direction}" '
-        f'href="{html.escape(href, quote=True)}">'
-        f'<span class="bp-book-nav-direction"><span aria-hidden="true">{arrow}</span> '
-        f"{label}</span>"
-        f'<span class="bp-book-nav-title">{title_html}</span>'
-        "</a>"
-    )
 
 
 def _next_target(
@@ -4324,8 +4252,8 @@ def _stylesheet() -> str:
   --bp-link-hover: #7FB8FF;
   --bp-blue: #2D88FF;
 }}
-/* Material's own tokens take the same blue, so its links, breadcrumbs and
-   Previous/Next match the explorer instead of the theme's default indigo.
+/* Material's own tokens take the same blue, so its links and breadcrumbs
+   match the explorer instead of the theme's default indigo.
    The theme sets them on body through data-md-color-primary, and the slate
    link colour through two attributes, so this selector carries two
    attributes and wins by coming later. The bp tokens already switch with
@@ -4598,30 +4526,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-size: 0.85rem;
 }}
 .bp-progress-state {{ display: inline-flex; align-items: center; gap: 0.35rem; }}
-
-/* Reading order belongs to the book itself, not to MkDocs' global navbar. */
-.bp-book-nav {{
-  display: flex;
-  font-family: {sans};
-  gap: 1.5rem;
-  margin: 3rem 0 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--bp-rule);
-}}
-.bp-book-nav-link {{
-  display: flex;
-  flex-direction: column;
-  max-width: 48%;
-  text-decoration: none;
-}}
-.bp-book-nav-link:hover {{ text-decoration: none; }}
-.bp-book-nav-next {{ margin-left: auto; text-align: right; }}
-.bp-book-nav-direction {{
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--bp-muted);
-}}
-.bp-book-nav-title {{ margin-top: 0.15rem; font-family: {serif}; font-size: 1rem; }}
 
 /* Theorem environments, following leanblueprint's amsthm markup. */
 .bp-thmwrapper {{ margin: 2rem 0 2.25rem; }}

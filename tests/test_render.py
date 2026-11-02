@@ -603,7 +603,7 @@ def test_titles_typeset_their_math_in_headings(tmp_path: Path) -> None:
     assert f'<span class="bp-thmtitle">{typeset}</span>' in heading
 
 
-def test_previous_next_and_next_up_typeset_a_chapter_title_once(tmp_path: Path) -> None:
+def test_next_up_typesets_a_chapter_title_once(tmp_path: Path) -> None:
     """A chapter page's header holds its title's visible text, so converting that read a code `$literal$` as math."""
     project = _project(tmp_path)
     folder = project / "blueprint/roadmap/chapter"
@@ -611,11 +611,6 @@ def test_previous_next_and_next_up_typeset_a_chapter_title_once(tmp_path: Path) 
     authored = "Groups $\\mathbb{Z}/n$ and code `$literal$`"
     (folder / "README.md").write_text(f"# {authored}\n\n- [Deep](deep.md)\n", encoding="utf-8")
     (folder / "deep.md").write_text("---\ndeclaration: theorem\n---\n\n# Deep\n\nA result still to state.\n", encoding="utf-8")
-    # A title with no math or code keeps its visible text, not its asterisks.
-    padic = project / "blueprint/roadmap/padic"
-    padic.mkdir()
-    (padic / "README.md").write_text("# The *p*-adic numbers\n\n- [Field](field.md)\n", encoding="utf-8")
-    (padic / "field.md").write_text("# Field\n\nThe field.\n", encoding="utf-8")
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out, lean_root=project)
@@ -624,10 +619,9 @@ def test_previous_next_and_next_up_typeset_a_chapter_title_once(tmp_path: Path) 
     assert "<code>$literal$</code>" in title and '<span class="arithmatex">\\(\\mathbb{Z}/n\\)</span>' in title
     assert f'<a href="roadmap/chapter/index.html">{title}</a>' in (out / "README.md").read_text(encoding="utf-8")
     pages = [page.read_text(encoding="utf-8") for page in out.rglob("*.md")]
-    assert any(f'<span class="bp-book-nav-title">{title}</span>' in page for page in pages)
     assert not any("\\(literal\\)" in page for page in pages)
-    assert any('<span class="bp-book-nav-title">The p-adic numbers</span>' in page for page in pages)
-    assert not any('<span class="bp-book-nav-title">The *p*' in page for page in pages)
+    # A title with no math or code keeps its visible text, not its asterisks.
+    assert render_module._title_html("The *p*-adic numbers", fallback="The p-adic numbers") == "The p-adic numbers"
 
 
 def test_a_caption_names_the_command_after_its_modifiers_or_reads_node() -> None:
@@ -779,7 +773,7 @@ def test_a_label_holding_half_open_math_is_still_a_link(tmp_path: Path) -> None:
     render_site(blueprint, tmp_path / "out", lean_root=project, repository_url="", ref="")
     page = (tmp_path / "out/roadmap/ch/README.md").read_text(encoding="utf-8")
 
-    assert "bp-book-nav" in page
+    assert "(roadmap/ch/README.md)" in (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
     assert "Other statements" not in page
     assert "- [Lemma on $(0,1]$](../../sources/paper.md)\n" in page
 
@@ -1669,19 +1663,8 @@ def test_the_legends_beside_the_explorer_count_what_its_rings_count(tmp_path: Pa
         assert f".bp-swatch-{state.key} {{ background: {background}; border-color: {state.stroke}; }}" in css
 
 
-def test_book_navigation_is_bottom_only_and_never_crosses_into_project_views(tmp_path: Path) -> None:
+def test_the_summary_lists_the_book_and_never_the_project_views(tmp_path: Path) -> None:
     _render(tmp_path)
-    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-    dependencies = (tmp_path / "out/dependencies.md").read_text(encoding="utf-8")
-
-    # The landing page is a dashboard, not chapter one, so it carries no strip.
-    # This fixture has a single chapter, which leaves nowhere to page to.
-    assert "bp-book-nav" not in overview
-    assert "bp-book-nav" not in chapter
-    graph_page = (tmp_path / "out/dependencies.md").read_text(encoding="utf-8")
-    assert "bp-book-nav" not in graph_page
-    assert "bp-book-nav" not in dependencies
     summary = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
     assert "- Mathematics\n" in summary
     assert "[Roadmap](roadmap/README.md)" in summary
@@ -1708,11 +1691,7 @@ def test_links_naming_a_node_file_follow_it_onto_the_chapter(tmp_path: Path) -> 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     published = (tmp_path / "out/coverage/README.md").read_text(encoding="utf-8")
-    overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert "[Top](../roadmap/README.md#top)" in published
-    assert "bp-book-nav" not in overview
-    assert "bp-book-nav" not in chapter
 
 
 def test_the_book_nav_nests_each_page_under_its_folder_whatever_the_book_order(tmp_path: Path) -> None:
@@ -2227,8 +2206,8 @@ def test_material_links_and_chrome_take_the_blueprint_blue() -> None:
     css = render_module._stylesheet()
     rule = re.search(r"\[data-md-color-scheme\]\[data-md-color-primary\] \{([^}]+)\}", css)
 
-    # One rule over the scheme-switching bp tokens, so breadcrumbs, book
-    # links and Previous/Next use the explorer's blue in both schemes.
+    # One rule over the scheme-switching bp tokens, so breadcrumbs and book
+    # links use the explorer's blue in both schemes.
     assert rule is not None
     assert "--md-primary-fg-color: var(--bp-blue);" in rule.group(1)
     assert "--md-accent-fg-color: var(--bp-link-hover);" in rule.group(1)
@@ -2262,7 +2241,6 @@ def test_labels_are_sentence_case_sans_and_the_status_is_a_pill_under_the_title(
     # no tracking, one weight. Monospace stays for Lean names and code.
     for selector in (
         ".bp-progress-kicker",
-        ".bp-book-nav-direction",
         ".bp-key",
         ".bp-thmnotes h6",
         ".bp-next-kicker",
@@ -4162,21 +4140,10 @@ def test_statement_numbers_rise_down_each_page_and_across_chapters(tmp_path: Pat
     ]
     assert numbers == list(range(1, 7 + (variant == "unlisted-result") + 2 * (variant == "unlinked-scope")))
     if variant == "landing-shortcut":
-        # The nav and Previous/Next read the same book: the shortcut moves neither.
+        # The nav reads the book in order: the shortcut does not move it.
         assert _summary_chapters(out) == ["zeta", "alpha", "irrationality-proof"]
-        assert _next_chain(out / "roadmap/README.md") == [
-            out / "roadmap" / page / "README.md" for page in ("", "zeta", "alpha", "irrationality-proof")
-        ]
-
-
-def _next_chain(page: Path) -> list[Path]:
-    """*page*, then every page its Next links lead to, in turn."""
-    chain = [page]
-    while match := re.search(r'bp-book-nav-next" href="([^"]+)"', chain[-1].read_text(encoding="utf-8")):
-        target = Path(os.path.normpath(chain[-1].parent / unquote(match.group(1))))
-        chain.append(target.with_name("README.md") if target.name == "index.html" else target.with_suffix(".md"))
-        assert len(chain) <= 50, chain
-    return chain
+        # A wiki has no single next page, so no page links a previous or next one.
+        assert not any("bp-book-nav" in page.read_text(encoding="utf-8") for page in out.rglob("*.md"))
 
 
 def test_nodes_on_pages_outside_the_book_follow_one_page_at_a_time(tmp_path: Path) -> None:

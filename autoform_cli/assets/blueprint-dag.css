@@ -270,8 +270,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-reading-body h3 { font-size: 17px; line-height: 1.4; }
 /* The book sizes notes, totals and labels in rem for Material's body size; beside the pane's 16px statement they would outrank it, so they step down here. */
 .bp-reading-body :is(.bp-thmnotes, .bp-meta, .bp-progress-states), .bp-reading-body details.bp-dependencies { font-size: 14px; }
-.bp-reading-body :is(.bp-thmnotes h6, .bp-key, .bp-mark, .bp-progress-kicker, .bp-book-nav-direction, .bp-next-kicker, .bp-hero-kicker) { font-size: 12px; }
-.bp-reading-body :is(.bp-progress-total, .bp-book-nav-title, .bp-next-title) { font-size: 16px; }
+.bp-reading-body :is(.bp-thmnotes h6, .bp-key, .bp-mark, .bp-progress-kicker, .bp-next-kicker, .bp-hero-kicker) { font-size: 12px; }
+.bp-reading-body :is(.bp-progress-total, .bp-next-title) { font-size: 16px; }
 /* The status rule and the bold head already mark a theorem, so the workspace sets its statement upright. */
 .bp-dag-integrated .theorem-style-plain > .bp-thmcontent { font-style: normal; }
 .bp-reading-body pre, .bp-reading-body table { max-width: 100%; overflow: auto; }

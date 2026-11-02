@@ -633,7 +633,7 @@ def test_explorer_styles_keep_one_family_one_type_scale_and_one_micro_label() ->
 
 
 def test_reading_pane_sizes_put_the_statement_first() -> None:
-    """The book's rem sizes set Sources, totals and Previous/Next larger than the 17px statement in the pane."""
+    """The book's rem sizes set Sources and totals larger than the 17px statement in the pane."""
     style = dag_viewer._STYLE
     body = re.search(r"^\.bp-reading-body \{([^}]*)\}", style, re.M)
     assert body is not None and "font-size: 16px; line-height: 1.6;" in body.group(1)
@@ -646,9 +646,9 @@ def test_reading_pane_sizes_put_the_statement_first() -> None:
     notes = ".bp-reading-body :is(.bp-thmnotes, .bp-meta, .bp-progress-states), .bp-reading-body details.bp-dependencies"
     labels = (
         ".bp-reading-body :is(.bp-thmnotes h6, .bp-key, .bp-mark, .bp-progress-kicker, "
-        ".bp-book-nav-direction, .bp-next-kicker, .bp-hero-kicker)"
+        ".bp-next-kicker, .bp-hero-kicker)"
     )
-    totals = ".bp-reading-body :is(.bp-progress-total, .bp-book-nav-title, .bp-next-title)"
+    totals = ".bp-reading-body :is(.bp-progress-total, .bp-next-title)"
     assert (size(notes), size(labels), size(totals)) == ("14", "12", "16")
     # The workspace sets theorem statements upright; book pages keep amsthm italics.
     assert ".bp-dag-integrated .theorem-style-plain > .bp-thmcontent { font-style: normal; }" in style

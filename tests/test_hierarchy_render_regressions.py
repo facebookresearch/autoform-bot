@@ -228,7 +228,7 @@ def test_prose_only_leaf_article_remains_a_book_page(tmp_path: Path) -> None:
 
     epilogue = (output / "roadmap/epilogue.md").read_text(encoding="utf-8")
     assert "Closing prose." in epilogue
-    assert "bp-book-nav-previous" in epilogue
+    assert "(roadmap/epilogue.md)" in (output / "SUMMARY.md").read_text(encoding="utf-8")
 
 
 def test_same_named_leaf_slots_are_scoped_to_their_container(tmp_path: Path) -> None:
