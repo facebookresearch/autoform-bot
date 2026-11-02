@@ -499,6 +499,29 @@ def test_escape_and_up_go_back_one_level_at_a_time(tmp_path: Path) -> None:
     assert "up ok" in out
 
 
+def test_modified_keys_and_a_release_off_the_map_leave_the_view_alone(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      const canvas = $('.pm-stage').querySelector('svg');
+      const left = () => +$$('.pm-part').find(n => n.getAttribute('data-part') === 'Algebra').querySelector('rect').getAttribute('x');
+      const start = left();
+      // Command-Left and Alt-Left are the browser's Back, and Control-0 resets its zoom: the map lets them through.
+      for (const key of [{key: 'ArrowLeft', metaKey: true}, {key: 'ArrowLeft', altKey: true}, {key: '0', ctrlKey: true}]) {
+        const event = emit(canvas, 'keydown', key); await wait(10);
+        assert.strictEqual(event.defaultPrevented, false, JSON.stringify(key));
+      }
+      assert.strictEqual(left(), start);
+      emit(canvas, 'keydown', {key: 'ArrowLeft'}); await wait(10);
+      assert.notStrictEqual(left(), start, 'a plain arrow still pans');
+      // A press released off the map sends no pointerup here; the next move, with no button down, pans nothing.
+      const moved = left();
+      emit(canvas, 'pointerdown', {button: 0, buttons: 1, pointerType: 'mouse', pointerId: 1, clientX: 300, clientY: 300});
+      emit(canvas, 'pointermove', {buttons: 0, pointerType: 'mouse', pointerId: 1, clientX: 360, clientY: 300}); await wait(10);
+      assert.strictEqual(left(), moved);
+      console.log('keys ok');
+    """)
+    assert "keys ok" in out
+
+
 def test_a_pinch_zooms_and_back_from_an_outline_part_keeps_the_pane(tmp_path: Path) -> None:
     out = _walk(tmp_path, r"""
       const canvas = $('.pm-stage').querySelector('svg'), reader = $('.pm-reader');

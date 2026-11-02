@@ -19,13 +19,12 @@ date when the release is tagged.
   recovered and how to re-create the checkout; ignored files such as `.lake`
   are not kept (#435).
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
-  zoomable page for the whole project, linked from the landing page beside the
-  book. Regions (authored areas, or the top-level chapters) open into their
-  parts and parts into their results as the camera closes in, and a part opens
-  once its parts can be named. Search reaches any result by title or Lean name;
-  the reading pane names the result's kind, such as Theorem or Definition, and
-  shows its statement and proof from its page, and what it uses and what uses
-  it. One click picks a part and shows the parts it
+  zoomable page for the whole project. Regions (authored areas, or the top-level
+  chapters) open into their parts and parts into their results as the camera
+  closes in, and a part opens once its parts can be named. Search reaches any
+  result by title or Lean name; the reading pane names the result's kind, such
+  as Theorem or Definition, and shows its statement and proof from its page, and
+  what it uses and what uses it. One click picks a part and shows the parts it
   builds on and the parts that use it, with links flowing between them; a second
   click goes inside, and Up or Escape goes back a level. On a narrow screen the
   map takes the width, with the reading pane under it. The data loads one level
@@ -37,13 +36,32 @@ date when the release is tagged.
   readiness and `work assumptions` never count them, and the article's summary
   skips the section. `check` warns about a link that does not resolve, one whose
   target depends on the article (it stays listed), and the heading written below
-  a dependency heading, where its links count (#541).
+  a dependency heading, where its links count (#541). The Roadmap skill puts
+  under it what a source's proof cites but the planned Lean proof will not use,
+  as when a library proof is reused (#556).
 
 ### Changed
 
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
+- **Import closure.** `work import-impact --module-scope import-closure` tests
+  each module only against the files that hold its last component, which one
+  pass over each file finds, and reads a file that libraries sharing a `srcDir`
+  all map once. It tested every file, once per such library, for each module it
+  added: on a generated root whose libraries all share one `srcDir`, a hub
+  module took 69 s at 1,491 files and is now 0.15 s, and 0.9 s at 7,000 files,
+  where one test of each file per module took 105 s. The modules it finds are
+  unchanged (#429).
+- **Lean root reads.** With `--lean-root`, `search`, `check`, `work list` and
+  `work context` scan only the Lean files that spell the last component of a
+  name they look up, and `search` looks up only the hits it prints. Every file
+  is still read, so the source revision, the errors and the output are
+  unchanged; on a 13,698-file Lean root, indexing a 36-name blueprint's
+  declarations took 4.7 s of CPU instead of 13.6 s. `check` reads the Lean
+  root once where a shared library's citations made it read it twice, and
+  again only when a name is declared nowhere, for the error about its parent.
+  `audit` strips comments only from files that hold a resolved target (#429).
 - **Search index size.** `dependencies/index.json` no longer repeats links the
   explorer doesn't read. A row whose route the explorer opens drops its context
   `url`, and only container rows keep `data_url`, since every page names its
@@ -52,6 +70,11 @@ date when the release is tagged.
   42.1 MB to 32.2 MB, and on one CI runner search and the outline were ready
   2.1 s after Home started loading instead of 2.8 s in WebKit, and 1.6 s
   instead of 1.9 s in Chrome.
+- **Wiki links.** Render reads the links between articles without rendering
+  an article whose links all sit under its Sources, References, Bibliography
+  or Depends on headings, which holds for about nine in ten ATLAS articles.
+  The links it finds are the same. On one CI runner, ATLAS rendered in 397 s
+  instead of 456 s.
 - **Landing.** The ready figure links the list of what it counts, each count
   shows once with thousands separators, and the brand gradient is off the
   figures, bar and header hairline. Source coverage reads in plain words
@@ -125,6 +148,15 @@ date when the release is tagged.
   pushing, goes to the `origin` branch `handoff/<article_id>`, which the next
   worker to take the leaf continues. With claims, no message grants
   ownership; none completes a leaf (#434, #532).
+- **Formalize without claims.** Workers run `work list` and `work context`
+  without `--lean-root`, and the lead dispatches each leaf's `work list` item.
+  Within a run, whoever works a leaf first creates its branch
+  `work/<article_id>`, which Git refuses twice in one clone, in place of
+  packages of leaves the lead confirmed; the branch goes once the work lands or
+  the leaf is abandoned. The skill suggests, without requiring, landing as a
+  fast-forward that rebases and rechecks when the shared branch moved, then
+  taking the next leaf, preferring one the landing unlocked. Claims are used
+  only when the user asks for them or another session already does (#429).
 - **Setup donor.** When the user names an existing Lake project or packages
   folder, Setup copies each package the new project locks that the donor holds
   clean at that revision, copy-on-write where the file system supports it and

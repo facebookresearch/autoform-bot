@@ -39,7 +39,7 @@ from urllib.parse import unquote, urlsplit
 
 from ._fs import directory_path, resolved_path
 from .graph import Graph, load_graph, roadmap_symlink_issues
-from .lean import LeanSourceError, declaration_names, index_failure_message, index_project, resolve_lean_root
+from .lean import LeanSourceError, declaration_names, index_failure_message, index_project_names, resolve_lean_root
 from .status import derive, is_definition
 
 RUNTIME_SCHEMA = "autoform-runtime/v5"
@@ -363,8 +363,10 @@ def build_runtime_graph(
             root = resolve_lean_root(lean_root)
         except LeanSourceError as error:
             raise RuntimeProjectionError([str(error)]) from error
+        # A target's file is all the projection reads, so only sources that could declare one are scanned.
+        names = {name for node in graph.nodes.values() for name in declaration_names(node.lean or "")}
         try:
-            lean_index = index_project(root)
+            lean_index = index_project_names(root, names)
         except OSError as error:
             raise RuntimeProjectionError([index_failure_message(error)]) from error
 

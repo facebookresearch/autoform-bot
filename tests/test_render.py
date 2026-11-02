@@ -1408,13 +1408,13 @@ def test_the_landing_page_preserves_its_full_reading_hero_in_one_integrated_shel
     assert overview.index('class="bp-reading-source"') < overview.index('class="bp-landing-intro"')
     assert overview.index('class="bp-landing-intro"') < overview.index('class="bp-dag-viewer"')
     intro = overview.split('class="bp-landing-intro"', 1)[1]
-    # The ways into the book and the map come straight after the claim, before the progress.
-    assert intro.index("bp-hero-title") < intro.index("bp-intro-book") < intro.index("bp-intro-map") < intro.index("bp-hero-status")
+    # The way into the book comes straight after the claim, before the progress.
+    assert intro.index("bp-hero-title") < intro.index("bp-intro-book") < intro.index("bp-hero-status")
     assert '<a class="bp-intro-book" href="roadmap/index.html">Start reading</a>' in intro
-    assert '<a class="bp-intro-map" href="dependencies/map/index.html">Open the map</a>' in intro
     # The hero's title is the page's one heading.
     assert overview.count("<h1") == 1 and "\n# " not in overview
-    for retired in ("bp-map", 'class="bp-landing"', "open full-page", "## Status breakdown", "## Contents", "```mermaid"):
+    # The page's stage holds the whole-project map, so the hero no longer links it.
+    for retired in ("bp-map", "bp-intro-map", 'class="bp-landing"', "open full-page", "## Status breakdown", "## Contents", "```mermaid"):
         assert retired not in overview
     assert overview.count("blueprint-dag.js") == 1
     assert overview.count('class="bp-explorer-page"') == overview.count('class="bp-reading-source"') == 1

@@ -130,6 +130,40 @@ def test_nested_setext_provenance_does_not_hide_unquoted_mathematical_references
     ) == dag_viewer.WikiLinks(((0, 1),))
 
 
+@pytest.mark.parametrize(("body", "skipped"), [
+    ("# A\n\nA statement with no links.\n", True),
+    ("# A\n\nA statement.\n\n## Sources\n\n- [Paper](https://example.org/paper)\n- [C](c.md)\n", True),
+    ("# A\n\nText.\n\n## Depends on\n\n- [B](b.md)\n\n## Sources\n\n### Primary\n\n- [C](c.md)\n", True),
+    ("# A\n\nSee [B](b.md).\n\n## Sources\n\n- [C](c.md)\n", False),
+    ("# A\n\nText.\n\n## Sources\n\n- [C](c.md)\n\n## Notes\n\n[B](b.md)\n", False),
+    ("# A\n\nText.\n\n## Sources\n\n- [C](c.md)\n\nNotes\n-----\n\n[B](b.md)\n", False),
+    ("# A\n\nText.\n\n##Sources\n\n- [C](c.md)\n", False),
+    ("# A\n\nText.\n## Sources\n- [C](c.md)\n", False),
+    ("# A\n\nText.\n{: .wide }\n\n## Sources\n\n- [C](c.md)\n", False),
+    ("# A\n\nText &amp; more.\n\n## Sources\n\n- [C](c.md)\n", False),
+    ("# A\n\n" + "".join("    " * depth + "- item\n" for depth in range(130)) + "\n## Sources\n\n- [C](c.md)\n", False),
+])
+def test_an_article_that_links_only_from_provenance_skips_the_render_with_the_same_targets(body: str, skipped: bool) -> None:
+    lines = dag_viewer._wiki_lines(body)
+    assert lines is not None
+    assert dag_viewer._no_wiki_targets(lines) is skipped
+    if skipped:
+        assert dag_viewer._wiki_targets(lines) == []
+
+
+def test_extraction_renders_only_articles_that_link_outside_their_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    view = _view("a", "b", "c")
+    paths, sources, metadata = _inputs("a", "b", "c")
+    sources["a"] = b"# A\n\nText.\n\n## Sources\n\n- [C](c.md)\n"
+    sources["b"] = b"# B\n\nSee [C](c.md).\n"
+    rendered, render = [], dag_viewer._wiki_targets
+    monkeypatch.setattr(dag_viewer, "_wiki_targets", lambda lines: rendered.append(lines[0]) or render(lines))
+    assert dag_viewer.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == dag_viewer.WikiLinks(((1, 2),))
+    assert rendered == ["# B"]
+
+
 def test_setext_heading_attributes_keep_valid_incoming_links_but_mark_outbound_extraction_unavailable() -> None:
     view = _view("a", "b", "c")
     paths, sources, metadata = _inputs("a", "b", "c")

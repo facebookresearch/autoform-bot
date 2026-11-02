@@ -50,7 +50,13 @@ from .impact import (
     module_import_impact,
     revision_impact,
 )
-from .lean import _name_prefix, declaration_names, index_failure_message, index_project
+from .lean import (
+    _name_prefix,
+    declaration_names,
+    index_failure_message,
+    resolve_lean_root,
+    snapshot_project_sources,
+)
 from .lean_probe import DEFAULT_PROBE_TIMEOUT
 from .library.citations import library_citation_warnings
 from .library.generate import GenerateError, check_index, generate_index, write_index
@@ -871,18 +877,27 @@ def _check(args: argparse.Namespace) -> int:
         for issue in source_issues:
             print(f"error: {issue}")
         return 1
-    if args.lean_root is not None:
-        source_warnings += [_human_text(warning) for warning in library_citation_warnings(graph, args.lean_root)]
-
-    # Check looks each name up and builds no permalink, so it skips the Git
-    # work a linker does.
+    # Check looks each lean: name up and builds no permalink, so it scans only the
+    # sources that could declare one and skips the Git work a linker does. One
+    # capture serves the library citation check too.
     index = None
     if args.lean_root is not None:
+        names = frozenset(name for node in graph.nodes.values() for name in declaration_names(node.lean or ""))
         try:
-            index = index_project(args.lean_root)
+            root = resolve_lean_root(args.lean_root)
+            snapshot = snapshot_project_sources(root, names=names)
+            # The error for a name declared nowhere describes its parent, which a
+            # source spelling none of the names may declare.
+            parents = frozenset(_name_prefix(name) for name in names if not snapshot.index.occurrences(name))
+            if parents:
+                snapshot = snapshot_project_sources(root, names=names | parents)
         except OSError as error:
             print(f"error: {index_failure_message(error)}")
             return 1
+        index = snapshot.index
+        source_warnings += [
+            _human_text(warning) for warning in library_citation_warnings(graph, args.lean_root, snapshot)
+        ]
 
     # The book's hero counts the same targets and inventories.
     statuses = status.derive(graph)
