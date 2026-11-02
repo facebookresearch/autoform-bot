@@ -103,6 +103,13 @@ date when the release is tagged.
   805-formula ATLAS page instead of 918 ms, and the typeset formulas are the
   same. The reader also shows that page's Mermaid diagrams, where it showed
   their source.
+- **Map layout.** Laying out a part on the whole-project map no longer routes
+  the links implied by others, which the map draws only around a selected
+  result: they are routed when a selection first needs them. On one CI runner,
+  laying out ATLAS's 3,635 parts that hold results took 945 ms instead of
+  1,639 ms, and the slowest part 11.1 ms instead of 74.2 ms; its first
+  selection pays the rest. Until a selection reads them, the laid-out parts
+  also hold a third less memory.
 - **Declaration captions.** A `declaration` command with no caption, such as
   `isomorphism`, is captioned as written, first letter capitalized, in the book
   instead of "Node". Modifiers
