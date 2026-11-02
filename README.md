@@ -30,7 +30,8 @@ flowchart LR
   step whose prerequisites are done. Each checks Mathlib and the libraries you depend on before writing a new lemma.
 - **Proofs Lean has checked.** A result counts as proved only when it builds with no `sorry` or new axiom, and a
   separate review agent has found its statement faithful to the source. Progress is recomputed on every run, and
-  the CI written by `setup` replays the project's declarations through the Lean kernel on every pull request.
+  the CI written by `setup` replays the project's declarations through the Lean kernel on every pull request,
+  failing on a `sorry` outside statements you left open or on a nonstandard axiom.
 - **Statement review without reading Lean.** Lean checks proofs, not whether a theorem says what the paper says. To
   approve each statement yourself, turn on statement review with `human-review`: an agent that sees only the Lean
   writes the statement back in plain English, and you compare it with the source.
