@@ -266,6 +266,23 @@ def test_a_part_picked_on_the_map_opens_its_chapter_in_the_reader(webkit_browser
         playwright.expect(book).to_have_attribute("data-map-start", "roadmap")
 
 
+def test_the_map_lets_go_of_a_result_when_the_book_does(webkit_browser: object, map_url: str) -> None:
+    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        _open_book(page, map_url, "roadmap/algebra/index.html")
+        book, selected = page.locator(".bp-dag-viewer"), page.locator(".bp-whole-map .pm-result.pm-selected")
+        page.locator('.bp-whole-map .pm-result[data-result="algebra/lagrange"]').click()
+        playwright.expect(selected).to_have_attribute("data-result", "algebra/lagrange")
+        # Escape in the reader lets go of the result in the book, and the map lets go of its card.
+        page.locator(".bp-reading-body").evaluate("body => { body.tabIndex = -1; body.focus(); }")
+        page.keyboard.press("Escape")
+        playwright.expect(book).not_to_have_class(re.compile(r"\bbp-dag-has-selection\b"))
+        playwright.expect(selected).to_have_count(0)
+        # Back to the selection selects the card again.
+        page.go_back()
+        playwright.expect(book).to_have_class(re.compile(r"\bbp-dag-has-selection\b"))
+        playwright.expect(selected).to_have_attribute("data-result", "algebra/lagrange")
+
+
 def test_the_statement_being_read_lights_up_on_the_map(webkit_browser: object, map_url: str) -> None:
     # A short window, so the chapter's statements scroll past the top of the reader.
     with _page(webkit_browser, viewport={"width": 1440, "height": 420}, reduced_motion="reduce") as page:
