@@ -879,6 +879,7 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
     masked = _without_lean_comments(text, mask_literals=True)
     lines = masked.splitlines()
     unmasked: list[str] = []
+    indents: list[int] = []
 
     def literal_line(index: int) -> str:
         """Line ``index`` with its literals back; masking keeps each literal's length, so the offsets agree."""
@@ -889,14 +890,24 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
                 offset += len(line)
         return unmasked[index]
 
-    # Masking shortens a comment, so a comment before a field on its line would
-    # move the field's column: columns come from the text as written, unless a
-    # comment or string holds a line separator other than a line end.
-    written = text.splitlines()
-    if len(written) == len(lines) + 1 and text.endswith(written[-1]) and written[-1].lstrip().startswith(("--", "/-")):
-        # A comment on the last line, with no line end after it, masks to nothing.
-        written.pop()
-    indents = [len(line) - len(line.lstrip()) for line in (written if len(written) == len(lines) else lines)]
+    def line_indents() -> list[int]:
+        """Each line's indent, which only a structure's fields read."""
+        if not indents:
+            # Masking shortens a comment, so a comment before a field on its line would
+            # move the field's column: columns come from the text as written, unless a
+            # comment or string holds a line separator other than a line end.
+            written = text.splitlines()
+            if (
+                len(written) == len(lines) + 1
+                and text.endswith(written[-1])
+                and written[-1].lstrip().startswith(("--", "/-"))
+            ):
+                # A comment on the last line, with no line end after it, masks to nothing.
+                written.pop()
+            measured = written if len(written) == len(lines) else lines
+            indents.extend(len(line) - len(line.lstrip()) for line in measured)
+        return indents
+
     for number, line in enumerate(lines, start=1):
         if not _SCANNED_LINE.match(line):
             continue
@@ -973,7 +984,7 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
             # `class abbrev` and `class inductive` read as a class of that name, with no fields.
             if keyword in ("structure", "class") and name not in ("abbrev", "inductive"):
                 found.extend(
-                    _fields(lines, literal_line, indents, number - 1, body_index, qualified, relative, private)
+                    _fields(lines, literal_line, line_indents(), number - 1, body_index, qualified, relative, private)
                 )
     return found, len(lines)
 
