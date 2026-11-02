@@ -55,10 +55,10 @@ def test_root_readme_uses_the_canonical_repository(repo_root: Path) -> None:
     assert "VivienCabannes/autoform-bot" not in readme
 
 
-def test_generated_site_docs_keep_internal_view_and_alias_boundaries(repo_root: Path) -> None:
+def test_generated_site_docs_keep_internal_view_and_redirect_boundaries(repo_root: Path) -> None:
     cli = " ".join((repo_root / "autoform_cli/README.md").read_text(encoding="utf-8").split())
     assert "other `dependencies/` payloads are internal to this viewer; their schemas may change" in cli
-    assert "legacy `#node=<id>`, view and filter links remain aliases, not a second viewer" in cli
+    assert "legacy `#node=<id>`, view and filter links redirect there, not to a second viewer" in cli
 
 
 def test_integrated_landing_retains_authored_title_with_generated_hide_metadata(tmp_path: Path) -> None:

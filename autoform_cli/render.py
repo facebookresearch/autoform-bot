@@ -7,9 +7,9 @@ the DAG -- the presentation ``leanblueprint`` gives a LaTeX blueprint, driven
 from Markdown instead.
 
 The user-facing rules are the publication contract in
-``autoform_cli/reference/runtime-and-publication.md``. The legacy full route is
-a project-scale compatibility shell backed by a layout-free global search
-index, never an all-repository node cloud. ``autoform-publication/v3`` records
+``autoform_cli/reference/runtime-and-publication.md``. The old dependency
+pages, the full route among them, redirect to the book, whose global search
+index resolves their ``#node=`` links. ``autoform-publication/v3`` records
 what v2 records, but the site holds the shared explorer's JSON projections and
 script in place of v2's Mermaid dependency maps, and the blueprint hash is taken
 under a label of its own, so no v2 ``source_revision`` equals a v3 one.
