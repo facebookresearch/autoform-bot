@@ -60,7 +60,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from markdown.treeprocessors import Treeprocessor
 
-from . import dag_viewer, graph_pages, graph_views, project_map, status
+from . import dag_viewer, graph_pages, graph_views, project_map, site_index, status
 from ._fs import resolve as _resolve
 from ._fs import resolving_once
 from ._repository import detect_ref, detect_repository_url, repository_top_level, verify_repository_snapshot
@@ -4127,7 +4127,7 @@ def _title_html(text: str, *, fallback: str | None = None) -> str:
     shows ``fallback`` as text when given: a page header's visible title, whose
     emphasis and links read as the page's own heading does.
     """
-    reading = dag_viewer._reading_label(text, require_math=False)
+    reading = site_index._reading_label(text, require_math=False)
     if reading is None:
         return html.escape(text if fallback is None else fallback)
     return "".join(
