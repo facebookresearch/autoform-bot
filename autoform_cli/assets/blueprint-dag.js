@@ -134,8 +134,8 @@
     })});
   }
 
-  function outlineProjection(nodes, currentScope, currentNode, limit) {
-    var records = new Map(nodes.map(function (node) { return [node.id, node]; })), children = new Map(), parents = new Map();
+  function outlineProjection(nodes, currentScope, currentNode, limit, byId) {
+    var records = byId || new Map(nodes.map(function (node) { return [node.id, node]; })), children = new Map(), parents = new Map();
     function parentOf(node) {
       if (parents.has(node.id)) return parents.get(node.id);
       var parent = records.get(node.parent), seen = new Set([node.id]);
@@ -237,9 +237,9 @@
     buildShell();
     bindEvents();
     // The router has already validated its index, so the first route, a
-    // direct theorem entry included, reads its records.
-    if (navigation && navigation.getIndex) useIndex(navigation.getIndex());
-    resize();
+    // direct theorem entry included, reads its records. Only the route
+    // renders the first view, after projecting with them.
+    if (navigation && navigation.getIndex) adoptIndex(navigation.getIndex());
     readingReady = applyRoute(firstBundle);
 
     function globalListen(target, type, handler, options) {
@@ -311,14 +311,18 @@
       }
       dom$error.hidden = false;
     }
-    function useIndex(index) {
-      if (!index || sharedIndex === index) return;
+    function adoptIndex(index) {
+      if (!index || sharedIndex === index) return false;
       sharedIndex = index; records = new Map(); dom$search.removeAttribute("aria-busy");
       index.nodes.forEach(function (node, i) { node._index = i; records.set(node.id, node); });
       ui$searchNodes = index.nodes; ui$searchCacheQuery = null;
+      requestWikiLinks();
+      return true;
+    }
+    function useIndex(index) {
+      if (!adoptIndex(index)) return;
       if (currentBundle) updateProjection();
       renderNavigation(); refresh(false);
-      requestWikiLinks();
     }
     function requestWikiLinks() {
       if (!alive || !sharedIndex || ui$wikiRequested) return;
@@ -482,7 +486,7 @@
     }
     function renderOutline() {
       var key = currentBundle && currentBundle.scope, tree = outlineProjection(sharedIndex.nodes, key,
-        currentBundle && currentBundle.nodeId, ui$outlineLimit);
+        currentBundle && currentBundle.nodeId, ui$outlineLimit, records);
       var list = element("ul", "bp-dag-navigation-list");
       tree.entries.forEach(function (entry) {
         var node = entry.node, item = element("li", "bp-outline-depth-" + entry.depth);

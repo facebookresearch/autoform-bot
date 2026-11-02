@@ -109,6 +109,11 @@ date when the release is tagged.
   query no longer joins each row's fields. Results and their order are the
   same. In Node, on ATLAS's index, ranking as "zeckendorf" was typed took
   53 ms instead of 383 ms, and "measure theory" 112 ms instead of 705 ms.
+- **Explorer first view.** The explorer draws a page's first view once. It drew
+  the Topics outline, breadcrumb and reader as it took in the search index, and
+  then again for the page itself. The outline also reads the index's rows by
+  ID from the map the explorer already keeps, instead of building another. The
+  first view is the same.
 - **Wiki links.** Render reads the links between articles without rendering
   an article whose links all sit under its Sources, References, Bibliography
   or Depends on headings, which holds for about nine in ten ATLAS articles.
