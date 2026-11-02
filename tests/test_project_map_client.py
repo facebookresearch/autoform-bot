@@ -558,3 +558,54 @@ def test_a_pinch_zooms_and_back_from_an_outline_part_keeps_the_pane(tmp_path: Pa
       console.log('pinch ok');
     """)
     assert "pinch ok" in out
+
+
+def test_titles_with_formulas_are_typeset_once_by_the_sites_mathjax(tmp_path: Path) -> None:
+    library = tmp_path / "formulas"
+    project_map.write_project_map(library, project_map.build_project_map([
+        {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
+        {"id": "Algebra", "kind": "scope", "title": "Algebra", "parent": "roadmap", "result": False, "area": "Algebra"},
+        {"id": "Algebra/order", "kind": "scope", "title": "Groups of order $p^2$", "parent": "Algebra", "result": False,
+         "navigation": "module"},
+        {"id": "Algebra/order/abel", "kind": "node", "title": r"Abel summation for $\mathbb{R}$", "parent": "Algebra/order",
+         "result": True, "status": "planned"},
+        {"id": "Algebra/order/lagrange", "kind": "node", "title": "Lagrange's theorem", "parent": "Algebra/order", "result": True,
+         "status": "planned"},
+        {"id": "Algebra/order/price", "kind": "node", "title": "A $5 bound", "parent": "Algebra/order", "result": True,
+         "status": "planned"},
+    ], []))
+    out = _walk(tmp_path, r"""
+      const canvas = $('.pm-stage').querySelector('svg'), layer = $('.pm-tex-layer');
+      const show = async () => {
+        const search = $('.pm-search').querySelector('input');
+        search.value = 'abel'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+        emit(search, 'keydown', {key: 'Enter'}); await wait(40);
+      };
+      const svgText = () => $$('text').map(node => node.textContent).join(' | ');
+      // Without the site's MathJax, a formula is drawn as readable SVG text.
+      await show();
+      assert(svgText().includes('Abel summation for ℝ'), svgText());
+      assert.strictEqual(layer.children.length, 0);
+      // With it, the titles with formulas move to HTML for MathJax to set, each once; the others stay SVG text.
+      const asked = [];
+      window.AutoformMath = {refresh: root => { asked.push(root); return Promise.resolve(true); }};
+      emit(canvas, 'keydown', {key: '+'}); await wait(20);
+      const card = $$('.pm-tex').find(node => node.classList.contains('pm-card-title'));
+      assert(card, 'the card title is HTML');
+      assert.deepStrictEqual(card.querySelectorAll('.arithmatex').map(node => node.textContent), ['\\(\\mathbb{R}\\)']);
+      assert(!svgText().includes('Abel summation'), svgText());
+      assert(svgText().includes("Lagrange's theorem") && svgText().includes('A $5 bound'), svgText());
+      assert($$('.pm-tex').every(node => node.querySelector('.arithmatex')), 'only titles with formulas are HTML');
+      assert(asked.includes(layer), 'the layer is handed to MathJax');
+      // Out of view the title leaves the stage; back in view the same node returns without another pass.
+      for (let i = 0; i < 12; i++) { emit(canvas, 'keydown', {key: '-'}); await wait(5); }
+      await wait(20);
+      assert(!card.parentNode, 'zoomed out, the card title is gone');
+      card.appendChild(document.createElement('mjx-container'));
+      const passes = asked.length;
+      await show();
+      assert.strictEqual(card.parentNode, layer);
+      assert.strictEqual(asked.filter(root => root === layer).length, asked.slice(0, passes).filter(root => root === layer).length);
+      console.log('formulas ok');
+    """, library)
+    assert "formulas ok" in out

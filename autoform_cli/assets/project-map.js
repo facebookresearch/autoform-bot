@@ -247,9 +247,12 @@
   var partLayer = svg("g"), miniLayer = svg("g"), resultLayer = svg("g"), cardRouteLayer = svg("g"), linkLayer = svg("g"),
     backdropLayer = svg("g"), labelLayer = svg("g");
   canvas.append(defs, partLayer, miniLayer, resultLayer, cardRouteLayer, linkLayer, backdropLayer, labelLayer);
+  // Titles with formulas, which SVG text cannot typeset. The layer is inert: each part's and card's own label already
+  // names them, and MathJax would make every formula a tab stop.
+  var mathLayer = el("div", "pm-tex-layer"); mathLayer.inert = true;
   var pin = el("div", "pm-pin"); pin.hidden = true;
   var hint = el("div", "pm-hint", "");
-  stage.append(canvas, pin, hint);
+  stage.append(canvas, mathLayer, pin, hint);
   var reader = el("aside", "pm-reader"); reader.setAttribute("aria-label", "Reading pane");
   var readerInner = el("div", "pm-reader-inner"); reader.append(readerInner);
   // Embedded, the book announces where the reader is.
@@ -380,6 +383,35 @@
     return node;
   }
   function setText(node, text) { if (node.textContent !== text) node.textContent = text; return node; }
+  // A title with a formula is HTML over the canvas, set by the site's MathJax; other titles stay SVG text. Its node
+  // outlives the frames it is off screen, so a typeset title comes back without typesetting again.
+  var mathNodes = new Map(), mathUsed = new Set(), mathPending = false;
+  function hasMath(text) {
+    if (!window.AutoformMath) return false;
+    // A formula as withMath reads one: a lone dollar sign keeps the title SVG text.
+    MARKUP.lastIndex = 0;
+    for (var match; (match = MARKUP.exec(text));) if (match[4] !== undefined || match[5] !== undefined) return true;
+    return false;
+  }
+  // New formulas wait hidden while MathJax sets them, until every pass started on the node has settled; one MathJax
+  // could not set then shows as typed, as in the book.
+  function typesetHidden(node) {
+    node.texPasses = (node.texPasses || 0) + 1;
+    node.classList.add("pm-tex-waiting");
+    var settled = function () { if (!--node.texPasses) node.classList.remove("pm-tex-waiting"); };
+    typeset(node).then(settled, settled);
+  }
+  function mathTitle(key, text, cls, x, baseline, width, size, step, lines) {
+    var node = mathNodes.get(key);
+    if (!node) { node = withMath(el("div"), text); mathNodes.set(key, node); }
+    // The first line's baseline lands where the SVG text's would: half a line down, plus about a third of the font size.
+    var style = "left:" + Math.round(x) + "px;top:" + Math.round(baseline - step / 2 - size * 0.35) + "px;width:" + Math.max(0, Math.round(width)) +
+      "px;font-size:" + size + "px;line-height:" + step + "px;-webkit-line-clamp:" + lines;
+    if (node.className !== "pm-tex " + cls) node.className = "pm-tex " + cls;
+    if (node.getAttribute("style") !== style) node.setAttribute("style", style);
+    if (node.parentNode !== mathLayer) { mathLayer.appendChild(node); if (!node.querySelector("mjx-container")) mathPending = true; }
+    mathUsed.add(key);
+  }
   // Deep zooms put ancestors' edges tens of millions of pixels away, where the compositor's float32 loses whole pixels;
   // geometry is cut to a margin around the stage first. Clamping each coordinate keeps an orthogonal route's visible
   // part exactly and folds the rest onto the margin, out of sight.
@@ -409,7 +441,7 @@
   function render() {
     if (!part(ROOT) || !part(ROOT).box) return;
     measure();
-    used = new Set();
+    used = new Set(); mathUsed = new Set();
     deepestAtCenter = part(ROOT);
     var onPath = state.selected && model.results.get(state.selected) ? new Set(chainOf(model.results.get(state.selected).home)) : null;
     var labelBoxes = {}, closed = {}, communities = [], drawn = new Set();
@@ -441,6 +473,8 @@
     drawPin(pinnedPart);
     explainEmpty(drawn);
     keyed.forEach(function (node, key) { if (!used.has(key)) { node.remove(); keyed.delete(key); } });
+    mathNodes.forEach(function (node, key) { if (!mathUsed.has(key)) node.remove(); });
+    if (mathPending) { mathPending = false; typesetHidden(mathLayer); }
     updateTrail();
     if (!state.selected) showPart(currentPart());
   }
@@ -583,7 +617,8 @@
     if (!text) return true;
     var pad = 10, width = b.w - 2 * pad, cls = dim ? " pm-dimmed" : "";
     var lines = wrap(plain(row.title), Math.max(4, Math.floor(width / CARD_EM)), b.h >= 58 ? 2 : 1);
-    lines.forEach(function (line, index) {
+    if (hasMath(row.title)) mathTitle("ct:" + row.id, row.title, "pm-card-title" + cls, b.x + pad, b.y + pad + 13, width, 13, 17, b.h >= 58 ? 2 : 1);
+    else lines.forEach(function (line, index) {
       setText(keep(labelLayer, "ct:" + row.id + ":" + index, "text", {x: b.x + pad, y: b.y + pad + 13 + index * 17, class: "pm-card-title" + cls}), line);
     });
     if (b.h >= 52) {
@@ -611,8 +646,10 @@
           class: "pm-backdrop pm-backdrop-" + (own ? "open" : isOpen(record, b) ? "open" : tileKind(record.summary.status)) + cls, rx: 6});
         placeRect(backdrop, {x: b.x + 1, y: slot.y + 1, w: b.w - 2, h: slot.band});
       }
+      var tex = !own && hasMath(record.summary.title);
       if (slot.compact) {
-        wrap(title, Math.max(3, Math.floor(slot.w / COMPACT_EM)), slot.lines).forEach(function (line, index) {
+        if (tex) mathTitle("lc:" + slot.id, record.summary.title, "pm-title pm-compact" + cls, slot.x, slot.baseline, slot.w, 13, L.constants.COMPACT_LINE, slot.lines);
+        else wrap(title, Math.max(3, Math.floor(slot.w / COMPACT_EM)), slot.lines).forEach(function (line, index) {
           setText(keep(labelLayer, "lc:" + slot.id + ":" + index, "text", {x: slot.x, y: slot.baseline + index * L.constants.COMPACT_LINE,
             class: "pm-title pm-compact" + cls}), line);
         });
@@ -639,7 +676,8 @@
       var step = stepOf(size), most = mostOf(size);
       var lines = most > 1 ? wrap(title, perLine(size), most) : [clip(title, perLine(size))];
       var y = size === 15 ? slot.baseline : slot.y + Math.round(size * 1.2);
-      lines.forEach(function (line, index) {
+      if (tex) mathTitle("lt:" + slot.id, record.summary.title, "pm-title" + (shut ? " pm-halo" : "") + cls, x, y, width, size, step, lines.length);
+      else lines.forEach(function (line, index) {
         setText(keep(labelLayer, "lt:" + slot.id + ":" + index, "text", {x: x, y: y + index * step,
           class: "pm-title" + (shut ? " pm-halo" : "") + cls, style: size === 15 ? "" : "font-size:" + size + "px"}), line);
       });
@@ -685,7 +723,10 @@
     if (!record) return;
     if (pin.dataset.part !== record.id) {
       pin.dataset.part = record.id;
-      pin.replaceChildren(el("strong", "", plain(record.summary.title)), el("span", "", progressText(record.summary)));
+      var tex = hasMath(record.summary.title);
+      pin.replaceChildren(tex ? withMath(el("strong"), record.summary.title) : el("strong", "", plain(record.summary.title)),
+        el("span", "", progressText(record.summary)));
+      if (tex) typesetHidden(pin);
     }
   }
 
