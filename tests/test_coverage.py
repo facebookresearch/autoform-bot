@@ -547,15 +547,16 @@ def test_a_link_with_the_role_does_not_excuse_one_without_it(tmp_path: Path) -> 
         blueprint,
         "| Existing module | INVENTORIED | [Module](../roadmap/module.md), [Result](../roadmap/result.md) |\n"
         "| Main theorem | DECOMPOSED | [Result](../roadmap/result.md) |\n"
-        "| Result only | INVENTORIED | [Result](../roadmap/result.md) |\n",
+        "| Result only | INVENTORIED | [Result](../roadmap/result.md) |\n"
+        "| Module only | INVENTORIED | [Module](../roadmap/module.md) |\n",
     )
     summary, syntax_issues = load_coverage(blueprint)
 
     # Loading reads no roles; only validate_coverage_roles sees that result.md is not a catalog.
     assert syntax_issues == ()
     assert summary is not None
-    assert summary.counts["INVENTORIED"] == 2
-    # The DECOMPOSED row links only a declaration, so only the inventory rows are reported.
+    assert summary.counts["INVENTORIED"] == 3
+    # Rows 6 and 8 link only leaves with their row's role, so neither is reported.
     assert validate_coverage_roles(load_graph(blueprint), summary) == (
         CoverageRoleIssue(
             5,
