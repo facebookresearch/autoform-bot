@@ -18,6 +18,15 @@ date when the release is tagged.
   it with `git worktree remove`, never `--force`, and reports the free space
   recovered and how to re-create the checkout; ignored files such as `.lake`
   are not kept (#435).
+- **Check without site warnings.** `check --no-site-warnings` skips the
+  warnings about the pages the site would publish, which `render` prints too,
+  and still reads the notes under `blueprint/sources/`, which a render that
+  links them in the repository never reads. The generated
+  `blueprint-pages.yml` passes it, since render runs two steps later, when its
+  `AUTOFORM_REF`'s `check --help` lists it, so an older pin runs the full check.
+  On one CI runner ATLAS's check took 60 s with the flag instead of 255 s, and
+  render printed every warning it skipped. A scaffolded project keeps its
+  workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project. Regions (authored areas, or the top-level
   chapters) open into their parts and parts into their results as the camera
@@ -43,6 +52,12 @@ date when the release is tagged.
   a dependency heading, where its links count (#541). The Roadmap skill puts
   under it what a source's proof cites but the planned Lean proof will not use,
   as when a library proof is reused (#556).
+- **Projects that track no Lean.** `tracks_lean: false` in
+  `roadmap/README.md` takes Lean progress out of the book's pages: the landing
+  page's figures and Next up, the statement status marks, the status dots on
+  dependency references and the chapter progress lines. Check warns about the
+  setting anywhere else under `roadmap/`, or with a value other than true or
+  false, and ignores it.
 
 ### Changed
 
@@ -109,6 +124,13 @@ date when the release is tagged.
   805-formula ATLAS page instead of 918 ms, and the typeset formulas are the
   same. The reader also shows that page's Mermaid diagrams, where it showed
   their source.
+- **Map layout.** Laying out a part on the whole-project map no longer routes
+  the links implied by others, which the map draws only around a selected
+  result: they are routed when a selection first needs them. On one CI runner,
+  laying out ATLAS's 3,635 parts that hold results took 945 ms instead of
+  1,639 ms, and the slowest part 11.1 ms instead of 74.2 ms; its first
+  selection pays the rest. Until a selection reads them, the laid-out parts
+  also hold a third less memory.
 - **Declaration captions.** A `declaration` command with no caption, such as
   `isomorphism`, is captioned as written, first letter capitalized, in the book
   instead of "Node". Modifiers
@@ -316,6 +338,13 @@ date when the release is tagged.
   Git wrote objects, and on a refused acquire a claim ref, into the hook's
   repository; with `GIT_WORK_TREE` too, every claim command failed. `git -c`
   settings still reach the board.
+- **Other commands inside a Git hook.** In a hook, `init` and `project new`
+  pin CI to the Autoform checkout they run from, and `claim` and `dashboard`
+  without `--repo` use the origin of the checkout they run in. Before, the
+  hook's `GIT_DIR` and `GIT_INDEX_FILE` made Git take any directory for the
+  hook's repository, so CI was written without a pin, and the default board was
+  the hook repository's origin. Autoform's local Git commands now share one
+  runner that drops the caller's `GIT_*` variables.
 - **`\pmod`, `\bmod` and `\mod` on the site.** Site formulas typeset `\pmod`,
   `\bmod`, `\mod` and amsmath's `\varliminf`, `\varlimsup`, `\varinjlim` and
   `\varprojlim`. MathJax builds them from `\mmlToken`, which the page's TeX input

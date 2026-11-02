@@ -68,6 +68,12 @@ def webkit_browser() -> Iterator[object]:
         browser.close()
 
 
+# WebKit reports this when a resize callback changes layout again within one frame. It is a
+# notice, not an uncaught exception, and it failed unrelated tests at random; a real layout
+# loop still fails the geometry assertions.
+_BENIGN_PAGE_ERRORS = ("ResizeObserver loop completed with undelivered notifications.",)
+
+
 @contextmanager
 def _page(browser: object, **options: object) -> Iterator[object]:
     """Open a page in a context of its own, close it, and fail on any uncaught page error."""
@@ -79,7 +85,7 @@ def _page(browser: object, **options: object) -> Iterator[object]:
         yield page
     finally:
         context.close()
-    assert errors == []
+    assert [error for error in errors if error not in _BENIGN_PAGE_ERRORS] == []
 
 
 @pytest.fixture()

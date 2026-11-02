@@ -501,6 +501,17 @@
     return out;
   }
 
+  // A view's links implied by others show only around a selected result, so they are routed the
+  // first time `implied` is read. Out here, the getter keeps alive only what routing them needs,
+  // not the scratch state of the layout that made the view.
+  function routeImpliedWhenRead(view, cards, implied, area) {
+    var routes = null;
+    Object.defineProperty(view, "implied", {enumerable: true, get: function () {
+      return routes || (routes = bundleEdges(cards, implied, area, true));
+    }});
+    return view;
+  }
+
   // The result view inside a part, in the explorer's style: prerequisites above their users, each
   // cycle condensed into one layer, links implied by others hidden at rest and kept for selection.
   // Cards keep one size (CARD_W by CARD_H at the zoom where the part is fitted, or smaller when
@@ -632,7 +643,7 @@
     });
     var area = {x: x0, y: y0, w: best.width * scale, h: (rowsOf.length * CARD_H + (rowsOf.length - 1) * ROW_GAP) * scale};
     // Every result route shows: the reduction already chose them.
-    var routes = bundleEdges(cards, direct, area, true), hidden = bundleEdges(cards, implied, area, true);
+    var routes = bundleEdges(cards, direct, area, true);
     var stubs = {};
     (boundaryEdges || []).forEach(function (edge) {
       var inside = at.has(edge[0]) ? edge[0] : at.has(edge[1]) ? edge[1] : null;
@@ -640,7 +651,7 @@
       var entry = stubs[inside] || (stubs[inside] = {uses: 0, usedBy: 0});
       if (inside === edge[0]) entry.uses++; else entry.usedBy++;
     });
-    return {cards: cards, routes: routes, implied: hidden, stubs: stubs, fold: best.fold};
+    return routeImpliedWhenRead({cards: cards, routes: routes, stubs: stubs, fold: best.fold}, cards, implied, area);
   }
 
   // Labels for the boxes on screen at this camera. A box at least MIN_W wide whose band holds a title

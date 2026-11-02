@@ -10,7 +10,6 @@ import os
 import shlex
 import signal
 import socket
-import subprocess
 import sys
 import tempfile
 from collections.abc import Sequence
@@ -19,6 +18,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from . import debrief, debrief_orchestrator, status
+from ._repository import git
 from .approvals import ApprovalStatus, approval_statuses
 from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
 from .audit import audit_blueprint
@@ -150,6 +150,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--lean-root",
         type=Path,
         help="Lean project to resolve 'lean:' declarations against (enables declaration checking)",
+    )
+    check.add_argument(
+        "--no-site-warnings",
+        action="store_true",
+        help="leave the warnings about the site's pages to render, which reports them; source notes are still read",
     )
 
     audit = subparsers.add_parser("audit", help="audit roadmap completeness and checked facts")
@@ -944,7 +949,8 @@ def _check(args: argparse.Namespace) -> int:
             f"warning: {node_id}: module catalog links no declaration ledger under blueprint/sources/ from '## Sources'"
         )
     for warning in (
-        _byte_order_mark_warnings(graph)
+        list(graph.warnings)
+        + _byte_order_mark_warnings(graph)
         + _formalizable_container_warnings(graph)
         + _unknown_declaration_warnings(graph)
         + list(graph.informal_warnings)
@@ -953,8 +959,9 @@ def _check(args: argparse.Namespace) -> int:
     ):
         print(f"warning: {warning}")
     # What the site would leave out or show as typed, and what would stop
-    # render; none of it fails check.
-    for warning in publication_issues(graph, Path(args.blueprint_dir)):
+    # render; none of it fails check. Render reports the same, except for the
+    # source notes it links in the repository instead, so the flag keeps those.
+    for warning in publication_issues(graph, Path(args.blueprint_dir), sources_only=args.no_site_warnings):
         print(f"warning: {warning}")
     return 0
 
@@ -2109,18 +2116,10 @@ def _claim_board(args: argparse.Namespace) -> ClaimBoard:
 
 
 def _origin_url(root: Path | None = None) -> str:
-    try:
-        result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=10,
-            cwd=root,
-        )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise ValueError("--repo is required outside a Git checkout with an origin remote") from exc
-    return result.stdout.strip()
+    url = git(root or ".", "remote", "get-url", "origin")
+    if url is None:
+        raise ValueError("--repo is required outside a Git checkout with an origin remote")
+    return url
 
 
 def _port(value: str) -> int:
