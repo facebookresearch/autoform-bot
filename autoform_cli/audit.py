@@ -18,7 +18,6 @@ from pathlib import Path
 from . import status
 from ._fs import directory_path as _directory_path
 from .coverage import CoverageSummary, load_coverage, validate_coverage_roles
-from .dag_viewer import MAX_MAP_NODES
 from .elaboration_limits import LimitSetting, limits_by_line, limits_in_force
 from .graph_views import _countable
 from .graph import (
@@ -62,15 +61,15 @@ _MAX_DIRECT_CHILDREN = 24
 #: wider than a readable mathematical chapter while remaining navigable.
 _MAX_ROOT_CHILDREN = 64
 #: A module page lists one Lean module's declarations, so its width is the
-#: module's; it may hold as many as the explorer still draws as a map.
-_MAX_MODULE_CHILDREN = MAX_MAP_NODES
+#: module's: up to 120, the number the explorer's map was sized for.
+_MAX_MODULE_CHILDREN = 120
 
-#: A node is reported as oversized only once its finished Lean work clears both
+#: A node is warned about as oversized only once its finished Lean work clears both
 #: an absolute floor and a large multiple of this project's own median. The
 #: multiple self-calibrates -- a project whose nodes are routinely long is
 #: measured against itself, and a project with too few finished nodes to have a
 #: meaningful median cannot clear the multiple at all. Every measurement is in
-#: the finding's reason, so ``--json`` over a finished project is the
+#: the warning's message, so ``--json`` over a finished project is the
 #: calibration corpus for the threshold. Nothing authored in an article
 #: predicts size: on the 43 finished nodes of phulin/finite-flat, prose length
 #: correlates with realized Lean length at r = -0.03 and prerequisite count at
@@ -650,8 +649,8 @@ def _lean_findings(
         if resolved:
             sizes[node_id] = sum(spans[body] for body in bodies)
 
-    findings.extend(_size_findings(graph, sizes))
     if warnings is not None:
+        warnings.extend(_size_warnings(graph, sizes))
         warnings.extend(_catalog_limit_warnings(catalogs, sources, index))
     return findings
 
@@ -934,19 +933,25 @@ def _name_key(name: str) -> tuple[str, ...]:
     return tuple(parts[1:] if len(parts) > 1 and parts[0] == "_root_" else parts)
 
 
-def _size_findings(graph: Graph, sizes: dict[str, int]) -> list[AuditFinding]:
-    """Flag finished nodes that are large outliers against this project's own work."""
+def _size_warnings(graph: Graph, sizes: dict[str, int]) -> list[AuditWarning]:
+    """Warn about nodes that are large outliers against this project's own work.
+
+    The median moves whenever any article's Lean lands, so a node nobody edited
+    can cross the limit; that is information about decomposition, not a
+    problem the audit should fail on.
+    """
 
     if not sizes:
         return []
     median = statistics.median(sizes.values())
     limit = max(_NODE_SIZE_FLOOR, _NODE_SIZE_MULTIPLE * median)
     return [
-        AuditFinding(
+        AuditWarning(
             _relative_path(graph.nodes[node_id].path, graph.blueprint_dir),
             "node-too-large",
             f"node's Lean declarations span {size} lines against this project's "
             f"{median:g}-line median; split it into pull-request-sized nodes",
+            (),
         )
         for node_id, size in sorted(sizes.items())
         if size >= limit
