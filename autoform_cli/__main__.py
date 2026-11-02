@@ -944,11 +944,10 @@ def _check(args: argparse.Namespace) -> int:
             f"warning: {node_id}: module catalog links no declaration ledger under blueprint/sources/ from '## Sources'"
         )
     for warning in (
-        list(graph.warnings)
-        + _byte_order_mark_warnings(graph)
+        _byte_order_mark_warnings(graph)
         + _formalizable_container_warnings(graph)
         + _unknown_declaration_warnings(graph)
-        + list(graph.informal_warnings)
+        + list(graph.warnings)
         + informal_cycle_warnings(graph)
         + source_warnings
     ):

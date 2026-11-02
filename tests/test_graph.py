@@ -721,7 +721,7 @@ def test_informally_uses_links_resolve_without_becoming_dependencies(tmp_path: P
     assert graph.nodes["top"].informal_dependencies == ("base",)
     assert graph.nodes["top"].dependencies == ("lemma",)
     assert graph.edge_count == 1
-    assert graph.informal_warnings == ()
+    assert graph.warnings == ()
 
 
 def test_an_informal_link_that_cannot_be_used_is_a_warning_not_an_error(tmp_path: Path) -> None:
@@ -741,7 +741,7 @@ def test_an_informal_link_that_cannot_be_used_is_a_warning_not_an_error(tmp_path
     graph = load_graph(blueprint)
 
     assert graph.nodes["top"].informal_dependencies == ("base",)
-    assert graph.informal_warnings == (
+    assert graph.warnings == (
         "top: informal target is not a node: '../sources/paper.md'",
         "top: informal target does not exist: 'missing.md'",
         "top: informal target must be a relative Markdown path: 'https://example.invalid/survey'",
@@ -765,7 +765,7 @@ def test_an_informal_link_whose_target_depends_on_its_article_is_a_warning(tmp_p
 
     # Loading leaves the search to check. C informally using A closes no cycle:
     # A only informally uses C back. Of C's two routes to A, the shorter is named.
-    assert graph.informal_warnings == ()
+    assert graph.warnings == ()
     assert graph.nodes["a"].informal_dependencies == ("c",)
     assert informal_cycle_warnings(graph) == ["a: informally uses c, which depends on it: c -> b -> a"]
 
@@ -781,7 +781,7 @@ def test_informally_uses_below_a_dependency_heading_is_a_warning(tmp_path: Path,
     # The deeper heading stays inside the dependency section, as before.
     assert graph.nodes["top"].dependencies == ("base",)
     assert graph.nodes["top"].informal_dependencies == ()
-    assert graph.informal_warnings == (
+    assert graph.warnings == (
         f"top: '### Informally uses' is read as part of '## {heading}', so its links count; "
         "write it as '## Informally uses'",
     )
