@@ -436,14 +436,12 @@ def _reference_counts(graph: dict, owner_id: str, target_id: str) -> tuple[int, 
     return counts
 
 
-def _numbered_reference(disclosure: object, target: object, href: str, counts: tuple[int, int]) -> object:
-    """Match natural numbered fixture names and their exact typed descriptions."""
+def _named_reference(disclosure: object, target: object, href: str, counts: tuple[int, int]) -> object:
+    """Match a reference by the name its statement shows, and its exact typed descriptions."""
     playwright.expect(target).to_have_count(1)
-    caption = target.locator(".bp-thmheading > .bp-thmcaption").text_content()
-    number = target.locator(".bp-thmheading > .bp-thmlabel").text_content()
     title = target.locator(".bp-thmheading > .bp-thmtitle").text_content()
-    assert isinstance(caption, str) and isinstance(number, str) and isinstance(title, str)
-    label = f"{caption.strip()} {number.strip()} ({title.strip()})"
+    assert isinstance(title, str)
+    label = title.strip()
     link = disclosure.locator("a.bp-ref").filter(has_text=re.compile(r"^" + re.escape(label) + r"$"))
     playwright.expect(link).to_have_count(1)
     playwright.expect(link).to_have_text(label)
@@ -476,7 +474,7 @@ def _open_dependency(card: object, consumer: _ExplorerConsumer, target_id: str) 
         consumer.records[target_id]["title"]
     )
     graph = consumer.graphs[consumer.records[owner_id]["scope"]]
-    return _numbered_reference(
+    return _named_reference(
         disclosure, target, consumer.route(target_id), _reference_counts(graph, owner_id, target_id)
     )
 
@@ -1998,8 +1996,8 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     assert graph_response.ok
     last_card = _reading_card(page, last_id)
     playwright.expect(last_card.locator(".bp-thmheading > .bp-thmtitle")).to_have_text("Later 54")
-    last = _numbered_reference(relations, last_card, _site_route(page, site_url, last_id),
-                               _reference_counts(graph_response.json(), "topology/result", last_id))
+    last = _named_reference(relations, last_card, _site_route(page, site_url, last_id),
+                            _reference_counts(graph_response.json(), "topology/result", last_id))
     last.scroll_into_view_if_needed()
     _assert_hit(page, last)
     last.click()

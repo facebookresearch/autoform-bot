@@ -578,14 +578,46 @@ def test_statement_headings_and_references_do_not_repeat_the_kind(tmp_path: Path
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     base, top = page[page.index('id="base"') : page.index('id="top"')], page[page.index('id="top"') :]
 
-    # A title that is only the kind word leaves no empty parentheses behind.
-    assert "bp-thmtitle" not in base
-    assert '<span class="bp-thmtitle">Top (finite case)</span>' in top
-    assert 'href="#top">Theorem 1 (Top (finite case))</a>' in base
-    assert 'href="#base">Definition 1</a>' in top
+    # A title that is only the kind word is the name, shown once with no kind above it.
+    assert "bp-thmcaption" not in base
+    assert '<span class="bp-thmtitle">Definition</span>' in base
+    assert (
+        '<span class="bp-thmcaption" data-search-exclude>Theorem</span><span class="bp-thmtitle">Top (finite case)</span>'
+    ) in top
+    assert 'href="#top">Top (finite case)</a>' in base
+    assert 'href="#base">Definition</a>' in top
     # The graph keeps the authored titles.
     chapter = json.loads((tmp_path / "out/dependencies/chapters/roadmap.json").read_text(encoding="utf-8"))
     assert {node["id"]: node["title"] for node in chapter["nodes"]} == titles
+
+
+def test_a_sources_own_numbering_stays_in_the_heading_and_its_links(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    top = project / "blueprint/roadmap/top.md"
+    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Theorem 7.7 (Bézout)\n"), encoding="utf-8")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    base, top_card = page[page.index('id="base"') : page.index('id="top"')], page[page.index('id="top"') :]
+
+    # Only the generated counter went: the title, with the source's number, heads the statement as written.
+    heading = top_card.split("</h4>")[0]
+    assert '<span class="bp-thmcaption" data-search-exclude>Theorem</span>' in heading
+    assert '<span class="bp-thmtitle">Theorem 7.7 (Bézout)</span>' in heading
+    assert 'href="#top">Theorem 7.7 (Bézout)</a>' in base
+
+
+def test_a_statement_with_an_empty_title_is_named_by_its_kind(tmp_path: Path) -> None:
+    """An H1 of only whitespace loads with an empty title; without a number its heading and links would show nothing."""
+    project = _project(tmp_path)
+    base = project / "blueprint/roadmap/base.md"
+    base.write_text(base.read_text(encoding="utf-8").replace("# Base\n", "# \t\n"), encoding="utf-8")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    heading = page[page.index('id="base"') :].split("</h4>")[0]
+
+    assert '<span class="bp-thmtitle">Definition</span>' in heading and "bp-thmcaption" not in heading
+    assert 'aria-label="Link to Definition"' in heading
+    assert 'href="#base">Definition</a>' in page[page.index('id="top"') :]
 
 
 def test_titles_typeset_their_math_in_headings(tmp_path: Path) -> None:
@@ -646,7 +678,7 @@ def test_a_declaration_with_no_caption_reads_as_written(tmp_path: Path) -> None:
 
     assert '<span class="bp-thmcaption" data-search-exclude>Definition</span>' in page
     assert '<span class="bp-thmcaption" data-search-exclude>Short exact sequence</span>' in page
-    assert 'href="#top">Short exact sequence 1 (Top)</a>' in page
+    assert 'href="#top">Top</a>' in page
 
 
 def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -> None:
@@ -665,12 +697,13 @@ def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -
     assert '<div class="bp-search-names" hidden>Project.top</div>' in page
     assert 'data-autoform-node-id="base"' in page
     assert 'data-autoform-node-id="top"' in page
+    # A statement is headed by its name, with its kind above it and no generated number.
     assert (
         '<span class="bp-thmcaption" data-search-exclude>Definition</span>'
-        '<span class="bp-thmlabel" data-search-exclude>1</span>'
+        '<span class="bp-thmtitle">Base</span>'
     ) in page
     # The permalink keeps its accessible name while search excludes its punctuation.
-    assert '<a class="bp-permalink" href="#base" aria-label="Link to Definition 1" data-search-exclude>#</a>' in page
+    assert '<a class="bp-permalink" href="#base" aria-label="Link to Base" data-search-exclude>#</a>' in page
     assert '<span class="bp-thmtitle">Top</span>' in page
     assert "The main result." in page
     assert "<strong>2</strong> fully proved" in page
@@ -807,8 +840,8 @@ def test_cross_references_point_at_anchors_on_the_chapter(tmp_path: Path) -> Non
     assert 'class="bp-reading-source"' in page and 'class="bp-dag-viewer"' in page
     assert '<details class="bp-dependencies"><summary>Uses 1</summary>' in page
     assert '<span class="bp-key">Statement uses</span>' in page
-    assert 'href="#base">Definition 1 (Base)' in page
-    assert 'href="#top">Theorem 1 (Top)' in page
+    assert 'href="#base">Base</a>' in page
+    assert 'href="#top">Top</a>' in page
     assert 'href="https://github.com/owner/repo/issues/42">#42' in page
 
 
@@ -1236,7 +1269,7 @@ def test_module_catalog_is_separate_from_formalization_progress(
     assert roadmap["status_counts"] == [["fully_proved", 2], ["can_state", 1], ["inventory_checked", 1]]
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert (
-        '<span class="bp-thmcaption" data-search-exclude>Module</span><span class="bp-thmlabel" data-search-exclude>1</span>'
+        '<span class="bp-thmcaption" data-search-exclude>Module</span><span class="bp-thmtitle">Existing module</span>'
     ) in chapter
     assert "A checked inventory of an existing Lean module." in chapter
     assert "<strong>2</strong> fully proved" in chapter
@@ -1468,7 +1501,7 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
         assert f'<h4 class="bp-thmheading" id="{name}">' in book
     assert book.count('●<span class="bp-mark-label">inventory pending</span>') == 3
     assert (
-        '<a class="bp-ref bp-ref-planned" title="1 statement dependency" href="#a">Module 1 (Module A)</a>'
+        '<a class="bp-ref bp-ref-planned" title="1 statement dependency" href="#a">Module A</a>'
     ) in book
     assert "ready to state" not in book
     structure = (out / "structure.md").read_text(encoding="utf-8")
@@ -3979,7 +4012,7 @@ def test_render_reads_each_page_of_the_book_once_for_its_order(tmp_path: Path, m
     monkeypatch.setattr(render_module, "_book_links", counted)
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
-    # Statement numbers, the search index and SUMMARY.md share one walk.
+    # The search index and SUMMARY.md share one walk.
     assert read and len(read) == len(set(read))
 
 
@@ -4109,7 +4142,7 @@ def test_a_cycle_releases_a_sibling_on_it_not_one_waiting_behind_it() -> None:
     "variant",
     ("as-written", "landing-shortcut", "only-zeta-linked", "no-landing-page", "unlinked-scope", "unlisted-result"),
 )
-def test_statement_numbers_rise_down_each_page_and_across_chapters(tmp_path: Path, variant: str) -> None:
+def test_the_reading_order_runs_down_each_page_and_across_chapters(tmp_path: Path, variant: str) -> None:
     """A landing-page shortcut does not reorder the book. A page or result
     its parent does not list follows the listed ones, as one run."""
     project = _book_order_project(tmp_path)
@@ -4141,14 +4174,18 @@ def test_statement_numbers_rise_down_each_page_and_across_chapters(tmp_path: Pat
 
     render_site(blueprint, out, lean_root=project)
 
-    numbers = [
-        int(number)
+    # The search index reads the statements in the order the pages show them.
+    statements = [
+        node_id
         for page in pages
-        for number in re.findall(
-            r'class="bp-thmlabel"[^>]*>(\d+)<', (out / "roadmap" / page / "README.md").read_text(encoding="utf-8")
+        for node_id in re.findall(
+            r'<div class="bp-thmwrapper [^"]*" data-autoform-node-id="([^"]+)"',
+            (out / "roadmap" / page / "README.md").read_text(encoding="utf-8"),
         )
     ]
-    assert numbers == list(range(1, 7 + (variant == "unlisted-result") + 2 * (variant == "unlinked-scope")))
+    assert len(statements) == 6 + (variant == "unlisted-result") + 2 * (variant == "unlinked-scope")
+    index = json.loads((out / "dependencies/index.json").read_text(encoding="utf-8"))
+    assert [node["id"] for node in index["nodes"] if node["id"] in statements] == statements
     if variant == "landing-shortcut":
         # The nav reads the book in order: the shortcut does not move it.
         assert _summary_chapters(out) == ["zeta", "alpha", "irrationality-proof"]
@@ -4255,7 +4292,7 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(
     assert '●<span class="bp-mark-label">conditionally proved</span>' in top
     assert (
         '<span class="bp-key">Assumes</span><span class="bp-value">'
-        '<a class="bp-ref bp-ref-can_prove" href="#open">Theorem 1 (Open)</a>'
+        '<a class="bp-ref bp-ref-can_prove" href="#open">Open</a>'
         " (open statements without a recorded Lean proof)</span>"
     ) in top
     # Only the conditional proof carries the row; the open statement assumes nothing.

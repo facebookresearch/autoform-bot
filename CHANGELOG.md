@@ -61,6 +61,12 @@ date when the release is tagged.
 
 ### Changed
 
+- **Statements go by their names.** A statement's heading and every link to it,
+  in Uses, Used by and Assumes, show its name instead of a generated number:
+  "Theorem 55 (Bézout's theorem)" reads "Bézout's theorem", with the kind on a
+  small line above the name. A title that is only the kind word, or empty, is
+  named by the kind. Statements that share a title now read alike. Anchors and
+  links into a page don't change (#612).
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
@@ -183,11 +189,10 @@ date when the release is tagged.
 - **Explorer payloads.** Scope payloads no longer carry the x and y positions
   0.6.0's Python layout computed; they keep card dimensions and authored region
   counts (#442).
-- **Book order.** Previous/Next, the site nav, statement numbers, Next up and
-  the explorer's outline and search follow one reading order, down the
-  containment tree, so a landing-page shortcut no longer reorders the book and
-  sites get new statement numbers. Pages their parent does not link now join
-  the site nav and Previous/Next, after the pages it links (#495).
+- **Book order.** Previous/Next, the site nav, Next up and the explorer's
+  outline and search follow one reading order, down the containment tree, so a
+  landing-page shortcut no longer reorders the book. Pages their parent does not
+  link now join the site nav and Previous/Next, after the pages it links (#495).
 - **Book copy.** The landing lead keeps link text, code, formulas and whole
   sentences. Next up says which Lean step is next. A chapter's progress is one
   line of counts whose status meanings show on hover, gone when the chapter has
