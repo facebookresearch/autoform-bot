@@ -2390,8 +2390,6 @@ def _render_landing_page(
         ready_href=f"{book_href}#view=list&status=can_state,can_prove" if book_href else None,
         # Without a roadmap contents page the book starts here.
         book_href=None if book == Path("README.md") else book_href,
-        # The whole-project map sits beside the book.
-        map_href=_as_published(relative_link(destination / MAP_PAGE, page, ".html")) if book else None,
     )
     next_up = _next_target(
         graph,
@@ -2486,7 +2484,6 @@ def _render_hero(
     rail: bool = False,
     ready_href: str | None = None,
     book_href: str | None = None,
-    map_href: str | None = None,
 ) -> str:
     """Open with the project's name, its one-line claim, and where it stands.
 
@@ -2496,8 +2493,7 @@ def _render_hero(
     blueprint has to answer. The explorer's reading pane (*rail*) gets the
     two progress figures only, and module inventories as one plain line under
     them. With *ready_href* the ready figure links the list of what it counts,
-    and *book_href* puts the way into the book right under the claim, with
-    *map_href*'s way into the whole-project map beside it.
+    and *book_href* puts the way into the book right under the claim.
     """
     leaves = _countable(graph)
     selected = {node_id: statuses[node_id] for node_id in leaves}
@@ -2556,9 +2552,7 @@ def _render_hero(
             return f'<a class="bp-figure bp-figure-link" href="{html.escape(ready_href, quote=True)}">{inner}</a>'
         return f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">{inner}</div>'
 
-    ways_in = (f'<a class="bp-intro-book" href="{html.escape(book_href, quote=True)}">Start reading</a>' if book_href else "") + (
-        f'<a class="bp-intro-map" href="{html.escape(map_href, quote=True)}">Open the map</a>' if map_href else ""
-    )
+    ways_in = f'<a class="bp-intro-book" href="{html.escape(book_href, quote=True)}">Start reading</a>' if book_href else ""
     sentence = "No statements yet." if not total else "Every statement is fully proved." if done == total else ""
     stats = "".join(figure(*entry) for entry in figures)
     inventories = f"{inventory_count:,} module {'inventory' if inventory_count == 1 else 'inventories'}"
@@ -4476,8 +4470,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 }}
 .bp-landing-intro.bp-landing-intro .bp-hero-coverage {{ margin-top: 6px; font-size: 12px; }}
 .bp-landing-intro.bp-landing-intro .bp-hero-coverage-link {{ margin-left: 0; }}
-.bp-landing-intro.bp-landing-intro .bp-intro-book,
-.bp-landing-intro.bp-landing-intro .bp-intro-map {{
+.bp-landing-intro.bp-landing-intro .bp-intro-book {{
   display: inline-block;
   margin-top: 10px;
   color: var(--bp-link);
@@ -4485,8 +4478,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-weight: 600;
   text-decoration: none;
 }}
-.bp-intro-book::after, .bp-intro-map::after {{ content: " →"; }}
-.bp-intro-book + .bp-intro-map {{ margin-left: 16px; }}
+.bp-intro-book::after {{ content: " →"; }}
 .bp-landing-intro.bp-landing-intro .bp-next-target {{ margin: 14px 0 0; padding: 10px 12px; }}
 .bp-landing-intro.bp-landing-intro .bp-next-title {{ font-size: 14px; font-weight: 600; }}
 .bp-landing-intro.bp-landing-intro .bp-next-why,
