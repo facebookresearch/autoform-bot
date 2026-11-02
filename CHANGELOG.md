@@ -389,9 +389,9 @@ date when the release is tagged.
   40 of the cache's 48 MiB, so pages and graphs already read were dropped and
   fetched again. A body WebKit hands over in one piece is hashed and decoded
   without a copy, and when reading the index takes at least 25 ms, a frame
-  paints before it is parsed. On ATLAS, on one CI runner, the longest frame
-  while the index was read and parsed went from 217 ms to 142 ms in Chrome
-  and from 199 ms to 164 ms in WebKit.
+  paints before it is parsed. On ATLAS, on one CI runner, with 10 ms slices,
+  the longest frame while the index was read and parsed went from 217 ms to
+  142 ms in Chrome and from 199 ms to 164 ms in WebKit.
 - **Book order.** A link inside an HTML comment no longer places its page in
   the book's order: a commented-out chapter link moved that chapter forward in
   `SUMMARY.md`, though the page showed it later (#535).
