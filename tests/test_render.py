@@ -3094,6 +3094,29 @@ def test_source_notes_leave_the_site_for_the_repository(tmp_path: Path) -> None:
     assert expected in (out / "roadmap/README.md").read_text(encoding="utf-8")
 
 
+def test_render_and_check_without_site_warnings_print_every_site_warning(tmp_path: Path) -> None:
+    """``check --no-site-warnings`` leaves the site's warnings to render, which
+    reads no source note it links in the repository. Check still reads those,
+    so between them every warning plain check gives is printed."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    for page in (blueprint / "sources/paper.md", blueprint / "roadmap/README.md"):
+        page.write_text(page.read_text(encoding="utf-8") + "\n<b>bold</b>\n", encoding="utf-8")
+    ref = _commit_project(project)
+    graph = load_graph(blueprint)
+
+    report = render_site(
+        blueprint, tmp_path / "out", lean_root=project, repository_url="https://github.com/owner/repo", ref=ref
+    )
+    issues = render_module.publication_issues(graph, blueprint)
+    kept = render_module.publication_issues(graph, blueprint, sources_only=True)
+
+    assert not (tmp_path / "out/sources").exists()
+    assert kept and all(issue.startswith("sources/paper.md: ") for issue in kept)
+    assert any(issue.startswith("roadmap: ") for issue in report.warnings)
+    assert [issue for issue in issues if issue not in report.warnings] == kept
+
+
 def test_a_fence_line_in_a_comment_leaves_the_links_after_it_rewritten(tmp_path: Path) -> None:
     """Issue #527: render read the commented fence line as an open fence and
     published the link below it as written, to a page the site leaves out."""

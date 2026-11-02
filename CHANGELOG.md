@@ -18,6 +18,15 @@ date when the release is tagged.
   it with `git worktree remove`, never `--force`, and reports the free space
   recovered and how to re-create the checkout; ignored files such as `.lake`
   are not kept (#435).
+- **Check without site warnings.** `check --no-site-warnings` skips the
+  warnings about the pages the site would publish, which `render` prints too,
+  and still reads the notes under `blueprint/sources/`, which a render that
+  links them in the repository never reads. The generated
+  `blueprint-pages.yml` passes it, since render runs two steps later, when its
+  `AUTOFORM_REF`'s `check --help` lists it, so an older pin runs the full check.
+  On one CI runner ATLAS's check took 60 s with the flag instead of 255 s, and
+  render printed every warning it skipped. A scaffolded project keeps its
+  workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project. Regions (authored areas, or the top-level
   chapters) open into their parts and parts into their results as the camera

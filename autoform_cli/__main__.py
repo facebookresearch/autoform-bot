@@ -151,6 +151,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="Lean project to resolve 'lean:' declarations against (enables declaration checking)",
     )
+    check.add_argument(
+        "--no-site-warnings",
+        action="store_true",
+        help="leave the warnings about the site's pages to render, which reports them; source notes are still read",
+    )
 
     audit = subparsers.add_parser("audit", help="audit roadmap completeness and checked facts")
     audit.add_argument("blueprint_dir")
@@ -954,8 +959,9 @@ def _check(args: argparse.Namespace) -> int:
     ):
         print(f"warning: {warning}")
     # What the site would leave out or show as typed, and what would stop
-    # render; none of it fails check.
-    for warning in publication_issues(graph, Path(args.blueprint_dir)):
+    # render; none of it fails check. Render reports the same, except for the
+    # source notes it links in the repository instead, so the flag keeps those.
+    for warning in publication_issues(graph, Path(args.blueprint_dir), sources_only=args.no_site_warnings):
         print(f"warning: {warning}")
     return 0
 

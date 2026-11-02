@@ -435,13 +435,17 @@ class PublicationError(ValueError):
         super().__init__("; ".join(self.issues))
 
 
-def publication_issues(graph: Graph, blueprint: Path) -> list[str]:
+def publication_issues(graph: Graph, blueprint: Path, *, sources_only: bool = False) -> list[str]:
     """What ``autoform check`` reports about the site for ``graph``: the
     warnings :func:`_publication` gives for the pages and files render would
     publish, then what would stop render, the inputs it refuses to capture
     and the files in the way of its own. Source notes are read as pages
     wherever the site would link them instead, so the verdict does not depend
     on the clone's remote.
+
+    With ``sources_only``, only the warnings about the files under
+    ``sources/``, which a render that links them in the repository never
+    reads. It reads the rest as this does.
     """
 
     # The root load_graph took, so every node's path lies below it.
@@ -450,6 +454,9 @@ def publication_issues(graph: Graph, blueprint: Path) -> list[str]:
         # Capture leaves out the folders that say published: false, as render does.
         snapshot, _unpublished, _nodes = _capture_blueprint(blueprint)
     except PublicationError as exc:
+        # Render refuses the same inputs, and says so as errors.
+        if sources_only:
+            return []
         return [f"{issue}; autoform render stops until this is fixed" for issue in exc.issues]
     files = _captured_files(snapshot, blueprint)
     with resolving_once():
@@ -460,7 +467,10 @@ def publication_issues(graph: Graph, blueprint: Path) -> list[str]:
             destination=blueprint,
             sources_base=None,
             unpublished=_unpublished_folders(snapshot, blueprint),
+            within=blueprint / SOURCES_DIR if sources_only else None,
         )
+    if sources_only:
+        return site.warnings
     stops = _in_the_way(blueprint, graph, files)
     return [*site.warnings, *(f"{issue}; autoform render stops until this is fixed" for issue in stops)]
 
@@ -511,10 +521,12 @@ def _publication(
     destination: Path,
     sources_base: "_SourceBase | None",
     unpublished: tuple[Path, ...] = (),
+    within: Path | None = None,
 ) -> _Publication:
     """The pages and files the site for ``graph`` gets from ``snapshot``, the
     bytes render captured by path, and the warnings about them: each page's,
-    named by its node or its file, then the MathJax configuration's.
+    named by its node or its file, then the MathJax configuration's. With
+    ``within``, only the files below that folder are read and warned about.
 
     Every page an author wrote is untrusted, so each is published as the
     text :func:`~autoform_cli.publishable.publishable_article` returns for it
@@ -643,7 +655,7 @@ def _publication(
         # describe once capture checks it. Check's graph also holds the
         # articles in unpublished folders, which capture leaves out.
         captured = snapshot.get(node.path)
-        if captured is None:
+        if captured is None or (within is not None and not _is_within(node.path, within)):
             continue
         leaf = (node.formalizable or node.catalog is not None) and node_id not in containers
         text, found = published(captured.decode("utf-8"), node.path, targets[node_id][0], whole=not leaf)
@@ -664,6 +676,8 @@ def _publication(
 
     files: dict[Path, str | bytes] = {}
     for source in sorted(snapshot):
+        if within is not None and not _is_within(source, within):
+            continue
         relative = source.relative_to(blueprint)
         # Source notes leave the site entirely once readers can reach them in
         # the repository, so the book has one reference surface rather than two.
@@ -704,10 +718,13 @@ def _publication(
                 "save it as an image (PNG, JPEG, GIF, WebP), a PDF or plain text, "
                 "or keep it outside blueprint/"
             )
-    if blueprint / TEX_MACROS not in snapshot and any(source.is_relative_to(blueprint / TEX_MACROS) for source in snapshot):
+    if within is None and blueprint / TEX_MACROS not in snapshot and any(
+        source.is_relative_to(blueprint / TEX_MACROS) for source in snapshot
+    ):
         warnings.append(f"{TEX_MACROS}: is a directory, so the site has no project macros; make it a JSON file")
     script, script_warnings = mathjax_script(snapshot.get(blueprint / MATHJAX_SCRIPT), snapshot.get(blueprint / TEX_MACROS))
-    warnings.extend(script_warnings)
+    if within is None:
+        warnings.extend(script_warnings)
     return _Publication(
         groups, targets, node_sources, files, statements, script, warnings, frozenset(typed),
         frozenset(unavailable_source_ids),
