@@ -3752,6 +3752,9 @@ def _review_disclosures(
     # spelling it was written in; capture refuses two names that differ only
     # in case or Unicode form.
     spellings = {_folded(name): name for name in captured}
+    # Render writes its own file where a vault's copy of one of these would go.
+    # Planned once: the plan names every page the site writes.
+    written_over = frozenset(_site_paths(graph))
     # A passage shown must be the one the copy cuts, from a file the site holds.
     for article in bundle.articles:
         if article.node_id not in graph.nodes:
@@ -3763,7 +3766,7 @@ def _review_disclosures(
                 # The locator ends in its line range; a file's name may hold a #.
                 cited = article.passage_locator.rpartition("#")[0]
                 cited = spellings.get(_folded(cited), cited)
-                if _left_out(PurePosixPath(cited), graph):
+                if _left_out(PurePosixPath(cited), written_over):
                     reason = f"cites a passage from {cited}, a file the site leaves out"
                     edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
             continue
@@ -3806,17 +3809,18 @@ def _folded(name: str) -> str:
     return unicodedata.normalize("NFC", name).casefold()
 
 
-def _left_out(cited: PurePosixPath, graph: Graph) -> bool:
+def _left_out(cited: PurePosixPath, written_over: Collection[str]) -> bool:
     """Whether the site leaves out the captured file at ``cited``, a path in
     the blueprint as captured, as :func:`_publication` does: a file under
-    ``readbacks/``, the atlas, a file render writes its own over, or one that
-    is neither a page nor a file the site copies. Notes under ``sources/``
-    count as published, on the site or at the verified commit."""
+    ``readbacks/``, the atlas, a file render writes its own over (one of
+    ``written_over``, the :func:`_site_paths`), or one that is neither a page
+    nor a file the site copies. Notes under ``sources/`` count as published,
+    on the site or at the verified commit."""
 
     return (
         cited.parts[:1] == (READBACKS_DIR,)
         or cited.as_posix().casefold() == "atlas.json"
-        or cited.as_posix() in _site_paths(graph)
+        or cited.as_posix() in written_over
         or cited.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
     )
 
