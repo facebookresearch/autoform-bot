@@ -13,6 +13,7 @@ import pytest
 import autoform_cli.__main__ as cli_module
 from autoform_cli import lean as lean_module
 from autoform_cli.__main__ import main
+from autoform_cli._fs import is_within
 from autoform_cli.render import DECLARATION_LABELS
 from autoform_cli.graph import (
     GraphValidationError,
@@ -451,6 +452,102 @@ def test_resolves_links_relative_to_each_node(tmp_path: Path) -> None:
     graph = load_graph(blueprint)
 
     assert graph.nodes["chapter/result"].dependencies == ("base",)
+
+
+def test_dotted_steps_reach_the_folder_they_name_beside_same_named_articles(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "chapter/base.md", "# Chapter base\n")
+    _node(blueprint, "chapter/section/README.md", "# Section\n")
+    _node(blueprint, "chapter/section/base.md", "# Section base\n")
+    links = "[Top](../../base.md)\n[Chapter](../base.md)\n[Here](base.md)\n[Spelled out](../../chapter/section/base.md)\n"
+    _node(blueprint, "chapter/section/result.md", f"# Result\n\n## Depends on\n\n{links}")
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["chapter/section/result"].dependencies == ("base", "chapter/base", "chapter/section/base")
+    assert graph.nodes["chapter/section/result"].parent == "chapter/section"
+    assert graph.nodes["chapter/section/base"].parent == "chapter/section"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows applies .. as text before it looks anything up")
+def test_a_dependency_that_steps_back_out_of_a_file_or_a_missing_folder_does_not_exist(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "chapter/a.md", "# A\n")
+    _node(blueprint, "chapter/b.md", "# B\n")
+    _node(blueprint, "chapter/result.md", "# Result\n\n## Depends on\n\n[x](a.md/../b.md)\n[y](missing/../b.md)\n")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues == (
+        "chapter/result: dependency target does not exist: 'a.md/../b.md'",
+        "chapter/result: dependency target does not exist: 'missing/../b.md'",
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows folders differ in whether they compare names with case")
+@pytest.mark.parametrize(("spelled", "file"), [("B.md", "b.md"), ("\u212a.md", "k.md")])
+def test_a_dependency_spelled_in_other_letters_is_looked_up_on_disk(tmp_path: Path, spelled: str, file: str) -> None:
+    """A folder that compares names without case finds the file, but not as a
+    node; one that compares with case does not find it at all."""
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, f"chapter/{file}", "# Target\n")
+    _node(blueprint, "chapter/result.md", f"# Result\n\n## Depends on\n\n[x]({spelled})\n")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues in (
+        (f"chapter/result: dependency target does not exist: {spelled!r}",),
+        (f"chapter/result: dependency target is not a node: {spelled!r}",),
+    )
+
+
+def test_a_link_into_the_only_unpublished_folder_is_named(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "drafts/README.md", "# Drafts\n", published="false")
+    _node(blueprint, "drafts/idea.md", "# Idea\n")
+    _node(blueprint, "base.md", "# Base\n\nSee [the idea](drafts/idea.md).\n")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues == ("base: links to 'drafts/idea.md', in an unpublished folder render omits",)
+
+
+def test_a_blueprint_with_no_unpublished_folder_reads_no_links_for_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n\nSee [the source](https://example.org).\n")
+    _node(blueprint, "chapter/result.md", "# Result\n\n## Depends on\n\n[Base](../base.md)\n")
+
+    def refuse(text: str) -> list[tuple[str, str]]:
+        raise AssertionError("no folder is unpublished, so no link can lead into one")
+
+    monkeypatch.setattr("autoform_cli.graph.markdown_links", refuse)
+
+    assert load_graph(blueprint).nodes["chapter/result"].dependencies == ("base",)
+
+
+@pytest.mark.parametrize(
+    ("path", "directory"),
+    [
+        ("/a/b", "/a"), ("/a", "/a"), ("/ab", "/a"), ("/a", "/a/b"), ("/a/b", "/"), ("/", "/"),
+        ("//a", "/"), ("/a", "//a"), ("a/b", "a"), ("a", "a/b"), ("a", "."), ("a", ""), ("/a", "."),
+        ("a", "/a"), ("/a", "a"), ("a/../b", "a"), ("../a", ".."), ("a", ".."),
+    ],
+)
+def test_is_within_agrees_with_relative_to(path: str, directory: str) -> None:
+    try:
+        Path(path).relative_to(Path(directory))
+    except ValueError:
+        expected = False
+    else:
+        expected = True
+
+    assert is_within(Path(path), Path(directory)) is expected
 
 
 @pytest.mark.parametrize(
