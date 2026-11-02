@@ -54,6 +54,7 @@ import unicodedata
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
@@ -3341,9 +3342,7 @@ def _place_environments(
     affected = protect and "<" in _document_body(narrative)
     references = None
     if affected:
-        context = _body_converter()
-        context.convert(_document_body(narrative))
-        references = context.references
+        _, references, _ = _convert_body(_document_body(narrative))
 
     def flush() -> None:
         if pending:
@@ -3470,6 +3469,7 @@ class _PublishedBodyLinks(Treeprocessor):
                     element.set("href", urlunsplit(parts._replace(path=path)))
 
 
+@lru_cache(maxsize=1)
 def _body_converter():
     converter = site_converter()
     # The final page assigns heading IDs once, across all its statements.
@@ -3477,6 +3477,30 @@ def _body_converter():
     converter.treeprocessors.deregister("toc")
     converter.treeprocessors.register(_PublishedBodyLinks(converter), "published-body-links", 5)
     return converter
+
+
+def _convert_body(
+    text: str, references: Mapping[str, tuple[str, str]] | None = None,
+) -> tuple[str, dict[str, tuple[str, str]], list[tuple[str, str]]]:
+    """*text* converted as on the final page, with the reference definitions it
+    knew and the links it left for MkDocs to check.
+
+    One converter is reused, as markdown's render_html reuses its own. Its reset
+    clears the definitions but not the links collected, and a conversion that
+    fails midway leaves it unable to convert the next text.
+    """
+    converter = _body_converter()
+    converter.reset()
+    links = converter.treeprocessors["published-body-links"]
+    links.validation_targets = []
+    if references:
+        converter.references.update(references)
+    try:
+        rendered = converter.convert(text)
+    except Exception:
+        _body_converter.cache_clear()
+        raise
+    return rendered, dict(converter.references), links.validation_targets
 
 
 def _protect_markdown_in_html(
@@ -3492,16 +3516,12 @@ def _protect_markdown_in_html(
     """
     if not force and "<" not in text:
         return text
-    converter = _body_converter()
-    if references:
-        converter.references.update(references)
-    rendered = converter.convert(text)
+    rendered, _, targets = _convert_body(text, references)
     if "```" in rendered or "~~~" in rendered:
         protected = _FenceSafeHtml()
         protected.feed(rendered)
         protected.close()
         rendered = "".join(protected.parts)
-    targets = converter.treeprocessors["published-body-links"].validation_targets
     if targets:
         # The visible fragment is raw HTML, which MkDocs does not validate.
         # Native Markdown witnesses retain the original validation behavior,
@@ -3559,11 +3579,8 @@ def _render_environment(
     # References in either chunk may be used by the other. If one chunk is
     # preconverted, render both with the shared article context: otherwise its
     # consumed definitions would leave the remaining Markdown links unresolved.
-    references = {}
     if converted_alone(statement, remainder):
-        context = _body_converter()
-        context.convert("\n\n".join((statement, remainder)))
-        references = context.references
+        _, references, _ = _convert_body("\n\n".join((statement, remainder)))
         statement, remainder = (
             _protect_markdown_in_html(part, references=references, force=True) for part in (statement, remainder)
         )
