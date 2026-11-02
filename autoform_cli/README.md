@@ -549,7 +549,8 @@ autoform work impact chapter/result . --lean-root . --declaration MyProject.help
 `work impact` runs a bounded Lean probe against a fresh build and reports the
 articles a revision of the selected article's declarations would affect and the
 complete `claim_targets` set; JSON uses `autoform-impact/v1` ([work
-impact](reference/work.md#work-impact)). Both impact probes import project
+impact](reference/work.md#work-impact)). Both impact commands exit 2 on any
+refusal, a missing or stale build included. Both impact probes import project
 modules, so run them only in a trusted checkout or sandbox.
 
 #### work import-impact
