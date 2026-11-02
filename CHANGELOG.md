@@ -43,6 +43,12 @@ date when the release is tagged.
   a dependency heading, where its links count (#541). The Roadmap skill puts
   under it what a source's proof cites but the planned Lean proof will not use,
   as when a library proof is reused (#556).
+- **Projects that track no Lean.** `tracks_lean: false` in
+  `roadmap/README.md` takes Lean progress out of the book's pages: the landing
+  page's figures and Next up, the statement status marks, the status dots on
+  dependency references and the chapter progress lines. Check warns about the
+  setting anywhere else under `roadmap/`, or with a value other than true or
+  false, and ignores it.
 
 ### Changed
 

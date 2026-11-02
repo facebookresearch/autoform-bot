@@ -2195,3 +2195,46 @@ def test_open_statements_set_outside_the_roadmap_root_is_refused(
     assert caught.value.issues == (
         f"{node_id}: open_statements is a project policy; set it only in roadmap/README.md",
     )
+
+
+@pytest.mark.parametrize(
+    ("value", "tracked"),
+    [(None, True), ("true", True), ("false", False), ('"no"', False), ("FALSE", False)],
+)
+def test_tracks_lean_is_read_from_the_roadmap_root(tmp_path: Path, value: str | None, tracked: bool) -> None:
+    """Absent means the project tracks its Lean; values unquote and casefold like every other scalar."""
+    blueprint = tmp_path / "blueprint"
+    setting = "" if value is None else f"tracks_lean: {value}\n"
+    _roadmap_page(blueprint, "README.md", f"---\n{setting}---\n\n# Roadmap\n")
+    _node(blueprint, "result.md", "# Result\n", declaration="theorem")
+
+    assert load_graph(blueprint).tracks_lean is tracked
+
+
+def test_a_tracks_lean_value_other_than_true_or_false_is_ignored_with_a_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "---\ntracks_lean: never\n---\n\n# Roadmap\n")
+    _node(blueprint, "result.md", "# Result\n")
+
+    assert load_graph(blueprint).tracks_lean is True
+    assert main(["check", str(blueprint)]) == 0
+    assert "warning: roadmap: tracks_lean accepts only true or false; ignored" in capsys.readouterr().out.splitlines()
+
+
+@pytest.mark.parametrize(("relative", "node_id"), [("result.md", "result"), ("chapter/README.md", "chapter")])
+def test_tracks_lean_set_outside_the_roadmap_root_is_ignored_with_a_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], relative: str, node_id: str
+) -> None:
+    """Newer than open_statements, so a misplaced one keeps check's exit code and the project tracking Lean."""
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "---\n---\n\n# Roadmap\n")
+    _node(blueprint, relative, "# Result\n", tracks_lean="false")
+
+    assert load_graph(blueprint).tracks_lean is True
+    assert main(["check", str(blueprint)]) == 0
+    assert (
+        f"warning: {node_id}: tracks_lean is a project setting, read only in roadmap/README.md; ignored here"
+        in capsys.readouterr().out.splitlines()
+    )

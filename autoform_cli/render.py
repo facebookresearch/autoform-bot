@@ -2217,8 +2217,11 @@ def _next_target(
     DAG already answers: the first node in reading ``order`` (topological
     without one) whose prerequisites are met and whose proof is still open.
     Naming it without linking to it makes the reader hunt, so the card
-    carries the statement, its chapter, and its dependency view.
+    carries the statement, its chapter, and its dependency view. A project
+    that tracks no Lean has nothing to pick up in Lean, so it has no card.
     """
+    if not graph.tracks_lean:
+        return ""
     containers = _containers(graph)
     links = _anchored_links(targets or {}, page)
     for node_id in order or status.topological_order(graph):
@@ -2434,9 +2437,13 @@ def _render_landing_page(
         return "\n".join([*front, "---", "", reading]).rstrip() + "\n"
     # A roadmap without articles has nothing to explore, so the hero stands
     # over its status breakdown.
-    breakdown = graph_pages.render_legend(
-        graph_views.scope_target_statuses(graph, statuses),
-        graph_views.inventory_counts(graph, statuses),
+    breakdown = (
+        graph_pages.render_legend(
+            graph_views.scope_target_statuses(graph, statuses),
+            graph_views.inventory_counts(graph, statuses),
+        )
+        if graph.tracks_lean
+        else ""
     )
     parts = [*front, "---", "", '<div class="bp-landing" markdown="1">', "", hero, "", next_up]
     if breakdown:
@@ -2509,8 +2516,11 @@ def _render_hero(
     blueprint has to answer. The explorer's reading pane (*rail*) gets the
     two progress figures only, and module inventories as one plain line under
     them. With *ready_href* the ready figure links the list of what it counts,
-    and *book_href* puts the way into the book right under the claim.
+    and *book_href* puts the way into the book right under the claim. A project
+    that tracks no Lean has no progress to show, so its hero keeps the title,
+    the claim, the way in and the coverage line.
     """
+    tracked = graph.tracks_lean
     leaves = _countable(graph)
     selected = {node_id: statuses[node_id] for node_id in leaves}
     # A target is complete only when it and every prerequisite are proved.
@@ -2530,7 +2540,7 @@ def _render_hero(
     # prove"; each note says in plain words what the number counts. With no
     # statements, or all of them fully proved, one sentence says so instead.
     figures: list[tuple[str, str, str, bool]] = []
-    if done < total:
+    if tracked and done < total:
         figures.append(("Fully proved", f"{share}%", f"{done:,} of {total:,} {statement_label}", False))
         figures.append(
             (
@@ -2569,7 +2579,9 @@ def _render_hero(
         return f'<div class="bp-figure{" bp-figure-neutral" if neutral else ""}">{inner}</div>'
 
     ways_in = f'<a class="bp-intro-book" href="{html.escape(book_href, quote=True)}">Start reading</a>' if book_href else ""
-    sentence = "No statements yet." if not total else "Every statement is fully proved." if done == total else ""
+    sentence = (
+        "No statements yet." if not total else "Every statement is fully proved." if tracked and done == total else ""
+    )
     stats = "".join(figure(*entry) for entry in figures)
     inventories = f"{inventory_count:,} module {'inventory' if inventory_count == 1 else 'inventories'}"
     areas = _coverage_summary(coverage)
@@ -2583,7 +2595,7 @@ def _render_hero(
     lead = _lead_sentence(body)
     return (
         '<div class="bp-hero">'
-        + ("" if rail else '<div class="bp-hero-kicker">Formalization blueprint</div>')
+        + ("" if rail or not tracked else '<div class="bp-hero-kicker">Formalization blueprint</div>')
         + f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
         + (f'<p class="bp-hero-lead">{lead}</p>' if lead else "")
         # In its own block: Markdown breaks an inline link between blocks apart.
@@ -2596,7 +2608,7 @@ def _render_hero(
         + (
             '<div class="bp-hero-bar" aria-hidden="true">'
             f'<span class="bp-swatch-fully_proved" style="width: {share}%"></span></div>'
-            if not rail and not sentence
+            if tracked and not rail and not sentence
             else ""
         )
         + coverage_line
@@ -2768,8 +2780,11 @@ def _render_overview_summary(
     """Render a chapter's progress as one line, or nothing for a single statement.
 
     A lone statement's card already shows its status, and the module
-    inventories have their own section, so neither is counted here.
+    inventories have their own section, so neither is counted here. A project
+    that tracks no Lean has no progress to count.
     """
+    if not graph.tracks_lean:
+        return ""
     candidates = list(node_ids if node_ids is not None else graph.nodes)
     selected = {
         node_id: statuses[node_id]
@@ -3608,8 +3623,17 @@ def _render_environment(
         if node.catalog == "module" or is_definition(node)
         else "theorem-style-plain"
     )
-    # A checked inventory is fully proved, so it keeps the tick.
+    # A checked inventory is fully proved, so it keeps the tick. A project that
+    # tracks no Lean marks no status, and its box keeps the neutral rule.
     mark = "✓" if node_status.key in {"fully_proved", "mathlib"} else "●"
+    tracked = graph.tracks_lean
+    status_class = f" bp-{display_key}" if tracked else ""
+    status_mark = (
+        f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}" data-search-exclude>'
+        f'{mark}<span class="bp-mark-label">{html.escape(display_label)}</span></span>'
+        if tracked
+        else ""
+    )
 
     shown = _display_title(node.title, caption)
     title_html = (
@@ -3620,7 +3644,7 @@ def _render_environment(
     permalink_label = " ".join(part for part in ("Link to", caption, number) if part)
 
     lines = [
-        f'<div class="bp-thmwrapper {style} bp-{display_key}" '
+        f'<div class="bp-thmwrapper {style}{status_class}" '
         f'data-autoform-node-id="{html.escape(node.id, quote=True)}" markdown="1">',
         f'<h4 class="bp-thmheading" id="{html.escape(anchor, quote=True)}">',
         f'<span class="bp-thmcaption" data-search-exclude>{html.escape(caption)}</span>'
@@ -3630,8 +3654,7 @@ def _render_environment(
         f"{source_link}"
         f'<a class="bp-permalink" href="#{html.escape(anchor, quote=True)}" '
         f'aria-label="{html.escape(permalink_label, quote=True)}" data-search-exclude>#</a>'
-        f'<span class="bp-mark" title="{html.escape(display_label, quote=True)}" data-search-exclude>'
-        f'{mark}<span class="bp-mark-label">{html.escape(display_label)}</span></span>',
+        f"{status_mark}",
         "</h4>",
         *_search_names(node),
         *boxed(statement, STATEMENT_BOX),
@@ -4145,7 +4168,7 @@ def _node_references(
     relation_node: Node | None = None,
     used_by_row: bool = False,
 ) -> str:
-    """Link each node by number and title, coloured by its derived state.
+    """Link each node by number and title, coloured by its derived state when the project tracks Lean.
 
     A catalog is coloured as neutrally as its own environment, checked or not.
     Dependency rows additionally describe the original pair's typed counts;
@@ -4157,7 +4180,9 @@ def _node_references(
         shown = _display_title(other.title, numbers[other_id].rpartition(" ")[0])
         text = numbers[other_id] + (f" ({shown})" if shown else "")
         label = _title_html(text)
+        # The dot before a reference shows its status, which a project that tracks no Lean has none of.
         key = graph_views.display_status_key(other, statuses[other_id])
+        status_class = f" bp-ref-{key}" if graph.tracks_lean else ""
         relation_attributes = ""
         if relation_node is not None:
             owner, endpoint = (other, relation_node.id) if used_by_row else (relation_node, other_id)
@@ -4172,7 +4197,7 @@ def _node_references(
             if weights:
                 relation_attributes = f'title="{html.escape(weights, quote=True)}" '
         rendered.append(
-            f'<a class="bp-ref bp-ref-{key}" '
+            f'<a class="bp-ref{status_class}" '
             f'{relation_attributes}href="{html.escape(links[other_id], quote=True)}">{label}</a>'
         )
     return ' <span class="bp-ref-sep">·</span> '.join(rendered)
@@ -4935,14 +4960,15 @@ mjx-container > svg {{ max-width: none !important; }}
 }}
 .bp-value {{ flex: 1; }}
 /* A reference breaks between entries, never inside one; a long one wraps in its own box. Each starts with its status dot, so
-   the list drops the separators, which ended every wrapped line and could take a line of their own. */
+   the list drops the separators, which ended every wrapped line and could take a line of their own. A project that tracks
+   no Lean has no dots, so its references keep the separators. */
 .bp-dependency-body .bp-ref {{ display: inline-block; max-width: 100%; margin-right: 0.5rem; }}
-.bp-dependency-body .bp-ref-sep {{ display: none; }}
+.bp-dependency-body .bp-ref[class*=" bp-ref-"] + .bp-ref-sep {{ display: none; }}
 .bp-lean {{ font-family: {mono}; }}
 .bp-where {{ color: var(--bp-muted); }}
 .bp-missing {{ color: #b91c1c; }}
 [data-md-color-scheme=slate] .bp-missing {{ color: #ff7b72; }}
-.bp-ref::before {{
+.bp-ref[class*=" bp-ref-"]::before {{
   content: "";
   display: inline-block;
   width: 0.6rem;
