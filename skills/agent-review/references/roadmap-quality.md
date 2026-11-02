@@ -67,9 +67,9 @@ scope against the sources, then inspect the fine DAG and its coarse roadmap.
   identified.
 - `## Depends on` contains statement prerequisites; `## Proof depends on`
   contains dependencies needed only by the proof.
-- An article whose result a library already proves lists under
-  `## Proof depends on` only the articles that proof uses, usually none. Links
-  to the source's route there are spurious edges that block it.
+- An article whose result a library proves lists only the articles that proof
+  uses under `## Proof depends on`, usually none; links to the source's route
+  there are spurious edges that block it, and go under `## Informally uses`.
 
 ## Usability and status discipline — 20%
 
