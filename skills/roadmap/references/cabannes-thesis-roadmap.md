@@ -14,9 +14,7 @@ The example is small:
   Supervision” contains a supporting Lean definition;
 - the coverage page distinguishes mapped, decomposed, and out-of-scope material;
 - the [source page](../../setup/assets/cabannes-thesis-project/blueprint/sources/thesis.md)
-  records stable labels from `infimum/core.tex`; and
-- seven DAG nodes decompose one representative “Infimum Loss” slice and its
-  supporting full-supervision construction.
+  records stable labels from `infimum/core.tex`.
 
 This is a structural example, not a completion fixture: only one of its six
 chapter clusters has pull-request-sized nodes, and its `MAPPED` rows make the

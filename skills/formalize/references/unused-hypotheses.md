@@ -1,12 +1,12 @@
 # Unused hypotheses in a Formalize run
 
-[Formalize](../SKILL.md) runs Batteries' linter as
-`#lint only unusedArguments in <Module>` after `import <Module>`, where
-`<Module>` declares the article's theorems; act only on its findings for those
-theorems. From its release for Lean v4.32.0 it skips an argument named with a
-leading `_` and an unnamed one other than an instance, such as the antecedent of
-`p → q`; its releases for Lean v4.30.0 and v4.31.0 check no theorem at all, so a
-clean run there is not evidence.
+[Formalize](../SKILL.md) runs Batteries' `#lint only unusedArguments in <Module>`
+after `import <Module>`, where `<Module>` declares the article's theorems
+(without `in` it lints only the current file); act only on its findings for
+those theorems. From its release for Lean v4.32.0 it skips an argument named
+with a leading `_` and an unnamed one other than an instance, such as the
+antecedent of `p → q`; its releases for Lean v4.30.0 and v4.31.0 check no
+theorem at all, so a clean run there is not evidence.
 
 A finding, from Lean's warnings or the linter, means the proof never uses that
 argument:

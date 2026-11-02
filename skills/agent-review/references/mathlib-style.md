@@ -13,8 +13,7 @@ declaration types rather than relying on memory.
 - Use `simp only [...]` for nonterminal simplification, and document a public declaration whose
   purpose is not obvious.
 - Use the weakest sufficient typeclasses (`Semiring` before `Ring`, `Preorder` before
-  `LinearOrder`) and `Finite` before `Fintype` when enumeration is unnecessary. Remove unused
-  hypotheses.
+  `LinearOrder`) and `Finite` before `Fintype` when enumeration is unnecessary.
 - Follow the repository's configured line length.
 
 ## Lean pitfalls

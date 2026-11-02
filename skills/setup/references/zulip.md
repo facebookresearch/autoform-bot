@@ -1,8 +1,7 @@
 # Synchronize an Autoform project with Zulip
 
-Use this workflow only when the user opts into Zulip discovery or project
-coordination. Treat reading and writing as separate permissions: research is
-read-only, and drafting a post does not authorize sending or editing one.
+Treat reading and writing as separate permissions: research is read-only, and
+drafting a post does not authorize sending or editing one.
 
 ## Discover community context
 
