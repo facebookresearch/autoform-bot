@@ -445,12 +445,14 @@
     if (!state.selected) showPart(currentPart());
   }
   function drawPart(record, b, open, onPath) {
-    var dim = state.related && !state.related.parts.has(record.id);
+    // A part as wide as the stage fills the view across: an outline on it would read as a rule across the stage.
+    var dim = state.related && !state.related.parts.has(record.id), wide = b.x <= 0 && b.x + b.w >= size.w;
     var holder = keep(partLayer, "part:" + record.id, "g", {
       class: "pm-part " + (open ? "pm-open" : "pm-tile pm-tile-" + tileKind(record.summary.status)) + (dim ? " pm-dimmed" : "") +
         (state.focusPart === record.id ? " pm-focus" : "") + (onPath && onPath.has(record.id) ? " pm-on-path" : "") +
         (!state.selected && state.links && state.links.has(record.id) ? " pm-" + state.links.get(record.id) : "") +
-        (state.linkHover === record.id ? " pm-link-hover" : "") + (state.picked === record.id ? " pm-picked" : ""),
+        (state.linkHover === record.id ? " pm-link-hover" : "") + (state.picked === record.id ? " pm-picked" : "") +
+        (wide ? " pm-stage-wide" : ""),
       tabindex: open ? -1 : 0, role: "button", "data-part": record.id,
       "aria-label": plain(record.summary.title) + ", " + num(record.summary.results) + " results" +
         (record.summary.api_total ? ", " + num(record.summary.api_total) + " used elsewhere" : "")});
@@ -667,6 +669,8 @@
     }
     if (hint.textContent !== text) hint.textContent = text;
     hint.classList.toggle("pm-hint-strong", text !== HINT);
+    // In the book the general hint is for the whole project; inside a part or beside a result it would sit on the cards.
+    hint.hidden = embedded && text === HINT && (state.focusPart !== ROOT || Boolean(state.selected));
   }
   // Once the part the view is in has its header band scrolled off, its title stays pinned to the top of the stage.
   function pinned() {

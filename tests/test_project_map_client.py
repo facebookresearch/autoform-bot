@@ -230,6 +230,21 @@ def test_escaped_braces_and_norm_bars_stay_in_titles(tmp_path: Path) -> None:
     assert "braces ok" in out
 
 
+def test_a_part_as_wide_as_the_stage_is_marked_stage_wide(tmp_path: Path) -> None:
+    out = _walk(tmp_path, r"""
+      const canvas = $('.pm-stage').querySelector('svg'), stageWidth = $('.pm-stage').getBoundingClientRect().width;
+      const spans = node => { const r = node.querySelector('rect'); return +r.getAttribute('x') <= 0 && +r.getAttribute('x') + +r.getAttribute('width') >= stageWidth; };
+      const wide = node => node.getAttribute('class').includes('pm-stage-wide');
+      assert.strictEqual($$('.pm-part').filter(wide).length, 0, 'the whole project draws no part across the stage');
+      for (let i = 0; i < 4; i++) { emit(canvas, 'keydown', {key: '+'}); await wait(10); }
+      const parts = $$('.pm-part');
+      assert(parts.some(spans), 'zoomed in, a part spans the stage');
+      assert.deepStrictEqual(parts.map(wide), parts.map(spans));
+      console.log('stage-wide ok');
+    """)
+    assert "stage-wide ok" in out
+
+
 def test_search_finds_results_in_a_flat_roadmap(tmp_path: Path) -> None:
     # Results straight under the root live in a generated part whose id they don't extend.
     flat = tmp_path / "flat"
