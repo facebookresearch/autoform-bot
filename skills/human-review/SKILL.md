@@ -21,8 +21,8 @@ the same way, where the root is the absolute plugin directory holding `skills/`
 and `pyproject.toml`; give a subagent that prefix.
 
 Regenerate the review views from `<PROJECT>` with the publication sequence in
-the [CLI reference](../../autoform_cli/README.md#commands), but omit
-`--require-declarations` so the reviewer sees missing declarations.
+the [CLI reference](../../autoform_cli/README.md#publishing-and-the-dashboard),
+but omit `--require-declarations` so the reviewer sees missing declarations.
 
 Stop on structural failures and present them before asking for mathematical
 judgment. For vault review, point the user to `blueprint/README.md`, coverage,
@@ -31,11 +31,11 @@ in Obsidian. For browser review, run
 `autoform dashboard <PROJECT> --site-dir site`, which serves the deployed site
 on loopback with local-only live claim badges, and give the overview plus the
 relevant project, chapter, nested-scope, and statement-context links. Every
-generated site route uses the same viewer: the reader beside the project map.
-Drill from the project's topics to a chapter, a nested scope, then a searched
-statement, in a window wider than 1,100 px so open details leave the hierarchy
-rail visible; on the map, one click on a part shows the parts it builds on and
-the parts that use it.
+generated site route but the standalone `dependencies/map/` page uses the same
+viewer: the reader beside the project map. Drill from the project's topics to a
+chapter, a nested scope, then a searched statement, in a window wider than
+1,100 px so open details leave the hierarchy rail visible; on the map, one click
+on a part shows the parts it builds on and the parts that use it.
 
 Guide the review from coarse to fine: declared scope and exclusions, milestone
 book, landing-page progress summary, cross-chapter graph, chapter graph, then
@@ -65,7 +65,7 @@ The person compares the article statement and cited passage, the elaborated
 Lean signature, and the project definitions it rests on with a *read-back*: a
 blind rendering in mathematical English of what one exact Lean packet literally
 asserts. Use the `review` commands in the
-[CLI reference](../../autoform_cli/README.md#commands); `review check` is the
+[CLI reference](../../autoform_cli/README.md#review); `review check` is the
 one judge of whether cards and approvals are current.
 
 1. Confirm that the repository has opted in with the
@@ -103,5 +103,6 @@ one judge of whether cards and approvals are current.
    approve it; a later push needs a new approval. When the person does not
    approve, record `revise` with their reason and hand the change to Roadmap.
 6. Run `review check` again before reporting, and treat each finding as a
-   failure. Do not report a statement as approved by a person while its label
-   says self-approved.
+   failure. Every current approval is labelled self-approved, since nothing
+   authenticates the hash: report a statement as approved by a person only when
+   a code owner approved the pull request that committed its `review_approved`.
