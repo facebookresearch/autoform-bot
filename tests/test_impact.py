@@ -40,7 +40,7 @@ from autoform_cli.impact import (
     revision_impact,
 )
 from autoform_cli.lean import snapshot_project_sources
-from autoform_cli.lean_probe import LeanLibrary, SkeletonError, lean_libraries
+from autoform_cli.lean_probe import LeanLibrary, SkeletonError, lean_libraries, lean_name_parts
 from autoform_cli.work import work_context
 from tests.conftest import _SKELETON_FIXTURE, _lean_toolchain_available
 
@@ -1622,6 +1622,40 @@ def test_import_closure_over_approximates_every_spelling_of_an_import() -> None:
     assert import_closure("Q.M", sources, ()) == {"Q.M", "Q.Guillemets", "Q.Unicode", "Q.DocComment", "Q.Later"}
 
 
+def test_import_closure_finds_what_testing_every_file_finds() -> None:
+    """Each module is tested only against the files that hold its last component (#429)."""
+    sources = [
+        ("Q.Basic", b"def b := 1\n"),
+        ("Q.BasicLemmas", b"import Q.Basic\n"),
+        ("Q.Lemmas", b"def l := 1\n"),
+        # One position holds Basic and BasicLemmas, and Lemmas starts inside them.
+        ("Q.Uses", b"import Q.BasicLemmas\n"),
+        ("Q.«a b»", b"def ab := 1\n"),
+        ("Q.Quoted", "import Q.«a b»\n".encode()),
+        ("Q.Twice", b"def t := 1\n"),
+        ("Q.Twice", b"import Q.Lemmas\n"),
+        ("Q.Last", b"import Q.Twice\n"),
+        # Only Basics, the longest spelling there, starts at Basic's one occurrence.
+        ("Q.Basics", b"def s := 1\n"),
+        ("Q.Mentions", b"-- unlike Q.Basics\n"),
+    ]
+
+    def testing_every_file(module: str) -> set[str]:
+        closure, work = {module}, [module]
+        while work:
+            target = work.pop()
+            for name, data in sources:
+                if name not in closure and all(part.encode() in data for part, _quoted in lean_name_parts(target)):
+                    closure.add(name)
+                    work.append(name)
+        return closure
+
+    for module in dict.fromkeys(name for name, _data in sources):
+        assert import_closure(module, sources, ()) == testing_every_file(module)
+    assert import_closure("Q.Lemmas", sources, ()) == {"Q.Lemmas", "Q.Uses", "Q.Twice", "Q.Last"}
+    assert import_closure("Q.Basic", sources, ()) == {"Q.Basic", "Q.BasicLemmas", "Q.Uses", "Q.Mentions"}
+
+
 def test_import_closure_refuses_a_file_outside_the_inventory_that_may_import_it() -> None:
     sources = [("Q.M", b""), ("Q.U", b"import Q.M\n")]
     outside = [(".lake/packages/D/D/X.lean", b"import Q.U\n")]
@@ -1882,6 +1916,34 @@ def test_import_closure_scope_imports_only_candidate_importers(tmp_path: Path, m
     assert [name for name, _parts in selected] == ["Demo.A", "Demo.Apart", "Demo.B"]
     assert report.module_scope == "import-closure"
     assert report.affected_modules == ("Demo.A", "Demo.B")
+
+
+def test_import_closure_scope_reads_a_file_libraries_share_once(tmp_path: Path, monkeypatch) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _closure_lean_root(tmp_path)
+    with (lean_root / "lakefile.toml").open("a", encoding="utf-8") as lakefile:
+        lakefile.write('\n[[lean_lib]]\nname = "Extra"\nglobs = ["Extra"]\n')
+    (lean_root / "Extra.lean").write_text("def Extra.x : Nat := 0\n", encoding="utf-8")
+    _stub_probe(
+        monkeypatch,
+        records=[_payload("Demo.base", kind="def", module="Demo.A")],
+        modules=(
+            ModuleEvidence("Demo.A", str((lean_root / "Demo/A.lean").resolve())),
+            ModuleEvidence("Demo.B", str((lean_root / "Demo/B.lean").resolve()), ("Demo.A",)),
+        ),
+    )
+    given: list[list[tuple[str, bytes]]] = []
+    closure = impact_module.import_closure
+    monkeypatch.setattr(
+        impact_module,
+        "import_closure",
+        lambda module, sources, outside: closure(module, given.append(list(sources)) or given[-1], outside),
+    )
+
+    module_import_impact(project, _BASE_ID, "Demo.A", lean_root=lean_root, module_scope="import-closure")
+
+    # Both libraries keep the default srcDir, so each maps every file under the root.
+    assert sorted(name for name, _data in given[0]) == ["Demo.A", "Demo.Apart", "Demo.B", "Extra"]
 
 
 def test_import_closure_scope_reaches_a_roots_library_module_through_its_root(tmp_path: Path, monkeypatch) -> None:

@@ -7,12 +7,12 @@ import json
 import re
 import unicodedata
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 
 from .graph import load_graph
-from .lean import LeanSourceError, SourceIndex, index_failure_message, index_project, resolve_lean_root
+from .lean import LeanSourceError, SourceIndex, index_failure_message, index_project_names, resolve_lean_root
 from .markdown import ArticleParts, article_parts, visible_prose
 from .runtime import RuntimeNode, build_runtime_graph, resolve_runtime_paths
 
@@ -177,10 +177,10 @@ def search_blueprint(
 
     paths = resolve_runtime_paths(project_or_blueprint)
     graph = load_graph(paths.blueprint_dir)
-    # The runtime is built without the Lean root and the sources are indexed
-    # here, once, because a hit reports a declaration's line as well as its file.
+    # The runtime is built without the Lean root: a hit reports its declarations'
+    # files and lines, so only the hits the answer keeps are looked up, at the end.
     runtime = build_runtime_graph(graph, project_root=paths.project_root)
-    lean_index = _lean_index(lean_root)
+    source_root = _lean_root(lean_root)
     nodes = {node.id: node for node in runtime.nodes}
     root_page = (paths.blueprint_dir / "roadmap" / "README.md").resolve()
     root = next((node_id for node_id, node in graph.nodes.items() if node.path.resolve() == root_page), None)
@@ -227,7 +227,7 @@ def search_blueprint(
             catalog=node.catalog,
             state=node.status.state,
             statement_text=parts.statement,
-            lean_targets=tuple(_lean_target(target.declaration, lean_index) for target in node.lean_targets),
+            lean_targets=tuple(SearchLeanTarget(target.declaration, None, None) for target in node.lean_targets),
             mathlib=node.mathlib,
             mathlib_declarations=node.mathlib_declarations,
             mathlib_file=node.mathlib_file,
@@ -244,6 +244,13 @@ def search_blueprint(
     # better field, then one owning a Lean name that a query word spells
     # exactly, then the one more articles depend on.
     matches.sort(key=lambda match: (*match[:4], -match[4].used_by_count, match[4].node_id))
+    hits = tuple(match[4] for match in matches[:limit])
+    if source_root is not None:
+        index = _lean_index(source_root, {target.declaration for hit in hits for target in hit.lean_targets})
+        hits = tuple(
+            replace(hit, lean_targets=tuple(_lean_target(target.declaration, index) for target in hit.lean_targets))
+            for hit in hits
+        )
     return SearchResult(
         source_revision=runtime.source_revision,
         open_statements=runtime.open_statements,
@@ -253,7 +260,7 @@ def search_blueprint(
         declarations=wanted_declarations,
         limit=limit,
         total_matches=len(matches),
-        hits=tuple(match[4] for match in matches[:limit]),
+        hits=hits,
         unused_declarations=unused,
     )
 
@@ -522,21 +529,24 @@ def _fields(
     }
 
 
-def _lean_index(lean_root: str | Path | None) -> SourceIndex | None:
+def _lean_root(lean_root: str | Path | None) -> Path | None:
     if lean_root is None:
         return None
     try:
-        root = resolve_lean_root(lean_root)
+        return resolve_lean_root(lean_root)
     except LeanSourceError as error:
         raise SearchError(str(error)) from error
+
+
+def _lean_index(root: Path, names: set[str]) -> SourceIndex:
     try:
-        return index_project(root)
+        return index_project_names(root, names)
     except OSError as error:
         raise SearchError(index_failure_message(error)) from error
 
 
-def _lean_target(name: str, index: SourceIndex | None) -> SearchLeanTarget:
-    declaration = index.find(name) if index is not None else None
+def _lean_target(name: str, index: SourceIndex) -> SearchLeanTarget:
+    declaration = index.find(name)
     if declaration is None:
         return SearchLeanTarget(name, None, None)
     return SearchLeanTarget(name, declaration.path.as_posix(), declaration.line)

@@ -421,12 +421,12 @@ def test_runtime_translates_source_index_io_failure(
 ) -> None:
     project = _project(tmp_path)
 
-    def fail_index(root: Path):
+    def fail_index(root: Path, names: set[str]):
         if reason is not None:
             raise LeanSourceError(reason)
         raise OSError(f"private host detail: {root}")
 
-    monkeypatch.setattr("autoform_cli.runtime.index_project", fail_index)
+    monkeypatch.setattr("autoform_cli.runtime.index_project_names", fail_index)
 
     with pytest.raises(RuntimeProjectionError) as error:
         load_runtime_graph(project, lean_root=project)

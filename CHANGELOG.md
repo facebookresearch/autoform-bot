@@ -42,6 +42,23 @@ date when the release is tagged.
 
 ### Changed
 
+- **Import closure.** `work import-impact --module-scope import-closure` tests
+  each module only against the files that hold its last component, which one
+  pass over each file finds, and reads a file that libraries sharing a `srcDir`
+  all map once. It tested every file, once per such library, for each module it
+  added: on a generated root whose libraries all share one `srcDir`, a hub
+  module took 69 s at 1,491 files and is now 0.15 s, and 0.9 s at 7,000 files,
+  where one test of each file per module took 105 s. The modules it finds are
+  unchanged (#429).
+- **Lean root reads.** With `--lean-root`, `search`, `check`, `work list` and
+  `work context` scan only the Lean files that spell the last component of a
+  name they look up, and `search` looks up only the hits it prints. Every file
+  is still read, so the source revision, the errors and the output are
+  unchanged; on a 13,698-file Lean root, indexing a 36-name blueprint's
+  declarations took 4.7 s of CPU instead of 13.6 s. `check` reads the Lean
+  root once where a shared library's citations made it read it twice, and
+  again only when a name is declared nowhere, for the error about its parent.
+  `audit` strips comments only from files that hold a resolved target (#429).
 - **Search index size.** `dependencies/index.json` no longer repeats links the
   explorer doesn't read. A row whose route the explorer opens drops its context
   `url`, and only container rows keep `data_url`, since every page names its

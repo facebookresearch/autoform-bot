@@ -553,7 +553,7 @@ def _lean_findings(
     index = snapshot.index
     spans = _source_spans(index)
     sizes: dict[str, int] = {}
-    sources = _captured_source_lines(snapshot.source_files)
+    sources = _SourceLines(snapshot.source_files)
     catalogs: dict[str, tuple[Declaration, ...]] = {}
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
@@ -674,23 +674,31 @@ def _kind(declaration: Declaration, index: SourceIndex) -> str | None:
     return declaration.keyword
 
 
-def _captured_source_lines(
-    source_files: tuple[tuple[Path, bytes], ...],
-) -> dict[Path, list[str] | None]:
-    """Decode the already captured source generation for lexical checks."""
+class _SourceLines:
+    """The captured source generation's lines without comments, for lexical checks.
 
-    sources: dict[Path, list[str] | None] = {}
-    for path, data in source_files:
-        try:
-            text = data.decode("utf-8")
-        except UnicodeError:
-            sources[path] = None
-        else:
-            sources[path] = _without_lean_comments(text).splitlines()
-    return sources
+    A file is decoded and stripped the first time a check asks for it: the
+    checks read only the files holding an article's targets, so the rest of a
+    large Lean root is never stripped.
+    """
+
+    def __init__(self, source_files: tuple[tuple[Path, bytes], ...]) -> None:
+        self._data = dict(source_files)
+        self._lines: dict[Path, list[str] | None] = {}
+
+    def get(self, path: Path) -> list[str] | None:
+        """The file's lines, or ``None`` when it was not captured or is not UTF-8."""
+
+        if path not in self._lines:
+            data = self._data.get(path)
+            try:
+                self._lines[path] = None if data is None else _without_lean_comments(data.decode("utf-8")).splitlines()
+            except UnicodeError:
+                self._lines[path] = None
+        return self._lines[path]
 
 
-def _declared_deprecated(declaration: Declaration, sources: dict[Path, list[str] | None]) -> bool:
+def _declared_deprecated(declaration: Declaration, sources: _SourceLines) -> bool:
     """Whether the source declaration carries the ``deprecated`` attribute lexically.
 
     Only ``@[...]`` lists before the keyword count: on the declaration's line,
@@ -742,7 +750,7 @@ def _limit_line(declaration: Declaration, index: SourceIndex) -> int:
 def _limit_findings(
     article_path: str,
     declaration: Declaration,
-    sources: dict[Path, list[str] | None],
+    sources: _SourceLines,
     line: int,
 ) -> list[AuditFinding]:
     """Flag a target with no elaboration limit, or a raised one it only inherits.
@@ -797,7 +805,7 @@ def _limit_problem(setting: LimitSetting) -> str | None:
 
 def _catalog_limit_warnings(
     catalogs: dict[str, tuple[Declaration, ...]],
-    sources: dict[Path, list[str] | None],
+    sources: _SourceLines,
     index: SourceIndex,
 ) -> list[AuditWarning]:
     """Aggregate what :func:`_limit_findings` reports into one warning per catalog and code.

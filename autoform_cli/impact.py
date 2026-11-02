@@ -45,7 +45,13 @@ from . import lean_probe
 from ._repository import git
 from ._tree_snapshot import TreeSnapshotError, _normalized_name
 from .claims import author_claim_key
-from .lean import IndexedSourceSnapshot, LeanSourceError, bind_project_source_snapshot, resolve_lean_root
+from .lean import (
+    IndexedSourceSnapshot,
+    LeanSourceError,
+    _longest_spellings,
+    bind_project_source_snapshot,
+    resolve_lean_root,
+)
 from .lean_probe import (
     LeanLibrary,
     SkeletonError,
@@ -443,10 +449,32 @@ def _module_source_paths(
     return paths
 
 
+def _import_parts(module: str) -> tuple[bytes, ...]:
+    """What a file that could import ``module`` holds: each component, however the import spells it."""
+
+    return tuple(part.encode("utf-8") for part, _quoted in lean_name_parts(module))
+
+
 def _may_import(data: bytes, module: str) -> bool:
     """Whether ``data`` could import ``module``: it contains each component, however the import spells it."""
 
-    return all(part.encode("utf-8") in data for part, _quoted in lean_name_parts(module))
+    return all(part in data for part in _import_parts(module))
+
+
+def _holders(sources: Sequence[tuple[str, bytes]], spellings: Iterable[bytes]) -> dict[bytes, list[int]]:
+    """The indexes of the sources whose bytes hold each spelling, found in one pass over each source."""
+
+    pattern, prefixes = _longest_spellings(spellings)
+    holders: dict[bytes, list[int]] = {}
+    for index, (_name, data) in enumerate(sources):
+        held: set[bytes] = set()
+        position = 0
+        while position <= len(data) and (match := pattern.search(data, position)) is not None:
+            held.update(prefixes[match.group()])
+            position = match.start() + 1
+        for spelling in held:
+            holders.setdefault(spelling, []).append(index)
+    return holders
 
 
 def import_closure(
@@ -465,12 +493,17 @@ def import_closure(
     """
 
     sources = list(sources)
+    parts = {name: _import_parts(name) for name in {module, *(name for name, _data in sources)}}
+    # A file that may import a module holds its last component, so each module
+    # is tested only against the files holding that, which one pass finds.
+    holders = _holders(sources, {name_parts[-1] for name_parts in parts.values()})
     closure = {module}
     work = [module]
     while work:
-        target = work.pop()
-        for name, data in sources:
-            if name not in closure and _may_import(data, target):
+        target = parts[work.pop()]
+        for index in holders.get(target[-1], ()):
+            name, data = sources[index]
+            if name not in closure and all(part in data for part in target):
                 closure.add(name)
                 work.append(name)
     firsts = {lean_name_parts(name)[0][0].encode("utf-8") for name in closure}
@@ -1582,11 +1615,11 @@ def _load_impact_evidence(
             if module not in local_modules:
                 raise ImpactError(f"not a project module: {module}")
             captured = dict(source_snapshot.source_files)
-            sources = [
-                (name, captured[path])
-                for library in libraries
-                for name, path in _source_modules(library, source_snapshot)[0].items()
-            ]
+            # Libraries sharing a srcDir map the same files; each is read once.
+            pairs = dict.fromkeys(
+                pair for library in libraries for pair in _source_modules(library, source_snapshot)[0].items()
+            )
+            sources = [(name, captured[path]) for name, path in pairs]
             closure = import_closure(module, sources, _outside_sources(root, libraries, set(captured)))
             paths = {path: name for name, path in _module_source_paths(libraries, source_snapshot, strict=True).items()}
             index = source_snapshot.index
