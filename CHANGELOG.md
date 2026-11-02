@@ -338,7 +338,8 @@ date when the release is tagged.
   hook's `GIT_DIR` and `GIT_INDEX_FILE` made Git take any directory for the
   hook's repository, so CI was written without a pin, and the default board was
   the hook repository's origin. Autoform's local Git commands now share one
-  runner that drops the caller's `GIT_*` variables.
+  runner that drops the caller's `GIT_*` variables, except
+  `GIT_CEILING_DIRECTORIES`, which only stops Git's search upwards.
 - **`\pmod`, `\bmod` and `\mod` on the site.** Site formulas typeset `\pmod`,
   `\bmod`, `\mod` and amsmath's `\varliminf`, `\varlimsup`, `\varinjlim` and
   `\varprojlim`. MathJax builds them from `\mmlToken`, which the page's TeX input
