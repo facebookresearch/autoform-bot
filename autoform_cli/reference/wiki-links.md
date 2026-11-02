@@ -16,4 +16,4 @@ Neither wiki references nor their availability change the formal DAG,
 readiness, proof status, or index bytes.
 
 Private controller hooks coalesce loads and normalize verified offsets to canonical article IDs.
-Viewer affinities group intact formal components, never redefine proof edges, ranks or SCCs.
+The reader lists them under Concept links; they never redefine proof edges, ranks or SCCs.

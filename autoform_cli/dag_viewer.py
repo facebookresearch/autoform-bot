@@ -1,9 +1,8 @@
 """Static payloads and the prebuilt Autoform graph explorer.
 
-Publication supplies the authoritative topology and card dimensions. The
-integrated browser caches deterministic dependency-driven geometry per bounded
-projection, paints its routes on Canvas and places ordinary DOM controls over
-visible nodes, keeping the graph navigable rather than bitmap-only.
+Publication supplies the authoritative topology. The browser's book reads it
+for its outline, search and statement lists; its stage shows the whole-project
+map, which loads its own data.
 """
 
 from __future__ import annotations

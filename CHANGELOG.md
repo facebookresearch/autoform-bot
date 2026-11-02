@@ -28,7 +28,11 @@ date when the release is tagged.
   builds on and the parts that use it, with links flowing between them; a second
   click goes inside, and Up or Escape goes back a level. On a narrow screen the
   map takes the width, with the reading pane under it. The data loads one level
-  at a time from `dependencies/map/data/` (#517, #545).
+  at a time from `dependencies/map/data/` (#517, #545). The explorer's stage
+  shows the same map beside the book: the page being read sets where it opens,
+  a result picked on it opens in the reader and a part opens its chapter, the
+  statement at the top of the reader is outlined on it, and the status filter
+  dims the results it leaves out (#552).
 - **Informal dependencies.** Under `## Informally uses`, an article can list
   what its source's proof cites but its Lean proof need not use. The links
   resolve like dependencies and appear in the runtime projection, now
@@ -257,6 +261,20 @@ date when the release is tagged.
   `mathlib_declaration` name of a `mathlib: true` target, compared as Lean
   names. Later names, catalogs, containers and placeholders recording neither
   take no credit (#193).
+
+### Removed
+
+- **Explorer canvas.** The explorer's own drawing of the graph is gone, now
+  that its stage shows the whole-project map: its bounded maps, camera, Fit and
+  zoom controls, topic shelves, concept-link clusters and connection backbone.
+  On a desktop, a page whose reader only lists its children folds the reader to
+  its rail, and other pages open the reader beside the map; on a phone,
+  chapters and Home open on the map and statements in the reader. Back to map
+  focuses the selected result's card, or else the map. A status filter that
+  leaves out the selected result's status no longer clears the selection, and
+  "Show N filtered out" counts what it hides from the list. A map that cannot
+  load says so on the stage, and the outline, search and lists still work. The
+  explorer bundle is 68,622 bytes instead of 144,973.
 
 ### Fixed
 
