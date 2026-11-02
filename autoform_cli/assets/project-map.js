@@ -1534,7 +1534,7 @@
     statuses = shown === null ? null : new Set(shown.split(" ").filter(Boolean));
   }
   // The book also marks on its host whether it has a result selected. When it lets go of the page's result (Escape in
-  // its reader, or a filter that leaves its status out) the map does too, and Back to the selection selects it again.
+  // its reader) the map does too, and Back to the selection selects it again.
   var bookSelects = embedded && book.classList.contains("bp-dag-has-selection");
   if (embedded && window.MutationObserver) new MutationObserver(function (records) {
     var changed = function (name) { return records.some(function (record) { return record.attributeName === name; }); };
