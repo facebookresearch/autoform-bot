@@ -192,6 +192,8 @@ def test_the_book_shows_the_map_beside_the_page_and_opens_what_is_picked_on_it(w
         # shows none of its own.
         playwright.expect(book).to_have_attribute("data-map-start", "algebra")
         playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+        # Inside a part, the map's general hint would sit on the cards, so the book leaves it to the whole project.
+        playwright.expect(page.locator(".bp-whole-map .pm-hint")).to_be_hidden()
         assert page.locator(".bp-whole-map :is(.pm-search, .pm-side, .pm-reader)").evaluate_all(
             "nodes => nodes.length === 3 && nodes.every(node => getComputedStyle(node).display === 'none')")
         # A result picked on the map opens in the reader, and Back returns to the one before.
@@ -253,6 +255,14 @@ def test_a_part_picked_on_the_map_opens_its_chapter_in_the_reader(webkit_browser
     with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
         _open_book(page, map_url, "index.html")
         book, heading = page.locator(".bp-dag-viewer"), page.locator(".bp-reading-body h1")
+        playwright.expect(page.locator(".bp-whole-map .pm-hint")).to_be_visible()
+        # Zoomed out, the view is still the whole project and the hint stays, though a zoom lets go of the view's part.
+        before = page.locator('.bp-whole-map .pm-part[data-part="algebra"] > rect').get_attribute("width")
+        page.locator(".bp-whole-map .pm-stage > svg").focus()
+        page.keyboard.press("-")
+        page.wait_for_function("""w => document.querySelector('.bp-whole-map .pm-part[data-part="algebra"] > rect').getAttribute('width') !== w""", arg=before)
+        playwright.expect(page.locator(".bp-whole-map .pm-hint")).to_be_visible()
+        page.keyboard.press("+")
         # One click on Algebra's band picks it where it is, and the reader turns to the chapter's page.
         page.locator('.bp-whole-map .pm-part[data-part="algebra"] > rect').click(position={"x": 24, "y": 10})
         playwright.expect(heading).to_have_text(re.compile(r"^Algebra"))
