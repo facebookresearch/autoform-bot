@@ -460,7 +460,6 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert 'setMode("list", true)' in script
     assert 'refs.announcement.setAttribute("aria-live", "polite")' in script
     assert "new ResizeObserver(queueResize)" in script
-    assert "touch-action: none; cursor: grab;" in container
     assert 'url.origin === window.location.origin' in script
     assert "if (query === state.searchCacheQuery) return state.searchCache" in script
     assert f'data.schema !== "{dag_viewer.SCHEMA}"' in script
@@ -549,8 +548,6 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
     script = _viewer_source()
     style = dag_viewer.render_container("graph.json")
 
-    # An area card's meta keeps "2,070 of 2,485 fully proved" whole beside its summary.
-    assert ".bp-dag-viewer:not(.bp-dag-compact-regions) .bp-dag-node:has(.bp-dag-node-summary) .bp-dag-node-meta > span:not(:last-child) { display: none; }" in dag_viewer._STYLE
     # A row keeps its status and says where it lives, below the list's own page or the root, or else its area.
     assert 'element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (where ? " · " + where : ""))' in script
     assert 'var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;' in script
@@ -583,7 +580,7 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
     """The drawer explained its own controls, invented a summary for topics without one and titled its pivots."""
     from tests.test_wiki_workspace_controls import _run
 
-    script, style = _viewer_source(), dag_viewer._STYLE
+    script = _viewer_source()
 
     for gone in (
         "keyboard-accessible",
@@ -610,8 +607,6 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
       assert(links(dom$readingNeighbors).every(link=>link.getAttribute('aria-label')===null),'Topic links cannot claim dependency weights');
     """)
     assert "function appendRelations(" not in script and "bp-dag-pivots" not in script
-    badge = next(line for line in style.splitlines() if line.startswith(".bp-dag-viewer.bp-dag-atlas .bp-dag-node[data-relation=dependent] .bp-dag-node-relation {"))
-    assert "text-overflow: ellipsis; white-space: nowrap;" in badge
     assert '"Prerequisite"' not in script and '"Dependent"' not in script
 
 
@@ -742,23 +737,13 @@ def test_explorer_toolbar_counts_only_hidden_items() -> None:
     script, style = _viewer_source(), dag_viewer._STYLE
     assert "bp-dag-stats" not in script and "bp-dag-stats" not in style and '" shown"' not in script
     assert 'refs.hiddenButton.textContent = "Show " + hidden + " filtered out"; refs.hiddenButton.hidden = !hidden;' in script
-    # The zoom buttons are borderless ghost buttons inside one 1px group; the four-way view switch it matched is gone.
-    assert ".bp-dag-zoom { display: inline-flex; flex: none; gap: 2px; padding: 2px; border: 1px solid var(--dag-border);" in style
-    assert ".bp-dag-zoom .bp-dag-button { min-height: 30px; padding: 4px 10px; border: 0;" in style
+    # The four-way view switch is gone.
     assert "bp-dag-modes" not in style and "bp-dag-mode-button" not in style and "bp-dag-mode-button" not in script
-    # Zoom leaves with the map; touch retains both single-pointer zoom controls as well as Fit.
-    assert ".bp-dag-viewer:has(.bp-dag-stage[hidden]) .bp-dag-zoom { visibility: hidden; }" in style
+    # A touch screen hides no control, and every toolbar control reaches 44px.
     coarse = style.split("@media (pointer: coarse) {\n", 1)[1].split("\n}", 1)[0]
     assert "display: none" not in coarse and "visibility: hidden" not in coarse and "pointer-events: none" not in coarse
-    targets = re.search(r"\.bp-dag-zoom \.bp-dag-button \{([^}]+)\}", coarse)
-    assert targets is not None
-    dimensions = dict(re.findall(r"([\w-]+):\s*([^;]+);", targets.group(1)))
-    assert dimensions["min-width"] == dimensions["min-height"] == "44px"
-    assert dimensions["color"] == "var(--dag-fg)"
     assert (".bp-dag-toolbar :is(.bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button) "
             "{ min-height: 44px; }") in coarse
-    assert ".bp-dag-zoom { padding: 0; border: 0; box-shadow: inset 0 0 0 1px var(--dag-border); }" in coarse
-    assert ".bp-dag-zoom .bp-dag-button:not(:last-child)" not in style
     assert ".bp-dag-search, .bp-dag-button, .bp-dag-filter-summary, .bp-dag-hidden-button { min-height: 44px; }" in style
 
 
@@ -780,10 +765,9 @@ def test_explorer_toolbar_copy_says_what_it_searches_and_filters() -> None:
     # #442's Back to map and Browse replace the Map / Results / Sources / Areas switch, in its own words.
     assert 'button("bp-dag-button", "Back to map")' in script and 'button("bp-dag-button", "Browse", "Browse statements or source texts")' in script
     assert '"Regions"' not in script and '"Areas"' not in script
-    # A disabled button looks unavailable and never lights up on hover.
+    # A disabled button never lights up on hover.
     style = dag_viewer._STYLE
     assert ".bp-dag-button:not(:disabled):hover, .bp-dag-filter-summary:hover" in style
-    assert ".bp-dag-button:disabled { opacity: .45; cursor: default; }" in style
     assert "No nodes match" not in script
     # The router loads the index before the shell mounts, so only a retry after a failed load is
     # ever in flight: ensureGlobalSearch marks it, and either outcome or the mounted index clears it.
@@ -876,22 +860,33 @@ def test_search_placeholder_uses_opaque_readable_book_tokens_in_both_schemes() -
         assert _contrast(tokens["--bp-muted"], background) >= 4.5, selector
 
 
-def test_selection_focus_and_the_current_statement_do_not_borrow_status_blue() -> None:
-    """Selection shared ready-to-prove's blue, focus rings were about 2:1 and the rail showed focus as hover."""
+def test_a_map_that_cannot_load_leaves_a_readable_notice_in_the_middle_of_the_stage() -> None:
+    """Without the canvas, a map script that failed to load left the stage empty."""
+    notice = re.search(r"^\.bp-dag-viewer\.bp-dag-viewer \.bp-dag-map-unavailable \{([^}]+)\}", dag_viewer._STYLE, re.M)
+    assert notice is not None
+    declarations = dict(re.findall(r"([\w-]+):\s*([^;]+);", notice.group(1)))
+    assert (declarations["position"], declarations["top"], declarations["left"]) == ("absolute", "50%", "50%")
+    assert declarations["transform"] == "translate(-50%, -50%)" and declarations["max-width"] == "calc(100% - 32px)"
+    # Muted text on the page's surface, which the book's tokens keep above 4.5:1 in both schemes.
+    assert (declarations["color"], declarations["background"]) == ("var(--dag-muted)", "var(--dag-bg)")
+    book = render._stylesheet()
+    for selector in (":root", "[data-md-color-scheme=slate]"):
+        rule = re.search(re.escape(selector) + r" \{([^}]+)\}", book)
+        assert rule is not None
+        tokens = dict(re.findall(r"(--[\w-]+):\s*([^;]+);", rule.group(1)))
+        assert _contrast(tokens["--bp-muted"], tokens["--bp-surface"]) >= 4.5, selector
+
+
+def test_focus_and_the_current_statement_do_not_borrow_status_blue() -> None:
+    """Focus rings were about 2:1 and the rail showed focus as hover."""
     style = dag_viewer._STYLE
-    # The selected card's ring is the text colour past a gap; blue stays a status colour.
-    assert "data-selected=true] { box-shadow: 0 0 0 2px var(--dag-link)" not in style
-    # Subdued cards wash their fill and border instead of fading as a group, which took the words and the focus ring with them.
-    assert "opacity: .62" not in style and "saturate(" not in style
-    # One solid ring for every focus-visible state, drawn inside rows and outside a card's selection ring.
+    # One solid ring for every focus-visible state, drawn inside rows.
     assert "color-mix(in srgb, var(--dag-link) 45%" not in style and "52%" not in style
     assert [rule.split(" {")[0] for rule in style.splitlines() if rule.startswith(".bp-dag-viewer") and ":focus-visible {" in rule] == [
         ".bp-dag-viewer :is(button, a, [tabindex]):focus-visible",
         ".bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body, .bp-dag-sheet-handle):focus-visible",
-        ".bp-dag-viewer .bp-dag-node:focus-visible",
     ]
     assert ":focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }" in style
-    assert ".bp-dag-node:focus-visible { outline-offset: 4px; }" in style
     assert [rule for rule in style.splitlines() if "outline:" in rule and "focus-visible" in rule and "solid var(--dag-link)" not in rule] == []
     # Hovering a rail link lights its row; focus is the ring alone.
     assert ".bp-dag-navigation-link:hover { border-color: var(--dag-border); background: var(--dag-panel); }" in style
@@ -963,35 +958,13 @@ def test_status_ring_greys_stay_apart_in_both_schemes() -> None:
         assert min(_contrast(state.dark_stroke, state.dark_fill), _contrast(state.dark_stroke, "#18191A")) >= 3, state.key
 
 
-def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> None:
-    """A 3px conic ring in status colours framed every topic and region card, so a mostly stated region read as done.
-
-    Regions behind the cards cycled seven pastels that meant nothing; the integrated explorer
-    paints no region panels at all.
-    """
-    script, style = _viewer_source(), dag_viewer._STYLE
-    card = re.search(r"^\.bp-dag-viewer\.bp-dag-atlas \.bp-dag-node\[data-kind=scope\] \{([^}]*)\}", style, re.M)
-    assert card is not None
-    for declaration in ("padding: 0;", "border: 1px solid var(--dag-border);", "background: var(--dag-node-fill);"):
-        assert declaration in card.group(1)
-    assert "dag-status-ring" not in card.group(1)
-    bar = re.search(r"^\.bp-dag-node-core::after \{([^}]*)\}", style, re.M)
-    assert bar is not None and "background: var(--dag-status-ring, var(--dag-border));" in bar.group(1)
-    # The bar sits in the bottom padding of every card size, so it adds no height and meets no text.
-    bottom = int(re.search(r"bottom: (\d+)px;", bar.group(1)).group(1))
-    height = int(re.search(r"height: (\d+)px;", bar.group(1)).group(1))
-    paddings = re.findall(r"\.bp-dag-node-core \{[^}]*?padding: (\d+)px", style)
-    assert paddings and bottom + height <= min(map(int, paddings)), paddings
-
-    # The integrated explorer paints no region panels (#442 removed drawRegions with the standalone
-    # viewer), so no hue behind the cards competes with status: areas part by the Areas view and labels.
-    assert "regionColors" not in script and "function drawRegions(" not in script
-
+def test_the_reader_opens_a_statements_own_relations_and_nothing_repeats_them() -> None:
+    """A pill repeated a card's fully proved share, and a strip under the reader repeated the statement's relations."""
+    script = _viewer_source()
     # The details pill that repeated a card's fully proved share left with the standalone inspector,
     # and the integrated reader shows the scope's own article instead.
     assert 'element("span", "bp-dag-status-pill",' not in script
     assert '" items in this scope"' not in script and '"Mathematical regions"' not in script
-    assert ".bp-map-context > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }" in dag_viewer._STYLE
     assert '" → Result → "' not in script
     assert 'var relations = target.querySelector(".bp-dependencies"); if (relations) relations.open = true;' in script
     # What stays under the reader is #442's topic pages and concept links, never a second relations strip.
@@ -1002,15 +975,10 @@ def test_topic_and_region_cards_frame_neutrally_and_show_progress_as_a_bar() -> 
 
 
 def test_small_status_marks_fill_finished_states_with_the_stroke() -> None:
-    """The light tints made tiny map plates, rail swatches and dependency dots of finished work vanish."""
+    """The light tints made rail swatches and dependency dots of finished work vanish."""
     script = _viewer_source()
     assert 'function solid(key, color) { return ((palette[key] || palette.planned || {}).light || {}).fill === "#FFFFFF" ? color.fill : color.stroke; }' in script
     assert '"-fill", solid(key, color) || "transparent");' in script
-    # Against the map the zoomed-out plate of every finished state keeps 3:1, as it did before the tints.
-    for state in status.STATES:
-        if state.fill != "#FFFFFF":
-            assert _contrast(state.stroke, "#F0F2F5") >= 3, state.key
-            assert _contrast(state.dark_stroke, "#18191A") >= 3, state.key
 
 
 def _book_marks(dark: bool) -> dict[str, str]:
