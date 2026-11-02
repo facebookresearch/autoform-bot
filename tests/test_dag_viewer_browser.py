@@ -15,7 +15,7 @@ from urllib.parse import unquote, urljoin, urlsplit
 import html5lib
 import pytest
 
-from autoform_cli import dag_viewer
+from autoform_cli import dag_viewer, site_index
 from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
 from tests.test_integrated_publication import _decoded_relations
@@ -570,7 +570,7 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
     records = {node["id"]: node for node in index["nodes"]}
     for node_id, title in (("algebra", _TITLE_MATH_SCOPE), ("algebra/title-foundation", _TITLE_MATH_FOUNDATION)):
         assert records[node_id]["title"] == title
-        assert records[node_id]["reading_title"] == dag_viewer._reading_label(title)
+        assert records[node_id]["reading_title"] == site_index._reading_label(title)
     with _served(project / "site") as url:
         yield url
 

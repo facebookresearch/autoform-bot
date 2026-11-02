@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer, markdown
+from autoform_cli import dag_viewer, markdown, site_index
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
 from autoform_cli.mathjax import mathjax_script
 from tests.test_site_mathjax_node import _node_report, mathjax_package
@@ -26,19 +26,19 @@ _CODE_TITLE = r"Notation $x$ and `</div><script>window.__titlePwned=1</script>`.
 
 
 def test_reading_label_separates_real_site_math_from_code_and_preserves_source() -> None:
-    assert dag_viewer._reading_label(_TITLE) == {
+    assert site_index._reading_label(_TITLE) == {
         "format": "inline-parts-v1", "source": _TITLE,
         "parts": [["text", "Groups "], ["math", r"\(\mathbb{Z}/n\)"]],
     }
-    label = dag_viewer._reading_label(_SUMMARY)
+    label = site_index._reading_label(_SUMMARY)
     assert label is not None and label["source"] == _SUMMARY
     assert [part for part in label["parts"] if part[0] == "math"] == [["math", r"\(\ZZ/n\)"]]
     assert [part for part in label["parts"] if part[0] == "code"] == [["code", "$literal$"]]
     assert "Cyclic groups " in "".join(part[1] for part in label["parts"] if part[0] == "text")
-    code = dag_viewer._reading_label(_CODE_TITLE)
+    code = site_index._reading_label(_CODE_TITLE)
     assert code is not None
     assert [part for part in code["parts"] if part[0] == "code"] == [["code", "</div><script>window.__titlePwned=1</script>"]]
-    comparison = dag_viewer._reading_label("Math $a<b>c$")
+    comparison = site_index._reading_label("Math $a<b>c$")
     assert comparison is not None and comparison["parts"][-1] == ["math", r"\(a<b>c\)"]
 
 
@@ -49,12 +49,12 @@ def test_reading_label_separates_real_site_math_from_code_and_preserves_source()
     "$x$ " * 129, "$x$" + "a" * 16_384,
 ])
 def test_plain_unsupported_and_oversized_labels_keep_the_literal_fallback(text: str) -> None:
-    assert dag_viewer._reading_label(text) is None
+    assert site_index._reading_label(text) is None
 
 
 def test_literal_attribute_like_suffix_stays_text_without_becoming_an_attribute() -> None:
     text = "Math $x$ {.untrusted}"
-    assert dag_viewer._reading_label(text) == {
+    assert site_index._reading_label(text) == {
         "format": "inline-parts-v1", "source": text,
         "parts": [["text", "Math "], ["math", r"\(x\)"], ["text", " {.untrusted}"]],
     }
@@ -66,7 +66,7 @@ def test_literal_attribute_like_suffix_stays_text_without_becoming_an_attribute(
 ])
 def test_valid_character_references_keep_math_parts_and_exact_title_source(reference: str, visible: str) -> None:
     text = f"Groups {reference} rings $x$"
-    assert dag_viewer._reading_label(text) == {
+    assert site_index._reading_label(text) == {
         "format": "inline-parts-v1", "source": text,
         "parts": [["text", f"Groups {visible} rings "], ["math", r"\(x\)"]],
     }
@@ -81,12 +81,12 @@ def test_valid_character_references_keep_math_parts_and_exact_title_source(refer
     "Math $x$\n{: title='&amp;'}", "Math $x$ <!-- &amp; -->",
 ])
 def test_entities_do_not_make_raw_html_links_images_or_attributes_a_label_transport(text: str) -> None:
-    assert dag_viewer._reading_label(text) is None
+    assert site_index._reading_label(text) is None
 
 
 def test_entity_encoded_tags_remain_single_decoded_text_and_code_references_stay_literal() -> None:
     text = r'Math $x$ &lt;script&gt;window.__titlePwned=1&lt;/script&gt; &amp;lt;b&amp;gt;'
-    label = dag_viewer._reading_label(text)
+    label = site_index._reading_label(text)
     assert label == {
         "format": "inline-parts-v1", "source": text,
         "parts": [["text", "Math "], ["math", r"\(x\)"],
@@ -95,12 +95,12 @@ def test_entity_encoded_tags_remain_single_decoded_text_and_code_references_stay
     tree = markdown.render_tree(text, allow_html=False)
     assert tree is not None and all(element.tag not in {"script", "b", "a", "img"} for element in tree.iter())
     literal = r'Math $x$ `&amp; &lt;script&gt; <script>window.__titlePwned=1</script>`'
-    code = dag_viewer._reading_label(literal)
+    code = site_index._reading_label(literal)
     assert code is not None and code["source"] == literal
     assert [part for part in code["parts"] if part[0] == "code"] == [
         ["code", "&amp; &lt;script&gt; <script>window.__titlePwned=1</script>"],
     ]
-    encoded_math = dag_viewer._reading_label("Math &#36;not_math&#36; $x$")
+    encoded_math = site_index._reading_label("Math &#36;not_math&#36; $x$")
     assert encoded_math is not None
     assert encoded_math["parts"] == [["text", "Math $not_math$ "], ["math", r"\(x\)"]]
 
@@ -115,7 +115,7 @@ def _view(title: str) -> GraphView:
 def test_optional_reading_title_keeps_plain_index_bytes_relations_and_statuses(tmp_path: Path) -> None:
     links = {"a": "a.html", "b": "b.html"}
     plain, marked = tmp_path / "plain.json", tmp_path / "marked.json"
-    dag_viewer.write_search_index(plain, _view("Plain A"), context_links=links, include_relations=True)
+    site_index.write_search_index(plain, _view("Plain A"), context_links=links, include_relations=True)
     assert plain.read_bytes() == (
         b'{"nodes":[{"id":"a","kind":"node","status":"planned","title":"Plain A","url":"a.html"},'
         b'{"id":"b","kind":"node","status":"planned","title":"Plain B","url":"b.html"}],'
@@ -123,10 +123,10 @@ def test_optional_reading_title_keeps_plain_index_bytes_relations_and_statuses(t
     )
     digests: list[str] = []
     view = _view(_TITLE)
-    dag_viewer.write_search_index(marked, view, context_links=links, include_relations=True, sha256_out=digests)
+    site_index.write_search_index(marked, view, context_links=links, include_relations=True, sha256_out=digests)
     payload = json.loads(marked.read_bytes())
     assert payload["nodes"][0]["title"] == _TITLE
-    assert payload["nodes"][0]["reading_title"] == dag_viewer._reading_label(_TITLE)
+    assert payload["nodes"][0]["reading_title"] == site_index._reading_label(_TITLE)
     assert "reading_title" not in payload["nodes"][1]
     assert payload["relations"] == [[0, 1, 2, 3]]
     assert [node["status"] for node in payload["nodes"]] == ["planned", "planned"]
@@ -145,8 +145,8 @@ def test_publisher_breadcrumb_parts_preserve_plain_bytes_titles_urls_and_math_so
     dag_viewer.write_payload(marked, view, links={}, breadcrumbs=((_SUMMARY, "chapter.html"), (_TITLE, None)))
     expected = json.loads(empty.read_bytes())
     expected["view"]["breadcrumbs"] = [
-        {"label": _SUMMARY, "url": "chapter.html", "reading_title": dag_viewer._reading_label(_SUMMARY)},
-        {"label": _TITLE, "url": None, "reading_title": dag_viewer._reading_label(_TITLE)},
+        {"label": _SUMMARY, "url": "chapter.html", "reading_title": site_index._reading_label(_SUMMARY)},
+        {"label": _TITLE, "url": None, "reading_title": site_index._reading_label(_TITLE)},
     ]
     assert json.loads(marked.read_bytes()) == expected
     assert view.title == "Plain trail" and view.nodes == () and view.edges == ()
@@ -157,7 +157,7 @@ def _fixture() -> dict:
         result = {"id": node_id, "title": title, "parent": parent,
                   "scope": node_id if scope else "chapter", "kind": "scope" if scope else "node",
                   "result": not scope, "status": "planned", "route": "https://blueprint.example.invalid/" + node_id + ".html"}
-        label = dag_viewer._reading_label(title)
+        label = site_index._reading_label(title)
         if label is not None:
             result["reading_title"] = label
         return result
@@ -167,7 +167,7 @@ def _fixture() -> dict:
         node("other-topic", r"Other $\ZZ$", "roadmap", scope=True), node("F", "Focal result", "chapter"),
         node("A", _ENTITY_TITLE, "chapter"), node("B", r"Custom $\ZZ/n$", "chapter"),
         node("C", _SUMMARY, "chapter"), node("D", _CODE_TITLE, "chapter"),
-    ], "summary": {"text": _SUMMARY, "label": dag_viewer._reading_label(_SUMMARY)},
+    ], "summary": {"text": _SUMMARY, "label": site_index._reading_label(_SUMMARY)},
         "unsupported": "Raw $x$ <script>window.__titlePwned=1</script>"}
 
 
@@ -323,7 +323,7 @@ def test_actual_reading_controls_keep_encoded_tags_and_code_as_text_and_reject_r
         r'Math $x$ `&amp; &lt;script&gt; <script>window.__titlePwned=1</script>`',
         r'Math $x$ <script>&amp;window.__titlePwned=1</script>',
     ]
-    entries = [{"text": text, "label": dag_viewer._reading_label(text)} for text in texts]
+    entries = [{"text": text, "label": site_index._reading_label(text)} for text in texts]
     _dom_script("const entries=" + json.dumps(entries) + r""";
       const proof=window.__explorerTitleProof;
       for(const entry of entries) {

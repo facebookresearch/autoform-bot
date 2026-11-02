@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer, graph_pages, status
+from autoform_cli import graph_pages, site_index, status
 from autoform_cli.graph import Graph, Node
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
 
@@ -24,7 +24,7 @@ def _view(summary: str = "The identity holds.") -> GraphView:
 
 
 def _write(path: Path, view: GraphView, *, warnings: list[str] | None = None, digests: list[str] | None = None) -> Path:
-    return dag_viewer.write_search_index(
+    return site_index.write_search_index(
         path, view, context_links={"a": "a.html", "b": "b.html"},
         metadata={"a": {"parent": "b", "scope": "b", "result": True}, "b": {"result": False}},
         include_relations=True, warnings_out=warnings, sha256_out=digests,
@@ -44,7 +44,7 @@ def test_size_note_boundary_without_refusal_truncation_or_wire_changes(
     baseline = _write(tmp_path / "baseline.json", view).read_bytes()
     assert len(baseline) == size
     # Scale only the private note threshold for tiny exact boundary cases.
-    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_NOTE_BYTES", 1000)
+    monkeypatch.setattr(site_index, "_SEARCH_INDEX_NOTE_BYTES", 1000)
     warnings, digests = [], []
     emitted = _write(tmp_path / "warned.json", view, warnings=warnings, digests=digests).read_bytes()
     assert emitted == baseline and digests == [hashlib.sha256(emitted).hexdigest()]
@@ -53,12 +53,12 @@ def test_size_note_boundary_without_refusal_truncation_or_wire_changes(
         assert f"{size:,} bytes" in warnings[0] and "past 1,000 bytes" in warnings[0]
         assert "downloads it" in warnings[0] and "limit" not in warnings[0]
     payload = json.loads(emitted)
-    assert payload["schema"] == dag_viewer.SEARCH_SCHEMA
+    assert payload["schema"] == site_index.SEARCH_SCHEMA
     assert [node["id"] for node in payload["nodes"]] == ["a", "b"]
     assert [node["status"] for node in payload["nodes"]] == ["planned", "fully_proved"]
     assert payload["relations"] == [[1, 0, 2, 3]] and payload["nodes"][0]["parent"] == 1
     assert payload["nodes"][0]["summary"] == summary and payload["nodes"][0]["lean"] == "Demo.identity"
-    assert payload["nodes"][0]["reading_title"] == dag_viewer._reading_label(view.nodes[0].title)
+    assert payload["nodes"][0]["reading_title"] == site_index._reading_label(view.nodes[0].title)
     assert view.edges == (ViewEdge("b", "a", 2, 3),) and view.nodes[0].summary == summary
 
 
@@ -69,7 +69,7 @@ def test_warning_counts_utf8_bytes_once_without_rereading_source_or_output(
     baseline = _write(tmp_path / "baseline.json", view).read_bytes()
     # The index is ASCII: the title's accents travel as escapes, which the byte count includes.
     assert baseline.isascii() and b"\\u00c9galit\\u00e9" in baseline
-    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_NOTE_BYTES", len(baseline) - 1)
+    monkeypatch.setattr(site_index, "_SEARCH_INDEX_NOTE_BYTES", len(baseline) - 1)
     original_read = Path.read_bytes
 
     def forbidden_read(*args: object, **kwargs: object) -> None:
@@ -86,7 +86,7 @@ def test_warning_counts_utf8_bytes_once_without_rereading_source_or_output(
 
 
 def test_unsuccessful_write_does_not_claim_a_published_budget_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_NOTE_BYTES", 1)
+    monkeypatch.setattr(site_index, "_SEARCH_INDEX_NOTE_BYTES", 1)
 
     def failed_write(*args: object, **kwargs: object) -> None:
         raise OSError("controlled index write failure")
@@ -114,7 +114,7 @@ def test_graph_publication_forwards_index_warning_without_changing_its_manifest_
 
     quiet, warned = tmp_path / "quiet", tmp_path / "warned"
     baseline = graph_pages.write_graph_pages(graph, states, quiet, node_links=links)
-    monkeypatch.setattr(dag_viewer, "_SEARCH_INDEX_NOTE_BYTES", 1)
+    monkeypatch.setattr(site_index, "_SEARCH_INDEX_NOTE_BYTES", 1)
     warnings: list[str] = []
     produced = graph_pages.write_graph_pages(graph, states, warned, node_links=links, warnings_out=warnings)
     assert warnings and len(warnings) == 1 and "search index" in warnings[0]
@@ -126,9 +126,9 @@ def test_graph_publication_forwards_index_warning_without_changing_its_manifest_
 
 
 def test_nothing_caps_published_data() -> None:
-    assert dag_viewer._SEARCH_INDEX_NOTE_BYTES == 32 * 1024 * 1024
-    assert not hasattr(dag_viewer, "MAX_WIKI_LINK_BYTES")
-    source = (Path(dag_viewer.__file__).parent / "assets" / "blueprint-navigation.js").read_text(encoding="utf-8")
+    assert site_index._SEARCH_INDEX_NOTE_BYTES == 32 * 1024 * 1024
+    assert not hasattr(site_index, "MAX_WIKI_LINK_BYTES")
+    source = (Path(site_index.__file__).parent / "assets" / "blueprint-navigation.js").read_text(encoding="utf-8")
     # The explorer only fetches its own site's data, so it refuses none of it for size.
     for cap in ("jsonLimit", "htmlLimit", "WIKI_LIMIT", "Published data is too large"):
         assert cap not in source, cap

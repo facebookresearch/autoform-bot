@@ -16,7 +16,7 @@ from dataclasses import replace
 from pathlib import Path, PurePath
 from urllib.parse import quote
 
-from . import dag_viewer, project_map
+from . import dag_viewer, project_map, site_index
 from .graph import Graph
 from .graph_views import (
     FLATTENED_ROLES,
@@ -187,7 +187,7 @@ def write_graph_pages(
             continue
         context_links[node.id] = _published_link(scope_pages[node.id], search_index)
     index_digests: list[str] = []
-    dag_viewer.write_search_index(
+    site_index.write_search_index(
         search_index, complete, context_links=context_links, metadata=metadata, include_relations=True,
         sha256_out=index_digests if captured_sources is not None else None, warnings_out=warnings_out,
     )
@@ -196,12 +196,12 @@ def write_graph_pages(
     map_records, map_relations = project_map.records_from_view(complete, metadata)
     project_map.write_project_map(destination / project_map.MAP_DIRECTORY, project_map.build_project_map(map_records, map_relations))
     if captured_sources is not None:
-        references = dag_viewer.extract_wiki_links(
+        references = site_index.extract_wiki_links(
             complete, captured_sources=captured_sources, source_paths=source_paths, metadata=metadata,
             unavailable_source_ids=unavailable_source_ids,
         )
         written.append(
-            dag_viewer.write_wiki_links(
+            site_index.write_wiki_links(
                 destination / WIKI_LINKS, references, index_sha256=index_digests[0], warnings_out=warnings_out,
             )
         )

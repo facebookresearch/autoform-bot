@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer
+from autoform_cli import site_index
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
 
 _NODE = shutil.which("node")
@@ -226,7 +226,7 @@ def parent_wires(tmp_path: Path):
     before = copy.deepcopy(metadata)
     digests: list[str] = []
     output = tmp_path / "index.json"
-    dag_viewer.write_search_index(output, view, context_links=links, metadata=metadata,
+    site_index.write_search_index(output, view, context_links=links, metadata=metadata,
                                  include_relations=True, sha256_out=digests)
     raw = output.read_bytes()
     assert metadata == before
@@ -246,7 +246,7 @@ def test_published_parent_offsets_preserve_all_other_index_fields_and_exact_byte
     assert digest == hashlib.sha256(raw).hexdigest()
     assert raw.endswith(b"\n")
     duplicate = tmp_path / "without-receipt.json"
-    dag_viewer.write_search_index(duplicate, view, context_links=links, metadata=metadata, include_relations=True)
+    site_index.write_search_index(duplicate, view, context_links=links, metadata=metadata, include_relations=True)
     assert duplicate.read_bytes() == raw
 
 

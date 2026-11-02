@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer, graph_pages, render, status
+from autoform_cli import dag_viewer, graph_pages, render, site_index, status
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
 
 
@@ -463,7 +463,7 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert 'url.origin === window.location.origin' in script
     assert "if (query === state.searchCacheQuery) return state.searchCache" in script
     assert f'data.schema !== "{dag_viewer.SCHEMA}"' in script
-    assert f'INDEX_SCHEMA = "{dag_viewer.SEARCH_SCHEMA}"' in script
+    assert f'INDEX_SCHEMA = "{site_index.SEARCH_SCHEMA}"' in script
     # Ranking matches exact names before prefixes, and statement text last.
     assert script.index("if (title === query)") < script.index("if (title.startsWith(query))")
     assert script.index("if (lean === query)") < script.index("if (lean.startsWith(query))")
@@ -1072,7 +1072,7 @@ def test_explorer_assets_and_ordinary_payload_stay_within_budgets(tmp_path: Path
     output = tmp_path / "budget.json"
     dag_viewer.write_payload(output, view, links={})
     search = tmp_path / "search.json"
-    dag_viewer.write_search_index(
+    site_index.write_search_index(
         search,
         view,
         context_links={node.id: f"chapters/chapter.html#node={node.id}" for node in nodes},

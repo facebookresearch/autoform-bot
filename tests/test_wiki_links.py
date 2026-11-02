@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import html5lib
 
-from autoform_cli import dag_viewer, graph_pages, markdown, render
+from autoform_cli import graph_pages, markdown, render, site_index
 from autoform_cli.graph import load_graph
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
 from autoform_cli.status import derive
@@ -47,9 +47,9 @@ def test_unmatched_inline_delimiters_in_different_paragraphs_keep_real_site_link
     body = f"# A\n\n{opening}start\n\n[B](b.md)\n\nend{closing}\n"
     assert _converted_links(body) == ["b.md"]
     sources["a"] = body.encode()
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks(((0, 1),))
+    ) == site_index.WikiLinks(((0, 1),))
 
 
 @pytest.mark.parametrize(("opening", "closing"), [("`", "`"), ("$", "$"), (r"\(", r"\)")])
@@ -59,9 +59,9 @@ def test_valid_multiline_inline_spans_within_a_paragraph_keep_the_site_code_and_
     body = f"# A\n\n{opening}start\n[B](b.md)\nend{closing}\n\n[C](c.md)\n"
     assert _converted_links(body) == ["c.md"]
     sources["a"] = body.encode()
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks(((0, 2),))
+    ) == site_index.WikiLinks(((0, 2),))
 
 
 @pytest.mark.parametrize("span", [r"\`left [B](b.md) right\`", r"\`literal\` before [B](b.md) after \`literal\`"])
@@ -71,9 +71,9 @@ def test_escaped_inline_ticks_are_literal_and_keep_real_site_links(span: str) ->
     body = "# A\n\n" + span + "\n"
     assert _converted_links(body) == ["b.md"]
     sources["a"] = body.encode()
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks(((0, 1),))
+    ) == site_index.WikiLinks(((0, 1),))
 
 
 def test_even_backslash_prefix_leaves_a_real_code_span_masked_as_the_site_reads_it() -> None:
@@ -82,9 +82,9 @@ def test_even_backslash_prefix_leaves_a_real_code_span_masked_as_the_site_reads_
     body = "# A\n\n" + r"\\`left [B](b.md) right`" + "\n"
     assert _converted_links(body) == []
     sources["a"] = body.encode()
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks(())
+    ) == site_index.WikiLinks(())
 
 
 @pytest.mark.parametrize("heading", ["##Sources", "##Depends on", "##Proof depends on"])
@@ -95,9 +95,9 @@ def test_actual_hash_headings_without_spaces_still_exclude_provenance_and_formal
     assert _converted_links(body) == ["c.md", "b.md"]
     assert "<h2" in markdown.site_converter().convert(body)
     sources["a"] = body.encode()
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks(((0, 1),))
+    ) == site_index.WikiLinks(((0, 1),))
 
 
 @pytest.mark.parametrize("heading", [
@@ -113,9 +113,9 @@ def test_published_section_semantics_keep_setext_and_formatted_provenance_out_of
     assert _converted_links(body) == ["c.md", "b.md"]
     sources["a"] = body.encode()
     before = copy.deepcopy((view, sources, paths, metadata))
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks(((0, 1),))
+    ) == site_index.WikiLinks(((0, 1),))
     assert (view, sources, paths, metadata) == before
 
 
@@ -125,9 +125,9 @@ def test_nested_setext_provenance_does_not_hide_unquoted_mathematical_references
     body = "# A\n\n> Sources\n> -------\n>\n> [C](c.md)\n\nSee [B](b.md).\n"
     assert _converted_links(body) == ["c.md", "b.md"]
     sources["a"] = body.encode()
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks(((0, 1),))
+    ) == site_index.WikiLinks(((0, 1),))
 
 
 @pytest.mark.parametrize(("body", "skipped"), [
@@ -144,11 +144,11 @@ def test_nested_setext_provenance_does_not_hide_unquoted_mathematical_references
     ("# A\n\n" + "".join("    " * depth + "- item\n" for depth in range(130)) + "\n## Sources\n\n- [C](c.md)\n", False),
 ])
 def test_an_article_that_links_only_from_provenance_skips_the_render_with_the_same_targets(body: str, skipped: bool) -> None:
-    lines = dag_viewer._wiki_lines(body)
+    lines = site_index._wiki_lines(body)
     assert lines is not None
-    assert dag_viewer._no_wiki_targets(lines) is skipped
+    assert site_index._no_wiki_targets(lines) is skipped
     if skipped:
-        assert dag_viewer._wiki_targets(lines) == []
+        assert site_index._wiki_targets(lines) == []
 
 
 def test_extraction_renders_only_articles_that_link_outside_their_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,11 +156,11 @@ def test_extraction_renders_only_articles_that_link_outside_their_provenance(mon
     paths, sources, metadata = _inputs("a", "b", "c")
     sources["a"] = b"# A\n\nText.\n\n## Sources\n\n- [C](c.md)\n"
     sources["b"] = b"# B\n\nSee [C](c.md).\n"
-    rendered, render = [], dag_viewer._wiki_targets
-    monkeypatch.setattr(dag_viewer, "_wiki_targets", lambda lines: rendered.append(lines[0]) or render(lines))
-    assert dag_viewer.extract_wiki_links(
+    rendered, render = [], site_index._wiki_targets
+    monkeypatch.setattr(site_index, "_wiki_targets", lambda lines: rendered.append(lines[0]) or render(lines))
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks(((1, 2),))
+    ) == site_index.WikiLinks(((1, 2),))
     assert rendered == ["# B"]
 
 
@@ -170,9 +170,9 @@ def test_setext_heading_attributes_keep_valid_incoming_links_but_mark_outbound_e
     sources["a"] = b"# A\n\n[B](b.md).\n"
     sources["b"] = b"# B\n\nSources {.note}\n-------\n\n[C](c.md).\n"
     assert publishable_article(sources["b"].decode())[1]
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks(((0, 1),), (1,))
+    ) == site_index.WikiLinks(((0, 1),), (1,))
 
 
 @pytest.mark.parametrize("heading", ["## Sources {#sources}", "##Sources {#sources}", "## Sources {.note} ##"])
@@ -184,9 +184,9 @@ def test_applied_heading_attributes_mark_only_outgoing_data_unavailable_and_keep
     assert publishable_article(body)[1]
     sources["a"] = b"# A\n\n[B](b.md).\n"
     sources["b"] = body.encode()
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks(((0, 1),), (1,))
+    ) == site_index.WikiLinks(((0, 1),), (1,))
 
 
 def test_optional_source_omissions_keep_capture_api_compatibility_and_known_incoming_targets() -> None:
@@ -197,10 +197,10 @@ def test_optional_source_omissions_keep_capture_api_compatibility_and_known_inco
     assert publishable_article(sources["b"].decode())[1]
     before = copy.deepcopy((view, paths, sources, metadata))
     arguments = dict(captured_sources=sources, source_paths=paths, metadata=metadata)
-    baseline = dag_viewer.extract_wiki_links(view, **arguments)
-    assert baseline == dag_viewer.WikiLinks(((0, 1), (1, 0)))
-    assert dag_viewer.extract_wiki_links(view, **arguments, unavailable_source_ids=()) == baseline
-    assert dag_viewer.extract_wiki_links(view, **arguments, unavailable_source_ids=("b",)) == dag_viewer.WikiLinks(((0, 1),), (1,))
+    baseline = site_index.extract_wiki_links(view, **arguments)
+    assert baseline == site_index.WikiLinks(((0, 1), (1, 0)))
+    assert site_index.extract_wiki_links(view, **arguments, unavailable_source_ids=()) == baseline
+    assert site_index.extract_wiki_links(view, **arguments, unavailable_source_ids=("b",)) == site_index.WikiLinks(((0, 1),), (1,))
     assert (view, paths, sources, metadata) == before
 
 
@@ -215,9 +215,9 @@ def test_authored_inline_reference_and_encoded_fragment_links_keep_exact_index_o
     sources["beta"] = b"# Beta\n\nSee [Alpha](alpha.md).\n"
     before = copy.deepcopy((view, paths, sources, metadata))
 
-    links = dag_viewer.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
+    links = site_index.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
 
-    assert links == dag_viewer.WikiLinks(((0, 1), (1, 0), (1, 2)))
+    assert links == site_index.WikiLinks(((0, 1), (1, 0), (1, 2)))
     assert (view, paths, sources, metadata) == before
     assert view.edges == (ViewEdge("beta", "alpha", 2, 3),)
     assert [node.status_counts for node in view.nodes] == [(("planned", 1),)] * 3
@@ -251,7 +251,7 @@ origin: '[Metadata](c.md)'
 See [B](b.md).
 """
 
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
     ).references == ((0, 1),)
 
@@ -265,9 +265,9 @@ def test_literal_inline_and_display_tex_links_never_become_wiki_references(formu
     view = _view("a", "b", "c")
     paths, sources, metadata = _inputs("a", "b", "c")
     sources["a"] = f"# A\n\n{formula}\n\nSee [B](b.md).\n".encode()
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks(((0, 1),))
+    ) == site_index.WikiLinks(((0, 1),))
 
 
 @pytest.mark.parametrize("unsupported", [
@@ -281,10 +281,10 @@ def test_unsupported_html_or_unclosed_display_math_is_explicitly_partial(
     view = _view("a", "b", "c")
     paths, sources, metadata = _inputs("a", "b", "c")
     sources["a"] = f"# A\n\n{unsupported}\n\nSee [B](b.md).\n".encode()
-    links = dag_viewer.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
-    assert links == dag_viewer.WikiLinks((), (0,))
+    links = site_index.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
+    assert links == site_index.WikiLinks((), (0,))
     output = tmp_path / "wiki-links.json"
-    dag_viewer.write_wiki_links(output, links, index_sha256="a" * 64)
+    site_index.write_wiki_links(output, links, index_sha256="a" * 64)
     payload = json.loads(output.read_bytes())
     assert payload["availability"] == "partial" and payload["unavailable_sources"] == [0]
     assert "unavailable or unsupported" in payload["reason"]
@@ -298,9 +298,9 @@ def test_valid_incoming_links_to_published_unsupported_articles_remain_backlinks
     paths, sources, metadata = _inputs("a", "b", "c")
     sources["a"] = b"# A\n\n[B](b.md).\n"
     sources["b"] = f"# B\n\n{unsupported}\n\n[C](c.md).\n".encode()
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks(((0, 1),), (1,))
+    ) == site_index.WikiLinks(((0, 1),), (1,))
 
 
 def test_roles_inherited_source_tracks_and_authored_placement_do_not_become_wiki_edges() -> None:
@@ -318,9 +318,9 @@ def test_roles_inherited_source_tracks_and_authored_placement_do_not_become_wiki
     sources["book-child"] = b"# Source article\n\n[A](a.md)\n"
     sources["scope"] = b"# Scope\n\n[A](a.md) and [B](b.md).\n"
 
-    links = dag_viewer.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
+    links = site_index.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
 
-    assert links == dag_viewer.WikiLinks(((0, 1),))
+    assert links == site_index.WikiLinks(((0, 1),))
 
 
 @pytest.mark.parametrize("target", [
@@ -332,7 +332,7 @@ def test_nonpublished_or_unsafe_targets_cannot_establish_references(target: str)
     view = _view("a", "b")
     paths, sources, metadata = _inputs("a", "b")
     sources["a"] = f"# A\n\n[Target]({target})\n".encode()
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
     ).references == ()
 
@@ -348,9 +348,9 @@ def test_missing_invalid_hidden_and_external_publication_captures_are_honestly_u
     metadata["external"]["route"] = "https://example.com/article.html"
     del metadata["unpublished"]["route"]
 
-    links = dag_viewer.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
+    links = site_index.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
 
-    assert links == dag_viewer.WikiLinks((), (1, 2, 3, 4, 5))
+    assert links == site_index.WikiLinks((), (1, 2, 3, 4, 5))
 
 
 def test_extractor_uses_only_retained_bytes_not_live_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -366,14 +366,14 @@ def test_extractor_uses_only_retained_bytes_not_live_paths(tmp_path: Path, monke
     monkeypatch.setattr(Path, "resolve", forbidden)
     monkeypatch.setattr(Path, "read_bytes", forbidden)
     monkeypatch.setattr(Path, "read_text", forbidden)
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks(((0, 1),))
+    ) == site_index.WikiLinks(((0, 1),))
 
 
 def test_no_capture_and_ambiguous_or_cyclic_sources_have_no_invented_fallback() -> None:
     view = _view("a", "b", "c", "d")
-    absent = dag_viewer.extract_wiki_links(view)
+    absent = site_index.extract_wiki_links(view)
     assert absent.references == () and absent.unavailable_sources == (0, 1, 2, 3)
     assert absent.reason and "not supplied" in absent.reason
     paths, sources, metadata = _inputs("a", "b", "c", "d")
@@ -381,9 +381,9 @@ def test_no_capture_and_ambiguous_or_cyclic_sources_have_no_invented_fallback() 
     metadata["c"]["parent"] = "d"
     metadata["d"]["parent"] = "c"
     sources["a"] = b"# A\n\n[B](b.md) [C](c.md)\n"
-    assert dag_viewer.extract_wiki_links(
+    assert site_index.extract_wiki_links(
         view, captured_sources=sources, source_paths=paths, metadata=metadata,
-    ) == dag_viewer.WikiLinks((), (0, 1, 2, 3))
+    ) == site_index.WikiLinks((), (0, 1, 2, 3))
 
 
 def test_optional_asset_binds_exact_index_bytes_and_leaves_dependencies_and_status_unchanged(tmp_path: Path) -> None:
@@ -392,11 +392,11 @@ def test_optional_asset_binds_exact_index_bytes_and_leaves_dependencies_and_stat
     sources["a"] = b"# A\n\n[B](b.md).\n"
     baseline, indexed, sidecar = (tmp_path / name for name in ("baseline.json", "index.json", "wiki-links.json"))
     arguments = dict(context_links={"a": "a.html", "b": "b.html"}, metadata=metadata, include_relations=True)
-    dag_viewer.write_search_index(baseline, view, **arguments)
+    site_index.write_search_index(baseline, view, **arguments)
     digests: list[str] = []
-    dag_viewer.write_search_index(indexed, view, **arguments, sha256_out=digests)
-    dag_viewer.write_wiki_links(
-        sidecar, dag_viewer.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata),
+    site_index.write_search_index(indexed, view, **arguments, sha256_out=digests)
+    site_index.write_wiki_links(
+        sidecar, site_index.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata),
         index_sha256=digests[0],
     )
 
@@ -423,11 +423,11 @@ def test_a_large_layer_is_published_whole(tmp_path: Path) -> None:
     view = _view(*names)
     paths, sources, metadata = _inputs(*names)
     sources["n0"] = ("# First\n\n" + " ".join(f"[N]({name}.md)" for name in names[1:])).encode()
-    links = dag_viewer.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
+    links = site_index.extract_wiki_links(view, captured_sources=sources, source_paths=paths, metadata=metadata)
     assert links.reason is None and links.references == tuple((0, index) for index in range(1, 120))
     warnings: list[str] = []
     output = tmp_path / "wiki-links.json"
-    dag_viewer.write_wiki_links(output, links, index_sha256="a" * 64, warnings_out=warnings)
+    site_index.write_wiki_links(output, links, index_sha256="a" * 64, warnings_out=warnings)
     payload = json.loads(output.read_bytes())
     assert payload["availability"] == "complete" and len(payload["references"]) == 119
     assert "reason" not in payload and warnings == []
@@ -491,7 +491,7 @@ def test_real_render_forwards_publication_findings_without_reparsing_or_reopenin
     path = blueprint / "roadmap/b.md"
     original = path.read_text()
     path.write_text(original.replace("A proposition.", f"AUTHORED_LINK_MARKER [A](a.md).\n\n{unsupported}"), encoding="utf-8")
-    extractor = dag_viewer.extract_wiki_links
+    extractor = site_index.extract_wiki_links
     found: list[tuple[str, ...]] = []
 
     def retained_only(*args, **kwargs):
@@ -504,7 +504,7 @@ def test_real_render_forwards_publication_findings_without_reparsing_or_reopenin
             guarded.setattr(render, "publishable_article", forbidden)
             return extractor(*args, **kwargs)
 
-    monkeypatch.setattr(dag_viewer, "extract_wiki_links", retained_only)
+    monkeypatch.setattr(site_index, "extract_wiki_links", retained_only)
     output = tmp_path / "site-src"
     report = render.render_site(blueprint, output)
     assert found == [("b",)]
