@@ -101,10 +101,6 @@ def write_payload(
             entry["lean"] = ", ".join(declaration_names(node.lean)[:_CATALOG_LEAN_NAMES])
         nodes.append(entry)
 
-    edges = [
-        {"proof": edge.proof_count, "source": edge.source, "statement": edge.statement_count, "target": edge.target}
-        for edge in view.edges
-    ]
     ordered_statuses = [
         state.key for state in _ALL_STATES if state.key in present_statuses
     ]
@@ -115,7 +111,9 @@ def write_payload(
             crumb["reading_title"] = reading
         trail.append(crumb)
     payload = {
-        "edges": edges,
+        # Nothing reads a payload's relations: a statement's page lists its own, and the map has its
+        # own data. Both clients still require the list.
+        "edges": [],
         "nodes": nodes,
         "palette": _palette(),
         "present_statuses": ordered_statuses,

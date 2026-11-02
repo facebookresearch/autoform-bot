@@ -109,13 +109,14 @@ def mobile_page(webkit_browser: object) -> Iterator[object]:
 
 @dataclass(frozen=True)
 class _ExplorerConsumer:
-    """Canonical routes and scope payloads captured from the actual publisher."""
+    """Canonical routes, scope payloads and typed relations captured from the actual publisher."""
 
     url: str
     records: dict[str, dict]
     graphs: dict[str, dict]
     headings: dict[str, str]
     page_titles: dict[str, str]
+    relations: list[list[object]]
 
     def route(self, node_id: str) -> str:
         return urljoin(self.url + "/dependencies/index.json", self.records[node_id]["route"])
@@ -286,7 +287,8 @@ def explorer_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Exp
     render_site(project / "blueprint", project / "site-src", lean_root=project)
     build(load_config(config_file=str(project / "mkdocs.yml"), strict=True))
     index_path = project / "site/dependencies/index.json"
-    records = {node["id"]: node for node in json.loads(index_path.read_text(encoding="utf-8"))["nodes"]}
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    records = {node["id"]: node for node in index["nodes"]}
     graphs = {
         scope: json.loads((index_path.parent / unquote(urlsplit(records[scope]["data_url"]).path)).read_text(encoding="utf-8"))
         for scope in scopes
@@ -321,7 +323,7 @@ def explorer_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Exp
     )
     _write_consumer(project / "site/bare.html", "<!doctype html><title>Linked fallback</title><main>" + fallback + "</main>")
     with _served(project / "site") as url:
-        yield _ExplorerConsumer(url, records, graphs, headings, page_titles)
+        yield _ExplorerConsumer(url, records, graphs, headings, page_titles, _decoded_relations(index))
 
 
 @pytest.fixture(scope="module")
@@ -425,13 +427,13 @@ def _assert_hit(page: object, control: object) -> None:
     )
 
 
-def _reference_counts(graph: dict, owner_id: str, target_id: str) -> tuple[int, int]:
+def _reference_counts(relations: list[list[object]], owner_id: str, target_id: str) -> tuple[int, int]:
     """Original weights in these one-direction fixtures, not a reciprocal-link resolver."""
     pair = {owner_id, target_id}
     assert len(pair) == 2
-    edges = [edge for edge in graph["edges"] if {edge["source"], edge["target"]} == pair]
+    edges = [relation for relation in relations if set(relation[:2]) == pair]
     assert len(edges) == 1, "This fixture reference must name one unambiguous original directed pair"
-    counts = (edges[0]["statement"], edges[0]["proof"])
+    counts = (edges[0][2], edges[0][3])
     assert all(type(count) is int and count >= 0 for count in counts) and sum(counts) > 0
     return counts
 
@@ -475,9 +477,8 @@ def _open_dependency(card: object, consumer: _ExplorerConsumer, target_id: str) 
     playwright.expect(target.locator(".bp-thmheading > .bp-thmtitle")).to_have_text(
         consumer.records[target_id]["title"]
     )
-    graph = consumer.graphs[consumer.records[owner_id]["scope"]]
     return _numbered_reference(
-        disclosure, target, consumer.route(target_id), _reference_counts(graph, owner_id, target_id)
+        disclosure, target, consumer.route(target_id), _reference_counts(consumer.relations, owner_id, target_id)
     )
 
 
@@ -1995,14 +1996,12 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     playwright.expect(relations.locator("summary")).to_have_text("Uses 1 · Used by 55")
     playwright.expect(relations.locator("a.bp-ref")).to_have_count(56)
     last_id = "topology/later-54"
-    scope = _site_record(page, site_url, "topology/result")["scope"]
-    graph_url = urljoin(site_url + "/dependencies/index.json", _site_record(page, site_url, scope)["data_url"])
-    graph_response = page.request.get(graph_url, timeout=10_000)
-    assert graph_response.ok
+    index_response = page.request.get(f"{site_url}/dependencies/index.json", timeout=10_000)
+    assert index_response.ok
     last_card = _reading_card(page, last_id)
     playwright.expect(last_card.locator(".bp-thmheading > .bp-thmtitle")).to_have_text("Later 54")
     last = _numbered_reference(relations, last_card, _site_route(page, site_url, last_id),
-                               _reference_counts(graph_response.json(), "topology/result", last_id))
+                               _reference_counts(_decoded_relations(index_response.json()), "topology/result", last_id))
     last.scroll_into_view_if_needed()
     _assert_hit(page, last)
     last.click()
@@ -2581,7 +2580,8 @@ def test_the_rail_counts_in_words_that_agree_with_their_numbers(
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text(counts)
     graph = explorer_consumer.graphs[name]
     assert len(graph["nodes"]) == (4 if name == "mixed" else 1_000)
-    assert len(graph["edges"]) == (1 if name == "mixed" else 0)
+    members = {node["id"] for node in graph["nodes"]}
+    assert sum(set(relation[:2]) <= members for relation in explorer_consumer.relations) == (1 if name == "mixed" else 0)
     if name == "mixed":
         page.locator(".bp-dag-search").fill("mixed/a")
         playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 statement · search the whole roadmap")

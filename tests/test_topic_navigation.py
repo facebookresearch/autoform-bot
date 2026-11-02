@@ -78,7 +78,7 @@ def test_topics_replace_library_and_pagination_peers_without_dropping_sources_or
     assert {node["title"] for node in payload["nodes"] if node["map"]} >= {
         "Distance geometry", "Comparison geometry", "Comparison triangles", "A geometry textbook", "A direct result",
     }
-    assert len(payload["edges"]) == 4  # relations of the collections themselves stay in the payload
+    assert payload["edges"] == []
 
 
 def test_an_overview_legend_counts_a_collected_catalog_once(tmp_path: Path) -> None:

@@ -68,10 +68,8 @@ def test_full_view_payload_is_deterministic_and_carries_only_what_the_book_reads
         and set(entry["light"]) == set(entry["dark"]) == {"fill", "stroke"}
         for entry in payload["palette"].values()
     )
-    assert payload["edges"] == [
-        {"source": source.id, "target": target.id, "statement": 1, "proof": 0}
-        for source, target in zip(nodes, nodes[1:])
-    ]
+    # Nothing reads a payload's relations; both clients still require the list.
+    assert payload["edges"] == []
 
     script = dag_viewer.viewer_script()
     assert "innerHTML" not in script
@@ -82,7 +80,7 @@ def test_full_view_payload_is_deterministic_and_carries_only_what_the_book_reads
     assert "mark.title = entry.meaning || statusLabel(key)" in _viewer_source()
 
 
-def test_an_overview_marks_what_the_book_lists_without_changing_source_topology(tmp_path: Path) -> None:
+def test_an_overview_marks_what_the_book_lists(tmp_path: Path) -> None:
     wrappers = tuple(
         ViewNode(
             f"scope:wrapper-{index}", f"Wrapper {index}", "scope", ("a", "b"), (("planned", 2),),
@@ -99,10 +97,6 @@ def test_an_overview_marks_what_the_book_lists_without_changing_source_topology(
 
     assert [node["id"] for node in payload["nodes"]] == [node.id for node in view.nodes]
     assert [node["map"] for node in payload["nodes"]] == [False, False, True, True]
-    assert payload["edges"] == [
-        {"source": wrappers[0].id, "target": "a", "statement": 1, "proof": 0},
-        {"source": "a", "target": "b", "statement": 1, "proof": 2},
-    ]
 
 
 def test_each_inventory_has_a_neutral_colour_of_its_own(tmp_path: Path) -> None:
@@ -198,12 +192,10 @@ def test_isolated_nodes_leave_the_connected_nodes_data_unchanged(tmp_path: Path)
     dag_viewer.write_payload(output, view)
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert [node["id"] for node in payload["nodes"]] == node_ids
-    assert payload["edges"] == [{"source": "root", "target": "result", "statement": 1, "proof": 0}]
     connected = tmp_path / "connected.json"
     dag_viewer.write_payload(connected, GraphView("full", "Mixed graph", nodes[:2], view.edges))
     original = json.loads(connected.read_text(encoding="utf-8"))
     assert payload["nodes"][:2] == original["nodes"]
-    assert payload["edges"] == original["edges"]
 
 
 def test_a_standalone_explorer_page_is_named_for_its_scope() -> None:
@@ -914,43 +906,6 @@ def test_viewer_script_links_are_relative_to_the_rendered_site_root(tmp_path: Pa
         graph_pages._viewer_script_link(tmp_path / "dependencies/chapters/large.md", tmp_path)
         == "../../javascripts/blueprint-dag.js"
     )
-
-
-def test_payload_preserves_dependencies_and_collapsed_cycles(tmp_path: Path) -> None:
-    nodes = (
-        ViewNode("result", "Result", "node", ("result",), (("planned", 1),)),
-        ViewNode("base", "Base", "node", ("base",), (("planned", 1),)),
-    )
-    acyclic = GraphView(
-        kind="full",
-        title="Acyclic",
-        nodes=nodes,
-        edges=(ViewEdge("base", "result", statement_count=1),),
-    )
-    cyclic = GraphView(
-        kind="project",
-        title="Collapsed cycle",
-        nodes=nodes,
-        edges=(
-            ViewEdge("base", "result", statement_count=1),
-            ViewEdge("result", "base", proof_count=1),
-        ),
-    )
-
-    for view, expected in (
-        (acyclic, [{"source": "base", "target": "result", "statement": 1, "proof": 0}]),
-        (cyclic, [
-            {"source": "base", "target": "result", "statement": 1, "proof": 0},
-            {"source": "result", "target": "base", "statement": 0, "proof": 1},
-        ]),
-    ):
-        outputs = [tmp_path / f"{view.kind}-{index}.json" for index in range(2)]
-        for output in outputs:
-            dag_viewer.write_payload(output, view)
-        assert outputs[0].read_bytes() == outputs[1].read_bytes()
-        payload = json.loads(outputs[0].read_text(encoding="utf-8"))
-        assert [node["id"] for node in payload["nodes"]] == ["result", "base"]
-        assert payload["edges"] == expected
 
 
 def test_payload_rejects_duplicate_nodes_and_unknown_edges(tmp_path: Path) -> None:

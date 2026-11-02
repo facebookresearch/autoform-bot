@@ -96,7 +96,10 @@ def test_render_publishes_dependencies_between_the_roadmap_root_and_a_chapter(
     project_payload = json.loads((output / "dependencies.json").read_text(encoding="utf-8"))
     assert project_payload["schema"] == "autoform-dag-view/v2"
     source, target = ("scope:chapter", "scope:roadmap") if root_depends_on_chapter else ("scope:roadmap", "scope:chapter")
-    assert project_payload["edges"] == [{"source": source, "target": target, "statement": 1, "proof": 0}]
+    graph = load_graph(blueprint)
+    edges = project_view(graph, derive(graph)).edges
+    assert [(edge.source, edge.target, edge.statement_count, edge.proof_count) for edge in edges] == [(source, target, 1, 0)]
+    assert project_payload["edges"] == []
     assert 'class="bp-dag-viewer"' in chapter_page
     chapter_payload = json.loads(
         (output / "dependencies/chapters/chapter.json").read_text(encoding="utf-8")

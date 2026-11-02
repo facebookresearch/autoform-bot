@@ -309,7 +309,8 @@ def test_small_and_large_chapters_use_the_same_json_payload(
     ).read_text(encoding="utf-8")
     payload = json.loads((tmp_path / "out/dependencies/chapters/large.json").read_text(encoding="utf-8"))
     assert len(payload["nodes"]) == node_count
-    assert len(payload["edges"]) == node_count - 1
+    index = json.loads((tmp_path / "out/dependencies/index.json").read_text(encoding="utf-8"))
+    assert payload["edges"] == [] and len(index["relations"]) == node_count - 1
 
 
 def test_the_structure_compatibility_page_opens_the_book(tmp_path: Path) -> None:
