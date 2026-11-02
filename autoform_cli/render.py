@@ -1093,8 +1093,9 @@ def _render_pages(
         report.pages += 1
 
     # One reading order for statement numbers, Next up and the search index.
+    walk = _reading_walk(blueprint, destination, graph)
     order = _reading_order(
-        graph, targets, _reading_pages(blueprint, destination, graph), _card_positions(
+        graph, targets, _written(walk), _card_positions(
             groups, group_pages, graph=graph, blueprint=blueprint, node_sources=node_sources,
             targets=targets, typed=site.typed,
         ),
@@ -1155,11 +1156,8 @@ def _render_pages(
         report.linked += linked
         report.unresolved.extend(unresolved)
 
-    book_pages = _book_page_order(
-        blueprint,
-        destination,
-        graph,
-    )
+    # Pages written since, such as a milestone's, join the book here.
+    book_pages = _book_page_order(blueprint, destination, graph, walk)
     # The landing page is a dashboard, not chapter one. Previous/next belongs
     # to the book, so the strip starts at the contents page. Each page is named
     # by its node's title as authored: its header holds the visible text, which
@@ -1983,20 +1981,25 @@ def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> lis
     return linked_sources
 
 
-def _book_page_order(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
-    """The landing page, then the book in reading order (:func:`_reading_pages`).
+def _book_page_order(blueprint: Path, destination: Path, graph: Graph, walk: list[Path] | None = None) -> list[Path]:
+    """The landing page, then the book in reading order (:func:`_reading_walk`).
 
     SUMMARY.md and Previous/Next follow this order, and statement numbers, Next
     up and the search index follow the same walk, so the book reads one way
-    everywhere."""
+    everywhere. A caller that has walked the book already passes *walk*."""
     landing = (destination / "README.md").resolve()
-    pages = _reading_pages(blueprint, destination, graph)
+    pages = _written(walk if walk is not None else _reading_walk(blueprint, destination, graph))
     return ([landing] if landing.is_file() else []) + [page for page in pages if page != landing]
 
 
-def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
-    """The published book pages in reading order: down the containment tree
-    from the landing page, each page's children in the order it links them,
+def _written(walk: list[Path]) -> list[Path]:
+    """The pages of *walk* written so far, resolved."""
+    return [_resolve(output) for output in walk if output.is_file()]
+
+
+def _reading_walk(blueprint: Path, destination: Path, graph: Graph) -> list[Path]:
+    """Where the book's pages are published, in reading order, written yet or
+    not: down the containment tree from the landing page, each page's children in the order it links them,
     then the ones it does not link. A child the page never links directly
     takes the place of the page's first link into its subtree, to a section
     or a result; a direct link wins over that, so a prose shortcut to a deep
@@ -2014,9 +2017,8 @@ def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Pat
     pending: list[tuple[Path, str | None]] = [(blueprint / "README.md", None)]
     while pending:
         source, parent = pending.pop()
-        output = destination / source.relative_to(blueprint)
-        if parent is not None and output.is_file():
-            ordered.append(_resolve(output))
+        if parent is not None:
+            ordered.append(destination / _relative(source, blueprint))
         own = children.get(parent, [])
         linked = [node_sources[path] for path in _book_links(source, blueprint, node_sources)] if source.is_file() else []
         direct: dict[str, int] = {}
@@ -2330,7 +2332,7 @@ def _render_summary_nav(
     A chapter's README nests under the nearest README above its folder, any
     other page under the nearest README in its own folder or above, and the
     tree is written depth first in book order. The book order walks the
-    containment tree (:func:`_reading_pages`), so a page always comes after
+    containment tree (:func:`_reading_walk`), so a page always comes after
     its chapter. Nesting by folder rather than by depth alone keeps each
     level one step below its parent, which literate-nav requires.
     """
