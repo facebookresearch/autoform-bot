@@ -86,6 +86,12 @@ date when the release is tagged.
   page again for every formula. On one CI runner, Chrome prepared the 805
   formulas of an ATLAS page in 130 ms instead of 964 ms; the typeset output is
   unchanged.
+- **Typeset once.** The explorer moves the page it opens on into its reader,
+  with the formulas MathJax typeset as the page loaded, instead of a copy that
+  it typeset again. On one CI runner, Chrome spent 561 ms in MathJax on an
+  805-formula ATLAS page instead of 918 ms, and the typeset formulas are the
+  same. The reader also shows that page's Mermaid diagrams, where it showed
+  their source.
 - **Declaration captions.** A `declaration` command with no caption, such as
   `isomorphism`, is captioned as written, first letter capitalized, in the book
   instead of "Node". Modifiers

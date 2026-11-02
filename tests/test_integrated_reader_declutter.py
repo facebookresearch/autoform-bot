@@ -89,7 +89,7 @@ def test_incomplete_or_missing_outline_and_disposal_restore_only_this_instances_
     """)
 
 
-@pytest.mark.parametrize("scenario", ["mixed", "prose", "sources", "bibliography", "proof", "math", "native_anchor", "external", "source_destination", "narrative_leaf"])
+@pytest.mark.parametrize("scenario", ["mixed", "prose", "sources", "bibliography", "proof", "math", "native_anchor", "external", "source_destination", "narrative_leaf", "raw_math_title", "typeset_math_title"])
 def test_source_proof_math_mixed_and_noncanonical_sections_stay_complete(scenario: str) -> None:
     mutation = {
         "mixed": "projectedList.children[0].text='Mathematical explanation outside the link.';",
@@ -102,6 +102,9 @@ def test_source_proof_math_mixed_and_noncanonical_sections_stay_complete(scenari
         "external": "projectedList.children[0].children[0].attrs.href='https://outside.test/reference.html';",
         "source_destination": "app.nav.getIndex().nodes.find(node=>node.id==='topic-a').navigation='source';",
         "narrative_leaf": "const leaf=app.nav.getIndex().nodes.find(node=>node.id==='topic-a');leaf.kind='node';leaf.scope='roadmap';leaf.result=false;",
+        # Math in an earlier heading protects the section, typeset or not: typeset output keeps no TeX in its text.
+        "raw_math_title": "const title=reading.querySelector('h1'),formula=new Element('span',{class:'arithmatex'},[],'\\\\(x\\\\)');title.children.push(formula);formula.parent=title;",
+        "typeset_math_title": "const title=reading.querySelector('h1'),formula=new Element('span',{class:'arithmatex'},[new Element('mjx-container',{},[],'x')]);title.children.push(formula);formula.parent=title;",
     }[scenario]
     _exercise(mutation + r"""
       const before=reading.textContent;

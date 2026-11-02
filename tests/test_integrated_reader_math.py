@@ -295,6 +295,17 @@ def test_scoped_refresh_preserves_other_live_math_and_skips_owned_output() -> No
     """)
 
 
+def test_a_typeset_reader_moved_into_another_container_is_not_typeset_again() -> None:
+    _run(r"""
+      const original = reader("\\(\\RR\\)", "\\[\\overline{AB}=2\\]"); await install();
+      const glyph = original.querySelector("mjx-container"), renders = stats.renders.length;
+      const pane = document.createElement("div"); document.body.appendChild(pane); pane.appendChild(original);
+      assert.equal(await window.AutoformMath.refresh(pane), true);
+      assert.equal(stats.renders.length, renders); assert.equal(pane.querySelector("mjx-container"), glyph);
+      assert.equal(stats.docs[0].cleared, false);
+    """)
+
+
 def test_ssr_clone_recovers_original_tex_not_glyph_text_and_retires_old_records() -> None:
     _run(r"""
       const original = reader("\\(\\RR\\)", "\\[\\overline{AB}=2\\]"); await install();

@@ -465,6 +465,35 @@ def test_canonical_node_navigation_keeps_complete_ssr_and_rebases_reading() -> N
     """)
 
 
+def test_the_loaded_page_hands_over_its_own_reading_sanitized_in_place() -> None:
+    _run(r"""
+      const app=setup(), reading=app.initial.reading;
+      const glyph=new Element('mjx-container',{},[new Element('a',{href:'c.html'},[],'c')]);
+      const drawing=new Element('style',{},[],'#diagram rect{fill:#eef}'), authored=new Element('style',{},[],'p{color:red}');
+      const drawn=[new Element('span',{'class':'arithmatex'},[glyph]), new Element('div',{'class':'mermaid'},[new Element('svg',{},[drawing])])];
+      for (const node of [...drawn,authored]) { node.parent=reading; reading.children.push(node); }
+      const opened=await app.nav.start();
+      assert.strictEqual(opened.readingSource,reading);
+      assert.equal(reading.getAttribute('onclick'),null); assert.equal(reading.querySelector('script'),null);
+      assert(!reading.children.includes(authored),'an authored style is removed in place, as from a copy');
+      assert.equal(reading.querySelector('a').getAttribute('onclick'),null);
+      assert.equal(reading.querySelector('a').href,absolute('roadmap/b.html#theorem-b'));
+      assert.equal(glyph.querySelector('a').getAttribute('href'),'c.html','typeset output is left as MathJax wrote it');
+      assert(reading.contains(drawing),'a drawn diagram keeps its style');
+      // A copy is sanitized throughout, MathJax-looking markup included.
+      const parser=global.DOMParser;
+      global.DOMParser=class { parseFromString(text) {
+        const built=page(JSON.parse(text)), math=new Element('mjx-container',{},[new Element('a',{href:'c.html',onclick:'bad()'},[],'c')]);
+        math.parent=built.reading; built.reading.children.push(math); return built.doc;
+      } };
+      await app.nav.navigate(aSpec.route); const again=await app.nav.navigate(rootSpec.route); global.DOMParser=parser;
+      assert.notStrictEqual(again.readingSource,reading); assert(app.fetches.includes(rootSpec.route));
+      const copied=again.readingSource.querySelector('mjx-container').querySelector('a');
+      assert.equal(copied.getAttribute('onclick'),null); assert.equal(copied.href,absolute('roadmap/c.html'));
+      app.nav.dispose();
+    """)
+
+
 def test_scope_map_first_transport_is_independent_of_explicit_reading_focus() -> None:
     _run(r"""
       const app=setup(),spec=addLargeScope(app);await app.nav.start();

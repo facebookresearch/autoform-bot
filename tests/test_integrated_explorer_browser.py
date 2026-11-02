@@ -228,7 +228,7 @@ def _routes(page: object, site: str, runtime: _PinnedRuntime, *, graph_client: b
 
 
 def _bridge(page: object) -> None:
-    """Mount actual router clones into one reader; do not reconstruct content."""
+    """Mount the router's actual reading into one reader; do not reconstruct content."""
     navigation = Path(__file__).resolve().parents[1] / "autoform_cli/assets/blueprint-navigation.js"
     page.add_script_tag(content=navigation.read_text(encoding="utf-8"))
     page.evaluate("""() => {
@@ -374,7 +374,7 @@ def test_delayed_engine_renders_latest_complete_reader_after_many_swaps(
     _wait_reader(page, _ALGEBRA_TITLE, _ALGEBRA_TEX)
 
 
-def test_early_ssr_typesetting_then_delayed_graph_clone_keeps_real_menu_readback(
+def test_early_ssr_typesetting_then_delayed_graph_keeps_the_same_formulas_and_real_menu_readback(
     reader_page: object, reader_site: str, pinned_runtime: _PinnedRuntime,
 ) -> None:
     page = reader_page
@@ -402,7 +402,8 @@ def test_early_ssr_typesetting_then_delayed_graph_clone_keeps_real_menu_readback
         route.continue_()
     assert page.evaluate("() => __readerStart.then(Boolean)") is True
     reader = _wait_reader(page, _ALGEBRA_TITLE, _ALGEBRA_TEX)
-    assert page.evaluate("() => __originalSSRGlyph.isConnected") is False
+    # The page's own typeset formulas move into the reader rather than being typeset again.
+    assert page.evaluate("() => __originalSSRGlyph === document.querySelector('#test-complete-reader mjx-container')") is True
     assert _math_source(page, reader.locator("mjx-container").last) == _ALGEBRA_TEX[-1]
     assert "mathvariant=\"double-struck\"" in _math_source(page, reader.locator("mjx-container").first, mathml=True)
 
