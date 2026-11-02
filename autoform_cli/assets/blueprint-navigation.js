@@ -19,7 +19,7 @@
   if (window.AutoformNavigation) return;
 
   var HISTORY_KEY = "autoformNavigation", GRAPH_SCHEMA = "autoform-dag-view/v2", INDEX_SCHEMA = "autoform-dag-search/v1";
-  var WIKI_SCHEMA = "autoform-wiki-links/v1", INDEX_SLICE_MS = 10;
+  var WIKI_SCHEMA = "autoform-wiki-links/v1", INDEX_SLICE_MS = 25;
 
   function create(options) {
     options = options || {};
@@ -236,7 +236,8 @@
     async function normalizeIndex(payload, base) {
       if (!payload || payload.schema !== INDEX_SCHEMA || !Array.isArray(payload.nodes)) throw new Error("Unsupported search index");
       // Batches end on time, not on a row count: each pause waits two frames, so
-      // short fixed batches spent most of a large index's load waiting.
+      // short fixed batches spent most of a large index's load waiting. The clock
+      // is read every 128 rows or relations, a small fraction of a slice's work.
       var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [], slice = clock();
       // Rows on one page share the part before "#", so resolve it once. A fragment
       // made of characters the URL parser keeps as written is appended. Other
@@ -273,7 +274,7 @@
         // A serialized URL's first "#" starts its fragment, so this is resource(copy.route) without a parse.
         if (copy.route) { byRoute.set(copy.route, copy); knownDocuments.add(copy.route.split("#")[0]); }
         nodes.push(copy);
-        if (clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
+        if ((position + 1) % 128 === 0 && clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
       }
       var relations;
       if (payload.relations !== undefined) {
@@ -287,7 +288,7 @@
           if (!ids.has(from) || !ids.has(to) || !Number.isSafeInteger(row[2]) || !Number.isSafeInteger(row[3]) ||
               row[2] < 0 || row[3] < 0 || row[2] + row[3] === 0) throw new Error("Invalid search relation endpoint");
           relations.push([from, to, row[2], row[3]]);
-          if (clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
+          if ((edge + 1) % 128 === 0 && clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
         }
       }
       if (disposed) throw abortError();

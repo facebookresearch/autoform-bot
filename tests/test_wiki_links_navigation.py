@@ -161,7 +161,7 @@ function restore(){global.setTimeout=nativeTimer;global.clearTimeout=nativeClear
 
 
 @pytest.mark.parametrize("transport", ("stream", "single"))
-@pytest.mark.parametrize(("slow", "expected"), ((10, ["decode", "pause", "parse"]), (9, ["decode", "parse"])))
+@pytest.mark.parametrize(("slow", "expected"), ((25, ["decode", "pause", "parse"]), (24, ["decode", "parse"])))
 def test_a_slow_index_read_pauses_before_the_parse(transport: str, slow: int, expected: list[str]) -> None:
     _run(f"const transport={json.dumps(transport)},SLOW={slow},expected={json.dumps(expected)};\n" + r"""
       const app=await wikiApp({transport});
@@ -176,7 +176,7 @@ def test_a_slow_index_read_pauses_before_the_parse(transport: str, slow: int, ex
 
 
 def test_a_visible_page_paints_two_frames_between_reading_and_parsing_the_index() -> None:
-    _run("const SLOW=10;\nconst app=await wikiApp();\n" + _READ_EVENTS + r"""
+    _run("const SLOW=25;\nconst app=await wikiApp();\n" + _READ_EVENTS + r"""
       const frames=[];app.initial.doc.visibilityState='visible';app.win.cancelAnimationFrame=()=>{};
       app.win.requestAnimationFrame=callback=>{events.push('frame');frames.push(callback);return frames.length;};
       // Hold the 50 ms fallback, so only the frames can end the pause.

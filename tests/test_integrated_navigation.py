@@ -85,8 +85,9 @@ function index() { return {schema:'autoform-dag-search/v1',nodes:[
 const rootSpec = {title:'Root',route:absolute('roadmap/index.html'),data:'../dependencies.json',scope:'roadmap'};
 const aSpec = {title:'A topic',route:absolute('roadmap/a.html'),data:'../dependencies/a.json',scope:'a'};
 const bSpec = {title:'B topic',route:absolute('roadmap/b.html'),data:'../dependencies/b.json',scope:'b'};
-// The index normalizer ends a batch once 10 ms have passed; this clock passes them every 512 reads.
-function steppedClock(app) { let tick=0; app.win.performance={now:()=>tick++*10/512}; return app; }
+// The index normalizer reads the clock every 128 rows and ends a batch once 25 ms have passed; this clock passes
+// them every 4 reads, so a batch ends every 512 rows.
+function steppedClock(app) { let tick=0; app.win.performance={now:()=>tick++*25/4}; return app; }
 function setup(extra = {}) {
   const initial = page(extra.initial || rootSpec), listeners = new Map(), commits = [], errors = [], restored = [], fetches = [];
   let state = {mode:'map',readingScroll:0}, pointer = 0;
@@ -937,16 +938,20 @@ def test_large_index_yields_and_commits_only_after_all_rows_validate() -> None:
 
 def test_index_batches_end_on_elapsed_time_not_on_a_row_count() -> None:
     _run(r"""
-      for(const [step,pause,size,expected] of [[0,0,2000,0],[10,0,40,44],[10/512,50,1100,2]]) {
-        // A frozen clock never ends a batch; one that passes a whole slice per read ends one after every row.
-        // The 50 ms spent in each pause must not count toward the next batch.
-        const payload=index();for(let n=0;n<size;n++) payload.nodes.push({id:'leaf-'+n,title:'Leaf '+n});
+      // 1,280 rows and 384 relations. A frozen clock never ends a batch. The clock is read every 128 rows or relations,
+      // so one that passes a whole slice per read ends a batch after every 128, and no sooner.
+      // The 50 ms spent in each pause must not count toward the next batch. Batches never change the index.
+      const payload=index();for(let n=0;n<1277;n++) payload.nodes.push({id:'leaf-'+n,title:'Leaf '+n});
+      payload.relations=Array.from({length:384},(_,n)=>[n%3,(n+1)%3,1,0]);let unbatched=null;
+      for(const [step,pause,expected] of [[0,0,0],[25,0,13],[25/4,50,3]]) {
         const app=setup();app.contents.set(absolute('dependencies/index.json'),payload);
         let now=0;app.win.performance={now:()=>now+=step};
         const nativeTimer=global.setTimeout;let yields=0;
         global.setTimeout=(callback,delay,...args)=>{if(delay===0){yields++;now+=pause;}return nativeTimer(callback,delay,...args);};
-        try {const result=await app.nav.loadIndex();assert.equal(result.nodes.length,size+3);assert.equal(yields,expected);}
-        finally {global.setTimeout=nativeTimer;app.nav.dispose();}
+        try {
+          const result=await app.nav.loadIndex();assert.equal(result.nodes.length,1280);assert.equal(yields,expected);
+          unbatched=unbatched||JSON.stringify(result);assert.equal(JSON.stringify(result),unbatched);
+        } finally {global.setTimeout=nativeTimer;app.nav.dispose();}
       }
     """)
 

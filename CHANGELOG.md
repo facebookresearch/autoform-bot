@@ -368,17 +368,17 @@ date when the release is tagged.
   in dependency packages. It no longer reads other nested checkouts, such as
   worker worktrees with their own `.lake`, the root's build output or a
   package's `.lake`, which could stall the run before its probe (#429).
-- **Search index load.** The explorer prepares its search index in 10 ms
-  slices rather than 512-row batches, and resolves each page's links once
-  rather than every row's. On ATLAS (38,661 rows), search, the Topics outline
-  and concept links were ready 5.3 s after the index was parsed, most of it
-  spent waiting between batches; they are now ready after 1.0 s in WebKit and
-  0.7 s in Chrome.
+- **Search index load.** The explorer prepares its search index in 25 ms
+  slices rather than 512-row batches, reading the clock every 128 rows, and
+  resolves each page's links once rather than every row's. On ATLAS (38,661
+  rows), search, the Topics outline and concept links were ready 5.3 s after
+  the index was parsed, most of it spent waiting between batches; with 10 ms
+  slices they were ready after 1.0 s in WebKit and 0.7 s in Chrome.
 - **Search index memory.** The explorer no longer keeps the search index's
   text in its page cache after preparing the index. ATLAS's 42 MB index took
   40 of the cache's 48 MiB, so pages and graphs already read were dropped and
   fetched again. A body WebKit hands over in one piece is hashed and decoded
-  without a copy, and when reading the index takes at least 10 ms, a frame
+  without a copy, and when reading the index takes at least 25 ms, a frame
   paints before it is parsed. On ATLAS, on one CI runner, the longest frame
   while the index was read and parsed went from 217 ms to 142 ms in Chrome
   and from 199 ms to 164 ms in WebKit.
