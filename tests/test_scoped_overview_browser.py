@@ -334,7 +334,7 @@ def _native_scope_math(page: object) -> object:
 
 
 @pytest.mark.parametrize(("width", "height"), _VIEWPORTS)
-def test_exact_lean_search_precedes_groups_and_keeps_complete_math_source_and_scope_back(
+def test_exact_lean_search_keeps_complete_math_source_and_scope_back(
     workspace_page: object, scoped_consumer: _ScopedConsumer, workspace_runtime: _PinnedRuntime, width: int, height: int,
 ) -> None:
     page, consumer = workspace_page, scoped_consumer
@@ -343,12 +343,13 @@ def test_exact_lean_search_precedes_groups_and_keeps_complete_math_source_and_sc
     page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
     _open(page, consumer.site, workspace_runtime, _SCOPE)
     _committed(page)
+    # The workshop's page has prose of its own, so a desktop reads it beside the map and a phone opens it on the map.
+    handle, opened = page.locator(".bp-reading-pane > .bp-dag-sheet-handle"), "true" if width > 720 else "false"
+    playwright.expect(handle).to_have_attribute("aria-expanded", opened)
     _search(page, _TARGET_LEAN, _TARGET)
     page.wait_for_url(consumer.site.route(_TARGET))
     _committed(page)
-    playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(0)
     _selected(page, _TARGET)
-    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
     card = _native_math(page)
     playwright.expect(card).to_contain_text(_END)
@@ -368,16 +369,16 @@ def test_exact_lean_search_precedes_groups_and_keeps_complete_math_source_and_sc
     assert "".join(_math_source(page, formula).split()) == "".join(_TEX[-1].split())
     page.go_back()
     _committed(page)
-    playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(1)
     playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_SCOPE_TITLE)
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    playwright.expect(handle).to_have_attribute("aria-expanded", opened)
+    playwright.expect(page.locator(".bp-dag-overview-only")).to_have_count(0)
     _selected(page, _SCOPE)
     assert documents == [consumer.site.route(_SCOPE)]
     assert page.evaluate("() => document === __workspaceDocument") is True
 
 
 @pytest.mark.parametrize(("width", "height"), _VIEWPORTS)
-def test_native_scope_reading_links_open_full_math_and_restore_closed_group_history(
+def test_native_scope_reading_links_open_full_math_and_back_restores_the_scope(
     workspace_page: object, scoped_consumer: _ScopedConsumer, workspace_runtime: _PinnedRuntime, width: int, height: int,
 ) -> None:
     page, consumer = workspace_page, scoped_consumer
@@ -386,8 +387,9 @@ def test_native_scope_reading_links_open_full_math_and_restore_closed_group_hist
     page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
     _open(page, consumer.site, workspace_runtime, _SCOPE)
     _committed(page)
-    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    # A desktop reads the workshop's own prose beside the map; a phone opens it on the map.
+    handle, opened = page.locator(".bp-reading-pane > .bp-dag-sheet-handle"), "true" if width > 720 else "false"
+    playwright.expect(handle).to_have_attribute("aria-expanded", opened)
     for label, anchor in (("Read the complete workshop", None), ("Read the retained identity notes", _HEADING)):
         _search(page, "remote/note-00", "remote/note-00")
         page.wait_for_url(consumer.site.route("remote/note-00"))
@@ -420,8 +422,8 @@ def test_native_scope_reading_links_open_full_math_and_restore_closed_group_hist
         page.wait_for_url(consumer.site.route(_SCOPE))
         playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_SCOPE_TITLE)
         _committed(page)
-        playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-        playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(1)
+        playwright.expect(handle).to_have_attribute("aria-expanded", opened)
+        playwright.expect(page.locator(".bp-dag-overview-only")).to_have_count(0)
         _selected(page, _SCOPE)
     assert documents == [consumer.site.route(_SCOPE)]
     assert page.evaluate("() => document === __workspaceDocument") is True

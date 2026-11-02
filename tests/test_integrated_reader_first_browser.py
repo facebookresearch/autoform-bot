@@ -1,14 +1,12 @@
 """Desktop chapters open with the reader showing the chapter text.
 
-Map-first is only for real overviews: authored-area overviews and scopes
-coarsened because they exceed the map's node limit
-(tests/test_scoped_overview_browser.py covers the authored-area case). A hub
-chapter whose three statements depend on three other chapters gets linked
-context cards, and a 14-statement chapter with one unlinked statement gets a
-shelf; neither is an overview. At 1440x900 both must open on the whole map
-with a reader at least 340 px wide and the chapter text visible, without the
-overview's collapsed layout. A chapter of 121 linked statements is coarsened,
-so it keeps the collapsed reader.
+Map-first is only for pages whose reader would just list their children
+(tests/test_integrated_workspace_browser.py covers that case). A hub chapter
+whose three statements depend on three other chapters, a 14-statement chapter
+with one unlinked statement, and a chapter of 121 linked statements, more than
+the old explorer could draw, all have text of their own. At 1440x900 each must
+open on the whole map with a reader at least 340 px wide and the chapter text
+visible, without the overview's collapsed layout.
 """
 
 from __future__ import annotations
@@ -59,7 +57,7 @@ def chapters_site(tmp_path_factory: pytest.TempPathFactory) -> Path:
     # A chain of 13 statements and one with no local link.
     shelf = [(f"s{k:02d}", f"Shelf {k}", [(f"Shelf {k - 1}", f"s{k - 1:02d}.md")] if 0 < k < 13 else []) for k in range(14)]
     _chapter(roadmap, "shelf", "Shelf", shelf)
-    # Eleven chains of eleven linked statements, one over the map's limit of 120.
+    # Eleven chains of eleven linked statements, one over the old explorer's limit of 120.
     big = [(f"b{k:03d}", f"Big {k}", [(f"Big {k - 1}", f"b{k - 1:03d}.md")] if k % 11 else []) for k in range(121)]
     _chapter(roadmap, "big", "Big", big)
     (roadmap / "README.md").write_text(
@@ -75,7 +73,7 @@ def _frames(page: object) -> None:
     page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))))")
 
 
-@pytest.mark.parametrize("chapter", ["hub", "shelf"])
+@pytest.mark.parametrize("chapter", ["hub", "shelf", "big"])
 def test_desktop_chapter_opens_with_the_reader(
     webkit_browser: object, pinned_runtime: object, chapters_site: Path, chapter: str,  # noqa: F811
 ) -> None:
@@ -92,39 +90,10 @@ def test_desktop_chapter_opens_with_the_reader(
             page.wait_for_load_state("networkidle")
             _frames(page)
             viewer = page.locator(".bp-dag-viewer")
-            assert viewer.evaluate("element => element.classList.contains('bp-dag-scope-overview')") is False
+            assert viewer.evaluate("element => element.classList.contains('bp-dag-overview-only')") is False
             reader = page.locator(".bp-reading-pane").bounding_box()
             assert reader is not None and reader["width"] >= 340, reader
             assert page.locator(".bp-reading-body").get_by_text("chapter text is readable here").is_visible()
-            # The fixture really has the context card or the shelf that once collapsed the reader.
-            if chapter == "hub":
-                assert page.locator(".bp-dag-node", has_text="Needed here").count() == 1
-            else:
-                assert viewer.evaluate("element => element.classList.contains('bp-dag-has-shelves')") is True
-        finally:
-            context.close()
-    assert errors == []
-
-
-def test_a_chapter_over_the_map_limit_opens_map_first(
-    webkit_browser: object, pinned_runtime: object, chapters_site: Path,  # noqa: F811
-) -> None:
-    errors: list[str] = []
-    with _served(chapters_site) as url:
-        context = webkit_browser.new_context(viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
-        try:
-            page = context.new_page()
-            page.set_default_timeout(30_000)
-            page.on("pageerror", lambda error: errors.append(str(error)))
-            _routes(page, url, pinned_runtime, graph_client=True)
-            page.goto(f"{url}/roadmap/big/index.html")
-            page.locator(".bp-dag-integrated .bp-whole-map .pm-app").wait_for()
-            page.wait_for_load_state("networkidle")
-            _frames(page)
-            viewer = page.locator(".bp-dag-viewer")
-            assert viewer.evaluate("element => element.classList.contains('bp-dag-scope-overview')") is True
-            reader = page.locator(".bp-reading-pane").bounding_box()
-            assert reader is not None and reader["width"] <= 64, reader
         finally:
             context.close()
     assert errors == []

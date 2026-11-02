@@ -27,7 +27,6 @@ from tests.test_integrated_workspace_browser import (
     _full_math,
     _open,
     _peek_reader,
-    _pixels,
     _search,
     _selected,
     _served,
@@ -182,7 +181,6 @@ def test_late_authored_scope_and_ancestry_survive_the_outline_bound_and_explicit
     assert page.url == site.route(_LATE_RESULT)
     assert documents == [site.route(_LATE_RESULT).split("#", 1)[0]]
     assert page.evaluate("() => document === __workspaceDocument") is True
-    assert _pixels(page)["painted"] > 0
 
 
 def test_edited_outgoing_entry_and_same_url_entries_restore_their_own_reading_and_map_state(
@@ -239,7 +237,6 @@ def test_edited_outgoing_entry_and_same_url_entries_restore_their_own_reading_an
     assert page.url == site.route(_OTHER)
     assert documents == [site.route(_TARGET).split("#", 1)[0]]
     assert page.evaluate("() => document === __workspaceDocument") is True
-    assert _pixels(page)["painted"] > 0
 
 
 def _horizontal_bounds(page: object, locator: object) -> dict:
@@ -264,7 +261,6 @@ def test_phone_reader_opens_at_half_covers_the_body_at_full_and_peeks_over_the_m
     _peek_reader(page, handle)
     _frames(page)
     playwright.expect(page.locator(".bp-whole-map .pm-part").first).to_be_visible()
-    assert _pixels(page)["painted"] > 0
     _search(page, _TARGET_TITLE, _TARGET)
     page.wait_for_url(site.route(_TARGET))
     assert _LAST_SENTENCE in _full_math(page).inner_text()
@@ -315,4 +311,4 @@ def test_phone_reader_opens_at_half_covers_the_body_at_full_and_peeks_over_the_m
     assert _LAST_SENTENCE in _full_math(page).inner_text()
     assert documents == [site.route("roadmap")]
     assert page.evaluate("() => document === __workspaceDocument") is True
-    assert _pixels(page)["painted"] > 0
+    playwright.expect(page.locator(".bp-whole-map .pm-part").first).to_be_visible()
