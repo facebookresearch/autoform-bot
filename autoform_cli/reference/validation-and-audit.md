@@ -135,16 +135,15 @@ Lean accepts it, or selected where Lean binds it nowhere outside its file.
 
 `autoform audit` reports structured findings at blueprint-relative paths. It
 checks that no article leaves a code fence open, that formalizable articles are
-declaration-sized leaves with statement text and an explicit dependency
-section, that asserted Mathlib facts are internally consistent, and that cited
-work resolves to local source material without escaping the blueprint.
-Coverage files are checked for broken links and explicitly declared gaps. With
-`--lean-root`, local declaration names and kinds are checked against the Lean
-source index, along with the elaboration limits each target runs under; a
-`node-too-large` warning, which never fails the audit, names a node whose
-resolved `lean:` declarations span at least 200 lines and at least four
-times this project's median, each from its first line to the line before
-the next declaration. `review_approved` is left to `review check`.
+declaration-sized leaves with statement text and an explicit dependency section,
+that asserted Mathlib facts are internally consistent, and that cited work
+resolves to local source material without escaping the blueprint. Coverage files
+are checked for broken links and explicitly declared gaps. With `--lean-root`,
+local declaration names and kinds are checked against the Lean source index,
+along with the elaboration limits each target runs under; a `node-too-large`
+warning names a node whose resolved `lean:` declarations span at least 200 lines
+and at least four times this project's median, each from its first line to the
+line before the next declaration. `review_approved` is left to `review check`.
 
 An alias has its target's kind, size, and elaboration limits when the index can
 be sure what the target is (`alias_target` in `lean.py`); otherwise it matches
@@ -176,12 +175,13 @@ and `declarations`, one object per affected declaration and setting with its
 `name`, `option`, `value`, `location` (the `set_option` as `path:line` relative
 to the Lean root), and `scope` (`file`, `section`, `declaration`, or `proof`),
 sorted by name. The catalog limit warnings under [Elaboration
-limits](#elaboration-limits) fill `declarations`. Three warnings leave it empty:
+limits](#elaboration-limits) fill `declarations`. Four warnings leave it empty:
 `atlas-omission`, at `atlas.json`, names what loading ignored in that file;
 `decomposed-without-declaration`, at `coverage/README.md`, names a `DECOMPOSED`
-row's links that reach no declaration leaf; and `duplicate-lean-target`, at
-each target involved, names the others taking the same credit. A target (a leaf
-carrying `declaration:`) recording `statement: formalized` takes progress
+row's links that reach no declaration leaf; `duplicate-lean-target`, at each
+target involved, names the others taking the same credit; and `node-too-large`,
+at the node's article, gives its span against the project's median. A target (a
+leaf carrying `declaration:`) recording `statement: formalized` takes progress
 credit for its first `lean:` name, and a `mathlib: true` one Mathlib credit for
 its first `mathlib_declaration` name, compared as Lean names: `_root_.` and
 `«»` quoting drop out, and `«x.y»` stays one component. Later names, catalogs,
