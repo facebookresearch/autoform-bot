@@ -61,6 +61,8 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 from markdown.treeprocessors import Treeprocessor
 
 from . import dag_viewer, graph_pages, graph_views, project_map, status
+from ._fs import resolve as _resolve
+from ._fs import resolving_once
 from ._repository import detect_ref, detect_repository_url, repository_top_level, verify_repository_snapshot
 from ._tree_snapshot import (
     TreeChangedError,
@@ -450,14 +452,15 @@ def publication_issues(graph: Graph, blueprint: Path) -> list[str]:
     except PublicationError as exc:
         return [f"{issue}; autoform render stops until this is fixed" for issue in exc.issues]
     files = _captured_files(snapshot, blueprint)
-    site = _publication(
-        graph,
-        blueprint,
-        files,
-        destination=blueprint,
-        sources_base=None,
-        unpublished=_unpublished_folders(snapshot, blueprint),
-    )
+    with resolving_once():
+        site = _publication(
+            graph,
+            blueprint,
+            files,
+            destination=blueprint,
+            sources_base=None,
+            unpublished=_unpublished_folders(snapshot, blueprint),
+        )
     stops = _in_the_way(blueprint, graph, files)
     return [*site.warnings, *(f"{issue}; autoform render stops until this is fixed" for issue in stops)]
 
@@ -545,7 +548,7 @@ def _publication(
         }
     )
     node_sources = {
-        node.path.resolve(): node_id for node_id, node in graph.nodes.items()
+        _resolve(node.path): node_id for node_id, node in graph.nodes.items()
     }
 
     chapters = {page: group for group, page in group_pages.items()}
@@ -557,7 +560,7 @@ def _publication(
     # A link to a file the site leaves out keeps only its text, so the strict
     # build finds nothing missing.
     left_out = frozenset(
-        source.resolve()
+        _resolve(source)
         for source in snapshot
         if source.relative_to(blueprint).as_posix() not in written_over
         and (
@@ -878,7 +881,7 @@ def render_site(
     # the blueprint's place in the repository, so a path below the copy's root is
     # the repository path it had when render read the vault.
     relative = blueprint.relative_to(top_level) if _is_within(blueprint, top_level) else Path("blueprint")
-    with _private_copy(snapshot, relative) as (copy_root, copy):
+    with _private_copy(snapshot, relative) as (copy_root, copy), resolving_once():
         graph = _load_graph(copy, blueprint, unpublished_ids)
         coverage, coverage_issues = load_coverage(copy)
         if coverage_issues:
@@ -1925,7 +1928,7 @@ def _book_sources(graph: Graph) -> dict[Path, str]:
     """The book's pages, containers and narrative articles, by resolved source."""
     containers = _containers(graph)
     return {
-        node.path.resolve(): node.id
+        _resolve(node.path): node.id
         for node in graph.nodes.values()
         if node.id in containers or (not node.formalizable and node.catalog is None)
     }
@@ -1947,7 +1950,7 @@ def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> lis
             try:
                 if not path or urlsplit(path).scheme or path.startswith("/"):
                     continue
-                candidate = (source.parent / unquote(path)).resolve()
+                candidate = _resolve(source.parent / unquote(path))
                 candidate_relative = candidate.relative_to(blueprint)
             except ValueError:  # a target outside the vault, an unbalanced IPv6 bracket, or a decoded NUL
                 continue
@@ -1991,10 +1994,10 @@ def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Pat
     the tree does not move it. The children a page does not link at all
     follow in dependency order, ties by id (:func:`_dependency_sorted`)."""
     book_sources = _book_sources(graph)
-    node_sources = {node.path.resolve(): node.id for node in graph.nodes.values()}
+    node_sources = {_resolve(node.path): node.id for node in graph.nodes.values()}
     children: dict[str | None, list[str]] = {}
     for node_id in sorted(graph.nodes):
-        if graph.nodes[node_id].path.resolve() in book_sources:
+        if _resolve(graph.nodes[node_id].path) in book_sources:
             children.setdefault(graph.nodes[node_id].parent, []).append(node_id)
     precedence: dict[str, set[str]] | None = None
     ordered: list[Path] = []
@@ -2003,7 +2006,7 @@ def _reading_pages(blueprint: Path, destination: Path, graph: Graph) -> list[Pat
         source, parent = pending.pop()
         output = destination / source.relative_to(blueprint)
         if parent is not None and output.is_file():
-            ordered.append(output.resolve())
+            ordered.append(_resolve(output))
         own = children.get(parent, [])
         linked = [node_sources[path] for path in _book_links(source, blueprint, node_sources)] if source.is_file() else []
         direct: dict[str, int] = {}
@@ -2875,8 +2878,8 @@ class _PageLinks(Mapping[str, str]):
         href = self._hrefs.get(target)
         if href is None:
             if self._resolved_page is None:
-                self._resolved_page = self._page.resolve()
-            if target.resolve() == self._resolved_page:
+                self._resolved_page = _resolve(self._page)
+            if _resolve(target) == self._resolved_page:
                 href = ""
             else:
                 href = relative_link(target, self._page, self._extension)

@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
+
+#: Each path resolved inside :func:`resolving_once`, keyed by its spelling:
+#: Windows paths compare without case, and a missing file keeps the case it was given.
+_RESOLVED: ContextVar[dict[str, Path] | None] = ContextVar("_RESOLVED", default=None)
 
 
 def resolved_path(path: Path) -> Path | None:
@@ -22,6 +29,39 @@ def resolved_path(path: Path) -> Path | None:
         return Path(os.path.realpath(path, strict=True))
     except (OSError, ValueError):  # ValueError: a NUL in the path
         return None
+
+
+@contextmanager
+def resolving_once() -> Iterator[None]:
+    """Resolve each path once until the block ends.
+
+    For a render or a check, which resolve the same pages and nodes many times
+    and create no symbolic links meanwhile. A path that does not exist yet
+    resolves to its spelling, so writing it later changes nothing. A block
+    inside another shares the outer one's memory.
+    """
+
+    if _RESOLVED.get() is not None:
+        yield
+        return
+    token = _RESOLVED.set({})
+    try:
+        yield
+    finally:
+        _RESOLVED.reset(token)
+
+
+def resolve(path: Path) -> Path:
+    """``path.resolve()``, remembered inside :func:`resolving_once`."""
+
+    memory = _RESOLVED.get()
+    if memory is None:
+        return path.resolve()
+    key = os.fspath(path)
+    resolved = memory.get(key)
+    if resolved is None:
+        resolved = memory[key] = path.resolve()
+    return resolved
 
 
 def directory_path(path: Path) -> Path | None:
