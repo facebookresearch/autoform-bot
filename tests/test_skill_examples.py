@@ -717,13 +717,6 @@ def test_documented_autoform_commands_parse(repo_root: Path, monkeypatch: pytest
     assert not failures, failures
 
 
-_UNSHIPPED_SCHEMAS = {
-    # The read-back rubric's tooling is in open PRs #216 and #284.
-    "autoform-readback-faithfulness-item/v1",
-    "autoform-readback-faithfulness-verdict/v1",
-}
-
-
 def test_documented_schema_ids_exist_in_code(repo_root: Path) -> None:
     code = _shipped_code(repo_root)
     # The generated verify workflow checks the review policy marker by the sha256 of its line.
@@ -738,8 +731,7 @@ def test_documented_schema_ids_exist_in_code(repo_root: Path) -> None:
         for schema in re.findall(r"\bautoform-[a-z0-9-]+/v\d+\b", page.read_text(encoding="utf-8"))
     ]
     assert len({schema for _, schema in named}) >= 10  # the extraction still finds the docs' schema ids
-    unknown = [(where, schema) for where, schema in named if schema not in code]
-    missing = [f"{where}: {schema}" for where, schema in unknown if schema not in _UNSHIPPED_SCHEMAS]
+    missing = [f"{where}: {schema}" for where, schema in named if schema not in code]
     assert not missing, missing
 
 
@@ -759,8 +751,6 @@ def test_codes_the_skills_name_exist_in_code(repo_root: Path) -> None:
     ]
     missing = []
     for page in sorted((repo_root / "skills").rglob("*.md")):
-        if page.name == "readback-faithfulness.md":  # rubric categories; their tooling is in #216 and #284
-            continue
         for name in sorted(set(re.findall(r"`([a-z]+(?:-[a-z]+)+)`", page.read_text(encoding="utf-8")))):
             if name not in _NOT_CODES and f'"{name}"' not in code and not any(p.fullmatch(name) for p in composed):
                 missing.append(f"{page.relative_to(repo_root)}: {name}")
