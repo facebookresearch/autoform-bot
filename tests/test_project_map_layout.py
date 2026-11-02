@@ -287,6 +287,25 @@ def test_result_view_puts_prerequisites_above_and_hides_implied_links() -> None:
     """)
 
 
+def test_implied_links_are_routed_when_first_read() -> None:
+    _run(r"""
+    const results = ['c', 'b', 'a'].map(id => ({id, title: id}));
+    const edges = [['c', 'b', 1, 0], ['b', 'a', 1, 0], ['c', 'a', 1, 0]];
+    const view = L.layoutCommunity(results, edges, [], {x: 0, y: 0, w: 520, h: 600, unit: 1});
+    // A draw reads them only around a selected result, so laying out a part routes none of them:
+    // a card dropped before the first read takes its implied link with it.
+    assert.equal(typeof Object.getOwnPropertyDescriptor(view, 'implied').get, 'function');
+    const early = L.layoutCommunity(results, edges, [], {x: 0, y: 0, w: 520, h: 600, unit: 1});
+    delete early.cards.a;
+    assert.deepEqual(early.implied, []);
+    const implied = view.implied;
+    assert.strictEqual(view.implied, implied, 'routed once');
+    assert.deepEqual(implied.map(r => [r.from, r.to].sort().join()), ['a,c']);
+    checkRoutes(implied, view.cards);
+    assert.deepEqual(Object.keys(JSON.parse(JSON.stringify(view))).sort(), ['cards', 'fold', 'implied', 'routes', 'stubs']);
+    """)
+
+
 def test_labels_appear_only_where_they_fit() -> None:
     _run(r"""
     const regions = sizes(5, 400).map((results, k) => summary('r' + k, results));
