@@ -109,6 +109,12 @@ date when the release is tagged.
   or Depends on headings, which holds for about nine in ten ATLAS articles.
   The links it finds are the same. On one CI runner, ATLAS rendered in 397 s
   instead of 456 s.
+- **Render reuse.** Render reuses one converter for statement and note bodies,
+  where it built one for each (about 16,000 on ATLAS), walks the book once
+  instead of twice, keeps every title's label from the search index for the
+  map, and compares path parts where it called `relative_to`, which is slow
+  from Python 3.12. On one CI runner ATLAS rendered in 312 s instead of 340 s,
+  with the same output.
 - **Landing.** The ready figure links the list of what it counts, each count
   shows once with thousands separators, and the brand gradient is off the
   figures, bar and header hairline. Source coverage reads in plain words
