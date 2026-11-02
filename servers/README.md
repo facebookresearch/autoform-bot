@@ -30,16 +30,15 @@ requests"; the runtime goes on draining and exits by itself.
 
 `run_lean_code` runs code in a fresh REPL child for each call, so no
 process-owned environment or proof-state handle survives the response. Before
-that child starts, Lean's own header parser, run by the selected Lake
-toolchain, reads the submitted source. Every import it reports must have one of
-the allowlisted roots `Mathlib`, `Aesop`, `Batteries`, or `LeanSearchClient` (a
+that child starts, Lean's own header parser, run by the selected Lake toolchain,
+reads the submitted source. Every import it reports must have one of the
+allowlisted roots `Mathlib`, `Aesop`, `Batteries`, or `LeanSearchClient` (a
 plain `Init` import is ignored); names still quoted or path-like after Lean
 parses them are refused, and a rejected or unrecognized parser response fails
-closed. Code with other
-imports, such as the project's own modules, is checked as a saved file with
-`lean_diagnostic_messages` instead. The allowlist is a policy check, not a
-sandbox: each call runs with the runtime user's privileges, and `Init` alone
-provides file and process IO, for example `#eval IO.Process.run`.
+closed. Code with other imports, such as the project's own modules, is checked
+as a saved file with `lean_diagnostic_messages` instead. The allowlist is a
+policy check, not a sandbox: each call runs with the runtime user's privileges,
+and `Init` alone provides file and process IO, as in `#eval IO.Process.run`.
 
 A REPL call whose header does not start with `module` or `prelude` imports
 Mathlib, so it takes at least as long as `import Mathlib` on the node. The REPL
@@ -81,8 +80,7 @@ under `config`.
 
 - `AUTOFORM_MAX_LEAN_PROJECTS` (default 4): projects with loaded Lean state.
 - `AUTOFORM_REPL_TOTAL_WORKERS` (default one per 32 GB of memory, at least 1)
-  and `AUTOFORM_REPL_WORKERS_PER_PROJECT` (default 1): concurrent REPL calls;
-  a worker is one call slot.
+  and `AUTOFORM_REPL_WORKERS_PER_PROJECT` (default 1): REPL call slots.
 - `AUTOFORM_LEAN_IDLE_SECONDS` (default 1800): when idle project state closes;
   the runtime itself stays up.
 - `LEAN_LSP_TIMEOUT` (default 60 seconds), at most
@@ -114,9 +112,8 @@ under `config`.
   matching toolchain's `lean --run`, passing the source on standard input.
 
 The runtime refuses to start, which leaves the LSP tools unavailable too, when
-`LEAN_LSP_TIMEOUT` exceeds its maximum, when an explicit
-`AUTOFORM_REPL_REQUEST_TIMEOUT` exceeds its cap, when either maximum does not
-fit `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT`, when
-`AUTOFORM_REPL_WORKERS_PER_PROJECT` exceeds `AUTOFORM_REPL_TOTAL_WORKERS`, or
-when `LEAN_REPL_CMD` does not start with a `lake` executable and
+`LEAN_LSP_TIMEOUT` or an explicit `AUTOFORM_REPL_REQUEST_TIMEOUT` exceeds its
+maximum, when either maximum does not fit `AUTOFORM_RUNTIME_RESPONSE_TIMEOUT`,
+when `AUTOFORM_REPL_WORKERS_PER_PROJECT` exceeds `AUTOFORM_REPL_TOTAL_WORKERS`,
+or when `LEAN_REPL_CMD` does not start with a `lake` executable and
 `LEAN_REPL_HEADER_CMD` is unset.
