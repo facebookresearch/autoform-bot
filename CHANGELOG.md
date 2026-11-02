@@ -46,6 +46,9 @@ date when the release is tagged.
 
 ### Changed
 
+- **Titles typeset their math.** Statement headings, Next up and the
+  Previous/Next links typeset a title's formulas, as the reader's dependency
+  references already did, instead of showing its TeX as typed.
 - **Import closure.** `work import-impact --module-scope import-closure` tests
   each module only against the files that hold its last component, which one
   pass over each file finds, and reads a file that libraries sharing a `srcDir`

@@ -588,6 +588,48 @@ def test_statement_headings_and_references_do_not_repeat_the_kind(tmp_path: Path
     assert {node["id"]: node["title"] for node in chapter["nodes"]} == titles
 
 
+def test_titles_typeset_their_math_in_headings(tmp_path: Path) -> None:
+    """A title's TeX showed as typed, dollar signs and all, everywhere but the reader's references."""
+    typeset = 'Top on <span class="arithmatex">\\(\\mathbb{R}^n\\)</span>'
+    assert render_module._title_html("Top on $\\mathbb{R}^n$") == typeset
+    assert render_module._title_html("Plain <b>title</b>") == "Plain &lt;b&gt;title&lt;/b&gt;"
+    project = _project(tmp_path)
+    top = project / "blueprint/roadmap/top.md"
+    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Top on $\\mathbb{R}^n$\n"), encoding="utf-8")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    heading = page[page.index('id="top"') : page.index("</h4>", page.index('id="top"'))]
+
+    assert f'<span class="bp-thmtitle">{typeset}</span>' in heading
+
+
+def test_previous_next_and_next_up_typeset_a_chapter_title_once(tmp_path: Path) -> None:
+    """A chapter page's header holds its title's visible text, so converting that read a code `$literal$` as math."""
+    project = _project(tmp_path)
+    folder = project / "blueprint/roadmap/chapter"
+    folder.mkdir()
+    authored = "Groups $\\mathbb{Z}/n$ and code `$literal$`"
+    (folder / "README.md").write_text(f"# {authored}\n\n- [Deep](deep.md)\n", encoding="utf-8")
+    (folder / "deep.md").write_text("---\ndeclaration: theorem\n---\n\n# Deep\n\nA result still to state.\n", encoding="utf-8")
+    # A title with no math or code keeps its visible text, not its asterisks.
+    padic = project / "blueprint/roadmap/padic"
+    padic.mkdir()
+    (padic / "README.md").write_text("# The *p*-adic numbers\n\n- [Field](field.md)\n", encoding="utf-8")
+    (padic / "field.md").write_text("# Field\n\nThe field.\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    title = render_module._title_html(authored)
+    assert "<code>$literal$</code>" in title and '<span class="arithmatex">\\(\\mathbb{Z}/n\\)</span>' in title
+    assert f'<a href="roadmap/chapter/index.html">{title}</a>' in (out / "README.md").read_text(encoding="utf-8")
+    pages = [page.read_text(encoding="utf-8") for page in out.rglob("*.md")]
+    assert any(f'<span class="bp-book-nav-title">{title}</span>' in page for page in pages)
+    assert not any("\\(literal\\)" in page for page in pages)
+    assert any('<span class="bp-book-nav-title">The p-adic numbers</span>' in page for page in pages)
+    assert not any('<span class="bp-book-nav-title">The *p*' in page for page in pages)
+
+
 def test_a_caption_names_the_command_after_its_modifiers_or_reads_node() -> None:
     def caption(declaration: str | None) -> str:
         return _declaration_label(SimpleNamespace(catalog=None, declaration=declaration))

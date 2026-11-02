@@ -1156,8 +1156,16 @@ def _render_pages(
         graph,
     )
     # The landing page is a dashboard, not chapter one. Previous/next belongs
-    # to the book, so the strip starts at the contents page.
-    _append_book_navigation([p for p in book_pages if p != overview])
+    # to the book, so the strip starts at the contents page. Each page is named
+    # by its node's title as authored: its header holds the visible text, which
+    # a second pass through Markdown would read differently. A title with no
+    # math or code keeps that visible text, emphasis and links already read.
+    authored = {
+        (destination / node.path.relative_to(blueprint)).resolve(): node.title
+        for node in graph.nodes.values()
+        if node.path.is_relative_to(blueprint)
+    }
+    _append_book_navigation([p for p in book_pages if p != overview], authored)
     structure = destination / STRUCTURE_PAGE
     structure.write_text(
         _render_structure_page(
@@ -2129,11 +2137,15 @@ def _reading_order(
     return sorted(status.topological_order(graph), key=key)
 
 
-def _append_book_navigation(pages: list[Path]) -> None:
+def _append_book_navigation(pages: list[Path], authored: dict[Path, str]) -> None:
     """Add previous/next links to the bottom of Blueprint pages, never global nav."""
     if len(pages) < 2:
         return
-    titles = [_page_heading(page.read_text(encoding="utf-8")) or page.stem for page in pages]
+    visible = [_page_heading(page.read_text(encoding="utf-8")) or page.stem for page in pages]
+    titles = [
+        _title_html(authored[page.resolve()], fallback=shown) if page.resolve() in authored else html.escape(shown)
+        for page, shown in zip(pages, visible)
+    ]
     for index, page in enumerate(pages):
         links: list[str] = []
         if index:
@@ -2168,7 +2180,7 @@ def _append_book_navigation(pages: list[Path]) -> None:
 def _book_navigation_link(
     target: Path,
     page: Path,
-    title: str,
+    title_html: str,
     *,
     direction: str,
 ) -> str:
@@ -2180,7 +2192,7 @@ def _book_navigation_link(
         f'href="{html.escape(href, quote=True)}">'
         f'<span class="bp-book-nav-direction"><span aria-hidden="true">{arrow}</span> '
         f"{label}</span>"
-        f'<span class="bp-book-nav-title">{html.escape(title)}</span>'
+        f'<span class="bp-book-nav-title">{title_html}</span>'
         "</a>"
     )
 
@@ -2219,7 +2231,7 @@ def _next_target(
         statement = links.get(node_id)
         graph_href = graph_pages.scope_page_href(destination, node.id, page, parent=node.parent)
 
-        title = html.escape(node.title)
+        title = _title_html(node.title)
         heading = (
             f'<a href="{html.escape(statement, quote=True)}">{title}</a>' if statement else title
         )
@@ -2230,18 +2242,19 @@ def _next_target(
         )
         actions = [f'<a href="{html.escape(graph_href, quote=True)}">Dependencies</a>']
         if chapter_page is not None:
-            chapter_title = _page_heading(chapter_page.read_text(encoding="utf-8")) or "chapter"
+            # The chapter's title as authored: its page's header holds the visible text.
+            chapter = graph.nodes.get(chapter_id)
+            shown = _page_heading(chapter_page.read_text(encoding="utf-8")) or "chapter"
+            chapter_title = _title_html(chapter.title, fallback=shown) if chapter is not None else html.escape(shown)
             href = _as_published(relative_link(chapter_page, page, ".html"))
-            actions.insert(
-                0, f'<a href="{html.escape(href, quote=True)}">{html.escape(chapter_title)}</a>'
-            )
+            actions.insert(0, f'<a href="{html.escape(href, quote=True)}">{chapter_title}</a>')
         blockers = [
             graph.nodes[dep].title
             for dep in node.dependencies
             if statuses.get(dep) and statuses[dep].key not in {"fully_proved", "mathlib"}
         ]
         rests = (
-            f'<div class="bp-next-rests">Rests on {html.escape(", ".join(blockers[:3]))}</div>'
+            f'<div class="bp-next-rests">Rests on {", ".join(_title_html(title) for title in blockers[:3])}</div>'
             if blockers
             else ""
         )
@@ -3597,7 +3610,7 @@ def _render_environment(
 
     shown = _display_title(node.title, caption)
     title_html = (
-        f'<span class="bp-thmtitle">{html.escape(shown)}</span>' if shown
+        f'<span class="bp-thmtitle">{_title_html(shown)}</span>' if shown
         else f'<span hidden>{html.escape(node.title)}</span>'
     )
     # The "#" link's only text is "#", so its name says which statement it links to.
@@ -4080,6 +4093,25 @@ def _dependency_disclosure(
     return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
 
 
+def _title_html(text: str, *, fallback: str | None = None) -> str:
+    """A title as HTML whose TeX and code the site typesets, not as the source's dollar signs.
+
+    Only converter-validated text, code and math enter the page; authored HTML,
+    destinations and attributes stay literal. A title the converter leaves alone
+    shows ``fallback`` as text when given: a page header's visible title, whose
+    emphasis and links read as the page's own heading does.
+    """
+    reading = dag_viewer._reading_label(text, require_math=False)
+    if reading is None:
+        return html.escape(text if fallback is None else fallback)
+    return "".join(
+        html.escape(value) if kind == "text" else
+        f"<code>{html.escape(value)}</code>" if kind == "code" else
+        f'<span class="arithmatex">{html.escape(value)}</span>'
+        for kind, value in reading["parts"]
+    )
+
+
 def _display_title(title: str, caption: str) -> str:
     """Drop a kind the caption already shows: 'Theorem (X)' under 'Theorem 4' reads X.
 
@@ -4121,17 +4153,7 @@ def _node_references(
         other = graph.nodes[other_id]
         shown = _display_title(other.title, numbers[other_id].rpartition(" ")[0])
         text = numbers[other_id] + (f" ({shown})" if shown else "")
-        reading = dag_viewer._reading_label(text, require_math=False)
-        label = html.escape(text)
-        if reading is not None:
-            # Only converter-validated text/code/math enters the native link;
-            # authored HTML, destinations and attributes remain literal.
-            label = "".join(
-                html.escape(value) if kind == "text" else
-                f"<code>{html.escape(value)}</code>" if kind == "code" else
-                f'<span class="arithmatex">{html.escape(value)}</span>'
-                for kind, value in reading["parts"]
-            )
+        label = _title_html(text)
         key = graph_views.display_status_key(other, statuses[other_id])
         relation_attributes = ""
         if relation_node is not None:
