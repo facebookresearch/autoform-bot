@@ -10,6 +10,8 @@ without regard to case, and `&&` and `||` return one of their operands.
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ from autoform_cli.scaffold import _destination
 
 _ROOT = Path(__file__).resolve().parents[1]
 _TEMPLATES = _ROOT / "autoform_cli/templates/github/workflows"
+_AUTOFORM = 'uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}" autoform'
 _VERIFY_PATH = ".github/workflows/autoform-verify.yml"
 _MOVES_HEAD = re.compile(r"\bgit\s+(checkout|switch|reset|pull|fetch)\b")
 _TOKEN = re.compile(r"\s*(?:(?P<string>'(?:[^']|'')*')|(?P<op>==|!=|&&|\|\||!|\(|\)|,)|(?P<name>[A-Za-z_][\w.-]*))")
@@ -240,9 +243,10 @@ def test_the_audit_runs_after_check_as_a_report(pages: dict) -> None:
     audit = steps[check_at + 1]
 
     assert audit["name"] == "Audit the roadmap (report only)"
-    assert audit["run"] == steps[check_at]["run"].replace("autoform check", "autoform audit").removesuffix(
-        " --no-site-warnings"
-    )
+    assert audit["run"] == f"{_AUTOFORM} audit blueprint --lean-root ."
+    # Check runs the same pinned Autoform on the same roots.
+    assert 'autoform="git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"' in steps[check_at]["run"]
+    assert 'uvx --from "$autoform" autoform check blueprint --lean-root .' in steps[check_at]["run"]
     assert audit["continue-on-error"] is True and set(audit) == {"name", "continue-on-error", "run"}
 
 
@@ -255,27 +259,54 @@ def test_the_site_check_runs_after_the_build_as_a_report(pages: dict) -> None:
     steps = pages["jobs"]["build"]["steps"]
     names = [step["name"] for step in steps]
     site_check = steps[names.index("Build the Markdown site") + 1]
-    check = steps[names.index("Validate the theorem DAG and its declarations")]
     site = steps[names.index("Upload Pages artifact")]["with"]["path"]
     output = re.search(r"--output (\S+)", steps[names.index("Render the blueprint")]["run"]).group(1)
 
     assert site_check["name"] == "Check the built site (report only)"
-    assert site_check["run"] == check["run"].replace(
-        "autoform check blueprint --lean-root . --no-site-warnings", f"autoform site check {site} --source {output}"
-    )
+    assert site_check["run"] == f"{_AUTOFORM} site check {site} --source {output}"
     assert site_check["continue-on-error"] is True and set(site_check) == {"name", "continue-on-error", "run"}
 
 
-def test_check_leaves_the_site_warnings_to_render(pages: dict) -> None:
-    """Pages runs ``check`` with ``--no-site-warnings``, since render reports
-    those warnings later in the same job. Verify keeps them: setup can write a
-    project with no Pages workflow, where check is the only step that reports them."""
+@pytest.mark.skipif(shutil.which("bash") is None, reason="the step runs in bash")
+@pytest.mark.parametrize("pinned", ["flagged", "older", "unreachable"])
+def test_check_leaves_the_site_warnings_to_render_when_its_autoform_can(
+    pages: dict, tmp_path: Path, pinned: str
+) -> None:
+    """Pages runs ``check`` with ``--no-site-warnings`` when the pinned
+    Autoform's check lists it, since render reports those warnings later in
+    the same job. An older pin, which init and setup accept by
+    ``--autoform-ref``, runs the full check, and a pin uvx cannot run stops
+    the step. Verify keeps the warnings: setup can write a project with no
+    Pages workflow, where check is the only step that reports them."""
 
     steps = pages["jobs"]["build"]["steps"]
     names = [step["name"] for step in steps]
     check = steps[names.index("Validate the theorem DAG and its declarations")]
     verify = (_TEMPLATES / "autoform-verify.yml").read_text(encoding="utf-8")
+    calls = tmp_path / "calls"
+    help_text = "usage: autoform check [-h] [--lean-root LEAN_ROOT]" + (" [--no-site-warnings]" if pinned == "flagged" else "")
+    uvx = tmp_path / "bin" / "uvx"
+    uvx.parent.mkdir()
+    uvx.write_text(
+        f'#!/bin/sh\necho "$*" >> "{calls}"\n'
+        + ('exit 1\n' if pinned == "unreachable" else f'case "$*" in *--help*) echo "{help_text}" ;; esac\n'),
+        encoding="utf-8",
+    )
+    uvx.chmod(0o755)
+    ref = "0" * 40
+    env = {"PATH": f"{uvx.parent}:/usr/bin:/bin", "AUTOFORM_SOURCE": "https://example.invalid/a.git", "AUTOFORM_REF": ref}
 
-    assert check["run"].endswith("autoform check blueprint --lean-root . --no-site-warnings")
+    # GitHub runs a step's script with bash -e -o pipefail.
+    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", check["run"]], env=env, cwd=tmp_path)
+    autoform = f"--from git+https://example.invalid/a.git@{ref} autoform"
+    if pinned == "unreachable":
+        assert result.returncode != 0 and calls.read_text(encoding="utf-8").splitlines() == [f"{autoform} check --help"]
+    else:
+        flag = " --no-site-warnings" if pinned == "flagged" else ""
+        assert result.returncode == 0
+        assert calls.read_text(encoding="utf-8").splitlines() == [
+            f"{autoform} check --help",
+            f"{autoform} check blueprint --lean-root .{flag}",
+        ]
     assert names.index("Render the blueprint") > names.index("Validate the theorem DAG and its declarations")
     assert "autoform check" in verify and "--no-site-warnings" not in verify
