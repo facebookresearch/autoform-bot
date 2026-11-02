@@ -48,6 +48,10 @@ _WIKI_BLOCK_MATH = re.compile(f"(?:{RE_DOLLAR_BLOCK}|{RE_BRACKET_BLOCK}|{RE_TEX_
 _WIKI_INLINE_MATH = re.compile(f"(?:{RE_SMART_DOLLAR_INLINE}|{RE_BRACKET_INLINE})", re.DOTALL)
 _WIKI_INLINE_CODE = re.compile(BACKTICK_RE, re.DOTALL)
 _WIKI_HEADING = HashHeaderProcessor.RE
+#: Top-level sections whose links are provenance, not mathematical references.
+_WIKI_EXCLUDED = frozenset({"sources", "references", "bibliography", "depends on", "proof depends on"})
+_WIKI_EXCLUDED_HEADING = re.compile(r"#{1,2}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*")
+_WIKI_SECTION_LINE = re.compile(r" {0,3}#{1,2}(?!#)| {0,3}(?:=+|-+)[ \t]*$")
 #: Where the site publishes the viewer, relative to its root.
 SCRIPT_PATH = "javascripts/blueprint-dag.js"
 #: One cached stylesheet for the integrated book and map.
@@ -485,6 +489,29 @@ def _wiki_lines(body: str) -> list[str] | None:
     return masked.splitlines()
 
 
+def _excluded_heading(lines: list[str], n: int) -> bool:
+    match = _WIKI_EXCLUDED_HEADING.fullmatch(lines[n])
+    return bool(match) and match.group(1).strip().casefold() in _WIKI_EXCLUDED and (n == 0 or not lines[n - 1].strip())
+
+
+def _no_wiki_targets(lines: list[str]) -> bool:
+    """Whether ``_wiki_targets(lines)`` is surely empty, without rendering.
+
+    A link needs "[" or "<". When none comes before the first excluded
+    top-level heading, and every later top-level heading is excluded too, every
+    link sits in a provenance section. Braces (attribute lists), character
+    references and very deep nesting can make the converter refuse an article,
+    so those take the full render.
+    """
+    for line in lines:
+        if "{" in line or "&" in line or len(re.match(r"[ \t>]*", line).group().expandtabs(4)) >= 512:
+            return False
+    tail = next((n for n in range(len(lines)) if _excluded_heading(lines, n)), len(lines))
+    if any("[" in line or "<" in line for line in lines[:tail]):
+        return False
+    return all(_excluded_heading(lines, n) for n in range(tail + 1, len(lines)) if _WIKI_SECTION_LINE.match(lines[n]))
+
+
 def _wiki_targets(lines: list[str]) -> list[str] | None:
     """Read links and section boundaries through the site's actual converter.
 
@@ -506,9 +533,7 @@ def _wiki_targets(lines: list[str]) -> list[str] | None:
         for element in parent:
             if element.tag in headings:
                 if element.tag in {"h1", "h2"}:
-                    excluded = "".join(element.itertext()).strip().casefold() in {
-                        "sources", "references", "bibliography", "depends on", "proof depends on",
-                    }
+                    excluded = "".join(element.itertext()).strip().casefold() in _WIKI_EXCLUDED
                 continue
             if excluded or element.tag in {"code", "pre", "img"}:
                 continue
@@ -627,7 +652,8 @@ def extract_wiki_links(
         if lines is None:
             unavailable.add(positions[source_id])
             continue
-        targets = _wiki_targets(lines)
+        # Most articles link only from their Sources: skip the render there.
+        targets = [] if _no_wiki_targets(lines) else _wiki_targets(lines)
         if targets is None:
             unavailable.add(positions[source_id])
             continue
