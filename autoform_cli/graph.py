@@ -20,6 +20,7 @@ from html import unescape
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from ._fs import is_within as _is_within
 from .lean import declaration_names
 from .markdown import (
     INLINE_CODE,
@@ -366,6 +367,8 @@ def _unpublished_link_issues(sources: list[_NodeSource], unpublished: tuple[Path
     Render rewrites a page's links as text, applying their ``..`` steps, so they
     are read that way here: a dependency, a source and a prose link alike.
     """
+    if not unpublished:
+        return []
     issues = []
     for source in sources:
         if any(_is_within(source.path, folder) for folder in unpublished):
@@ -731,7 +734,9 @@ def _article_id(path: Path, roadmap_root: Path) -> str:
 
 def _article_parents(parsed: list[_ParsedNode], roadmap_root: Path) -> dict[str, str | None]:
     """Infer strict single-parent containment from nested README articles."""
-    by_path = {node.path.resolve(): node.id for node in parsed}
+    # Node paths are resolved, and discovery refused every link under roadmap/,
+    # so a README that is a node is found as spelled.
+    by_path = {node.path: node.id for node in parsed}
     parents: dict[str, str | None] = {}
     for node in parsed:
         candidate = node.path.parent
@@ -739,7 +744,7 @@ def _article_parents(parsed: list[_ParsedNode], roadmap_root: Path) -> dict[str,
             candidate = candidate.parent
         parent: str | None = None
         while _is_within(candidate, roadmap_root):
-            readme = (candidate / "README.md").resolve()
+            readme = candidate / "README.md"
             if readme in by_path:
                 parent = by_path[readme]
                 break
@@ -1059,6 +1064,20 @@ def _resolve_target(
     # Render's copy has no hidden folder, so it cannot step through one and back out either.
     if any(part.startswith(".") and part != ".." for part in relative.parts):
         return None, f"{node.id}: {label} names a hidden path, which render omits: {target!r}"
+    # Node paths are resolved, and discovery refused every link under roadmap/.
+    # So ".." steps that stay in roadmap/, then plain names, reach a node as
+    # spelled; anything else is looked up on disk below.
+    steps = raw_path.split("/")
+    up = next((n for n, step in enumerate(steps) if step != ".."), len(steps))
+    roadmap = blueprint / "roadmap"
+    if (
+        all(step and not step.startswith(".") for step in steps[up:])
+        and _is_within(node.path.parent, roadmap)
+        and up <= len(node.path.parent.parts) - len(roadmap.parts)
+    ):
+        dependency = canonical_ids.get(node.path.parents[up].joinpath(*steps[up:]))
+        if dependency is not None:
+            return dependency, None
     resolved = resolved_path(node.path.parent / relative)
     if resolved is None:
         # The kernel reaches a file behind a link only `readlink` refuses.
@@ -1144,14 +1163,6 @@ def informal_cycle_warnings(graph: Graph) -> list[str]:
                     step = previous[step]
                 issues.append(f"{node.id}: informally uses {target}, which depends on it: {' -> '.join(reversed(path))}")
     return issues
-
-
-def _is_within(path: Path, directory: Path) -> bool:
-    try:
-        path.relative_to(directory)
-    except ValueError:
-        return False
-    return True
 
 
 __all__ = [
