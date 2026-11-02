@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from .._strict_json import reject_json_constant
+from ..lean import _ASCII_IDENTIFIER
 
 #: Provisional until the generator has shown it can produce every field.
 INDEX_SCHEMA = "autoform-library-index/v0"
@@ -26,7 +27,6 @@ TREE_FILES = ("lake-manifest.json", "lakefile.lean", "lakefile.toml", "lean-tool
 KINDS = ("abbrev", "class", "def", "inductive", "instance", "lemma", "opaque", "structure", "theorem")
 STATUSES = ("complete", "wanted")
 _DEPENDENCY_TYPES = ("git", "path")
-_MODULE_COMPONENT = re.compile(r"[A-Za-z_][A-Za-z0-9_'!?]*")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _ECHO_LIMIT = 80
@@ -327,7 +327,7 @@ def _flag(value: object) -> bool:
 
 
 def _module_name(value: object) -> bool:
-    return type(value) is str and all(_MODULE_COMPONENT.fullmatch(part) for part in value.split("."))
+    return type(value) is str and all(_ASCII_IDENTIFIER.fullmatch(part) for part in value.split("."))
 
 
 def _header(record: dict[str, object]) -> IndexHeader:
