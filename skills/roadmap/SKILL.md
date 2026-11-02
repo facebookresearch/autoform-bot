@@ -148,7 +148,8 @@ note is stale, which `autoform audit` reports and you then delete, and how to
 repair an orphan. Move an article by moving its file; a page written afresh
 takes the old page's `article_id` line in the same edit. A commit that deletes
 or merges an article moves what is still useful from its note into a surviving
-article's note and deletes the note.
+article's note and deletes the note. Read and write no note while `check` warns
+`.implementation-notes` is a link.
 
 ### Claims and revisions
 

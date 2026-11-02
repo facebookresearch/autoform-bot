@@ -108,6 +108,7 @@ Unrelated parallel articles may change the graph-wide source revision.
 
 Read the complete article, its `blueprint/.implementation-notes/<article_id>.md`
 when present, cited sources, dependency articles, and existing Lean target.
+Read and write no note while `check` warns `.implementation-notes` is a link.
 Preserve the exact mathematical statement. Work only on the selected phase: do
 not modify another article or its Lean declarations, or weaken a public
 statement. The exceptions are deleting stale and repairing orphaned
