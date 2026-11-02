@@ -670,7 +670,7 @@
     if (hint.textContent !== text) hint.textContent = text;
     hint.classList.toggle("pm-hint-strong", text !== HINT);
     // In the book the general hint is for the whole project; inside a part or beside a result it would sit on the cards.
-    hint.hidden = embedded && text === HINT && (state.focusPart !== ROOT || Boolean(state.selected));
+    hint.hidden = embedded && text === HINT && (Boolean(state.selected) || Boolean(record && record.id !== ROOT));
   }
   // Once the part the view is in has its header band scrolled off, its title stays pinned to the top of the stage.
   function pinned() {

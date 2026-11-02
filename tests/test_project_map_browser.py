@@ -256,6 +256,13 @@ def test_a_part_picked_on_the_map_opens_its_chapter_in_the_reader(webkit_browser
         _open_book(page, map_url, "index.html")
         book, heading = page.locator(".bp-dag-viewer"), page.locator(".bp-reading-body h1")
         playwright.expect(page.locator(".bp-whole-map .pm-hint")).to_be_visible()
+        # Zoomed out, the view is still the whole project and the hint stays, though a zoom lets go of the view's part.
+        before = page.locator('.bp-whole-map .pm-part[data-part="algebra"] > rect').get_attribute("width")
+        page.locator(".bp-whole-map .pm-stage > svg").focus()
+        page.keyboard.press("-")
+        page.wait_for_function("""w => document.querySelector('.bp-whole-map .pm-part[data-part="algebra"] > rect').getAttribute('width') !== w""", arg=before)
+        playwright.expect(page.locator(".bp-whole-map .pm-hint")).to_be_visible()
+        page.keyboard.press("+")
         # One click on Algebra's band picks it where it is, and the reader turns to the chapter's page.
         page.locator('.bp-whole-map .pm-part[data-part="algebra"] > rect').click(position={"x": 24, "y": 10})
         playwright.expect(heading).to_have_text(re.compile(r"^Algebra"))
