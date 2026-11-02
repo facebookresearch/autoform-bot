@@ -115,6 +115,7 @@ from .markdown import (
     PAGE_SUFFIXES,
     RETIRED_VIEWS,
     STATEMENT_BOX,
+    article_prose_issues,
     _blank,
     blueprint_root,
     boxed,
@@ -657,6 +658,11 @@ def _publication(
         captured = snapshot.get(node.path)
         if captured is None or (within is not None and not _is_within(node.path, within)):
             continue
+        if node.catalog is None:
+            warnings.extend(
+                f"{node_id}: line {line}: {code}: {reason}"
+                for line, code, reason in article_prose_issues(captured.decode("utf-8"))
+            )
         leaf = (node.formalizable or node.catalog is not None) and node_id not in containers
         text, found = published(captured.decode("utf-8"), node.path, targets[node_id][0], whole=not leaf)
         if found:

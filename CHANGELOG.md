@@ -11,6 +11,11 @@ date when the release is tagged.
 
 ### Added
 
+- **Mathematical prose diagnostics.** `check`, `render`, and `audit` warn about
+  likely Lean syntax and code-formatted mathematics in article prose, and
+  accidental numeric headings and unlinked source-number references. They preserve the authored text and existing
+  exit status, naming a source line for each kind of repair (#598).
+
 - **Worktrees.** `autoform project worktrees` reports which linked worktrees
   are safe to remove after a run and what protects the rest: changes, Git
   operations, unintegrated commits, processes, recent activity and live leases

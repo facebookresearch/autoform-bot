@@ -769,6 +769,94 @@ def site_converter() -> pymarkdown.Markdown:
     )
 
 
+def article_prose_issues(text: str) -> tuple[tuple[int, str, str], ...]:
+    """Advisory writing diagnostics with the author's one-based source lines.
+
+    These never rewrite the mathematics or decide what a code span means.
+    They inspect only published narrative, not metadata, source lists,
+    dependency lists, fenced examples or comments. The converter confirms
+    that a candidate span actually appears as inline code on the page.
+    """
+
+    lines = text.splitlines()
+    start = frontmatter_end(lines)
+    shown = [''] * start + mask_fences_and_comments(lines[start:])
+    narrative = True
+    for index in range(start, len(shown)):
+        heading = HEADING.match(shown[index])
+        if heading is not None and len(heading[1]) == 2:
+            narrative = heading[2].strip().casefold() not in {'sources', 'depends on', 'proof depends on', 'informally uses'}
+        if not narrative:
+            shown[index] = ''
+
+    body = '\n'.join(shown)
+    code_matches = tuple(match for match in _CODE_OR_COMMENT.finditer(body) if not match[0].startswith('<!--'))
+    numeric_heading = next(
+        ((index, line) for index, line in enumerate(shown, 1) if re.fullmatch(r' {0,3}#{1,6}[ \t]*\d{4,}[.)]?[ \t]*', line)),
+        None,
+    )
+    book_reference = re.compile(r'\b(?:Theorem|Lemma|Proposition|Corollary|Definition)\s+(?:[IVX]+\.)?\d+(?:\.\d+)+(?:[A-Z])?\b')
+    if not code_matches and numeric_heading is None and book_reference.search(body) is None:
+        return ()
+    tree = render_tree(body)
+    if tree is None:
+        return ()
+    visible_codes: set[str] = set()
+    unlinked_text: list[str] = []
+
+    def collect(element: object, hidden: bool = False, in_pre: bool = False, linked: bool = False) -> None:
+        hidden = _conceals(element, hidden)
+        if hidden:
+            return
+        name = _local_name(element)
+        in_pre = in_pre or name == 'pre'
+        linked = linked or name in {'a', 'code', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'}
+        if name == 'code' and not in_pre:
+            visible_codes.add(_collapse(''.join(element.itertext())))
+        if not in_pre and not linked and element.text:
+            unlinked_text.append(element.text)
+        for child in element:
+            collect(child, hidden, in_pre, linked)
+            if not in_pre and not linked and child.tail:
+                unlinked_text.append(child.tail)
+
+    collect(tree)
+    issues: list[tuple[int, str, str]] = []
+    seen: set[str] = set()
+    for match in code_matches:
+        marker = match[1]
+        value = _collapse(match[0][len(marker):-len(marker)])
+        if value not in visible_codes:
+            continue
+        line = body.count('\n', 0, match.start()) + 1
+        if re.search(r'\b(?:[A-Z][\w]*\.)+[A-Za-z_][\w]*|\b(?:projDim|ringKrullDim|topologicalKrullDim|valuationSubringAt|localRingRange)\b|\b(?:def|theorem|lemma)\s+\w+|:=', value):
+            code = 'lean-in-mathematical-prose'
+            reason = 'likely Lean syntax in mathematical prose; write the mathematics in English/TeX and keep declaration names in metadata or implementation notes'
+        elif re.fullmatch(r'[A-Za-z0-9α-ωΑ-Ω𝒪𝔭𝔪ℙ𝔸]', value) or re.search(r'[=^_{}]|[∈⊆⊗→≅≃]|\b(?:dim|deg|Hom|Ext|Spec|Proj)\b', value):
+            code = 'mathematics-written-as-code'
+            reason = 'mathematics appears in a code span; use TeX delimiters if this is mathematical notation'
+        else:
+            continue
+        # One actionable example of each kind per article keeps a large
+        # existing blueprint's report bounded while naming the exact line.
+        if code not in seen:
+            issues.append((line, code, reason))
+            seen.add(code)
+
+    if numeric_heading is not None:
+        issues.append((numeric_heading[0], 'numeric-prose-heading', 'a standalone number is a Markdown heading; put issue references in implementation notes or write a linked reference within a sentence'))
+    unlinked_references = {_collapse(match[0]) for match in book_reference.finditer(' '.join(unlinked_text))}
+    unlinked_body = re.sub(r'\[[^\]\n]*\]\s*(?:\([^\n]*?\)|\[[^\]\n]*\])', _blank, body)
+    unlinked_body = _CODE_OR_COMMENT.sub(_blank, unlinked_body)
+    for match in book_reference.finditer(unlinked_body):
+        reference = _collapse(match[0])
+        if reference in unlinked_references:
+            line = body.count('\n', 0, match.start()) + 1
+            issues.append((line, 'unlinked-source-number', f'{reference} is an unlinked source-number reference; name its source/chapter and link the represented result to its roadmap article'))
+            break
+    return tuple(issues)
+
+
 #: The sections that list an article's dependencies. The site shows them in
 #: its own form in the article's box, so they are not published as written.
 DEPENDENCY_SECTIONS = frozenset({"depends on", "proof depends on"})
@@ -1264,6 +1352,7 @@ __all__ = [
     "ArticleParts",
     "ArticleSection",
     "article_parts",
+    "article_prose_issues",
     "Content",
     "boxed",
     "converted_alone",

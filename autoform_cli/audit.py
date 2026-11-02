@@ -44,6 +44,7 @@ from .lean import (
     snapshot_project_sources,
 )
 from .markdown import article_parts as _article_parts
+from .markdown import article_prose_issues as _article_prose_issues
 from .markdown import content_lines as _content_lines
 from .markdown import first_unclosed_fence as _first_unclosed_fence
 from .markdown import frontmatter_end as _frontmatter_end
@@ -237,6 +238,7 @@ def audit_graph(
     """Audit an already loaded graph without modifying it or its source files."""
 
     findings: list[AuditFinding] = []
+    warnings: list[AuditWarning] = []
     derived = status.derive(graph)
     contained: dict[str, list[str]] = {}
     for node in graph.nodes.values():
@@ -270,6 +272,11 @@ def audit_graph(
         article_path = _relative_path(node.path, graph.blueprint_dir)
         children = contained.get(node_id, ())
         article = _read_article(node.path)
+        if node.catalog is None:
+            warnings.extend(
+                AuditWarning(article_path, code, f"line {line}: {reason}", ())
+                for line, code, reason in article.prose_issues
+            )
 
         implementation_done = derived[node_id].proved or (
             scope_has_formalizable[node_id] and scope_fully_implemented[node_id]
@@ -395,7 +402,7 @@ def audit_graph(
     if coverage_findings is None:
         coverage, coverage_findings = _coverage_findings(graph.blueprint_dir, graph.unpublished)
     findings.extend(coverage_findings)
-    warnings = [AuditWarning("atlas.json", "atlas-omission", omission, ()) for omission in atlas_omissions(graph)]
+    warnings.extend(AuditWarning("atlas.json", "atlas-omission", omission, ()) for omission in atlas_omissions(graph))
     warnings.extend(_duplicate_target_warnings(graph))
     for issue in () if coverage is None else validate_coverage_roles(graph, coverage):
         reason = f"{issue.reason}{f' (line {issue.line})' if issue.line else ''}"
@@ -414,6 +421,7 @@ class _ArticleShape:
     has_depends_section: bool
     #: The one-based source line of the first fence that never closes.
     unclosed_fence: int | None = None
+    prose_issues: tuple[tuple[int, str, str], ...] = ()
 
 
 def _read_article(path: Path) -> _ArticleShape:
@@ -430,6 +438,7 @@ def _read_article(path: Path) -> _ArticleShape:
         statement=parts.statement,
         has_depends_section=any(section.title.casefold() == "depends on" for section in parts.sections),
         unclosed_fence=None if unclosed is None else start + unclosed + 1,
+        prose_issues=_article_prose_issues(text),
     )
 
 
