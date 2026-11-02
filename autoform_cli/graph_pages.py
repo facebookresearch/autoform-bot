@@ -414,18 +414,6 @@ def scope_page_path(destination: str | Path, node_id: str, *, parent: str | None
     return destination / "dependencies/scopes" / f"{scope}.md"
 
 
-def scope_page_href(
-    destination: str | Path,
-    node_id: str,
-    page: str | Path,
-    *,
-    parent: str | None = None,
-) -> str:
-    """Link a node's scope page from *page*, selecting the node in the hash."""
-    target = scope_page_path(destination, node_id, parent=parent)
-    return f"{relative_link(target, Path(page), '.html')}#node={quote(node_id, safe='')}"
-
-
 def _write_page(
     page: Path,
     *,
@@ -711,7 +699,6 @@ __all__ = [
     "graph_page_paths",
     "render_legend",
     "render_legend_tip",
-    "scope_page_href",
     "scope_page_path",
     "write_graph_pages",
 ]

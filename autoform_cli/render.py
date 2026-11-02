@@ -2227,7 +2227,6 @@ def _next_target(
     statuses: dict[str, status.NodeStatus],
     *,
     page: Path,
-    destination: Path,
     group_pages: dict[str, Path] | None = None,
     targets: dict[str, tuple[Path, str]] | None = None,
     order: Sequence[str] = (),
@@ -2257,7 +2256,6 @@ def _next_target(
         chapter_id = node.id.split("/", 1)[0] if "/" in node.id else ""
         chapter_page = (group_pages or {}).get(chapter_id)
         statement = links.get(node_id)
-        graph_href = graph_pages.scope_page_href(destination, node.id, page, parent=node.parent)
 
         title = _title_html(node.title)
         heading = (
@@ -2268,7 +2266,11 @@ def _next_target(
             if node_status.key == "can_prove"
             else "Everything its statement uses is in Lean, so its Lean statement can be written now."
         )
-        actions = [f'<a href="{html.escape(graph_href, quote=True)}">Dependencies</a>']
+        actions: list[str] = []
+        if statement:
+            # Its page with the node selected, where its old dependency page's redirect leads.
+            selected = f"{statement.partition('#')[0]}#node={quote(node.id, safe='')}"
+            actions.append(f'<a href="{html.escape(selected, quote=True)}">Dependencies</a>')
         if chapter_page is not None:
             # The chapter's title as authored: its page's header holds the visible text.
             chapter = graph.nodes.get(chapter_id)
@@ -2436,7 +2438,6 @@ def _render_landing_page(
         graph,
         statuses,
         page=page,
-        destination=destination,
         group_pages=group_pages,
         targets=targets,
         order=order,

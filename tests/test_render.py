@@ -4334,21 +4334,32 @@ def test_next_up_explains_readiness_without_naming_a_policy(tmp_path: Path, drop
 
 
 @pytest.mark.parametrize(
-    ("section", "statement", "chapter"),
+    ("section", "statement", "chapter", "dependencies"),
     [
-        ("chapter", "roadmap/chapter/index.html#deep", "roadmap/chapter/index.html"),
-        ("chapter/part", "roadmap/chapter/part/index.html#deep", "roadmap/chapter/index.html"),
+        (
+            "chapter",
+            "roadmap/chapter/index.html#deep",
+            "roadmap/chapter/index.html",
+            "roadmap/chapter/index.html#node=chapter%2Fdeep",
+        ),
+        (
+            "chapter/part",
+            "roadmap/chapter/part/index.html#deep",
+            "roadmap/chapter/index.html",
+            "roadmap/chapter/part/index.html#node=chapter%2Fpart%2Fdeep",
+        ),
     ],
     ids=["chapter", "nested-section"],
 )
 def test_next_up_links_the_published_statement_and_chapter(
-    tmp_path: Path, section: str, statement: str, chapter: str
+    tmp_path: Path, section: str, statement: str, chapter: str, dependencies: str
 ) -> None:
     """MkDocs publishes a chapter's ``README.md`` as ``index.html``.
 
     The card is the landing page's way into the book, so a link to
     ``README.html``, or to the top-level chapter of a result placed in a nested
-    section, left the reader on a 404.
+    section, left the reader on a 404. Its dependencies link selects the result
+    on its page, where the old dependency pages only redirect.
     """
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
@@ -4379,6 +4390,7 @@ def test_next_up_links_the_published_statement_and_chapter(
     assert f'data-autoform-node-id="{section}/deep"' in card
     assert f'<div class="bp-next-title"><a href="{statement}">Deep</a></div>' in card
     assert f'<a href="{chapter}">Chapter</a>' in card
+    assert f'<a href="{dependencies}">Dependencies</a>' in card
     published = _published_pages(out)
     for href in re.findall(r'href="([^"]+)"', card):
         assert Path(os.path.normpath(out / unquote(href.partition("#")[0]))) in published, href
