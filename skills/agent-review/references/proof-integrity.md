@@ -20,15 +20,14 @@ is insufficient when its dependencies are hollow.
 If `roadmap/README.md` sets `open_statements: allowed`, list the open statements the reviewed
 article may assume (`autoform work assumptions`) and trace each `sorryAx` to its source, for
 example with the CI audit the [open statements reference](../../../autoform_cli/reference/open-statements.md#open-statements)
-reproduces, which logs each declaration as open, conditional, or sorry-free. A `sorry` inside a
-declared open upstream statement, one the reviewed article reaches through its Markdown dependencies
-and that `work assumptions` attributes to it, is a recorded dependency of the reviewed declaration,
-not a gap in it. Score the reviewed proof on its own work, name every assumed open statement in the
-review, and mark the verdict as due for re-review when one is discharged, since the skeleton's
-axioms and hashes then move. A `sorry` anywhere else, including a helper, a `where` clause, or the
-reviewed declaration's own statement, or an open statement that is not a declared dependency, keeps
-the ceilings below. A conditional proof is never axiom-clean, complete, or sorry-free, whatever its
-score.
+reproduces. A `sorry` inside a declared open upstream statement, one the reviewed article reaches
+through its Markdown dependencies and that `work assumptions` attributes to it, is a recorded
+dependency of the reviewed declaration, not a gap in it. Score the reviewed proof on its own work,
+name every assumed open statement in the review, and mark the verdict as due for re-review when one
+is discharged, since the skeleton's axioms and hashes then move. A `sorry` anywhere else, including
+a helper, a `where` clause, or the reviewed declaration's own statement, or an open statement that
+is not a declared dependency, keeps the ceilings below. A conditional proof is never axiom-clean,
+complete, or sorry-free, whatever its score.
 
 ## Structural red flags
 

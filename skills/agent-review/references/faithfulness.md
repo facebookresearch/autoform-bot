@@ -14,11 +14,9 @@ quality here.
 5. When the Lean is proved, run `#lint only unusedArguments in <Module>` after `import <Module>`,
    where `<Module>` declares the theorem, but only in a trusted checkout or an operating-system
    sandbox, since that runs project Lean. Formalize's [unused-hypothesis
-   rules](../../formalize/references/unused-hypotheses.md) say what the linter skips and how
-   each finding is handled. A leading `_` marks a hypothesis the author
-   kept on purpose; check that the article says why.
-   A hypothesis the proof never uses is either a source hypothesis Lean does not need or a sign
-   that the statement assumes what the source derives.
+   rules](../../formalize/references/unused-hypotheses.md) say what the linter skips and how each
+   finding is handled; a leading `_` marks a hypothesis kept on purpose, so check that the article
+   says why.
 
 If the source is unavailable, report insufficient evidence instead of inventing a score. The human
 trust surface includes every new or changed definition, public statement, axiom, instance, notation,

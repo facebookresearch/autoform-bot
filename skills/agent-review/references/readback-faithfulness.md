@@ -63,8 +63,7 @@ The skeleton hashes bind elaborated meaning and trust context; the packet hash
 and article packet hash bind the declaration packet its auditor saw and the
 joint packet; the article review hash also binds the joint packet to the cited
 passage and locator (see the [CLI reference](../../../autoform_cli/README.md#skeleton-hashes)).
-None binds the read-back, so the read-back hash is required. These are drift
-checksums, not reviewer authentication or an approval key.
+None binds the read-back, so the read-back hash is required.
 
 ## Evidence boundary
 
@@ -109,9 +108,8 @@ rather than carding around hidden content.
 
 Spelling out binders, conventions, and degenerate behavior the claim already
 determines is `elaboration`. Use it for an added assumption only when it is
-plainly redundant or
-an implementation-level restatement and the detail line says why it changes no
-mathematical instance; otherwise use `hypothesis-added`.
+plainly redundant or an implementation-level restatement and the detail line
+says why it changes no mathematical instance; otherwise use `hypothesis-added`.
 
 An item takes the worst decision among its discrepancies:
 `disagrees` outranks `unknown`, which outranks `review`, which outranks `agrees`.

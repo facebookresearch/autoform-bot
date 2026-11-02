@@ -19,13 +19,9 @@ reference](../../autoform_cli/README.md#commands) documents the commands.
 its own worktree). First run `autoform work list <PROJECT> --json`, whose items
 hold every field a dispatch needs; a worker inspects its leaf with `autoform
 work context <NODE> <PROJECT> --json`. The phase is derived; never author ready,
-running, retrying, failed, or blocked scheduler states. If `work list` refuses
-because unfinished leaves lack `article_id`, run `autoform migrate article-ids
-<PROJECT>/blueprint --write`, validate, and commit before starting work. If a
-command refuses because an implementation note names no roadmap article, any
-worker may repair the note as the [format
-reference](../../autoform_cli/README.md#articles-and-containment) says, and
-commit.
+running, retrying, failed, or blocked scheduler states. If a command refuses for
+a missing `article_id` or an orphaned implementation note, make the repair its
+message names, validate, and commit before starting work.
 
 For a direct formalization request, use a compatible native persistent Goal when
 available and complete one useful frontier pass. When a run starts or resumes,
@@ -97,8 +93,7 @@ not proof they are unaffected. After rebuilding, repeat any baseline skeleton
 evidence and use Agent Review to judge semantic changes; repair each article
 that needs changes under the review gates of the [revision
 contract](../../autoform_cli/reference/claims-and-revisions.md#revision-contract).
-Stop for an active conflict (an affected target another worker holds, or another
-owner's live claim on one) or failed validation, not for a blanket import rule;
+Stop for an active conflict or failed validation, not for a blanket import rule;
 disclosure alone is neither. With or without claims, a `module_generated` root
 follows [its rules](references/claims.md#generated-import-roots).
 
@@ -135,8 +130,7 @@ search` over the blueprint of `<PROJECT>` and its usable shared libraries for
 it, following the [search steps](references/library-search.md#search-steps),
 which also cover library hits and refusals that name a library.
 
-- Searching for an article's own result finds the article itself; it is not a
-  duplicate.
+- A search for an article's own result finds that article, not a duplicate.
 - Retry a refusal that asks for it. Any other refusal that names no library
   blocks the leaf: add no helper and report it as the blocker.
 - Use the declaration of a blueprint hit that states the helper only when the
@@ -159,23 +153,19 @@ recorded statement without changing that statement.
 
 Under the open policy a proof may use the open statements its Markdown
 dependencies reach; `autoform work assumptions --json` lists the exact
-`allowed_open_declarations`, and the article then shows as conditionally proved;
-`#print axioms` lists the inherited `sorryAx` without saying from where.
-Before landing, record `proof: formalized` in the worktree (until then the audit
-treats the article as open), reproduce the CI audit as the open statements
-reference shows, and require a `conditional` or `sorry-free` line for each
-recorded declaration and a passing summary. An open statement the Markdown does
-not declare as a dependency fails CI: send the missing dependency to Roadmap or
-stop using it. Never describe a conditional proof as complete, fully proved, or
-sorry-free.
+`allowed_open_declarations`; `#print axioms` lists the inherited `sorryAx`
+without saying from where. Before landing, record `proof: formalized` in the
+worktree (until then the audit treats the article as open), reproduce the CI
+audit as the open statements reference shows, and require a `conditional` or
+`sorry-free` line for each recorded declaration and a passing summary. An open
+statement the Markdown does not declare as a dependency fails CI: send the
+missing dependency to Roadmap or stop using it. Never describe a conditional
+proof as complete, fully proved, or sorry-free.
 
 Treat Lean's `unusedVariables` and `unusedSectionVars` warnings on the article's
 theorems as findings. Once the proof is complete and its focused build passes,
-also run Batteries' `#lint only unusedArguments in <Module>` after
-`import <Module>`, where `<Module>` declares them: without `in` it lints only the
-current file, and its releases for Lean v4.30.0 and v4.31.0 check no theorem, so
-a clean run there is not evidence. Resolve each finding as the [unused-hypothesis
-rules](references/unused-hypotheses.md) say.
+also run Batteries' `unusedArguments` linter and resolve each finding, both as
+the [unused-hypothesis rules](references/unused-hypotheses.md) say.
 
 After the focused build passes, require an independent Agent Review of every
 changed statement or proof for source faithfulness, dependency correctness, and
@@ -190,28 +180,25 @@ mathematics; move its still-useful notes to its
 `blueprint/.implementation-notes/<article_id>.md`, the only place to write
 notes: Lean names, Mathlib gaps, prior art, friction, partial progress, and,
 after a useful failed route, the remaining goal, checked lemmas, and next route,
-never a transcript, retry counter, secret, or machine-local path. Delete the
-file once the article is proved; an empty file fails `autoform check`. Never
-link the note from an article. A missing prerequisite, an incorrect
-decomposition, a change another article needs beyond an import repair, or a
-proof recorded without its statement returns to Roadmap instead of silently
-changing the DAG. So does a `check` warning that a shared library declaration's
-docstring, or its module's, cites the blueprint's sources, even when deleting a
-stale note brings it back: report it, and neither keep the note nor edit a
-source page for it.
+never a transcript, retry counter, secret, or machine-local path. Never link the
+note from an article. A missing prerequisite, an incorrect decomposition, a
+change another article needs beyond an import repair, or a proof recorded
+without its statement returns to Roadmap instead of silently changing the DAG.
+So does a `check` warning that a shared library declaration's docstring, or its
+module's, cites the blueprint's sources, even when deleting a stale note brings
+it back: report it, and neither keep the note nor edit a source page for it.
 
 Run `autoform check <PROJECT>/blueprint --lean-root <PROJECT>` and `autoform
 audit <PROJECT>/blueprint --lean-root <PROJECT>`. Resolve every finding this
 work introduced on the selected article (match `article_path` and `code`, not
-`reason`, with the starting commit's audit), except `lean-target-deprecated` for
-a superseded declaration that an expand, migrate, contract revision keeps in the
-revised article's `lean:` until it is deleted. Delete every note the audit
-reports as `stale-implementation-note`, including another article's, such as a
-container's this proof completed or one an earlier commit left behind; the audit
-fails until they are all gone. Report other pre-existing findings instead of
-fixing them. A `catalog-unbounded-limit` or `catalog-unscoped-limit` warning
-describes existing Lean code and never fails the audit: report it, and change
-that code only when the user asks, rebuilding before anything is recorded.
+`reason`, with the starting commit's audit), except a `lean-target-deprecated`
+that the revision contract expects. Delete every note the audit reports as
+`stale-implementation-note`, including another article's, such as a container's
+this proof completed or one an earlier commit left behind; the audit fails until
+they are all gone. Report other pre-existing findings instead of fixing them. A
+`catalog-unbounded-limit` or `catalog-unscoped-limit` warning describes existing
+Lean code and never fails the audit: report it, and change that code only when
+the user asks, rebuilding before anything is recorded.
 
 If `<PROJECT>/blueprint/.autoform-review` exists, project CI also runs `autoform
 review check`, which fails on a formalized statement until Human Review has
@@ -233,13 +220,11 @@ edit, re-run `autoform work import-impact` on the result; if integration brought
 in a change to an article it lists as affected, the candidate changed too:
 capture a fresh baseline of that article on the shared branch. In a run without
 claims, send the lead that report's `affected_claim_targets` and land the edit
-only once the lead confirms that no other worker holds them. For a revision,
-also re-run `autoform work impact` on the rebuilt result and repair any new
-targets before landing. Without authority to update or push the shared branch,
-without the lead's answer, or when integration fails, report the branch and
-commit for handoff. When the run uses claims, the [claim
-rules](references/claims.md#integration-and-handoff) say how to renew, keep,
-hand off, and release the claim set.
+only once the lead confirms that no other worker holds them. Without authority
+to update or push the shared branch, without the lead's answer, or when
+integration fails, report the branch and commit for handoff. When the run uses
+claims, the [claim rules](references/claims.md#integration-and-handoff) say how
+to renew, keep, hand off, and release the claim set.
 
 When `AUTOFORM_SUBAGENT_DEBRIEF=1`, the agent that worked an attempt follows
 the [subagent debrief steps](references/debrief-subagent.md) before reporting.

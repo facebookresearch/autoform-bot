@@ -32,10 +32,9 @@ says what is matched.
 Run `autoform library list .` once per checkout, in the checkout being edited,
 once its packages are present: in a new worktree, after the step Formalize
 prescribes for a new worktree. A package still reported as not checked out is
-not fetched any other way (never `lake update`, never a new `require`). Pass
-every package it reports as usable to each search, even while the blueprint is
-empty, as `--library NAME`, together with `--lean-root` naming the same Lake
-project root: search refuses `--library` without it. Do not pass a package it
+not fetched any other way. Pass every package it reports as usable to each
+search, even while the blueprint is empty, as `--library NAME`, together with
+`--lean-root` naming the same Lake project root. Do not pass a package it
 reports as not usable, such as a dependency that publishes no index. A package
 left out, as not usable or not checked out, is unchecked, as for a refused
 library: tell the user once which package was left out and the reason the
@@ -45,18 +44,16 @@ listing gives, and that whether it has the result is unknown.
 
 A refusal that names a library (the CLI prints `error: library NAME: ...`) is
 not a blocker: rerun the same search without that library, continue, and tell
-the user which library was not searched and why. A library that was not
-searched has not been checked: "no library has it" is unknown for that library,
-and the report says so.
+the user which library was not searched, why, and that whether it has the
+result is unknown.
 
 ## Queries
 
 Library declarations are found mostly by name: many have no docstring, and a
 query word is never matched against a signature. Besides the blueprint query of
 a few words, run one or two distinctive words, or a Lean name, as a search of
-its own. Before deciding that a library has no such result, run each distinctive
-word, and the Lean name the result would likely have, as a query of its own,
-retry with other usual names, and search by the words of the result.
+its own; before deciding that a library has no such result, run each distinctive
+word and the likely Lean name alone, and retry with other usual names.
 
 ## A complete hit
 

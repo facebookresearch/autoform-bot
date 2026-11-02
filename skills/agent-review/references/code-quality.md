@@ -3,8 +3,7 @@
 Judge Mathlib idiom, maintainability, and public API shape only. Do not use this axis to rescore
 statement faithfulness or proof soundness; style may flag a review but never rescue or reject it.
 
-Read [Mathlib style](mathlib-style.md) before scoring and inspect surrounding project and Mathlib
-code for established names and APIs.
+Inspect surrounding project and Mathlib code for established names and APIs.
 
 ## Review points
 
