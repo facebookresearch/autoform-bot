@@ -36,7 +36,9 @@ date when the release is tagged.
   readiness and `work assumptions` never count them, and the article's summary
   skips the section. `check` warns about a link that does not resolve, one whose
   target depends on the article (it stays listed), and the heading written below
-  a dependency heading, where its links count (#541).
+  a dependency heading, where its links count (#541). The Roadmap skill puts
+  under it what a source's proof cites but the planned Lean proof will not use,
+  as when a library proof is reused (#556).
 
 ### Changed
 
