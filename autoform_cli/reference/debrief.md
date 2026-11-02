@@ -1,7 +1,7 @@
 # Autoform debriefs
 
 What the `autoform debrief` commands ask, store and print. The [CLI
-reference](../../README.md#debrief) gives the synopses.
+reference](../README.md#debrief) gives the synopses.
 
 ## Orchestrator debriefs
 

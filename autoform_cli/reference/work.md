@@ -2,7 +2,7 @@
 
 What the `autoform work` reports contain: the frontier and an article's context,
 open statements, and the impact of a Lean or import edit. The [CLI
-reference](../../README.md#work) gives the synopses and exit statuses.
+reference](../README.md#work) gives the synopses and exit statuses.
 
 ## Work list and context
 
