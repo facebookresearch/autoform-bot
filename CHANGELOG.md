@@ -262,7 +262,7 @@ date when the release is tagged.
   leaves out the selected result's status no longer clears the selection, and
   "Show N filtered out" counts what it hides from the list. A map that cannot
   load says so on the stage, and the outline, search and lists still work. The
-  explorer bundle is 68,622 bytes instead of 144,973.
+  explorer bundle is 68,622 bytes instead of 144,973 (#574).
 
 ### Fixed
 
