@@ -1,4 +1,5 @@
-"""Production boot gating and cold-mount order of the explorer shell, over tiny DOM and router seams.
+"""Production boot gating, cold-mount order, the map's failure notice and resize batching of the explorer shell,
+over tiny DOM and router seams.
 
 These are source checks, not substitutes for genuine browser journeys.
 """
@@ -43,8 +44,8 @@ def _run(body: str, fixture: object) -> None:
 
 
 @pytest.mark.parametrize("entry", ["roadmap", "resultA"])
-def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(entry: str) -> None:
-    """Execute the real cold-mount prefix and index adoption; the shell, projection and layout are seams."""
+def test_cold_mount_seeds_its_route_and_adopts_the_loaded_index_before_the_first_resize(entry: str) -> None:
+    """Execute the real cold-mount prefix and index adoption; the shell, the page's adoption and the route are seams."""
     _run(r"""
       const events=[];
       const scopes=Array.from({length:12},(_,number)=>({id:'scope-'+number,title:'Topic '+number,
@@ -67,7 +68,7 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
       const seams=`
         function buildShell() {events.push('shell');dom$search={removeAttribute(){}};}
         function bindEvents() {events.push('bind');}
-        function updateProjection() {events.push('project');}
+        function updateProjection() {events.push('adopt');}
         function renderNavigation() {} function refresh() {}
         function renderWikiContext() {events.push('optional-wiki');}
         function applyRoute(bundle) {
@@ -75,7 +76,7 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
           assert.equal(ui$wikiLinks.availability,'unavailable');events.push('route');return Promise.resolve();
         }
         function record(phase) {
-          assert.strictEqual(sharedIndex,index,"Cold layout must use the router's validated index");
+          assert.strictEqual(sharedIndex,index,"The first resize must see the router's validated index");
           assert.equal(ui$requestedNode,fixture.entry,'The first resize must retain the canonical requested route');
           events.push(phase);
         }
@@ -84,8 +85,9 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
       const bootstrap=eval('('+productionSource.slice(start,end)+'\nreturn ui$requestedNode;\n'+helpers+'\n'+seams+'})');
       assert.equal(bootstrap(host,payload,1,firstBundle,navigation),fixture.entry);
       const phase=name=>events.indexOf(name);
-      assert(phase('shell')<phase('bind')&&phase('bind')<phase('index')&&phase('index')<phase('project'));
-      assert(phase('project')<phase('resize')&&phase('resize')<phase('route'));
+      assert(phase('shell')<phase('bind')&&phase('bind')<phase('index')&&phase('index')<phase('adopt'));
+      // The optional concept links render once the page is adopted, before the first resize.
+      assert(phase('adopt')<phase('optional-wiki')&&phase('optional-wiki')<phase('resize')&&phase('resize')<phase('route'));
       assert(events.filter(event=>event==='index').length===1);
       assert.throws(()=>bootstrap(host,payload,1,firstBundle,null),/complete mathematical page and navigation/);
       assert.throws(()=>bootstrap(host,payload,1,null,navigation),/complete mathematical page and navigation/);
@@ -106,7 +108,7 @@ def test_bare_or_navigationless_hosts_do_not_start_an_interactive_client() -> No
     """, {})
 
 
-def test_cold_mount_measures_full_page_framing_and_error_restores_native_reading() -> None:
+def test_cold_mount_takes_the_full_page_and_error_restores_native_reading() -> None:
     """Run real boot ordering over tiny DOM/router seams; browser containment remains independent."""
     _run("""
       const events=[],bodyClasses=new Set(),hostClasses=new Set(),loading={hidden:true,classList:{add(){}}};
@@ -118,11 +120,85 @@ def test_cold_mount_measures_full_page_framing_and_error_restores_native_reading
       const clients=new Map();let fail=false,options;
       const window={AutoformNavigation:{create(value){options=value;return {
         start(){try{options.onCommit({graph:{},readingSource:{}});}catch(error){options.onError(error);}},dispose(){}};}}};
-      function mount(){assert(bodyClasses.has('bp-dag-app-page'),'Initial geometry must see the actual full-page viewport');
-        events.push('layout');if(fail)throw Error('controlled mount failure');return {ready:Promise.resolve()};}
+      function mount(){assert(bodyClasses.has('bp-dag-app-page'),'The shell mounts into the full-page layout');
+        events.push('mount');if(fail)throw Error('controlled mount failure');return {ready:Promise.resolve()};}
       eval(original('start'));start(host());
-      assert.deepEqual(events,['layout']);assert(bodyClasses.has('bp-dag-app-page'));
+      assert.deepEqual(events,['mount']);assert(bodyClasses.has('bp-dag-app-page'));
       fail=true;clients.clear();bodyClasses.clear();start(host());
-      assert.deepEqual(events,['layout','layout']);assert(!bodyClasses.has('bp-dag-app-page'));
+      assert.deepEqual(events,['mount','mount']);assert(!bodyClasses.has('bp-dag-app-page'));
       assert(!hostClasses.has('bp-dag-enhancing'));assert(loading.textContent.includes('complete mathematical page remains readable'));
+    """, {})
+
+
+@pytest.mark.parametrize("outcome", ["error", "load-without-map", "load-with-map"])
+def test_a_map_script_that_fails_or_draws_nothing_leaves_one_notice_in_the_stage(outcome: str) -> None:
+    """Execute the real start() and notice; the mounted shell around them is a seam."""
+    _run(r"""
+      const scripts=[],stage={children:[],appendChild(child){this.children.push(child);return child;},
+        querySelector(selector){return this.children.find(child=>'.'+child.className===selector)||null;}};
+      function node(tag){return {tagName:tag.toUpperCase(),attributes:new Map(),setAttribute(name,value){this.attributes.set(name,value);}};}
+      const document={body:{classList:{add(){},remove(){}}},head:{appendChild(child){scripts.push(child);}},createElement:node};
+      const location={href:'https://example.test/project/roadmap/chapter/index.html'};
+      const attributes=new Map([['data-catalog-src','../../dependencies/search-index.json']]);let drawn=null;
+      const host={isConnected:true,dataset:{},classList:{add(){},remove(){}},closest(){return {};},addEventListener(){},
+        getAttribute(name){return attributes.get(name)||null;},setAttribute(name,value){attributes.set(name,value);},
+        querySelector(selector){return selector==='.bp-whole-map'?drawn:null;}};
+      const clients=new Map(),window={AutoformNavigation:{create(options){return {
+        start(){options.onCommit({graph:{},readingSource:{}});},dispose(){}};}}};
+      let alive=true;const dom$stage=stage;
+      eval(original('element'));eval(original('mapUnavailable'));eval(original('start'));
+      function mount(){return {ready:Promise.resolve(),mapUnavailable};}
+      start(host);
+      assert.equal(scripts.length,1);assert.equal(scripts[0].src,'https://example.test/project/javascripts/project-map.js');
+      // The map mounts its host in the stage as its script runs, so a load without it drew nothing.
+      if(fixture.outcome==='load-with-map')drawn={className:'bp-whole-map'};
+      const report=scripts[0][fixture.outcome==='error'?'onerror':'onload'];
+      assert.equal(typeof report,'function','The map script reports how it went');report();
+      const notices=()=>stage.children.filter(child=>child.className==='bp-dag-map-unavailable');
+      assert.equal(notices().length,fixture.outcome==='load-with-map'?0:1);
+      if(fixture.outcome!=='load-with-map'){
+        const [notice]=notices();assert.equal(notice.tagName,'P');assert.equal(notice.attributes.get('role'),'status');
+        assert.equal(notice.textContent,'The map could not load. Topics, search and the statement lists still work.');
+        mapUnavailable();assert.equal(notices().length,1,'A second report keeps the one notice');
+      }
+    """, {"outcome": outcome})
+
+
+def test_resize_notifications_wait_for_one_frame_and_dispose_cancels_a_pending_one() -> None:
+    """Execute the real observer binding, resize queue and disposal; the resize itself is a seam."""
+    _run(r"""
+      const frames=new Map(),cancelled=[],observed=[];let nextFrame=0,delivering=false,resized=0,disposed=0;
+      class ResizeObserver {
+        constructor(callback){this.callback=callback;this.targets=[];this.disconnections=0;observed.push(this);}
+        observe(target){this.targets.push(target);}
+        disconnect(){this.disconnections++;}
+      }
+      const window={ResizeObserver},dom$stage={},navigation={dispose(){disposed++;}};
+      function requestAnimationFrame(callback){const id=nextFrame++;frames.set(id,callback);return id;}
+      function cancelAnimationFrame(id){cancelled.push(id);frames.delete(id);}
+      function notify(observer){delivering=true;try{observer.callback([{target:dom$stage}],observer);}finally{delivering=false;}}
+      function flushFrame(){const current=Array.from(frames);frames.clear();current.forEach(([id,callback])=>callback(id));}
+      function resize(){assert(!delivering,'A resize waits for a frame, out of observer delivery');resized++;}
+      function globalListen(){assert.fail('A ResizeObserver needs no window resize listener');}
+      function clearTimeout(){} function stopRowMath(){}
+      // The mount's lifecycle state, the observer binding from bindEvents and the client's dispose run as published.
+      eval(productionSource.match(/\bvar alive =[^;]+;/)[0]);eval(original('queueResize'));
+      const bind=original('bindEvents'),begin=bind.indexOf('if (window.ResizeObserver)');
+      eval(bind.slice(begin,bind.indexOf('globalListen(window, "resize", syncSheetAccessibility)',begin)));
+      const marker=productionSource.indexOf('dispose: function () { alive = false'),from=productionSource.indexOf('function',marker);
+      let dispose=null;
+      for(let end=productionSource.indexOf('}',from);!dispose;end=productionSource.indexOf('}',end+1)){
+        try{dispose=eval('('+productionSource.slice(from,end+1)+')');}catch(error){if(!(error instanceof SyntaxError))throw error;}
+      }
+      const observer=observed[0];assert.strictEqual(observer.callback,queueResize);assert.deepEqual(observer.targets,[dom$stage]);
+      notify(observer);notify(observer);notify(observer);
+      assert.equal(frames.size,1);assert.equal(resized,0);
+      flushFrame();assert.equal(resized,1);assert.equal(resizeFrame,null);
+      flushFrame();assert.equal(resized,1,'A settled size starts no frame loop');
+      notify(observer);const id=resizeFrame,pending=frames.get(id);
+      dispose();
+      assert.equal(alive,false);assert.deepEqual(cancelled,[id]);assert.equal(frames.size,0);assert.equal(resizeFrame,null);
+      assert.equal(observer.disconnections,1);assert.equal(disposed,1);
+      pending(id);notify(observer);queueResize();
+      assert.equal(frames.size,0);assert.equal(resized,1,'A late frame or notification cannot resize a disposed shell');
     """, {})

@@ -75,7 +75,7 @@ window.matchMedia=()=>({matches:true});
 )
 
 _PHONE_CALLBACKS = [
-    "captureState", "snapshotForRoute", "applyRoute", "restoreState", "setFilters", "setBrowse", "sheetLayout",
+    "captureState", "snapshotForRoute", "applyRoute", "restoreState", "setFilters", "setBrowse", "sheetLayout", "mapControl",
 ]
 
 _INVENTORY_PEERS = _OUTLINE_PEERS + r"""
@@ -375,7 +375,7 @@ def test_phone_topic_boundary_overview_peeks_without_overriding_reading_intent(i
         status:'fully_proved',route:'https://example.test/project/roadmap/topic/index.html'};
       const external={id:'external',scope:'external',parent:'roadmap',kind:'scope',result:false,title:'External topic',
         status:'fully_proved',route:'https://example.test/project/roadmap/external/index.html'};
-      const boundary=Object.assign({},external,{id:'boundary:external',kind:'boundary',_recordId:'external'});
+      const boundary=Object.assign({},external,{id:'boundary:external',kind:'boundary'});
       byId=new Map([[topic.id,topic],[boundary.id,boundary]]);records=new Map([[root.id,root],[topic.id,topic],[external.id,external]]);
       let id=intent==='no-node'?null:intent==='roadmap'?'roadmap':'topic';
       if(intent.startsWith('chapter-math')) {

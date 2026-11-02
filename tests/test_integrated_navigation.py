@@ -1056,7 +1056,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
       };
       // Supply the renderer's actual private lexical collaborators; executed source stays verbatim.
       let ui$selected=null,ui$filtersTouched,ui$requestedNode,ui$selectedStatuses,
-        ui$mode,ui$listLimit,ui$relationIds,ui$query,ui$activeDirty,ui$reading,ui$overviewOnly,ui$outlineLimit;
+        ui$mode,ui$listLimit,ui$relationIds,ui$query,ui$reading,ui$overviewOnly,ui$outlineLimit;
       const dom$readingBody=refs.$readingBody,dom$search=refs.$search,dom$error=refs.$error,
         dom$breadcrumb=refs.$breadcrumb,dom$navigation=refs.$navigation,dom$inventoryScroll=refs.$inventoryScroll;
       let dom$outlineToggle;
@@ -1108,7 +1108,7 @@ def test_results_restoration_renders_saved_page_before_restoring_scroll_and_focu
       const calls=[],LIST_PAGE=100,presentStatuses=['planned'];
       let alive=true,restoration=0,restoring=false,checkpointTimer,readingReady=Promise.resolve();
       let ui$filtersTouched,ui$requestedNode,ui$selected,ui$selectedStatuses,
-        ui$mode='list',ui$listLimit=100,ui$relationIds,ui$outlineLimit,ui$query,ui$activeDirty;
+        ui$mode='list',ui$listLimit=100,ui$relationIds,ui$outlineLimit,ui$query;
       const host={classList:{toggle(){}}},records=new Map(),byId=new Map();
       let dom$inventoryRows=new Map(),dom$outlineToggle;
       const dom$search={value:''},dom$navigation={scrollTop:0},dom$readingBody={scrollTop:0},dom$inventoryScroll={scrollTop:0};

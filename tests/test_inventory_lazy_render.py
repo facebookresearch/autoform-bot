@@ -60,7 +60,7 @@ const document={activeElement:null,createElement:peer,createTextNode(value){cons
 const window={};
 const host=peer(),dom$inventory=peer('section'),dom$inventoryList=peer('ul'),dom$inventorySummary=peer('span');
 dom$inventory.appendChild(peer('h2'));
-const dom$loadMore=peer('button'),dom$inventoryScroll=peer(),dom$wholeSearch=peer('button');
+const dom$loadMore=peer('button'),dom$inventoryScroll=peer(),dom$wholeSearch=peer('button'),dom$hiddenButton=peer('button');
 const dom$readingContext=peer(),dom$readingNeighbors=peer(),dom$readingBody=peer('article'),dom$navigation=peer('nav'),dom$search=peer('input');
 var dom$inventoryRows=new Map(),dom$outlineToggle=null;
 const results=Array.from({length:150},(_,n)=>({id:'result-'+String(n).padStart(3,'0'),title:'Result '+n,
@@ -75,7 +75,7 @@ const records=new Map(indexNodes.map(node=>[node.id,node])),byId=new Map(records
 var currentBundle={nodeId:'roadmap',scope:'roadmap'},ui$mode='graph',ui$query='',ui$relationIds=null,ui$listLimit=LIST_PAGE;
 var ui$selectedStatuses=new Set(['planned','fully_proved','inventory_pending']),ui$selected=null;
 var ui$overviewOnly=false,ui$requestedNode=null;
-var ui$active=[],ui$activeDirty=true,ui$filtersTouched=false,ui$outlineLimit=120;
+var ui$filtersTouched=false,ui$outlineLimit=120;
 var alive=true,restoration=0,restoring=false,checkpointTimer,readingReady=Promise.resolve();
 const presentStatuses=['planned','fully_proved','inventory_pending'];
 const palette={planned:{label:'planned'},fully_proved:{label:'fully proved'},inventory_pending:{label:'inventory pending'}};
@@ -83,7 +83,8 @@ const navigation={checkpoint(method){effects.push({kind:'checkpoint',method});},
 function syncControls(){dom$inventory.hidden=ui$mode==='graph';}
 function renderInspector(){}function sheetLayout(){return false;}function setSheet(){}function refreshReadingLabels(){}function typesetRowsInView(){}var instance=1;
 function updateProjection(){}function renderNavigation(){}function resize(){}
-function calculateActive(){assert.fail('An available complete index was replaced by a map subset');}
+// The page's own payload stands in for the list only until the index loads.
+Object.defineProperty(globalThis,'data',{get(){assert.fail('An available complete index was replaced by the page payload');}});
 function activateNode(node){effects.push({kind:'activate',node});}
 function requestAnimationFrame(callback){return setImmediate(callback);}
 function rowIds(){return Array.from(dom$inventoryRows.keys());}
@@ -171,4 +172,22 @@ def test_deferred_inventory_still_applies_query_and_status_without_truncating_th
       assert.equal(dom$inventoryRows.size,75);assert.equal(dom$inventorySummary.textContent,'75 statements');
       assert(rowIds().every(id=>records.get(id).status==='fully_proved'));
       assert.equal(sharedIndex.nodes.length,155);assert.equal(JSON.stringify(indexNodes),before);
+    """)
+
+
+def test_show_filtered_out_counts_what_the_status_filter_hides_from_the_browse_list() -> None:
+    _run(r"""
+      const before=JSON.stringify(indexNodes);ui$selectedStatuses=new Set(['fully_proved']);setMode('list',true);
+      // The list holds 150 results and a module article: the 75 proved results show; 75 planned ones and the article do not.
+      assert.equal(dom$inventorySummary.textContent,'75 statements');
+      assert.equal(dom$hiddenButton.textContent,'Show 76 filtered out');assert.equal(dom$hiddenButton.hidden,false);
+      // A search counts only its own matches: result-140 to result-149, five of them planned.
+      ui$query='result-14';refresh(true);
+      assert.deepEqual(rowIds(),['result-141','result-143','result-145','result-147','result-149']);
+      assert.equal(dom$hiddenButton.textContent,'Show 5 filtered out');
+      ui$query='';setMode('sources',true);
+      assert.deepEqual(rowIds(),[]);assert.equal(dom$hiddenButton.textContent,'Show 2 filtered out');
+      ui$selectedStatuses=new Set(presentStatuses);refresh(true);
+      assert.deepEqual(rowIds(),['source-0','source-1']);assert.equal(dom$hiddenButton.hidden,true);
+      assert.equal(JSON.stringify(indexNodes),before);
     """)

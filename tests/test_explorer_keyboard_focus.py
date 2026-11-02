@@ -15,7 +15,7 @@ _PEERS = (
     _CONTROL_PEERS.replace("buildShell();bindEvents();syncControls();", "")
     .replace("function setFilters(){}", "")
     .replace("function revealAll(){}", "")
-    .replace("function focusNodeControl(){}", "")
+    .replace("function focusMap(){}", "")
     .replace("function remember(){}", "function remember(){remembered++;}")
     .replace("function resize(){}", "function resize(){resized++;}")
     + _CONSTANTS + r"""
@@ -40,18 +40,21 @@ buildShell();bindEvents();syncControls();
 dom$inventoryRows=new Map();
 dom$stage.clientWidth=600;dom$stage.clientHeight=400;
 dom$inspector.clientHeight=400;
-// The whole map mounts its own host in the stage; its svg is the map's one tab stop.
-const wholeMap=new Element('div'),mapSvg=new Element('svg');
+// The whole map mounts its own host in the stage. Its tab stop is the card it has selected, else its svg.
+const wholeMap=new Element('div'),mapSvg=new Element('svg'),mapCard=new Element('g');
 wholeMap.className='bp-whole-map';mapSvg.setAttribute('tabindex','0');wholeMap.appendChild(mapSvg);dom$stage.appendChild(wholeMap);
+mapCard.className='pm-result pm-selected';mapCard.setAttribute('tabindex','0');
+const mapStops={'.bp-whole-map .pm-result.pm-selected[tabindex="0"]':mapCard,'.bp-whole-map svg[tabindex="0"]':mapSvg};
 dom$stage.querySelector=selector=>{
-  assert.equal(selector,'.bp-whole-map svg[tabindex="0"]');return wholeMap.parentElement===dom$stage?mapSvg:null;
+  assert(selector in mapStops,'Unexpected map selector '+selector);const stop=mapStops[selector];
+  return wholeMap.parentElement===dom$stage&&wholeMap.contains(stop)?stop:null;
 };
 """
 )
 _CALLBACKS = [
     "element", "button", "readingLabel", "bindNodeLink", "safeHref", "buildShell", "bindEvents", "syncControls",
     "setBrowse", "setFilters", "trailList", "renderBreadcrumb", "routeTrail", "semanticParent",
-    "refreshReadingLabels", "tooltip", "sourceNodes", "inCurrentScope", "focusNodeControl", "clearSelection",
+    "refreshReadingLabels", "tooltip", "sourceNodes", "inCurrentScope", "focusMap", "mapControl", "clearSelection",
     "revealAll", "statusLabel",
 ]
 
@@ -121,6 +124,19 @@ def test_back_to_map_hiding_button_focuses_the_real_map_tabstop_after_paint() ->
     """)
 
 
+def test_only_the_latest_map_focus_request_can_focus_or_checkpoint() -> None:
+    _controls(r"""
+      const outside=new Element('button');outside.focus();const before=remembered;
+      focusMap();frames.splice(0).forEach(callback=>callback());focusMap();
+      // The older request's second frame comes first, and it no longer acts.
+      frames.shift()();
+      assert.equal(document.activeElement,outside);assert.equal(mapSvg.focuses.length,0);assert.equal(remembered,before);
+      flushFrames();
+      assert.equal(document.activeElement,mapSvg);assert.deepEqual(mapSvg.focuses,[{preventScroll:true}]);
+      assert.equal(remembered,before+1);assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
+    """)
+
+
 def test_pending_back_to_map_focus_cannot_take_a_new_search_focus() -> None:
     _controls(r"""
       ui$mode='list';syncControls();dom$graphMode.focus();
@@ -142,7 +158,7 @@ def test_pending_back_to_map_focus_cannot_take_a_new_search_focus() -> None:
 def test_pending_map_focus_cannot_take_a_new_outside_focus() -> None:
     _controls(r"""
       const outside=new Element('a');document.body.appendChild(outside);dom$graphMode.focus();
-      focusNodeControl();frames.splice(0).forEach(callback=>callback());outside.focus();
+      focusMap();frames.splice(0).forEach(callback=>callback());outside.focus();
       const before={remembered,bundle:currentBundle,projection:data,index:JSON.stringify(sharedIndex),
         sheetFocuses:dom$sheetHandle.focuses.length,filterFocuses:dom$filterSummary.focuses.length};
       flushFrames();
@@ -171,15 +187,71 @@ def test_self_hiding_back_button_body_or_html_blur_still_focuses_the_actual_map(
     """)
 
 
-def test_full_phone_reader_suppresses_pending_node_fallback_and_missing_node_focus() -> None:
+def test_visible_owner_or_unowned_hidden_owner_blur_to_body_cancels_pending_map_focus() -> None:
+    _controls(r"""
+      const outside=new Element('button');document.body.appendChild(outside);
+      Element.prototype.blur=function(){if(document.activeElement===this)document.activeElement=document.body;};
+      for(const owner of [dom$browseToggle,outside]){
+        owner.focus();focusMap();frames.splice(0).forEach(callback=>callback());
+        if(owner===outside)outside.hidden=true;
+        owner.blur();
+        assert.equal(document.activeElement,document.body);
+        const before={remembered,focuses:mapSvg.focuses.length,filterFocuses:dom$filterSummary.focuses.length};flushFrames();
+        assert.equal(document.activeElement,document.body);assert.equal(mapSvg.focuses.length,before.focuses);
+        assert.equal(dom$filterSummary.focuses.length,before.filterFocuses);assert.equal(remembered,before.remembered);
+      }
+      assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
+    """)
+
+
+def test_a_removed_owned_owner_blurring_to_body_keeps_the_map_focus_eligible() -> None:
+    _controls(r"""
+      const owner=new Element('button');host.appendChild(owner);owner.focus();
+      focusMap();frames.splice(0).forEach(callback=>callback());
+      owner.remove();owner.isConnected=false;document.body.focus();
+      const before=remembered;flushFrames();
+      assert.equal(document.activeElement,mapSvg);assert.deepEqual(mapSvg.focuses,[{preventScroll:true}]);
+      assert.equal(remembered,before+1);assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
+    """)
+
+
+def test_disposed_map_focus_callback_does_not_focus_or_checkpoint() -> None:
+    _controls(r"""
+      const outside=new Element('button');outside.focus();
+      const before={remembered,filterFocuses:dom$filterSummary.focuses.length};
+      focusMap();alive=false;flushFrames();
+      assert.equal(document.activeElement,outside);assert.equal(mapSvg.focuses.length,0);
+      assert.equal(dom$filterSummary.focuses.length,before.filterFocuses);assert.equal(remembered,before.remembered);
+    """)
+
+
+def test_stale_or_hidden_map_focus_request_does_not_steal_later_focus() -> None:
+    _controls(r"""
+      const outside=new Element('button'),bundle=currentBundle;
+      for(const changed of ['bundle','list','generation']){
+        currentBundle=bundle;delete bundle.isCurrent;ui$mode='graph';outside.focus();
+        const before={remembered,focuses:mapSvg.focuses.length,filterFocuses:dom$filterSummary.focuses.length};
+        focusMap();
+        if(changed==='bundle')currentBundle={scope:'other'};
+        else if(changed==='list')ui$mode='list';
+        else bundle.isCurrent=()=>false;
+        flushFrames();
+        assert.equal(document.activeElement,outside,changed);assert.equal(mapSvg.focuses.length,before.focuses,changed);
+        assert.equal(dom$filterSummary.focuses.length,before.filterFocuses,changed);assert.equal(remembered,before.remembered,changed);
+      }
+    """)
+
+
+def test_full_phone_reader_suppresses_pending_map_focus_and_its_filter_fallback() -> None:
     _controls(r"""
       const reading=new Element('a'),bundle=currentBundle,projection=data;
       dom$readingBody.appendChild(reading);ui$phone=true;ui$mode='graph';
       host.classList.toggle('bp-dag-sheet-open',true);
-      for(const [target,mounted] of [[undefined,true],[{id:'not-drawn'},true],[undefined,false],[{id:'not-drawn'},false]]){
+      for(const mounted of [true,false]){
         if(mounted)dom$stage.appendChild(wholeMap);else wholeMap.remove();
-        host.classList.toggle('bp-dag-sheet-full',false);focusNodeControl(target);
-        host.classList.toggle('bp-dag-sheet-full',true);reading.focus();
+        host.classList.toggle('bp-dag-sheet-full',false);reading.focus();focusMap();
+        // The reader grows to cover the map before the map focus lands.
+        host.classList.toggle('bp-dag-sheet-full',true);
         const before={remembered,mapFocuses:mapSvg.focuses.length,
           sheetFocuses:dom$sheetHandle.focuses.length,filterFocuses:dom$filterSummary.focuses.length};
         flushFrames();
@@ -190,6 +262,44 @@ def test_full_phone_reader_suppresses_pending_node_fallback_and_missing_node_foc
         assert.equal(dom$filterSummary.focuses.length,before.filterFocuses);
         assert.equal(remembered,before.remembered);
       }
+    """)
+
+
+def test_full_sheet_class_does_not_suppress_an_uncovered_desktop_map() -> None:
+    _controls(r"""
+      const reading=new Element('a');dom$readingBody.appendChild(reading);reading.focus();
+      host.classList.toggle('bp-dag-sheet-full',true);ui$phone=false;focusMap();
+      flushFrames();assert.equal(document.activeElement,mapSvg);
+      assert.deepEqual(mapSvg.focuses.at(-1),{preventScroll:true});
+    """)
+
+
+def test_map_focus_lands_on_the_maps_selected_card_before_its_svg() -> None:
+    _controls(r"""
+      const outside=new Element('button');outside.focus();mapSvg.appendChild(mapCard);
+      focusMap();flushFrames();
+      assert.equal(document.activeElement,mapCard);assert.deepEqual(mapCard.focuses,[{preventScroll:true}]);
+      assert.equal(mapSvg.focuses.length,0);
+    """)
+
+
+def test_a_missing_or_still_hidden_map_leaves_focus_on_the_filter() -> None:
+    _controls(r"""
+      const outside=new Element('button');
+      for(const map of ['missing','unstyled']){
+        outside.focus();
+        if(map==='missing')wholeMap.remove();
+        else{
+          // Until its stylesheet loads the map is visibility:hidden, and its svg refuses focus.
+          dom$stage.appendChild(wholeMap);mapSvg.focus=function(options){this.focuses.push(options);};
+        }
+        const before={remembered,filterFocuses:dom$filterSummary.focuses.length};
+        focusMap();flushFrames();
+        assert.equal(document.activeElement,dom$filterSummary,map);
+        assert.equal(dom$filterSummary.focuses.length,before.filterFocuses+1,map);
+        assert.deepEqual(dom$filterSummary.focuses.at(-1),{preventScroll:true});assert.equal(remembered,before.remembered+1,map);
+      }
+      assert.equal(mapSvg.focuses.length,1,'The hidden map was offered the focus first');
     """)
 
 
@@ -302,6 +412,19 @@ def test_ignored_full_phone_shortcuts_keep_full_reader_focus_and_view_state() ->
       }
       assert.deepEqual(navigationCalls,[]);assert.deepEqual(history,[]);assert.equal(checkpoints,0);
     """, real_sheet=True)
+
+
+def test_reader_escape_clears_a_selection_with_one_history_entry_and_none_without() -> None:
+    _controls(r"""
+      const reading=new Element('a');dom$readingBody.appendChild(reading);reading.focus();const before=JSON.stringify(sharedIndex);
+      assert.equal(emit(dom$inspector,'keydown',{target:reading,key:'Escape'}).defaultPrevented,false);
+      clearSelection(true,true);assert.equal(checkpoints,0);assert.deepEqual(history,[]);assert.equal(sheets.length,0);
+      ui$selected={id:'A',title:'A',kind:'node',status:'planned'};
+      assert.equal(emit(dom$inspector,'keydown',{target:reading,key:'Escape'}).defaultPrevented,true);
+      assert.equal(ui$selected,null);assert.equal(checkpoints,1);assert.deepEqual(history,['push']);
+      assert.deepEqual(sheets,[{open:true,selected:null}],'The desktop reader stays open beside the map');
+      assert.equal(document.activeElement,reading);assert.equal(JSON.stringify(sharedIndex),before);
+    """)
 
 
 def test_outline_more_focuses_first_new_id_not_the_previous_row_count() -> None:

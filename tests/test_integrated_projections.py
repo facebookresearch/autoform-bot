@@ -35,8 +35,7 @@ function original(name) {
 const constants = source.match(/\bvar LIST_PAGE =[^;]+;/);
 assert(constants, 'Production list page size missing');
 const functions = [
-  'element', 'readingLabel', 'button', 'bindNodeLink', 'safeHref', 'graphAt', 'recordId', 'adoptGraph',
-  'matchesStatus', 'calculateActive',
+  'element', 'readingLabel', 'button', 'bindNodeLink', 'safeHref', 'graphAt', 'recordId', 'listed', 'adoptGraph',
   'statusLabel', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
   'semanticParent', 'placeOf', 'pendingMath', 'summaryLine', 'refreshReadingLabels', 'tooltip', 'inCurrentScope', 'sourceNodes'
 ].map(original).join('\n');
@@ -67,7 +66,7 @@ dom$inventory.appendChild(new Element('h2'));
 var data, palette, byId, incident, statusCounts, presentStatuses;
 var mobileIsolateBase, contextGraph, sharedIndex, currentBundle;
 var records, navigation, calls;
-var ui$active, ui$activeDirty, ui$selected, ui$selectedStatuses;
+var ui$selected, ui$selectedStatuses;
 var ui$query, ui$relationIds, ui$mode, ui$listLimit;
 var plural = (count, one, many) => count.toLocaleString() + ' ' + (count === 1 ? one : many);
 var num = (value) => value.toLocaleString();
@@ -99,7 +98,7 @@ function configure(indexNodes, context, relations = []) {
   sharedIndex = {schema: 'autoform-dag-search/v1', nodes: indexNodes, relations};
   contextGraph = context; currentBundle = {dataURL: 'https://example.test/math/dependencies/chapters/chapter.json'};
   calls = []; navigation = {navigateNode(id, settings) { calls.push({id, settings}); }};
-  ui$active = []; ui$activeDirty = true; ui$selected = null;
+  ui$selected = null;
   ui$selectedStatuses = new Set(['planned', 'fully_proved']);
   ui$query = ''; ui$relationIds = null; ui$mode = 'graph'; ui$listLimit = LIST_PAGE;
 }
@@ -164,6 +163,21 @@ def test_a_list_row_sets_its_summarys_code_and_tex_instead_of_printing_them() ->
       assert.equal(summaryLine({title: 'Group', summary: 'Groups act on sets.'}).textContent, 'Groups act on sets.');
       assert.equal(summaryLine({title: 'Lemma', summary: 'Plain prose.'}).textContent, 'Plain prose.');
     """)
+
+
+def test_the_page_adopts_only_the_entries_it_lists() -> None:
+    _run(r"""
+      // An overview payload marks the entries its overview leaves out, and a source track's scope is a source text, not a topic.
+      const source = scope('Atlas', {navigation: 'source'}), topic = scope('Geometry');
+      const entries = [viewNode('scope:Atlas', {kind: 'scope'}), viewNode('scope:Geometry', {kind: 'scope'}), viewNode('F'),
+        viewNode('page-2', {map: false, status: 'fully_proved'})];
+      configure([source, topic, leaf('F')], graph(entries));
+      adoptGraph(contextGraph);
+      assert.deepEqual(data.nodes.map(node => node.id), ['scope:Geometry', 'F']);
+      assert.deepEqual(Array.from(byId.keys()), ['scope:Geometry', 'F']);
+      assert.equal(contextGraph.nodes.length, 4, 'The payload itself stays as published');
+    """)
+
 
 def test_authoritative_ids_typed_view_ids_and_derived_boundaries_remain_distinct() -> None:
     _run(r"""

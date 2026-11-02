@@ -462,7 +462,6 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert "new ResizeObserver(queueResize)" in script
     assert "touch-action: none; cursor: grab;" in container
     assert 'url.origin === window.location.origin' in script
-    assert "if (!state.activeDirty) return" in script
     assert "if (query === state.searchCacheQuery) return state.searchCache" in script
     assert f'data.schema !== "{dag_viewer.SCHEMA}"' in script
     assert f'INDEX_SCHEMA = "{dag_viewer.SEARCH_SCHEMA}"' in script
@@ -785,7 +784,7 @@ def test_explorer_toolbar_copy_says_what_it_searches_and_filters() -> None:
     style = dag_viewer._STYLE
     assert ".bp-dag-button:not(:disabled):hover, .bp-dag-filter-summary:hover" in style
     assert ".bp-dag-button:disabled { opacity: .45; cursor: default; }" in style
-    assert '"Nothing matches these filters."' in script and "No nodes match" not in script
+    assert "No nodes match" not in script
     # The router loads the index before the shell mounts, so only a retry after a failed load is
     # ever in flight: ensureGlobalSearch marks it, and either outcome or the mounted index clears it.
     assert script.count('refs.search.setAttribute("aria-busy", "true")') == 1

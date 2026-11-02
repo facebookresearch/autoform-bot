@@ -27,7 +27,7 @@
   }
 
   // Only publisher-derived label parts enter reading controls. Never parse
-  // provider HTML, replace an interactive link, or alter graph-card geometry.
+  // provider HTML or replace an interactive link.
   function readingLabel(tag, className, text, label, prefix) {
     prefix = prefix || "";
     var root = element(tag, className, prefix + text);
@@ -84,14 +84,17 @@
       host: host,
       onCommit: function (bundle) {
         if (!host.isConnected) { navigation.dispose(); return; }
-        // Cold layout must measure the actual full-page shell, not Material's
-        // old content column. The error path below restores native reading.
+        // The book takes the whole page, not Material's content column. The
+        // error path below restores native reading.
         document.body.classList.add("bp-dag-app-page");
         var ready;
         if (!client) {
           client = mount(host, bundle.graph, instance, bundle, navigation); clients.set(host, client); ready = client.ready;
           if (catalog) {
-            var map = element("script"); map.src = new URL("../javascripts/project-map.js", host.dataset.wholeMap).href; document.head.appendChild(map);
+            var map = element("script"); map.src = new URL("../javascripts/project-map.js", host.dataset.wholeMap).href;
+            // A map that cannot load leaves the stage to a notice; the outline, search and lists still work.
+            map.onload = map.onerror = function () { if (!host.querySelector(".bp-whole-map")) client.mapUnavailable(); };
+            document.head.appendChild(map);
             host.addEventListener("autoform-map-select", function (event) { navigation.navigateNode(event.detail.id, event.detail); });
           }
         }
@@ -177,10 +180,17 @@
     host.classList.remove("bp-dag-enhancing");
     var palette, byId, statusCounts, presentStatuses;
     function recordId(node) {
-      return node._recordId || (records.get(node.id) === node || ["scope", "boundary"].indexOf(node.kind) < 0 ? node.id : node.id.replace(/^(scope|boundary):/, ""));
+      return records.get(node.id) === node || ["scope", "boundary"].indexOf(node.kind) < 0 ? node.id : node.id.replace(/^(scope|boundary):/, "");
+    }
+    // What the page lists: an overview payload marks the entries its overview leaves out, and a source track's scope is
+    // a source text, not a topic.
+    function listed(node) {
+      var record = records.get(recordId(node));
+      return node.map !== false && !(node.kind === "scope" && record && record.navigation === "source");
     }
     function adoptGraph(payload) {
     data = graphAt(payload, currentBundle && currentBundle.dataURL);
+    data.nodes = data.nodes.filter(listed);
     palette = data.palette || {}; byId = new Map();
     statusCounts = new Map(); presentStatuses = [];
     data.nodes.forEach(function (node, index) {
@@ -201,7 +211,7 @@
     }
     adoptGraph(data);
     // Renderer-private locals compress independently of public JSON/history field names.
-    var ui$active = [], ui$activeDirty = true, ui$listLimit = LIST_PAGE, ui$mode = "graph",
+    var ui$listLimit = LIST_PAGE, ui$mode = "graph",
       ui$query = "", ui$searchLimit = 12, ui$selected = null, ui$searchCache = [], ui$searchCacheQuery = null,
       ui$searchError = null, ui$searchLoading = false, ui$searchNodes = data.nodes, ui$searchPromise = null, ui$mathJob = null,
       ui$selectedStatuses = new Set(presentStatuses), ui$reading = Boolean(firstBundle && firstBundle.readingSource),
@@ -219,8 +229,8 @@
 
     buildShell();
     bindEvents();
-    // The router has already validated its index. Project before the first
-    // layout, including direct theorem entries, not a transient raw scope.
+    // The router has already validated its index, so the first route, a
+    // direct theorem entry included, reads its records.
     if (navigation && navigation.getIndex) useIndex(navigation.getIndex());
     resize();
     readingReady = applyRoute(firstBundle);
@@ -234,7 +244,8 @@
     }
 
     function captureState() {
-      var active = document.activeElement, key = active === dom$search ? "search" : dom$readingBody && dom$readingBody.contains(active) ? "reading" : active && (active.dataset.autoformNodeId || active.dataset.inventoryNodeId || active.dataset.shelfNodeId);
+      var active = document.activeElement, key = active === dom$search ? "search" : dom$readingBody && dom$readingBody.contains(active) ? "reading" :
+        dom$stage.contains(active) ? "map" : active && active.dataset.inventoryNodeId;
       return {node: ui$selected && ui$selected.id, requestedNode: ui$requestedNode, mode: ui$mode,
         statuses: Array.from(ui$selectedStatuses), query: ui$query, readingOpen: host.classList.contains("bp-dag-sheet-open"), focus: key,
         readingScroll: dom$readingBody ? dom$readingBody.scrollTop : 0, outlineScroll: dom$navigation.scrollTop,
@@ -268,14 +279,14 @@
       ui$query = saved.query || ""; dom$search.value = ui$query;
       host.classList.toggle("bp-dag-outline-open", Boolean(saved.outlineOpen));
       if (dom$outlineToggle) dom$outlineToggle.setAttribute("aria-expanded", String(Boolean(saved.outlineOpen)));
-      ui$activeDirty = true; setSheet(saved.readingOpen !== false && 1, ui$selected); refresh(false); resize();
+      setSheet(saved.readingOpen !== false && 1, ui$selected); refresh(false); resize();
       return readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || ticket !== restoration || (isCurrent && !isCurrent())) { if (ticket === restoration) restoring = false; resolve(); return; }
         dom$navigation.scrollTop = saved.outlineScroll || 0;
         if (dom$readingBody) dom$readingBody.scrollTop = saved.readingScroll || 0;
         dom$inventoryScroll.scrollTop = saved.inventoryScroll || 0;
         var chosen = saved.focus === "search" ? dom$search : saved.focus === "reading" ? dom$readingBody :
-          ui$mode === "graph" ? saved.focus && dom$stage.querySelector('.bp-whole-map svg[tabindex="0"]') : dom$inventoryRows.get(saved.focus);
+          ui$mode === "graph" ? saved.focus && mapControl() : dom$inventoryRows.get(saved.focus);
         if (chosen === dom$readingBody) chosen.tabIndex = -1;
         if (chosen) chosen.focus({preventScroll: true});
         restoring = false; resolve();
@@ -367,7 +378,7 @@
       }
       updateProjection();
       ui$mode = "graph";
-      ui$selectedStatuses = new Set(presentStatuses); ui$activeDirty = true;
+      ui$selectedStatuses = new Set(presentStatuses);
       var legacy = bundle.parameters || {};
       if (legacy.view === "list") ui$mode = "list";
       if (legacy.status) ui$selectedStatuses = new Set(legacy.status.split(",").filter(function (key) { return palette[key]; }));
@@ -375,18 +386,16 @@
       // Decide only after the outline has proved and hidden duplicated child
       // indexes. A canonical scope ID alone is not a request to read a result.
       renderNavigation();
-      var record = records.get(bundle.nodeId);
-      ui$overviewOnly = Boolean(data.nodes.length && data.nodes.every(function (node) { return node._region; }) &&
-        (!bundle.focus || bundle.mapFirst) && !bundle.anchor && !(record && record.result) && navigation.readerIsOverview && navigation.readerIsOverview(dom$readingBody));
+      var record = records.get(bundle.nodeId), statement = Boolean(bundle.anchor || record && record.result);
+      // A page whose reader only lists its children leaves the stage to the map, unless a statement or the reading is asked for.
+      ui$overviewOnly = Boolean(!statement && (!bundle.focus || bundle.mapFirst) && navigation.readerIsOverview && navigation.readerIsOverview(dom$readingBody));
       host.classList.toggle("bp-dag-overview-only", ui$overviewOnly);
-      var chapterOverview = record && record.scope === record.id && record.navigation !== "source" && record.catalog !== "module";
-      var topicCards = data.nodes.length && data.nodes.every(function (node) {
-        return node.kind === "scope" || node.kind === "boundary" || node._region || node._overviewGroup;
-      });
-      var topicOverview = data.nodes.length && (chapterOverview || topicCards) && !bundle.focus && !bundle.anchor && !(record && record.result);
-      var mapRequested = Boolean(bundle.mapFirst && (ui$overviewOnly || topicCards) && !bundle.anchor && !(record && record.result));
-      var readingRequested = Boolean(bundle.focus && !mapRequested || bundle.anchor || record && record.result);
-      setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false && 1 : sheetLayout() && (topicOverview || mapRequested) ? false : readingRequested ||
+      // A phone opens a topic, a chapter or Home, on the map, and a statement in the reader.
+      var place = record || !bundle.nodeId && records.get(bundle.scope);
+      var topic = Boolean(!statement && place && place.scope === place.id && place.navigation !== "source" && place.catalog !== "module");
+      var mapRequested = Boolean(bundle.mapFirst && (ui$overviewOnly || sheetLayout() && topic));
+      var readingRequested = Boolean(bundle.focus && !mapRequested || statement);
+      setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false && 1 : sheetLayout() && (topic && !bundle.focus || mapRequested) ? false : readingRequested ||
         !ui$overviewOnly && (!sheetLayout() || Boolean(bundle.nodeId)), ui$selected);
       refresh(true); resize(); host.dataset.mapStart = bundle.nodeId || bundle.scope || "";
       if (navigation) navigation.loadIndex().catch(showError);
@@ -406,7 +415,7 @@
             dom$readingBody.querySelector(".bp-reading-current") || dom$readingBody.querySelector("h1");
           if (readingTarget) { readingTarget.tabIndex = -1; readingTarget.focus({preventScroll: true}); }
         } else if (bundle.focus && mapRequested && !bundle.snapshot) {
-          var control = dom$stage.querySelector('.bp-whole-map svg[tabindex="0"]'); if (control) control.focus({preventScroll: true});
+          var control = mapControl(); if (control) control.focus({preventScroll: true});
         }
         resolve();
       }); }); });
@@ -421,8 +430,8 @@
       }
       if (atHome) return [{label: "Home"}];
       var entries = [], record = records.get(bundle.nodeId), pending = records.get(bundle.scope), seen = new Set();
-      if (!atHome && !pending) entries = (bundle.graph.view && bundle.graph.view.breadcrumbs || []).slice();
-      while (!atHome && pending && !seen.has(pending.id)) {
+      if (!pending) entries = (bundle.graph.view && bundle.graph.view.breadcrumbs || []).slice();
+      while (pending && !seen.has(pending.id)) {
         seen.add(pending.id);
         // A collection never stands between crumbs, but its own page ends the trail with it, as the map header does.
         var own = pending.id === bundle.scope && pending.navigation === "collection";
@@ -435,10 +444,9 @@
       return entries;
     }
     function updateProjection() {
-      adoptGraph(currentBundle.graph); ui$activeDirty = true;
+      adoptGraph(currentBundle.graph);
       ui$selected = byId.get(ui$requestedNode) || null;
       if (!ui$filtersTouched) ui$selectedStatuses = new Set(presentStatuses);
-      if (ui$selected && !ui$selectedStatuses.has(ui$selected.status)) ui$selected = null;
       if (dom$statusFieldset) renderStatusFields();
       renderBreadcrumb();
     }
@@ -616,12 +624,8 @@
       dom$navigationInner = element("div", "bp-dag-navigation-inner");
       dom$navigation.appendChild(dom$navigationInner); body.appendChild(dom$navigation);
       renderNavigation();
-      dom$stage = element("section", "bp-dag-stage"); dom$stage.setAttribute("role", "region");
-      // The region says what it is in the page's own word; how to work it is its description, keys first.
-      var help = element("p", "bp-dag-sr-only", "Arrow keys move between cards, Enter opens one, plus and minus zoom, 0 fits the map, " +
-        "and Escape clears the selection. Drag or scroll to pan, and Control or Command with scroll to zoom.");
-      help.id = "bp-dag-map-help-" + instance; dom$stage.setAttribute("aria-label", "Map"); dom$stage.setAttribute("aria-describedby", help.id);
-      dom$stage.append(help);
+      // The region says what it is in the page's own word; the whole map inside describes its own keys.
+      dom$stage = element("section", "bp-dag-stage"); dom$stage.setAttribute("role", "region"); dom$stage.setAttribute("aria-label", "Map");
       main.appendChild(dom$stage);
 
       dom$inventory = element("section", "bp-dag-inventory"); dom$inventory.hidden = true;
@@ -755,7 +759,7 @@
       dom$searchWrap.addEventListener("focusout", function (event) {
         if (event.relatedTarget && !dom$searchWrap.contains(event.relatedTarget)) closeSearch();
       });
-      dom$graphMode.addEventListener("click", function () { setMode("graph", true); if (ui$mode === "graph") focusNodeControl(); });
+      dom$graphMode.addEventListener("click", function () { setMode("graph", true); if (ui$mode === "graph") focusMap(); });
       dom$listMode.addEventListener("click", function () { setBrowse(false); ui$relationIds = null; setMode("list", true); });
       if (dom$sourcesMode) dom$sourcesMode.addEventListener("click", function () { setBrowse(false); setMode("sources", true); });
       dom$hiddenButton.addEventListener("click", revealAll);
@@ -863,7 +867,6 @@
     }
     function syncControls() {
       if (ui$mode === "graph" && ui$mathJob) stopRowMath();
-      calculateActive();
       syncNavigationSelection();
       dom$statusInputs.forEach(function (input, key) { input.checked = ui$selectedStatuses.has(key); });
       var enabled = ui$selectedStatuses.size;
@@ -885,23 +888,12 @@
       pressed(dom$listMode, ui$mode === "list");
       if (dom$sourcesMode) pressed(dom$sourcesMode, ui$mode === "sources");
       dom$stage.hidden = ui$mode !== "graph"; dom$inventory.hidden = ui$mode === "graph";
+      if (ui$mode === "graph") dom$hiddenButton.hidden = true;
       if (navigation) dom$inventory.querySelector("h2").textContent = ui$mode === "sources" ? "Source texts" : "Statements";
     }
 
-    function matchesStatus(node) {
-      return (node.kind === "scope" || node.kind === "boundary") && node.status_counts && node.status_counts.length ?
-        node.status_counts.some(function (pair) { return ui$selectedStatuses.has(pair[0]); }) : ui$selectedStatuses.has(node.status);
-    }
-    function calculateActive() {
-      if (!ui$activeDirty) return;
-      ui$active = data.nodes.filter(matchesStatus);
-      var hidden = data.nodes.length - ui$active.length;
-      dom$hiddenButton.textContent = "Show " + hidden + " filtered out"; dom$hiddenButton.hidden = !hidden;
-      ui$activeDirty = false;
-    }
-
     function queueResize() {
-      // Canvas/layout writes must not run inside ResizeObserver delivery.
+      // The breadcrumb's refold and the sheet's accessibility wait for a frame, out of ResizeObserver delivery.
       if (!alive || resizeFrame !== null) return;
       resizeFrame = requestAnimationFrame(function () {
         resizeFrame = null;
@@ -1018,24 +1010,36 @@
       if (record && record.scope === record.id && !record.result && record.navigation !== "source" && record.catalog !== "module") settings.mapFirst = true;
       navigation.navigateNode(id, settings); closeSearch();
     }
-    function focusNodeControl(node) {
-      var bundle = currentBundle, projection = data, owner = document.activeElement, owned = host.contains(owner), request = focusNodeControl.$request = {};
+    // The whole map's own focus: the card it has selected, or else the map.
+    function mapControl() {
+      return dom$stage.querySelector('.bp-whole-map .pm-result.pm-selected[tabindex="0"]') || dom$stage.querySelector('.bp-whole-map svg[tabindex="0"]');
+    }
+    // Back to map hands focus to the map once it shows, unless the reader moved focus on, the page changed or a full phone
+    // reader covers the map. A map that is missing, or still hidden waiting for its style, leaves focus on the filter.
+    function focusMap() {
+      var bundle = currentBundle, owner = document.activeElement, owned = host.contains(owner), request = focusMap.$request = {};
       requestAnimationFrame(function () { requestAnimationFrame(function () {
-        if (!alive || focusNodeControl.$request !== request || currentBundle !== bundle || data !== projection || ui$mode !== "graph" ||
+        if (!alive || focusMap.$request !== request || currentBundle !== bundle || ui$mode !== "graph" ||
             (document.activeElement !== owner && !(owned && (owner.hidden || owner.isConnected === false) &&
               (document.activeElement === document.body || document.activeElement === document.documentElement))) ||
             (sheetLayout() && host.classList.contains("bp-dag-sheet-full")) || (bundle && bundle.isCurrent && !bundle.isCurrent())) return;
-        var control = dom$stage.querySelector('.bp-whole-map svg[tabindex="0"]');
-        if (control) control.focus({preventScroll: true}); else (node ? dom$sheetHandle : dom$filterSummary).focus({preventScroll: true});
+        var control = mapControl();
+        if (control) control.focus({preventScroll: true});
+        if (!control || document.activeElement !== control) dom$filterSummary.focus({preventScroll: true});
         remember();
       }); });
+    }
+    function mapUnavailable() {
+      if (!alive || dom$stage.querySelector(".bp-dag-map-unavailable")) return;
+      var note = element("p", "bp-dag-map-unavailable", "The map could not load. Topics, search and the statement lists still work.");
+      note.setAttribute("role", "status"); dom$stage.appendChild(note);
     }
 
     function clearSelection(updateHistory, returnFocus) {
       if (!ui$selected) return;
       if (navigation && updateHistory) navigation.checkpoint();
       var cleared = ui$selected;
-      ui$selected = null; ui$activeDirty = true;
+      ui$selected = null;
       setSheet(navigation && !sheetLayout() && !ui$overviewOnly, null);
       syncNavigationSelection(); renderInspector(); renderInventory(false);
       if (updateHistory) writeLocation("push");
@@ -1090,25 +1094,21 @@
     }
     function revealAll() {
       ui$selectedStatuses = new Set(presentStatuses);
-      ui$activeDirty = true; writeLocation("replace"); refresh(true);
+      writeLocation("replace"); refresh(true);
       dom$filterSummary.focus({preventScroll: true});
     }
-    // A search or filter that changes the rows or cards says what is left, since the count on screen is not announced.
+    // A search or filter that changes the rows says what is left, since the count on screen is not announced. On the map
+    // the filter only dims, so it says the filter.
     function announceShown() {
-      if (ui$mode !== "graph") dom$announcement.textContent = dom$inventorySummary.firstChild ? dom$inventorySummary.firstChild.textContent : "";
-      else dom$announcement.textContent = ui$active.length ? num(ui$active.length) + " of " + num(data.nodes.length) + " cards shown" :
-        data.nodes.length ? "Nothing matches these filters." : "This roadmap has no articles yet.";
+      dom$announcement.textContent = ui$mode === "graph" ? dom$filterSummary.textContent :
+        dom$inventorySummary.firstChild ? dom$inventorySummary.firstChild.textContent : "";
     }
+    // The map dims the statuses the filter leaves out, so the selection stays.
     function onStatusChange() {
       ui$filtersTouched = true;
       ui$selectedStatuses = new Set();
       dom$statusInputs.forEach(function (input, key) { if (input.checked) ui$selectedStatuses.add(key); });
-      if (ui$selected && !ui$selectedStatuses.has(ui$selected.status)) {
-        ui$selected = null;
-        setSheet(navigation && !sheetLayout() && !ui$overviewOnly, null);
-        dom$announcement.textContent = "Selection cleared because its status is hidden.";
-      }
-      ui$activeDirty = true; writeLocation("replace"); refresh(true); announceShown();
+      writeLocation("replace"); refresh(true); announceShown();
     }
     function setMode(mode, updateHistory) {
       if (mode !== "list") ui$relationIds = null;
@@ -1177,9 +1177,12 @@
         if (relations) return relations.has(node.id);
         if (sources) return sources.has(node.id);
         return inCurrentScope(node) && (node.result === true || node.catalog === "module");
-      }) : (calculateActive(), ui$active);
+      }) : data.nodes;
       var nodes = query ? rankMatches(pool, query).map(function (match) { return match.node; }) : pool;
-      return nodes.filter(function (node) { return ui$selectedStatuses.has(node.status); });
+      var shown = nodes.filter(function (node) { return ui$selectedStatuses.has(node.status); }), hidden = nodes.length - shown.length;
+      // The list offers back what the filter hides.
+      dom$hiddenButton.textContent = "Show " + hidden + " filtered out"; dom$hiddenButton.hidden = !hidden;
+      return shown;
     }
     // Preview only closed code spans and unambiguous inline formulas. Unsupported
     // Markdown stays literal; it must not silently turn currency or code into math.
@@ -1336,6 +1339,7 @@
 
     syncControls();
     return {ready: readingReady, applyRoute: applyRoute, useIndex: useIndex, useWikiLinks: useWikiLinks, captureState: captureState, restoreState: restoreState, showError: showError,
+      mapUnavailable: mapUnavailable,
       dispose: function () { alive = false; stopRowMath(); clearTimeout(checkpointTimer);
         if (resizeFrame !== null) cancelAnimationFrame(resizeFrame); resizeFrame = null; cleanup.forEach(function (close) { close(); });
         observers.forEach(function (observer) { observer.disconnect(); }); if (navigation) navigation.dispose(); }};

@@ -1,4 +1,4 @@
-"""Actual status-swatch and activation callbacks with bounded DOM/history boundaries, not glyph evidence."""
+"""Actual status-swatch, status-filter and activation callbacks with bounded DOM/history boundaries, not glyph evidence."""
 
 from __future__ import annotations
 
@@ -10,15 +10,14 @@ from tests.test_wiki_workspace_controls import _CONTROL_PEERS, _NODE
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for bounded swatch and activation callback tests")
 
 _CALLBACKS = [
-    "element", "button", "readingLabel", "refreshReadingLabels", "safeHref", "graphAt", "recordId",
-    "adoptGraph", "updateProjection", "matchesStatus", "calculateActive",
+    "element", "button", "readingLabel", "refreshReadingLabels", "safeHref", "graphAt", "recordId", "listed",
+    "adoptGraph", "updateProjection",
     "statusLabel", "swatch", "solid", "syncControls", "activateNode", "setMode", "refresh",
     "setSheet", "sheetLayout", "syncSheetAccessibility", "captureState", "snapshotForRoute", "restoreState", "sourceNodes", "inCurrentScope",
 ]
 
 _PEERS = (
     _CONTROL_PEERS.replace("buildShell();bindEvents();syncControls();", "")
-    .replace("function calculateActive(){}", "")
     .replace("function syncSheetAccessibility(){}", "")
     .replace("function setMode(mode,push)", "function unusedControlMode(mode,push)")
     .replace("function remember(){}", "function unusedControlRemember(){}")
@@ -32,7 +31,7 @@ const location=window.location,frames=[],checkpoints=[],writes=[],mathRoots=[];
 window.matchMedia=()=>({matches:false});
 window.AutoformMath={refresh(root){mathRoots.push(root);return Promise.resolve(true);}};
 var palette,byId=new Map(),statusCounts;
-var ui$active=[],ui$activeDirty=true,ui$selected=null,ui$requestedNode='chapter';
+var ui$selected=null,ui$requestedNode='chapter';
 var ui$query='',ui$relationIds=null,ui$listLimit=100,ui$outlineLimit=120,ui$overviewOnly=false,ui$filtersTouched=false;
 var ui$reading=true;
 var alive=true,restoring=false,restoration=0,checkpointTimer=0;
@@ -42,7 +41,6 @@ navigation.navigateNode=(id,options)=>navigationCalls.push({id,options});
 function remember(){checkpoints.push(captureState());}
 function writeLocation(method){writes.push(method);}
 function renderBreadcrumb(){}function renderInspector(){}function renderInventory(){}
-function focusNodeControl(){}
 function requestAnimationFrame(callback){frames.push(callback);return frames.length;}
 async function frame(){
   for(let attempt=0;attempt<30&&!frames.length;attempt++)await Promise.resolve();
@@ -106,6 +104,25 @@ def test_status_swatches_name_their_meaning_and_carry_both_schemes_colours() -> 
       assert.equal(JSON.stringify({contextGraph,index:sharedIndex}),before);
       assert.strictEqual(dom$readingBody.children[0],state.reading);
     """)
+
+
+def test_a_status_change_on_the_map_keeps_the_selection_and_says_the_filter() -> None:
+    _execute(r"""
+      // The shell adopts its page before building, so the status fields have their counts.
+      statusCounts=new Map();const state=fixture(),selected=state.members[1];
+      ui$requestedNode=selected.id;currentBundle.nodeId=selected.id;updateProjection();setSheet(1,ui$selected);
+      assert.equal(selected.status,'fully_proved');assert.equal(dom$hiddenButton.hidden,true,'The map offers nothing to show back');
+      const proved=dom$statusInputs.get('fully_proved');proved.checked=false;emit(proved,'change');
+      // The map dims the statuses the filter leaves out, so the selection and its reader stay.
+      assert.equal(ui$selected?.id,selected.id);
+      assert(host.classList.contains('bp-dag-has-selection'));assert(host.classList.contains('bp-dag-sheet-open'));
+      assert.equal(host.dataset.mapStatuses,'planned');assert.equal(dom$hiddenButton.hidden,true);
+      assert.equal(dom$filterSummary.textContent,'Filter: 1 of 2 statuses');
+      assert.equal(dom$announcement.textContent,'Filter: 1 of 2 statuses');assert.deepEqual(writes,['replace']);
+      // Adopting the page again, as the index's arrival does, keeps it too.
+      updateProjection();assert.equal(ui$selected?.id,selected.id);assert.deepEqual([...ui$selectedStatuses],['planned']);
+    """, [*_CALLBACKS, "buildShell", "renderStatusFields", "onStatusChange", "announceShown"],
+        _PEERS.replace("function renderStatusFields(){}", ""))
 
 
 @pytest.mark.parametrize("kind", ["source", "module"])

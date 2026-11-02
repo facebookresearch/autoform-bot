@@ -58,7 +58,7 @@ class Element {
   all() {return this.children.flatMap(child=>[child,...child.all()]);}
 }
 const document={createElement:tag=>new Element(tag)};
-const dom$readingContext=new Element('div'),dom$readingNeighbors=new Element('div'),calls=[];
+const dom$readingContext=new Element('div'),dom$readingNeighbors=new Element('div'),dom$hiddenButton=new Element('button'),calls=[];
 const navigation={navigateNode(id,options){calls.push({id,options});}};
 var records,sharedIndex,contextGraph,currentBundle,ui$selected=null,ui$requestedNode=null;
 var ui$query='',ui$relationIds=null,ui$mode='list',ui$selectedStatuses=new Set(['planned','fully_proved','inventory_pending']);
@@ -156,9 +156,9 @@ var presentStatuses=['planned'],ui$relationIds=new Set(['F']);
 var ui$mathJob=null;
 function globalListen(target,type,callback) {target.addEventListener(type,callback);}
 class MutationObserver {observe(){}}
-function renderStatusFields(){}function renderNavigation(){}function calculateActive(){}
+function renderStatusFields(){}function renderNavigation(){}
 function syncNavigationSelection(){}
-function ensureGlobalSearch(){}function revealAll(){}function openResults(){}function focusNodeControl(){}
+function ensureGlobalSearch(){}function revealAll(){}function openResults(){}function focusMap(){}
 function resize(){}
 function syncSheetAccessibility(){}function remember(){}function sheetLayout(){return false;}
 function closeSearch(){}function setFilters(){}
