@@ -76,6 +76,8 @@ def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -
     renders write. That pin has no `review` command, and its check rejects
     `review_approved:`, so the example turns on no statement review: no marker,
     no read-back cards and no approvals, which the verify workflow looks for.
+    Its check has no --no-site-warnings either, so the Pages workflow passes
+    it only where check --help lists it.
     Move the pin, here and in the workflow equivalence test, before relaxing this.
     """
     example = repo_root / _EXAMPLE
@@ -85,6 +87,9 @@ def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -
         if path.is_file():
             assert not re.search(r"^\s*review_approved\s*:", path.read_text(encoding="utf-8"), re.MULTILINE), path
     assert "mermaid@11.4.1/dist/mermaid.min.js" in (example / "mkdocs.yml").read_text(encoding="utf-8")
+    for workflow in (example / ".github/workflows").glob("*.yml"):
+        text = workflow.read_text(encoding="utf-8")
+        assert "--no-site-warnings" not in text or "autoform check --help" in text, workflow
 
 
 def test_setup_example_pins_the_repl_that_the_real_repl_job_tests(repo_root: Path) -> None:

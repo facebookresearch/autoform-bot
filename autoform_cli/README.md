@@ -191,6 +191,7 @@ An article asserts only facts a human or agent verified:
 | `review_approved: sha256:<64 hex>` | The hash of the complete review surface someone approved for this article. It shows that surface is unchanged, not who approved it. |
 | `open_statements: allowed` | Project policy, valid only in `roadmap/README.md`: a theorem's statement may land with a `sorry` proof (see [Open statements](reference/open-statements.md#open-statements)). Absent or `forbidden` keeps the strict policy. |
 | `published: false` | Folder setting, valid only in the `README.md` of a folder below `roadmap/`: `check` and `audit` validate the folder and everything in it, but render leaves it out of the site and of the publication hash. No link on a published roadmap article may point into it, whether a dependency, a source or prose; a link from any other page keeps only its text, with a warning. `audit` and render reject coverage evidence that points into it. A folder inside an unpublished one is unpublished too, whatever its own README says. |
+| `tracks_lean: false` | Project setting, read only in `roadmap/README.md`: the project writes no Lean, so the book's pages show no Lean progress (no landing figures or Next up, no status marks on statements or status dots on their dependency references, no chapter progress lines). Absent or `true` keeps it. Anywhere else under `roadmap/`, or with another value, `check` warns and the setting is ignored. |
 
 Progress is *derived* from the DAG on every run, so it cannot go stale.
 Readiness depends on the [policy](reference/open-statements.md#open-statements).
@@ -444,6 +445,13 @@ with why, on the source's page under `blueprint/sources/`.
 library with a citing declaration fails verification against its checkout, and
 when the project's Lake files cannot be used. None of these warnings changes the
 exit status.
+
+`--no-site-warnings` skips the warnings about the pages the site would publish
+([Validation](reference/validation-and-audit.md#validation)), except those about
+notes under `blueprint/sources/`, for a run that renders next: `render` prints
+the rest, and fails where `check` would warn that it stops. The generated
+`blueprint-pages.yml` passes it when its `AUTOFORM_REF`'s `check --help` lists
+it; `autoform-verify.yml` does not.
 
 ### audit and coverage
 

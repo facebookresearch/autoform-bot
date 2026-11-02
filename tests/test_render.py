@@ -834,7 +834,8 @@ def test_a_dependency_list_drops_its_separators(tmp_path: Path) -> None:
     rows = top[top.index("bp-dependency-body"):top.index("</details>")]
     # Each entry starts with its status dot, so the list hides the separators between entries; other lists keep them.
     assert '</a> <span class="bp-ref-sep">·</span> <a class="bp-ref' in rows
-    assert ".bp-dependency-body .bp-ref-sep { display: none; }" in render_module._stylesheet()
+    css = render_module._stylesheet()
+    assert '.bp-dependency-body .bp-ref[class*=" bp-ref-"] + .bp-ref-sep { display: none; }' in css
 
 
 def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tmp_path: Path) -> None:
@@ -959,6 +960,101 @@ def test_the_wide_hero_bar_takes_the_fully_proved_colour(tmp_path: Path) -> None
     assert '<span class="bp-swatch-fully_proved" style="width: 67%"></span>' in wide
     css = render_module._stylesheet()
     assert re.search(r"\.bp-hero-bar > span \{([^}]+)\}", css).group(1).strip() == "display: block; height: 100%;"
+
+
+def _informal_project(tmp_path: Path, setting: str) -> Path:
+    """Three chapter levels, two results with no Lean fields, and reading notes that state nothing."""
+    blueprint = tmp_path / "blueprint"
+    subgroups = "roadmap/algebra/groups/subgroups"
+    pages = {
+        "README.md": "---\nkind: blueprint\n---\n\n# Informal notes\n\nNotes that track no Lean.\n\n"
+        "- [Roadmap](roadmap/README.md)\n",
+        "roadmap/README.md": f"---\n{setting}---\n\n# Roadmap\n\n- [Algebra](algebra/README.md)\n",
+        "roadmap/algebra/README.md": "# Algebra\n\n- [Groups](groups/README.md)\n",
+        "roadmap/algebra/groups/README.md": "# Groups\n\n- [Subgroups](subgroups/README.md)\n"
+        "- [Reading notes](notes.md)\n",
+        "roadmap/algebra/groups/notes.md": "# Reading notes\n\nWhy subgroups come first.\n",
+        f"{subgroups}/README.md": "# Subgroups\n\n- [Subgroup](subgroup.md)\n- [Lagrange's theorem](lagrange.md)\n",
+        f"{subgroups}/subgroup.md": "---\ndeclaration: def\n---\n\n# Subgroup\n\n"
+        "A subset closed under the group operations.\n\n## Depends on\n\nNo prerequisites.\n",
+        f"{subgroups}/lagrange.md": "---\ndeclaration: theorem\n---\n\n# Lagrange's theorem\n\n"
+        "A subgroup's order divides the group's.\n\n## Depends on\n\n- [Subgroup](subgroup.md)\n",
+        "coverage/README.md": "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        "| Groups | MAPPED | Informal notes |\n",
+    }
+    for relative, text in pages.items():
+        (blueprint / relative).parent.mkdir(parents=True, exist_ok=True)
+        (blueprint / relative).write_text(text, encoding="utf-8")
+    return blueprint
+
+
+@pytest.mark.parametrize("tracked", [True, False])
+def test_a_project_that_tracks_no_lean_shows_no_lean_progress(tmp_path: Path, tracked: bool) -> None:
+    """The landing page, chapters and statements keep their reading and lose every progress surface."""
+    blueprint = _informal_project(tmp_path, "" if tracked else "tracks_lean: false\n")
+
+    render_site(blueprint, tmp_path / "out")
+
+    site = "\n".join(page.read_text(encoding="utf-8") for page in sorted((tmp_path / "out").rglob("*.md")))
+    for surface in (
+        "Fully proved",
+        "Ready to work on",
+        "Next up",
+        'class="bp-mark"',
+        "bp-progress-overview",
+        'class="bp-ref bp-ref-',
+    ):
+        assert (surface in site) is tracked, surface
+    # The statement box's rule takes its status colour from a class on the box.
+    assert bool(re.search(r'class="bp-thmwrapper [^"]* bp-[a-z_]+"', site)) is tracked
+    # The book's hero is the rail's, which has neither, tracked or not.
+    assert "Formalization blueprint" not in site and "bp-hero-bar" not in site
+    assert "Lagrange" in site and "Why subgroups come first." in site
+
+
+def test_a_hero_that_tracks_no_lean_keeps_its_claim_and_ways_in(tmp_path: Path) -> None:
+    blueprint = _informal_project(tmp_path, "tracks_lean: false\n")
+    graph = load_graph(blueprint)
+    coverage, _issues = render_module.load_coverage(blueprint)
+
+    for rail in (False, True):
+        hero = render_module._render_hero(
+            "Notes", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/", rail=rail,
+            book_href="roadmap/",
+        )
+        for part in ("bp-hero-kicker", "bp-hero-figures", "bp-hero-status", "bp-hero-bar"):
+            assert part not in hero, (rail, part)
+        assert "Start reading" in hero and "What the sources cover" in hero
+
+    tracked = load_graph(_informal_project(tmp_path / "tracked", ""))
+    wide = render_module._render_hero(
+        "Notes", "", tracked, derive(tracked), coverage=coverage, coverage_href="coverage/"
+    )
+    assert "Formalization blueprint" in wide and "Fully proved" in wide and "bp-hero-bar" in wide
+
+
+@pytest.mark.parametrize("tracked", [True, False])
+def test_a_project_that_tracks_no_lean_never_says_every_statement_is_fully_proved(
+    tmp_path: Path, tracked: bool
+) -> None:
+    # Without Lean, only results already in Mathlib are fully proved.
+    blueprint = _informal_project(tmp_path, "" if tracked else "tracks_lean: false\n")
+    for page in blueprint.rglob("*.md"):
+        text = page.read_text(encoding="utf-8")
+        if "declaration:" in text:
+            page.write_text(text.replace("---\ndeclaration:", "---\nmathlib: true\ndeclaration:", 1), encoding="utf-8")
+    graph = load_graph(blueprint)
+    coverage, _issues = render_module.load_coverage(blueprint)
+
+    hero = render_module._render_hero("Notes", "", graph, derive(graph), coverage=coverage, coverage_href="coverage/")
+
+    assert ("Every statement is fully proved." in hero) is tracked
+
+
+def test_references_without_a_status_have_no_dot() -> None:
+    # A project that tracks no Lean links references without a status class; a dot there would read as "planned".
+    css = render_module._stylesheet()
+    assert ".bp-ref::before" not in css and '.bp-ref[class*=" bp-ref-"]::before {' in css
 
 
 def test_the_ready_figure_links_the_list_of_exactly_what_it_counts(tmp_path: Path) -> None:
@@ -2191,7 +2287,7 @@ def test_labels_are_sentence_case_sans_and_the_status_is_a_pill_under_the_title(
 
     # Status swatches are round dots, like the map's, not checkbox squares.
     assert "border-radius: 50%;" in rule(".bp-swatch")
-    assert "border-radius: 50%;" in rule(".bp-ref::before")
+    assert "border-radius: 50%;" in rule('.bp-ref[class*=" bp-ref-"]::before')
 
 
 _MERMAID_HARNESS = r"""
@@ -2996,6 +3092,29 @@ def test_source_notes_leave_the_site_for_the_repository(tmp_path: Path) -> None:
     assert not (out / "sources").exists()
     expected = f"https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.md#lemma-3"
     assert expected in (out / "roadmap/README.md").read_text(encoding="utf-8")
+
+
+def test_render_and_check_without_site_warnings_print_every_site_warning(tmp_path: Path) -> None:
+    """``check --no-site-warnings`` leaves the site's warnings to render, which
+    reads no source note it links in the repository. Check still reads those,
+    so between them every warning plain check gives is printed."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    for page in (blueprint / "sources/paper.md", blueprint / "roadmap/README.md"):
+        page.write_text(page.read_text(encoding="utf-8") + "\n<b>bold</b>\n", encoding="utf-8")
+    ref = _commit_project(project)
+    graph = load_graph(blueprint)
+
+    report = render_site(
+        blueprint, tmp_path / "out", lean_root=project, repository_url="https://github.com/owner/repo", ref=ref
+    )
+    issues = render_module.publication_issues(graph, blueprint)
+    kept = render_module.publication_issues(graph, blueprint, sources_only=True)
+
+    assert not (tmp_path / "out/sources").exists()
+    assert kept and all(issue.startswith("sources/paper.md: ") for issue in kept)
+    assert any(issue.startswith("roadmap: ") for issue in report.warnings)
+    assert [issue for issue in issues if issue not in report.warnings] == kept
 
 
 def test_a_fence_line_in_a_comment_leaves_the_links_after_it_rewritten(tmp_path: Path) -> None:
@@ -5400,10 +5519,8 @@ def _print_composed_names(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def composed(command, *args, **kwargs):
         completed = run(command, *args, **kwargs)
-        if command[:2] == ["git", "ls-tree"]:
+        if "ls-tree" in command or ("rev-parse" in command and "--show-prefix" in command):
             completed.stdout = completed.stdout.replace("e\u0301".encode(), "\u00e9".encode())
-        elif command[:2] == ["git", "rev-parse"] and "--show-prefix" in command:
-            completed.stdout = completed.stdout.replace("e\u0301", "\u00e9")
         return completed
 
     monkeypatch.setattr(repository_module.subprocess, "run", composed)
