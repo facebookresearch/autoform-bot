@@ -276,3 +276,32 @@ def test_the_statement_being_read_lights_up_on_the_map(webkit_browser: object, m
             body.scrollTop += first.getBoundingClientRect().bottom - body.getBoundingClientRect().top;
         }""")
         playwright.expect(page.locator('.bp-whole-map .pm-result.pm-reading[data-result="algebra/lagrange"]')).to_have_count(1)
+
+
+def test_the_map_typesets_a_title_with_a_formula_over_its_card(webkit_browser: object, map_url: str) -> None:
+    from autoform_cli.mathjax import MATHJAX_BASE
+    from tests.test_integrated_explorer_browser import _PinnedRuntime
+
+    runtime = _PinnedRuntime()
+    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        def serve(route: object) -> None:
+            target = route.request.url
+            if target.startswith(MATHJAX_BASE + "/"):
+                runtime.serve(route)
+            elif target.startswith(map_url + "/"):
+                route.continue_()
+            else:
+                route.abort()
+
+        page.route("**/*", serve)
+        page.goto(f"{map_url}/roadmap/analysis/index.html")
+        # Abel summation's card title is set by the site's MathJax, on its card, with no TeX and no SVG copy left.
+        title = page.locator(".bp-whole-map .pm-tex.pm-card-title")
+        playwright.expect(title.locator("mjx-container")).to_have_count(1)
+        playwright.expect(title).to_contain_text("Abel summation for")
+        assert "\\(" not in title.inner_text() and "mathbb" not in title.inner_text()
+        playwright.expect(page.locator(".bp-whole-map svg text", has_text="Abel summation")).to_have_count(0)
+        card = page.locator('.bp-whole-map .pm-result[data-result="analysis/abel"] > rect').bounding_box()
+        box = title.bounding_box()
+        assert card["x"] < box["x"] and box["x"] + box["width"] < card["x"] + card["width"], (card, box)
+        assert card["y"] < box["y"] and box["y"] + box["height"] < card["y"] + card["height"], (card, box)

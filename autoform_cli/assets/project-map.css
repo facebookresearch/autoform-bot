@@ -94,6 +94,11 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-title.pm-compact { font-size: 13px; }
 /* Over a closed tile's faint parts, text keeps a halo in the tile's own colour. */
 .pm-halo { paint-order: stroke; stroke: var(--pm-region); stroke-width: 4px; stroke-linejoin: round; }
+/* A title with a formula is HTML over the canvas (mathTitle in project-map.js); its classes give it the SVG titles' font. */
+.pm-tex-layer { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.pm-tex { position: absolute; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; color: var(--pm-fg); }
+.pm-tex.pm-halo { text-shadow: 0 0 2px var(--pm-region), 0 0 4px var(--pm-region); }
+.pm-tex-waiting .arithmatex:not(:has(mjx-container)) { visibility: hidden; }
 .pm-mini { pointer-events: none; stroke: var(--pm-region-stroke); stroke-width: .75; fill: var(--pm-region); opacity: .7; }
 .pm-mini-done { fill: color-mix(in srgb, var(--pm-proved) 22%, var(--pm-region)); }
 .pm-mini-progress { fill: color-mix(in srgb, var(--pm-progress) 22%, var(--pm-region)); }
