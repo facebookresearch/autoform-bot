@@ -13,11 +13,8 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10
-    import tomli as tomllib
+# Lake reads TOML 1.0, as the pinned tomli does; from Python 3.15 tomllib parses 1.1.
+import tomli
 
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.graph import load_graph
@@ -99,7 +96,7 @@ def test_setup_example_pins_the_repl_that_the_real_repl_job_tests(repo_root: Pat
     example = repo_root / _EXAMPLE
 
     def repl_revs(project: Path) -> tuple[str, str]:
-        lakefile = tomllib.loads((project / "lakefile.toml").read_text(encoding="utf-8"))
+        lakefile = tomli.loads((project / "lakefile.toml").read_text(encoding="utf-8"))
         manifest = json.loads((project / "lake-manifest.json").read_text(encoding="utf-8"))
         required = next(entry["rev"] for entry in lakefile["require"] if entry["name"] == "repl")
         locked = next(entry["rev"] for entry in manifest["packages"] if entry["name"] == "repl")
@@ -189,7 +186,7 @@ def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
     assert (example / "src/CabannesThesis.lean").is_file()
     assert (example / "src/CabannesThesis/Basic.lean").is_file()
     toolchain = (example / "lean-toolchain").read_text(encoding="utf-8").strip()
-    lakefile = tomllib.loads((example / "lakefile.toml").read_text(encoding="utf-8"))
+    lakefile = tomli.loads((example / "lakefile.toml").read_text(encoding="utf-8"))
     manifest = json.loads((example / "lake-manifest.json").read_text(encoding="utf-8"))
     assert toolchain == "leanprover/lean4:v4.32.2"
     requirements = {entry["name"]: entry for entry in lakefile["require"]}

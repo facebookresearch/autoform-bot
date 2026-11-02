@@ -1,7 +1,7 @@
 # Contributing to autoform-bot
 
 ## Our Development Process
-Changes reach `main` through pull requests. You need Python 3.10 or newer,
+Changes reach `main` through pull requests. You need Python 3.11 or newer,
 [`uv`](https://docs.astral.sh/uv/), Git, and Make. From a clone:
 
 ```bash
@@ -12,7 +12,7 @@ make check-example  # validate, render, and build the bundled example site
 ```
 
 CI ([`tests.yml`](.github/workflows/tests.yml) lists every job and its tests)
-runs these steps on Python 3.10 and 3.13 for pull requests and for pushes to
+runs these steps on Python 3.11 and 3.13 for pull requests and for pushes to
 `main` and to `scratch/` branches, which run CI without a pull request. CI sets
 each `AUTOFORM_REQUIRE_*` variable below, so it fails where a local run skips:
 

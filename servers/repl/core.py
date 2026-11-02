@@ -967,12 +967,7 @@ class LeanRepl:
             try:
                 self.close(deadline=cleanup_deadline)
             except BaseException as cleanup_error:
-                note = f"Lean REPL process cleanup also failed: {cleanup_error}"
-                add_note = getattr(error, "add_note", None)
-                if add_note is not None:
-                    add_note(note)
-                else:  # pragma: no cover - Python 3.10 compatibility
-                    logger.error("%s", note)
+                error.add_note(f"Lean REPL process cleanup also failed: {cleanup_error}")
             raise
 
     def _run_io(

@@ -32,6 +32,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+# Not tomllib: Lake reads TOML 1.0, and from Python 3.15 tomllib parses 1.1 (see pyproject.toml).
 import tomli
 
 from .. import lean_probe
