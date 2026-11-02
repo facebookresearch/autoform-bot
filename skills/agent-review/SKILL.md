@@ -18,24 +18,18 @@ subagent that prefix.
 Select the rubric from the artifact under review.
 
 - For a roadmap or blueprint, read [roadmap quality](references/roadmap-quality.md),
-  inspect its declared sources and coverage boundary, and validate the Markdown
-  DAG.
+  inspect its declared sources and coverage boundary, and validate its DAG.
 - For Lean code, read [faithfulness](references/faithfulness.md),
   [proof integrity](references/proof-integrity.md), [code quality](references/code-quality.md),
-  and [Mathlib style](references/mathlib-style.md). Compile the relevant target,
-  inspect the proof chain, and compare the complete public statement with the
-  original source.
+  and [Mathlib style](references/mathlib-style.md); gather each one's evidence.
 - For a read-back, an auditor's English account of what Lean declarations
-  assert, read [read-back faithfulness](references/readback-faithfulness.md).
-  A trusted coordinator supplies its hash-bound review item. Judge only the
-  supplied testimony against the cited source passage, without opening Lean,
-  and return exactly the reference's JSON verdict.
+  assert, judge it against the cited source passage, without opening Lean, as
+  [read-back faithfulness](references/readback-faithfulness.md) says.
 
 Keep objective evidence separate from judgment. Never claim compilation,
 declaration resolution, axiom cleanliness, source coverage, or dependency
 correctness without showing how it was checked. If required sources are absent,
-return insufficient evidence rather than guessing. A proof resting on declared
-open statements is conditional: name them and never call it axiom-clean.
+return insufficient evidence rather than guessing.
 
 Except in the isolated read-back-judge role, regenerate skeleton evidence from
 the exact candidate after its Lean build. Do that only in a trusted checkout or
@@ -51,9 +45,8 @@ article review hash; the
 binds. These hashes are provenance evidence, not reviewer authentication or an
 approval key. If the user has paused skeleton evidence during proof development,
 skip it and Formalize's import-edit baselines, say so, and record none of these
-hashes; still build the target, run `#print axioms` on each recorded declaration
-and `autoform check` and `audit` with `--lean-root`, and compare the compiled
-statement with its source.
+hashes; the rubrics' evidence still applies, and so do `autoform check` and
+`audit` with `--lean-root`.
 
 Report findings first, ordered by severity and tied to files or nodes. Then give
 the rubric scores, weighted verdict, commands run, unresolved questions, and a

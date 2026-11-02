@@ -12,10 +12,6 @@ description: >-
 
 # Set up an Autoform repository
 
-Setup prepares the Lean toolchain, an empty blueprint vault, ignore rules,
-MkDocs, CI, and optionally publication. It does not scope sources, choose
-theorems, write roadmap nodes, or prove results; Roadmap owns that planning.
-
 Inspect before writing and preserve existing Lean, Markdown, workflow, and
 ignore files. Resolve `AUTOFORM_PLUGIN_ROOT` from the loaded plugin and inspect
 an existing project read-only:
@@ -28,13 +24,11 @@ uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project inspect "$PROJECT" --j
 
 Infer safe local defaults from the request and repository. If a material choice
 is missing, ask once for the run type (new, repair, or inspect), UpperCamelCase
-package name, target directory, and whether publication is wanted. Without
-explicit publication approval, make no remote changes.
+package name, target directory, and whether publication is wanted.
 
 The [Cabannes thesis project](assets/cabannes-thesis-project/README.md) shows a
-set-up project, its DAG deliberately partial. Read it, but do not copy it:
-`project new` and `init` write the layout, and its thesis notes illustrate later
-skills.
+set-up project with a deliberately partial DAG. Read it, but do not copy it:
+`project new` and `init` write the layout; its notes illustrate later skills.
 
 For a new repository, create the project in an absent target directory:
 
@@ -46,11 +40,10 @@ uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project new "$TARGET" --packag
 ```
 
 The [CLI reference](../../autoform_cli/README.md#project) gives `project new`'s
-version flags, what it writes, and its error codes. Keep the recommended
-release from `autoform project versions` unless the user needs another Lean
-version (at least v4.27.0). On macOS use `/private/tmp`, not the `/tmp` alias.
-On `project-parent-unsafe`, choose another parent or, with the user's
-agreement, run `chmod g-w,o-w` on it.
+version flags, what it writes, and its error codes. Keep the recommended release
+from `autoform project versions` unless the user needs another Lean version (at
+least v4.27.0). On `project-parent-unsafe`, choose another parent or, with the
+user's agreement, run `chmod g-w,o-w` on it.
 
 If the user names a donor (never search for one), `<PKGS>` is its
 `.lake/packages`, or the donor if it is a packages folder. Before any Lake

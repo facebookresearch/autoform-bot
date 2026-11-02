@@ -3,14 +3,13 @@
 ## Validation
 
 `autoform check` rejects cycles between authored articles, missing targets,
-escaping paths, symbolic links under `roadmap/`, self-dependencies,
-missing or multiple H1 titles, unsupported frontmatter keys, assertion values
-it does not recognize, and assertions the Lean cannot back: `proof: formalized`
-without `statement: formalized`, or either without a `lean:` name, even beside
-`mathlib: true`. With `--lean-root`, `check` also fails on a `lean:` name that
-is absent from the sources or defined more than once in them (see below). Only
-the article graph must be acyclic, so project, chapter, and scope maps can
-relate two containers in both directions.
+escaping paths, symbolic links under `roadmap/`, self-dependencies, missing or
+multiple H1 titles, unsupported frontmatter keys, unrecognized assertion values,
+and assertions the Lean cannot back: `proof: formalized` without
+`statement: formalized`, or either without a `lean:` name, even beside
+`mathlib: true`. With `--lean-root`, it also fails on a `lean:` name absent from
+the sources or defined more than once in them. Only the article graph must be
+acyclic: project, chapter, and scope maps may relate two containers both ways.
 
 Hidden paths, those with a part starting with `.`, are no part of the roadmap:
 under `roadmap/` they hold no articles, need no chapter page, and may be
@@ -30,8 +29,7 @@ These pass `check` with a warning:
 
 - A `## Sources` link with another scheme or a network location; work and
   search leave it out, and `audit` checks fragments and fails such links.
-- A `mathlib_file` that is not a portable relative path; search reports it as
-  null.
+- A `mathlib_file` that is not a portable relative path; search reports null.
 - A byte-order mark at the start of an article that otherwise loads: frontmatter
   on its first line is read as text, so its keys are ignored. One that hides the
   article's H1 title fails `check`, as a missing title.
@@ -63,9 +61,8 @@ open where an article, a statement, its notes, or a stretch of a chapter ends;
 and a list nested hundreds of levels deep, beyond what the site's converter can
 read.
 
-`check` also warns about a formula that defines a command, such as
-`\newcommand`, `\def`, or `\DeclareMathOperator`, or uses one the site turns
-off, such as `\label`: it shows an error in red and the rest of the page is
+`check` also warns about a formula that defines a command or uses one the site
+turns off ([MathJax](../README.md#mathjax) lists them); the rest of the page is
 published as written. Put the project's notation in `blueprint/tex-macros.json`.
 
 Lean indexing reads the whole Lean root or nothing. It stops with an error when
@@ -190,7 +187,6 @@ placeholder left by a migration, take no credit.
 
 ### Structure
 
-Containment is inferred from nested `README.md` articles.
 `missing-chapter-article` reports a directory directly under `roadmap/` that
 holds articles but names no chapter, so its pages would attach to the roadmap
 root. Deeper directories, such as `definitions/` and `theorems/` buckets, are
@@ -216,13 +212,12 @@ deeply indented `set_option` as part of the proof above it.
 
 A catalog's declarations get the same two checks as [warnings](#warnings), at
 most one per catalog and code: `catalog-unbounded-limit` and
-`catalog-unscoped-limit`. An alias is read as the declaration it reaches. The
-message counts the affected declarations against all those the catalog's
-resolved names reach, names the options, locates the first `set_option`, and
-says to change existing code only on request and that a finite limit, or for
-an unscoped one `set_option X N in` on the declarations that need it, must pass
-a rebuild. A name that does not resolve is a `lean-target-not-found` or
-`lean-target-ambiguous` finding and is not counted.
+`catalog-unscoped-limit`. The message counts the affected declarations against
+all those the catalog's resolved names reach, names the options, locates the
+first `set_option`, and says to change existing code only on request and that a
+finite limit, or for an unscoped one `set_option X N in` on the declarations
+that need it, must pass a rebuild. A name that does not resolve is a
+`lean-target-not-found` or `lean-target-ambiguous` finding and is not counted.
 
 ### Statement text
 

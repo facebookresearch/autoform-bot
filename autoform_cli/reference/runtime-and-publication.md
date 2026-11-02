@@ -43,18 +43,17 @@ load. The `runtime` module docstring describes it for Python consumers.
 
 `autoform render` publishes the book, derived progress, and one dependency
 explorer as bounded project, chapter, and nested-scope projections. Rendering
-never reads a `graph.json` or an operational queue; [wiki references](wiki-links.md) are also derived. Hidden files and
-directories, including `.implementation-notes`, are omitted; the vault's
-implementation notes are read in place only to validate them. A `.autoform`
-directory and symlinks, credentials, logs, provider state, and agent/task state
-outside hidden directories fail the render rather than leak. Source and output
-directories must be disjoint. Render refuses a blueprint path that differs only
-in case from one it writes (`SUMMARY.md`, `dependencies.json`,
-`dependencies.md`, `structure.md`, `publication.json`, `assets/`,
-`dependencies/`, `javascripts/`, `stylesheets/`, and the generated stylesheet,
-scripts and logo inside them), and two blueprint paths that differ only in case
-or Unicode form. A blueprint file at exactly `dependencies.json` or
-`javascripts/blueprint-dag.js` is left out of the site with a warning.
+never reads a `graph.json` or an operational queue;
+[wiki references](wiki-links.md) are also derived. Hidden files and directories,
+including `.implementation-notes`, are omitted; the vault's implementation notes
+are read in place only to validate them. A `.autoform` directory and symlinks,
+credentials, logs, provider state, and agent/task state outside hidden
+directories fail the render rather than leak. Source and output directories must
+be disjoint. Render refuses a blueprint path that differs only in case from a
+file it writes at a fixed path ([render](../README.md#visualize-and-render)
+lists them), and two blueprint paths that differ only in case or Unicode form. A
+blueprint file at exactly `dependencies.json` or `javascripts/blueprint-dag.js`
+is left out of the site with a warning.
 
 The search index and graph breadcrumbs may carry `reading_title` (`inline-parts-v1`):
 captured title text and publisher-derived text, code and marked TeX parts.
@@ -66,25 +65,22 @@ Every render writes `publication.json`, schema `autoform-publication/v3`, with
 blueprint and Lean-source hashes (the Lean-source hash is empty when render
 reads no Lean sources), Git ref, article and dependency counts, the site's file
 inventory, and available views. It holds no timestamp or absolute path, so
-identical inputs produce identical output files. The dashboard accepts only a
-v3 site and reports an older one as stale until render replaces it. Render
-reads the blueprint and the Lean sources once each; an edit saved during a
-render waits for the next one, and until then the dashboard reports the built
-site as stale. Under `--review`, an article or cited passage edited between the
-capture and the end of the extraction fails the render instead (see `render
---review` under statement review).
+identical inputs produce identical output files. The dashboard accepts only a v3
+site and reports an older one as stale until render replaces it. Render reads
+the blueprint and the Lean sources once each; an edit saved during a render
+waits for the next one, and until then the dashboard reports the built site as
+stale; under `--review` it fails the render ([review](../README.md#review)).
 
-Repository links appear only when the Lean bytes match one locally available
-Git commit, recorded by its full object ID; a clean checkout that Git converts
-on checkout still matches. Otherwise the render stays local, keeps source
-notes in the site, records no Git ref, and warns with the first mismatch.
-Links into the blueprint (an article's Markdown source, a source note) also
-need the blueprint's bytes in that commit; when they differ, render keeps the
-code links, keeps source notes in the site, and warns with the first mismatch,
-or, for a blueprint outside the repository or in a nested checkout, does the
-same without a warning. When render reads no Lean file (native
-Windows, or a project with no `.lean` file yet), it records the Git ref only if
-the blueprint matches it.
+Repository links appear only when the Lean bytes match one locally available Git
+commit, recorded by its full object ID; a clean checkout that Git converts on
+checkout still matches. Otherwise the render stays local, keeps source notes in
+the site, records no Git ref, and warns with the first mismatch. Links into the
+blueprint (an article's Markdown source, a source note) also need the
+blueprint's bytes in that commit; when they differ, render keeps the code links,
+keeps source notes in the site, and warns with the first mismatch, or, for a
+blueprint outside the repository or in a nested checkout, does the same without
+a warning. When render reads no Lean file (native Windows, or a project with no
+`.lean` file yet), it records the Git ref only if the blueprint matches it.
 
 Render replaces only an empty directory or a complete `autoform-publication/v2`
 or v3 site whose files match its inventory (`.DS_Store` and `._*` are ignored),
