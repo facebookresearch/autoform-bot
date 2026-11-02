@@ -164,6 +164,33 @@ def test_safe_refresh_reads_only_canonical_sources_and_keeps_startup_empty() -> 
     """)
 
 
+def test_staging_reads_every_style_and_width_before_it_appends_a_stage() -> None:
+    _run(r"""
+      // A read after a stage is appended forces a style and layout pass of the whole page, once per formula.
+      const stages = [];
+      let late = 0;
+      const append = document.body.appendChild.bind(document.body);
+      document.body.appendChild = node => {
+        if (node.getAttribute && node.getAttribute("data-autoform-math-stage") !== null) stages.push(node);
+        return append(node);
+      };
+      const rect = Element.prototype.getBoundingClientRect, style = window.getComputedStyle;
+      Element.prototype.getBoundingClientRect = function () { if (stages.length) late++; return rect.call(this); };
+      window.getComputedStyle = element => { if (stages.length) late++; return style(element); };
+      reader("\\(a\\)", "\\(b\\)", "\\(c\\)");
+      assert.equal(await install(), true);
+      assert.equal(stages.length, 3);
+      assert.equal(late, 0);
+      // Each stage still copies its formula's font and its parent's width.
+      stages.forEach(stage => {
+        assert.equal(stage.style.width, "640px");
+        assert.equal(stage.style.fontSize, "16px");
+        assert.equal(stage.style.direction, "ltr");
+      });
+      assert.deepEqual(stats.renders, [["\\(a\\)", "\\(b\\)", "\\(c\\)"]]);
+    """)
+
+
 def test_safe_doc_menu_presentation_uses_connected_metrics_and_only_own_display_methods() -> None:
     # Run the generated production service, not a copied placement algorithm.
     # These adapters supply menu lifecycle/metrics; genuine engine/hit tests

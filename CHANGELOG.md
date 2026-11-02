@@ -76,6 +76,12 @@ date when the release is tagged.
   shows once with thousands separators, and the brand gradient is off the
   figures, bar and header hairline. Source coverage reads in plain words
   (#503).
+- **Formula staging.** A page reads every formula's font and width before it
+  stages any formula for typesetting. It used to read each formula after
+  appending the previous one's staging copy, so the browser laid out the whole
+  page again for every formula. On one CI runner, Chrome prepared the 805
+  formulas of an ATLAS page in 130 ms instead of 964 ms; the typeset output is
+  unchanged.
 - **Declaration captions.** A `declaration` command with no caption, such as
   `isomorphism`, is captioned as written, first letter capitalized, in the book
   instead of "Node", and named on its map card, which showed no kind. Modifiers
