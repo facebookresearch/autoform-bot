@@ -104,6 +104,11 @@ date when the release is tagged.
   42.1 MB to 32.2 MB, and on one CI runner search and the outline were ready
   2.1 s after Home started loading instead of 2.8 s in WebKit, and 1.6 s
   instead of 1.9 s in Chrome.
+- **Explorer search.** A keystroke that extends the query ranks only the
+  previous query's matches, not every row of the search index, and a one-word
+  query no longer joins each row's fields. Results and their order are the
+  same. In Node, on ATLAS's index, ranking as "zeckendorf" was typed took
+  53 ms instead of 383 ms, and "measure theory" 112 ms instead of 705 ms.
 - **Wiki links.** Render reads the links between articles without rendering
   an article whose links all sit under its Sources, References, Bibliography
   or Depends on headings, which holds for about nine in ten ATLAS articles.

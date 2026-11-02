@@ -922,8 +922,9 @@
       if (title.split(/\s+/).some(function (word) { return word.startsWith(query); })) return 7;
       if (title.indexOf(query) >= 0) return 8; if (id.indexOf(query) >= 0) return 9;
       if (lean.indexOf(query) >= 0) return 10; if (summary.indexOf(query) >= 0) return 11;
-      var terms = query.split(/\s+/).filter(Boolean), all = [title, id, lean, summary].join(" ");
-      return terms.length > 1 && terms.every(function (term) { return all.indexOf(term) >= 0; }) ? 12 : 0;
+      var terms = query.split(/\s+/).filter(Boolean); if (terms.length < 2) return 0;
+      var all = [title, id, lean, summary].join(" ");
+      return terms.every(function (term) { return all.indexOf(term) >= 0; }) ? 12 : 0;
     }
     function ensureGlobalSearch() {
       if (sharedIndex) return Promise.resolve(sharedIndex);
@@ -953,7 +954,9 @@
     function searchMatches() {
       var query = ui$query.toLocaleLowerCase(); if (!query) return [];
       if (query === ui$searchCacheQuery) return ui$searchCache;
-      ui$searchCacheQuery = query; ui$searchCache = rankMatches(ui$searchNodes, query);
+      // Every row that matches a query matches the query it extends, so typing on ranks only the last matches.
+      var pool = ui$searchCacheQuery && query.startsWith(ui$searchCacheQuery) ? ui$searchCache.map(function (match) { return match.node; }) : ui$searchNodes;
+      ui$searchCacheQuery = query; ui$searchCache = rankMatches(pool, query);
       return ui$searchCache;
     }
     function renderSearch() {
