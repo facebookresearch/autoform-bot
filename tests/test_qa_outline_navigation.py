@@ -359,6 +359,20 @@ def test_error_notice_keeps_a_safe_canonical_html_new_tab_fallback(url: str) -> 
     """, ["element", "safeHref", "showError"], _OUTLINE_PEERS)
 
 
+def test_authored_scope_entry_requests_map_first_without_changing_result_reading_intent() -> None:
+    _run(r"""
+      const root=scope('roadmap',null),chapter=scope('chapter','roadmap'),result=page('chapter/result','chapter',{scope:'chapter'});
+      configureOutline([root,chapter,result],chapter.id);
+      const card={id:'scope:'+chapter.id,kind:'scope',title:chapter.title};
+      activateNode(card);
+      assert.deepEqual(dispatched.at(-1),{id:chapter.id,options:{history:'push',focus:'reading',mapFirst:true}});
+      chapter.result=true;activateNode(card);
+      assert.deepEqual(dispatched.at(-1),{id:chapter.id,options:{history:'push',focus:'reading'}});
+      activateNode(result);
+      assert.deepEqual(dispatched.at(-1),{id:result.id,options:{history:'push',focus:'reading'}});
+    """, ["recordId", "activateNode"], _OUTLINE_PEERS)
+
+
 @pytest.mark.parametrize(("intent", "opened"), [
     ("no-node", False), ("roadmap", False), ("topic", False), ("focus", True), ("map-first", False), ("anchor", True),
     ("snapshot-open", True), ("snapshot-closed", False), ("result", True), ("article", True),

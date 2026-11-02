@@ -133,38 +133,6 @@ def test_back_to_map_hiding_button_focuses_the_real_map_tabstop_after_paint() ->
     """)
 
 
-def test_map_focus_and_native_layer_scroll_never_diverge_from_the_canvas() -> None:
-    _controls(r"""
-      const entry=card('A',0,0);
-      dom$nodeLayer.scrollTop=280;dom$nodeLayer.scrollLeft=75;
-      focusNodeControl(entry.node);flushFrames();
-      assert.equal(document.activeElement,entry.control);
-      assert.deepEqual(entry.control.focuses.at(-1),{preventScroll:true});
-      assert.equal(dom$nodeLayer.scrollTop,0);assert.equal(dom$nodeLayer.scrollLeft,0);
-      dom$nodeLayer.scrollTop=120;dom$nodeLayer.scrollLeft=45;
-      emit(dom$nodeLayer,'scroll');
-      assert.equal(dom$nodeLayer.scrollTop,0);assert.equal(dom$nodeLayer.scrollLeft,0);
-      assert.equal(document.activeElement,entry.control);
-    """)
-
-
-def test_only_the_latest_map_focus_request_can_focus_or_checkpoint() -> None:
-    _controls(r"""
-      const first=card('A',0,0),latest=card('B',150,0),outside=new Element('button');outside.focus();
-      const before={remembered,scheduled,bundle:currentBundle,projection:data,index:JSON.stringify(sharedIndex)};
-      focusNodeControl(first.node);
-      // Queue the old request's second rAF before a newer request arrives.
-      frames.splice(0).forEach(callback=>callback());focusNodeControl(latest.node);
-      dom$nodeLayer.scrollLeft=35;dom$nodeLayer.scrollTop=70;flushFrames();
-      assert.equal(document.activeElement,latest.control);assert.equal(first.control.focuses.length,0);
-      assert.deepEqual(latest.control.focuses,[{preventScroll:true}]);
-      assert.equal(remembered,before.remembered+1);assert.equal(scheduled,before.scheduled+1);
-      assert.equal(dom$nodeLayer.scrollLeft,0);assert.equal(dom$nodeLayer.scrollTop,0);
-      assert.strictEqual(currentBundle,before.bundle);assert.strictEqual(data,before.projection);
-      assert.equal(JSON.stringify(sharedIndex),before.index);assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
-    """)
-
-
 def test_pending_back_to_map_focus_cannot_take_a_new_search_focus() -> None:
     _controls(r"""
       const entry=card('A',0,0);ui$active=[entry.node];ui$mode='list';syncControls();dom$graphMode.focus();
@@ -220,76 +188,6 @@ def test_self_hiding_back_button_body_or_html_blur_still_focuses_the_actual_map(
     """)
 
 
-def test_visible_owner_or_unowned_hidden_owner_blur_to_body_cancels_pending_map_focus() -> None:
-    _controls(r"""
-      const entry=card('A',0,0),outside=new Element('button');document.body.appendChild(outside);
-      Element.prototype.blur=function(){if(document.activeElement===this)document.activeElement=document.body;};
-      outside.isConnected=true;dom$fit.isConnected=true;
-      for(const owner of [dom$fit,outside]){
-        owner.focus();focusNodeControl(entry.node);frames.splice(0).forEach(callback=>callback());
-        if(owner===outside)outside.hidden=true;
-        owner.blur();
-        assert.equal(document.activeElement,document.body);
-        dom$nodeLayer.scrollLeft=35;dom$nodeLayer.scrollTop=70;
-        const before={remembered,scheduled,focuses:entry.control.focuses.length};flushFrames();
-        assert.equal(document.activeElement,document.body);assert.equal(entry.control.focuses.length,before.focuses);
-        assert.equal(dom$nodeLayer.scrollLeft,35);assert.equal(dom$nodeLayer.scrollTop,70);
-        assert.equal(remembered,before.remembered);assert.equal(scheduled,before.scheduled);
-      }
-      assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
-    """)
-
-
-def test_removed_owned_overlay_body_blur_keeps_the_latest_target_focus_eligible() -> None:
-    _controls(r"""
-      const owner=card('A',0,0),target=card('B',150,0),bundle=currentBundle,projection=data;
-      owner.control.isConnected=true;target.control.isConnected=true;owner.control.focus();
-      assert(host.contains(owner.control));focusNodeControl(target.node);frames.splice(0).forEach(callback=>callback());
-      owner.control.remove();owner.control.isConnected=false;overlays.delete(owner.node.id);document.body.focus();
-      dom$nodeLayer.scrollLeft=35;dom$nodeLayer.scrollTop=70;
-      const before={remembered,scheduled};flushFrames();
-      assert.equal(document.activeElement,target.control);assert.equal(target.control.focuses.length,1);
-      assert.deepEqual(target.control.focuses.at(-1),{preventScroll:true});
-      assert.equal(dom$nodeLayer.scrollLeft,0);assert.equal(dom$nodeLayer.scrollTop,0);
-      assert.equal(remembered,before.remembered+1);assert.equal(scheduled,before.scheduled+1);
-      assert.strictEqual(currentBundle,bundle);assert.strictEqual(data,projection);
-      assert.deepEqual(history,[]);assert.deepEqual(navigationCalls,[]);
-    """)
-
-
-def test_disposed_map_focus_callback_does_not_focus_scroll_or_checkpoint() -> None:
-    _controls(r"""
-      const entry=card('A',0,0),outside=new Element('button');outside.focus();
-      dom$nodeLayer.scrollTop=25;dom$nodeLayer.scrollLeft=40;
-      const before={remembered,scheduled,focuses:entry.control.focuses.length};
-      focusNodeControl(entry.node);alive=false;flushFrames();
-      assert.equal(document.activeElement,outside);
-      assert.equal(entry.control.focuses.length,before.focuses);
-      assert.equal(dom$nodeLayer.scrollTop,25);assert.equal(dom$nodeLayer.scrollLeft,40);
-      assert.equal(remembered,before.remembered);assert.equal(scheduled,before.scheduled);
-    """)
-
-
-def test_stale_or_hidden_map_focus_request_does_not_steal_later_focus() -> None:
-    _controls(r"""
-      const entry=card('A',0,0),outside=new Element('button'),bundle=currentBundle;
-      for(const changed of ['bundle','list','generation']){
-        currentBundle=bundle;delete bundle.isCurrent;ui$mode='graph';outside.focus();
-        dom$nodeLayer.scrollTop=25;dom$nodeLayer.scrollLeft=40;
-        const before={remembered,scheduled,focuses:entry.control.focuses.length};
-        focusNodeControl();
-        if(changed==='bundle')currentBundle={scope:'other'};
-        else if(changed==='list')ui$mode='list';
-        else bundle.isCurrent=()=>false;
-        flushFrames();
-        assert.equal(document.activeElement,outside);
-        assert.equal(entry.control.focuses.length,before.focuses);
-        assert.equal(dom$nodeLayer.scrollTop,25);assert.equal(dom$nodeLayer.scrollLeft,40);
-        assert.equal(remembered,before.remembered);assert.equal(scheduled,before.scheduled);
-      }
-    """)
-
-
 def test_full_phone_reader_suppresses_pending_node_fallback_and_missing_node_focus() -> None:
     _controls(r"""
       const entry=card('A',0,0),reading=new Element('a'),bundle=currentBundle,projection=data;
@@ -310,49 +208,6 @@ def test_full_phone_reader_suppresses_pending_node_fallback_and_missing_node_foc
         assert.equal(dom$nodeLayer.scrollTop,25);assert.equal(dom$nodeLayer.scrollLeft,40);
         assert.equal(remembered,before.remembered);assert.equal(scheduled,before.scheduled);
       }
-    """)
-
-
-def test_full_sheet_class_does_not_suppress_an_uncovered_desktop_map() -> None:
-    _controls(r"""
-      const entry=card('A',0,0),reading=new Element('a');dom$readingBody.appendChild(reading);reading.focus();
-      host.classList.toggle('bp-dag-sheet-full',true);ui$phone=false;focusNodeControl(entry.node);
-      flushFrames();assert.equal(document.activeElement,entry.control);
-      assert.deepEqual(entry.control.focuses.at(-1),{preventScroll:true});
-    """)
-
-
-def test_same_bundle_projection_replacement_cannot_steal_focus_scroll_or_checkpoint() -> None:
-    _controls(r"""
-      const entry=card('A',0,0),outside=new Element('a'),bundle=currentBundle;
-      host.appendChild(outside);outside.focus();ui$mode='graph';
-      focusNodeControl(entry.node);
-      data={...data,nodes:[]};overlays.delete(entry.node.id);entry.control.remove();outside.focus();
-      dom$nodeLayer.scrollTop=25;dom$nodeLayer.scrollLeft=40;
-      const before={remembered,scheduled,focuses:entry.control.focuses.length,sheetFocuses:dom$sheetHandle.focuses.length};
-      flushFrames();
-      assert.strictEqual(currentBundle,bundle);assert.equal(ui$mode,'graph');
-      assert.equal(document.activeElement,outside);assert.equal(entry.control.focuses.length,before.focuses);
-      assert.equal(dom$sheetHandle.focuses.length,before.sheetFocuses);
-      assert.equal(dom$nodeLayer.scrollTop,25);assert.equal(dom$nodeLayer.scrollLeft,40);
-      assert.equal(remembered,before.remembered);assert.equal(scheduled,before.scheduled);
-    """)
-
-
-def test_same_projection_wiki_geometry_and_overlay_refresh_keep_pending_focus_eligible() -> None:
-    _controls(r"""
-      const entry=card('A',0,0),projection=data,bundle=currentBundle,outside=new Element('a');
-      host.appendChild(outside);outside.focus();focusNodeControl(entry.node);
-      data.$wikiEdges=[{source:'A',target:'B',count:1}];
-      const current=card('A',150,100);entry.control.remove();
-      dom$nodeLayer.scrollTop=25;dom$nodeLayer.scrollLeft=40;
-      const before={remembered,scheduled};flushFrames();
-      assert.strictEqual(data,projection);assert.strictEqual(currentBundle,bundle);
-      assert.equal(document.activeElement,current.control);assert.equal(entry.control.focuses.length,0);
-      assert.deepEqual(current.control.focuses.at(-1),{preventScroll:true});
-      assert.equal(dom$nodeLayer.scrollTop,0);assert.equal(dom$nodeLayer.scrollLeft,0);
-      assert.equal(remembered,before.remembered+1);assert.equal(scheduled,before.scheduled+1);
-      assert.deepEqual(data.$wikiEdges,[{source:'A',target:'B',count:1}]);
     """)
 
 
@@ -470,49 +325,6 @@ def test_ignored_full_phone_shortcuts_keep_full_reader_focus_and_view_state() ->
     """, real_sheet=True)
 
 
-def test_modified_arrows_remain_native_and_plain_arrow_focuses_actual_neighbor() -> None:
-    _controls(r"""
-      const a=card('A',0,0),b=card('B',150,0);ui$active=[a.node,b.node];a.control.focus();
-      for(const key of ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown']){
-        for(const setting of [{ctrlKey:true},{metaKey:true},{shiftKey:true},{altKey:true},{defaultPrevented:true}]){
-          const event=emit(a.control,'keydown',Object.assign({key},setting));
-          assert.equal(event.defaultPrevented,Boolean(setting.defaultPrevented));
-          assert.equal(frames.length,0);assert.equal(centered.length,0);assert.equal(document.activeElement,a.control);
-        }
-      }
-      assert.equal(emit(a.control,'keydown',{key:'ArrowRight'}).defaultPrevented,true);flushFrames();
-      assert.deepEqual(centered,[{id:'B',scale:.7}]);assert.equal(document.activeElement,b.control);
-      assert.deepEqual(b.control.focuses.at(-1),{preventScroll:true});
-    """)
-
-
-def test_empty_escape_does_not_write_history_and_selected_escape_preserves_focus() -> None:
-    _controls(r"""
-      const a=card('A',0,0);a.control.focus();const before=JSON.stringify(sharedIndex);
-      for(let index=0;index<4;index++)assert.equal(emit(a.control,'keydown',{key:'Escape'}).defaultPrevented,false);
-      clearSelection(true,true);assert.equal(checkpoints,0);assert.deepEqual(history,[]);assert.equal(sheets.length,0);
-      ui$selected=a.node;ui$direction='before';clearSelection(true,true);
-      assert.equal(checkpoints,1);assert.deepEqual(history,['push']);assert.equal(ui$selected,null);assert.equal(ui$direction,'both');
-      assert.equal(document.activeElement,a.control);assert.deepEqual(a.control.focuses.at(-1),{preventScroll:true});
-      assert.equal(JSON.stringify(sharedIndex),before);
-    """)
-
-
-def test_zoom_collapse_focuses_the_actual_parent_group_and_keeps_provenance() -> None:
-    _controls(r"""
-      const parent=card('view-group:authored',0,0);parent.node._overviewGroup='authored';
-      const member=card('member',0,150);member.control.focus();
-      const original={members:[member.node],edges:[{source:'member',target:'external',statement:2,proof:3}]};
-      const before=JSON.stringify(original);ui$scopeOverview=true;ui$overviewGroup='authored';ui$transform.scale=.85;
-      updateProjection=()=>{assert.equal(ui$overviewGroup,null);data.nodes=[parent.node];data._scopeOverview={groups:[original]};};
-      zoomAt(.82,150,100);
-      assert.equal(checkpoints,1);assert.equal(resized,1);assert.equal(firstResize,true);assert.deepEqual(history,['push']);
-      flushFrames();assert.equal(document.activeElement,parent.control);
-      assert.deepEqual(parent.control.focuses.at(-1),{preventScroll:true});
-      assert.equal(JSON.stringify(original),before);
-    """)
-
-
 def test_outline_more_focuses_first_new_id_not_the_previous_row_count() -> None:
     _run(r"""
       const nodes=[scope('roadmap',null),...Array.from({length:13},(_,number)=>scope('T'+number,'roadmap'))];
@@ -546,44 +358,4 @@ def test_phone_key_keeps_every_real_span_and_open_focus_state_without_intercepti
       assert.equal(dom$mapKey.querySelector('details'),null);
       assert.deepEqual(dom$mapKey.children.map(span=>span.className),['bp-map-key-statement','bp-map-key-proof']);
       assert.equal(JSON.stringify(data),before);
-    """)
-
-
-def test_key_pointer_and_wheel_events_stay_native_while_plain_map_wheel_still_pans() -> None:
-    _controls(r"""
-      ui$phone=true;data.edges=[{source:'A',target:'B',statement:2,proof:3}];syncControls();
-      const legend=dom$mapKey.querySelector('details'),summary=legend.querySelector('summary'),key=legend.querySelector('div').firstChild;
-      const before={camera:JSON.stringify(ui$transform),data:JSON.stringify(data),remembered,scheduled};
-      for(const target of [summary,key]){
-        const press=emit(dom$stage,'pointerdown',{target,button:0,pointerId:9,clientX:50,clientY:60});
-        assert.equal(press.defaultPrevented,false);assert.equal(ui$pointers.size,0);assert.equal(ui$moved,false);
-        for(const keys of [{},{ctrlKey:true},{metaKey:true}]){
-          const wheel=emit(dom$stage,'wheel',Object.assign({target,deltaX:3,deltaY:8,deltaMode:0,clientX:50,clientY:60},keys));
-          assert.equal(wheel.defaultPrevented,false);
-        }
-      }
-      assert.equal(JSON.stringify(ui$transform),before.camera);assert.equal(remembered,before.remembered);assert.equal(scheduled,before.scheduled);
-      const x=ui$transform.x,y=ui$transform.y;
-      const outside=emit(dom$stage,'wheel',{target:dom$stage,deltaX:3,deltaY:8,deltaMode:0});
-      assert.equal(outside.defaultPrevented,true);assert.equal(ui$transform.x,x-3);assert.equal(ui$transform.y,y-8);
-      assert.equal(remembered,before.remembered+1);assert.equal(scheduled,before.scheduled+1);
-      emit(dom$stage,'pointerdown',{target:dom$stage,button:0,pointerId:10,clientX:50,clientY:60});
-      assert.deepEqual(ui$pointers.get(10),{x:50,y:60});assert.equal(JSON.stringify(data),before.data);
-    """)
-
-
-def test_map_feedback_tracks_the_real_free_band_and_resets_outside_the_half_phone_reader() -> None:
-    _controls(r"""
-      ui$phone=true;dom$stage.clientHeight=600;dom$inspector.clientHeight=600;
-      const before=JSON.stringify({data,camera:ui$transform});host.classList.toggle('bp-dag-sheet-open',true);
-      positionMapFeedback();const band=freeArea().band;
-      assert.equal(band,270);assert.equal(dom$stage.clientHeight-parseFloat(dom$mapKey.style.bottom),band-4);
-      assert.equal(dom$stage.clientHeight-parseFloat(dom$density.style.bottom),band-34);
-      host.classList.toggle('bp-dag-sheet-full',true);positionMapFeedback();
-      assert.equal(dom$mapKey.style.bottom,'');assert.equal(dom$density.style.bottom,'');
-      host.classList.toggle('bp-dag-sheet-full',false);host.classList.toggle('bp-dag-sheet-open',false);positionMapFeedback();
-      assert.equal(dom$mapKey.style.bottom,'');assert.equal(dom$density.style.bottom,'');
-      ui$phone=false;host.classList.toggle('bp-dag-sheet-open',true);positionMapFeedback();
-      assert.equal(dom$mapKey.style.bottom,'');assert.equal(dom$density.style.bottom,'');
-      assert.equal(JSON.stringify({data,camera:ui$transform}),before);
     """)

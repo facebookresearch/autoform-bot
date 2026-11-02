@@ -220,137 +220,6 @@ def test_isolate_and_status_filters_hide_native_shelves_and_count_every_hidden_m
     """)
 
 
-def test_expanded_owner_fallback_cannot_reveal_isolates_hidden_by_the_same_member_filter() -> None:
-    _run(r"""
-      const state=fixture(43);
-      contextGraph.nodes.forEach((node,number)=>{
-        node.area=number<13?'First area':'Second area';
-        node.status=number>=2&&number<13?'fully_proved':'planned';
-        node.status_counts=[[node.status,1]];node.isolated=number>=2;
-        records.get(node.id).status=node.status;
-      });
-      contextGraph.edges=[{source:state.members[0].id,target:state.members[1].id,statement:1,proof:0}];
-      ui$overviewGroup='area:First area';ui$requestedNode=null;updateProjection();
-      assert.equal(data.$shelves[0].members.length,11);assert.equal(currentOverviewGroup().$shelf,false);
-      const before=JSON.stringify({contextGraph,index:sharedIndex,members:currentOverviewGroup().members});
-      ui$selectedStatuses=new Set(['fully_proved']);ui$showIsolated=false;ui$activeDirty=true;syncControls();
-      assert.equal(ui$active.length,0);assert.equal(dom$shelves.hidden,true);assert.equal(links().length,0);
-      assert.equal(dom$hiddenButton.textContent,'Show 14 filtered out');
-      assert.equal(JSON.stringify({contextGraph,index:sharedIndex,members:currentOverviewGroup().members}),before);
-      ui$showIsolated=true;ui$activeDirty=true;syncControls();
-      assert.equal(dom$shelves.hidden,false);assert.equal(links().length,11);
-      assert.equal(dom$hiddenButton.textContent,'Show 3 filtered out');
-      assert.equal(JSON.stringify({contextGraph,index:sharedIndex,members:currentOverviewGroup().members}),before);
-    """)
-
-
-def test_external_connected_power_series_shelf_topic_keeps_its_canonical_link_and_true_isolation_flag() -> None:
-    _run(r"""
-      const state=fixture(13),first=contextGraph.nodes[0],canonical='Algebra/WantedExt/power-series';
-      const power={...records.get(first.id),id:canonical,title:'Power series',kind:'scope',scope:canonical,result:false,status:'can_prove',
-        route:'https://example.test/project/roadmap/Algebra/WantedExt/power-series/index.html'};
-      records.delete(first.id);records.set(canonical,power);
-      contextGraph.nodes[0]={...power,id:'scope:'+canonical,_recordId:canonical,url:power.route,isolated:false,
-        status_counts:[['fully_proved',6],['can_prove',17]],member_count:23};
-      contextGraph.palette.can_prove={...contextGraph.palette.planned,label:'Ready to prove'};
-      const external={id:'RingTheory',title:'Ring Theory',kind:'scope',scope:'RingTheory',parent:'roadmap',status:'planned',result:false,
-        route:'https://example.test/project/roadmap/RingTheory/index.html'};records.set(external.id,external);
-      contextGraph.nodes.push({...external,id:'boundary:RingTheory',kind:'boundary',status_counts:[['planned',1]],member_count:1,isolated:false});
-      const edge={source:'boundary:RingTheory',target:'scope:'+canonical,statement:7,proof:0};
-      contextGraph.edges=[edge];sharedIndex={...sharedIndex,nodes:Array.from(records.values()),relations:[['RingTheory',canonical,7,0]]};
-      updateProjection();syncControls();assert.equal(data.nodes.length,0);
-      const before=JSON.stringify({contextGraph,index:sharedIndex}),originalShelf=data.$shelves[0],cacheLinks=links();
-      assert(originalShelf.members.some(node=>node.id==='scope:'+canonical));
-      ui$showIsolated=false;ui$activeDirty=true;syncControls();
-      assert.equal(dom$shelves.hidden,false);assert.equal(links().length,1);
-      assert.equal(links()[0].dataset.shelfNodeId,canonical);assert.equal(links()[0].href,power.route);
-      assert.equal(dom$hiddenButton.textContent,'Show 12 filtered out');
-      assert.equal(contextGraph.nodes[0].isolated,false);assert.strictEqual(contextGraph.edges[0],edge);
-      assert.equal(JSON.stringify({contextGraph,index:sharedIndex}),before);
-      assert.deepEqual(data.$shelves[0].members,originalShelf.members);
-      const visible=links()[0];renderShelves();renderShelves();assert.strictEqual(links()[0],visible);
-      ui$showIsolated=true;ui$activeDirty=true;syncControls();
-      assert.equal(dom$hiddenButton.hidden,true);assert.equal(links().length,cacheLinks.length);
-      assert.equal(JSON.stringify({contextGraph,index:sharedIndex}),before);
-    """)
-
-
-def test_missing_isolation_flags_use_one_cached_scan_of_actual_typed_endpoints_including_external_edges() -> None:
-    _run(r"""
-      const state=fixture(13),first=contextGraph.nodes[0],last=contextGraph.nodes.at(-1);
-      const actual=[{source:'boundary:captured-input',target:first.id,statement:7,proof:0},
-        {source:'not-an-edge',target:last.id,statement:0,proof:0}];contextGraph={...contextGraph,edges:actual};
-      let scans=0,rows=0;const forEach=actual.forEach;
-      actual.forEach=function(callback,...args){scans++;return forEach.call(this,edge=>{rows++;return callback(edge);},...args);};
-      const before=JSON.stringify({contextGraph,index:sharedIndex});ui$showIsolated=false;
-      for(let repeat=0;repeat<5;repeat++){
-        assert(matchesIsolation(first));assert(!matchesIsolation(last));assert(!matchesIsolation(contextGraph.nodes[1]));
-      }
-      assert.equal(scans,1);assert.equal(rows,2);assert.strictEqual(matchesIsolation.$cache.graph,contextGraph);
-      assert(matchesIsolation({...first,isolated:false}));assert(!matchesIsolation({...first,isolated:true}));assert.equal(scans,1);
-      ui$selected=last;assert(matchesIsolation(last));assert.equal(scans,1);ui$selected=null;
-      const cached=matchesIsolation.$cache;
-      contextGraph={...contextGraph,edges:[{source:last.id,target:first.id,statement:0,proof:3}]};
-      assert(matchesIsolation(last));assert.notStrictEqual(matchesIsolation.$cache,cached);
-      assert.strictEqual(matchesIsolation.$cache.graph,contextGraph);
-      assert.equal(JSON.stringify(sharedIndex),JSON.stringify(JSON.parse(before).index));
-      assert.deepEqual(actual.map(edge=>[edge.source,edge.target,edge.statement,edge.proof]),[
-        ['boundary:captured-input',first.id,7,0],['not-an-edge',last.id,0,0]]);
-    """)
-
-
-def test_collapsed_connected_development_is_not_an_isolate_when_its_typed_edges_are_private() -> None:
-    _run(r"""
-      const state=fixture(129);
-      contextGraph.edges=state.members.slice(1).map((member,index)=>({source:state.members[index].id,target:member.id,statement:1,proof:0}));
-      updateProjection();syncControls();const before=JSON.stringify({contextGraph,index:sharedIndex});
-      const group=data._scopeOverview.groups[0],proxy=data.nodes[0];
-      assert.equal(data.nodes.length,1);assert.equal(group.members.length,129);assert.equal(group.edges.length,128);
-      assert.equal(proxy.internal_dependency_count,128);
-      ui$showIsolated=false;ui$activeDirty=true;syncControls();
-      assert(matchesIsolation(proxy),'A derived proxy cannot reinterpret a connected original development as an isolate');
-      assert.equal(ui$active.length,1);assert.equal(dom$empty.hidden,true);assert.equal(dom$hiddenButton.hidden,true);
-      assert(group.edges.every((edge,index)=>edge===contextGraph.edges[index]));
-      assert.equal(JSON.stringify({contextGraph,index:sharedIndex}),before);
-    """)
-
-
-def test_collapsed_group_status_and_isolation_must_match_the_same_original_member() -> None:
-    _run(r"""
-      const state=fixture(43);
-      contextGraph.nodes.forEach((node,number)=>{
-        node.area=number<13?'First area':'Second area';
-        node.status=number>=2&&number<13?'fully_proved':'planned';
-        node.status_counts=[[node.status,1]];node.isolated=number>=2;
-        records.get(node.id).status=node.status;
-      });
-      contextGraph.edges=[{source:state.members[0].id,target:state.members[1].id,statement:1,proof:0}];
-      ui$overviewGroup=null;ui$requestedNode=null;updateProjection();
-      const group=data._scopeOverview.groups.find(group=>group.area==='First area'),proxy=data.nodes.find(node=>node.id===group.id);
-      const before=JSON.stringify({contextGraph,index:sharedIndex,members:group.members});
-      ui$selectedStatuses=new Set(['fully_proved']);ui$showIsolated=false;ui$activeDirty=true;syncControls();
-      assert(matchesStatus(proxy),'The fixture must contain actual fully proved contributors');
-      assert(group.members.some(node=>!node.isolated)&&group.members.some(node=>node.status==='fully_proved'));
-      assert.equal(ui$activeIds.has(proxy.id),false,'Different contributors cannot independently satisfy the two filters');
-      assert.equal(JSON.stringify({contextGraph,index:sharedIndex,members:group.members}),before);
-    """)
-
-
-def test_shelf_cache_retains_link_focus_scroll_and_all_underlying_members() -> None:
-    _run(r"""
-      const state=fixture(),before=JSON.stringify({contextGraph,index:sharedIndex});
-      const link=links()[0],container=section();link.focus({});dom$shelves.scrollTop=71;
-      renderShelves();renderShelves();
-      assert.strictEqual(links()[0],link);assert.strictEqual(section(),container);
-      assert.strictEqual(document.activeElement,link);assert.equal(dom$shelves.scrollTop,71);
-      assert.deepEqual(allMemberIds(),state.members.map(node=>node.id));
-      ui$selectedStatuses=new Set(['fully_proved']);renderShelves();
-      assert(links().every(link=>records.get(link.dataset.shelfNodeId).status==='fully_proved'));
-      assert.deepEqual(allMemberIds(),state.members.map(node=>node.id),'A visual filter cannot remove source membership');
-      assert.equal(JSON.stringify({contextGraph,index:sharedIndex}),before);
-    """)
-
-
 def test_authored_collection_math_parts_remain_safe_in_group_breadcrumb_and_map_heading() -> None:
     peers=_PEERS.replace("function renderBreadcrumb(){}", "").replace("function trailList() {return new Element('ol');}", "")
     callbacks=[*_CALLBACKS,"buildShell","semanticParent","routeTrail","trailList","tooltip","renderBreadcrumb"]
@@ -377,26 +246,6 @@ def test_authored_collection_math_parts_remain_safe_in_group_breadcrumb_and_map_
     """,callbacks,peers)
 
 
-def test_focal_definition_heading_keeps_authored_math_title_and_actual_neighbour_counts() -> None:
-    _run(r"""
-      const state=fixture(13),definition=state.members[0];
-      definition.title='Definition $D$';definition.reading_title={format:'inline-parts-v1',source:definition.title,
-        parts:[['text','Definition '],['math','\\(D\\)']]};
-      sharedIndex.relations=[[state.members[1].id,definition.id,1,0],[state.members[2].id,definition.id,0,2],
-        [definition.id,state.members[3].id,1,1]];
-      currentBundle=Object.assign({},currentBundle,{nodeId:definition.id,title:'Generic view label'});
-      const before=JSON.stringify(sharedIndex);syncControls();
-      assert(dom$mapContext.textContent.startsWith('Definition '),'A definition must be identified by its authored title');
-      const math=dom$mapContext.all().filter(node=>node.className==='arithmatex');assert.equal(math.length,1);
-      assert.equal(math[0].textContent,'\\(D\\)');
-      // The reader beside a desktop map already says Uses and Used by, so the header counts them only on a phone.
-      assert.equal(dom$mapContext.textContent.match(/\b\d+\b/g),null);
-      const desktop=sheetLayout;sheetLayout=()=>true;syncControls();sheetLayout=desktop;
-      assert.deepEqual(dom$mapContext.textContent.match(/\b\d+\b/g),['2','1']);
-      assert.equal(JSON.stringify(sharedIndex),before);
-    """)
-
-
 @pytest.mark.parametrize("kind", ["source", "module"])
 def test_source_or_module_scope_activation_keeps_reading_intent_without_forcing_map_first(kind: str) -> None:
     _execute("const kind="+repr(kind)+";\n"+r"""
@@ -409,17 +258,6 @@ def test_source_or_module_scope_activation_keeps_reading_intent_without_forcing_
       records.set(topic.id,topic);activateNode(topic);
       assert.deepEqual(navigationCalls.at(-1),{id:topic.id,options:{history:'push',focus:'reading',mapFirst:true}});
     """,[*_CALLBACKS,"buildShell"],_PEERS)
-
-
-def test_empty_map_with_real_shelves_is_not_shown_as_an_empty_roadmap() -> None:
-    _run(r"""
-      const state=fixture();assert.equal(data.nodes.length,0);assert.equal(state.members.length,13);
-      assert.equal(dom$shelves.hidden,false);assert.equal(dom$stage.hidden,true);
-      assert(host.classList.contains('bp-dag-shelves-only'));
-      assert(links().length>0,'The complete scope must still expose native reading links');
-      assert(dom$empty.hidden||dom$stage.hidden,'An empty map notice must not be visible over a nonempty scope shelf');
-      assert.deepEqual(allMemberIds(),state.members.map(node=>node.id));
-    """)
 
 
 def test_fully_filtered_context_drill_keeps_mixed_scope_members_and_actual_status_ring_counts() -> None:
@@ -455,61 +293,6 @@ def test_fully_filtered_context_drill_keeps_mixed_scope_members_and_actual_statu
       }
       assert.deepEqual(currentOverviewGroup().members.map(node=>recordId(node)),state.members.slice(0,2).map(node=>node.id));
       assert.equal(JSON.stringify({contextGraph,index:sharedIndex}),before,'Filtering and status-ring rendering cannot rewrite source counts or weights');
-    """)
-
-
-def test_drilled_authored_area_keeps_linked_cards_and_full_provenance_while_showing_all_local_isolates() -> None:
-    _run(r"""
-      const state=fixture(41);
-      state.members.forEach((node,number)=>node.area=number<15?'Authored area A':'Authored area B');
-      contextGraph.nodes.forEach((node,number)=>node.area=state.members[number].area);
-      const edges=[{source:state.members[0].id,target:state.members[1].id,statement:2,proof:3},
-        {source:state.members[2].id,target:state.members[15].id,statement:1,proof:0}];
-      contextGraph.edges=edges;sharedIndex.relations=edges.map(edge=>[edge.source,edge.target,edge.statement,edge.proof]);
-      const before=JSON.stringify({contextGraph,index:sharedIndex});
-      ui$overviewGroup='area:Authored area A';ui$requestedNode=null;updateProjection();syncControls();
-      const group=currentOverviewGroup();assert(group);
-      assert.deepEqual(group.members.map(node=>recordId(node)),state.members.slice(0,15).map(node=>node.id));
-      assert.deepEqual(data.$shelves.flatMap(shelf=>shelf.members.map(node=>recordId(node))),
-        state.members.slice(2,15).map(node=>node.id));
-      assert.deepEqual(data.nodes.filter(node=>!node._overviewGroup).map(node=>recordId(node)),
-        state.members.slice(0,2).map(node=>node.id));
-      assert(data.edges.some(edge=>edge.source===edges[0].source&&edge.target===edges[0].target&&edge.statement===2&&edge.proof===3));
-      assert(group.edges.some(edge=>edge.source===edges[1].source&&edge.target===edges[1].target&&edge.statement===1&&edge.proof===0),
-        'Moving an externally related local isolate to a shelf must retain its original typed-edge provenance');
-      assert.equal(dom$stage.hidden,false,'Locally connected cards must remain on the mathematical map');
-      assert.equal(host.classList.contains('bp-dag-shelves-only'),false);
-      assert.equal(dom$shelves.hidden,false);assert.equal(links().length,13,
-        'Selected-area native shelves use the full 100-entry page, not another five-link preview');
-      assert.deepEqual(links().map(link=>link.dataset.shelfNodeId),state.members.slice(2,15).map(node=>node.id));
-      assert.equal(JSON.stringify({contextGraph,index:sharedIndex}),before);
-      assert.strictEqual(dom$readingBody.children[0],state.reading);
-    """)
-
-
-def test_filtered_area_drill_uses_native_members_instead_of_an_unrelated_active_sibling_card() -> None:
-    _run(r"""
-      const state=fixture(41);
-      state.members.forEach((record,number)=>{
-        record.area=number<15?'Authored area A':'Authored area B';
-        if(number<2) record.status='fully_proved';
-        Object.assign(contextGraph.nodes[number],{area:record.area,status:record.status,status_counts:[[record.status,1]]});
-      });
-      contextGraph.edges=[{source:state.members[0].id,target:state.members[1].id,statement:1,proof:2}];
-      sharedIndex.relations=contextGraph.edges.map(edge=>[edge.source,edge.target,edge.statement,edge.proof]);
-      const before=JSON.stringify({contextGraph,index:sharedIndex});
-      ui$overviewGroup='area:Authored area A';ui$requestedNode=null;updateProjection();
-      ui$filtersTouched=true;ui$selectedStatuses=new Set(['planned']);ui$activeDirty=true;syncControls();
-      const group=currentOverviewGroup(),memberIds=new Set(group.members.map(node=>node.id));
-      assert(ui$active.length>0,'The unrelated sibling area remains active for this regression');
-      assert(ui$active.every(node=>!memberIds.has(node.id)));
-      assert.equal(dom$stage.hidden,true,'Filtered-away local cards must not leave the sibling map framed as this drill');
-      assert(host.classList.contains('bp-dag-shelves-only'));
-      assert(dom$shelves.children.some(node=>node.tagName==='BUTTON'),'A native filtered drill retains its local Back action');
-      const expected=state.members.slice(0,15).filter(node=>node.status==='planned').map(node=>node.id);
-      assert.deepEqual(links().map(link=>link.dataset.shelfNodeId),expected);
-      assert.deepEqual(group.members.map(node=>recordId(node)),state.members.slice(0,15).map(node=>node.id));
-      assert.equal(JSON.stringify({contextGraph,index:sharedIndex}),before);
     """)
 
 

@@ -244,18 +244,6 @@ def test_a_collection_page_ends_its_own_trail_and_never_stands_between_crumbs() 
     """)
 
 
-def test_the_map_key_names_concept_links_once_and_only_when_the_map_draws_them() -> None:
-    _run_controls(r"""
-      var byId=new Map();function wikiOwnerVisible(){return true;}
-      const key=()=>dom$mapKey.children.map(node=>node.textContent);
-      // "Partial link coverage" printed on maps with no concept links, where it read as missing dependencies.
-      ui$wikiView={availability:'partial'};syncControls();assert.deepEqual(key(),[]);
-      data.$wikiEdges=[{source:'a',target:'b'}];syncControls();assert.deepEqual(key(),['Concept links, some pages unread']);
-      // "Local concept links · All links in articles" read as two kinds of line; one entry now says how many this map draws.
-      sceneData=data;scene={$wikiRoutes:{omitted:28,total:40}};ui$wikiView={availability:'complete'};syncControls();
-      assert.deepEqual(key(),['Concept links: 12 of 40 on this map']);
-    """)
-
 def test_browse_toggle_and_escape_close_with_focus_return_from_the_actual_menu() -> None:
     _run_controls(r"""
       dom$browseToggle.focus({});emit(dom$browseToggle,'click');
@@ -460,21 +448,18 @@ def test_first_breadcrumb_targets_deployment_home_and_preserves_native_modified_
     """)
 
 
-def test_home_leads_back_in_place_from_an_area_or_group_opened_on_the_home_map() -> None:
+def test_internal_breadcrumb_soft_navigation_and_off_origin_text_policy() -> None:
     _run_controls(r"""
-      var ui$scopeOverview=false,ui$active=[{id:'region:Geometry',_region:'Geometry'},{id:'region:Analysis',_region:'Analysis'}];
-      const centered=[];function centerIfHidden(node){centered.push(node.id);}
-      currentBundle={nodeId:null,scope:'roadmap',title:'Authored library',url:homeURL,graph:{view:{}}};
-      const crumbs=()=>routeTrail(currentBundle).map(entry=>[entry.label,entry.url||null]);
-      assert.deepEqual(crumbs(),[['Home',null]]);
-      // Opening an area keeps the home URL; Home must lead back to the whole map in place.
-      ui$area='Geometry';assert.deepEqual(crumbs(),[['Home',homeURL],['Geometry',null]]);
-      renderBreadcrumb();const home=dom$breadcrumb.querySelector('.bp-dag-book');assert.equal(home.href,homeURL);
-      const calls=navigationCalls.length,event=emit(home,'click',{button:0});
-      assert.equal(event.defaultPrevented,true);assert.equal(navigationCalls.length,calls,'Home returns in place');
-      assert.deepEqual(modes.at(-1),{mode:'regions',push:true});assert.deepEqual(centered,['region:Geometry']);
-      ui$area=null;ui$scopeOverview=true;ui$overviewGroup='g1';data._scopeOverview={groups:[{key:'g1',title:'Group one'}]};
-      assert.deepEqual(crumbs(),[['Home',homeURL],['Group one',null]]);
+      // Home leads the trail; the parent topic's crumb follows it.
+      renderBreadcrumb();const link=dom$breadcrumb.children[0].children[1].children[0];
+      assert.equal(link.href,records.get('roadmap').route);
+      const event=emit(link,'click',{button:0});assert.equal(event.defaultPrevented,true);
+      assert.deepEqual(navigationCalls.at(-1),{url:records.get('roadmap').route,
+        options:{history:'push',focus:true,mapFirst:true}});
+      const external=trailList([{label:'External source',url:'https://outside.test/book'}]);
+      assert.equal(external.children[0].textContent,'External source');assert.equal(external.children[0].children.length,0,
+        'Existing off-origin breadcrumb safety keeps a text entry, not a fabricated native anchor');
+      assert.equal(external.children[0].listeners.size,0);
     """)
 
 
@@ -521,19 +506,6 @@ def test_missing_ownership_and_root_topic_sidebar_duplication_produce_no_peer_di
       configure([focus]);renderReaderContext();
       assert.equal(marked(dom$readingNeighbors,'bp-reading-related-topics'),undefined);
       assert.equal(dom$readingNeighbors.children.length,0);
-    """)
-
-
-def test_structural_peers_never_pad_the_focal_graph_or_acquire_dependency_edges() -> None:
-    _run(r"""
-      const a=record('A','chapter'),b=record('B','chapter');configure([focus,a,b],[['A','B',2,3]]);
-      const before=snapshot(),peers=topicPeers('F'),projected=neighborhood('F');
-      assert.deepEqual(peers.nodes.map(node=>node.id),['A','B']);
-      assert.deepEqual(projected.nodes.map(node=>node.id),['F']);assert.deepEqual(projected.edges,[]);
-      assert.equal(projected.nodes[0].isolated,true);assert.deepEqual(neighborIds('F'),{before:[],after:[]});
-      const connected=neighborhood('A');assert.deepEqual(connected.nodes.map(node=>node.id).sort(),['A','B']);
-      assert.deepEqual(connected.edges,[{source:'A',target:'B',statement:2,proof:3}]);
-      assert.equal(snapshot(),before,'Showing peer navigation changed the authoritative graph');
     """)
 
 

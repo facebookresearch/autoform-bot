@@ -18,16 +18,12 @@ from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
 from tests.test_integrated_workspace_browser import (
     _LAST_SENTENCE,
-    _LIBRARY,
     _OTHER,
-    _OTHER_TITLE,
     _PinnedRuntime,
     _TARGET,
     _TARGET_TITLE,
     _WorkspaceSite,
-    _focus_graph_node,
     _frames,
-    _focus_graph_region,
     _full_math,
     _open,
     _peek_reader,
@@ -145,164 +141,6 @@ def _scroll_and_back(page: object, *, cleared: bool = False) -> dict:
         outline_open: document.querySelector('.bp-dag-outline-toggle').getAttribute('aria-expanded')};
       history.back(); return saved;
     }""", cleared)
-
-
-@pytest.mark.skip(reason="The whole map has no roving focus yet: opening a part with Enter leaves focus on the part, not on a card inside it.")
-def test_keyboard_region_expansion_focuses_a_new_readable_map_control(
-    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
-) -> None:
-    page, site = workspace_page, workspace_site
-    documents = _documents(page)
-    _open(page, site, workspace_runtime)
-    region = _focus_graph_region(page, "Geometry")
-    assert _pixels(page)["painted"] > 0
-    region.focus()
-    playwright.expect(region).to_be_focused()
-    page.keyboard.press("Enter")
-    playwright.expect(region).to_have_count(0)
-    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id="scope:division-00"]')).to_be_visible()
-    _frames(page)
-    focused = page.locator(".bp-dag-node:focus")
-    playwright.expect(focused).to_have_count(1)
-    assert focused.get_attribute("data-autoform-node-id").startswith("scope:")
-    assert page.locator(".bp-dag-stage").evaluate("stage => stage.contains(document.activeElement)") is True
-    playwright.expect(page.locator('.bp-dag-node[tabindex="0"]')).to_have_count(1)
-    playwright.expect(focused).to_have_attribute("tabindex", "0")
-    assert page.url == site.route("roadmap")
-    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_LIBRARY)
-    assert _pixels(page)["painted"] > 0
-    assert documents == [site.route("roadmap")]
-    assert page.evaluate("() => document === __workspaceDocument") is True
-
-
-@pytest.mark.skip(reason="The reader does not step aside for a part opened on the whole map yet.")
-@pytest.mark.parametrize(("width", "height"), [(390, 844), (1000, 900), (1600, 900)])
-def test_region_graph_first_keeps_native_reading_reopen_and_back_pane_camera(
-    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int, height: int,
-) -> None:
-    page, site = workspace_page, workspace_site
-    page.set_viewport_size({"width": width, "height": height})
-    documents = _documents(page)
-    _open(page, site, workspace_runtime)
-    # The open desktop reader over an area closes with ×, so the handle is found by its class, not its name.
-    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
-    inner = page.locator(".bp-reading-pane > .bp-dag-inspector-inner")
-    initial_width = page.locator(".bp-dag-stage").bounding_box()["width"]
-    _focus_graph_region(page, "Geometry").press("Enter")
-    _frames(page)
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-    playwright.expect(inner).to_have_attribute("inert", "")
-    playwright.expect(inner).to_have_attribute("aria-hidden", "true")
-    closed_width = page.locator(".bp-dag-stage").bounding_box()["width"]
-    if width > 720:
-        assert closed_width > initial_width + 250
-        playwright.expect(inner).to_be_hidden()
-    else:
-        assert closed_width == pytest.approx(width, abs=1)
-    handle.click()
-    _frames(page)
-    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-    playwright.expect(inner).not_to_have_attribute("inert", "")
-    assert inner.get_attribute("inert") is None and inner.get_attribute("aria-hidden") is None
-    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_LIBRARY)
-    playwright.expect(page.locator(".bp-reading-body")).to_be_visible()
-    if width > 720:
-        playwright.expect(handle).to_be_visible()
-        playwright.expect(handle).to_have_text("×")
-        playwright.expect(page.locator(".bp-reading-body")).to_be_focused()
-        url = page.url
-        handle.click()
-        playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-        playwright.expect(inner).to_have_attribute("inert", "")
-        assert page.url == url and page.evaluate("() => document === __workspaceDocument") is True
-        handle.click()
-        playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-        playwright.expect(page.locator(".bp-reading-body")).to_be_focused()
-    parent = page.locator(".bp-dag-breadcrumb").get_by_role("link", name=_LIBRARY, exact=True)
-    playwright.expect(parent).to_have_attribute("href", site.route("roadmap"))
-    parent.click()
-    assert page.url == site.route("roadmap")
-    _focus_graph_region(page, "Geometry").press("Enter")
-    _frames(page)
-    focused = page.locator(".bp-dag-node:focus")
-    scope_id = focused.get_attribute("data-autoform-node-id")
-    assert scope_id.startswith("scope:")
-    camera = focused.evaluate("""node=>{const m=new DOMMatrix(getComputedStyle(node).transform);return [m.a,m.d,m.e,m.f];}""")
-    focused.press("Enter")
-    page.wait_for_url(site.route(scope_id.removeprefix("scope:")))
-    if width <= 720:
-        # A chapter route opens graph-first on phones even when its map has
-        # concrete mathematical cards. Reading remains an explicit native action.
-        playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-        playwright.expect(inner).to_have_attribute("inert", "")
-        handle.click()
-        _frames(page)
-    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-    playwright.expect(inner).not_to_have_attribute("inert", "")
-    playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(site.records[scope_id.removeprefix("scope:")]["title"])
-    playwright.expect(page.locator(".bp-dag-viewer")).not_to_have_attribute("aria-busy", "true")
-    _search(page, _TARGET_TITLE, _TARGET)
-    page.wait_for_url(site.route(_TARGET))
-    _selected(page, _TARGET)
-    assert _LAST_SENTENCE in _full_math(page).inner_text()
-    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-    page.go_back()
-    page.wait_for_url(site.route(scope_id.removeprefix("scope:")))
-    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-    page.go_back()
-    page.wait_for_url(site.route("roadmap"))
-    _frames(page)
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-    playwright.expect(inner).to_have_attribute("inert", "")
-    playwright.expect(handle).to_be_visible()
-    restored = page.locator(".bp-dag-node:focus")
-    playwright.expect(restored).to_have_attribute("data-autoform-node-id", scope_id)
-    assert restored.evaluate("""node=>{const m=new DOMMatrix(getComputedStyle(node).transform);return [m.a,m.d,m.e,m.f];}""") == pytest.approx(camera, abs=2)
-    assert page.locator(".bp-dag-stage").bounding_box()["width"] == pytest.approx(closed_width, abs=1)
-    assert documents == [site.route("roadmap")]
-    assert page.evaluate("() => document === __workspaceDocument") is True
-
-
-@pytest.mark.skip(reason="The whole map has no card-to-card arrow keys or roving focus yet.")
-def test_arrow_roving_keeps_selection_and_full_reader_until_enter_activates_the_peer(
-    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
-) -> None:
-    page, site = workspace_page, workspace_site
-    documents = _documents(page)
-    _open(page, site, workspace_runtime, _TARGET)
-    first = _selected(page, _TARGET)
-    assert _LAST_SENTENCE in _full_math(page).inner_text()
-    page.evaluate("() => window.__continuityReader = document.querySelector('.bp-reading-body > .bp-reading-source')")
-    peer = page.locator(f'.bp-dag-node[data-autoform-node-id="{_OTHER}"]')
-    first = _focus_graph_node(page, _TARGET)
-    start_box, peer_box = first.bounding_box(), peer.bounding_box()
-    assert start_box and peer_box
-    dx = peer_box["x"] + peer_box["width"] / 2 - start_box["x"] - start_box["width"] / 2
-    dy = peer_box["y"] + peer_box["height"] / 2 - start_box["y"] - start_box["height"] / 2
-    assert abs(dx) + abs(dy) > 1
-    arrow = ("ArrowRight" if dx > 0 else "ArrowLeft") if abs(dx) >= abs(dy) else ("ArrowDown" if dy > 0 else "ArrowUp")
-    page.keyboard.press(arrow)
-    playwright.expect(peer).to_be_focused()
-    _frames(page)
-    playwright.expect(page.locator('.bp-dag-node[tabindex="0"]')).to_have_count(1)
-    playwright.expect(peer).to_have_attribute("tabindex", "0")
-    playwright.expect(peer).to_have_attribute("data-selected", "false")
-    _selected(page, _TARGET)
-    assert page.url == site.route(_TARGET)
-    assert page.evaluate("() => document.querySelector('.bp-reading-body > .bp-reading-source') === __continuityReader") is True
-    assert _LAST_SENTENCE in _full_math(page).inner_text()
-    assert _pixels(page)["painted"] > 0
-    page.keyboard.press("Enter")
-    page.wait_for_url(site.route(_OTHER))
-    _selected(page, _OTHER)
-    counterpart = _full_math(page, _OTHER, 1)
-    assert "Its complete explanation remains available." in counterpart.inner_text()
-    assert len(counterpart.inner_text()) > 420
-    assert page.title() == _OTHER_TITLE
-    assert page.evaluate("() => document.querySelector('.bp-reading-body > .bp-reading-source') !== __continuityReader") is True
-    assert documents == [site.route(_TARGET).split("#", 1)[0]]
-    assert page.evaluate("() => document === __workspaceDocument") is True
-    assert _pixels(page)["painted"] > 0
 
 
 def test_late_authored_scope_and_ancestry_survive_the_outline_bound_and_explicit_reveal(
