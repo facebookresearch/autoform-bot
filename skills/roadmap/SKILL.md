@@ -78,9 +78,13 @@ extract module and declaration docstrings and nearby source comments alongside
 the Lean signatures; they locate and describe code but never replace the adopted
 source. Record stable source locations, assumptions, and uncovered prerequisites
 under `blueprint/sources/`, labelling project-authored specifications as such.
-External research is read-only, and contacting people requires permission. Do
-not invent a statement, motivation, proof narrative, dependency, citation, or
-historical attribution the sources do not support. Read [Setup's Zulip
+Under statement review (`blueprint/.autoform-review`), each `origin: cited`
+article must also link an in-vault, non-Markdown snapshot of its source with an
+exact `#L<start>-L<end>` range, as the [review
+contract](../../autoform_cli/README.md#review) says. External research is
+read-only, and contacting people requires permission. Do not invent a statement,
+motivation, proof narrative, dependency, citation, or historical attribution the
+sources do not support. Read [Setup's Zulip
 workflow](../setup/references/zulip.md) only for requested Zulip work.
 
 ### Search and library reuse
