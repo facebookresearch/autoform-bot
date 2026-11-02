@@ -61,20 +61,9 @@ open where an article, a statement, its notes, or a stretch of a chapter ends;
 and a list nested hundreds of levels deep, beyond what the site's converter can
 read.
 
-`check` also warns about a formula that defines a command or uses one the site
-turns off ([MathJax](../README.md#mathjax) lists them); the rest of the page is
-published as written. Put the project's notation in `blueprint/tex-macros.json`.
-
-Mathematical articles also receive advisory writing diagnostics for likely Lean
-syntax in prose, mathematical notation written in code spans, unlinked numbered
-source results, and standalone numeric headings such as an issue number at the start of a line. `check`,
-`render`, and `audit` name the article and source line. They preserve the
-authored text and exit status; the diagnostics ask the author to repair the
-prose, rather than guessing a mathematical translation. Write notation in
-`$...$` or `$$...$$`, keep Lean names in metadata, and move implementation
-planning to per-article internal notes. Link book-number references to the
-corresponding roadmap article and qualify them with their source and chapter;
-the site's generated statement number is a separate label.
+`check`, `render` and `audit` flag likely Lean syntax or code-formatted math in prose, numeric headings and unlinked
+source numbers. Disabled TeX commands ([MathJax](../README.md#mathjax)) also warn. These preserve text and exit status:
+use TeX, link source labels to articles, keep Lean names in notes/metadata, and put macros in `blueprint/tex-macros.json`.
 
 `check --no-site-warnings` leaves these page warnings, and what would stop
 `render`, to `render`, which prints the same. It still reads the notes under

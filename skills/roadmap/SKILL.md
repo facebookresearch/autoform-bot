@@ -138,11 +138,9 @@ articles a durable `article_id`.
 
 ### Articles and implementation notes
 
-Articles hold only frontmatter and informal mathematics. Write the narrative in
-plain English with TeX for mathematical notation, not code spans or Lean
-expressions. Link a numbered source result to its article when represented in
-the roadmap, and name the source and chapter so its label cannot be mistaken
-for the site's generated number. Put Lean-side findings
+Articles hold only frontmatter and informal mathematics. Write English with TeX
+for notation. Link numbered source results to their roadmap articles, qualifying
+each with source and chapter. Put Lean-side findings
 such as Mathlib gaps, prior art, and candidate declaration names in
 `blueprint/.implementation-notes/<article_id>.md`, never a transcript, a secret,
 or a machine-local path, and never link a note from an article; a shared library
