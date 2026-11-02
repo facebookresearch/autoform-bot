@@ -78,8 +78,8 @@ date when the release is tagged.
   modules read Lean names by the one grammar `lean.py` writes down, Lean's own,
   in place of seven copies that disagreed at the edges. A quoted component may
   be empty or hold spaces and dots, as in Lean, but not `«`. Every name the Lean
-  index reads in Mathlib reads as before; a spelling no Lean name has, such as
-  `Nat..add`, `a«b»c` or `«a«b»`, now splits into components as that grammar
+  index reads in Mathlib reads as before; a spelling no Mathlib name has, such
+  as `Nat..add`, `a«b»c` or `«a«b»`, now splits into components as that grammar
   splits it.
 - **Search index size.** `dependencies/index.json` no longer repeats links the
   explorer doesn't read. A row whose route the explorer opens drops its context

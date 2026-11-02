@@ -3,7 +3,8 @@
 Until the readers shared it, seven modules held copies of the grammar that disagreed
 at the edges. The copies are kept below as they were, and ``_DIFFERENCES``
 lists every spelling where a reader now parts from its copy: on the other real
-names in ``fixtures/mathlib-names.txt`` each reader gives what its copy gave.
+names in ``fixtures/mathlib-names.txt``, and on ``_QUOTED_SPELLINGS``, each reader
+gives what its copy gave.
 """
 
 from __future__ import annotations
@@ -29,6 +30,9 @@ _NAMES = [
     for line in (Path(__file__).parent / "fixtures/mathlib-names.txt").read_text(encoding="utf-8").splitlines()
     if line and not line.startswith("#")
 ]
+#: Quoted components Lean accepts that no Mathlib name has: empty, and holding a
+#: space or a dot.
+_QUOTED_SPELLINGS = ["Foo.«».bar", "«a b».c", "A.«b.c»"]
 
 
 # The copies, as each reader held one before.
@@ -101,9 +105,10 @@ def test_the_grammar_takes_empty_and_spaced_quoted_components_but_no_guillemet_i
 
 
 @pytest.mark.parametrize("reader", _READERS)
-def test_each_reader_reads_every_real_name_as_its_copy_did(reader: str) -> None:
+def test_each_reader_reads_real_names_and_quoted_spellings_as_its_copy_did(reader: str) -> None:
     now, copy = _READERS[reader]
-    names = [*_NAMES, *(f"_root_.{name}" for name in _NAMES)]
+    spellings = [*_NAMES, *_QUOTED_SPELLINGS]
+    names = [*spellings, *(f"_root_.{name}" for name in spellings)]
 
     listed = sorted(spelling for row, spelling, _before, _after in _DIFFERENCES if row == reader and spelling in names)
 
