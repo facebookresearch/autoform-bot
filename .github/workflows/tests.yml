@@ -40,6 +40,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
       - run: uv sync --locked --extra dev --extra repl
+      # Generated projects' CI runs the audit helper with the runner's python3, which
+      # can be 3.10, so one leg puts a 3.10 on PATH for the test that runs it there.
+      - name: Python 3.10 for the audit helper's test
+        if: matrix.python-version == '3.11'
+        run: |
+          uv python install 3.10
+          mkdir -p "$RUNNER_TEMP/python3.10"
+          ln -s "$(uv python find 3.10)" "$RUNNER_TEMP/python3.10/python3.10"
+          echo "$RUNNER_TEMP/python3.10" >> "$GITHUB_PATH"
+          echo "AUTOFORM_REQUIRE_PYTHON310_TESTS=1" >> "$GITHUB_ENV"
       - run: uv run ruff check autoform_cli servers tests
       - run: uv run pytest -q
       - run: make check-example

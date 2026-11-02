@@ -28,6 +28,8 @@ each `AUTOFORM_REQUIRE_*` variable below, so it fails where a local run skips:
   (`AUTOFORM_REQUIRE_REAL_LEAN_TESTS=1`).
 - The Lean tests in `tests/test_library_generate.py` clone Batteries from GitHub
   and run only with `AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS=1`.
+- The audit helper's Python 3.10 test skips without `python3.10` on `PATH`; CI's
+  3.11 leg installs one (`AUTOFORM_REQUIRE_PYTHON310_TESTS=1`).
 - Run `lake build` in `skills/setup/assets/cabannes-thesis-project` when you
   change the example's Lean sources or declarations.
 

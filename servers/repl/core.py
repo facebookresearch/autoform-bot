@@ -910,10 +910,7 @@ class LeanRepl:
                         "failed to retire disposable Lean REPL process"
                     )
                     if request_error is not None:
-                        note = f"Lean REPL process cleanup also failed: {cleanup_error}"
-                        add_note = getattr(request_error, "add_note", None)
-                        if add_note is not None:
-                            add_note(note)
+                        request_error.add_note(f"Lean REPL process cleanup also failed: {cleanup_error}")
                     elif not isinstance(cleanup_error, Exception):
                         raise
                     elif result is not None:

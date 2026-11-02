@@ -54,6 +54,10 @@ packages = ["autoform_cli", "servers"]
 [tool.ruff]
 line-length = 120
 
+[tool.ruff.per-file-target-version]
+# Generated projects' CI runs this helper with the runner's python3, which can be 3.10.
+"autoform_cli/templates/github/autoform_audit.py" = "py310"
+
 [tool.uv]
 # cryptography (pulled in by fastmcp -> authlib/joserfc and mcp -> pyjwt[crypto]) stopped
 # publishing Intel-macOS wheels at 49.0.0. Without a wheel, uv builds it from source, which

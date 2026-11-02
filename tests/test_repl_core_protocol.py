@@ -1511,8 +1511,7 @@ def test_disposable_call_preserves_header_request_cancellation(monkeypatch):
     with pytest.raises(KeyboardInterrupt, match="cancel header request") as raised:
         repl.run_disposable("import Mathlib\n#check Nat")
 
-    if hasattr(raised.value, "add_note"):
-        assert raised.value.__notes__ == ["Lean REPL process cleanup also failed: header cleanup failed"]
+    assert raised.value.__notes__ == ["Lean REPL process cleanup also failed: header cleanup failed"]
     # The slot keeps the parser until a later close() verifies that it exited.
     assert not repl.is_clean()
     repl.close()
@@ -1670,10 +1669,9 @@ def test_run_preserves_cancellation_when_cleanup_fails(monkeypatch):
     with pytest.raises(asyncio.CancelledError) as raised:
         repl._run("#check Nat", timeout=1)
 
-    if hasattr(raised.value, "add_note"):
-        assert raised.value.__notes__ == [
-            "Lean REPL process cleanup also failed: cleanup failed"
-        ]
+    assert raised.value.__notes__ == [
+        "Lean REPL process cleanup also failed: cleanup failed"
+    ]
 
 
 def test_wire_protocol_accepts_response_split_across_reads(monkeypatch):
