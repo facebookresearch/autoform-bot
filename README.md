@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Turn mathematical papers and notes into Lean 4 formalizations, from your coding assistant.</strong><br>
-  A plugin for Claude Code, Codex and Muse Code: plan the work, write the proofs, review the progress.
+  A plugin for Claude Code, Muse Code and Codex: plan the work, write the proofs, review the progress.
 </p>
 
 <p align="center">
@@ -38,18 +38,18 @@ claude plugin marketplace add facebookresearch/autoform-bot@v0.6.0
 claude plugin install autoform@autoform
 ```
 
-**Codex**
-
-```bash
-codex plugin marketplace add facebookresearch/autoform-bot --ref v0.6.0
-codex plugin add autoform@autoform
-```
-
 **Muse Code**
 
 ```bash
 muse plugins marketplace add autoform 'https://github.com/facebookresearch/autoform-bot.git#v0.6.0'
 muse plugins install autoform@autoform
+```
+
+**Codex**
+
+```bash
+codex plugin marketplace add facebookresearch/autoform-bot --ref v0.6.0
+codex plugin add autoform@autoform
 ```
 
 These install release 0.6.0 ([changelog](CHANGELOG.md)). Then start a new session in the repository to set up.
@@ -59,24 +59,24 @@ These install release 0.6.0 ([changelog](CHANGELOG.md)). Then start a new sessio
 
 - Claude Code before 2.1.71 takes `'facebookresearch/autoform-bot#v0.6.0'` instead of the `@v0.6.0` form, quoted
   for shells that read `#`.
-- To move an install that follows `main` onto the release, remove the `autoform` marketplace first
-  (`claude plugin marketplace remove autoform`, `codex plugin marketplace remove autoform`, or
-  `muse plugins remove autoform` and then `muse plugins marketplace remove autoform`), then run the commands again.
+- To move an install that follows `main` onto the release, remove the `autoform` marketplace first (`claude plugin
+  marketplace remove autoform`, `muse plugins remove autoform` and then `muse plugins marketplace remove autoform`,
+  or `codex plugin marketplace remove autoform`), then run the commands again.
 - To follow `main` instead, drop the `@v0.6.0` or `#v0.6.0` suffix, and give Codex `--ref main`.
 
 </details>
 
 ## Quick start
 
-Run these skills from your agent window (in Muse Code, as commands of the same names); there is no CLI to learn.
+Run these skills from your agent window; there is no CLI to learn.
 
-| Step | Claude Code | Codex | What it does |
-| :-: | --- | --- | --- |
-| 1 | `/autoform:setup` | `$autoform:setup` | Set up the project |
-| 2 | `/autoform:roadmap` | `$autoform:roadmap` | Plan from a paper or notes |
-| 3 | `/autoform:formalize` | `$autoform:formalize` | Write Lean definitions and proofs |
-| Any time | `/autoform:human-review` | `$autoform:human-review` | Review the roadmap and progress |
-| Any time | `/autoform:agent-review` | `$autoform:agent-review` | Request an independent AI review |
+| Step | Claude Code | Muse Code | Codex | What it does |
+| :-: | --- | --- | --- | --- |
+| 1 | `/autoform:setup` | `/autoform:setup` | `$autoform:setup` | Set up the project |
+| 2 | `/autoform:roadmap` | `/autoform:roadmap` | `$autoform:roadmap` | Plan from a paper or notes |
+| 3 | `/autoform:formalize` | `/autoform:formalize` | `$autoform:formalize` | Write Lean definitions and proofs |
+| Any time | `/autoform:human-review` | `/autoform:human-review` | `$autoform:human-review` | Review the roadmap and progress |
+| Any time | `/autoform:agent-review` | `/autoform:agent-review` | `$autoform:agent-review` | Request an independent AI review |
 
 > [!TIP]
 > Invoke `roadmap` and ask: "Build a complete roadmap for Sections 2–4 of `paper.pdf`." Keep the source in your
