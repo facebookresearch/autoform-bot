@@ -88,7 +88,9 @@ def _write_json(
     return path
 
 
-@lru_cache(maxsize=4096)
+# Unbounded: render reads each title for the search index and again for the
+# map, and a book can hold more titles than any fixed size would keep.
+@lru_cache(maxsize=None)
 def _reading_label(text: str, *, require_math: bool = True) -> dict[str, object] | None:
     """Safe, derived inline text/code/math parts for reading-only controls.
 

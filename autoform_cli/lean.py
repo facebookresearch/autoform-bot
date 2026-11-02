@@ -1311,13 +1311,40 @@ def _qualified(namespaces: list[str], name: str) -> str:
     return name.removeprefix("_root_.") if name.startswith("_root_.") else ".".join([*namespaces, name])
 
 
+# The package reads Lean names by this one grammar, Lean's own (identFnAux in
+# Lean.Parser.Basic, isIdFirst and isIdRest in Init.Meta.Defs). A name is
+# components joined by dots. A component is either atomic, an ASCII letter, `_`
+# or a character of the listed letter-like blocks, then more of those, digits,
+# `'`, `!`, `?` and subscripts; or quoted, guillemets around any other text, so
+# `«»` and `«a.b c»` are components. Lean also lets a quoted component hold `«`:
+# no real name does, and refusing it keeps a stray `«` in source text from
+# reaching ahead to the next `»`.
+_QUOTED_COMPONENT = r"«[^«»]*»"
+_ID_LETTER = (
+    r"A-Za-z_\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f"
+    r"\u0391-\u039f\u03a1-\u03a2\u03a4-\u03a9\u03b1-\u03ba\u03bc-\u03fb"
+    r"\u1f00-\u1ffe\u2100-\u214f\U0001d49c-\U0001d59f"
+)
+_ID_REST = rf"[{_ID_LETTER}0-9'!?\u2080-\u2089\u2090-\u209c\u1d62-\u1d6a\u2c7c]*"
+_ID_COMPONENT = rf"(?:{_QUOTED_COMPONENT}|[{_ID_LETTER}]{_ID_REST})"
+_CONTINUATION_IDENTIFIER = re.compile(rf"{_ID_COMPONENT}(?:\.{_ID_COMPONENT})*")
+#: Lean's ASCII identifiers (isIdFirstAscii and isIdRestAscii): the only module
+#: names the impact probe imports and a library index holds.
+_ASCII_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_'!?]*")
 _NAME_TOKEN = re.compile(r"(?:«[^«»]*»|[^\s:(){}\[\]⦃⦄,«»])+")
 
 
 def _name_parts(name: str) -> list[str]:
     """The components of ``name``, where a guillemet may quote dots: ``A.«b.c»`` has two."""
 
-    return re.findall(r"«[^»]*»|[^.«»]+", name)
+    return re.findall(rf"{_QUOTED_COMPONENT}|[^.«»]+", name)
+
+
+def _unquoted_parts(name: str) -> tuple[str, ...]:
+    """The components of ``name`` without their guillemets; a leading ``_root_`` drops out."""
+
+    parts = [part[1:-1] if part[:1] == "«" else part for part in _name_parts(name)]
+    return tuple(parts[1:] if len(parts) > 1 and parts[0] == "_root_" else parts)
 
 
 def _name_token(text: str) -> str | None:
@@ -1327,16 +1354,6 @@ def _name_token(text: str) -> str | None:
     return match.group() if match and text[match.end() : match.end() + 1] not in ("«", "»") else None
 
 
-# Lean's isIdFirst/isIdRest (Init.Meta.Defs): ASCII letters plus the listed
-# letter-like blocks; later characters also admit digits, primes and subscripts.
-_ID_LETTER = (
-    r"A-Za-z_\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f"
-    r"\u0391-\u039f\u03a1-\u03a2\u03a4-\u03a9\u03b1-\u03ba\u03bc-\u03fb"
-    r"\u1f00-\u1ffe\u2100-\u214f\U0001d49c-\U0001d59f"
-)
-_ID_REST = rf"[{_ID_LETTER}0-9'!?\u2080-\u2089\u2090-\u209c\u1d62-\u1d6a\u2c7c]*"
-_ID_COMPONENT = rf"(?:«[^«»]*»|[{_ID_LETTER}]{_ID_REST})"
-_CONTINUATION_IDENTIFIER = re.compile(rf"{_ID_COMPONENT}(?:\.{_ID_COMPONENT})*")
 #: One component of a Lean name, such as a structure field's.
 _FIELD_NAME = re.compile(_ID_COMPONENT)
 #: A parent that names its projection, ``toA : A`` in ``extends toA : A``.
