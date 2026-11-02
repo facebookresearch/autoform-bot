@@ -769,19 +769,34 @@ def test_an_interruption_as_any_step_of_a_write_returns_leaves_no_lock_or_stagin
         blueprint, path, expected = _filed(tmp_path / str(step))
         original = path.read_bytes()
         card = _prepared(blueprint, "Replacement.", expected)
+        # Hand back the tracer that was running, such as coverage's, so later tests stay traced.
+        previous = sys.gettrace()
         sys.settrace(interrupt_on_the_nth_return)
         try:
             publish_readback(card)
         except KeyboardInterrupt:
             pass
         finally:
-            sys.settrace(None)
+            sys.settrace(previous)
         if returns < step:
             break
         assert path.read_bytes() in (original, card.content.encode("utf-8")), step
         assert _staged_names(path.parent) == [], step
         assert _unlocked(path.parent), step
     assert step > 10
+
+
+def test_the_interruption_test_leaves_the_tracer_it_found(tmp_path: Path) -> None:
+    def tracer(frame, event, arg):
+        return None
+
+    running = sys.gettrace()
+    sys.settrace(tracer)
+    try:
+        test_an_interruption_as_any_step_of_a_write_returns_leaves_no_lock_or_staging_file(tmp_path)
+        assert sys.gettrace() is tracer
+    finally:
+        sys.settrace(running)
 
 
 def test_every_card_is_left_readable_by_all_and_writable_by_its_owner_whatever_the_umask(tmp_path: Path) -> None:
