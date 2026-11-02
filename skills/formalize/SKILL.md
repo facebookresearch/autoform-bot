@@ -52,33 +52,33 @@ Builds take no claim: dispatch no more workers at once than the machine's memory
 can build for. If the lakefile lacks the artifact cache `project new` writes,
 Setup offers to add it.
 
-Habits for sharing a project without claims, none required: work each leaf on a
-branch `work/<article_id>`, which Git refuses twice in one clone, so a refusal
-means the leaf is taken, and delete it once the work lands; land as a
-fast-forward from the commit the checks ran on, rebasing and rechecking if the
-shared branch moved; then take the next leaf yourself, telling the lead: one the
-landing unlocked, else one in the same container, else any.
-
 Use claims only when the user asks for them or another session already does.
-Within one run no one needs them: the lead keeps workers, itself included, from
-holding the same target at once. A worker holds its article's `claim_target` and
-the `claim_targets` the lead confirmed until its work lands or it abandons the
-leaf without a candidate; a handoff keeps them. To edit beyond them (an import
-edit, a revision or its grown `claim_targets`, or an article its import edit
-broke), a subagent reports the new targets and waits until the lead confirms no
-other worker holds them; one that cannot wait commits, stops, and reports, and
-the lead answers when it dispatches the leaf again from that commit. The lead
-checks an import edit's `affected_claim_targets` when confirming and before the
-edit lands; one another worker holds is an active conflict. If workers would
-wait on each other, the lead has one of them give up what it holds. Before
-choosing none, run `autoform claim list` once, with any `--worker-id`: an
-unexpired claim means another session uses them. If the command fails, as it
-does without an `origin`, tell the user and go on without claims; after `error:
-timeout:`, `error: transport:` or `error: contention:` the board exists but
-could not be read, so run it once more, then ask the user before going on
-without them. A claim excludes only workers that also claim, and `work list`
-does not read the board, so on such a project every worker claims: tell each
-subagent so, and follow the [claim rules](references/claims.md) at each step.
+Within one run, whoever works a leaf, the lead too, first runs `git switch -c
+work/<article_id>`, and a refusal means the leaf is taken. Delete the branch
+once its work lands or the leaf is abandoned without a candidate; until then
+whoever continues the leaf uses it, and a gone worker's is the lead's. A worker
+holds its article's `claim_target` and the `claim_targets` the lead confirmed
+until its work lands or it abandons the leaf without a candidate; a handoff
+keeps them. To edit beyond them (an import edit, a revision or its grown
+`claim_targets`, or an article its import edit broke), a subagent reports the
+new targets and waits until the lead confirms no other worker holds them; one
+that cannot wait commits, stops, and reports, and the lead answers when it
+dispatches the leaf again from that commit. The lead checks an import edit's
+`affected_claim_targets` when confirming and before the edit lands; one another
+worker holds is an active conflict. If workers would wait on each other, the
+lead has one of them give up what it holds. Before choosing none, run `autoform
+claim list` once, with any `--worker-id`: an unexpired claim means another
+session uses them. If the command fails, as it does without an `origin`, tell
+the user and go on without claims; after `error: timeout:`, `error: transport:`
+or `error: contention:` the board exists but could not be read, so run it once
+more, then ask the user before going on without them. A claim excludes only
+workers that also claim, and `work list` does not read the board, so on such a
+project every worker claims: tell each subagent so, and follow the [claim
+rules](references/claims.md) at each step.
+
+Habits, none required: land as a fast-forward from the commit the checks ran on,
+rebasing and rechecking if the shared branch moved; then take the next leaf,
+telling the lead: one the landing unlocked, else one in its container, else any.
 
 ### Import edits
 
@@ -202,9 +202,9 @@ source page for it.
 
 Run `autoform check <PROJECT>/blueprint --lean-root <PROJECT>` and `autoform
 audit <PROJECT>/blueprint --lean-root <PROJECT>`. Resolve every finding this
-work introduced on the selected article (compare article and code, not message,
-with an audit of the starting commit), except `lean-target-deprecated` for a
-superseded declaration that an expand, migrate, contract revision keeps in the
+work introduced on the selected article (match `article_path` and `code`, not
+`reason`, with the starting commit's audit), except `lean-target-deprecated` for
+a superseded declaration that an expand, migrate, contract revision keeps in the
 revised article's `lean:` until it is deleted. Delete every note the audit
 reports as `stale-implementation-note`, including another article's, such as a
 container's this proof completed or one an earlier commit left behind; the audit

@@ -41,15 +41,6 @@ date when the release is tagged.
 
 ### Changed
 
-- **Formalize without claims.** Workers run `work list` and `work context`
-  without `--lean-root`, and the lead dispatches each leaf's `work list` item.
-  The skill suggests habits for sharing a project without claims: a
-  `work/<article_id>` branch per leaf, which Git refuses twice in one clone,
-  and landing as a fast-forward that rebases and rechecks when the shared
-  branch moved. A worker that has landed may take its next leaf itself,
-  preferring one its landing unlocked, in place of packages of leaves the lead
-  confirmed. Claims are used only when the user asks for them or another
-  session already does (#429).
 - **Search index size.** `dependencies/index.json` no longer repeats links the
   explorer doesn't read. A row whose route the explorer opens drops its context
   `url`, and only container rows keep `data_url`, since every page names its
@@ -131,6 +122,15 @@ date when the release is tagged.
   pushing, goes to the `origin` branch `handoff/<article_id>`, which the next
   worker to take the leaf continues. With claims, no message grants
   ownership; none completes a leaf (#434, #532).
+- **Formalize without claims.** Workers run `work list` and `work context`
+  without `--lean-root`, and the lead dispatches each leaf's `work list` item.
+  Within a run, whoever works a leaf first creates its branch
+  `work/<article_id>`, which Git refuses twice in one clone, in place of
+  packages of leaves the lead confirmed; the branch goes once the work lands or
+  the leaf is abandoned. The skill suggests, without requiring, landing as a
+  fast-forward that rebases and rechecks when the shared branch moved, then
+  taking the next leaf, preferring one the landing unlocked. Claims are used
+  only when the user asks for them or another session already does (#429).
 - **Setup donor.** When the user names an existing Lake project or packages
   folder, Setup copies each package the new project locks that the donor holds
   clean at that revision, copy-on-write where the file system supports it and
