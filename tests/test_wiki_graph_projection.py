@@ -86,14 +86,13 @@ const structural=new Element('details');structural.className='bp-reading-related
 structural.textContent='Existing structural topic peers';dom$readingNeighbors.appendChild(structural);
 var alive=true,ui$wikiLinks=null,ui$wikiBefore=new Map(),ui$wikiAfter=new Map(),ui$wikiUnavailable=new Set();
 var ui$wikiGeneration=0,ui$wikiPending=null,ui$wikiWork=null,ui$wikiRendered=null,ui$wikiNode=null;
-var ui$wikiRequested=false,ui$selected=null,ui$requestedNode=null,ui$mode='graph',ui$area='Geometry';
-var ui$overviewGroup='authored-area',ui$transform={x:17,y:31,scale:1.25},ui$query='retained query';
+var ui$wikiRequested=false,ui$selected=null,ui$requestedNode=null,ui$mode='graph';
+var ui$query='retained query';
 var ui$selectedStatuses=new Set(['planned','fully_proved']),ui$relationIds=['concept/in-1'];
 var navigation={},records=new Map(),sharedIndex,currentBundle={nodeId:'F',scope:'chapter'},contextGraph;
 var readingReady=new Promise(()=>{});
 const calls=[];let readerRenders=0;
 function updateProjection() {throw new Error('Wiki reading must not change the graph projection');}
-function projectWikiView() {}
 function node(id,title=id) {
   return Object.freeze({id,title,scope:'chapter',parent:id==='chapter'?'roadmap':'chapter',
     kind:id==='chapter'?'scope':'node',status:'planned',result:id!=='chapter',
@@ -113,7 +112,7 @@ function layer(references,availability='complete',unavailable_sources=[]) {
 }
 function snapshot(state) {
   return JSON.stringify({state,sharedIndex,contextGraph,records:Array.from(records.values()),
-    mode:ui$mode,area:ui$area,group:ui$overviewGroup,camera:ui$transform,query:ui$query,
+    mode:ui$mode,query:ui$query,
     statuses:Array.from(ui$selectedStatuses),relationIds:ui$relationIds,bundle:currentBundle,
     reading:dom$readingBody.textContent,scroll:dom$readingBody.scrollTop,structural:structural.textContent});
 }
@@ -367,7 +366,7 @@ def test_same_article_refresh_retains_open_paged_focused_disclosure_and_new_arti
       const dom$readingContext=new Element('div');document.activeElement=null;function syncSheetAccessibility() {}
     """
     callbacks = _CALLBACKS + (
-        "neighborIds", "relationCounts", "topicPeers", "semanticParent", "renderReaderContext", "renderInspector",
+        "topicPeers", "semanticParent", "renderReaderContext", "renderInspector",
     )
     _run(r"""
       configure(27);const other=node('G','Other canonical concept');

@@ -64,19 +64,13 @@ function outlineLinks() {return dom$navigationInner.all().filter(node=>node.tagN
 
 _OUTLINE_CALLBACKS = [
     "element", "button", "readingLabel", "bindNodeLink", "safeHref", "outlineProjection", "renderOutline", "renderNavigation",
-    "refreshReadingLabels", "tooltip", "semanticParent", "routeTrail", "currentOverviewGroup", "trailList", "renderBreadcrumb",
+    "refreshReadingLabels", "tooltip", "semanticParent", "routeTrail", "trailList", "renderBreadcrumb",
 ]
 
 _PHONE_PEERS = (
     _READER_PEERS.replace("function sheetLayout() {return false;}", "")
     + r"""
 window.matchMedia=()=>({matches:true});
-const overviewControl=new Element('button');overviewControl.className='bp-dag-node';
-overviewControl.dataset.autoformNodeId='topic';overviewControl.setAttribute('tabindex','0');
-dom$nodeLayer=new Element('div');dom$nodeLayer.replaceChildren(overviewControl);
-dom$nodeLayer.querySelector=selector=>{
-  assert.equal(selector,'.bp-dag-node[tabindex="0"]');return overviewControl;
-};
 """
 )
 
@@ -97,8 +91,8 @@ function setMode(mode,push) {modes.push({mode,push});ui$mode=mode;renderInventor
 """
 
 _INVENTORY_CALLBACKS = [
-    "element", "button", "readingLabel", "bindNodeLink", "refreshReadingLabels", "renderReaderContext", "neighborIds",
-    "relationCounts", "topicPeers", "semanticParent", "sourceNodes", "inCurrentScope", "inventoryNodes", "renderInventory", "statusLabel",
+    "element", "button", "readingLabel", "bindNodeLink", "refreshReadingLabels", "renderReaderContext",
+    "topicPeers", "semanticParent", "sourceNodes", "inCurrentScope", "inventoryNodes", "renderInventory", "statusLabel",
 ]
 
 
@@ -135,26 +129,21 @@ def test_actual_resize_refolds_only_for_breadcrumb_width_changes_and_keeps_heigh
     _run(r"""
       const root=scope('roadmap',null),a=scope('A','roadmap'),b=scope('B','A'),c=scope('C','B');
       const result=page('C/result','C',{scope:'C'});configureOutline([root,a,b,c,result],result.id);
-      ui$orientation='lr';ui$mode='graph';firstResize=false;draws=0;
-      dom$stage={clientWidth:800,clientHeight:600};dom$canvas={};
+      dom$stage={clientWidth:800,clientHeight:600};
       dom$breadcrumb.clientWidth=600;dom$breadcrumb.scrollWidth=500;renderBreadcrumb();
       const firstList=dom$breadcrumb.firstChild,first=dom$breadcrumb.querySelectorAll('a').find(link=>link.href===c.route);
       first.focus();const before=JSON.stringify(sharedIndex),mathCount=mathRoots.length;
       dom$stage.clientHeight=650;resize();
       assert.strictEqual(dom$breadcrumb.firstChild,firstList);assert.equal(document.activeElement,first);
-      assert.equal(mathRoots.length,mathCount);assert.equal(dom$canvas.height,650);assert.equal(draws,1);
+      assert.equal(mathRoots.length,mathCount);
       dom$breadcrumb.clientWidth=300;dom$breadcrumb.scrollWidth=700;resize();
       const secondList=dom$breadcrumb.firstChild,current=dom$breadcrumb.querySelectorAll('a').find(link=>link.href===c.route);
       assert.notStrictEqual(secondList,firstList);assert.equal(document.activeElement,current);
       assert.deepEqual(current.focuses.at(-1),{preventScroll:true});assert.equal(mathRoots.length,mathCount+1);
       assert.strictEqual(mathRoots.at(-1),dom$breadcrumb);assert.equal(renderBreadcrumb.$width,300);
       resize();assert.strictEqual(dom$breadcrumb.firstChild,secondList);assert.equal(document.activeElement,current);
-      assert.equal(mathRoots.length,mathCount+1);assert.equal(draws,3);assert.equal(JSON.stringify(sharedIndex),before);
-    """, _OUTLINE_CALLBACKS + ["resize", "positionMapFeedback"],
-        _OUTLINE_PEERS.replace("function resize(){}", "") + r"""
-var ui$orientation='lr',ui$mode='graph',firstResize=false,draws=0;
-function draw(){draws++;}
-""")
+      assert.equal(mathRoots.length,mathCount+1);assert.equal(JSON.stringify(sharedIndex),before);
+    """, _OUTLINE_CALLBACKS + ["resize"], _OUTLINE_PEERS.replace("function resize(){}", ""))
 
 
 @pytest.mark.parametrize("branch_first", [False, True])
@@ -426,8 +415,8 @@ def test_phone_topic_boundary_overview_peeks_without_overriding_reading_intent(i
       if(focus) {
         assert.equal(document.activeElement,incoming.pageHeading);assert.equal(incoming.pageHeading.focuses[0].preventScroll,true);
       } else if(intent==='map-first') {
-        assert.equal(document.activeElement,overviewControl);
-        assert.equal(overviewControl.focuses.length,1);assert.equal(overviewControl.focuses[0].preventScroll,true);
+        assert.equal(document.activeElement,mapSvg);
+        assert.equal(mapSvg.focuses.length,1);assert.equal(mapSvg.focuses[0].preventScroll,true);
       } else assert.equal(document.activeElement,dom$search);
       if(intent==='anchor') {
         assert(incoming.target.classList.contains('bp-reading-current'));
@@ -437,7 +426,6 @@ def test_phone_topic_boundary_overview_peeks_without_overriding_reading_intent(i
         const restored=restoreState(saved,incoming);await frame();await restored;
         assert.equal(hostClasses.has('bp-dag-sheet-open'),opened);
         assert.equal(ui$requestedNode,topic.id);assert.equal(ui$selected.id,topic.id);
-        assert.deepEqual(ui$transform,saved.camera);
         assert.equal(dom$readingBody.scrollTop,155);assert.equal(dom$navigation.scrollTop,42);assert.equal(dom$inventoryScroll.scrollTop,8);
         assert.equal(document.activeElement,opened?dom$readingBody:dom$search);
         assert.equal(document.activeElement.focuses.at(-1).preventScroll,true);

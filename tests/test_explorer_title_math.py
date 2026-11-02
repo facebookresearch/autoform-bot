@@ -189,15 +189,15 @@ _BOOT = r"""
   var sheetLayout=original('sheetLayout');
   var safeHref=original('safeHref'),graphAt=original('graphAt');
   var refreshReadingLabels=original('refreshReadingLabels'),tooltip=original('tooltip'),semanticParent=original('semanticParent');
-  var routeTrail=original('routeTrail'),currentOverviewGroup=original('currentOverviewGroup');
+  var routeTrail=original('routeTrail');
   var trailList=original('trailList'),renderBreadcrumb=original('renderBreadcrumb');
   var showError=original('showError');
-  var neighborIds=original('neighborIds'),relationCounts=original('relationCounts'),topicPeers=original('topicPeers');
+  var topicPeers=original('topicPeers');
   var outlineProjection=original('outlineProjection'),renderOutline=original('renderOutline'),renderNavigation=original('renderNavigation');
   var renderReaderContext=original('renderReaderContext'),renderWikiContext=original('renderWikiContext'),renderInspector=original('renderInspector');
   var records=new Map(fixture.nodes.map(node=>[node.id,node])),sharedIndex={nodes:fixture.nodes,relations:[['A','F',2,3],['F','B',0,4]]};
   var currentBundle={nodeId:'F',scope:'chapter'},ui$selected=null,ui$requestedNode='F',ui$outlineLimit=120;
-  var ui$overviewGroup=null,ui$scopeOverview=false,ui$area=null,data={};
+  var data={};
   var ui$wikiLinks=null,ui$wikiRendered=null,ui$wikiNode=null;
   var dom$navigationInner=element('div','fixture-outline'),dom$navigationNodes=new Map();
   var dom$readingContext=element('div','fixture-context'),dom$readingNeighbors=element('div','fixture-neighbors');

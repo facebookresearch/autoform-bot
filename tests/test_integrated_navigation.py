@@ -1040,7 +1040,7 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
         assert(following); return viewer.slice(start+4,start+4+following.index).trim();
       }
       const hooks={},app=setup(hooks),calls=[];
-      let alive=true,readingReady=Promise.resolve(),restoration=0,currentBundle,contextGraph,data,trail,firstResize,
+      let alive=true,readingReady=Promise.resolve(),restoration=0,currentBundle,data,trail,
         restoring=false,checkpointTimer;
       let release,mathReady; function deferMath() { mathReady=new Promise(resolve=>{release=resolve;}); }
       const window=app.win,document=app.initial.doc,host=app.initial.host;
@@ -1055,15 +1055,15 @@ def test_native_section_intent_cannot_revive_delayed_reader_focus_or_scroll_rest
         $breadcrumb:{replaceChildren(){}},$navigation:{scrollTop:0},$inventoryScroll:{scrollTop:0}
       };
       // Supply the renderer's actual private lexical collaborators; executed source stays verbatim.
-      let ui$selected=null,ui$filtersTouched,ui$area,ui$requestedNode,ui$selectedStatuses,ui$showIsolated,
-        ui$mode,ui$listLimit,ui$relationIds,ui$direction,ui$query,ui$transform,ui$activeDirty,ui$reading,ui$overviewOnly,ui$overviewGroup,ui$scopeOverview,ui$coarseOverview,ui$outlineLimit;
+      let ui$selected=null,ui$filtersTouched,ui$requestedNode,ui$selectedStatuses,
+        ui$mode,ui$listLimit,ui$relationIds,ui$query,ui$activeDirty,ui$reading,ui$overviewOnly,ui$outlineLimit;
       const dom$readingBody=refs.$readingBody,dom$search=refs.$search,dom$error=refs.$error,
         dom$breadcrumb=refs.$breadcrumb,dom$navigation=refs.$navigation,dom$inventoryScroll=refs.$inventoryScroll;
       let dom$outlineToggle;
-      const records=new Map(),byId=new Map(),overlays=new Map(),dom$inventoryRows=new Map(),navigation=app.nav;
-      const mapAllowed=true,ui$mapAllowed=true,presentStatuses=['planned'],palette={planned:{}},LIST_PAGE=100;
-      const updateProjection=()=>{data=contextGraph;},closeSearch=()=>{},setFilters=()=>{},setBrowse=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
-      const resize=()=>{},center=()=>{},centerIfHidden=()=>{},showError=()=>{},trailList=()=>[],routeTrail=()=>[],sheetLayout=()=>false;
+      const records=new Map(),byId=new Map(),dom$inventoryRows=new Map(),navigation=app.nav;
+      const presentStatuses=['planned'],palette={planned:{}},LIST_PAGE=100;
+      const updateProjection=()=>{data=currentBundle.graph;},closeSearch=()=>{},setFilters=()=>{},setBrowse=()=>{},setSheet=()=>{},renderNavigation=()=>{},refresh=()=>{};
+      const resize=()=>{},showError=()=>{},trailList=()=>[],routeTrail=()=>[],sheetLayout=()=>false;
       const requestAnimationFrame=callback=>setImmediate(callback);
       const snapshotForRoute=eval('('+callback('snapshotForRoute')+')');
       const applyRoute=eval('('+callback('applyRoute')+')');
@@ -1105,15 +1105,15 @@ def test_results_restoration_renders_saved_page_before_restoring_scroll_and_focu
         const following=/\n    function [A-Za-z_$][A-Za-z0-9_$]*\(/.exec(viewer.slice(start+4));
         assert(following); return viewer.slice(start+4,start+4+following.index).trim();
       }
-      const calls=[],LIST_PAGE=100,presentStatuses=['planned'],mapAllowed=false,ui$mapAllowed=false;
+      const calls=[],LIST_PAGE=100,presentStatuses=['planned'];
       let alive=true,restoration=0,restoring=false,checkpointTimer,readingReady=Promise.resolve();
-      let ui$filtersTouched,ui$area,ui$requestedNode,ui$selected,ui$selectedStatuses,ui$showIsolated,
-        ui$mode='list',ui$listLimit=100,ui$relationIds,ui$outlineLimit,ui$direction,ui$query,ui$activeDirty,ui$transform;
-      const host={classList:{toggle(){}}},records=new Map(),byId=new Map(),overlays=new Map();
-      let dom$inventoryRows=new Map(),dom$outlineToggle,dom$shelves=null;
+      let ui$filtersTouched,ui$requestedNode,ui$selected,ui$selectedStatuses,
+        ui$mode='list',ui$listLimit=100,ui$relationIds,ui$outlineLimit,ui$query,ui$activeDirty;
+      const host={classList:{toggle(){}}},records=new Map(),byId=new Map();
+      let dom$inventoryRows=new Map(),dom$outlineToggle;
       const dom$search={value:''},dom$navigation={scrollTop:0},dom$readingBody={scrollTop:0},dom$inventoryScroll={scrollTop:0};
       const updateProjection=()=>{},renderNavigation=()=>{},setSheet=()=>{},resize=()=>{};
-      const syncControls=()=>{},renderInspector=()=>{},schedule=()=>{};
+      const syncControls=()=>{},renderInspector=()=>{};
       function renderInventory(resetScroll) {
         calls.push(['render',ui$listLimit,resetScroll]); dom$inventoryRows=new Map();
         for(let i=0;i<ui$listLimit;i++) dom$inventoryRows.set('result-'+i,{focus(options){
@@ -1130,7 +1130,7 @@ def test_results_restoration_renders_saved_page_before_restoring_scroll_and_focu
       assert.deepEqual(calls,[['render',200,false],['focus',150,1800,{preventScroll:true}]]);
       assert.equal(ui$listLimit,200); assert.equal(dom$inventoryScroll.scrollTop,1800);
       assert.equal(dom$navigation.scrollTop,37); assert.equal(dom$readingBody.scrollTop,71);
-      assert.deepEqual(ui$transform,saved.camera); assert.equal(restoring,false);
+      assert.equal(restoring,false);
       // A new filter/query still deliberately starts a fresh first page.
       refresh(true); assert.equal(ui$listLimit,100); assert.equal(dom$inventoryScroll.scrollTop,0);
       assert.deepEqual(calls.at(-1),['render',100,true]);

@@ -31,9 +31,9 @@ function original(name) {
   }
   assert.fail('Unparseable production callback: '+name);
 }
-const names=['element','readingLabel','button','bindNodeLink','recordId','semanticParent','topicPeers','neighborIds','neighborhood',
-  'relationCounts','renderReaderContext','inventoryNodes','sourceNodes','inCurrentScope'];
-const constants=['NODE_W','plural','num','pressed'].map(name=>{
+const names=['element','readingLabel','button','bindNodeLink','recordId','semanticParent','topicPeers',
+  'renderReaderContext','inventoryNodes','sourceNodes','inCurrentScope'];
+const constants=['LIST_PAGE','plural','num','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
 }).join('\n');
@@ -150,21 +150,18 @@ var homeURL='https://example.test/index.html',navigationCalls=[];
 const navigation={bindReader(){},getHomeURL(){return homeURL;},
   navigate(url,options){navigationCalls.push({url,options});}};
 var currentBundle={nodeId:'chapter',scope:'chapter',title:'Authored topic',url:'https://example.test/chapter/',graph:{view:{}}};
-var instance=1,trail=[],view={},family,data={title:'Authored topic',nodes:[],edges:[]};
-var mapAllowed=true,ui$mapAllowed=true,ui$mode='graph',ui$selectedStatuses=new Set(['planned']),ui$showIsolated=true;
-var presentStatuses=['planned'],ui$relationIds=new Set(['F']),ui$overviewGroup=null,ui$area=null;
-var ui$wikiView=null,ui$mathJob=null,sceneData=null,scene=null;
-function getComputedStyle() {return {fontFamily:'sans-serif'};}
+var instance=1,trail=[],data={title:'Authored topic',nodes:[],edges:[]};
+var ui$mode='graph',ui$selectedStatuses=new Set(['planned']);
+var presentStatuses=['planned'],ui$relationIds=new Set(['F']);
+var ui$mathJob=null;
 function globalListen(target,type,callback) {target.addEventListener(type,callback);}
 class MutationObserver {observe(){}}
 function renderStatusFields(){}function renderNavigation(){}function calculateActive(){}
-function compactRegions(){return false;}function syncNavigationSelection(){}
-function ensureGlobalSearch(){}function fit(){}function revealAll(){}function openResults(){}function focusNodeControl(){}
-function pointerDown(){}function pointerMove(){}function pointerUp(){}function resize(){}
-function syncSheetAccessibility(){}function schedule(){}function remember(){}function sheetLayout(){return false;}
+function syncNavigationSelection(){}
+function ensureGlobalSearch(){}function revealAll(){}function openResults(){}function focusNodeControl(){}
+function resize(){}
+function syncSheetAccessibility(){}function remember(){}function sheetLayout(){return false;}
 function closeSearch(){}function setFilters(){}
-// Scene/shelf rendering is outside these toolbar-control assertions.
-function geometry(){return {};}function renderShelves(){}
 function setMode(mode,push) {
   assert.equal(dom$browsePopover.hidden,true,'Browse choices must close before mode dispatch');
   modes.push({mode,push});ui$mode=mode;syncControls();
@@ -186,7 +183,7 @@ def _run(body: str) -> None:
 
 def _run_controls(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
-    script += "const controls=['element','button','readingLabel','bindNodeLink','safeHref','buildShell','bindEvents','setBrowse','syncControls','wrapMapKey','currentOverviewGroup',"
+    script += "const controls=['element','button','readingLabel','bindNodeLink','safeHref','buildShell','bindEvents','setBrowse','syncControls',"
     script += "'trailList','renderBreadcrumb','routeTrail','semanticParent','refreshReadingLabels','tooltip','sourceNodes','inCurrentScope'].map(original).join('\\n');\n"
     script += "const start=source.indexOf('    var dom$announcement,');assert(start>=0);\n"
     script += "const domDeclarations=source.slice(start,source.indexOf(';',start)+1);\n"
@@ -215,12 +212,12 @@ def test_toolbar_keeps_browse_choices_nested_and_back_visible_only_outside_the_g
       const pressedNow=()=>toolbar.all().filter(node=>node.getAttribute('aria-pressed')==='true');
       assert.deepEqual(pressedNow(),[]);
       assert.equal(dom$stage.hidden,false);assert.equal(dom$inventory.hidden,true);
-      currentBundle.scope='roadmap';ui$mode='list';ui$mapAllowed=false;syncControls();
+      currentBundle.scope='roadmap';ui$mode='list';syncControls();
       assert.equal(dom$listMode.textContent,'All statements');assert.equal(dom$graphMode.hidden,false);
       assert.deepEqual(pressedNow(),[dom$listMode]);
-      assert.equal(dom$graphMode.disabled,true);assert.equal(dom$stage.hidden,true);assert.equal(dom$inventory.hidden,false);
-      ui$mapAllowed=true;ui$mode='sources';syncControls();
-      assert.equal(dom$graphMode.disabled,false);assert.equal(dom$graphMode.hidden,false);
+      assert.equal(dom$stage.hidden,true);assert.equal(dom$inventory.hidden,false);
+      ui$mode='sources';syncControls();
+      assert.equal(dom$graphMode.hidden,false);
       assert.equal(dom$inventory.querySelector('h2').textContent,'Source texts');assert.deepEqual(pressedNow(),[dom$sourcesMode]);
       ui$mode='graph';syncControls();assert.equal(dom$graphMode.hidden,true);assert.deepEqual(pressedNow(),[]);
     """)

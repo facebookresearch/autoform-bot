@@ -26,9 +26,9 @@ function original(name) {
   assert.fail('Unparseable actual callback: '+name);
 }
 const names=['element','readingLabel','refreshReadingLabels','button','bindNodeLink','statusLabel','searchScore','rankMatches','inventoryNodes','inCurrentScope','sourceNodes','renderInventory',
-  'setMode','refresh','snapshotForRoute','restoreState','writeLocation','neighborIds','relationCounts','renderReaderContext','topicPeers','semanticParent',
+  'setMode','refresh','snapshotForRoute','restoreState','writeLocation','renderReaderContext','topicPeers','semanticParent',
   'placeOf','recordId','pendingMath','summaryLine'];
-const constants=['NODE_W','plural','num','pressed'].map(name=>{
+const constants=['LIST_PAGE','plural','num','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
 }).join('\n');
@@ -62,7 +62,7 @@ const host=peer(),dom$inventory=peer('section'),dom$inventoryList=peer('ul'),dom
 dom$inventory.appendChild(peer('h2'));
 const dom$loadMore=peer('button'),dom$inventoryScroll=peer(),dom$wholeSearch=peer('button');
 const dom$readingContext=peer(),dom$readingNeighbors=peer(),dom$readingBody=peer('article'),dom$navigation=peer('nav'),dom$search=peer('input');
-var dom$inventoryRows=new Map(),dom$outlineToggle=null,dom$shelves=null,overlays=new Map();
+var dom$inventoryRows=new Map(),dom$outlineToggle=null;
 const results=Array.from({length:150},(_,n)=>({id:'result-'+String(n).padStart(3,'0'),title:'Result '+n,
   summary:'Source statement '+n,status:n%2?'fully_proved':'planned',result:true,scope:'roadmap',parent:'roadmap',
   route:'https://example.test/roadmap/result-'+n+'.html',_index:n}));
@@ -73,16 +73,16 @@ const indexNodes=results.concat([{id:'module',title:'Module article',catalog:'mo
 var sharedIndex={nodes:indexNodes,relations:results.slice(1,8).map(node=>[node.id,results[0].id,2,3])};
 const records=new Map(indexNodes.map(node=>[node.id,node])),byId=new Map(records);
 var currentBundle={nodeId:'roadmap',scope:'roadmap'},ui$mode='graph',ui$query='',ui$relationIds=null,ui$listLimit=LIST_PAGE;
-var ui$selectedStatuses=new Set(['planned','fully_proved','inventory_pending']),ui$selected=null,ui$showIsolated=true;
-var ui$scopeOverview=false,ui$overviewGroup=null,ui$overviewOnly=false,ui$area=null,ui$requestedNode=null,ui$direction='both';
-var ui$mapAllowed=true,ui$active=[],ui$activeDirty=true,ui$filtersTouched=false,ui$outlineLimit=120,ui$transform={x:0,y:0,scale:1};
+var ui$selectedStatuses=new Set(['planned','fully_proved','inventory_pending']),ui$selected=null;
+var ui$overviewOnly=false,ui$requestedNode=null;
+var ui$active=[],ui$activeDirty=true,ui$filtersTouched=false,ui$outlineLimit=120;
 var alive=true,restoration=0,restoring=false,checkpointTimer,readingReady=Promise.resolve();
-const mapAllowed=true,presentStatuses=['planned','fully_proved','inventory_pending'];
+const presentStatuses=['planned','fully_proved','inventory_pending'];
 const palette={planned:{label:'planned'},fully_proved:{label:'fully proved'},inventory_pending:{label:'inventory pending'}};
 const navigation={checkpoint(method){effects.push({kind:'checkpoint',method});},navigateNode(){assert.fail('A list entry changed the canonical route');}};
 function syncControls(){dom$inventory.hidden=ui$mode==='graph';}
-function renderInspector(){}function schedule(){}function sheetLayout(){return false;}function setSheet(){}function refreshReadingLabels(){}function typesetRowsInView(){}var instance=1;
-function updateProjection(){}function renderNavigation(){}function resize(){}function fit(){}
+function renderInspector(){}function sheetLayout(){return false;}function setSheet(){}function refreshReadingLabels(){}function typesetRowsInView(){}var instance=1;
+function updateProjection(){}function renderNavigation(){}function resize(){}
 function calculateActive(){assert.fail('An available complete index was replaced by a map subset');}
 function activateNode(node){effects.push({kind:'activate',node});}
 function requestAnimationFrame(callback){return setImmediate(callback);}
@@ -153,7 +153,7 @@ def test_saved_results_page_builds_before_restoring_scroll_and_owned_focus() -> 
       assert.equal(ui$mode,'list');assert.equal(ui$listLimit,200);assert.equal(dom$inventoryRows.size,151);
       assert(rowIds().includes('result-130'));assert.equal(dom$inventoryScroll.scrollTop,1800);
       assert.equal(dom$navigation.scrollTop,37);assert.equal(dom$readingBody.scrollTop,71);
-      assert.deepEqual(ui$transform,saved.camera);assert.equal(restoring,false);
+      assert.equal(restoring,false);
       const focused=effects.find(event=>event.kind==='focus');
       assert.deepEqual(focused,{kind:'focus',id:'result-130',rows:151,scroll:1800,options:{preventScroll:true}});
       assert.strictEqual(document.activeElement,dom$inventoryRows.get('result-130'));

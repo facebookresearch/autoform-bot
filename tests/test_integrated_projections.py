@@ -32,14 +32,12 @@ function original(name) {
   }
   assert.fail('Production function did not parse: ' + name);
 }
-const constants = source.match(/\bvar NODE_W =[^;]+;/);
-assert(constants, 'Production map constants missing');
-const kinds = source.match(/\bvar KINDS =[^;]+;/);
-assert(kinds, 'Production kind words missing');
+const constants = source.match(/\bvar LIST_PAGE =[^;]+;/);
+assert(constants, 'Production list page size missing');
 const functions = [
-  'element', 'readingLabel', 'button', 'bindNodeLink', 'safeHref', 'graphAt', 'recordId', 'mapNode', 'adoptGraph',
-  'neighborIds', 'neighborhood', 'regionProjection', 'collect', 'matchesStatus', 'matchesIsolation', 'calculateActive',
-  'statusLabel', 'finished', 'boundaryMeta', 'kindWord', 'makeNodeControl', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
+  'element', 'readingLabel', 'button', 'bindNodeLink', 'safeHref', 'graphAt', 'recordId', 'adoptGraph',
+  'matchesStatus', 'calculateActive',
+  'statusLabel', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
   'semanticParent', 'placeOf', 'pendingMath', 'summaryLine', 'refreshReadingLabels', 'tooltip', 'inCurrentScope', 'sourceNodes'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');
@@ -62,14 +60,14 @@ var document = {createElement: tag => new Element(tag)};
 var window = {location: {href: 'https://example.test/math/roadmap/chapter/index.html', origin: 'https://example.test'}};
 var location = window.location;
 var host = {dataset: {}, classList: {toggle() {}}};
-var dom$hiddenButton = new Element('button'), dom$empty = new Element('p'), dom$searchResults = new Element('div');
+var dom$hiddenButton = new Element('button'), dom$searchResults = new Element('div');
 var dom$inventory = new Element('section'), dom$inventoryList = new Element('ul'), dom$inventoryRows;
 var dom$inventorySummary = new Element('span'), dom$loadMore = new Element('button'), dom$inventoryScroll = new Element('div');
 dom$inventory.appendChild(new Element('h2'));
-var data, view, atlas, palette, byId, prerequisites, dependents, incident, statusCounts, presentStatuses;
-var mobileIsolateBase, mapAllowed, contextGraph, sharedIndex, currentBundle;
+var data, palette, byId, incident, statusCounts, presentStatuses;
+var mobileIsolateBase, contextGraph, sharedIndex, currentBundle;
 var records, navigation, calls;
-var ui$active, ui$activeDirty, ui$activeIds, ui$selected, ui$direction, ui$selectedStatuses, ui$showIsolated;
+var ui$active, ui$activeDirty, ui$selected, ui$selectedStatuses;
 var ui$query, ui$relationIds, ui$mode, ui$listLimit;
 var plural = (count, one, many) => count.toLocaleString() + ' ' + (count === 1 ? one : many);
 var num = (value) => value.toLocaleString();
@@ -101,8 +99,8 @@ function configure(indexNodes, context, relations = []) {
   sharedIndex = {schema: 'autoform-dag-search/v1', nodes: indexNodes, relations};
   contextGraph = context; currentBundle = {dataURL: 'https://example.test/math/dependencies/chapters/chapter.json'};
   calls = []; navigation = {navigateNode(id, settings) { calls.push({id, settings}); }};
-  ui$active = []; ui$activeDirty = true; ui$activeIds = new Set(); ui$selected = null; ui$direction = 'both';
-  ui$selectedStatuses = new Set(['planned', 'fully_proved']); ui$showIsolated = true;
+  ui$active = []; ui$activeDirty = true; ui$selected = null;
+  ui$selectedStatuses = new Set(['planned', 'fully_proved']);
   ui$query = ''; ui$relationIds = null; ui$mode = 'graph'; ui$listLimit = LIST_PAGE;
 }
 """
@@ -111,27 +109,19 @@ function configure(indexNodes, context, relations = []) {
 def _run(body: str, *, fixture: object = None) -> None:
     program = "var fixture = JSON.parse(fixtureText);\n" + _ENVIRONMENT + "\n"
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
-    script += "vm.runInContext(" + json.dumps('"use strict";\n') + "+constants[0]+kinds[0]+"
+    script += "vm.runInContext(" + json.dumps('"use strict";\n') + "+constants[0]+"
     script += json.dumps(program) + "+functions+" + json.dumps(body)
     script += ", sandbox, {timeout: 5000, filename: CLIENT});"
     result = subprocess.run([_NODE, "-e", script], input=json.dumps(fixture), text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_an_isolated_focal_result_has_no_arbitrary_dependency_peers_and_keeps_the_inventory() -> None:
+def test_an_unlinked_result_keeps_its_place_in_the_statement_list() -> None:
     _run(r"""
       const input = [leaf('T'), leaf('A'), leaf('B')];
       const authored = {source: 'A', target: 'B', statement: 1, proof: 0};
       configure(input, graph(input.map(node => viewNode(node.id)), [authored]), [['A', 'B', 1, 0]]);
       const before = JSON.stringify({input, contextGraph, sharedIndex});
-      const projected = neighborhood('T');
-      assert.deepEqual(projected.nodes.map(node => node.id), ['T']);
-      assert.deepEqual(projected.edges, []);
-      adoptGraph(projected);
-      assert.equal(byId.get('T').isolated, true);
-      assert(makeNodeControl(byId.get('T')).getAttribute('aria-label').includes('not linked to anything on this map'));
-      ui$selected = byId.get('T'); ui$showIsolated = false; ui$activeDirty = true; calculateActive();
-      assert.deepEqual(ui$active.map(node => node.id), ['T'], 'The explicitly selected isolated article remains reachable');
       currentBundle.scope = 'chapter'; ui$mode = 'list';
       assert.deepEqual(inventoryNodes().map(node => node.id).sort(), ['A', 'B', 'T']);
       assert.equal(JSON.stringify({input, contextGraph, sharedIndex}), before);
@@ -190,20 +180,9 @@ def test_authoritative_ids_typed_view_ids_and_derived_boundaries_remain_distinct
       }
       const synthetic = viewNode('scope:Atlas', {kind: 'scope'});
       assert.equal(recordId(synthetic), 'Atlas');
-      assert.equal(mapNode(synthetic), false, 'The synthetic scope denotes the source track');
-      assert.equal(mapNode(records.get('scope:Atlas')), true, 'The same-named indexed article is mathematical');
       assert.equal(recordId(viewNode('scope:scope:Atlas', {kind: 'scope'})), 'scope:Atlas');
       assert.equal(recordId(external), 'scope:Atlas');
-      const projected = neighborhood('F'), boundary = projected.nodes.find(node => node.id === 'scope:Atlas');
-      assert.equal(boundary._recordId, 'scope:Atlas');
-      assert.equal(boundary.kind, 'boundary');
-      assert.equal(boundary.member_count, 2);
-      assert.equal(boundary._unknownCount, false);
-      assert.deepEqual(boundary.status_counts, external.status_counts);
-      assert.equal(boundary.internal_dependency_count, 7);
-      assert.equal(recordId(boundary), 'scope:Atlas', 'The derived copy must not normalize a second time');
-      assert.deepEqual(projected.edges, [{source: 'scope:Atlas', target: 'F', statement: 1, proof: 0}]);
-      activateNode(boundary, false); assert.equal(calls.at(-1).id, 'scope:Atlas');
+      activateNode(external, false); assert.equal(calls.at(-1).id, 'scope:Atlas');
     """)
 
 
@@ -250,7 +229,6 @@ def test_an_oversized_module_scope_keeps_its_real_math_articles_navigable_withou
     _run(r"""
       configure(fixture.index.nodes, fixture.context, fixture.index.relations);
       currentBundle.scope = 'catalogs'; adoptGraph(contextGraph);
-      assert.equal(mapAllowed, false, 'The actual oversized scope uses its bounded article inventory');
       ui$mode = 'list'; ui$selectedStatuses = new Set(presentStatuses);
       const articles = inventoryNodes();
       assert.equal(articles.length, fixture.count);
@@ -260,13 +238,11 @@ def test_an_oversized_module_scope_keeps_its_real_math_articles_navigable_withou
       renderInventory(true);
       assert.equal(dom$inventory.querySelector('h2').textContent, 'Statements & articles');
       assert.equal(dom$inventorySummary.textContent, '100 of ' + fixture.count);
-      // The list says in words why there is no map, ahead of its 100 rows.
-      assert.equal(dom$inventoryList.children[0].textContent, 'Too many statements to draw as one map. Search to find one.');
-      assert.equal(dom$inventoryList.children.length, 101);
+      assert.equal(dom$inventoryList.children.length, 100);
       assert.equal(dom$loadMore.hidden, false);
       ui$listLimit = fixture.count; renderInventory(true);
       assert.equal(dom$inventorySummary.textContent, fixture.count + ' articles');
-      assert.equal(dom$inventoryList.children.length, fixture.count + 1);
+      assert.equal(dom$inventoryList.children.length, fixture.count);
       assert.equal(dom$loadMore.hidden, true);
       const last = articles.at(-1);
       dom$inventoryRows.get(last.id).listeners.click();

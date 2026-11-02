@@ -31,7 +31,7 @@ function original(name) {
 }
 const context={assert,URL,productionSource:source,original,fixture:JSON.parse(fs.readFileSync(0,'utf8'))};
 vm.createContext(context);
-vm.runInContext(source.slice(source.indexOf('  var NODE_W ='),source.indexOf('  var clients =')),context);
+vm.runInContext(source.slice(source.indexOf('  var LIST_PAGE ='),source.indexOf('  var clients =')),context);
 """
 
 
@@ -70,24 +70,22 @@ def test_cold_mount_seeds_its_route_and_projects_the_loaded_index_before_layout(
         function updateProjection() {events.push('project');}
         function renderNavigation() {} function refresh() {}
         function renderWikiContext() {events.push('optional-wiki');}
-        function projectWikiView() {}
         function applyRoute(bundle) {
           assert.strictEqual(bundle,firstBundle);assert.equal(ui$wikiRequested,true);
           assert.equal(ui$wikiLinks.availability,'unavailable');events.push('route');return Promise.resolve();
         }
         function record(phase) {
           assert.strictEqual(sharedIndex,index,"Cold layout must use the router's validated index");
-          assert.equal(ui$requestedNode,fixture.entry,'First fit must retain the canonical requested route');
+          assert.equal(ui$requestedNode,fixture.entry,'The first resize must retain the canonical requested route');
           events.push(phase);
         }
-        function fit() {record('fit');} function resize() {record('resize');}
+        function resize() {record('resize');}
       `;
       const bootstrap=eval('('+productionSource.slice(start,end)+'\nreturn ui$requestedNode;\n'+helpers+'\n'+seams+'})');
       assert.equal(bootstrap(host,payload,1,firstBundle,navigation),fixture.entry);
       const phase=name=>events.indexOf(name);
-      assert(phase('shell')<phase('bind')&&phase('bind')<phase('index')&&phase('index')<phase('project')&&phase('project')<phase('fit'));
-      assert(phase('fit')<phase('optional-wiki'),'Optional references must not delay the first mathematical fit');
-      assert(phase('fit')<phase('resize')&&phase('resize')<phase('route'));
+      assert(phase('shell')<phase('bind')&&phase('bind')<phase('index')&&phase('index')<phase('project'));
+      assert(phase('project')<phase('resize')&&phase('resize')<phase('route'));
       assert(events.filter(event=>event==='index').length===1);
       assert.throws(()=>bootstrap(host,payload,1,firstBundle,null),/complete mathematical page and navigation/);
       assert.throws(()=>bootstrap(host,payload,1,null,navigation),/complete mathematical page and navigation/);
