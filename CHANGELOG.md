@@ -19,8 +19,8 @@ date when the release is tagged.
   recovered and how to re-create the checkout; ignored files such as `.lake`
   are not kept (#435).
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
-  zoomable page for the whole project, linked from the landing page beside the
-  book. Regions (authored areas, or the top-level chapters) open into their
+  zoomable page for the whole project. Regions (authored areas, or the
+  top-level chapters) open into their
   parts and parts into their results as the camera closes in, and a part opens
   once its parts can be named. Search reaches any result by title or Lean name;
   the reading pane names the result's kind, such as Theorem or Definition, and
