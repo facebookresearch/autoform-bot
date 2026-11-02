@@ -1025,6 +1025,6 @@ def test_review_skills_route_statement_review_through_the_cli_reference(repo_roo
 
     human = (repo_root / "skills/human-review/SKILL.md").read_text(encoding="utf-8")
 
-    assert "../../autoform_cli/README.md#commands" in human
+    assert "../../autoform_cli/README.md#review" in human
     assert "(references/readback.md)" in human
     assert (repo_root / "skills/human-review/references/readback.md").is_file()
