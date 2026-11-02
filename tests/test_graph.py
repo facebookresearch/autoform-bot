@@ -484,6 +484,36 @@ def test_a_dependency_that_steps_back_out_of_a_file_or_a_missing_folder_does_not
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows folders differ in whether they compare names with case")
+@pytest.mark.parametrize(("spelled", "file"), [("B.md", "b.md"), ("\u212a.md", "k.md")])
+def test_a_dependency_spelled_in_other_letters_is_looked_up_on_disk(tmp_path: Path, spelled: str, file: str) -> None:
+    """A folder that compares names without case finds the file, but not as a
+    node; one that compares with case does not find it at all."""
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, f"chapter/{file}", "# Target\n")
+    _node(blueprint, "chapter/result.md", f"# Result\n\n## Depends on\n\n[x]({spelled})\n")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues in (
+        (f"chapter/result: dependency target does not exist: {spelled!r}",),
+        (f"chapter/result: dependency target is not a node: {spelled!r}",),
+    )
+
+
+def test_a_link_into_the_only_unpublished_folder_is_named(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "drafts/README.md", "# Drafts\n", published="false")
+    _node(blueprint, "drafts/idea.md", "# Idea\n")
+    _node(blueprint, "base.md", "# Base\n\nSee [the idea](drafts/idea.md).\n")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues == ("base: links to 'drafts/idea.md', in an unpublished folder render omits",)
+
+
 def test_a_blueprint_with_no_unpublished_folder_reads_no_links_for_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

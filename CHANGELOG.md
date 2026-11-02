@@ -62,12 +62,13 @@ date when the release is tagged.
   and `irreducible_def` and `opaque` read as definitions. `check` names each
   command with no caption once, with the articles that use it; `audit` does not
   check those articles' Lean target kind either (#485).
-- **Graph loading.** Loading a blueprint asks the disk less of what discovery
-  already knows: a dependency spelled as `..` steps and plain names, the README
-  that contains an article, and links into unpublished folders when there are
-  none. Path containment compares path parts. On one CI runner ATLAS's graph
-  loaded in 25.8 s instead of 52.3 s, with an equal result, and `check`,
-  `audit` and `render`, which each load it, took 29, 28 and 24 s less.
+- **Graph loading.** Loading a blueprint answers from what discovery already
+  read, instead of asking the disk, for a dependency spelled as `..` steps and
+  plain names and for the README that contains an article. It reads no page's
+  links for ones into an unpublished folder when there is none, and path
+  containment compares path parts. On one CI runner ATLAS's graph loaded in
+  25.8 s instead of 52.3 s, with an equal result, and `check`, `audit` and
+  `render`, which each load it, took 29, 28 and 24 s less.
 - **Explorer delivery.** The approved integrated redesign ships below 145 KB,
   with the same bounded graph, JSON and frame budgets and pinned safe compiler.
   Touch keeps single-pointer zoom controls; reading handles retain page-owned

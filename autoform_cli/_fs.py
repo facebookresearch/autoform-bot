@@ -66,7 +66,7 @@ def is_within(path: Path, directory: Path) -> bool:
         except ValueError:
             return False
         return True
-    # relative_to's own test compares the directory with each of the path's
-    # parents, which is slow enough to show up in loading a large blueprint.
+    # From Python 3.12, relative_to compares the directory with each of the
+    # path's parents, which is slow enough to show up in loading a large blueprint.
     parts = directory.parts
     return path.parts[: len(parts)] == parts if parts else not path.anchor

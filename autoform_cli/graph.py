@@ -1066,12 +1066,14 @@ def _resolve_target(
         return None, f"{node.id}: {label} names a hidden path, which render omits: {target!r}"
     # Node paths are resolved, and discovery refused every link under roadmap/.
     # So ".." steps that stay in roadmap/, then plain names, reach a node as
-    # spelled; anything else is looked up on disk below.
+    # spelled; anything else is looked up on disk below. Windows paths compare
+    # without case, which a case-sensitive folder does not, so there the disk decides.
     steps = raw_path.split("/")
     up = next((n for n, step in enumerate(steps) if step != ".."), len(steps))
     roadmap = blueprint / "roadmap"
     if (
-        all(step and not step.startswith(".") for step in steps[up:])
+        os.name != "nt"
+        and all(step and not step.startswith(".") for step in steps[up:])
         and _is_within(node.path.parent, roadmap)
         and up <= len(node.path.parent.parts) - len(roadmap.parts)
     ):
