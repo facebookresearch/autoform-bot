@@ -43,6 +43,8 @@ dev = [
     "mkdocs-material>=9.5,<10",
     "mkdocs-literate-nav>=0.6,<1",
     "pytest>=7.0",
+    # Runs the real-Lean skeleton tests on every CI core.
+    "pytest-xdist>=3.6,<4",
     "ruff>=0.4",
 ]
 
