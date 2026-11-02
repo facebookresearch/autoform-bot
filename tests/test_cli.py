@@ -314,3 +314,35 @@ def test_check_warns_about_markup_the_site_shows_as_typed(tmp_path: Path, capsys
     out = capsys.readouterr().out
     assert "warning: result: line 9: raw HTML is not allowed: <script>" in out
     assert "warning: result: the site shows it as typed until these are fixed" in out
+
+
+def test_check_leaves_the_site_warnings_to_render_but_reads_source_notes(tmp_path: Path, capsys) -> None:
+    """``--no-site-warnings`` drops only the page warnings render reports, and
+    changes no exit status. Source notes still draw theirs: a render that links
+    them in the repository never reads them. Check's own graph warnings stay."""
+
+    blueprint = _with_body(
+        _clean_blueprint(tmp_path), "<script>alert(1)</script>\n\n## Informally uses\n\n- [Gap](gap.md)"
+    )
+    (blueprint / "sources").mkdir()
+    (blueprint / "sources" / "paper.md").write_text("# Paper\n\n<b>bold</b>\n", encoding="utf-8")
+    typed = "the site shows it as typed until these are fixed"
+    informal = "warning: result: informal target does not exist: 'gap.md'"
+
+    assert main(["check", str(blueprint)]) == 0
+    plain = capsys.readouterr().out.splitlines()
+    assert {informal, f"warning: result: {typed}", f"warning: sources/paper.md: {typed}"} <= set(plain)
+    site = [line for line in plain if line.startswith("warning: result: ") and line != informal]
+    assert len(site) == 2
+    assert main(["check", str(blueprint), "--no-site-warnings"]) == 0
+    assert capsys.readouterr().out.splitlines() == [line for line in plain if line not in site]
+
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Demo.lean").write_text("def Demo.other : Nat := 0\n", encoding="utf-8")
+    article = blueprint / "roadmap" / "result.md"
+    article.write_text(
+        article.read_text(encoding="utf-8").replace("---\n\n#", "lean: Demo.missing\n---\n\n#"), encoding="utf-8"
+    )
+    assert main(["check", str(blueprint), "--lean-root", str(lean_root), "--no-site-warnings"]) == 1
+    assert f"error: result: declaration not found in {lean_root}: Demo.missing" in capsys.readouterr().out

@@ -168,16 +168,15 @@ class Graph:
     #: Folders whose ``README.md`` says ``published: false``: check validates
     #: them, and render leaves them out of the site.
     unpublished: tuple[Path, ...] = ()
-    #: What check warns about ``## Informally uses`` links: ones that do not
-    #: resolve to another article, and the heading written below a dependency
-    #: heading, where its links count. :func:`informal_cycle_warnings` adds the
-    #: links whose target depends on the article.
-    informal_warnings: tuple[str, ...] = ()
     #: ``tracks_lean: false`` in ``roadmap/README.md``: the project writes no
     #: Lean, so the site shows no Lean progress.
     tracks_lean: bool = True
     #: What check warns about from loading without failing: a project setting
-    #: it ignores because it is misplaced or has an unknown value.
+    #: it ignores because it is misplaced or has an unknown value, then
+    #: ``## Informally uses`` links that do not resolve to another article and
+    #: the heading written below a dependency heading, where its links count.
+    #: :func:`informal_cycle_warnings` adds the links whose target depends on
+    #: the article.
     warnings: tuple[str, ...] = ()
 
     @property
@@ -302,10 +301,9 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         raise GraphValidationError(issues)
     unpublished = tuple(sorted(node.path.parent for node in parsed if node.metadata.get("published") in _FALSE))
     issues.extend(_unpublished_link_issues(sources, unpublished))
-    informal_warnings: list[str] = []
     nodes: dict[str, Node] = {}
     for parsed_node in parsed:
-        informal_warnings.extend(parsed_node.informal_warnings)
+        warnings.extend(parsed_node.informal_warnings)
 
         def resolve(targets: tuple[str, ...], node: _ParsedNode = parsed_node) -> list[str]:
             resolved: list[str] = []
@@ -329,9 +327,9 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         for target in parsed_node.informal_targets:
             dependency, issue = _resolve_target(parsed_node, target, blueprint, canonical_ids, "informal target")
             if issue:
-                informal_warnings.append(issue)
+                warnings.append(issue)
             elif dependency == parsed_node.id:
-                informal_warnings.append(f"{parsed_node.id}: informally uses itself")
+                warnings.append(f"{parsed_node.id}: informally uses itself")
             elif dependency not in dependencies and dependency not in informal_dependencies:
                 informal_dependencies.append(dependency)
         metadata = parsed_node.metadata
@@ -378,7 +376,6 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         nodes=nodes,
         open_statements=open_statements,
         unpublished=unpublished,
-        informal_warnings=tuple(informal_warnings),
         tracks_lean=tracks_lean,
         warnings=tuple(warnings),
     )
