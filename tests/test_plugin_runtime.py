@@ -29,7 +29,6 @@ def test_plugin_manifests_list_the_shipped_skills_and_servers(repo_root):
     review_dir = repo_root / "skills" / "agent-review"
     references = {
         "faithfulness.md",
-        "readback-faithfulness.md",
         "proof-integrity.md",
         "code-quality.md",
         "mathlib-style.md",

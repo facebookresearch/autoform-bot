@@ -3973,6 +3973,22 @@ def test_the_search_index_follows_the_book_order(tmp_path: Path) -> None:
     assert chapters[-1] == "irrationality-proof"
 
 
+def test_render_reads_each_page_of_the_book_once_for_its_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = _book_order_project(tmp_path)
+    read: list[Path] = []
+    book_links = render_module._book_links
+
+    def counted(source: Path, blueprint: Path, targets: object) -> list[Path]:
+        read.append(source)
+        return book_links(source, blueprint, targets)
+
+    monkeypatch.setattr(render_module, "_book_links", counted)
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    # Statement numbers, the search index and SUMMARY.md share one walk.
+    assert read and len(read) == len(set(read))
+
+
 def _summary_chapters(out: Path) -> list[str]:
     return re.findall(r"\(roadmap/([^)]+)/README\.md\)", (out / "SUMMARY.md").read_text(encoding="utf-8"))
 
@@ -4544,6 +4560,26 @@ def test_body_protection_preserves_original_validation_urls_and_link_kinds() -> 
         ("a", "notes A(b.html?print=1#chosen"), ("img", "fig A(b.svg?print=1#symbol"),
         ("a", "raw.md#raw"),
     ]
+
+
+def test_body_protection_reuses_one_converter_but_starts_each_chunk_afresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A chunk's links to check do not follow it into the next chunk, which has none.
+    assert "bp-body-link-validation" in _protect_markdown_in_html("For r < n, see [paper](notes.md).")
+    assert "bp-body-link-validation" not in _protect_markdown_in_html("For r < n, see nothing.")
+    # Nor do its reference definitions.
+    _protect_markdown_in_html("For r < n, see [paper][ref].\n\n[ref]: https://example.invalid/paper")
+    assert "example.invalid" not in _protect_markdown_in_html("For r < n, see [paper][ref].")
+    # A conversion that fails midway leaves no half-used converter behind.
+    converter = render_module._body_converter()
+
+    def fail(text: str) -> str:
+        raise RuntimeError("midway")
+
+    monkeypatch.setattr(converter, "convert", fail)
+    with pytest.raises(RuntimeError, match="midway"):
+        _protect_markdown_in_html("For r < n, fail.")
+    assert render_module._body_converter() is not converter
+    assert "again" in _protect_markdown_in_html("For r < n, again.")
 
 
 @pytest.mark.parametrize(("body", "files", "warning"), [

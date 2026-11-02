@@ -55,12 +55,6 @@ def test_root_readme_uses_the_canonical_repository(repo_root: Path) -> None:
     assert "VivienCabannes/autoform-bot" not in readme
 
 
-def test_generated_site_docs_keep_internal_view_and_alias_boundaries(repo_root: Path) -> None:
-    cli = " ".join((repo_root / "autoform_cli/README.md").read_text(encoding="utf-8").split())
-    assert "other `dependencies/` payloads are internal to this viewer; their schemas may change" in cli
-    assert "legacy `#node=<id>`, view and filter links remain aliases, not a second viewer" in cli
-
-
 def test_integrated_landing_retains_authored_title_with_generated_hide_metadata(tmp_path: Path) -> None:
     from autoform_cli.render import _integrated_page
 
@@ -93,31 +87,9 @@ def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -
         if path.is_file():
             assert not re.search(r"^\s*review_approved\s*:", path.read_text(encoding="utf-8"), re.MULTILINE), path
     assert "mermaid@11.4.1/dist/mermaid.min.js" in (example / "mkdocs.yml").read_text(encoding="utf-8")
-    assert "dependency maps of the project and each chapter" in " ".join(
-        (example / "README.md").read_text(encoding="utf-8").split()
-    )
-    assert "derived statuses, dependency maps," in (example / ".github/workflows/blueprint-pages.yml").read_text(
-        encoding="utf-8"
-    )
     for workflow in (example / ".github/workflows").glob("*.yml"):
         text = workflow.read_text(encoding="utf-8")
         assert "--no-site-warnings" not in text or "autoform check --help" in text, workflow
-
-
-def test_readme_tells_users_how_to_run_several_sessions(repo_root: Path) -> None:
-    """A session's agent limit is not the project's: several sessions share one claim board (#421).
-
-    Sessions started together each see an empty board and would choose no claims,
-    so only the user's request can tell a session that others share the project.
-    """
-    readme = " ".join((repo_root / "README.md").read_text(encoding="utf-8").split())
-    assert "## Run several sessions" in readme
-    assert "own clone of the project, with the same `origin` and the same branch" in readme
-    assert "Tell each session that other sessions share the project" in readme
-    assert "push claims and verified results to `origin`" in readme
-    assert "each one sees an empty claim board and would otherwise work without claims" in readme
-    assert "raise `max_threads` under `[agents]` in `~/.codex/config.toml`" in readme
-    assert "They also share one Lean runtime" in readme
 
 
 def test_setup_example_pins_the_repl_that_the_real_repl_job_tests(repo_root: Path) -> None:
@@ -430,73 +402,6 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
         assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in action_refs)
 
 
-def test_readback_faithfulness_contract_is_hash_bound_and_machine_readable(
-    repo_root: Path,
-) -> None:
-    skill = (repo_root / "skills/agent-review/SKILL.md").read_text(encoding="utf-8")
-    rubric = (
-        repo_root / "skills/agent-review/references/readback-faithfulness.md"
-    ).read_text(encoding="utf-8")
-    normalized = " ".join(rubric.split())
-
-    assert "isolated read-back-judge role" in skill
-    assert "exact JSON output replaces this\ngeneral report layout" in skill
-    for required in (
-        "trusted coordinator",
-        "blind auditor",
-        "faithfulness judge",
-        "packet hash",
-        "article packet hash",
-        "article review hash",
-        "read-back hash is required",
-    ):
-        assert required in normalized
-
-    def template(marker: str) -> dict[str, object]:
-        fenced = rubric.split(f"<!-- {marker} -->\n```json\n", 1)[1]
-        return json.loads(fenced.split("\n```", 1)[0])
-
-    item = template("readback-faithfulness-item-template")
-    verdict = template("readback-faithfulness-verdict-template")
-    provenance = {
-        "item",
-        "declarations",
-        "article_skeleton_hash",
-        "article_packet_hash",
-        "article_review_hash",
-        "passage_hash",
-    }
-    assert item["schema"] == "autoform-readback-faithfulness-item/v1"
-    assert verdict["schema"] == "autoform-readback-faithfulness-verdict/v1"
-    assert provenance <= item.keys() and provenance <= verdict.keys()
-    assert item["declarations"] == verdict["declarations"]
-    declaration = item["declarations"][0]
-    assert set(declaration) == {
-        "id",
-        "skeleton_hash",
-        "packet_hash",
-        "read_back_hash",
-    }
-
-    category_rows = {}
-    table = rubric.split("## Categories and decisions", 1)[1].split("## Exact output", 1)[0]
-    for line in table.splitlines():
-        match = re.match(r"\| `([^`]+)` \| `([^`]+)` \|", line)
-        if match:
-            category_rows[match.group(1)] = match.group(2)
-    assert category_rows["elaboration"] == "agrees"
-    assert category_rows["equivalent-reformulation"] == "review"
-    for category in (
-        "hypothesis-missing",
-        "hypothesis-added",
-        "conclusion-weaker",
-        "conclusion-stronger",
-    ):
-        assert category_rows[category] == "disagrees"
-    assert category_rows["evidence-missing"] == "unknown"
-    assert "hypothesis-missing: generalizes" not in rubric
-
-
 _NOT_FRONTMATTER = {
     "differs": "a line of `autoform search` library output",
     "error": "the prefix of a CLI error message",
@@ -618,105 +523,6 @@ def test_skill_links_into_the_cli_reference_land_on_a_section(repo_root: Path) -
                 assert fragment in sections[resolved], f"{where} links to a missing section: {target}#{fragment}"
                 cited += 1
     assert cited
-
-
-def test_agent_review_judges_a_catalog_as_an_inventory(repo_root: Path) -> None:
-    """A catalog lists peer declarations by design, which the rubric scored as a defect."""
-    rubric = " ".join(
-        (repo_root / "skills/agent-review/references/roadmap-quality.md").read_text(encoding="utf-8").split()
-    )
-
-    assert "`DECOMPOSED`, `INVENTORIED`, `DEFERRED`, and `OUT`" in rubric
-    assert "not a duplicate of the article that expounds it" in rubric
-    assert "The pull-request-unit and unique-main-result rules do not apply to it" in rubric
-
-
-def test_roadmap_repository_scope_inventories_existing_lean(repo_root: Path) -> None:
-    """A global blueprint is an inventory, not merely a future-work backlog.
-
-    A consumer asked for one wiki covering all mathematics in an established
-    Lean repository. The old workflow treated local implementations as prior
-    art, produced only prospective roadmaps, and therefore rendered 0% despite
-    extensive existing code.
-    """
-
-    roadmap_path = repo_root / "skills" / "roadmap" / "SKILL.md"
-    roadmap = roadmap_path.read_text(encoding="utf-8")
-    normalized = " ".join(roadmap.split())
-    metadata = (
-        repo_root / "skills" / "roadmap" / "agents" / "openai.yaml"
-    ).read_text(encoding="utf-8")
-    example = (
-        repo_root / "skills" / "roadmap" / "references" / "cabannes-thesis-roadmap.md"
-    ).read_text(encoding="utf-8")
-
-    for required in (
-        "repository-wide library, global wiki, or other existing codebase",
-        "project-owned Lean is a primary mathematical source",
-        "inventory every in-scope tracked module and public mathematical declaration",
-        "future-work slice cannot stand in for a repository-wide inventory",
-        # A docstring describes code; a paper-based pass still works from its source.
-        "Work from exact source passages. When the boundary includes existing Lean",
-        "never replace the adopted source",
-        "a repository inventory also needs every in-scope declaration reconciled",
-        "`DECOMPOSED` means represented by declaration articles, not unfinished",
-        "record exact compiled names in `lean`",
-        "`proof: formalized` for a theorem or lemma only after checking that its proof is complete",
-        "An axiom or wanted placeholder does not justify a formalized proof",
-        "a definition of a conjecture proposition formalizes its statement representation",
-        "`mathlib: true` only for an exact verified upstream result",
-    ):
-        assert required in normalized
-
-    assert "inventorying existing formalized Lean when the boundary is an existing repository or library" in metadata
-    assert "Existing and planned mathematics coexist in one book" in example
-
-
-def test_roadmap_and_formalize_leave_code_an_audit_warns_about_to_the_user(repo_root: Path) -> None:
-    """A catalog's limit warning describes code that builds today; a guessed limit can break it."""
-    for skill in ("roadmap", "formalize"):
-        text = " ".join((repo_root / f"skills/{skill}/SKILL.md").read_text(encoding="utf-8").split())
-        assert "`catalog-unscoped-limit` warning describes existing Lean code and never fails the audit" in text, skill
-        assert "change that code only when the user asks" in text, skill
-
-
-def test_roadmap_retracts_against_the_branch_formalize_works_from(repo_root: Path) -> None:
-    """Roadmap's base can predate a Formalize landing, with or without claims.
-
-    If Roadmap looks for `lean:` only on its own base, an article Formalize
-    formalized meanwhile keeps `statement: formalized` through a clean rebase
-    or merge although the revision changed its statement, and check and audit
-    both pass.
-    """
-
-    roadmap = " ".join((repo_root / "skills/roadmap/SKILL.md").read_text(encoding="utf-8").split())
-    for required in (
-        "Before the revision lands on that branch, and so before releasing any claim",
-        "bring it up to date with that branch by rebase or merge, "
-        "retract any revised article that gained `lean:` there",
-        "report the revised articles that had no `lean:` on that branch at your last update",
-    ):
-        assert required in roadmap
-
-
-def test_formalize_copies_the_lead_s_packages_into_each_worktree(repo_root: Path) -> None:
-    """A fresh worktree's `lake exe cache get` re-clones every package and unpacks Mathlib again (#275).
-
-    A copy of the lead's packages downloads nothing, and copy-on-write keeps it
-    almost free; a symbolic link instead makes `library list` refuse the
-    project's libraries. Agent isolation creates the worktree as the worker
-    starts, so the worker copies, from the lead's checkout it was given.
-    """
-
-    formalize = " ".join((repo_root / "skills/formalize/SKILL.md").read_text(encoding="utf-8").split())
-    for required in (
-        "Give each subagent the lead's checkout path",
-        "the lead runs no Lake command in its own checkout while workers may start",
-        "copies the lead's packages into its worktree, never as a symbolic link",
-        "`mkdir -p .lake && cp -Rc <LEAD>/.lake/packages .lake/` (`cp -R --reflink=auto` on Linux)",
-        "then runs `lake exe cache get`, which downloads nothing",
-    ):
-        assert required in formalize
 
 
 def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None:
@@ -903,13 +709,6 @@ def test_documented_autoform_commands_parse(repo_root: Path, monkeypatch: pytest
     assert not failures, failures
 
 
-_UNSHIPPED_SCHEMAS = {
-    # The read-back rubric's tooling is in open PRs #216 and #284.
-    "autoform-readback-faithfulness-item/v1",
-    "autoform-readback-faithfulness-verdict/v1",
-}
-
-
 def test_documented_schema_ids_exist_in_code(repo_root: Path) -> None:
     code = _shipped_code(repo_root)
     # The generated verify workflow checks the review policy marker by the sha256 of its line.
@@ -924,8 +723,7 @@ def test_documented_schema_ids_exist_in_code(repo_root: Path) -> None:
         for schema in re.findall(r"\bautoform-[a-z0-9-]+/v\d+\b", page.read_text(encoding="utf-8"))
     ]
     assert len({schema for _, schema in named}) >= 10  # the extraction still finds the docs' schema ids
-    unknown = [(where, schema) for where, schema in named if schema not in code]
-    missing = [f"{where}: {schema}" for where, schema in unknown if schema not in _UNSHIPPED_SCHEMAS]
+    missing = [f"{where}: {schema}" for where, schema in named if schema not in code]
     assert not missing, missing
 
 
@@ -945,8 +743,6 @@ def test_codes_the_skills_name_exist_in_code(repo_root: Path) -> None:
     ]
     missing = []
     for page in sorted((repo_root / "skills").rglob("*.md")):
-        if page.name == "readback-faithfulness.md":  # rubric categories; their tooling is in #216 and #284
-            continue
         for name in sorted(set(re.findall(r"`([a-z]+(?:-[a-z]+)+)`", page.read_text(encoding="utf-8")))):
             if name not in _NOT_CODES and f'"{name}"' not in code and not any(p.fullmatch(name) for p in composed):
                 missing.append(f"{page.relative_to(repo_root)}: {name}")
@@ -995,13 +791,3 @@ _SAFETY_RULES = [
 def test_safety_rules_stay_in_their_skill(repo_root: Path, relative: str, sentence: str) -> None:
     """The only wording this module pins: rules that keep agents from acting outward or trusting data."""
     assert sentence in " ".join((repo_root / relative).read_text(encoding="utf-8").split())
-
-
-def test_review_skills_route_statement_review_through_the_cli_reference(repo_root: Path) -> None:
-    """Skills say what to achieve and link the CLI reference; flags live in one place."""
-
-    human = (repo_root / "skills/human-review/SKILL.md").read_text(encoding="utf-8")
-
-    assert "../../autoform_cli/README.md#review" in human
-    assert "(references/readback.md)" in human
-    assert (repo_root / "skills/human-review/references/readback.md").is_file()

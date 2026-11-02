@@ -12,11 +12,11 @@ description: >-
 
 Maintain an ordered mathematical book whose formalizable leaves form a
 dependency DAG of coherent, pull-request-sized units. Markdown under
-`blueprint/` is the source of truth. Consult the
-[format and command reference](../../autoform_cli/README.md) only when exact
-syntax or CLI usage is needed, and the
-[worked example](references/cabannes-thesis-roadmap.md) only when a concrete
-source-to-DAG pattern would help.
+`blueprint/` is the source of truth. Consult the [format and command
+reference](../../autoform_cli/README.md) only when exact syntax or CLI usage is
+needed, and the [worked
+example](../setup/assets/cabannes-thesis-project/README.md), a deliberately
+partial vault, only when a concrete source-to-DAG pattern would help.
 
 There is no `autoform` on `PATH`. Run it from the Lean project root as
 `uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform`, where the root is the
@@ -81,10 +81,10 @@ under `blueprint/sources/`, labelling project-authored specifications as such.
 Under statement review (`blueprint/.autoform-review`), each `origin: cited`
 article must also link an in-vault, non-Markdown snapshot of its source with an
 exact `#L<start>-L<end>` range, as the [review
-contract](../../autoform_cli/README.md#review) says. External research is
-read-only, and contacting people requires permission. Do not invent a statement,
-motivation, proof narrative, dependency, citation, or historical attribution the
-sources do not support. Read [Setup's Zulip
+contract](../../autoform_cli/reference/skeleton-and-review.md#statement-review)
+says. External research is read-only, and contacting people requires permission.
+Do not invent a statement, motivation, proof narrative, dependency, citation, or
+historical attribution the sources do not support. Read [Setup's Zulip
 workflow](../setup/references/zulip.md) only for requested Zulip work.
 
 ### Search and library reuse

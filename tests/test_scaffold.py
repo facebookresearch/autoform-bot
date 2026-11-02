@@ -1350,7 +1350,10 @@ def test_checkout_pin_ignores_git_variables_that_name_another_repository(
     hooked = tmp_path / "hooked"
     hooked.mkdir()
     _git_output(hooked, "init", "-q")
-    _git_output(hooked, "commit", "-q", "--allow-empty", "-m", "the hook's repository")
+    # A file the checkout lacks, so Git asked about the hook's repository sees changes.
+    (hooked / "hooked.txt").write_text("the hook's repository\n")
+    _git_output(hooked, "add", "hooked.txt")
+    _git_output(hooked, "commit", "-q", "-m", "the hook's repository")
     plain = tmp_path / "plain"
     plain.mkdir()
     _run_from(monkeypatch, checkout)

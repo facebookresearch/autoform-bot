@@ -13,7 +13,7 @@ import pytest
 import autoform_cli.__main__ as cli_module
 from autoform_cli import lean as lean_module
 from autoform_cli.__main__ import main
-from autoform_cli._fs import is_within
+from autoform_cli._fs import is_within, relative
 from autoform_cli.render import DECLARATION_LABELS
 from autoform_cli.graph import (
     GraphValidationError,
@@ -539,15 +539,18 @@ def test_a_blueprint_with_no_unpublished_folder_reads_no_links_for_one(
         ("a", "/a"), ("/a", "a"), ("a/../b", "a"), ("../a", ".."), ("a", ".."),
     ],
 )
-def test_is_within_agrees_with_relative_to(path: str, directory: str) -> None:
+def test_is_within_and_relative_agree_with_relative_to(path: str, directory: str) -> None:
     try:
-        Path(path).relative_to(Path(directory))
+        expected = Path(path).relative_to(Path(directory))
     except ValueError:
-        expected = False
-    else:
-        expected = True
+        expected = None
 
-    assert is_within(Path(path), Path(directory)) is expected
+    assert is_within(Path(path), Path(directory)) is (expected is not None)
+    if expected is None:
+        with pytest.raises(ValueError):
+            relative(Path(path), Path(directory))
+    else:
+        assert relative(Path(path), Path(directory)) == expected
 
 
 @pytest.mark.parametrize(
@@ -721,7 +724,7 @@ def test_informally_uses_links_resolve_without_becoming_dependencies(tmp_path: P
     assert graph.nodes["top"].informal_dependencies == ("base",)
     assert graph.nodes["top"].dependencies == ("lemma",)
     assert graph.edge_count == 1
-    assert graph.informal_warnings == ()
+    assert graph.warnings == ()
 
 
 def test_an_informal_link_that_cannot_be_used_is_a_warning_not_an_error(tmp_path: Path) -> None:
@@ -741,7 +744,7 @@ def test_an_informal_link_that_cannot_be_used_is_a_warning_not_an_error(tmp_path
     graph = load_graph(blueprint)
 
     assert graph.nodes["top"].informal_dependencies == ("base",)
-    assert graph.informal_warnings == (
+    assert graph.warnings == (
         "top: informal target is not a node: '../sources/paper.md'",
         "top: informal target does not exist: 'missing.md'",
         "top: informal target must be a relative Markdown path: 'https://example.invalid/survey'",
@@ -765,7 +768,7 @@ def test_an_informal_link_whose_target_depends_on_its_article_is_a_warning(tmp_p
 
     # Loading leaves the search to check. C informally using A closes no cycle:
     # A only informally uses C back. Of C's two routes to A, the shorter is named.
-    assert graph.informal_warnings == ()
+    assert graph.warnings == ()
     assert graph.nodes["a"].informal_dependencies == ("c",)
     assert informal_cycle_warnings(graph) == ["a: informally uses c, which depends on it: c -> b -> a"]
 
@@ -781,7 +784,7 @@ def test_informally_uses_below_a_dependency_heading_is_a_warning(tmp_path: Path,
     # The deeper heading stays inside the dependency section, as before.
     assert graph.nodes["top"].dependencies == ("base",)
     assert graph.nodes["top"].informal_dependencies == ()
-    assert graph.informal_warnings == (
+    assert graph.warnings == (
         f"top: '### Informally uses' is read as part of '## {heading}', so its links count; "
         "write it as '## Informally uses'",
     )
@@ -2238,3 +2241,22 @@ def test_tracks_lean_set_outside_the_roadmap_root_is_ignored_with_a_warning(
         f"warning: {node_id}: tracks_lean is a project setting, read only in roadmap/README.md; ignored here"
         in capsys.readouterr().out.splitlines()
     )
+
+
+def test_check_prints_the_warnings_loading_gives_after_its_article_checks_settings_first(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Check prints Graph.warnings in one place: after the warnings it finds in the articles itself, ignored settings
+    before informal links."""
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "---\ntracks_lean: never\n---\n\n# Roadmap\n")
+    _roadmap_page(blueprint, "marked.md", "\ufeff---\ndeclaration: lemma\n---\n\n# Marked\n\nText.\n")
+    _node(blueprint, "loose.md", "# Loose\n## Informally uses\n[Gap](gap.md)\n")
+
+    assert main(["check", str(blueprint)]) == 0
+    assert [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning: ")] == [
+        "warning: marked: starts with a byte-order mark, so frontmatter on its first line is read as text and its "
+        "keys are ignored; remove the mark",
+        "warning: roadmap: tracks_lean accepts only true or false; ignored",
+        "warning: loose: informal target does not exist: 'gap.md'",
+    ]

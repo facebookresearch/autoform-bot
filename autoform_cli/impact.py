@@ -46,6 +46,7 @@ from ._repository import git
 from ._tree_snapshot import TreeSnapshotError, _normalized_name
 from .claims import author_claim_key
 from .lean import (
+    _ASCII_IDENTIFIER,
     IndexedSourceSnapshot,
     LeanSourceError,
     _longest_spellings,
@@ -312,8 +313,6 @@ def _name_key(name: str) -> tuple[object, ...]:
 # Project modules and the probe
 # --------------------------------------------------------------------------- #
 
-#: Module name components the probe can import without quoting.
-_MODULE_COMPONENT = re.compile(r"[A-Za-z_][A-Za-z0-9_'!?]*")
 _MAX_SOURCE_DEPTH = 64
 
 
@@ -353,7 +352,7 @@ def project_modules(
             if mode:
                 descendants = sorted(module for module in selected if module.startswith(f"{base}."))
                 for module in descendants:
-                    if not all(_MODULE_COMPONENT.fullmatch(part) for part in module.split(".")):
+                    if not all(_ASCII_IDENTIFIER.fullmatch(part) for part in module.split(".")):
                         raise SkeletonError(
                             [
                                 f"lean_lib {library.name}: cannot import {selected[module].as_posix()}; "
@@ -394,7 +393,7 @@ def _source_modules(
         parts = (*relative.parts[:-1], relative.stem)
         # Quote components that are not plain identifiers, so `Basic copy.lean`
         # is the module `«Basic copy»` that Lean reports.
-        module = ".".join(part if _MODULE_COMPONENT.fullmatch(part) else f"«{part}»" for part in parts)
+        module = ".".join(part if _ASCII_IDENTIFIER.fullmatch(part) else f"«{part}»" for part in parts)
         # A component containing `»` has no quoted spelling, so nothing can
         # import that module. Quoting it anyway keeps a dotted stem one
         # component, so a glob selects it exactly when Lake does.
@@ -730,7 +729,7 @@ def _glob(glob: str, library: LeanLibrary) -> tuple[str, str]:
     base, mode = glob, ""
     if glob.endswith((".*", ".+")):
         base, mode = glob[:-2], glob[-1]
-    if not base or not all(_MODULE_COMPONENT.fullmatch(part) for part in base.split(".")):
+    if not base or not all(_ASCII_IDENTIFIER.fullmatch(part) for part in base.split(".")):
         raise SkeletonError(
             [
                 f"lean_lib {library.name}: cannot read module glob {glob!r}; the impact probe supports "

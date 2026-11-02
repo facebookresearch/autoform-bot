@@ -3178,9 +3178,26 @@ def test_ambiguous_scoped_token_is_withheld_and_where_statement_is_recovered(tmp
     assert not where.declarations[0].source_withheld
 
 
+@pytest.fixture(scope="module")
+def built_semantics(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """One build of ``Skel.Semantics`` for the tests that copy it before changing it."""
+
+    project = _project(tmp_path_factory.mktemp("built-semantics"))
+    _build(project, "Skel.Semantics")
+    return project
+
+
+def _built_semantics_copy(root: Path, built: Path) -> Path:
+    """A private copy of the built fixture. Lake keeps the copied build, so it is not compiled again."""
+
+    project = root / "project"
+    shutil.copytree(built, project, symlinks=True)
+    return project
+
+
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_private_dependency_safety_uses_the_lean_environment(tmp_path: Path) -> None:
-    project = _project(tmp_path)
+def test_private_dependency_safety_uses_the_lean_environment(tmp_path: Path, built_semantics: Path) -> None:
+    project = _built_semantics_copy(tmp_path, built_semantics)
     _build(project, "Skel.Semantics")
 
     unsafe_blueprint = _blueprint(
@@ -3468,8 +3485,8 @@ def test_a_partial_dependency_refuses_only_its_own_article(tmp_path: Path, capsy
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_external_internal_detail_rotates_the_declaration_hash(tmp_path: Path) -> None:
-    project = _project(tmp_path)
+def test_external_internal_detail_rotates_the_declaration_hash(tmp_path: Path, built_semantics: Path) -> None:
+    project = _built_semantics_copy(tmp_path, built_semantics)
     _build(project, "Skel.Semantics")
 
     roots = (
@@ -3563,8 +3580,8 @@ def _probe_records(
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_probe_reads_more_roots_than_lean_compiles_in_a_list(tmp_path: Path) -> None:
-    project = _project(tmp_path)
+def test_probe_reads_more_roots_than_lean_compiles_in_a_list(tmp_path: Path, built_semantics: Path) -> None:
+    project = _built_semantics_copy(tmp_path, built_semantics)
     _build(project, "Skel.Semantics")
     # Found roots with a quoted, a needlessly quoted and a numeric component;
     # absent ones with characters a Lean string literal must escape, and with
@@ -3629,9 +3646,9 @@ def _replace_source(path: Path, old: str, new: str) -> None:
     ids=["vendor-macro", "external-wf-helper", "external-private-chain", "structure-field-order"],
 )
 def test_hidden_change_rotates_the_declaration_hash(
-    tmp_path: Path, root: str, module: str, old: str, new: str, boundary: list[str]
+    tmp_path: Path, built_semantics: Path, root: str, module: str, old: str, new: str, boundary: list[str]
 ) -> None:
-    project = _project(tmp_path)
+    project = _built_semantics_copy(tmp_path, built_semantics)
     _build(project, "Skel.Semantics")
     record, before = _probe_declaration(project, f"Skel.Semantics.{root}")
     assert [item[0] for item in record["boundary_modules"]] == boundary
@@ -3645,8 +3662,8 @@ def test_hidden_change_rotates_the_declaration_hash(
 
 
 @pytest.mark.skipif(not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain")
-def test_external_private_axiom_binds_its_module(tmp_path: Path) -> None:
-    project = _project(tmp_path)
+def test_external_private_axiom_binds_its_module(tmp_path: Path, built_semantics: Path) -> None:
+    project = _built_semantics_copy(tmp_path, built_semantics)
     _build(project, "Skel.Semantics")
     record, _ = _probe_declaration(project, "Skel.Semantics.usesVendorPrivateAxiom")
 

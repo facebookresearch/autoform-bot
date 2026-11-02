@@ -31,12 +31,12 @@ from .graph import (
 )
 from .lean import (
     _DECLARATION,
-    _ONE_COMPONENT,
     _WANTED_KEYWORDS,
     Declaration,
     LeanSourceError,
     SourceIndex,
     _name_prefix,
+    _unquoted_parts,
     _without_lean_comments,
     declaration_names,
     index_failure_message,
@@ -907,7 +907,7 @@ def _duplicate_target_warnings(graph: Graph) -> list[AuditWarning]:
         for key, names in owned:
             for name in names:
                 article_path = _relative_path(node.path, graph.blueprint_dir)
-                claims.setdefault((key, _name_key(name)), []).append((article_path, name))
+                claims.setdefault((key, _unquoted_parts(name)), []).append((article_path, name))
     warnings = []
     for (key, _), owners in claims.items():
         if len(owners) < 2:
@@ -924,13 +924,6 @@ def _duplicate_target_warnings(graph: Graph) -> list[AuditWarning]:
                 )
             )
     return warnings
-
-
-def _name_key(name: str) -> tuple[str, ...]:
-    """The components of the Lean name *name* spells; ``«»`` quoting and a leading ``_root_`` drop out."""
-
-    parts = [part[1:-1] if part[:1] == "«" and part[-1:] == "»" else part for part in _ONE_COMPONENT.findall(name)]
-    return tuple(parts[1:] if len(parts) > 1 and parts[0] == "_root_" else parts)
 
 
 def _size_warnings(graph: Graph, sizes: dict[str, int]) -> list[AuditWarning]:

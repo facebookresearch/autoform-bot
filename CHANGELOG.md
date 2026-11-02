@@ -89,6 +89,13 @@ date when the release is tagged.
   structure or class, whose fields need it. On one CI runner, indexing
   ATLAS's 13,698 Lean files took 9.2 s instead of 13.0 s; the declarations
   found are the same.
+- **Lean names.** Search, audit, elaboration limits, impact and the library
+  modules read Lean names by the one grammar `lean.py` writes down, Lean's own,
+  in place of seven copies that disagreed at the edges. A quoted component may
+  be empty or hold spaces and dots, as in Lean, but not `«`. Every name the Lean
+  index reads in Mathlib reads as before; a spelling no Mathlib name has, such
+  as `Nat..add`, `a«b»c` or `«a«b»`, now splits into components as that grammar
+  splits it.
 - **Search index size.** `dependencies/index.json` no longer repeats links the
   explorer doesn't read. A row whose route the explorer opens drops its context
   `url`, and only container rows keep `data_url`, since every page names its
@@ -102,6 +109,12 @@ date when the release is tagged.
   or Depends on headings, which holds for about nine in ten ATLAS articles.
   The links it finds are the same. On one CI runner, ATLAS rendered in 397 s
   instead of 456 s.
+- **Render reuse.** Render reuses one converter for statement and note bodies,
+  where it built one for each (about 16,000 on ATLAS), walks the book once
+  instead of twice, keeps every title's label from the search index for the
+  map, and compares path parts where it called `relative_to`, which is slow
+  from Python 3.12. On one CI runner ATLAS rendered in 312 s instead of 340 s,
+  with the same output.
 - **Landing.** The ready figure links the list of what it counts, each count
   shows once with thousands separators, and the brand gradient is off the
   figures, bar and header hairline. Source coverage reads in plain words
@@ -343,7 +356,8 @@ date when the release is tagged.
   hook's `GIT_DIR` and `GIT_INDEX_FILE` made Git take any directory for the
   hook's repository, so CI was written without a pin, and the default board was
   the hook repository's origin. Autoform's local Git commands now share one
-  runner that drops the caller's `GIT_*` variables.
+  runner that drops the caller's `GIT_*` variables, except
+  `GIT_CEILING_DIRECTORIES`, which only stops Git's search upwards.
 - **`\pmod`, `\bmod` and `\mod` on the site.** Site formulas typeset `\pmod`,
   `\bmod`, `\mod` and amsmath's `\varliminf`, `\varlimsup`, `\varinjlim` and
   `\varprojlim`. MathJax builds them from `\mmlToken`, which the page's TeX input

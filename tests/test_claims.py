@@ -809,6 +809,25 @@ def test_the_default_board_is_the_origin_of_the_checkout_even_under_a_hook(
     assert _origin_url(checkout) == "https://example.test/checkout.git"
 
 
+def test_the_default_board_is_not_taken_from_a_repository_above_a_git_ceiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # GIT_CEILING_DIRECTORIES hides the repositories above it, such as a home
+    # directory kept in Git; below one, Git finds no checkout, so claims need --repo.
+    home = tmp_path / "home"
+    _git("init", "--quiet", str(home))
+    _git("remote", "add", "origin", "https://example.test/home.git", cwd=home)
+    work = home / "work"
+    work.mkdir()
+    monkeypatch.delenv("GIT_CEILING_DIRECTORIES", raising=False)
+    assert _origin_url(work) == "https://example.test/home.git"
+
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(home.resolve()))
+
+    with pytest.raises(ValueError, match="--repo is required"):
+        _origin_url(work)
+
+
 def test_list_reads_a_lease_through_an_annotated_tag_as_read_does(tmp_path: Path, board_repo: Path) -> None:
     owner = _board(tmp_path, board_repo, "worker-a")
     assert owner.acquire("a", ttl=600)

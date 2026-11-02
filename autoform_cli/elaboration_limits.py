@@ -30,6 +30,8 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+from .lean import _CONTINUATION_IDENTIFIER, _name_parts
+
 #: Lean's defaults for the limits this module reads.
 LIMIT_DEFAULTS = {
     "maxHeartbeats": 200000,
@@ -49,9 +51,6 @@ _SCOPE_OPEN = re.compile(
     r"(?:@\[[^\]]*\]\s*)*(?:(?:public|private|meta|noncomputable)\s+)*section\b|namespace\s|mutual$"
 )
 _SCOPE_CLOSE = re.compile(r"end\b")
-#: A scope's name, and one component of it; a guillemet may quote dots and spaces.
-_SCOPE_NAME = re.compile(r"(?:«[^»]*»|[^\s«»])+")
-_COMPONENT = re.compile(r"«[^»]*»|[^.«»\s]+")
 #: Unindented lines that still belong to the declaration above them.
 _CONTINUATION = re.compile(r"(?:termination_by|decreasing_by|where|deriving)\b|\|")
 
@@ -111,8 +110,8 @@ def limits_by_line(lines: Sequence[str], starts: Iterable[int]) -> dict[int, tup
 def _components(text: str) -> int:
     """How many scopes the name at the start of ``text`` opens or closes: one per component, and one for no name."""
 
-    name = _SCOPE_NAME.match(text.lstrip())
-    return len(_COMPONENT.findall(name.group())) if name else 1
+    name = _CONTINUATION_IDENTIFIER.match(text.lstrip())
+    return len(_name_parts(name.group())) if name else 1
 
 
 def _scan(lines: Sequence[str], indent: int, starts: set[int]) -> dict[int, tuple[LimitSetting, ...]]:

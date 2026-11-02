@@ -9,9 +9,10 @@ file that does not match drops every code link. ``detect_repository_url`` and
 when the root lies in ``GITHUB_WORKSPACE``, and ask Git when the root is
 outside it or the variable is empty; ``repository_top_level`` places the root
 in its working tree. Every Git command here runs without the caller's ``GIT_*``
-variables, so the given directory alone selects the repository; the debrief
-store, ``work import-impact``, ``autoform --version``, the scaffold's pin and
-``worktrees`` run Git through ``git`` and ``run_git`` too.
+variables, except ``GIT_CEILING_DIRECTORIES``, so the given directory alone
+selects the repository; the debrief store, ``work import-impact``,
+``autoform --version``, the scaffold's pin and ``worktrees`` run Git through
+``git`` and ``run_git`` too.
 """
 
 from __future__ import annotations
@@ -264,7 +265,7 @@ def run_git(
     timeout: float | None = 10,
     environment: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run Git in ``root`` without the caller's ``GIT_*`` variables.
+    """Run Git in ``root`` without the caller's ``GIT_*`` variables, except ``GIT_CEILING_DIRECTORIES``.
 
     Git that cannot start or runs out of time comes back with exit status -1 and
     the reason on stderr, so callers handle one shape of failure.
@@ -286,12 +287,16 @@ def run_git(
 
 
 def _git_environment() -> dict[str, str]:
-    """Make the explicit working directory the only Git repository selector."""
+    """Make the explicit working directory the only Git repository selector.
+
+    ``GIT_CEILING_DIRECTORIES`` stays: it only stops Git's search upwards, so it
+    can hide a repository from the directory but never names one.
+    """
 
     environment = {
         name: value
         for name, value in os.environ.items()
-        if not name.startswith("GIT_")
+        if not name.startswith("GIT_") or name == "GIT_CEILING_DIRECTORIES"
     }
     environment["GIT_NO_REPLACE_OBJECTS"] = "1"
     return environment

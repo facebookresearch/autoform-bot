@@ -22,16 +22,13 @@ Select the rubric from the artifact under review.
 - For Lean code, read [faithfulness](references/faithfulness.md),
   [proof integrity](references/proof-integrity.md), [code quality](references/code-quality.md),
   and [Mathlib style](references/mathlib-style.md); gather each one's evidence.
-- For a read-back, an auditor's English account of what Lean declarations
-  assert, judge it against the cited source passage, without opening Lean, as
-  [read-back faithfulness](references/readback-faithfulness.md) says.
 
 Keep objective evidence separate from judgment. Never claim compilation,
 declaration resolution, axiom cleanliness, source coverage, or dependency
 correctness without showing how it was checked. If required sources are absent,
 return insufficient evidence rather than guessing.
 
-Except in the isolated read-back-judge role, regenerate skeleton evidence from
+Regenerate skeleton evidence from
 the exact candidate after its Lean build. Do that only in a trusted checkout or
 an operating-system sandbox: the command evaluates Lake configuration and
 project Lean metaprograms, and its resource bounds are not a security boundary.
@@ -41,7 +38,7 @@ refusal as insufficient evidence; never approve a current source excerpt paired
 with an older compiled declaration. Record the skeleton hash, the evidence hash
 of the packet that was read, and, for a source-faithfulness verdict, the
 article review hash; the
-[CLI reference](../../autoform_cli/README.md#skeleton-hashes) says what each
+[skeleton reference](../../autoform_cli/reference/skeleton-and-review.md#skeleton-hashes) says what each
 binds. These hashes are provenance evidence, not reviewer authentication or an
 approval key. If the user has paused skeleton evidence during proof development,
 skip it and Formalize's import-edit baselines, say so, and record none of these
@@ -50,8 +47,7 @@ hashes; the rubrics' evidence still applies, and so do `autoform check` and
 
 Report findings first, ordered by severity and tied to files or nodes. Then give
 the rubric scores, weighted verdict, commands run, unresolved questions, and a
-short remediation list. The read-back rubric's exact JSON output replaces this
-general report layout. Do not edit the reviewed work unless the user separately
+short remediation list. Do not edit the reviewed work unless the user separately
 asks for fixes.
 
 Score faithfulness and integrity separately: a sorry-free proof that drops a
