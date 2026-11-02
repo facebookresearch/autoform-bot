@@ -5,16 +5,14 @@ coarsened because they exceed the map's node limit
 (tests/test_scoped_overview_browser.py covers the authored-area case). A hub
 chapter whose three statements depend on three other chapters gets linked
 context cards, and a 14-statement chapter with one unlinked statement gets a
-native shelf; neither is an overview. At 1440x900 both must open with a
-reader at least 340 px wide and the chapter text visible, without the
-overview's collapsed layout or its 0.9 zoom-out floor. Arriving from a map
-card focuses the reader's heading. A chapter of 121 linked statements is
-coarsened, so it keeps the collapsed reader and the floor.
+shelf; neither is an overview. At 1440x900 both must open on the whole map
+with a reader at least 340 px wide and the chapter text visible, without the
+overview's collapsed layout. A chapter of 121 linked statements is coarsened,
+so it keeps the collapsed reader.
 """
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
@@ -77,13 +75,8 @@ def _frames(page: object) -> None:
     page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 50))))")
 
 
-def _scale(page: object) -> float:
-    transform = page.locator(".bp-dag-node").first.evaluate("element => element.style.transform")
-    return float(re.search(r"scale\(([\d.]+)\)", transform).group(1))
-
-
 @pytest.mark.parametrize("chapter", ["hub", "shelf"])
-def test_desktop_chapter_opens_with_the_reader_and_zooms_out_freely(
+def test_desktop_chapter_opens_with_the_reader(
     webkit_browser: object, pinned_runtime: object, chapters_site: Path, chapter: str,  # noqa: F811
 ) -> None:
     errors: list[str] = []
@@ -95,7 +88,7 @@ def test_desktop_chapter_opens_with_the_reader_and_zooms_out_freely(
             page.on("pageerror", lambda error: errors.append(str(error)))
             _routes(page, url, pinned_runtime, graph_client=True)
             page.goto(f"{url}/roadmap/{chapter}/index.html")
-            page.wait_for_selector(".bp-dag-node", state="visible")
+            page.locator(".bp-dag-integrated .bp-whole-map .pm-app").wait_for()
             page.wait_for_load_state("networkidle")
             _frames(page)
             viewer = page.locator(".bp-dag-viewer")
@@ -103,52 +96,17 @@ def test_desktop_chapter_opens_with_the_reader_and_zooms_out_freely(
             reader = page.locator(".bp-reading-pane").bounding_box()
             assert reader is not None and reader["width"] >= 340, reader
             assert page.locator(".bp-reading-body").get_by_text("chapter text is readable here").is_visible()
-            zoom_out = page.get_by_role("button", name="Zoom out", exact=True)
-            for _ in range(4):
-                zoom_out.click()
-                _frames(page)
-            scale = _scale(page)
             # The fixture really has the context card or the shelf that once collapsed the reader.
             if chapter == "hub":
                 assert page.locator(".bp-dag-node", has_text="Needed here").count() == 1
             else:
-                assert page.locator(".bp-scope-shelves").is_visible()
+                assert viewer.evaluate("element => element.classList.contains('bp-dag-has-shelves')") is True
         finally:
             context.close()
     assert errors == []
-    assert scale < 0.9 - 1e-6, scale
 
 
-@pytest.mark.parametrize("chapter", ["hub", "shelf"])
-def test_a_map_card_arrival_at_a_reader_first_chapter_focuses_the_reading_heading(
-    webkit_browser: object, pinned_runtime: object, chapters_site: Path, chapter: str,  # noqa: F811
-) -> None:
-    errors: list[str] = []
-    with _served(chapters_site) as url:
-        context = webkit_browser.new_context(viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
-        try:
-            page = context.new_page()
-            page.set_default_timeout(30_000)
-            page.on("pageerror", lambda error: errors.append(str(error)))
-            _routes(page, url, pinned_runtime, graph_client=True)
-            page.goto(f"{url}/roadmap/index.html")
-            page.wait_for_selector(".bp-dag-node", state="visible")
-            page.wait_for_load_state("networkidle")
-            page.locator(".bp-dag-node", has_text=chapter.title()).first.click()
-            page.wait_for_function("(title) => document.querySelector('.bp-reading-body h1')?.textContent.trim().startsWith(title)", arg=chapter.title())
-            # Focus lands after the reader's math pass, so wait up to 10 s for it rather than read it once.
-            where = page.evaluate("""async () => {
-              const heading = () => document.querySelector('.bp-reading-body h1');
-              for (let n = 0; n < 100 && document.activeElement !== heading(); n++) await new Promise(r => setTimeout(r, 100));
-              return document.activeElement === heading() ? null : document.activeElement.outerHTML.slice(0, 120);
-            }""")
-        finally:
-            context.close()
-    assert errors == []
-    assert where is None, where
-
-
-def test_a_chapter_over_the_map_limit_opens_map_first_with_the_zoom_floor(
+def test_a_chapter_over_the_map_limit_opens_map_first(
     webkit_browser: object, pinned_runtime: object, chapters_site: Path,  # noqa: F811
 ) -> None:
     errors: list[str] = []
@@ -160,19 +118,13 @@ def test_a_chapter_over_the_map_limit_opens_map_first_with_the_zoom_floor(
             page.on("pageerror", lambda error: errors.append(str(error)))
             _routes(page, url, pinned_runtime, graph_client=True)
             page.goto(f"{url}/roadmap/big/index.html")
-            page.wait_for_selector(".bp-dag-node", state="visible")
+            page.locator(".bp-dag-integrated .bp-whole-map .pm-app").wait_for()
             page.wait_for_load_state("networkidle")
             _frames(page)
             viewer = page.locator(".bp-dag-viewer")
             assert viewer.evaluate("element => element.classList.contains('bp-dag-scope-overview')") is True
             reader = page.locator(".bp-reading-pane").bounding_box()
             assert reader is not None and reader["width"] <= 64, reader
-            zoom_out = page.get_by_role("button", name="Zoom out", exact=True)
-            for _ in range(4):
-                zoom_out.click()
-                _frames(page)
-            scale = _scale(page)
         finally:
             context.close()
     assert errors == []
-    assert scale >= 0.9 - 1e-6, scale

@@ -1,5 +1,6 @@
-/* Whole-project map: one continuous, zoomable map of every result, with an outline on the left and a reading pane on the right. */
-:root {
+/* Whole-project map: one continuous, zoomable map of every result, with an outline on the left and a reading pane on the right.
+   In a book page it takes the scheme the site's toggle sets (Material's data-md-color-scheme) over the system's. */
+:root, [data-md-color-scheme=default] .pm-app {
   --pm-bg: #f7f7f5; --pm-panel: #ffffff; --pm-fg: #1d1d1f; --pm-muted: #5f6368; --pm-faint: #9aa0a6; --pm-border: #e3e3e0;
   --pm-link: #1a5fb4; --pm-accent: #1a5fb4; --pm-region: #ffffff; --pm-region-stroke: #c9c9c4; --pm-edge: #7a7f86;
   --pm-proved: #2e7d4f; --pm-progress: #3b82c4; --pm-planned: #b9bdc2; --pm-select: #111111; --pm-dim: .38;
@@ -13,12 +14,12 @@
     --pm-proved: #5cc48a; --pm-progress: #6aa8e8; --pm-planned: #565b62; --pm-select: #ffffff;
   }
 }
-:root[data-pm-theme=dark] {
+:root[data-pm-theme=dark], [data-md-color-scheme=slate] .pm-app {
   --pm-bg: #16181b; --pm-panel: #1e2024; --pm-fg: #e8eaed; --pm-muted: #a8adb4; --pm-faint: #6b7178; --pm-border: #2e3136;
   --pm-link: #8ab4f8; --pm-accent: #8ab4f8; --pm-region: #1e2024; --pm-region-stroke: #3a3e44; --pm-edge: #8a9099;
   --pm-proved: #5cc48a; --pm-progress: #6aa8e8; --pm-planned: #565b62; --pm-select: #ffffff;
 }
-html, body { height: 100%; margin: 0; }
+html:has(> body.pm-page), body.pm-page { height: 100%; margin: 0; }
 body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 var(--pm-font); overflow: hidden; }
 .pm-app { display: grid; grid-template-columns: 280px minmax(0, 1fr) 380px; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
 .pm-top { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--pm-border); background: var(--pm-panel); }
@@ -116,6 +117,8 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-result.pm-planned > rect { fill: var(--pm-panel); stroke: var(--pm-planned); }
 .pm-result.pm-card > rect { stroke-width: 1.4; }
 .pm-result:focus-visible > rect, .pm-result.pm-selected > rect { stroke: var(--pm-select); stroke-width: 2.5; outline: none; }
+/* In a book page, the statement being read. */
+.pm-result.pm-reading > rect { stroke: var(--pm-accent); stroke-width: 2.5; }
 .pm-card-title { fill: var(--pm-fg); font: 600 13px var(--pm-font); pointer-events: none; }
 .pm-card-meta { fill: var(--pm-muted); font: 11px var(--pm-font); pointer-events: none; }
 .pm-dimmed { opacity: var(--pm-dim); }
@@ -180,3 +183,13 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-show-more[hidden] { display: none; }
 .pm-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+
+/* Inside a book page the map fills the book's stage, which has its own outline, search, trail and reading pane; the
+   map keeps its zoom tools. */
+.pm-app.pm-embedded { position: absolute; inset: 0; display: block; height: auto; color: var(--pm-fg); font: 14px/1.45 var(--pm-font); }
+.pm-embedded .pm-stage { position: absolute; inset: 0; background: var(--pm-bg); }
+.pm-embedded .pm-top { position: absolute; z-index: 6; right: 12px; bottom: 12px; padding: 0; border: 0; background: none; }
+.pm-embedded .pm-hint:not(.pm-hint-strong) { right: 260px; }
+/* A phone has no keys or Control-scroll, and its stage is short. */
+@media (max-width: 700px) { .pm-embedded .pm-hint:not(.pm-hint-strong) { display: none; } }
+.pm-embedded :is(.pm-home, .pm-trail, .pm-search, .pm-side, .pm-reader) { display: none !important; }

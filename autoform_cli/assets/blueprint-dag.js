@@ -88,6 +88,10 @@
     var loading = host.querySelector(".bp-dag-loading"); if (loading) loading.hidden = false;
     var instance = ++hostSequence;
     var client = null, index = null, ui$wikiLinks = null;
+    // The whole-project map draws in the stage. Its data sits beside the search index, whose address is relative to the
+    // page as loaded: the router may move the address to the canonical page before the first commit.
+    var catalog = host.getAttribute("data-catalog-src");
+    if (catalog) host.dataset.wholeMap = new URL(catalog, location.href).href;
     var navigation = window.AutoformNavigation.create({
       host: host,
       onCommit: function (bundle) {
@@ -96,7 +100,13 @@
         // old content column. The error path below restores native reading.
         document.body.classList.add("bp-dag-app-page");
         var ready;
-        if (!client) { client = mount(host, bundle.graph, instance, bundle, navigation); clients.set(host, client); ready = client.ready; }
+        if (!client) {
+          client = mount(host, bundle.graph, instance, bundle, navigation); clients.set(host, client); ready = client.ready;
+          if (catalog) {
+            var map = element("script"); map.src = new URL("../javascripts/project-map.js", host.dataset.wholeMap).href; document.head.appendChild(map);
+            host.addEventListener("autoform-map-select", function (event) { navigation.navigateNode(event.detail.id, event.detail); });
+          }
+        }
         else ready = client.applyRoute(bundle);
         if (index) client.useIndex(index);
         if (ui$wikiLinks) client.useWikiLinks(ui$wikiLinks);
@@ -1385,7 +1395,7 @@
       updateProjection(); ui$selected = saved.node && byId.get(saved.node) || null;
       ui$selectedStatuses = new Set(saved.statuses || presentStatuses); ui$showIsolated = saved.isolates !== false;
       ui$mode = ["graph", "list", "sources", "regions"].indexOf(saved.mode) >= 0 ? saved.mode : "graph";
-      if (ui$mode === "graph" && !mapAllowed) ui$mode = "list";
+      if (ui$mode === "graph" && !ui$mapAllowed) ui$mode = "list";
       ui$listLimit = Math.max(LIST_PAGE, Number(saved.listLimit) || LIST_PAGE); ui$relationIds = saved.relationIds || null;
       ui$outlineLimit = Math.max(120, Number(saved.outlineLimit) || 120); renderNavigation();
       ui$direction = saved.direction || "both"; ui$query = saved.query || ""; dom$search.value = ui$query;
@@ -1528,7 +1538,7 @@
         readingReady = window.AutoformMath ? Promise.resolve(window.AutoformMath.refresh(dom$readingBody)) : Promise.resolve();
       }
       updateProjection();
-      ui$mode = mapAllowed ? "graph" : "list"; ui$direction = "both";
+      ui$mode = ui$mapAllowed ? "graph" : "list"; ui$direction = "both";
       ui$selectedStatuses = new Set(presentStatuses); ui$showIsolated = true; ui$activeDirty = true;
       var legacy = bundle.parameters || {};
       if (legacy.view === "list") ui$mode = "list";
@@ -1552,7 +1562,7 @@
       var readingRequested = Boolean(bundle.focus && !mapRequested || bundle.anchor || record && record.result);
       setSheet(bundle.snapshot ? bundle.snapshot.readingOpen !== false && 1 : sheetLayout() && (topicOverview || mapRequested) ? false : readingRequested ||
         !ui$overviewOnly && (sheetLayout() ? !ui$scopeOverview && Boolean(bundle.nodeId) : !ui$coarseOverview), ui$selected);
-      refresh(true); firstResize = true; resize();
+      refresh(true); firstResize = true; resize(); host.dataset.mapStart = bundle.nodeId || bundle.scope || "";
       if (navigation) navigation.loadIndex().catch(showError);
       readingReady = readingReady.catch(function () {}).then(function () { return new Promise(function (resolve) { requestAnimationFrame(function () {
         if (!alive || (isCurrent && !isCurrent())) { resolve(); return; }
@@ -1685,7 +1695,7 @@
       ui$coarseOverview = Boolean(overview && (!overview._scopeOverview.$structural || overview._scopeOverview.originalNodes > MAX_MAP_NODES && overview.nodes.length));
       host.classList.toggle("bp-dag-scope-overview", ui$coarseOverview);
       host.classList.toggle("bp-dag-area-expanded", Boolean(navigation && ui$area));
-      adoptGraph(projected); ui$mapAllowed = mapAllowed; ui$activeDirty = true; ui$spotlight = ui$hovered = null;
+      adoptGraph(projected); ui$mapAllowed = mapAllowed || Boolean(host.dataset.wholeMap); ui$activeDirty = true; ui$spotlight = ui$hovered = null;
       overlays.forEach(function (control) { control.remove(); }); overlays.clear();
       ui$selected = byId.get(ui$requestedNode) || null;
       if (!ui$filtersTouched) ui$selectedStatuses = new Set(presentStatuses);
@@ -2039,11 +2049,12 @@
       dom$browse.addEventListener("keydown", function (event) {
         if (event.key === "Escape" && !dom$browsePopover.hidden) { event.preventDefault(); setBrowse(false); }
       });
+      // Captured, so a press on the whole map, which keeps its own pointer events, still closes them.
       globalListen(document, "pointerdown", function (event) {
         if (!dom$filters.contains(event.target)) setFilters(false, false);
         if (!dom$browse.contains(event.target)) setBrowse(false, false);
         if (!dom$searchWrap.contains(event.target)) closeSearch();
-      });
+      }, true);
       dom$browse.addEventListener("focusout", function (event) {
         if (event.relatedTarget && !dom$browse.contains(event.relatedTarget)) setBrowse(false, false);
       });
@@ -2387,6 +2398,8 @@
       var enabled = ui$selectedStatuses.size;
       dom$filterSummary.textContent = "Filter: " + (enabled === presentStatuses.length ? "all" : enabled + " of " + presentStatuses.length) +
         " statuses" + (ui$showIsolated ? "" : " · linked only");
+      // The whole map dims the results whose status the filter leaves out.
+      if (enabled < presentStatuses.length) host.dataset.mapStatuses = Array.from(ui$selectedStatuses).join(" "); else delete host.dataset.mapStatuses;
       dom$graphMode.hidden = ui$mode === "graph";
       dom$listMode.textContent = currentBundle && currentBundle.scope === "roadmap" ? "All statements" : "Statements in this topic";
       var hasSources = sourceNodes().length > 0;
@@ -2401,7 +2414,7 @@
       // Browse marks the list on screen, so at most one of its choices reads as pressed; on the map neither does.
       pressed(dom$listMode, ui$mode === "list");
       if (dom$sourcesMode) pressed(dom$sourcesMode, ui$mode === "sources");
-      dom$stage.hidden = ui$mode !== "graph" || host.classList.contains("bp-dag-shelves-only"); dom$inventory.hidden = ui$mode === "graph";
+      dom$stage.hidden = ui$mode !== "graph" || !host.dataset.wholeMap && host.classList.contains("bp-dag-shelves-only"); dom$inventory.hidden = ui$mode === "graph";
       dom$graphMode.disabled = !ui$mapAllowed;
       // A disabled Back to map says why the map is unavailable.
       if (ui$mapAllowed) dom$graphMode.removeAttribute("title"); else dom$graphMode.title = "Too many statements to draw as a map";
@@ -3430,7 +3443,7 @@
       if (navigation && ui$mode !== "sources") dom$inventory.querySelector("h2").textContent = articles ? "Statements & articles" : "Statements";
       dom$inventoryRows = new Map();
       // A page too big for a map says so in words: a disabled button's tooltip never shows on a touch screen.
-      if (navigation && !mapAllowed && ui$mode === "list") {
+      if (navigation && !mapAllowed && !host.dataset.wholeMap && ui$mode === "list") {
         var topics = data.nodes.filter(function (node) { return node.kind === "scope"; }).length;
         dom$inventoryList.appendChild(element("li", "bp-dag-inventory-note", topics > 1 ? (currentBundle && currentBundle.title || "This page") + " has " +
           num(topics) + " topics, too many to draw as one map. Open one from Topics, or search." : "Too many statements to draw as one map. Search to find one."));

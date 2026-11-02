@@ -14,12 +14,34 @@
   "use strict";
 
   var host = document.querySelector("[data-project-map]");
+  // A book page loads this script and names the search index beside the map's data in data-whole-map: the map makes
+  // its own host in the book's stage.
+  var bookHost = !host && document.querySelector("[data-whole-map]"), bookStage = bookHost && bookHost.querySelector(".bp-dag-stage");
+  if (bookStage) {
+    host = document.createElement("div"); host.className = "bp-whole-map";
+    host.setAttribute("data-project-map", ""); host.setAttribute("data-embedded", ""); host.setAttribute("data-routes", bookHost.dataset.wholeMap);
+    bookStage.appendChild(host);
+  }
   if (!host || host.dataset.pmMounted) return;
   host.dataset.pmMounted = "1";
   var L = window.AutoformMapLayout;
+  // Inside a book page the map draws in the book's stage. The book has the outline, search, trail and reading pane and
+  // owns the address and history: the map tells it which result or part was picked, with an "autoform-map-select" event
+  // from the host, and follows the book's host (`book`): data-map-start names the page's node or scope, and
+  // data-map-statuses the statuses its filter shows. The map's data and style sit beside the search index (data-routes).
+  var embedded = host.hasAttribute("data-embedded"), fromBook = null;
+  var book = embedded && host.parentNode && host.parentNode.closest("[data-catalog-src]") || host;
 
-  var mapBase = new URL(host.getAttribute("data-map") || "data/", location.href);
   var routeBase = new URL(host.getAttribute("data-routes") || "dependencies/index.json", location.href);
+  var mapBase = new URL(host.getAttribute("data-map") || (embedded ? new URL("map/data/", routeBase).href : "data/"), location.href);
+  // Embedded, the map waits for its stylesheet, so the book never shows it unstyled and it packs for the styled stage.
+  var styled = Promise.resolve();
+  if (embedded) {
+    var style = document.createElement("link"); style.rel = "stylesheet"; style.href = new URL("../stylesheets/project-map.css", routeBase).href;
+    host.style.visibility = "hidden";
+    styled = new Promise(function (resolve) { style.onload = style.onerror = function () { host.style.visibility = ""; resolve(); }; });
+    document.head.appendChild(style);
+  }
   var reduceMotion = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
   var SVGNS = "http://www.w3.org/2000/svg";
   var ROOT = "#root";
@@ -230,8 +252,21 @@
   stage.append(canvas, pin, hint);
   var reader = el("aside", "pm-reader"); reader.setAttribute("aria-label", "Reading pane");
   var readerInner = el("div", "pm-reader-inner"); reader.append(readerInner);
-  var live = el("p", "pm-sr"); live.setAttribute("aria-live", "polite");
+  // Embedded, the book announces where the reader is.
+  var live = el("p", "pm-sr"); if (!embedded) live.setAttribute("aria-live", "polite");
   app.append(top, side, stage, reader, live);
+  if (embedded) {
+    app.classList.add("pm-embedded");
+    // The book's own drawing under the map listens on its stage: the map's pointer, wheel and keys stop at the map.
+    ["pointerdown", "pointermove", "pointerup", "pointercancel", "wheel"].forEach(function (type) {
+      host.addEventListener(type, function (event) { event.stopPropagation(); });
+    });
+    host.addEventListener("keydown", function (event) {
+      if (!/^(Escape|Arrow|[-+=0]$)/.test(event.key)) return;
+      event.stopPropagation();
+      if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); escape(); }
+    });
+  }
   host.append(app);
 
   // ---------------------------------------------------------------- camera
@@ -533,9 +568,11 @@
     var b = screenBox(entry.box);
     if (!onScreen(b) || b.w < 1) return false;
     var row = entry.row, isSelected = row.id === state.selected;
-    var dim = state.related ? !state.related.results.has(row.id) : state.facets && row.facet && !state.facets.has(row.facet);
+    var dim = (state.related ? !state.related.results.has(row.id) : state.facets && row.facet && !state.facets.has(row.facet)) ||
+      Boolean(statuses && !statuses.has(row.status));
     var holder = keep(resultLayer, "result:" + row.id, "g", {
-      class: "pm-result pm-" + group(row.status) + (text ? " pm-card" : "") + (isSelected ? " pm-selected" : "") + (dim ? " pm-dimmed" : ""),
+      class: "pm-result pm-" + group(row.status) + (text ? " pm-card" : "") + (isSelected ? " pm-selected" : "") +
+        (row.id === reading && !isSelected ? " pm-reading" : "") + (dim ? " pm-dimmed" : ""),
       tabindex: 0, role: "button", "aria-label": plain(row.title) + ", " + statusWords(row.status), "data-result": row.id});
     var card = holder.firstChild || holder.appendChild(svg("rect"));
     placeRect(card, b);
@@ -626,7 +663,7 @@
     var record = viewPart(), text = state.error || HINT;
     if (!state.error && record && record.id !== ROOT && record.data && !state.selected) {
       var inside = record.kids.some(function (id) { return drawn.has(id); }) || drawn.has(record.id + "#results");
-      if (!inside && (record.kids.length || record.results.length)) text = "You are between the parts of " + plain(record.summary.title) + ". Zoom out, or choose a part in the reading pane.";
+      if (!inside && (record.kids.length || record.results.length)) text = "You are between the parts of " + plain(record.summary.title) + ". Zoom out" + (embedded ? "." : ", or choose a part in the reading pane.");
     }
     if (hint.textContent !== text) hint.textContent = text;
     hint.classList.toggle("pm-hint-strong", text !== HINT);
@@ -679,7 +716,12 @@
     if (id) state.picked = null;
     state.selected = id;
     state.related = id ? relatedSets(id) : null;
-    if (id) showResult(id); else showPart(currentPart());
+    // Embedded, the book's reading pane opens the result's page; a result the book sent is not sent back.
+    if (embedded) {
+      if (id && id !== fromBook) { fromBook = id; host.dispatchEvent(new CustomEvent("autoform-map-select", {bubbles: true, detail: {id: id, history: "push", focus: "reading"}})); }
+    }
+    else if (id) showResult(id);
+    if (!id) showPart(currentPart());
     if (options.history !== false) remember(options.replace, leaving);
     schedule();
   }
@@ -1236,6 +1278,7 @@
   }
   // `leaving` is the view state of the entry being left, when the reading pane has already changed under it.
   function remember(replace, leaving) {
+    if (embedded) return;
     var snap = snapshot();
     var hash = snap.selected ? "#result=" + encodeURIComponent(snap.selected) :
       snap.focusPart && snap.focusPart !== ROOT ? "#part=" + encodeURIComponent(snap.focusPart) : location.pathname + location.search;
@@ -1247,6 +1290,7 @@
     if (replace || same) history.replaceState(Object.assign(snap, viewState()), "", hash); else history.pushState(snap, "", hash);
   }
   window.addEventListener("popstate", function (event) {
+    if (embedded) return;
     var snap = event.state;
     clearTimeout(cameraTimer);  // a camera write still pending belongs to the entry just left
     var epoch = navigation();
@@ -1275,6 +1319,7 @@
   // Keep the camera of the current entry up to date as the reader moves around.
   var cameraTimer = 0;
   function rememberCamera() {
+    if (embedded) return;
     clearTimeout(cameraTimer);
     cameraTimer = setTimeout(function () {
       var current = history.state && history.state.pm ? history.state : snapshot();
@@ -1351,8 +1396,10 @@
     if (resultNode) { navigation(); select(resultNode.getAttribute("data-result")); return; }
     var partNode = target.closest && target.closest("[data-part]");
     if (partNode) {
-      var id = partNode.getAttribute("data-part");
+      var id = partNode.getAttribute("data-part"), inside = state.focusPart === id;
       if (state.picked === id) flyToPart(id).catch(report); else pick(id).catch(report);
+      // A click in the part the view is already in, between its cards, leaves the reader on its page.
+      if (!inside) tell(id);
       return;
     }
     if (state.selected) select(null); else unpick();
@@ -1388,18 +1435,22 @@
   function upOneLevel() {
     if (state.selected) {
       var home = model.results.get(state.selected) && model.results.get(state.selected).home;
-      if (home) leaveFor(home).catch(report); else select(null, {history: false});
+      if (home) { tell(home); leaveFor(home).catch(report); } else select(null, {history: false});
       return;
     }
     var here = state.focusPart && state.focusPart !== ROOT && part(state.focusPart) || viewPart();
     if (!here || here.id === ROOT) return;
-    if (here.parent === ROOT || !part(here.parent)) wholeProject(); else flyToPart(here.parent).catch(report);
+    // Embedded, the reader turns to the part the view is in before the view leaves it, as Up from a result does.
+    if (embedded && fromBook !== here.id && hasPage(here.id)) { tell(here.id); return; }
+    if (here.parent === ROOT || !part(here.parent)) wholeProject(); else { tell(here.parent); flyToPart(here.parent).catch(report); }
   }
   // Escape lets go of what is chosen first, then goes up a level.
   function escape() { if (state.selected) select(null); else if (state.picked) unpick(); else upOneLevel(); }
   upLevel.addEventListener("click", function () { unpick(); upOneLevel(); });
   document.addEventListener("keydown", function (event) {
     var active = document.activeElement, typing = !!active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
+    // Embedded, "/" is the book's search, and the map's host handles its own Escape.
+    if (embedded) return;
     if (event.key === "/" && active !== search && !typing) {
       event.preventDefault(); search.focus(); search.select();
     } else if (event.key === "Escape" && !typing && !event.defaultPrevented) { event.preventDefault(); escape(); }
@@ -1408,11 +1459,18 @@
   if (window.ResizeObserver) new ResizeObserver(function () {
     if (!stageSize) return;
     measure();
-    if ((size.w >= size.h) !== (stageSize.w >= stageSize.h)) {
+    // The book hides its stage while it lists statements; the map waits until it shows again.
+    if (size.w <= 1) return;
+    var repack = stageSize.w <= 1 || (size.w >= size.h) !== (stageSize.w >= stageSize.h);
+    if (repack) {
       stageSize = {w: size.w, h: size.h};
       packRoot();
-      fitProject(true);
+      if (!embedded) fitProject(true);
     }
+    // In the book, a stage that was hidden or repacked goes back to the page's place, and the reading pane opening or
+    // closing refits the whole project when that is the view.
+    if (embedded && (repack || missed)) { fromBook = null; show(book.getAttribute("data-map-start") || ""); }
+    else if (embedded && state.focusPart === ROOT && !state.selected && !state.picked) fitProject();
     schedule();
   }).observe(stage);
   function report(error) {
@@ -1422,13 +1480,92 @@
     if (window.console) console.error(error);
   }
 
+  // Where the book sends the map: the roadmap's own id for the whole project, a part, a result, or else (an article
+  // that states nothing) the part whose folder holds it. What the map itself just picked is already in view.
+  var missed = false;
+  function show(id) {
+    measure();
+    // An empty roadmap draws nothing, and a hidden stage (the book's list) waits until it shows again.
+    if (!part(ROOT)) return;
+    missed = size.w <= 1;
+    if (missed) return;
+    if (id && id === fromBook && (state.selected === id || state.picked === id || state.focusPart === id)) return;
+    fromBook = id || null; reading = null;
+    if (!id || id === "roadmap") return wholeProject();
+    if (knownPart(id)) {
+      if (state.selected) select(null, {history: false});
+      return goToPart(id, {history: false}).catch(report);
+    }
+    return arriveById(id, {history: false}).catch(function () {
+      var home = nearestPart(id);
+      if (state.selected) select(null, {history: false});
+      return home ? goToPart(home, {history: false}) : wholeProject();
+    }).catch(wholeProject);
+  }
+  // project_map.py names the parts it makes up "region:..." or ".../~n": they, and the map's own root, have no page.
+  function hasPage(id) { return id !== ROOT && !/^region:|\/~/.test(id); }
+  // Search lists every part, loaded or not.
+  function knownPart(id) { return Boolean(part(id) || model.search && model.search.partById.has(id)); }
+  // A page the map has no card for, such as an article that states nothing, opens the part whose folder holds it.
+  function nearestPart(id) {
+    for (var at = id; at; at = at.slice(0, Math.max(0, at.lastIndexOf("/")))) if (knownPart(at)) return at;
+    return null;
+  }
+  // Embedded, a part the reader picks, opens or goes up to on the map opens its page in the book, as a picked result
+  // does.
+  function tell(id) {
+    if (!embedded || !id || id === fromBook || !hasPage(id)) return;
+    fromBook = id;
+    // Focus stays on the map, so the part can be opened there next.
+    host.dispatchEvent(new CustomEvent("autoform-map-select", {bubbles: true, detail: {id: id, history: "push", focus: false}}));
+  }
+  // The book's status filter, as the statuses it shows (space-separated; absent for all of them): the map dims the rest.
+  var statuses = null;
+  function readStatuses() {
+    var shown = book.getAttribute("data-map-statuses");
+    statuses = shown === null ? null : new Set(shown.split(" ").filter(Boolean));
+  }
+  if (embedded && window.MutationObserver) new MutationObserver(function (records) {
+    var changed = function (name) { return records.some(function (record) { return record.attributeName === name; }); };
+    if (changed("data-map-statuses")) { readStatuses(); schedule(); }
+    if (changed("data-map-start") && model.parts.has(ROOT)) show(book.getAttribute("data-map-start") || "");
+  }).observe(book, {attributes: true, attributeFilter: ["data-map-start", "data-map-statuses"]});
+  if (embedded) readStatuses();
+  // Embedded, the statement being read lights up on the map: the first one in the book's reading pane that reaches below
+  // the pane's top, as the reader scrolls a chapter. One the map has drawn off the stage comes into view.
+  var reading = null, readingFrame = 0;
+  function followReading() {
+    var body = document.querySelector(".bp-reading-body");
+    if (!body || body.pmFollowed) return;
+    body.pmFollowed = true;
+    body.addEventListener("scroll", function () {
+      cancelAnimationFrame(readingFrame);
+      readingFrame = requestAnimationFrame(function () {
+        var top = body.getBoundingClientRect().top + 40, id = null;
+        Array.prototype.some.call(body.querySelectorAll(".bp-thmwrapper[data-autoform-node-id]"), function (card) {
+          if (card.getBoundingClientRect().bottom < top) return false;
+          id = card.getAttribute("data-autoform-node-id");
+          return true;
+        });
+        if (id === reading) return;
+        reading = id; schedule();
+        var entry = id && model.results.get(id), b = entry && entry.box && screenBox(entry.box);
+        if (b && !flight && (b.x < 0 || b.y < 0 || b.x + b.w > size.w || b.y + b.h > size.h)) {
+          var at = centerOf(entry.box); flyTo({x: at[0], y: at[1], k: camera.k});
+        }
+      });
+    }, {passive: true});
+  }
+
   // ---------------------------------------------------------------- start
-  fetchJSON("index.json").then(function (index) {
+  styled.then(function () { return fetchJSON("index.json"); }).then(function (index) {
     if (!L) throw new Error("the map's layout script did not load");
     model.index = index;
     if (!index.regions.length) {
-      readerInner.replaceChildren(el("p", "pm-kicker", "Whole project"), el("h2", "", plain(index.title)),
-        el("p", "pm-empty", "Nothing is on the map yet: the roadmap has no results."));
+      var nothing = "Nothing is on the map yet: the roadmap has no results.";
+      readerInner.replaceChildren(el("p", "pm-kicker", "Whole project"), el("h2", "", plain(index.title)), el("p", "pm-empty", nothing));
+      // The stage says so too, for the book, which hides the map's reading pane; there is nothing to move.
+      hint.textContent = nothing; hint.classList.add("pm-hint-strong"); top.hidden = true;
       return;
     }
     var root = {id: ROOT, summary: {id: ROOT, title: index.title, results: index.results, status: index.status, parts: index.regions.length, api: [], api_total: 0, imports_total: 0},
@@ -1443,6 +1580,7 @@
     fitProject(true);
     renderSide();
     var hash = location.hash.slice(1), params = new URLSearchParams(hash);
+    if (embedded) { show(book.getAttribute("data-map-start") || ""); followReading(); schedule(); return; }
     var start = params.get("result") ? arriveById(params.get("result"), {replace: true})
       : params.get("part") ? goToPart(params.get("part"), {replace: true})
       : Promise.resolve(remember(true));
@@ -1450,5 +1588,6 @@
     schedule();
   }).catch(function (error) {
     readerInner.replaceChildren(el("p", "pm-empty", "The map could not load: " + error.message));
+    hint.textContent = "The map could not load: " + error.message; hint.classList.add("pm-hint-strong");
   });
 })();
