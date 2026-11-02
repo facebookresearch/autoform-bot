@@ -1158,7 +1158,8 @@ def _render_pages(
     # The landing page is a dashboard, not chapter one. Previous/next belongs
     # to the book, so the strip starts at the contents page. Each page is named
     # by its node's title as authored: its header holds the visible text, which
-    # a second pass through Markdown would read differently.
+    # a second pass through Markdown would read differently. A title with no
+    # math or code keeps that visible text, emphasis and links already read.
     authored = {
         (destination / node.path.relative_to(blueprint)).resolve(): node.title
         for node in graph.nodes.values()
@@ -2140,10 +2141,10 @@ def _append_book_navigation(pages: list[Path], authored: dict[Path, str]) -> Non
     """Add previous/next links to the bottom of Blueprint pages, never global nav."""
     if len(pages) < 2:
         return
+    visible = [_page_heading(page.read_text(encoding="utf-8")) or page.stem for page in pages]
     titles = [
-        _title_html(authored[page.resolve()]) if page.resolve() in authored
-        else html.escape(_page_heading(page.read_text(encoding="utf-8")) or page.stem)
-        for page in pages
+        _title_html(authored[page.resolve()], fallback=shown) if page.resolve() in authored else html.escape(shown)
+        for page, shown in zip(pages, visible)
     ]
     for index, page in enumerate(pages):
         links: list[str] = []
@@ -2243,10 +2244,8 @@ def _next_target(
         if chapter_page is not None:
             # The chapter's title as authored: its page's header holds the visible text.
             chapter = graph.nodes.get(chapter_id)
-            chapter_title = (
-                _title_html(chapter.title) if chapter is not None
-                else html.escape(_page_heading(chapter_page.read_text(encoding="utf-8")) or "chapter")
-            )
+            shown = _page_heading(chapter_page.read_text(encoding="utf-8")) or "chapter"
+            chapter_title = _title_html(chapter.title, fallback=shown) if chapter is not None else html.escape(shown)
             href = _as_published(relative_link(chapter_page, page, ".html"))
             actions.insert(0, f'<a href="{html.escape(href, quote=True)}">{chapter_title}</a>')
         blockers = [
@@ -4100,15 +4099,17 @@ def _dependency_disclosure(
     return f'<details class="bp-dependencies"><summary>{label}</summary>{body}</details>'
 
 
-def _title_html(text: str) -> str:
+def _title_html(text: str, *, fallback: str | None = None) -> str:
     """A title as HTML whose TeX and code the site typesets, not as the source's dollar signs.
 
     Only converter-validated text, code and math enter the page; authored HTML,
-    destinations and attributes stay literal.
+    destinations and attributes stay literal. A title the converter leaves alone
+    shows ``fallback`` as text when given: a page header's visible title, whose
+    emphasis and links read as the page's own heading does.
     """
     reading = dag_viewer._reading_label(text, require_math=False)
     if reading is None:
-        return html.escape(text)
+        return html.escape(text if fallback is None else fallback)
     return "".join(
         html.escape(value) if kind == "text" else
         f"<code>{html.escape(value)}</code>" if kind == "code" else

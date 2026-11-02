@@ -611,6 +611,11 @@ def test_previous_next_and_next_up_typeset_a_chapter_title_once(tmp_path: Path) 
     authored = "Groups $\\mathbb{Z}/n$ and code `$literal$`"
     (folder / "README.md").write_text(f"# {authored}\n\n- [Deep](deep.md)\n", encoding="utf-8")
     (folder / "deep.md").write_text("---\ndeclaration: theorem\n---\n\n# Deep\n\nA result still to state.\n", encoding="utf-8")
+    # A title with no math or code keeps its visible text, not its asterisks.
+    padic = project / "blueprint/roadmap/padic"
+    padic.mkdir()
+    (padic / "README.md").write_text("# The *p*-adic numbers\n\n- [Field](field.md)\n", encoding="utf-8")
+    (padic / "field.md").write_text("# Field\n\nThe field.\n", encoding="utf-8")
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out, lean_root=project)
@@ -621,6 +626,8 @@ def test_previous_next_and_next_up_typeset_a_chapter_title_once(tmp_path: Path) 
     pages = [page.read_text(encoding="utf-8") for page in out.rglob("*.md")]
     assert any(f'<span class="bp-book-nav-title">{title}</span>' in page for page in pages)
     assert not any("\\(literal\\)" in page for page in pages)
+    assert any('<span class="bp-book-nav-title">The p-adic numbers</span>' in page for page in pages)
+    assert not any('<span class="bp-book-nav-title">The *p*' in page for page in pages)
 
 
 def test_a_caption_names_the_command_after_its_modifiers_or_reads_node() -> None:
