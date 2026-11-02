@@ -691,6 +691,24 @@ def test_work_assumptions_under_the_strict_policy_lists_articles_with_nothing_op
     assert capsys.readouterr().out == "Open statements: forbidden\n"
 
 
+def test_informal_links_leave_the_assumption_contract_unchanged(tmp_path: Path) -> None:
+    project = _policy_project(tmp_path, "allowed")
+    before = work_module.assumption_contract(project).as_dict()
+    # Counted, prove's link would let it reach the open theorem; base's closes a
+    # cycle through the open theorem, which check only warns about.
+    for name, target in (("prove.md", "open.md"), ("corollary.md", "open.md"), ("base.md", "uses.md")):
+        path = project / "blueprint/roadmap/chapter" / name
+        text = path.read_text(encoding="utf-8")
+        path.write_text(text + f"\n## Informally uses\n\n- [link]({target})\n", encoding="utf-8")
+
+    after = work_module.assumption_contract(project).as_dict()
+
+    assert after["source_revision"] != before["source_revision"]
+    assert {**after, "source_revision": None} == {**before, "source_revision": None}
+    _edit(project, "prove.md", "## Informally uses", "## Proof depends on")
+    assert work_module.assumption_contract(project).as_dict()["articles"] != before["articles"]
+
+
 def test_work_assumptions_under_the_open_policy_bounds_each_article(
     tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
 ) -> None:

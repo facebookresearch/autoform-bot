@@ -34,7 +34,7 @@ def test_doctor_cli_reports_deterministic_human_and_json_output(tmp_path: Path, 
     assert main(["doctor", str(blueprint)]) == 0
     assert capsys.readouterr().out.splitlines() == [
         "PASS: blueprint: resolved blueprint",
-        "PASS: runtime: autoform-runtime/v4; markdown-articles; revision "
+        "PASS: runtime: autoform-runtime/v5; markdown-articles; revision "
         + load_runtime_graph(blueprint).source_revision,
         "PASS: graph: 1 articles; 0 dependencies; 1 formalizable; 1 dispatchable; depth 0",
         "PASS: references: all parents, typed dependencies, and dispatchable leaves are consistent",
@@ -288,6 +288,20 @@ def _with_body(blueprint: Path, body: str) -> Path:
         encoding="utf-8",
     )
     return blueprint
+
+
+def test_check_warns_about_an_informal_link_it_cannot_use_and_still_passes(tmp_path: Path, capsys) -> None:
+    blueprint = _with_body(_clean_blueprint(tmp_path), "## Informally uses\n\n- [Gap](gap.md)\n- [Corollary](corollary.md)")
+    (blueprint / "roadmap" / "corollary.md").write_text(
+        "---\ndeclaration: theorem\n---\n\n# Corollary\n\nA consequence.\n\n## Depends on\n\n- [Result](result.md)\n",
+        encoding="utf-8",
+    )
+
+    assert main(["check", str(blueprint)]) == 0
+    out = capsys.readouterr().out
+    assert "OK: 2 articles, 1 dependencies" in out
+    assert "warning: result: informal target does not exist: 'gap.md'" in out
+    assert "warning: result: informally uses corollary, which depends on it: corollary -> result" in out
 
 
 def test_check_warns_about_markup_the_site_shows_as_typed(tmp_path: Path, capsys) -> None:

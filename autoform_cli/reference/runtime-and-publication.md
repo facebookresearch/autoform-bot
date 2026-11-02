@@ -24,20 +24,20 @@ renderers, or dashboards, and it writes no file.
 ## Runtime contract
 
 `autoform_cli.runtime` projects the Markdown graph into the read-only,
-in-memory schema `autoform-runtime/v4`; the Markdown stays the authority, and
+in-memory schema `autoform-runtime/v5`; the Markdown stays the authority, and
 Autoform never creates, synchronizes, or treats `graph.json` as an authority. A
 source target that is neither an http(s) link nor a path inside the blueprint,
 and a `mathlib_file` that is not a portable relative path, are left out of the
 projection ([Validation](validation-and-audit.md#validation) says how `check`
-reports them). Each v4 node carries `article_id`, a nullable `catalog`,
-`assertions.statement_retracted`, and `status.assumes` and `status.waiting_on`,
-and the graph its `open_statements` policy. Temporary claims and local
-dashboard hooks may fall back to an article's path-derived `id`, but durable
-execution records and routes must require `article_id` until the path-move
-migration is complete. Operational state is excluded from runtime snapshots and
-publication. Projection fails with `the article changed after the graph was
-loaded` when an article's bytes no longer match the digest recorded at load.
-The `runtime` module docstring describes the projection for Python consumers.
+reports them). Each v5 node carries `article_id`, a nullable `catalog`,
+`informal_dependencies`, `assertions.statement_retracted`, and `status.assumes`
+and `status.waiting_on`, and the graph its `open_statements` policy. Temporary
+claims and local dashboard hooks may fall back to an article's path-derived
+`id`, but durable execution records and routes must require `article_id` until
+the path-move migration is complete. Operational state is excluded from runtime
+snapshots and publication. Projection fails with `the article changed after the
+graph was loaded` when an article's bytes no longer match the digest recorded at
+load. The `runtime` module docstring describes it for Python consumers.
 
 ## Publication contract
 

@@ -76,11 +76,12 @@ later heading and dependency link: the graph loses those edges, one opened in
 the statement puts the rest of the article in the theorem box, and nothing
 reports it.
 
-`## Depends on` lists what the article needs to be *stated*;
-`## Proof depends on` lists what only its *proof* needs. Links under them are
-graph edges, except in a code block (fenced or indented) or an HTML comment;
-other links are navigation or citations. Dependencies resolve relative to the
-article and must point at another roadmap article.
+`## Depends on` lists what the article needs to be *stated*,
+`## Proof depends on` what only its *proof* needs, and `## Informally uses` what
+the source's proof cites but the Lean proof need not use. Links under them
+resolve relative to the article and must point at another roadmap article,
+except in a code block or an HTML comment; other links are navigation or
+citations. Status never counts informal links; `check` warns about a bad one.
 
 The optional `declaration` field marks a formalizable leaf and names its
 intended Lean declaration command, any one, such as `def`, `theorem`,

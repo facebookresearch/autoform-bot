@@ -112,7 +112,7 @@ def test_loads_identical_runtime_from_project_or_blueprint(tmp_path: Path) -> No
     from_project = load_runtime_graph(project)
     from_blueprint = load_runtime_graph(project / "blueprint")
 
-    assert RUNTIME_SCHEMA == "autoform-runtime/v4"
+    assert RUNTIME_SCHEMA == "autoform-runtime/v5"
     assert from_project == from_blueprint
     assert from_project.schema == RUNTIME_SCHEMA
     assert from_project.authority == RUNTIME_AUTHORITY
@@ -159,6 +159,27 @@ def test_preserves_hierarchy_typed_dependencies_and_dispatchability(tmp_path: Pa
     assert result.status.fully_proved
     assert not result.status.defined
     assert result.dispatchable
+
+
+def test_runtime_lists_informal_dependencies_apart_from_counted_ones(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _article(
+        project,
+        "chapter/section/remark.md",
+        title="Remark",
+        prose="A remark.\n\n## Informally uses\n\n- [Result](result.md)",
+        statement_dependencies=("base.md",),
+    )
+
+    runtime = load_runtime_graph(project)
+    remark = runtime.get("chapter/section/remark")
+
+    assert remark is not None
+    assert remark.informal_dependencies == ("chapter/section/result",)
+    assert remark.dependencies == ("chapter/section/base",)
+    assert remark.as_dict()["informal_dependencies"] == ["chapter/section/result"]
+    assert runtime.get("chapter/section/base").as_dict()["informal_dependencies"] == []
+    assert runtime.dependency_count == 2
 
 
 def test_runtime_exposes_a_settled_module_catalog_without_dispatching_it(tmp_path: Path) -> None:
