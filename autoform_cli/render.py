@@ -3079,7 +3079,7 @@ def _rewrite_links(
             end = match.end()
         return "".join(pieces) + line[end:]
 
-    return _outside_fences(text, rewrite)
+    return _outside_fences(text, rewrite, page=True)
 
 
 def _is_within(path: Path, directory: Path) -> bool:

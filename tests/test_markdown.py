@@ -278,6 +278,30 @@ def test_render_s_line_transforms_read_a_comment_that_never_closes_as_text() -> 
     assert outside_fences(reopened, lambda line: f"+{line}") == "+<!--\n+```\n+--> text <!-- open\n+see [x](a.md)\n"
 
 
+def test_render_s_line_transforms_read_a_comment_opener_in_code_as_text() -> None:
+    """A `<!--` in a code span or an indented code block opens no comment on the site, though a later `-->` would
+    close one for the graph's reader; the fenced block between them is code and stays as typed."""
+    pairs = (("Write `<!--` to open a comment.", "Close it with `-->`."), ("    <!-- in code", "    --> too"))
+    for opener, closer in pairs:
+        text = f"{opener}\n\n```text\nsee [x](a.md)\n# not a heading\n```\n\n{closer}\n"
+
+        assert outside_fences(text, lambda line: f"+{line}") == (
+            f"+{opener}\n+\n```text\nsee [x](a.md)\n# not a heading\n```\n+\n+{closer}\n"
+        )
+
+
+def test_render_s_line_transforms_pair_no_code_span_across_a_page_s_frontmatter() -> None:
+    """Review of #542: a backtick run in the frontmatter, which the site doesn't read as Markdown, paired with one in
+    the body and kept the comment between, so the comment's fence line hid every line after it."""
+    for text in (
+        "---\ntitle: a ` b\n---\nThe `x` value.\n<!--\n```\n-->\nUse ` and see [x](a.md).\n",
+        "---\n# use ``` here\n---\n<!--\n```\n-->\nsee [x](a.md)\n",
+    ):
+        assert outside_fences(text, lambda line: f"+{line}", page=True) == "".join(
+            f"+{line}\n" for line in text.splitlines()
+        )
+
+
 def test_text_beside_a_comment_on_one_line_survives() -> None:
     assert content_lines("| OUT | real <!-- aside --> reason |\n") == [
         "| OUT | real  reason |"

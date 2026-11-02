@@ -2993,6 +2993,68 @@ def test_a_comment_that_never_closes_leaves_the_code_after_it_as_typed(tmp_path:
     assert "see [Paper](https://" not in page
 
 
+def test_a_comment_opener_in_code_leaves_a_later_code_block_as_typed(tmp_path: Path) -> None:
+    """A review of #528 and #534: render read a `<!--` in a code span as a comment
+    up to a later `-->` in another, and rewrote the link in the code block between."""
+    project = _with_source_notes(tmp_path)
+    readme = project / "blueprint/roadmap/README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8")
+        + "\nWrite `<!--` to open a comment.\n\n```text\nsee [Paper](../sources/paper.md)\n```\n\n"
+        "Close it with `-->`.\n",
+        encoding="utf-8",
+    )
+    ref = _commit_project(project)
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project, repository_url="https://github.com/owner/repo", ref=ref)
+
+    page = (out / "roadmap/README.md").read_text(encoding="utf-8")
+    assert "see [Paper](../sources/paper.md)" in page
+    assert "see [Paper](https://" not in page
+
+
+def test_a_fence_between_comment_markers_in_code_that_never_closes_is_reported(tmp_path: Path) -> None:
+    """Review of #542: check read the indented fence as inside a comment, render read it on to the end of the
+    page, so the link after it was published as written, with no warning, and the strict build stopped there."""
+    project = _with_source_notes(tmp_path)
+    readme = project / "blueprint/roadmap/README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8")
+        + "\nWrite `<!--` to open a comment.\n\n  ```\nsee [Paper](../sources/paper.md)\n\nClose it with `-->`.\n",
+        encoding="utf-8",
+    )
+    ref = _commit_project(project)
+    out = tmp_path / "out"
+
+    report = render_site(
+        project / "blueprint", out, lean_root=project, repository_url="https://github.com/owner/repo", ref=ref
+    )
+
+    assert any("code fence is not closed" in warning for warning in report.warnings)
+    assert '<pre class="bp-as-typed">' in (out / "roadmap/README.md").read_text(encoding="utf-8")
+
+
+def test_a_backtick_in_the_frontmatter_leaves_the_links_after_a_comment_rewritten(tmp_path: Path) -> None:
+    """Review of #542: render paired a backtick run in the frontmatter with one in a comment, so the comment's
+    fence line hid the rest of the page and the link below it was published as written."""
+    project = _with_source_notes(tmp_path)
+    readme = project / "blueprint/roadmap/README.md"
+    written = readme.read_text(encoding="utf-8")
+    readme.write_text(
+        written.replace("---\n---\n\n", "---\n# use ``` here\n---\n<!--\n```\n-->\n", 1)
+        + "\nGrounded in [Paper](../sources/paper.md).\n",
+        encoding="utf-8",
+    )
+    ref = _commit_project(project)
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project, repository_url="https://github.com/owner/repo", ref=ref)
+
+    expected = f"Grounded in [Paper](https://github.com/owner/repo/blob/{ref}/blueprint/sources/paper.md)."
+    assert expected in (out / "roadmap/README.md").read_text(encoding="utf-8")
+
+
 def test_source_notes_stay_published_when_there_is_nowhere_to_send_readers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
