@@ -987,8 +987,8 @@ autoform claim release af_5b0e4d3c2a1f09e8d7c6b5a4 af_0123456789abcdef01234567
 autoform claim list af_5b0e4d3c2a1f09e8d7c6b5a4 af_0123456789abcdef01234567
 ```
 
-Claims are optional: use them when other people or sessions may work on the same
-project at once, or when the user asks; a single Formalize run needs none. A
+Claims are optional: use them when the user asks, or when another session on the
+project already does; a single Formalize run needs none. A
 claim excludes only workers that also claim. Claim an article by the
 `claim_target` that `work context` reports: claims on its path ID and on its
 `article_id` do not exclude each other. Each concurrent agent needs its own

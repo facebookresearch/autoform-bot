@@ -16,14 +16,14 @@ subagent that prefix.
 Treat `blueprint/roadmap/**/*.md` as the sole durable work graph; the [CLI
 reference](../../autoform_cli/README.md#commands) documents the commands.
 `<PROJECT>` is the absolute path of the checkout being edited (for a subagent,
-its own worktree). First run `autoform work list <PROJECT> --lean-root <PROJECT>
---json`, then inspect a selected leaf with `autoform work context <NODE>
-<PROJECT> --lean-root <PROJECT> --json`. The phase is derived; never author
-ready, running, retrying, failed, or blocked scheduler states. If `work list`
-refuses because unfinished leaves lack `article_id`, run `autoform migrate
-article-ids <PROJECT>/blueprint --write`, validate, and commit before starting
-work. If a command refuses because an implementation note names no roadmap
-article, any worker may repair the note as the [format
+its own worktree). First run `autoform work list <PROJECT> --json`, whose items
+hold every field a dispatch needs; a worker inspects its leaf with `autoform
+work context <NODE> <PROJECT> --json`. The phase is derived; never author ready,
+running, retrying, failed, or blocked scheduler states. If `work list` refuses
+because unfinished leaves lack `article_id`, run `autoform migrate article-ids
+<PROJECT>/blueprint --write`, validate, and commit before starting work. If a
+command refuses because an implementation note names no roadmap article, any
+worker may repair the note as the [format
 reference](../../autoform_cli/README.md#articles-and-containment) says, and
 commit.
 
@@ -33,45 +33,40 @@ and at each later re-read of the frontier, the lead first reads and decides the
 reviews on the project's pull requests as the [review
 steps](references/pull-request-reviews.md) say. Native subagents may work
 independent leaves in separate Git worktrees; no custom scheduler or provider
-adapter is part of the protocol. A subagent may keep its worktree for a package
-of related leaves, such as a container's, that the lead confirms together. It
-holds only the leaf it has taken, taking the next once `work context` shows it
-ready after integrating; at the first that is not, the rest return to the lead.
-The lead's branch is the shared branch results integrate into; the lead also
-works its own leaves in worktrees, so nothing reaches that branch before its
-default build passes. Before dispatching, commit the roadmap state the frontier
-was read from and base each worktree on that commit, not on the remote's default
-branch (Claude Code's agent isolation does so only with `worktree.baseRef:
-head`). Give each subagent the lead's checkout path, each leaf's
-`claim_target`, `article_revision`, `open_statements`, `revision`, and the first
-leaf's `phase` and `assumes`. A new worktree has no `.lake`: in a Mathlib
-project, run `lake exe cache get` in the lead's checkout before creating
+adapter is part of the protocol. The lead's branch is the shared branch results
+integrate into; the lead also works its own leaves in worktrees, so nothing
+reaches that branch before its default build passes. Before dispatching, commit
+the roadmap state the frontier was read from and base each worktree on that
+commit, not on the remote's default branch (Claude Code's agent isolation does
+so only with `worktree.baseRef: head`). Give each subagent the lead's checkout
+path and its leaf's `work list` item. A new worktree has no `.lake`: in a
+Mathlib project, run `lake exe cache get` in the lead's checkout before creating
 worktrees, rerunning it once if it fails. If the rerun fails too, ask the user
 before creating worktrees, since each would then fetch or build Mathlib itself.
 Then the lead runs no Lake command in its own checkout while workers may start,
 and each worker, before its first build or Lean tool call, copies the lead's
-packages into its worktree, never as a symbolic link:
-`mkdir -p .lake && cp -Rc <LEAD>/.lake/packages .lake/` (`cp -R --reflink=auto`
-on Linux), then runs `lake exe cache get`, which downloads nothing; on APFS the
-copy takes almost no space. Builds take no claim: dispatch no more workers at
-once than the machine's memory can build for. If the lakefile lacks the
-artifact cache `project new` writes, Setup offers to add it.
+packages into its worktree, never as a symbolic link: `mkdir -p .lake && cp -Rc
+<LEAD>/.lake/packages .lake/` (`cp -R --reflink=auto` on Linux), then runs `lake
+exe cache get`, which downloads nothing; on APFS the copy takes almost no space.
+Builds take no claim: dispatch no more workers at once than the machine's memory
+can build for. If the lakefile lacks the artifact cache `project new` writes,
+Setup offers to add it.
 
-Claims are optional. Within one run no one needs them: the lead keeps workers,
-itself included, from holding the same target, or a leaf of another worker's
-package, at once. A worker holds its article's `claim_target` and the
-`claim_targets` the lead confirmed until its work lands or it abandons the leaf
-without a candidate; a handoff keeps them. To edit beyond them (an import edit,
-a revision or its grown `claim_targets`, or an article its import edit broke), a
-subagent reports the new targets and waits until the lead confirms no other
-worker holds them; one that cannot wait commits, stops, and reports, and the
-lead answers when it dispatches the leaf again from that commit. The lead checks
-an import edit's `affected_claim_targets` when confirming and before the edit
-lands; one another worker holds is an active conflict. If workers would wait on
-each other, the lead has one of them give up what it holds.
-
-Use claims only when other people or sessions may work on the project
-concurrently, or the user asks for them. Before choosing none, run `autoform
+Use claims only when the user asks for them or another session already does.
+Within one run, whoever works a leaf, the lead too, first runs `git switch -c
+work/<article_id>`, and a refusal means the leaf is taken. Delete the branch
+once its work lands or the leaf is abandoned without a candidate; until then
+whoever continues the leaf uses it, and a gone worker's is the lead's. A worker
+holds its article's `claim_target` and the `claim_targets` the lead confirmed
+until its work lands or it abandons the leaf without a candidate; a handoff
+keeps them. To edit beyond them (an import edit, a revision or its grown
+`claim_targets`, or an article its import edit broke), a subagent reports the
+new targets and waits until the lead confirms no other worker holds them; one
+that cannot wait commits, stops, and reports, and the lead answers when it
+dispatches the leaf again from that commit. The lead checks an import edit's
+`affected_claim_targets` when confirming and before the edit lands; one another
+worker holds is an active conflict. If workers would wait on each other, the
+lead has one of them give up what it holds. Before choosing none, run `autoform
 claim list` once, with any `--worker-id`: an unexpired claim means another
 session uses them. If the command fails, as it does without an `origin`, tell
 the user and go on without claims; after `error: timeout:`, `error: transport:`
@@ -80,6 +75,10 @@ more, then ask the user before going on without them. A claim excludes only
 workers that also claim, and `work list` does not read the board, so on such a
 project every worker claims: tell each subagent so, and follow the [claim
 rules](references/claims.md) at each step.
+
+Habits, none required: land as a fast-forward from the commit the checks ran on,
+rebasing and rechecking if the shared branch moved; then take the next leaf,
+telling the lead: one the landing unlocked, else one in its container, else any.
 
 ### Import edits
 
@@ -203,8 +202,9 @@ source page for it.
 
 Run `autoform check <PROJECT>/blueprint --lean-root <PROJECT>` and `autoform
 audit <PROJECT>/blueprint --lean-root <PROJECT>`. Resolve every finding this
-work introduced on the selected article, except `lean-target-deprecated` for a
-superseded declaration that an expand, migrate, contract revision keeps in the
+work introduced on the selected article (match `article_path` and `code`, not
+`reason`, with the starting commit's audit), except `lean-target-deprecated` for
+a superseded declaration that an expand, migrate, contract revision keeps in the
 revised article's `lean:` until it is deleted. Delete every note the audit
 reports as `stale-implementation-note`, including another article's, such as a
 container's this proof completed or one an earlier commit left behind; the audit
