@@ -904,7 +904,8 @@ autoform render blueprint --output site-src --lean-root . --require-declarations
 `render` never writes into the vault. Once the roadmap has articles, the landing
 page combines the mathematical reader and dependency map in one full-page client.
 `dependencies.md` and the old pages under `dependencies/` redirect to the
-matching book page, keeping the address's fragment; `structure.md` links the book.
+matching book page, keeping the address's fragment when JavaScript runs;
+`structure.md` links the book.
 Complete published statements, proofs and citations remain the reading content.
 The index `dependencies/index.json`, project payload `dependencies.json`, and
 other `dependencies/` payloads are internal to this viewer; their schemas may change.
