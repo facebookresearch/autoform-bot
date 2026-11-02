@@ -75,11 +75,12 @@ jobs:
           version: "0.12.1"
 
       # Rejects cycles and dangling links, and fails when a node names a Lean
-      # declaration that is not in the sources.
+      # declaration that is not in the sources. Render, two steps on, reports
+      # the warnings about the site's pages, so check leaves them to it.
       - name: Validate the theorem DAG and its declarations
         run: >-
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          autoform check blueprint --lean-root .
+          autoform check blueprint --lean-root . --no-site-warnings
 
       # Lists every audit finding and warning, such as a declared coverage gap
       # or an oversized node. It builds no Lean, and nothing it reports fails

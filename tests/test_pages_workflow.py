@@ -240,7 +240,9 @@ def test_the_audit_runs_after_check_as_a_report(pages: dict) -> None:
     audit = steps[check_at + 1]
 
     assert audit["name"] == "Audit the roadmap (report only)"
-    assert audit["run"] == steps[check_at]["run"].replace("autoform check", "autoform audit")
+    assert audit["run"] == steps[check_at]["run"].replace("autoform check", "autoform audit").removesuffix(
+        " --no-site-warnings"
+    )
     assert audit["continue-on-error"] is True and set(audit) == {"name", "continue-on-error", "run"}
 
 
@@ -259,6 +261,21 @@ def test_the_site_check_runs_after_the_build_as_a_report(pages: dict) -> None:
 
     assert site_check["name"] == "Check the built site (report only)"
     assert site_check["run"] == check["run"].replace(
-        "autoform check blueprint --lean-root .", f"autoform site check {site} --source {output}"
+        "autoform check blueprint --lean-root . --no-site-warnings", f"autoform site check {site} --source {output}"
     )
     assert site_check["continue-on-error"] is True and set(site_check) == {"name", "continue-on-error", "run"}
+
+
+def test_check_leaves_the_site_warnings_to_render(pages: dict) -> None:
+    """Pages runs ``check`` with ``--no-site-warnings``, since render reports
+    those warnings later in the same job. Verify keeps them: setup can write a
+    project with no Pages workflow, where check is the only step that reports them."""
+
+    steps = pages["jobs"]["build"]["steps"]
+    names = [step["name"] for step in steps]
+    check = steps[names.index("Validate the theorem DAG and its declarations")]
+    verify = (_TEMPLATES / "autoform-verify.yml").read_text(encoding="utf-8")
+
+    assert check["run"].endswith("autoform check blueprint --lean-root . --no-site-warnings")
+    assert names.index("Render the blueprint") > names.index("Validate the theorem DAG and its declarations")
+    assert "autoform check" in verify and "--no-site-warnings" not in verify

@@ -82,6 +82,7 @@ def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -
     renders write. That pin has no `review` command, and its check rejects
     `review_approved:`, so the example turns on no statement review: no marker,
     no read-back cards and no approvals, which the verify workflow looks for.
+    Its check has no --no-site-warnings either, so no workflow passes it.
     Move the pin, here and in the workflow equivalence test, before relaxing this.
     """
     example = repo_root / _EXAMPLE
@@ -97,6 +98,8 @@ def test_the_example_uses_nothing_newer_than_its_autoform_pin(repo_root: Path) -
     assert "derived statuses, dependency maps," in (example / ".github/workflows/blueprint-pages.yml").read_text(
         encoding="utf-8"
     )
+    for workflow in (example / ".github/workflows").glob("*.yml"):
+        assert "--no-site-warnings" not in workflow.read_text(encoding="utf-8"), workflow
 
 
 def test_readme_tells_users_how_to_run_several_sessions(repo_root: Path) -> None:
@@ -728,7 +731,11 @@ def test_formalize_copies_the_lead_s_packages_into_each_worktree(repo_root: Path
 
 
 def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None:
-    """The executable example differs only by its concrete immutable pin."""
+    """The executable example differs only by its concrete immutable pin.
+
+    Its pin predates check's --no-site-warnings, so its Pages workflow keeps
+    the full check until the pin moves.
+    """
 
     substitutions = {
         "{{AUTOFORM_SOURCE_YAML}}": '"https://github.com/facebookresearch/autoform-bot.git"',
@@ -745,10 +752,18 @@ def test_example_workflows_match_the_scaffold_templates(repo_root: Path) -> None
         repo_root / _EXAMPLE / ".github/CODEOWNERS.autoform.example"
     ).read_bytes()
 
+    full_check = {
+        " Render, two steps on, reports\n      # the warnings about the site's pages, so check leaves them to it.": "",
+        "autoform check blueprint --lean-root . --no-site-warnings": "autoform check blueprint --lean-root .",
+    }
     for name in ("autoform-verify.yml", "blueprint-pages.yml"):
         expected = (template_dir / name).read_text(encoding="utf-8")
         for placeholder, value in substitutions.items():
             expected = expected.replace(placeholder, value)
+        if name == "blueprint-pages.yml":
+            for new, old in full_check.items():
+                assert new in expected
+                expected = expected.replace(new, old)
         actual = (example_dir / name).read_text(encoding="utf-8")
         assert actual == expected
 

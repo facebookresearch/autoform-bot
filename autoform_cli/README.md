@@ -445,6 +445,12 @@ library with a citing declaration fails verification against its checkout, and
 when the project's Lake files cannot be used. None of these warnings changes the
 exit status.
 
+`--no-site-warnings` skips the warnings about the pages the site would publish
+([Validation](reference/validation-and-audit.md#validation)), except those about
+notes under `blueprint/sources/`, for a run that renders next: `render` prints
+the rest, and fails where `check` would warn that it stops. The generated
+`blueprint-pages.yml` passes it; `autoform-verify.yml` does not.
+
 ### audit and coverage
 
 ```bash
