@@ -32,6 +32,7 @@ from autoform_cli.lean import (
     SourceLinker,
     declaration_names,
     index_project,
+    index_project_names,
     open_project_sources,
     snapshot_project_sources,
 )
@@ -853,6 +854,44 @@ def test_hidden_lean_source_directories_are_indexed(tmp_path: Path) -> None:
     (hidden / "Hidden.lean").write_text("def hiddenProof : Nat := 0\n", encoding="utf-8")
 
     assert index_project(tmp_path).find("hiddenProof") is not None
+
+
+def test_indexing_some_names_locates_each_as_the_whole_index_does(tmp_path: Path) -> None:
+    whole = _index_files(
+        tmp_path,
+        {
+            "Project/Basic.lean": _SOURCE,
+            "Project/Again.lean": "namespace Outer\ndef alpha : Nat := 1\nend Outer\n",
+            "Project/Shapes.lean": "structure Hom extends toBase : Base where\n  w : Nat\n"
+            "theorem «dotted.name» : True := trivial\n",
+        },
+    )
+    names = {*whole.declarations, *whole.duplicates}
+    assert {"Outer.alpha", "Outer.Inner.gamma", "Hom.toBase", "Hom.w", "«dotted.name»", "toplevel"} <= names
+
+    every = index_project_names(tmp_path, names)
+    for name in names:
+        some = index_project_names(tmp_path, {name})
+        assert (some.find(name), some.occurrences(name)) == (whole.find(name), whole.occurrences(name))
+        assert (every.find(name), every.occurrences(name)) == (whole.find(name), whole.occurrences(name))
+        assert some.source_digest == whole.source_digest
+    assert index_project_names(tmp_path, {"Hom.w"}).find("toplevel") is None
+
+
+def test_indexing_some_names_scans_only_the_sources_that_spell_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _index_files(tmp_path, {"Project/Basic.lean": _SOURCE, "Project/Other.lean": "def unrelated : Nat := 0\n"})
+    scanned: list[str] = []
+    scan = lean_module._scan
+    monkeypatch.setattr(
+        lean_module, "_scan", lambda text, relative: scanned.append(relative.as_posix()) or scan(text, relative)
+    )
+
+    assert index_project_names(tmp_path, {"Outer.alpha"}).find("Outer.alpha") is not None
+    assert index_project_names(tmp_path, ()).declarations == {}
+
+    assert scanned == ["Project/Basic.lean"]
 
 
 @pytest.mark.parametrize("parent", ["", "Nested/"])

@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+import autoform_cli.__main__ as cli_module
+from autoform_cli import lean as lean_module
 from autoform_cli.__main__ import main
 from autoform_cli.render import DECLARATION_LABELS
 from autoform_cli.graph import (
@@ -1570,6 +1572,50 @@ def test_check_resolves_a_structure_field_and_says_why_a_generated_name_is_not_f
     ]
 
 
+def test_check_scans_only_the_sources_that_could_declare_a_name_or_its_prefix(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "entry.md", "# Entry\n", declaration="def", lean="Demo.Entry.mk")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Entry.lean").write_text(
+        "namespace Demo\nstructure Entry where\n  value : Nat\nend Demo\n", encoding="utf-8"
+    )
+    (lean_root / "Other.lean").write_text("def unrelated : Nat := 0\n", encoding="utf-8")
+    scanned: list[str] = []
+    scan = lean_module._scan
+    monkeypatch.setattr(
+        lean_module, "_scan", lambda text, relative: scanned.append(relative.as_posix()) or scan(text, relative)
+    )
+
+    assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 1
+
+    assert "Demo.Entry is a structure at Entry.lean:2" in capsys.readouterr().out
+    assert scanned == ["Entry.lean"]
+
+
+def test_check_reads_the_lean_root_once_when_every_name_resolves(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "entry.md", "# Entry\n", declaration="def", lean="Demo.Entry.value")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Entry.lean").write_text(
+        "namespace Demo\nstructure Entry where\n  value : Nat\nend Demo\n", encoding="utf-8"
+    )
+    asked: list[frozenset[str]] = []
+    capture = cli_module.snapshot_project_sources
+    monkeypatch.setattr(
+        cli_module, "snapshot_project_sources", lambda root, *, names: asked.append(names) or capture(root, names=names)
+    )
+
+    assert main(["check", str(blueprint), "--lean-root", str(lean_root)]) == 0
+
+    assert asked == [frozenset({"Demo.Entry.value"})]
+
+
 def test_check_prints_its_warnings_after_the_whole_summary(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1705,10 +1751,10 @@ def test_check_cli_reports_source_index_io_failure_before_success(
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "base.md", "# Base\n", lean="Project.base")
 
-    def fail_index(root: Path):
+    def fail_capture(root: Path, *, names: frozenset[str]):
         raise OSError(f"private host detail: {root}")
 
-    monkeypatch.setattr("autoform_cli.__main__.index_project", fail_index)
+    monkeypatch.setattr("autoform_cli.__main__.snapshot_project_sources", fail_capture)
 
     assert main(["check", str(blueprint), "--lean-root", str(tmp_path)]) == 1
     captured = capsys.readouterr()

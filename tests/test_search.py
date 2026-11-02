@@ -684,6 +684,23 @@ def test_search_adds_one_read_and_one_render_per_article(tmp_path: Path, monkeyp
     assert len(renders) == len(reads)
 
 
+def test_search_looks_up_only_the_lean_targets_of_the_hits_it_shows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path)
+    (project / "Project.lean").write_text(_LEAN_SOURCE, encoding="utf-8")
+    asked: list[set[str]] = []
+    index = search_module.index_project_names
+    monkeypatch.setattr(
+        search_module, "index_project_names", lambda root, names: asked.append(set(names)) or index(root, names)
+    )
+
+    assert _ids(project, "convex", lean_root=project, limit=1) == ["convexity"]
+    assert _ids(project, "convex", lean_root=project, limit=2) == ["convexity", "convexity/hyperplane"]
+
+    assert asked == [set(), {"Project.separation"}]
+
+
 def test_a_statement_the_renderer_gives_up_on_is_still_found_by_its_title(tmp_path: Path) -> None:
     project = _project(tmp_path)
     _article(project, "convexity/deep.md", title="Deeply nested", body="- " * 500 + "x")
