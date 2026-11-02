@@ -910,7 +910,7 @@ def test_zero_count_authored_region_is_visible_and_does_not_invent_one_item(
 ) -> None:
     page, site = workspace_page, workspace_site
     authored = [node for node in site.root_graph["nodes"] if node.get("area") == "Unstarted mathematics"]
-    assert authored and all(node["member_count"] == 0 and node["status_counts"] == [] for node in authored)
+    assert authored
     _open(page, site, workspace_runtime)
     # An area of one topic is that topic on the whole map.
     region = page.locator('.bp-whole-map .pm-part[data-part="unstarted"]')

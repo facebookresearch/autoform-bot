@@ -329,15 +329,19 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'data-page-href="roadmap/index.html"' in graph_page
     assert "data-graph-src" not in graph_page
     project_payload = json.loads((site / "dependencies.json").read_text(encoding="utf-8"))
-    assert project_payload["view"]["presentation"] == "atlas"
-    assert {region["label"] for region in project_payload["regions"]} == {
+    assert {node["area"] for node in project_payload["nodes"]} == {
         "Foundations",
         "Learning Theory",
     }
     assert all(node["summary"] for node in project_payload["nodes"])
-    assert {node["url"] for node in project_payload["nodes"]} == {
-        "roadmap/full-supervision/index.html",
-        "roadmap/infimum-loss/index.html",
+    # The book opens each node at the search index's route.
+    records = {
+        record["id"]: record
+        for record in json.loads((site / "dependencies/index.json").read_text(encoding="utf-8"))["nodes"]
+    }
+    assert {records[node["id"].removeprefix("scope:")]["route"] for node in project_payload["nodes"]} == {
+        "../roadmap/full-supervision/index.html",
+        "../roadmap/infimum-loss/index.html",
     }
 
     chapter_graph = (site / "dependencies/chapters/infimum-loss.md").read_text(
@@ -355,8 +359,8 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     for node_id in formalizable:
         anchor = node_id.split("/", 1)[1].replace("/", "-")
         group = node_id.split("/", 1)[0]
-        urls = {node["id"]: node["url"] for node in chapter_payloads[group]["nodes"]}
-        assert urls[node_id] == f"../../roadmap/{group}/index.html#{anchor}"
+        assert node_id in {node["id"] for node in chapter_payloads[group]["nodes"]}
+        assert records[node_id]["route"] == f"../roadmap/{group}/index.html#{anchor}"
     assert not (site / "dependencies/nodes").exists()
 
     generated_graph_pages = [site / "dependencies.md", *(site / "dependencies").rglob("*.md")]

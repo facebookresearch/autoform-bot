@@ -95,7 +95,6 @@ def test_render_publishes_dependencies_between_the_roadmap_root_and_a_chapter(
     assert '<a href="roadmap/index.html">Continue to the mathematical page</a>' in project_page
     project_payload = json.loads((output / "dependencies.json").read_text(encoding="utf-8"))
     assert project_payload["schema"] == "autoform-dag-view/v2"
-    assert sum(node["member_count"] for node in project_payload["nodes"]) == 1
     source, target = ("scope:chapter", "scope:roadmap") if root_depends_on_chapter else ("scope:roadmap", "scope:chapter")
     assert project_payload["edges"] == [{"source": source, "target": target, "statement": 1, "proof": 0}]
     assert 'class="bp-dag-viewer"' in chapter_page
@@ -105,7 +104,6 @@ def test_render_publishes_dependencies_between_the_roadmap_root_and_a_chapter(
     boundary = next(node for node in chapter_payload["nodes"] if node["kind"] == "boundary")
     # It stands for what the project's Top level card does.
     assert boundary["title"] == "Top level"
-    assert boundary["url"] == "../../roadmap/index.html"
     assert 'data-page-href="../../roadmap/chapter/index.html"' in chapter_page
     # The old full page redirects too, and the project payload holds the overview it showed.
     assert 'data-page-href="../roadmap/index.html"' in full_page
@@ -162,13 +160,13 @@ def test_a_boundary_to_the_root_opens_the_page_that_draws_its_articles(tmp_path:
 
     _render(blueprint, output)
 
-    for payload, url in (
-        ("chapters/chapter.json", "../../roadmap/index.html"),
-        ("scopes/chapter/section.json", "../../../roadmap/index.html"),
-    ):
+    for payload in ("chapters/chapter.json", "scopes/chapter/section.json"):
         nodes = json.loads((output / "dependencies" / payload).read_text(encoding="utf-8"))["nodes"]
         boundary = next(node for node in nodes if node["kind"] == "boundary")
-        assert (boundary["id"], boundary["title"], boundary["url"]) == ("boundary:roadmap", "Top level", url)
+        assert (boundary["id"], boundary["title"]) == ("boundary:roadmap", "Top level")
+    # The book opens a boundary at the index's route for the scope it names.
+    records = {node["id"]: node for node in json.loads((output / "dependencies/index.json").read_text(encoding="utf-8"))["nodes"]}
+    assert records["roadmap"]["route"] == "../roadmap/index.html"
     assert (output / "dependencies/chapters/roadmap.md").is_file()
     project = json.loads((output / "dependencies.json").read_text(encoding="utf-8"))
     cards = {node["id"]: (node["title"], node["summary"], node["area"]) for node in project["nodes"]}
@@ -289,7 +287,7 @@ def test_render_preserves_fragment_on_container_article_link(tmp_path: Path) -> 
     assert "##details" not in rendered_chapter
 
 
-def test_scope_payloads_count_targets_not_notes(tmp_path: Path) -> None:
+def test_project_scopes_count_targets_not_notes(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     roadmap = blueprint / "roadmap"
     chapter = roadmap / "chapter"
@@ -326,12 +324,12 @@ def test_scope_payloads_count_targets_not_notes(tmp_path: Path) -> None:
     chapter_map = (output / "dependencies/chapters/chapter.md").read_text(encoding="utf-8")
     pair_map = (output / "dependencies/chapters/pair.md").read_text(encoding="utf-8")
     notes_map = (output / "dependencies/chapters/notes.md").read_text(encoding="utf-8")
-    project = json.loads((output / "dependencies.json").read_text(encoding="utf-8"))
-    counts = {node["id"]: (node["member_count"], node["status_counts"]) for node in project["nodes"]}
+    graph = load_graph(blueprint)
+    counts = {node.id: (node.item_count, node.status_counts) for node in project_view(graph, derive(graph)).nodes}
     assert counts == {
-        "scope:chapter": (1, [["can_state", 1]]),
-        "scope:pair": (2, [["can_state", 1], ["not_ready", 1]]),
-        "scope:notes": (0, []),
+        "scope:chapter": (1, (("can_state", 1),)),
+        "scope:pair": (2, (("can_state", 1), ("not_ready", 1))),
+        "scope:notes": (0, ()),
     }
     assert sum(count for count, _states in counts.values()) == 3
     for alias, href in (
@@ -367,15 +365,15 @@ def test_dependency_map_legends_leave_out_containers(tmp_path: Path) -> None:
 
     # Redirects hold no second legend. Scope counts still include only the
     # theorem, and the standalone API preserves its no-JS legend.
-    data = json.loads((output / "dependencies.json").read_text(encoding="utf-8"))
-    assert sum(node["member_count"] for node in data["nodes"]) == 1
-    assert [pair for node in data["nodes"] for pair in node["status_counts"]] == [["can_state", 1]]
+    graph = load_graph(blueprint)
+    view = project_view(graph, derive(graph))
+    assert sum(node.item_count for node in view.nodes) == 1
+    assert [pair for node in view.nodes for pair in node.status_counts] == [("can_state", 1)]
     for page in ("dependencies.md", "dependencies/full.md"):
         rendered = (output / page).read_text(encoding="utf-8")
         assert 'class="bp-legend-count"' not in rendered
         assert "Continue to the mathematical page" in rendered
     standalone = tmp_path / "standalone"
-    graph = load_graph(blueprint)
     graph_pages.write_graph_pages(graph, derive(graph), standalone, node_links=lambda _page, _ids: {})
     for page in ("dependencies.md", "dependencies/full.md"):
         rendered = (standalone / page).read_text(encoding="utf-8")

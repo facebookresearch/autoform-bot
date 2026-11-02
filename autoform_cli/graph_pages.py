@@ -240,7 +240,12 @@ def write_graph_pages(
         return book_targets.get(scope or "roadmap", (book_root, ""))[0]
 
     def view_links(view: GraphView, page: Path) -> dict[str, str]:
-        """Link *view* from *page*: articles to the book, scopes and boundaries to their explorers."""
+        """Link *view* from *page*: articles to the book, scopes and boundaries to their explorers.
+
+        Only a standalone page lists these links, for readers without JavaScript.
+        """
+        if book_targets is not None:
+            return {}
         links = dict(node_links(page, _article_link_ids(view)))
         for view_node in view.nodes:
             if view_node.kind != "node":
@@ -439,7 +444,7 @@ def _write_page(
     canonical: Path | None = None,
     read: Collection[Path] | None = None,
 ) -> Path:
-    # Every projection is one payload. The explorer names the page by its bare
+    # A standalone projection is one payload. The explorer names the page by its bare
     # *title*, defaulting to *heading*; the suffixed heading stays in the
     # Markdown, where it tells the browser tab and site search apart from the
     # book page of the same name. A page with a *canonical* book page only
@@ -449,7 +454,6 @@ def _write_page(
         dag_viewer.write_payload(
             payload,
             replace(view, title=title or heading),
-            links=links,
             breadcrumbs=breadcrumbs,
             book=book,
         )
@@ -555,9 +559,8 @@ def _dependency_subject(view: GraphView) -> str:
 
 
 def _dependency_heading(view: GraphView, subject: str | None = None) -> str:
-    """Name an explorer page for *subject*, by default the view's scope, and for what it draws."""
-    subject = subject or _dependency_subject(view)
-    return f"{subject} {'knowledge map' if dag_viewer.uses_atlas(view) else 'dependencies'}"
+    """Name a standalone explorer page for *subject*, by default the view's scope."""
+    return f"{subject or _dependency_subject(view)} dependencies"
 
 
 def _article_link_ids(view: GraphView) -> tuple[str, ...]:

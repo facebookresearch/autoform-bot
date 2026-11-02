@@ -213,7 +213,6 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
     graph = json.loads(graph_path.read_text(encoding="utf-8"))
     local = [node for node in graph["nodes"] if node["kind"] != "boundary"]
     assert len(local) == 81 and {node["title"] for node in local} == {_title(n) for n in range(81)}
-    assert all(node["member_count"] == 1 for node in local)
     assert not any("Unrelated note" in node["title"] for node in graph["nodes"])
     groups: dict[str, list[dict]] = {}
     owners = {}
@@ -223,18 +222,14 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
         owners[node["id"]] = key
     assert set(groups) == {*("area:" + area for area in _AREAS), "unassigned"}
     assert all(len(members) == 9 for members in groups.values())
-    # Identify represented records through the actual published permalinks,
-    # rather than manufacture a scope:/boundary: namespace from fixture paths.
-    routes = {}
-    for identifier, record in records.items():
-        route = urljoin(index_path.as_uri(), record["route"])
-        assert route not in routes, (identifier, routes.get(route))
-        routes[route] = identifier
+    # Identify each card's record as the book does (blueprint-dag.js recordId): by its
+    # id, or for a scope or boundary card that is no record itself, the id after its prefix.
     represented = {}
     for node in graph["nodes"]:
-        route = urljoin(graph_path.as_uri(), node["url"])
-        assert route in routes, (node["id"], node["url"])
-        original = routes[route]
+        original = node["id"] if node["id"] in records or node["kind"] not in {"scope", "boundary"} else (
+            node["id"].split(":", 1)[1]
+        )
+        assert original in records, node["id"]
         assert original not in represented, original
         represented[original] = node["id"]
 

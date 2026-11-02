@@ -37,6 +37,7 @@ from autoform_cli.audit import audit_blueprint
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS, COVERAGE_SCHEMA, CoverageEntry, CoverageSummary
 from autoform_cli.dashboard import publication_bound_live_state
 from autoform_cli.graph import Graph, GraphValidationError, Node, atlas_omissions, load_graph
+from autoform_cli.graph_views import project_view
 from autoform_cli.lean import LeanSourceError
 from autoform_cli.markdown import site_converter
 from autoform_cli.render import (
@@ -174,9 +175,6 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert "Explore all nodes" not in project_page
     project_payload = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))
     assert project_payload["title"] == "Roadmap"
-    assert {node["url"] for node in project_payload["nodes"]} == {
-        "roadmap/index.html"
-    }
     chapter_payload = json.loads(
         (out / "dependencies/chapters/roadmap.json").read_text(encoding="utf-8")
     )
@@ -311,7 +309,7 @@ def test_small_and_large_chapters_use_the_same_json_payload(
     ).read_text(encoding="utf-8")
     payload = json.loads((tmp_path / "out/dependencies/chapters/large.json").read_text(encoding="utf-8"))
     assert len(payload["nodes"]) == node_count
-    assert payload["edge_count"] == node_count - 1
+    assert len(payload["edges"]) == node_count - 1
 
 
 def test_the_structure_compatibility_page_opens_the_book(tmp_path: Path) -> None:
@@ -404,14 +402,15 @@ def test_the_site_carries_its_own_mark(tmp_path: Path) -> None:
     assert root.find("{http://www.w3.org/2000/svg}title").text == "Autoform"
 
 
-def _project_book_links(page: Path) -> set[str]:
-    payload_path = page.parent / "dependencies.json" if page.name == "README.md" else page.with_suffix(".json")
-    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+def _project_book_links(out: Path) -> set[str]:
+    """The book pages the index opens for the project payload's chapters, from the site's root."""
+    project = json.loads((out / graph_pages.PROJECT_PAYLOAD).read_text(encoding="utf-8"))
+    chapters = {node["id"].removeprefix("scope:") for node in project["nodes"] if node["kind"] == "scope"}
+    index = json.loads((out / graph_pages.SEARCH_INDEX).read_text(encoding="utf-8"))
     return {
-        node["url"]
-        for node in payload["nodes"]
-        if isinstance(node.get("url"), str)
-        and re.fullmatch(r"roadmap/(?:.+/)?index\.html", node["url"])
+        os.path.normpath(os.path.join("dependencies", record["route"])).replace(os.sep, "/")
+        for record in index["nodes"]
+        if record["id"] in chapters and isinstance(record.get("route"), str)
     }
 
 
@@ -433,9 +432,8 @@ def test_the_home_page_and_legacy_entrance_share_canonical_book_routes(tmp_path:
     assert 'class="bp-reading-source"' in overview
     assert 'data-page-href="index.html"' in overview
     assert 'data-page-href="roadmap/index.html"' in dependencies
-    links = _project_book_links(out / "README.md")
-    assert links, "the landing page should carry the project explorer"
-    assert links == _project_book_links(out / "dependencies.md") == {"roadmap/index.html"}
+    links = _project_book_links(out)
+    assert links == {"roadmap/index.html"}
     for link in links:
         assert out / unquote(link) in _published_pages(out), f"home page links to a missing page: {link}"
 
@@ -458,7 +456,7 @@ def test_the_home_page_project_explorer_survives_named_chapters(tmp_path: Path) 
 
     render_site(project / "blueprint", out, lean_root=project)
 
-    links = _project_book_links(out / "README.md")
+    links = _project_book_links(out)
     assert "roadmap/structure/index.html" in links
     assert not any("scope:" in link for link in links)
     for link in links:
@@ -1231,10 +1229,10 @@ def test_module_catalog_is_separate_from_formalization_progress(
     assert "of 4 statements" not in overview
     assert '<p class="bp-hero-counts">1 module inventory</p>' in overview
     assert not (tmp_path / "out/roadmap/catalog.md").exists()
-    project_payload = json.loads((tmp_path / "out/dependencies.json").read_text(encoding="utf-8"))
-    roadmap = project_payload["nodes"][0]
-    assert roadmap["member_count"] == 4
-    assert roadmap["status_counts"] == [["fully_proved", 2], ["can_state", 1], ["inventory_checked", 1]]
+    graph = load_graph(project / "blueprint")
+    roadmap = project_view(graph, derive(graph)).nodes[0]
+    assert roadmap.item_count == 4
+    assert roadmap.status_counts == (("fully_proved", 2), ("can_state", 1), ("inventory_checked", 1))
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert (
         '<span class="bp-thmcaption" data-search-exclude>Module</span><span class="bp-thmlabel" data-search-exclude>1</span>'
@@ -1447,13 +1445,11 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
     assert '<p class="bp-hero-counts">3 module inventories</p>' in overview
     topic = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))["nodes"][0]
     assert topic["id"] == "scope:library"
-    assert topic["status_counts"] == [["inventory_pending", 3]]
-    assert topic["member_count"] == 3
     # An inventory never sets a scope's own status.
     assert topic["status"] == "planned"
-    # Cards keep their labels readable; scope size changes height, not title width.
-    assert topic["layout"]["width"] == 232
-    assert topic["layout"]["height"] == 92
+    graph = load_graph(blueprint)
+    view = project_view(graph, derive(graph)).nodes[0]
+    assert view.status_counts == (("inventory_pending", 3),) and view.item_count == 3
     alias = (out / "dependencies.md").read_text(encoding="utf-8")
     assert 'data-page-href="roadmap/index.html"' in alias
     assert '<a href="roadmap/index.html">Continue to the mathematical page</a>' in alias
@@ -1590,12 +1586,12 @@ def test_the_hero_lead_is_the_whole_first_sentence_as_readable_html(readme: str,
     assert render_module._lead_sentence(readme) == lead
 
 
-def test_the_legends_beside_the_explorer_count_what_its_rings_count(tmp_path: Path) -> None:
-    """The legend beside a ring counts what the ring counts.
+def test_the_legends_count_what_the_scope_views_count(tmp_path: Path) -> None:
+    """A legend counts what its scope's view counts.
 
     A leaf marked not ready that declares nothing yet is not one of the hero's
-    targets, and a catalog is inventory rather than a target, but the rings
-    count both. A legend that left them out disagreed with the map it explains.
+    targets, and a catalog is inventory rather than a target, but a scope
+    counts both. A legend that left them out disagreed with the scope it explains.
     """
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
@@ -1626,13 +1622,13 @@ def test_the_legends_beside_the_explorer_count_what_its_rings_count(tmp_path: Pa
 
     render_site(project / "blueprint", out, lean_root=project)
 
-    ring = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))["nodes"][0]
-    assert ring["status_counts"] == [
-        ["fully_proved", 2],
-        ["not_ready", 1],
-        ["inventory_checked", 1],
-        ["inventory_pending", 1],
-    ]
+    graph = load_graph(project / "blueprint")
+    assert project_view(graph, derive(graph)).nodes[0].status_counts == (
+        ("fully_proved", 2),
+        ("not_ready", 1),
+        ("inventory_checked", 1),
+        ("inventory_pending", 1),
+    )
     rows = [
         f'<span class="bp-swatch bp-swatch-{key}"></span>'
         f'<span class="bp-legend-label">{label}</span>'
@@ -1648,7 +1644,6 @@ def test_the_legends_beside_the_explorer_count_what_its_rings_count(tmp_path: Pa
     # Compatibility entrances have no second legend/body. The standalone API
     # still explains the exact scope-target and inventory counts without JS.
     standalone = tmp_path / "standalone"
-    graph = load_graph(project / "blueprint")
     graph_pages.write_graph_pages(graph, derive(graph), standalone, node_links=lambda _page, _ids: {})
     for legend in (
         (standalone / "dependencies.md").read_text(encoding="utf-8"),
@@ -3641,7 +3636,7 @@ def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path
     assert 'data-page-href="index.html"' in overview
     payload = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))
     assert payload["schema"] == "autoform-dag-view/v2"
-    assert payload["nodes"] == payload["edges"] == [] and payload["edge_count"] == 0
+    assert payload["nodes"] == payload["edges"] == []
     index = json.loads((out / "dependencies/index.json").read_text(encoding="utf-8"))
     assert index["schema"] == "autoform-dag-search/v1"
     assert index["relations"] == []

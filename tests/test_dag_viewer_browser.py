@@ -1730,7 +1730,7 @@ def test_the_toolbars_popovers_paint_over_the_open_details(desktop_page: object,
         payload = route.fetch().json()
         palette.update(payload["palette"])
         payload["nodes"] += [
-            {"id": f"more/{key}", "kind": "node", "status": key, "status_counts": [[key, 1]], "title": f"More {key}"}
+            {"id": f"more/{key}", "kind": "node", "status": key, "title": f"More {key}"}
             for key in payload["palette"]
         ]
         route.fulfill(json=payload)

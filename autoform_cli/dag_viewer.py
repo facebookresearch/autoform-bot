@@ -9,49 +9,31 @@ from __future__ import annotations
 
 import hashlib
 import html
-import math
 from dataclasses import replace
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from .graph_views import FLATTENED_ROLES, GraphView
 from .lean import declaration_names
 from .site_index import _ALL_STATES, _display_status, _reading_label, _write_json
-from .status import INVENTORY_STATES, MEANINGS
+from .status import MEANINGS
 
 SCHEMA = "autoform-dag-view/v2"
 #: Where the site publishes the viewer, relative to its root.
 SCRIPT_PATH = "javascripts/blueprint-dag.js"
 #: One cached stylesheet for the integrated book and map.
 STYLE_PATH = "stylesheets/blueprint-dag.css"
-#: The most nodes the explorer draws as a map; it only browses a larger view, which gets no layout.
-MAX_MAP_NODES = 120
-
-#: A catalog lists its keyword-declared public names; its explorer node and its Lean row
-#: in the book show this many and a count.
+#: A catalog lists its keyword-declared public names; its Lean row in the book shows this
+#: many and a count, and its payload entry carries the same names for search.
 _CATALOG_LEAN_NAMES = 8
-_NODE_WIDTH = 196
-_NODE_HEIGHT = 56
-
-
-def _dimensions(view: GraphView) -> dict[str, dict[str, int]]:
-    """Keep card sizing; the one browser engine owns every position and route."""
-    atlas = uses_atlas(view)
-    return {
-        node.id: {
-            "width": 232 if atlas else _NODE_WIDTH,
-            "height": max(88, min(116, round(84 + 4 * math.log2(max(1, node.item_count) + 1)))) if atlas else _NODE_HEIGHT,
-        }
-        for node in view.nodes
-    }
 
 
 def drawn_view(view: GraphView) -> GraphView:
-    """Return the part of *view* the explorer draws.
+    """Return the part of *view* the book lists.
 
     An overview replaces collections and pagination ranges by their contents,
-    so it draws those contents, not the wrappers or their relations.
+    so it lists those contents, not the wrappers or their relations.
     """
     if not view.overview:
         return view
@@ -62,36 +44,14 @@ def drawn_view(view: GraphView) -> GraphView:
     ))
 
 
-def uses_atlas(view: GraphView) -> bool:
-    """Draw topic cards in regions only when every drawn node is a topic.
-
-    A leaf needs a readable card, so a view holding any leaf, such as a
-    chapter with module catalogs beside its sections, is a DAG.
-    """
-    view = drawn_view(view)
-    return (
-        bool(view.nodes)
-        and all(node.kind == "scope" for node in view.nodes)
-        and (not view.edges or any(node.area for node in view.nodes))
-    )
-
-
-def _atlas_regions(view: GraphView) -> list[dict[str, object]]:
-    """Count only authored areas; the browser owns their geometry too."""
-    # Areas that differ only in case would otherwise keep the set's hash-seeded order.
-    areas = sorted({node.area for node in view.nodes if node.area}, key=lambda area: (area.casefold(), area))
-    return [{"count": sum(node.area == area for node in view.nodes), "label": area} for area in areas]
-
-
 def _palette() -> dict[str, dict[str, object]]:
-    """Name, explain and colour every status, so the explorer's swatches are its legend."""
+    """Name, explain and colour every status, so the book's swatches are its legend."""
     return {
         state.key: {
             "label": state.label,
             "meaning": MEANINGS[state.key],
-            **({"neutral": True} if state in INVENTORY_STATES else {}),
-            "light": {"fill": state.fill, "stroke": state.stroke, "text": state.text},
-            "dark": {"fill": state.dark_fill, "stroke": state.dark_stroke, "text": state.dark_text},
+            "light": {"fill": state.fill, "stroke": state.stroke},
+            "dark": {"fill": state.dark_fill, "stroke": state.dark_stroke},
         }
         for state in _ALL_STATES
     }
@@ -101,30 +61,25 @@ def write_payload(
     path: Path,
     view: GraphView,
     *,
-    links: Mapping[str, str],
     breadcrumbs: Iterable[tuple[str, str | None]] = (),
     book: str | None = None,
 ) -> Path:
-    """Write the deterministic layout and data one explorer page draws.
+    """Write what the book reads for one scope: its palette and statuses on
+    every route, and its list until the search index arrives.
 
-    *book* links a chapter's or section's explorer to its textbook page.
+    *book* links a chapter's or section's payload to its textbook page.
 
-    The payload carries only what the explorer reads. On an overview, the
-    collections and pagination ranges it replaces ride along with
-    ``map: false`` and no layout.
+    The payload carries only what the book reads: each node's title, kind,
+    status, area, Lean names and summary, the palette and the page's trail.
+    On an overview, the collections and pagination ranges it replaces ride
+    along with ``map: false``.
     """
     known = frozenset(node.id for node in view.nodes)
     if len(known) != len(view.nodes):
         raise ValueError("dependency view has duplicate node ids")
     if any(edge.source not in known or edge.target not in known for edge in view.edges):
         raise ValueError("dependency view edge names an unknown node")
-    map_view = drawn_view(view)
-    map_ids = frozenset(node.id for node in map_view.nodes)
-    dimensions = _dimensions(map_view) if len(map_view.nodes) <= MAX_MAP_NODES else {}
-    degrees: dict[str, int] = {node.id: 0 for node in view.nodes}
-    for edge in map_view.edges:
-        degrees[edge.source] += 1
-        degrees[edge.target] += 1
+    map_ids = frozenset(node.id for node in drawn_view(view).nodes)
 
     nodes: list[dict[str, object]] = []
     present_statuses: set[str] = set()
@@ -133,29 +88,17 @@ def write_payload(
         present_statuses.add(status_key)
         entry: dict[str, object] = {
             "area": node.area,
-            "declaration": node.declaration,
             "id": node.id,
-            "internal_dependency_count": node.internal_dependency_count,
-            "isolated": degrees[node.id] == 0,
             "kind": node.kind,
-            **({"layout": dimensions[node.id]} if node.id in dimensions else {}),
             "lean": node.lean,
-            # The items the status counts add up to, so a scope's
-            # "N items" header agrees with the rows beneath it.
-            "member_count": node.item_count,
             "status": status_key,
-            # Pairs, not an object, so the legend's state order survives sorted keys.
-            "status_counts": node.status_counts,
             "summary": node.summary,
             "title": node.title,
-            "url": links.get(node.id),
         }
         if view.overview:
             entry["map"] = node.id in map_ids
         if node.catalog == "module" and node.lean:
-            names = declaration_names(node.lean)
-            shown = names[:_CATALOG_LEAN_NAMES]
-            entry.update(lean=", ".join(shown), lean_more=len(names) - len(shown))
+            entry["lean"] = ", ".join(declaration_names(node.lean)[:_CATALOG_LEAN_NAMES])
         nodes.append(entry)
 
     edges = [
@@ -172,20 +115,13 @@ def write_payload(
             crumb["reading_title"] = reading
         trail.append(crumb)
     payload = {
-        "edge_count": sum(edge.dependency_count for edge in map_view.edges),
         "edges": edges,
         "nodes": nodes,
         "palette": _palette(),
         "present_statuses": ordered_statuses,
-        "regions": _atlas_regions(map_view) if uses_atlas(view) else [],
         "schema": SCHEMA,
         "title": view.title,
-        "view": {
-            "breadcrumbs": trail,
-            "book": book,
-            "presentation": "atlas" if uses_atlas(view) else "dag",
-            "summary": view.summary,
-        },
+        "view": {"breadcrumbs": trail, "book": book},
     }
     return _write_json(path, payload)
 
@@ -314,13 +250,11 @@ _SCRIPT = "\n".join(_asset_text(name) for name in (
 
 
 __all__ = [
-    "MAX_MAP_NODES",
     "SCHEMA",
     "SCRIPT_PATH",
     "STYLE_PATH",
     "drawn_view",
     "render_container",
-    "uses_atlas",
     "viewer_script",
     "write_payload",
 ]

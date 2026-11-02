@@ -137,12 +137,12 @@ def test_optional_reading_title_keeps_plain_index_bytes_relations_and_statuses(t
 def test_publisher_breadcrumb_parts_preserve_plain_bytes_titles_urls_and_math_source(tmp_path: Path) -> None:
     view = GraphView(kind="full", title="Plain trail", nodes=(), edges=())
     empty, plain, marked = (tmp_path / name for name in ("empty.json", "plain.json", "marked.json"))
-    dag_viewer.write_payload(empty, view, links={})
-    dag_viewer.write_payload(plain, view, links={}, breadcrumbs=(("Library", "library.html"), ("Plain trail", None)))
+    dag_viewer.write_payload(empty, view)
+    dag_viewer.write_payload(plain, view, breadcrumbs=(("Library", "library.html"), ("Plain trail", None)))
     assert plain.read_bytes() == empty.read_bytes().replace(
         b'"breadcrumbs":[]', b'"breadcrumbs":[{"label":"Library","url":"library.html"},{"label":"Plain trail","url":null}]',
     )
-    dag_viewer.write_payload(marked, view, links={}, breadcrumbs=((_SUMMARY, "chapter.html"), (_TITLE, None)))
+    dag_viewer.write_payload(marked, view, breadcrumbs=((_SUMMARY, "chapter.html"), (_TITLE, None)))
     expected = json.loads(empty.read_bytes())
     expected["view"]["breadcrumbs"] = [
         {"label": _SUMMARY, "url": "chapter.html", "reading_title": site_index._reading_label(_SUMMARY)},
@@ -342,7 +342,7 @@ def test_actual_reading_controls_keep_encoded_tags_and_code_as_text_and_reject_r
 
 def test_actual_graph_fallback_breadcrumbs_keep_published_parts_and_canonical_urls(tmp_path: Path) -> None:
     path = tmp_path / "fallback.json"
-    dag_viewer.write_payload(path, GraphView(kind="full", title="Fallback", nodes=(), edges=()), links={},
+    dag_viewer.write_payload(path, GraphView(kind="full", title="Fallback", nodes=(), edges=()),
                              breadcrumbs=((_SUMMARY, "chapter.html"), (_TITLE, None)))
     _dom_script(r"""
       const proof=window.__explorerTitleProof,before=JSON.stringify(fixture.fallback);
