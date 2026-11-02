@@ -895,12 +895,12 @@ def test_indexing_some_names_scans_only_the_sources_that_spell_one(
 
 
 def test_the_scan_skips_only_lines_that_open_close_and_declare_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Every command the scan reads, each where a line it skipped wrongly would change a name or drop one.
+    # Each way a command the scan reads can start, where a line it skipped wrongly would change a name or drop one.
     keywords = [keyword for keyword in lean_module._DECLARATION_KEYWORDS.split("|") if keyword != "alias"]
     lines = ["namespace Outer", "@[expose] public section Inner"]
     for m, modifier in enumerate(["", *lean_module._DECLARATION_MODIFIERS.split("|")]):
         lines += [f"  {modifier} {keyword} m{m}k{k} : True := trivial" for k, keyword in enumerate(keywords)]
-    lines += ["@[simp]", "theorem attributed : True := by", "  simp", "  exact trivial", "end Inner"]
+    lines += ["@[simp] theorem attributed : True := by", "  simp", "  exact trivial", "end Inner"]
     lines += ["mutual", "def even : Bool := true", "end", "def after_mutual : Nat := 0"]
     for s, modifier in enumerate(["", *lean_module._SECTION_MODIFIERS.split("|")]):
         lines += [f"{modifier} section S{s}", f"def in_section{s} : Nat := {s}", f"end S{s}"]
@@ -909,7 +909,8 @@ def test_the_scan_skips_only_lines_that_open_close_and_declare_nothing(monkeypat
     root = Path(__file__).resolve().parents[1]
     sources = {Path("Synthetic.lean"): "\n".join(lines) + "\n"}
     for path in sorted([*(root / "tests/fixtures").rglob("*.lean"), *(root / "skills").rglob("*.lean")]):
-        sources[path.relative_to(root)] = path.read_text(encoding="utf-8")
+        if not any(part.startswith(".") for part in path.relative_to(root).parts):  # not a fixture's own build, .lake
+            sources[path.relative_to(root)] = path.read_text(encoding="utf-8")
 
     skipping = [lean_module._scan(text, relative) for relative, text in sources.items()]
     monkeypatch.setattr(lean_module, "_SCANNED_LINE", re.compile(""))
