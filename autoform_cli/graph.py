@@ -527,6 +527,14 @@ def _links_into(article: Path, target: str, directory: Path) -> bool:
 def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str], list[str]]:
     """Read the roadmap's articles; return them, the errors, and the warnings."""
     roadmap_root = blueprint / "roadmap"
+    # A case-insensitive filesystem opens Roadmap/ as roadmap/, but render lists the folder
+    # as spelled and a case-sensitive one finds none, so it is refused everywhere (#595).
+    try:
+        spellings = sorted(path.name for path in blueprint.iterdir() if path.name.casefold() == "roadmap")
+    except OSError:
+        spellings = []
+    if spellings and "roadmap" not in spellings:
+        return [], [f"roadmap directory does not exist: {roadmap_root}; rename {spellings[0]} to roadmap"], []
     if not roadmap_root.is_dir():
         return [], [f"roadmap directory does not exist: {roadmap_root}"], []
 
