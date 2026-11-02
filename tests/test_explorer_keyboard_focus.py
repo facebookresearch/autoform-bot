@@ -33,7 +33,6 @@ function renderInspector(){}
 function renderInventory(){}
 function setSheet(open,selected){sheets.push({open,selected});}
 function sheetLayout(){return ui$phone;}
-function updateProjection(){}
 navigation.checkpoint=()=>checkpoints++;
 Element.prototype.select=function(){this.selects=(this.selects||0)+1;};
 buildShell();bindEvents();syncControls();

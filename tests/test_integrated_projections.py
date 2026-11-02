@@ -64,7 +64,7 @@ var dom$inventory = new Element('section'), dom$inventoryList = new Element('ul'
 var dom$inventorySummary = new Element('span'), dom$loadMore = new Element('button'), dom$inventoryScroll = new Element('div');
 dom$inventory.appendChild(new Element('h2'));
 var data, palette, byId, incident, statusCounts, presentStatuses;
-var mobileIsolateBase, contextGraph, sharedIndex, currentBundle;
+var contextGraph, sharedIndex, currentBundle;
 var records, navigation, calls;
 var ui$selected, ui$selectedStatuses;
 var ui$query, ui$relationIds, ui$mode, ui$listLimit;
