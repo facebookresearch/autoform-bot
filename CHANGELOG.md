@@ -499,8 +499,9 @@ date when the release is tagged.
   the links after its first word pointing at unpublished pages (#484).
 - **Roadmap folder spelling.** A roadmap folder spelled with other capitals,
   such as `Roadmap/`, passed `check` on a case-insensitive filesystem, as on
-  macOS, and then ended `render` in a `KeyError`. Every command now refuses it
-  as Linux did, "roadmap directory does not exist", and names the rename (#595).
+  macOS, and then ended `render` in a `KeyError`. Loading the graph now refuses
+  it on every filesystem as Linux did, "roadmap directory does not exist", and
+  names the rename (#595).
 
 ## 0.6.0 (2026-10-22)
 
