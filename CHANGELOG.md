@@ -102,6 +102,9 @@ date when the release is tagged.
   one persistent workspace. The outline follows authored containment, includes
   root-level pages and labels collections as subheads; Home returns to the site.
   Empty source choices are hidden (#442).
+- **Explorer payloads.** Scope payloads no longer carry the x and y positions
+  0.6.0's Python layout computed; they keep card dimensions and authored region
+  counts (#442).
 - **Book order.** Previous/Next, the site nav, statement numbers, Next up and
   the explorer's outline and search follow one reading order, down the
   containment tree, so a landing-page shortcut no longer reorders the book and
@@ -254,15 +257,18 @@ date when the release is tagged.
 
 - **Explorer canvas.** The explorer's own drawing of the graph is gone, now
   that its stage shows the whole-project map: its bounded maps, camera, Fit and
-  zoom controls, topic shelves, concept-link clusters and connection backbone.
-  On a desktop, a page whose reader only lists its children folds the reader to
-  its rail, and other pages open the reader beside the map; on a phone,
-  chapters and Home open on the map and statements in the reader. Back to map
-  focuses the selected result's card, or else the map. A status filter that
-  leaves out the selected result's status no longer clears the selection, and
-  "Show N filtered out" counts what it hides from the list. A map that cannot
-  load says so on the stage, and the outline, search and lists still work. The
-  explorer bundle is 68,622 bytes instead of 144,973 (#574).
+  zoom controls, Show unlinked filter, topic shelves, concept-link clusters and
+  connection backbone. Old links' `direction=` and `isolates=` parameters are
+  ignored. On a desktop, a page whose reader only lists its children folds the
+  reader to its rail, and other pages open the reader beside the map; on a
+  phone, landing on a chapter or Home, or picking one in search or on the map,
+  opens the map, and statements open in the reader. Back to map focuses the
+  selected result's card, or else the map. A status filter that leaves out the
+  selected result's status no longer clears the selection, and "Show N
+  filtered out" counts what it hides from the list. A map that cannot load, or
+  stops before it is set up, leaves a notice on the stage, and the outline,
+  search and lists still work. The explorer bundle is 68,637 bytes instead of
+  144,973 (#574).
 
 ### Fixed
 
