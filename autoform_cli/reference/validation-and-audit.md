@@ -15,8 +15,7 @@ Hidden paths, those with a part starting with `.`, are no part of the roadmap:
 under `roadmap/` they hold no articles, need no chapter page, and may be
 symbolic links, such as an editor's lock file. A dependency on a hidden page,
 or one that steps through a hidden folder and back out, fails naming the hidden
-path, and so does an `.implementation-notes` folder under `roadmap/`. A
-`## Sources` link to a local path must name an existing file inside the
+path. A `## Sources` link to a local path must name an existing file inside the
 blueprint that opens as written, with no hidden part, even one its `..` steps
 leave again; a directory, an invalid path or URL, or a symbolic link loop
 fails, and `audit` requires the same. Under `sources/`, a hidden note passes
@@ -177,18 +176,19 @@ and `declarations`, one object per affected declaration and setting with its
 `name`, `option`, `value`, `location` (the `set_option` as `path:line` relative
 to the Lean root), and `scope` (`file`, `section`, `declaration`, or `proof`),
 sorted by name. The catalog limit warnings under [Elaboration
-limits](#elaboration-limits) fill `declarations`. Four warnings leave it empty:
+limits](#elaboration-limits) fill `declarations`. Five warnings leave it empty:
 `atlas-omission`, at `atlas.json`, names what loading ignored in that file;
 `decomposed-without-declaration`, at `coverage/README.md`, names a `DECOMPOSED`
 row's links that reach no declaration leaf; `duplicate-lean-target`, at each
-target involved, names the others taking the same credit; and `node-too-large`,
-at the node's article, gives its span against the project's median. A target (a
-leaf carrying `declaration:`) recording `statement: formalized` takes progress
-credit for its first `lean:` name, and a `mathlib: true` one Mathlib credit for
-its first `mathlib_declaration` name, compared as Lean names: `_root_.` and
-`«»` quoting drop out, and `«x.y»` stays one component. Later names, catalogs,
-containers and a target recording neither, such as a `statement: retracted`
-placeholder left by a migration, take no credit.
+target involved, names the others taking the same credit; `node-too-large`, at
+the node's article, gives its span against the project's median; and
+`invalid-implementation-note`, at the note or folder, gives `check`'s warning. A
+target (a leaf carrying `declaration:`) recording `statement: formalized` takes
+progress credit for its first `lean:` name, and a `mathlib: true` one Mathlib
+credit for its first `mathlib_declaration` name, compared as Lean names:
+`_root_.` and `«»` quoting drop out, and `«x.y»` stays one component. Later
+names, catalogs, containers and a target recording neither, such as a
+`statement: retracted` placeholder left by a migration, take no credit.
 
 ### Structure
 

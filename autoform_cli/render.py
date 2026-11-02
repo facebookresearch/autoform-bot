@@ -87,7 +87,6 @@ from .graph import (
     Graph,
     GraphValidationError,
     Node,
-    _implementation_note_issues,
     atlas_omissions,
     load_graph,
     unpublished_content,
@@ -455,7 +454,7 @@ def publication_issues(graph: Graph, blueprint: Path, *, sources_only: bool = Fa
     blueprint = blueprint_root(blueprint)
     try:
         # Capture leaves out the folders that say published: false, as render does.
-        snapshot, _unpublished, _nodes = _capture_blueprint(blueprint)
+        snapshot, _nodes = _capture_blueprint(blueprint)
     except PublicationError as exc:
         # Render refuses the same inputs, and says so as errors.
         if sources_only:
@@ -885,7 +884,7 @@ def render_site(
             ["blueprint and output directories must be disjoint; refusing destructive render"]
         )
     recovered = _recover_backup(destination)
-    snapshot, unpublished_ids, unpublished_nodes = _capture_blueprint(blueprint)
+    snapshot, unpublished_nodes = _capture_blueprint(blueprint)
     # The repository root, not the vault's parent. A blueprint nested at
     # <repo>/docs/blueprint would otherwise be described as <repo>/blueprint,
     # and every generated permalink would 404.
@@ -902,7 +901,7 @@ def render_site(
     # the repository path it had when render read the vault.
     relative = blueprint.relative_to(top_level) if _is_within(blueprint, top_level) else Path("blueprint")
     with _private_copy(snapshot, relative) as (copy_root, copy), resolving_once():
-        graph = _load_graph(copy, blueprint, unpublished_ids)
+        graph = _load_graph(copy, blueprint)
         coverage, coverage_issues = load_coverage(copy)
         if coverage_issues:
             raise PublicationError(
@@ -1315,13 +1314,13 @@ def _integrated_page(
     )
 
 
-def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str], frozenset[str]]:
+def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str]]:
     """Read the blueprint once, refusing what must not be published.
 
     Through descriptors where the host has them; elsewhere (Windows) as two
     pathname captures that must agree. Folders whose README says ``published:
     false`` are left out before anything is refused or published, so no page,
-    hash or check sees them; the article and node IDs in them come beside the snapshot.
+    hash or check sees them; the node IDs in them come beside the snapshot.
     """
     try:
         selection = _PUBLICATION_SELECTION
@@ -1333,7 +1332,7 @@ def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str], f
         if isinstance(error, TreeChangedError):
             raise PublicationError(["blueprint changed while it was read; retry"]) from error
         raise PublicationError([f"blueprint could not be captured: {error}"]) from error
-    folders, article_ids = unpublished_content(snapshot.files)
+    folders = unpublished_content(snapshot.files)
     node_ids = unpublished_node_ids(snapshot.files, folders)
 
     def kept(name: str) -> bool:
@@ -1382,7 +1381,7 @@ def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str], f
             )
     if issues:
         raise PublicationError(issues)
-    return snapshot, article_ids, node_ids
+    return snapshot, node_ids
 
 
 def _is_sensitive(relative: PurePosixPath) -> bool:
@@ -1425,32 +1424,22 @@ def _private_copy(
         yield root, copy
 
 
-def _load_graph(copy: Path, blueprint: Path, unpublished_ids: frozenset[str]) -> Graph:
-    """Load the copy's graph, then check the vault's implementation notes as ``load_graph`` would.
-
-    The notes are hidden, so the copy lacks them. Nothing is published or hashed
-    from them, so reading them in place changes no output. A note may belong to
-    an article in an unpublished folder, which the copy lacks too.
-    """
+def _load_graph(copy: Path, blueprint: Path) -> Graph:
+    """Load the copy's graph, naming the vault's paths in its errors."""
     try:
-        graph = load_graph(copy)
+        return load_graph(copy)
     except GraphValidationError as error:
         issues = [issue.replace(str(copy), str(blueprint)) for issue in error.issues]
         raise GraphValidationError(issues) from None
-    article_ids = {node.article_id: node.id for node in graph.nodes.values() if node.article_id is not None}
-    article_ids.update(dict.fromkeys(unpublished_ids, ""))
-    if issues := _implementation_note_issues(blueprint, article_ids):
-        raise GraphValidationError(issues)
-    return graph
 
 
 def load_publication_source(blueprint_dir: str | Path) -> tuple[str, Graph]:
     """Read the blueprint once; return its publication revision and the graph of those bytes."""
     blueprint = blueprint_root(blueprint_dir)
-    snapshot, unpublished_ids, _nodes = _capture_blueprint(blueprint)
+    snapshot, _nodes = _capture_blueprint(blueprint)
     # The graph reads the articles and the atlas.
     with _private_copy(snapshot, prefix=("roadmap/", "atlas.json")) as (_root, copy):
-        return _source_revision(snapshot), _load_graph(copy, blueprint, unpublished_ids)
+        return _source_revision(snapshot), _load_graph(copy, blueprint)
 
 
 #: An output render may replace: its identity and its files' digests (none for an empty one).

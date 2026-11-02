@@ -22,8 +22,8 @@ work context <NODE> <PROJECT> --json` and, before its first edit, saves the
 output of `autoform audit <PROJECT>/blueprint --lean-root <PROJECT> --json` as
 its baseline audit. The phase is derived; never author ready, running, retrying,
 failed, or blocked scheduler states. If a command refuses for a missing
-`article_id` or an orphaned implementation note, make the repair its message
-names, validate, and commit before starting work.
+`article_id`, make the repair its message names, validate, and commit before
+starting work.
 
 For a direct formalization request, use a compatible native persistent Goal when
 available and repeat frontier passes as below. When a run starts or resumes,

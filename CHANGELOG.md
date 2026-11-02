@@ -319,6 +319,17 @@ date when the release is tagged.
   a finding, so it no longer fails the audit or the doctor's `lean targets`
   check. Its limit is four times the project's median, so finished work
   landing elsewhere could fail the audit of a node nobody edited (#429).
+- **Loader warnings.** A `navigation` role other than `topic` on an article that
+  sets `declaration`, and an implementation note or notes folder no command can
+  use, no longer stop every command. `check` warns about each, and about a notes
+  folder that can be listed but not searched, which crashed every command.
+  `audit` reports a note as `invalid-implementation-note` where it used to
+  report it as `invalid-graph`, and no longer reports the role. The article
+  ignores the role, nothing reads through a linked notes folder, and render no
+  longer checks the notes: `graph.unpublished_content`, which gave it the
+  unpublished articles' IDs, returns only the folders. CI at an older
+  `AUTOFORM_REF` still refuses both, so move the pin before relying on the
+  warnings.
 
 ### Removed
 
