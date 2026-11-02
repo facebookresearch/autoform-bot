@@ -433,6 +433,7 @@ def test_requirement_git_url_is_compared_with_the_lock_before_redaction(
     main(["project", "inspect", str(root), "--json"])
     captured = capsys.readouterr()
 
+    assert result.compatibility.status == "unlisted"
     assert ("lake-manifest-stale" in _codes(result)) is stale
     output = result.to_json() + captured.out + captured.err
     assert "token=a" not in output and "token=b" not in output
@@ -559,6 +560,7 @@ def test_required_git_package_fields_cannot_be_missing(tmp_path: Path, field: st
         {"name": "other", "type": "path", "inherited": True, "dir": 7},
         {"name": 7},
     ],
+    ids=["path-without-dir", "dir-null", "dir-not-a-string", "name-not-a-string"],
 )
 def test_malformed_non_mathlib_package_also_invalidates_the_manifest(tmp_path: Path, entry: dict) -> None:
     result = inspect_project(_project(tmp_path, manifest=(_mathlib(), entry)))
