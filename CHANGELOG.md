@@ -115,6 +115,12 @@ date when the release is tagged.
   map, and compares path parts where it called `relative_to`, which is slow
   from Python 3.12. On one CI runner ATLAS rendered in 312 s instead of 340 s,
   with the same output.
+- **Render workers.** With 4,000 or more node pages, `render` and `check` read
+  them in up to four worker processes: on POSIX, from Python 3.11.5, run as the
+  `autoform` command or `python -m autoform_cli`. A page a worker cannot read,
+  or a pool that breaks or will not start, is read as before, so the site and
+  the warnings are the same. On a 4-processor CI runner, ATLAS rendered in
+  225 s instead of 337 s, and checked in 145 s instead of 255 s.
 - **Landing.** The ready figure links the list of what it counts, each count
   shows once with thousands separators, and the brand gradient is off the
   figures, bar and header hairline. Source coverage reads in plain words

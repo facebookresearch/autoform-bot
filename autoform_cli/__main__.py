@@ -17,7 +17,7 @@ from functools import partial
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from . import debrief, debrief_orchestrator, status
+from . import _page_pool, debrief, debrief_orchestrator, status
 from ._repository import git
 from .approvals import ApprovalStatus, approval_statuses
 from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
@@ -632,6 +632,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     _add_probe_timeout_argument(render)
 
     args = parser.parse_args(argv)
+    # Spawn starts each page worker by importing the main module again. The
+    # autoform script and python -m autoform_cli call main() under a __main__
+    # guard; a script that hands main its arguments may not, and every worker
+    # would run it again.
+    args.page_workers = argv is None
 
     if args.command == "init":
         return _init(args)
@@ -960,7 +965,9 @@ def _check(args: argparse.Namespace) -> int:
     # What the site would leave out or show as typed, and what would stop
     # render; none of it fails check. Render reports the same, except for the
     # source notes it links in the repository instead, so the flag keeps those.
-    for warning in publication_issues(graph, Path(args.blueprint_dir), sources_only=args.no_site_warnings):
+    with _page_pool.allowed(args.page_workers):
+        issues = publication_issues(graph, Path(args.blueprint_dir), sources_only=args.no_site_warnings)
+    for warning in issues:
         print(f"warning: {warning}")
     return 0
 
@@ -2148,14 +2155,15 @@ def _render(args: argparse.Namespace) -> int:
     # pass, so a render they refuse costs no Lean.
     review = partial(extract_skeletons, args.blueprint_dir, lean_root=args.lean_root, timeout=args.timeout)
     try:
-        report = render_site(
-            args.blueprint_dir,
-            args.output,
-            lean_root=args.lean_root,
-            repository_url=args.repository_url,
-            ref=args.ref,
-            review=review if args.review else None,
-        )
+        with _page_pool.allowed(args.page_workers):
+            report = render_site(
+                args.blueprint_dir,
+                args.output,
+                lean_root=args.lean_root,
+                repository_url=args.repository_url,
+                ref=args.ref,
+                review=review if args.review else None,
+            )
     except (GraphValidationError, PublicationError, ReviewError, SkeletonError) as exc:
         _print_refusal(exc, stream=sys.stdout)
         return 1
