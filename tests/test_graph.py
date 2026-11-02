@@ -2238,3 +2238,22 @@ def test_tracks_lean_set_outside_the_roadmap_root_is_ignored_with_a_warning(
         f"warning: {node_id}: tracks_lean is a project setting, read only in roadmap/README.md; ignored here"
         in capsys.readouterr().out.splitlines()
     )
+
+
+def test_check_prints_the_warnings_loading_gives_after_its_article_checks_settings_first(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Check prints Graph.warnings in one place: after the warnings it finds in the articles itself, ignored settings
+    before informal links."""
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "---\ntracks_lean: never\n---\n\n# Roadmap\n")
+    _roadmap_page(blueprint, "marked.md", "\ufeff---\ndeclaration: lemma\n---\n\n# Marked\n\nText.\n")
+    _node(blueprint, "loose.md", "# Loose\n## Informally uses\n[Gap](gap.md)\n")
+
+    assert main(["check", str(blueprint)]) == 0
+    assert [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning: ")] == [
+        "warning: marked: starts with a byte-order mark, so frontmatter on its first line is read as text and its "
+        "keys are ignored; remove the mark",
+        "warning: roadmap: tracks_lean accepts only true or false; ignored",
+        "warning: loose: informal target does not exist: 'gap.md'",
+    ]
