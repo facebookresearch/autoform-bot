@@ -63,6 +63,10 @@ which then removes its lock, in every claim command but `claim list`. Autoform
 never deletes a lock file: once no Git process is using the board, delete it
 and retry.
 
+`acquire --note TEXT` stores free text in each lease, `renew` keeps it, and
+`claim list` shows it as `note`; the key is absent, not empty, after an acquire
+without `--note`.
+
 Claims are temporary operational state, never article frontmatter.
 
 ## Revision contract
