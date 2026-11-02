@@ -1295,6 +1295,33 @@ def test_delayed_math_readiness_cannot_restore_an_older_native_section_after_bac
     assert page.evaluate("() => document === __workspaceDocument") is True
 
 
+def test_a_scroll_in_the_reader_holds_while_the_page_with_a_fragment_is_still_loading(
+    workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    page, site = workspace_page, workspace_site
+    _routes(page, site.url, workspace_runtime, graph_client=True)
+    held: list[object] = []
+    page.route(MATHJAX_BUNDLE, lambda route: held.append(route))
+    page.goto(site.route(_TARGET), wait_until="domcontentloaded")
+    _selected(page, _TARGET)
+    assert page.evaluate("() => document.readyState") != "complete"
+    # Until the page loads, WebKit keeps the element its fragment names in view. The reader holds a copy of it instead.
+    fragment = urlsplit(site.route(_TARGET)).fragment
+    reader = page.locator(".bp-reading-body")
+    assert reader.evaluate("(reader, id) => reader.contains(document.getElementById(id))", fragment) is True
+    end = reader.evaluate("reader => { reader.scrollTop = reader.scrollHeight; return reader.scrollTop; }")
+    assert end > 0
+    page.evaluate("""() => {
+      const probe = document.body.appendChild(document.createElement('div'));
+      probe.style.height = '1px'; void document.body.offsetHeight; probe.remove(); void document.body.offsetHeight;
+    }""")
+    _frames(page)
+    assert reader.evaluate("reader => reader.scrollTop") == end
+    assert held
+    for route in held:
+        workspace_runtime.serve(route)
+
+
 @pytest.mark.parametrize(("width", "height"), [(1600, 900), (1000, 900), (390, 844)])
 def test_rich_workspace_region_and_full_reader_screenshots(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int, height: int,

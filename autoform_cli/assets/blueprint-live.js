@@ -35,8 +35,8 @@
   }
 
   function activity(payload, landing) {
-    // A reader can clone an already enhanced source. Only this locally owned
-    // panel survives; neither its clone nor a hidden SSR copy is live state.
+    // A reader can move an already enhanced source or copy it. Only this locally
+    // owned panel survives; a copy of it is not live state.
     document.querySelectorAll(".bp-live-activity").forEach(function (copy) { if (copy !== panel) copy.remove(); });
     if (!landing) { if (panel) panel.remove(); return; }
     if (!panel) {

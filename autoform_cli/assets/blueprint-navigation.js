@@ -1,12 +1,14 @@
 /* Shared book/explorer navigation. Reading HTML is published by Autoform, not made from graph summaries.
  * create({host,onCommit,captureState,restoreState,onIndex,onError}) keeps one renderer-owned shell.
- * onCommit receives a detached readingSource, canonical url, resolved graph/dataURL, nodeId/anchor,
- * scope/title, snapshot, reason and isCurrent(), after URL/history commit. A renderer failure
- * is reported without promising DOM rollback. No math engine is owned or called here.
+ * onCommit receives a sanitized readingSource, canonical url, resolved graph/dataURL, nodeId/anchor,
+ * scope/title, snapshot, reason and isCurrent(), after URL/history commit. The loaded page's own
+ * reading is handed over itself, sanitized where it stands, so the formulas already typeset there are
+ * kept; any other reading is a detached copy. A renderer failure is reported without promising DOM
+ * rollback. No math engine is owned or called here.
  * checkpoint() replaces only autoformNavigation:{version:1,url,key,snapshot}; checkpoint('push') records
  * a deliberate view/filter action without changing the canonical permalink. Snapshot fields are opaque.
  * declutterReader(root, representedScopeIds) hides duplicated pure child-scope indexes only in the
- * enhanced reader clone, after the renderer has supplied its actual semantic-outline coverage.
+ * enhanced reader, after the renderer has supplied its actual semantic-outline coverage.
  * readerIsOverview(root) conservatively recognizes that owned, navigation-only reading projection.
  * loadWikiLinks()/getWikiLinks() expose a lazy optional, exact-index-SHA-bound hyperlink layer;
  * onWikiLinks receives canonical IDs and honest coverage, never mathematical dependencies.
@@ -26,7 +28,6 @@
     var origin = new URL(win.location.href).origin, initialURL = win.location.href;
     var initialPage = host.closest(".bp-explorer-page") || doc.querySelector(".bp-explorer-page");
     var source = initialPage && initialPage.querySelector(".bp-reading-source") || doc.querySelector(".bp-reading-source");
-    var initialSource = source && source.cloneNode(true);
     var catalogueURL = link(attribute(host, initialPage, "data-catalog-src"), initialURL);
     var wikiURL = catalogueURL && link("wiki-links.json", catalogueURL);
     var initialDataURL = link(attribute(host, initialPage, "data-graph-src"), initialURL);
@@ -426,11 +427,17 @@
       return {node: node, nodeId: nodeId, anchor: anchor, parameters: legacy ? Object.fromEntries(parameters) : {},
         focus: navigation.focus !== undefined ? Boolean(navigation.focus) : Boolean(node && node.result || parameters.has("node"))};
     }
-    function copyFragment(element, base) {
+    // The loaded page's own reading is sanitized in place, so the formulas MathJax
+    // typeset there move with it rather than being typeset a second time. What
+    // MathJax and Mermaid drew there is left as they drew it: a copy holds none
+    // of their output when it is sanitized.
+    function copyFragment(element, base, inPlace) {
       if (!element || /^(SCRIPT|IFRAME|OBJECT|EMBED)$/i.test(element.tagName)) throw new Error("Invalid mathematical reading element");
-      var reading = element.cloneNode(true);
-      reading.querySelectorAll("script,iframe,object,embed,base,link,style").forEach(function (node) { node.remove(); });
-      [reading].concat(Array.from(reading.querySelectorAll("*"))).forEach(function (node) {
+      var reading = inPlace ? element : element.cloneNode(true);
+      function sanitized(node) { return !inPlace || !node.closest("mjx-container") && !node.closest(".mermaid"); }
+      Array.from(reading.querySelectorAll("script,iframe,object,embed,base,link,style")).filter(sanitized)
+        .forEach(function (node) { node.remove(); });
+      [reading].concat(Array.from(reading.querySelectorAll("*")).filter(sanitized)).forEach(function (node) {
         Array.from(node.attributes).forEach(function (attribute) {
           if (/^on/i.test(attribute.name) || attribute.name.toLowerCase() === "srcdoc") node.removeAttribute(attribute.name);
         });
@@ -458,6 +465,18 @@
           if (candidates.length) node.setAttribute("srcset", candidates.join(", ")); else node.removeAttribute("srcset");
         }
       });
+      // Until a page has loaded, WebKit scrolls the element its address's fragment
+      // names back into view after every layout. In the reader that would undo every
+      // other scroll, so that element is left detached, and a shallow copy of it
+      // takes its children, typeset formulas included. It is found as :target, which
+      // can stop matching once the element moves, so this runs before the reading does.
+      var anchored = inPlace && (reading.matches(":target") ? reading : reading.querySelector(":target"));
+      if (anchored && sanitized(anchored)) {
+        var stand = anchored.cloneNode(false);
+        while (anchored.firstChild) stand.appendChild(anchored.firstChild);
+        anchored.replaceWith(stand);
+        if (anchored === reading) reading = stand;
+      }
       return reading;
     }
     function parsedPage(text, base) {
@@ -483,7 +502,7 @@
         var key = resource(canonical); if (seen.has(key)) throw new Error("Canonical reading link forms a loop"); seen.add(key);
         if (initial && key === resource(initialURL)) {
           page = {url: initialCanonical, documentURL: initialURL, title: initialTitle, scope: initialScope,
-            readingSource: initialSource, dataURL: initialDataURL}; initial = false;
+            readingSource: source, dataURL: initialDataURL}; initial = false;
         } else {
           var loaded = await fetchText(canonical, "html", request.signal); assertAlive(request);
           page = parsedPage(loaded.text, loaded.url);
@@ -518,7 +537,7 @@
         var selected = selection(target.href, Object.assign({}, navigation, {nodeId: choice.nodeId}));
         documents.add(resource(target.href));
         return {url: target.href, documentURL: page.documentURL, title: selected.node && selected.node.result ? selected.node.title : page.title || graph && graph.title || "Mathematics",
-          scope: page.scope || selected.node && selected.node.scope || null, readingSource: copyFragment(page.readingSource, page.documentURL),
+          scope: page.scope || selected.node && selected.node.scope || null, readingSource: copyFragment(page.readingSource, page.documentURL, page.readingSource === source),
           graph: graph, dataURL: dataURL, nodeId: selected.nodeId, anchor: selected.anchor, focus: selected.focus,
           mapFirst: navigation.mapFirst === true,
           parameters: choice.parameters, snapshot: navigation.snapshot || null, reason: navigation.reason || "navigate",
@@ -609,7 +628,7 @@
         bound.forEach(function (listener, root) {
           if (root.isConnected === false) { root.removeEventListener("click", listener, true); bound.delete(root); }
         });
-        initialSource = null; source = null;
+        source = null;
         if (bundle.snapshot && typeof options.restoreState === "function") await options.restoreState(bundle.snapshot, bundle);
         assertAlive(request); saveCurrent(); return bundle;
       }
@@ -691,7 +710,9 @@
         var level = Number(heading.tagName.slice(1)), previous = heading;
         while (previous) {
           if (/^H[1-6]$/.test(previous.tagName) && Number(previous.tagName.slice(1)) <= level) {
-            if (protectedAnchor.test(previous.id || "") || /[$\\]/.test(previous.textContent)) return true;
+            // Typeset math keeps no TeX in its text, so its markup counts as well.
+            if (protectedAnchor.test(previous.id || "") || previous.querySelector(".arithmatex,math,mjx-container") ||
+                /[$\\]/.test(previous.textContent)) return true;
             level = Number(previous.tagName.slice(1)) - 1;
           }
           previous = previous.previousElementSibling;
@@ -855,7 +876,7 @@
         root.removeEventListener("click", listener, true);
       }); bound.clear();
       htmlCache.clear(); jsonCache.clear(); cacheBytes = 0; index = null; indexed.clear(); routes.clear(); documents.clear();
-      snapshots.clear(); currentKey = null; current = null; initialSource = null; source = null; indexPromise = null; started = null;
+      snapshots.clear(); currentKey = null; current = null; source = null; indexPromise = null; started = null;
       indexDigest = null; wikiLinks = null; wikiPromise = null; wikiController = null;
       decluttered = new WeakMap();
     }
