@@ -287,6 +287,6 @@ def test_actual_graph_controls_cancel_the_owned_list_job_without_changing_index(
       assert.equal(ui$mathJob,null);assert.equal(job.$observer.disconnected,true);assert.equal(timers.size,0);
       assert.equal(refreshes.length,0);literal(rows());unchanged(fixture);
     """, _CALLBACKS + [
-        "button", "readingLabel", "safeHref", "buildShell", "syncControls", "wrapMapKey", "currentOverviewGroup", "trailList",
+        "button", "readingLabel", "safeHref", "buildShell", "syncControls", "trailList",
         "renderBreadcrumb", "routeTrail", "semanticParent", "refreshReadingLabels", "tooltip", "sourceNodes", "inCurrentScope",
     ], _PEERS)

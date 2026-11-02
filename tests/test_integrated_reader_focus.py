@@ -56,8 +56,13 @@ var document = {body: new Element('body'), activeElement: null, title: '',
 document.activeElement = document.body;
 var dom$search = new Element('input'), dom$readingBody = new Element('article');
 var dom$navigation = new Element('aside'), dom$inventoryScroll = new Element('div'), dom$outlineToggle = new Element('button');
-var dom$shelves = new Element('section'); dom$shelves.hidden = true;
-var dom$nodeLayer = null;
+var dom$stage = new Element('section'), mapSvg = new Element('svg'), mapCard = null;
+dom$stage.replaceChildren(mapSvg);
+// The whole map's tab stop is the card it has selected, else its svg.
+dom$stage.querySelector = selector => {
+  if (selector === '.bp-whole-map .pm-result.pm-selected[tabindex="0"]') return mapCard;
+  assert.equal(selector, '.bp-whole-map svg[tabindex="0"]'); return mapSvg;
+};
 var dom$inventoryRows = new Map();
 var dom$error = new Element('div'), dom$breadcrumb = new Element('nav');
 var dom$filterPopover = new Element('div'), dom$filterSummary = new Element('button');
@@ -68,25 +73,22 @@ var hostClasses = new Set(['bp-dag-sheet-open']);
 var host = {dataset: {}, classList: {contains: name => hostClasses.has(name),
   toggle(name, enabled) { if (enabled) hostClasses.add(name); else hostClasses.delete(name); }},
   closest() { return {querySelector() {return null;}}; }};
-var ui$selected, ui$requestedNode = 'A', ui$mode = 'graph', ui$direction = 'both';
-var ui$selectedStatuses = new Set(['fully_proved']), ui$showIsolated = true, ui$query = 'saved query', ui$area = null, ui$overviewGroup = null, ui$scopeOverview = false, ui$coarseOverview = false;
-var ui$transform = {x: 20, y: 30, scale: 1}, ui$listLimit = 100, ui$relationIds = null, ui$outlineLimit = 120;
-var ui$filtersTouched = false, ui$activeDirty = true, ui$reading = true, ui$overviewOnly = false;
+var ui$selected, ui$requestedNode = 'A', ui$mode = 'graph';
+var ui$selectedStatuses = new Set(['fully_proved']), ui$query = 'saved query';
+var ui$listLimit = 100, ui$relationIds = null, ui$outlineLimit = 120;
+var ui$filtersTouched = false, ui$reading = true, ui$overviewOnly = false;
 var byId = new Map(['A','B'].map(id => [id, {id, title: id, kind: 'node', result: true,
   scope: 'chapter', parent: 'chapter', status: 'fully_proved'}]));
 var records = new Map(byId);
-var overlays = new Map(['A','B'].map(id => {
-  const node = new Element('button'); node.dataset.autoformNodeId = id; return [id, node];
-}));
 ui$selected = byId.get('A');
 var alive = true, restoration = 0, restoring = false, checkpointTimer = 0, currentVersion = 1;
 var readingReady = Promise.resolve(true), mathPass = Promise.resolve(true), mathRoots = [], frames = [];
-var data, contextGraph, currentBundle, trail, firstResize = false, mapAllowed = true, ui$mapAllowed = true;
+var data, currentBundle, trail;
 var palette = {fully_proved: {}, planned: {}}, presentStatuses = ['fully_proved', 'planned'];
 var navigation = {loadIndex() { return Promise.resolve(null); }};
 var window = {AutoformMath: {refresh(root) {mathRoots.push(root); return mathPass;}}};
 function requestAnimationFrame(callback) {frames.push(callback); return frames.length;}
-function updateProjection() {data = contextGraph; ui$selected = byId.get(ui$requestedNode) || null;}
+function updateProjection() {data = currentBundle.graph; ui$selected = byId.get(ui$requestedNode) || null;}
 function setSheet(open) {host.classList.toggle('bp-dag-sheet-open', open);}
 function sheetLayout() {return false;}
 function closeSearch() {}
@@ -95,8 +97,6 @@ function trailList() {return new Element('ol');}
 function renderNavigation() {}
 function refresh() {}
 function resize() {}
-function center() {}
-function centerIfHidden() {}
 function showError(error) {throw error;}
 function element(tag) {return new Element(tag);}
 function deferred() {let resolve; const promise = new Promise(done => resolve = done); return {promise, resolve};}
@@ -144,7 +144,8 @@ function headingBundle(id, snapshot, focus = true) {
 def _run(body: str) -> None:
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
     script += "\nObject.assign(sandbox, {clearTimeout});\n"
-    script += "const callbacks=['captureState','snapshotForRoute','applyRoute','restoreState','setFilters','setBrowse'].map(original).join('\\n');\n"
+    script += "const callbacks=['captureState','snapshotForRoute','applyRoute','selection','restoreState','setFilters','setBrowse','mapControl']"
+    script += ".map(original).join('\\n');\n"
     script += "let testBodyComplete=false;\n"
     script += "process.once('beforeExit',()=>{if(!testBodyComplete){"
     script += "console.error('Reader callback test body did not complete');process.exitCode=1;}});\n"
@@ -200,7 +201,7 @@ def test_heading_anchor_snapshot_opens_the_card_without_overriding_saved_reader_
     _run(r"""
       records.get('A').route='/book/a.html#main';
       dom$readingBody.focus({});dom$readingBody.scrollTop=211;
-      dom$navigation.scrollTop=44;dom$inventoryScroll.scrollTop=9;ui$transform={x:145,y:-78,scale:1.1};
+      dom$navigation.scrollTop=44;dom$inventoryScroll.scrollTop=9;
       const saved=captureState(),savedBefore=JSON.stringify(saved),math=deferred();mathPass=math.promise;
       const incoming=headingBundle('A',saved,'reading');incoming.url='https://example.test/book/a.html#main';
       assert.equal(snapshotForRoute(saved,incoming),saved);
@@ -212,7 +213,7 @@ def test_heading_anchor_snapshot_opens_the_card_without_overriding_saved_reader_
       const restored=restoreState(saved,incoming);await frame();await restored;
       assert.equal(document.activeElement,dom$readingBody);assert.equal(dom$readingBody.focuses.at(-1).preventScroll,true);
       assert.equal(dom$readingBody.scrollTop,211);assert.equal(dom$navigation.scrollTop,44);
-      assert.equal(dom$inventoryScroll.scrollTop,9);assert.deepEqual(ui$transform,saved.camera);
+      assert.equal(dom$inventoryScroll.scrollTop,9);
       assert.equal(incoming.statementHeading.focuses.length,0);assert.equal(incoming.target.focuses.length,0);
       assert.equal(dom$readingBody.children[0],incoming.readingSource);assert.equal(JSON.stringify(saved),savedBefore);
       assert.deepEqual(mathRoots,[dom$readingBody]);
@@ -371,11 +372,10 @@ def test_foreign_resource_snapshot_cannot_override_the_new_article(resource: str
       assert.equal(hostClasses.has('bp-dag-sheet-open'), true, 'The foreign closed sheet must not hide B');
       assert.equal(hostClasses.has('bp-dag-outline-open'), false);
       assert.equal(ui$requestedNode, 'B'); assert.equal(ui$selected.id, 'B');
-      assert.equal(ui$mode, 'graph'); assert.equal(ui$direction, 'both');
-      assert.equal(ui$query, ''); assert.equal(ui$area, null); assert.equal(ui$overviewGroup, null);
-      assert.equal(ui$relationIds, null); assert.equal(ui$showIsolated, true);
+      assert.equal(ui$mode, 'graph');
+      assert.equal(ui$query, '');
+      assert.equal(ui$relationIds, null);
       assert.deepEqual(Array.from(ui$selectedStatuses), presentStatuses);
-      assert.deepEqual(ui$transform, {x: 20, y: 30, scale: 1});
       await frame(); await ready;
       assert.equal(dom$readingBody.children[0], source);
       assert.equal(incoming.target.dataset.autoformNodeId, 'B');
@@ -387,7 +387,7 @@ def test_foreign_resource_snapshot_cannot_override_the_new_article(resource: str
       assert.equal(incoming.heading.focuses.length, 0);
       assert.equal(dom$readingBody.scrollTop, 276, 'The real native-anchor calculation must run for B');
       assert.equal(dom$navigation.scrollTop, 0); assert.equal(dom$inventoryScroll.scrollTop, 0);
-      assert.equal(overlays.get('A').focuses.length, 0);
+      assert.equal(mapSvg.focuses.length, 0);
       const current = captureState(), ticket = restoration;
       await restoreState(saved, incoming);
       assert.deepEqual(captureState(), current, 'Direct restoration must reject the entire foreign snapshot');
@@ -405,7 +405,6 @@ def test_same_document_section_snapshot_preserves_requested_node_and_reader_inte
       records.get('B').route = './chapter.html?edition=1#statement-b';
       const owned = new Element('a'); dom$readingBody.replaceChildren(owned); owned.focus({});
       dom$readingBody.scrollTop = 211; dom$navigation.scrollTop = 44; dom$inventoryScroll.scrollTop = 9;
-      ui$transform = {x: 145, y: -78, scale: 1.1};
       const saved = captureState(), savedBefore = JSON.stringify(saved);
       assert.equal(saved.requestedNode, 'A'); assert.equal(saved.focus, 'reading');
       const incoming = bundle('A', saved, true);
@@ -425,7 +424,6 @@ def test_same_document_section_snapshot_preserves_requested_node_and_reader_inte
       assert.equal(dom$readingBody.focuses.at(-1).preventScroll, true);
       assert.equal(dom$readingBody.scrollTop, 211);
       assert.equal(dom$navigation.scrollTop, 44); assert.equal(dom$inventoryScroll.scrollTop, 9);
-      assert.deepEqual(ui$transform, saved.camera);
       assert.equal(JSON.stringify(saved), savedBefore);
     """)
 
@@ -455,7 +453,6 @@ def test_null_or_unknown_requested_snapshot_keeps_legacy_restoration(requested: 
       assert.equal(document.activeElement, dom$search); assert.equal(dom$search.focuses.at(-1).preventScroll, true);
       assert.equal(dom$readingBody.scrollTop, 89);
       assert.equal(dom$navigation.scrollTop, 44); assert.equal(dom$inventoryScroll.scrollTop, 9);
-      assert.deepEqual(ui$transform, saved.camera);
       assert.equal(dom$readingBody.children[0], incoming.readingSource);
     """)
 
@@ -482,16 +479,20 @@ def test_snapshot_marks_its_owned_anchor_without_jumping_and_restores_reader_int
     """)
 
 
-@pytest.mark.parametrize("intent", ["search", "A"])
-def test_reader_restoration_does_not_replace_saved_search_or_graph_focus(intent: str) -> None:
+@pytest.mark.parametrize("intent", ["search", "map", "selected-card"])
+def test_reader_restoration_does_not_replace_saved_search_or_map_focus(intent: str) -> None:
     _run("const intent=" + json.dumps(intent) + ";\n" + r"""
-      const chosen = intent === 'search' ? dom$search : overlays.get(intent);
-      chosen.focus({}); const saved = captureState(); assert.equal(saved.focus, intent);
+      // Focus anywhere in the stage is the map's, and it comes back to the map's own tab stop.
+      const part = new Element('g'); mapSvg.replaceChildren(part);
+      const chosen = intent === 'search' ? dom$search : part;
+      chosen.focus({}); const saved = captureState(); assert.equal(saved.focus, intent === 'search' ? 'search' : 'map');
+      if (intent === 'selected-card') { mapCard = new Element('g'); mapSvg.replaceChildren(part, mapCard); }
+      const restored = intent === 'search' ? dom$search : mapCard || mapSvg;
       const restoredPage = bundle('A', saved), ready = applyRoute(restoredPage);
       await frame(); await ready;
       const restoration = restoreState(saved, restoredPage); await frame(); await restoration;
-      assert.equal(document.activeElement, chosen);
-      assert.equal(chosen.focuses.at(-1).preventScroll, true);
+      assert.equal(document.activeElement, restored);
+      assert.equal(restored.focuses.at(-1).preventScroll, true);
       assert.equal(dom$readingBody.focuses.length, 0);
       assert.equal(restoredPage.heading.focuses.length, 0);
     """)
@@ -589,108 +590,97 @@ def test_article_commit_closes_browse_and_returns_focus_before_requested_reading
     """)
 
 
-def test_group_history_keeps_derived_selection_reading_focus_and_saved_camera() -> None:
+def test_map_intent_on_an_overview_page_never_focuses_the_inert_reader() -> None:
     _run(r"""
-      ui$overviewGroup='area:Authored geometry';ui$scopeOverview=true;
-      dom$readingBody.focus({});dom$readingBody.scrollTop=89;
-      ui$transform={x:145,y:-78,scale:1.1};
-      const saved=captureState();assert.equal(saved.overviewGroup,'area:Authored geometry');
-      assert.equal(saved.focus,'reading');
-      ui$overviewGroup=null;ui$scopeOverview=false;ui$transform={x:0,y:0,scale:.9};
-      const restored=bundle('A',saved),ready=applyRoute(restored);await frame();await ready;
-      const pending=restoreState(saved,restored);await frame();await pending;
-      assert.equal(ui$overviewGroup,saved.overviewGroup);assert.deepEqual(ui$transform,saved.camera);
-      assert.equal(dom$readingBody.scrollTop,89);assert.equal(document.activeElement,dom$readingBody);
-      // An actual article navigation clears derived group intent, not its authored math.
-      const next=bundle('B',null,true),nextReady=applyRoute(next);await frame();await nextReady;
-      assert.equal(ui$overviewGroup,null);assert.equal(document.activeElement,next.target);
-      assert.equal(next.heading.focuses.length,0);
-      assert(next.target.classList.contains('bp-reading-current'));
-    """)
-
-
-def test_large_scope_landing_never_overrides_explicit_reading_or_saved_sheet_intent() -> None:
-    _run(r"""
-      const project=updateProjection;
-      updateProjection=function(){project();ui$scopeOverview=true;ui$coarseOverview=true;};
       byId.get('A').result=false;
+      // The router says the reader only lists the page's children.
+      navigation.readerIsOverview=root=>{assert.strictEqual(root,dom$readingBody);return true;};
       const landing=bundle('A',null,false);landing.anchor=null;
       const landingReady=applyRoute(landing);
-      assert.equal(host.classList.contains('bp-dag-sheet-open'),false);
+      assert.equal(ui$overviewOnly,true);assert(hostClasses.has('bp-dag-overview-only'));
+      assert.equal(host.classList.contains('bp-dag-sheet-open'),false,'The reader folds to its rail and leaves the stage to the map');
       await frame();await landingReady;
-      for(const intent of ['reading','anchor']) {
-        const incoming=bundle('A',null,intent==='reading'?'reading':false);
-        if(intent==='reading')incoming.anchor=null;
-        const ready=applyRoute(incoming);
-        assert.equal(host.classList.contains('bp-dag-sheet-open'),true,
-          'A derived overview must not hide an explicitly requested mathematical reading');
-        await frame();await ready;
-      }
-      dom$nodeLayer={querySelector(selector){
-        assert.equal(selector,'.bp-dag-node[tabindex="0"]');return overlays.get('A');
-      }};
-      const graphEntry=bundle('A',null,true);graphEntry.anchor=null;graphEntry.mapFirst=true;
-      const graphReady=applyRoute(graphEntry);
-      assert.equal(host.classList.contains('bp-dag-sheet-open'),false);
-      await frame();await graphReady;
-      assert.equal(graphEntry.heading.focuses.length,0,'Map exploration cannot focus an inert reader');
-      assert.equal(document.activeElement,overlays.get('A'));
-      const anchorEntry=bundle('A',null,true);anchorEntry.mapFirst=true;
-      const anchorReady=applyRoute(anchorEntry);
-      assert.equal(host.classList.contains('bp-dag-sheet-open'),true,'An explicit heading wins over map preference');
-      await frame();await anchorReady;
-      const saved={readingOpen:false},incoming=bundle('A',saved,'reading');
-      const ready=applyRoute(incoming);
-      assert.equal(host.classList.contains('bp-dag-sheet-open'),false,
-        'History must retain the saved reading-sheet state');
-      await frame();await ready;
-    """)
-
-
-def test_map_intent_on_a_shelf_scope_focuses_the_reader_on_desktop_and_the_map_on_a_phone() -> None:
-    _run(r"""
-      const project=updateProjection;
-      // Shelves or context cards make a scope overview that is not coarse.
-      updateProjection=function(){project();ui$scopeOverview=true;ui$coarseOverview=false;};
-      byId.get('A').result=false;
-      dom$nodeLayer={querySelector(selector){
-        assert.equal(selector,'.bp-dag-node[tabindex="0"]');return overlays.get('A');
-      }};
-      const desktop=bundle('A',null,true);desktop.anchor=null;desktop.mapFirst=true;
-      const desktopReady=applyRoute(desktop);
-      assert.equal(host.classList.contains('bp-dag-sheet-open'),true);
-      await frame();await desktopReady;
-      assert.equal(document.activeElement,desktop.pageHeading,'A desktop reader that opens takes the focus');
-      sheetLayout=()=>true;
-      const phone=bundle('A',null,true);phone.anchor=null;phone.mapFirst=true;
-      const phoneReady=applyRoute(phone);
-      assert.equal(host.classList.contains('bp-dag-sheet-open'),false);
-      await frame();await phoneReady;
-      assert.equal(phone.pageHeading.focuses.length,0);assert.equal(document.activeElement,overlays.get('A'));
-    """)
-
-
-def test_map_intent_on_a_small_pure_overview_never_focuses_the_inert_reader() -> None:
-    _run(r"""
-      byId.get('A').result=false;
-      navigation.readerIsOverview=()=>true;
-      dom$nodeLayer={querySelector(selector){
-        assert.equal(selector,'.bp-dag-node[tabindex="0"]');return overlays.get('A');
-      }};
       const incoming=bundle('A',null,true);incoming.anchor=null;incoming.mapFirst=true;
-      incoming.graph.nodes=incoming.graph.nodes.map(node=>({...node,_region:'Authored overview area'}));
       const ready=applyRoute(incoming);
-      assert.equal(ui$scopeOverview,false,'This case must exercise the small pure-overview branch');
       assert.equal(ui$overviewOnly,true);
       assert.equal(host.classList.contains('bp-dag-sheet-open'),false);
       await frame();await ready;
-      assert.equal(incoming.heading.focuses.length,0);assert.equal(document.activeElement,overlays.get('A'));
+      assert.equal(incoming.heading.focuses.length,0);assert.equal(document.activeElement,mapSvg);
       const reading=bundle('A',null,true);reading.anchor=null;
-      reading.graph.nodes=incoming.graph.nodes;
       const readingReady=applyRoute(reading);
       assert.equal(ui$overviewOnly,false,'Explicit reading intent still opens the source');
+      assert(!hostClasses.has('bp-dag-overview-only'));
       assert.equal(host.classList.contains('bp-dag-sheet-open'),true);
       await frame();await readingReady;
       // With no statement to land on, the page's own title takes focus.
       assert.equal(document.activeElement,reading.pageHeading);
+    """)
+
+
+@pytest.mark.parametrize("statement", ["anchor", "result"])
+@pytest.mark.parametrize("viewport", ["desktop", "phone"])
+def test_an_asked_for_statement_beats_map_first_and_opens_in_the_reader(viewport: str, statement: str) -> None:
+    _run("const viewport=" + json.dumps(viewport) + ",statement=" + json.dumps(statement) + ";\n" + r"""
+      // A topic page: its reader is an overview on the desktop, and a phone opens it on the map.
+      const topic={id:'topic',scope:'topic',parent:'chapter',kind:'scope',result:statement==='result',
+        title:'Topic',status:'fully_proved'};
+      records.set(topic.id,topic);navigation.readerIsOverview=()=>viewport==='desktop';
+      if(viewport==='phone')sheetLayout=()=>true;
+      const incoming=bundle(topic.id,null,true);incoming.scope=topic.id;incoming.mapFirst=true;
+      if(statement==='result')incoming.anchor=null;
+      const ready=applyRoute(incoming);
+      assert.equal(ui$overviewOnly,false);assert.equal(host.classList.contains('bp-dag-sheet-open'),true);
+      await frame();await ready;
+      assert.equal(mapSvg.focuses.length,0);
+      // An anchor's statement takes the focus; a result page with no anchor gives it to its title.
+      assert.equal(document.activeElement,statement==='anchor'?incoming.target:incoming.pageHeading);
+    """)
+
+
+def test_desktop_map_intent_on_a_chapter_with_text_keeps_the_reader_open_and_focused() -> None:
+    _run(r"""
+      const chapter={id:'chapter',scope:'chapter',parent:'roadmap',kind:'scope',result:false,title:'Chapter',status:'fully_proved'};
+      records.set(chapter.id,chapter);navigation.readerIsOverview=()=>false;
+      const incoming=bundle(chapter.id,null,true);incoming.anchor=null;incoming.mapFirst=true;
+      const ready=applyRoute(incoming);
+      assert.equal(ui$overviewOnly,false);assert.equal(host.classList.contains('bp-dag-sheet-open'),true);
+      await frame();await ready;
+      assert.equal(document.activeElement,incoming.pageHeading,'A desktop reader that opens takes the focus');
+      assert.equal(mapSvg.focuses.length,0);
+    """)
+
+
+@pytest.mark.parametrize("intent", ["landing", "reading", "map-first", "anchor"])
+@pytest.mark.parametrize("page", ["chapter", "home"])
+def test_a_phone_opens_a_topic_or_home_on_the_map_unless_its_reading_is_asked_for(page: str, intent: str) -> None:
+    _run("const page=" + json.dumps(page) + ",intent=" + json.dumps(intent) + ";\n" + r"""
+      // A chapter is a scope record of its own; Home has no node, and its page is the root scope's.
+      for(const id of ['roadmap','chapter'])records.set(id,{id,scope:id,parent:id==='roadmap'?null:'roadmap',kind:'scope',
+        result:false,title:id,status:'fully_proved'});
+      sheetLayout=()=>true;navigation.readerIsOverview=()=>false;dom$search.focus({});
+      const incoming=bundle(page==='home'?null:'chapter',null,intent==='reading'||intent==='map-first');
+      incoming.scope=page==='home'?'roadmap':'chapter';incoming.mapFirst=intent==='map-first';
+      if(intent!=='anchor')incoming.anchor=null;
+      const ready=applyRoute(incoming);
+      assert.equal(host.classList.contains('bp-dag-sheet-open'),intent==='reading'||intent==='anchor');
+      await frame();await ready;
+      assert.equal(document.activeElement,intent==='reading'?incoming.pageHeading:intent==='map-first'?mapSvg:dom$search);
+    """)
+
+
+@pytest.mark.parametrize("saved", ["open", "closed"])
+def test_a_saved_reading_sheet_wins_over_the_overview_and_a_statement(saved: str) -> None:
+    _run("const saved=" + json.dumps(saved) + ";\n" + r"""
+      // History keeps the sheet as it was: open over an overview asked for map-first, or closed over an anchored result.
+      navigation.readerIsOverview=()=>true;dom$search.focus({});
+      if(saved==='open')byId.get('A').result=false;
+      const incoming=bundle('A',{readingOpen:saved==='open'},true);
+      if(saved==='open'){incoming.anchor=null;incoming.mapFirst=true;}
+      const ready=applyRoute(incoming);
+      assert.equal(ui$overviewOnly,saved==='open');
+      assert.equal(host.classList.contains('bp-dag-sheet-open'),saved==='open');
+      await frame();await ready;
+      // The restoration that follows places focus, so landing moves none.
+      assert.equal(document.activeElement,dom$search);assert.equal(mapSvg.focuses.length,0);
+      assert.equal(incoming.heading.focuses.length,0);assert.equal(incoming.target.focuses.length,0);
     """)

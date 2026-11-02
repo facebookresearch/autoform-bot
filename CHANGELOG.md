@@ -28,7 +28,11 @@ date when the release is tagged.
   builds on and the parts that use it, with links flowing between them; a second
   click goes inside, and Up or Escape goes back a level. On a narrow screen the
   map takes the width, with the reading pane under it. The data loads one level
-  at a time from `dependencies/map/data/` (#517, #545).
+  at a time from `dependencies/map/data/` (#517, #545). The explorer's stage
+  shows the same map beside the book: the page being read sets where it opens,
+  a result picked on it opens in the reader and a part opens its chapter, the
+  statement at the top of the reader is outlined on it, and the status filter
+  dims the results it leaves out (#552).
 - **Informal dependencies.** Under `## Informally uses`, an article can list
   what its source's proof cites but its Lean proof need not use. The links
   resolve like dependencies and appear in the runtime projection, now
@@ -84,7 +88,7 @@ date when the release is tagged.
   unchanged.
 - **Declaration captions.** A `declaration` command with no caption, such as
   `isomorphism`, is captioned as written, first letter capitalized, in the book
-  instead of "Node", and named on its map card, which showed no kind. Modifiers
+  instead of "Node". Modifiers
   such as `noncomputable` and now `public` no longer hide a known command from
   the caption, from progress or from `audit`'s check of the Lean target's kind,
   which skipped `noncomputable def`; `public def` also counts as a definition,
@@ -92,29 +96,20 @@ date when the release is tagged.
   command with no caption once, with the articles that use it; `audit` does not
   check those articles' Lean target kind either (#485).
 - **Explorer delivery.** The approved integrated redesign ships below 145 KB,
-  with the same bounded graph, JSON and frame budgets and pinned safe compiler.
-  Touch keeps single-pointer zoom controls; reading handles retain page-owned
-  mathematical titles, and typed dependency counts remain accessible descriptions.
+  with the same JSON and frame budgets and pinned safe compiler. Reading
+  handles retain page-owned mathematical titles.
 - **Integrated reading.** The book, theorem search and dependency map share
   one persistent workspace. The outline follows authored containment, includes
   root-level pages and labels collections as subheads; Home returns to the site.
-  Large scopes group before the scene cap, with paged structural shelves for
-  topics without local formal links. Empty source choices are hidden (#442).
-- **Map framing.** Small cycles pack to the viewport's aspect, and bounded
-  maps compare both orientations. Fit frames local or drilled cards without
-  shrinking their labels. Dense unselected maps show an explicitly counted
-  connection backbone; all typed dependencies remain in article lists, and
-  selected results restore full routes in their bounded neighborhoods (#442).
+  Empty source choices are hidden (#442).
+- **Explorer payloads.** Scope payloads no longer carry the x and y positions
+  0.6.0's Python layout computed; they keep card dimensions and authored region
+  counts (#442).
 - **Book order.** Previous/Next, the site nav, statement numbers, Next up and
   the explorer's outline and search follow one reading order, down the
   containment tree, so a landing-page shortcut no longer reorders the book and
   sites get new statement numbers. Pages their parent does not link now join
   the site nav and Previous/Next, after the pages it links (#495).
-- **Wiki map.** Authored concept links cluster intact formal developments,
-  with distinct dotted associations and bounded local corridors. Proof edges,
-  ranks, status and full reading pages remain unchanged (#442).
-  Publication keeps card dimensions and authored region counts; the one
-  browser engine owns positions and routes, without an unused Python grid.
 - **Book copy.** The landing lead keeps link text, code, formulas and whole
   sentences. Next up says which Lean step is next. A chapter's progress is one
   line of counts whose status meanings show on hover, gone when the chapter has
@@ -209,8 +204,8 @@ date when the release is tagged.
   checks the same (#443).
 - **Dependency explorer.** The rail and the details typeset the TeX in titles
   and summaries, with the articles' input and the project's macros, where the
-  explorer's own MathJax calls had typeset nothing on a generated site. Map
-  cards retain titles as typed (#455). Reading controls, breadcrumbs, search
+  explorer's own MathJax calls had typeset nothing on a generated site
+  (#455). Reading controls, breadcrumbs, search
   and supported inventory titles now typeset safe title parts; inventory math
   is deferred and unsupported inputs stay literal (#444).
 - **Theme.** A new project's site opens in the reader's own light or dark
@@ -257,6 +252,23 @@ date when the release is tagged.
   `mathlib_declaration` name of a `mathlib: true` target, compared as Lean
   names. Later names, catalogs, containers and placeholders recording neither
   take no credit (#193).
+
+### Removed
+
+- **Explorer canvas.** The explorer's own drawing of the graph is gone, now
+  that its stage shows the whole-project map: its bounded maps, camera, Fit and
+  zoom controls, Show unlinked filter, topic shelves, concept-link clusters and
+  connection backbone. Old links' `direction=` and `isolates=` parameters are
+  ignored. On a desktop, a page whose reader only lists its children folds the
+  reader to its rail, and other pages open the reader beside the map; on a
+  phone, landing on a chapter or Home, or picking one in search or on the map,
+  opens the map, and statements open in the reader. Back to map focuses the
+  selected result's card, or else the map. A status filter that leaves out the
+  selected result's status no longer clears the selection, and "Show N
+  filtered out" counts what it hides from the list. A map that cannot load, or
+  stops before it is set up, leaves a notice on the stage, and the outline,
+  search and lists still work. The explorer bundle is 68,637 bytes instead of
+  144,973 (#574).
 
 ### Fixed
 
@@ -307,13 +319,11 @@ date when the release is tagged.
   42 MB index had passed the old 32 MiB limit, so search and the Topics
   outline failed on every page.
 - **Explorer reading defaults.** Desktop chapters open with the reader showing
-  their text again, and arriving at a shelf or context chapter from the map,
-  search or the trail focuses its heading. Only authored-area overviews and
-  scopes over 120 nodes that draw cards open map-first, with the 0.9 zoom-out
-  floor. On a phone, Back to a result whose reader was closed no longer fails
-  with "Could not open this view" (#507, #520).
-- **Explorer review follow-ups.** Fit retains a selected unlinked result.
-  Deferred list math cancels with its view and falls back to visible text on
+  their text again, and arriving at a context chapter from search or the trail
+  focuses its heading. On a phone, Back to a result whose reader was
+  closed no longer fails with "Could not open this view" (#507, #520).
+- **Explorer review follow-ups.** Deferred list math cancels with its view and
+  falls back to visible text on
   unavailable typesetting. Preview formatting keeps currency and code literal;
   formal dependency links use converter-validated code and formula labels (#444).
 - **Structure fields.** The Lean source index records the fields a
@@ -328,21 +338,11 @@ date when the release is tagged.
   closes one per component of its name, as Lean does: `end B` after
   `namespace A.B` no longer drops the `A.` prefix from later names, and
   `end C.D` closes both scopes (#524).
-- **Explorer controls.** Closing full phone reading brings a cropped selected
-  card back into the map without overriding restored cameras. Isolate/status
-  filters use the same eligible original members in maps and native shelves,
-  including external formal links, and count hidden members. Empty shelves
-  reserve no map space; the closed phone handle anchors to the bottom (#442).
+- **Explorer controls.** The closed phone handle anchors to the bottom (#442).
 - **Explorer resizing.** Observer notifications coalesce into one animation
-  frame, keeping canvas writes out of observer delivery and cancelling pending
-  resize work when the viewer is disposed. Reading toggles settle changed stage
-  dimensions before recording the camera, so Back retains the shown view (#442).
-- **Phone framing control.** Fit and Recentre share a fixed-size focus icon
-  and truthful accessibility names. Switching actions no longer wraps the
-  toolbar and shrinks the graph beneath a restored camera (#442).
+  frame, and pending resize work is cancelled when the viewer is disposed (#442).
 - **Explorer keyboard focus.** Result selection focuses its visible statement
-  heading; stale projection callbacks cannot steal focus. Outline, filters
-  and self-hiding map controls keep native focus. Slash stays scoped; modified
+  heading. Outline and filters keep native focus. Slash stays scoped; modified
   arrow keys stay native, and empty Escape no longer adds history entries (#442).
 - **Reading feedback.** Valid HTML character references keep title math
   without admitting authored HTML. Directory aliases retain statement
@@ -368,8 +368,8 @@ date when the release is tagged.
   default library, or skipping the entries that are not named tables (#505).
 - **Wiki reading links.** The integrated explorer retains #455's title math
   in its outline, breadcrumbs, paged inventory and related-reading controls, using safe MathJax
-  service and project macros. Code stays literal, canonical links keep focus
-  and native modifiers, and graph labels remain as typed (#442).
+  service and project macros. Code stays literal, and canonical links keep
+  focus and native modifiers (#442).
 - **Import impact.** In `work import-impact`, a library whose `globs` name
   other modules but not its own root no longer claims the files under that
   root that no glob matches, which Lake does not build for it. A library

@@ -10,13 +10,11 @@ graph JSON or a replacement renderer.
 from __future__ import annotations
 
 import json
-import os
 import posixpath
 import re
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
-from pathlib import Path
 from urllib.parse import unquote, urljoin, urlsplit
 
 import pytest
@@ -27,13 +25,9 @@ from autoform_cli.scaffold import scaffold_project
 from tests.test_integrated_workspace_browser import (
     _PinnedRuntime,
     _WorkspaceSite,
-    _fit_graph,
-    _focus_graph_node,
     _frames,
     _math_source,
     _open,
-    _peek_reader,
-    _pixels,
     _search,
     _selected,
     _served,
@@ -339,126 +333,8 @@ def _native_scope_math(page: object) -> object:
     return source
 
 
-def _group(page: object, key: str) -> object:
-    return page.locator(f'.bp-dag-node[data-overview-group="{key}"]')
-
-
-def _geometry(control: object) -> dict:
-    return control.evaluate("""node => {
-      const r=node.getBoundingClientRect(),s=node.closest('.bp-dag-stage').getBoundingClientRect();
-      const m=new DOMMatrix(getComputedStyle(node).transform),title=node.querySelector('.bp-dag-node-title'),meta=node.querySelector('.bp-dag-node-meta');
-      return {x:r.x,y:r.y,width:r.width,height:r.height,scale:m.a,camera:[m.a,m.d,m.e,m.f],
-        stage:{x:s.x,y:s.y,width:s.width,height:s.height},hit:node.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)),
-        title:title.textContent,meta:meta.textContent,titlePx:parseFloat(getComputedStyle(title).fontSize)*m.a,
-        metaPx:parseFloat(getComputedStyle(meta).fontSize)*m.a};
-    }""")
-
-
-def _focus_group(page: object, key: str) -> object:
-    # The existing native map keys can reach virtualized off-screen groups.
-    # Do not expose the renderer or invent a view-group id from its serial.
-    pending: list[tuple[str, ...]] = [()]
-    seen: set[str] = set()
-    _fit_graph(page)
-    start_id = page.locator(".bp-dag-node").evaluate_all("""nodes => {
-      for(const node of nodes) {
-        const r=node.getBoundingClientRect(),s=node.closest('.bp-dag-stage').getBoundingClientRect();
-        if(r.width>0&&r.height>0&&r.left>=s.left&&r.right<=s.right&&r.top>=s.top&&r.bottom<=s.bottom&&
-           node.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)))return node.dataset.autoformNodeId;
-      } return null;
-    }""")
-    assert start_id is not None, "A fitted large scope must contain a real usable starting card"
-    while pending and len(seen) <= 32:
-        path = pending.pop(0)
-        _fit_graph(page)
-        start = page.locator(f'.bp-dag-node[data-autoform-node-id="{start_id}"]')
-        playwright.expect(start).to_be_visible()
-        start.focus()
-        for direction in path:
-            page.keyboard.press(direction)
-            _frames(page)
-        active = page.locator(".bp-dag-node:focus")
-        if active.get_attribute("data-overview-group") == key:
-            assert _geometry(active)["hit"] is True
-            # Keep this observed control's identity; a background pan clears
-            # focus, so returning the dynamic :focus selector would lose it.
-            identifier = active.get_attribute("data-autoform-node-id")
-            return page.locator(f'.bp-dag-node[data-autoform-node-id="{identifier}"]')
-        identifier = active.get_attribute("data-autoform-node-id")
-        if identifier not in seen:
-            seen.add(identifier)
-            pending.extend((*path, direction) for direction in ("ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"))
-    pytest.fail(f"Real scoped group is not keyboard-reachable: {key}")
-
-
-def _pan(page: object) -> None:
-    point = page.locator(".bp-dag-stage").evaluate("""stage => {
-      const r=stage.getBoundingClientRect(),canvas=stage.querySelector('canvas');
-      for(const fx of [.08,.92,.5])for(const fy of [.75,.5,.25]) {
-        const x=r.x+r.width*fx,y=r.y+r.height*fy;if(document.elementFromPoint(x,y)===canvas)return {x,y};
-      } throw new Error('The real map must have a reachable native canvas background');
-    }""")
-    page.mouse.move(point["x"], point["y"])
-    page.mouse.down()
-    page.mouse.move(point["x"] + 18, point["y"] + 12, steps=5)
-    page.mouse.up()
-    _frames(page)
-
-
-def _settled_reading_scroll(reading: object) -> float:
-    """Observe native scrolling until its actual position is stable, without setting it."""
-    return reading.evaluate("""node => new Promise((resolve, reject) => {
-      let previous = node.scrollTop, stableSince = performance.now(), frame = 0;
-      const timeout = setTimeout(() => {
-        cancelAnimationFrame(frame);
-        reject(new Error('Native reader scroll did not stabilize within five seconds'));
-      }, 5000);
-      function sample(now) {
-        const actual = node.scrollTop;
-        if (actual !== previous) { previous = actual; stableSince = now; }
-        if (now - stableSince >= 200) { clearTimeout(timeout); resolve(actual); return; }
-        frame = requestAnimationFrame(sample);
-      }
-      frame = requestAnimationFrame(sample);
-    })""")
-
-
-def _zoom_group(page: object, key: str) -> None:
-    control = _focus_group(page, key)
-    r = control.bounding_box()
-    page.mouse.move(r["x"] + r["width"] / 2, r["y"] + r["height"] / 2)
-    page.keyboard.down("Control")
-    try:
-        for _ in range(8):
-            page.mouse.wheel(0, -180)
-            _frames(page)
-            if _group(page, key).count() == 0:
-                break
-    finally:
-        page.keyboard.up("Control")
-    playwright.expect(_group(page, key)).to_have_count(0)
-
-
-def _capture(page: object, consumer: _ScopedConsumer, width: int, phase: str) -> None:
-    folder = os.environ.get("AUTOFORM_UI_SCREENSHOT_DIR")
-    if folder:
-        directory = Path(folder)
-        directory.mkdir(parents=True, exist_ok=True)
-        page.screenshot(path=str(directory / f"scope-overview-{width}-{phase}.png"))
-        snapshot = {"phase": phase, "typed_totals": consumer.totals,
-                    "visible_groups": page.locator(".bp-dag-node[data-overview-group]").count(), "pixels": _pixels(page)}
-        snapshot["controls"] = page.locator(".bp-dag-node").evaluate_all("""nodes => nodes.map(node => {
-          const r=node.getBoundingClientRect(),m=new DOMMatrix(getComputedStyle(node).transform);
-          return {id:node.dataset.autoformNodeId,group:node.dataset.overviewGroup,title:node.querySelector('.bp-dag-node-title').textContent,
-            meta:node.querySelector('.bp-dag-node-meta').textContent,scale:m.a,x:r.x,y:r.y,width:r.width,height:r.height};
-        })""")
-        (directory / f"scope-overview-{width}-{phase}.json").write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")
-
-
-@pytest.mark.skip(reason="A group opened on the whole map adds no breadcrumb or history entry yet, so neither the "
-                         "parent topic's crumb nor Back leads back to the topic.")
 @pytest.mark.parametrize(("width", "height"), _VIEWPORTS)
-def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
+def test_exact_lean_search_keeps_complete_math_source_and_scope_back(
     workspace_page: object, scoped_consumer: _ScopedConsumer, workspace_runtime: _PinnedRuntime, width: int, height: int,
 ) -> None:
     page, consumer = workspace_page, scoped_consumer
@@ -467,145 +343,13 @@ def test_large_scope_keeps_readable_truthful_groups_native_drill_zoom_and_back(
     page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
     _open(page, consumer.site, workspace_runtime, _SCOPE)
     _committed(page)
-    playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(1)
-    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-    _capture(page, consumer, width, "initial")
-    assert 1 <= page.locator(".bp-dag-node[data-overview-group]").count() <= 9
-    assert page.locator(".bp-dag-node").count() < 40 and _pixels(page)["painted"] > 0
-    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id*="remote"]')).to_have_count(0)
-    for key in consumer.groups:
-        control = _focus_group(page, key)
-        box = _geometry(control)
-        assert box["title"] == ("Other topics" if key == "unassigned" else key[5:])
-        # An area card counts its fully proved targets; every fixture target is not ready.
-        assert box["meta"] == "9 topics · 0 of 9 fully proved"
-        assert box["scale"] >= .9 - 1e-6 and box["width"] >= 180 and box["height"] >= 90
-        assert box["titlePx"] >= 15 and box["metaPx"] >= 12
-        assert box["hit"] is True
-        assert box["y"] >= box["stage"]["y"] + 36
-        assert box["y"] + box["height"] <= box["stage"]["y"] + box["stage"]["height"] - 32
-    handle.click()
-    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-    _native_math(page)
-    reading = page.locator(".bp-reading-body")
-    reading.hover()
-    page.mouse.wheel(0, 360)
-    reading_scroll = _settled_reading_scroll(reading)
-    assert reading_scroll > 0
-    # A phone's taps cycle half, full and the peek, so closing can take two.
-    _peek_reader(page, handle)
-    key = "area:" + _AREAS[0]
-    control = _focus_group(page, key)
-    _pan(page)
-    control.focus()
-    saved = _geometry(control)
-    assert saved["hit"] is True
-    source = page.locator(".bp-reading-body > .bp-reading-source")
-    source_title = source.locator("h1").text_content()
-    control.click()
-    playwright.expect(_group(page, key)).to_have_count(0)
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-    for node in (consumer.groups[key][0], consumer.groups[key][-1]):
-        exposed = _focus_graph_node(page, node["id"])
-        assert exposed.get_attribute("data-overview-group") is None and _geometry(exposed)["hit"] is True
-    assert page.url == consumer.site.route(_SCOPE)
-    page.go_back()
-    _committed(page)
-    restored = _group(page, key)
-    playwright.expect(restored).to_be_focused()
-    assert _geometry(restored)["camera"] == pytest.approx(saved["camera"], abs=.5)
-    assert source.locator("h1").text_content() == source_title
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-    # A collapsed wide reader is display:none; inspect retention only after
-    # the user natively reopens the actual scrollable mathematical source.
-    handle.click()
-    playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-    playwright.expect(page.locator(".bp-reading-pane > .bp-dag-inspector-inner")).to_be_visible()
-    assert _settled_reading_scroll(reading) == pytest.approx(reading_scroll, abs=1)
-    # A phone's taps go half, full, then peek, so closing may take two.
-    _peek_reader(page, handle)
-    _zoom_group(page, key)
-    focused = _focus_graph_node(page, consumer.groups[key][0]["id"])
-    playwright.expect(page.locator(".bp-dag-breadcrumb")).to_contain_text(_AREAS[0])
-    playwright.expect(page.locator(".bp-dag-breadcrumb").get_by_role("link", name=_SCOPE_TITLE, exact=True)).to_have_count(1)
-    expanded_camera = _geometry(focused)["camera"]
-    parent = page.locator(".bp-dag-breadcrumb").get_by_role("link", name=_SCOPE_TITLE, exact=True)
-    playwright.expect(parent).to_have_attribute("href", consumer.site.route(_SCOPE))
-    parent.click()
-    _committed(page)
-    assert page.url == consumer.site.route(_SCOPE)
-    playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(1)
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-    _focus_group(page, key)
-    page.go_back()
-    _committed(page)
-    playwright.expect(_group(page, key)).to_have_count(0)
-    playwright.expect(page.locator(".bp-dag-breadcrumb")).to_contain_text(_AREAS[0])
-    focused = page.locator(f'.bp-dag-node[data-autoform-node-id="{consumer.groups[key][0]["id"]}"]')
-    assert _geometry(focused)["camera"] == pytest.approx(expanded_camera, abs=.5)
-    parent = page.locator(".bp-dag-breadcrumb").get_by_role("link", name=_SCOPE_TITLE, exact=True)
-    parent.focus()
-    parent.press("Enter")
-    _committed(page)
-    assert page.url == consumer.site.route(_SCOPE), "The group parent is this local scope, not the whole library"
-    playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(1)
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-    # The trail is rebuilt under the crumb, so focus goes to the group just left rather than to the page.
-    playwright.expect(_group(page, key)).to_be_focused()
-    _focus_group(page, key)
-    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id*="remote"]')).to_have_count(0)
-    page.go_back()
-    _committed(page)
-    playwright.expect(_group(page, key)).to_have_count(0)
-    playwright.expect(page.locator(".bp-dag-breadcrumb")).to_contain_text(_AREAS[0])
-    focused = page.locator(f'.bp-dag-node[data-autoform-node-id="{consumer.groups[key][0]["id"]}"]')
-    assert _geometry(focused)["camera"] == pytest.approx(expanded_camera, abs=.5)
-    bounds = focused.bounding_box()
-    page.mouse.move(bounds["x"] + bounds["width"] / 2, bounds["y"] + bounds["height"] / 2)
-    page.keyboard.down("Control")
-    try:
-        for _ in range(12):
-            page.mouse.wheel(0, 220)
-            _frames(page)
-            if _group(page, key).count():
-                break
-    finally:
-        page.keyboard.up("Control")
-    _focus_group(page, key)
-    _frames(page)
-    assert page.url == consumer.site.route(_SCOPE)
-    playwright.expect(_group(page, key)).to_have_count(1)
-    current = page.locator(".bp-dag-breadcrumb li").last
-    playwright.expect(current).to_have_text(_SCOPE_TITLE)
-    playwright.expect(current).to_have_attribute("aria-current", "page")
-    playwright.expect(page.locator(".bp-dag-breadcrumb").get_by_role("link", name=_SCOPE_TITLE, exact=True)).to_have_count(0)
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-    playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(1)
-    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id*="remote"]')).to_have_count(0)
-    _fit_graph(page)
-    assert _geometry(page.locator(".bp-dag-node[data-overview-group]").first)["scale"] >= .9 - 1e-6
-    _capture(page, consumer, width, "fit")
-    assert documents == [consumer.site.route(_SCOPE)]
-    assert page.evaluate("() => document === __workspaceDocument") is True
-
-
-@pytest.mark.parametrize(("width", "height"), _VIEWPORTS)
-def test_exact_lean_search_precedes_groups_and_keeps_complete_math_source_and_scope_back(
-    workspace_page: object, scoped_consumer: _ScopedConsumer, workspace_runtime: _PinnedRuntime, width: int, height: int,
-) -> None:
-    page, consumer = workspace_page, scoped_consumer
-    page.set_viewport_size({"width": width, "height": height})
-    documents = []
-    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
-    _open(page, consumer.site, workspace_runtime, _SCOPE)
-    _committed(page)
+    # The workshop's page has prose of its own, so a desktop reads it beside the map and a phone opens it on the map.
+    handle, opened = page.locator(".bp-reading-pane > .bp-dag-sheet-handle"), "true" if width > 720 else "false"
+    playwright.expect(handle).to_have_attribute("aria-expanded", opened)
     _search(page, _TARGET_LEAN, _TARGET)
     page.wait_for_url(consumer.site.route(_TARGET))
     _committed(page)
-    playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(0)
     _selected(page, _TARGET)
-    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
     card = _native_math(page)
     playwright.expect(card).to_contain_text(_END)
@@ -625,16 +369,16 @@ def test_exact_lean_search_precedes_groups_and_keeps_complete_math_source_and_sc
     assert "".join(_math_source(page, formula).split()) == "".join(_TEX[-1].split())
     page.go_back()
     _committed(page)
-    playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(1)
     playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_SCOPE_TITLE)
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    playwright.expect(handle).to_have_attribute("aria-expanded", opened)
+    playwright.expect(page.locator(".bp-dag-overview-only")).to_have_count(0)
     _selected(page, _SCOPE)
     assert documents == [consumer.site.route(_SCOPE)]
     assert page.evaluate("() => document === __workspaceDocument") is True
 
 
 @pytest.mark.parametrize(("width", "height"), _VIEWPORTS)
-def test_native_scope_reading_links_open_full_math_and_restore_closed_group_history(
+def test_native_scope_reading_links_open_full_math_and_back_restores_the_scope(
     workspace_page: object, scoped_consumer: _ScopedConsumer, workspace_runtime: _PinnedRuntime, width: int, height: int,
 ) -> None:
     page, consumer = workspace_page, scoped_consumer
@@ -643,8 +387,9 @@ def test_native_scope_reading_links_open_full_math_and_restore_closed_group_hist
     page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
     _open(page, consumer.site, workspace_runtime, _SCOPE)
     _committed(page)
-    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
+    # A desktop reads the workshop's own prose beside the map; a phone opens it on the map.
+    handle, opened = page.locator(".bp-reading-pane > .bp-dag-sheet-handle"), "true" if width > 720 else "false"
+    playwright.expect(handle).to_have_attribute("aria-expanded", opened)
     for label, anchor in (("Read the complete workshop", None), ("Read the retained identity notes", _HEADING)):
         _search(page, "remote/note-00", "remote/note-00")
         page.wait_for_url(consumer.site.route("remote/note-00"))
@@ -677,8 +422,8 @@ def test_native_scope_reading_links_open_full_math_and_restore_closed_group_hist
         page.wait_for_url(consumer.site.route(_SCOPE))
         playwright.expect(page.locator(".bp-reading-body h1")).to_have_text(_SCOPE_TITLE)
         _committed(page)
-        playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-        playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(1)
+        playwright.expect(handle).to_have_attribute("aria-expanded", opened)
+        playwright.expect(page.locator(".bp-dag-overview-only")).to_have_count(0)
         _selected(page, _SCOPE)
     assert documents == [consumer.site.route(_SCOPE)]
     assert page.evaluate("() => document === __workspaceDocument") is True

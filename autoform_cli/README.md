@@ -91,11 +91,11 @@ target, `bridged` for a result introduced between source targets, and
 Frontmatter is optional; a container that only supplies prose and placement
 needs none.
 
-The optional `area` field places a container in a mathematical region of its
-parent's explorer map; on a leaf it only labels the article. Use mathematical
-areas such as `Foundations` or `Geometry & Topology`, never repository or
-workflow buckets such as `MathlibExt` or `catalog-01`. Autoform does not guess
-areas from paths, imports, or titles.
+The optional `area` field groups the chapters, and deeper containers naming a
+chapter's area, into regions of the project map; on a leaf it only labels the
+article. Use mathematical areas such as `Foundations` or `Geometry & Topology`,
+never repository or workflow buckets such as `MathlibExt` or `catalog-01`.
+Autoform does not guess areas from paths, imports, or titles.
 
 An optional container-only `navigation` role separates mathematical topics
 from repository organization:
@@ -1055,7 +1055,7 @@ autoform render blueprint --output site-src --lean-root . --require-declarations
 `render` never writes into the vault. Once the roadmap has articles, the landing
 page combines the mathematical reader and dependency map in one full-page client.
 `structure.md`, `dependencies.md` and old dependency-page URLs enter canonical
-article or chapter-card reading, with bounded maps, authored areas and global search.
+article or chapter-card reading beside the whole-project map, with global search.
 Complete published statements, proofs and citations remain the reading content.
 The index `dependencies/index.json`, project payload `dependencies.json`, and
 other `dependencies/` payloads are internal to this viewer; their schemas may change.

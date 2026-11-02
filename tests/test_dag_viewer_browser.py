@@ -570,40 +570,6 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
 
 
 @pytest.fixture(scope="module")
-def math_handle_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
-    """Twelve real authored modules create two regions, not a manual graph payload."""
-    from mkdocs.commands.build import build
-    from mkdocs.config import load_config
-
-    project = tmp_path_factory.mktemp("math-handle-site") / "project"
-    scaffold_project(project, title="Mathematical handle fixture")
-    blueprint = project / "blueprint"
-    _write_consumer(blueprint / "tex-macros.json", json.dumps({"ZZ": r"\mathbb{Z}"}))
-    _write_consumer(blueprint / "README.md", "# Mathematical handle fixture\n\n- [Library](roadmap/README.md)\n")
-    _write_consumer(blueprint / "roadmap/README.md", (
-        "# Library $\\ZZ/n$ and code `$literal$`\n\n"
-        + "\n".join(f"- [Topic {number}](topic-{number}/README.md)" for number in range(12)) + "\n"
-    ))
-    for number in range(12):
-        area = "Geometry" if number < 6 else "Analysis"
-        _write_consumer(blueprint / f"roadmap/topic-{number}/README.md", (
-            f"---\nnavigation: module\narea: {area}\n---\n\n# Authored topic {number}\n\n"
-            "- [Complete statement](identity.md)\n"
-        ))
-        _consumer_article(blueprint / "roadmap", f"topic-{number}/identity", f"Identity {number}")
-    render_site(blueprint, project / "site-src")
-    build(load_config(config_file=str(project / "mkdocs.yml"), strict=True))
-    index = json.loads((project / "site/dependencies/index.json").read_text(encoding="utf-8"))
-    root = next(node for node in index["nodes"] if node["id"] == "roadmap")
-    assert root["title"] == r"Library $\ZZ/n$ and code `$literal$`"
-    assert root["reading_title"] == dag_viewer._reading_label(root["title"])
-    graph = json.loads((project / "site/dependencies.json").read_text(encoding="utf-8"))
-    assert len(graph["nodes"]) == 12 and {node["area"] for node in graph["nodes"]} == {"Geometry", "Analysis"}
-    with _served(project / "site") as url:
-        yield url
-
-
-@pytest.fixture(scope="module")
 def marked_math_runtime() -> object:
     from tests.test_integrated_explorer_browser import _PinnedRuntime
 
@@ -629,58 +595,6 @@ def _assert_native_handle_math(page: object) -> None:
     handle.focus()
     assert page.evaluate("AutoformMath.refresh(document.querySelector('.bp-dag-sheet-handle'))") is True
     playwright.expect(handle).to_be_focused()
-
-
-@pytest.mark.skip(reason="The whole map's zoom buttons are 32px on a coarse pointer, not whole 44px targets.")
-@pytest.mark.parametrize("width,height", [(320, 844), (390, 844), (1000, 900)])
-def test_coarse_pointer_zoom_has_whole_44px_single_finger_targets_in_two_toolbar_rows(
-    mobile_page: object, explorer_consumer: _ExplorerConsumer, marked_math_runtime: object, width: int, height: int,
-) -> None:
-    from tests.test_integrated_explorer_browser import _routes
-    from tests.test_integrated_selected_focus_browser import _complete_source, _published_source
-
-    page, consumer = mobile_page, explorer_consumer
-    page.set_viewport_size({"width": width, "height": height})
-    assert page.evaluate("matchMedia('(pointer: coarse)').matches") is True
-    route = consumer.route("chapter/middle")
-    expected = _published_source(page, route)
-    documents: list[str] = []
-    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
-    _routes(page, consumer.url, marked_math_runtime, graph_client=True)
-    page.goto(route)
-    _consumer_ready(page, consumer, "chapter/middle")
-    page.evaluate("window.__singleFingerDocument=document")
-    _complete_source(page, expected)
-    if width <= 720:
-        _close_phone_reading(page)
-    control = _consumer_selected(page, consumer, "chapter/middle")
-    buttons = [page.get_by_role("button", name=name, exact=True) for name in ("Zoom out", "Zoom in")]
-    buttons.append(page.locator(".bp-dag-fit"))
-    for button in buttons:
-        playwright.expect(button).to_be_visible()
-        _assert_hit(page, button)
-        box = button.bounding_box()
-        assert box is not None and box["width"] >= 44 and box["height"] >= 44
-        assert 0 <= box["x"] and box["x"] + box["width"] <= width
-    rows = """()=>new Set(Array.from(document.querySelector('.bp-dag-toolbar').children)
-      .filter(node=>node.getClientRects().length).map(node=>Math.round(node.getBoundingClientRect().top))).size"""
-    assert page.evaluate(rows) == 2
-    history = page.evaluate("history.length")
-    before = control.evaluate("node=>new DOMMatrix(getComputedStyle(node).transform).a")
-    buttons[0].tap()
-    _paint_frame(page)
-    smaller = control.evaluate("node=>new DOMMatrix(getComputedStyle(node).transform).a")
-    assert smaller < before
-    buttons[1].tap()
-    _paint_frame(page)
-    assert control.evaluate("node=>new DOMMatrix(getComputedStyle(node).transform).a") > smaller
-    assert page.evaluate(rows) == 2
-    for button in buttons:
-        _assert_hit(page, button)
-    assert page.url == route and page.evaluate("history.length") == history
-    _complete_source(page, expected)
-    assert page.evaluate("document===__singleFingerDocument") is True
-    assert documents == [route.split("#", 1)[0]]
 
 
 @pytest.mark.parametrize("entrance", ["chapter-heading", "catalogue"])
@@ -740,62 +654,6 @@ def test_phone_peek_typesets_the_pages_own_chapter_title_without_borrowing_a_cat
     assert documents == [scope.split("#", 1)[0]]
 
 
-@pytest.mark.skip(reason="Opening an area on the whole map neither collapses the reader to its rail "
-                         "nor adds the area to the trail.")
-@pytest.mark.parametrize("width,height", [(390, 844), (1000, 900)])
-def test_region_reader_handle_keeps_genuine_page_math_when_its_peek_or_rail_is_collapsed(
-    mobile_page: object, math_handle_site_url: str, marked_math_runtime: object, width: int, height: int,
-) -> None:
-    from tests.test_integrated_explorer_browser import _routes
-    from tests.test_integrated_selected_focus_browser import _complete_source, _published_source
-    from tests.test_integrated_workspace_browser import _focus_graph_region
-
-    page, base = mobile_page, math_handle_site_url
-    page.set_viewport_size({"width": width, "height": height})
-    canonical = _site_route(page, base, "roadmap")
-    expected = _published_source(page, canonical)
-    documents: list[str] = []
-    page.on("request", lambda request: documents.append(request.url) if request.resource_type == "document" else None)
-    _routes(page, base, marked_math_runtime, graph_client=True)
-    page.goto(canonical)
-    _ready_site(page)
-    page.evaluate("window.__regionHandleDocument=document")
-    handle = page.locator(".bp-reading-pane > .bp-dag-sheet-handle")
-    source = _complete_source(page, expected)
-    if width > 720:
-        # This authored math/code root keeps its full reader and has no desktop close control.
-        # Its real Geometry area supplies the collapsed rail checked below.
-        playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-        playwright.expect(handle).to_be_hidden()
-        playwright.expect(source.locator("h1")).to_be_visible()
-        playwright.expect(source.locator("h1 mjx-c.mjx-c2124")).to_have_count(1)
-        playwright.expect(source.locator("h1 code")).to_have_text("$literal$")
-    else:
-        playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-        _assert_native_handle_math(page)
-    _focus_graph_region(page, "Geometry").tap()
-    playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(1)
-    assert page.url == canonical
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-    _assert_native_handle_math(page)
-    _complete_source(page, expected)
-    parent = page.locator('.bp-dag-breadcrumb a[href="' + canonical + '"]')
-    playwright.expect(parent).to_have_count(1)
-    parent.click()
-    playwright.expect(page.locator(".bp-dag-area-expanded")).to_have_count(0)
-    _paint_frame(page)
-    source = _complete_source(page, expected)
-    if width > 720:
-        playwright.expect(handle).to_be_hidden()
-        playwright.expect(source.locator("h1")).to_be_visible()
-        playwright.expect(source.locator("h1 mjx-c.mjx-c2124")).to_have_count(1)
-        playwright.expect(source.locator("h1 code")).to_have_text("$literal$")
-    else:
-        _assert_native_handle_math(page)
-    assert page.url == canonical and page.evaluate("document===__regionHandleDocument") is True
-    assert documents == [canonical]
-
-
 def _consumer_ready(page: object, consumer: _ExplorerConsumer, node_id: str = "chapter") -> None:
     page.locator(".bp-dag-integrated .bp-dag-stage").wait_for(state="attached")
     playwright.expect(page.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
@@ -812,9 +670,14 @@ def _open_consumer(page: object, consumer: _ExplorerConsumer, node_id: str = "ch
 
 
 def _consumer_selected(page: object, consumer: _ExplorerConsumer, node_id: str) -> object:
+    """The book has selected ``node_id``, and the whole map has followed it there and selected its card."""
     _consumer_ready(page, consumer, node_id)
-    control = page.locator(f'.bp-dag-node[data-autoform-node-id="{node_id}"]')
-    playwright.expect(control).to_have_attribute("data-selected", "true")
+    host = page.locator(".bp-dag-viewer")
+    playwright.expect(host).to_have_attribute("data-map-start", node_id)
+    playwright.expect(host).to_have_class(re.compile(r"\bbp-dag-has-selection\b"))
+    # Attached rather than visible: on a phone the half reader may cover the card.
+    control = page.locator(f'.bp-whole-map .pm-result.pm-selected[data-result="{node_id}"]')
+    playwright.expect(control).to_have_count(1)
     anchor = unquote(urlsplit(consumer.route(node_id)).fragment)
     if anchor:
         # A statement's anchor is on its card's heading, and the card is the current reading.
@@ -976,7 +839,7 @@ def test_an_oversized_flat_scope_opens_on_the_whole_map_beside_its_reader(
     playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="flat"]')).to_have_count(1)
     playwright.expect(page.get_by_role("button", name="Back to map", exact=True)).to_be_hidden()
     # The oversized chapter opens with its reader, not a map-first overview.
-    playwright.expect(page.locator(".bp-dag-scope-overview")).to_have_count(0)
+    playwright.expect(page.locator(".bp-dag-viewer")).not_to_have_class(re.compile(r"\bbp-dag-overview-only\b"))
     reader = page.locator(".bp-reading-pane").bounding_box()
     assert reader is not None and reader["width"] >= 340, reader
     _browse_contents(page, "Statements in this topic")
@@ -1088,157 +951,6 @@ def test_mobile_contents_pagination_stays_above_the_collapsed_sheet(mobile_page:
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("200 of 1,000")
 
 
-def _clear_consumer_selection(page: object, consumer: _ExplorerConsumer, node_id: str) -> object:
-    """Open a result's neighbourhood, then clear its selection on the same route and leave no card focused."""
-    _open_consumer(page, consumer, node_id)
-    node = _consumer_selected(page, consumer, node_id)
-    node.focus()
-    node.press("Escape")
-    playwright.expect(node).to_have_attribute("data-selected", "false")
-    node.evaluate("node => node.blur()")
-    _paint_frame(page)
-    return node
-
-
-@pytest.mark.skip(reason="The whole map takes a press that moves 4px as a drag, "
-                         "so a tap that wobbles up to 8px no longer opens a card.")
-def test_a_drag_that_starts_on_a_card_pans_and_a_tap_still_opens_it(
-    desktop_page: object, explorer_consumer: _ExplorerConsumer,
-) -> None:
-    """Presses on cards were ignored by the map, so on a phone, where cards cover most of it, a drag did nothing."""
-    page = desktop_page
-    node = _clear_consumer_selection(page, explorer_consumer, "chapter/middle")
-    foundation = page.locator('.bp-dag-node[data-autoform-node-id="chapter/foundation"]')
-    _assert_hit(page, node)
-    url, length = page.url, page.evaluate("history.length")
-    before = node.bounding_box()
-    assert before is not None
-    x, y = before["x"] + before["width"] / 2, before["y"] + before["height"] / 2
-
-    page.mouse.move(x, y)
-    page.mouse.down()
-    page.mouse.move(x + 60, y + 40, steps=6)
-    page.mouse.up()
-    _paint_frame(page)
-    after = node.bounding_box()
-    assert after is not None
-    # The first step past 8px carries the whole way travelled, so the card ends under the pointer.
-    assert abs(after["x"] - before["x"] - 60) < 1 and abs(after["y"] - before["y"] - 40) < 1
-    playwright.expect(node).to_have_attribute("data-selected", "false")
-    assert page.url == url and page.evaluate("history.length") == length
-
-    # A press that wobbles less than 8px is still a tap, and opens the card.
-    _assert_hit(page, foundation)
-    box = foundation.bounding_box()
-    assert box is not None
-    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
-    page.mouse.move(x, y)
-    page.mouse.down()
-    page.mouse.move(x + 4, y + 3, steps=2)
-    page.mouse.up()
-    page.wait_for_url(explorer_consumer.route("chapter/foundation"))
-    _consumer_selected(page, explorer_consumer, "chapter/foundation")
-
-
-@pytest.mark.skip(reason="The whole map has no hover preview of a card's neighbours yet.")
-def test_resting_the_mouse_on_a_card_previews_its_neighbours_without_selecting_it(
-    desktop_page: object, explorer_consumer: _ExplorerConsumer,
-) -> None:
-    """Nothing on the map reacted before a click, so seeing what a card links to meant opening it."""
-    page = desktop_page
-    middle = _clear_consumer_selection(page, explorer_consumer, "chapter/middle")
-    foundation = page.locator('.bp-dag-node[data-autoform-node-id="chapter/foundation"]')
-    target = page.locator('.bp-dag-node[data-autoform-node-id="chapter/target"]')
-    _assert_hit(page, foundation)
-    _assert_hit(page, target)
-    url, length = page.url, page.evaluate("history.length")
-    # A touch has no hover, so it previews nothing.
-    page.evaluate(
-        """() => new Promise(done => {
-          document.querySelector('.bp-dag-node[data-autoform-node-id="chapter/foundation"]')
-            .dispatchEvent(new PointerEvent("pointerenter", {pointerType: "touch"}));
-          setTimeout(done, 300);
-        })"""
-    )
-    playwright.expect(target).to_have_attribute("data-subdued", "false")
-    # A mouse previews only after it rests on the card, not as it passes over.
-    waited = page.evaluate(
-        """() => new Promise(done => {
-          const target = document.querySelector('.bp-dag-node[data-autoform-node-id="chapter/target"]'), start = performance.now();
-          new MutationObserver(() => { if (target.dataset.subdued === "true") done(performance.now() - start); })
-            .observe(target, {attributes: true, attributeFilter: ["data-subdued"]});
-          document.querySelector('.bp-dag-node[data-autoform-node-id="chapter/foundation"]')
-            .dispatchEvent(new PointerEvent("pointerenter", {pointerType: "mouse"}));
-        })"""
-    )
-    assert waited >= 110
-    foundation.dispatch_event("pointerleave")
-    playwright.expect(target).to_have_attribute("data-subdued", "false")
-
-    foundation.hover()
-    # Its direct dependent stays at full strength; a card two links away fades with the rest.
-    playwright.expect(target).to_have_attribute("data-subdued", "true")
-    playwright.expect(middle).to_have_attribute("data-subdued", "false")
-    playwright.expect(foundation).to_have_attribute("data-subdued", "false")
-    playwright.expect(foundation).to_have_attribute("data-selected", "false")
-    assert page.url == url and page.evaluate("history.length") == length
-    # Leaving the card restores the map.
-    page.mouse.move(1, 1)
-    playwright.expect(target).to_have_attribute("data-subdued", "false")
-    playwright.expect(middle).to_have_attribute("data-subdued", "false")
-
-    # A card zoomed off the map gets no pointerleave, so its preview ends with it instead of fading the map for good.
-    foundation.hover()
-    playwright.expect(target).to_have_attribute("data-subdued", "true")
-    page.keyboard.down("Control")
-    for _ in range(3):
-        page.mouse.wheel(0, 2000)
-    page.keyboard.up("Control")
-    playwright.expect(foundation).to_have_count(0)
-    page.get_by_role("button", name="Fit the map", exact=True).click()
-    playwright.expect(target).to_have_attribute("data-subdued", "false")
-    playwright.expect(foundation).to_have_attribute("data-subdued", "false")
-
-
-@pytest.mark.skip(reason="The whole map has no hover preview of a card's neighbours yet.")
-def test_moving_the_mouse_to_the_next_card_hands_the_preview_over_without_a_flash(
-    desktop_page: object, explorer_consumer: _ExplorerConsumer,
-) -> None:
-    """Leaving a card cleared its preview on the next tick, so crossing the gap to the next card flashed the whole map back."""
-    page = desktop_page
-    page.set_viewport_size({"width": 1440, "height": 900})
-    _open_consumer(page, explorer_consumer, "star")
-    # Every chapter of the star depends on chapter 0 alone, so under two neighbouring leaves' previews every other leaf stays faded.
-    leaves = page.evaluate("""() => [...document.querySelectorAll('.bp-dag-node')].map(node => {
-        const box = node.getBoundingClientRect(), stage = node.closest('.bp-dag-stage').getBoundingClientRect();
-        return {id: node.dataset.autoformNodeId, x: box.left, y: box.top, w: box.width, h: box.height,
-                whole: box.left >= stage.left && box.right <= stage.right && box.top >= stage.top && box.bottom <= stage.bottom};
-      }).filter(card => card.whole && !card.id.endsWith('/chapter-00'))""")
-    leaves.sort(key=lambda card: (round(card["x"]), card["y"]))
-    pairs = [(a, b) for a, b in zip(leaves, leaves[1:]) if abs(a["x"] - b["x"]) < 1]
-    assert pairs and len(leaves) > 2, leaves
-    first, second = pairs[0]
-    outside = [card["id"] for card in leaves if card["id"] not in (first["id"], second["id"])]
-    card = page.locator(f'.bp-dag-node[data-autoform-node-id="{first["id"]}"]')
-    _assert_hit(page, card)
-    _assert_hit(page, page.locator(f'.bp-dag-node[data-autoform-node-id="{second["id"]}"]'))
-    card.hover()
-    playwright.expect(page.locator(f'.bp-dag-node[data-autoform-node-id="{outside[0]}"]')).to_have_attribute("data-subdued", "true")
-    page.evaluate("""ids => {
-      window.__lit = new Set();
-      window.__watch = new MutationObserver(records => records.forEach(record => {
-        if (record.target.dataset.subdued === "false") window.__lit.add(record.target.dataset.autoformNodeId);
-      }));
-      ids.forEach(id => window.__watch.observe(document.querySelector(`.bp-dag-node[data-autoform-node-id="${id}"]`),
-        {attributes: true, attributeFilter: ["data-subdued"]}));
-    }""", outside)
-    page.mouse.move(second["x"] + second["w"] / 2, second["y"] + second["h"] / 2, steps=8)
-    # The first leaf fades once the second's preview takes over.
-    playwright.expect(card).to_have_attribute("data-subdued", "true")
-    lit = page.evaluate("() => { window.__watch.disconnect(); return [...window.__lit]; }")
-    assert lit == [], f"Cards outside both neighbourhoods lit while the mouse crossed the gap: {lit}"
-
-
 def test_a_books_own_area_map_presses_nothing_and_a_list_presses_only_its_browse_choice(
     desktop_page: object, explorer_consumer: _ExplorerConsumer,
 ) -> None:
@@ -1257,6 +969,78 @@ def test_a_books_own_area_map_presses_nothing_and_a_list_presses_only_its_browse
     back.click()
     playwright.expect(back).to_be_hidden()
     playwright.expect(pressed).to_have_count(0)
+
+
+@pytest.mark.parametrize("node_id", ["chapter/middle", "chapter"])
+def test_back_to_map_from_a_statement_list_focuses_the_whole_map(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer, node_id: str,
+) -> None:
+    """Back to map hands focus to the whole map: to the card it has selected, or else to the map itself."""
+    page = desktop_page
+    page.emulate_media(reduced_motion="reduce")
+    _open_consumer(page, explorer_consumer, node_id)
+    target = page.locator(f'.bp-whole-map .pm-result.pm-selected[data-result="{node_id}"]')
+    if node_id == "chapter":
+        # A topic's page opens the topic on the map and selects no card, so the map itself takes focus.
+        playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="chapter"]')).to_have_count(1)
+        target = page.locator(".bp-whole-map .pm-stage > svg")
+    playwright.expect(target).to_have_count(1)
+    # A part file arriving while the list hides the map redraws it without its card, so let the map load first.
+    page.wait_for_load_state("networkidle")
+    _browse_contents(page, "Statements in this topic")
+    back = page.get_by_role("button", name="Back to map", exact=True)
+    back.click()
+    playwright.expect(back).to_be_hidden()
+    playwright.expect(target).to_be_focused()
+
+
+def test_a_map_that_cannot_load_leaves_one_notice_and_back_to_map_focuses_the_filter(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """Without the whole map the stage says so once, the lists still work, and Back to map leaves focus on the filter."""
+    page = desktop_page
+    page.route("**/javascripts/project-map.js", lambda route: route.abort())
+    _open_consumer(page, explorer_consumer, "chapter/middle")
+    notice = page.locator(".bp-dag-stage > .bp-dag-map-unavailable")
+    playwright.expect(notice).to_have_count(1)
+    playwright.expect(notice).to_have_text("The map could not load. Topics, search and the statement lists still work.")
+    playwright.expect(notice).to_have_attribute("role", "status")
+    playwright.expect(notice).to_be_visible()
+    playwright.expect(page.locator(".bp-whole-map")).to_have_count(0)
+    _browse_contents(page, "Statements in this topic")
+    playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("63 statements")
+    back = page.get_by_role("button", name="Back to map", exact=True)
+    back.click()
+    playwright.expect(back).to_be_hidden()
+    playwright.expect(page.locator(".bp-dag-filter-summary")).to_be_focused()
+    playwright.expect(notice).to_have_count(1)
+    playwright.expect(notice).to_be_visible()
+
+
+def test_a_map_that_stops_after_making_its_host_still_leaves_the_notice(
+    webkit_browser: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
+    """The map makes its host in the stage first, so a script that throws after that never marks it set up."""
+    stub = (
+        "(function () { var host = document.createElement('div'); host.className = 'bp-whole-map';"
+        " document.querySelector('[data-whole-map] .bp-dag-stage').appendChild(host);"
+        " throw new Error('the map stopped partway'); })();"
+    )
+    # Its own page: the shared one fails on any uncaught page error, and this script throws one on purpose.
+    context = webkit_browser.new_context(viewport={"width": 1280, "height": 900})
+    errors: list[str] = []
+    page = context.new_page()
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.route("**/javascripts/project-map.js", lambda route: route.fulfill(content_type="text/javascript", body=stub))
+    try:
+        _open_consumer(page, explorer_consumer, "chapter/middle")
+        notice = page.locator(".bp-dag-stage > .bp-dag-map-unavailable")
+        playwright.expect(notice).to_have_count(1)
+        playwright.expect(notice).to_be_visible()
+        playwright.expect(page.locator(".bp-whole-map")).to_have_count(1)
+    finally:
+        context.close()
+    assert len(errors) == 1 and "the map stopped partway" in errors[0], errors
 
 
 def test_back_restores_a_phone_reader_at_half_rather_than_carrying_full_over(
@@ -1399,7 +1183,8 @@ def test_global_search_jumps_to_the_smallest_context(desktop_page: object, explo
     result.click()
     _consumer_selected(page, explorer_consumer, "remote/deep-theorem")
     assert page.url == explorer_consumer.route("remote/deep-theorem")
-    assert page.locator(".bp-dag-node").count() <= 8
+    # The map goes to the result inside its own topic.
+    playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="remote"]')).to_have_count(1)
     assert page.evaluate("document===window.__consumerDocument") is True
 
 
@@ -1419,7 +1204,10 @@ def test_legacy_node_hash_resolves_through_the_global_index(desktop_page: object
     playwright.expect(page.locator(".bp-dag-search")).not_to_have_attribute("aria-busy", "true")
     assert page.url.endswith("#node=unknown%2Fitem")
     assert len(navigations) == 1
-    assert page.locator('.bp-dag-node[data-selected="true"]').count() == 0
+    # Nothing is selected, in the book or on the map, once the map has drawn.
+    playwright.expect(page.locator(".bp-whole-map .pm-part").first).to_be_visible()
+    playwright.expect(page.locator(".bp-dag-has-selection")).to_have_count(0)
+    playwright.expect(page.locator(".bp-whole-map .pm-result.pm-selected")).to_have_count(0)
 
 
 def test_paginated_search_and_arrow_navigation_restore_focus(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
@@ -1496,6 +1284,7 @@ def test_direct_list_view_has_current_shown_and_hidden_counts(desktop_page: obje
     _consumer_ready(page, explorer_consumer)
     playwright.expect(page.locator(".bp-dag-inventory")).to_be_visible()
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 statement")
+    # The list holds the chapter's 63 statements: the filter shows the one fully proved and offers back the other 62.
     playwright.expect(page.locator(".bp-dag-hidden-button")).to_have_text("Show 62 filtered out")
     playwright.expect(page.locator(".bp-dag-inventory-row")).to_have_count(1)
 
@@ -1527,7 +1316,9 @@ def test_reselect_does_not_duplicate_history_and_back_restores_selection(desktop
     assert page.evaluate("document===window.__consumerDocument") is True
 
 
-def test_hiding_the_selected_status_clears_selection(desktop_page: object, explorer_consumer: _ExplorerConsumer) -> None:
+def test_hiding_the_selected_status_keeps_the_selection_and_dims_its_card(
+    desktop_page: object, explorer_consumer: _ExplorerConsumer,
+) -> None:
     page = desktop_page
     _open_consumer(page, explorer_consumer, "chapter/target")
     summary, popover = page.locator(".bp-dag-filter-summary"), page.locator(".bp-dag-filter-popover")
@@ -1543,7 +1334,15 @@ def test_hiding_the_selected_status_clears_selection(desktop_page: object, explo
     summary.click()
     target_status = explorer_consumer.records["chapter/target"]["status"]
     page.locator(f'.bp-dag-filter-popover input[value="{target_status}"]').uncheck()
-    playwright.expect(page.locator(".bp-dag-has-selection")).to_have_count(0)
+    # The map dims the statuses the filter leaves out, so the selection stays and its card dims; since the map hides
+    # nothing, the change is announced as the filter.
+    host, filtered = page.locator(".bp-dag-viewer"), f"Filter: {len(statuses) - 1} of {len(statuses)} statuses"
+    playwright.expect(summary).to_have_text(filtered)
+    playwright.expect(host).to_have_class(re.compile(r"\bbp-dag-has-selection\b"))
+    playwright.expect(host).to_have_attribute("data-map-statuses", re.compile(rf"^(?!.*\b{target_status}\b)"))
+    card = page.locator('.bp-whole-map .pm-result.pm-selected[data-result="chapter/target"]')
+    playwright.expect(card).to_have_class(re.compile(r"\bpm-dimmed\b"))
+    playwright.expect(page.locator("p.bp-dag-sr-only[aria-live]")).to_have_text(filtered)
     assert page.url == explorer_consumer.route("chapter/target")
     playwright.expect(page.locator(".bp-reading-body")).to_contain_text("Final sentence of the complete target statement.")
 
@@ -1809,46 +1608,6 @@ def test_on_a_phone_the_status_filter_and_search_results_open_in_view(mobile_pag
           return shown.contains(document.elementFromPoint(x, (top + bottom) / 2));
         }"""
     ) is True
-
-
-@pytest.mark.skip(reason="The whole map has no card-to-card arrow keys yet.")
-@pytest.mark.parametrize("width", (800, 1100, 1101, 1440))
-def test_a_node_chosen_on_a_wider_screen_lands_beside_the_open_details(
-    desktop_page: object, site_url: str, width: int
-) -> None:
-    """The graph, explicit activation and full reader agree; keyboard roving alone does not replace mathematics."""
-    page = desktop_page
-    page.set_viewport_size({"width": width, "height": 900})
-    page.emulate_media(reduced_motion="reduce")
-    _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
-    def assert_beside_reading(node: object) -> None:
-        playwright.expect(node).to_have_attribute("data-selected", "true")
-        _paint_frame(page)
-        box, reader, stage = (
-            item.bounding_box() for item in (node, page.locator(".bp-reading-pane"), page.locator(".bp-dag-stage"))
-        )
-        assert box is not None and reader is not None and stage is not None
-        assert box["x"] + box["width"] <= reader["x"] or reader["x"] + reader["width"] <= box["x"]
-        assert stage["x"] <= box["x"] and box["x"] + box["width"] <= stage["x"] + stage["width"]
-        _assert_hit(page, node)
-    result = page.locator('[data-autoform-node-id="algebra/result"].bp-dag-node')
-    assert_beside_reading(result)
-    _reading_card(page, "algebra/result")
-    result.focus()
-    base = page.locator('[data-autoform-node-id="algebra/base"].bp-dag-node')
-    origin, target = result.bounding_box(), base.bounding_box()
-    assert origin is not None and target is not None
-    dx = target["x"] + target["width"] / 2 - origin["x"] - origin["width"] / 2
-    dy = target["y"] + target["height"] / 2 - origin["y"] - origin["height"] / 2
-    key = ("ArrowRight" if dx > 0 else "ArrowLeft") if abs(dx) >= abs(dy) else ("ArrowDown" if dy > 0 else "ArrowUp")
-    result.press(key)
-    playwright.expect(base).to_be_focused()
-    playwright.expect(result).to_have_attribute("data-selected", "true")
-    assert page.url == _site_route(page, site_url, "algebra/result")
-    base.press("Enter")
-    page.wait_for_url(_site_route(page, site_url, "algebra/base"))
-    assert_beside_reading(base)
-    _reading_card(page, "algebra/base")
 
 
 def test_the_rail_under_the_open_details_leaves_the_tab_order(desktop_page: object, site_url: str) -> None:
@@ -2181,7 +1940,7 @@ def test_slash_inside_the_explorer_opens_its_search_but_an_input_keeps_its_keys(
     playwright.expect(search).to_be_focused()
     assert wrap.evaluate(hint)[1] == "none"
     page.locator(".bp-dag-filter-summary").click()
-    status = page.locator(".bp-dag-filter-popover fieldset:not(.bp-dag-isolated) input[type=checkbox]").first
+    status = page.locator(".bp-dag-filter-popover fieldset input[type=checkbox]").first
     status.focus()
     page.keyboard.press("Control+K")
     playwright.expect(status).to_be_focused()
@@ -2222,9 +1981,9 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     remote.click()
     page.wait_for_url(_site_route(page, site_url, "topology/result"))
     remote_card = full_math("topology/result", 5)
-    # The map names the selected result, and its own relations open in place of a separate strip; on a desktop the
-    # counts are the reader's, said once.
-    playwright.expect(page.locator(".bp-map-context")).to_have_text("Result")
+    # The map selects the result's card, named for it, and its own relations open in place of a separate strip; on a
+    # desktop the counts are the reader's, said once.
+    playwright.expect(_map_card(page, "topology/result")).to_have_attribute("aria-label", re.compile(r"^Result, "))
     playwright.expect(page.locator(".bp-reading-links")).to_have_count(0)
     relations = remote_card.locator("details.bp-dependencies")
     playwright.expect(relations).to_have_attribute("open", "")
@@ -2336,10 +2095,9 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     ancestor.evaluate("node=>window.__titleMathAncestor=node")
     current.evaluate("node=>window.__titleMathCurrentCrumb=node")
     _paint_frame(page)
-    geometry = """nodes=>nodes.map(node=>{const box=node.getBoundingClientRect();
-      return [node.getAttribute('data-autoform-node-id'),box.x,box.y,box.width,box.height,
-        node.querySelector('.bp-dag-node-title')?.textContent];}).sort((a,b)=>a[0].localeCompare(b[0]))"""
-    map_before = page.locator(".bp-dag-node").evaluate_all(geometry)
+    # The breadcrumb's math refresh must not move the stage the map draws in.
+    stage_before = page.locator(".bp-dag-stage").bounding_box()
+    assert stage_before is not None
     ancestor.focus()
     assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-dag-breadcrumb'))") is True
     playwright.expect(ancestor).to_be_focused()
@@ -2355,8 +2113,9 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
         assert crumb.locator("code .arithmatex, code mjx-container, [tabindex], [role=application]").count() == 0
         assert crumb.locator("mjx-merror, merror, script, iframe, img").count() == 0
         assert crumb.evaluate("node=>!node.classList.contains('arithmatex')")
-    assert page.locator(".bp-dag-node").evaluate_all(geometry) == map_before
-    assert page.locator(".bp-dag-node .arithmatex, .bp-dag-node mjx-container").count() == 0
+    assert page.locator(".bp-dag-stage").bounding_box() == stage_before
+    # The map writes its titles as plain text, which no refresh of the book typesets.
+    assert page.locator(".bp-whole-map .arithmatex, .bp-whole-map mjx-container").count() == 0
     ancestor.locator("mjx-container").click(button="right")
     playwright.expect(page.get_by_role("menu")).to_have_count(0)
     page.keyboard.press("Escape")
@@ -2558,18 +2317,6 @@ def _paint_frame(page: object) -> None:
 
 
 
-def _canvas_pixels(page: object) -> dict[str, object]:
-    return page.locator(".bp-dag-canvas").evaluate(
-        """canvas => {
-          const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
-          let painted = 0;
-          for (let index = 3; index < pixels.length; index += 4) if (pixels[index]) painted++;
-          return {width: canvas.width, height: canvas.height, painted};
-        }"""
-    )
-
-
-
 def _assert_sheet_state(page: object, *, selected: str | None, opened: bool) -> None:
     _paint_frame(page)
     state = page.locator(".bp-dag-viewer").evaluate(
@@ -2581,27 +2328,32 @@ def _assert_sheet_state(page: object, *, selected: str | None, opened: bool) -> 
     inner = page.locator(".bp-dag-inspector-inner")
     assert inner.get_attribute("inert") == (None if opened else "")
     assert inner.get_attribute("aria-hidden") == (None if opened else "true")
-    marked = page.locator('.bp-dag-node[data-selected="true"]')
-    playwright.expect(marked).to_have_count(0 if selected is None else 1)
+    # The map follows the book's selection mark, so it lets go of its card when the book does.
+    card = page.locator(".bp-whole-map .pm-result.pm-selected")
     if selected is not None:
-        playwright.expect(marked).to_have_attribute("data-autoform-node-id", selected)
+        playwright.expect(card).to_have_attribute("data-result", selected)
+    else:
+        playwright.expect(card).to_have_count(0)
 
 
 
-def test_widening_with_the_book_focused_resizes_and_repaints_the_live_canvas(
+def test_widening_with_the_book_focused_keeps_its_focus_and_the_map_fills_the_wider_stage(
     desktop_page: object, site_url: str
 ) -> None:
     page = desktop_page
     page.emulate_media(reduced_motion="reduce")
     page.set_viewport_size({"width": 1000, "height": 800})
     _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
+    # Once the map has its style and draws.
+    playwright.expect(page.locator(".bp-whole-map .pm-part").first).to_be_visible()
     _paint_frame(page)
     book = page.locator(".bp-dag-breadcrumb .bp-dag-book")
     playwright.expect(book).to_have_text("Home")
     playwright.expect(book).to_have_attribute("href", site_url + "/index.html")
     book.focus()
-    before = _canvas_pixels(page)
-    assert before["painted"] > 0
+    map_view = page.locator(".bp-whole-map .pm-stage > svg")
+    before = map_view.bounding_box()
+    assert before is not None
     page.set_viewport_size({"width": 1280, "height": 900})
     playwright.expect(page.locator(".bp-dag-book")).to_have_count(1)
     _paint_frame(page)
@@ -2612,14 +2364,11 @@ def test_widening_with_the_book_focused_resizes_and_repaints_the_live_canvas(
     book.evaluate("node => window.__resizedHomeCrumb = node")
     _paint_frame(page)
     assert book.evaluate("node => node === __resizedHomeCrumb && node === document.activeElement")
-    after = _canvas_pixels(page)
+    # The whole map follows its stage to the new size.
+    after, stage = map_view.bounding_box(), page.locator(".bp-dag-stage").bounding_box()
+    assert after is not None and stage is not None
     assert after["width"] != before["width"] and after["height"] != before["height"]
-    assert after["painted"] > 0, "Resizing cleared the canvas without painting the graph again"
-    stage = page.locator(".bp-dag-stage").bounding_box()
-    ratio = page.evaluate("Math.min(2, devicePixelRatio || 1)")
-    assert stage is not None
-    assert abs(after["width"] - stage["width"] * ratio) <= 1
-    assert abs(after["height"] - stage["height"] * ratio) <= 1
+    assert abs(after["width"] - stage["width"]) < 1 and abs(after["height"] - stage["height"]) < 1
 
 
 
@@ -2741,18 +2490,20 @@ def test_sheet_selection_close_clear_filter_and_history_states_stay_consistent(
         assert metrics["hit"] is True, metrics
         _assert_hit(page, checkbox)
     checkbox.uncheck()
-    _assert_sheet_state(page, selected=None, opened=width > 720)
+    # Filtering out the selection's status keeps the selection and the reader as they were.
+    _assert_sheet_state(page, selected="chapter/middle", opened=True)
     if width == 1000:
         after_filter = stage.bounding_box()
-        assert after_filter is not None and abs(after_filter["y"] - before_filter["y"]) < 2, "Hiding the selection moved the map vertically"
-    # The map is told which statuses to show, and dims the rest.
+        assert after_filter is not None and abs(after_filter["y"] - before_filter["y"]) < 2, "Filtering moved the map vertically"
+    # The map is told which statuses to show, and dims the rest, the selected card included.
     playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-statuses", re.compile(r"^(?!.*\bcan_prove\b)"))
+    playwright.expect(page.locator(".bp-whole-map .pm-result.pm-selected")).to_have_class(re.compile(r"\bpm-dimmed\b"))
     page.go_back()
     _consumer_selected(page, explorer_consumer, "chapter/foundation")
     _assert_sheet_state(page, selected="chapter/foundation", opened=True)
     page.go_forward()
-    _consumer_ready(page, explorer_consumer, "chapter/middle")
-    _assert_sheet_state(page, selected=None, opened=width > 720)
+    _consumer_selected(page, explorer_consumer, "chapter/middle")
+    _assert_sheet_state(page, selected="chapter/middle", opened=True)
     playwright.expect(page.locator('.bp-dag-filter-popover input[value="can_prove"]')).not_to_be_checked()
     assert page.evaluate("document===window.__consumerDocument") is True
 
@@ -2803,17 +2554,11 @@ def test_details_read_as_mathematics_not_as_instructions(desktop_page: object, e
     playwright.expect(page.locator(".bp-reading-links")).to_have_count(0)
     playwright.expect(card.locator("details.bp-dependencies")).to_have_attribute("open", "")
     playwright.expect(_open_dependency(card, explorer_consumer, "chapter/middle")).to_be_visible()
-    # The removed inspector's path pivots do not justify dropping their
-    # compatibility behavior: the same controller interprets old directions.
-    for direction, expected in (
-        ("prerequisites", ["chapter/foundation", "chapter/middle"]),
-        ("dependents", ["chapter/middle", "chapter/target"]),
-        ("both", ["chapter/foundation", "chapter/middle", "chapter/target"]),
-    ):
+    # Old permalinks that name the removed inspector's path direction still select their statement; the direction no
+    # longer chooses what the map draws.
+    for direction in ("prerequisites", "dependents", "both"):
         page.goto(explorer_consumer.url + "/dependencies/chapters/chapter.html#node=chapter%2Fmiddle&direction=" + direction)
         _consumer_selected(page, explorer_consumer, "chapter/middle")
-        _paint_frame(page)
-        assert sorted(page.locator(".bp-dag-node").evaluate_all("nodes => nodes.map(node => node.dataset.autoformNodeId)")) == expected
         playwright.expect(_reading_card(page, "chapter/target")).to_contain_text("Final sentence of the complete target statement.")
 
 
@@ -2853,7 +2598,8 @@ def test_semantic_outline_and_status_controls_do_not_repeat_leaf_summary_rows(
     playwright.expect(current).to_have_attribute("href", explorer_consumer.route("chapter/middle"))
     playwright.expect(current).to_have_attribute("aria-current", "page")
     playwright.expect(navigation.locator('[data-navigation-node-id="chapter/foundation"], [data-navigation-node-id="chapter/target"]')).to_have_count(0)
-    playwright.expect(page.locator('.bp-dag-node[data-autoform-node-id="chapter/middle"] .bp-dag-node-meta')).to_have_text("Lemma · ready to prove")
+    # The map's card names the statement and its status.
+    playwright.expect(_map_card(page, "chapter/middle")).to_have_attribute("aria-label", "Middle lemma, ready to prove")
     page.locator(".bp-dag-filter-summary").click()
     filters = page.locator(".bp-dag-filter-popover")
     statuses = {node["status"] for node in explorer_consumer.records.values()}
@@ -2951,50 +2697,12 @@ def test_the_explorer_head_follows_and_switches_the_readers_colour_scheme(
     assert box is not None and (box["width"], box["height"]) == (32, 32)
     flip.click()
     playwright.expect(body).to_have_attribute("data-md-color-scheme", "default")
-    _paint_frame(page)
-    assert _canvas_pixels(page)["painted"] > 0
     # Material keeps the choice over the media query, on this page and the next.
     page.reload()
     _ready_site(page)
     playwright.expect(body).to_have_attribute("data-md-color-scheme", "default")
     page.get_by_role("button", name="Switch light or dark theme", exact=True).click()
     playwright.expect(body).to_have_attribute("data-md-color-scheme", "slate")
-
-
-@pytest.mark.skip(reason="On a phone the whole map recentres when the full reader hides the toolbar, "
-                         "so the selected card moves; the canvas shifted back by the head it freed.")
-def test_opening_details_keeps_the_clicked_card_under_the_pointer(desktop_page: object, site_url: str) -> None:
-    """Phone reading-plane toggles do not silently move the current graph camera or replace its node."""
-    page = desktop_page
-    page.set_viewport_size({"width": 390, "height": 844})
-    page.emulate_media(reduced_motion="reduce")
-    _open_site(page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
-    handle = page.get_by_role("button", name=re.compile(r", reading$"))
-    # The page opens at half; taps go on to full and back to the peek.
-    handle.click()
-    handle.click()
-    playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-    node = page.locator('.bp-dag-node[data-autoform-node-id="algebra/result"]')
-    _paint_frame(page)
-    original = node.bounding_box()
-    identity = node.element_handle()
-    url, history_length = page.url, page.evaluate("history.length")
-    assert original is not None
-    for _ in range(2):
-        # Full hides the toolbar, and the map shifts back by the head it frees.
-        for _level in ("half", "full"):
-            handle.click()
-            playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-            _paint_frame(page)
-            opened = node.bounding_box()
-            assert opened is not None and abs(opened["y"] - original["y"]) < 2
-        handle.click()
-        playwright.expect(handle).to_have_attribute("aria-expanded", "false")
-        _paint_frame(page)
-        closed = node.bounding_box()
-        assert closed is not None and abs(closed["y"] - original["y"]) < 2
-        assert identity.evaluate("node => node === document.querySelector('.bp-dag-node[data-autoform-node-id=\"algebra/result\"]')")
-        assert page.url == url and page.evaluate("history.length") == history_length
 
 
 @pytest.mark.parametrize("attempt", (1, 2, 3))

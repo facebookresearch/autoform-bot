@@ -31,11 +31,11 @@ in Obsidian. For browser review, run
 `autoform dashboard <PROJECT> --site-dir site`, which serves the deployed site
 on loopback with local-only live claim badges, and give the overview plus the
 relevant project, chapter, nested-scope, and statement-context links. Every
-generated site route uses the same Canvas plus semantic-DOM viewer. Drill from
-the project's topics to a chapter, a nested scope, then a searched statement, in
-a window wider than 1,100 px so open details leave the hierarchy rail visible;
-at project scale, select one topic to see its dependency neighborhood. A level
-with no authored dependency edges says so.
+generated site route uses the same viewer: the reader beside the project map.
+Drill from the project's topics to a chapter, a nested scope, then a searched
+statement, in a window wider than 1,100 px so open details leave the hierarchy
+rail visible; on the map, one click on a part shows the parts it builds on and
+the parts that use it.
 
 Guide the review from coarse to fine: declared scope and exclusions, milestone
 book, landing-page progress summary, cross-chapter graph, chapter graph, then

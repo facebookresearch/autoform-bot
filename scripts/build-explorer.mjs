@@ -36,7 +36,7 @@ if (args.length > 1 || (args.length && args[0] !== "--check")) {
     minifyIdentifiers: true,
     minifySyntax: true,
     minifyWhitespace: true,
-    // Only explicitly private scene properties use $ names; payload/router fields stay intact.
+    // Only explicitly private properties use $ names; payload/router fields stay intact.
     mangleProps: /^\$/,
     legalComments: "none",
     sourcemap: false,
