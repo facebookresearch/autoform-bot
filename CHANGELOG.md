@@ -281,6 +281,12 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Claims inside a Git hook.** The claim commands' Git ignores `GIT_DIR`,
+  `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the other variables that point Git at
+  another repository, as a hook sets them. With only `GIT_DIR` set, the board's
+  Git wrote objects, and on a refused acquire a claim ref, into the hook's
+  repository; with `GIT_WORK_TREE` too, every claim command failed. `git -c`
+  settings still reach the board.
 - **`\pmod`, `\bmod` and `\mod` on the site.** Site formulas typeset `\pmod`,
   `\bmod`, `\mod` and amsmath's `\varliminf`, `\varlimsup`, `\varinjlim` and
   `\varprojlim`. MathJax builds them from `\mmlToken`, which the page's TeX input

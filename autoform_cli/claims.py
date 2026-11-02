@@ -127,6 +127,10 @@ _LOCAL_GIT_ENV = frozenset(
         "GIT_COMMON_DIR",
     }
 )
+# Those of them that name a repository, its objects or its work tree. A Git
+# hook runs with GIT_DIR set to its own repository, so the board's Git drops
+# them; configuration variables stay, so `git -c` settings still reach the board.
+_REPOSITORY_GIT_ENV = _LOCAL_GIT_ENV - {"GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"}
 
 _GIT_ENV = {
     "GIT_AUTHOR_NAME": "autoform",
@@ -504,6 +508,7 @@ class ClaimBoard:
         deadline: float | None,
         isolated: bool,
     ) -> subprocess.CompletedProcess[Any]:
+        env = {name: value for name, value in os.environ.items() if name not in _REPOSITORY_GIT_ENV}
         try:
             process = subprocess.Popen(
                 ["git", *args],
@@ -512,7 +517,7 @@ class ClaimBoard:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=text,
-                env={**os.environ, **_GIT_ENV},
+                env={**env, **_GIT_ENV},
                 **(_OWN_PROCESS_GROUP if isolated else {}),
             )
         except OSError as exc:

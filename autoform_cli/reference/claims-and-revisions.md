@@ -43,7 +43,9 @@ board did not answer in time, naming the step; `error: contention:` when the
 board refused three fetches because claims kept moving; or `error: transport:`
 for any other failure to reach or read the board. Claim commands run Git with
 `GIT_TERMINAL_PROMPT=0` and no input, but a credential helper or `GIT_ASKPASS`
-program Git is configured to use can still prompt, until the time limit.
+program Git is configured to use can still prompt, until the time limit. They
+ignore `GIT_DIR`, `GIT_WORK_TREE` and the other variables that point Git at
+another repository, so they work inside a Git hook.
 
 A Git process that stops while updating a claim ref leaves a lock file that
 blocks updates: `refs/autoform-claims/<key>.lock` blocks that claim,
