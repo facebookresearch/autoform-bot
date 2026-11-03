@@ -61,7 +61,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from markdown.treeprocessors import Treeprocessor
 
-from . import dag_viewer, graph_pages, graph_views, project_map, status
+from . import _page_pool, dag_viewer, graph_pages, graph_views, project_map, status
 from ._fs import is_within as _is_within
 from ._fs import relative as _relative
 from ._fs import resolve as _resolve
@@ -588,6 +588,32 @@ def _publication(
     # linked path resolved, once for the whole site.
     page_links: dict[Path, Mapping[str, str]] = {}
     resolved: dict[str, Path] = {}
+    reader: _page_pool.Reader | None = None
+
+    def rewrite(text: str, source: Path, page: Path) -> tuple[str, list[str]]:
+        """``text`` with its links pointing where the site puts their targets,
+        and the links it drops."""
+
+        links = page_links.get(page)
+        if links is None:
+            links = page_links[page] = _anchored_links(targets, page, extension=".md")
+        dropped: list[str] = []
+        rewritten = _rewrite_links(
+            text,
+            source_dir=source.parent,
+            page=page,
+            blueprint=blueprint,
+            destination=destination,
+            node_sources=node_sources,
+            targets=targets,
+            sources_base=sources_base,
+            left_out=left_out,
+            unpublished=unpublished,
+            dropped=dropped,
+            links=links,
+            resolved=resolved,
+        )
+        return rewritten, dropped
 
     def published(text: str, source: Path, page: Path, *, whole: bool = True) -> tuple[str, tuple[str, ...]]:
         """The page ``text`` is published as, or the part of ``page`` it is
@@ -596,27 +622,15 @@ def _publication(
         its lines, so each stretch between is read too, as it sits there. Its
         notation goes straight to the warnings."""
 
-        links = page_links.get(page)
-        if links is None:
-            links = page_links[page] = _anchored_links(targets, page, extension=".md")
-        dropped: list[str] = []
-        page_text, found, notation = _read_page(
-            _rewrite_links(
-                text,
-                source_dir=source.parent,
-                page=page,
-                blueprint=blueprint,
-                destination=destination,
-                node_sources=node_sources,
-                targets=targets,
-                sources_base=sources_base,
-                left_out=left_out,
-                unpublished=unpublished,
-                dropped=dropped,
-                links=links,
-                resolved=resolved,
-            )
-        )
+        # Both branches call _read_page from this frame, where the reader
+        # measures the recursion headroom its workers match.
+        prepared = reader.take(text, source, page) if reader is not None else None
+        if prepared is None:
+            rewritten, dropped = rewrite(text, source, page)
+            page_text, found, notation = _read_page(rewritten)
+        else:
+            rewritten, dropped, read = prepared
+            page_text, found, notation = read if read is not None else _read_page(rewritten)
         group = chapters.get(page) if whole else None
         if group is not None:
             # Without the header, each line is where the author wrote it.
@@ -652,29 +666,41 @@ def _publication(
 
     articles: dict[Path, str] = {}
     statements: dict[str, tuple[str, str]] = {}
-    for node_id, node in graph.nodes.items():
-        # The captured bytes, the state the graph and any review disclosure
-        # describe once capture checks it. Check's graph also holds the
-        # articles in unpublished folders, which capture leaves out.
-        captured = snapshot.get(node.path)
-        if captured is None or (within is not None and not _is_within(node.path, within)):
-            continue
-        leaf = (node.formalizable or node.catalog is not None) and node_id not in containers
-        text, found = published(captured.decode("utf-8"), node.path, targets[node_id][0], whole=not leaf)
-        if found:
-            unavailable_source_ids.add(node_id)
-        # Narrative articles remain book pages. Formalizable leaves and module
-        # catalogs are consolidated into their containing article with stable anchors.
-        if leaf:
-            parts = statement_and_notes(text)
-            # A flagged leaf's box shows its statement and notes as typed.
-            statements[node_id] = (shown_as_typed("\n\n".join(filter(None, parts)), page=False), "") if found else parts
-        else:
-            articles[_resolve(node.path)] = (
-                shown_as_typed(text) if found
-                else text if node_id in groups
-                else _protect_narrative_markdown(text)
-            )
+    # The captured bytes, the state the graph and any review disclosure
+    # describe once capture checks it. Check's graph also holds the
+    # articles in unpublished folders, which capture leaves out.
+    pages = [
+        (node_id, node, snapshot[node.path])
+        for node_id, node in graph.nodes.items()
+        if node.path in snapshot and (within is None or _is_within(node.path, within))
+    ]
+    reader = _page_pool.reader(
+        ((captured.decode("utf-8"), node.path, targets[node_id][0]) for node_id, node, captured in pages),
+        rewrite,
+        articles=len(pages),
+        read=publishable_article,
+    )
+    try:
+        for node_id, node, captured in pages:
+            leaf = (node.formalizable or node.catalog is not None) and node_id not in containers
+            text, found = published(captured.decode("utf-8"), node.path, targets[node_id][0], whole=not leaf)
+            if found:
+                unavailable_source_ids.add(node_id)
+            # Narrative articles remain book pages. Formalizable leaves and module
+            # catalogs are consolidated into their containing article with stable anchors.
+            if leaf:
+                parts = statement_and_notes(text)
+                # A flagged leaf's box shows its statement and notes as typed.
+                statements[node_id] = (shown_as_typed("\n\n".join(filter(None, parts)), page=False), "") if found else parts
+            else:
+                articles[_resolve(node.path)] = (
+                    shown_as_typed(text) if found
+                    else text if node_id in groups
+                    else _protect_narrative_markdown(text)
+                )
+    finally:
+        if reader is not None:
+            reader.close()
 
     files: dict[Path, str | bytes] = {}
     for source in sorted(snapshot):
