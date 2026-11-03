@@ -528,7 +528,7 @@ def test_the_card_path_never_goes_empty_while_a_card_is_replaced(tmp_path: Path,
     expected = load_readbacks(blueprint)[(_ARTICLE_ID, "Skel.sup_unique")].file_hash
     create_only = _prepared(blueprint, "Create-only.")
     seen: dict[str, list] = {"loaded": [], "create-only": []}
-    rename_file = os.rename
+    rename_file = os.replace
 
     # Just before and just after the new card is renamed over the old, a
     # reader looks, and a create-only writer tries to publish.
@@ -547,7 +547,7 @@ def test_the_card_path_never_goes_empty_while_a_card_is_replaced(tmp_path: Path,
         rename_file(*args, **kwargs)
         look()
 
-    monkeypatch.setattr(os, "rename", look_around_the_rename)
+    monkeypatch.setattr(os, "replace", look_around_the_rename)
     monkeypatch.setattr("autoform_cli.readback._LOCK_TIMEOUT", 0.05)
 
     assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
@@ -565,12 +565,12 @@ def _crash_publication(tmp_path: Path, repo_root: Path, card: object, *, rename:
     script = (
         "import os, pickle, sys\n"
         "from autoform_cli import readback\n"
-        "rename_file = os.rename\n"
+        "rename_file = os.replace\n"
         "def die(*args, **kwargs):\n"
         "    if sys.argv[2] == 'after':\n"
         "        rename_file(*args, **kwargs)\n"
         "    os._exit(17)\n"
-        "os.rename = die\n"
+        "os.replace = die\n"
         "with open(sys.argv[1], 'rb') as stream:\n"
         "    readback.publish_readback(pickle.load(stream))\n"
     )

@@ -15,13 +15,13 @@ import json
 import os
 import re
 import stat
-import tempfile
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from ._fs import atomic_write
 from ._repository import git, run_git
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
@@ -873,33 +873,6 @@ def _append_gitignore_rules(path: Path, required: bytes) -> bool:
                 pass
 
 
-def _atomic_write(
-    destination: Path,
-    content: bytes,
-    *,
-    mode: int,
-) -> None:
-    """Replace *destination* from a same-directory temporary file.
-
-    Replacing rather than truncating is essential when an existing destination
-    has hard links: ``--force`` must not modify another path to the old inode.
-    """
-
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=destination.parent, prefix=f".{destination.name}.", suffix=".tmp"
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as output:
-            output.write(content)
-            output.flush()
-            os.fsync(output.fileno())
-        temporary.chmod(mode)
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def _within(path: Path, root: Path) -> bool:
     """True when *path* resolves to somewhere at or beneath *root*.
 
@@ -1057,7 +1030,8 @@ def scaffold_project(
             skipped.append(planned_file.relative)
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write(destination, planned_file.content, mode=planned_file.mode)
+        # Replaced, not truncated, so --force leaves other hard links to the old file alone.
+        atomic_write(destination, planned_file.content, mode=planned_file.mode)
         written.append(planned_file.relative)
     # Report omitted workflows and files left alone in template order, as
     # they were before the plan was shared with `project new`.

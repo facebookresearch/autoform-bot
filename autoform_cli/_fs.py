@@ -1,10 +1,11 @@
-"""Filesystem path helpers shared by the blueprint readers."""
+"""Filesystem helpers shared by the blueprint readers and writers."""
 
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
-from contextlib import contextmanager
+import secrets
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from pathlib import Path
 
@@ -120,3 +121,60 @@ def relative(path: Path, directory: Path) -> Path:
     if os.name == "nt" or not is_within(path, directory):
         return path.relative_to(directory)
     return Path(*path.parts[len(directory.parts) :])
+
+
+def atomic_write(
+    path: Path,
+    data: bytes,
+    *,
+    mode: int,
+    directory: int | None = None,
+    prefix: str | None = None,
+    check: Callable[[], object] | None = None,
+) -> None:
+    """Replace ``path`` with a file holding ``data``, in one step.
+
+    The new file is staged beside ``path`` under a random name starting with
+    ``prefix`` (by default ``path``'s name between dots), written in full,
+    given ``mode``, flushed to disk and renamed over ``path``: the name holds
+    the old complete file until it holds the new one, and other links to the
+    old file keep it. ``check`` runs just before the rename and can stop it by
+    raising. With ``directory``, an open descriptor of ``path``'s directory,
+    every step goes by name in it, so a directory swapped for a link after it
+    was opened is not followed. A failure or interruption before the rename
+    removes the staging file if it can; a crash can leave it. The directory is
+    not flushed, so a power loss can still undo the rename.
+    """
+
+    # Named before it exists, so the cleanup below sees the staging file from
+    # the moment it is created. The name is too random to be anyone else's.
+    name = f"{f'.{path.name}.' if prefix is None else prefix}{secrets.token_hex(12)}.tmp"
+    staged: str | None = name if directory is not None else os.path.join(path.parent, name)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        try:
+            descriptor = os.open(staged, flags, 0o600, dir_fd=directory)
+        except OSError:
+            # A failed exclusive create makes no file, and a name already
+            # taken is not this write's file, so there is nothing to remove.
+            staged = None
+            raise
+        try:
+            written = 0
+            while written < len(data):
+                written += os.write(descriptor, data[written:])
+            if hasattr(os, "fchmod"):
+                os.fchmod(descriptor, mode)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        if not hasattr(os, "fchmod"):  # Windows before Python 3.13
+            os.chmod(staged, mode, dir_fd=directory)
+        if check is not None:
+            check()
+        os.replace(staged, path.name if directory is not None else path, src_dir_fd=directory, dst_dir_fd=directory)
+        staged = None
+    finally:
+        if staged is not None:
+            with suppress(OSError):
+                os.unlink(staged, dir_fd=directory)

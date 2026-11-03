@@ -6,10 +6,10 @@ import hashlib
 import json
 import os
 import stat
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from ._fs import atomic_write
 from .graph import GraphValidationError, load_graph
 from .markdown import blueprint_root
 
@@ -183,20 +183,12 @@ def _with_article_id(content: bytes, article_id: str) -> bytes:
 def _replace_if_unchanged(path: Path, expected_sha256: str, content: bytes, mode: int) -> None:
     """Replace *path* from a same-directory temporary file, unless it changed since it was planned."""
 
-    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as output:
-            output.write(content)
-            output.flush()
-            os.fsync(output.fileno())
-        temporary.chmod(mode)
+    def unchanged() -> None:
         current, _ = _read_regular(path)
         if hashlib.sha256(current).hexdigest() != expected_sha256:
             raise OSError("the article changed while the plan was applied; run the command again")
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+
+    atomic_write(path, content, mode=mode, check=unchanged)
 
 
 def _proposed_id(path_id: str, source_sha256: str) -> str:
