@@ -344,6 +344,13 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Decision files on Windows.** `project inspect` and the library commands
+  read `lean-toolchain`, the lakefiles and the manifests in text mode on
+  Windows, which turned CRLF into LF and stopped at a 0x1A byte. They now read
+  the bytes as they are, like every other bounded reader, so `library verify`
+  digests a CRLF checkout's decision files as stored, as it already digested
+  its Lean sources. A digest recorded on Windows before this fix no longer
+  matches such a checkout.
 - **Claims inside a Git hook.** The claim commands' Git ignores `GIT_DIR`,
   `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the other variables that point Git at
   another repository, as a hook sets them. With only `GIT_DIR` set, the board's

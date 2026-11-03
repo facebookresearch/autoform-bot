@@ -1226,6 +1226,16 @@ def test_oversized_and_non_utf8_files_are_errors(tmp_path: Path) -> None:
     assert _unreadable(result) == ["lake-manifest.json", "lean-toolchain"]
 
 
+def test_decision_files_are_captured_byte_for_byte(tmp_path: Path) -> None:
+    # Windows opens a file in text mode unless asked otherwise, which turns
+    # CRLF into LF and stops reading at 0x1A.
+    root = _project(tmp_path)
+    data = b"leanprover/lean4:v4.32.2\r\n\x1a\n"
+    (root / "lean-toolchain").write_bytes(data)
+
+    assert project_snapshot.capture_decision_snapshot(root).file("lean-toolchain").content == data
+
+
 @pytest.mark.parametrize(
     ("relative", "failure"),
     [
