@@ -40,11 +40,11 @@ PACKAGE="<UpperCamelCaseName>"
 uv run --project "$AUTOFORM_PLUGIN_ROOT" autoform project new "$TARGET" --package "$PACKAGE"
 ```
 
-The [CLI reference](../../autoform_cli/README.md#project) gives `project new`'s
-version flags, what it writes, and its error codes. Keep the recommended release
-from `autoform project versions` unless the user needs another Lean version (at
-least v4.27.0). On `project-parent-unsafe`, choose another parent or, with the
-user's agreement, run `chmod g-w,o-w` on it.
+[Project setup](../../autoform_cli/reference/project-setup.md#project-new) gives
+`project new`'s version flags, what it writes, and its error codes. Keep the
+recommended release from `autoform project versions` unless the user needs
+another Lean version (at least v4.27.0). On `project-parent-unsafe`, choose
+another parent or, with the user's agreement, run `chmod g-w,o-w` on it.
 
 If the user names a donor (never search for one), `<PKGS>` is its
 `.lake/packages`, or the donor if it is a packages folder. Before any Lake

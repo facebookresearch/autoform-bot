@@ -9,7 +9,7 @@ lists as removable, each through ``git worktree remove`` without ``--force``,
 after checking again that the integration HEAD, its commit and its branch are
 unchanged and that nothing protects it. Nothing else in Autoform removes a
 worktree. The user-facing contract is the ``project worktrees`` section of
-``autoform_cli/README.md``.
+``autoform_cli/reference/project-setup.md``.
 
 What protects a worktree is evidence, never inference. Git's own command
 refuses only a worktree that its configured status shows dirty, or a locked one:

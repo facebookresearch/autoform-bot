@@ -13,7 +13,7 @@ that the generated `blueprint-pages.yml` passes to `check`, `audit` and
 
 ## Dashboard
 
-`autoform dashboard . --site-dir site` then serves the built site on
+`autoform dashboard . --site-dir site` serves the built site on
 `127.0.0.1` until you stop it, with a read-only live overlay of current author
 claims at `/__autoform/live.json`, which only the loopback server exposes. The
 overlay matches claims on an article's node ID or its `article_id`, reports the
