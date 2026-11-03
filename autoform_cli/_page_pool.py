@@ -20,22 +20,25 @@ limit so that it calls the function with the headroom the loop has.
 
 from __future__ import annotations
 
-import multiprocessing
-import multiprocessing.connection
 import os
 import signal
 import sys
 import threading
 from collections import deque
 from collections.abc import Callable, Iterator
-from concurrent.futures import Future, ProcessPoolExecutor, wait
-from concurrent.futures.process import BrokenProcessPool
+from concurrent.futures import BrokenExecutor, Future, wait
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .publishable import publishable_article
+
+# Every command imports this module, so multiprocessing and the process pool
+# are imported only where a pool starts or runs.
+if TYPE_CHECKING:
+    from concurrent.futures import ProcessPoolExecutor
 
 #: Smaller sites read their pages in one process, without the workers'
 #: start-up and memory.
@@ -105,7 +108,11 @@ def reader(
         return None
     if os.name != "posix" or threading.current_thread() is not threading.main_thread():
         return None
-    if sys.version_info < MIN_PYTHON or multiprocessing.current_process().daemon or not sys.executable:
+    if sys.version_info < MIN_PYTHON or not sys.executable:
+        return None
+    import multiprocessing
+
+    if multiprocessing.current_process().daemon:
         return None
     workers = min(_processors(), MAX_WORKERS)
     if workers < 2:
@@ -146,6 +153,8 @@ class Reader:
         self._window: deque[_Page] = deque()
         self._chunk: list[_Page] = []
         self._executor: ProcessPoolExecutor | None = None
+        # PYTHONSAFEPATH as it was before the pool set it, while it is set.
+        self._safe_path: tuple[str | None] | None = None
         self._target = 0
         self._started = self._broken = self._exhausted = self._closed = False
         self.hits = self.misses = 0
@@ -161,6 +170,12 @@ class Reader:
             if self._target < MIN_HEADROOM:
                 self.close()
                 return None
+            # Spawn starts each worker, and the resource tracker, with python -c,
+            # which puts the working directory first on sys.path, and render and
+            # check run from the consumer's repository: its own selectors.py
+            # would run in every process the pool starts.
+            self._safe_path = (os.environ.get("PYTHONSAFEPATH"),)
+            os.environ["PYTHONSAFEPATH"] = "1"
             try:
                 self._executor = _executor(self._workers)
             except Exception:
@@ -195,6 +210,12 @@ class Reader:
                 executor.shutdown(wait=True, cancel_futures=True)
             except Exception:  # the loop no longer needs anything from it
                 pass
+        if self._safe_path is not None:
+            (before,), self._safe_path = self._safe_path, None
+            if before is None:
+                os.environ.pop("PYTHONSAFEPATH", None)
+            else:
+                os.environ["PYTHONSAFEPATH"] = before
 
     def _fill(self) -> None:
         ahead = AHEAD * self._workers * CHUNK
@@ -234,7 +255,7 @@ class Reader:
             while not future.done():
                 wait([future], timeout=0.05)
             results = future.result()
-        except BrokenProcessPool:
+        except BrokenExecutor:
             self._broken = True
             return None
         except Exception:
@@ -251,10 +272,15 @@ def _processors() -> int:
 
 
 def _executor(workers: int) -> ProcessPoolExecutor:
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+
     return ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"), initializer=_start)
 
 
 def _start() -> None:
+    import multiprocessing
+
     # Ctrl-C reaches the whole process group; the parent stops the pool.
     try:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -268,6 +294,8 @@ def _start() -> None:
 
 
 def _leave_with(sentinel: int) -> None:
+    import multiprocessing.connection
+
     multiprocessing.connection.wait([sentinel])
     os._exit(1)
 

@@ -635,7 +635,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Spawn starts each page worker by importing the main module again. The
     # autoform script and python -m autoform_cli call main() under a __main__
     # guard; a script that hands main its arguments may not, and every worker
-    # would run it again.
+    # would run it again. A bare main() is taken for that guard: a script that
+    # calls it unguarded would run its whole command again in each worker.
     args.page_workers = argv is None
 
     if args.command == "init":

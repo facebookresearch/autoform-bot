@@ -318,6 +318,43 @@ def test_a_library_caller_never_starts_a_pool(tmp_path: Path, monkeypatch: pytes
     assert pooled == [None]
 
 
+def test_starting_the_cli_imports_no_process_pool() -> None:
+    # Every command imports _page_pool, and only a pool that starts needs these.
+    program = (
+        "import sys, autoform_cli.__main__\n"
+        "print(sorted({'multiprocessing', 'concurrent.futures.process'} & set(sys.modules)))\n"
+    )
+    started = subprocess.run(
+        [sys.executable, "-c", program], env=os.environ | {"PYTHONPATH": str(_ROOT)}, capture_output=True, text=True
+    )
+    assert started.returncode == 0, started.stderr
+    assert started.stdout == "[]\n"
+
+
+def test_a_stdlib_name_in_the_consumers_repository_runs_in_no_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], pooled
+) -> None:
+    blueprint = _vault(tmp_path, drafts=False)
+    # The Pages workflow runs check and render from the consumer's repository,
+    # and spawn starts each worker with python -c, which puts that first on sys.path.
+    monkeypatch.chdir(blueprint.parent)
+    monkeypatch.delenv("PYTHONSAFEPATH", raising=False)
+    planted = blueprint.parent / "selectors.py"
+    planted.write_text(
+        "import os\n"
+        "open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'planted-ran'), 'w').close()\n"
+        "raise ImportError('the consumer selectors.py ran')\n",
+        encoding="utf-8",
+    )
+
+    assert _as_the_autoform_script(monkeypatch, "check", str(blueprint)) == 0
+    capsys.readouterr()
+    assert pooled[-1] is not None and pooled[-1].hits
+    assert not planted.with_name("planted-ran").exists()
+    assert "PYTHONSAFEPATH" not in os.environ
+    assert multiprocessing.active_children() == []
+
+
 def test_pythons_whose_pool_can_hang_read_every_page_themselves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pooled
 ) -> None:
