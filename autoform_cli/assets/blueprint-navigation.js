@@ -19,7 +19,7 @@
   if (window.AutoformNavigation) return;
 
   var HISTORY_KEY = "autoformNavigation", GRAPH_SCHEMA = "autoform-dag-view/v2", INDEX_SCHEMA = "autoform-dag-search/v1";
-  var WIKI_SCHEMA = "autoform-wiki-links/v1", INDEX_SLICE_MS = 10;
+  var WIKI_SCHEMA = "autoform-wiki-links/v1", INDEX_SLICE_MS = 25;
 
   function create(options) {
     options = options || {};
@@ -233,11 +233,14 @@
       try { return resolvedGraph(JSON.parse(loaded.text), loaded.url); }
       catch (error) { cacheDelete(jsonCache, resource(url)); throw error; }
     }
-    async function normalizeIndex(payload, base) {
+    async function normalizeIndex(payload, base, began) {
       if (!payload || payload.schema !== INDEX_SCHEMA || !Array.isArray(payload.nodes)) throw new Error("Unsupported search index");
       // Batches end on time, not on a row count: each pause waits two frames, so
-      // short fixed batches spent most of a large index's load waiting.
-      var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [], slice = clock();
+      // short fixed batches spent most of a large index's load waiting. The clock
+      // is read every 128 rows or relations, a small fraction of a slice's work.
+      // The first batch's slice began with the parse, so a long parse pauses at
+      // the first read rather than run a slice more in the same task.
+      var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [], slice = began;
       // Rows on one page share the part before "#", so resolve it once. A fragment
       // made of characters the URL parser keeps as written is appended. Other
       // fragments, and paths ending in a space (which the parser would trim
@@ -273,7 +276,7 @@
         // A serialized URL's first "#" starts its fragment, so this is resource(copy.route) without a parse.
         if (copy.route) { byRoute.set(copy.route, copy); knownDocuments.add(copy.route.split("#")[0]); }
         nodes.push(copy);
-        if (clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
+        if ((position + 1) % 128 === 0 && clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
       }
       var relations;
       if (payload.relations !== undefined) {
@@ -287,7 +290,7 @@
           if (!ids.has(from) || !ids.has(to) || !Number.isSafeInteger(row[2]) || !Number.isSafeInteger(row[3]) ||
               row[2] < 0 || row[3] < 0 || row[2] + row[3] === 0) throw new Error("Invalid search relation endpoint");
           relations.push([from, to, row[2], row[3]]);
-          if (clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
+          if ((edge + 1) % 128 === 0 && clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
         }
       }
       if (disposed) throw abortError();
@@ -304,8 +307,8 @@
       indexPromise = fetchText(catalogueURL, "json", indexController.signal).then(async function (loaded) {
         if (disposed) throw abortError();
         // Drop the text before normalizing, which takes many frames.
-        var payload = JSON.parse(loaded.text), base = loaded.url, digest = loaded.indexDigest; loaded = null;
-        var normalized = await normalizeIndex(payload, base);
+        var began = clock(), payload = JSON.parse(loaded.text), base = loaded.url, digest = loaded.indexDigest; loaded = null;
+        var normalized = await normalizeIndex(payload, base, began);
         if (disposed) throw abortError();
         index = normalized; indexDigest = digest;
         if (typeof options.onIndex === "function") {

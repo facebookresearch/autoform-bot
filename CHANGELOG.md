@@ -104,6 +104,19 @@ date when the release is tagged.
   42.1 MB to 32.2 MB, and on one CI runner search and the outline were ready
   2.1 s after Home started loading instead of 2.8 s in WebKit, and 1.6 s
   instead of 1.9 s in Chrome.
+- **Explorer search.** A keystroke that extends the query ranks only the
+  previous query's matches, not every row of the search index, and a one-word
+  query no longer joins each row's fields. Results and their order are the
+  same. On one CI runner, typing "zeckendorf" on ATLAS's Home took 110 ms of
+  script in Chrome instead of 562 ms, and 220 ms instead of 1,272 ms in WebKit.
+- **Explorer first view.** The explorer draws a page's first view once. It drew
+  the Topics outline, breadcrumb and reader as it took in the search index, and
+  then again for the page itself. The outline also reads the index's rows by
+  ID from the map the explorer already keeps, instead of building another. The
+  first view is the same. With the index's 25 ms slices, on one CI runner,
+  ATLAS's Home showed it 426 ms after the index arrived instead of 805 ms in
+  Chrome, and 986 ms instead of 1,327 ms in WebKit. Other pages gained about as
+  much, and the longest frame stayed within one frame of its old length.
 - **Wiki links.** Render reads the links between articles without rendering
   an article whose links all sit under its Sources, References, Bibliography
   or Depends on headings, which holds for about nine in ten ATLAS articles.
@@ -390,20 +403,22 @@ date when the release is tagged.
   in dependency packages. It no longer reads other nested checkouts, such as
   worker worktrees with their own `.lake`, the root's build output or a
   package's `.lake`, which could stall the run before its probe (#429).
-- **Search index load.** The explorer prepares its search index in 10 ms
-  slices rather than 512-row batches, and resolves each page's links once
-  rather than every row's. On ATLAS (38,661 rows), search, the Topics outline
-  and concept links were ready 5.3 s after the index was parsed, most of it
-  spent waiting between batches; they are now ready after 1.0 s in WebKit and
-  0.7 s in Chrome.
+- **Search index load.** The explorer prepares its search index in 25 ms slices
+  rather than 512-row batches, reading the clock every 128 rows, and resolves
+  each page's links once rather than every row's. The first slice begins with
+  the parse, so a long parse is not followed by a slice's work in the same task.
+  On ATLAS (38,661 rows), search, the Topics outline and concept links were
+  ready 5.3 s after the index was parsed, most of it spent waiting between
+  batches; with 10 ms slices they were ready after 1.0 s in WebKit and 0.7 s in
+  Chrome.
 - **Search index memory.** The explorer no longer keeps the search index's
   text in its page cache after preparing the index. ATLAS's 42 MB index took
   40 of the cache's 48 MiB, so pages and graphs already read were dropped and
   fetched again. A body WebKit hands over in one piece is hashed and decoded
-  without a copy, and when reading the index takes at least 10 ms, a frame
-  paints before it is parsed. On ATLAS, on one CI runner, the longest frame
-  while the index was read and parsed went from 217 ms to 142 ms in Chrome
-  and from 199 ms to 164 ms in WebKit.
+  without a copy, and when reading the index takes at least 25 ms, a frame
+  paints before it is parsed. On ATLAS, on one CI runner, with 10 ms slices,
+  the longest frame while the index was read and parsed went from 217 ms to
+  142 ms in Chrome and from 199 ms to 164 ms in WebKit.
 - **Book order.** A link inside an HTML comment no longer places its page in
   the book's order: a commented-out chapter link moved that chapter forward in
   `SUMMARY.md`, though the page showed it later (#535).

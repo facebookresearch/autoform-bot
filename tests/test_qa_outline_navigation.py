@@ -187,6 +187,25 @@ def test_outline_keeps_collection_subhead_and_root_page_through_transparent_wrap
     """, ["outlineProjection"], _PROJECTION_PEERS)
 
 
+def test_the_outline_reads_the_index_records_the_mount_keeps_and_projects_the_same_tree() -> None:
+    _run(r"""
+      const root=scope('roadmap',null),collection=scope('collection','roadmap',{navigation:'collection'});
+      const nodes=[root,scope('schemes','roadmap'),scope('varieties','schemes'),scope('fine','varieties'),collection,
+        scope('wrapper','collection',{navigation:'transparent'}),scope('wrapped','wrapper'),scope('source','roadmap',{navigation:'source'}),
+        page('chapter-zero','roadmap'),page('result','fine',{scope:'fine'}),scope('loop','knot',{navigation:'transparent'}),
+        scope('knot','loop',{navigation:'transparent'}),scope('tangled','loop')];
+      const known=new Map(nodes.map(node=>[node.id,node]));
+      for(const [scopeId,id,limit] of [['roadmap',null,120],['fine','result',120],['wrapped','wrapped',2],['tangled','tangled',120]])
+        assert.deepEqual(outlineProjection(nodes,scopeId,id,limit,known),outlineProjection(nodes,scopeId,id,limit));
+      // Rendering maps the index by ID only once, in the records the mount keeps for it.
+      configureOutline(nodes,'result');const get=records.get;let reads=0;
+      records.get=function(id){reads++;return get.call(this,id);};
+      renderNavigation();assert(reads>0,'The outline mapped the index again instead of reading its records');
+      assert.deepEqual(outlineLinks().map(link=>link.dataset.navigationNodeId),
+        outlineProjection(nodes,'fine','result',120).entries.filter(entry=>!entry.collection).map(entry=>entry.node.id));
+    """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
+
+
 def test_rendered_outline_preserves_depth_current_leaf_and_native_canonical_links() -> None:
     _run(r"""
       const root=scope('roadmap',null),collection=scope('collection','roadmap',{navigation:'collection'});
