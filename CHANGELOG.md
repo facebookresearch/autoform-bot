@@ -502,6 +502,11 @@ date when the release is tagged.
   its first, such as `[^1]: Grounded in [Paper](../sources/paper.md)`, is
   prose, as Python-Markdown reads it. Render read it as a definition and left
   the links after its first word pointing at unpublished pages (#484).
+- **Roadmap folder spelling.** A roadmap folder spelled with other capitals,
+  such as `Roadmap/`, passed `check` on a case-insensitive filesystem, as on
+  macOS, and then ended `render` in a `KeyError`. Loading the graph now refuses
+  it on every filesystem as Linux did, "roadmap directory does not exist", and
+  names the rename (#595).
 
 ## 0.6.0 (2026-10-22)
 
