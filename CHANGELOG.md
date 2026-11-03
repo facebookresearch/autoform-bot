@@ -352,6 +352,11 @@ date when the release is tagged.
   stops before it is set up, leaves a notice on the stage, and the outline,
   search and lists still work. The explorer bundle is 68,637 bytes instead of
   144,973 (#574).
+- **Python 3.10.** Autoform needs Python 3.11 or later, and CI tests 3.11 and
+  3.13. The lock drops the packages only 3.10 needed and takes dnspython
+  2.9.1, which fixes GHSA-45c3-73f7-pv4m. Lakefiles are still read with
+  `tomli` below 2.4 rather than the standard library's `tomllib`: Lake reads
+  TOML 1.0, and from Python 3.15 `tomllib` parses TOML 1.1.
 
 ### Fixed
 
