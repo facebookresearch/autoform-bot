@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 # Helper modules that assert, rewritten as pytest rewrites the test files they came from.
-pytest.register_assert_rewrite("tests.audit_fixture", "tests.work_fixture")
+pytest.register_assert_rewrite("tests.audit_fixture", "tests.dom_fixture", "tests.work_fixture")
 
 _SKELETON_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "skeleton-project"
 
