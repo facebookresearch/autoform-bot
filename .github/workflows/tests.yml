@@ -299,12 +299,8 @@ jobs:
         env:
           AUTOFORM_RUN_REAL_REPL_TESTS: "1"
       # The open-statement audit runs here, beside the short REPL suite, rather than in the real Lean job,
-      # which would otherwise be the longest job of the run.
-      - name: Install the fixture's Lean toolchain
-        run: |
-          set -euo pipefail
-          timeout --signal=TERM --kill-after=30s 10m \
-            elan toolchain install "$(tr -d '\r\n' < tests/fixtures/skeleton-project/lean-toolchain)"
+      # which would otherwise be the longest job of the run. The REPL fixture pins the toolchain of the
+      # skeleton fixture these tests copy, so only the library fixture's is left to install.
       - name: Install the library fixture's Lean toolchain
         run: |
           set -euo pipefail
