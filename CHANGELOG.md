@@ -379,6 +379,13 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Decision files on Windows.** `project inspect` and the library commands
+  read `lean-toolchain`, the lakefiles and the manifests in text mode on
+  Windows, which turned CRLF into LF and stopped at a 0x1A byte. They now read
+  the bytes as they are, as elan and Lake do. Ordinary CRLF files read and
+  digest as before. A decision file with a 0x1A byte or a CR CR LF line ending
+  now parses and digests whole, so a 0x1A on `lean-toolchain`'s first line
+  gets `invalid-lean-toolchain` instead of passing.
 - **Claims inside a Git hook.** The claim commands' Git ignores `GIT_DIR`,
   `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the other variables that point Git at
   another repository, as a hook sets them. With only `GIT_DIR` set, the board's
