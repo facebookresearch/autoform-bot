@@ -112,7 +112,8 @@ from repository organization:
 
 Roles never change identity, containment, readiness, or edges. An overview
 draws no edge to a collection it replaces with its contents, so depend on an
-article inside the collection instead.
+article inside the collection instead. On a declaration article, `check` warns
+about any role but `topic`, which the article ignores.
 
 For a taxonomy kept apart from article files, `blueprint/atlas.json` may assign
 the same areas without moving pages:
@@ -158,16 +159,18 @@ declaration-kind, and node-size checks apply only to declaration articles.
 Versioned implementation notes live at
 `blueprint/.implementation-notes/<article_id>.md`, one per article, and survive
 article moves. Claims keep workers from editing the same leaf's note;
-containers have no claims. Every command that loads the graph rejects
-malformed, empty, symlinked, or orphaned notes, so assign the article ID before
-creating its note. Any worker may delete a stale note or repair an orphan: move
-anything still useful into the surviving article's note and delete the orphan,
-or restore a lost `article_id` line if the article still exists. Delete a note
-once its article is proved; for a container, once every formalizable
-descendant and every `not_ready` leaf beneath it is proved and there is at
-least one (a module catalog never counts). `autoform audit` reports a note left
-after that point. Render omits the hidden directory from the site and the
-publication hash.
+containers have no claims. `check` warns about a malformed, empty, unreadable,
+symlinked, or orphaned note, so assign the article ID before creating its note.
+It also warns about a notes folder under `roadmap/` or capitalized differently,
+and about `.implementation-notes` as a file or a link, which nothing reads
+through. `audit` reports each as `invalid-implementation-note`. Any worker may
+delete a stale note or repair an orphan: move anything still useful into the
+surviving article's note and delete the orphan, or restore a lost `article_id`
+line if the article still exists. Delete a note once its article is proved; for
+a container, once every formalizable descendant and every `not_ready` leaf
+beneath it is proved and there is at least one (a module catalog never counts).
+`autoform audit` reports a note left after that point. Render omits the hidden
+directory from the site and the publication hash.
 
 ## Assertions and derived status
 

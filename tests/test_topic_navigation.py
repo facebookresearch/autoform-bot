@@ -154,17 +154,23 @@ def test_navigation_roles_load_as_presentation_metadata(tmp_path: Path, role: st
     assert load_graph(tmp_path).nodes["roadmap"].navigation == role
 
 
-@pytest.mark.parametrize("metadata", (
-    "navigation: guess-from-directory",
-    "navigation: collection\ndeclaration: theorem",
-    "navigation: module\ndeclaration: theorem",
-))
-def test_invalid_roles_cannot_hide_a_mathematical_declaration(tmp_path: Path, metadata: str) -> None:
+def test_an_unknown_role_is_refused(tmp_path: Path) -> None:
     roadmap = tmp_path / "roadmap"
     roadmap.mkdir()
-    (roadmap / "README.md").write_text(f"---\n{metadata}\n---\n# Geometry\n")
+    (roadmap / "README.md").write_text("---\nnavigation: guess-from-directory\n---\n# Geometry\n")
     with pytest.raises(GraphValidationError, match="navigation"):
         load_graph(tmp_path)
+
+
+@pytest.mark.parametrize("role", ("collection", "source", "transparent", "module"))
+def test_a_container_role_cannot_hide_a_mathematical_declaration(tmp_path: Path, role: str) -> None:
+    """On a declaration article the role is ignored with a warning, so the declaration stays in view."""
+    roadmap = tmp_path / "roadmap"
+    roadmap.mkdir()
+    (roadmap / "README.md").write_text(f"---\nnavigation: {role}\ndeclaration: theorem\n---\n# Geometry\n")
+    graph = load_graph(tmp_path)
+    assert graph.nodes["roadmap"].navigation is None
+    assert graph.warnings == ("roadmap: 'navigation' describes containers, not declaration articles; ignored here",)
 
 
 def _overview_payload(tmp_path: Path, nodes: dict[str, Node], scope: str) -> dict:

@@ -45,8 +45,8 @@ load. The `runtime` module docstring describes it for Python consumers.
 explorer as bounded project, chapter, and nested-scope projections. Rendering
 never reads a `graph.json` or an operational queue;
 [wiki references](wiki-links.md) are also derived. Hidden files and directories,
-including `.implementation-notes`, are omitted; the vault's implementation notes
-are read in place only to validate them. A `.autoform` directory and symlinks,
+including `.implementation-notes`, are omitted; render reads no implementation
+notes; `check` validates them. A `.autoform` directory and symlinks,
 credentials, logs, provider state, and agent/task state outside hidden
 directories fail the render rather than leak. Source and output directories must
 be disjoint. Render refuses a blueprint path that differs only in case from a

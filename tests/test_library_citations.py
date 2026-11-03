@@ -328,6 +328,43 @@ def test_a_sources_folder_that_is_a_link_is_not_read(tmp_path: Path, capsys: pyt
     assert _check(project, capsys) == (0, [_warning(), _stop("refusing symlink in blueprint publication: sources")])
 
 
+def test_a_notes_folder_that_is_a_link_is_not_read(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    project = _consumer(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / f"af_{0:024x}.md").write_text(f"Reuse `{_THEOREM}` from ATLAS.\n", encoding="utf-8")
+    try:
+        (project / "blueprint/.implementation-notes").symlink_to(elsewhere, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    # The note names the theorem, but nothing reads it through the link, so the citation is still reported.
+    assert _check(project, capsys) == (
+        0, ["warning: .implementation-notes: implementation notes directory must not be a symlink", _warning()]
+    )
+
+
+@_UNREADABLE
+def test_a_notes_folder_that_cannot_be_searched_is_not_read(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    project = _consumer(tmp_path)
+    # Beside the Lean root, as check's own index build stops on such a folder inside it.
+    blueprint = (project / "blueprint").rename(tmp_path / "blueprint")
+    notes = blueprint / ".implementation-notes"
+    notes.mkdir()
+    (notes / f"af_{0:024x}.md").write_text(f"Reuse `{_THEOREM}` from ATLAS.\n", encoding="utf-8")
+    notes.chmod(0o644)  # listable, not searchable
+    try:
+        status = main(["check", str(blueprint), "--lean-root", str(project)])
+    finally:
+        notes.chmod(0o755)
+
+    warnings = [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning:")]
+    # The loader warns instead of failing on the note, and the citation is still reported.
+    assert status == 0
+    assert warnings[0].startswith(f"warning: .implementation-notes/af_{0:024x}.md: cannot read implementation note: ")
+    assert warnings[1:] == [_warning()]
+
+
 @_UNREADABLE
 @pytest.mark.parametrize("beside", [True, False], ids=["blueprint-beside-the-lean-root", "blueprint-inside-it"])
 def test_a_sources_folder_that_cannot_be_searched_never_raises(

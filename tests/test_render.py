@@ -36,7 +36,7 @@ from autoform_cli._tree_snapshot import TreeChangedError
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS, COVERAGE_SCHEMA, CoverageEntry, CoverageSummary
 from autoform_cli.dashboard import publication_bound_live_state
-from autoform_cli.graph import Graph, GraphValidationError, Node, atlas_omissions, load_graph
+from autoform_cli.graph import Graph, Node, atlas_omissions, load_graph
 from autoform_cli.lean import LeanSourceError
 from autoform_cli.markdown import site_converter
 from autoform_cli.render import (
@@ -1843,13 +1843,9 @@ def test_render_leaves_an_unpublished_folder_out(tmp_path: Path) -> None:
     drafts = project / "blueprint" / "roadmap" / "drafts"
     drafts.mkdir()
     (drafts / "README.md").write_text("---\npublished: false\n---\n\n# Drafts\n", encoding="utf-8")
-    article_id = "af_0123456789abcdef01234567"
     idea = drafts / "idea.md"
-    idea.write_text(f"---\narticle_id: {article_id}\n---\n\n# Idea\n\nAn idea.\n", encoding="utf-8")
-    # Its implementation note still belongs to an article, though render reads none of the folder.
-    (project / "blueprint" / ".implementation-notes").mkdir()
-    (project / "blueprint" / ".implementation-notes" / f"{article_id}.md").write_text("route\n", encoding="utf-8")
-    # Nor is anything in it refused, since none of it is published.
+    idea.write_text("# Idea\n\nAn idea.\n", encoding="utf-8")
+    # Nothing in it is refused, since none of it is published.
     (drafts / "scratch.log").write_text("local\n", encoding="utf-8")
     revision = publication_source_revision(project / "blueprint")
 
@@ -2968,20 +2964,18 @@ def test_implementation_notes_stay_out_of_the_published_wiki(tmp_path: Path) -> 
     assert publication_source_revision(blueprint) == with_public_page
 
 
-def test_an_orphaned_implementation_note_stops_the_render(tmp_path: Path) -> None:
-    """Render and the dashboard read a copy without hidden files, but still check the notes."""
+def test_an_orphaned_implementation_note_does_not_stop_the_render(tmp_path: Path) -> None:
+    """Render and the dashboard read a copy without hidden files; check warns about the note."""
     project = _project(tmp_path)
     blueprint = project / "blueprint"
     notes = blueprint / ".implementation-notes"
     notes.mkdir()
     (notes / "af_0123456789abcdef01234567.md").write_text("Mathlib gap.\n", encoding="utf-8")
 
-    with pytest.raises(GraphValidationError, match="names no roadmap article"):
-        render_site(blueprint, tmp_path / "out", lean_root=project)
-    with pytest.raises(GraphValidationError, match="names no roadmap article"):
-        load_publication_source(blueprint)
+    render_site(blueprint, tmp_path / "out", lean_root=project)
+    load_publication_source(blueprint)
 
-    assert not (tmp_path / "out").exists()
+    assert not any(b"Mathlib gap." in path.read_bytes() for path in (tmp_path / "out").rglob("*") if path.is_file())
 
 
 def test_the_dashboard_copy_holds_the_atlas_the_graph_reads(tmp_path: Path) -> None:
