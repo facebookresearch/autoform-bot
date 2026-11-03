@@ -4,7 +4,10 @@ Compatibility is decided by `lean-toolchain` and the Mathlib entry that
 `lake-manifest.json` locks, which is what `lake build` materializes; a
 `.lake/package-overrides.json` entry replaces it. `lakefile.toml` is read for
 the package name, targets, and whether the lock is used and current.
-`lakefile.lean` is never evaluated, so those projects stay indeterminate.
+Inspection never evaluates `lakefile.lean`, since that runs the project's Lean
+code, so those projects stay indeterminate. Commands that already run Lake and
+need its targets evaluate it through `lake translate-config`
+(`lean_probe.lean_libraries`).
 This is deliberately not a complete Lake configuration validator.
 """
 

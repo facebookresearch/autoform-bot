@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from ..lean import _ID_LETTER, _ID_REST
 from .catalog import canonical_git_url
 
 _TARGET_KINDS = ("lean_lib", "lean_exe", "input_file", "input_dir")  # the kinds lakefile.toml declares
@@ -18,8 +19,9 @@ MATHLIB_NAME = (("str", "mathlib"),)
 _LAKE_VERSION = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)(?:-[^ \t\r\n]+)?")  # Lake's StdVer
 _URL_CREDENTIALS = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@")
 _URL_QUERY_OR_FRAGMENT = re.compile(r"([?#]).*", re.S)
-_LEAN_ID_BEGIN_ESCAPE = "«"
-_LEAN_ID_END_ESCAPE = "»"
+# One Lean name component, quoted, an identifier or a number, and the dot after it if any.
+# Unlike lean.py's source scanner, and as in Lean, a quoted component may hold `«`.
+_NAME_COMPONENT = re.compile(rf"(?:«([^»]*)»|([{_ID_LETTER}]{_ID_REST})|([0-9]+))(\.?)")
 
 
 class JsonInteger(str):
@@ -447,64 +449,10 @@ def canonical_toml_name(value: str) -> tuple[tuple[str, str], ...]:
 def _split_lean_name(value: str) -> tuple[tuple[str, str], ...] | None:
     parts: list[tuple[str, str]] = []
     index = 0
-    while index < len(value):
-        character = value[index]
-        if character == _LEAN_ID_BEGIN_ESCAPE:
-            end = value.find(_LEAN_ID_END_ESCAPE, index + 1)
-            if end < 0:
-                return None
-            parts.append(("str", value[index + 1 : end]))
-            index = end + 1
-        elif _lean_is_id_first(character):
-            start = index
-            index += 1
-            while index < len(value) and _lean_is_id_rest(value[index]):
-                index += 1
-            parts.append(("str", value[start:index]))
-        elif "0" <= character <= "9":
-            start = index
-            while index < len(value) and "0" <= value[index] <= "9":
-                index += 1
-            parts.append(("num", _normalize_decimal(value[start:index])))
-        else:
-            return None
-        if index == len(value):
-            return tuple(parts)
-        if value[index] != ".":
-            return None
-        index += 1
+    while component := _NAME_COMPONENT.match(value, index):
+        quoted, identifier, number, dot = component.groups()
+        parts.append(("str", identifier or quoted) if number is None else ("num", _normalize_decimal(number)))
+        index = component.end()
+        if not dot:
+            return tuple(parts) if index == len(value) else None
     return None
-
-
-def _lean_is_id_first(character: str) -> bool:
-    return character == "_" or "a" <= character <= "z" or "A" <= character <= "Z" or _lean_is_letter_like(character)
-
-
-def _lean_is_id_rest(character: str) -> bool:
-    return (
-        "a" <= character <= "z"
-        or "A" <= character <= "Z"
-        or "0" <= character <= "9"
-        or character in "_'!?"
-        or _lean_is_letter_like(character)
-        or _lean_is_subscript_alnum(character)
-    )
-
-
-def _lean_is_letter_like(character: str) -> bool:
-    code = ord(character)
-    return (
-        (0x3B1 <= code <= 0x3C9 and code != 0x3BB)
-        or (0x391 <= code <= 0x3A9 and code not in {0x3A0, 0x3A3})
-        or 0x3CA <= code <= 0x3FB
-        or 0x1F00 <= code <= 0x1FFE
-        or 0x2100 <= code <= 0x214F
-        or 0x1D49C <= code <= 0x1D59F
-        or (0xC0 <= code <= 0xFF and code not in {0xD7, 0xF7})
-        or 0x100 <= code <= 0x17F
-    )
-
-
-def _lean_is_subscript_alnum(character: str) -> bool:
-    code = ord(character)
-    return 0x2080 <= code <= 0x2089 or 0x2090 <= code <= 0x209C or 0x1D62 <= code <= 0x1D6A or code == 0x2C7C
