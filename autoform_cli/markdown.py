@@ -40,6 +40,7 @@ import html
 import json
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import groupby
@@ -48,7 +49,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 import html5lib
 import markdown as pymarkdown
-from markdown.blockprocessors import ReferenceProcessor
+from markdown.blockprocessors import HRProcessor, ReferenceProcessor
 from markdown.inlinepatterns import ENTITY_RE, ReferenceInlineProcessor
 from pymdownx.arithmatex import RE_BRACKET_INLINE, RE_SMART_DOLLAR_INLINE
 from pymdownx.superfences import fence_div_format
@@ -108,6 +109,12 @@ FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 #: renders as literal text, so accepting it would let unrendered evidence
 #: satisfy a coverage disposition.
 _INLINE_TARGET = re.compile(r"\(\s*(<[^>]+>|[^)\s]+)(?:\s+[^)]*)?\)")
+#: The same destination as the site reads it in a block, where a title after it
+#: may run onto the next line: the title is quoted or holds only balanced
+#: parentheses, so a parenthesis that never closes leaves the link unclosed.
+_BLOCK_TARGET = re.compile(
+    r"""\(\s*(<[^>]+>|[^)\s]+)(?:\s+(?:"[^")]*"\s*|'[^')]*'\s*|(?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*))?\)"""
+)
 
 #: The second label of a full or collapsed reference link, ``[text][label]`` or
 #: ``[label][]``, as Python-Markdown reads it after the first.
@@ -130,6 +137,25 @@ _LIST_ITEM = re.compile(r"^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)")
 
 #: CommonMark's indentation threshold for an indented code block.
 _CODE_INDENT = 4
+
+#: A list item's marker as the site reads one: ``*``, ``+``, ``-``, or a number
+#: and a period, then a space. ``1)`` starts no item there.
+_ITEM_MARKER = re.compile(r"^[ \t]*(?:[*+-]|\d+\.)[ \t]+")
+#: A thematic break, as the site reads one alone wherever it is, its tabs expanded.
+_BREAK = HRProcessor.SEARCH_RE
+#: A setext heading's underline, which the site reads only as a block's second line.
+_SETEXT = re.compile(r"^(?:=+|-+) *$")
+#: A block quote's marker, with the space after it, which the site drops.
+_QUOTE_MARKER = re.compile(r"^ {0,3}> ?")
+#: A line that starts with an HTML tag, whose name is read as Python's HTML
+#: parser reads one, a processing instruction, a doctype or a CDATA section.
+_HTML_START = re.compile(r"^ {0,3}(?:</?([A-Za-z][^\t\n\r\f />\x00]*)|<\?|<!(?i:doctype)|<!\[CDATA\[)")
+#: A code span as the site reads one in a block, scanned past backslash
+#: escapes: an escaped backtick opens none, only a run as long as the opening
+#: one closes it, and it may wrap onto the next line of its paragraph.
+_CODE_SPAN = re.compile(r"\\.|(`+)(.+?)(?<!`)\1(?!`)", re.DOTALL)
+#: The row under a table's header: pipes, colons, dashes and spaces.
+_TABLE_SEPARATOR = re.compile(r"^[ \t:-]*\|[ \t|:-]*$")
 
 #: Elements whose contents a browser never shows the reader. Text inside these
 #: is not evidence of anything.
@@ -246,15 +272,31 @@ def link_targets(value: str, references: dict[str, str] | None = None) -> tuple[
     targets are unwrapped, and images are not links.
     """
 
+    return tuple(target for _, target in _links(value, references, INLINE_CODE, _INLINE_TARGET))
+
+
+def _links(
+    value: str,
+    references: dict[str, str] | None,
+    code: re.Pattern[str] = _CODE_SPAN,
+    target: re.Pattern[str] = _BLOCK_TARGET,
+) -> list[tuple[int, str]]:
+    """Where each link :func:`link_targets` reads in ``value`` starts, and its target.
+
+    :func:`_block_links` passes a block instead, whose code spans *code* and
+    link destinations *target* find as the site does. :func:`link_targets`
+    passes the patterns check has always read one line with.
+    """
+
     if _LINK_DEFINITION.match(value):
-        return ()
+        return []
     references = references or {}
     # Code spans, then inline math, are read before any link. Brackets are
     # matched with escapes masked; a target keeps its escapes.
-    code_masked = _INLINE_MATH.sub(_blank, INLINE_CODE.sub(_blank, value))
+    code_masked = _INLINE_MATH.sub(_blank, code.sub(_blank_code, value))
     masked = _BRACKET_ESCAPE.sub(_blank, code_masked)
     closing = _closing_brackets(masked)
-    targets: list[str] = []
+    links: list[tuple[int, str]] = []
     # Python-Markdown reads full and collapsed references, inline links and
     # shortcut references in that order, each in its own pass. A reference pass
     # skips what it reads without a definition: both labels of a full or
@@ -271,7 +313,7 @@ def link_targets(value: str, references: dict[str, str] | None = None) -> tuple[
             reference = _REFERENCE_LABEL.match(masked, close + 1) if start > passed else None
             full = _WHITESPACE.sub(" ", (reference.group(1) or label).lower()) if reference else None
             short = _WHITESPACE.sub(" ", label.lower())
-            inline = _INLINE_TARGET.match(code_masked, close + 1)
+            inline = target.match(code_masked, close + 1)
             if reference and full not in references and not image:
                 passed = reference.end() - 1
             if full in references:
@@ -286,9 +328,21 @@ def link_targets(value: str, references: dict[str, str] | None = None) -> tuple[
             start = masked.find("[", start + 1)
             continue
         if not image:
-            targets.append(link[0])
+            links.append((start, link[0]))
         start = masked.find("[", link[1])
-    return tuple(targets)
+    return links
+
+
+def _block_links(lines: list[str], references: dict[str, str]) -> list[tuple[int, str]]:
+    """``(index, target)`` for each link the site reads in a block :func:`text_blocks` finds.
+
+    The block's *lines* are read together without their quote markers, as the
+    site reads a paragraph, so a link can wrap across them. *index* is the
+    line it starts on, counted from the block's first.
+    """
+
+    block = "\n".join(_unquoted(line)[0] for line in lines)
+    return [(block.count("\n", 0, begin), target) for begin, target in _links(block, references)]
 
 
 def link_definitions(lines: list[str]) -> dict[str, str]:
@@ -326,18 +380,185 @@ def _blank(match: re.Match[str]) -> str:
     return " " * len(match.group(0))
 
 
-def markdown_links(text: str) -> list[tuple[int, str]]:
-    """Return ``(line number, target)`` for every visible link in ``text``.
+def _blank_code(match: re.Match[str]) -> str:
+    # A match without a backtick run is an escape, which stays.
+    return _blank(match) if match.group(1) else match.group(0)
 
-    A reference link is reported on its own line, with the target of its
-    definition anywhere in ``text``.
+
+def text_blocks(lines: list[str]) -> list[tuple[int, int]]:
+    """Return ``(start, stop)`` for each run of ``lines`` the site reads as one block.
+
+    ``lines`` are masked, so a hidden line ends a block as a blank one does. A
+    paragraph or a list item runs on over the lines below it, so a link or a
+    code span can wrap from one line to the next. A list marker starts a new
+    item in a list, even on a lazy line below a quote in one; in a paragraph
+    the site reads it as text. A quote starts a new block, and its lines are
+    read by these same rules without their markers, so a bare ``>`` ends one.
+    A heading, which on the site is any line that starts with ``#``, a
+    thematic break, a setext underline below a block's first line, a line
+    outside a quote that starts raw HTML, a reference definition over all its
+    lines and each row of a table are read alone, and so is each line of
+    indented code the mask leaves below one of them. So is a ``#`` heading
+    indented up to three spaces, as the loader has always read one, and a line
+    that starts with a block-level closing tag. The site keeps the heading in
+    the paragraph, and the tag where it closes no raw HTML, so a link that
+    wraps onto or off such a line goes unread.
+    """
+
+    blocks: list[tuple[int, int]] = []
+    start: int | None = None
+    # Since the last blank line, the quote markers of the quote the lines are
+    # in, which takes in lazy lines below it, and of the list, if any.
+    quoted = 0
+    listed: int | None = None
+    table = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        content, markers = _unquoted(line)
+        if start is not None and markers > quoted:
+            # A deeper quote starts a block of its own.
+            blocks.append((start, index))
+            start = None
+        quoted = max(quoted, markers)
+        if not content.strip():
+            if start is not None:
+                blocks.append((start, index))
+                start = None
+            if not line.strip():
+                quoted, listed = 0, None
+            table = False
+            index += 1
+            continue
+        # A table's header holds a pipe, as does the row under it.
+        if start == index - 1 and "|" in lines[start] and _TABLE_SEPARATOR.match(content):
+            table = True
+        span = 0
+        if _read_alone(content, line, start == index - 1):
+            # The site reads these before any list, and an unquoted one before
+            # any quote, so it ends them.
+            span, listed = 1, None
+            if not markers:
+                quoted = 0
+        elif table:
+            span = 1
+        elif content.lstrip(" ").startswith("["):
+            span = _definition_span(lines[index : index + 3], quoted)
+        # A list marker starts an item of the list these lines are in, at its
+        # quote depth or, on a line with fewer markers, lazily.
+        item = _ITEM_MARKER.match(content) and listed is not None and markers <= listed
+        if start is None and listed is None and index and lines[index - 1].strip() and _indent(content) >= _CODE_INDENT:
+            # Indented code right below a line read alone or a quote's bare
+            # line, which the mask leaves: read a line at a time, as before.
+            span = 1
+        if start is not None and (span or item):
+            blocks.append((start, index))
+            start = None
+        if span:
+            blocks.append((index, index + span))
+            index += span
+            continue
+        if start is None:
+            if item:
+                # A new item of the list ends a quote in the item above it.
+                quoted = listed
+            start = index
+            if _ITEM_MARKER.match(content) and not item:
+                listed = quoted
+        index += 1
+    if start is not None:
+        blocks.append((start, len(lines)))
+    return blocks
+
+
+def _unquoted(line: str) -> tuple[str, int]:
+    """*line* without its quote markers, and how many it had."""
+
+    count = 0
+    while marker := _QUOTE_MARKER.match(line):
+        line = line[marker.end() :]
+        count += 1
+    return line, count
+
+
+def _read_alone(content: str, line: str, second: bool) -> bool:
+    """Whether the site reads *line*, *content* once unquoted, before any list, definition or paragraph.
+
+    An underline only counts as a block's *second* line.
+    """
+
+    return bool(
+        content.startswith("#")
+        or HEADING.match(content)
+        or _BREAK.match(content.expandtabs(_CODE_INDENT))
+        or _raw_html(line)
+        or (second and _SETEXT.match(content))
+    )
+
+
+def _raw_html(line: str) -> bool:
+    """Whether the site reads *line* as the start of raw HTML: a tag only starts it if block-level."""
+
+    start = _HTML_START.match(line)
+    return start is not None and (start[1] is None or _converter().is_block_level(start[1]))
+
+
+def _definition_span(lines: list[str], depth: int) -> int:
+    """How many of *lines* a reference definition on the first spans, or 0 if none starts there.
+
+    The site reads one over up to three lines, *depth* quote markers in: its
+    label, its target and its title. It reads a deeper quote and each line
+    :func:`_read_alone` names first, so a definition never runs into one.
+    """
+
+    contents: list[str] = []
+    for line in lines:
+        content, markers = _unquoted(line)
+        if contents and (not content.strip() or markers > depth or _read_alone(content, line, len(contents) == 1)):
+            break
+        contents.append(content)
+    # The site expands tabs before it reads a definition.
+    definition = _LINK_DEFINITION.match("\n".join(contents).expandtabs(_CODE_INDENT))
+    return definition.group(0).count("\n") + 1 if definition else 0
+
+
+def markdown_links(text: str) -> list[tuple[int, str, bool]]:
+    """Return ``(line number, target, wrapped)`` for every visible link in ``text``.
+
+    Links are read a block at a time, as :func:`text_blocks` finds them, so a
+    link whose text wraps onto the next line of its paragraph is found, on the
+    line it starts on. Each link a line read alone finds, as check always read
+    one, is kept, even one the site shows as code or a definition's target. A
+    link the block reading finds is taken for one of those with its target, on
+    the line it starts on or, failing that, anywhere in the block, as for a
+    full reference whose label is on a later line. A link left over is
+    *wrapped*: its text wraps, or the site's reading of code spans across lines
+    or past an escaped backtick shows it. A reference link takes the target of
+    its definition anywhere in ``text``.
     """
 
     lines = content_lines(text)
     references = link_definitions(lines)
-    links: list[tuple[int, str]] = []
-    for line_number, line in enumerate(lines, start=1):
-        links.extend((line_number, target) for target in link_targets(line, references))
+    links: list[tuple[int, str, bool]] = []
+    for start, stop in text_blocks(lines):
+        alone = [
+            (start + index + 1, target)
+            for index, line in enumerate(lines[start:stop])
+            for target in link_targets(line, references)
+        ]
+        whole = [(start + index + 1, target) for index, target in _block_links(lines[start:stop], references)]
+        unpaired = Counter(whole) - Counter(alone)
+        spare = Counter(target for _, target in (Counter(alone) - Counter(whole)).elements())
+        wrapped: list[tuple[int, str]] = []
+        for link in whole:
+            if unpaired[link]:
+                unpaired[link] -= 1
+                if spare[link[1]]:
+                    spare[link[1]] -= 1
+                else:
+                    wrapped.append(link)
+        found = [(*link, False) for link in alone] + [(*link, True) for link in wrapped]
+        links.extend(sorted(found, key=lambda link: link[0]))
     return links
 
 
@@ -923,21 +1144,40 @@ def statement_and_notes(text: str) -> tuple[str, str]:
     return _demote_headings(parts.statement), _demote_headings(notes)
 
 
-def outside_fences(text: str, transform, *, page: bool = False) -> str:
+def outside_fences(text: str, transform, *, page: bool = False, joined: bool = False) -> str:
     """Apply *transform* to every line that is not inside a code fence.
 
     Fences are read with the comments the site leaves out blanked, as
     :func:`published_page` finds them: a fence line inside a comment opens
     nothing, and a ``<!--`` in a code span or a code block, or one that never
     closes, hides no fence. A *page*'s frontmatter, which the site does not
-    read as Markdown, takes no part in that reading.
+    read as Markdown, takes no part in that reading. With *joined*, the lines
+    of each block :func:`text_blocks` finds go to *transform* together, joined
+    with ``\\n``, so a link that wraps across them is read whole. A block that
+    holds a comment still goes a line at a time: a backtick in the comment,
+    which the site never reads, could pair with one on the next line.
     """
     lines = text.splitlines()
     start = _page_start(text.removeprefix("\ufeff").splitlines()) if page else 0
     shown = [""] * start + _comments_blanked(lines[start:])
     fenced: set[int] = set()
-    _mask_fences_and_comments(shown, set(), fenced=fenced, comments=False)
-    out = [line if index in fenced else transform(line) for index, line in enumerate(lines)]
+    masked = _mask_fences_and_comments(shown, set(), fenced=fenced, comments=False)
+    stops = (
+        {
+            first: stop
+            for first, stop in text_blocks(_mask_indented_code(masked, set()))
+            if lines[first:stop] == shown[first:stop]
+        }
+        if joined
+        else {}
+    )
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        stop = stops.get(index, index + 1)
+        piece = "\n".join(lines[index:stop])
+        out.append(piece if index in fenced else transform(piece))
+        index = stop
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 
@@ -1294,6 +1534,7 @@ __all__ = [
     "resolved_path",
     "site_converter",
     "statement_and_notes",
+    "text_blocks",
     "title_text",
     "name_text",
     "page_title",

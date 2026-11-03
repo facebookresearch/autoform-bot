@@ -39,6 +39,8 @@ These pass `check` with a warning:
   `example`, `inductive`, `instance`, `irreducible_def`, `lemma`, `opaque`,
   `proposition`, `structure` and `theorem`: render captions it as written,
   capitalized, or "Node" if blank, and `audit` skips its Lean kind check.
+- A bad link earlier versions did not read, such as one wrapped across lines:
+  no edge counts for it, and `audit` only warns about a source or coverage link.
 
 `check` also warns, naming the file and the line, about markup a published page
 could use to run script or pass for the site's own markup; each warning says
@@ -182,7 +184,9 @@ limits](#elaboration-limits) fill `declarations`. Six warnings leave it empty:
 row's links that reach no declaration leaf; `duplicate-lean-target`, at each
 target involved, names the others taking the same credit; `node-too-large`, at
 the node's article, gives its span against the project's median; and
-`invalid-implementation-note`, at the note or folder, gives `check`'s warning. A
+`invalid-implementation-note`, at the note or folder, gives `check`'s warning.
+The warnings about a source or coverage link earlier versions did not read take
+their finding's code and leave it empty too. A
 target (a leaf carrying `declaration:`) recording `statement: formalized` takes
 progress credit for its first `lean:` name, and a `mathlib: true` one Mathlib
 credit for its first `mathlib_declaration` name, compared as Lean names:

@@ -15,6 +15,7 @@ import os
 import re
 import stat
 from collections import deque
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from html import unescape
 from pathlib import Path
@@ -24,9 +25,10 @@ from ._fs import is_within as _is_within
 from .lean import declaration_names
 from .library.pinned_names import PinnedLists, load_pinned_lists, name_warnings
 from .markdown import (
-    INLINE_CODE,
+    _CODE_SPAN,
     _INLINE_MATH,
-    _blank,
+    _blank_code,
+    _block_links,
     _is_hidden_path,
     directory_path,
     link_definitions,
@@ -34,6 +36,7 @@ from .markdown import (
     markdown_links,
     mask_code_and_comments,
     resolved_path,
+    text_blocks,
 )
 from .markdown import HEADING as _HEADING
 
@@ -43,10 +46,6 @@ _MARKDOWN_LINK_TEXT = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\([^)]*\)")
 #: A full, collapsed or shortcut reference link: ``[text][label]``, ``[label][]`` or ``[label]``.
 _REFERENCE_LINK_TEXT = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])+)\](?:\[([^\[\]]*)\])?")
 _HTML_TAG = re.compile(r"<[A-Za-z/!][^>]*>")
-# A code span may wrap across the paragraph's lines, as the page reads it. An
-# escaped character is matched first, so an escaped backtick opens no span;
-# inside one a backslash is literal, so ``a\`` still closes it.
-_CODE_SPAN = re.compile(r"\\.|" + INLINE_CODE.pattern, re.DOTALL)
 ARTICLE_ID_PATTERN = re.compile(r"af_[0-9a-f]{24}\Z")
 _FRONTMATTER_KEYS = frozenset(
     {
@@ -134,6 +133,12 @@ class Node:
     discussion: str | None = None
     origin: str | None = None
     sources: tuple[str, ...] = ()
+    #: What else ``## Sources`` links to, in wrapped links, as
+    #: :func:`~autoform_cli.markdown.markdown_links` defines them, such as one
+    #: whose text wraps across lines. Check and audit did not read these
+    #: before, so they warn about a problem with one (#325), and nothing else
+    #: reads them.
+    wrapped_sources: tuple[str, ...] = ()
     parent: str | None = None
     depth: int = 0
     article_id: str | None = None
@@ -175,10 +180,14 @@ class Graph:
     #: What check warns about from loading without failing: a project setting
     #: it ignores because it is misplaced or has an unknown value, then
     #: ``## Informally uses`` links that do not resolve to another article and
-    #: the heading written below a dependency heading, where its links count.
-    #: Last come the pinned name lists' warnings about ``mathlib_declaration``
-    #: and ``mathlib_file``. :func:`informal_cycle_warnings` adds the links
-    #: whose target depends on the article.
+    #: the heading written below a dependency heading, where its links count,
+    #: and, in a wrapped link, such as one whose text wraps across lines, what
+    #: loading would otherwise refuse: a dependency that does not resolve,
+    #: names its own article or closes a cycle, or a link into an unpublished
+    #: folder. Last come the pinned name lists' warnings about
+    #: ``mathlib_declaration`` and ``mathlib_file``.
+    #: :func:`informal_cycle_warnings` adds the links whose target depends on
+    #: the article.
     warnings: tuple[str, ...] = ()
     #: The pinned name lists in ``blueprint/libraries/``, or None without that folder.
     pinned_names: PinnedLists | None = None
@@ -208,6 +217,10 @@ class _ParsedNode:
     summary: str | None
     informal_targets: tuple[str, ...] = ()
     informal_warnings: tuple[str, ...] = ()
+    #: Dependency targets named only by wrapped links, which check did not read
+    #: before, so a problem with one warns (#325), and the sources such links add.
+    wrapped_targets: frozenset[str] = frozenset()
+    wrapped_sources: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,21 +320,39 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     if issues:
         raise GraphValidationError(issues)
     unpublished = tuple(sorted(node.path.parent for node in parsed if node.metadata.get("published") in _FALSE))
-    issues.extend(_unpublished_link_issues(sources, unpublished))
+    unpublished_issues, unpublished_warnings = _unpublished_link_issues(sources, unpublished)
+    issues.extend(unpublished_issues)
+    warnings.extend(unpublished_warnings)
+    omitted = {node.id for node in parsed if any(_is_within(node.path, folder) for folder in unpublished)}
     nodes: dict[str, Node] = {}
+    # The edges only wrapped links name, and what each article's informal links
+    # resolve to.
+    wrapped_edges: set[tuple[str, str]] = set()
+    informal_named: dict[str, list[str]] = {}
     for parsed_node in parsed:
         warnings.extend(parsed_node.informal_warnings)
+        one_line: set[str] = set()
 
-        def resolve(targets: tuple[str, ...], node: _ParsedNode = parsed_node) -> list[str]:
+        def resolve(
+            targets: tuple[str, ...], node: _ParsedNode = parsed_node, one_line: set[str] = one_line
+        ) -> list[str]:
             resolved: list[str] = []
             for target in targets:
                 dependency, issue = _resolve_target(node, target, blueprint, canonical_ids)
-                if issue:
+                wrapped = target in node.wrapped_targets
+                if issue is None and dependency == node.id:
+                    issue = f"{node.id}: dependency on itself"
+                if issue and wrapped:
+                    warnings.append(f"{issue}; not counted")
+                elif issue:
                     issues.append(issue)
-                elif dependency == node.id:
-                    issues.append(f"{node.id}: dependency on itself")
-                elif dependency not in resolved:
-                    resolved.append(dependency)
+                elif wrapped and dependency in omitted and node.id not in omitted:
+                    continue  # not counted; _unpublished_link_issues warns, except below a fence that never closes
+                else:
+                    if not wrapped:
+                        one_line.add(dependency)
+                    if dependency not in resolved:
+                        resolved.append(dependency)
             return resolved
 
         statement_dependencies = resolve(parsed_node.statement_targets)
@@ -330,15 +361,18 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         dependencies.extend(
             dependency for dependency in proof_dependencies if dependency not in dependencies
         )
-        informal_dependencies: list[str] = []
+        wrapped_edges.update((parsed_node.id, dependency) for dependency in dependencies if dependency not in one_line)
+        informal: list[str] = []
         for target in parsed_node.informal_targets:
             dependency, issue = _resolve_target(parsed_node, target, blueprint, canonical_ids, "informal target")
             if issue:
                 warnings.append(issue)
             elif dependency == parsed_node.id:
                 warnings.append(f"{parsed_node.id}: informally uses itself")
-            elif dependency not in dependencies and dependency not in informal_dependencies:
-                informal_dependencies.append(dependency)
+            elif dependency not in informal:
+                informal.append(dependency)
+        informal_named[parsed_node.id] = informal
+        informal_dependencies = [dependency for dependency in informal if dependency not in dependencies]
         metadata = parsed_node.metadata
         nodes[parsed_node.id] = Node(
             id=parsed_node.id,
@@ -362,6 +396,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             discussion=metadata.get("discussion"),
             origin=metadata.get("origin"),
             sources=tuple(dict.fromkeys(parsed_node.source_targets)),
+            wrapped_sources=parsed_node.wrapped_sources,
             parent=parents[parsed_node.id],
             depth=_article_depth(parsed_node.id, parents),
             article_id=metadata.get("article_id"),
@@ -375,7 +410,23 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     for node_id, area in _atlas_assignments(blueprint, nodes)[0].items():
         nodes[node_id] = replace(nodes[node_id], area=area)
     if not issues:
-        issues.extend(_find_cycles(nodes))
+        cycles = _find_cycles(nodes)
+        # A cycle that an edge named only by wrapped links closes warns, and the edge is left out, since the
+        # loader did not read those links before (#325). Any cycle left refuses, as before.
+        looped = _looped_edges(nodes, wrapped_edges) if cycles else []
+        for (source, dependency), path in looped:
+            warnings.append(f"{source}: dependency on {dependency} not counted: it closes a cycle: {' -> '.join(path)}")
+            node = nodes[source]
+            remaining = tuple(other for other in node.dependencies if other != dependency)
+            nodes[source] = replace(
+                node,
+                dependencies=remaining,
+                statement_dependencies=tuple(other for other in node.statement_dependencies if other != dependency),
+                proof_dependencies=tuple(other for other in node.proof_dependencies if other != dependency),
+                # An informal link to it counts again, as it did before.
+                informal_dependencies=tuple(other for other in informal_named[source] if other not in remaining),
+            )
+        issues.extend(_find_cycles(nodes) if looped else cycles)
     if issues:
         raise GraphValidationError(issues)
     pinned_names = load_pinned_lists(blueprint)
@@ -394,27 +445,33 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     )
 
 
-def _unpublished_link_issues(sources: list[_NodeSource], unpublished: tuple[Path, ...]) -> list[str]:
+def _unpublished_link_issues(
+    sources: list[_NodeSource], unpublished: tuple[Path, ...]
+) -> tuple[list[str], list[str]]:
     """Name each link from a published page into an unpublished folder, which the site lacks.
 
     Render rewrites a page's links as text, applying their ``..`` steps, so they
     are read that way here: a dependency, a source and a prose link alike.
+    Returns the errors, then the warnings: a wrapped link, which the loader did
+    not read before, is only warned about (#325).
     """
+    issues: list[str] = []
+    warnings: list[str] = []
     if not unpublished:
-        return []
-    issues = []
+        return issues, warnings
     for source in sources:
         if any(_is_within(source.path, folder) for folder in unpublished):
             continue
-        for _, target in markdown_links(source.text):
+        for _, target, wrapped in markdown_links(source.text):
             try:
                 split = urlsplit(target)
             except ValueError:
                 continue  # never a path into the folder; other checks report it
             spelled = Path(os.path.normpath(source.path.parent / unquote(split.path)))
             if not (split.scheme or split.netloc) and any(_is_within(spelled, folder) for folder in unpublished):
-                issues.append(f"{source.id}: links to {target!r}, in an unpublished folder render omits")
-    return issues
+                found = warnings if wrapped else issues
+                found.append(f"{source.id}: links to {target!r}, in an unpublished folder render omits")
+    return issues, warnings
 
 
 def unpublished_content(files: tuple[tuple[str, bytes], ...]) -> tuple[str, ...]:
@@ -840,8 +897,13 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
     body = mask_code_and_comments(lines[body_start:])
     # A reference link takes its target from a definition anywhere on the page.
     references = link_definitions(body)
-    for line in body:
-        heading = _HEADING.match(line)
+    # Links are read a block at a time, as the page reads them, so one can
+    # wrap across lines, and each section's lines one at a time too, as the
+    # loader read them before.
+    alone: dict[str, list[str]] = {section: [] for section in targets}
+    for start, stop in text_blocks(body):
+        block = "\n".join(body[start:stop])
+        heading = _HEADING.match(block)
         if heading:
             level = len(heading.group(1))
             heading_text = heading.group(2).strip()
@@ -860,7 +922,10 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
                 )
             continue
         if section is not None:
-            targets[section].extend(link_targets(line, references))
+            alone[section].extend(target for line in body[start:stop] for target in link_targets(line, references))
+            # A block of one line without a backtick shows no link that line read alone missed.
+            if stop - start > 1 or "`" in body[start]:
+                targets[section].extend(target for _, target in _block_links(body[start:stop], references))
 
     if title is None:
         issues.append(f"{node_id}: missing H1 title")
@@ -868,17 +933,28 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         issues.append(f"{node_id}: multiple H1 titles")
     if issues:
         return None, issues
+    # Every link the loader read before still counts, even one the page shows as
+    # code (#325). The links only a whole block shows come after them, and under
+    # ``## Sources`` they stay apart, since only check and audit read them.
+    named = {section: set(found) for section, found in alone.items()}
+    added = {
+        section: [target for target in found if target not in named[section]] for section, found in targets.items()
+    }
+    wrapped_dependencies = {*added[_STATEMENT_SECTION], *added[_PROOF_SECTION]}
+    wrapped_dependencies -= named[_STATEMENT_SECTION] | named[_PROOF_SECTION]
     parsed = _ParsedNode(
         node_id,
         title,
         path,
-        tuple(targets[_STATEMENT_SECTION]),
-        tuple(targets[_PROOF_SECTION]),
-        tuple(targets[_SOURCES_SECTION]),
+        (*alone[_STATEMENT_SECTION], *added[_STATEMENT_SECTION]),
+        (*alone[_PROOF_SECTION], *added[_PROOF_SECTION]),
+        tuple(alone[_SOURCES_SECTION]),
         metadata,
         _extract_summary(body, references),
-        tuple(targets[_INFORMAL_SECTION]),
+        (*alone[_INFORMAL_SECTION], *added[_INFORMAL_SECTION]),
         tuple(misplaced),
+        frozenset(wrapped_dependencies),
+        tuple(dict.fromkeys(added[_SOURCES_SECTION])),
     )
     return parsed, []
 
@@ -944,7 +1020,7 @@ def _strip_markup(text: str) -> str:
         return _HTML_TAG.sub("", prose).replace("**", "").replace("__", "")
 
     code = [match for match in _CODE_SPAN.finditer(text) if match[1]]
-    code_masked = _CODE_SPAN.sub(lambda match: _blank(match) if match[1] else match[0], text)
+    code_masked = _CODE_SPAN.sub(_blank_code, text)
     spans = sorted(match.span() for match in (*code, *_INLINE_MATH.finditer(code_masked)))
     parts: list[str] = []
     end = 0
@@ -1135,6 +1211,51 @@ def _resolve_target(
     return dependency, None
 
 
+def _looped_edges(
+    nodes: dict[str, Node], wrapped_edges: set[tuple[str, str]]
+) -> list[tuple[tuple[str, str], list[str]]]:
+    """The edges only wrapped links name that close a cycle, each with its cycle.
+
+    An edge closes one when its dependency leads back to its article: first
+    through edges named on one line alone, then, among the edges left, through
+    any. A wrapped link that closes a cycle through one-line edges so leaves
+    the other wrapped edges on that cycle counted.
+    """
+    edges = {
+        node_id: [dependency for dependency in node.dependencies if (node_id, dependency) not in wrapped_edges]
+        for node_id, node in nodes.items()
+    }
+
+    def closing(candidates: set[tuple[str, str]]) -> list[tuple[tuple[str, str], list[str]]]:
+        found = [(edge, _dependency_path(edges, edge[1], edge[0])) for edge in sorted(candidates)]
+        return [(edge, [edge[0], *path]) for edge, path in found if path]
+
+    first = closing(wrapped_edges)
+    rest = wrapped_edges.difference(edge for edge, _ in first)
+    for source, dependency in sorted(rest):
+        edges[source].append(dependency)
+    return sorted(first + closing(rest))
+
+
+def _dependency_path(edges: Mapping[str, Sequence[str]], start: str, goal: str) -> list[str]:
+    """A shortest chain of *edges*, each article's dependencies, from *start* to *goal*, or an empty list."""
+    # Breadth first, so the path named is a shortest one.
+    previous: dict[str, str | None] = {start: None}
+    queue = deque([start])
+    while queue and goal not in previous:
+        current = queue.popleft()
+        for dependency in edges[current]:
+            if dependency not in previous:
+                previous[dependency] = current
+                queue.append(dependency)
+    path: list[str] = []
+    step = goal if goal in previous else None
+    while step is not None:
+        path.append(step)
+        step = previous[step]
+    return path[::-1]
+
+
 def _find_cycles(nodes: dict[str, Node]) -> list[str]:
     state: dict[str, int] = {}
     stack: list[str] = []
@@ -1183,26 +1304,12 @@ def informal_cycle_warnings(graph: Graph) -> list[str]:
     dependencies, it would. Only check reports these, so loading does not pay
     for the searches.
     """
-    nodes = graph.nodes
+    edges = {node_id: node.dependencies for node_id, node in graph.nodes.items()}
     issues: list[str] = []
-    for node in nodes.values():
+    for node in graph.nodes.values():
         for target in node.informal_dependencies:
-            # Breadth first from the target, so the path named is a shortest one.
-            previous: dict[str, str | None] = {target: None}
-            queue = deque([target])
-            while queue and node.id not in previous:
-                current = queue.popleft()
-                for dependency in nodes[current].dependencies:
-                    if dependency not in previous:
-                        previous[dependency] = current
-                        queue.append(dependency)
-            if node.id in previous:
-                path: list[str] = []
-                step: str | None = node.id
-                while step is not None:
-                    path.append(step)
-                    step = previous[step]
-                issues.append(f"{node.id}: informally uses {target}, which depends on it: {' -> '.join(reversed(path))}")
+            if path := _dependency_path(edges, target, node.id):
+                issues.append(f"{node.id}: informally uses {target}, which depends on it: {' -> '.join(path)}")
     return issues
 
 

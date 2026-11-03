@@ -516,6 +516,22 @@ def test_a_link_into_the_only_unpublished_folder_is_named(tmp_path: Path) -> Non
     assert caught.value.issues == ("base: links to 'drafts/idea.md', in an unpublished folder render omits",)
 
 
+@pytest.mark.parametrize(
+    "body", ["See [the\nidea](drafts/idea.md).", "## Depends on\n\n- [The\n  idea](drafts/idea.md)"]
+)
+def test_a_wrapped_link_into_an_unpublished_folder_warns(tmp_path: Path, body: str) -> None:
+    # A dependency written that way is not counted, as the site does not show its target.
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "drafts/README.md", "# Drafts\n", published="false")
+    _node(blueprint, "drafts/idea.md", "# Idea\n")
+    _node(blueprint, "base.md", f"# Base\n\n{body}\n")
+
+    graph = load_graph(blueprint)
+
+    assert graph.warnings == ("base: links to 'drafts/idea.md', in an unpublished folder render omits",)
+    assert graph.nodes["base"].dependencies == ()
+
+
 def test_a_blueprint_with_no_unpublished_folder_reads_no_links_for_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -899,6 +915,239 @@ def test_a_fence_that_never_closes_hides_no_dependency(tmp_path: Path, fence: st
     _node(blueprint, "only.md", f"# Only\n\n## Depends on\n\n{fence}\n- [Base](base.md)\n")
 
     assert set(load_graph(blueprint).nodes["only"].dependencies) == {"base"}
+
+
+def test_a_dependency_link_whose_text_wraps_is_an_edge(tmp_path: Path) -> None:
+    # Read a line at a time, the link was dropped with no warning.
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(
+        blueprint,
+        "result.md",
+        "# Result\n\n## Proof depends on\n\n- For an integral base, [line bundles that agree on\n"
+        "  fibres descend](base.md) to the base.\n",
+    )
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["result"].proof_dependencies == ("base",)
+    assert not graph.warnings
+
+
+def test_a_heading_indented_under_a_line_still_opens_its_section(tmp_path: Path) -> None:
+    # Read a line at a time, the loader took it for a heading, so the block reader does too.
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "result.md", "# Result\n\nStatement.\n  ## Depends on\n- [Base](base.md)\n")
+
+    assert load_graph(blueprint).nodes["result"].dependencies == ("base",)
+
+
+def test_a_wrapped_dependency_inside_an_unpublished_folder_counts(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "drafts/README.md", "# Drafts\n", published="false")
+    _node(blueprint, "drafts/base.md", "# Base\n")
+    _node(blueprint, "drafts/idea.md", "# Idea\n\n## Depends on\n\n- [The\n  base](base.md)\n")
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["drafts/idea"].dependencies == ("drafts/base",)
+    assert not graph.warnings
+
+
+def test_a_wrapped_link_in_code_is_no_dependency(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(
+        blueprint,
+        "result.md",
+        "# Result\n\n## Depends on\n\nAs `[in\nthis](base.md)` or\n\n```\n[in\nthis](base.md)\n```\n",
+    )
+
+    assert load_graph(blueprint).nodes["result"].dependencies == ()
+
+
+@pytest.mark.parametrize(
+    ("links", "dependencies"),
+    [
+        # The site balances parentheses, so the one after "the notes" leaves the link unclosed.
+        ("- By [the lemma](base.md see\n  the notes (below) for more.", ()),
+        # Read alone, the line ran its title on to the first ")", and so still does (#325).
+        ("- By [the lemma](base.md see the notes (below) for more.", ("base",)),
+    ],
+    ids=["wrapped", "one-line"],
+)
+def test_a_destination_whose_parenthesis_never_closes_is_read_as_before(
+    tmp_path: Path, links: str, dependencies: tuple[str, ...]
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "result.md", f"# Result\n\n## Depends on\n\n{links}\n")
+
+    assert load_graph(blueprint).nodes["result"].dependencies == dependencies
+
+
+@pytest.mark.parametrize(
+    ("links", "warning"),
+    [
+        ("- [The\n  page](missing.md)", "result: dependency target does not exist: 'missing.md'"),
+        ("- [The\n  page](result.md)", "result: dependency on itself"),
+        # A code span read across lines leaves this link out of code, where a line read alone hid it.
+        ("See ` one\ntwo ` [x](missing.md) ` three", "result: dependency target does not exist: 'missing.md'"),
+        # A line read alone opened a code span at an escaped backtick, which the site does not.
+        ("- Typed as a \\` b [the page](missing.md) \\` c.", "result: dependency target does not exist: 'missing.md'"),
+    ],
+)
+def test_a_wrapped_dependency_link_that_cannot_count_warns(tmp_path: Path, links: str, warning: str) -> None:
+    # The loader never read these links, so refusing one would fail a vault that passed (#325).
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", f"# Result\n\n## Depends on\n\n{links}\n")
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["result"].dependencies == ()
+    assert graph.warnings == (f"{warning}; not counted",)
+
+
+@pytest.mark.parametrize("section", ["Depends on", "Proof depends on"])
+def test_a_cycle_a_wrapped_dependency_link_closes_warns_and_drops_it(tmp_path: Path, section: str) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "first.md", "# First\n\n## Depends on\n\n- [Second](second.md)\n")
+    _node(
+        blueprint,
+        "second.md",
+        f"# Second\n\n## {section}\n\n- [The\n  first](first.md)\n\n## Informally uses\n\n- [First](first.md)\n",
+    )
+
+    graph = load_graph(blueprint)
+    second = graph.nodes["second"]
+
+    assert graph.nodes["first"].dependencies == ("second",)
+    assert second.dependencies == second.statement_dependencies == second.proof_dependencies == ()
+    # The informal link the dropped edge hid counts again.
+    assert second.informal_dependencies == ("first",)
+    assert graph.warnings == ("second: dependency on first not counted: it closes a cycle: second -> first -> second",)
+
+
+@pytest.mark.parametrize(
+    ("pages", "kept", "warnings"),
+    [
+        # Only the edge that closes a cycle goes.
+        (
+            {"first": "- [Second](second.md)", "second": "- [The\n  first](first.md)\n- [The\n  third](third.md)"},
+            {"first": ("second",), "second": ("third",)},
+            ["second: dependency on first not counted: it closes a cycle: second -> first -> second"],
+        ),
+        # A mistaken link back costs no other wrapped edge on its cycles its count.
+        (
+            {
+                "first": "- [Second](second.md)\n- [The\n  third](third.md)",
+                "second": "- [The\n  first](first.md)",
+                "third": "- [The\n  second](second.md)",
+            },
+            {"first": ("second", "third"), "second": (), "third": ("second",)},
+            ["second: dependency on first not counted: it closes a cycle: second -> first -> second"],
+        ),
+        # Where only wrapped links close a cycle, which is wrong is unknown, so each goes.
+        (
+            {"first": "- [The\n  second](second.md)", "second": "- [The\n  first](first.md)"},
+            {"first": (), "second": ()},
+            [
+                "first: dependency on second not counted: it closes a cycle: first -> second -> first",
+                "second: dependency on first not counted: it closes a cycle: second -> first -> second",
+            ],
+        ),
+    ],
+    ids=["one-closes", "mistaken-back-link", "only-wrapped"],
+)
+def test_only_wrapped_edges_that_close_a_cycle_are_dropped(
+    tmp_path: Path, pages: dict[str, str], kept: dict[str, tuple[str, ...]], warnings: list[str]
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "third.md", "# Third\n")
+    for name, links in pages.items():
+        _node(blueprint, f"{name}.md", f"# {name.title()}\n\n## Depends on\n\n{links}\n")
+
+    graph = load_graph(blueprint)
+
+    assert {name: graph.nodes[name].dependencies for name in kept} == kept
+    assert list(graph.warnings) == warnings
+
+
+def test_a_cycle_written_on_one_line_beside_one_a_wrapped_link_closes_still_refuses(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "first.md", "# First\n\n## Depends on\n\n- [Second](second.md)\n")
+    _node(blueprint, "second.md", "# Second\n\n## Depends on\n\n- [The\n  first](first.md)\n")
+    _node(blueprint, "a.md", "# A\n\n## Depends on\n\n- [B](b.md)\n")
+    _node(blueprint, "b.md", "# B\n\n## Depends on\n\n- [A](a.md)\n")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues == ("dependency cycle: a -> b -> a",)
+
+
+@pytest.mark.parametrize(
+    "links",
+    [
+        "- `see [Base](base.md) and\n  more`",
+        "- $x [Base](base.md) and\n  y$",
+        "[a]:\n  [Base](base.md)",
+        "> [base]: elsewhere.md\n\n[base]: base.md",
+        "```lean\nexample : True := trivial\n- [Base](base.md)\n``` -- end",
+    ],
+    ids=["code-span", "math", "definition-target", "quoted-definition", "unclosed-fence"],
+)
+def test_a_dependency_read_before_still_counts_where_the_page_shows_no_link(tmp_path: Path, links: str) -> None:
+    # Read a line at a time, each link was an edge. Dropping it would change readiness and the
+    # assumptions verify checks, with no warning (#325).
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "result.md", f"# Result\n\n## Depends on\n\n{links}\n")
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["result"].dependencies == ("base",)
+    assert not graph.warnings
+
+
+def test_a_wrapped_sources_link_names_no_cited_passage(tmp_path: Path) -> None:
+    # A review approves the cited passage, so a link check did not read before must not move it (#325).
+    from autoform_cli.skeleton import source_passage
+
+    blueprint = tmp_path / "blueprint"
+    (blueprint / "sources").mkdir(parents=True)
+    (blueprint / "sources" / "book.txt").write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
+    _node(
+        blueprint,
+        "result.md",
+        "# Result\n\n## Sources\n\n- [Theorem 2, as printed on\n  pages 3 and 4](../sources/book.txt#L3-L4)\n"
+        "- [Theorem 1](../sources/book.txt#L1-L2)\n",
+    )
+
+    node = load_graph(blueprint).nodes["result"]
+
+    assert (node.sources, node.wrapped_sources) == (("../sources/book.txt#L1-L2",), ("../sources/book.txt#L3-L4",))
+    assert source_passage(node, blueprint) == ("one\ntwo", "sources/book.txt#L1-L2")
+
+
+@pytest.mark.parametrize(
+    "links",
+    [
+        "## Depends on\n\n- [Missing](missing.md)\n- [The\n  missing](missing.md)\n",
+        "## Depends on\n\n- [The\n  missing](missing.md)\n\n## Proof depends on\n\n- [Missing](missing.md)\n",
+        "## Depends on\n\n- [Missing](missing.md)\n\n## Proof depends on\n\n- [The\n  missing](missing.md)\n",
+    ],
+    ids=["one-section", "wrapped-statement", "wrapped-proof"],
+)
+def test_a_target_also_linked_on_one_line_still_refuses(tmp_path: Path, links: str) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", f"# Result\n\n{links}")
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert set(caught.value.issues) == {"result: dependency target does not exist: 'missing.md'"}
 
 
 def test_a_fence_closes_only_on_a_bare_fence_line(tmp_path: Path) -> None:
@@ -1388,6 +1637,19 @@ def test_check_rejects_sources_links_that_name_no_file_in_the_blueprint(
         "error: result: source target escapes the blueprint directory: '../../slides.pdf'\n"
         "error: result: source target contains an invalid path: '../sources/%00.md'\n"
         "error: result: source target is not a valid URL: 'http://[oops/paper.md'\n"
+    )
+
+
+def test_check_warns_about_a_broken_sources_link_whose_text_wraps(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Check never read the link before, so refusing it would fail a vault that passed (#325).
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", "# Result\n\n## Sources\n\n- [The missing\n  note](../sources/missing.md)\n")
+
+    assert main(["check", str(blueprint)]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        "warning: result: source target does not resolve to a file: '../sources/missing.md'"
     )
 
 

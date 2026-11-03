@@ -24,7 +24,7 @@ BUDGETS = {
     "autoform_cli/reference/search.md": 171,
     "autoform_cli/reference/site.md": 50,
     "autoform_cli/reference/skeleton-and-review.md": 199,
-    "autoform_cli/reference/validation-and-audit.md": 250,  # #193's credit rule; #485's list of captioned commands.
+    "autoform_cli/reference/validation-and-audit.md": 254,  # #193's credit rule; #485's captions; wrapped links.
     "autoform_cli/reference/wiki-links.md": 20,  # Internal optional viewer transport; keep it on demand and concise.
     "autoform_cli/reference/work.md": 127,
     "servers/README.md": 122,
