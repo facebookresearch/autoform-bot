@@ -7,6 +7,7 @@ import subprocess
 
 import pytest
 
+from autoform_cli import project_map
 from tests.test_integrated_reader_focus import _ENVIRONMENT as _READER_PEERS
 from tests.test_wiki_workspace_controls import _CLIENT, _CONTROL_PEERS, _LOADER, _NODE
 
@@ -286,6 +287,95 @@ def test_outline_pagination_keeps_current_scope_and_reveals_all_rows_in_sibling_
       assert.equal(dom$navigationInner.all().some(node=>node.tagName==='BUTTON'),false);
       assert.equal(JSON.stringify(sharedIndex),before);
     """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
+
+
+def test_outline_heads_each_area_run_with_its_title() -> None:
+    _run(r"""
+      const root=scope('roadmap',null),chapter=(id,area)=>scope(id,'roadmap',area?{area}:{});
+      const shape=(nodes,id,limit)=>outlineProjection(nodes,id,id,limit).entries.map(entry=>[entry.node.id,entry.depth,entry.collection]);
+      // A one-chapter area and a chapter without an area keep their place, and an area that comes back is headed again.
+      // A statement or a collection at the top neither counts toward an area nor goes under one.
+      const nodes=[root,chapter('logic','Foundations'),chapter('sets','Foundations'),chapter('algebra','Algebra'),
+        page('lemma','roadmap',{area:'Algebra'}),chapter('notes'),chapter('geometry','Geometry'),chapter('topology','Geometry'),
+        chapter('models','Foundations'),scope('library','roadmap',{navigation:'collection',area:'Algebra'}),
+        scope('manifolds','topology'),scope('smooth','manifolds'),scope('lie','smooth'),scope('groups','lie')];
+      const before=JSON.stringify(nodes);
+      // The heading takes a level, so the current page sits one level deeper before the indent stops growing.
+      assert.deepEqual(shape(nodes,'groups',120),[['region:Foundations',0,true],['logic',1,false],['sets',1,false],
+        ['algebra',0,false],['lemma',0,false],['notes',0,false],['region:Geometry',0,true],['geometry',1,false],
+        ['topology',1,false],['manifolds',2,false],['smooth',3,false],['lie',4,false],['groups',4,false],
+        ['region:Foundations',0,true],['models',1,false],['library',0,true]]);
+      assert.deepEqual(outlineProjection(nodes,'roadmap',null,120).entries.filter(entry=>entry.node.id.startsWith('region:'))
+        .map(entry=>entry.node.title),['Foundations','Geometry','Foundations']);
+      // However short the list, the current chapter keeps its heading, and a heading cut off from its chapters waits.
+      assert.deepEqual(shape(nodes,'topology',1),[['region:Geometry',0,true],['topology',1,false]]);
+      assert.deepEqual(shape(nodes,'topology',3),[['region:Geometry',0,true],['topology',1,false]]);
+      assert.deepEqual(shape(nodes,'topology',5),[['region:Foundations',0,true],['logic',1,false],['sets',1,false],
+        ['region:Geometry',0,true],['topology',1,false]]);
+      // Areas head nothing until the chapters name two of them and one holds two chapters.
+      for(const areas of [[null,null],['Algebra','Algebra'],['Algebra','Algebra',null],['Algebra','Geometry']])
+        assert.deepEqual(shape([root,...areas.map((area,index)=>chapter('c'+index,area))],'roadmap',120),
+          areas.map((_,index)=>['c'+index,0,false]));
+      assert.equal(JSON.stringify(nodes),before);
+    """, ["outlineProjection"], _PROJECTION_PEERS)
+
+
+def test_area_headings_are_text_and_keep_the_current_link_and_paging_focus() -> None:
+    _run(r"""
+      const root=scope('roadmap',null),chapter=(id,area)=>scope(id,'roadmap',{area});
+      const nodes=[root,chapter('logic','Foundations'),chapter('sets','Foundations'),chapter('geometry','Geometry'),
+        chapter('topology','Geometry')];
+      configureOutline(nodes,'topology');ui$outlineLimit=1;
+      const before=JSON.stringify(sharedIndex);renderNavigation();
+      const headings=()=>dom$navigationInner.all().filter(node=>node.className==='bp-outline-collection');
+      assert.deepEqual(headings().map(node=>[node.tagName,node.textContent,node.parentElement.className]),
+        [['SPAN','Geometry','bp-outline-depth-0']]);
+      assert.deepEqual(outlineLinks().map(link=>[link.dataset.navigationNodeId,link.parentElement.className]),
+        [['topology','bp-outline-depth-1']]);
+      assert.equal(outlineLinks()[0].getAttribute('aria-current'),'page');
+      // Show more topics brings back the rest and focuses the first new link, not a heading.
+      emit(dom$navigationInner.all().find(node=>node.tagName==='BUTTON'),'click');
+      assert.deepEqual(headings().map(node=>node.textContent),['Foundations','Geometry']);
+      assert.deepEqual(outlineLinks().map(link=>link.dataset.navigationNodeId),['logic','sets','geometry','topology']);
+      assert.equal(document.activeElement,outlineLinks()[0]);
+      assert.deepEqual(decluttered.at(-1).ids,['logic','sets','geometry','topology']);
+      assert.equal(JSON.stringify(sharedIndex),before);
+    """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
+
+
+def test_area_headings_name_the_regions_the_map_draws() -> None:
+    """The outline restates project_map.py's region rule in JS; this checks the two agree on a book of chapters."""
+    records: list[dict[str, object]] = [{"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False}]
+    for chapter, area in [("logic", "Foundations"), ("sets", "Foundations"), ("algebra", "Algebra"), ("geometry", "Geometry"),
+                          ("topology", "Geometry"), ("notes", None), ("analysis", "Analysis"), ("probability", "Analysis"),
+                          ("tables", None)]:
+        records.append({"id": chapter, "kind": "scope", "title": chapter, "parent": "roadmap", "result": False,
+                        **({"area": area} if area else {})})
+        records.append({"id": f"{chapter}/result", "kind": "node", "title": "Result", "parent": chapter, "result": True,
+                        "status": "fully_proved"})
+    # A statement written straight into the root labels itself with its area; it is no chapter of that area.
+    records.append({"id": "lemma", "kind": "node", "title": "Lemma", "parent": "roadmap", "result": True,
+                    "status": "fully_proved", "area": "Algebra"})
+    files = project_map.build_project_map(records, [])
+    regions = {}
+    for region in files["index.json"]["regions"]:
+        if region["id"].startswith("region:"):
+            part = files[f"parts/{project_map.part_file(region['id'])}"]["parts"][region["id"]]
+            regions[region["title"]] = sorted(child["id"] for child in part["children"])
+    # The map gathers the chapters without an area, and its part for the root's own statements, under "Other";
+    # the outline leaves them where they are.
+    assert regions.pop("Other") == ["notes", "roadmap/~results", "tables"]
+    nodes = [{**record, "scope": record["id"] if record["kind"] == "scope" else record["parent"]} for record in records]
+    _run("const nodes=" + json.dumps(nodes) + ",regions=" + json.dumps(regions) + ";\n" + r"""
+      const headed={},unheaded=[];let heading=null;
+      for(const entry of outlineProjection(nodes,'roadmap',null,500).entries) {
+        if(entry.depth>0) {headed[heading].push(entry.node.id);continue;}
+        heading=entry.collection?entry.node.title:null;
+        if(heading) headed[heading]=[];else unheaded.push(entry.node.id);
+      }
+      Object.values(headed).forEach(members=>members.sort());
+      assert.deepEqual(headed,regions);assert.deepEqual(unheaded,['algebra','notes','tables','lemma']);
+    """, ["outlineProjection"])
 
 
 def test_site_home_breadcrumb_is_one_current_item_and_topic_trail_has_a_native_home_link() -> None:

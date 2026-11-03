@@ -92,10 +92,11 @@ Frontmatter is optional; a container that only supplies prose and placement
 needs none.
 
 The optional `area` field groups the chapters, and deeper containers naming a
-chapter's area, into regions of the project map; on a leaf it only labels the
-article. Use mathematical areas such as `Foundations` or `Geometry & Topology`,
-never repository or workflow buckets such as `MathlibExt` or `catalog-01`.
-Autoform does not guess areas from paths, imports, or titles.
+chapter's area, into regions of the project map, and Topics heads each area's
+chapters with its name; on a leaf it only labels the article. Use mathematical
+areas such as `Foundations` or `Geometry & Topology`, never repository or
+workflow buckets such as `MathlibExt` or `catalog-01`. Autoform does not guess
+areas from paths, imports, or titles.
 
 An optional container-only `navigation` role separates mathematical topics
 from repository organization:
