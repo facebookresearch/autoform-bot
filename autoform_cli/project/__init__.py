@@ -9,8 +9,6 @@ from .catalog import (
     SharedLibrary,
     load_library_catalog,
     load_release_catalog,
-    parse_library_catalog,
-    parse_release_catalog,
 )
 from .create import PROJECT_CREATION_SCHEMA, ProjectCreateError, ProjectCreateResult, create_project
 from .inspect import PROJECT_INSPECTION_SCHEMA, ProjectInspection, inspect_project
@@ -31,6 +29,4 @@ __all__ = [
     "inspect_project",
     "load_library_catalog",
     "load_release_catalog",
-    "parse_library_catalog",
-    "parse_release_catalog",
 ]

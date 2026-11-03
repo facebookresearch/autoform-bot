@@ -8,9 +8,9 @@ requested parent is reopened without following links and its device, inode,
 and owner rechecked. A mismatch before publication preserves the stage; a later
 one reports where publication was observed. Platforms without descriptor
 traversal, advisory locking, directory sync, or atomic no-replace rename fail
-closed. A private creation bundle adds generated production-module roots, and
-its release identity is cross-checked with the public catalog and its complete
-Lake manifest before any filesystem state is created.
+closed. A catalog release's bundled Lake manifest becomes the project's
+``lake-manifest.json``; the test suite checks the bundled data, so creation
+reads it without revalidating it.
 
 Exactly one of several concurrent creators of the same target wins. The
 published tree has modes 0755 for directories and executables and 0644 for
@@ -30,13 +30,10 @@ import re
 import secrets
 import stat
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
-from urllib.parse import urlsplit
 
-from .._strict_json import reject_json_constant, strict_json_object
-from ..graph import _parse_node
 from ..scaffold import (
     ScaffoldError,
     _FULL_SHA,
@@ -50,13 +47,9 @@ from ..scaffold import (
 from .catalog import SharedLibrary, SupportedRelease, load_library_catalog, load_release_catalog
 
 PROJECT_CREATION_SCHEMA = "autoform-project-creation/v1"
-_CREATION_RELEASE_SCHEMA = "autoform-project-creation-release/v1"
 _PACKAGE_NAME = re.compile(r"[A-Z][A-Za-z0-9]*")
 _RESERVED_PACKAGE_NAMES = frozenset({"Prop", "Sort", "Type"})
-_RELEASE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _STAGE_ATTEMPTS = 32
-_TOOLCHAIN_MODULE_ROOTS = frozenset({"Init", "Lake", "Lean", "Std"})
-_MATHLIB_PRODUCTION_ROOTS = frozenset({"Archive", "Counterexamples", "Mathlib"})
 # Bounded components keep int() conversion and the derived default revision small.
 _LEAN_TOOLCHAIN = re.compile(
     r"(?:leanprover/lean4:)?(?P<tag>v(?P<major>0|[1-9][0-9]{0,8})\.(?P<minor>0|[1-9][0-9]{0,8})"
@@ -70,17 +63,19 @@ _LONGEST_LAKE_ARTIFACT_SUFFIX = ".olean.private.hash"
 _MINIMUM_LEAN = (4, 27, 0)
 _LOCK_WAIT_SECONDS = 30.0
 _LOCK_POLL_SECONDS = 0.05
-# Mathlib library roots that no creation descriptor lists: `docs` (every tag from
-# v4.27.0, and outside the descriptor root grammar), LongestPole (v4.27.0), and
-# Wanted (v4.34.1 on).
-_MATHLIB_EXTRA_ROOTS = frozenset({"docs", "LongestPole", "Wanted"})
-# The toolchain library's top-level entries besides _TOOLCHAIN_MODULE_ROOTS, which
-# every bundle lists. The CI audit refuses a root module under any of them, since
-# it loads the toolchain's library first.
-_TOOLCHAIN_EXTRA_ROOTS = frozenset({"LakeMain", "Leanc", "LeanChecker", "LeanIR"})
-_MANIFEST_FIELDS = frozenset({"version", "packagesDir", "packages", "name", "lakeDir", "fixedToolchain"})
-_MANIFEST_PACKAGE_FIELDS = frozenset(
-    {"url", "type", "subDir", "scope", "rev", "name", "manifestFile", "inputRev", "inherited", "configFile"}
+# Module roots a package must not shadow, compared case-folded. The toolchain's
+# top-level library entries: the CI audit refuses a root module under any of them,
+# since it loads the toolchain's library first. Then the library roots of Mathlib
+# and its dependencies at every bundled release, plus Mathlib's `docs` (every tag
+# from v4.27.0), LongestPole (v4.27.0) and Wanted (v4.34.1 on). Add a root here
+# when a release or toolchain brings one; `tests/test_project_create.py` checks
+# only that every bundled package's name is here.
+_RESERVED_ROOTS = frozenset(
+    {
+        "Init", "Lake", "LakeMain", "Lean", "LeanChecker", "Leanc", "LeanIR", "Std",
+        "Aesop", "Archive", "Batteries", "Cache", "Cli", "Counterexamples", "docs", "ImportGraph",
+        "LeanSearchClient", "LongestPole", "Mathlib", "MathlibTest", "Plausible", "ProofWidgets", "Qq", "Wanted",
+    }
 )
 _UNSAFE_PARENT_MESSAGE = (
     "The target parent is group- or world-writable and is not a sticky directory owned by you "
@@ -89,10 +84,7 @@ _UNSAFE_PARENT_MESSAGE = (
 _FAILED_MESSAGE = "Project creation failed; no project was created."
 _EXISTS_MESSAGE = "The target already exists; project new never overwrites it."
 _CONTRACTS_MESSAGE = "The generated project did not satisfy Autoform's project contracts."
-_STAGED_MESSAGE = "The staged project did not satisfy Autoform's project contracts."
-_DESCRIPTOR_MESSAGE = "The bundled project-creation release metadata is invalid."
 _MANIFEST_MESSAGE = "The bundled release manifest is invalid."
-_LIBRARY_MESSAGE = "The bundled library catalog entry is invalid."
 _NO_RENAME_MESSAGE = "This platform cannot atomically publish a new project without replacement."
 
 
@@ -145,20 +137,6 @@ class ProjectCreateResult:
 
 
 @dataclass(frozen=True, slots=True)
-class _ReleaseBundle:
-    """Immutable release bytes and generated production-module metadata."""
-
-    manifest_bytes: bytes
-    module_roots: frozenset[str]
-
-
-@dataclass(frozen=True, slots=True)
-class _CreationReleaseDescriptor:
-    manifest_resource: str
-    module_roots: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class _ProjectVersion:
     """The versions a new project requires; *release* is None outside the catalog."""
 
@@ -191,23 +169,16 @@ def create_project(
     package_name = _validate_package(package, requested.parent)
     shared = _resolve_library(library, release_id, lean_toolchain, mathlib_rev)
     version = _resolve_version(shared.release if shared is not None else release_id, lean_toolchain, mathlib_rev)
-    # Unlisted pairs still reserve the recommended release's module roots.
-    roots_bundle = _load_release_bundle(version.release or load_release_catalog().recommended)
-    _validate_package_for_release(package_name, roots_bundle, shared)
-    release_bundle = roots_bundle if version.release is not None else None
-    if shared is not None:
-        release_bundle = _with_library(roots_bundle, shared)
+    _validate_package_roots(package_name, shared)
+    manifest = None if version.release is None else _release_manifest(version.release, shared)
     warnings = _version_warnings(version)
     try:
         # Pin discovery validates this exact snapshot, and the plan keeps
         # these retained bytes rather than reopening the template tree.
         templates = _read_templates(_TEMPLATES)
         workflow_source, workflow_ref = _resolve_workflow_pin(autoform_source, autoform_ref, templates=templates)
-        plan = _build_project_plan(
-            package_name, version, release_bundle, templates, workflow_source, workflow_ref, shared
-        )
+        plan = _build_project_plan(package_name, version, manifest, templates, workflow_source, workflow_ref, shared)
         tree = _plan_tree(plan)
-        _validate_roadmap_plan(plan)
     except (OSError, ScaffoldError, UnicodeError):
         raise ProjectCreateError("project-create-validation-failed", _CONTRACTS_MESSAGE) from None
     parent_descriptor = _open_parent(requested.parent)
@@ -408,24 +379,22 @@ def _resolve_library(
     return library
 
 
-def _with_library(bundle: _ReleaseBundle, library: SharedLibrary) -> _ReleaseBundle:
-    """*bundle* with *library*'s resolved packages locked too, in the order `lake update` writes them."""
+def _release_manifest(release: SupportedRelease, library: SharedLibrary | None) -> dict[str, object]:
+    """*release*'s bundled Lake manifest, with *library*'s packages locked in the order `lake update` writes them."""
 
-    added = list(library.manifest_packages)
-    payload = json.loads(bundle.manifest_bytes)
-    packages = payload["packages"]
-    if not all(_valid_manifest_package(entry) for entry in added):
-        raise ProjectCreateError("project-create-validation-failed", _LIBRARY_MESSAGE)
-    names = [entry["name"].casefold() for entry in (*packages, *added)]
-    if len(set(names)) != len(names):
-        raise ProjectCreateError("project-create-validation-failed", _LIBRARY_MESSAGE)
-    payload["packages"] = [
-        *(entry for entry in added if not entry["inherited"]),
-        *(entry for entry in packages if not entry["inherited"]),
-        *(entry for entry in added if entry["inherited"]),
-        *(entry for entry in packages if entry["inherited"]),
-    ]
-    return replace(bundle, manifest_bytes=json.dumps(payload).encode())
+    try:
+        payload = json.loads(files("autoform_cli.project").joinpath(f"release-manifest-{release.id}.json").read_bytes())
+    except (OSError, ValueError):
+        raise ProjectCreateError("project-create-validation-failed", _MANIFEST_MESSAGE) from None
+    if library is not None:
+        added, packages = library.manifest_packages, payload["packages"]
+        payload["packages"] = [
+            *(entry for entry in added if not entry["inherited"]),
+            *(entry for entry in packages if not entry["inherited"]),
+            *(entry for entry in added if entry["inherited"]),
+            *(entry for entry in packages if entry["inherited"]),
+        ]
+    return payload
 
 
 def _valid_mathlib_revision(revision: str) -> bool:
@@ -467,9 +436,8 @@ def _version_warnings(version: _ProjectVersion) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(warnings))
 
 
-def _validate_package_for_release(package: str, bundle: _ReleaseBundle, library: SharedLibrary | None = None) -> None:
-    reserved = bundle.module_roots | _MATHLIB_EXTRA_ROOTS | _TOOLCHAIN_EXTRA_ROOTS
-    if package.casefold() in {root.casefold() for root in reserved}:
+def _validate_package_roots(package: str, library: SharedLibrary | None) -> None:
+    if package.casefold() in {root.casefold() for root in _RESERVED_ROOTS}:
         raise ProjectCreateError(
             "project-name-invalid",
             "Project name must not shadow a module root used by Lean, Mathlib, or Mathlib's dependencies.",
@@ -757,7 +725,7 @@ def _publication_state(
 def _build_project_plan(
     package: str,
     version: _ProjectVersion,
-    release_bundle: _ReleaseBundle | None,
+    manifest: dict[str, object] | None,
     templates: tuple[tuple[str, bytes, int], ...],
     autoform_source: str,
     autoform_ref: str,
@@ -795,8 +763,8 @@ def _build_project_plan(
     ]
     # Only a catalog release has a resolved manifest; `lake update` writes one
     # for any other pair.
-    if release_bundle is not None:
-        files.append(_ScaffoldFile("lake-manifest.json", _lake_manifest(package, release_bundle), 0o644))
+    if manifest is not None:
+        files.append(_ScaffoldFile("lake-manifest.json", _lake_manifest(package, manifest), 0o644))
     # The shared plan has already reduced installer modes to Git's executable
     # bit, so `init` and `project new` publish the same canonical modes.
     scaffold_files, _ = _scaffold_plan(
@@ -806,180 +774,19 @@ def _build_project_plan(
     return tuple(sorted(files, key=lambda item: item.relative))
 
 
-def _load_release_bundle(release: SupportedRelease) -> _ReleaseBundle:
-    try:
-        descriptor = _load_creation_release_descriptor(release)
-        manifest_bytes = files("autoform_cli.project").joinpath(descriptor.manifest_resource).read_bytes()
-        return _parse_release_bundle(manifest_bytes, release, descriptor.module_roots)
-    except ProjectCreateError:
-        raise
-    except (OSError, TypeError, UnicodeError, ValueError, RecursionError, MemoryError):
-        raise ProjectCreateError("project-create-validation-failed", _MANIFEST_MESSAGE) from None
-
-
-def _load_creation_release_descriptor(release: SupportedRelease) -> _CreationReleaseDescriptor:
-    invalid = ProjectCreateError("project-create-validation-failed", _DESCRIPTOR_MESSAGE)
-    if _RELEASE_ID.fullmatch(release.id) is None:
-        raise invalid
-    try:
-        payload = _load_strict_json(
-            files("autoform_cli.project").joinpath(f"creation-release-{release.id}.json").read_bytes()
-        )
-    except (OSError, TypeError, UnicodeError, ValueError, RecursionError, MemoryError):
-        raise invalid from None
-    expected_release = {
-        "id": release.id,
-        "lean_toolchain": release.lean_toolchain,
-        "mathlib_git": release.mathlib_git,
-        "mathlib_rev": release.mathlib_rev,
-        "mathlib_commit": release.mathlib_commit,
-    }
-    if type(payload) is not dict or set(payload) != {"schema", "release", "lake_manifest", "production_module_roots"}:
-        raise invalid
-    resource, roots = payload["lake_manifest"], payload["production_module_roots"]
-    if (
-        payload["schema"] != _CREATION_RELEASE_SCHEMA
-        or payload["release"] != expected_release
-        or type(resource) is not str
-        or not resource.endswith(".json")
-        or not _safe_relative(resource)
-        or any(ord(character) >= 0xD800 for character in resource)
-        or "/" in resource
-        or type(roots) is not list
-        or not roots
-        or any(type(root) is not str or _PACKAGE_NAME.fullmatch(root) is None for root in roots)
-        or len({root.casefold() for root in roots}) != len(roots)
-    ):
-        raise invalid
-    return _CreationReleaseDescriptor(resource, tuple(roots))
-
-
-def _parse_release_bundle(
-    manifest_bytes: bytes, release: SupportedRelease, module_roots: tuple[str, ...]
-) -> _ReleaseBundle:
-    invalid = ProjectCreateError("project-create-validation-failed", _MANIFEST_MESSAGE)
-    payload = _load_strict_json(manifest_bytes)
-    if (
-        type(payload) is not dict
-        or set(payload) != _MANIFEST_FIELDS
-        or payload["version"] != "1.2.0"
-        or payload["packagesDir"] != ".lake/packages"
-        or payload["name"] != ""
-        or payload["lakeDir"] != ".lake"
-        or payload["fixedToolchain"] is not False
-        or type(payload["packages"]) is not list
-        or not payload["packages"]
-        or not all(_valid_manifest_package(entry) for entry in payload["packages"])
-    ):
-        raise invalid
-    packages = payload["packages"]
-    roots = frozenset(module_roots)
-    folded_roots = {root.casefold() for root in roots}
-    names = [entry["name"].casefold() for entry in packages]
-    direct = [entry for entry in packages if entry["inherited"] is False]
-    if (
-        len(set(names)) != len(names)
-        or any(name not in folded_roots for name in names)
-        or not _TOOLCHAIN_MODULE_ROOTS | _MATHLIB_PRODUCTION_ROOTS <= roots
-        or len(direct) != 1
-        or direct[0]["name"] != "mathlib"
-        or direct[0]["url"] != release.mathlib_git
-        or direct[0]["inputRev"] != release.mathlib_rev
-        or direct[0]["rev"] != release.mathlib_commit
-        or direct[0]["subDir"] is not None  # releases load Mathlib from its repository root
-        or direct[0]["configFile"] != "lakefile.lean"
-        or direct[0]["manifestFile"] != "lake-manifest.json"
-    ):
-        raise ProjectCreateError(
-            "project-create-validation-failed", "The bundled release manifest does not match the release catalog."
-        )
-    return _ReleaseBundle(manifest_bytes=manifest_bytes, module_roots=roots)
-
-
-def _valid_manifest_package(entry: object) -> bool:
-    if type(entry) is not dict or set(entry) != _MANIFEST_PACKAGE_FIELDS:
-        return False
-    input_revision = entry["inputRev"]
-    return (
-        type(entry["url"]) is str
-        and _safe_https_git_url(entry["url"])
-        and entry["type"] == "git"
-        and type(entry["name"]) is str
-        and re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", entry["name"]) is not None
-        and type(entry["scope"]) is str
-        and type(entry["rev"]) is str
-        and _FULL_SHA.fullmatch(entry["rev"]) is not None
-        and type(input_revision) is str
-        and bool(input_revision)
-        and all(ord(character) >= 0x20 for character in input_revision)
-        and type(entry["inherited"]) is bool
-        and _safe_relative(entry["configFile"])
-        and _safe_relative(entry["manifestFile"])
-        and (entry["subDir"] is None or _safe_relative(entry["subDir"]))
-    )
-
-
-def _safe_https_git_url(value: str) -> bool:
-    try:
-        parsed = urlsplit(value)
-    except ValueError:
-        return False
-    return (
-        parsed.scheme == "https"
-        and bool(parsed.hostname)
-        and parsed.username is None
-        and parsed.password is None
-        and not parsed.query
-        and not parsed.fragment
-        and parsed.path not in {"", "/"}
-    )
-
-
-def _safe_relative(value: object) -> bool:
-    """Whether *value* is a normalized relative POSIX path with printable components."""
-
-    if (
-        type(value) is not str
-        or "\\" in value
-        or any(ord(character) < 0x20 or 0xD800 <= ord(character) <= 0xDFFF for character in value)
-    ):
-        return False
-    path = PurePosixPath(value)
-    return (
-        value not in {"", ".", ".."}
-        and not path.is_absolute()
-        and path.as_posix() == value
-        and all(part not in {"", ".", ".."} for part in path.parts)
-    )
-
-
-def _load_strict_json(data: bytes) -> object:
-    """Parse JSON, rejecting duplicate keys and NaN or Infinity."""
-
-    return json.loads(data, object_pairs_hook=strict_json_object, parse_constant=reject_json_constant)
-
-
-def _lake_manifest(package: str, bundle: _ReleaseBundle) -> bytes:
-    payload = json.loads(bundle.manifest_bytes)
-    payload["name"] = package
-    return (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+def _lake_manifest(package: str, manifest: dict[str, object]) -> bytes:
+    return (json.dumps({**manifest, "name": package}, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
 def _plan_tree(plan: tuple[_ScaffoldFile, ...]) -> dict[str, object]:
-    """Nest the plan by path component, rejecting unsafe paths and file/directory collisions."""
+    """Nest the plan by path component."""
 
     tree: dict[str, object] = {}
     for item in plan:
-        if not _safe_relative(item.relative) or item.mode not in {0o644, 0o755}:
-            raise ProjectCreateError("project-create-validation-failed", _CONTRACTS_MESSAGE)
         *directories, name = PurePosixPath(item.relative).parts
         branch = tree
         for part in directories:
             branch = branch.setdefault(part, {})
-            if not isinstance(branch, dict):
-                raise ProjectCreateError("project-create-validation-failed", _CONTRACTS_MESSAGE)
-        if name in branch:
-            raise ProjectCreateError("project-create-validation-failed", _CONTRACTS_MESSAGE)
         branch[name] = item
     return tree
 
@@ -1072,22 +879,6 @@ def _verify_project_tree(root_descriptor: int, tree: dict[str, object]) -> None:
             raise OSError(errno.ESTALE, "project directory changed")
 
     verify_directory(root_descriptor, tree)
-
-
-def _validate_roadmap_plan(plan: tuple[_ScaffoldFile, ...]) -> None:
-    invalid = ProjectCreateError("project-create-validation-failed", _STAGED_MESSAGE)
-    roadmap = [
-        item for item in plan if item.relative.startswith("blueprint/roadmap/") and item.relative.endswith(".md")
-    ]
-    if len(roadmap) != 1 or roadmap[0].relative != "blueprint/roadmap/README.md":
-        raise invalid
-    try:
-        text = roadmap[0].content.decode("utf-8")
-    except UnicodeError:
-        raise invalid from None
-    parsed, issues = _parse_node("roadmap", Path("roadmap/README.md"), text)
-    if issues or parsed is None or parsed.statement_targets or parsed.proof_targets:
-        raise invalid
 
 
 def _rename_noreplace(source_parent_descriptor: int, source: str, target_parent_descriptor: int, target: str) -> None:

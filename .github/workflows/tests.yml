@@ -184,7 +184,7 @@ jobs:
           set -euo pipefail
           timeout --signal=TERM --kill-after=30s 10m \
             elan toolchain install "$(tr -d '\r\n' < tests/fixtures/library-project/lean-toolchain)"
-      - name: Build a project from the bundled creation release
+      - name: Build a project from a bundled release
         run: |
           set -euo pipefail
           generated_project="$RUNNER_TEMP/autoform-created-project"
