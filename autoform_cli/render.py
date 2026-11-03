@@ -290,6 +290,21 @@ def _static_asset(name: str) -> str:
         raise PublicationError([f"packaged render asset is unavailable: {name}"]) from error
 
 
+def _map_assets(title: str) -> tuple[tuple[str, str], ...]:
+    """The whole-project map's script, style and page, for a roadmap called ``title``."""
+    return (
+        # The layout module ships ahead of the controller in one file, so the page makes one request for both.
+        (MAP_SCRIPT, _static_asset("project-map-layout.js") + "\n" + _static_asset("project-map.js")),
+        (MAP_STYLE, _static_asset("project-map.css")),
+        # One standalone page over the per-level files beside it.
+        (MAP_PAGE, project_map.render_page(
+            title=title, map_base=_TO_ROOT + project_map.MAP_DIRECTORY + "/",
+            routes=_TO_ROOT + graph_pages.SEARCH_INDEX, home=_TO_ROOT, script=_TO_ROOT + MAP_SCRIPT,
+            style=_TO_ROOT + MAP_STYLE, mathjax=_TO_ROOT + MATHJAX_SCRIPT,
+        )),
+    )
+
+
 def _logo() -> str:
     """The Autoform mark: the smallest blueprint there is, drawn as an A.
 
@@ -1247,15 +1262,7 @@ def _render_pages(
         (LIVE_SCRIPT, _static_asset("blueprint-live.js")),
         (DAG_SCRIPT, explorer_script),
         (DAG_STYLE, dag_viewer._STYLE),
-        # The layout module ships ahead of the controller in one file, so the page makes one request for both.
-        (MAP_SCRIPT, _static_asset("project-map-layout.js") + "\n" + _static_asset("project-map.js")),
-        (MAP_STYLE, _static_asset("project-map.css")),
-        # The whole-project map: one standalone page over the per-level files beside it.
-        (MAP_PAGE, project_map.render_page(
-            title=graph_views.group_title(graph, "roadmap"), map_base=_TO_ROOT + project_map.MAP_DIRECTORY + "/",
-            routes=_TO_ROOT + graph_pages.SEARCH_INDEX, home=_TO_ROOT, script=_TO_ROOT + MAP_SCRIPT,
-            style=_TO_ROOT + MAP_STYLE, mathjax=_TO_ROOT + MATHJAX_SCRIPT,
-        )),
+        *_map_assets(graph_views.group_title(graph, "roadmap")),
         (LOGO, _logo()),
     ):
         asset = destination / relative
