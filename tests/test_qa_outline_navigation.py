@@ -312,6 +312,10 @@ def test_outline_heads_each_area_run_with_its_title() -> None:
       assert.deepEqual(shape(nodes,'topology',3),[['region:Geometry',0,true],['topology',1,false]]);
       assert.deepEqual(shape(nodes,'topology',5),[['region:Foundations',0,true],['logic',1,false],['sets',1,false],
         ['region:Geometry',0,true],['topology',1,false]]);
+      // A chapter without an area ends a run, so its area's next chapter is headed again rather than set under it.
+      assert.deepEqual(shape([root,chapter('c0','Algebra'),chapter('c1'),chapter('c2','Algebra'),chapter('c3','Geometry'),
+        chapter('c4','Geometry')],'roadmap',120),[['region:Algebra',0,true],['c0',1,false],['c1',0,false],
+        ['region:Algebra',0,true],['c2',1,false],['region:Geometry',0,true],['c3',1,false],['c4',1,false]]);
       // Areas head nothing until the chapters name two of them and one holds two chapters.
       for(const areas of [[null,null],['Algebra','Algebra'],['Algebra','Algebra',null],['Algebra','Geometry']])
         assert.deepEqual(shape([root,...areas.map((area,index)=>chapter('c'+index,area))],'roadmap',120),
@@ -343,38 +347,85 @@ def test_area_headings_are_text_and_keep_the_current_link_and_paging_focus() -> 
     """, _OUTLINE_CALLBACKS, _OUTLINE_PEERS)
 
 
-def test_area_headings_name_the_regions_the_map_draws() -> None:
-    """The outline restates project_map.py's region rule in JS; this checks the two agree on a book of chapters."""
+@pytest.mark.parametrize(
+    ("rows", "regions", "headings", "unheaded"),
+    [
+        pytest.param(
+            [("logic", "roadmap", "Foundations", None), ("sets", "roadmap", "Foundations", None),
+             ("algebra", "roadmap", "Algebra", None), ("lemma", "roadmap", "Algebra", "statement"),
+             ("geometry", "roadmap", "Geometry", None), ("topology", "roadmap", "Geometry", None),
+             ("notes", "roadmap", None, None), ("analysis", "roadmap", "Analysis", None),
+             ("probability", "roadmap", "Analysis", None), ("tables", "roadmap", None, None)],
+            # The map gathers the chapters without an area, with its part for the root's own statements, under "Other".
+            {"Foundations": ["logic", "sets"], "Geometry": ["geometry", "topology"], "Analysis": ["analysis", "probability"],
+             "Other": ["notes", "roadmap/~results", "tables"]},
+            {"Foundations": ["logic", "sets"], "Geometry": ["geometry", "topology"], "Analysis": ["analysis", "probability"]},
+            ["algebra", "lemma", "notes", "tables"],
+            id="chapters",
+        ),
+        pytest.param(
+            [("a1", "roadmap", "A", None), ("a2", "roadmap", "A", None), ("b1", "roadmap", "B", None), ("b2", "roadmap", "B", None)],
+            {"A": ["a1", "a2"], "B": ["b1", "b2"]}, {"A": ["a1", "a2"], "B": ["b1", "b2"]}, [],
+            id="two-areas",
+        ),
+        pytest.param(
+            [("a1", "roadmap", "A", None), ("a2", "roadmap", "A", None), ("x", "roadmap", None, None), ("y", "roadmap", None, None)],
+            {}, {}, ["a1", "a2", "x", "y"],
+            id="one-area",
+        ),
+        pytest.param(
+            [("a1", "roadmap", "A", None), ("a2", "roadmap", "A", None), ("b1", "roadmap", "B", None),
+             ("library", "roadmap", "B", "collection"), ("c1", "library", "B", None), ("c2", "library", "B", None),
+             ("notes", "roadmap", None, "source"), ("s1", "notes", "A", None), ("s2", "notes", "C", None),
+             ("s3", "notes", "C", None)],
+            # The map flattens the collection, so its chapters join B, and moves s1, which names a chapter's area, into A.
+            # Topics keeps the collection's subhead and leaves the topics it lifts out of the source track unheaded.
+            {"A": ["a1", "a2", "s1"], "B": ["b1", "c1", "c2"]}, {"A": ["a1", "a2"]}, ["b1", "library", "s1", "s2", "s3"],
+            id="collection-and-source-track",
+        ),
+        pytest.param(
+            [("logic", "roadmap", "Foundations", None), ("sets", "roadmap", "Foundations", None),
+             ("track", "roadmap", None, "source"), ("geometry", "track", "Geometry", None), ("topology", "track", "Geometry", None)],
+            {}, {}, ["logic", "sets", "geometry", "topology"],
+            id="areas-only-inside-a-source-track",
+        ),
+    ],
+)
+def test_area_headings_name_the_regions_the_map_draws(
+    rows: list[tuple[str, str, str | None, str | None]], regions: dict[str, list[str]], headings: dict[str, list[str]],
+    unheaded: list[str],
+) -> None:
+    """The outline restates project_map.py's region rule in JS: each book pins both, and every heading is a map region."""
     records: list[dict[str, object]] = [{"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False}]
-    for chapter, area in [("logic", "Foundations"), ("sets", "Foundations"), ("algebra", "Algebra"), ("geometry", "Geometry"),
-                          ("topology", "Geometry"), ("notes", None), ("analysis", "Analysis"), ("probability", "Analysis"),
-                          ("tables", None)]:
-        records.append({"id": chapter, "kind": "scope", "title": chapter, "parent": "roadmap", "result": False,
-                        **({"area": area} if area else {})})
-        records.append({"id": f"{chapter}/result", "kind": "node", "title": "Result", "parent": chapter, "result": True,
-                        "status": "fully_proved"})
-    # A statement written straight into the root labels itself with its area; it is no chapter of that area.
-    records.append({"id": "lemma", "kind": "node", "title": "Lemma", "parent": "roadmap", "result": True,
-                    "status": "fully_proved", "area": "Algebra"})
+    for node_id, parent, area, role in rows:
+        record: dict[str, object] = {"id": node_id, "title": node_id, "parent": parent, **({"area": area} if area else {})}
+        if role == "statement":
+            records.append({**record, "kind": "node", "result": True, "status": "fully_proved"})
+            continue
+        records.append({**record, "kind": "scope", "result": False, **({"navigation": role} if role else {})})
+        if role is None:
+            records.append({"id": f"{node_id}/result", "kind": "node", "title": "Result", "parent": node_id, "result": True,
+                            "status": "fully_proved"})
     files = project_map.build_project_map(records, [])
-    regions = {}
+    drawn = {}
     for region in files["index.json"]["regions"]:
         if region["id"].startswith("region:"):
             part = files[f"parts/{project_map.part_file(region['id'])}"]["parts"][region["id"]]
-            regions[region["title"]] = sorted(child["id"] for child in part["children"])
-    # The map gathers the chapters without an area, and its part for the root's own statements, under "Other";
-    # the outline leaves them where they are.
-    assert regions.pop("Other") == ["notes", "roadmap/~results", "tables"]
+            drawn[region["title"]] = sorted(child["id"] for child in part["children"])
+    assert drawn == regions
     nodes = [{**record, "scope": record["id"] if record["kind"] == "scope" else record["parent"]} for record in records]
-    _run("const nodes=" + json.dumps(nodes) + ",regions=" + json.dumps(regions) + ";\n" + r"""
+    expected = {"regions": regions, "headings": headings, "unheaded": unheaded}
+    _run("const nodes=" + json.dumps(nodes) + ",expected=" + json.dumps(expected) + ";\n" + r"""
       const headed={},unheaded=[];let heading=null;
       for(const entry of outlineProjection(nodes,'roadmap',null,500).entries) {
-        if(entry.depth>0) {headed[heading].push(entry.node.id);continue;}
-        heading=entry.collection?entry.node.title:null;
-        if(heading) headed[heading]=[];else unheaded.push(entry.node.id);
+        if(entry.depth===0) {
+          heading=entry.node.id.startsWith('region:')?entry.node.title:null;
+          if(heading) headed[heading]=[];else unheaded.push(entry.node.id);
+        } else if(heading&&entry.depth===1) headed[heading].push(entry.node.id);
       }
-      Object.values(headed).forEach(members=>members.sort());
-      assert.deepEqual(headed,regions);assert.deepEqual(unheaded,['algebra','notes','tables','lemma']);
+      assert.deepEqual(headed,expected.headings);assert.deepEqual(unheaded,expected.unheaded);
+      for(const [title,members] of Object.entries(headed))
+        assert(members.every(id=>(expected.regions[title]||[]).includes(id)),'Every heading is one of the map\'s regions');
     """, ["outlineProjection"])
 
 

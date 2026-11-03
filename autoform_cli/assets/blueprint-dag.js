@@ -136,10 +136,12 @@
 
   function outlineProjection(nodes, currentScope, currentNode, limit, byId) {
     var records = byId || new Map(nodes.map(function (node) { return [node.id, node]; })), children = new Map(), parents = new Map();
+    var sourced = new Set();
     function parentOf(node) {
       if (parents.has(node.id)) return parents.get(node.id);
       var parent = records.get(node.parent), seen = new Set([node.id]);
       while (parent && !seen.has(parent.id) && ["transparent", "source"].indexOf(parent.navigation) >= 0) {
+        if (parent.navigation === "source") sourced.add(node.id);
         seen.add(parent.id); parent = records.get(parent.parent);
       }
       var id = parent && !seen.has(parent.id) ? parent.id : null; parents.set(node.id, id); return id;
@@ -161,13 +163,14 @@
     }
     function walk(id, depth) { (children.get(id) || []).forEach(function (node) { visit(node, depth); }); }
     // As the map groups chapters into regions (project_map.py), Topics heads each run of an area's chapters with the
-    // area's name, once the chapters name two areas and for an area of two chapters or more. Only the topics at the top
-    // count: a statement's area only labels it, and a collection keeps its own subhead. A chapter without an area keeps
-    // its place unheaded, where the map gathers two or more of them under "Other", so every heading is a name the
-    // project wrote.
+    // area's name, once the chapters name two areas and for an area of two chapters or more. Only the topics written at
+    // the top count: a statement's area only labels it, a collection keeps its own subhead, and the map keeps a source
+    // track whole, so the topics lifted out of one stay unheaded. A chapter without an area keeps its place unheaded,
+    // where the map gathers two or more of them under "Other", so every heading is a name the project wrote.
     var chapters = children.get(root ? root.id : null) || [], sizes = new Map(), heading = null;
     var areas = chapters.map(function (node) {
-      return node.scope === node.id && node.navigation !== "collection" && node.area ? String(node.area) : "";
+      var chapter = node.scope === node.id && node.navigation !== "collection" && !sourced.has(node.id);
+      return chapter && node.area ? String(node.area) : "";
     });
     areas.forEach(function (area) { if (area) sizes.set(area, (sizes.get(area) || 0) + 1); });
     var headed = function (area) { return sizes.size >= 2 && sizes.get(area) >= 2; };
