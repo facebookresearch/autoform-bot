@@ -265,12 +265,6 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'data-graph-src="../../dependencies/chapters/infimum-loss.json"' in chapter
     assert re.search(r'<details class="bp-dependencies"><summary>(Uses [1-9]\d*|Used by [1-9]\d*)', chapter)
     assert "Uses 0" not in chapter and "Used by 0" not in chapter
-    assert '<nav class="bp-book-nav" aria-label="Blueprint chapters">' in chapter
-    assert (
-        'class="bp-book-nav-link bp-book-nav-previous" '
-        'href="../full-supervision/index.html"'
-    ) in chapter
-    assert 'bp-book-nav-next' not in chapter
 
     support_path = site / "roadmap/full-supervision/README.md"
     support = support_path.read_text(encoding="utf-8")
@@ -282,11 +276,6 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'class="bp-thmwrapper theorem-style-definition bp-fully_proved"' in support
     assert 'class="bp-thmwrapper theorem-style-plain' not in support
     assert '<a class="bp-code-link"' in support
-    assert 'class="bp-book-nav-link bp-book-nav-previous" href="../index.html"' in support
-    assert (
-        'class="bp-book-nav-link bp-book-nav-next" '
-        'href="../infimum-loss/index.html"'
-    ) in support
 
     for href in _HREF.findall(chapter):
         if href.startswith(("http", "#")):
@@ -375,8 +364,6 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "<strong>4</strong> fully proved" in milestone
     coverage = (site / "coverage/README.md").read_text(encoding="utf-8")
     assert "Experiments and narrative material" in coverage
-    graph_page = (site / "dependencies.md").read_text(encoding="utf-8")
-    assert "bp-book-nav" not in graph_page
 
     mkdocs = (example / "mkdocs.yml").read_text(encoding="utf-8")
     # Material renders repo_url as the header link, so it must be the project's

@@ -1460,10 +1460,10 @@ def test_a_page_shown_as_typed_keeps_its_title(tmp_path: Path, capsys: pytest.Ca
 def test_a_folder_named_like_a_scheme_is_linked_by_a_relative_path(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], name: str
 ) -> None:
-    """Render writes its book navigation and dependency links from folder
-    names. A link whose first folder is named like ``javascript:...`` would
-    read as a script URL, so render percent-encodes the colon, or starts a
-    Markdown link it keeps decoded with ./, and check has nothing to report."""
+    """Render writes its dependency links from folder names. A link whose
+    first folder is named like ``javascript:...`` would read as a script URL,
+    so render percent-encodes the colon, or starts a Markdown link it keeps
+    decoded with ./, and check has nothing to report."""
 
     blueprint = tmp_path / "project/blueprint"
     shutil.copytree(_EXAMPLE / "blueprint", blueprint)
@@ -1489,7 +1489,7 @@ def test_a_folder_named_like_a_scheme_is_linked_by_a_relative_path(
         for page in site.rglob("*.md")
         for found in re.finditer(r'href="([^"]*)"|\]\(<?([^)\s>]+)', page.read_text(encoding="utf-8"))
     ]
-    assert f"{quote(name, safe='')}/index.html" in targets
+    assert f"../{quote(name, safe='')}/index.html#definitions-full-supervision" in targets
     assert [target for target in targets if scheme.match(target) and not target.startswith(("http", "mailto:"))] == []
 
 

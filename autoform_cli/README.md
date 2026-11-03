@@ -916,7 +916,7 @@ legacy `#node=<id>`, view and filter links remain aliases, not a second viewer.
 A `lean:` declaration resolving to a repository permalink gets a source link;
 a catalog's Lean row shows its first eight names and counts the rest.
 Render percent-encodes each
-link it writes from file and folder names, such as the book's previous and next
+link it writes from file and folder names, such as the book's dependency
 links; a Markdown link it moves keeps its decoded spelling and starts with `./`
 when its first segment holds a colon, so no name can make a `javascript:` URL.
 

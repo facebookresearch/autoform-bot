@@ -1848,13 +1848,10 @@ def test_published_explorer_controls_keep_their_own_styles_under_material(
 
 
 def _assert_site_chrome_is_reachable(page: object) -> None:
-    """The header, heading and navigation are visible, and each is the element a click would hit."""
+    """The header and heading are visible, and each is the element a click would hit."""
     for chrome in (
         page.locator(".md-header"),
         page.get_by_role("heading", level=1),
-        page.get_by_role("navigation", name="Blueprint chapters", exact=True).get_by_role(
-            "link", name="Next Topology", exact=True
-        ),
     ):
         playwright.expect(chrome).to_be_visible()
         chrome.click(trial=True, timeout=5_000)
@@ -1868,7 +1865,6 @@ def test_a_published_app_page_without_script_keeps_the_site_chrome(webkit_browse
         loading = page.locator(".bp-dag-loading")
         playwright.expect(loading).to_be_attached()
         playwright.expect(loading).to_be_hidden()
-        # WebKit's no-script trial click can follow the native Next link; audit this page before it.
         playwright.expect(page.locator('.bp-reading-source .bp-thmwrapper[data-autoform-node-id="algebra/result"]')).to_contain_text(
             "The main result."
         )

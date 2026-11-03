@@ -743,7 +743,7 @@
       reading.querySelectorAll("h2,h3,h4,h5,h6").forEach(function (heading) {
         if (heading.hidden || protectedSection(heading)) return;
         var block = [], next = heading.nextElementSibling, level = Number(heading.tagName.slice(1));
-        while (next && !(/^H[1-6]$/.test(next.tagName) && Number(next.tagName.slice(1)) <= level) && !next.matches(".bp-book-nav")) {
+        while (next && !(/^H[1-6]$/.test(next.tagName) && Number(next.tagName.slice(1)) <= level)) {
           block.push(next); next = next.nextElementSibling;
         }
         if (!block.length || !block.every(pureList)) return;
@@ -771,39 +771,14 @@
         return Array.from(node.attributes).every(function (attribute) { return allowed.indexOf(attribute.name) >= 0; });
       }
       function plain(node) { return Array.from(node.childNodes).every(function (child) { return child.nodeType === 3 || child.nodeType === 8; }); }
-      function elements(node) {
-        var children = Array.from(node.childNodes);
-        return children.some(function (child) { return child.nodeType !== 1 && child.nodeType !== 8 &&
-          (child.nodeType !== 3 || child.textContent.trim()); }) ? null : children.filter(function (child) { return child.nodeType === 1; });
-      }
-      function chapters(node) {
-        if (node.tagName !== "NAV" || node.getAttribute("class") !== "bp-book-nav" ||
-            node.getAttribute("aria-label") !== "Blueprint chapters" || !attributes(node, ["class", "aria-label"])) return false;
-        var links = elements(node), directions = [];
-        return links && links.length > 0 && links.length <= 2 && links.every(function (anchor) {
-          var direction = anchor.getAttribute("class") === "bp-book-nav-link bp-book-nav-previous" ? "previous" :
-            anchor.getAttribute("class") === "bp-book-nav-link bp-book-nav-next" ? "next" : null;
-          var href = link(anchor.getAttribute("href"), current.documentURL), target = href && routes.get(href), parts = elements(anchor);
-          if (anchor.tagName !== "A" || !direction || !target || !attributes(anchor, ["class", "href"]) ||
-              directions.indexOf(direction) >= 0 || direction === "previous" && directions.length || !parts || parts.length !== 2) return false;
-          directions.push(direction);
-          var label = parts[0], title = parts[1], contents = Array.from(label.childNodes), arrow = contents[0];
-          return label.tagName === "SPAN" && label.getAttribute("class") === "bp-book-nav-direction" && attributes(label, ["class"]) &&
-            contents.length === 2 && arrow.nodeType === 1 && arrow.tagName === "SPAN" && arrow.getAttribute("aria-hidden") === "true" &&
-            attributes(arrow, ["aria-hidden"]) && plain(arrow) && arrow.textContent === (direction === "previous" ? "←" : "→") &&
-            contents[1].nodeType === 3 && contents[1].textContent === (direction === "previous" ? " Previous" : " Next") &&
-            title.tagName === "SPAN" && title.getAttribute("class") === "bp-book-nav-title" && attributes(title, ["class"]) &&
-            plain(title) && title.textContent === target.title;
-        });
-      }
-      var headings = 0, navigation = 0;
+      var headings = 0;
       return Array.from(reading.childNodes).every(function (node) {
         if (node.nodeType === 8 || node.nodeType === 3 && !node.textContent.trim()) return true;
         if (node.nodeType !== 1) return false;
         if (ignored.has(node)) return !/^H[1-6]$/.test(node.tagName) || !/[$\\]/.test(node.textContent);
         if (node.tagName === "H1" && attributes(node, ["id"]) && plain(node) && !/[$\\]/.test(node.textContent) &&
             node.textContent.trim() === owner.title) return ++headings === 1;
-        return chapters(node) && ++navigation === 1;
+        return false;
       }) && headings === 1;
     }
     function bindReader(root) {

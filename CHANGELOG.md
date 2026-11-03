@@ -322,6 +322,11 @@ date when the release is tagged.
 
 ### Removed
 
+- **Previous/Next links.** Render no longer ends each book page, or the
+  explorer's reader, with Previous and Next links. They followed the walk down
+  the containment tree, so on a wiki such as ATLAS a folder's last page led into
+  the next domain: Ultrafilter's Next was Theory of Computation. The sidebar and
+  `SUMMARY.md` keep the book's order (#599).
 - **Explorer canvas.** The explorer's own drawing of the graph is gone, now
   that its stage shows the whole-project map: its bounded maps, camera, Fit and
   zoom controls, Show unlinked filter, topic shelves, concept-link clusters and
