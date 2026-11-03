@@ -534,7 +534,8 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str], list
     except OSError:
         spellings = []
     if spellings and "roadmap" not in spellings:
-        return [], [f"roadmap directory does not exist: {roadmap_root}; rename {spellings[0]} to roadmap"], []
+        hint = f"rename {spellings[0]} to roadmap (in Git: git mv through a temporary name)"
+        return [], [f"roadmap directory does not exist: {roadmap_root}; {hint}"], []
     if not roadmap_root.is_dir():
         return [], [f"roadmap directory does not exist: {roadmap_root}"], []
 

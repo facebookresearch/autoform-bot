@@ -927,14 +927,13 @@ def test_a_roadmap_folder_spelled_with_other_capitals_is_refused(tmp_path: Path)
     """A case-insensitive filesystem opened it as roadmap/, and render then crashed (#595)."""
     blueprint = tmp_path / "blueprint"
     (blueprint / "Roadmap").mkdir(parents=True)
-    (blueprint / "Roadmap" / "result.md").write_text("---\n---\n\n# Result\n", encoding="utf-8")
 
     with pytest.raises(GraphValidationError) as caught:
         load_graph(blueprint)
 
     (issue,) = caught.value.issues
     assert issue.startswith("roadmap directory does not exist: ")
-    assert issue.endswith("; rename Roadmap to roadmap")
+    assert issue.endswith("; rename Roadmap to roadmap (in Git: git mv through a temporary name)")
 
 
 def test_loads_container_articles_and_infers_single_parent_hierarchy(tmp_path: Path) -> None:
