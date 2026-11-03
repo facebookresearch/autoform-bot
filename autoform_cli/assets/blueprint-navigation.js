@@ -13,6 +13,9 @@
  * loadWikiLinks()/getWikiLinks() expose a lazy optional, exact-index-SHA-bound hyperlink layer;
  * onWikiLinks receives canonical IDs and honest coverage, never mathematical dependencies.
  * getHomeURL() names the site's native home page, separately from the indexed roadmap root.
+ * fetchJSON(url) reads published same-origin JSON for the whole-project map under the router's fetch rules (origin
+ * checks before and after redirects, stall timeout) and keeps no copy in the page cache; it is not a navigation, so
+ * navigating never aborts it and onError never hears of it.
  */
 (function () {
   "use strict";
@@ -150,7 +153,7 @@
         return subtle.digest("SHA-256", bytes).then(digestHex, digestUnavailable);
       } catch (_error) { return Promise.resolve(null); }
     }
-    async function fetchText(value, type, parentSignal) {
+    async function fetchText(value, type, parentSignal, store) {
       var href = link(value, initialURL); if (!href) throw new Error("Refusing an external data request");
       var key = resource(href), cache = type === "html" ? htmlCache : jsonCache;
       var cached = cacheGet(cache, key);
@@ -198,7 +201,7 @@
         if (parentSignal && parentSignal.aborted) throw abortError();
         var entry = {text: text, url: responseURL, bytes: length, indexDigest: digest};
         // loadIndex keeps the normalized index, never this text: caching it took the pages' budget.
-        if (!isCatalogue) cachePut(cache, key, entry, type === "html" ? htmlEntries : jsonEntries);
+        if (!isCatalogue && store !== false) cachePut(cache, key, entry, type === "html" ? htmlEntries : jsonEntries);
         return entry;
       } catch (error) {
         if (expired) throw new Error("Published data request timed out");
@@ -232,6 +235,9 @@
       var loaded = await fetchText(url, "json", request.signal); assertAlive(request);
       try { return resolvedGraph(JSON.parse(loaded.text), loaded.url); }
       catch (error) { cacheDelete(jsonCache, resource(url)); throw error; }
+    }
+    function fetchJSON(url) {
+      return fetchText(url, "json", null, false).then(function (loaded) { return JSON.parse(loaded.text); });
     }
     async function normalizeIndex(payload, base, began) {
       if (!payload || payload.schema !== INDEX_SCHEMA || !Array.isArray(payload.nodes)) throw new Error("Unsupported search index");
@@ -859,7 +865,7 @@
       decluttered = new WeakMap();
     }
     return {start: start, navigate: navigate, navigateNode: navigateNode, loadIndex: loadIndex, loadWikiLinks: loadWikiLinks,
-      getHomeURL: function () { return homeURL; },
+      fetchJSON: fetchJSON, getHomeURL: function () { return homeURL; },
       getWikiLinks: function () { return wikiLinks; },
       getIndex: function () { return index; }, bindReader: bindReader, declutterReader: declutterReader, readerIsOverview: readerIsOverview,
       checkpoint: checkpoint, dispose: dispose};
