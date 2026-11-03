@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import stat
 from collections.abc import Callable
 from pathlib import Path
@@ -291,7 +292,10 @@ def test_cli_write_json_keeps_stdout_for_the_plan(tmp_path: Path, capsys) -> Non
     assert captured.err.count("added article_id af_") == 3
 
 
-def test_write_keeps_the_file_mode(tmp_path: Path) -> None:
+@pytest.mark.parametrize("fchmod", [True, False], ids=["fchmod", "no-fchmod"])
+def test_write_keeps_the_file_mode(tmp_path: Path, monkeypatch, fchmod: bool) -> None:
+    if not fchmod:  # as on Windows before Python 3.13
+        monkeypatch.delattr(os, "fchmod", raising=False)
     blueprint = _blueprint(tmp_path)
     result = blueprint / "roadmap/chapter/result.md"
     result.chmod(0o640)
@@ -299,6 +303,26 @@ def test_write_keeps_the_file_mode(tmp_path: Path) -> None:
     write_article_ids(blueprint)
 
     assert stat.S_IMODE(result.stat().st_mode) == 0o640
+
+
+def test_write_keeps_an_edit_made_while_the_new_article_is_flushed(tmp_path: Path, monkeypatch) -> None:
+    blueprint = _blueprint(tmp_path)
+    _article(blueprint / "roadmap/README.md", "Roadmap", "af_" + "1" * 24)
+    _article(blueprint / "roadmap/chapter/README.md", "Chapter", "af_" + "2" * 24)
+    result = blueprint / "roadmap/chapter/result.md"
+    fsync = os.fsync
+
+    # The only write is the result's, so this edit lands while its new copy is flushed.
+    def edit_then_fsync(descriptor: int) -> None:
+        result.write_text(result.read_text(encoding="utf-8") + "Edited meanwhile.\n", encoding="utf-8")
+        fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", edit_then_fsync)
+
+    with pytest.raises(article_identity.ArticleIdWriteError, match="changed while the plan was applied"):
+        write_article_ids(blueprint)
+    assert result.read_text(encoding="utf-8") == "---\n---\n\n# Result\nEdited meanwhile.\n"
+    assert not list(blueprint.rglob("*.tmp"))
 
 
 def test_cli_lists_what_it_wrote_before_a_refusal(tmp_path: Path, monkeypatch, capsys) -> None:

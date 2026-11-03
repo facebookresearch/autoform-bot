@@ -61,7 +61,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from markdown.treeprocessors import Treeprocessor
 
-from . import dag_viewer, graph_pages, graph_views, project_map, site_index, status
+from . import _page_pool, dag_viewer, graph_pages, graph_views, project_map, site_index, status
 from ._fs import is_within as _is_within
 from ._fs import relative as _relative
 from ._fs import resolve as _resolve
@@ -87,7 +87,6 @@ from .graph import (
     Graph,
     GraphValidationError,
     Node,
-    _implementation_note_issues,
     atlas_omissions,
     load_graph,
     unpublished_content,
@@ -455,7 +454,7 @@ def publication_issues(graph: Graph, blueprint: Path, *, sources_only: bool = Fa
     blueprint = blueprint_root(blueprint)
     try:
         # Capture leaves out the folders that say published: false, as render does.
-        snapshot, _unpublished, _nodes = _capture_blueprint(blueprint)
+        snapshot, _nodes = _capture_blueprint(blueprint)
     except PublicationError as exc:
         # Render refuses the same inputs, and says so as errors.
         if sources_only:
@@ -589,6 +588,32 @@ def _publication(
     # linked path resolved, once for the whole site.
     page_links: dict[Path, Mapping[str, str]] = {}
     resolved: dict[str, Path] = {}
+    reader: _page_pool.Reader | None = None
+
+    def rewrite(text: str, source: Path, page: Path) -> tuple[str, list[str]]:
+        """``text`` with its links pointing where the site puts their targets,
+        and the links it drops."""
+
+        links = page_links.get(page)
+        if links is None:
+            links = page_links[page] = _anchored_links(targets, page, extension=".md")
+        dropped: list[str] = []
+        rewritten = _rewrite_links(
+            text,
+            source_dir=source.parent,
+            page=page,
+            blueprint=blueprint,
+            destination=destination,
+            node_sources=node_sources,
+            targets=targets,
+            sources_base=sources_base,
+            left_out=left_out,
+            unpublished=unpublished,
+            dropped=dropped,
+            links=links,
+            resolved=resolved,
+        )
+        return rewritten, dropped
 
     def published(text: str, source: Path, page: Path, *, whole: bool = True) -> tuple[str, tuple[str, ...]]:
         """The page ``text`` is published as, or the part of ``page`` it is
@@ -597,27 +622,15 @@ def _publication(
         its lines, so each stretch between is read too, as it sits there. Its
         notation goes straight to the warnings."""
 
-        links = page_links.get(page)
-        if links is None:
-            links = page_links[page] = _anchored_links(targets, page, extension=".md")
-        dropped: list[str] = []
-        page_text, found, notation = _read_page(
-            _rewrite_links(
-                text,
-                source_dir=source.parent,
-                page=page,
-                blueprint=blueprint,
-                destination=destination,
-                node_sources=node_sources,
-                targets=targets,
-                sources_base=sources_base,
-                left_out=left_out,
-                unpublished=unpublished,
-                dropped=dropped,
-                links=links,
-                resolved=resolved,
-            )
-        )
+        # Both branches call _read_page from this frame, where the reader
+        # measures the recursion headroom its workers match.
+        prepared = reader.take(text, source, page) if reader is not None else None
+        if prepared is None:
+            rewritten, dropped = rewrite(text, source, page)
+            page_text, found, notation = _read_page(rewritten)
+        else:
+            rewritten, dropped, read = prepared
+            page_text, found, notation = read if read is not None else _read_page(rewritten)
         group = chapters.get(page) if whole else None
         if group is not None:
             # Without the header, each line is where the author wrote it.
@@ -653,29 +666,41 @@ def _publication(
 
     articles: dict[Path, str] = {}
     statements: dict[str, tuple[str, str]] = {}
-    for node_id, node in graph.nodes.items():
-        # The captured bytes, the state the graph and any review disclosure
-        # describe once capture checks it. Check's graph also holds the
-        # articles in unpublished folders, which capture leaves out.
-        captured = snapshot.get(node.path)
-        if captured is None or (within is not None and not _is_within(node.path, within)):
-            continue
-        leaf = (node.formalizable or node.catalog is not None) and node_id not in containers
-        text, found = published(captured.decode("utf-8"), node.path, targets[node_id][0], whole=not leaf)
-        if found:
-            unavailable_source_ids.add(node_id)
-        # Narrative articles remain book pages. Formalizable leaves and module
-        # catalogs are consolidated into their containing article with stable anchors.
-        if leaf:
-            parts = statement_and_notes(text)
-            # A flagged leaf's box shows its statement and notes as typed.
-            statements[node_id] = (shown_as_typed("\n\n".join(filter(None, parts)), page=False), "") if found else parts
-        else:
-            articles[_resolve(node.path)] = (
-                shown_as_typed(text) if found
-                else text if node_id in groups
-                else _protect_narrative_markdown(text)
-            )
+    # The captured bytes, the state the graph and any review disclosure
+    # describe once capture checks it. Check's graph also holds the
+    # articles in unpublished folders, which capture leaves out.
+    pages = [
+        (node_id, node, snapshot[node.path])
+        for node_id, node in graph.nodes.items()
+        if node.path in snapshot and (within is None or _is_within(node.path, within))
+    ]
+    reader = _page_pool.reader(
+        ((captured.decode("utf-8"), node.path, targets[node_id][0]) for node_id, node, captured in pages),
+        rewrite,
+        articles=len(pages),
+        read=publishable_article,
+    )
+    try:
+        for node_id, node, captured in pages:
+            leaf = (node.formalizable or node.catalog is not None) and node_id not in containers
+            text, found = published(captured.decode("utf-8"), node.path, targets[node_id][0], whole=not leaf)
+            if found:
+                unavailable_source_ids.add(node_id)
+            # Narrative articles remain book pages. Formalizable leaves and module
+            # catalogs are consolidated into their containing article with stable anchors.
+            if leaf:
+                parts = statement_and_notes(text)
+                # A flagged leaf's box shows its statement and notes as typed.
+                statements[node_id] = (shown_as_typed("\n\n".join(filter(None, parts)), page=False), "") if found else parts
+            else:
+                articles[_resolve(node.path)] = (
+                    shown_as_typed(text) if found
+                    else text if node_id in groups
+                    else _protect_narrative_markdown(text)
+                )
+    finally:
+        if reader is not None:
+            reader.close()
 
     files: dict[Path, str | bytes] = {}
     for source in sorted(snapshot):
@@ -885,7 +910,7 @@ def render_site(
             ["blueprint and output directories must be disjoint; refusing destructive render"]
         )
     recovered = _recover_backup(destination)
-    snapshot, unpublished_ids, unpublished_nodes = _capture_blueprint(blueprint)
+    snapshot, unpublished_nodes = _capture_blueprint(blueprint)
     # The repository root, not the vault's parent. A blueprint nested at
     # <repo>/docs/blueprint would otherwise be described as <repo>/blueprint,
     # and every generated permalink would 404.
@@ -902,7 +927,7 @@ def render_site(
     # the repository path it had when render read the vault.
     relative = blueprint.relative_to(top_level) if _is_within(blueprint, top_level) else Path("blueprint")
     with _private_copy(snapshot, relative) as (copy_root, copy), resolving_once():
-        graph = _load_graph(copy, blueprint, unpublished_ids)
+        graph = _load_graph(copy, blueprint)
         coverage, coverage_issues = load_coverage(copy)
         if coverage_issues:
             raise PublicationError(
@@ -1176,17 +1201,6 @@ def _render_pages(
 
     # Pages written since, such as a milestone's, join the book here.
     book_pages = _book_page_order(blueprint, destination, graph, walk)
-    # The landing page is a dashboard, not chapter one. Previous/next belongs
-    # to the book, so the strip starts at the contents page. Each page is named
-    # by its node's title as authored: its header holds the visible text, which
-    # a second pass through Markdown would read differently. A title with no
-    # math or code keeps that visible text, emphasis and links already read.
-    authored = {
-        _resolve(destination / _relative(node.path, blueprint)): node.title
-        for node in graph.nodes.values()
-        if _is_within(node.path, blueprint)
-    }
-    _append_book_navigation([p for p in book_pages if p != overview], authored)
     structure = destination / STRUCTURE_PAGE
     structure.write_text(
         _render_structure_page(
@@ -1315,13 +1329,13 @@ def _integrated_page(
     )
 
 
-def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str], frozenset[str]]:
+def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str]]:
     """Read the blueprint once, refusing what must not be published.
 
     Through descriptors where the host has them; elsewhere (Windows) as two
     pathname captures that must agree. Folders whose README says ``published:
     false`` are left out before anything is refused or published, so no page,
-    hash or check sees them; the article and node IDs in them come beside the snapshot.
+    hash or check sees them; the node IDs in them come beside the snapshot.
     """
     try:
         selection = _PUBLICATION_SELECTION
@@ -1333,7 +1347,7 @@ def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str], f
         if isinstance(error, TreeChangedError):
             raise PublicationError(["blueprint changed while it was read; retry"]) from error
         raise PublicationError([f"blueprint could not be captured: {error}"]) from error
-    folders, article_ids = unpublished_content(snapshot.files)
+    folders = unpublished_content(snapshot.files)
     node_ids = unpublished_node_ids(snapshot.files, folders)
 
     def kept(name: str) -> bool:
@@ -1382,7 +1396,7 @@ def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str], f
             )
     if issues:
         raise PublicationError(issues)
-    return snapshot, article_ids, node_ids
+    return snapshot, node_ids
 
 
 def _is_sensitive(relative: PurePosixPath) -> bool:
@@ -1425,32 +1439,22 @@ def _private_copy(
         yield root, copy
 
 
-def _load_graph(copy: Path, blueprint: Path, unpublished_ids: frozenset[str]) -> Graph:
-    """Load the copy's graph, then check the vault's implementation notes as ``load_graph`` would.
-
-    The notes are hidden, so the copy lacks them. Nothing is published or hashed
-    from them, so reading them in place changes no output. A note may belong to
-    an article in an unpublished folder, which the copy lacks too.
-    """
+def _load_graph(copy: Path, blueprint: Path) -> Graph:
+    """Load the copy's graph, naming the vault's paths in its errors."""
     try:
-        graph = load_graph(copy)
+        return load_graph(copy)
     except GraphValidationError as error:
         issues = [issue.replace(str(copy), str(blueprint)) for issue in error.issues]
         raise GraphValidationError(issues) from None
-    article_ids = {node.article_id: node.id for node in graph.nodes.values() if node.article_id is not None}
-    article_ids.update(dict.fromkeys(unpublished_ids, ""))
-    if issues := _implementation_note_issues(blueprint, article_ids):
-        raise GraphValidationError(issues)
-    return graph
 
 
 def load_publication_source(blueprint_dir: str | Path) -> tuple[str, Graph]:
     """Read the blueprint once; return its publication revision and the graph of those bytes."""
     blueprint = blueprint_root(blueprint_dir)
-    snapshot, unpublished_ids, _nodes = _capture_blueprint(blueprint)
+    snapshot, _nodes = _capture_blueprint(blueprint)
     # The graph reads the articles and the atlas.
     with _private_copy(snapshot, prefix=("roadmap/", "atlas.json")) as (_root, copy):
-        return _source_revision(snapshot), _load_graph(copy, blueprint, unpublished_ids)
+        return _source_revision(snapshot), _load_graph(copy, blueprint)
 
 
 #: An output render may replace: its identity and its files' digests (none for an empty one).
@@ -2002,9 +2006,9 @@ def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> lis
 def _book_page_order(blueprint: Path, destination: Path, graph: Graph, walk: list[Path] | None = None) -> list[Path]:
     """The landing page, then the book in reading order (:func:`_reading_walk`).
 
-    SUMMARY.md and Previous/Next follow this order, and statement numbers, Next
-    up and the search index follow the same walk, so the book reads one way
-    everywhere. A caller that has walked the book already passes *walk*."""
+    SUMMARY.md follows this order, and statement numbers, Next up and the
+    search index follow the same walk, so the book reads one way everywhere. A
+    caller that has walked the book already passes *walk*."""
     landing = (destination / "README.md").resolve()
     pages = _written(walk if walk is not None else _reading_walk(blueprint, destination, graph))
     return ([landing] if landing.is_file() else []) + [page for page in pages if page != landing]
@@ -2160,66 +2164,6 @@ def _reading_order(
         return page_rank.get(page, len(page_rank)), str(page or ""), positions.get(node_id, -1)
 
     return sorted(status.topological_order(graph), key=key)
-
-
-def _append_book_navigation(pages: list[Path], authored: dict[Path, str]) -> None:
-    """Add previous/next links to the bottom of Blueprint pages, never global nav."""
-    if len(pages) < 2:
-        return
-    visible = [_page_heading(page.read_text(encoding="utf-8")) or page.stem for page in pages]
-    titles = [
-        _title_html(authored[_resolve(page)], fallback=shown) if _resolve(page) in authored else html.escape(shown)
-        for page, shown in zip(pages, visible)
-    ]
-    for index, page in enumerate(pages):
-        links: list[str] = []
-        if index:
-            links.append(
-                _book_navigation_link(
-                    pages[index - 1],
-                    page,
-                    titles[index - 1],
-                    direction="previous",
-                )
-            )
-        if index + 1 < len(pages):
-            links.append(
-                _book_navigation_link(
-                    pages[index + 1],
-                    page,
-                    titles[index + 1],
-                    direction="next",
-                )
-            )
-        navigation = (
-            '<nav class="bp-book-nav" aria-label="Blueprint chapters">'
-            + "".join(links)
-            + "</nav>"
-        )
-        page.write_text(
-            page.read_text(encoding="utf-8").rstrip() + "\n\n" + navigation + "\n",
-            encoding="utf-8",
-        )
-
-
-def _book_navigation_link(
-    target: Path,
-    page: Path,
-    title_html: str,
-    *,
-    direction: str,
-) -> str:
-    href = _as_published(relative_link(target, page, ".html"))
-    label = "Previous" if direction == "previous" else "Next"
-    arrow = "←" if direction == "previous" else "→"
-    return (
-        f'<a class="bp-book-nav-link bp-book-nav-{direction}" '
-        f'href="{html.escape(href, quote=True)}">'
-        f'<span class="bp-book-nav-direction"><span aria-hidden="true">{arrow}</span> '
-        f"{label}</span>"
-        f'<span class="bp-book-nav-title">{title_html}</span>'
-        "</a>"
-    )
 
 
 def _next_target(
@@ -4344,8 +4288,8 @@ def _stylesheet() -> str:
   --bp-link-hover: #7FB8FF;
   --bp-blue: #2D88FF;
 }}
-/* Material's own tokens take the same blue, so its links, breadcrumbs and
-   Previous/Next match the explorer instead of the theme's default indigo.
+/* Material's own tokens take the same blue, so its links and breadcrumbs
+   match the explorer instead of the theme's default indigo.
    The theme sets them on body through data-md-color-primary, and the slate
    link colour through two attributes, so this selector carries two
    attributes and wins by coming later. The bp tokens already switch with
@@ -4618,30 +4562,6 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-size: 0.85rem;
 }}
 .bp-progress-state {{ display: inline-flex; align-items: center; gap: 0.35rem; }}
-
-/* Reading order belongs to the book itself, not to MkDocs' global navbar. */
-.bp-book-nav {{
-  display: flex;
-  font-family: {sans};
-  gap: 1.5rem;
-  margin: 3rem 0 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--bp-rule);
-}}
-.bp-book-nav-link {{
-  display: flex;
-  flex-direction: column;
-  max-width: 48%;
-  text-decoration: none;
-}}
-.bp-book-nav-link:hover {{ text-decoration: none; }}
-.bp-book-nav-next {{ margin-left: auto; text-align: right; }}
-.bp-book-nav-direction {{
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: var(--bp-muted);
-}}
-.bp-book-nav-title {{ margin-top: 0.15rem; font-family: {serif}; font-size: 1rem; }}
 
 /* Theorem environments, following leanblueprint's amsthm markup. */
 .bp-thmwrapper {{ margin: 2rem 0 2.25rem; }}

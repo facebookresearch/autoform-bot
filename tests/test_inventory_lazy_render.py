@@ -27,7 +27,7 @@ function original(name) {
 }
 const names=['element','readingLabel','refreshReadingLabels','button','bindNodeLink','statusLabel','searchScore','rankMatches','inventoryNodes','inCurrentScope','sourceNodes','renderInventory',
   'setMode','refresh','snapshotForRoute','selection','restoreState','writeLocation','renderReaderContext','topicPeers','semanticParent',
-  'placeOf','recordId','pendingMath','summaryLine'];
+  'placeOf','recordId','pendingMath','summaryLine','searchMatches','adoptIndex','useIndex'];
 const constants=['LIST_PAGE','plural','num','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
@@ -44,7 +44,7 @@ function peer(tag='div') {
   const attrs=new Map(),classes=new Set();let text='';
   const node={tagName:tag.toUpperCase(),dataset:{},children:[],listeners:new Map(),scrollTop:0,writes:0,
     classList:{toggle(name,on){if(on)classes.add(name);else classes.delete(name);},contains(name){return classes.has(name);}},
-    setAttribute(name,value){attrs.set(name,String(value));},getAttribute(name){return attrs.get(name)||null;},
+    setAttribute(name,value){attrs.set(name,String(value));},getAttribute(name){return attrs.get(name)||null;},removeAttribute(name){attrs.delete(name);},
     addEventListener(type,callback){this.listeners.set(type,callback);},
     appendChild(child){this.children.push(child);return child;},replaceChildren(...children){this.children=children;},
     all(){return this.children.flatMap(child=>[child,...child.all()]);},
@@ -71,18 +71,18 @@ const indexNodes=results.concat([{id:'module',title:'Module article',catalog:'mo
   {id:'note',title:'Narrative note',result:false,status:'planned',scope:'roadmap'},
   {id:'roadmap',title:'Library',result:false,status:'planned',scope:'roadmap',route:'https://example.test/roadmap/index.html'}]);
 var sharedIndex={nodes:indexNodes,relations:results.slice(1,8).map(node=>[node.id,results[0].id,2,3])};
-const records=new Map(indexNodes.map(node=>[node.id,node])),byId=new Map(records);
+var records=new Map(indexNodes.map(node=>[node.id,node]));const byId=new Map(records);
 var currentBundle={nodeId:'roadmap',scope:'roadmap'},ui$mode='graph',ui$query='',ui$relationIds=null,ui$listLimit=LIST_PAGE;
 var ui$selectedStatuses=new Set(['planned','fully_proved','inventory_pending']),ui$selected=null;
 var ui$overviewOnly=false,ui$requestedNode=null;
-var ui$filtersTouched=false,ui$outlineLimit=120;
+var ui$filtersTouched=false,ui$outlineLimit=120,ui$searchNodes=indexNodes,ui$searchCache=[],ui$searchCacheQuery=null;
 var alive=true,restoration=0,restoring=false,checkpointTimer,readingReady=Promise.resolve();
 const presentStatuses=['planned','fully_proved','inventory_pending'];
 const palette={planned:{label:'planned'},fully_proved:{label:'fully proved'},inventory_pending:{label:'inventory pending'}};
 const navigation={checkpoint(method){effects.push({kind:'checkpoint',method});},navigateNode(){assert.fail('A list entry changed the canonical route');}};
 function syncControls(){dom$inventory.hidden=ui$mode==='graph';}
 function renderInspector(){}function sheetLayout(){return false;}function setSheet(){}function refreshReadingLabels(){}function typesetRowsInView(){}var instance=1;
-function updateProjection(){}function renderNavigation(){}function resize(){}
+function updateProjection(){}function renderNavigation(){}function resize(){}function requestWikiLinks(){}
 // The page's own payload stands in for the list only until the index loads.
 Object.defineProperty(globalThis,'data',{get(){assert.fail('An available complete index was replaced by the page payload');}});
 function activateNode(node){effects.push({kind:'activate',node});}
@@ -190,4 +190,47 @@ def test_show_filtered_out_counts_what_the_status_filter_hides_from_the_browse_l
       ui$selectedStatuses=new Set(presentStatuses);refresh(true);
       assert.deepEqual(rowIds(),['source-0','source-1']);assert.equal(dom$hiddenButton.hidden,true);
       assert.equal(JSON.stringify(indexNodes),before);
+    """)
+
+
+def test_typing_on_ranks_only_the_last_matches_and_every_rank_and_order_stay_the_same() -> None:
+    _run(r"""
+      // The ranks tie, and the last query's order is not the index order, so a narrowed rank must sort again.
+      const rows=[{id:'capri',title:'Capri numbers',summary:'A prime-like sequence.'},
+        {id:'zeckendorf',title:'Zeckendorf representation',summary:'Every positive integer is a sum of Fibonacci numbers.'},
+        {id:'root',title:'Primitive root',lean:'ZMod.IsPrimitiveRoot',summary:'A generator of the units mod n.'},
+        {id:'prime',title:'Prime numbers',lean:'Nat.Prime',summary:'There are infinitely many.'},{id:'pri',title:'Pri',lean:'Nu.lemma'},
+        {id:'odos',title:'ΟΔΟΣ'},{id:'odosa',title:'ΟΔΟΣΑ'},{id:'kent',title:'İstanbul'},
+        {id:'zeta',title:'Riemann zeta',summary:'Zeckendorf repr. of nothing'}].map(row=>({status:'planned',scope:'roadmap',...row}));
+      useIndex({nodes:rows,relations:[]});
+      const real=searchScore,keys=matches=>matches.map(match=>match.node.id+':'+match.rank);let scored=0;
+      searchScore=function(node,query){scored++;return real(node,query);};
+      // Every keystroke ranks as a full rank of every row does; one that extends the last query scores only its matches.
+      function type(value,narrows) {
+        const last=ui$searchCache.length;ui$query=value.trim();scored=0;const matches=searchMatches(),count=scored;
+        assert.deepEqual(keys(matches),keys(rankMatches(ui$searchNodes,ui$query.toLocaleLowerCase())),value);
+        assert.equal(count,narrows?last:ui$searchNodes.length,value);return keys(matches);
+      }
+      assert.deepEqual(type('p',false),['root:4','prime:4','pri:4','capri:8','zeckendorf:8','zeta:11']);
+      type('pr',true);assert.deepEqual(type('pri',true),['pri:1','root:4','prime:4','capri:8']);
+      // A second word: the one-word query's matches still hold every match.
+      assert.deepEqual(type('pri n',true),['capri:8','root:12','prime:12','pri:12']);
+      assert.deepEqual(type('pri nu',true),['capri:8','prime:12','pri:12']);
+      // Backspace and paste rank every row again.
+      type('pri n',false);assert.deepEqual(type('zeckendorf',false),['zeckendorf:2','zeta:11']);type('zeckendorf r',true);
+      // A new index starts over, even for a query that extends the last one.
+      useIndex({nodes:rows.slice(1).concat([{id:'reps',title:'Zeckendorf representations',status:'planned',scope:'roadmap'}])});
+      assert.deepEqual(type('zeckendorf re',false),['zeckendorf:4','reps:4','zeta:11']);
+      // Lowercasing is toLocaleLowerCase's: a final capital sigma becomes ς, so ΟΔΟΣΑ does not extend ΟΔΟΣ, and İ holds an i.
+      type('Ο',false);type('ΟΔ',true);type('ΟΔΟ',true);assert.deepEqual(type('ΟΔΟΣ',true),['odos:1']);
+      assert.deepEqual(type('ΟΔΟΣΑ',false),['odosa:1']);assert.deepEqual(type('σ',false),['odosa:8']);
+      assert(type('i',false).includes('kent:4'));
+      // The cache holds every match, not the twelve shown, so a query with more matches narrows exactly too.
+      useIndex({nodes:Array.from({length:30},(_,n)=>({id:'result-'+n,title:'Result '+n,status:'planned',scope:'roadmap'}))});
+      assert.equal(type('result',false).length,30);assert.equal(type('result 1',true).length,12);
+      // A one-word query joins no row's fields.
+      const join=Array.prototype.join;let joined=0;
+      Array.prototype.join=function(...args){joined++;return join.apply(this,args);};
+      try {rankMatches(ui$searchNodes,'zeta');assert.equal(joined,0);rankMatches(ui$searchNodes,'pri nu');assert(joined>0);}
+      finally {Array.prototype.join=join;}
     """)

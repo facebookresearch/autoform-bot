@@ -8,7 +8,7 @@ version = "0.6.0"
 description = "Markdown-blueprint roadmaps with Lean LSP and REPL servers"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "fastmcp>=3.4.10,<4",
     "psutil>=5.9",
@@ -53,6 +53,10 @@ packages = ["autoform_cli", "servers"]
 
 [tool.ruff]
 line-length = 120
+
+[tool.ruff.per-file-target-version]
+# Generated projects' CI runs this helper with the runner's python3, which can be 3.10.
+"autoform_cli/templates/github/autoform_audit.py" = "py310"
 
 [tool.uv]
 # cryptography (pulled in by fastmcp -> authlib/joserfc and mcp -> pyjwt[crypto]) stopped

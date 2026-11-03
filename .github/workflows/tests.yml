@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       matrix:
-        python-version: ["3.10", "3.13"]
+        python-version: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -40,6 +40,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
       - run: uv sync --locked --extra dev --extra repl
+      # Generated projects' CI runs the audit helper with the runner's python3, which
+      # can be 3.10, so one leg puts a 3.10 on PATH for the test that runs it there.
+      - name: Python 3.10 for the audit helper's test
+        if: matrix.python-version == '3.11'
+        run: |
+          uv python install 3.10
+          mkdir -p "$RUNNER_TEMP/python3.10"
+          ln -s "$(uv python find 3.10)" "$RUNNER_TEMP/python3.10/python3.10"
+          echo "$RUNNER_TEMP/python3.10" >> "$GITHUB_PATH"
+          echo "AUTOFORM_REQUIRE_PYTHON310_TESTS=1" >> "$GITHUB_ENV"
       - run: uv run ruff check autoform_cli servers tests
       - run: uv run pytest -q
       - run: make check-example
@@ -209,10 +219,6 @@ jobs:
         run: timeout --signal=TERM --kill-after=30s 30m uv run pytest -q tests/test_library_generate.py
         env:
           AUTOFORM_REQUIRE_REAL_LIBRARY_TESTS: "1"
-      - name: Run the open-statement audit and contract against real Lean
-        run: timeout --signal=TERM --kill-after=30s 10m uv run pytest -q tests/test_lake_artifact_audit.py tests/test_contract.py
-        env:
-          AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
       - name: Run the LSP lifecycle and diagnostics checks against real Lean
         run: >-
           timeout --signal=TERM --kill-after=30s 10m uv run pytest -q -k real_lean
@@ -252,8 +258,10 @@ jobs:
             elan toolchain install "$(tr -d '\r\n' < tests/fixtures/skeleton-project/lean-toolchain)"
           command -v lake
       - name: Run the skeleton suite against real Lean
+        # A few tests take one to two minutes each; worksteal hands queued tests to idle workers,
+        # so one of them picked up late does not set the job's length.
         run: >-
-          timeout --signal=TERM --kill-after=30s 35m uv run pytest -q -n 4
+          timeout --signal=TERM --kill-after=30s 35m uv run pytest -q -n 4 --dist worksteal
           tests/test_skeleton.py
           tests/test_lean_probe.py
           tests/test_project_inspect.py::test_stale_inherited_mathlib_is_ignored_by_real_lake
@@ -263,7 +271,7 @@ jobs:
   real-repl:
     name: real REPL (fixture toolchain)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -300,6 +308,18 @@ jobs:
         run: timeout --signal=TERM --kill-after=30s 10m uv run pytest -q tests/test_real_repl.py
         env:
           AUTOFORM_RUN_REAL_REPL_TESTS: "1"
+      # The open-statement audit runs here, beside the short REPL suite, rather than in the real Lean job,
+      # which would otherwise be the longest job of the run. The REPL fixture pins the toolchain of the
+      # skeleton fixture these tests copy, so only the library fixture's is left to install.
+      - name: Install the library fixture's Lean toolchain
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=30s 10m \
+            elan toolchain install "$(tr -d '\r\n' < tests/fixtures/library-project/lean-toolchain)"
+      - name: Run the open-statement audit and contract against real Lean
+        run: timeout --signal=TERM --kill-after=30s 10m uv run pytest -q tests/test_lake_artifact_audit.py tests/test_contract.py
+        env:
+          AUTOFORM_REQUIRE_REAL_LEAN_TESTS: "1"
 
   windows-hardening:
     name: Windows inspection, subprocess, and publication hardening
@@ -322,6 +342,7 @@ jobs:
           tests/test_scaffold.py::test_scaffold_merges_autoform_rules_into_lake_gitignore
           tests/test_scaffold.py::test_windows_cross_interface_gitignore_identity_ignores_ctime_only
           tests/test_scaffold.py::test_scaffold_refuses_case_variants_of_managed_paths
+          tests/test_graph.py::test_a_roadmap_folder_spelled_with_other_capitals_is_refused
           tests/test_lean_probe.py::test_bounded_command_rejects_excess_output
           tests/test_lean_probe.py::test_bounded_command_caps_stdout_and_stderr_together
           tests/test_lean_probe.py::test_bounded_command_rejects_invalid_utf8

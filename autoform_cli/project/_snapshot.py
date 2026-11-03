@@ -136,7 +136,7 @@ def _capture_file(root: Path, relative: str) -> _FileSnapshot:
     if _node_identity(followed) != before_token:
         return _FileSnapshot("changed", before_token, route=route)
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0)
     descriptor: int | None = None
     try:

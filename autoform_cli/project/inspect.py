@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+# Not tomllib: Lake reads TOML 1.0, and from Python 3.15 tomllib parses 1.1 (see pyproject.toml).
 import tomli
 
 from .._strict_json import reject_json_constant

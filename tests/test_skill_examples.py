@@ -13,11 +13,8 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10
-    import tomli as tomllib
+# Lake reads TOML 1.0, as the pinned tomli does; from Python 3.15 tomllib parses 1.1.
+import tomli
 
 from autoform_cli.audit import audit_blueprint
 from autoform_cli.graph import load_graph
@@ -99,7 +96,7 @@ def test_setup_example_pins_the_repl_that_the_real_repl_job_tests(repo_root: Pat
     example = repo_root / _EXAMPLE
 
     def repl_revs(project: Path) -> tuple[str, str]:
-        lakefile = tomllib.loads((project / "lakefile.toml").read_text(encoding="utf-8"))
+        lakefile = tomli.loads((project / "lakefile.toml").read_text(encoding="utf-8"))
         manifest = json.loads((project / "lake-manifest.json").read_text(encoding="utf-8"))
         required = next(entry["rev"] for entry in lakefile["require"] if entry["name"] == "repl")
         locked = next(entry["rev"] for entry in manifest["packages"] if entry["name"] == "repl")
@@ -189,7 +186,7 @@ def test_setup_asset_is_a_repo_shaped_thesis_vault(repo_root: Path) -> None:
     assert (example / "src/CabannesThesis.lean").is_file()
     assert (example / "src/CabannesThesis/Basic.lean").is_file()
     toolchain = (example / "lean-toolchain").read_text(encoding="utf-8").strip()
-    lakefile = tomllib.loads((example / "lakefile.toml").read_text(encoding="utf-8"))
+    lakefile = tomli.loads((example / "lakefile.toml").read_text(encoding="utf-8"))
     manifest = json.loads((example / "lake-manifest.json").read_text(encoding="utf-8"))
     assert toolchain == "leanprover/lean4:v4.32.2"
     requirements = {entry["name"]: entry for entry in lakefile["require"]}
@@ -265,12 +262,6 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'data-graph-src="../../dependencies/chapters/infimum-loss.json"' in chapter
     assert re.search(r'<details class="bp-dependencies"><summary>(Uses [1-9]\d*|Used by [1-9]\d*)', chapter)
     assert "Uses 0" not in chapter and "Used by 0" not in chapter
-    assert '<nav class="bp-book-nav" aria-label="Blueprint chapters">' in chapter
-    assert (
-        'class="bp-book-nav-link bp-book-nav-previous" '
-        'href="../full-supervision/index.html"'
-    ) in chapter
-    assert 'bp-book-nav-next' not in chapter
 
     support_path = site / "roadmap/full-supervision/README.md"
     support = support_path.read_text(encoding="utf-8")
@@ -282,11 +273,6 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert 'class="bp-thmwrapper theorem-style-definition bp-fully_proved"' in support
     assert 'class="bp-thmwrapper theorem-style-plain' not in support
     assert '<a class="bp-code-link"' in support
-    assert 'class="bp-book-nav-link bp-book-nav-previous" href="../index.html"' in support
-    assert (
-        'class="bp-book-nav-link bp-book-nav-next" '
-        'href="../infimum-loss/index.html"'
-    ) in support
 
     for href in _HREF.findall(chapter):
         if href.startswith(("http", "#")):
@@ -377,8 +363,6 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert "<strong>4</strong> fully proved" in milestone
     coverage = (site / "coverage/README.md").read_text(encoding="utf-8")
     assert "Experiments and narrative material" in coverage
-    graph_page = (site / "dependencies.md").read_text(encoding="utf-8")
-    assert "bp-book-nav" not in graph_page
 
     mkdocs = (example / "mkdocs.yml").read_text(encoding="utf-8")
     # Material renders repo_url as the header link, so it must be the project's

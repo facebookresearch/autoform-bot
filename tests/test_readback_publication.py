@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli import readback
+from autoform_cli import _fs, readback
 from autoform_cli.markdown import blueprint_root
 from autoform_cli.readback import (
     PreparedReadback,
@@ -70,13 +70,14 @@ def _patch_os(monkeypatch, **calls) -> None:
     for name, call in calls.items():
         setattr(patched, name, call)
     monkeypatch.setattr(readback, "os", patched)
+    monkeypatch.setattr(_fs, "os", patched)
 
 
 def _fail(monkeypatch, call: str, when=lambda *args, **kwargs: True) -> list[tuple]:
     """Make publication's ``os.<call>`` fail with EIO whenever ``when`` accepts its arguments.
 
-    Only the readback module sees the failing call. Returns the arguments of
-    each call that failed.
+    Only the readback module and the helper it writes with see the failing
+    call. Returns the arguments of each call that failed.
     """
 
     real = getattr(os, call)
@@ -118,7 +119,7 @@ def test_a_second_publisher_waits_for_the_lock_then_compares_against_the_first_c
     fcntl = pytest.importorskip("fcntl")
     blueprint, path, expected = _filed(tmp_path)
     waiting, results, held = threading.Event(), [], []
-    check, rename_file = readback._card_hash_at, os.rename
+    check, rename_file = readback._card_hash_at, os.replace
 
     def flock(descriptor: int, operation: int) -> None:
         try:
@@ -149,7 +150,7 @@ def test_a_second_publisher_waits_for_the_lock_then_compares_against_the_first_c
 
     _fcntl(monkeypatch, flock=flock)
     monkeypatch.setattr("autoform_cli.readback._card_hash_at", check_then_start_second)
-    monkeypatch.setattr(os, "rename", try_the_lock_then_rename)
+    monkeypatch.setattr(os, "replace", try_the_lock_then_rename)
 
     assert _file_card(blueprint, "Replacement.", expected_card_hash=expected) == path
     second.join()
@@ -686,9 +687,9 @@ def test_a_card_whose_article_id_is_invalid_or_whose_blueprint_is_gone_is_refuse
         ("write", lambda *args: True),
         ("fchmod", lambda *args: True),
         ("fsync", lambda *args: True),
-        ("rename", lambda *args, **kwargs: True),
+        ("replace", lambda *args, **kwargs: True),
     ],
-    ids=["open", "write", "fchmod", "fsync", "rename"],
+    ids=["open", "write", "fchmod", "fsync", "replace"],
 )
 def test_a_call_that_fails_before_the_rename_leaves_the_card_and_no_staging_file(
     tmp_path: Path, monkeypatch, call: str, when
@@ -714,9 +715,9 @@ def test_a_call_that_fails_before_the_rename_leaves_the_card_and_no_staging_file
         # The staging file was just created, and its descriptor not yet kept.
         ("open", lambda name, flags, *args, **kwargs: str(name).startswith(".autoform-readback-")),
         # The new card is about to be renamed into place.
-        ("rename", lambda *args, **kwargs: True),
+        ("replace", lambda *args, **kwargs: True),
     ],
-    ids=["read", "stage", "rename"],
+    ids=["read", "stage", "replace"],
 )
 def test_an_interruption_just_after_a_call_returns_closes_each_descriptor_once_and_leaves_no_file(
     tmp_path: Path, monkeypatch, call: str, when
@@ -728,7 +729,7 @@ def test_an_interruption_just_after_a_call_returns_closes_each_descriptor_once_a
 
     def interrupted(*args, **kwargs):
         hit = not fired and when(*args, **kwargs)
-        result = real(*args, **kwargs) if call != "rename" else None
+        result = real(*args, **kwargs) if call != "replace" else None
         if hit:
             fired.append(call)
             if call == "open":
@@ -747,15 +748,15 @@ def test_an_interruption_just_after_a_call_returns_closes_each_descriptor_once_a
 
 def test_an_interruption_as_any_step_of_a_write_returns_leaves_no_lock_or_staging_file(tmp_path: Path) -> None:
     pytest.importorskip("fcntl")
-    module = readback.__file__
+    modules = {readback.__file__, _fs.__file__}
     step = returns = 0
 
     # Python 3.10 can deliver an interrupt as any function returns, before its
     # caller keeps the result. Raising from a trace function on the n-th
-    # return in the module lands one there, for each n in turn.
+    # return in the modules lands one there, for each n in turn.
     def interrupt_on_the_nth_return(frame, event, arg):
         nonlocal returns
-        if frame.f_code.co_filename != module:
+        if frame.f_code.co_filename not in modules:
             return None
         if event == "return":
             returns += 1
@@ -835,7 +836,7 @@ def test_a_staging_name_already_taken_is_neither_used_nor_removed(tmp_path: Path
     original = path.read_bytes()
     taken = path.with_name(".autoform-readback-" + "0" * 24 + ".tmp")
     taken.write_bytes(b"Someone else's file.\n")
-    monkeypatch.setattr("autoform_cli.readback.secrets.token_hex", lambda size: "0" * (2 * size))
+    monkeypatch.setattr("autoform_cli._fs.secrets.token_hex", lambda size: "0" * (2 * size))
 
     with pytest.raises(ValueError, match=f"cannot publish read-back: {path}: .*File exists"):
         _file_card(blueprint, "Replacement.", expected_card_hash=expected)

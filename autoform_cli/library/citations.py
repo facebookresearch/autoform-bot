@@ -334,6 +334,8 @@ def _page_text(path: Path) -> str:
 
 def _note_texts(blueprint: Path) -> list[str]:
     root = blueprint / IMPLEMENTATION_NOTES_DIR
+    if root.is_symlink():
+        return []  # never read through a linked notes folder, which check warns about
     try:
         paths = sorted(root.iterdir())
     except OSError:
@@ -341,7 +343,8 @@ def _note_texts(blueprint: Path) -> list[str]:
     texts = []
     for path in paths:
         # Hidden entries, such as an editor's lock symlink, are never notes.
-        if path.name.startswith(".") or path.is_symlink() or not path.is_file():
+        # os.path is False for an entry it cannot stat, as in a folder it cannot search.
+        if path.name.startswith(".") or os.path.islink(path) or not os.path.isfile(path):
             continue
         try:
             texts.append(path.read_text(encoding="utf-8", errors="replace"))

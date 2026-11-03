@@ -58,7 +58,7 @@ from ._fs import directory_path, is_within, resolve, resolved_path
 #: The class pymdownx.arithmatex gives each formula it finds in the site's
 #: Markdown. The page's MathJax reads these elements and no other text, so the
 #: site's own navigation shows its TeX as typed, but for the titles render
-#: writes (statement headings, Next up, Previous/Next) and the titles and
+#: writes (statement headings and Next up) and the titles and
 #: summaries the dependency explorer draws, which are marked with this class.
 FORMULA_CLASS = "arithmatex"
 

@@ -138,6 +138,36 @@ def test_audit_rejects_implementation_notes_only_after_proof(tmp_path: Path) -> 
     assert audit_blueprint(blueprint).clean
 
 
+def test_audit_never_asks_to_delete_a_note_behind_a_linked_notes_folder(tmp_path: Path) -> None:
+    """Deleting it would delete a file outside the vault; the loader warns about the link instead."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    article_id = "af_0123456789abcdef01234567"
+    _article(
+        blueprint,
+        "result.md",
+        article_id=article_id,
+        declaration="theorem",
+        statement="formalized",
+        proof="formalized",
+        lean="Project.result",
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / f"{article_id}.md").write_text("route\n", encoding="utf-8")
+    try:
+        (blueprint / ".implementation-notes").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    result = audit_blueprint(blueprint)
+
+    assert result.clean
+    assert [(warning.article_path, warning.code) for warning in result.warnings] == [
+        (".implementation-notes", "invalid-implementation-note")
+    ]
+
+
 @pytest.mark.parametrize(
     ("child", "stale"),
     [
@@ -342,8 +372,61 @@ def test_audit_reports_invalid_note_at_its_blueprint_path(
 
     result = audit_blueprint(blueprint)
 
-    assert [(finding.article_path, finding.code) for finding in result.findings] == [
-        (f".implementation-notes/{filename}", "invalid-graph")
+    assert result.clean
+    assert [(warning.article_path, warning.code) for warning in result.warnings] == [
+        (f".implementation-notes/{filename}", "invalid-implementation-note")
+    ]
+
+
+def test_audit_reports_a_notes_path_that_is_a_file_at_that_path(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "result.md")
+    (blueprint / ".implementation-notes").write_text("route\n", encoding="utf-8")
+
+    result = audit_blueprint(blueprint)
+
+    assert result.clean
+    assert [(warning.article_path, warning.code) for warning in result.warnings] == [
+        (".implementation-notes", "invalid-implementation-note")
+    ]
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
+@pytest.mark.parametrize(
+    ("locked", "mode", "path"),
+    [
+        (".implementation-notes", 0, ".implementation-notes"),
+        (".implementation-notes", 0o644, ".implementation-notes/af_111111111111111111111111.md"),
+        ("", 0o311, "."),
+    ],
+    ids=["unlistable-notes-folder", "unsearchable-notes-folder", "unlistable-blueprint"],
+)
+def test_audit_reports_notes_that_cannot_be_read(tmp_path: Path, locked: str, mode: int, path: str) -> None:
+    """A proved article sends audit looking for its stale note, which it must not crash on."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(
+        blueprint,
+        "result.md",
+        article_id="af_0123456789abcdef01234567",
+        declaration="theorem",
+        statement="formalized",
+        proof="formalized",
+        lean="Project.result",
+    )
+    (blueprint / ".implementation-notes").mkdir()
+    (blueprint / ".implementation-notes" / "af_111111111111111111111111.md").write_text("route\n", encoding="utf-8")
+    directory = blueprint / locked
+    directory.chmod(mode)
+    try:
+        result = audit_blueprint(blueprint)
+    finally:
+        directory.chmod(0o755)
+
+    assert result.clean
+    assert [(warning.article_path, warning.code) for warning in result.warnings] == [
+        (path, "invalid-implementation-note")
     ]
 
 
@@ -371,11 +454,13 @@ def test_audit_reports_a_misplaced_notes_directory_where_it_is(tmp_path: Path, f
     misplaced.mkdir(parents=True)
     (misplaced / f"{article_id}.md").write_text("Mathlib gap.\n", encoding="utf-8")
 
-    paths = {finding.article_path for finding in audit_blueprint(blueprint).findings}
+    result = audit_blueprint(blueprint)
 
     # Hidden entries are no part of the roadmap, as for render, so the directory itself is named.
-    assert f"{folder}/.implementation-notes" in paths
-    assert ".implementation-notes" not in paths
+    assert result.clean
+    assert [(warning.article_path, warning.code) for warning in result.warnings] == [
+        (f"{folder}/.implementation-notes", "invalid-implementation-note")
+    ]
 
 
 def test_audit_reports_formalizable_structure(tmp_path: Path) -> None:

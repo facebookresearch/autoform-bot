@@ -229,14 +229,13 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     parsed: list[_ParsedNode] = []
     canonical_ids: dict[Path, str] = {}
     node_ids: dict[str, Path] = {}
-    sources, discovery_issues = _discover_nodes(blueprint)
+    sources, discovery_issues, warnings = _discover_nodes(blueprint)
     issues.extend(discovery_issues)
     article_ids: dict[str, str] = {}
     source_hashes = {source.id: source.source_sha256 for source in sources}
     policy_page = (blueprint / "roadmap" / "README.md").resolve()
     open_statements = False
     tracks_lean = True
-    warnings: list[str] = []
 
     for source in sources:
         canonical = source.path.resolve()
@@ -284,16 +283,20 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     warnings.append(f"{node.id}: tracks_lean accepts only true or false; ignored")
                 else:
                     tracks_lean = tracked.casefold() in _TRUE
+            # A role that describes containers is ignored with a warning on a declaration article (#325).
+            if node.metadata.get("navigation", "topic") != "topic" and "declaration" in node.metadata:
+                warnings.append(f"{node.id}: 'navigation' describes containers, not declaration articles; ignored here")
+                del node.metadata["navigation"]
             if "published" in node.metadata and (canonical.name != "README.md" or canonical == policy_page):
                 issues.append(
                     f"{node.id}: published is a folder setting; set it in a folder's README.md below roadmap/"
                 )
             parsed.append(node)
 
-    if not issues:
-        issues.extend(_implementation_note_issues(blueprint, article_ids))
     if issues:
         raise GraphValidationError(issues)
+    # A note no command can use leaves the graph whole, so it is warned about, never refused (#325).
+    warnings.extend(_implementation_note_warnings(blueprint, article_ids))
 
     parents = _article_parents(parsed, blueprint / "roadmap")
     issues.extend(_containment_cycles(parents))
@@ -404,12 +407,11 @@ def _unpublished_link_issues(sources: list[_NodeSource], unpublished: tuple[Path
     return issues
 
 
-def unpublished_content(files: tuple[tuple[str, bytes], ...]) -> tuple[tuple[str, ...], frozenset[str]]:
-    """The folders captured *files* mark ``published: false``, and the article IDs inside them.
+def unpublished_content(files: tuple[tuple[str, bytes], ...]) -> tuple[str, ...]:
+    """The folders captured *files* mark ``published: false``.
 
-    For render, which leaves those folders out before it loads the graph but
-    still knows their articles' implementation notes. A README that cannot be
-    read here fails ``load_graph`` too.
+    For render, which leaves those folders out before it loads the graph. A
+    README that cannot be read here fails ``load_graph`` too.
     """
     folders = []
     for name, data in files:
@@ -421,16 +423,7 @@ def unpublished_content(files: tuple[tuple[str, bytes], ...]) -> tuple[tuple[str
                 continue
             if metadata.get("published") in _FALSE:
                 folders.append(name.removesuffix("/README.md"))
-    article_ids = set()
-    for name, data in files:
-        if name.endswith(".md") and any(name.startswith(f"{folder}/") for folder in folders):
-            try:
-                article_id = _parse_frontmatter(name, data.decode("utf-8").splitlines())[0].get("article_id")
-            except UnicodeError:
-                continue
-            if article_id is not None:
-                article_ids.add(article_id)
-    return tuple(folders), frozenset(article_ids)
+    return tuple(folders)
 
 
 def unpublished_node_ids(files: tuple[tuple[str, bytes], ...], folders: tuple[str, ...]) -> frozenset[str]:
@@ -531,18 +524,29 @@ def _links_into(article: Path, target: str, directory: Path) -> bool:
     return directory in Path(os.path.normpath(article.parent / unquote(split.path))).parents
 
 
-def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
+def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str], list[str]]:
+    """Read the roadmap's articles; return them, the errors, and the warnings."""
     roadmap_root = blueprint / "roadmap"
+    # A case-insensitive filesystem opens Roadmap/ as roadmap/, but render lists the folder
+    # as spelled and a case-sensitive one finds none, so it is refused everywhere (#595).
+    try:
+        spellings = sorted(path.name for path in blueprint.iterdir() if path.name.casefold() == "roadmap")
+    except OSError:
+        spellings = []
+    if spellings and "roadmap" not in spellings:
+        hint = f"rename {spellings[0]} to roadmap (in Git: git mv through a temporary name)"
+        return [], [f"roadmap directory does not exist: {roadmap_root}; {hint}"], []
     if not roadmap_root.is_dir():
-        return [], [f"roadmap directory does not exist: {roadmap_root}"]
+        return [], [f"roadmap directory does not exist: {roadmap_root}"], []
 
     symlink_issues = roadmap_symlink_issues(blueprint)
     if symlink_issues:
         # Containment and ids are read from paths, so one symbolic link can make two
         # pages each other's parent; refuse the layout before anything is read.
-        return [], symlink_issues
+        return [], symlink_issues, []
 
     issues: list[str] = []
+    warnings: list[str] = []
     sources: list[_NodeSource] = []
     roadmap_root = roadmap_root.resolve()
 
@@ -556,7 +560,7 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
         for name in directories:
             if name.casefold() == IMPLEMENTATION_NOTES_DIR.casefold():
                 misplaced = (Path(directory) / name).relative_to(roadmap_root.parent).as_posix()
-                issues.append(
+                warnings.append(
                     f"{misplaced}: implementation notes directory belongs at the blueprint root, "
                     f"as {IMPLEMENTATION_NOTES_DIR}; nothing reads it here"
                 )
@@ -564,6 +568,7 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
         entries.extend(Path(directory, name) for name in files if not name.startswith("."))
     entries.sort()
     issues.sort()  # a walk visits directories in arbitrary order
+    warnings.sort()
     for path in entries:
         if path.suffix != ".md" and path.name.casefold() != "readme.md":
             continue
@@ -595,7 +600,7 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
         )
 
     issues.extend(_chapter_issues(roadmap_root))
-    return sources, issues
+    return sources, issues, warnings
 
 
 def roadmap_symlink_issues(blueprint: Path) -> list[str]:
@@ -664,7 +669,7 @@ def _chapter_issues(roadmap_root: Path) -> list[str]:
     return issues
 
 
-def _implementation_note_issues(
+def _implementation_note_warnings(
     blueprint: Path, article_ids: dict[str, str]
 ) -> list[str]:
     """Validate hidden, per-article implementation notes.
@@ -714,10 +719,12 @@ def _implementation_note_issues(
         # Hidden entries, such as an editor's lock symlink, are never notes.
         if path.name.startswith("."):
             continue
-        if path.is_symlink():
-            issues.append(f"{relative}: implementation note must be a regular file")
+        try:
+            mode = path.lstat().st_mode  # a folder that can be listed but not searched fails here
+        except OSError as error:
+            issues.append(f"{relative}: cannot read implementation note: {error}")
             continue
-        if not path.is_file():
+        if not stat.S_ISREG(mode):
             issues.append(f"{relative}: implementation note must be a regular file")
             continue
         if path.suffix != ".md" or not ARTICLE_ID_PATTERN.fullmatch(path.stem):
@@ -977,9 +984,6 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
                 f"{node_id}: 'catalog' cannot be combined with declaration-specific "
                 f"frontmatter key {key!r}"
             )
-
-    if metadata.get("navigation") in {"collection", "source", "transparent", "module"} and "declaration" in metadata:
-        issues.append(f"{node_id}: 'navigation' describes containers, not declaration articles")
 
     if metadata.get("statement") == _RETRACTED:
         if "lean" not in metadata:

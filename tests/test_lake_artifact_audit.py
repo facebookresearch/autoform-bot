@@ -308,7 +308,8 @@ def test_duplicate_member_path_fails_closed(helper: ModuleType, tmp_path: Path) 
 def test_helper_runs_on_python_310(repo_root: Path, tmp_path: Path) -> None:
     python = shutil.which("python3.10")
     if python is None:
-        pytest.skip("python3.10 is not installed")
+        unavailable = pytest.fail if os.environ.get("AUTOFORM_REQUIRE_PYTHON310_TESTS") == "1" else pytest.skip
+        unavailable("python3.10 is not installed")
     helper_path = repo_root / _TEMPLATE
     config = tmp_path / "evaluated.toml"
     _write(config, 'name = "Fixture"\n')

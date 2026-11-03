@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import os
 import re
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -30,11 +31,6 @@ from autoform_cli.markdown import (
     resolved_path,
     visible_prose,
 )
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10
-    import tomli as tomllib
 
 #: Heading forms whose published anchors are easy to get subtly wrong, paired
 #: with what the configured MkDocs renderer actually publishes for them. Several

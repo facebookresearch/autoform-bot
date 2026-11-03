@@ -134,8 +134,8 @@
     })});
   }
 
-  function outlineProjection(nodes, currentScope, currentNode, limit) {
-    var records = new Map(nodes.map(function (node) { return [node.id, node]; })), children = new Map(), parents = new Map();
+  function outlineProjection(nodes, currentScope, currentNode, limit, byId) {
+    var records = byId || new Map(nodes.map(function (node) { return [node.id, node]; })), children = new Map(), parents = new Map();
     function parentOf(node) {
       if (parents.has(node.id)) return parents.get(node.id);
       var parent = records.get(node.parent), seen = new Set([node.id]);
@@ -237,9 +237,9 @@
     buildShell();
     bindEvents();
     // The router has already validated its index, so the first route, a
-    // direct theorem entry included, reads its records.
-    if (navigation && navigation.getIndex) useIndex(navigation.getIndex());
-    resize();
+    // direct theorem entry included, reads its records. Only the route
+    // renders the first view, after projecting with them.
+    if (navigation && navigation.getIndex) adoptIndex(navigation.getIndex());
     readingReady = applyRoute(firstBundle);
 
     function globalListen(target, type, handler, options) {
@@ -311,14 +311,18 @@
       }
       dom$error.hidden = false;
     }
-    function useIndex(index) {
-      if (!index || sharedIndex === index) return;
+    function adoptIndex(index) {
+      if (!index || sharedIndex === index) return false;
       sharedIndex = index; records = new Map(); dom$search.removeAttribute("aria-busy");
       index.nodes.forEach(function (node, i) { node._index = i; records.set(node.id, node); });
       ui$searchNodes = index.nodes; ui$searchCacheQuery = null;
+      requestWikiLinks();
+      return true;
+    }
+    function useIndex(index) {
+      if (!adoptIndex(index)) return;
       if (currentBundle) updateProjection();
       renderNavigation(); refresh(false);
-      requestWikiLinks();
     }
     function requestWikiLinks() {
       if (!alive || !sharedIndex || ui$wikiRequested) return;
@@ -482,7 +486,7 @@
     }
     function renderOutline() {
       var key = currentBundle && currentBundle.scope, tree = outlineProjection(sharedIndex.nodes, key,
-        currentBundle && currentBundle.nodeId, ui$outlineLimit);
+        currentBundle && currentBundle.nodeId, ui$outlineLimit, records);
       var list = element("ul", "bp-dag-navigation-list");
       tree.entries.forEach(function (entry) {
         var node = entry.node, item = element("li", "bp-outline-depth-" + entry.depth);
@@ -922,8 +926,9 @@
       if (title.split(/\s+/).some(function (word) { return word.startsWith(query); })) return 7;
       if (title.indexOf(query) >= 0) return 8; if (id.indexOf(query) >= 0) return 9;
       if (lean.indexOf(query) >= 0) return 10; if (summary.indexOf(query) >= 0) return 11;
-      var terms = query.split(/\s+/).filter(Boolean), all = [title, id, lean, summary].join(" ");
-      return terms.length > 1 && terms.every(function (term) { return all.indexOf(term) >= 0; }) ? 12 : 0;
+      var terms = query.split(/\s+/).filter(Boolean); if (terms.length < 2) return 0;
+      var all = [title, id, lean, summary].join(" ");
+      return terms.every(function (term) { return all.indexOf(term) >= 0; }) ? 12 : 0;
     }
     function ensureGlobalSearch() {
       if (sharedIndex) return Promise.resolve(sharedIndex);
@@ -953,7 +958,9 @@
     function searchMatches() {
       var query = ui$query.toLocaleLowerCase(); if (!query) return [];
       if (query === ui$searchCacheQuery) return ui$searchCache;
-      ui$searchCacheQuery = query; ui$searchCache = rankMatches(ui$searchNodes, query);
+      // Every row that matches a query matches the query it extends, so typing on ranks only the last matches.
+      var pool = ui$searchCacheQuery && query.startsWith(ui$searchCacheQuery) ? ui$searchCache.map(function (match) { return match.node; }) : ui$searchNodes;
+      ui$searchCacheQuery = query; ui$searchCache = rankMatches(pool, query);
       return ui$searchCache;
     }
     function renderSearch() {

@@ -923,6 +923,19 @@ def test_requires_blueprint_and_roadmap_directories(tmp_path: Path) -> None:
         load_graph(blueprint)
 
 
+def test_a_roadmap_folder_spelled_with_other_capitals_is_refused(tmp_path: Path) -> None:
+    """A case-insensitive filesystem opened it as roadmap/, and render then crashed (#595)."""
+    blueprint = tmp_path / "blueprint"
+    (blueprint / "Roadmap").mkdir(parents=True)
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    (issue,) = caught.value.issues
+    assert issue.startswith("roadmap directory does not exist: ")
+    assert issue.endswith("; rename Roadmap to roadmap (in Git: git mv through a temporary name)")
+
+
 def test_loads_container_articles_and_infers_single_parent_hierarchy(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _roadmap_page(
@@ -1980,11 +1993,13 @@ def test_implementation_notes_are_keyed_by_durable_article_id(tmp_path: Path) ->
 
     graph = load_graph(blueprint)
     assert sorted(graph.nodes) == ["chapter", "chapter/result", "moved", "roadmap"]
+    assert graph.warnings == ()
 
     (roadmap / "chapter" / "result.md").rename(roadmap / "moved" / "result.md")
 
     moved = load_graph(blueprint)
     assert moved.nodes["moved/result"].article_id == article_id
+    assert moved.warnings == ()
 
 
 @pytest.mark.parametrize(
@@ -2001,7 +2016,7 @@ def test_implementation_notes_are_keyed_by_durable_article_id(tmp_path: Path) ->
         ("af_0123456789abcdef01234567.md", "\ufeff\u200b\n", "empty implementation note"),
     ],
 )
-def test_implementation_notes_fail_closed(
+def test_an_unusable_implementation_note_is_a_warning(
     tmp_path: Path, filename: str, contents: str, message: str
 ) -> None:
     blueprint = tmp_path / "blueprint"
@@ -2016,8 +2031,8 @@ def test_implementation_notes_fail_closed(
     notes.mkdir()
     (notes / filename).write_text(contents, encoding="utf-8")
 
-    with pytest.raises(GraphValidationError, match=message):
-        load_graph(blueprint)
+    (warning,) = load_graph(blueprint).warnings
+    assert message in warning
 
 
 def test_implementation_notes_directory_has_canonical_spelling(tmp_path: Path) -> None:
@@ -2033,8 +2048,8 @@ def test_implementation_notes_directory_has_canonical_spelling(tmp_path: Path) -
     notes.mkdir()
     (notes / f"{article_id}.md").write_text("route\n", encoding="utf-8")
 
-    with pytest.raises(GraphValidationError, match="noncanonical implementation notes"):
-        load_graph(blueprint)
+    (warning,) = load_graph(blueprint).warnings
+    assert "noncanonical implementation notes" in warning
 
 
 def test_implementation_note_must_be_utf8(tmp_path: Path) -> None:
@@ -2050,8 +2065,8 @@ def test_implementation_note_must_be_utf8(tmp_path: Path) -> None:
     notes.mkdir()
     (notes / f"{article_id}.md").write_bytes(b"\xff")
 
-    with pytest.raises(GraphValidationError, match="cannot read implementation note"):
-        load_graph(blueprint)
+    (warning,) = load_graph(blueprint).warnings
+    assert "cannot read implementation note" in warning
 
 
 def test_implementation_note_must_not_be_a_symlink(tmp_path: Path) -> None:
@@ -2072,8 +2087,8 @@ def test_implementation_note_must_not_be_a_symlink(tmp_path: Path) -> None:
     except OSError:
         pytest.skip("symlinks are unavailable")
 
-    with pytest.raises(GraphValidationError, match="must be a regular file"):
-        load_graph(blueprint)
+    (warning,) = load_graph(blueprint).warnings
+    assert "must be a regular file" in warning
 
 
 def test_hidden_entries_beside_implementation_notes_are_ignored(tmp_path: Path) -> None:
@@ -2094,7 +2109,9 @@ def test_hidden_entries_beside_implementation_notes_are_ignored(tmp_path: Path) 
     except OSError:
         pytest.skip("symlinks are unavailable")
 
-    assert list(load_graph(blueprint).nodes) == ["result"]
+    graph = load_graph(blueprint)
+    assert list(graph.nodes) == ["result"]
+    assert graph.warnings == ()
 
 
 def test_an_implementation_note_for_a_hidden_page_names_no_article(tmp_path: Path) -> None:
@@ -2106,8 +2123,8 @@ def test_an_implementation_note_for_a_hidden_page_names_no_article(tmp_path: Pat
     (blueprint / ".implementation-notes").mkdir()
     (blueprint / ".implementation-notes" / f"{article_id}.md").write_text("route\n", encoding="utf-8")
 
-    with pytest.raises(GraphValidationError, match="implementation note names no roadmap article"):
-        load_graph(blueprint)
+    (warning,) = load_graph(blueprint).warnings
+    assert "implementation note names no roadmap article" in warning
 
 
 def test_implementation_notes_directory_must_not_be_a_symlink(tmp_path: Path) -> None:
@@ -2121,32 +2138,88 @@ def test_implementation_notes_directory_must_not_be_a_symlink(tmp_path: Path) ->
     )
     target = tmp_path / "notes"
     target.mkdir()
+    # Never read: a note named for no article would be a second warning.
+    (target / "result.md").write_text("route\n", encoding="utf-8")
     try:
         (blueprint / ".implementation-notes").symlink_to(target, target_is_directory=True)
     except OSError:
         pytest.skip("symlinks are unavailable")
 
-    with pytest.raises(GraphValidationError, match="directory must not be a symlink"):
-        load_graph(blueprint)
+    (warning,) = load_graph(blueprint).warnings
+    assert "directory must not be a symlink" in warning
 
 
-def test_article_error_does_not_misreport_its_note_as_orphaned(tmp_path: Path) -> None:
+def test_a_notes_path_that_is_a_file_is_a_warning(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
-    roadmap = blueprint / "roadmap"
-    roadmap.mkdir(parents=True)
+    _node(blueprint, "result.md", "# Result\n")
+    (blueprint / ".implementation-notes").write_text("route\n", encoding="utf-8")
+
+    (warning,) = load_graph(blueprint).warnings
+    assert warning == ".implementation-notes: implementation notes path must be a directory"
+
+
+def test_a_folder_named_as_a_note_is_a_warning(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
     article_id = "af_0123456789abcdef01234567"
-    (roadmap / "result.md").write_text(
-        f"---\narticle_id: {article_id}\ndeclaration: theorem\n---\n\nNo H1.\n",
-        encoding="utf-8",
-    )
-    notes = blueprint / ".implementation-notes"
-    notes.mkdir()
-    (notes / f"{article_id}.md").write_text("route\n", encoding="utf-8")
+    _node(blueprint, "result.md", "# Result\n", article_id=article_id)
+    (blueprint / ".implementation-notes" / f"{article_id}.md").mkdir(parents=True)
 
-    with pytest.raises(GraphValidationError) as caught:
-        load_graph(blueprint)
+    (warning,) = load_graph(blueprint).warnings
+    assert warning == f".implementation-notes/{article_id}.md: implementation note must be a regular file"
 
-    assert caught.value.issues == ("result: missing H1 title",)
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
+@pytest.mark.parametrize(
+    ("locked", "mode", "message"),
+    [
+        (".implementation-notes", 0, ".implementation-notes: cannot read directory: "),
+        (
+            ".implementation-notes",
+            0o644,
+            ".implementation-notes/af_111111111111111111111111.md: cannot read implementation note: ",
+        ),
+        ("", 0o311, "cannot inspect implementation notes: "),
+    ],
+    ids=["unlistable-notes-folder", "unsearchable-notes-folder", "unlistable-blueprint"],
+)
+def test_notes_that_cannot_be_read_are_a_warning(tmp_path: Path, locked: str, mode: int, message: str) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "result.md", "# Result\n")
+    (blueprint / ".implementation-notes").mkdir()
+    (blueprint / ".implementation-notes" / "af_111111111111111111111111.md").write_text("route\n", encoding="utf-8")
+    directory = blueprint / locked
+    directory.chmod(mode)
+    try:
+        (warning,) = load_graph(blueprint).warnings
+    finally:
+        directory.chmod(0o755)
+
+    assert warning.startswith(message)
+
+
+def test_a_note_for_an_unpublished_article_is_no_orphan(tmp_path: Path) -> None:
+    """Render leaves the folder out, but its articles keep their notes."""
+    blueprint = tmp_path / "blueprint"
+    article_id = "af_0123456789abcdef01234567"
+    _node(blueprint, "drafts/README.md", "# Drafts\n", published="false")
+    _node(blueprint, "drafts/idea.md", "# Idea\n", article_id=article_id)
+    (blueprint / ".implementation-notes").mkdir()
+    (blueprint / ".implementation-notes" / f"{article_id}.md").write_text("route\n", encoding="utf-8")
+
+    assert load_graph(blueprint).warnings == ()
+
+
+@pytest.mark.parametrize("folder", ["roadmap", "roadmap/chapter"])
+def test_a_notes_directory_under_the_roadmap_is_a_warning(tmp_path: Path, folder: str) -> None:
+    blueprint = tmp_path / "blueprint"
+    article_id = "af_0123456789abcdef01234567"
+    _node(blueprint, "result.md", "# Result\n", article_id=article_id)
+    misplaced = blueprint / folder / ".implementation-notes"
+    misplaced.mkdir(parents=True)
+    (misplaced / f"{article_id}.md").write_text("route\n", encoding="utf-8")
+
+    (warning,) = load_graph(blueprint).warnings
+    assert warning.startswith(f"{folder}/.implementation-notes: implementation notes directory belongs at the blueprint")
 
 
 @pytest.mark.parametrize(

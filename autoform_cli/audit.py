@@ -265,6 +265,9 @@ def audit_graph(
         scope_has_formalizable[node_id] = has_formalizable
         scope_fully_implemented[node_id] = fully_implemented
 
+    # Behind a linked notes folder a note lies outside the vault, so none is reported for deletion.
+    notes = graph.blueprint_dir / IMPLEMENTATION_NOTES_DIR
+    notes_linked = notes.is_symlink()
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
@@ -274,9 +277,9 @@ def audit_graph(
         implementation_done = derived[node_id].proved or (
             scope_has_formalizable[node_id] and scope_fully_implemented[node_id]
         )
-        if node.article_id is not None and implementation_done:
-            note = graph.blueprint_dir / IMPLEMENTATION_NOTES_DIR / f"{node.article_id}.md"
-            if note.is_file():
+        if node.article_id is not None and implementation_done and not notes_linked:
+            # False for a notes folder that cannot be searched, which check warns about; Path.is_file raises.
+            if os.path.isfile(notes / f"{node.article_id}.md"):
                 findings.append(
                     AuditFinding(
                         article_path,
@@ -396,6 +399,12 @@ def audit_graph(
         coverage, coverage_findings = _coverage_findings(graph.blueprint_dir, graph.unpublished)
     findings.extend(coverage_findings)
     warnings = [AuditWarning("atlas.json", "atlas-omission", omission, ()) for omission in atlas_omissions(graph)]
+    # The loader's note warnings, at the note or folder each names.
+    warnings.extend(
+        AuditWarning(path, "invalid-implementation-note", _stable_validation_reason(graph.blueprint_dir, warning), ())
+        for warning in graph.warnings
+        if (path := _implementation_note_path(warning)) is not None
+    )
     warnings.extend(_duplicate_target_warnings(graph))
     for issue in () if coverage is None else validate_coverage_roles(graph, coverage):
         reason = f"{issue.reason}{f' (line {issue.line})' if issue.line else ''}"
@@ -955,15 +964,20 @@ def _stable_validation_reason(blueprint: Path, issue: str) -> str:
     return issue.replace(str(blueprint), ".")
 
 
-def _validation_article_path(blueprint: Path, issue: str) -> str:
-    # The notes directory, or one misplaced under roadmap/, as the issue names it.
+def _implementation_note_path(issue: str) -> str | None:
+    """The note or notes folder a loader warning names, or None for a warning about anything else."""
+    if issue.startswith("cannot inspect implementation notes: "):
+        return "."  # the blueprint folder cannot be listed
     subject = issue.split(":", 1)[0].split("/")
     if IMPLEMENTATION_NOTES_DIR.casefold() in {part.casefold() for part in subject}:
         for marker in _IMPLEMENTATION_NOTE_ISSUE_MARKERS:
             boundary = issue.rfind(marker)
             if boundary >= 0:
                 return issue[:boundary]
+    return None
 
+
+def _validation_article_path(blueprint: Path, issue: str) -> str:
     node_id = issue.split(":", 1)[0]
     if not node_id or " " in node_id:
         return "."

@@ -104,6 +104,19 @@ date when the release is tagged.
   42.1 MB to 32.2 MB, and on one CI runner search and the outline were ready
   2.1 s after Home started loading instead of 2.8 s in WebKit, and 1.6 s
   instead of 1.9 s in Chrome.
+- **Explorer search.** A keystroke that extends the query ranks only the
+  previous query's matches, not every row of the search index, and a one-word
+  query no longer joins each row's fields. Results and their order are the
+  same. On one CI runner, typing "zeckendorf" on ATLAS's Home took 110 ms of
+  script in Chrome instead of 562 ms, and 220 ms instead of 1,272 ms in WebKit.
+- **Explorer first view.** The explorer draws a page's first view once. It drew
+  the Topics outline, breadcrumb and reader as it took in the search index, and
+  then again for the page itself. The outline also reads the index's rows by
+  ID from the map the explorer already keeps, instead of building another. The
+  first view is the same. With the index's 25 ms slices, on one CI runner,
+  ATLAS's Home showed it 426 ms after the index arrived instead of 805 ms in
+  Chrome, and 986 ms instead of 1,327 ms in WebKit. Other pages gained about as
+  much, and the longest frame stayed within one frame of its old length.
 - **Wiki links.** Render reads the links between articles without rendering
   an article whose links all sit under its Sources, References, Bibliography
   or Depends on headings, which holds for about nine in ten ATLAS articles.
@@ -115,6 +128,12 @@ date when the release is tagged.
   map, and compares path parts where it called `relative_to`, which is slow
   from Python 3.12. On one CI runner ATLAS rendered in 312 s instead of 340 s,
   with the same output.
+- **Render workers.** With 4,000 or more node pages, `render` and `check` read
+  them in up to four worker processes: on POSIX, from Python 3.11.5, run as the
+  `autoform` command or `python -m autoform_cli`. A page a worker cannot read,
+  or a pool that breaks or will not start, is read as before, so the site and
+  the warnings are the same. On a 4-processor CI runner, ATLAS rendered in
+  225 s instead of 337 s, and checked in 145 s instead of 255 s.
 - **Landing.** The ready figure links the list of what it counts, each count
   shows once with thousands separators, and the brand gradient is off the
   figures, bar and header hairline. Source coverage reads in plain words
@@ -328,9 +347,25 @@ date when the release is tagged.
   a finding, so it no longer fails the audit or the doctor's `lean targets`
   check. Its limit is four times the project's median, so finished work
   landing elsewhere could fail the audit of a node nobody edited (#429).
+- **Loader warnings.** A `navigation` role other than `topic` on an article that
+  sets `declaration`, and an implementation note or notes folder no command can
+  use, no longer stop every command. `check` warns about each, and about a notes
+  folder that can be listed but not searched, which crashed every command.
+  `audit` reports a note as `invalid-implementation-note` where it used to
+  report it as `invalid-graph`, and no longer reports the role. The article
+  ignores the role, nothing reads through a linked notes folder, and render no
+  longer checks the notes: `graph.unpublished_content`, which gave it the
+  unpublished articles' IDs, returns only the folders. CI at an older
+  `AUTOFORM_REF` still refuses both, so move the pin before relying on the
+  warnings.
 
 ### Removed
 
+- **Previous/Next links.** Render no longer ends each book page, or the
+  explorer's reader, with Previous and Next links. They followed the walk down
+  the containment tree, so on a wiki such as ATLAS a folder's last page led into
+  the next domain: Ultrafilter's Next was Theory of Computation. The sidebar and
+  `SUMMARY.md` keep the book's order (#599).
 - **Explorer canvas.** The explorer's own drawing of the graph is gone, now
   that its stage shows the whole-project map: its bounded maps, camera, Fit and
   zoom controls, Show unlinked filter, topic shelves, concept-link clusters and
@@ -345,9 +380,21 @@ date when the release is tagged.
   stops before it is set up, leaves a notice on the stage, and the outline,
   search and lists still work. The explorer bundle is 68,637 bytes instead of
   144,973 (#574).
+- **Python 3.10.** Autoform needs Python 3.11 or later, and CI tests 3.11 and
+  3.13. The lock drops the packages only 3.10 needed and takes dnspython
+  2.9.1, which fixes GHSA-45c3-73f7-pv4m. Lakefiles are still read with
+  `tomli` below 2.4 rather than the standard library's `tomllib`: Lake reads
+  TOML 1.0, and from Python 3.15 `tomllib` parses TOML 1.1.
 
 ### Fixed
 
+- **Decision files on Windows.** `project inspect` and the library commands
+  read `lean-toolchain`, the lakefiles and the manifests in text mode on
+  Windows, which turned CRLF into LF and stopped at a 0x1A byte. They now read
+  the bytes as they are, as elan and Lake do. Ordinary CRLF files read and
+  digest as before. A decision file with a 0x1A byte or a CR CR LF line ending
+  now parses and digests whole, so a 0x1A on `lean-toolchain`'s first line
+  gets `invalid-lean-toolchain` instead of passing.
 - **Claims inside a Git hook.** The claim commands' Git ignores `GIT_DIR`,
   `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the other variables that point Git at
   another repository, as a hook sets them. With only `GIT_DIR` set, the board's
@@ -372,20 +419,22 @@ date when the release is tagged.
   in dependency packages. It no longer reads other nested checkouts, such as
   worker worktrees with their own `.lake`, the root's build output or a
   package's `.lake`, which could stall the run before its probe (#429).
-- **Search index load.** The explorer prepares its search index in 10 ms
-  slices rather than 512-row batches, and resolves each page's links once
-  rather than every row's. On ATLAS (38,661 rows), search, the Topics outline
-  and concept links were ready 5.3 s after the index was parsed, most of it
-  spent waiting between batches; they are now ready after 1.0 s in WebKit and
-  0.7 s in Chrome.
+- **Search index load.** The explorer prepares its search index in 25 ms slices
+  rather than 512-row batches, reading the clock every 128 rows, and resolves
+  each page's links once rather than every row's. The first slice begins with
+  the parse, so a long parse is not followed by a slice's work in the same task.
+  On ATLAS (38,661 rows), search, the Topics outline and concept links were
+  ready 5.3 s after the index was parsed, most of it spent waiting between
+  batches; with 10 ms slices they were ready after 1.0 s in WebKit and 0.7 s in
+  Chrome.
 - **Search index memory.** The explorer no longer keeps the search index's
   text in its page cache after preparing the index. ATLAS's 42 MB index took
   40 of the cache's 48 MiB, so pages and graphs already read were dropped and
   fetched again. A body WebKit hands over in one piece is hashed and decoded
-  without a copy, and when reading the index takes at least 10 ms, a frame
-  paints before it is parsed. On ATLAS, on one CI runner, the longest frame
-  while the index was read and parsed went from 217 ms to 142 ms in Chrome
-  and from 199 ms to 164 ms in WebKit.
+  without a copy, and when reading the index takes at least 25 ms, a frame
+  paints before it is parsed. On ATLAS, on one CI runner, with 10 ms slices,
+  the longest frame while the index was read and parsed went from 217 ms to
+  142 ms in Chrome and from 199 ms to 164 ms in WebKit.
 - **Book order.** A link inside an HTML comment no longer places its page in
   the book's order: a commented-out chapter link moved that chapter forward in
   `SUMMARY.md`, though the page showed it later (#535).
@@ -495,6 +544,11 @@ date when the release is tagged.
   its first, such as `[^1]: Grounded in [Paper](../sources/paper.md)`, is
   prose, as Python-Markdown reads it. Render read it as a definition and left
   the links after its first word pointing at unpublished pages (#484).
+- **Roadmap folder spelling.** A roadmap folder spelled with other capitals,
+  such as `Roadmap/`, passed `check` on a case-insensitive filesystem, as on
+  macOS, and then ended `render` in a `KeyError`. Loading the graph now refuses
+  it on every filesystem as Linux did, "roadmap directory does not exist", and
+  names the rename (#595).
 
 ## 0.6.0 (2026-10-22)
 

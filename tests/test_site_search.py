@@ -140,7 +140,6 @@ def test_isolating_notes_headings_keeps_every_card_and_heading_whole(tmp_path: P
     cards = [el for el in article.iter("div") if "bp-thmwrapper" in el.get("class", "").split()]
     assert [card.get("data-autoform-node-id") for card in cards] == ["ch/first", "ch/second"]
     # A "<" in a notes heading once closed its wrapper early and pushed the rest of the page out of the article.
-    assert any("bp-book-nav" in el.get("class", "").split() for el in article.iter())
     second = cards[1]
     assert any("bp-dependencies" in el.get("class", "").split() for el in second.iter())
     headings = {"".join(el.itertext()).strip(): el.get("id") for el in article.iter("h6")}

@@ -15,6 +15,8 @@ from importlib.resources import files
 from pathlib import Path
 
 import pytest
+# Lake reads TOML 1.0, as the pinned tomli does; from Python 3.15 tomllib parses 1.1.
+import tomli
 
 from autoform_cli import scaffold as scaffold_module
 from autoform_cli.__main__ import main
@@ -29,11 +31,6 @@ from autoform_cli.project import (
 )
 from autoform_cli.project import create as create_module
 from autoform_cli.scaffold import DEFAULT_AUTOFORM_SOURCE
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10
-    import tomli as tomllib
 
 _RELEASE = "lean-v4.32.2-mathlib-v4.32.2"
 _CATALOG = load_release_catalog().releases
@@ -568,7 +565,7 @@ def test_unlisted_pair_threads_the_mathlib_revision(tmp_path: Path, toolchain: s
     assert result.release is None
     assert result.mathlib_rev == revision
     with (target / "lakefile.toml").open("rb") as lakefile:
-        assert tomllib.load(lakefile)["require"] == [
+        assert tomli.load(lakefile)["require"] == [
             {"name": "mathlib", "git": "https://github.com/leanprover-community/mathlib4", "rev": revision}
         ]
 
@@ -1646,7 +1643,7 @@ def test_pair_matching_the_catalog_in_one_component_stays_unlisted(
     assert not (target / "lake-manifest.json").exists()
     assert (target / "lean-toolchain").read_text(encoding="utf-8") == f"leanprover/lean4:{toolchain}\n"
     with (target / "lakefile.toml").open("rb") as lakefile:
-        assert tomllib.load(lakefile)["require"][0]["rev"] == revision
+        assert tomli.load(lakefile)["require"][0]["rev"] == revision
 
 
 @pytest.mark.parametrize(
@@ -1992,7 +1989,7 @@ def test_cli_threads_the_toolchain_and_revision_together(tmp_path: Path, capsys)
     assert payload["lean_toolchain"] == "leanprover/lean4:v4.30.0"
     assert payload["mathlib_rev"] == "master"
     with (target / "lakefile.toml").open("rb") as lakefile:
-        assert tomllib.load(lakefile)["require"][0]["rev"] == "master"
+        assert tomli.load(lakefile)["require"][0]["rev"] == "master"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="project creation is POSIX-only")

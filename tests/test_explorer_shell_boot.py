@@ -44,10 +44,10 @@ def _run(body: str, fixture: object) -> None:
 
 
 @pytest.mark.parametrize("entry", ["roadmap", "resultA"])
-def test_cold_mount_seeds_its_route_and_adopts_the_loaded_index_before_the_first_resize(entry: str) -> None:
-    """Execute the real cold-mount prefix and index adoption; the shell, the page's adoption and the route are seams."""
+def test_cold_mount_adopts_the_loaded_index_and_only_its_route_renders(entry: str) -> None:
+    """Execute the real cold-mount prefix and index adoption; the shell, the renderers and the route are seams."""
     _run(r"""
-      const events=[];
+      const events=[];let loaded=true;
       const scopes=Array.from({length:12},(_,number)=>({id:'scope-'+number,title:'Topic '+number,
         scope:'scope-'+number,parent:'roadmap',kind:'scope',navigation:'module',status:'planned',area:number<6?'Algebra':'Topology'}));
       const results=['resultA','resultB'].map((id,number)=>({id,title:id,scope:'scope-'+number*6,parent:'scope-'+number*6,kind:'node',status:'planned',result:true}));
@@ -59,36 +59,40 @@ def test_cold_mount_seeds_its_route_and_adopts_the_loaded_index_before_the_first
         view:{presentation:'atlas',breadcrumbs:[]},regions:[],present_statuses:['planned']};
       const firstBundle={nodeId:fixture.entry,scope:fixture.entry==='roadmap'?'roadmap':'scope-0',
         graph:payload,readingSource:{},dataURL:'https://example.test/dependencies.json'};
-      const navigation={getIndex(){events.push('index');return index;}};
+      const navigation={getIndex(){events.push('index');return loaded?index:null;}};
       const host={querySelector(){return null;},classList:{add(){},remove(){},toggle(){}}};
       const window={location:{href:'https://example.test/roadmap/index.html',origin:'https://example.test'}};
       const start=productionSource.indexOf('  function mount('),end=productionSource.indexOf('    function globalListen(',start);
       assert(start>=0&&end>start,'The real cold-mount boundary must exist');
-      const helpers=['safeHref','graphAt','useIndex','requestWikiLinks','useWikiLinks'].map(original).join('\n');
+      const helpers=['safeHref','graphAt','adoptIndex','useIndex','requestWikiLinks','useWikiLinks'].map(original).join('\n');
       const seams=`
         function buildShell() {events.push('shell');dom$search={removeAttribute(){}};}
         function bindEvents() {events.push('bind');}
-        function updateProjection() {events.push('adopt');}
-        function renderNavigation() {} function refresh() {}
+        function updateProjection() {events.push('project');}
+        function renderNavigation() {events.push('outline');} function refresh() {events.push('refresh');}
+        function resize() {events.push('resize');}
         function renderWikiContext() {events.push('optional-wiki');}
         function applyRoute(bundle) {
-          assert.strictEqual(bundle,firstBundle);assert.equal(ui$wikiRequested,true);
-          assert.equal(ui$wikiLinks.availability,'unavailable');events.push('route');return Promise.resolve();
+          assert.strictEqual(bundle,firstBundle);assert.equal(ui$requestedNode,fixture.entry);
+          if(loaded) {
+            // The route projects with the router's validated index, a direct theorem entry's record included.
+            assert.strictEqual(sharedIndex,index,"The route must see the router's validated index");
+            assert.strictEqual(records.get(fixture.entry),index.nodes.find(node=>node.id===fixture.entry));
+            assert.strictEqual(ui$searchNodes,index.nodes);
+            assert.equal(ui$wikiRequested,true);assert.equal(ui$wikiLinks.availability,'unavailable');
+          } else assert.equal(sharedIndex,null);
+          events.push('route');return Promise.resolve();
         }
-        function record(phase) {
-          assert.strictEqual(sharedIndex,index,"The first resize must see the router's validated index");
-          assert.equal(ui$requestedNode,fixture.entry,'The first resize must retain the canonical requested route');
-          events.push(phase);
-        }
-        function resize() {record('resize');}
       `;
-      const bootstrap=eval('('+productionSource.slice(start,end)+'\nreturn ui$requestedNode;\n'+helpers+'\n'+seams+'})');
-      assert.equal(bootstrap(host,payload,1,firstBundle,navigation),fixture.entry);
-      const phase=name=>events.indexOf(name);
-      assert(phase('shell')<phase('bind')&&phase('bind')<phase('index')&&phase('index')<phase('adopt'));
-      // The optional concept links render once the page is adopted, before the first resize.
-      assert(phase('adopt')<phase('optional-wiki')&&phase('optional-wiki')<phase('resize')&&phase('resize')<phase('route'));
-      assert(events.filter(event=>event==='index').length===1);
+      const bootstrap=eval('('+productionSource.slice(start,end)+'\nreturn {requestedNode:ui$requestedNode,useIndex};\n'+helpers+'\n'+seams+'})');
+      assert.equal(bootstrap(host,payload,1,firstBundle,navigation).requestedNode,fixture.entry);
+      // Adopting the index renders nothing and lays nothing out: only the route renders the first view.
+      assert.deepEqual(events,['shell','bind','index','optional-wiki','route']);
+      // An index that arrives after the mount is adopted and rendered at once.
+      events.length=0;loaded=false;const client=bootstrap(host,payload,1,firstBundle,navigation);
+      assert.deepEqual(events,['shell','bind','index','route']);
+      events.length=0;client.useIndex(index);assert.deepEqual(events,['optional-wiki','project','outline','refresh']);
+      events.length=0;client.useIndex(index);assert.deepEqual(events,[]);
       assert.throws(()=>bootstrap(host,payload,1,firstBundle,null),/complete mathematical page and navigation/);
       assert.throws(()=>bootstrap(host,payload,1,null,navigation),/complete mathematical page and navigation/);
       assert.throws(()=>bootstrap(host,payload,1,{graph:payload},navigation),/complete mathematical page and navigation/);

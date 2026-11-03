@@ -29,7 +29,7 @@ every five minutes (leases expire after 25) and just before integrating.
 ## Import edits
 
 Compare the import-impact report's claim keys with `autoform claim list`, as the
-[CLI reference](../../../autoform_cli/README.md#work-import-impact) describes: another
+[work reference](../../../autoform_cli/reference/work.md#work-import-impact) describes: another
 owner's live affected claim is a conflict, malformed evidence is unverifiable,
 and an expired valid claim is not active. Before the edit, atomically acquire
 the report's `claim_targets`; an already-held same-worker article claim is

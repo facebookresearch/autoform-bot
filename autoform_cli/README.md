@@ -112,7 +112,8 @@ from repository organization:
 
 Roles never change identity, containment, readiness, or edges. An overview
 draws no edge to a collection it replaces with its contents, so depend on an
-article inside the collection instead.
+article inside the collection instead. On a declaration article, `check` warns
+about any role but `topic`, which the article ignores.
 
 For a taxonomy kept apart from article files, `blueprint/atlas.json` may assign
 the same areas without moving pages:
@@ -158,16 +159,18 @@ declaration-kind, and node-size checks apply only to declaration articles.
 Versioned implementation notes live at
 `blueprint/.implementation-notes/<article_id>.md`, one per article, and survive
 article moves. Claims keep workers from editing the same leaf's note;
-containers have no claims. Every command that loads the graph rejects
-malformed, empty, symlinked, or orphaned notes, so assign the article ID before
-creating its note. Any worker may delete a stale note or repair an orphan: move
-anything still useful into the surviving article's note and delete the orphan,
-or restore a lost `article_id` line if the article still exists. Delete a note
-once its article is proved; for a container, once every formalizable
-descendant and every `not_ready` leaf beneath it is proved and there is at
-least one (a module catalog never counts). `autoform audit` reports a note left
-after that point. Render omits the hidden directory from the site and the
-publication hash.
+containers have no claims. `check` warns about a malformed, empty, unreadable,
+symlinked, or orphaned note, so assign the article ID before creating its note.
+It also warns about a notes folder under `roadmap/` or capitalized differently,
+and about `.implementation-notes` as a file or a link, which nothing reads
+through. `audit` reports each as `invalid-implementation-note`. Any worker may
+delete a stale note or repair an orphan: move anything still useful into the
+surviving article's note and delete the orphan, or restore a lost `article_id`
+line if the article still exists. Delete a note once its article is proved; for
+a container, once every formalizable descendant and every `not_ready` leaf
+beneath it is proved and there is at least one (a module catalog never counts).
+`autoform audit` reports a note left after that point. Render omits the hidden
+directory from the site and the publication hash.
 
 ## Assertions and derived status
 
@@ -244,23 +247,9 @@ autoform init . --title "Finite Flat Group Schemes" \
   --repository-url https://github.com/owner/repo
 ```
 
-`init` appends the missing Autoform rules to an existing root `.gitignore`,
-which must be a regular file with one link; when it cannot verify the append,
-the error says the file may be partial: inspect it before retrying. Even with
-`--force`, `init` refuses before writing anything when it finds an entry that
-differs from a path it manages only in letter case or Unicode form (a
-`Blueprint/` Lean library, `MkDocs.yml`), a managed directory it cannot list,
-or a root `Readme.md` or `readme.md`. The vault is always `blueprint/`, so a
-Lean library named `Blueprint` needs a different library name (its lakefile
-`lean_lib`, root module and imports), not a lowercase rename.
-
-Generated workflows pin `--autoform-ref` or, by default, the HEAD commit of the
-Autoform checkout running the command (or of the marketplace checkout an
-installed plugin was copied from), when a safe remote (Autoform's canonical
-repository, then `origin`, then `upstream`, then a unique remaining one) has a
-cached tracking ref containing it, tracked files are clean, and the templates
-and any installed plugin copy match it; an explicit `--autoform-source` gets no
-default ref. Without a ref the CI workflows are omitted.
+Generated workflows pin an Autoform commit; without one, the CI workflows are
+omitted. [Project setup](reference/project-setup.md#init) gives the
+`.gitignore` rules, the names `init` refuses, and how the commit is chosen.
 
 ### project
 
@@ -278,53 +267,9 @@ autoform project inspect path/inside/project --json
 `project new` builds a complete Lean shell (the release's resolved dependency
 manifest, blueprint, and site) in a private sibling directory and publishes it
 atomically: the target must not exist and is never overwritten, and a failed or
-concurrent creation leaves no partial target. A failure or interrupt after
-staging can leave a hidden `.autoform-new-*` directory in the parent, which the
-error mentions; inspect it before removing it. The published tree has modes 0755
-for directories and executables and 0644 for other files, whatever the umask.
-Its `lakefile.toml` sets `enableArtifactCache = true` and `restoreAllArtifacts =
-true`, so checkouts on the same toolchain share builds through Lake's artifact
-cache while each module's `.olean` stays in `.lake/build`. Package names cannot
-shadow Mathlib libraries such as `Archive` or `Counterexamples`. Workflows are
-pinned as [`init`](#init) pins them. Apart from local Git reads, the command
-runs no subprocess, Lake, Lean, or network operation. Its errors name a code:
-
-- `project-parent-inaccessible` or `project-path-is-symlink`: the parent and
-  its ancestors must be readable real directories, not links; on macOS, use
-  `/private/tmp` rather than the `/tmp` symlink.
-- `project-parent-unsafe`: the parent is group- or world-writable and not a
-  sticky directory owned by you or root; run `chmod g-w,o-w` on it.
-- `project-parent-busy`: another creation held the parent's lock for 30
-  seconds; retry once it is done.
-- `project-parent-changed`: the parent path stopped naming the locked
-  directory. Nothing was published, but an `.autoform-new-*` stage may remain
-  in the original directory; inspect it before removing it.
-- `project-create-commit-uncertain`: publication started but its outcome could
-  not be confirmed; locate the project before retrying.
-
-Creation fails closed, including on Windows, where POSIX descriptor traversal,
-advisory locking, directory sync, or atomic no-replace rename is unavailable.
-
-`--lean-toolchain` also accepts `v4.30.0-rc1` and `leanprover/lean4:v4.30.0`;
-`--mathlib-rev` requires it, and neither combines with `--release`. A pair equal
-to a catalog entry gets that entry's bundled manifest. Any other pair is written
-without `lake-manifest.json`, with a `project-release-unlisted` warning: run
-`lake update` in the project (it needs network access, locks Mathlib and
-downloads its build cache), then commit the manifest. Use the toolchain that
-Mathlib revision declares in its own `lean-toolchain`, or Lake may rewrite the
-project's toolchain or fail to build. A toolchain older than v4.27.0 gets a
-`project-lean-below-minimum` warning. Warnings go to stderr, or with `--json`
-to the `warnings` array, where such a pair reports `"release": null`; the exit
-status stays 0. Successful JSON uses schema `autoform-project-creation/v1`.
-
-`--library NAME` names an entry of `autoform_cli/project/libraries.json`, which
-pins a shared Lean library to a full commit on a listed release. The project is
-created on that release with the library's `[[require]]`, and its manifest
-already locks the library's packages, so it needs no `lake update`; the first
-Lake command clones them, which needs network access. An unknown name is
-`project-library-unknown`, and a package name that is one of the library's
-module roots or packages is `project-name-invalid`. The JSON result adds
-`library: {name, git, rev}`.
+concurrent creation leaves no partial target. Its errors name a code;
+[Project setup](reference/project-setup.md#project-new) lists them, with the
+published tree, toolchain pairs other than the bundled ones, and `--library`.
 
 `project inspect` is read-only and offline. Automation should use `--json`,
 accept only `autoform-project-inspection/v1`, and branch on `ok`,
@@ -333,21 +278,10 @@ accept only `autoform-project-inspection/v1`, and branch on `ok`,
 codes, JSON fields, and diagnostic codes. `project versions` lists the bundled
 pairs, the ones `project new` can lock offline.
 
-`autoform project worktrees --json` runs Git and reads the claim board (`origin`
-or `--repo`; else `board` is null) to list, as `autoform-project-worktrees/v1`,
-each linked worktree but the main one and the target's with its `protected_by`
-codes; none means removable, and an unknown code protects: `locked`, `in-use`,
-`git-operation`, `contains-worktree`, `dirty` (hidden or unreadable status too),
-`unintegrated` (the target's HEAD lacks a commit by ancestry and non-merge patch
-ID, or only its own reflog or refs reach one), `recent` (index, HEAD reflog or
-`.lake` itself changed in 25 minutes), `claimed` (a live lease naming this
-hostname, which a Mac without a fixed HostName changes), `liveness-unknown` (an
-uninspectable process of yours begun after it, an unreadable board or lease). A
-report's removable entries get sizes; `freeable_bytes` (an upper bound) omits
-hard-linked blocks. `--remove MANIFEST` rechecks each such entry (`changed` if
-it moved or went, or the target's HEAD moved), runs `git worktree remove` (else
-`git-refused`), and prints them with `removed` and measured `freed_bytes`. Exit
-1: no checkout, bad manifest, or a refusal.
+`autoform project worktrees --json` lists each linked worktree with the codes
+that protect it, and `--remove MANIFEST` removes the unprotected ones after
+checking each again ([Project setup](reference/project-setup.md#project-worktrees)).
+Exit 1: no checkout, bad manifest, or a refusal.
 
 ### Publishing and the dashboard
 
@@ -367,42 +301,13 @@ Drop `--require-declarations` when reviewing work in progress, where a
 statement may name a Lean declaration that does not exist yet. On native
 Windows, run `check` and `render` without `--lean-root`; the site then has no
 code links ([publication contract](reference/runtime-and-publication.md#publication-contract)).
-Pass a Lake project in a subdirectory, such as `v1/`, as `--lean-root v1`;
-links name paths from the repository's top level. Edit the `--lean-root .`
-that the generated `blueprint-pages.yml` passes to `check`, `audit` and
-`render` to match.
 
 `autoform dashboard . --site-dir site` then serves the built site on
 `127.0.0.1` until you stop it, with a read-only live overlay of current author
-claims at `/__autoform/live.json`, which only the loopback server exposes. The
-overlay matches claims on an article's node ID or its `article_id`, reports the
-`claim_target` each lease used, and is never written into the vault,
-publication manifest, or public site. Claim badges update while it runs; re-run
-render and the MkDocs build to refresh everything else.
-
-The generated `blueprint-pages.yml` deploys only a commit that the project's own
-`.github/workflows/autoform-verify.yml` (matched by file, not name) passed on a
-push to `main`, with code links rendered at that commit by `--ref`. A failed
-verification deploys nothing, so the last verified site stays up. Pull requests
-and manual runs build the site but never deploy, and cannot cancel a waiting
-deploy. To redeploy, re-run the Pages run that the newest successful verify run
-on `main` started; re-running an older one deploys the older commit. Deleting or
-renaming `autoform-verify.yml`, or disabling it in the repository's Actions
-settings, stops every deploy, with no error. An older scaffold deploys every
-push; [Upgrading](../CHANGELOG.md#upgrading-from-050) says how to switch, and no
-pin has to move: every `AUTOFORM_REF` since 0.5.0 has `render --ref`.
-
-Pages gates on `check` and `render`, and runs `audit` after `check` and
-`site check` after the MkDocs build only as reports, with `continue-on-error`:
-`audit` logs every finding, or `OK: roadmap audit passed`. An invalid coverage
-contract fails `render` before it writes anything, but `MAPPED` rows (each an
-audit `declared-coverage-gap`; a new project lists the template's row) and
-coverage-role issues, which `render` prints as warnings, still publish. An older
-scaffold can add either step by hand with `continue-on-error: true` and the same
-`uvx --from` source: `autoform audit blueprint --lean-root .` after `check`, and
-`autoform site check site --source site-src` after the MkDocs build, which needs
-an `AUTOFORM_REF` from 0.6.0 or later. To block merges on findings, run
-`autoform audit` in CI without `continue-on-error`.
+claims. The generated `blueprint-pages.yml` deploys only a commit that
+`autoform-verify.yml` passed on a push to `main`. [The published
+site](reference/site.md) covers a Lake project in a subdirectory, the overlay,
+redeploys, and the reports Pages runs.
 
 ### check
 
@@ -613,30 +518,13 @@ and the site's Next up card (see [Open
 statements](reference/open-statements.md#open-statements)).
 
 `work context` takes the path-derived node ID or an `article_id` and reports the
-article, dependencies, source and Lean targets, blockers, article and graph
-source revisions (the article revision hashes that article's bytes alone), and
-the claim target, which prefers the `article_id`. A Lean target's `source_file`
-is relative to `--lean-root`, and null without one or when the local scan, which
-skips build output and nested checkouts (any subdirectory with a `.git` entry),
-finds the declaration nowhere or several times with none chosen. Blockers are
-unmet dependency IDs or `roadmap:not-a-formalizable-leaf`,
-`roadmap:missing-article-id`, `roadmap:missing-article-revision`, or
-`roadmap:not-ready`. `work list` fails if an unfinished formalizable leaf lacks
-an `article_id` (add them with `autoform migrate article-ids --write`); `work
-context` still selects such an article by path ID to report the blocker. An
-article recording `statement: retracted` is a revision: JSON `revision` is true,
-and the text adds a `revision:` (list) or `Revision:` (context) line saying to
-start from `autoform work impact` (see the [revision
-contract](reference/claims-and-revisions.md#revision-contract)). Both commands
-are read-only and refuse an article whose bytes changed after the graph loaded;
-rerun once the project is idle.
-
-Under the open policy the text of `work list` starts with an `Open statements:
-allowed` line and adds an `assumes:` line under each item resting on open
-statements; `work context` prints `Open statements:` and `Assumes:` lines. JSON
-uses `autoform-work/v2`: the frontier and every item carry `open_statements`,
-and every item carries `assumes`, the open statements its proof rests on (empty
-under the strict policy), and `revision`.
+article, its dependencies, source and Lean targets, blockers, and the claim
+target. `work list` fails if an unfinished formalizable leaf lacks an
+`article_id` (add them with `autoform migrate article-ids --write`). Both
+commands are read-only and refuse an article whose bytes changed after the graph
+loaded; rerun once the project is idle. JSON uses `autoform-work/v2`; [work list
+and context](reference/work.md#work-list-and-context) gives the fields,
+blockers, revision lines and open-policy output.
 
 List the open statements and the articles that rest on them:
 
@@ -645,18 +533,11 @@ autoform work assumptions .
 autoform work assumptions blueprint --json
 ```
 
-`work assumptions` prints the policy, an `open:` line per open statement with
-its declarations and the open statements it assumes, a `conditional:` line per
-conditional article, and an `unproved:` line per other listed article that
-assumes open statements. `--json` writes the `autoform-assumptions/v1` contract
-CI audits the build against: every article whose `lean:` names a declaration,
-with `open`, `assumes`, and `allowed_open_declarations` (the open declarations
-its Lean may reach, plus its own when it is open). A `mathlib: true` article
-(state `mathlib`) is never open and is allowed nothing, nor is any article under
-the strict policy. Under the open policy, a module catalog that is not proved
-keeps only the names no non-catalog article's `lean:` lists, and is left out
-when none remain. CI checks that every listed name exists. It
-reads Markdown only and needs no Lean build.
+`work assumptions` prints the policy, each open statement, and the articles that
+rest on open statements; `--json` writes the `autoform-assumptions/v1` contract
+CI audits the build against ([work
+assumptions](reference/work.md#work-assumptions)). It reads Markdown only and
+needs no Lean build.
 
 #### work impact
 
@@ -668,30 +549,11 @@ autoform work impact chapter/result . --lean-root .
 autoform work impact chapter/result . --lean-root . --declaration MyProject.helper --json
 ```
 
-`work impact` runs a bounded Lean probe against a fresh build and reports
-statement-impacted and proof-impacted articles, unnamed helpers, missing
-Markdown dependency paths (`undeclared_dependencies`: impacted articles with no
-Markdown path to the revised article, to one naming a revised declaration, or,
-when none names it, to an owner), deprecated declarations and their users,
-whether the revision is contained (the selected article's target is its only
-claim target), and the complete `claim_targets` set. A helper shared by several
-articles adds every owner's claim; an unowned helper, or a revised declaration
-no article names, is claimed under every nearest owner's target or a stable
-`lean/<slug>-<digest>` target. `unused_statement_dependencies`, the stated
-articles whose Markdown statement rests on the revised declarations, directly or
-through other statement dependencies, but that the probe does not find
-statement-impacted, join `claim_targets` too. `mathlib: true` articles are
-left out. The probe refuses a loaded root-package module missing from the
-repository's source inventory, which skips nested Git checkouts, ignored
-directories such as `build`, and symlinked directories, and a module an `M.*`
-or `M.+` glob finds that it did not load.
-
-The command refuses if the roadmap or the Lean sources change during the probe.
-JSON uses `autoform-impact/v1`, bound to the Markdown `source_revision`, the
-repository `lean_source_revision`, and a `build_revision` hash of the normalized
-Lean records. A missing or stale build is reported as for `work import-impact`.
-Changes to notation, attributes, instance priority, or unreported generated
-declarations still require human review. Both impact probes import project
+`work impact` runs a bounded Lean probe against a fresh build and reports the
+articles a revision of the selected article's declarations would affect and the
+complete `claim_targets` set; JSON uses `autoform-impact/v1` ([work
+impact](reference/work.md#work-impact)). Both impact commands exit 2 on any
+refusal, a missing or stale build included. Both impact probes import project
 modules, so run them only in a trusted checkout or sandbox.
 
 #### work import-impact
@@ -703,54 +565,12 @@ the edit:
 autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH [--json] [--timeout SECONDS] [--module-scope SCOPE]
 ```
 
-`import-impact` is advisory and edits no authored roadmap or Lean source, though
-its Lake freshness check may refresh build hash sidecars. By default the probe
-imports every module of the root libraries, so each must be built in this
-checkout (a build in another clone or worktree does not count): a missing or
-stale build exits 2 with the `lake build` command for those libraries, how many
-modules were checked, and the first one Lake found unbuilt. `affected_modules`
-is `MODULE` and every loaded module that imports it, transitively, complete over
-the root libraries' Lake roots and globs. Modules that removing an import drops
-from the build are not listed. Like `work impact`, the probe refuses a
-root-package module the captured inventory lacks, and one whose loaded source
-or artifact is not the captured root one, so a dependency cannot shadow it.
-
-Under `--module-scope import-closure` the candidates are `MODULE` and every
-root-package module whose source contains each component of a candidate's name,
-repeated until none is added; Lean loads them and what they import. Only those
-modules must be built, and stale-build advice names only them. An article owns a
-declaration when one of its `lean:` names equals it or is a dotted prefix of it,
-so `affected_articles` may list more articles and `article_local` is always
-`false`; `affected_unowned_helpers` keep the parent-chain rule, and
-`unresolved_articles` leaves out a name the source index places outside
-`affected_modules` but lists one in a file no `lean_lib` builds. An uncaptured
-`.lean` file that may import a candidate, in a root library's module tree or a
-dependency package (outside its `.lake`, and in a clone outside nested
-checkouts), makes the command exit 2 and ask for the default scope; use the
-default scope too when a component of a module name is a common word. In either
-scope, and unlike `work impact`, the probe also refuses a loaded module that no
-`lean_lib` builds, as from a leftover `.olean`.
-
-JSON uses `autoform-module-import-impact/v1`, with `module_graph_revision` and
-`module_scope` (`loaded-root-library-graph` or `import-closure`). `article` is
-the selected article (`id`, `article_id`, `claim_target`). `claim_targets` holds
-only it and `module_claim_target`, `lean-module/<lowercase-slug>-<sha256[:16]>`,
-whose key is `module_claim_key`, or only it when `module_generated`: Git
-attributes from the index or the clone's `.git/info/attributes`, not the user's
-or the system's attribute files, set `linguist-generated` on MODULE's file, or
-make it `true`. It is `false` outside a Git work tree or when Git fails.
-`affected_claim_targets` are downstream warnings, not ownership requirements;
-`claim_keys` and `affected_claim_keys` match the JSON of
-`autoform claim list --worker-id WORKER` given those targets.
-`affected_articles` lists each article that names, or owns through the parent
-chain, a declaration in an affected module, with those `modules`, and
-`selected_affected` says whether the selected article is one.
-`unresolved_articles` reports local declarations absent from the loaded
-environment without blocking unrelated edits, and each
-`affected_unowned_helpers` entry carries its own claim target and key.
-`article_local` holds only when `selected_affected` does,
-`affected_claim_targets` is empty, and no other article has unresolved
-declarations.
+`import-impact` is advisory and edits no authored roadmap or Lean source. By
+default the probe imports every module of the root libraries, so each must be
+built in this checkout: a missing or stale build exits 2 with the `lake build`
+command for those libraries. JSON uses `autoform-module-import-impact/v1`;
+[work import-impact](reference/work.md#work-import-impact) gives the scopes,
+ownership rules and every field.
 
 Imports are allowed regardless of reported breadth. Follow the [Formalize import
 workflow](../skills/formalize/SKILL.md#import-edits) for baseline evidence,
@@ -805,18 +625,17 @@ autoform claim list af_5b0e4d3c2a1f09e8d7c6b5a4 af_0123456789abcdef01234567
 ```
 
 Claims are optional: use them when the user asks, or when another session on the
-project already does; a single Formalize run needs none. A
-claim excludes only workers that also claim. Claim an article by the
-`claim_target` that `work context` reports: claims on its path ID and on its
-`article_id` do not exclude each other. Each concurrent agent needs its own
-worker ID, since a second acquire by the same owner succeeds; where shell state
-does not persist, pass `--worker-id` on every command. Leases expire after 1500
-seconds unless `--ttl` sets another length; renew well within that, and confirm
-a claim with `renew`, not `acquire`, which also succeeds on an expired or
-released lease. Acquire a whole set in one command (see the [claim
-contract](reference/claims-and-revisions.md#claim-contract)). `acquire --note
-TEXT` stores free text in each lease, `renew` keeps it, and `claim list` shows
-it as `note`; the key is absent, not empty, after an acquire without `--note`.
+project already does; a single Formalize run needs none. A claim excludes only
+workers that also claim. Claim an article by the `claim_target` that `work
+context` reports: claims on its path ID and on its `article_id` do not exclude
+each other. Each concurrent agent needs its own worker ID, since a second
+acquire by the same owner succeeds; where shell state does not persist, pass
+`--worker-id` on every command. Leases expire after 1500 seconds unless `--ttl`
+sets another length; renew well within that, and confirm a claim with `renew`,
+not `acquire`, which also succeeds on an expired or released lease. Acquire a
+whole set in one command (see the [claim
+contract](reference/claims-and-revisions.md#claim-contract), which also covers
+`acquire --note`).
 
 Claims are fail-closed compare-and-swap leases under `refs/autoform-claims/` on
 the Git `origin`; pass `--repo` for another board. A failed acquire or renew
@@ -836,20 +655,9 @@ autoform debrief orchestrator record . --skill formalize < /tmp/answer.json
 
 Orchestrator debriefs are on by default: `form` prints the form unless
 `AUTOFORM_DEBRIEF` is `0`, `false`, `no`, or `off`, or the platform cannot store
-the answer, and otherwise says the step is disabled. The form asks separately
-for friction from the user's local setup (`local_setup_friction`) and with
-AutoformBot itself (`autoform_friction`). `record` reads one JSON object
-answering the form from `--answer` or standard input, refuses anything else, and
-stores it under `runs/` with the installed AutoformBot version; a directory
-without a roadmap, as during Setup, is accepted. When `autoform_friction` is not
-empty, `record` writes a draft issue for `facebookresearch/autoform-bot`
-under `issues/` and prints its path. The draft holds only that friction and the
-environment, with the project path replaced by `$PROJECT` and home directories
-by `~`, and ends, below a `---` footer, with a link to GitHub's new-issue form
-pre-filled with the draft as recorded (only its title when the draft is too
-long, as the footer and `record` say), so edit in the form. Nothing is sent.
-With `--json`, `record` prints `{"run_id": ..., "path": ..., "issue": null |
-{"path": ..., "url": ..., "url_has_body": true | false}}`.
+the answer, and otherwise says the step is disabled. When the answer reports
+friction with AutoformBot, `record` writes a draft issue for
+`facebookresearch/autoform-bot` and prints its path. Nothing is sent.
 
 Ask the agent that just finished a formalization attempt what infrastructure
 would have made it cheaper, and keep its answer:
@@ -862,22 +670,12 @@ autoform debrief subagent render .
 ```
 
 Subagent debriefs are opt-in: `form` prints the form only when
-`AUTOFORM_SUBAGENT_DEBRIEF=1` on a platform that can store the answer, with the
-outcome filled in from the runtime: the phase succeeded when the article's
-statement (for `statement`) or proof (for `proof`) is now recorded as
-formalized. `record` takes one JSON object as above, re-reads the outcome from
-the runtime, stores a new record, and never edits the project; it requires
-`--worker-id` or `AUTOFORM_WORKER_ID`. With `--json` it prints `{"attempt_id":
-..., "outcome": "succeeded" | "not-succeeded", "path": ...}`, `path` being the
-stored record. `render` rebuilds `views/` from the validated records, escaping
-agent text and deleting reports whose record is gone.
+`AUTOFORM_SUBAGENT_DEBRIEF=1` on a platform that can store the answer. `record`
+requires `--worker-id` or `AUTOFORM_WORKER_ID` and never edits the project.
 
-Both kinds share one store, `autoform/debriefs/` in the repository's Git common
-directory, which every worktree shares and Git does not track, or outside Git
-`$XDG_STATE_HOME/autoform/debriefs/<project>-<hash>/`. Set
-`AUTOFORM_DEBRIEF_DIR` to an absolute path outside the Git working tree to
-choose another. A record is never overwritten; platforms that cannot retain
-directory descriptors, such as Windows, refuse to read or write the store.
+Both kinds share one store that Git does not track, and `AUTOFORM_DEBRIEF_DIR`
+chooses another. [Debriefs](reference/debrief.md) gives
+the form, what `record` stores and prints, and where the store lives.
 
 ### visualize and render
 
@@ -917,7 +715,7 @@ legacy `#node=<id>`, view and filter links redirect there, not to a second viewe
 A `lean:` declaration resolving to a repository permalink gets a source link;
 a catalog's Lean row shows its first eight names and counts the rest.
 Render percent-encodes each
-link it writes from file and folder names, such as the book's previous and next
+link it writes from file and folder names, such as the book's dependency
 links; a Markdown link it moves keeps its decoded spelling and starts with `./`
 when its first segment holds a colon, so no name can make a `javascript:` URL.
 
@@ -998,5 +796,9 @@ Each area's contract has its own page:
 - [Skeletons and statement review](reference/skeleton-and-review.md): what `skeleton` extracts, its hashes, read-back cards, and the `review` rules.
 - [Open statements](reference/open-statements.md): conditional results and the open-statement policy.
 - [Claims and revisions](reference/claims-and-revisions.md): leases and revising a published statement.
+- [Work](reference/work.md): the frontier, open statements, and the impact of a Lean or import edit.
+- [Debriefs](reference/debrief.md): what the debrief commands ask, store and print.
+- [Project setup](reference/project-setup.md): what `init` and `project` write, refuse and report.
+- [The published site](reference/site.md): subdirectory projects, the dashboard overlay, and Pages deploys and reports.
 - [Runtime and publication](reference/runtime-and-publication.md): `doctor`, the in-memory runtime projection and the published site.
 - [Upgrading](../CHANGELOG.md#upgrading-from-050): what a repository meets on a new version, including what CI at an older `AUTOFORM_REF` rejects.

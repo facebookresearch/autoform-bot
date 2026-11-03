@@ -58,7 +58,6 @@ import hashlib
 import json
 import os
 import re
-import secrets
 import stat
 import time
 import unicodedata
@@ -72,6 +71,7 @@ try:
 except ImportError:  # pragma: no cover - Windows, which cannot publish cards
     fcntl = None  # type: ignore[assignment]
 
+from ._fs import atomic_write
 from .graph import ARTICLE_ID_PATTERN
 from .markdown import blueprint_root
 from .skeleton import declaration_filename, evidence_hash_of
@@ -930,12 +930,9 @@ def _publish_card(directory: int, path: Path, content: str, *, expected_card_has
     Every step goes by name in the open, locked card ``directory``, so a
     folder swapped for a link after it was opened is not followed. No other
     publication acts between the compare and the replacement.
-    Content identical to the card's is not written again. Otherwise the new
-    card is staged beside the old one, flushed to disk, and renamed over it
-    in one step, so the card's name holds the old complete card until it
-    holds the new one. A failure or interruption before the rename removes
-    the staging file if it can; a crash, SIGTERM, or SIGKILL can leave it,
-    and the loader never reads it as a card.
+    Content identical to the card's is not written again; other content
+    replaces the card through :func:`~autoform_cli._fs.atomic_write`. A
+    staging file that a crash leaves is never read as a card.
     """
 
     data = content.encode("utf-8")
@@ -944,33 +941,10 @@ def _publish_card(directory: int, path: Path, content: str, *, expected_card_has
         return
     if conflict := _card_conflict(path, before, expected_card_hash):
         raise ValueError(conflict)
-    # Named before it exists, so the cleanup below sees the staging file from
-    # the moment it is created. The name is too random to be anyone else's.
-    staged: str | None = f"{_WORK_PREFIX}{secrets.token_hex(12)}.tmp"
     try:
-        try:
-            descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
-        except OSError:
-            # A failed exclusive create makes no file, and a name already
-            # taken is not this write's file, so there is nothing to remove.
-            staged = None
-            raise
-        try:
-            written = 0
-            while written < len(data):
-                written += os.write(descriptor, data[written:])
-            os.fchmod(descriptor, 0o644)
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-        os.rename(staged, path.name, src_dir_fd=directory, dst_dir_fd=directory)
-        staged = None
+        atomic_write(path, data, mode=0o644, directory=directory, prefix=_WORK_PREFIX)
     except OSError as exc:
         raise ValueError(f"cannot publish read-back: {path}: {exc}") from exc
-    finally:
-        if staged is not None:
-            with contextlib.suppress(OSError):
-                os.unlink(staged, dir_fd=directory)
 
 
 __all__ = [

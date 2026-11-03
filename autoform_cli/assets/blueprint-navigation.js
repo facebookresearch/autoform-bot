@@ -19,7 +19,7 @@
   if (window.AutoformNavigation) return;
 
   var HISTORY_KEY = "autoformNavigation", GRAPH_SCHEMA = "autoform-dag-view/v2", INDEX_SCHEMA = "autoform-dag-search/v1";
-  var WIKI_SCHEMA = "autoform-wiki-links/v1", INDEX_SLICE_MS = 10;
+  var WIKI_SCHEMA = "autoform-wiki-links/v1", INDEX_SLICE_MS = 25;
 
   function create(options) {
     options = options || {};
@@ -233,11 +233,14 @@
       try { return resolvedGraph(JSON.parse(loaded.text), loaded.url); }
       catch (error) { cacheDelete(jsonCache, resource(url)); throw error; }
     }
-    async function normalizeIndex(payload, base) {
+    async function normalizeIndex(payload, base, began) {
       if (!payload || payload.schema !== INDEX_SCHEMA || !Array.isArray(payload.nodes)) throw new Error("Unsupported search index");
       // Batches end on time, not on a row count: each pause waits two frames, so
-      // short fixed batches spent most of a large index's load waiting.
-      var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [], slice = clock();
+      // short fixed batches spent most of a large index's load waiting. The clock
+      // is read every 128 rows or relations, a small fraction of a slice's work.
+      // The first batch's slice began with the parse, so a long parse pauses at
+      // the first read rather than run a slice more in the same task.
+      var ids = new Map(), byRoute = new Map(), knownDocuments = new Set(), nodes = [], slice = began;
       // Rows on one page share the part before "#", so resolve it once. A fragment
       // made of characters the URL parser keeps as written is appended. Other
       // fragments, and paths ending in a space (which the parser would trim
@@ -273,7 +276,7 @@
         // A serialized URL's first "#" starts its fragment, so this is resource(copy.route) without a parse.
         if (copy.route) { byRoute.set(copy.route, copy); knownDocuments.add(copy.route.split("#")[0]); }
         nodes.push(copy);
-        if (clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
+        if ((position + 1) % 128 === 0 && clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
       }
       var relations;
       if (payload.relations !== undefined) {
@@ -287,7 +290,7 @@
           if (!ids.has(from) || !ids.has(to) || !Number.isSafeInteger(row[2]) || !Number.isSafeInteger(row[3]) ||
               row[2] < 0 || row[3] < 0 || row[2] + row[3] === 0) throw new Error("Invalid search relation endpoint");
           relations.push([from, to, row[2], row[3]]);
-          if (clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
+          if ((edge + 1) % 128 === 0 && clock() - slice >= INDEX_SLICE_MS) await yieldIndex();
         }
       }
       if (disposed) throw abortError();
@@ -304,8 +307,8 @@
       indexPromise = fetchText(catalogueURL, "json", indexController.signal).then(async function (loaded) {
         if (disposed) throw abortError();
         // Drop the text before normalizing, which takes many frames.
-        var payload = JSON.parse(loaded.text), base = loaded.url, digest = loaded.indexDigest; loaded = null;
-        var normalized = await normalizeIndex(payload, base);
+        var began = clock(), payload = JSON.parse(loaded.text), base = loaded.url, digest = loaded.indexDigest; loaded = null;
+        var normalized = await normalizeIndex(payload, base, began);
         if (disposed) throw abortError();
         index = normalized; indexDigest = digest;
         if (typeof options.onIndex === "function") {
@@ -743,7 +746,7 @@
       reading.querySelectorAll("h2,h3,h4,h5,h6").forEach(function (heading) {
         if (heading.hidden || protectedSection(heading)) return;
         var block = [], next = heading.nextElementSibling, level = Number(heading.tagName.slice(1));
-        while (next && !(/^H[1-6]$/.test(next.tagName) && Number(next.tagName.slice(1)) <= level) && !next.matches(".bp-book-nav")) {
+        while (next && !(/^H[1-6]$/.test(next.tagName) && Number(next.tagName.slice(1)) <= level)) {
           block.push(next); next = next.nextElementSibling;
         }
         if (!block.length || !block.every(pureList)) return;
@@ -771,39 +774,14 @@
         return Array.from(node.attributes).every(function (attribute) { return allowed.indexOf(attribute.name) >= 0; });
       }
       function plain(node) { return Array.from(node.childNodes).every(function (child) { return child.nodeType === 3 || child.nodeType === 8; }); }
-      function elements(node) {
-        var children = Array.from(node.childNodes);
-        return children.some(function (child) { return child.nodeType !== 1 && child.nodeType !== 8 &&
-          (child.nodeType !== 3 || child.textContent.trim()); }) ? null : children.filter(function (child) { return child.nodeType === 1; });
-      }
-      function chapters(node) {
-        if (node.tagName !== "NAV" || node.getAttribute("class") !== "bp-book-nav" ||
-            node.getAttribute("aria-label") !== "Blueprint chapters" || !attributes(node, ["class", "aria-label"])) return false;
-        var links = elements(node), directions = [];
-        return links && links.length > 0 && links.length <= 2 && links.every(function (anchor) {
-          var direction = anchor.getAttribute("class") === "bp-book-nav-link bp-book-nav-previous" ? "previous" :
-            anchor.getAttribute("class") === "bp-book-nav-link bp-book-nav-next" ? "next" : null;
-          var href = link(anchor.getAttribute("href"), current.documentURL), target = href && routes.get(href), parts = elements(anchor);
-          if (anchor.tagName !== "A" || !direction || !target || !attributes(anchor, ["class", "href"]) ||
-              directions.indexOf(direction) >= 0 || direction === "previous" && directions.length || !parts || parts.length !== 2) return false;
-          directions.push(direction);
-          var label = parts[0], title = parts[1], contents = Array.from(label.childNodes), arrow = contents[0];
-          return label.tagName === "SPAN" && label.getAttribute("class") === "bp-book-nav-direction" && attributes(label, ["class"]) &&
-            contents.length === 2 && arrow.nodeType === 1 && arrow.tagName === "SPAN" && arrow.getAttribute("aria-hidden") === "true" &&
-            attributes(arrow, ["aria-hidden"]) && plain(arrow) && arrow.textContent === (direction === "previous" ? "←" : "→") &&
-            contents[1].nodeType === 3 && contents[1].textContent === (direction === "previous" ? " Previous" : " Next") &&
-            title.tagName === "SPAN" && title.getAttribute("class") === "bp-book-nav-title" && attributes(title, ["class"]) &&
-            plain(title) && title.textContent === target.title;
-        });
-      }
-      var headings = 0, navigation = 0;
+      var headings = 0;
       return Array.from(reading.childNodes).every(function (node) {
         if (node.nodeType === 8 || node.nodeType === 3 && !node.textContent.trim()) return true;
         if (node.nodeType !== 1) return false;
         if (ignored.has(node)) return !/^H[1-6]$/.test(node.tagName) || !/[$\\]/.test(node.textContent);
         if (node.tagName === "H1" && attributes(node, ["id"]) && plain(node) && !/[$\\]/.test(node.textContent) &&
             node.textContent.trim() === owner.title) return ++headings === 1;
-        return chapters(node) && ++navigation === 1;
+        return false;
       }) && headings === 1;
     }
     function bindReader(root) {
