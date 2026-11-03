@@ -247,23 +247,9 @@ autoform init . --title "Finite Flat Group Schemes" \
   --repository-url https://github.com/owner/repo
 ```
 
-`init` appends the missing Autoform rules to an existing root `.gitignore`,
-which must be a regular file with one link; when it cannot verify the append,
-the error says the file may be partial: inspect it before retrying. Even with
-`--force`, `init` refuses before writing anything when it finds an entry that
-differs from a path it manages only in letter case or Unicode form (a
-`Blueprint/` Lean library, `MkDocs.yml`), a managed directory it cannot list,
-or a root `Readme.md` or `readme.md`. The vault is always `blueprint/`, so a
-Lean library named `Blueprint` needs a different library name (its lakefile
-`lean_lib`, root module and imports), not a lowercase rename.
-
-Generated workflows pin `--autoform-ref` or, by default, the HEAD commit of the
-Autoform checkout running the command (or of the marketplace checkout an
-installed plugin was copied from), when a safe remote (Autoform's canonical
-repository, then `origin`, then `upstream`, then a unique remaining one) has a
-cached tracking ref containing it, tracked files are clean, and the templates
-and any installed plugin copy match it; an explicit `--autoform-source` gets no
-default ref. Without a ref the CI workflows are omitted.
+Generated workflows pin an Autoform commit; without one, the CI workflows are
+omitted. [Project setup](reference/project-setup.md#init) gives the
+`.gitignore` rules, the names `init` refuses, and how the commit is chosen.
 
 ### project
 
@@ -281,53 +267,9 @@ autoform project inspect path/inside/project --json
 `project new` builds a complete Lean shell (the release's resolved dependency
 manifest, blueprint, and site) in a private sibling directory and publishes it
 atomically: the target must not exist and is never overwritten, and a failed or
-concurrent creation leaves no partial target. A failure or interrupt after
-staging can leave a hidden `.autoform-new-*` directory in the parent, which the
-error mentions; inspect it before removing it. The published tree has modes 0755
-for directories and executables and 0644 for other files, whatever the umask.
-Its `lakefile.toml` sets `enableArtifactCache = true` and `restoreAllArtifacts =
-true`, so checkouts on the same toolchain share builds through Lake's artifact
-cache while each module's `.olean` stays in `.lake/build`. Package names cannot
-shadow Mathlib libraries such as `Archive` or `Counterexamples`. Workflows are
-pinned as [`init`](#init) pins them. Apart from local Git reads, the command
-runs no subprocess, Lake, Lean, or network operation. Its errors name a code:
-
-- `project-parent-inaccessible` or `project-path-is-symlink`: the parent and
-  its ancestors must be readable real directories, not links; on macOS, use
-  `/private/tmp` rather than the `/tmp` symlink.
-- `project-parent-unsafe`: the parent is group- or world-writable and not a
-  sticky directory owned by you or root; run `chmod g-w,o-w` on it.
-- `project-parent-busy`: another creation held the parent's lock for 30
-  seconds; retry once it is done.
-- `project-parent-changed`: the parent path stopped naming the locked
-  directory. Nothing was published, but an `.autoform-new-*` stage may remain
-  in the original directory; inspect it before removing it.
-- `project-create-commit-uncertain`: publication started but its outcome could
-  not be confirmed; locate the project before retrying.
-
-Creation fails closed, including on Windows, where POSIX descriptor traversal,
-advisory locking, directory sync, or atomic no-replace rename is unavailable.
-
-`--lean-toolchain` also accepts `v4.30.0-rc1` and `leanprover/lean4:v4.30.0`;
-`--mathlib-rev` requires it, and neither combines with `--release`. A pair equal
-to a catalog entry gets that entry's bundled manifest. Any other pair is written
-without `lake-manifest.json`, with a `project-release-unlisted` warning: run
-`lake update` in the project (it needs network access, locks Mathlib and
-downloads its build cache), then commit the manifest. Use the toolchain that
-Mathlib revision declares in its own `lean-toolchain`, or Lake may rewrite the
-project's toolchain or fail to build. A toolchain older than v4.27.0 gets a
-`project-lean-below-minimum` warning. Warnings go to stderr, or with `--json`
-to the `warnings` array, where such a pair reports `"release": null`; the exit
-status stays 0. Successful JSON uses schema `autoform-project-creation/v1`.
-
-`--library NAME` names an entry of `autoform_cli/project/libraries.json`, which
-pins a shared Lean library to a full commit on a listed release. The project is
-created on that release with the library's `[[require]]`, and its manifest
-already locks the library's packages, so it needs no `lake update`; the first
-Lake command clones them, which needs network access. An unknown name is
-`project-library-unknown`, and a package name that is one of the library's
-module roots or packages is `project-name-invalid`. The JSON result adds
-`library: {name, git, rev}`.
+concurrent creation leaves no partial target. Its errors name a code;
+[Project setup](reference/project-setup.md#project-new) lists them, with the
+published tree, toolchain pairs other than the bundled ones, and `--library`.
 
 `project inspect` is read-only and offline. Automation should use `--json`,
 accept only `autoform-project-inspection/v1`, and branch on `ok`,
@@ -336,21 +278,10 @@ accept only `autoform-project-inspection/v1`, and branch on `ok`,
 codes, JSON fields, and diagnostic codes. `project versions` lists the bundled
 pairs, the ones `project new` can lock offline.
 
-`autoform project worktrees --json` runs Git and reads the claim board (`origin`
-or `--repo`; else `board` is null) to list, as `autoform-project-worktrees/v1`,
-each linked worktree but the main one and the target's with its `protected_by`
-codes; none means removable, and an unknown code protects: `locked`, `in-use`,
-`git-operation`, `contains-worktree`, `dirty` (hidden or unreadable status too),
-`unintegrated` (the target's HEAD lacks a commit by ancestry and non-merge patch
-ID, or only its own reflog or refs reach one), `recent` (index, HEAD reflog or
-`.lake` itself changed in 25 minutes), `claimed` (a live lease naming this
-hostname, which a Mac without a fixed HostName changes), `liveness-unknown` (an
-uninspectable process of yours begun after it, an unreadable board or lease). A
-report's removable entries get sizes; `freeable_bytes` (an upper bound) omits
-hard-linked blocks. `--remove MANIFEST` rechecks each such entry (`changed` if
-it moved or went, or the target's HEAD moved), runs `git worktree remove` (else
-`git-refused`), and prints them with `removed` and measured `freed_bytes`. Exit
-1: no checkout, bad manifest, or a refusal.
+`autoform project worktrees --json` lists each linked worktree with the codes
+that protect it, and `--remove MANIFEST` removes the unprotected ones after
+checking each again ([Project setup](reference/project-setup.md#project-worktrees)).
+Exit 1: no checkout, bad manifest, or a refusal.
 
 ### Publishing and the dashboard
 
@@ -370,42 +301,13 @@ Drop `--require-declarations` when reviewing work in progress, where a
 statement may name a Lean declaration that does not exist yet. On native
 Windows, run `check` and `render` without `--lean-root`; the site then has no
 code links ([publication contract](reference/runtime-and-publication.md#publication-contract)).
-Pass a Lake project in a subdirectory, such as `v1/`, as `--lean-root v1`;
-links name paths from the repository's top level. Edit the `--lean-root .`
-that the generated `blueprint-pages.yml` passes to `check`, `audit` and
-`render` to match.
 
 `autoform dashboard . --site-dir site` then serves the built site on
 `127.0.0.1` until you stop it, with a read-only live overlay of current author
-claims at `/__autoform/live.json`, which only the loopback server exposes. The
-overlay matches claims on an article's node ID or its `article_id`, reports the
-`claim_target` each lease used, and is never written into the vault,
-publication manifest, or public site. Claim badges update while it runs; re-run
-render and the MkDocs build to refresh everything else.
-
-The generated `blueprint-pages.yml` deploys only a commit that the project's own
-`.github/workflows/autoform-verify.yml` (matched by file, not name) passed on a
-push to `main`, with code links rendered at that commit by `--ref`. A failed
-verification deploys nothing, so the last verified site stays up. Pull requests
-and manual runs build the site but never deploy, and cannot cancel a waiting
-deploy. To redeploy, re-run the Pages run that the newest successful verify run
-on `main` started; re-running an older one deploys the older commit. Deleting or
-renaming `autoform-verify.yml`, or disabling it in the repository's Actions
-settings, stops every deploy, with no error. An older scaffold deploys every
-push; [Upgrading](../CHANGELOG.md#upgrading-from-050) says how to switch, and no
-pin has to move: every `AUTOFORM_REF` since 0.5.0 has `render --ref`.
-
-Pages gates on `check` and `render`, and runs `audit` after `check` and
-`site check` after the MkDocs build only as reports, with `continue-on-error`:
-`audit` logs every finding, or `OK: roadmap audit passed`. An invalid coverage
-contract fails `render` before it writes anything, but `MAPPED` rows (each an
-audit `declared-coverage-gap`; a new project lists the template's row) and
-coverage-role issues, which `render` prints as warnings, still publish. An older
-scaffold can add either step by hand with `continue-on-error: true` and the same
-`uvx --from` source: `autoform audit blueprint --lean-root .` after `check`, and
-`autoform site check site --source site-src` after the MkDocs build, which needs
-an `AUTOFORM_REF` from 0.6.0 or later. To block merges on findings, run
-`autoform audit` in CI without `continue-on-error`.
+claims. The generated `blueprint-pages.yml` deploys only a commit that
+`autoform-verify.yml` passed on a push to `main`. [The published
+site](reference/site.md) covers a Lake project in a subdirectory, the overlay,
+redeploys, and the reports Pages runs.
 
 ### check
 
@@ -650,7 +552,8 @@ autoform work impact chapter/result . --lean-root . --declaration MyProject.help
 `work impact` runs a bounded Lean probe against a fresh build and reports the
 articles a revision of the selected article's declarations would affect and the
 complete `claim_targets` set; JSON uses `autoform-impact/v1` ([work
-impact](reference/work.md#work-impact)). Both impact probes import project
+impact](reference/work.md#work-impact)). Both impact commands exit 2 on any
+refusal, a missing or stale build included. Both impact probes import project
 modules, so run them only in a trusted checkout or sandbox.
 
 #### work import-impact
@@ -894,5 +797,7 @@ Each area's contract has its own page:
 - [Claims and revisions](reference/claims-and-revisions.md): leases and revising a published statement.
 - [Work](reference/work.md): the frontier, open statements, and the impact of a Lean or import edit.
 - [Debriefs](reference/debrief.md): what the debrief commands ask, store and print.
+- [Project setup](reference/project-setup.md): what `init` and `project` write, refuse and report.
+- [The published site](reference/site.md): subdirectory projects, the dashboard overlay, and Pages deploys and reports.
 - [Runtime and publication](reference/runtime-and-publication.md): `doctor`, the in-memory runtime projection and the published site.
 - [Upgrading](../CHANGELOG.md#upgrading-from-050): what a repository meets on a new version, including what CI at an older `AUTOFORM_REF` rejects.

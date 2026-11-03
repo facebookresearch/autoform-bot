@@ -13,13 +13,15 @@ BUDGETS = {
     "CONTRIBUTING.md": 87,
     "docs/explorer-design.md": 65,  # Internal architecture and failure contracts, not another user guide.
     "README.md": 120,
-    "autoform_cli/README.md": 924,  # K5: skeleton, review, work and debrief moved to reference pages.
+    "autoform_cli/README.md": 828,  # K5: skeleton, review, work, debrief, setup and publishing moved to reference pages.
     "autoform_cli/project/README.md": 120,
     "autoform_cli/reference/claims-and-revisions.md": 164,
     "autoform_cli/reference/debrief.md": 45,
     "autoform_cli/reference/open-statements.md": 186,
+    "autoform_cli/reference/project-setup.md": 97,
     "autoform_cli/reference/runtime-and-publication.md": 123,
     "autoform_cli/reference/search.md": 171,
+    "autoform_cli/reference/site.md": 50,
     "autoform_cli/reference/skeleton-and-review.md": 199,
     "autoform_cli/reference/validation-and-audit.md": 250,  # #193's credit rule; #485's list of captioned commands.
     "autoform_cli/reference/wiki-links.md": 20,  # Internal optional viewer transport; keep it on demand and concise.
