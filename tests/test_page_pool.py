@@ -331,6 +331,7 @@ def test_starting_the_cli_imports_no_process_pool() -> None:
     assert started.stdout == "[]\n"
 
 
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="PYTHONSAFEPATH arrived in Python 3.11, below MIN_PYTHON")
 def test_a_stdlib_name_in_the_consumers_repository_runs_in_no_worker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], pooled
 ) -> None:

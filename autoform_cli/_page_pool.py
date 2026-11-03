@@ -173,7 +173,8 @@ class Reader:
             # Spawn starts each worker, and the resource tracker, with python -c,
             # which puts the working directory first on sys.path, and render and
             # check run from the consumer's repository: its own selectors.py
-            # would run in every process the pool starts.
+            # would run in every process the pool starts. PYTHONSAFEPATH arrived
+            # in Python 3.11, below MIN_PYTHON.
             self._safe_path = (os.environ.get("PYTHONSAFEPATH"),)
             os.environ["PYTHONSAFEPATH"] = "1"
             try:
