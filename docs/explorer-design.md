@@ -18,10 +18,10 @@ filesystem-derived taxonomy, or workspace/schema exception belongs here.
 
 ## Navigation and failure
 
-[blueprint-navigation.js](../autoform_cli/assets/blueprint-navigation.js) owns
-bounded same-origin fetches, coalesced index loading, exact-byte digests, request
-epochs/aborts, caches and the versioned history namespace. Index batches yield
-to visible frames with a timer fallback; validation publishes no partial index.
+[blueprint-navigation.js](../autoform_cli/assets/blueprint-navigation.js) owns bounded same-origin fetches, coalesced
+index loading, exact-byte digests, request epochs/aborts, caches and the versioned history namespace. The book's map
+reads through `fetchJSON` (`autoformFetchJSON` on its host): the same fetch checks, but no cache, epoch or `onError`.
+Index batches yield to visible frames with a timer fallback; validation publishes no partial index.
 Parents/relations decode index offsets to IDs; wiki links bind the exact wire SHA. Unavailable is not zero.
 Directory aliases preserve statement fragments without weakening exact resource/canonical validation.
 Fetched HTML must come from a compatible publishable producer. Fragment copying,

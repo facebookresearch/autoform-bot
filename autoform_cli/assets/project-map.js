@@ -123,8 +123,10 @@
   function clip(text, width) { return text.length > width ? text.slice(0, Math.max(1, width - 1)) + "…" : text; }
 
   // ---------------------------------------------------------------- data
-  // One request per file (at most the index, search and 256 part files); a request that fails, or hangs for FETCH_MS,
-  // is forgotten, so the next use of the file asks again.
+  // One request per file (at most the index, search and 256 part files); a request that fails or times out is
+  // forgotten, so the next use of the file asks again. In the book, the book's router reads the files
+  // (blueprint-navigation.js fetchJSON) under its stall timeout and keeps no copy; the standalone page has no router
+  // and fetches them itself, giving each request FETCH_MS in all.
   var cache = new Map(), FETCH_MS = 30000;
   function request(url, name, read) {
     var controller = window.AbortController ? new AbortController() : null;
@@ -137,9 +139,13 @@
       throw controller && controller.signal.aborted ? new Error("loading " + name + " timed out") : error;
     });
   }
+  var routed = embedded && typeof book.autoformFetchJSON === "function" ? book.autoformFetchJSON : null;
   function fetchJSON(relative) {
     if (!cache.has(relative)) {
-      cache.set(relative, request(new URL(relative, mapBase), relative, function (response) { return response.json(); })
+      var url = new URL(relative, mapBase);
+      // The router's messages name no file, so the map adds it.
+      cache.set(relative, (routed ? routed(url.href).catch(function (error) { throw new Error((error && error.message || error) + " for " + relative); })
+        : request(url, relative, function (response) { return response.json(); }))
         .catch(function (error) { cache.delete(relative); throw error; }));
     }
     return cache.get(relative);

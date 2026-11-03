@@ -41,7 +41,8 @@ date when the release is tagged.
   shows the same map beside the book: the page being read sets where it opens,
   a result picked on it opens in the reader and a part opens its chapter, the
   statement at the top of the reader is outlined on it, and the status filter
-  dims the results it leaves out (#552).
+  dims the results it leaves out (#552). There it reads its data through the
+  book's router, under the book's timeout and same-origin rules.
 - **Informal dependencies.** Under `## Informally uses`, an article can list
   what its source's proof cites but its Lean proof need not use. The links
   resolve like dependencies and appear in the runtime projection, now
