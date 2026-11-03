@@ -55,7 +55,9 @@ Markdown dependency paths (`undeclared_dependencies`: impacted articles with no
 Markdown path to the revised article, to one naming a revised declaration, or,
 when none names it, to an owner), deprecated declarations and their users,
 whether the revision is contained (the selected article's target is its only
-claim target), and the complete `claim_targets` set. A helper shared by several
+claim target), and the complete `claim_targets` set. Owners of a declaration no
+article names are the articles naming its nearest named `parent` ancestor, else
+the only article naming declarations in its module. A helper shared by several
 articles adds every owner's claim; an unowned helper, or a revised declaration
 no article names, is claimed under every nearest owner's target or a stable
 `lean/<slug>-<digest>` target. `unused_statement_dependencies`, the stated
@@ -78,14 +80,7 @@ modules, so run them only in a trusted checkout or sandbox.
 ## Work import-impact
 
 `import-impact` is advisory and edits no authored roadmap or Lean source, though
-its Lake freshness check may refresh build hash sidecars. `SELECTOR` identifies
-the working article and `MODULE` the project module whose effective header would
-change: the file that gains or loses the import, not the module it imports, so
-adding a Mathlib import is reported for the project file that adds it. Without
-`MODULE`, it is the one module that holds the article's declarations; a path in
-its place is taken as `TARGET`. A `MODULE` that is not a project module is
-refused, naming the article's module, before the freshness check and the probe.
-By default the probe
+its Lake freshness check may refresh build hash sidecars. By default the probe
 imports every module of the root libraries, so each must be built in this
 checkout (a build in another clone or worktree does not count): a missing or
 stale build exits 2 with the `lake build` command for those libraries, how many
@@ -95,6 +90,7 @@ the root libraries' Lake roots and globs. Modules that removing an import drops
 from the build are not listed. Like `work impact`, the probe refuses a
 root-package module the captured inventory lacks, and one whose loaded source
 or artifact is not the captured root one, so a dependency cannot shadow it.
+A `MODULE` outside the project is refused first, naming the article's module.
 
 Under `--module-scope import-closure` the candidates are `MODULE` and every
 root-package module whose source contains each component of a candidate's name,
@@ -102,7 +98,7 @@ repeated until none is added; Lean loads them and what they import. Only those
 modules must be built, and stale-build advice names only them. An article owns a
 declaration when one of its `lean:` names equals it or is a dotted prefix of it,
 so `affected_articles` may list more articles and `article_local` is always
-`false`; `affected_unowned_helpers` keep the parent-chain rule, and
+`false`; `affected_unowned_helpers` keep the default scope's rule, and
 `unresolved_articles` leaves out a name the source index places outside
 `affected_modules` but lists one in a file no `lean_lib` builds. An uncaptured
 `.lean` file that may import a candidate, in a root library's module tree or a
@@ -125,14 +121,11 @@ make it `true`. It is `false` outside a Git work tree or when Git fails.
 `autoform claim list --worker-id WORKER` given those targets.
 `affected_articles` lists each article that names, or owns through the parent
 chain, a declaration in an affected module, with those `modules`, and
-`selected_affected` says whether the selected article is one. A declaration with
-no owner through the parent chain belongs to the one article that names
-declarations in its module, when exactly one does, so a worker's own helpers,
-public or private, count as its article's. `unresolved_articles` reports local
-declarations absent from the loaded environment without blocking unrelated
-edits, and each `affected_unowned_helpers` entry, a declaration in a module that
-no article, or several, name declarations in, carries its own claim target and
-key.
+`selected_affected` says whether the selected article is one.
+`unresolved_articles` reports local declarations absent from the loaded
+environment without blocking unrelated edits, and each
+`affected_unowned_helpers` entry, a helper owned as in `work impact` by no
+article, carries its own claim target and key.
 `article_local` holds only when `selected_affected` does,
 `affected_claim_targets` is empty, and no other article has unresolved
 declarations.

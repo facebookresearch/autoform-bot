@@ -1147,6 +1147,7 @@ def compute_impact(
     proof_impacted.sort(key=lambda item: item.id)
 
     by_id = {article.id: article for article in articles}
+    module_articles = _module_articles(records, named)
     helpers: list[ImpactHelper] = []
     for name in sorted(meaning | proof):
         record = records[name]
@@ -1154,7 +1155,7 @@ def compute_impact(
             continue
         path, line = locate(record) if locate is not None else (None, None)
         impact = "statement" if name in meaning else "proof"
-        owners = _owners(record, records, named)
+        owners = _helper_owners(record, records, named, module_articles)
         targets = _claim_targets_for(name, owners, by_id)
         helpers.append(
             ImpactHelper(name, record.kind, impact, record.module, path, line, owners, targets)
@@ -1165,7 +1166,7 @@ def compute_impact(
     # revision as surely as a path to the revised article does.
     anchors = {revised.id}
     for name in revised_names:
-        anchors.update(named.get(name) or _owners(records[name], records, named))
+        anchors.update(named.get(name) or _helper_owners(records[name], records, named, module_articles))
     impacted = (*statement_impacted, *proof_impacted)
     undeclared = sorted(
         item.id for item in impacted if item.id not in anchors and not _reaches(item.id, anchors, by_id)
@@ -1211,7 +1212,8 @@ def compute_impact(
     )
     for name in revised_names:
         if name not in named:
-            others.update(_claim_targets_for(name, _owners(records[name], records, named), by_id))
+            owners = _helper_owners(records[name], records, named, module_articles)
+            others.update(_claim_targets_for(name, owners, by_id))
     claim_targets = (revised.claim_target, *sorted(others - {revised.claim_target}))
     return ImpactReport(
         source_revision=source_revision,
@@ -1308,23 +1310,9 @@ def compute_module_import_impact(
 
     # An article also owns, through the parent chain, the helpers it names no
     # declaration for, such as a structure's API lemmas in a later module.
-    # A helper with no such owner belongs to its module's article when exactly
-    # one article names declarations in that module: a worker's own helpers
-    # beside its article's declarations are its own, public or private.
-    module_articles: dict[str, set[str]] = {}
-    for resolved, article_ids in named.items():
-        module_articles.setdefault(records[resolved].module, set()).update(article_ids)
-
-    def module_owner(record: ConstantRecord) -> tuple[str, ...]:
-        in_module = module_articles.get(record.module, set())
-        return tuple(in_module) if len(in_module) == 1 else ()
-
-    def helper_owners(record: ConstantRecord) -> tuple[str, ...]:
-        return _owners(record, records, named) or module_owner(record)
-
     for record in records.values():
         if record.module in affected_set and record.name not in named:
-            for owner in owners(record) or module_owner(record):
+            for owner in owners(record):
                 touched[owner].add(record.module)
     affected_articles = tuple(
         ModuleImpactedArticle(article.id, article.article_id, article.claim_target, tuple(sorted(touched[article.id])))
@@ -1334,15 +1322,17 @@ def compute_module_import_impact(
     unresolved_articles.sort(key=lambda article: article.id)
 
     module_claim_target = _module_claim_target(module)
-    # Helpers keep the default rule under either scope: a narrowed chain
+    # Helpers keep the default scope's rule under either scope: a narrowed chain
     # is only shorter, so every helper the default scope reports keeps its key.
+    # `work impact` owns helpers by the same rule, so the two agree on keys.
+    module_articles = _module_articles(records, named)
     affected_helpers = tuple(
         ModuleImpactedHelper(record.name, record.module, _helper_claim_target(record.name))
         for record in sorted(records.values(), key=lambda record: record.name)
         if record.module in affected_set
         and not record.internal
         and record.name not in named
-        and not helper_owners(record)
+        and not _helper_owners(record, records, named, module_articles)
     )
     affected_claim_targets = tuple(
         sorted(
@@ -1483,6 +1473,34 @@ def _owners(
     return ()
 
 
+def _module_articles(records: Mapping[str, ConstantRecord], named: Mapping[str, list[str]]) -> dict[str, set[str]]:
+    """The articles naming declarations in each module."""
+
+    module_articles: dict[str, set[str]] = {}
+    for name, article_ids in named.items():
+        module_articles.setdefault(records[name].module, set()).update(article_ids)
+    return module_articles
+
+
+def _helper_owners(
+    record: ConstantRecord,
+    records: Mapping[str, ConstantRecord],
+    named: Mapping[str, list[str]],
+    module_articles: Mapping[str, set[str]],
+) -> tuple[str, ...]:
+    """``record``'s owners through the parent chain, else the one article naming declarations in its module.
+
+    A worker's own helpers beside its article's declarations are its own,
+    public or private. A module several articles share keeps them unowned.
+    """
+
+    owners = _owners(record, records, named)
+    if owners:
+        return owners
+    in_module = module_articles.get(record.module, set())
+    return tuple(in_module) if len(in_module) == 1 else ()
+
+
 def _ancestors(record: ConstantRecord, records: Mapping[str, ConstantRecord]) -> Iterator[str]:
     """The ``parent`` chain of ``record``, nearest first, stopping where it repeats."""
 
@@ -1571,7 +1589,6 @@ class _ImpactEvidence:
     locate: Locator
     declaration_modules: Mapping[str, str] | None = None
     module_generated: bool = False
-    module: str | None = None
 
 
 def _load_impact_evidence(
@@ -1582,14 +1599,13 @@ def _load_impact_evidence(
     timeout: float | None,
     require_modules: bool,
     require_default_declarations: bool,
+    module: str | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
-    resolve_module: Callable[[ImpactArticle, Sequence[LeanLibrary], IndexedSourceSnapshot, Collection[str]], str]
-    | None = None,
 ) -> _ImpactEvidence:
     """Load one freshness-bound roadmap, source, module, and Lean environment.
 
-    ``resolve_module`` names the edited module from the source inventory alone,
-    so a wrong module is refused before the freshness check and the probe.
+    A ``module`` outside the project is refused from the source inventory
+    alone, before the freshness check and the probe.
     """
 
     runtime = load_runtime_graph(project_or_blueprint)
@@ -1628,11 +1644,12 @@ def _load_impact_evidence(
             source_snapshot,
             strict_module_ownership=require_modules,
         )
-        module = None if resolve_module is None else resolve_module(selected, libraries, source_snapshot, local_modules)
+        if module is not None:
+            module_paths = _module_source_paths(libraries, source_snapshot, strict=True)
+            _check_import_module(module, selected, module_paths, source_snapshot, local_modules)
         selected_modules = imports
         declaration_modules = None
         if module_scope == IMPORT_CLOSURE_SCOPE:
-            # resolve_import_module refused a module outside the project.
             assert module is not None
             captured = dict(source_snapshot.source_files)
             # Libraries sharing a srcDir map the same files; each is read once.
@@ -1727,7 +1744,6 @@ def _load_impact_evidence(
         locate=_locator(libraries, source_snapshot),
         declaration_modules=declaration_modules,
         module_generated=module_generated,
-        module=module,
     )
 
 
@@ -1770,17 +1786,13 @@ def revision_impact(
 def module_import_impact(
     project_or_blueprint: str | Path,
     selector: str,
-    module: str | None = None,
+    module: str,
     *,
     lean_root: str | Path,
     timeout: float | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
 ) -> ModuleImportImpactReport:
-    """Report, without blocking it, the reverse-import scope of an import edit.
-
-    ``module`` is the project module whose imports change; without it, the one
-    module that holds the selected article's declarations.
-    """
+    """Report, without blocking it, the reverse-import scope of an import edit."""
 
     if module_scope not in (MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE):
         raise ImpactError(f"unknown module scope: {module_scope}")
@@ -1791,18 +1803,15 @@ def module_import_impact(
         timeout=timeout,
         require_modules=True,
         require_default_declarations=False,
+        module=module,
         module_scope=module_scope,
-        resolve_module=lambda selected, libraries, snapshot, local_modules: resolve_import_module(
-            module, selected, _module_source_paths(libraries, snapshot), snapshot, local_modules
-        ),
     )
-    assert evidence.module is not None
     return compute_module_import_impact(
         evidence.records,
         evidence.modules,
         evidence.articles,
         evidence.selected,
-        evidence.module,
+        module,
         source_revision=evidence.source_revision,
         lean_source_revision=evidence.lean_source_revision,
         module_scope=module_scope,
@@ -1840,17 +1849,16 @@ def _linguist_generated(root: Path, relative: str) -> bool:
     return output is not None and output.rsplit(": ", 1)[-1] in ("set", "true")
 
 
-def resolve_import_module(
-    module: str | None,
+def _check_import_module(
+    module: str,
     selected: ImpactArticle,
     module_paths: Mapping[str, str],
     snapshot: IndexedSourceSnapshot,
     local_modules: Collection[str],
-) -> str:
-    """The project module an import edit changes: ``module``, else the selected article's own module.
+) -> None:
+    """Refuse a ``module`` outside the project, naming the selected article's own module.
 
-    Workers often pass the module they mean to import; the refusal says which
-    module the argument names instead.
+    Workers often pass the module they mean to import.
     """
 
     modules_by_path = {path: name for name, path in module_paths.items()}
@@ -1863,18 +1871,12 @@ def resolve_import_module(
         }
     )
     usage = "MODULE is the project module whose imports change, the file that gains or loses the import"
-    if module is None:
-        if len(homes) == 1:
-            return homes[0]
-        found = f"; its declarations are in {', '.join(homes)}" if homes else ""
-        raise ImpactError(f"{usage}; pass it, since {selected.id} has no single module{found}")
     if module not in local_modules:
         here = f" (for {selected.id}: {homes[0]})" if len(homes) == 1 else ""
         raise ImpactError(
             f"{module} is not a module of this project. {usage}{here}, not the module it imports: "
             "an import from Mathlib or another dependency is reported for the project file that adds it"
         )
-    return module
 
 
 def _locator(
@@ -1979,8 +1981,7 @@ def format_module_import_impact(report: ModuleImportImpactReport) -> list[str]:
     ]
     if not report.selected_affected:
         lines.append(
-            "Warning: the selected article has no built declaration in this reverse-import scope; "
-            "MODULE should be the module whose imports change, usually the one holding the article's declarations."
+            "Warning: the selected article has no built declaration in this reverse-import scope."
         )
     other_articles = tuple(
         article for article in report.affected_articles if article.id != report.article.id

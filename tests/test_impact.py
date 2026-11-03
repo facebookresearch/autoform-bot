@@ -438,10 +438,37 @@ def test_module_import_impact_gives_a_helper_to_the_one_article_of_its_module() 
     assert own.article_local is True
 
     report = compute_module_import_impact(records, modules, articles, articles[0], "Demo.Sel", source_revision="rev")
-    # Another article's helper makes that article affected, not a helper key of its own;
+    # Another article's helper is that article's, not a helper key of its own;
     # a module several articles share keeps its helpers unowned, since which one owns them is unknown.
     assert [helper.name for helper in report.affected_unowned_helpers] == ["Demo.Shared.helper"]
     assert report.affected_claim_targets == ("af_a", "af_b", "af_x", _lean_key("Demo.Shared.helper"))
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_work_impact_and_import_impact_claim_a_module_helper_under_one_key(shared: bool) -> None:
+    # Revising Base.value proof-impacts Sel's helper; Sel's worker then edits Sel's imports.
+    records = _records(
+        _rec("Demo.Base.value", "def", module="Demo.Base"),
+        _rec("Demo.Sel.helper", module="Demo.Sel", value_uses=("Demo.Base.value",)),
+        _rec("Demo.Sel.main", module="Demo.Sel", value_uses=("Demo.Sel.helper",)),
+        _rec("Demo.Sel.other", module="Demo.Sel"),
+    )
+    modules = {
+        "Demo.Base": ModuleEvidence("Demo.Base", "/project/Demo/Base.lean"),
+        "Demo.Sel": ModuleEvidence("Demo.Sel", "/project/Demo/Sel.lean", ("Demo.Base",)),
+    }
+    base = _article("chapter/base", "Demo.Base.value", article_id="af_base")
+    sel = _article("chapter/sel", "Demo.Sel.main")
+    articles = (base, sel, _article("chapter/other", "Demo.Sel.other")) if shared else (base, sel)
+
+    revision = _impact(records, articles, "chapter/base")
+    edit = compute_module_import_impact(records, modules, articles, sel, "Demo.Sel", source_revision="rev")
+
+    (helper,) = revision.helpers
+    expected = _lean_key("Demo.Sel.helper") if shared else sel.claim_target
+    assert helper.claim_targets == (expected,)
+    assert expected in set(revision.claim_targets) & {*edit.claim_targets, *edit.affected_claim_targets}
+    assert edit.article_local is not shared
 
 
 def test_constructor_edges_carry_an_inductive_s_meaning() -> None:
@@ -1058,9 +1085,37 @@ def test_markdown_paths_count_from_every_article_a_revised_declaration_belongs_t
     assert unowned.claim_targets == ("r", _lean_key("A.loose"))
 
 
+def test_a_revised_declaration_no_article_names_belongs_to_its_module_s_one_article() -> None:
+    records = _records(
+        _rec("A.R", "def"),
+        _rec("A.M", "def", module="Demo.M"),
+        _rec("A.mHelper", "def", module="Demo.M"),
+        _rec("A.useHelper", type_uses=("A.mHelper",)),
+        _rec("A.inlinesHelper"),
+    )
+    articles = [
+        _article("r", "A.R"),
+        _article("m", "A.M"),
+        _article("uses-helper", "A.useHelper", dependencies=("m",)),
+        _article("inlines-helper", "A.inlinesHelper", dependencies=("m",), statement_dependencies=("m",), stated=True),
+    ]
+
+    report = _impact(records, articles, "r", ["A.mHelper"])
+
+    # m is the only article naming declarations in Demo.M, so A.mHelper is m's:
+    # a path to m declares uses-helper, and inlines-helper rests on it through m.
+    assert _ids(report.statement_impacted) == ["uses-helper"]
+    assert report.undeclared_dependencies == ()
+    assert report.unused_statement_dependencies == ("inlines-helper",)
+    assert report.claim_targets == ("r", "inlines-helper", "m", "uses-helper")
+
+
 def test_an_unowned_helper_claim_key_is_ref_safe_for_any_name() -> None:
     names = ("_private.Demo.Extra.0.A.priv", "A.«weird name»", "«∀»", "A." + "long" * 20)
-    records = _records(_rec("A.base", "def"), *(_rec(name, type_uses=("A.base",)) for name in names))
+    # The helpers sit in a module no article names declarations in, so none owns them.
+    records = _records(
+        _rec("A.base", "def"), *(_rec(name, module="Demo.Extra", type_uses=("A.base",)) for name in names)
+    )
     articles = [_article("base", "A.base")]
 
     report = _impact(records, articles, "base")
@@ -2544,12 +2599,6 @@ def test_cli_import_impact_names_the_edited_module_before_the_probe(tmp_path: Pa
     assert "Mathlib.Order.Basic is not a module of this project" in output.err
     assert "(for chapter/base: Demo), not the module it imports" in output.err
 
-    # Without MODULE, the module that holds the article's declarations; a path in its place is the target.
-    code = cli.main(["work", "import-impact", _BASE_ID, str(project), "--lean-root", str(lean_root), "--json"])
-    output = capsys.readouterr()
-    assert code == 0, output.err
-    assert json.loads(output.out)["module"] == "Demo"
-
 
 @pytest.mark.parametrize(
     ("modules", "message"),
@@ -2677,6 +2726,45 @@ def test_cli_import_impact_accepts_a_root_lake_does_not_build(tmp_path: Path, mo
     output = capsys.readouterr()
     assert code == 0, output.err
     assert json.loads(output.out)["affected_modules"] == ["Extra", "Foo.Basic"]
+
+
+def test_cli_import_impact_reports_a_project_module_other_than_the_article_s(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    project = _blueprint_project(tmp_path, "Foo")
+    lean_root = _unbuilt_root_lean(tmp_path)
+    _stub_probe(
+        monkeypatch,
+        records=[_payload("Foo.base", kind="def", module="Foo.Basic")],
+        modules=(
+            ModuleEvidence("Foo.Basic", str((lean_root / "Foo/Basic.lean").resolve())),
+            ModuleEvidence("Extra", str((lean_root / "Foo/Extra.lean").resolve()), ("Foo.Basic",)),
+        ),
+    )
+
+    code = cli.main(["work", "import-impact", _BASE_ID, "Extra", str(project), "--lean-root", str(lean_root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    assert (report["module"], report["affected_modules"]) == ("Extra", ["Extra"])
+    assert report["selected_affected"] is False
+    assert report["article_local"] is False
+
+
+def test_cli_import_impact_names_the_module_lake_builds_for_the_article(tmp_path: Path, monkeypatch, capsys) -> None:
+    # Foo/Basic.lean is under both srcDirs; Lake builds it only as Foo.Basic, not as Extra's Basic.
+    project = _blueprint_project(tmp_path, "Foo")
+    lean_root = _unbuilt_root_lean(tmp_path)
+    calls = _stub_probe(monkeypatch)
+
+    code = cli.main(
+        ["work", "import-impact", _BASE_ID, "Mathlib.Order.Basic", str(project), "--lean-root", str(lean_root)]
+    )
+
+    output = capsys.readouterr()
+    assert code == 2 and calls == []
+    assert "(for chapter/base: Foo.Basic), not the module it imports" in output.err
 
 
 def test_cli_import_impact_refuses_a_loaded_module_no_library_builds(tmp_path: Path, monkeypatch, capsys) -> None:
