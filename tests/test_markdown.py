@@ -55,6 +55,10 @@ ANCHOR_CORPUS = [
     ("# Trailing hashes ###", ["trailing-hashes"]),
     ("# 1. Numbered", ["1-numbered"]),
     ("# Depends on\n\n## Depends on\n\n### Depends on", ["depends-on", "depends-on_1", "depends-on_2"]),
+    (
+        "# Roadmap article\n\n## Depends on\n\n## Depends on\n\n## Result {#custom-id}",
+        ["roadmap-article", "depends-on", "depends-on_1", "custom-id"],
+    ),
     # An explicit ID is emitted verbatim and never uniquified, but it is
     # reserved before any heading is slugged.
     ("# A {#dup}\n\n# B {#dup}", ["dup"]),
@@ -62,6 +66,9 @@ ANCHOR_CORPUS = [
     ("# ***", ["_1"]),
     ("Setext one\n===", ["setext-one"]),
     ("Setext two\n---", ["setext-two"]),
+    # MkDocs strips frontmatter before Markdown sees it, so a setext-looking
+    # closing delimiter must not turn a YAML key into a heading.
+    ("---\nkind: blueprint\n---\n\n# Real heading", ["real-heading"]),
     # `arithmatex` in generic mode leaves one copy of the maths for the slugger.
     ("# $x + y$", ["x-y"]),
     # Block context: these headings publish anchors even though they do not
@@ -141,15 +148,6 @@ def test_the_pages_build_pins_the_renderer_and_the_locked_versions() -> None:
     assert drifted == {}, "Pages pins that differ from uv.lock"
 
 
-def test_frontmatter_cannot_contribute_anchors(tmp_path: Path) -> None:
-    # MkDocs strips frontmatter before Markdown sees it, so a setext-looking
-    # closing delimiter must not turn a YAML key into a heading.
-    article = tmp_path / "article.md"
-    article.write_text("---\nkind: blueprint\n---\n\n# Real heading\n", encoding="utf-8")
-
-    assert markdown_anchors(article) == {"real-heading"}
-
-
 def test_rendered_visible_text_is_what_a_reader_sees() -> None:
     def visible(value: str) -> str:
         return rendered_visible_text(value).strip()
@@ -188,9 +186,7 @@ def test_published_tables_reports_rows_as_a_reader_sees_them() -> None:
     assert tables[0].headers == ("Area", "Coverage", "Evidence")
     # The link label, not its destination.
     assert tables[0].rows == (("Main", "OUT", "Node"),)
-
-
-def test_a_paragraph_running_into_a_table_publishes_no_table() -> None:
+    # A paragraph running into a table publishes no table.
     assert published_tables("Intro\n| Area | Coverage |\n| --- | --- |\n| a | b |\n") == []
 
 
@@ -205,9 +201,6 @@ def test_published_tables_skips_what_a_reader_cannot_see() -> None:
         "<table><tr><th>A</th></tr><tr hidden><td>gone</td></tr><tr><td>kept</td></tr></table>"
     )
     assert [row for table_ in rows for row in table_.rows] == [("kept",)]
-
-
-def test_a_hidden_cell_is_not_an_empty_column() -> None:
     # Keeping a concealed cell as an empty string invents a column no reader
     # sees, which both disguises a table whose visible headers match and
     # manufactures mismatches in one whose rows do.
@@ -215,48 +208,52 @@ def test_a_hidden_cell_is_not_an_empty_column() -> None:
         "<table><tr><th>Area</th><th>Coverage</th><th>Evidence</th><th hidden>Notes</th></tr>"
         "<tr><td>a</td><td>b</td><td>c</td><td hidden>aside</td></tr></table>"
     )
-
     assert tables == [
         PublishedTable(headers=("Area", "Coverage", "Evidence"), rows=(("a", "b", "c"),))
     ]
 
 
-def test_masking_blanks_code_blocks_and_comments_without_moving_lines() -> None:
-    text = (
-        "# Title\n"
-        "\n"
-        "```markdown\n"
-        "| Area | Coverage | Evidence |\n"
-        "```\n"
-        "\n"
-        "<!-- hidden\n"
-        "still hidden\n"
-        "-->\n"
-        "\n"
-        "    indented code\n"
-        "\n"
-        "visible tail\n"
-    )
-
-    lines = content_lines(text)
-
-    assert len(lines) == len(text.splitlines())
-    assert lines[0] == "# Title"
-    assert [line for line in lines if line.strip()] == ["# Title", "visible tail"]
+#: Text paired with the lines the checks read in it: everything the site does
+#: not publish is blank, and every line keeps its number.
+CONTENT_LINES = [
     # The tail keeps its own line number, which is what diagnostics report.
-    assert lines.index("visible tail") == 12
+    pytest.param(
+        "# Title\n\n```markdown\n| Area | Coverage | Evidence |\n```\n\n<!-- hidden\nstill hidden\n-->\n\n"
+        "    indented code\n\nvisible tail\n",
+        ["# Title", *[""] * 11, "visible tail"],
+        id="code-blocks-and-comments",
+    ),
+    pytest.param("```\n<!--\n```\n\nvisible\n", ["", "", "", "", "visible"], id="comment-opener-inside-a-fence"),
+    pytest.param("<!--\n```\n-->\n\nvisible\n", ["", "", "", "", "visible"], id="fence-inside-a-comment"),
+    pytest.param("| OUT | real <!-- aside --> reason |\n", ["| OUT | real  reason |"], id="text-beside-a-comment"),
+    pytest.param(
+        "- item\n\n    continuation of the item\n",
+        ["- item", "", "    continuation of the item"],
+        id="indented-content-under-a-list-item",
+    ),
+    # List context has to survive the blank lines between paragraphs, or the
+    # second one is mistaken for a code block and its links go unchecked.
+    pytest.param(
+        "- item\n\n    first continuation\n\n    second continuation\n\ntail\n",
+        ["- item", "", "    first continuation", "", "    second continuation", "", "tail"],
+        id="every-continuation-paragraph-in-a-list",
+    ),
+    pytest.param("    indented code\n\nvisible\n", ["", "", "visible"], id="indented-code-at-the-start"),
+    # pymdownx.superfences keeps a closing fence with trailing text inside the
+    # code block, so anything after it is still fenced and must stay masked: the
+    # checks that read tables keep that fence, and a table in its paragraph is
+    # not published.
+    pytest.param("```\nfenced\n``` trailing\nstill fenced\n", ["", "", "", ""], id="closing-fence-with-trailing-text"),
+    pytest.param("```\nfenced\n```\npublished\n", ["", "", "", "published"], id="bare-closing-fence"),
+    # The statement of an article whose title line opens a comment, which still
+    # hides what it covers.
+    pytest.param("<!-- TODO:\nwrite the statement -->", ["", ""], id="comment-opened-on-the-title-line"),
+]
 
 
-def test_a_comment_opener_inside_a_fence_is_literal_text() -> None:
-    text = "```\n<!--\n```\n\nvisible\n"
-
-    assert [line for line in content_lines(text) if line.strip()] == ["visible"]
-
-
-def test_a_fence_inside_a_comment_does_not_open_a_code_block() -> None:
-    text = "<!--\n```\n-->\n\nvisible\n"
-
-    assert [line for line in content_lines(text) if line.strip()] == ["visible"]
+@pytest.mark.parametrize(("text", "expected"), CONTENT_LINES)
+def test_masking_blanks_what_the_site_hides_without_moving_lines(text: str, expected: list[str]) -> None:
+    assert content_lines(text) == expected
 
 
 def test_render_s_line_transforms_read_no_fence_inside_a_comment() -> None:
@@ -302,38 +299,6 @@ def test_render_s_line_transforms_pair_no_code_span_across_a_page_s_frontmatter(
         )
 
 
-def test_text_beside_a_comment_on_one_line_survives() -> None:
-    assert content_lines("| OUT | real <!-- aside --> reason |\n") == [
-        "| OUT | real  reason |"
-    ]
-
-
-def test_indented_content_under_a_list_item_is_not_code() -> None:
-    text = "- item\n\n    continuation of the item\n"
-
-    assert [line.strip() for line in content_lines(text) if line.strip()] == [
-        "- item",
-        "continuation of the item",
-    ]
-
-
-def test_every_continuation_paragraph_in_a_list_stays_visible() -> None:
-    # List context has to survive the blank lines between paragraphs, or the
-    # second one is mistaken for a code block and its links go unchecked.
-    text = "- item\n\n    first continuation\n\n    second continuation\n\ntail\n"
-
-    assert [line.strip() for line in content_lines(text) if line.strip()] == [
-        "- item",
-        "first continuation",
-        "second continuation",
-        "tail",
-    ]
-
-
-def test_indented_code_at_the_start_of_a_document_is_masked() -> None:
-    assert content_lines("    indented code\n\nvisible\n") == ["", "", "visible"]
-
-
 def test_content_distinguishes_hidden_lines_from_blank_ones() -> None:
     view = content("visible\n\n<!-- hidden -->\n")
 
@@ -346,32 +311,18 @@ def test_content_distinguishes_hidden_lines_from_blank_ones() -> None:
     assert not view.ends_block(2)
 
 
-def test_blank_lines_inside_a_comment_belong_to_the_comment() -> None:
-    view = content("visible\n<!-- note\n\nmore note -->\nafter\n")
+@pytest.mark.parametrize(
+    ("text", "hidden"),
+    [
+        pytest.param("visible\n<!-- note\n\nmore note -->\nafter\n", frozenset({1, 2, 3}), id="comment"),
+        pytest.param("visible\n```\n\nexample\n```\nafter\n", frozenset({1, 2, 3, 4}), id="fence"),
+    ],
+)
+def test_blank_lines_inside_a_comment_or_a_fence_belong_to_it(text: str, hidden: frozenset[int]) -> None:
+    view = content(text)
 
-    assert view.hidden == frozenset({1, 2, 3})
+    assert view.hidden == hidden
     assert not view.ends_block(2)
-
-
-def test_blank_lines_inside_a_fence_belong_to_the_fence() -> None:
-    view = content("visible\n```\n\nexample\n```\nafter\n")
-
-    assert view.hidden == frozenset({1, 2, 3, 4})
-    assert not view.ends_block(2)
-
-
-def test_a_closing_fence_may_not_carry_trailing_text() -> None:
-    # pymdownx.superfences keeps this inside the code block, so anything after
-    # it is still fenced and must stay masked.
-    view = content("```\nfenced\n``` trailing\nstill fenced\n")
-
-    assert [line for line in view.lines if line.strip()] == []
-
-
-def test_a_bare_closing_fence_ends_the_block() -> None:
-    view = content("```\nfenced\n```\npublished\n")
-
-    assert [line for line in view.lines if line.strip()] == ["published"]
 
 
 def test_markdown_links_report_visible_links_with_line_numbers() -> None:
@@ -425,21 +376,6 @@ def test_links_are_the_ones_the_configured_renderer_publishes(source: str, expec
 
     assert [html.unescape(href) for href in published] == expected
     assert [target for _, target in markdown_links(source)] == expected
-
-
-def test_anchors_follow_headings_and_explicit_ids(tmp_path: Path) -> None:
-    path = tmp_path / "article.md"
-    path.write_text(
-        "# Roadmap article\n\n## Depends on\n\n## Depends on\n\n## Result {#custom-id}\n",
-        encoding="utf-8",
-    )
-
-    assert markdown_anchors(path) == {
-        "roadmap-article",
-        "depends-on",
-        "depends-on_1",
-        "custom-id",
-    }
 
 
 def test_anchor_rendering_is_cached_by_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -584,98 +520,106 @@ def test_a_directory_behind_a_link_that_cannot_be_read_has_the_path_the_system_o
     assert directory_path(root / "via" / "missing") is None
 
 
-def test_a_statement_runs_from_the_title_to_the_first_h2() -> None:
-    parts = article_parts(
+#: Articles paired with the statement and the sections `article_parts` reads in them.
+ARTICLE_PARTS = [
+    pytest.param(
         "---\ndeclaration: theorem\n---\n\n# Title\n\nThe statement.\n\n"
-        "## Depends on\n\n- [Base](base.md)\n\n## Sources\n\n- [Paper](paper.md)\n"
-    )
+        "## Depends on\n\n- [Base](base.md)\n\n## Sources\n\n- [Paper](paper.md)\n",
+        "The statement.",
+        (
+            ArticleSection("Depends on", "## Depends on", "- [Base](base.md)"),
+            ArticleSection("Sources", "## Sources", "- [Paper](paper.md)"),
+        ),
+        id="from-the-title-to-the-first-h2",
+    ),
+    pytest.param(
+        "# Title\n\nFirst part.\n\n### Remark\n\nSecond part.\n\n## Sources\n",
+        "First part.\n\n### Remark\n\nSecond part.",
+        (ArticleSection("Sources", "## Sources", ""),),
+        id="a-deeper-heading-ends-nothing",
+    ),
+    *(
+        pytest.param(
+            f"# Title\n\nBefore.\n\n{hidden}\n\nAfter.\n\n## Sources\n",
+            f"Before.\n\n{hidden}\n\nAfter.",
+            (ArticleSection("Sources", "## Sources", ""),),
+            id=f"an-unpublished-heading-ends-nothing-{name}",
+        )
+        for name, hidden in (
+            ("backticks", "```\n## Not a section\n```"),
+            ("tildes", "~~~~\n## Not a section\n~~~~"),
+            ("comment", "<!--\n## Not a section\n-->"),
+            ("indented", "    ## Not a section"),
+        )
+    ),
+    pytest.param("# Title\n\nOnly a statement.\n", "Only a statement.", (), id="without-sections"),
+    *(
+        pytest.param(text, "", (), id=f"no-body-{name}")
+        for name, text in (
+            ("empty", ""),
+            ("title", "# Title\n"),
+            ("frontmatter", "---\ndeclaration: theorem\n---\n"),
+            ("frontmatter-never-closed", "---\nnever closed\n# Title\n\nBody.\n"),
+        )
+    ),
+    pytest.param(
+        "# Title\r\n\r\nBody.\r\n\r\n## Depends on <!-- edges --> ##\r\n\r\nNone.\r\n",
+        "Body.",
+        (ArticleSection("Depends on", "## Depends on <!-- edges --> ##", "None."),),
+        id="a-section-title-as-published",
+    ),
+    # The graph loader reads only ATX headings, so a setext underline is prose
+    # here too; one rule for where a section starts, whatever reads the article.
+    pytest.param(
+        "# Title\n\nBody.\n\nProof\n-----\n\nSteps.\n", "Body.\n\nProof\n-----\n\nSteps.", (), id="only-atx-headings"
+    ),
+    pytest.param(
+        "---\nlean: A.b\n---\n\n# Title\n\nAbove.\n\n---\n\nBelow.\n",
+        "Above.\n\n---\n\nBelow.",
+        (),
+        id="a-horizontal-rule-after-the-frontmatter",
+    ),
+    pytest.param(
+        "# Title\n\n    theorem draft : True := trivial\n\n## Sources\n\n    cited\n",
+        "    theorem draft : True := trivial",
+        (ArticleSection("Sources", "## Sources", "    cited"),),
+        id="the-indentation-that-makes-it-code",
+    ),
+    # The page draws a fence without a closing line as plain text and shows
+    # the section after it, so the section is read as one.
+    pytest.param(
+        "# Title\n\nBefore.\n\n```\ncode\n\n## Depends on\n\n- [Base](base.md)\n",
+        "Before.\n\n```\ncode",
+        (ArticleSection("Depends on", "## Depends on", "- [Base](base.md)"),),
+        id="a-fence-that-never-closes-hides-no-heading",
+    ),
+    pytest.param(
+        "# Title\n\nBody.\n\n<!-- todo\n\n## Depends on\n\n- [Base](base.md)\n",
+        "Body.\n\n<!-- todo\n\n## Depends on\n\n- [Base](base.md)",
+        (),
+        id="an-unclosed-comment-hides-every-heading-after-it",
+    ),
+    # CONTENT_LINES shows that the comment still hides the statement it covers.
+    pytest.param(
+        "# Title <!-- TODO:\nwrite the statement -->\n\n## Depends on\n\nNone.\n",
+        "<!-- TODO:\nwrite the statement -->",
+        (ArticleSection("Depends on", "## Depends on", "None."),),
+        id="a-comment-opened-on-the-title-line",
+    ),
+]
 
-    assert parts.statement == "The statement."
-    assert parts.sections == (
-        ArticleSection("Depends on", "## Depends on", "- [Base](base.md)"),
-        ArticleSection("Sources", "## Sources", "- [Paper](paper.md)"),
-    )
 
+@pytest.mark.parametrize(("text", "statement", "sections"), ARTICLE_PARTS)
+def test_a_statement_runs_from_the_title_to_the_first_published_h2(
+    text: str, statement: str, sections: tuple[ArticleSection, ...]
+) -> None:
+    parts = article_parts(text)
 
-def test_a_deeper_heading_does_not_end_the_statement() -> None:
-    parts = article_parts("# Title\n\nFirst part.\n\n### Remark\n\nSecond part.\n\n## Sources\n")
-
-    assert parts.statement == "First part.\n\n### Remark\n\nSecond part."
-    assert [section.title for section in parts.sections] == ["Sources"]
+    assert (parts.statement, parts.sections) == (statement, sections)
 
 
 def test_prose_before_the_title_belongs_to_the_statement() -> None:
     assert article_parts("Lead-in.\n\n# Title\n\nBody.\n").statement.split() == ["Lead-in.", "Body."]
-
-
-@pytest.mark.parametrize(
-    "hidden",
-    [
-        "```\n## Not a section\n```",
-        "~~~~\n## Not a section\n~~~~",
-        "<!--\n## Not a section\n-->",
-        "    ## Not a section",
-    ],
-)
-def test_a_heading_that_is_not_published_ends_nothing(hidden: str) -> None:
-    parts = article_parts(f"# Title\n\nBefore.\n\n{hidden}\n\nAfter.\n\n## Sources\n")
-
-    assert parts.statement == f"Before.\n\n{hidden}\n\nAfter."
-    assert [section.title for section in parts.sections] == ["Sources"]
-
-
-def test_an_article_without_sections_is_all_statement() -> None:
-    parts = article_parts("# Title\n\nOnly a statement.\n")
-
-    assert (parts.statement, parts.sections) == ("Only a statement.", ())
-
-
-@pytest.mark.parametrize(
-    "text",
-    ["", "# Title\n", "---\ndeclaration: theorem\n---\n", "---\nnever closed\n# Title\n\nBody.\n"],
-)
-def test_an_article_with_no_body_has_an_empty_statement(text: str) -> None:
-    parts = article_parts(text)
-
-    assert (parts.statement, parts.sections) == ("", ())
-
-
-def test_a_section_title_is_read_as_published() -> None:
-    parts = article_parts("# Title\r\n\r\nBody.\r\n\r\n## Depends on <!-- edges --> ##\r\n\r\nNone.\r\n")
-
-    assert parts.statement == "Body."
-    assert parts.sections == (ArticleSection("Depends on", "## Depends on <!-- edges --> ##", "None."),)
-
-
-def test_only_atx_headings_end_a_statement() -> None:
-    # The graph loader reads only ATX headings, so a setext underline is prose
-    # here too; one rule for where a section starts, whatever reads the article.
-    parts = article_parts("# Title\n\nBody.\n\nProof\n-----\n\nSteps.\n")
-
-    assert parts.statement == "Body.\n\nProof\n-----\n\nSteps."
-    assert parts.sections == ()
-
-
-def test_a_horizontal_rule_after_the_frontmatter_is_statement_text() -> None:
-    assert article_parts("---\nlean: A.b\n---\n\n# Title\n\nAbove.\n\n---\n\nBelow.\n").statement == (
-        "Above.\n\n---\n\nBelow."
-    )
-
-
-def test_a_statement_keeps_the_indentation_that_makes_it_code() -> None:
-    parts = article_parts("# Title\n\n    theorem draft : True := trivial\n\n## Sources\n\n    cited\n")
-
-    assert parts.statement == "    theorem draft : True := trivial"
-    assert parts.sections == (ArticleSection("Sources", "## Sources", "    cited"),)
-
-
-def test_a_fence_that_never_closes_hides_no_heading() -> None:
-    # The page draws a fence without a closing line as plain text and shows
-    # the section after it, so the section is read as one.
-    parts = article_parts("# Title\n\nBefore.\n\n```\ncode\n\n## Depends on\n\n- [Base](base.md)\n")
-
-    assert parts.statement == "Before.\n\n```\ncode"
-    assert parts.sections == (ArticleSection("Depends on", "## Depends on", "- [Base](base.md)"),)
 
 
 def test_coverage_and_link_checks_read_a_fence_that_never_closes_to_the_end() -> None:
@@ -690,46 +634,55 @@ def test_coverage_and_link_checks_read_a_fence_that_never_closes_to_the_end() ->
     assert not any(line.strip() for line in content(text).lines)
 
 
-def test_inline_code_starting_with_three_backticks_is_not_a_fence() -> None:
+#: Lines paired with what `mask_fences_and_comments` leaves of them. A fence
+#: that never closes is text only from its own first line.
+MASKED = [
     # Read as an opener, the first line would pair with the later fence and hide the heading.
-    lines = ["```x``` is inline code here.", "## Shown", "```", "hidden", "```"]
-
-    assert mask_fences_and_comments(lines) == ["```x``` is inline code here.", "## Shown", "", "", ""]
-
-
-def test_a_fence_that_never_closes_is_text_only_from_its_own_first_line() -> None:
-    lines = ["```", "hidden <!--", "```", "shown", "~~~py", "<!-- a comment", "## Hidden by the comment"]
-
+    pytest.param(
+        ["```x``` is inline code here.", "## Shown", "```", "hidden", "```"],
+        ["```x``` is inline code here.", "## Shown", "", "", ""],
+        id="inline-code-starting-with-three-backticks-is-not-a-fence",
+    ),
     # The closed fence stays hidden, and the comment inside the open one counts
     # again once that fence is read as text.
-    assert mask_fences_and_comments(lines) == ["", "", "", "shown", "~~~py", "", ""]
-    assert mask_fences_and_comments([*lines[:5], "## Shown"])[4:] == ["~~~py", "## Shown"]
-    # The checks that read tables keep the fence: a table in its paragraph is not published.
-    assert [line for line in content("```\nfenced\n``` trailing\nstill fenced\n").lines if line.strip()] == []
-
-
-def test_a_fence_closes_only_on_its_own_character() -> None:
-    assert mask_fences_and_comments(["~~~", "```", "## Hidden", "~~~", "## Shown"]) == ["", "", "", "", "## Shown"]
-
-
-def test_a_closed_fence_after_one_that_never_closes_is_still_hidden() -> None:
-    lines = ["````py", "## Shown", "```", "hidden", "```", "after"]
-
-    assert mask_fences_and_comments(lines) == ["````py", "## Shown", "", "", "", "after"]
-
-
-def test_a_fence_that_never_closes_is_reread_with_the_comment_state_it_opened_in() -> None:
-    lines = ["<!-- a comment", "ends --> ```", "## Shown"]
-
-    assert mask_fences_and_comments(lines) == ["", " ```", "## Shown"]
-
-
-def test_a_later_longer_fence_line_closes_a_fence_whose_own_closing_line_is_not_bare() -> None:
+    pytest.param(
+        ["```", "hidden <!--", "```", "shown", "~~~py", "<!-- a comment", "## Hidden by the comment"],
+        ["", "", "", "shown", "~~~py", "", ""],
+        id="a-comment-inside-a-fence-that-never-closes",
+    ),
+    pytest.param(
+        ["```", "hidden <!--", "```", "shown", "~~~py", "## Shown"],
+        ["", "", "", "shown", "~~~py", "## Shown"],
+        id="a-fence-that-never-closes-is-text",
+    ),
+    pytest.param(
+        ["~~~", "```", "## Hidden", "~~~", "## Shown"],
+        ["", "", "", "", "## Shown"],
+        id="a-fence-closes-only-on-its-own-character",
+    ),
+    pytest.param(
+        ["````py", "## Shown", "```", "hidden", "```", "after"],
+        ["````py", "## Shown", "", "", "", "after"],
+        id="a-closed-fence-after-one-that-never-closes",
+    ),
+    pytest.param(
+        ["<!-- a comment", "ends --> ```", "## Shown"],
+        ["", " ```", "## Shown"],
+        id="reread-with-the-comment-state-it-opened-in",
+    ),
     # A known limit: the page needs a closing line of the opener's own length,
     # so it draws this fence as text and shows the heading.
-    lines = ["```lean", "x", "``` -- end", "## Depends on", "````", "code", "````"]
+    pytest.param(
+        ["```lean", "x", "``` -- end", "## Depends on", "````", "code", "````"],
+        ["", "", "", "", "", "code", "````"],
+        id="a-later-longer-fence-line-closes-it",
+    ),
+]
 
-    assert mask_fences_and_comments(lines) == ["", "", "", "", "", "code", "````"]
+
+@pytest.mark.parametrize(("lines", "expected"), MASKED)
+def test_masking_reads_each_fence_as_the_page_draws_it(lines: list[str], expected: list[str]) -> None:
+    assert mask_fences_and_comments(lines) == expected
 
 
 def test_many_fences_that_never_close_do_not_each_reread_the_article(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -753,19 +706,6 @@ def test_many_fences_that_never_close_do_not_each_reread_the_article(monkeypatch
     monkeypatch.setattr(markdown_module, "FENCE_CLOSE", Counted(markdown_module.FENCE_CLOSE))
     assert mask_fences_and_comments(lines) == lines
     assert len(reads) >= len(lines)
-
-
-def test_an_unclosed_comment_hides_every_heading_after_it() -> None:
-    parts = article_parts("# Title\n\nBody.\n\n<!-- todo\n\n## Depends on\n\n- [Base](base.md)\n")
-
-    assert parts.sections == ()
-
-
-def test_a_comment_opened_on_the_title_line_still_hides_what_it_covers() -> None:
-    parts = article_parts("# Title <!-- TODO:\nwrite the statement -->\n\n## Depends on\n\nNone.\n")
-
-    assert parts.statement == "<!-- TODO:\nwrite the statement -->"
-    assert content_lines(parts.statement) == ["", ""]
 
 
 def test_a_title_below_a_section_ends_that_section() -> None:
@@ -792,6 +732,11 @@ def test_a_title_below_a_section_ends_that_section() -> None:
         "TODO\u2014later",
         "TODO -- later",
         "TODO--later",
+        "TODO \u2013 later",
+        "TODO\u2013 later",
+        "TBD\u2014write this",
+        "Unknown: x",
+        "TODO - x",
     ],
 )
 def test_is_placeholder_accepts_bare_and_marker_placeholders(visible: str) -> None:
@@ -807,17 +752,13 @@ def test_is_placeholder_accepts_bare_and_marker_placeholders(visible: str) -> No
         "Let x be a todo list.",
         "TODO-lists form a monoid.",
         "Unknown-variance case: the sample mean is normal.",
+        # A dash joining two words does not mark a placeholder.
+        "Unknown\u2013known duality holds for every pair.",
+        "Unknown-variance case.",
     ],
 )
 def test_is_placeholder_leaves_sentences_alone(visible: str) -> None:
     assert not is_placeholder(visible)
-
-
-def test_a_dash_joining_two_words_does_not_mark_a_placeholder() -> None:
-    assert not is_placeholder("Unknown\u2013known duality holds for every pair.")
-    assert not is_placeholder("Unknown-variance case.")
-    for marker in ("TODO \u2013 later", "TODO\u2013 later", "TBD\u2014write this", "Unknown: x", "TODO - x"):
-        assert is_placeholder(marker), marker
 
 
 @pytest.mark.parametrize(("visible", "expected"), [("", False), ("...", False), ("**_~", False), ("x", True)])
