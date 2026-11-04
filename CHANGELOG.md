@@ -379,6 +379,11 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Unlistable project root.** `project inspect` no longer reports
+  `project-changed-during-inspection` on every run for a project root that
+  cannot be listed. A root that can still be searched (mode 0311) gets its
+  report, and the library commands read it; one that cannot be searched
+  reports `unreadable-file`.
 - **Decision files on Windows.** `project inspect` and the library commands
   read `lean-toolchain`, the lakefiles and the manifests in text mode on
   Windows, which turned CRLF into LF and stopped at a 0x1A byte. They now read
