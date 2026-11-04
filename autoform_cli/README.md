@@ -142,9 +142,9 @@ declaration the module writes with a declaration keyword, as the Lean source
 index records them; a structure field the index records may go there instead
 of the ledger. Names Lean generates, such as constructors,
 derived or unnamed instances, and `@[ext]`, `@[simps]`, or `@[to_additive]`
-results, and declarations the index cannot see yet, behind `nonrec` or `meta`
-or written `class inductive`, go in the ledger as supporting entries, never in
-`lean:`; a `private` name never goes in `lean:`.
+results, and declarations the index cannot see yet, behind `nonrec` or `meta`,
+go in the ledger as supporting entries, never in `lean:`; a `private` name
+never goes in `lean:`.
 A completed catalog may assert `statement: formalized` and `proof: formalized`
 once the complete module has been checked.
 
