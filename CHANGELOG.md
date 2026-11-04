@@ -190,9 +190,18 @@ date when the release is tagged.
   one persistent workspace. The outline follows authored containment, includes
   root-level pages and labels collections as subheads; Home returns to the site.
   Empty source choices are hidden (#442).
-- **Explorer payloads.** Scope payloads no longer carry the x and y positions
-  0.6.0's Python layout computed; they keep card dimensions and authored region
-  counts (#442).
+- **Explorer payloads.** Scope payloads carry only what the book reads: each
+  node's title, kind, status, area, Lean names and summary, the palette and the
+  page's trail. The x and y positions 0.6.0's Python layout computed are gone
+  (#442), and so are card dimensions, region and member counts, and relations,
+  which nothing read: a statement's page lists its own. `edges` stays, empty.
+  The no-JavaScript fallback's graph-data link opens the search index (#597).
+- **Old dependency pages.** `dependencies.html`, `dependencies/full.html` and
+  the chapter and section pages under `dependencies/` redirect to the matching
+  book page and keep the address's fragment, so `#node=` links and old view and
+  filter links still open there; without JavaScript they refresh to it. They
+  load no explorer, stylesheet or data of their own, and
+  `dependencies/full.json` is no longer written (#597).
 - **Book order.** Previous/Next, the site nav, statement numbers, Next up and
   the explorer's outline and search follow one reading order, down the
   containment tree, so a landing-page shortcut no longer reorders the book and

@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from autoform_cli.dag_viewer import MAX_MAP_NODES
 from autoform_cli import graph_pages, render
 from tests.test_integrated_publication import _decoded_relations, _project, _write
 
@@ -204,7 +203,8 @@ def test_an_oversized_module_scope_keeps_its_real_math_articles_navigable_withou
     project, _group, _explanation = _project(tmp_path)
     blueprint, output = project / "blueprint", tmp_path / "out"
     topic = blueprint / "roadmap/catalogs"
-    count = MAX_MAP_NODES + 1
+    # More modules than the 120 the explorer's map was sized for.
+    count = 121
     _write(topic / "README.md", "# Existing mathematics\n\nThe module articles describe the existing mathematical library.\n")
     _write(blueprint / "sources/ledger.md", "# Declaration ledger\n\nThe modules already in the library.\n")
     for index in range(count):
@@ -228,7 +228,6 @@ def test_an_oversized_module_scope_keeps_its_real_math_articles_navigable_withou
     assert all(records[node_id]["catalog"] == "module" and records[node_id]["result"] is False for node_id in module_ids)
     assert {records[node_id]["status"] for node_id in module_ids} == {"inventory_pending", "inventory_checked"}
     for status in ("inventory_pending", "inventory_checked"):
-        assert context["palette"][status]["neutral"] is True
         assert "not a mathematical proof" in context["palette"][status]["meaning"]
     book = (output / "roadmap/catalogs/README.md").read_text(encoding="utf-8")
     assert book.count("The mathematical content includes the identity") == count

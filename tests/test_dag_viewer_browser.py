@@ -15,7 +15,7 @@ from urllib.parse import unquote, urljoin, urlsplit
 import html5lib
 import pytest
 
-from autoform_cli import dag_viewer
+from autoform_cli import dag_viewer, site_index
 from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
 from tests.test_integrated_publication import _decoded_relations
@@ -109,13 +109,14 @@ def mobile_page(webkit_browser: object) -> Iterator[object]:
 
 @dataclass(frozen=True)
 class _ExplorerConsumer:
-    """Canonical routes and scope payloads captured from the actual publisher."""
+    """Canonical routes, scope payloads and typed relations captured from the actual publisher."""
 
     url: str
     records: dict[str, dict]
     graphs: dict[str, dict]
     headings: dict[str, str]
     page_titles: dict[str, str]
+    relations: list[list[object]]
 
     def route(self, node_id: str) -> str:
         return urljoin(self.url + "/dependencies/index.json", self.records[node_id]["route"])
@@ -286,7 +287,8 @@ def explorer_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Exp
     render_site(project / "blueprint", project / "site-src", lean_root=project)
     build(load_config(config_file=str(project / "mkdocs.yml"), strict=True))
     index_path = project / "site/dependencies/index.json"
-    records = {node["id"]: node for node in json.loads(index_path.read_text(encoding="utf-8"))["nodes"]}
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    records = {node["id"]: node for node in index["nodes"]}
     graphs = {
         scope: json.loads((index_path.parent / unquote(urlsplit(records[scope]["data_url"]).path)).read_text(encoding="utf-8"))
         for scope in scopes
@@ -321,7 +323,7 @@ def explorer_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Exp
     )
     _write_consumer(project / "site/bare.html", "<!doctype html><title>Linked fallback</title><main>" + fallback + "</main>")
     with _served(project / "site") as url:
-        yield _ExplorerConsumer(url, records, graphs, headings, page_titles)
+        yield _ExplorerConsumer(url, records, graphs, headings, page_titles, _decoded_relations(index))
 
 
 @pytest.fixture(scope="module")
@@ -425,13 +427,13 @@ def _assert_hit(page: object, control: object) -> None:
     )
 
 
-def _reference_counts(graph: dict, owner_id: str, target_id: str) -> tuple[int, int]:
+def _reference_counts(relations: list[list[object]], owner_id: str, target_id: str) -> tuple[int, int]:
     """Original weights in these one-direction fixtures, not a reciprocal-link resolver."""
     pair = {owner_id, target_id}
     assert len(pair) == 2
-    edges = [edge for edge in graph["edges"] if {edge["source"], edge["target"]} == pair]
+    edges = [relation for relation in relations if set(relation[:2]) == pair]
     assert len(edges) == 1, "This fixture reference must name one unambiguous original directed pair"
-    counts = (edges[0]["statement"], edges[0]["proof"])
+    counts = (edges[0][2], edges[0][3])
     assert all(type(count) is int and count >= 0 for count in counts) and sum(counts) > 0
     return counts
 
@@ -475,9 +477,8 @@ def _open_dependency(card: object, consumer: _ExplorerConsumer, target_id: str) 
     playwright.expect(target.locator(".bp-thmheading > .bp-thmtitle")).to_have_text(
         consumer.records[target_id]["title"]
     )
-    graph = consumer.graphs[consumer.records[owner_id]["scope"]]
     return _numbered_reference(
-        disclosure, target, consumer.route(target_id), _reference_counts(graph, owner_id, target_id)
+        disclosure, target, consumer.route(target_id), _reference_counts(consumer.relations, owner_id, target_id)
     )
 
 
@@ -570,7 +571,7 @@ def marked_math_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[s
     records = {node["id"]: node for node in index["nodes"]}
     for node_id, title in (("algebra", _TITLE_MATH_SCOPE), ("algebra/title-foundation", _TITLE_MATH_FOUNDATION)):
         assert records[node_id]["title"] == title
-        assert records[node_id]["reading_title"] == dag_viewer._reading_label(title)
+        assert records[node_id]["reading_title"] == site_index._reading_label(title)
     with _served(project / "site") as url:
         yield url
 
@@ -1209,7 +1210,9 @@ def test_legacy_node_hash_resolves_through_the_global_index(desktop_page: object
     # The router loaded the whole-roadmap index before this commit, so no retry is in flight.
     playwright.expect(page.locator(".bp-dag-search")).not_to_have_attribute("aria-busy", "true")
     assert page.url.endswith("#node=unknown%2Fitem")
-    assert len(navigations) == 1
+    # The old page, then the book page its script replaces it with.
+    assert len(navigations) == 2 and "/dependencies/chapters/chapter.html" in navigations[0]
+    assert "/roadmap/" in navigations[1]
     # Nothing is selected, in the book or on the map, once the map has drawn.
     playwright.expect(page.locator(".bp-whole-map .pm-part").first).to_be_visible()
     playwright.expect(page.locator(".bp-dag-has-selection")).to_have_count(0)
@@ -1366,8 +1369,8 @@ def test_no_javascript_keeps_the_linked_fallback(webkit_browser: object, explore
         playwright.expect(fallback).to_be_visible()
         download = fallback.get_by_role("link", name="Download the complete graph data")
         playwright.expect(download).to_be_visible()
-        assert page.request.get(download.get_attribute("href") if download.get_attribute("href").startswith("http")
-                                else urljoin(page.url, download.get_attribute("href"))).json()["schema"] == "autoform-dag-view/v2"
+        data = page.request.get(urljoin(page.url, download.get_attribute("href"))).json()
+        assert data["schema"] == site_index.SEARCH_SCHEMA and len(data["nodes"]) == len(explorer_consumer.records)
         reference = _open_dependency(card, explorer_consumer, "chapter/middle")
         assert urljoin(page.url, reference.get_attribute("href")) == explorer_consumer.route("chapter/middle")
         reference.click()
@@ -1728,7 +1731,7 @@ def test_the_toolbars_popovers_paint_over_the_open_details(desktop_page: object,
         payload = route.fetch().json()
         palette.update(payload["palette"])
         payload["nodes"] += [
-            {"id": f"more/{key}", "kind": "node", "status": key, "status_counts": [[key, 1]], "title": f"More {key}"}
+            {"id": f"more/{key}", "kind": "node", "status": key, "title": f"More {key}"}
             for key in payload["palette"]
         ]
         route.fulfill(json=payload)
@@ -1870,15 +1873,12 @@ def test_a_published_app_page_without_script_keeps_the_site_chrome(webkit_browse
         )
         _assert_site_chrome_is_reachable(page)
         playwright.expect(page.locator(".bp-dag-integrated")).to_have_count(0)
-        # A legacy entrance is still a usable native notice, not a blank graph without JavaScript.
+        # Without JavaScript, a legacy entrance refreshes to its canonical page.
         page.goto(f"{site_url}/dependencies/chapters/algebra.html")
-        notice = page.locator(".bp-reading-source")
-        playwright.expect(notice).to_be_visible()
-        link = notice.get_by_role("link").first
-        href = link.get_attribute("href")
-        assert isinstance(href, str)
-        assert urljoin(page.url, href) == _site_route(page, site_url, "algebra")
-        link.click(trial=True)
+        page.wait_for_url(_site_route(page, site_url, "algebra"))
+        playwright.expect(page.locator('.bp-reading-source .bp-thmwrapper[data-autoform-node-id="algebra/result"]')).to_contain_text(
+            "The main result."
+        )
 
 
 def test_a_published_app_page_restores_the_site_chrome_when_its_data_fails(
@@ -1992,14 +1992,12 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     playwright.expect(relations.locator("summary")).to_have_text("Uses 1 · Used by 55")
     playwright.expect(relations.locator("a.bp-ref")).to_have_count(56)
     last_id = "topology/later-54"
-    scope = _site_record(page, site_url, "topology/result")["scope"]
-    graph_url = urljoin(site_url + "/dependencies/index.json", _site_record(page, site_url, scope)["data_url"])
-    graph_response = page.request.get(graph_url, timeout=10_000)
-    assert graph_response.ok
+    index_response = page.request.get(f"{site_url}/dependencies/index.json", timeout=10_000)
+    assert index_response.ok
     last_card = _reading_card(page, last_id)
     playwright.expect(last_card.locator(".bp-thmheading > .bp-thmtitle")).to_have_text("Later 54")
     last = _numbered_reference(relations, last_card, _site_route(page, site_url, last_id),
-                               _reference_counts(graph_response.json(), "topology/result", last_id))
+                               _reference_counts(_decoded_relations(index_response.json()), "topology/result", last_id))
     last.scroll_into_view_if_needed()
     _assert_hit(page, last)
     last.click()
@@ -2578,7 +2576,8 @@ def test_the_rail_counts_in_words_that_agree_with_their_numbers(
     playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text(counts)
     graph = explorer_consumer.graphs[name]
     assert len(graph["nodes"]) == (4 if name == "mixed" else 1_000)
-    assert len(graph["edges"]) == (1 if name == "mixed" else 0)
+    members = {node["id"] for node in graph["nodes"]}
+    assert sum(set(relation[:2]) <= members for relation in explorer_consumer.relations) == (1 if name == "mixed" else 0)
     if name == "mixed":
         page.locator(".bp-dag-search").fill("mixed/a")
         playwright.expect(page.locator(".bp-dag-inventory-summary")).to_have_text("1 statement · search the whole roadmap")

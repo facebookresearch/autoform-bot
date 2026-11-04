@@ -22,6 +22,7 @@ import pytest
 from autoform_cli.mathjax import MATHJAX_BUNDLE
 from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
+from tests.test_integrated_publication import _decoded_relations
 from tests.test_integrated_workspace_browser import (
     _PinnedRuntime,
     _WorkspaceSite,
@@ -213,7 +214,6 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
     graph = json.loads(graph_path.read_text(encoding="utf-8"))
     local = [node for node in graph["nodes"] if node["kind"] != "boundary"]
     assert len(local) == 81 and {node["title"] for node in local} == {_title(n) for n in range(81)}
-    assert all(node["member_count"] == 1 for node in local)
     assert not any("Unrelated note" in node["title"] for node in graph["nodes"])
     groups: dict[str, list[dict]] = {}
     owners = {}
@@ -223,18 +223,14 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
         owners[node["id"]] = key
     assert set(groups) == {*("area:" + area for area in _AREAS), "unassigned"}
     assert all(len(members) == 9 for members in groups.values())
-    # Identify represented records through the actual published permalinks,
-    # rather than manufacture a scope:/boundary: namespace from fixture paths.
-    routes = {}
-    for identifier, record in records.items():
-        route = urljoin(index_path.as_uri(), record["route"])
-        assert route not in routes, (identifier, routes.get(route))
-        routes[route] = identifier
+    # Identify each card's record as the book does (blueprint-dag.js recordId): by its
+    # id, or for a scope or boundary card that is no record itself, the id after its prefix.
     represented = {}
     for node in graph["nodes"]:
-        route = urljoin(graph_path.as_uri(), node["url"])
-        assert route in routes, (node["id"], node["url"])
-        original = routes[route]
+        original = node["id"] if node["id"] in records or node["kind"] not in {"scope", "boundary"} else (
+            node["id"].split(":", 1)[1]
+        )
+        assert original in records, node["id"]
         assert original not in represented, original
         represented[original] = node["id"]
 
@@ -247,18 +243,21 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
             identifier = index["nodes"][parent]["id"] if type(parent) is int else parent
         return represented[identifier]
 
+    # The search index publishes every relation; each is put on the cards holding its records, as the book
+    # identifies them.
+    shown = [(endpoint(source), endpoint(target), {"statement": statement, "proof": proof})
+             for source, target, statement, proof in _decoded_relations(index)]
     # The authoring tuples are dependent -> prerequisite; published flow is
     # prerequisite -> dependent, so upstream/downstream is checked explicitly.
     expected_edges = Counter((endpoint(target), endpoint(source), kind) for source, target, kind in edges)
     actual_edges = Counter()
     neighbors = {node["id"]: set() for node in local}
-    for edge in graph["edges"]:
+    for source, target, counts in shown:
         for kind in ("statement", "proof"):
-            assert type(edge[kind]) is int and edge[kind] >= 0
-            actual_edges[(edge["source"], edge["target"], kind)] += edge[kind]
-        if edge["source"] in neighbors and edge["target"] in neighbors:
-            neighbors[edge["source"]].add(edge["target"])
-            neighbors[edge["target"]].add(edge["source"])
+            actual_edges[(source, target, kind)] += counts[kind]
+        if source in neighbors and target in neighbors:
+            neighbors[source].add(target)
+            neighbors[target].add(source)
     assert actual_edges == expected_edges
     unseen, components = set(neighbors), []
     while unseen:
@@ -273,12 +272,12 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
     assert sorted(components) == [1] * 55 + [26]
     assert len(components) == 56
     totals = {part: {"statement": 0, "proof": 0} for part in ("internal", "cross_group", "outside")}
-    for edge in graph["edges"]:
-        part = "outside" if edge["source"] not in owners or edge["target"] not in owners else (
-            "internal" if owners[edge["source"]] == owners[edge["target"]] else "cross_group"
+    for source, target, counts in shown:
+        part = "outside" if source not in owners or target not in owners else (
+            "internal" if owners[source] == owners[target] else "cross_group"
         )
         for kind in ("statement", "proof"):
-            totals[part][kind] += edge[kind]
+            totals[part][kind] += counts[kind]
     assert totals["outside"] == {"statement": 1, "proof": 2}
     assert {kind: totals["internal"][kind] + totals["cross_group"][kind] for kind in ("statement", "proof")} == {
         "statement": 60, "proof": 56,

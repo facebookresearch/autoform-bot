@@ -25,6 +25,7 @@ from autoform_cli.mathjax import MATHJAX_BUNDLE, MATHJAX_VERSION
 from autoform_cli.render import render_site
 from autoform_cli.scaffold import scaffold_project
 from tests.test_integrated_explorer_browser import _PinnedRuntime, _math_menu_evidence, _math_source, _routes, _served, playwright
+from tests.test_integrated_publication import _decoded_relations
 
 
 _LIBRARY = "Mathematical library"
@@ -50,6 +51,7 @@ class _WorkspaceSite:
     root_graph: dict
     wiki_layer: dict | None = None
     wiki_pairs: frozenset[tuple[str, str]] = frozenset()
+    index: dict | None = None
 
     def route(self, node_id: str) -> str:
         return urljoin(self.url + "/dependencies/index.json", self.records[node_id]["route"])
@@ -60,13 +62,23 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _area_edges(graph: dict) -> list[dict]:
-    areas = {node["id"]: node.get("area") for node in graph["nodes"]}
+def _area_edges(index: dict) -> list[dict]:
+    nodes = index["nodes"]
+    by_id = {node["id"]: node for node in nodes}
+
+    def area(node: dict) -> object:
+        # The nearest area on the record or above it; the root's describes the whole project.
+        while (parent := node.get("parent")) is not None:
+            if node.get("area"):
+                return node["area"]
+            node = nodes[parent] if type(parent) is int else by_id[parent]
+        return None
+
+    areas = {node["id"]: area(node) for node in nodes}
     return [
-        {"source": areas[edge["source"]], "target": areas[edge["target"]],
-         "statement": edge["statement"], "proof": edge["proof"]}
-        for edge in graph["edges"]
-        if areas.get(edge["source"]) and areas.get(edge["target"]) and areas[edge["source"]] != areas[edge["target"]]
+        {"source": areas[source], "target": areas[target], "statement": statement, "proof": proof}
+        for source, target, statement, proof in _decoded_relations(index)
+        if areas[source] and areas[target] and areas[source] != areas[target]
     ]
 
 
@@ -209,13 +221,13 @@ def workspace_site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Worksp
             "runtime_sha256": hashlib.sha256(runtime).hexdigest(),
             "runtime_source_sha256": fingerprint.group(1).decode("ascii"),
             "root_nodes": len(root_graph["nodes"]),
-            "root_edges": len(root_graph["edges"]),
-            "area_edges": _area_edges(root_graph),
+            "relations": len(index["relations"]),
+            "area_edges": _area_edges(index),
             "kernel_checked": False,
         }
         (destination / "ci-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
     with _served(project / "site") as url:
-        yield _WorkspaceSite(url, records, root_graph, wiki_layer, wiki_pairs)
+        yield _WorkspaceSite(url, records, root_graph, wiki_layer, wiki_pairs, index)
 
 
 @pytest.fixture(scope="module")
@@ -259,7 +271,7 @@ def navigation_overview_site(tmp_path_factory: pytest.TempPathFactory) -> Iterat
     index = json.loads((project / "site/dependencies/index.json").read_text(encoding="utf-8"))
     records = {record["id"]: record for record in index["nodes"]}
     graph = json.loads((project / "site/dependencies.json").read_text(encoding="utf-8"))
-    assert len(graph["nodes"]) == 15 and len(_area_edges(graph)) == 10
+    assert len(graph["nodes"]) == 15 and len(_area_edges(index)) == 10
     with _served(project / "site") as url:
         yield _WorkspaceSite(url, records, graph)
 
@@ -910,7 +922,7 @@ def test_zero_count_authored_region_is_visible_and_does_not_invent_one_item(
 ) -> None:
     page, site = workspace_page, workspace_site
     authored = [node for node in site.root_graph["nodes"] if node.get("area") == "Unstarted mathematics"]
-    assert authored and all(node["member_count"] == 0 and node["status_counts"] == [] for node in authored)
+    assert authored
     _open(page, site, workspace_runtime)
     # An area of one topic is that topic on the whole map.
     region = page.locator('.bp-whole-map .pm-part[data-part="unstarted"]')
@@ -1349,8 +1361,8 @@ def test_rich_workspace_region_and_full_reader_screenshots(
     if directory:
         page.screenshot(path=str(directory / f"reader-{width}x{height}.png"))
         report = {"viewport": [width, height], "route": page.url, "nodes": len(site.records), "areas": list(_AREAS),
-                  "root_nodes": len(site.root_graph["nodes"]), "root_edges": len(site.root_graph["edges"]),
-                  "area_edges": _area_edges(site.root_graph),
+                  "root_nodes": len(site.root_graph["nodes"]), "relations": len(site.index["relations"]),
+                  "area_edges": _area_edges(site.index),
                   "mathjax": page.evaluate("() => MathJax.version"), "complete_math": 5,
                   "map_parts": page.locator(".bp-whole-map .pm-part").count()}
         (directory / f"workspace-{width}x{height}.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

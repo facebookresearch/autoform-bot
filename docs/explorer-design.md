@@ -1,7 +1,7 @@
 # Explorer ownership and failure model
 
-The mathematical reader and the whole-project map share one page. Dependency-page URLs are
-canonical reading aliases, not a second renderer. Payloads/controller hooks are internal, not a public viewer API.
+The mathematical reader and the whole-project map share one page. Old dependency-page URLs
+redirect to canonical reading pages, not a second renderer. Payloads/controller hooks are internal, not a public viewer API.
 
 ## Evidence and publication
 
@@ -12,8 +12,8 @@ Optional authored wiki links associate intact formal components, never ranks, re
 [render.py](../autoform_cli/render.py) retains source captures and assembles safe
 reading pages; rereading its private staged pages is not rereading authored input.
 [graph_pages.py](../autoform_cli/graph_pages.py) owns canonical paths and contexts.
-[dag_viewer.py](../autoform_cli/dag_viewer.py) emits topology, card dimensions and
-authored region labels/counts, not Python coordinates. No consumer-name,
+[site_index.py](../autoform_cli/site_index.py) writes the search index, with typed relations, and wiki links;
+[dag_viewer.py](../autoform_cli/dag_viewer.py) writes what each scope's list shows. No consumer-name,
 filesystem-derived taxonomy, or workspace/schema exception belongs here.
 
 ## Navigation and failure

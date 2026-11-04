@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer
 from autoform_cli.graph import Graph, Node
 from autoform_cli.graph_pages import _selected_statuses, write_graph_pages
 from autoform_cli.graph_views import chapter_view, full_view, project_view, scope_view
@@ -207,12 +205,9 @@ def test_status_rings_count_only_leaves_that_declare_something(tmp_path: Path) -
     assert complete["prose"].status_key == "planned"
 
 
-def test_a_scope_header_counts_the_items_its_status_rows_list(tmp_path: Path) -> None:
-    """The explorer heads a scope's status rows with "N articles in this topic".
-
-    N is the payload's member_count, so it is the sum of those rows: a prose
-    leaf is in neither, and a checked catalog is one item in its inventory row.
-    """
+def test_a_scope_counts_the_items_its_status_rows_list(tmp_path: Path) -> None:
+    """A scope's item count is the sum of its status rows: a prose leaf is in
+    neither, and a checked catalog is one item in its inventory row."""
     roadmap = tmp_path / "blueprint/roadmap"
 
     def node(node_id: str, parent: str | None, **kwargs) -> Node:
@@ -234,13 +229,11 @@ def test_a_scope_header_counts_the_items_its_status_rows_list(tmp_path: Path) ->
             ),
         },
     )
-    payload = tmp_path / "dependencies.json"
-    dag_viewer.write_payload(payload, project_view(graph, derive(graph)), links={})
-    scope = json.loads(payload.read_text(encoding="utf-8"))["nodes"][0]
+    scope = project_view(graph, derive(graph)).nodes[0]
 
-    assert scope["id"] == "scope:mixed"
-    assert scope["status_counts"] == [["can_state", 1], ["inventory_checked", 1]]
-    assert scope["member_count"] == sum(count for _, count in scope["status_counts"]) == 2
+    assert scope.id == "scope:mixed"
+    assert scope.status_counts == (("can_state", 1), ("inventory_checked", 1))
+    assert scope.item_count == sum(count for _, count in scope.status_counts) == 2
 
 
 def test_chapter_view_keeps_external_relations_as_boundaries(tmp_path: Path) -> None:

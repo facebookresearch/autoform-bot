@@ -9,8 +9,8 @@ import pytest
 
 from autoform_cli import dag_viewer
 from autoform_cli.graph import Graph, GraphValidationError, Node, load_graph
-from autoform_cli.graph_pages import _dependency_heading, write_graph_pages
-from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode, full_view, project_view, scope_view, scope_views
+from autoform_cli.graph_pages import write_graph_pages
+from autoform_cli.graph_views import full_view, project_view, scope_view, scope_views
 from autoform_cli.status import derive
 
 
@@ -71,20 +71,14 @@ def test_topics_replace_library_and_pagination_peers_without_dropping_sources_or
     assert graph.nodes == before
 
     output = tmp_path / "geometry.json"
-    dag_viewer.write_payload(output, view, links={node.id: f"pages/{index}.html" for index, node in enumerate(view.nodes)})
+    dag_viewer.write_payload(output, view)
     payload = json.loads(output.read_text())
-    # The overview draws what replaces the collections, not the collections.
-    assert payload["view"]["presentation"] == "dag"
+    # The overview lists what replaces the collections, not the collections.
     assert {node["title"] for node in payload["nodes"] if not node["map"]} == {"Reusable library", "Deferred library"}
     assert {node["title"] for node in payload["nodes"] if node["map"]} >= {
         "Distance geometry", "Comparison geometry", "Comparison triangles", "A geometry textbook", "A direct result",
     }
-    assert all("layout" not in node for node in payload["nodes"] if not node["map"])
-    assert all("layout" in node for node in payload["nodes"] if node["map"])
-    assert len(payload["edges"]) == 4  # relations of the collections themselves stay in the payload
-    # The rail counts and the isolate grid follow the map, not the payload.
-    assert payload["edge_count"] == 3
-    assert [node["isolated"] for node in payload["nodes"] if node["id"] == "Geometry/result"] == [True]
+    assert payload["edges"] == []
 
 
 def test_an_overview_legend_counts_a_collected_catalog_once(tmp_path: Path) -> None:
@@ -106,31 +100,6 @@ def test_an_overview_legend_counts_a_collected_catalog_once(tmp_path: Path) -> N
         node_links=lambda _page, node_ids: {node_id: "book.html#" + node_id for node_id in node_ids})
     page = (site / "dependencies/chapters/G.md").read_text()
     assert 'inventory pending</span><span class="bp-legend-count">1<' in page
-
-
-def _scope(node_id: str, **facts: object) -> ViewNode:
-    return ViewNode(id=node_id, title=node_id, kind="scope", members=(), status_counts=(), **facts)
-
-
-@pytest.mark.parametrize(("view", "expected"), (
-    (GraphView(
-        kind="chapter", title="Areas dependency map", overview=True,
-        nodes=(_scope("scope:a"), _scope("scope:b"), _scope("scope:lib", navigation="collection", area="Library")),
-        edges=(ViewEdge("scope:a", "scope:b", 1, 0),),
-    ), "dag"),
-    (GraphView(
-        kind="chapter", title="Wrapper dependency map", overview=True,
-        nodes=(_scope("scope:a"), _scope("scope:lib", navigation="collection")),
-        edges=(ViewEdge("scope:lib", "scope:a", 1, 0),),
-    ), "atlas"),
-), ids=("collection-area-beside-topics", "only-edge-on-the-collection"))
-def test_an_overview_heading_names_what_its_map_draws(tmp_path: Path, view: GraphView, expected: str) -> None:
-    output = tmp_path / "view.json"
-    dag_viewer.write_payload(output, view, links={})
-    presentation = json.loads(output.read_text())["view"]["presentation"]
-    # Drawn, the first is a->b with no area and the second a lone topic.
-    assert presentation == expected
-    assert _dependency_heading(view).endswith(" dependencies") == (presentation == "dag")
 
 
 def test_breadcrumbs_skip_collections_and_pagination(tmp_path: Path) -> None:
@@ -178,7 +147,7 @@ def _overview_payload(tmp_path: Path, nodes: dict[str, Node], scope: str) -> dic
     view = scope_view(graph, derive(graph), scope)
     assert view.overview
     output = tmp_path / "view.json"
-    dag_viewer.write_payload(output, view, links={})
+    dag_viewer.write_payload(output, view)
     return json.loads(output.read_text())
 
 
@@ -200,7 +169,6 @@ def test_an_overview_of_pagination_parts_of_leaves_maps_the_leaves(tmp_path: Pat
     assert sorted(node["id"] for node in payload["nodes"] if node["map"]) == [
         f"roadmap/module/{part}/result-{index}" for part in ("part-01", "part-02") for index in range(2)
     ]
-    assert all("layout" in node for node in payload["nodes"] if node["map"])
 
 
 def test_an_overview_whose_only_child_is_a_source_book_maps_the_book(tmp_path: Path) -> None:

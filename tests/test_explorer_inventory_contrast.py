@@ -41,20 +41,19 @@ def test_inventory_ring_greys_remain_distinguishable_in_both_schemes() -> None:
             assert _contrast(first.dark_stroke, second.dark_stroke) >= 1.5
 
 
-def test_emitted_inventory_palette_retains_neutral_semantics_and_dark_colours(tmp_path: Path) -> None:
+def test_emitted_inventory_palette_keeps_its_dark_colours(tmp_path: Path) -> None:
     pending = _pending()
     node = ViewNode(
         "module", "Module inventory", "node", ("module",), ((pending.key, 1),),
         catalog="module", status_key="planned",
     )
     path = tmp_path / "inventory.json"
-    dag_viewer.write_payload(path, GraphView(kind="full", title="Inventory", nodes=(node,), edges=()), links={})
+    dag_viewer.write_payload(path, GraphView(kind="full", title="Inventory", nodes=(node,), edges=()))
     payload = json.loads(path.read_text(encoding="utf-8"))
     palette = payload["palette"][pending.key]
 
     assert payload["nodes"][0]["status"] == pending.key
-    assert palette["neutral"] is True
-    assert palette["light"] == {"fill": pending.fill, "stroke": pending.stroke, "text": pending.text}
-    assert palette["dark"] == {"fill": pending.dark_fill, "stroke": pending.dark_stroke, "text": pending.dark_text}
+    assert palette["light"] == {"fill": pending.fill, "stroke": pending.stroke}
+    assert palette["dark"] == {"fill": pending.dark_fill, "stroke": pending.dark_stroke}
     assert _contrast(pending.dark_text, pending.dark_fill) >= 4.5
     assert _contrast(pending.dark_stroke, pending.dark_fill) >= 3
