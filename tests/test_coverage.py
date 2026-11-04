@@ -9,6 +9,7 @@ import pytest
 from autoform_cli.coverage import (
     COVERAGE_SCHEMA,
     CoverageRoleIssue,
+    contract_table,
     load_coverage,
     validate_coverage_roles,
 )
@@ -692,6 +693,30 @@ def test_ignores_fenced_tables_and_accepts_escaped_pipes(tmp_path: Path) -> None
     assert summary is not None
     assert len(summary.entries) == 1
     assert summary.entries[0].evidence == "Case A | Case B"
+
+
+def test_the_contract_table_is_found_in_a_page_as_render_publishes_it() -> None:
+    """A fenced example is no contract, a row's cells split as the parser
+    splits them, and the table ends at the first blank line."""
+    page = (
+        "---\ntitle: Coverage\n---\n\n# Coverage\n\n"
+        "```markdown\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n| Example | MAPPED | x |\n```\n\n"
+        "| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        "| Main theorem | `DECOMPOSED` | [Top](../roadmap/README.md#top) |\n"
+        "| Rest | OUT | Case A \\| Case B |\n"
+        "\n| x | y |\n| - | - |\n| 1 | 2 |\n"
+    )
+
+    assert contract_table(page) == (
+        range(12, 16),
+        (
+            ("Main theorem", "`DECOMPOSED`", "[Top](../roadmap/README.md#top)"),
+            ("Rest", "OUT", "Case A | Case B"),
+        ),
+    )
+    assert contract_table(page.replace("| Area | Coverage | Evidence |\n| --- | --- | --- |\n| Main", "| Main")) is None
+    twice = page + "\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n| More | OUT | y |\n"
+    assert contract_table(twice) is None
 
 
 def test_a_fence_that_never_closes_keeps_the_table_below_it_out_of_the_contract(tmp_path: Path) -> None:

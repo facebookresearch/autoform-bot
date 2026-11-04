@@ -1856,6 +1856,30 @@ def test_the_coverage_page_shows_its_contract_as_the_coverage_view(tmp_path: Pat
     assert not [warning for warning in report.warnings if "coverage view" in warning]
 
 
+def test_a_coverage_view_beside_an_autolink_keeps_the_page_protected(tmp_path: Path) -> None:
+    """An autolink in a cell is a "<", so render parses the page's own
+    Markdown before it sits beside render's HTML, as it did before the view;
+    the rows the view writes from the cells are parsed the same way."""
+    project = _project(tmp_path)
+    (project / "blueprint/coverage/README.md").write_text(
+        "# Coverage\n\nWhat the project covers.\n\n"
+        "| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        "| Results | DECOMPOSED | [Top](../roadmap/top.md) and [Base](../roadmap/base.md) |\n"
+        "| Elsewhere | OUT | Mapped at <https://example.test/notes>. |\n"
+        "\nAfter the table.\n",
+        encoding="utf-8",
+    )
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    page = (tmp_path / "out/coverage/README.md").read_text(encoding="utf-8")
+    assert "<https://example.test/notes>" not in page
+    assert '<a href="https://example.test/notes">https://example.test/notes</a>' in page
+    assert "<p>What the project covers.</p>" in page and "<p>After the table.</p>" in page
+    assert "## Out of scope (1) {#coverage-out}" in page
+    assert not [warning for warning in report.warnings if "coverage view" in warning]
+
+
 def test_a_coverage_page_render_cannot_read_is_published_as_written_with_a_warning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -111,7 +111,7 @@ autoform site check site --source site-src
 ```
 
 `mkdocs build --strict` never checks a link written as raw HTML, as render
-writes card references, the structure page and the landing page's Next up card.
+writes statement references, the structure page and the landing page's Next up card.
 `site check` reports, as warnings, an internal link or asset whose target the
 site does not contain, a fragment that matches no `id` on its target page, a
 link that is not a valid URL, and, with `--source`, each statement card that

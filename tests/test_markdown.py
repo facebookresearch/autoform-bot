@@ -29,6 +29,7 @@ from autoform_cli.markdown import (
     render_html,
     rendered_visible_text,
     resolved_path,
+    text_besides_links,
     visible_prose,
 )
 
@@ -781,6 +782,20 @@ def test_visible_prose_leaves_out_headings_code_blocks_and_diagrams(source: str)
 def test_visible_prose_keeps_inline_code_and_drops_hidden_text() -> None:
     assert visible_prose("Use `Nat.add_zero`.") == "Use Nat.add_zero."
     assert visible_prose("<span hidden>secret</span> shown") == "shown"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("[A](a.md), [B](b.md), and [C](c.md)", ", , and"),
+        ("[`K(X)`](a.md)", ""),
+        ("[A](a.md) uses Exercise 6.2", "uses Exercise 6.2"),
+        ("See <https://example.test/notes>.", "See ."),
+        ("No links here", "No links here"),
+    ],
+)
+def test_text_besides_links_leaves_out_every_link(source: str, expected: str) -> None:
+    assert text_besides_links(source) == expected
 
 
 def test_visible_text_survives_markup_nested_thousands_deep() -> None:

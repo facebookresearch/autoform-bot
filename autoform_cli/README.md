@@ -194,7 +194,7 @@ An article asserts only facts a human or agent verified:
 | `review_approved: sha256:<64 hex>` | The hash of the complete review surface someone approved for this article. It shows that surface is unchanged, not who approved it. |
 | `open_statements: allowed` | Project policy, valid only in `roadmap/README.md`: a theorem's statement may land with a `sorry` proof (see [Open statements](reference/open-statements.md#open-statements)). Absent or `forbidden` keeps the strict policy. |
 | `published: false` | Folder setting, valid only in the `README.md` of a folder below `roadmap/`: `check` and `audit` validate the folder and everything in it, but render leaves it out of the site and of the publication hash. No link on a published roadmap article may point into it, whether a dependency, a source or prose; a link from any other page keeps only its text, with a warning. `audit` and render reject coverage evidence that points into it. A folder inside an unpublished one is unpublished too, whatever its own README says. |
-| `tracks_lean: false` | Project setting, read only in `roadmap/README.md`: the project writes no Lean, so the book's pages show no Lean progress (no landing figures or Next up, no status marks on statements or status dots on their dependency references, no chapter progress lines). Absent or `true` keeps it. Anywhere else under `roadmap/`, or with another value, `check` warns and the setting is ignored. |
+| `tracks_lean: false` | Project setting, read only in `roadmap/README.md`: the project writes no Lean, so the book's pages show no Lean progress (no landing figures or Next up, no status marks on statements or status dots on references to them, no chapter progress lines). Absent or `true` keeps it. Anywhere else under `roadmap/`, or with another value, `check` warns and the setting is ignored. |
 
 Progress is *derived* from the DAG on every run, so it cannot go stale.
 Readiness depends on the [policy](reference/open-statements.md#open-statements).
@@ -369,7 +369,8 @@ The machine-checkable `coverage/README.md` contract contains one
   a containing scope. Links that reach only catalogs are a
   `coverage-role-mismatch`; any other link reaching no declaration leaf, such as
   prose or `not_ready` leaves that declare nothing yet, is a
-  `decomposed-without-declaration` warning.
+  `decomposed-without-declaration` warning. The site's coverage view lists the
+  declarations the row reaches, with their status.
 - `DEFERRED` and `OUT` record an explicit later milestone or exclusion.
 
 Audit JSON includes canonical rows, the exact coverage source hash, and counts,

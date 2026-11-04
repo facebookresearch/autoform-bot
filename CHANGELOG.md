@@ -79,6 +79,14 @@ date when the release is tagged.
   small line above the name. A title that is only the kind word, or empty, is
   named by the kind. Statements that share a title now read alike. Anchors and
   links into a page don't change (#612).
+- **Coverage view.** The coverage page shows its contract's table as a view: a
+  heading for each disposition with the number of rows under it, and each row
+  led by its area. A `DECOMPOSED` row lists the declarations its links reach,
+  in book order and with their status, behind a line that counts them and their
+  states; its evidence stays as written unless it is only links to roadmap
+  articles, which the list then shows. Other rows show their evidence as
+  written, and the rest of the page is unchanged. In the sidebar the page has
+  an entry of its own under Mathematics, which no longer opens it.
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
