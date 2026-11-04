@@ -11,6 +11,17 @@ date when the release is tagged.
 
 ### Added
 
+- **Pinned name lists.** A JSON Lines file in `blueprint/libraries/`, schema
+  `autoform-pinned-names/v0`, names the declarations a library holds at one
+  pinned revision; a wiki that cites Mathlib can generate one. Once a list holds
+  a name, `check` warns about a `mathlib_declaration` name that no list holds,
+  one the lists pin to different sources, a deprecated one, and a `mathlib_file`
+  other than the first name's module path. A list whose file or header breaks
+  the schema is left out, and a bad record is skipped; `check`, `render` and
+  `audit` say which, and `audit` reports it as `invalid-pinned-list`. No exit
+  status changes, render never publishes a list, and a project without the
+  folder sees no change ([Pinned name
+  lists](autoform_cli/reference/pinned-names.md)).
 - **Worktrees.** `autoform project worktrees` reports which linked worktrees
   are safe to remove after a run and what protects the rest: changes, Git
   operations, unintegrated commits, processes, recent activity and live leases

@@ -1,8 +1,7 @@
 # Blueprint format and CLI
 
 The Autoform CLI validates, visualizes, and publishes the multilevel dependency
-graph in `blueprint/roadmap/`. The Markdown book is the graph; no separate
-graph file exists.
+graph in `blueprint/roadmap/`. The Markdown book is the graph.
 
 ## Articles and containment
 
@@ -186,7 +185,7 @@ An article asserts only facts a human or agent verified:
 | `statement: retracted` | A revision retracted the statement while `lean:` still names the old declaration, which stays in the build until Formalize restates the article and records `statement: formalized` in its place. Requires `lean:`; invalid with `proof: formalized` or `mathlib: true`. |
 | `proof: formalized` | The Lean proof compiles. Requires `statement: formalized` and `lean:`. Under the open policy it may rest on open statements, and the article is then conditional; only the derived `fully_proved` means complete and `sorry`-free. |
 | `mathlib: true` | The result is upstreamed into Mathlib. |
-| `mathlib_declaration: Nat.exists_infinite_primes` | Mathlib name(s) the article restates; `audit` requires one on a `mathlib: true` article. Render lists each in a Mathlib row of the article's statement box, as text without a link, since nothing checks it against the pinned Mathlib. |
+| `mathlib_declaration: Nat.exists_infinite_primes` | Mathlib name(s) the article restates; `audit` requires one on a `mathlib: true` article. Render lists each in a Mathlib row of the article's statement box, as text without a link; once a [pinned name list](reference/pinned-names.md) in `blueprint/libraries/` holds a name, `check` warns about one no list holds. |
 | `mathlib_file: Mathlib/Data/Nat/Prime/Infinite.lean` | The Mathlib file that declares the `mathlib_declaration` name(s), as a portable relative path; `search` reports it. |
 | `not_ready: true` | Needs more blueprint work before it can be attempted. |
 | `lean: Ns.decl` | Declaration name(s) that discharge the article. On a target recording `statement: formalized`, the first takes its progress credit, and `audit` warns `duplicate-lean-target` when another target takes credit for the same declaration (see [Warnings](reference/validation-and-audit.md#warnings)). |
@@ -220,20 +219,15 @@ row of its statement box.
 ## Commands
 
 This section is the single source of truth for the command line; skills link
-here. Every `autoform` invocation shown here or in a skill is parse-checked
-against the real parser.
+here, and every invocation in either is parse-checked against the real parser.
 
-Commands are written as they appear on `PATH` with this package installed. In
-a consumer project, where it is not, resolve `<AUTOFORM_PLUGIN_ROOT>` from the
-loaded plugin and prefix each command, running from the project root:
-
-```bash
-uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform check blueprint --lean-root .
-```
+Commands are written as they appear on `PATH` with this package installed; in a
+consumer project, where it is not, run each from the project root with the
+prefix `uv run --project "<AUTOFORM_PLUGIN_ROOT>"`, the root resolved from the
+loaded plugin, as [Publishing](#publishing-and-the-dashboard) shows.
 
 `autoform --version` prints the installed version, followed by the plugin
-checkout's commit when it runs from one, as in `autoform 0.6.0 (745a88599469)`;
-a debrief records the same string.
+checkout's commit when it runs from one, as in `autoform 0.6.0 (745a88599469)`.
 
 ### init
 
@@ -248,14 +242,13 @@ autoform init . --title "Finite Flat Group Schemes" \
   --repository-url https://github.com/owner/repo
 ```
 
-Generated workflows pin an Autoform commit; without one, the CI workflows are
-omitted. [Project setup](reference/project-setup.md#init) gives the
-`.gitignore` rules, the names `init` refuses, and how the commit is chosen.
+[Project setup](reference/project-setup.md#init) gives the `.gitignore` rules,
+the names `init` refuses, and the Autoform pin without which CI is omitted.
 
 ### project
 
 Create or inspect a Lean project, report its worktrees, and list Autoform's
-bundled known-good release pairs:
+bundled known-good release pairs, the ones `project new` can lock offline:
 
 ```bash
 autoform project versions
@@ -268,16 +261,14 @@ autoform project inspect path/inside/project --json
 `project new` builds a complete Lean shell (the release's resolved dependency
 manifest, blueprint, and site) in a private sibling directory and publishes it
 atomically: the target must not exist and is never overwritten, and a failed or
-concurrent creation leaves no partial target. Its errors name a code;
-[Project setup](reference/project-setup.md#project-new) lists them, with the
-published tree, toolchain pairs other than the bundled ones, and `--library`.
+concurrent creation leaves no partial target. Its errors name a code, which
+[Project setup](reference/project-setup.md#project-new) lists.
 
 `project inspect` is read-only and offline. Automation should use `--json`,
 accept only `autoform-project-inspection/v1`, and branch on `ok`,
 `compatibility.status`, and `diagnostics[].code`, not message text. The
 [project-inspection reference](project/README.md) defines the statuses, exit
-codes, JSON fields, and diagnostic codes. `project versions` lists the bundled
-pairs, the ones `project new` can lock offline.
+codes, JSON fields, and diagnostic codes.
 
 `autoform project worktrees --json` lists each linked worktree with the codes
 that protect it, and `--remove MANIFEST` removes the unprotected ones after
@@ -286,8 +277,7 @@ Exit 1: no checkout, bad manifest, or a refusal.
 
 ### Publishing and the dashboard
 
-Publishing a project runs four steps in order: validate, refresh the vault's
-dependency summary, render the site source, then strict-build the site.
+Publishing a project runs four steps in order:
 
 ```bash
 uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform check blueprint --lean-root .
@@ -303,17 +293,14 @@ statement may name a Lean declaration that does not exist yet. On native
 Windows, run `check` and `render` without `--lean-root`; the site then has no
 code links ([publication contract](reference/runtime-and-publication.md#publication-contract)).
 
-`autoform dashboard . --site-dir site` then serves the built site on
-`127.0.0.1` until you stop it, with a read-only live overlay of current author
-claims. The generated `blueprint-pages.yml` deploys only a commit that
-`autoform-verify.yml` passed on a push to `main`. [The published
-site](reference/site.md) covers a Lake project in a subdirectory, the overlay,
-redeploys, and the reports Pages runs.
+`autoform dashboard . --site-dir site` then serves the built site on `127.0.0.1`
+until you stop it, with a read-only live overlay of current author claims. The
+generated `blueprint-pages.yml` deploys only a commit that `autoform-verify.yml`
+passed on a push to `main` (see [the published site](reference/site.md)).
 
 ### check
 
-Validate structure, and optionally check that every `lean:` name exists in the
-project's Lean sources:
+Validate structure and, with `--lean-root`, that every `lean:` name exists:
 
 ```bash
 autoform check blueprint --lean-root .
@@ -349,8 +336,7 @@ with why, on the source's page under `blueprint/sources/`.
 
 `check` also warns when a library's index cannot be read or parsed, when a
 library with a citing declaration fails verification against its checkout, and
-when the project's Lake files cannot be used. None of these warnings changes the
-exit status.
+when the project's Lake files cannot be used. None changes the exit status.
 
 `--no-site-warnings` skips the warnings about the pages the site would publish
 ([Validation](reference/validation-and-audit.md#validation)), except those about
@@ -367,8 +353,7 @@ autoform audit blueprint --lean-root .
 
 `audit` adds deterministic completeness, provenance, coverage, checked-fact,
 and optional Lean-target checks ([Audit contract](reference/validation-and-audit.md#audit-contract)).
-It is read-only and offline: it contacts no network service and writes no
-findings into the blueprint. Pass `--json` for stable machine-readable output.
+It is read-only and offline. Pass `--json` for stable machine-readable output.
 A nonzero exit status means at least one finding;
 [warnings](reference/validation-and-audit.md#warnings) never change it.
 
@@ -453,11 +438,9 @@ sandbox: Lake evaluates `lakefile.lean`, and the probe imports project code
 that may perform arbitrary IO and can forge probe output. `--timeout SECONDS`
 sets the helper's and each probe's budget, 600 seconds by default.
 
-The [skeleton contract](reference/skeleton-and-review.md#skeleton-contract)
-gives the resolution rules, the report, packets and passages; [skeleton
-hashes](reference/skeleton-and-review.md#skeleton-hashes) says what each hash
-binds, and [read-back cards](reference/skeleton-and-review.md#read-back-cards)
-what a card holds and when it is refused.
+[Skeletons and statement review](reference/skeleton-and-review.md) gives what a
+skeleton holds, the resolution rules, the report, packets and passages, what
+each hash binds, and what a read-back card holds and when it is refused.
 
 ### review
 
@@ -505,12 +488,15 @@ approvals, and requires approval of the latest push.
 
 ### work
 
-Inspect the current Markdown-derived formalization frontier:
+Inspect the current Markdown-derived formalization frontier, and list the open
+statements and the articles that rest on them:
 
 ```bash
 autoform work list . --lean-root .
 autoform work list . --lean-root . --json
 autoform work context chapter/result . --lean-root . --json
+autoform work assumptions .
+autoform work assumptions blueprint --json
 ```
 
 `work list` returns the formalizable leaves whose next statement or proof phase
@@ -518,49 +504,33 @@ is unblocked, by the rule behind the derived `can_state` and `can_prove` states
 and the site's Next up card (see [Open
 statements](reference/open-statements.md#open-statements)).
 
-`work context` takes the path-derived node ID or an `article_id` and reports the
-article, its dependencies, source and Lean targets, blockers, and the claim
-target. `work list` fails if an unfinished formalizable leaf lacks an
-`article_id` (add them with `autoform migrate article-ids --write`). Both
-commands are read-only and refuse an article whose bytes changed after the graph
-loaded; rerun once the project is idle. JSON uses `autoform-work/v2`; [work list
-and context](reference/work.md#work-list-and-context) gives the fields,
-blockers, revision lines and open-policy output.
+`work context` takes the path-derived node ID or an `article_id`; `work list`
+fails if an unfinished formalizable leaf lacks one (add them with `autoform
+migrate article-ids --write`). Both are read-only and refuse an article whose
+bytes changed after the graph loaded; rerun once the project is idle. [Work list
+and context](reference/work.md#work-list-and-context) gives the report, the
+`autoform-work/v2` JSON, blockers, revision lines and open-policy output.
 
-List the open statements and the articles that rest on them:
-
-```bash
-autoform work assumptions .
-autoform work assumptions blueprint --json
-```
-
-`work assumptions` prints the policy, each open statement, and the articles that
-rest on open statements; `--json` writes the `autoform-assumptions/v1` contract
-CI audits the build against ([work
-assumptions](reference/work.md#work-assumptions)). It reads Markdown only and
-needs no Lean build.
+`work assumptions --json` writes the `autoform-assumptions/v1` contract CI
+audits the build against ([work assumptions](reference/work.md#work-assumptions)).
 
 #### work impact
 
-Ask what revising an article's Lean declarations would affect before editing
-them:
+Before editing an article's Lean declarations, ask what revising them affects:
 
 ```bash
 autoform work impact chapter/result . --lean-root .
 autoform work impact chapter/result . --lean-root . --declaration MyProject.helper --json
 ```
 
-`work impact` runs a bounded Lean probe against a fresh build and reports the
-articles a revision of the selected article's declarations would affect and the
-complete `claim_targets` set; JSON uses `autoform-impact/v1` ([work
+`work impact` runs a bounded Lean probe against a fresh build ([work
 impact](reference/work.md#work-impact)). Both impact commands exit 2 on any
-refusal, a missing or stale build included. Both impact probes import project
-modules, so run them only in a trusted checkout or sandbox.
+refusal, a missing or stale build included, and import project modules, so run
+them only in a trusted checkout or sandbox.
 
 #### work import-impact
 
-Report the coordination and review scope of an import edit without forbidding
-the edit:
+Report an import edit's coordination and review scope without forbidding it:
 
 ```bash
 autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH [--json] [--timeout SECONDS] [--module-scope SCOPE]
@@ -569,18 +539,15 @@ autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH [--json] [
 `import-impact` is advisory and edits no authored roadmap or Lean source. By
 default the probe imports every module of the root libraries, so each must be
 built in this checkout: a missing or stale build exits 2 with the `lake build`
-command for those libraries. JSON uses `autoform-module-import-impact/v1`;
-[work import-impact](reference/work.md#work-import-impact) gives the scopes,
-ownership rules and every field.
+command for them. [work import-impact](reference/work.md#work-import-impact)
+gives the scopes, ownership rules, JSON and every field.
 
-Imports are allowed regardless of reported breadth. Follow the [Formalize import
-workflow](../skills/formalize/SKILL.md#import-edits) for baseline evidence,
-conflict checks, claim lifecycle, and post-build review.
+Imports are allowed regardless of reported breadth; follow the [Formalize import
+workflow](../skills/formalize/SKILL.md#import-edits).
 
 ### search
 
-Ask whether the blueprint already holds a result before adding an article or a
-Lean helper:
+Before adding an article or a Lean helper, check the blueprint for its result:
 
 ```bash
 autoform search . "separating hyperplane" --lean-root .
@@ -592,8 +559,7 @@ autoform library index . --lib MathlibExt
 
 `search` takes the project or blueprint directory, then one quoted query; both
 are required. A query that starts with `-` goes last, after `--`. It exits 0
-with or without hits. See the [search
-contract](reference/search.md#search-contract).
+with or without hits ([search contract](reference/search.md#search-contract)).
 
 ### migrate
 
@@ -654,12 +620,6 @@ autoform debrief orchestrator form . --skill formalize
 autoform debrief orchestrator record . --skill formalize < /tmp/answer.json
 ```
 
-Orchestrator debriefs are on by default: `form` prints the form unless
-`AUTOFORM_DEBRIEF` is `0`, `false`, `no`, or `off`, or the platform cannot store
-the answer, and otherwise says the step is disabled. When the answer reports
-friction with AutoformBot, `record` writes a draft issue for
-`facebookresearch/autoform-bot` and prints its path. Nothing is sent.
-
 Ask the agent that just finished a formalization attempt what infrastructure
 would have made it cheaper, and keep its answer:
 
@@ -670,13 +630,10 @@ autoform debrief subagent record af_5b0e4d3c2a1f09e8d7c6b5a4 . --phase proof \
 autoform debrief subagent render .
 ```
 
-Subagent debriefs are opt-in: `form` prints the form only when
-`AUTOFORM_SUBAGENT_DEBRIEF=1` on a platform that can store the answer. `record`
-requires `--worker-id` or `AUTOFORM_WORKER_ID` and never edits the project.
-
-Both kinds share one store that Git does not track, and `AUTOFORM_DEBRIEF_DIR`
-chooses another. [Debriefs](reference/debrief.md) gives
-the form, what `record` stores and prints, and where the store lives.
+Orchestrator debriefs are on unless `AUTOFORM_DEBRIEF` turns them off; subagent
+debriefs need `AUTOFORM_SUBAGENT_DEBRIEF=1`. Both share one store that Git does
+not track, which `AUTOFORM_DEBRIEF_DIR` moves; [Debriefs](reference/debrief.md)
+gives the form, what `record` stores and prints, and where the store lives.
 
 ### visualize and render
 
@@ -747,11 +704,12 @@ Besides its Markdown pages, a vault publishes only images (`.png`, `.jpg`,
 the suffix. The site leaves out any other file under `blueprint/`, such as an
 `.html` page, an `.svg`, a script, or a stylesheet, and `check` and `render`
 warn about it by path: write it as Markdown, an image, a PDF, or plain text, or
-keep it outside `blueprint/`. An Obsidian `.canvas` file is left out silently,
-as `.obsidian` is, and a Markdown page that is not UTF-8 with a warning. A link
-to a file the site leaves out, a hidden path outside `sources/`, or a page in a
-`published: false` folder keeps only its text; `check` and `render` warn about
-each such link to a hidden path or an unpublished folder.
+keep it outside `blueprint/`. An Obsidian `.canvas` file and a [pinned name
+list](reference/pinned-names.md) are left out silently, as `.obsidian` is, and a
+Markdown page that is not UTF-8 with a warning. A link to a file the site leaves
+out, a hidden path outside `sources/`, or a page in a `published: false` folder
+keeps only its text; `check` and `render` warn about each such link to a hidden
+path or an unpublished folder.
 
 #### MathJax
 
@@ -793,6 +751,7 @@ Each area's contract has its own page:
 
 - [Validation and audit](reference/validation-and-audit.md): what `check` and `audit` refuse or warn about.
 - [Search](reference/search.md): `autoform search`, and searching a library the project depends on.
+- [Pinned name lists](reference/pinned-names.md): a library's names at a pinned revision, and what `check` warns about them.
 - [Skeletons and statement review](reference/skeleton-and-review.md): what `skeleton` extracts, its hashes, read-back cards, and the `review` rules.
 - [Open statements](reference/open-statements.md): conditional results and the open-statement policy.
 - [Claims and revisions](reference/claims-and-revisions.md): leases and revising a published statement.
