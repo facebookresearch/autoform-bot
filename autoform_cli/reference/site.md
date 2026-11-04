@@ -52,11 +52,12 @@ Besides its Markdown pages, a vault publishes only images (`.png`, `.jpg`,
 the suffix. The site leaves out any other file under `blueprint/`, such as an
 `.html` page, an `.svg`, a script, or a stylesheet, and `check` and `render`
 warn about it by path: write it as Markdown, an image, a PDF, or plain text, or
-keep it outside `blueprint/`. An Obsidian `.canvas` file is left out silently,
-as `.obsidian` is, and a Markdown page that is not UTF-8 with a warning. A link
-to a file the site leaves out, a hidden path outside `sources/`, or a page in a
-`published: false` folder keeps only its text; `check` and `render` warn about
-each such link to a hidden path or an unpublished folder.
+keep it outside `blueprint/`. An Obsidian `.canvas` file and a [pinned name
+list](pinned-names.md) are left out silently, as `.obsidian` is, and a
+Markdown page that is not UTF-8 with a warning. A link to a file the site leaves
+out, a hidden path outside `sources/`, or a page in a `published: false` folder
+keeps only its text; `check` and `render` warn about each such link to a hidden
+path or an unpublished folder.
 
 ## MathJax
 

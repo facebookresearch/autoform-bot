@@ -52,6 +52,8 @@ jobs:
           echo "AUTOFORM_REQUIRE_PYTHON310_TESTS=1" >> "$GITHUB_ENV"
       - run: uv run ruff check autoform_cli servers tests
       - run: uv run pytest -q
+        env:
+          AUTOFORM_REQUIRE_NODE_TESTS: "1"
       - run: make check-example
 
   browser:

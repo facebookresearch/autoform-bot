@@ -16,6 +16,15 @@ def main() -> int:
     # Inspection opens decision files beneath the resolved root.
     root = Path(raw_root).resolve()
     switched = False
+    captures = []
+    original_capture = project_inspect._snapshot.capture_decision_snapshot
+
+    def recording_capture(path):
+        snapshot = original_capture(path)
+        captures.append(snapshot.file("lakefile.toml").state)
+        return snapshot
+
+    project_inspect._snapshot.capture_decision_snapshot = recording_capture
     if mode == "swap":
         lakefile = root / "lakefile.toml"
         original_open = project_inspect.os.open
@@ -33,7 +42,7 @@ def main() -> int:
         raise ValueError(f"unknown FIFO probe mode: {mode}")
 
     result = inspect_project(root)
-    print(json.dumps({"result": result.as_dict(), "switched": switched}, sort_keys=True))
+    print(json.dumps({"result": result.as_dict(), "switched": switched, "captures": captures}, sort_keys=True))
     return 0
 
 

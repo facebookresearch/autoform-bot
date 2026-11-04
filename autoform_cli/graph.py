@@ -22,6 +22,7 @@ from urllib.parse import unquote, urlsplit
 
 from ._fs import is_within as _is_within
 from .lean import declaration_names
+from .library.pinned_names import PinnedLists, load_pinned_lists, name_warnings
 from .markdown import (
     INLINE_CODE,
     _INLINE_MATH,
@@ -175,9 +176,12 @@ class Graph:
     #: it ignores because it is misplaced or has an unknown value, then
     #: ``## Informally uses`` links that do not resolve to another article and
     #: the heading written below a dependency heading, where its links count.
-    #: :func:`informal_cycle_warnings` adds the links whose target depends on
-    #: the article.
+    #: Last come the pinned name lists' warnings about ``mathlib_declaration``
+    #: and ``mathlib_file``. :func:`informal_cycle_warnings` adds the links
+    #: whose target depends on the article.
     warnings: tuple[str, ...] = ()
+    #: The pinned name lists in ``blueprint/libraries/``, or None without that folder.
+    pinned_names: PinnedLists | None = None
 
     @property
     def edge_count(self) -> int:
@@ -374,6 +378,11 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         issues.extend(_find_cycles(nodes))
     if issues:
         raise GraphValidationError(issues)
+    pinned_names = load_pinned_lists(blueprint)
+    # With no usable list there is nothing to compare against; each list left out is a problem of its own.
+    if pinned_names is not None and pinned_names.names:
+        for node in nodes.values():
+            warnings.extend(name_warnings(pinned_names, node.id, node.mathlib_declaration, node.mathlib_file))
     return Graph(
         blueprint_dir=blueprint,
         nodes=nodes,
@@ -381,6 +390,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         unpublished=unpublished,
         tracks_lean=tracks_lean,
         warnings=tuple(warnings),
+        pinned_names=pinned_names,
     )
 
 
@@ -446,6 +456,11 @@ def atlas_omissions(graph: Graph, unpublished: frozenset[str] = frozenset()) -> 
     them, so their entries draw no warning there, as they draw none in check.
     """
     return _atlas_assignments(graph.blueprint_dir, graph.nodes, unpublished)[1]
+
+
+def pinned_list_omissions(graph: Graph) -> tuple[tuple[str, str], ...]:
+    """Name each pinned name list loading left out or skipped records of, and why, for check, render and audit."""
+    return () if graph.pinned_names is None else graph.pinned_names.problems
 
 
 def _atlas_assignments(
@@ -1198,6 +1213,7 @@ __all__ = [
     "atlas_omissions",
     "catalogs_without_ledger",
     "load_graph",
+    "pinned_list_omissions",
     "unpublished_content",
     "unpublished_node_ids",
 ]

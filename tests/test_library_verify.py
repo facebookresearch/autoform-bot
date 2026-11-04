@@ -13,6 +13,7 @@ import pytest
 from autoform_cli.library.index import INDEX_FILE
 from autoform_cli.library.locate import LibraryError, read_workspace
 from autoform_cli.library.verify import Difference, load_library
+from autoform_cli.project import _snapshot
 from tests.library_fixture import MATHLIB_REV, REV, build_index, entry, make_library, manifest, write_index
 
 
@@ -295,6 +296,35 @@ def test_two_oversized_lakefiles_are_refused_and_not_given_one_tree_digest(tmp_p
         reasons.append(_refusal(library))
 
     assert reasons == ["its lakefile.lean cannot be read (it is over 1 MiB or unreadable)"] * 2
+
+
+def test_pin_files_are_read_until_two_reads_agree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    library = make_library(tmp_path)
+    lakefile = library.root / "lakefile.toml"
+    whole = lakefile.read_bytes()
+    capture = _snapshot.capture_decision_snapshot
+    reads = 0
+    torn = {1}
+
+    def read_while_writing(root: Path):
+        nonlocal reads
+        if Path(root).resolve() != library.root.resolve():
+            return capture(root)
+        reads += 1
+        if reads not in torn:
+            return capture(root)
+        lakefile.write_bytes(whole[: len(whole) // 2])
+        try:
+            return capture(root)
+        finally:
+            lakefile.write_bytes(whole)
+
+    monkeypatch.setattr(_snapshot, "capture_decision_snapshot", read_while_writing)
+    # The first read catches a write halfway; the next two agree, so the index matches.
+    assert _load(library).revision == REV
+
+    reads, torn = 0, {1, 3, 5}
+    assert _refusal(library) == "its pin files changed while they were being read; retry after the checkout is idle"
 
 
 def test_a_missing_pin_file_is_still_only_absent(tmp_path: Path) -> None:

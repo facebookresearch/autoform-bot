@@ -125,8 +125,9 @@ def test_a_kind_only_title_keeps_its_own_search_record_and_canonical_anchor(tmp_
     page = (project / "site/roadmap/ch/index.html").read_text(encoding="utf-8")
     tree = html5lib.parse(page, treebuilder="etree", namespaceHTMLElements=False)
     heading = next(node for node in tree.iter("h4") if node.get("id") == "first")
-    hidden = [node for node in heading.iter("span") if "hidden" in node.attrib]
-    assert len(hidden) == 1 and "".join(hidden[0].itertext()) == title
+    # The title is the name it shows, once: no kind line above it repeats the word.
+    spans = {node.get("class"): "".join(node.itertext()) for node in heading.iter("span") if node.get("class")}
+    assert spans.get("bp-thmtitle") == title and "bp-thmcaption" not in spans
 
 
 def test_isolating_notes_headings_keeps_every_card_and_heading_whole(tmp_path: Path) -> None:

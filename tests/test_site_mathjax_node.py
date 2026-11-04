@@ -23,17 +23,14 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
-import subprocess
 
 import pytest
 
 from autoform_cli.mathjax import _LOADED, REBUILT
+from tests.dom_fixture import NODE, check_jsdom, run_dom
 from tests.test_site_math import _BASE, _BUNDLE, _CARD_PACKAGES, _MACROS, _PAGE_PACKAGES, _render, _vault
 
 MATHJAX_VERSION = "3.2.2"
-NODE = shutil.which("node")
-_ROOT = Path(__file__).resolve().parents[1]
 
 
 def mathjax_package(*, node: bool = True) -> Path:
@@ -55,32 +52,27 @@ def mathjax_package(*, node: bool = True) -> Path:
     version = json.loads((root / "package.json").read_text(encoding="utf-8")).get("version")
     if version != MATHJAX_VERSION:
         pytest.fail(f"AUTOFORM_MATHJAX_DIR={setting} is MathJax {version}, not {MATHJAX_VERSION}")
-    bridge = _ROOT / "node_modules/jsdom/package.json"
-    if node and (not bridge.is_file() or json.loads(bridge.read_text(encoding="utf-8")).get("version") != "26.1.0"):
-        pytest.fail("The native DOM test bridge requires locked jsdom 26.1.0; run npm ci --ignore-scripts")
+    if node:
+        check_jsdom(required=True)
     return root
 
 
-# Runs javascripts/mathjax.js in node against a local MathJax, as a page would,
-# and reports what each document it made typeset. argv: the script, a page,
-# the next page as Material's instant navigation shows it, "new" or "old":
-# whether mkdocs.yml also lists the bundle, after the script, and "after" when
-# a project script listed after it assigns the configuration Material's
+# Runs javascripts/mathjax.js against a local MathJax on a page, as a browser
+# would, and reports what each document it made typeset. args: the script, the
+# next page as Material's instant navigation shows it, "new" or "old": whether
+# mkdocs.yml also lists the bundle, after the script, and "after" when a
+# project script listed after it assigns the configuration Material's
 # documentation gives, or "version" when the bundle is another MathJax release,
-# and "append" when the next reading fragment is appended before a refresh.
-# This bridge verifies real TeX/output semantics in a native connected DOM,
-# not the browser menu's geometry or presentation.
+# and "append" when the next reading fragment is appended before a refresh, and
+# the MathJax package. This bridge verifies real TeX/output semantics in a
+# native connected DOM, not the browser menu's geometry or presentation.
 _HARNESS = r"""
 "use strict";
-const fs = require("fs"), path = require("path"), assert = require("assert");
+const path = require("path"), assert = require("assert");
 const {webcrypto} = require("crypto");
-const {JSDOM} = require(path.join(process.env.AUTOFORM_DOM_BRIDGE_DIR, "jsdom"));
-const [scriptPath, firstPath, secondPath, project, override, then] = process.argv.slice(2);
+const {script, second, project, override, then, mathjax} = args;
 const report = {injected: [], errors: [], passes: [], version: null, base: null, load: null, early: null};
-const dom = new JSDOM(fs.readFileSync(firstPath, "utf8"), {
-  url: "https://blueprint.example.invalid/", runScripts: "outside-only", pretendToBeVisual: true
-});
-const nativeWindow = dom.window;
+const nativeWindow = window;
 global.window = nativeWindow;
 global.document = nativeWindow.document;
 // The real menu component uses the browser's storage global. Bind the genuine
@@ -108,7 +100,7 @@ Object.defineProperty(globalThis, "MathJax", {
   configurable: true, get: () => nativeWindow.MathJax,
   set: value => { nativeWindow.MathJax = value; }
 });
-console.error = (...args) => report.errors.push(args.map(String).join(" "));
+console.error = (...parts) => report.errors.push(parts.map(String).join(" "));
 nativeWindow.console.error = console.error;
 let shown = null;
 global.document$ = nativeWindow.document$ = {subscribe: listener => { shown = listener; }};
@@ -182,99 +174,93 @@ function glyphStyles() {
     missing:Array.from(variants.values()).filter(glyph=>!glyph.rules.length).map(glyph=>glyph.glyph)};
 }
 
-(async () => {
-  // Real DOM lifecycle: a new project runs the configuration after parsing;
-  // an older project also lists the bundle and initializes before DOM ready.
-  if (project === "new" && document.readyState !== "complete") {
-    await new Promise(resolve => nativeWindow.addEventListener("load", resolve, {once: true}));
-  }
-  (0, eval)(fs.readFileSync(scriptPath, "utf8"));
-  const early = then === "append" ? nativeWindow.AutoformMath.refresh(document) : null;
-  const configuration = nativeWindow.MathJax;
-  report.base = configuration.loader.paths.mathjax;
-  report.load = configuration.loader.load.slice();
-  // Node's core/safe handler has no MenuMathDocumentMixin. Load the real
-  // pinned component, which registers MenuHandler at startup just as the
-  // browser bundle does; never supply synthetic menu options or handlers.
-  configuration.loader.load.push("input/tex", "input/mml", "output/chtml", "a11y/assistive-mml", "ui/menu");
-  configuration.startup.document = document;
-  configuration.startup.ready = () => {
-    if (override === "version") MathJax.version = "3.2.1";
-    // node-main preloads LiteDOM even with a native document present. Select
-    // its official browser HTML adaptor before defaultReady creates the real
-    // startup document; retain MathJax's TeX/output/safe handler constructors.
-    MathJax.startup.useAdaptor("browserAdaptor", true);
-    assert.strictEqual(typeof MathJax._.ui.menu.MenuHandler.MenuHandler, "function",
-      "The real pinned MenuHandler component must be loaded");
-    const original = MathJax._.mathjax.mathjax.document;
-    MathJax._.mathjax.mathjax.document = function (root, options) {
-      const doc = original.call(this, root, options);
-      assert.strictEqual(typeof doc.addMenu, "function", "The native handler needs the real menu mixin");
-      assert(doc.menu instanceof MathJax._.ui.menu.Menu.Menu, "A genuine document menu must own its handlers");
-      assert.strictEqual(typeof doc.options.enableMenu, "boolean", "Menu options must come from the real mixin");
-      if (initialDocument === null) initialDocument = doc;
-      else docs.push(doc);
-      return doc;
-    };
-    MathJax.startup.defaultReady();
+// Real DOM lifecycle: a new project runs the configuration after parsing;
+// an older project also lists the bundle and initializes before DOM ready.
+if (project === "new" && document.readyState !== "complete") {
+  await new Promise(resolve => nativeWindow.addEventListener("load", resolve, {once: true}));
+}
+(0, eval)(script);
+const early = then === "append" ? nativeWindow.AutoformMath.refresh(document) : null;
+const configuration = nativeWindow.MathJax;
+report.base = configuration.loader.paths.mathjax;
+report.load = configuration.loader.load.slice();
+// Node's core/safe handler has no MenuMathDocumentMixin. Load the real
+// pinned component, which registers MenuHandler at startup just as the
+// browser bundle does; never supply synthetic menu options or handlers.
+configuration.loader.load.push("input/tex", "input/mml", "output/chtml", "a11y/assistive-mml", "ui/menu");
+configuration.startup.document = document;
+configuration.startup.ready = () => {
+  if (override === "version") MathJax.version = "3.2.1";
+  // node-main preloads LiteDOM even with a native document present. Select
+  // its official browser HTML adaptor before defaultReady creates the real
+  // startup document; retain MathJax's TeX/output/safe handler constructors.
+  MathJax.startup.useAdaptor("browserAdaptor", true);
+  assert.strictEqual(typeof MathJax._.ui.menu.MenuHandler.MenuHandler, "function",
+    "The real pinned MenuHandler component must be loaded");
+  const original = MathJax._.mathjax.mathjax.document;
+  MathJax._.mathjax.mathjax.document = function (root, options) {
+    const doc = original.call(this, root, options);
+    assert.strictEqual(typeof doc.addMenu, "function", "The native handler needs the real menu mixin");
+    assert(doc.menu instanceof MathJax._.ui.menu.Menu.Menu, "A genuine document menu must own its handlers");
+    assert.strictEqual(typeof doc.options.enableMenu, "boolean", "Menu options must come from the real mixin");
+    if (initialDocument === null) initialDocument = doc;
+    else docs.push(doc);
+    return doc;
   };
-  if (override === "after") nativeWindow.MathJax = {
-    tex: {inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]], processEscapes: true, processEnvironments: true},
-    options: {ignoreHtmlClass: ".*|", processHtmlClass: "arithmatex"}
-  };
-  const typedBody = document.body.innerHTML;
-  const main = require(path.join(process.env.AUTOFORM_MATHJAX_DIR, "es5", "node-main.js"));
-  await main.init({});
-  await MathJax.startup.promise;
-  if (early) report.early = await early;
-  report.version = MathJax.version;
-  assert.strictEqual(MathJax.startup.adaptor.document, document, "MathJax must use the genuine native DOM");
-  assert.strictEqual(MathJax.config, configuration, "The generated configuration must survive actual engine initialization");
-  if (override === "version") {
-    assert.strictEqual(report.version, "3.2.1");
-    assert.strictEqual(await nativeWindow.AutoformMath.refresh(document), false);
-    assert.strictEqual(document.body.innerHTML, typedBody, "A rejected engine release must leave source formulas intact");
-    assert.strictEqual(document.querySelectorAll("mjx-container, [data-autoform-math-stage]").length, 0);
-    assert.deepStrictEqual(docs, []);
-    assert.strictEqual(shown, null, "A rejected engine must not initialize the document subscription");
-    return;
-  }
-  assert(shown, "The generated document subscription must initialize");
-  // Material's subscription is fire-and-forget; await the actual scoped
-  // readiness API, which coalesces with the refresh that event requests.
-  shown();
-  assert.strictEqual(await nativeWindow.AutoformMath.refresh(document), true);
-  report.passes.push(describe());
-  report.initialTabstops = document.querySelectorAll('mjx-container[tabindex="0"]').length;
-  assert.strictEqual(document.querySelectorAll("[data-autoform-math-stage]").length, 0);
+  MathJax.startup.defaultReady();
+};
+if (override === "after") nativeWindow.MathJax = {
+  tex: {inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]], processEscapes: true, processEnvironments: true},
+  options: {ignoreHtmlClass: ".*|", processHtmlClass: "arithmatex"}
+};
+const typedBody = document.body.innerHTML;
+const main = require(path.join(mathjax, "es5", "node-main.js"));
+await main.init({});
+await MathJax.startup.promise;
+if (early) report.early = await early;
+report.version = MathJax.version;
+assert.strictEqual(MathJax.startup.adaptor.document, document, "MathJax must use the genuine native DOM");
+assert.strictEqual(MathJax.config, configuration, "The generated configuration must survive actual engine initialization");
+if (override === "version") {
+  assert.strictEqual(report.version, "3.2.1");
+  assert.strictEqual(await nativeWindow.AutoformMath.refresh(document), false);
+  assert.strictEqual(document.body.innerHTML, typedBody, "A rejected engine release must leave source formulas intact");
+  assert.strictEqual(document.querySelectorAll("mjx-container, [data-autoform-math-stage]").length, 0);
+  assert.deepStrictEqual(docs, []);
+  assert.strictEqual(shown, null, "A rejected engine must not initialize the document subscription");
+  return report;
+}
+assert(shown, "The generated document subscription must initialize");
+// Material's subscription is fire-and-forget; await the actual scoped
+// readiness API, which coalesces with the refresh that event requests.
+shown();
+assert.strictEqual(await nativeWindow.AutoformMath.refresh(document), true);
+report.passes.push(describe());
+report.initialTabstops = document.querySelectorAll('mjx-container[tabindex="0"]').length;
+assert.strictEqual(document.querySelectorAll("[data-autoform-math-stage]").length, 0);
 
-  docs = [];
-  const next = new nativeWindow.DOMParser().parseFromString(fs.readFileSync(secondPath, "utf8"), "text/html");
-  if (then === "promote") {
-    const button = document.createElement("button");
-    button.appendChild(document.querySelector(".arithmatex"));
-    document.body.appendChild(button);
-    assert.strictEqual(await nativeWindow.AutoformMath.refresh(button), true);
-  } else {
-    if (then === "append") document.body.append(...Array.from(next.body.childNodes));
-    else { document.body.replaceChildren(...Array.from(next.body.childNodes)); shown(); }
-    assert.strictEqual(await nativeWindow.AutoformMath.refresh(document), true);
-  }
-  report.passes.push(describe());
-  assert.strictEqual(document.querySelectorAll("[data-autoform-math-stage]").length, 0);
-  report.startup = Array.from(MathJax.startup.document.math).length;
-  report.glyphStyles = glyphStyles();
-  report.unstyled = report.glyphStyles.missing;
-  report.controls = Array.from(document.querySelectorAll("a, button")).filter(control => control.querySelector("mjx-container")).map(control => ({
-    tag: control.tagName, tabstops: control.querySelectorAll("[tabindex]").length,
-    applications: control.querySelectorAll('[role="application"]').length
-  }));
-})().catch(error => {
-  report.errors.push("harness: " + error.stack);
-}).finally(() => {
-  dom.window.close();
-  process.stdout.write(JSON.stringify(report));
-});
+docs = [];
+const next = new nativeWindow.DOMParser().parseFromString(second, "text/html");
+if (then === "promote") {
+  const button = document.createElement("button");
+  button.appendChild(document.querySelector(".arithmatex"));
+  document.body.appendChild(button);
+  assert.strictEqual(await nativeWindow.AutoformMath.refresh(button), true);
+} else {
+  if (then === "append") document.body.append(...Array.from(next.body.childNodes));
+  else { document.body.replaceChildren(...Array.from(next.body.childNodes)); shown(); }
+  assert.strictEqual(await nativeWindow.AutoformMath.refresh(document), true);
+}
+report.passes.push(describe());
+assert.strictEqual(document.querySelectorAll("[data-autoform-math-stage]").length, 0);
+report.startup = Array.from(MathJax.startup.document.math).length;
+report.glyphStyles = glyphStyles();
+report.unstyled = report.glyphStyles.missing;
+report.controls = Array.from(document.querySelectorAll("a, button")).filter(control => control.querySelector("mjx-container")).map(control => ({
+  tag: control.tagName, tabstops: control.querySelectorAll("[tabindex]").length,
+  applications: control.querySelectorAll('[role="application"]').length
+}));
+return report;
 """
 
 # Articles first, as the page's input reads them, then the cards as render
@@ -307,22 +293,13 @@ def _node_report(
     override: str = "none",
     then: str = "page",
 ) -> dict:
-    """Run the harness on ``script`` and the two pages, and decode the JSON it prints."""
+    """Run the harness on ``script`` with the first page loaded, and return its report.
 
-    files = {"harness.js": _HARNESS, "mathjax.js": script, "first.html": first, "second.html": second}
-    for name, text in files.items():
-        (tmp_path / name).write_text(text, encoding="utf-8")
-    done = subprocess.run(
-        [NODE, "harness.js", "mathjax.js", "first.html", "second.html", project, override, then],
-        cwd=tmp_path,
-        env=dict(os.environ, AUTOFORM_MATHJAX_DIR=str(mathjax_package()), AUTOFORM_DOM_BRIDGE_DIR=str(_ROOT / "node_modules")),
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-    assert done.returncode == 0, done.stderr
-    return json.loads(done.stdout)
+    ``tmp_path`` is unused; test_explorer_title_math.py still passes it.
+    """
+
+    args = {"script": script, "second": second, "project": project, "override": override, "then": then}
+    return json.loads(run_dom(_HARNESS, page=first, args={**args, "mathjax": str(mathjax_package())}, timeout=120))
 
 
 def _node_script(tmp_path: Path, macros: str | None = None) -> str:
@@ -386,31 +363,26 @@ def test_another_mathjax_release_leaves_every_formula_as_typed(tmp_path: Path) -
 
 # A MathJax that mkdocs.yml lists before javascripts/mathjax.js: loaded when
 # the script runs, and started afterwards with its own configuration. Reports
-# how many formulas it typeset. argv: the script, or "none" for a page without
-# it, and the page.
+# how many formulas it typeset. args: the script, or null for a page without
+# it, the page, and the MathJax package. The script sees Node's global as its
+# window, as the bundle does.
 _LOADED_FIRST_HARNESS = r"""
 "use strict";
-const fs = require("fs");
 const path = require("path");
-const [scriptPath, pagePath] = process.argv.slice(2);
 const report = {errors: [], math: null};
 global.window = globalThis;
-console.error = (...args) => report.errors.push(args.map(String).join(" "));
-const main = require(path.join(process.env.AUTOFORM_MATHJAX_DIR, "es5", "node-main.js"));
-const loaded = window.MathJax;
+console.error = (...parts) => report.errors.push(parts.map(String).join(" "));
+const main = require(path.join(args.mathjax, "es5", "node-main.js"));
+const loaded = globalThis.MathJax;
 global.document = {readyState: "complete", head: {appendChild: () => {}}, createElement: () => ({}),
   addEventListener: () => {}};
-if (scriptPath !== "none") (0, eval)(fs.readFileSync(scriptPath, "utf8"));
+if (args.script !== null) (0, eval)(args.script);
 delete global.document;
-loaded.config.startup.document = fs.readFileSync(pagePath, "utf8");
+loaded.config.startup.document = args.page;
 loaded.config.loader.load.push("input/tex", "output/chtml");
-main.init({}).then(() => {
-  report.math = Array.from(loaded.startup.document.math).length;
-}).catch((error) => {
-  report.errors.push("harness: " + error.stack);
-}).finally(() => {
-  process.stdout.write(JSON.stringify(report));
-});
+await main.init({});
+report.math = Array.from(loaded.startup.document.math).length;
+return report;
 """
 
 
@@ -420,28 +392,13 @@ def test_a_mathjax_listed_before_the_script_typesets_nothing(tmp_path: Path) -> 
     page with its own, a card's too. The script stops it instead, and says
     why."""
 
-    files = {
-        "harness.js": _LOADED_FIRST_HARNESS,
-        "mathjax.js": _node_script(tmp_path),
-        "page.html": '<html><body><p><span class="arithmatex">\\(a \\leq b\\)</span> \\(c\\)</p></body></html>',
-    }
-    for name, text in files.items():
-        (tmp_path / name).write_text(text, encoding="utf-8")
+    page = '<html><body><p><span class="arithmatex">\\(a \\leq b\\)</span> \\(c\\)</p></body></html>'
 
-    def run(script: str) -> dict:
-        done = subprocess.run(
-            [NODE, "harness.js", script, "page.html"],
-            cwd=tmp_path,
-            env=dict(os.environ, AUTOFORM_MATHJAX_DIR=str(mathjax_package())),
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-        assert done.returncode == 0, done.stderr
-        return json.loads(done.stdout)
+    def run(script: str | None) -> dict:
+        args = {"script": script, "page": page, "mathjax": str(mathjax_package())}
+        return json.loads(run_dom(_LOADED_FIRST_HARNESS, args=args, timeout=120))
 
-    assert run("mathjax.js") == {
+    assert run(_node_script(tmp_path)) == {
         "errors": [
             "autoform: MathJax was loaded before javascripts/mathjax.js; formulas are left as typed. Load MathJax "
             "only through javascripts/mathjax.js in mkdocs.yml."
@@ -449,7 +406,7 @@ def test_a_mathjax_listed_before_the_script_typesets_nothing(tmp_path: Path) -> 
         "math": 0,
     }
     # The same MathJax without the script typesets both formulas.
-    assert run("none") == {"errors": [], "math": 2}
+    assert run(None) == {"errors": [], "math": 2}
 
 
 def test_no_class_makes_an_input_read_more_of_a_card(tmp_path: Path) -> None:

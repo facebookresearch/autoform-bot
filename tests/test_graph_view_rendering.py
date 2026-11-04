@@ -452,7 +452,7 @@ def test_reading_pane_sizes_put_the_statement_first() -> None:
 
     notes = ".bp-reading-body :is(.bp-thmnotes, .bp-meta, .bp-progress-states), .bp-reading-body details.bp-dependencies"
     labels = (
-        ".bp-reading-body :is(.bp-thmnotes h6, .bp-key, .bp-mark, .bp-progress-kicker, "
+        ".bp-reading-body :is(.bp-thmnotes h6, .bp-thmcaption, .bp-key, .bp-mark, .bp-progress-kicker, "
         ".bp-next-kicker, .bp-hero-kicker)"
     )
     totals = ".bp-reading-body :is(.bp-progress-total, .bp-next-title)"
