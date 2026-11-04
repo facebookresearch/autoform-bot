@@ -87,7 +87,7 @@ date when the release is tagged.
   project tracks Lean. The list replaces evidence that is only links, each
   straight to one of those declarations. The rest of the page is unchanged. In
   the sidebar the page has an entry of its own under Mathematics, which no
-  longer opens it.
+  longer opens it (#631).
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
