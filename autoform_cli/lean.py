@@ -976,6 +976,10 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
                 )
                 continue
             name = name or _name_token(body)
+            # `class abbrev C` and `class inductive D` declare C and D, whose fields are not read.
+            variant = name if keyword == "class" and name in ("abbrev", "inductive") else None
+            if variant:
+                name = _name_token(body.removeprefix(variant).lstrip())
             if name is None:
                 continue
             # `_name_token` stops before the `{` in an explicit universe
@@ -983,8 +987,7 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
             name = name.removesuffix(".")
             qualified = _qualified(namespaces, name)
             found.append(Declaration(qualified, relative, number, keyword, protected, private))
-            # `class abbrev` and `class inductive` read as a class of that name, with no fields.
-            if keyword in ("structure", "class") and name not in ("abbrev", "inductive"):
+            if keyword in ("structure", "class") and variant is None:
                 found.extend(
                     _fields(lines, literal_line, line_indents(), number - 1, body_index, qualified, relative, private)
                 )
