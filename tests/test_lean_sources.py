@@ -666,8 +666,9 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
         ("structure Plain extends Base, Pair (fun x => x, 1) where\n  z : Nat\n", ["Plain", "Plain.z"]),
         ("structure S extends A { x := 1, y : Nat := 2 }, toB : B where\n  z : Nat\n", ["S", "S.toB", "S.z"]),
         ("structure S extends «X)», A { x := 1, y : Nat := 2 } where\n  z : Nat\n", ["S", "S.z"]),
-        # `class abbrev` still reads as a class named `abbrev`, but with no fields.
-        ("class abbrev C (α : Type) :=\n  (inst : Add α), Mul α\n", ["abbrev"]),
+        # `class abbrev C` and `class inductive D` declare C and D; their fields are not read.
+        ("class abbrev C (α : Type) :=\n  (inst : Add α), Mul α\n", ["C"]),
+        ("class inductive D (α : Type) : Prop\n  | mk : D α\n", ["D"]),
         ("structure Sized (n : Nat := 0)\n    (m : Nat) where\n  size : Nat\n", ["Sized", "Sized.size"]),
         # A default may set an inherited field, which Lean declares nothing for.
         (
@@ -692,7 +693,8 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
          "inline-constructor-with-binders", "inline-constructor-and-field", "argument-after-an-inline-field",
          "postfix-types", "comment-without-a-line-end", "separator-before-a-last-comment", "no-where", "no-fields",
          "assign", "named-parent", "field-named-module", "named-parents-without-where", "unnamed-parents",
-         "comma-inside-a-parent", "guillemet-inside-a-parent", "class-abbrev", "header-default", "defaults"],
+         "comma-inside-a-parent", "guillemet-inside-a-parent", "class-abbrev", "class-inductive", "header-default",
+         "defaults"],
 )
 def test_structure_fields_follow_the_structure_s_where(tmp_path: Path, source: str, names: list[str]) -> None:
     assert sorted(_index(tmp_path, source).declarations) == names

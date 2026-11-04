@@ -1355,6 +1355,8 @@ def test_file_replaced_by_fifo_between_stat_and_open_never_blocks(
     result = probe["result"]
 
     assert probe["switched"]
+    # fstat refuses the FIFO the open reached, so not even the first read takes it for an empty file.
+    assert probe["captures"][0] == "unreadable"
     assert not result["ok"]
     assert result["compatibility"]["status"] == "indeterminate"
     assert "unreadable-file" in {item["code"] for item in result["diagnostics"]}
@@ -1573,6 +1575,21 @@ def test_a_root_that_can_be_searched_but_not_listed_is_inspected(tmp_path: Path)
 
     assert result.ok, result.diagnostics
     assert result.compatibility.status == "supported"
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions that apply")
+def test_a_root_that_cannot_be_searched_is_unreadable_not_missing(tmp_path: Path) -> None:
+    # Nothing under it can be looked up, so its decision files may exist.
+    root = _project(tmp_path)
+    root.chmod(0)
+    try:
+        result = inspect_project(root)
+    finally:
+        root.chmod(0o755)
+
+    assert not result.ok
+    assert "unreadable-file" in _codes(result)
+    assert "project-not-found" not in _codes(result)
 
 
 @pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions that apply")
