@@ -1632,10 +1632,7 @@ def _debrief(args: argparse.Namespace) -> int:
         print(f"error: {_human_text(error)}", file=sys.stderr)
         return 2
     if entry.answer.copied_code:
-        try:
-            abstraction.render_todo(debrief.debrief_root(args.target), debrief.project_dir(args.target))
-        except (debrief.DebriefError, OSError) as error:
-            print(f"warning: the abstraction to-do list was not refreshed: {_human_text(error)}", file=sys.stderr)
+        _refresh_abstraction_todo(args.target)
     if args.json:
         print(json.dumps(
             {"attempt_id": entry.attempt_id, "outcome": entry.outcome, "path": str(path)},
@@ -1647,6 +1644,15 @@ def _debrief(args: argparse.Namespace) -> int:
     return 0
 
 
+def _refresh_abstraction_todo(target: str) -> Path | None:
+    """Rewrite abstractions/TODO.md; a failure only warns, since the records and decisions it shows are stored."""
+    try:
+        return abstraction.render_todo(debrief.debrief_root(target), debrief.project_dir(target))
+    except (debrief.DebriefError, OSError) as error:
+        print(f"warning: the abstraction to-do list was not refreshed: {_human_text(error)}", file=sys.stderr)
+        return None
+
+
 def _abstraction(args: argparse.Namespace) -> int:
     try:
         root = debrief.debrief_root(args.target)
@@ -1655,7 +1661,7 @@ def _abstraction(args: argparse.Namespace) -> int:
             selected = [
                 cluster for cluster in abstraction.clusters(root) if args.all or cluster.status == "open"
             ]
-            todo = abstraction.render_todo(root, project)
+            todo = _refresh_abstraction_todo(args.target)
             if args.json:
                 print(abstraction.to_json(project, selected))
                 return 0
@@ -1663,9 +1669,10 @@ def _abstraction(args: argparse.Namespace) -> int:
                 print("no copied code to raise")
             for cluster in selected:
                 state = abstraction.present(project, cluster)
+                raised = " raised as " if cluster.status == "raised" else " last raised as "
                 print(_human_text(
                     f"{cluster.cluster_id} [{cluster.status}] target: {cluster.file or 'not chosen'}"
-                    + (f" raised as {cluster.declaration}" if cluster.declaration else "")
+                    + (raised + cluster.declaration if cluster.declaration else "")
                 ))
                 for copy in cluster.copies:
                     gone = " (no longer present)" if state.get(copy.entry_id) is False else ""
@@ -1674,18 +1681,19 @@ def _abstraction(args: argparse.Namespace) -> int:
                         f" <- {copy.source_file or '?'} {copy.source_declaration or '(inline)'}"
                         f" [{copy.kind or '?'}, {copy.node_id}]{gone}"
                     ))
-            print(_human_text(f"to-do list: {todo}"))
+            if todo is not None:
+                print(_human_text(f"to-do list: {todo}"))
             return 0
         if args.abstraction_command == "target":
-            cluster, _ = abstraction.decide(root, args.cluster, "target", file=args.file, note=args.note)
+            cluster, decision = abstraction.decide(root, args.cluster, "target", file=args.file, note=args.note)
             message = f"cluster {cluster.cluster_id} will be raised into {args.file}"
         else:
+            # `--raised ""` is a raise without a declaration, which decide refuses, not a dismissal.
             action = "raised" if args.raised is not None else "dismissed"
-            cluster, _ = abstraction.decide(
+            cluster, decision = abstraction.decide(
                 root, args.cluster, action, file=args.file, declaration=args.raised or "", note=args.note
             )
             message = f"cluster {cluster.cluster_id} {action}"
-        abstraction.render_todo(root, project)
     except (GraphValidationError, RuntimeProjectionError) as error:
         for issue in error.issues:
             print(f"error: {_human_text(issue)}", file=sys.stderr)
@@ -1693,7 +1701,9 @@ def _abstraction(args: argparse.Namespace) -> int:
     except (abstraction.AbstractionError, debrief.DebriefError, OSError) as error:
         print(f"error: {_human_text(error)}", file=sys.stderr)
         return 2
-    print(_human_text(message))
+    # The decision covers the copies the cluster held when it was made; a copy recorded since `list` is among them.
+    print(_human_text(f"{message}, covering {', '.join(decision.entries)}"))
+    _refresh_abstraction_todo(args.target)
     return 0
 
 

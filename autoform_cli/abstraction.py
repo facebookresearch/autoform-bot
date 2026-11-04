@@ -19,7 +19,10 @@ records each time. Only decisions are written, beside the records::
 from __future__ import annotations
 
 import json
+import os
+import posixpath
 import re
+import stat
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -36,6 +39,12 @@ ACTIONS = frozenset({"target", "raised", "dismissed"})
 CLOSING = frozenset({"raised", "dismissed"})
 
 _DECISION_ID = re.compile(r"\A[0-9a-f]{32}\Z")
+# What an agent writes for a file or name it does not know.
+_UNKNOWN = frozenset({"", "null", "none"})
+# A copy's file larger than this is not searched for its name.
+_MAX_SOURCE = 8 * 1024 * 1024
+# A declaration keyword and any namespace prefix, so `theorem Foo.bar` names a copy `Foo.bar`.
+_DECLARED = r"\b(?:theorem|lemma|def|abbrev|instance|structure|inductive|class|opaque|axiom)\s+(?:[^\s.]+\.)*"
 
 
 class AbstractionError(ValueError):
@@ -171,21 +180,38 @@ def load_decisions(root: Path) -> list[Decision]:
 
 
 def _declaration(name: str) -> str:
-    return name.strip().strip("`").removeprefix("_root_.")
+    name = name.strip().strip("`").removeprefix("_root_.")
+    return "" if name.lower() in _UNKNOWN else name
+
+
+def _last_component(name: str) -> str:
+    """The last component of a reported name; a dot inside «» does not split it."""
+    return re.split(r"\.(?![^«]*»)", _declaration(name))[-1]
+
+
+def _file(path: str) -> str:
+    """A reported file as a key: empty when unknown, else a normalised relative path."""
+    path = path.strip().replace("\\", "/")
+    return "" if path.lower() in _UNKNOWN else posixpath.normpath(path)
 
 
 def _keys(copy: Copy) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """The code a copy was taken from, and the copy itself, as union-find keys.
 
-    Named code is keyed by file and declaration, so a copy of a copy joins the
-    first copy's cluster. Inline code has no name to share, so it only joins
-    the copy made from it.
+    Named code is keyed by its file and the last component of its name, so a
+    copy of a copy joins the first copy's cluster however the name was
+    qualified. The price: same-named declarations in different namespaces of
+    one file share a cluster. Inline code, or code whose file is unknown, has
+    no key to share, so it only joins the copy made from it.
     """
-    source = _declaration(copy.source_declaration)
-    target = _declaration(copy.copy_declaration)
-    source_key = ("declaration", copy.source_file, source) if source else ("inline-source", copy.entry_id)
-    copy_key = ("declaration", copy.copy_file, target) if target else ("inline-copy", copy.entry_id)
-    return source_key, copy_key
+    keys = []
+    for side, file, name in (
+        ("source", copy.source_file, copy.source_declaration),
+        ("copy", copy.copy_file, copy.copy_declaration),
+    ):
+        file, name = _file(file), _last_component(name)
+        keys.append(("declaration", file, name) if file and name else (side, copy.entry_id))
+    return keys[0], keys[1]
 
 
 def clusters(root: Path) -> list[Cluster]:
@@ -218,20 +244,26 @@ def clusters(root: Path) -> list[Cluster]:
         targets = [target[entry] for entry in ids if entry in target]
         closings = [closed[entry] for entry in ids if entry in closed]
         latest_target = max(targets, key=lambda decision: decision.recorded_at, default=None)
-        if len(closings) < len(ids):
-            status, latest = "open", None
+        raised = [decision for decision in closings if decision.action == "raised"]
+        latest = max(raised or closings, key=lambda decision: decision.recorded_at, default=None)
+        # A copy no decision covers opens the cluster again, which keeps its last raise, else its last
+        # dismissal, so the lead sees what was raised or why it was dismissed.
+        status = latest.action if latest and len(closings) == len(ids) else "open"
+        decided = sorted(filter(None, (latest_target, latest)), key=lambda decision: decision.recorded_at)
+        if status == "open":
+            file = next((decision.file for decision in reversed(decided) if decision.file), "")
+            note = next((decision.note for decision in reversed(decided) if decision.note), "")
         else:
-            raised = [decision for decision in closings if decision.action == "raised"]
-            latest = max(raised or closings, key=lambda decision: decision.recorded_at)
-            status = latest.action
+            file = latest.file or (latest_target.file if latest_target else "")
+            note = latest.note
         result.append(
             Cluster(
                 cluster_id=members[0].entry_id,
                 copies=tuple(members),
                 status=status,
-                file=(latest.file if latest and latest.file else latest_target.file if latest_target else ""),
+                file=file,
                 declaration=latest.declaration if latest else "",
-                note=(latest or latest_target).note if (latest or latest_target) else "",
+                note=note,
             )
         )
     return sorted(result, key=lambda cluster: (cluster.copies[0].recorded_at, cluster.cluster_id))
@@ -240,24 +272,41 @@ def clusters(root: Path) -> list[Cluster]:
 def present(project: Path, cluster: Cluster) -> dict[str, bool | None]:
     """Whether each copy is still in the project: its file exists and names the copy.
 
-    ``None`` when the copy's file is unknown or lies outside the project. A copy
-    that is gone was already cleaned up, by hand or by a later edit.
+    ``None`` when the copy's file is unknown, lies outside the project, or is not
+    a regular file of bounded size. A copy that is gone was already cleaned up,
+    by hand or by a later edit.
     """
     project = project.resolve()
     result: dict[str, bool | None] = {}
     for copy in cluster.copies:
-        path = (project / copy.copy_file).resolve() if copy.copy_file else None
+        file = _file(copy.copy_file)
+        try:
+            path = (project / file).resolve() if file else None
+        except (OSError, RuntimeError):  # A symlink loop; Python before 3.13 raises RuntimeError.
+            path = None
         if path is None or project not in path.parents:
             result[copy.entry_id] = None
             continue
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = _source_text(path)
         except OSError:
             result[copy.entry_id] = False
             continue
-        name = _declaration(copy.copy_declaration).rsplit(".", 1)[-1]
-        result[copy.entry_id] = not name or re.search(rf"(?<![\w.']){re.escape(name)}(?![\w'])", text) is not None
+        name = re.escape(_last_component(copy.copy_declaration))
+        result[copy.entry_id] = None if text is None else not name or re.search(
+            rf"(?:(?<![\w.'])|{_DECLARED}){name}(?![\w'])", text
+        ) is not None
     return result
+
+
+def _source_text(path: Path) -> str | None:
+    """A regular file's text; ``None`` for a FIFO, device or directory, or past the bound. Never blocks."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            return None
+        data = handle.read(_MAX_SOURCE + 1)
+    return None if len(data) > _MAX_SOURCE else data.decode("utf-8", errors="replace")
 
 
 def select(root: Path, selector: str) -> Cluster:
@@ -319,12 +368,13 @@ def render_todo(root: Path, project: Path | None = None) -> Path:
     ]
     for cluster in open_clusters:
         state = present(project, cluster) if project is not None else {}
-        lines += [
-            f"## {md(cluster.cluster_id)}",
-            "",
-            f"- **Target file:** {md(cluster.file, 'not chosen')}",
-            "",
-        ]
+        lines += [f"## {md(cluster.cluster_id)}", "", f"- **Target file:** {md(cluster.file, 'not chosen')}"]
+        # A cluster a new copy opened again shows what it was last raised as, or why it was dismissed.
+        if cluster.declaration:
+            lines.append(f"- **Last raised as:** {md(cluster.declaration)}")
+        if cluster.note:
+            lines.append(f"- **Note:** {md(cluster.note)}")
+        lines.append("")
         for copy in cluster.copies:
             source = f"{copy.source_file or '?'} {copy.source_declaration or '(inline)'}"
             copied = f"{copy.copy_file or '?'} {copy.copy_declaration or '(inline)'}"
