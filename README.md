@@ -24,22 +24,6 @@ flowchart LR
   roadmap & formalize --> site[("Blueprint site<br>book and dependency map")]
 ```
 
-- **A plan tied to the source.** The roadmap gives each definition and result its own Markdown article, citing the
-  passage it comes from and linking what it depends on. A coverage page records what is in scope and what is not.
-- **Many agents at once.** The dependency graph splits the work into pull-request-sized steps, and agents take every
-  step whose prerequisites are done. Each checks Mathlib and the libraries you depend on before writing a new lemma.
-- **Proofs Lean has checked.** A result counts as proved only when it builds with no `sorry` or new axiom, and a
-  separate review agent has found its statement faithful to the source. Progress is recomputed on every run, and
-  the CI written by `setup` replays the project's declarations through the Lean kernel on every pull request,
-  failing on a `sorry` outside statements you left open or on a nonstandard axiom.
-- **Statement review without reading Lean.** Lean checks proofs, not whether a theorem says what the paper says. To
-  approve each statement yourself, turn on statement review with `human-review`: an agent that sees only the Lean
-  writes the statement back in plain English, and you compare it with the source.
-- **Everything in your repository.** The blueprint is Markdown in Git beside the Lean code; no service holds it.
-  AutoformBot creates no remote and pushes nothing unless you ask.
-- **A site to share.** On request, the blueprint becomes a public website on GitHub Pages: the mathematics as a
-  readable book beside its dependency map, with search, progress figures and a Lean link on each statement.
-
 ## Installation
 
 Requires Python 3.11+, [`uv`](https://docs.astral.sh/uv/), Git, and Lean 4 v4.27.0 or newer with Lake.
