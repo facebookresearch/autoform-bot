@@ -129,8 +129,7 @@ def inspect_project(target: str | Path, *, catalog: ReleaseCatalog | None = None
         result = _inspect_snapshot(catalog, snapshot, project_root=project_root, autoform_paths=autoform_paths)
         verified = _snapshot.capture_decision_snapshot(root)
         if (
-            snapshot.stable
-            and snapshot == verified
+            snapshot == verified
             and _inspect_autoform_paths(root) == autoform_paths
             and _find_project_root(start) == root
         ):

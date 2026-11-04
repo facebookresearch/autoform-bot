@@ -666,8 +666,9 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
         ("structure Plain extends Base, Pair (fun x => x, 1) where\n  z : Nat\n", ["Plain", "Plain.z"]),
         ("structure S extends A { x := 1, y : Nat := 2 }, toB : B where\n  z : Nat\n", ["S", "S.toB", "S.z"]),
         ("structure S extends «X)», A { x := 1, y : Nat := 2 } where\n  z : Nat\n", ["S", "S.z"]),
-        # `class abbrev` still reads as a class named `abbrev`, but with no fields.
-        ("class abbrev C (α : Type) :=\n  (inst : Add α), Mul α\n", ["abbrev"]),
+        # `class abbrev C` and `class inductive D` declare C and D; their fields are not read.
+        ("class abbrev C (α : Type) :=\n  (inst : Add α), Mul α\n", ["C"]),
+        ("class inductive D (α : Type) : Prop\n  | mk : D α\n", ["D"]),
         ("structure Sized (n : Nat := 0)\n    (m : Nat) where\n  size : Nat\n", ["Sized", "Sized.size"]),
         # A default may set an inherited field, which Lean declares nothing for.
         (
@@ -692,7 +693,8 @@ def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: P
          "inline-constructor-with-binders", "inline-constructor-and-field", "argument-after-an-inline-field",
          "postfix-types", "comment-without-a-line-end", "separator-before-a-last-comment", "no-where", "no-fields",
          "assign", "named-parent", "field-named-module", "named-parents-without-where", "unnamed-parents",
-         "comma-inside-a-parent", "guillemet-inside-a-parent", "class-abbrev", "header-default", "defaults"],
+         "comma-inside-a-parent", "guillemet-inside-a-parent", "class-abbrev", "class-inductive", "header-default",
+         "defaults"],
 )
 def test_structure_fields_follow_the_structure_s_where(tmp_path: Path, source: str, names: list[str]) -> None:
     assert sorted(_index(tmp_path, source).declarations) == names
@@ -3651,6 +3653,32 @@ def test_aliases_are_indexed_with_where_their_target_can_be(tmp_path: Path) -> N
     }
     assert {declaration.keyword for declaration in index.declarations.values()} == {"alias"}
     assert index.find("A.B.mpr").line == 5
+
+
+def test_alias_names_take_lean_s_identifier_characters(tmp_path: Path) -> None:
+    # `℘` is one of Lean's letter-like characters and `Ж` is not.
+    index = _index(tmp_path, "theorem t : True := trivial\nalias ℘ := t\nalias Жук := t\n")
+
+    assert set(index.declarations) == {"t", "℘"}
+
+
+def test_commands_inside_a_syntax_quotation_declare_nothing(tmp_path: Path) -> None:
+    # As in Mathlib's Data/UInt.lean and Tactic/IrreducibleDef.lean, where the
+    # scan reads `$typeName.toBitVec_nsmul` and `$n`, names Lean's grammar refuses.
+    source = [
+        "run_cmd",
+        "  for typeName' in [`UInt8, `UInt16] do",
+        "  let typeName := Lean.mkIdent typeName'",
+        "  Lean.Elab.Command.elabCommand (← `(",
+        "    namespace $typeName",
+        "      protected theorem toBitVec_nsmul (a : $typeName) : True := trivial",
+        "    end $typeName))",
+        "macro_rules | `(irreducible_def $n:ident := $val) => `(",
+        "    def $n:ident := $val)",
+        "theorem kept : True := trivial",
+    ]
+
+    assert set(_index(tmp_path, "\n".join(source) + "\n").declarations) == {"kept"}
 
 
 def test_root_qualified_names_leave_their_namespace_out(tmp_path: Path) -> None:

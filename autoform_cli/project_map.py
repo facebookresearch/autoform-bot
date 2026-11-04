@@ -454,11 +454,11 @@ def write_project_map(directory: Path, files: Mapping[str, object]) -> tuple[Pat
 
 def records_from_view(view: object, metadata: Mapping[str, Mapping[str, object]]) -> tuple[list[dict[str, object]], list[Relation]]:
     """The map's records and (user, used) relations from the publisher's complete view and its index metadata."""
-    from . import dag_viewer, render  # local import: render imports this module, and dag_viewer the renderer stack
+    from . import render, site_index  # local import: render imports this module, and site_index the renderer stack
 
     records: list[dict[str, object]] = []
     for node in view.nodes:  # type: ignore[attr-defined]
-        record: dict[str, object] = {"id": node.id, "kind": node.kind, "title": node.title, "status": dag_viewer._display_status(node)}
+        record: dict[str, object] = {"id": node.id, "kind": node.kind, "title": node.title, "status": site_index._display_status(node)}
         if node.lean:
             record["lean"] = node.lean
         if node.summary:
@@ -466,7 +466,7 @@ def records_from_view(view: object, metadata: Mapping[str, Mapping[str, object]]
         # The book's caption, such as "Theorem" or "Definition"; the map calls anything without one a result.
         if node.declaration or node.catalog == "module":
             record["caption"] = render._declaration_label(node)
-        label = dag_viewer._reading_label(node.title)
+        label = site_index._reading_label(node.title)
         if label is not None:
             record["reading_title"] = label
         for key in ("parent", "navigation", "area", "route", "result"):

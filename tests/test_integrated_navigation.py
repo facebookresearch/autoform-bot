@@ -5,13 +5,14 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from autoform_cli import dag_viewer
+from autoform_cli import graph_pages, site_index
 from autoform_cli.graph_views import GraphView, ViewEdge, ViewNode
 
 _NODE = shutil.which("node")
@@ -227,7 +228,7 @@ def parent_wires(tmp_path: Path):
     before = copy.deepcopy(metadata)
     digests: list[str] = []
     output = tmp_path / "index.json"
-    dag_viewer.write_search_index(output, view, context_links=links, metadata=metadata,
+    site_index.write_search_index(output, view, context_links=links, metadata=metadata,
                                  include_relations=True, sha256_out=digests)
     raw = output.read_bytes()
     assert metadata == before
@@ -247,7 +248,7 @@ def test_published_parent_offsets_preserve_all_other_index_fields_and_exact_byte
     assert digest == hashlib.sha256(raw).hexdigest()
     assert raw.endswith(b"\n")
     duplicate = tmp_path / "without-receipt.json"
-    dag_viewer.write_search_index(duplicate, view, context_links=links, metadata=metadata, include_relations=True)
+    site_index.write_search_index(duplicate, view, context_links=links, metadata=metadata, include_relations=True)
     assert duplicate.read_bytes() == raw
 
 
@@ -776,6 +777,43 @@ def test_alias_fragment_does_not_override_explicit_or_legacy_statement_selection
       assert.equal(legacy.url,aSpec.route+'#theorem-a');assert.equal(legacy.nodeId,'a');assert.equal(legacy.anchor,'theorem-a');
       assert.equal(legacy.parameters.direction,'prerequisites');assert(!legacy.readingSource.textContent.includes('Reading notice only'));
       assert.equal(app.errors.length,0);app.nav.dispose();
+    """)
+
+
+def test_an_old_dependency_page_opened_in_the_book_goes_on_to_the_page_it_names() -> None:
+    _run(r"""
+      // What graph_pages writes there: a hidden explorer host naming the book page, and a link; no reading, no graph.
+      const parse=global.DOMParser;
+      global.DOMParser=class { parseFromString(text) { const spec=JSON.parse(text); if(!spec.moved) return new parse().parseFromString(text);
+        const doc=new Element('html',{},[new Element('main',{},[new Element('h1',{},[],'This page moved'),
+          new Element('div',{'class':'bp-dag-viewer','data-page-href':spec.moved,hidden:''}),
+          new Element('p',{},[new Element('a',{href:spec.moved},[],'Continue to the mathematical page')])])]);
+        doc.title='This page moved'; return doc; } };
+      const app=setup(),moved=absolute('dependencies/chapters/a.html');
+      app.contents.set(moved,{moved:'../../roadmap/a.html'}); await app.nav.start();
+      const opened=await app.nav.navigate(moved);
+      assert.equal(opened.url,aSpec.route); assert(opened.readingSource.textContent.includes('Complete source statement'));
+      assert.equal(app.fetches.filter(url=>url===moved).length,1);
+      // With a node in its hash, the index names the node's page, so the old page is not fetched again.
+      const selected=await app.nav.navigate(moved+'#node=b');
+      assert.equal(selected.url,absolute('roadmap/b.html#theorem-b')); assert.equal(selected.nodeId,'b');
+      assert.equal(app.fetches.filter(url=>url===moved).length,1);
+      assert.equal(app.errors.length,0); global.DOMParser=parse; app.nav.dispose();
+    """)
+
+
+def test_an_old_dependency_page_script_keeps_the_fragment_and_drops_the_query(tmp_path: Path) -> None:
+    page = graph_pages._write_moved(tmp_path / "dependencies/chapters/a.md", "../../roadmap/a.html")
+    script = re.search(r"<script>(.*?)</script>", page.read_text(encoding="utf-8"), re.DOTALL)[1]
+    _run("const SCRIPT=" + json.dumps(script) + ";\n" + r"""
+      const old='https://example.test/project/dependencies/chapters/a.html', replaced=[];
+      for (const suffix of ['', '#node=a%2Fb', '#view=list&status=fully_proved', '?utm=x#node=a', '?utm=x']) {
+        const url=new URL(old+suffix);
+        new Function('location',SCRIPT)({href:url.href,search:url.search,hash:url.hash,replace(to){replaced.push(to);}});
+      }
+      // The book reads a node and the old view and filter links from the fragment; a query would only refetch the page.
+      const book='https://example.test/project/roadmap/a.html';
+      assert.deepEqual(replaced,[book,book+'#node=a%2Fb',book+'#view=list&status=fully_proved',book+'#node=a',book]);
     """)
 
 
@@ -1588,4 +1626,56 @@ def test_rejected_popstate_history_preparation_reports_canonical_url_and_distrus
       assert.deepEqual(app.getState(),fresh,'Fresh private section snapshots remain valid after quarantine');
       assert.equal(app.win.location.href,section);assert.equal(app.win.history.length,length);
       assert.equal(app.win.history.state.material,'preserved');app.nav.dispose();
+    """)
+
+
+_MAP_READS = r"""
+function held(settings, onRelease) {
+  return new Promise((resolve, reject) => {
+    settings.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {once: true});
+    onRelease(resolve);
+  });
+}
+const mapFile = name => absolute('dependencies/map/data/' + name);
+"""
+
+
+def test_the_maps_reads_stay_out_of_the_page_cache_and_navigation_never_aborts_one() -> None:
+    """The whole-project map keeps every file it reads, so the router keeps no copy: a map read takes none of the
+    pages' cache budget, is read afresh each time, and a book navigation never cancels it."""
+    _run(_MAP_READS + r"""
+      const size=value=>new TextEncoder().encode(JSON.stringify(value)).byteLength;
+      const walk=3*size(graph)+size(aSpec)+size(bSpec),budget=walk+4*32+256;
+      const part=mapFile('parts/big.json'),big={parts:{x:'y'.repeat(budget-walk)}},signals=[];let release;
+      assert(size(big)<budget&&walk+size(big)>budget);
+      const app=setup({cacheBytes:budget,fetch(url,settings,reply){ if(url!==part) return; signals.push(settings);
+        if(signals.length===1) return held(settings,resolve=>{release=()=>resolve(reply(big,url));}); }});
+      app.contents.set(part,big);
+      await app.nav.start(); await app.nav.navigateNode('a');
+      const reading=app.nav.fetchJSON(part); await until(()=>signals.length===1);
+      await app.nav.navigateNode('b');
+      assert.equal(signals[0].signal.aborted,false,'A book navigation never aborts a map read');
+      release(); assert.deepEqual(await reading,big); assert.equal(signals[0].credentials,'same-origin');
+      await app.nav.fetchJSON(part);
+      assert.equal(app.fetches.filter(url=>url===part).length,2,'Read afresh: nothing kept a copy');
+      await app.nav.navigateNode('a');
+      assert.equal(app.fetches.filter(url=>url===aSpec.route).length,1,'Never stored there: the page read before it stays cached');
+      assert.equal(app.errors.length,0); app.nav.dispose();
+    """)
+
+
+def test_the_maps_reads_keep_the_routers_origin_rules_and_errors_and_never_reach_on_error() -> None:
+    _run(_MAP_READS + r"""
+      const bad=mapFile('bad.json'),moved=mapFile('moved.json');
+      const app=setup({fetch(url,_settings,reply){
+        if(url===bad) return {ok:true,status:200,url,headers:{get(){return null;}},text:async()=>'{not json'};
+        if(url===moved) return reply({},'https://outside.test/moved.json');
+      }});
+      await app.nav.start(); const before=app.fetches.length;
+      await assert.rejects(app.nav.fetchJSON('https://outside.test/dependencies/map/data/index.json'),{message:'Refusing an external data request'});
+      assert.equal(app.fetches.length,before,'An off-site read sends no request');
+      await assert.rejects(app.nav.fetchJSON(moved),{message:'Data redirected outside this site'});
+      await assert.rejects(app.nav.fetchJSON(mapFile('missing.json')),{message:'HTTP 404'});
+      await assert.rejects(app.nav.fetchJSON(bad),{name:'SyntaxError'});
+      assert.equal(app.errors.length,0,'The map shows its own errors; the book reports none of them'); app.nav.dispose();
     """)

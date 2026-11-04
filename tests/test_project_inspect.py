@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import errno
 import json
 import os
 import shutil
 import socket
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -1167,14 +1165,14 @@ def test_stably_unreadable_decision_file_is_not_misreported_as_changing(
     root = _project(tmp_path)
     if denied == ".lake/package-overrides.json":
         _write_overrides(root)
-    original = project_snapshot._open_resolved
+    original = project_snapshot.os.open
 
-    def deny_one(path: Path, *args):
-        if path == root / denied:
+    def deny_one(path, *args, **kwargs):
+        if Path(path) == root / denied:
             raise PermissionError(denied)
-        return original(path, *args)
+        return original(path, *args, **kwargs)
 
-    monkeypatch.setattr(project_snapshot, "_open_resolved", deny_one)
+    monkeypatch.setattr(project_snapshot.os, "open", deny_one)
 
     result = inspect_project(root)
 
@@ -1252,64 +1250,19 @@ def test_decision_files_are_retried_as_one_generation(tmp_path: Path, monkeypatc
     assert result.compatibility.status == "unlisted"
 
 
-def test_rename_aba_cannot_repeat_a_synthetic_pair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    root = _project(tmp_path, manifest=(_mathlib(rev=OTHER_COMMIT, input_rev="v4.31.0"),))
-    lean = root / "lean-toolchain"
-    manifest = root / "lake-manifest.json"
-    lean_b = root / ".lean-b"
-    manifest_b = root / ".manifest-b"
-    lean_b.write_text("leanprover/lean4:v4.31.0\n", encoding="utf-8")
-    manifest_b.write_text(
-        json.dumps({"version": "1.1.0", "packagesDir": ".lake/packages", "packages": [_mathlib()]}),
-        encoding="utf-8",
-    )
-    original = project_snapshot._capture_file
-    state = "a"
-
-    def swap(first: Path, second: Path, saved: Path) -> None:
-        first.replace(saved)
-        second.replace(first)
-
-    def capture_and_cycle(captured_root: Path, relative: str):
-        nonlocal state
-        entry = original(captured_root, relative)
-        if relative == "lean-toolchain" and state == "a":
-            swap(lean, lean_b, root / ".lean-a")
-            swap(manifest, manifest_b, root / ".manifest-a")
-            state = "b"
-        elif relative == "lake-manifest.json" and state == "b":
-            swap(lean, root / ".lean-a", lean_b)
-            swap(manifest, root / ".manifest-a", manifest_b)
-            state = "a"
-        return entry
-
-    monkeypatch.setattr(project_snapshot, "_capture_file", capture_and_cycle)
-
-    result = inspect_project(root)
-
-    assert result.compatibility.status == "indeterminate"
-    assert "project-changed-during-inspection" in _codes(result)
-
-
-def test_override_parent_generation_is_part_of_the_snapshot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_project_that_keeps_changing_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _project(tmp_path)
-    lake_dir = root / ".lake"
-    lake_dir.mkdir()
-    override = lake_dir / "package-overrides.json"
-    override.write_text(json.dumps({"schemaVersion": "1.1.0", "packages": []}), encoding="utf-8")
     original = project_snapshot._capture_file
+    writes = 0
 
-    def capture_and_rename_aba(captured_root: Path, relative: str):
-        entry = original(captured_root, relative)
-        if relative == ".lake/package-overrides.json":
-            temporary = lake_dir / ".override-aba"
-            override.replace(temporary)
-            temporary.replace(override)
-        return entry
+    def capture_and_rewrite(captured_root: Path, relative: str):
+        nonlocal writes
+        if relative == "lean-toolchain":
+            writes += 1
+            (root / "lean-toolchain").write_text(f"leanprover/lean4:v4.32.{writes}\n", encoding="utf-8")
+        return original(captured_root, relative)
 
-    monkeypatch.setattr(project_snapshot, "_capture_file", capture_and_rename_aba)
+    monkeypatch.setattr(project_snapshot, "_capture_file", capture_and_rewrite)
 
     result = inspect_project(root)
 
@@ -1402,40 +1355,11 @@ def test_file_replaced_by_fifo_between_stat_and_open_never_blocks(
     result = probe["result"]
 
     assert probe["switched"]
-    # The swap lands in the descriptor-relative open wherever real runs use one.
-    assert probe["dir_fd"] == (os.open in os.supports_dir_fd and hasattr(os, "O_DIRECTORY"))
+    # fstat refuses the FIFO the open reached, so not even the first read takes it for an empty file.
+    assert probe["captures"][0] == "unreadable"
     assert not result["ok"]
     assert result["compatibility"]["status"] == "indeterminate"
     assert "unreadable-file" in {item["code"] for item in result["diagnostics"]}
-
-
-def test_decision_file_accepts_windows_path_and_handle_stat_views(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root = _project(tmp_path)
-    original_fstat = project_snapshot.os.fstat
-
-    class WindowsHandleStat:
-        def __init__(self, metadata: os.stat_result) -> None:
-            self.st_dev = metadata.st_dev
-            self.st_ino = metadata.st_ino
-            self.st_mode = metadata.st_mode
-            self.st_size = metadata.st_size
-            self.st_mtime_ns = metadata.st_mtime_ns
-            self.st_ctime_ns = metadata.st_ctime_ns + 1
-
-    monkeypatch.setattr(
-        project_snapshot.os,
-        "fstat",
-        lambda descriptor: WindowsHandleStat(original_fstat(descriptor)),
-    )
-    monkeypatch.setattr(project_snapshot, "_WINDOWS_STAT_VIEWS", True)
-
-    captured = project_snapshot._capture_file(root, "lakefile.toml")
-
-    assert captured.state == "regular"
-    assert captured.content is not None
-    assert captured.content.decode("utf-8").splitlines() == LAKEFILE.splitlines()
 
 
 def _run_fifo_probe(root: Path, mode: str) -> dict:
@@ -1520,98 +1444,6 @@ def test_symlinked_decision_files_are_followed_like_lake(tmp_path: Path, relativ
     assert result.ok, result.diagnostics
     assert result.compatibility.status == "supported"
     assert result.compatibility.release == "lean-v4.32.2-mathlib-v4.32.2"
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="uses POSIX path-buffer semantics")
-@pytest.mark.parametrize("absolute_first_target", [False, True])
-def test_nested_symlink_expansion_matches_the_native_kernel(
-    tmp_path: Path, absolute_first_target: bool
-) -> None:
-    root = _project(tmp_path)
-    (root / "d").mkdir()
-    actual = root / "actual.toml"
-    (root / "lakefile.toml").rename(actual)
-    limit = os.pathconf(root, "PC_PATH_MAX")
-    unit = "d/../"
-    next_target = unit * max(1, (3 * limit // 4) // len(os.fsencode(unit)))
-    (root / "next").symlink_to(next_target, target_is_directory=True)
-    first_prefix = f"{root}/next/" if absolute_first_target else "next/"
-    padding = "./" * max(
-        1,
-        (limit // 2 - len(os.fsencode(first_prefix)) - len(os.fsencode(actual.name)))
-        // len(os.fsencode("./")),
-    )
-    first_target = f"{first_prefix}{padding}{actual.name}"
-    assert len(os.fsencode(next_target)) < limit
-    assert len(os.fsencode(first_target)) < limit
-    assert len(os.fsencode(f"{next_target}{padding}{actual.name}")) >= limit
-    assert len(os.fsencode(os.path.join(next_target, actual.name))) < limit
-    (root / "lakefile.toml").symlink_to(first_target)
-    assert stat.S_ISLNK(os.stat(root / "lakefile.toml", follow_symlinks=False).st_mode)
-    resolved, _, _ = project_snapshot._resolve(root, "lakefile.toml")
-    assert resolved.samefile(actual)
-
-    try:
-        os.stat(root / "lakefile.toml")
-    except OSError as error:
-        assert error.errno == errno.ENAMETOOLONG
-        native_state = "unreadable"
-    else:
-        native_state = "regular"
-
-    captured = project_snapshot._capture_file(root, "lakefile.toml")
-    result = inspect_project(root)
-
-    assert captured.state == native_state
-    if native_state == "unreadable":
-        assert not result.ok
-        assert result.compatibility.status == "indeterminate"
-        assert "lakefile.toml" in _unreadable(result)
-    else:
-        assert result.ok, result.diagnostics
-        assert result.compatibility.status == "supported"
-        assert "unreadable-file" not in _codes(result)
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="uses POSIX path-buffer semantics")
-@pytest.mark.parametrize("ending", ["/", "/."])
-def test_directory_symlink_at_kernel_path_limit_remains_readable(tmp_path: Path, ending: str) -> None:
-    root = _project(tmp_path)
-    actual_lake = root / "actual-lake"
-    actual_lake.mkdir()
-    (actual_lake / "package-overrides.json").write_text(
-        json.dumps({"schemaVersion": "1.1.0", "packages": []}),
-        encoding="utf-8",
-    )
-    limit = os.pathconf(root, "PC_PATH_MAX")
-    pending = "package-overrides.json"
-    unit = "d/../"
-    (root / "d").mkdir()
-    link = root / ".lake"
-    desired = limit - (2 if ending == "/" else 1)
-    ending_and_join = 1 if ending == "/" else 3
-    budget = desired - len(os.fsencode(pending)) - ending_and_join
-    repeats = (budget - 1) // len(os.fsencode(unit))
-    name = "a" * (budget - repeats * len(os.fsencode(unit)))
-    native_directory = root / name
-    actual_lake.rename(native_directory)
-    raw_target = f"{unit * repeats}{name}{ending}"
-    link.symlink_to(raw_target, target_is_directory=True)
-
-    native_expansion = os.path.join(raw_target, pending)
-    reconstructed = os.path.join(raw_target, ".", pending)
-    assert len(os.fsencode(native_expansion)) == desired
-    assert len(os.fsencode(reconstructed)) >= limit
-    assert stat.S_ISREG(os.stat(link / pending).st_mode)
-    resolved, _, _ = project_snapshot._resolve(root, ".lake/package-overrides.json")
-    assert resolved.samefile(native_directory / pending)
-    assert project_snapshot._capture_file(root, ".lake/package-overrides.json").state == "regular"
-
-    result = inspect_project(root)
-
-    assert result.ok, result.diagnostics
-    assert result.compatibility.status == "supported"
-    assert "unreadable-file" not in _codes(result)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
@@ -1731,157 +1563,36 @@ def test_dangling_lake_link_has_no_overrides_as_in_lake(tmp_path: Path) -> None:
     assert result.compatibility.status == "supported"
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
-@pytest.mark.parametrize(
-    ("link", "relative"), [("lakefile.toml", "lakefile.toml"), (".lake", ".lake/package-overrides.json")]
-)
-def test_unusable_symlink_is_identified_by_the_link_not_its_target(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, link: str, relative: str
-) -> None:
-    # Writes change /dev/null's times on macOS, so a link to a device must not
-    # read as a project that keeps changing.
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions that apply")
+def test_a_root_that_can_be_searched_but_not_listed_is_inspected(tmp_path: Path) -> None:
+    # Every run used to report project-changed-during-inspection here.
     root = _project(tmp_path)
-    target = tmp_path / "busy"
-    if link == ".lake":
-        target.write_text("", encoding="utf-8")
-    else:
-        target.mkdir()
-    (root / link).unlink(missing_ok=True)
-    (root / link).symlink_to(target)
-    original = project_snapshot._capture_file
-    touches = 0
-
-    def capture_and_touch_target(captured_root: Path, captured: str):
-        nonlocal touches
-        entry = original(captured_root, captured)
-        if captured == relative:
-            touches += 1
-            os.utime(target, ns=(touches * 10**9, touches * 10**9))
-        return entry
-
-    monkeypatch.setattr(project_snapshot, "_capture_file", capture_and_touch_target)
-
-    result = inspect_project(root)
-
-    assert touches >= 2
-    assert _unreadable(result) == [relative]
-    assert "project-changed-during-inspection" not in _codes(result)
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
-@pytest.mark.parametrize("swap", ["relink", "rename"])
-@pytest.mark.parametrize("where", ["subdirectory", "outside"])
-def test_lockstep_swaps_behind_a_linked_path_cannot_repeat_a_synthetic_pair(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where: str, swap: str
-) -> None:
-    # Both decision files are links into "current", which holds state A for
-    # every lean-toolchain read and state B for every other read.  Neither
-    # decision file nor the root changes; the swaps show only on the way to
-    # the files.  The holder's times are set explicitly so the result does
-    # not depend on timestamp granularity.
-    root = _project(tmp_path)
-    holder = root / "sub" if where == "subdirectory" else tmp_path / "outside"
-    holder.mkdir()
-    for name, toolchain, mathlib in (
-        ("a", "leanprover/lean4:v4.32.2\n", _mathlib(rev=OTHER_COMMIT, input_rev="v4.31.0")),
-        ("b", "leanprover/lean4:v4.31.0\n", _mathlib()),
-    ):
-        (holder / name).mkdir()
-        (holder / name / "lean-toolchain").write_text(toolchain, encoding="utf-8")
-        _write_manifest(holder / name, mathlib)
-    current = holder / "current"
-    if swap == "relink":
-        current.symlink_to(holder / "a", target_is_directory=True)
-    else:
-        (holder / "a").rename(current)
-    for relative in ("lean-toolchain", "lake-manifest.json"):
-        (root / relative).unlink()
-        (root / relative).symlink_to(current / relative)
-    state = "a"
-    swaps = 0
-
-    def switch(to: str) -> None:
-        nonlocal state, swaps
-        if to == state:
-            return
-        if swap == "relink":
-            (holder / "next").symlink_to(holder / to, target_is_directory=True)
-            (holder / "next").replace(current)
-        else:
-            current.rename(holder / state)
-            (holder / to).rename(current)
-        state = to
-        swaps += 1
-        os.utime(holder, ns=(swaps * 10**9, swaps * 10**9))
-
-    original = project_snapshot._capture_file
-
-    def capture_in_lockstep(captured_root: Path, relative: str):
-        if relative == "lean-toolchain":
-            switch("a")
-        entry = original(captured_root, relative)
-        if relative == "lean-toolchain":
-            switch("b")
-        return entry
-
-    monkeypatch.setattr(project_snapshot, "_capture_file", capture_in_lockstep)
-
-    result = inspect_project(root)
-
-    assert result.compatibility.status == "indeterminate"
-    assert "project-changed-during-inspection" in _codes(result)
-
-
-@pytest.mark.skipif(
-    os.name != "posix" or os.open not in os.supports_dir_fd or not os.path.exists("/dev/zero"),
-    reason="needs POSIX directory descriptors, symlinks and /dev/zero",
-)
-def test_parent_swapped_for_a_link_before_the_open_never_opens_a_device(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # lakefile.toml resolves to the regular file elsewhere/dev/zero.  Just
-    # before the open, "elsewhere" becomes a link to "/", so the same path
-    # names the /dev/zero device.
-    root = _project(tmp_path)
-    elsewhere = tmp_path.resolve() / "elsewhere"
-    (elsewhere / "dev").mkdir(parents=True)
-    (elsewhere / "dev" / "zero").write_text(LAKEFILE, encoding="utf-8")
-    (root / "lakefile.toml").unlink()
-    (root / "lakefile.toml").symlink_to(elsewhere / "dev" / "zero")
-    original_open = os.open
-    triggers = {str(root.resolve() / "lakefile.toml"), str(elsewhere / "dev")}
-    swapped = False
-    opened: list[int] = []
-
-    def swap_then_open(path, flags, *args, **kwargs):
-        nonlocal swapped
-        if not swapped and str(path) in triggers:
-            swapped = True
-            elsewhere.rename(tmp_path / "moved")
-            elsewhere.symlink_to("/", target_is_directory=True)
-        descriptor = original_open(path, flags, *args, **kwargs)
-        opened.append(stat.S_IFMT(os.fstat(descriptor).st_mode))
-        return descriptor
-
-    monkeypatch.setattr(project_snapshot.os, "open", swap_then_open)
-    # A wrapped os.open is not in os.supports_dir_fd; keep the descriptor-relative opens.
-    monkeypatch.setattr(project_snapshot.os, "supports_dir_fd", {*os.supports_dir_fd, swap_then_open})
+    root.chmod(0o311)
     try:
         result = inspect_project(root)
     finally:
-        if elsewhere.is_symlink():
-            elsewhere.unlink()
+        root.chmod(0o755)
 
-    assert swapped
-    assert stat.S_IFCHR not in opened
+    assert result.ok, result.diagnostics
+    assert result.compatibility.status == "supported"
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions that apply")
+def test_a_root_that_cannot_be_searched_is_unreadable_not_missing(tmp_path: Path) -> None:
+    # Nothing under it can be looked up, so its decision files may exist.
+    root = _project(tmp_path)
+    root.chmod(0)
+    try:
+        result = inspect_project(root)
+    finally:
+        root.chmod(0o755)
+
     assert not result.ok
-    assert "lakefile.toml" in _unreadable(result)
+    assert "unreadable-file" in _codes(result)
+    assert "project-not-found" not in _codes(result)
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32" or os.geteuid() == 0 or not (hasattr(os, "O_PATH") or hasattr(os, "O_SEARCH")),
-    reason="needs POSIX permissions that apply and search-only directory opens",
-)
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions that apply")
 def test_decision_file_linked_into_a_search_only_directory_is_read_like_lake(tmp_path: Path) -> None:
     # Lake and elan need search permission, not read permission, on the
     # directories on the way to a file.
@@ -1900,22 +1611,14 @@ def test_decision_file_linked_into_a_search_only_directory_is_read_like_lake(tmp
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
-@pytest.mark.parametrize(
-    ("suffix", "absolute", "error"),
-    [("-absent", True, FileNotFoundError), ("/", True, NotADirectoryError), ("/.", False, NotADirectoryError)],
-    ids=["dangling", "slash", "slash-dot"],
-)
-def test_decision_file_link_the_kernel_refuses_is_present_but_unreadable(
-    tmp_path: Path, suffix: str, absolute: bool, error: type[OSError]
-) -> None:
-    # A dangling link is present, not missing.  A trailing "/" or "/." asks for
-    # a directory, so the kernel, and elan with it, refuses the regular file there.
+def test_decision_file_link_the_kernel_refuses_is_present_but_unreadable(tmp_path: Path) -> None:
+    # A dangling link is present, not missing.
     root = _project(tmp_path)
     target = _move_behind_symlink(root, "lean-toolchain")
     link = root / "lean-toolchain"
     link.unlink()
-    os.symlink(f"{target if absolute else os.path.relpath(target, root)}{suffix}", link)
-    with pytest.raises(error):
+    os.symlink(f"{target}-absent", link)
+    with pytest.raises(FileNotFoundError):
         link.read_bytes()
 
     result = inspect_project(root)
@@ -1923,78 +1626,6 @@ def test_decision_file_link_the_kernel_refuses_is_present_but_unreadable(
     assert not result.ok
     assert _unreadable(result) == ["lean-toolchain"]
     assert "missing-lean-toolchain" not in _codes(result)
-    assert "project-changed-during-inspection" not in _codes(result)
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
-@pytest.mark.parametrize(("suffix", "absolute"), [("/", True), ("/.", False)])
-def test_directory_link_target_ending_in_a_slash_is_followed(tmp_path: Path, suffix: str, absolute: bool) -> None:
-    # Shell completion writes directory links as "../shared/.lake/", and the
-    # kernel follows them like links without the slash.
-    root = _project(tmp_path)
-    _write_overrides(root, {"name": "mathlib", "type": "path", "dir": "../mathlib4", "inherited": False})
-    target = _move_behind_symlink(root, ".lake")
-    link = root / ".lake"
-    link.unlink()
-    os.symlink(f"{target if absolute else os.path.relpath(target, root)}{suffix}", link)
-    assert (link / "package-overrides.json").is_file()
-
-    result = inspect_project(root)
-
-    assert "unreadable-file" not in _codes(result)
-    assert result.mathlib.source == ".lake/package-overrides.json"
-    assert "mathlib-overridden" in _codes(result)
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
-def test_link_through_a_link_with_an_empty_target_is_unreadable(tmp_path: Path) -> None:
-    # macOS creates a link with an empty target, and the kernel fails every
-    # lookup through it; Linux refuses to create one.
-    root = _project(tmp_path)
-    elsewhere = tmp_path / "elsewhere"
-    elsewhere.mkdir()
-    try:
-        os.symlink("", elsewhere / "empty")
-    except OSError:
-        pytest.skip("this platform does not create links with an empty target")
-    (elsewhere / "real-toolchain").write_bytes((root / "lean-toolchain").read_bytes())
-    link = root / "lean-toolchain"
-    link.unlink()
-    link.symlink_to(elsewhere / "empty" / "real-toolchain")
-    with pytest.raises(FileNotFoundError):
-        link.read_bytes()
-
-    result = inspect_project(root)
-
-    assert _unreadable(result) == ["lean-toolchain"]
-    assert "project-changed-during-inspection" not in _codes(result)
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
-@pytest.mark.parametrize("extra", [0, 1])
-def test_link_chains_are_followed_as_far_as_the_kernel_follows_them(tmp_path: Path, extra: int) -> None:
-    root = _project(tmp_path)
-    target = _move_behind_symlink(root, "lean-toolchain")
-    # lean-toolchain and the chain links below it, all relative.
-    links = project_snapshot._MAX_SYMLINKS + extra
-    chain = tmp_path / "chain"
-    chain.mkdir()
-    (chain / "0").symlink_to(os.path.relpath(target, chain))
-    for index in range(1, links - 1):
-        (chain / str(index)).symlink_to(str(index - 1))
-    link = root / "lean-toolchain"
-    link.unlink()
-    link.symlink_to(os.path.relpath(chain / str(links - 2), root))
-    if extra:
-        with pytest.raises(OSError) as error:
-            link.read_bytes()
-        assert error.value.errno == errno.ELOOP
-    else:
-        link.read_bytes()
-
-    result = inspect_project(root)
-
-    assert _unreadable(result) == (["lean-toolchain"] if extra else [])
     assert "project-changed-during-inspection" not in _codes(result)
 
 

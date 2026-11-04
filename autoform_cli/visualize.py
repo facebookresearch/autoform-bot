@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
 from . import graph_views, status
-from .dag_viewer import MAX_MAP_NODES
 from .graph import GraphValidationError, load_graph
 from .markdown import blueprint_root, relative_link
 from .readback import READBACKS_DIR
@@ -30,6 +29,9 @@ _MERMAID_PAGE_SENTENCE = (
 )
 #: States a contributor could pick up today.
 _READY = frozenset({"can_prove", "can_state"})
+#: The summary lists each article while the roadmap has at most this many, the
+#: number the explorer's map was sized for, and only chapters past it.
+MAX_MAP_NODES = 120
 
 
 class VisualizationError(ValueError):
@@ -213,8 +215,7 @@ def summary_page(
             )
         lines.append("")
 
-    # A roadmap with more articles than the explorer draws on one map lists its
-    # chapters only; the explorer lists every article.
+    # A larger roadmap lists its chapters only; the explorer lists every article.
     if 0 < members <= MAX_MAP_NODES:
         lines.extend(["## Articles", ""])
         for node in view.nodes:

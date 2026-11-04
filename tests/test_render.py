@@ -29,7 +29,7 @@ import autoform_cli.audit as audit_module
 import autoform_cli.lean as lean_module
 import autoform_cli.render as render_module
 from autoform_cli import _directory_binding as directory_binding_module
-from autoform_cli import dag_viewer, graph_pages, project_map
+from autoform_cli import dag_viewer, graph_pages, project_map, site_index
 from autoform_cli.__main__ import main
 from autoform_cli._repository import _normalize_remote
 from autoform_cli._tree_snapshot import TreeChangedError
@@ -37,6 +37,7 @@ from autoform_cli.audit import audit_blueprint
 from autoform_cli.coverage import COVERAGE_DISPOSITIONS, COVERAGE_SCHEMA, CoverageEntry, CoverageSummary
 from autoform_cli.dashboard import publication_bound_live_state
 from autoform_cli.graph import Graph, Node, atlas_omissions, load_graph
+from autoform_cli.graph_views import project_view
 from autoform_cli.lean import LeanSourceError
 from autoform_cli.markdown import site_converter
 from autoform_cli.render import (
@@ -140,7 +141,8 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     assert (out / "dependencies/chapters/roadmap.json").is_file()
     assert not (out / "dependencies/nodes").exists()
     assert (out / "dependencies/full.md").is_file()
-    assert (out / "dependencies/full.json").is_file()
+    # Only the old full page read this payload, and it now redirects.
+    assert not (out / "dependencies/full.json").exists()
     assert (out / "dependencies/index.json").is_file()
     assert (out / "stylesheets/blueprint.css").is_file()
     assert (out / "stylesheets/blueprint-dag.css").is_file()
@@ -158,44 +160,31 @@ def test_render_writes_a_derived_tree_and_leaves_the_vault_alone(tmp_path: Path)
     graph_pages = [out / "dependencies.md", *(out / "dependencies").rglob("*.md")]
     for graph_page in graph_pages:
         document = graph_page.read_text(encoding="utf-8")
-        assert 'class="bp-dag-viewer"' in document
+        # An old dependency page only sends its visitors on to the book: no explorer and no data of its own.
+        assert document.count('class="bp-dag-viewer"') == 1 and "data-graph-src" not in document
         assert "```mermaid" not in document
         assert "blueprint-mermaid.js" not in document
-        assert document.count("blueprint-dag.js") == 1
-        assert document.count('class="bp-reading-source"') == 1
+        assert "blueprint-dag.js" not in document
+        assert 'class="bp-reading-source"' not in document
         assert "Continue to the mathematical page" in document
-        assert '<style data-autoform-dag-style>' not in document
-        assert graph_page.with_suffix(".json").is_file()
+        assert "location.replace(" in document and '<meta http-equiv="refresh"' in document
 
     project_page = (out / "dependencies.md").read_text(encoding="utf-8")
-    assert "graph_view: project" in project_page
-    assert 'data-graph-src="dependencies.json"' in project_page
-    assert 'data-catalog-src="dependencies/index.json"' in project_page
     assert 'data-page-href="roadmap/index.html"' in project_page
     assert "data-search-src" not in project_page  # Material reserves and strips this prefix.
     assert "Explore all nodes" not in project_page
     project_payload = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))
     assert project_payload["title"] == "Roadmap"
-    assert {node["url"] for node in project_payload["nodes"]} == {
-        "roadmap/index.html"
-    }
     chapter_payload = json.loads(
         (out / "dependencies/chapters/roadmap.json").read_text(encoding="utf-8")
     )
-    # The explorer names the scope; the page's own H1 adds what it draws, for the tab and site search.
+    # The book names the scope by the payload's bare title.
     assert chapter_payload["title"] == "Top level"
-    assert "\n# Top level dependencies\n" in (out / "dependencies/chapters/roadmap.md").read_text(encoding="utf-8")
     assert chapter_payload["view"]["breadcrumbs"][-1] == {"label": "Top level", "url": None}
     full_page = (out / "dependencies/full.md").read_text(encoding="utf-8")
-    assert 'data-graph-src="full.json"' in full_page
+    assert 'data-page-href="../roadmap/index.html"' in full_page
     assert "search:\n  exclude: true" in full_page
     assert "search:\n  exclude: true" in project_page
-    payload = json.loads((out / "dependencies/full.json").read_text(encoding="utf-8"))
-    assert payload["schema"] == "autoform-dag-view/v2"
-    assert payload["title"] == "Roadmap"
-    assert len(payload["nodes"]) == 1
-    assert payload["edge_count"] == 0
-    assert all(node["url"] for node in payload["nodes"])
     search_index = json.loads((out / "dependencies/index.json").read_text(encoding="utf-8"))
     assert len(search_index["nodes"]) == 3
     assert search_index["schema"] == "autoform-dag-search/v1"
@@ -279,7 +268,7 @@ def test_a_card_heading_keeps_the_look_of_the_div_it_replaced() -> None:
 
 
 @pytest.mark.parametrize("node_count", (2, 502), ids=("small", "large"))
-def test_small_and_large_chapters_use_the_same_json_explorer(
+def test_small_and_large_chapters_use_the_same_json_payload(
     tmp_path: Path,
     node_count: int,
 ) -> None:
@@ -310,13 +299,18 @@ def test_small_and_large_chapters_use_the_same_json_explorer(
     render_site(blueprint, tmp_path / "out")
 
     page = (tmp_path / "out/dependencies/chapters/large.md").read_text(encoding="utf-8")
-    assert 'class="bp-dag-viewer"' in page
-    assert 'data-graph-src="large.json"' in page
+    assert 'data-page-href="../../roadmap/large/index.html"' in page
+    assert "data-graph-src" not in page
     assert "```mermaid" not in page
-    assert page.count("blueprint-dag.js") == 1
+    assert "blueprint-dag.js" not in page
+    # The chapter's book page reads this payload.
+    assert 'data-graph-src="../../dependencies/chapters/large.json"' in (
+        tmp_path / "out/roadmap/large/README.md"
+    ).read_text(encoding="utf-8")
     payload = json.loads((tmp_path / "out/dependencies/chapters/large.json").read_text(encoding="utf-8"))
     assert len(payload["nodes"]) == node_count
-    assert payload["edge_count"] == node_count - 1
+    index = json.loads((tmp_path / "out/dependencies/index.json").read_text(encoding="utf-8"))
+    assert payload["edges"] == [] and len(index["relations"]) == node_count - 1
 
 
 def test_the_structure_compatibility_page_opens_the_book(tmp_path: Path) -> None:
@@ -409,19 +403,20 @@ def test_the_site_carries_its_own_mark(tmp_path: Path) -> None:
     assert root.find("{http://www.w3.org/2000/svg}title").text == "Autoform"
 
 
-def _project_book_links(page: Path) -> set[str]:
-    payload_path = page.parent / "dependencies.json" if page.name == "README.md" else page.with_suffix(".json")
-    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+def _project_book_links(out: Path) -> set[str]:
+    """The book pages the index opens for the project payload's chapters, from the site's root."""
+    project = json.loads((out / graph_pages.PROJECT_PAYLOAD).read_text(encoding="utf-8"))
+    chapters = {node["id"].removeprefix("scope:") for node in project["nodes"] if node["kind"] == "scope"}
+    index = json.loads((out / graph_pages.SEARCH_INDEX).read_text(encoding="utf-8"))
     return {
-        node["url"]
-        for node in payload["nodes"]
-        if isinstance(node.get("url"), str)
-        and re.fullmatch(r"roadmap/(?:.+/)?index\.html", node["url"])
+        os.path.normpath(os.path.join("dependencies", record["route"])).replace(os.sep, "/")
+        for record in index["nodes"]
+        if record["id"] in chapters and isinstance(record.get("route"), str)
     }
 
 
 def test_the_home_page_and_legacy_entrance_share_canonical_book_routes(tmp_path: Path) -> None:
-    """The full landing page and old entrance consume the same project payload.
+    """The landing page reads the project payload, and the old entrance redirects to its book route.
 
     A project-view node is a chapter, so its id is namespaced `scope:<group>`,
     and only the old explorer stripped that before naming the page. The old home
@@ -433,14 +428,13 @@ def test_the_home_page_and_legacy_entrance_share_canonical_book_routes(tmp_path:
     overview = (out / "README.md").read_text(encoding="utf-8")
     dependencies = (out / "dependencies.md").read_text(encoding="utf-8")
     assert 'data-graph-src="dependencies.json"' in overview
-    assert 'data-graph-src="dependencies.json"' in dependencies
+    assert "data-graph-src" not in dependencies
     assert overview.count("blueprint-dag.js") == 1
     assert 'class="bp-reading-source"' in overview
     assert 'data-page-href="index.html"' in overview
     assert 'data-page-href="roadmap/index.html"' in dependencies
-    links = _project_book_links(out / "README.md")
-    assert links, "the landing page should carry the project explorer"
-    assert links == _project_book_links(out / "dependencies.md") == {"roadmap/index.html"}
+    links = _project_book_links(out)
+    assert links == {"roadmap/index.html"}
     for link in links:
         assert out / unquote(link) in _published_pages(out), f"home page links to a missing page: {link}"
 
@@ -463,7 +457,7 @@ def test_the_home_page_project_explorer_survives_named_chapters(tmp_path: Path) 
 
     render_site(project / "blueprint", out, lean_root=project)
 
-    links = _project_book_links(out / "README.md")
+    links = _project_book_links(out)
     assert "roadmap/structure/index.html" in links
     assert not any("scope:" in link for link in links)
     for link in links:
@@ -499,8 +493,8 @@ def test_every_explorer_breadcrumb_reaches_a_published_page(tmp_path: Path) -> N
         payloads = [out / "dependencies.json", *(path for path in (out / "dependencies").rglob("*.json") if map_data not in path.parents)]
         payloads.remove(out / "dependencies/index.json")
         decoded = {payload: json.loads(payload.read_text(encoding="utf-8")) for payload in payloads}
-        assert all(data.get("schema") in {dag_viewer.SCHEMA, dag_viewer.WIKI_LINKS_SCHEMA} for data in decoded.values())
-        assert decoded[out / graph_pages.WIKI_LINKS]["schema"] == dag_viewer.WIKI_LINKS_SCHEMA
+        assert all(data.get("schema") in {dag_viewer.SCHEMA, site_index.WIKI_LINKS_SCHEMA} for data in decoded.values())
+        assert decoded[out / graph_pages.WIKI_LINKS]["schema"] == site_index.WIKI_LINKS_SCHEMA
         payloads = [payload for payload, data in decoded.items() if data["schema"] == dag_viewer.SCHEMA]
         assert out / "dependencies/scopes/algebra/groups.json" in payloads
         crumbs = [
@@ -578,14 +572,46 @@ def test_statement_headings_and_references_do_not_repeat_the_kind(tmp_path: Path
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     base, top = page[page.index('id="base"') : page.index('id="top"')], page[page.index('id="top"') :]
 
-    # A title that is only the kind word leaves no empty parentheses behind.
-    assert "bp-thmtitle" not in base
-    assert '<span class="bp-thmtitle">Top (finite case)</span>' in top
-    assert 'href="#top">Theorem 1 (Top (finite case))</a>' in base
-    assert 'href="#base">Definition 1</a>' in top
+    # A title that is only the kind word is the name, shown once with no kind above it.
+    assert "bp-thmcaption" not in base
+    assert '<span class="bp-thmtitle">Definition</span>' in base
+    assert (
+        '<span class="bp-thmcaption" data-search-exclude>Theorem</span><span class="bp-thmtitle">Top (finite case)</span>'
+    ) in top
+    assert 'href="#top">Top (finite case)</a>' in base
+    assert 'href="#base">Definition</a>' in top
     # The graph keeps the authored titles.
     chapter = json.loads((tmp_path / "out/dependencies/chapters/roadmap.json").read_text(encoding="utf-8"))
     assert {node["id"]: node["title"] for node in chapter["nodes"]} == titles
+
+
+def test_a_sources_own_numbering_stays_in_the_heading_and_its_links(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    top = project / "blueprint/roadmap/top.md"
+    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Theorem 7.7 (Bézout)\n"), encoding="utf-8")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    base, top_card = page[page.index('id="base"') : page.index('id="top"')], page[page.index('id="top"') :]
+
+    # Only the generated counter went: the title, with the source's number, heads the statement as written.
+    heading = top_card.split("</h4>")[0]
+    assert '<span class="bp-thmcaption" data-search-exclude>Theorem</span>' in heading
+    assert '<span class="bp-thmtitle">Theorem 7.7 (Bézout)</span>' in heading
+    assert 'href="#top">Theorem 7.7 (Bézout)</a>' in base
+
+
+def test_a_statement_with_an_empty_title_is_named_by_its_kind(tmp_path: Path) -> None:
+    """An H1 of only whitespace loads with an empty title; without a number its heading and links would show nothing."""
+    project = _project(tmp_path)
+    base = project / "blueprint/roadmap/base.md"
+    base.write_text(base.read_text(encoding="utf-8").replace("# Base\n", "# \t\n"), encoding="utf-8")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    heading = page[page.index('id="base"') :].split("</h4>")[0]
+
+    assert '<span class="bp-thmtitle">Definition</span>' in heading and "bp-thmcaption" not in heading
+    assert 'aria-label="Link to Definition"' in heading
+    assert 'href="#base">Definition</a>' in page[page.index('id="top"') :]
 
 
 def test_titles_typeset_their_math_in_headings(tmp_path: Path) -> None:
@@ -646,7 +672,7 @@ def test_a_declaration_with_no_caption_reads_as_written(tmp_path: Path) -> None:
 
     assert '<span class="bp-thmcaption" data-search-exclude>Definition</span>' in page
     assert '<span class="bp-thmcaption" data-search-exclude>Short exact sequence</span>' in page
-    assert 'href="#top">Short exact sequence 1 (Top)</a>' in page
+    assert 'href="#top">Top</a>' in page
 
 
 def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -> None:
@@ -665,12 +691,13 @@ def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -
     assert '<div class="bp-search-names" hidden>Project.top</div>' in page
     assert 'data-autoform-node-id="base"' in page
     assert 'data-autoform-node-id="top"' in page
+    # A statement is headed by its name, with its kind above it and no generated number.
     assert (
         '<span class="bp-thmcaption" data-search-exclude>Definition</span>'
-        '<span class="bp-thmlabel" data-search-exclude>1</span>'
+        '<span class="bp-thmtitle">Base</span>'
     ) in page
     # The permalink keeps its accessible name while search excludes its punctuation.
-    assert '<a class="bp-permalink" href="#base" aria-label="Link to Definition 1" data-search-exclude>#</a>' in page
+    assert '<a class="bp-permalink" href="#base" aria-label="Link to Base" data-search-exclude>#</a>' in page
     assert '<span class="bp-thmtitle">Top</span>' in page
     assert "The main result." in page
     assert "<strong>2</strong> fully proved" in page
@@ -807,8 +834,8 @@ def test_cross_references_point_at_anchors_on_the_chapter(tmp_path: Path) -> Non
     assert 'class="bp-reading-source"' in page and 'class="bp-dag-viewer"' in page
     assert '<details class="bp-dependencies"><summary>Uses 1</summary>' in page
     assert '<span class="bp-key">Statement uses</span>' in page
-    assert 'href="#base">Definition 1 (Base)' in page
-    assert 'href="#top">Theorem 1 (Top)' in page
+    assert 'href="#base">Base</a>' in page
+    assert 'href="#top">Top</a>' in page
     assert 'href="https://github.com/owner/repo/issues/42">#42' in page
 
 
@@ -1230,13 +1257,13 @@ def test_module_catalog_is_separate_from_formalization_progress(
     assert "of 4 statements" not in overview
     assert '<p class="bp-hero-counts">1 module inventory</p>' in overview
     assert not (tmp_path / "out/roadmap/catalog.md").exists()
-    project_payload = json.loads((tmp_path / "out/dependencies.json").read_text(encoding="utf-8"))
-    roadmap = project_payload["nodes"][0]
-    assert roadmap["member_count"] == 4
-    assert roadmap["status_counts"] == [["fully_proved", 2], ["can_state", 1], ["inventory_checked", 1]]
+    graph = load_graph(project / "blueprint")
+    roadmap = project_view(graph, derive(graph)).nodes[0]
+    assert roadmap.item_count == 4
+    assert roadmap.status_counts == (("fully_proved", 2), ("can_state", 1), ("inventory_checked", 1))
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert (
-        '<span class="bp-thmcaption" data-search-exclude>Module</span><span class="bp-thmlabel" data-search-exclude>1</span>'
+        '<span class="bp-thmcaption" data-search-exclude>Module</span><span class="bp-thmtitle">Existing module</span>'
     ) in chapter
     assert "A checked inventory of an existing Lean module." in chapter
     assert "<strong>2</strong> fully proved" in chapter
@@ -1446,13 +1473,11 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
     assert '<p class="bp-hero-counts">3 module inventories</p>' in overview
     topic = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))["nodes"][0]
     assert topic["id"] == "scope:library"
-    assert topic["status_counts"] == [["inventory_pending", 3]]
-    assert topic["member_count"] == 3
     # An inventory never sets a scope's own status.
     assert topic["status"] == "planned"
-    # Cards keep their labels readable; scope size changes height, not title width.
-    assert topic["layout"]["width"] == 232
-    assert topic["layout"]["height"] == 92
+    graph = load_graph(blueprint)
+    view = project_view(graph, derive(graph)).nodes[0]
+    assert view.status_counts == (("inventory_pending", 3),) and view.item_count == 3
     alias = (out / "dependencies.md").read_text(encoding="utf-8")
     assert 'data-page-href="roadmap/index.html"' in alias
     assert '<a href="roadmap/index.html">Continue to the mathematical page</a>' in alias
@@ -1468,7 +1493,7 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
         assert f'<h4 class="bp-thmheading" id="{name}">' in book
     assert book.count('●<span class="bp-mark-label">inventory pending</span>') == 3
     assert (
-        '<a class="bp-ref bp-ref-planned" title="1 statement dependency" href="#a">Module 1 (Module A)</a>'
+        '<a class="bp-ref bp-ref-planned" title="1 statement dependency" href="#a">Module A</a>'
     ) in book
     assert "ready to state" not in book
     structure = (out / "structure.md").read_text(encoding="utf-8")
@@ -1589,12 +1614,12 @@ def test_the_hero_lead_is_the_whole_first_sentence_as_readable_html(readme: str,
     assert render_module._lead_sentence(readme) == lead
 
 
-def test_the_legends_beside_the_explorer_count_what_its_rings_count(tmp_path: Path) -> None:
-    """The legend beside a ring counts what the ring counts.
+def test_the_legends_count_what_the_scope_views_count(tmp_path: Path) -> None:
+    """A legend counts what its scope's view counts.
 
     A leaf marked not ready that declares nothing yet is not one of the hero's
-    targets, and a catalog is inventory rather than a target, but the rings
-    count both. A legend that left them out disagreed with the map it explains.
+    targets, and a catalog is inventory rather than a target, but a scope
+    counts both. A legend that left them out disagreed with the scope it explains.
     """
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
@@ -1625,13 +1650,13 @@ def test_the_legends_beside_the_explorer_count_what_its_rings_count(tmp_path: Pa
 
     render_site(project / "blueprint", out, lean_root=project)
 
-    ring = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))["nodes"][0]
-    assert ring["status_counts"] == [
-        ["fully_proved", 2],
-        ["not_ready", 1],
-        ["inventory_checked", 1],
-        ["inventory_pending", 1],
-    ]
+    graph = load_graph(project / "blueprint")
+    assert project_view(graph, derive(graph)).nodes[0].status_counts == (
+        ("fully_proved", 2),
+        ("not_ready", 1),
+        ("inventory_checked", 1),
+        ("inventory_pending", 1),
+    )
     rows = [
         f'<span class="bp-swatch bp-swatch-{key}"></span>'
         f'<span class="bp-legend-label">{label}</span>'
@@ -1647,7 +1672,6 @@ def test_the_legends_beside_the_explorer_count_what_its_rings_count(tmp_path: Pa
     # Compatibility entrances have no second legend/body. The standalone API
     # still explains the exact scope-target and inventory counts without JS.
     standalone = tmp_path / "standalone"
-    graph = load_graph(project / "blueprint")
     graph_pages.write_graph_pages(graph, derive(graph), standalone, node_links=lambda _page, _ids: {})
     for legend in (
         (standalone / "dependencies.md").read_text(encoding="utf-8"),
@@ -3641,7 +3665,7 @@ def test_a_fresh_vault_reports_no_work_rather_than_one_ready_item(tmp_path: Path
     assert 'data-page-href="index.html"' in overview
     payload = json.loads((out / "dependencies.json").read_text(encoding="utf-8"))
     assert payload["schema"] == "autoform-dag-view/v2"
-    assert payload["nodes"] == payload["edges"] == [] and payload["edge_count"] == 0
+    assert payload["nodes"] == payload["edges"] == []
     index = json.loads((out / "dependencies/index.json").read_text(encoding="utf-8"))
     assert index["schema"] == "autoform-dag-search/v1"
     assert index["relations"] == []
@@ -3979,7 +4003,7 @@ def test_render_reads_each_page_of_the_book_once_for_its_order(tmp_path: Path, m
     monkeypatch.setattr(render_module, "_book_links", counted)
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
-    # Statement numbers, the search index and SUMMARY.md share one walk.
+    # The search index and SUMMARY.md share one walk.
     assert read and len(read) == len(set(read))
 
 
@@ -4109,7 +4133,7 @@ def test_a_cycle_releases_a_sibling_on_it_not_one_waiting_behind_it() -> None:
     "variant",
     ("as-written", "landing-shortcut", "only-zeta-linked", "no-landing-page", "unlinked-scope", "unlisted-result"),
 )
-def test_statement_numbers_rise_down_each_page_and_across_chapters(tmp_path: Path, variant: str) -> None:
+def test_the_reading_order_runs_down_each_page_and_across_chapters(tmp_path: Path, variant: str) -> None:
     """A landing-page shortcut does not reorder the book. A page or result
     its parent does not list follows the listed ones, as one run."""
     project = _book_order_project(tmp_path)
@@ -4141,14 +4165,18 @@ def test_statement_numbers_rise_down_each_page_and_across_chapters(tmp_path: Pat
 
     render_site(blueprint, out, lean_root=project)
 
-    numbers = [
-        int(number)
+    # The search index reads the statements in the order the pages show them.
+    statements = [
+        node_id
         for page in pages
-        for number in re.findall(
-            r'class="bp-thmlabel"[^>]*>(\d+)<', (out / "roadmap" / page / "README.md").read_text(encoding="utf-8")
+        for node_id in re.findall(
+            r'<div class="bp-thmwrapper [^"]*" data-autoform-node-id="([^"]+)"',
+            (out / "roadmap" / page / "README.md").read_text(encoding="utf-8"),
         )
     ]
-    assert numbers == list(range(1, 7 + (variant == "unlisted-result") + 2 * (variant == "unlinked-scope")))
+    assert len(statements) == 6 + (variant == "unlisted-result") + 2 * (variant == "unlinked-scope")
+    index = json.loads((out / "dependencies/index.json").read_text(encoding="utf-8"))
+    assert [node["id"] for node in index["nodes"] if node["id"] in statements] == statements
     if variant == "landing-shortcut":
         # The nav reads the book in order: the shortcut does not move it.
         assert _summary_chapters(out) == ["zeta", "alpha", "irrationality-proof"]
@@ -4255,7 +4283,7 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(
     assert '●<span class="bp-mark-label">conditionally proved</span>' in top
     assert (
         '<span class="bp-key">Assumes</span><span class="bp-value">'
-        '<a class="bp-ref bp-ref-can_prove" href="#open">Theorem 1 (Open)</a>'
+        '<a class="bp-ref bp-ref-can_prove" href="#open">Open</a>'
         " (open statements without a recorded Lean proof)</span>"
     ) in top
     # Only the conditional proof carries the row; the open statement assumes nothing.
@@ -4304,21 +4332,32 @@ def test_next_up_explains_readiness_without_naming_a_policy(tmp_path: Path, drop
 
 
 @pytest.mark.parametrize(
-    ("section", "statement", "chapter"),
+    ("section", "statement", "chapter", "dependencies"),
     [
-        ("chapter", "roadmap/chapter/index.html#deep", "roadmap/chapter/index.html"),
-        ("chapter/part", "roadmap/chapter/part/index.html#deep", "roadmap/chapter/index.html"),
+        (
+            "chapter",
+            "roadmap/chapter/index.html#deep",
+            "roadmap/chapter/index.html",
+            "roadmap/chapter/index.html#node=chapter%2Fdeep",
+        ),
+        (
+            "chapter/part",
+            "roadmap/chapter/part/index.html#deep",
+            "roadmap/chapter/index.html",
+            "roadmap/chapter/part/index.html#node=chapter%2Fpart%2Fdeep",
+        ),
     ],
     ids=["chapter", "nested-section"],
 )
 def test_next_up_links_the_published_statement_and_chapter(
-    tmp_path: Path, section: str, statement: str, chapter: str
+    tmp_path: Path, section: str, statement: str, chapter: str, dependencies: str
 ) -> None:
     """MkDocs publishes a chapter's ``README.md`` as ``index.html``.
 
     The card is the landing page's way into the book, so a link to
     ``README.html``, or to the top-level chapter of a result placed in a nested
-    section, left the reader on a 404.
+    section, left the reader on a 404. Its dependencies link selects the result
+    on its page, where the old dependency pages only redirect.
     """
     project = _project(tmp_path)
     roadmap = project / "blueprint/roadmap"
@@ -4349,6 +4388,7 @@ def test_next_up_links_the_published_statement_and_chapter(
     assert f'data-autoform-node-id="{section}/deep"' in card
     assert f'<div class="bp-next-title"><a href="{statement}">Deep</a></div>' in card
     assert f'<a href="{chapter}">Chapter</a>' in card
+    assert f'<a href="{dependencies}">Dependencies</a>' in card
     published = _published_pages(out)
     for href in re.findall(r'href="([^"]+)"', card):
         assert Path(os.path.normpath(out / unquote(href.partition("#")[0]))) in published, href

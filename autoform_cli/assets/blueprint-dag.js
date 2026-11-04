@@ -95,6 +95,8 @@
             // A map that cannot load, or that fails before it marks its host set up, leaves the stage to a notice; the
             // outline, search and lists still work.
             map.onload = map.onerror = function () { if (!host.querySelector(".bp-whole-map[data-pm-ready]")) client.mapUnavailable(); };
+            // The map reads its files through this router, which keeps no copy of them; navigating never aborts them.
+            host.autoformFetchJSON = navigation.fetchJSON;
             document.head.appendChild(map);
             host.addEventListener("autoform-map-select", function (event) { navigation.navigateNode(event.detail.id, event.detail); });
           }
@@ -136,10 +138,12 @@
 
   function outlineProjection(nodes, currentScope, currentNode, limit, byId) {
     var records = byId || new Map(nodes.map(function (node) { return [node.id, node]; })), children = new Map(), parents = new Map();
+    var sourced = new Set();
     function parentOf(node) {
       if (parents.has(node.id)) return parents.get(node.id);
       var parent = records.get(node.parent), seen = new Set([node.id]);
       while (parent && !seen.has(parent.id) && ["transparent", "source"].indexOf(parent.navigation) >= 0) {
+        if (parent.navigation === "source") sourced.add(node.id);
         seen.add(parent.id); parent = records.get(parent.parent);
       }
       var id = parent && !seen.has(parent.id) ? parent.id : null; parents.set(node.id, id); return id;
@@ -153,19 +157,44 @@
       if (node.scope !== node.id && !top && node.id !== currentNode) return;
       var bucket = children.get(parent) || []; bucket.push(node); children.set(parent, bucket);
     });
-    var entries = [], seen = new Set();
-    function walk(id, depth) {
-      (children.get(id) || []).forEach(function (node) {
-        if (seen.has(node.id) || root && node.id === root.id) return;
-        seen.add(node.id); entries.push({node: node, depth: Math.min(depth, 3), collection: node.navigation === "collection"});
-        if (chain.has(node.id) || node.navigation === "collection") walk(node.id, depth + 1);
-      });
+    var entries = [], seen = new Set(), headings = new Set(), pinned = null, deepest = 3;
+    function visit(node, depth) {
+      if (seen.has(node.id) || root && node.id === root.id) return;
+      seen.add(node.id); entries.push({node: node, depth: Math.min(depth, deepest), collection: node.navigation === "collection"});
+      if (chain.has(node.id) || node.navigation === "collection") walk(node.id, depth + 1);
     }
-    if (root) walk(root.id, 0); else walk(null, 0);
-    var required = new Set(entries.filter(function (entry) { return chain.has(entry.node.id); }).map(function (entry) { return entry.node.id; }));
+    function walk(id, depth) { (children.get(id) || []).forEach(function (node) { visit(node, depth); }); }
+    // As the map groups chapters into regions (project_map.py), Topics heads each run of an area's chapters with the
+    // area's name, once the chapters name two areas and for an area of two chapters or more. Only the topics written at
+    // the top count: a statement's area only labels it, a collection keeps its own subhead, and the map keeps a source
+    // track whole, so the topics lifted out of one stay unheaded. A chapter without an area keeps its place unheaded,
+    // where the map gathers two or more of them under "Other", so every heading is a name the project wrote.
+    var chapters = children.get(root ? root.id : null) || [], sizes = new Map(), heading = null;
+    var areas = chapters.map(function (node) {
+      var chapter = node.scope === node.id && node.navigation !== "collection" && !sourced.has(node.id);
+      return chapter && node.area ? String(node.area) : "";
+    });
+    areas.forEach(function (area) { if (area) sizes.set(area, (sizes.get(area) || 0) + 1); });
+    var headed = function (area) { return sizes.size >= 2 && sizes.get(area) >= 2; };
+    // A heading takes a level, so the outline goes one level deeper under it.
+    if (areas.some(headed)) deepest = 4;
+    chapters.forEach(function (node, index) {
+      var area = headed(areas[index]) ? areas[index] : "";
+      if (!area) heading = null;
+      else if (!heading || heading.node.title !== area) {
+        heading = {node: {id: "region:" + area, title: area}, depth: 0, collection: true};
+        headings.add(heading); entries.push(heading);
+      }
+      // However short the list, the current chapter keeps its heading.
+      if (area && chain.has(node.id)) pinned = heading;
+      visit(node, area ? 1 : 0);
+    });
+    var required = new Set(entries.filter(function (entry) { return chain.has(entry.node.id) || entry === pinned; }));
     var remaining = Math.max(0, (limit || 120) - required.size);
-    return {root: root || null, total: entries.length, entries: entries.filter(function (entry) {
-      return required.has(entry.node.id) || remaining-- > 0;
+    var shown = entries.filter(function (entry) { return required.has(entry) || remaining-- > 0; });
+    // A heading the limit parted from its chapters waits for them under "Show more topics".
+    return {root: root || null, total: entries.length, entries: shown.filter(function (entry, index) {
+      return !headings.has(entry) || (shown[index + 1] || {}).depth > 0;
     })};
   }
 

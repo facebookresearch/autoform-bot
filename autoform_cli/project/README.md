@@ -25,14 +25,13 @@ selected entry, including an `inherited` one, is unused for this report, with a
 the root package's own name is satisfied by the root, so it is never looked up
 in the manifest or overrides. `lakefile.lean` takes precedence, as in Lake, but
 is never evaluated, so its projects stay `indeterminate`. The decision files are
-size-bounded and read as one snapshot; inspection retries or fails if their
-bytes, identities, presence, or case aliases change. Catalog matching treats
-elan's stable Lean release aliases, URI scheme and host case, and Mathlib's
-explicit `./` root subdirectory as equivalent while preserving the authored
-values in the report. A project that `project new` wrote without
-`lake-manifest.json` is `indeterminate`, with `missing-lake-manifest`, until
-`lake update` writes one; then it is `unlisted`, or `supported` when Lake locks
-a catalog commit.
+size-bounded and read twice per attempt; inspection retries, then fails, if the
+two reads differ. Catalog matching treats elan's stable Lean release aliases,
+URI scheme and host case, and Mathlib's explicit `./` root subdirectory as
+equivalent while preserving the authored values in the report. A project that
+`project new` wrote without `lake-manifest.json` is `indeterminate`, with
+`missing-lake-manifest`, until `lake update` writes one; then it is `unlisted`,
+or `supported` when Lake locks a catalog commit.
 
 This predicts an ordinary Lake invocation. CLI `--packages` / `--file`
 overrides, `LAKE_PKG_URL_MAP`, and edits inside an already-materialized checkout
@@ -65,7 +64,7 @@ instead of a report. A command-line usage error exits 2.
 | `lake` | `null` when the Lake configuration is missing, unreadable or invalid; otherwise `config` (`"lakefile.toml"` or `"lakefile.lean"`), the package `name` and `version` (both `null` for `lakefile.lean`, which is not evaluated), and `targets`, a list of `{kind, name}` for each `lean_lib` and `lean_exe` |
 | `mathlib` | the Mathlib entry the manifest or overrides select; `null` when there is none, when either file cannot be decoded, or when Autoform cannot establish that it is active (`lakefile.lean`, or a `mathlib-manifest-unused` warning). It is still reported when another error makes the status `indeterminate`; see below |
 | `compatibility` | `status` (`supported`, `unlisted` or `indeterminate`, defined under [Scope and resolver rules](#scope-and-resolver-rules)), `release` (the matching catalog id, or `null`), and `recommended_release` (the catalog's recommended id) |
-| `autoform_paths` | which of `blueprint`, `mkdocs.yml`, `.github/workflows/autoform-verify.yml` and `.github/workflows/blueprint-pages.yml` exist under the project root, with that exact spelling |
+| `autoform_paths` | which of `blueprint`, `mkdocs.yml`, `.github/workflows/autoform-verify.yml` and `.github/workflows/blueprint-pages.yml` exist under the project root, with that exact spelling; empty when the root cannot be listed |
 | `diagnostics` | a list of `{severity, code, message, path}`, sorted by severity (`error` first), then code, then path; `path` is the file concerned, relative to the project root, or `null` |
 
 The `mathlib` object has `source` (`"lake-manifest.json"` or

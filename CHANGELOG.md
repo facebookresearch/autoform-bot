@@ -11,6 +11,17 @@ date when the release is tagged.
 
 ### Added
 
+- **Pinned name lists.** A JSON Lines file in `blueprint/libraries/`, schema
+  `autoform-pinned-names/v0`, names the declarations a library holds at one
+  pinned revision; a wiki that cites Mathlib can generate one. Once a list holds
+  a name, `check` warns about a `mathlib_declaration` name that no list holds,
+  one the lists pin to different sources, a deprecated one, and a `mathlib_file`
+  other than the first name's module path. A list whose file or header breaks
+  the schema is left out, and a bad record is skipped; `check`, `render` and
+  `audit` say which, and `audit` reports it as `invalid-pinned-list`. No exit
+  status changes, render never publishes a list, and a project without the
+  folder sees no change ([Pinned name
+  lists](autoform_cli/reference/pinned-names.md), #626).
 - **Worktrees.** `autoform project worktrees` reports which linked worktrees
   are safe to remove after a run and what protects the rest: changes, Git
   operations, unintegrated commits, processes, recent activity and live leases
@@ -41,7 +52,8 @@ date when the release is tagged.
   shows the same map beside the book: the page being read sets where it opens,
   a result picked on it opens in the reader and a part opens its chapter, the
   statement at the top of the reader is outlined on it, and the status filter
-  dims the results it leaves out (#552).
+  dims the results it leaves out (#552). There it reads its data through the
+  book's router, under the book's timeout and same-origin rules.
 - **Informal dependencies.** Under `## Informally uses`, an article can list
   what its source's proof cites but its Lean proof need not use. The links
   resolve like dependencies and appear in the runtime projection, now
@@ -71,9 +83,19 @@ date when the release is tagged.
 - **Wrong import-impact module.** `work import-impact` refuses a `MODULE`
   outside the project before the freshness check and the probe; when the
   article's declarations are in one module, the error names it (#492).
+- **Statements go by their names.** A statement's heading and every link to it,
+  in Uses, Used by and Assumes, show its name instead of a generated number:
+  "Theorem 55 (Bézout's theorem)" reads "Bézout's theorem", with the kind on a
+  small line above the name. A title that is only the kind word, or empty, is
+  named by the kind. Statements that share a title now read alike. Anchors and
+  links into a page don't change (#612).
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
+- **Topics groups chapters by area.** When a project's chapters name two areas
+  or more, Topics heads each area's chapters with its name, as the map groups
+  them into regions. An area with a single chapter, and a chapter without an
+  area, keep their place unheaded.
 - **Import closure.** `work import-impact --module-scope import-closure` tests
   each module only against the files that hold its last component, which one
   pass over each file finds, and reads a file that libraries sharing a `srcDir`
@@ -106,6 +128,11 @@ date when the release is tagged.
   index reads in Mathlib reads as before; a spelling no Mathlib name has, such
   as `Nat..add`, `a«b»c` or `«a«b»`, now splits into components as that grammar
   splits it.
+- **Lean index names.** The Lean index leaves out names Lean cannot declare,
+  such as `$typeName.toBitVec_nsmul`, which it read from commands inside
+  syntax quotations (14 in Mathlib). An `alias` name takes Lean's identifier
+  characters: `alias ℘ := t` declares `℘`, and `alias Жук := t`, which Lean
+  refuses, declares nothing.
 - **Search index size.** `dependencies/index.json` no longer repeats links the
   explorer doesn't read. A row whose route the explorer opens drops its context
   `url`, and only container rows keep `data_url`, since every page names its
@@ -190,14 +217,22 @@ date when the release is tagged.
   one persistent workspace. The outline follows authored containment, includes
   root-level pages and labels collections as subheads; Home returns to the site.
   Empty source choices are hidden (#442).
-- **Explorer payloads.** Scope payloads no longer carry the x and y positions
-  0.6.0's Python layout computed; they keep card dimensions and authored region
-  counts (#442).
-- **Book order.** Previous/Next, the site nav, statement numbers, Next up and
-  the explorer's outline and search follow one reading order, down the
-  containment tree, so a landing-page shortcut no longer reorders the book and
-  sites get new statement numbers. Pages their parent does not link now join
-  the site nav and Previous/Next, after the pages it links (#495).
+- **Explorer payloads.** Scope payloads carry only what the book reads: each
+  node's title, kind, status, area, Lean names and summary, the palette and the
+  page's trail. The x and y positions 0.6.0's Python layout computed are gone
+  (#442), and so are card dimensions, region and member counts, and relations,
+  which nothing read: a statement's page lists its own. `edges` stays, empty.
+  The no-JavaScript fallback's graph-data link opens the search index (#597).
+- **Old dependency pages.** `dependencies.html`, `dependencies/full.html` and
+  the chapter and section pages under `dependencies/` redirect to the matching
+  book page and keep the address's fragment, so `#node=` links and old view and
+  filter links still open there; without JavaScript they refresh to it. They
+  load no explorer, stylesheet or data of their own, and
+  `dependencies/full.json` is no longer written (#597).
+- **Book order.** Previous/Next, the site nav, Next up and the explorer's
+  outline and search follow one reading order, down the containment tree, so a
+  landing-page shortcut no longer reorders the book. Pages their parent does not
+  link now join the site nav and Previous/Next, after the pages it links (#495).
 - **Book copy.** The landing lead keeps link text, code, formulas and whole
   sentences. Next up says which Lean step is next. A chapter's progress is one
   line of counts whose status meanings show on hover, gone when the chapter has
@@ -389,6 +424,16 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Unlistable project root.** `project inspect` no longer reports
+  `project-changed-during-inspection` on every run for a project root that
+  cannot be listed. A root that can still be searched (mode 0311) gets its
+  report, and the library commands read it; one that cannot be searched
+  reports `unreadable-file`.
+- **Pin files read mid-write.** `library index`, and every command that checks
+  a library's index against its checkout, read the library's pin files until
+  two reads agree, so a write that lands during a read is read again. Pins that
+  keep changing are refused as changing, where they were reported as over 1 MiB
+  or unreadable.
 - **Decision files on Windows.** `project inspect` and the library commands
   read `lean-toolchain`, the lakefiles and the manifests in text mode on
   Windows, which turned CRLF into LF and stopped at a 0x1A byte. They now read
@@ -473,11 +518,19 @@ date when the release is tagged.
   structure's limits. For a constructor or other name the index does not read
   directly under a project type, `check` names the type's `path:line` in a
   declaration article instead of pointing to `.lake` (#509).
+- **`class abbrev` and `class inductive`.** The Lean source index reads
+  `class abbrev C` and `class inductive D` as declarations of `C` and `D`, as
+  Lean does, not as classes named `abbrev` and `inductive`. In Mathlib this
+  indexes 10 classes it missed, such as `Finite`, `ExpChar` and `IsGCDMonoid`.
 - **Dotted namespaces.** The Lean source index and `audit`'s limit scan open
   a scope for each component of `namespace A.B` or `section A.B`, and `end`
   closes one per component of its name, as Lean does: `end B` after
   `namespace A.B` no longer drops the `A.` prefix from later names, and
   `end C.D` closes both scopes (#524).
+- **Empty quoted name components.** `skeleton`, `review prepare`,
+  `render --review` and the generated `.github/autoform_audit.py` read a Lean
+  name with an empty quoted component, such as `Foo.«».bar`, as Lean does,
+  instead of refusing it as an invalid declaration name.
 - **Explorer controls.** The closed phone handle anchors to the bottom (#442).
 - **Explorer resizing.** Observer notifications coalesce into one animation
   frame, and pending resize work is cancelled when the viewer is disposed (#442).

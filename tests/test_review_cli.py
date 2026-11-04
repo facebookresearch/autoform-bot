@@ -1005,7 +1005,7 @@ def test_the_site_shows_a_passage_and_a_model_as_typed(
         ("sources/notes.txt#x.js", "../../sources/notes.txt%23x.js#L1-L1", "A line of a script.\n"),
         ("atlas.json", "../../atlas.json#L2-L2", '{"schema": "autoform-atlas/v1",\n "areas": {"Drafts": ["basics/result"]}}\n'),
         ("readbacks/notes.txt", "../../readbacks/notes.txt#L1-L1", "A note beside the cards.\n"),
-        ("dependencies/full.json", "../../dependencies/full.json#L1-L1", '{"explorer": "written over"}\n'),
+        ("dependencies/index.json", "../../dependencies/index.json#L1-L1", '{"explorer": "written over"}\n'),
     ],
     ids=["script", "script-with-a-hash", "atlas", "readbacks", "written-over"],
 )

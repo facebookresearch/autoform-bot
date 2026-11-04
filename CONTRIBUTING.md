@@ -22,6 +22,9 @@ each `AUTOFORM_REQUIRE_*` variable below, so it fails where a local run skips:
   3.2.2 package, and the Node ones unless `node` is on `PATH`; CI's MathJax and
   WebKit jobs unpack it (`AUTOFORM_REQUIRE_MATHJAX_TESTS=1`).
   `npm ci --ignore-scripts` supplies the locked JSDOM bridge, not a math engine.
+- Tests that run the site's scripts through `tests/dom_fixture.py` skip without
+  `node` or jsdom, and fail on a jsdom other than the locked one; CI's test job
+  has both (`AUTOFORM_REQUIRE_NODE_TESTS=1`).
 - Lean tests skip without `lake` on `PATH`, and most without the toolchain in
   `tests/fixtures/skeleton-project/lean-toolchain`, which only the real-Lake
   test in `tests/test_project_inspect.py` lets elan download

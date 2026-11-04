@@ -750,7 +750,9 @@ def _indexed_source_snapshot(
             continue
         found, line_counts[relative_path] = _scan(text, relative_path)
         for declaration in found:
-            by_name.setdefault(declaration.name, []).append(declaration)
+            # Lean declares no name its grammar refuses, such as `$typeName.x` in a syntax quotation.
+            if _CONTINUATION_IDENTIFIER.fullmatch(declaration.name):
+                by_name.setdefault(declaration.name, []).append(declaration)
     source_digest = digest.hexdigest()
     return IndexedSourceSnapshot(
         SourceIndex(
@@ -974,6 +976,10 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
                 )
                 continue
             name = name or _name_token(body)
+            # `class abbrev C` and `class inductive D` declare C and D, whose fields are not read.
+            variant = name if keyword == "class" and name in ("abbrev", "inductive") else None
+            if variant:
+                name = _name_token(body.removeprefix(variant).lstrip())
             if name is None:
                 continue
             # `_name_token` stops before the `{` in an explicit universe
@@ -981,8 +987,7 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
             name = name.removesuffix(".")
             qualified = _qualified(namespaces, name)
             found.append(Declaration(qualified, relative, number, keyword, protected, private))
-            # `class abbrev` and `class inductive` read as a class of that name, with no fields.
-            if keyword in ("structure", "class") and name not in ("abbrev", "inductive"):
+            if keyword in ("structure", "class") and variant is None:
                 found.extend(
                     _fields(lines, literal_line, line_indents(), number - 1, body_index, qualified, relative, private)
                 )
@@ -1347,6 +1352,20 @@ def _unquoted_parts(name: str) -> tuple[str, ...]:
     return tuple(parts[1:] if len(parts) > 1 and parts[0] == "_root_" else parts)
 
 
+def _is_name(value: object) -> bool:
+    """Whether ``value`` is one Lean name by this grammar, holding no control character.
+
+    :func:`_unquoted_parts` does not check: it reads ``Nat..add_comm`` and
+    ``«Nat.add_comm`` as ``Nat.add_comm`` too.
+    """
+
+    return (
+        type(value) is str
+        and _CONTINUATION_IDENTIFIER.fullmatch(value) is not None
+        and not any(unicodedata.category(character) == "Cc" for character in value)
+    )
+
+
 def _name_token(text: str) -> str | None:
     """Read one possibly guillemet-quoted Lean identifier from ``text``."""
 
@@ -1441,8 +1460,8 @@ def _continuation_name(text: str) -> str | None:
     return name
 
 
-#: A name as ``alias`` takes one: it starts with a letter, ``_`` or ``«``.
-_ALIAS_NAME = r"(?:«[^«»]*»|[^\W\d])(?:«[^«»]*»|[^\s:(){}\[\]⦃⦄,«»⟨⟩])*"
+#: A name as ``alias`` takes one: an identifier by the grammar above.
+_ALIAS_NAME = _CONTINUATION_IDENTIFIER.pattern
 #: What follows ``alias``: one name, or ``⟨mp, mpr⟩`` naming the two directions
 #: of an iff, either of which may be ``_``; then ``:=`` and, unless it is on the
 #: next line, the target.
@@ -1475,7 +1494,7 @@ def _aliases(
         candidates = (target.removeprefix("_root_."),)
     else:
         candidates = tuple(".".join([*namespaces[:depth], target]) for depth in range(len(namespaces), -1, -1))
-    atomic = target is not None and _ONE_COMPONENT.fullmatch(target) is not None
+    atomic = target is not None and _FIELD_NAME.fullmatch(target) is not None
     iff = match["name"] is None
     alias = Alias(candidates, atomic, iff)
     return [
@@ -1483,9 +1502,6 @@ def _aliases(
         for name in ([match["mp"], match["mpr"]] if iff else [match["name"]])
         if name != "_"
     ]
-
-
-_ONE_COMPONENT = re.compile(r"(?:«[^«»]*»|[^.«»])+")
 
 
 _RAW_OPEN = re.compile(r'r(#*)"')
