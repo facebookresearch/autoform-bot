@@ -89,6 +89,7 @@ from .graph import (
     Node,
     atlas_omissions,
     load_graph,
+    pinned_list_omissions,
     unpublished_content,
     unpublished_node_ids,
 )
@@ -106,6 +107,7 @@ from .lean import (
     resolve_lean_root,
     snapshot_project_sources,
 )
+from .library.pinned_names import FOLDER as PINNED_NAMES_FOLDER
 from .markdown import (
     _BRACKET_ESCAPE,
     _INLINE_MATH,
@@ -719,6 +721,9 @@ def _publication(
         # name articles in unpublished folders, so it stays out of the site.
         if relative.as_posix().casefold() == "atlas.json":
             continue
+        # The graph has read the pinned name lists too, and nothing on the site reads them.
+        if relative.parent.as_posix() == PINNED_NAMES_FOLDER and relative.suffix == ".jsonl":
+            continue
         if _resolve(source) in node_sources:
             if _resolve(source) in articles:
                 files[source] = articles[_resolve(source)]
@@ -1079,11 +1084,12 @@ def _render_pages(
         explorer_script = dag_viewer.viewer_script()
     except ValueError as error:
         raise PublicationError([f"packaged explorer runtime is unavailable: {error}"]) from error
-    # Audit reports coverage-role issues and the atlas.json entries the loader
-    # ignored. A valid contract still publishes with them, as it does with
-    # MAPPED rows. An issue without a line already names the contract in its
-    # reason, so it gets no prefix. Check accepts an entry naming an article
-    # in an unpublished folder, so render does not warn about it either.
+    # Audit reports coverage-role issues, the atlas.json entries the loader
+    # ignored and what it left out of the pinned name lists. A valid contract
+    # still publishes with them, as it does with MAPPED rows. An issue without
+    # a line already names the contract in its reason, so it gets no prefix.
+    # Check accepts an entry naming an article in an unpublished folder, so
+    # render does not warn about it either.
     coverage_warnings = [
         f"coverage contract line {issue.line}: {issue.reason}"
         if issue.line
@@ -1091,6 +1097,7 @@ def _render_pages(
         for issue in validate_coverage_roles(graph, coverage)
     ]
     coverage_warnings += (f"atlas.json: {omission}" for omission in atlas_omissions(graph, unpublished_nodes))
+    coverage_warnings += (f"{subject}: {omission}" for subject, omission in pinned_list_omissions(graph))
     statuses = status.derive(graph)
     used_by = _reverse_edges(graph)
     # Sources leave the site only for a directory the verified commit holds.
@@ -1452,8 +1459,8 @@ def load_publication_source(blueprint_dir: str | Path) -> tuple[str, Graph]:
     """Read the blueprint once; return its publication revision and the graph of those bytes."""
     blueprint = blueprint_root(blueprint_dir)
     snapshot, _nodes = _capture_blueprint(blueprint)
-    # The graph reads the articles and the atlas.
-    with _private_copy(snapshot, prefix=("roadmap/", "atlas.json")) as (_root, copy):
+    # The graph reads the articles, the atlas and the pinned name lists.
+    with _private_copy(snapshot, prefix=("roadmap/", "atlas.json", f"{PINNED_NAMES_FOLDER}/")) as (_root, copy):
         return _source_revision(snapshot), _load_graph(copy, blueprint)
 
 
@@ -3569,7 +3576,7 @@ def _render_environment(
     source_link = _vault_source_link(node, repo_root=repo_root, linker=linker)
     meta_rows = implementation_rows
     if mathlib_names := declaration_names(node.mathlib_declaration or ""):
-        # As text: nothing checks these names against the pinned Mathlib.
+        # As text; check warns about a name no pinned name list holds.
         meta_rows.append(("Mathlib", " · ".join(f"<code>{html.escape(name)}</code>" for name in mathlib_names)))
     if node_status.key == "conditional":
         # A conditional proof must never read as finished, so the open

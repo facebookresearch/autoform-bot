@@ -39,6 +39,7 @@ from .graph import (
     catalogs_without_ledger,
     informal_cycle_warnings,
     load_graph,
+    pinned_list_omissions,
 )
 from .graph_views import _countable, _module_inventories
 from .impact import (
@@ -950,6 +951,8 @@ def _check(args: argparse.Namespace) -> int:
         print(f"warning: {omission}")
     for omission in atlas_omissions(graph):
         print(f"warning: atlas.json: {omission}")
+    for subject, omission in pinned_list_omissions(graph):
+        print(f"warning: {subject}: {omission}")
     for node_id in catalogs_without_ledger(graph):
         print(
             f"warning: {node_id}: module catalog links no declaration ledger under blueprint/sources/ from '## Sources'"

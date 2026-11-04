@@ -28,6 +28,7 @@ from .graph import (
     atlas_omissions,
     catalogs_without_ledger,
     load_graph,
+    pinned_list_omissions,
 )
 from .lean import (
     _DECLARATION,
@@ -399,6 +400,9 @@ def audit_graph(
         coverage, coverage_findings = _coverage_findings(graph.blueprint_dir, graph.unpublished)
     findings.extend(coverage_findings)
     warnings = [AuditWarning("atlas.json", "atlas-omission", omission, ()) for omission in atlas_omissions(graph)]
+    warnings.extend(
+        AuditWarning(subject, "invalid-pinned-list", omission, ()) for subject, omission in pinned_list_omissions(graph)
+    )
     # The loader's note warnings, at the note or folder each names.
     warnings.extend(
         AuditWarning(path, "invalid-implementation-note", _stable_validation_reason(graph.blueprint_dir, warning), ())

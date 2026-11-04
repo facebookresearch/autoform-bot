@@ -1349,6 +1349,20 @@ def _unquoted_parts(name: str) -> tuple[str, ...]:
     return tuple(parts[1:] if len(parts) > 1 and parts[0] == "_root_" else parts)
 
 
+def _is_name(value: object) -> bool:
+    """Whether ``value`` is one Lean name by this grammar, holding no control character.
+
+    :func:`_unquoted_parts` does not check: it reads ``Nat..add_comm`` and
+    ``«Nat.add_comm`` as ``Nat.add_comm`` too.
+    """
+
+    return (
+        type(value) is str
+        and _CONTINUATION_IDENTIFIER.fullmatch(value) is not None
+        and not any(unicodedata.category(character) == "Cc" for character in value)
+    )
+
+
 def _name_token(text: str) -> str | None:
     """Read one possibly guillemet-quoted Lean identifier from ``text``."""
 
