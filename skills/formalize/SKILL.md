@@ -107,8 +107,8 @@ as the first read and, for a subagent, the same fields it was dispatched with.
 Unrelated parallel articles may change the graph-wide source revision.
 
 Read the complete article, its `blueprint/.implementation-notes/<article_id>.md`
-when present, cited sources, dependency articles, and existing Lean target.
-Read and write no note while `check` warns `.implementation-notes` is a link.
+when present, cited sources, dependency articles, and existing Lean target. Read
+and write no note while `check` warns `.implementation-notes` is a link.
 Preserve the exact mathematical statement. Work only on the selected phase: do
 not modify another article or its Lean declarations, or weaken a public
 statement. The exceptions are deleting stale and repairing orphaned
@@ -242,15 +242,13 @@ there; first make sure a branch points at any handed-off commit. Autoform never
 clears Lake's shared artifact cache, so tell the user if disk runs low. After
 the run, `autoform project worktrees` lists leftover worktrees; pass it
 `--remove` only when the user asks and every session using this clone has
-stopped its workers. Re-read
-the work frontier from the updated shared branch and repeat while independent
-ready leaves or accepted review findings and authorized capacity remain. Stop
-when the frontier is empty and no accepted review finding awaits repair, or
-every remaining attempt has a concrete mathematical or ownership blocker. When
-`AUTOFORM_SUBAGENT_DEBRIEF=1`, the lead then [raises the code workers
-copied](references/auto-abstraction.md) into shared declarations. Then
-the lead follows [Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with
-`--skill formalize`. Report changed articles and Lean files, integrated commits,
-branches and commits handed off, pull requests opened, any claims released or
-handed off, checks and reviews run, copied code raised or left open, and exact
-remaining goals.
+stopped its workers. Re-read the work frontier from the updated shared branch
+and repeat while independent ready leaves or accepted review findings and
+authorized capacity remain. Stop when the frontier is empty and no accepted
+review finding awaits repair, or every remaining attempt has a concrete
+mathematical or ownership blocker. With `AUTOFORM_SUBAGENT_DEBRIEF=1` the lead
+then [raises copied code](references/auto-abstraction.md). Then the lead follows
+[Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with `--skill
+formalize`. Report changed articles and Lean files, integrated commits, branches
+and commits handed off, pull requests opened, any claims released or handed off,
+checks and reviews run, and exact remaining goals.

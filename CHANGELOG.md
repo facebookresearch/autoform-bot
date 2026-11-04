@@ -11,14 +11,6 @@ date when the release is tagged.
 
 ### Added
 
-- **Copied code.** With `AUTOFORM_SUBAGENT_DEBRIEF=1`, the subagent debrief
-  asks for the project code a worker copied (`copied_code`), apart from its
-  helper-lemma proposals. `autoform abstraction list|target|close` groups the
-  copies into clusters and records the lead's decisions in the debrief store,
-  with `abstractions/TODO.md` as the to-do list. At the end of a Formalize run
-  the lead gives each open cluster to a refactor subagent, which acquires the
-  claims it needs when the run uses claims (#491).
-
 - **Worktrees.** `autoform project worktrees` reports which linked worktrees
   are safe to remove after a run and what protects the rest: changes, Git
   operations, unintegrated commits, processes, recent activity and live leases
@@ -26,6 +18,13 @@ date when the release is tagged.
   it with `git worktree remove`, never `--force`, and reports the free space
   recovered and how to re-create the checkout; ignored files such as `.lake`
   are not kept (#435).
+- **Copied code.** With `AUTOFORM_SUBAGENT_DEBRIEF=1`, the subagent debrief
+  asks for the project code a worker copied (`copied_code`), apart from its
+  helper-lemma proposals. `autoform abstraction list|target|close` groups the
+  copies into clusters and records the lead's decisions in the debrief store,
+  with `abstractions/TODO.md` as the to-do list. At the end of a Formalize run
+  the lead gives each open cluster to a refactor subagent, which acquires the
+  claims it needs when the run uses claims (#491).
 - **Check without site warnings.** `check --no-site-warnings` skips the
   warnings about the pages the site would publish, which `render` prints too,
   and still reads the notes under `blueprint/sources/`, which a render that

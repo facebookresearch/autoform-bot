@@ -1,38 +1,37 @@
 # Copied code
 
-What `autoform abstraction` reads, groups and records. The [CLI
-reference](../README.md#debrief) gives the synopses, and only subagent
-debriefs, which need `AUTOFORM_SUBAGENT_DEBRIEF=1`, report copies.
+`autoform abstraction` groups the code workers copied, as subagent debriefs
+(`AUTOFORM_SUBAGENT_DEBRIEF=1`) report it in `copied_code`: the project's own
+code an agent could not use where it was (a `private` declaration, a declaration
+in a module it could not import, or steps inside another proof). `debrief
+subagent record` stores those paths relative to their worktree, so they match
+across worktrees. None of these commands edits the project:
 
-## Copies
+```bash
+autoform abstraction list . --json
+autoform abstraction target 3f9c2a1b7d4e.1 . --file Project/Shared/Order.lean
+autoform abstraction close 3f9c2a1b7d4e.1 . --raised Project.foo_le --file Project/Shared/Order.lean
+autoform abstraction close 3f9c2a1b7d4e.2 . --dismissed --note "the copies diverged"
+```
 
-The subagent form asks for `copied_code`: the project's own code the agent
-copied because it could not use it where it was (a `private` declaration, a
-declaration in a module it could not import, or steps inside another proof).
-`record` stores those paths relative to the worktree that holds them, so copies
-reported from different worktrees match.
-
-## Clusters
-
-`list` reads the copies from the debrief records of succeeded attempts (a failed
-attempt's copy never reached the shared branch) and groups them into clusters:
-copies of one declaration, and copies of those copies, share a cluster; a copy
-of inline code is a cluster of its own until someone copies it in turn. A
-cluster's ID is the entry ID (`<attempt prefix>.<index>`) of its oldest copy;
-every command also accepts the entry ID of any copy in it. `list` shows open
-clusters, or all with `--all`, and marks a copy whose file no longer names it as
-no longer present. With `--json` it prints `{"clusters": [{"cluster_id",
-"status": "open" | "raised" | "dismissed", "file", "declaration", "note",
-"copies": [{"entry_id", "attempt_id", "node_id", "recorded_at", "kind",
-"source_file", "source_declaration", "copy_file", "copy_declaration", "what",
-"present"}]}]}`.
-
-## Decisions
+`list` reads the copies that succeeded attempts reported and groups them into
+clusters: copies of one declaration, and copies of those copies, share a
+cluster; a copy of inline code is a cluster of its own until someone copies it
+in turn. A declaration matches by its file and the last component of its name
+(`A.foo` and `B.foo` in one file match), and an unknown file or name (empty,
+`null` or `none`) matches nothing. A cluster's ID is the entry ID (`<attempt
+prefix>.<index>`) of its oldest copy, and every command also accepts the entry
+ID of any of its copies. `list` shows open clusters, or all with `--all`, and
+marks a copy whose file no longer names it as no longer present. With `--json`
+it prints `{"clusters": [{"cluster_id", "status": "open" | "raised" |
+"dismissed", "file", "declaration", "note", "copies": [{"entry_id",
+"attempt_id", "node_id", "recorded_at", "kind", "source_file",
+"source_declaration", "copy_file", "copy_declaration", "what", "present"}]}]}`.
 
 `target` records the shared file a cluster should be raised into; `close`
 records that it was raised into a declaration, or dismissed with a note. Each
-decision covers the copies the cluster holds when it is made, so a later copy of
-the same code opens the cluster again. Decisions are created exclusively under
-`abstractions/` in the debrief store, never overwritten, and `record`, `list`,
-`target` and `close` rewrite `abstractions/TODO.md` there, the readable to-do
-list. None of them edits the project.
+prints the copies its decision covers, those the cluster holds then; a later
+copy opens the cluster again, keeping what it was last raised as, else why it
+was dismissed. Decisions are new files under `abstractions/` in the debrief
+store, never overwritten. `list`, `target`, `close` and a `record` that reports
+copies rewrite the to-do list there, `TODO.md`, and only warn if they cannot.
