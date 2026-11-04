@@ -184,6 +184,39 @@ def test_summary_clips_a_long_paragraph_at_a_word(tmp_path: Path) -> None:
     assert summary == " ".join(f"word{index}" for index in range(61)) + "…"
 
 
+@pytest.mark.parametrize("markup", ["$a + b = c$", "\\(a + b = c\\)", "`a + b = c`"])
+def test_summary_clips_before_a_formula_or_code_span_the_clip_would_cut(tmp_path: Path, markup: str) -> None:
+    blueprint = tmp_path / "blueprint"
+    words = " ".join(f"word{index}" for index in range(60))
+    # The 420-character limit falls inside the markup, which starts at character 414.
+    _node(blueprint, "topic.md", f"# Topic\n\n{words} so {markup} holds.\n")
+
+    assert load_graph(blueprint).nodes["topic"].summary == words + " so…"
+
+
+def test_summary_keeps_a_formula_longer_than_its_limit_whole(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    formula = "$" + " + ".join(f"x_{{{index}}}" for index in range(100)) + "$"
+    _node(blueprint, "topic.md", f"# Topic\n\n{formula} is a long sum.\n")
+
+    assert load_graph(blueprint).nodes["topic"].summary == formula + "…"
+
+
+def test_summary_shows_a_display_formula_in_its_paragraph_inline(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "topic.md",
+        "# Class equation\n\nThen $$|G| = |Z(G)| + \\sum_i |G : C_G(g_i)|$$ for a finite\ngroup, and \\[n\n= 1\\] here;"
+        " the code `$$x$$` and the price \\$$5 stay.\n",
+    )
+
+    assert load_graph(blueprint).nodes["topic"].summary == (
+        "Then \\(|G| = |Z(G)| + \\sum_i |G : C_G(g_i)|\\) for a finite group, and \\(n = 1\\) here;"
+        " the code `$$x$$` and the price \\$$5 stay."
+    )
+
+
 def test_authored_atlas_manifest_groups_nodes_independently_of_paths(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "algebra.md", "# Algebra\n")
