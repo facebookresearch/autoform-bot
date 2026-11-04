@@ -256,6 +256,7 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-outline-depth-1 { margin-left: 14px !important; }
 .bp-outline-depth-2 { margin-left: 28px !important; }
 .bp-outline-depth-3 { margin-left: 42px !important; }
+.bp-outline-depth-4 { margin-left: 56px !important; }
 .bp-outline-collection { display: block; padding: 10px 7px 4px; color: var(--dag-muted); font-size: 12px; font-weight: 600; }
 .bp-outline-label { margin: 0 7px 10px !important; font-size: 12px !important; color: var(--dag-muted); font-weight: 600; }
 .bp-dag-integrated .bp-reading-pane { position: relative; inset: auto; width: auto; max-width: none; height: 100%; max-height: none; min-width: 0; min-height: 0; visibility: visible; opacity: 1; transform: none; transition: none; border: 0; border-left: 1px solid var(--dag-border); border-radius: 0; box-shadow: none; overflow: hidden; }

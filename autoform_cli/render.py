@@ -7,9 +7,9 @@ the DAG -- the presentation ``leanblueprint`` gives a LaTeX blueprint, driven
 from Markdown instead.
 
 The user-facing rules are the publication contract in
-``autoform_cli/reference/runtime-and-publication.md``. The legacy full route is
-a project-scale compatibility shell backed by a layout-free global search
-index, never an all-repository node cloud. ``autoform-publication/v3`` records
+``autoform_cli/reference/runtime-and-publication.md``. The old dependency
+pages, the full route among them, redirect to the book, whose global search
+index resolves their ``#node=`` links. ``autoform-publication/v3`` records
 what v2 records, but the site holds the shared explorer's JSON projections and
 script in place of v2's Mermaid dependency maps, and the blueprint hash is taken
 under a label of its own, so no v2 ``source_revision`` equals a v3 one.
@@ -61,7 +61,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from markdown.treeprocessors import Treeprocessor
 
-from . import _page_pool, dag_viewer, graph_pages, graph_views, project_map, status
+from . import _page_pool, dag_viewer, graph_pages, graph_views, project_map, site_index, status
 from ._fs import is_within as _is_within
 from ._fs import relative as _relative
 from ._fs import resolve as _resolve
@@ -2169,7 +2169,6 @@ def _next_target(
     statuses: dict[str, status.NodeStatus],
     *,
     page: Path,
-    destination: Path,
     group_pages: dict[str, Path] | None = None,
     targets: dict[str, tuple[Path, str]] | None = None,
     order: Sequence[str] = (),
@@ -2199,7 +2198,6 @@ def _next_target(
         chapter_id = node.id.split("/", 1)[0] if "/" in node.id else ""
         chapter_page = (group_pages or {}).get(chapter_id)
         statement = links.get(node_id)
-        graph_href = graph_pages.scope_page_href(destination, node.id, page, parent=node.parent)
 
         title = _title_html(node.title)
         heading = (
@@ -2210,7 +2208,11 @@ def _next_target(
             if node_status.key == "can_prove"
             else "Everything its statement uses is in Lean, so its Lean statement can be written now."
         )
-        actions = [f'<a href="{html.escape(graph_href, quote=True)}">Dependencies</a>']
+        actions: list[str] = []
+        if statement:
+            # Its page with the node selected, where its old dependency page's redirect leads.
+            selected = f"{statement.partition('#')[0]}#node={quote(node.id, safe='')}"
+            actions.append(f'<a href="{html.escape(selected, quote=True)}">Dependencies</a>')
         if chapter_page is not None:
             # The chapter's title as authored: its page's header holds the visible text.
             chapter = graph.nodes.get(chapter_id)
@@ -2378,7 +2380,6 @@ def _render_landing_page(
         graph,
         statuses,
         page=page,
-        destination=destination,
         group_pages=group_pages,
         targets=targets,
         order=order,
@@ -3674,6 +3675,9 @@ def _review_disclosures(
     # spelling it was written in; capture refuses two names that differ only
     # in case or Unicode form.
     spellings = {_folded(name): name for name in captured}
+    # Render writes its own file where a vault's copy of one of these would go.
+    # Planned once: the plan names every page the site writes.
+    written_over = frozenset(_site_paths(graph))
     # A passage shown must be the one the copy cuts, from a file the site holds.
     for article in bundle.articles:
         if article.node_id not in graph.nodes:
@@ -3685,7 +3689,7 @@ def _review_disclosures(
                 # The locator ends in its line range; a file's name may hold a #.
                 cited = article.passage_locator.rpartition("#")[0]
                 cited = spellings.get(_folded(cited), cited)
-                if _left_out(PurePosixPath(cited), graph):
+                if _left_out(PurePosixPath(cited), written_over):
                     reason = f"cites a passage from {cited}, a file the site leaves out"
                     edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
             continue
@@ -3728,17 +3732,18 @@ def _folded(name: str) -> str:
     return unicodedata.normalize("NFC", name).casefold()
 
 
-def _left_out(cited: PurePosixPath, graph: Graph) -> bool:
+def _left_out(cited: PurePosixPath, written_over: Collection[str]) -> bool:
     """Whether the site leaves out the captured file at ``cited``, a path in
     the blueprint as captured, as :func:`_publication` does: a file under
-    ``readbacks/``, the atlas, a file render writes its own over, or one that
-    is neither a page nor a file the site copies. Notes under ``sources/``
-    count as published, on the site or at the verified commit."""
+    ``readbacks/``, the atlas, a file render writes its own over (one of
+    ``written_over``, the :func:`_site_paths`), or one that is neither a page
+    nor a file the site copies. Notes under ``sources/`` count as published,
+    on the site or at the verified commit."""
 
     return (
         cited.parts[:1] == (READBACKS_DIR,)
         or cited.as_posix().casefold() == "atlas.json"
-        or cited.as_posix() in _site_paths(graph)
+        or cited.as_posix() in written_over
         or cited.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
     )
 
@@ -4079,7 +4084,7 @@ def _title_html(text: str, *, fallback: str | None = None) -> str:
     shows ``fallback`` as text when given: a page header's visible title, whose
     emphasis and links read as the page's own heading does.
     """
-    reading = dag_viewer._reading_label(text, require_math=False)
+    reading = site_index._reading_label(text, require_math=False)
     if reading is None:
         return html.escape(text if fallback is None else fallback)
     return "".join(

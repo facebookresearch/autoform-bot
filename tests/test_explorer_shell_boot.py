@@ -141,7 +141,8 @@ def test_a_map_script_that_fails_or_draws_nothing_leaves_one_notice_in_the_stage
       const scripts=[],stage={children:[],appendChild(child){this.children.push(child);return child;},
         querySelector(selector){return this.children.find(child=>'.'+child.className===selector)||null;}};
       function node(tag){return {tagName:tag.toUpperCase(),attributes:new Map(),setAttribute(name,value){this.attributes.set(name,value);}};}
-      const document={body:{classList:{add(){},remove(){}}},head:{appendChild(child){scripts.push(child);}},createElement:node};
+      const handed=[],document={body:{classList:{add(){},remove(){}}},
+        head:{appendChild(child){scripts.push(child);handed.push(host.autoformFetchJSON);}},createElement:node};
       const location={href:'https://example.test/project/roadmap/chapter/index.html'};
       const attributes=new Map([['data-catalog-src','../../dependencies/search-index.json']]);let drawn=null;
       const host={isConnected:true,dataset:{},classList:{add(){},remove(){}},closest(){return {};},addEventListener(){},
@@ -150,13 +151,15 @@ def test_a_map_script_that_fails_or_draws_nothing_leaves_one_notice_in_the_stage
           if(selector==='.bp-whole-map')return drawn;
           return selector==='.bp-whole-map[data-pm-ready]'&&drawn&&drawn.dataset.pmReady?drawn:null;
         }};
-      const clients=new Map(),window={AutoformNavigation:{create(options){return {
-        start(){options.onCommit({graph:{},readingSource:{}});},dispose(){}};}}};
+      const fetchJSON=()=>{},clients=new Map(),window={AutoformNavigation:{create(options){return {
+        start(){options.onCommit({graph:{},readingSource:{}});},dispose(){},fetchJSON};}}};
       let alive=true;const dom$stage=stage,dom$announcement={textContent:''};
       eval(original('element'));eval(original('mapUnavailable'));eval(original('start'));
       function mount(){return {ready:Promise.resolve(),mapUnavailable};}
       start(host);
       assert.equal(scripts.length,1);assert.equal(scripts[0].src,'https://example.test/project/javascripts/project-map.js');
+      // The map reads its files through the book's router, which it finds on the book's host as its script starts.
+      assert.strictEqual(handed[0],fetchJSON);
       // The map makes its host in the stage as its script starts and marks it set up as the script ends, so a load
       // without the host drew nothing and one without the mark stopped partway.
       if(fixture.outcome.startsWith('load-')&&fixture.outcome!=='load-without-map')drawn={className:'bp-whole-map',dataset:{}};

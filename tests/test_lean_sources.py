@@ -3653,6 +3653,32 @@ def test_aliases_are_indexed_with_where_their_target_can_be(tmp_path: Path) -> N
     assert index.find("A.B.mpr").line == 5
 
 
+def test_alias_names_take_lean_s_identifier_characters(tmp_path: Path) -> None:
+    # `℘` is one of Lean's letter-like characters and `Ж` is not.
+    index = _index(tmp_path, "theorem t : True := trivial\nalias ℘ := t\nalias Жук := t\n")
+
+    assert set(index.declarations) == {"t", "℘"}
+
+
+def test_commands_inside_a_syntax_quotation_declare_nothing(tmp_path: Path) -> None:
+    # As in Mathlib's Data/UInt.lean and Tactic/IrreducibleDef.lean, where the
+    # scan reads `$typeName.toBitVec_nsmul` and `$n`, names Lean's grammar refuses.
+    source = [
+        "run_cmd",
+        "  for typeName' in [`UInt8, `UInt16] do",
+        "  let typeName := Lean.mkIdent typeName'",
+        "  Lean.Elab.Command.elabCommand (← `(",
+        "    namespace $typeName",
+        "      protected theorem toBitVec_nsmul (a : $typeName) : True := trivial",
+        "    end $typeName))",
+        "macro_rules | `(irreducible_def $n:ident := $val) => `(",
+        "    def $n:ident := $val)",
+        "theorem kept : True := trivial",
+    ]
+
+    assert set(_index(tmp_path, "\n".join(source) + "\n").declarations) == {"kept"}
+
+
 def test_root_qualified_names_leave_their_namespace_out(tmp_path: Path) -> None:
     index = _index(tmp_path, "namespace A\ntheorem _root_.B.c : True := trivial\ntheorem d : True := trivial\nend A\n")
 

@@ -92,10 +92,11 @@ Frontmatter is optional; a container that only supplies prose and placement
 needs none.
 
 The optional `area` field groups the chapters, and deeper containers naming a
-chapter's area, into regions of the project map; on a leaf it only labels the
-article. Use mathematical areas such as `Foundations` or `Geometry & Topology`,
-never repository or workflow buckets such as `MathlibExt` or `catalog-01`.
-Autoform does not guess areas from paths, imports, or titles.
+chapter's area, into regions of the project map, and Topics heads each area's
+chapters with its name; on a leaf it only labels the article. Use mathematical
+areas such as `Foundations` or `Geometry & Topology`, never repository or
+workflow buckets such as `MathlibExt` or `catalog-01`. Autoform does not guess
+areas from paths, imports, or titles.
 
 An optional container-only `navigation` role separates mathematical topics
 from repository organization:
@@ -701,8 +702,9 @@ autoform render blueprint --output site-src --lean-root . --require-declarations
 
 `render` never writes into the vault. Once the roadmap has articles, the landing
 page combines the mathematical reader and dependency map in one full-page client.
-`structure.md`, `dependencies.md` and old dependency-page URLs enter canonical
-article or chapter-card reading beside the whole-project map, with global search.
+`dependencies.md` and the old pages under `dependencies/` redirect to the
+matching book page, keeping the address's fragment when JavaScript runs;
+`structure.md` links the book.
 Complete published statements, proofs and citations remain the reading content.
 The index `dependencies/index.json`, project payload `dependencies.json`, and
 other `dependencies/` payloads are internal to this viewer; their schemas may change.
@@ -710,7 +712,7 @@ other `dependencies/` payloads are internal to this viewer; their schemas may ch
 one zoomable map of the whole project, which loads `dependencies/map/data/` one
 level at a time and shows each result's statement from its article.
 A formal statement links to its canonical article or containing chapter card;
-legacy `#node=<id>`, view and filter links remain aliases, not a second viewer.
+legacy `#node=<id>`, view and filter links redirect there, not to a second viewer.
 A `lean:` declaration resolving to a repository permalink gets a source link;
 a catalog's Lean row shows its first eight names and counts the rest.
 Render percent-encodes each

@@ -1,6 +1,6 @@
 # Wiki reference layer
 
-The viewer derives optional `dependencies/wiki-links.json`, schema `autoform-wiki-links/v1`,
+Render derives optional `dependencies/wiki-links.json`, schema `autoform-wiki-links/v1`,
 from captured article bytes. This is internal viewer data, not a public CLI contract. Its `references`
 are ordinary authored Markdown links between published mathematical articles,
 not statement or proof prerequisites. Source tracks, code and TeX literals,

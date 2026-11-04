@@ -74,7 +74,7 @@ _ASSUMPTIONS_SCHEMA = "autoform-assumptions/v1"
 #: one this helper does not know included; `autoform audit`'s lean-target-wanted
 #: refuses the proved ones too.
 _WANTED_STATES = frozenset({"can_prove", "can_state", "not_ready", "planned", "stated"})
-_DECLARATION_NAME_PART = r"«([^»]+)»|([^.\s«»]+)"
+_DECLARATION_NAME_PART = r"«([^»]*)»|([^.\s«»]+)"
 _DECLARATION_NAME = re.compile(
     rf"(?:{_DECLARATION_NAME_PART})(?:\.(?:{_DECLARATION_NAME_PART}))*"
 )
@@ -495,8 +495,8 @@ def _declaration_name_parts(name: object, article: str) -> tuple[tuple[str, bool
     if not isinstance(name, str) or not _DECLARATION_NAME.fullmatch(name) or not _printable(name):
         raise AuditInputError(f"{article} names an invalid Lean declaration: {name!r}")
     return tuple(
-        (quoted, True) if quoted else (plain, False)
-        for quoted, plain in re.findall(_DECLARATION_NAME_PART, name)
+        (match[1], True) if match[1] is not None else (match[2], False)
+        for match in re.finditer(_DECLARATION_NAME_PART, name)
     )
 
 

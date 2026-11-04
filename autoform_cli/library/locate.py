@@ -82,14 +82,14 @@ class LakeWorkspace:
 
 
 def read_workspace(root: str | Path) -> LakeWorkspace:
-    """Read the files that decide which packages ``root`` builds against, as one generation."""
+    """Read the files that decide which packages ``root`` builds against, until two reads agree."""
 
     directory = Path(root).expanduser().resolve()
     if not directory.is_dir():
         raise WorkspaceError("Lean root does not exist or is not a directory")
     for _attempt in range(_SNAPSHOT_ATTEMPTS):
         snapshot = _snapshot.capture_decision_snapshot(directory)
-        if snapshot.stable and snapshot == _snapshot.capture_decision_snapshot(directory):
+        if snapshot == _snapshot.capture_decision_snapshot(directory):
             return _workspace(directory, snapshot)
     raise WorkspaceError("project configuration changed while it was being read; retry after the project is idle")
 

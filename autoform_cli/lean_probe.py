@@ -919,7 +919,7 @@ def lean_name_components(name: str) -> tuple[str | int, ...]:
     )
 
 
-_LEAN_NAME_PART = r"«([^»]+)»|([^.\s«»]+)"
+_LEAN_NAME_PART = r"«([^»]*)»|([^.\s«»]+)"
 _LEAN_NAME = re.compile(rf"(?:{_LEAN_NAME_PART})(?:\.(?:{_LEAN_NAME_PART}))*")
 
 
@@ -933,7 +933,10 @@ def lean_name_parts(name: str) -> tuple[tuple[str, bool], ...]:
 
     if not _LEAN_NAME.fullmatch(name):
         raise SkeletonError([f"invalid Lean declaration name: {name!r}"])
-    return tuple((quoted, True) if quoted else (plain, False) for quoted, plain in re.findall(_LEAN_NAME_PART, name))
+    return tuple(
+        (match[1], True) if match[1] is not None else (match[2], False)
+        for match in re.finditer(_LEAN_NAME_PART, name)
+    )
 
 
 def _probe_modules(probe: str) -> tuple[str, ...]:

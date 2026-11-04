@@ -41,8 +41,9 @@ load. The `runtime` module docstring describes it for Python consumers.
 
 ## Publication contract
 
-`autoform render` publishes the book, derived progress, and one dependency
-explorer as bounded project, chapter, and nested-scope projections. Rendering
+`autoform render` publishes the book, derived progress, and the bounded
+project, chapter, and nested-scope projections the book reads; the old
+dependency pages redirect to the book. Rendering
 never reads a `graph.json` or an operational queue;
 [wiki references](wiki-links.md) are also derived. Hidden files and directories,
 including `.implementation-notes`, are omitted; render reads no implementation
@@ -64,7 +65,8 @@ failed/stalled math stay literal. Original titles, relations and status are unch
 Every render writes `publication.json`, schema `autoform-publication/v3`, with
 blueprint and Lean-source hashes (the Lean-source hash is empty when render
 reads no Lean sources), Git ref, article and dependency counts, the site's file
-inventory, and available views. It holds no timestamp or absolute path, so
+inventory, and available views (`project`, `chapter` and `full` name the old
+dependency pages). It holds no timestamp or absolute path, so
 identical inputs produce identical output files. The dashboard accepts only a v3
 site and reports an older one as stale until render replaces it. Render reads
 the blueprint and the Lean sources once each; an edit saved during a render
