@@ -148,6 +148,8 @@ def test_explorer_mangles_only_explicitly_private_refs_and_keeps_runtime_fields(
         b".onCommit",
         b".captureState",
         b".restoreState",
+        b"fetchJSON",
+        b".autoformFetchJSON",
     ):
         assert marker in bundled, f"A required runtime field was renamed or lost: {marker!r}"
 

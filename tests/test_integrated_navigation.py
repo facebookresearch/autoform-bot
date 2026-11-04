@@ -1589,3 +1589,55 @@ def test_rejected_popstate_history_preparation_reports_canonical_url_and_distrus
       assert.equal(app.win.location.href,section);assert.equal(app.win.history.length,length);
       assert.equal(app.win.history.state.material,'preserved');app.nav.dispose();
     """)
+
+
+_MAP_READS = r"""
+function held(settings, onRelease) {
+  return new Promise((resolve, reject) => {
+    settings.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {once: true});
+    onRelease(resolve);
+  });
+}
+const mapFile = name => absolute('dependencies/map/data/' + name);
+"""
+
+
+def test_the_maps_reads_stay_out_of_the_page_cache_and_navigation_never_aborts_one() -> None:
+    """The whole-project map keeps every file it reads, so the router keeps no copy: a map read takes none of the
+    pages' cache budget, is read afresh each time, and a book navigation never cancels it."""
+    _run(_MAP_READS + r"""
+      const size=value=>new TextEncoder().encode(JSON.stringify(value)).byteLength;
+      const walk=3*size(graph)+size(aSpec)+size(bSpec),budget=walk+4*32+256;
+      const part=mapFile('parts/big.json'),big={parts:{x:'y'.repeat(budget-walk)}},signals=[];let release;
+      assert(size(big)<budget&&walk+size(big)>budget);
+      const app=setup({cacheBytes:budget,fetch(url,settings,reply){ if(url!==part) return; signals.push(settings);
+        if(signals.length===1) return held(settings,resolve=>{release=()=>resolve(reply(big,url));}); }});
+      app.contents.set(part,big);
+      await app.nav.start(); await app.nav.navigateNode('a');
+      const reading=app.nav.fetchJSON(part); await until(()=>signals.length===1);
+      await app.nav.navigateNode('b');
+      assert.equal(signals[0].signal.aborted,false,'A book navigation never aborts a map read');
+      release(); assert.deepEqual(await reading,big); assert.equal(signals[0].credentials,'same-origin');
+      await app.nav.fetchJSON(part);
+      assert.equal(app.fetches.filter(url=>url===part).length,2,'Read afresh: nothing kept a copy');
+      await app.nav.navigateNode('a');
+      assert.equal(app.fetches.filter(url=>url===aSpec.route).length,1,'Never stored there: the page read before it stays cached');
+      assert.equal(app.errors.length,0); app.nav.dispose();
+    """)
+
+
+def test_the_maps_reads_keep_the_routers_origin_rules_and_errors_and_never_reach_on_error() -> None:
+    _run(_MAP_READS + r"""
+      const bad=mapFile('bad.json'),moved=mapFile('moved.json');
+      const app=setup({fetch(url,_settings,reply){
+        if(url===bad) return {ok:true,status:200,url,headers:{get(){return null;}},text:async()=>'{not json'};
+        if(url===moved) return reply({},'https://outside.test/moved.json');
+      }});
+      await app.nav.start(); const before=app.fetches.length;
+      await assert.rejects(app.nav.fetchJSON('https://outside.test/dependencies/map/data/index.json'),{message:'Refusing an external data request'});
+      assert.equal(app.fetches.length,before,'An off-site read sends no request');
+      await assert.rejects(app.nav.fetchJSON(moved),{message:'Data redirected outside this site'});
+      await assert.rejects(app.nav.fetchJSON(mapFile('missing.json')),{message:'HTTP 404'});
+      await assert.rejects(app.nav.fetchJSON(bad),{name:'SyntaxError'});
+      assert.equal(app.errors.length,0,'The map shows its own errors; the book reports none of them'); app.nav.dispose();
+    """)

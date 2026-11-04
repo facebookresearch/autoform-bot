@@ -95,6 +95,8 @@
             // A map that cannot load, or that fails before it marks its host set up, leaves the stage to a notice; the
             // outline, search and lists still work.
             map.onload = map.onerror = function () { if (!host.querySelector(".bp-whole-map[data-pm-ready]")) client.mapUnavailable(); };
+            // The map reads its files through this router, which keeps no copy of them; navigating never aborts them.
+            host.autoformFetchJSON = navigation.fetchJSON;
             document.head.appendChild(map);
             host.addEventListener("autoform-map-select", function (event) { navigation.navigateNode(event.detail.id, event.detail); });
           }

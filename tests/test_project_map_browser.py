@@ -174,10 +174,31 @@ def test_one_click_picks_a_region_in_place_and_a_second_opens_it(webkit_browser:
         playwright.expect(page.locator(".pm-trail li")).to_have_text(["Fixture library", "Algebra"])
 
 
+# Each read of the map's data, with the credentials it asked for: the book's router asks for "same-origin", and the map's
+# own request(), which only the standalone page uses, for none.
+_MAP_DATA_READS = """(() => {
+    const native = window.fetch;
+    window.mapDataReads = [];
+    window.fetch = function (resource, settings) {
+        const url = new URL(String(resource && resource.url || resource), location.href);
+        if (url.pathname.includes("/dependencies/map/data/")) window.mapDataReads.push([url.pathname, settings && settings.credentials || null]);
+        return native.apply(this, arguments);
+    };
+})();"""
+
+
 def _open_book(page: object, url: str, path: str) -> None:
     page.route(lambda requested: not requested.startswith(url), lambda route: route.abort())
+    page.add_init_script(_MAP_DATA_READS)
     page.goto(f"{url}/{path}")
     page.locator(".bp-whole-map .pm-part").first.wait_for(state="attached")
+
+
+def _assert_the_map_read_its_data_once_through_the_router(page: object) -> None:
+    reads = page.evaluate("() => window.mapDataReads")
+    paths = [path for path, _credentials in reads]
+    assert paths and len(paths) == len(set(paths)), reads
+    assert {credentials for _path, credentials in reads} == {"same-origin"}, reads
 
 
 def _reading(page: object) -> object:
@@ -241,6 +262,7 @@ def test_the_book_shows_the_map_beside_the_page_and_opens_what_is_picked_on_it(w
         # The map takes the site's scheme from its toggle, over the system's.
         page.evaluate("() => document.body.setAttribute('data-md-color-scheme', 'slate')")
         assert page.locator(".bp-whole-map .pm-app").evaluate("node => getComputedStyle(node).getPropertyValue('--pm-bg').trim()") == "#16181b"
+        _assert_the_map_read_its_data_once_through_the_router(page)
 
 
 def test_a_page_that_states_nothing_opens_the_map_on_its_part(webkit_browser: object, map_url: str) -> None:
@@ -249,6 +271,10 @@ def test_a_page_that_states_nothing_opens_the_map_on_its_part(webkit_browser: ob
         playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-start", "algebra/notes")
         # The map has no card for it, so it opens the chapter the notes are in, not the whole library.
         playwright.expect(page.locator('.bp-whole-map .pm-part.pm-focus[data-part="algebra"]')).to_have_count(1)
+        # Finding the notes' chapter read the map's search file, through the router like the rest.
+        reads = page.evaluate("() => window.mapDataReads")
+        assert any(path.endswith("/dependencies/map/data/search.json") for path, _credentials in reads), reads
+        _assert_the_map_read_its_data_once_through_the_router(page)
 
 
 def test_a_part_picked_on_the_map_opens_its_chapter_in_the_reader(webkit_browser: object, map_url: str) -> None:
