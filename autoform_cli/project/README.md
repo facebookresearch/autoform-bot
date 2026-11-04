@@ -64,7 +64,7 @@ instead of a report. A command-line usage error exits 2.
 | `lake` | `null` when the Lake configuration is missing, unreadable or invalid; otherwise `config` (`"lakefile.toml"` or `"lakefile.lean"`), the package `name` and `version` (both `null` for `lakefile.lean`, which is not evaluated), and `targets`, a list of `{kind, name}` for each `lean_lib` and `lean_exe` |
 | `mathlib` | the Mathlib entry the manifest or overrides select; `null` when there is none, when either file cannot be decoded, or when Autoform cannot establish that it is active (`lakefile.lean`, or a `mathlib-manifest-unused` warning). It is still reported when another error makes the status `indeterminate`; see below |
 | `compatibility` | `status` (`supported`, `unlisted` or `indeterminate`, defined under [Scope and resolver rules](#scope-and-resolver-rules)), `release` (the matching catalog id, or `null`), and `recommended_release` (the catalog's recommended id) |
-| `autoform_paths` | which of `blueprint`, `mkdocs.yml`, `.github/workflows/autoform-verify.yml` and `.github/workflows/blueprint-pages.yml` exist under the project root, with that exact spelling |
+| `autoform_paths` | which of `blueprint`, `mkdocs.yml`, `.github/workflows/autoform-verify.yml` and `.github/workflows/blueprint-pages.yml` exist under the project root, with that exact spelling; empty when the root cannot be listed |
 | `diagnostics` | a list of `{severity, code, message, path}`, sorted by severity (`error` first), then code, then path; `path` is the file concerned, relative to the project root, or `null` |
 
 The `mathlib` object has `source` (`"lake-manifest.json"` or
