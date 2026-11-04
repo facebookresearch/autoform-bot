@@ -5,6 +5,10 @@ at the edges. The copies are kept below as they were, and ``_DIFFERENCES``
 lists every spelling where a reader now parts from its copy: on the other real
 names in ``fixtures/mathlib-names.txt``, and on ``_QUOTED_SPELLINGS``, each reader
 gives what its copy gave.
+
+lean_probe and the generated audit helper keep readers of their own, since neither
+may import the package. lean_probe reads every name the grammar takes into the
+same components, and the helper reads every spelling as lean_probe does.
 """
 
 from __future__ import annotations
@@ -21,9 +25,11 @@ from autoform_cli.lean import (
     _name_parts,
     _unquoted_parts,
 )
+from autoform_cli.lean_probe import SkeletonError, lean_name_components, lean_name_parts
 from autoform_cli.library.citations import _drop_needless_quotes
 from autoform_cli.library.index import _module_name
 from autoform_cli.search import unquoted
+from tests.audit_fixture import _load_helper
 
 _NAMES = [
     line
@@ -33,6 +39,9 @@ _NAMES = [
 #: Quoted components Lean accepts that no Mathlib name has: empty, and holding a
 #: space or a dot.
 _QUOTED_SPELLINGS = ["Foo.«».bar", "«a b».c", "A.«b.c»"]
+#: Names lean_probe reads and the grammar refuses (numeric components among
+#: them), names both refuse, and more empty quoted components.
+_PROBE_SPELLINGS = ["«»", "a.«»", "Foo.1", "_private.M.0.x", "«a«b»", "$x.y", "a-b", "Nat..add", "a."]
 
 
 # The copies, as each reader held one before.
@@ -121,3 +130,29 @@ def test_where_a_reader_parts_from_its_copy(reader: str, spelling: str, before: 
     now, copy = _READERS[reader]
 
     assert (copy(spelling), now(spelling)) == (before, after)
+
+
+def _probe_parts(name: str) -> tuple[tuple[str, bool], ...] | None:
+    try:
+        return lean_name_parts(name)
+    except SkeletonError:
+        return None
+
+
+def test_lean_probe_reads_every_name_the_grammar_takes_into_the_same_components() -> None:
+    for name in [*_NAMES, *_QUOTED_SPELLINGS, *_PROBE_SPELLINGS]:
+        if _CONTINUATION_IDENTIFIER.fullmatch(name):
+            parts = tuple((part[1:-1], True) if part[:1] == "«" else (part, False) for part in _name_parts(name))
+            assert _probe_parts(name) == parts, name
+
+
+def test_the_audit_helper_reads_declaration_names_as_lean_probe_does(repo_root: Path) -> None:
+    helper = _load_helper(repo_root)
+    for name in [*_NAMES, *_QUOTED_SPELLINGS, *_PROBE_SPELLINGS]:
+        try:
+            parts = helper._declaration_name_parts(name, name)
+        except helper.AuditInputError:
+            parts = None
+        assert parts == _probe_parts(name), name
+        if parts is not None:
+            assert helper._json_declaration_name(name) == list(lean_name_components(name)), name

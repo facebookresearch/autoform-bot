@@ -473,6 +473,10 @@ date when the release is tagged.
   closes one per component of its name, as Lean does: `end B` after
   `namespace A.B` no longer drops the `A.` prefix from later names, and
   `end C.D` closes both scopes (#524).
+- **Empty quoted name components.** `skeleton`, `review prepare`,
+  `render --review` and the generated `.github/autoform_audit.py` read a Lean
+  name with an empty quoted component, such as `Foo.«».bar`, as Lean does,
+  instead of refusing it as an invalid declaration name.
 - **Explorer controls.** The closed phone handle anchors to the bottom (#442).
 - **Explorer resizing.** Observer notifications coalesce into one animation
   frame, and pending resize work is cancelled when the viewer is disposed (#442).
