@@ -1259,6 +1259,9 @@ def compute_module_import_impact(
     """
 
     if module not in modules:
+        # Either spelling of a quoted component names the module, such as the inventory's `H.«α»` for Lean's `H.α`.
+        module = next((name for name in modules if _name_key(name) == _name_key(module)), module)
+    if module not in modules:
         raise ImpactError(f"not a loaded project module: {module}")
 
     importers: dict[str, set[str]] = {}
@@ -1646,7 +1649,7 @@ def _load_impact_evidence(
         )
         if module is not None:
             module_paths = _module_source_paths(libraries, source_snapshot, strict=True)
-            _check_import_module(module, selected, module_paths, source_snapshot, local_modules)
+            module = _check_import_module(module, selected, module_paths, source_snapshot)
         selected_modules = imports
         declaration_modules = None
         if module_scope == IMPORT_CLOSURE_SCOPE:
@@ -1854,9 +1857,8 @@ def _check_import_module(
     selected: ImpactArticle,
     module_paths: Mapping[str, str],
     snapshot: IndexedSourceSnapshot,
-    local_modules: Collection[str],
-) -> None:
-    """Refuse a ``module`` outside the project, naming the selected article's own module.
+) -> str:
+    """Return the inventory's spelling of ``module``; refuse one outside the project, naming the article's module.
 
     Workers often pass the module they mean to import.
     """
@@ -1871,12 +1873,16 @@ def _check_import_module(
         }
     )
     usage = "MODULE is the project module whose imports change, the file that gains or loses the import"
-    if module not in local_modules:
+    # By component, as the probe's evidence is read: Lean prints H/α.lean as `H.α`, the inventory as `H.«α»`.
+    # The import closure and the probe's imports then read one spelling of it.
+    matches = [name for name in module_paths if _name_key(name) == _name_key(module)]
+    if not matches:
         here = f" (for {selected.id}: {homes[0]})" if len(homes) == 1 else ""
         raise ImpactError(
             f"{module} is not a module of this project. {usage}{here}, not the module it imports: "
             "an import from Mathlib or another dependency is reported for the project file that adds it"
         )
+    return matches[0]
 
 
 def _locator(

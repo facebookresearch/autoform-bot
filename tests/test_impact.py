@@ -2545,6 +2545,67 @@ def test_cli_import_impact_matches_module_names_by_component(
     assert '[\\"H\\", \\"1\\"]' in calls[0]["probe"]
 
 
+@pytest.mark.parametrize("spelling", ["H.α", "H.«α»"])
+def test_cli_import_impact_names_a_non_ascii_module_either_way(
+    tmp_path: Path, monkeypatch, capsys, spelling: str
+) -> None:
+    # Lean prints H/α.lean as `H.α`, and the inventory, so the refusal's hint, as `H.«α»`; each names the module.
+    lean_root = tmp_path / "lean"
+    (lean_root / "H").mkdir(parents=True)
+    (lean_root / "lakefile.toml").write_text('name = "H"\n\n[[lean_lib]]\nname = "H"\n', encoding="utf-8")
+    (lean_root / "H.lean").write_text("", encoding="utf-8")
+    (lean_root / "H" / "α.lean").write_text("", encoding="utf-8")
+    artifacts = lean_root.resolve() / ".lake/build/lib/lean"
+    alpha = ModuleEvidence("H.α", str((lean_root / "H" / "α.lean").resolve()), (), str(artifacts / "H" / "α.olean"))
+    root = ModuleEvidence("H", str((lean_root / "H.lean").resolve()), ("H.α",), str(artifacts / "H.olean"))
+    _stub_probe(monkeypatch, [_payload("H.stem", module="H.α")], modules=(alpha, root))
+    project = tmp_path / "project"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    _write_article(project, "stem.md", metadata=["declaration: definition", "statement: formalized", "lean: H.stem"])
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/stem", spelling, str(project), "--lean-root", str(lean_root), "--json"]
+    )
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    assert report["module"] == "H.α"
+    assert report["affected_modules"] == ["H", "H.α"]
+
+
+def test_cli_import_closure_reads_a_quoted_spelling_of_a_module_as_its_plain_name(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    # `H.«B»` is `H.B`; the narrowed probe must import it although its own file never names `H` and `B`.
+    lean_root = tmp_path / "lean"
+    (lean_root / "H").mkdir(parents=True)
+    (lean_root / "lakefile.toml").write_text(
+        'name = "H"\n\n[[lean_lib]]\nname = "H"\nglobs = ["H.*"]\n', encoding="utf-8"
+    )
+    (lean_root / "H.lean").write_text("", encoding="utf-8")
+    (lean_root / "H" / "B.lean").write_text("theorem stem : True := trivial\n", encoding="utf-8")
+    artifacts = lean_root.resolve() / ".lake/build/lib/lean"
+    modules = tuple(
+        ModuleEvidence(name, str((lean_root / path).resolve()), (), str(artifacts / path.replace(".lean", ".olean")))
+        for name, path in (("H", "H.lean"), ("H.B", "H/B.lean"))
+    )
+    calls = _stub_probe(monkeypatch, [_payload("H.stem", module="H.B")], modules=modules)
+    project = tmp_path / "project"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    _write_article(project, "stem.md", metadata=["declaration: definition", "statement: formalized", "lean: H.stem"])
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/stem", "H.«B»", str(project), "--lean-root", str(lean_root), "--json",
+         "--module-scope", "import-closure"]
+    )
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    assert "import H.B" in calls[0]["probe"].splitlines()
+    assert json.loads(output.out)["module"] == "H.B"
+
+
 def test_cli_import_impact_accepts_another_spelling_of_the_lean_root(tmp_path: Path, monkeypatch, capsys) -> None:
     # On a case-insensitive file system `--lean-root` may differ in case from
     # the on-disk path Lean reports; a symbolic link gives the same two

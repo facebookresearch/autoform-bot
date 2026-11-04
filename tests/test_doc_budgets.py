@@ -25,7 +25,7 @@ BUDGETS = {
     "autoform_cli/reference/skeleton-and-review.md": 199,
     "autoform_cli/reference/validation-and-audit.md": 250,  # #193's credit rule; #485's list of captioned commands.
     "autoform_cli/reference/wiki-links.md": 20,  # Internal optional viewer transport; keep it on demand and concise.
-    "autoform_cli/reference/work.md": 131,  # #492: who owns a declaration no article names; the MODULE refusal.
+    "autoform_cli/reference/work.md": 127,
     "servers/README.md": 122,
     "skills/agent-review/SKILL.md": 65,
     "skills/debrief-orchestrator/SKILL.md": 47,
