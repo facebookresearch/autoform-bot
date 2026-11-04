@@ -414,6 +414,11 @@ date when the release is tagged.
   cannot be listed. A root that can still be searched (mode 0311) gets its
   report, and the library commands read it; one that cannot be searched
   reports `unreadable-file`.
+- **Pin files read mid-write.** `library index`, and every command that checks
+  a library's index against its checkout, read the library's pin files until
+  two reads agree, so a write that lands during a read is read again. Pins that
+  keep changing are refused as changing, where they were reported as over 1 MiB
+  or unreadable.
 - **Decision files on Windows.** `project inspect` and the library commands
   read `lean-toolchain`, the lakefiles and the manifests in text mode on
   Windows, which turned CRLF into LF and stopped at a 0x1A byte. They now read
