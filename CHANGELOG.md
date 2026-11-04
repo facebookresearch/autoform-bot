@@ -62,6 +62,9 @@ date when the release is tagged.
 
 ### Changed
 
+- **Vault pages on Windows.** `autoform-visualize` writes the dependency
+  summary and structure pages with LF line endings on Windows too, as on every
+  other system, so a vault regenerated on both no longer flips them.
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
