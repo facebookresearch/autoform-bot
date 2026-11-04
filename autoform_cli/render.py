@@ -80,6 +80,8 @@ from .approvals import approval_statuses
 from .coverage import (
     COVERAGE_DISPOSITIONS,
     CoverageSummary,
+    contract_table,
+    coverage_target_nodes,
     load_coverage,
     validate_coverage_roles,
 )
@@ -93,7 +95,14 @@ from .graph import (
     unpublished_content,
     unpublished_node_ids,
 )
-from .graph_views import _containers, _countable, _is_countable, _module_inventories
+from .graph_views import (
+    _containers,
+    _containment_children,
+    _countable,
+    _is_countable,
+    _leaf_descendants,
+    _module_inventories,
+)
 from .lean import (
     _REPLACEABLE_SCHEMAS,
     PUBLICATION_MANIFEST,
@@ -124,8 +133,10 @@ from .markdown import (
     boxed,
     converted_alone,
     directory_path,
+    has_substance,
     mask_fences_and_comments,
     header_title,
+    link_targets,
     name_text,
     page_title,
     published_page,
@@ -134,6 +145,7 @@ from .markdown import (
     rendered_visible_text,
     site_converter,
     statement_and_notes,
+    text_besides_links,
     title_text,
     yaml_string,
 )
@@ -193,6 +205,9 @@ _SKIPPED_DIRECTORIES = frozenset({".obsidian", ".trash", ".git"})
 
 #: Transcriptions of the paper being formalised. Vault material, not chapters.
 SOURCES_DIR = "sources"
+#: The coverage contract's page, compared without regard to case, as a disk
+#: that ignores case serves it.
+COVERAGE_PAGE = "coverage/readme.md"
 #: Hidden siblings of the output: a site being built, a replaced one, or a backup.
 _STAGE_PREFIX = ".autoform-publication-"
 #: How a filesystem says it lacks an operation (an atomic exchange, a directory sync).
@@ -752,7 +767,13 @@ def _publication(
                 )
                 continue
             text, found = published(written, source, destination / relative)
-            files[source] = shown_as_typed(text) if found else _protect_narrative_markdown(text)
+            files[source] = (
+                shown_as_typed(text) if found
+                # Render shows the contract's table as the coverage view, and
+                # protects the stretches around it then, as on a chapter page.
+                else text if relative.as_posix().casefold() == COVERAGE_PAGE
+                else _protect_narrative_markdown(text)
+            )
         elif relative.as_posix() in written_over:
             continue
         elif source.suffix.lower() in _STATIC_SUFFIXES:
@@ -1189,6 +1210,34 @@ def _render_pages(
             ),
             encoding="utf-8",
         )
+
+    coverage_page = next(
+        (
+            destination / relative
+            for relative in (_relative(source, blueprint) for source in site.files)
+            if relative.as_posix().casefold() == COVERAGE_PAGE
+        ),
+        None,
+    )
+    if coverage_page is not None and coverage_page not in site.typed:
+        staged = coverage_page.read_text(encoding="utf-8")
+        shown = _render_coverage_page(
+            staged,
+            coverage=coverage,
+            graph=graph,
+            statuses=statuses,
+            containers=containers,
+            links=_anchored_links(targets, coverage_page),
+            node_sources=node_sources,
+            rank={node_id: index for index, node_id in enumerate(order)},
+        )
+        if shown is None:
+            report.warnings.append(
+                f"{coverage.source_path}: the coverage view found no contract table in the page render "
+                "publishes, so the site shows the page as written"
+            )
+            shown = _protect_narrative_markdown(staged)
+        coverage_page.write_text(shown, encoding="utf-8")
 
     for group, node_ids in groups.items():
         page = group_pages[group]
@@ -2348,7 +2397,9 @@ def _render_summary_nav(
     coverage = destination / "coverage/README.md"
     if coverage.is_file():
         title = title_text(_first_h1(coverage.read_text(encoding="utf-8")) or "Coverage")
-        lines.append(f"    - [{title}](coverage/README.md)")
+        # A section of its own: navigation.indexes takes a section's README as
+        # the page its heading opens, which made Mathematics open this one.
+        lines += [f"    - {title}", f"        - [{title}](coverage/README.md)"]
     return "\n".join(lines) + "\n"
 
 def _render_landing_page(
@@ -2459,6 +2510,107 @@ _COVERAGE_WORDS = {
     "DEFERRED": "left for later",
     "OUT": "out of scope",
 }
+
+
+#: The coverage view's heading for each disposition.
+_COVERAGE_HEADINGS = {
+    "DECOMPOSED": "Decomposed",
+    "MAPPED": "Mapped",
+    "INVENTORIED": "Inventoried",
+    "DEFERRED": "Deferred",
+    "OUT": "Out of scope",
+}
+#: The words that join a list of links and say nothing besides them.
+_CONNECTIVES = re.compile(r"\b(?:and|or)\b")
+
+
+def _render_coverage_page(
+    page: str,
+    *,
+    coverage: CoverageSummary,
+    graph: Graph,
+    statuses: dict[str, status.NodeStatus],
+    containers: frozenset[str],
+    links: Mapping[str, str],
+    node_sources: dict[Path, str],
+    rank: Mapping[str, int],
+) -> str | None:
+    """The coverage ``page`` with its contract table shown as the coverage
+    view, or None when the page holds no table with the contract's rows.
+
+    Each disposition gets a heading with its count, and its rows follow in the
+    author's order, each led by its area. A DECOMPOSED row lists the
+    declarations its links reach, in book order, with their status. Its
+    evidence stays as written unless it is only links to roadmap articles,
+    which the list shows; every other row shows its evidence as written.
+    """
+
+    found = contract_table(page)
+    if found is None or len(found[1]) != len(coverage.entries) or any(len(row) != 3 for row in found[1]):
+        return None
+    span, rows = found
+    above = next((match for line in reversed(_content_lines(page)[: span.start]) if (match := _HEADING.match(line))), None)
+    level = min(len(above.group(1)) + 1, 6) if above else 2
+    body = _document_body(page)
+    affected = "<" in body
+    references = _convert_body(body)[1] if affected else None
+
+    def authored(text: str) -> str:
+        # As on a chapter page, an affected page's own Markdown is parsed
+        # before it sits beside render's HTML.
+        return _protect_markdown_in_html(text, references=references, force=True) if affected else text
+
+    children = _containment_children(graph)
+    shown: dict[str, list[str]] = {}
+    for entry, (area, _, evidence) in zip(coverage.entries, rows):
+        statements: list[str] = []
+        only_links = False
+        if entry.disposition == "DECOMPOSED":
+            targets = coverage_target_nodes(graph, coverage, entry.evidence, by_path=node_sources)
+            reached = dict.fromkeys(
+                leaf
+                for target in targets
+                for leaf in _leaf_descendants(children, target)
+                if _is_countable(graph, leaf, containers)
+            )
+            statements = sorted(reached, key=lambda node_id: (rank.get(node_id, len(rank)), node_id))
+            besides = text_besides_links(evidence)
+            only_links = (
+                bool(statements)
+                and besides is not None
+                and not has_substance(_CONNECTIVES.sub("", besides))
+                and len(set(link_targets(entry.evidence))) == len(targets)
+            )
+        references_html = _node_references(statements, graph=graph, statuses=statuses, links=links)
+        lead = f"**{area}**"
+        if not only_links:
+            lead += f"  \n{evidence}"
+        elif len(statements) == 1:
+            lead += f"  \n{references_html}"
+        block = authored(lead)
+        if len(statements) > 1:
+            counted = f"{len(statements):,} statements"
+            if graph.tracks_lean:
+                selected = {node_id: statuses[node_id] for node_id in statements}
+                counted += "".join(f" · {count:,} {state.label}" for state, count in status.summarize(selected))
+            block += (
+                f'\n\n<details class="bp-dependencies" data-search-exclude><summary>{html.escape(counted)}</summary>'
+                f'<div class="bp-dependency-body">{references_html}</div></details>'
+            )
+        shown.setdefault(entry.disposition, []).append(block)
+    view = "\n\n".join(
+        "\n\n".join(
+            [f"{'#' * level} {_COVERAGE_HEADINGS[disposition]} ({len(blocks):,}) {{#coverage-{disposition.lower()}}}", *blocks]
+        )
+        for disposition in _COVERAGE_SUMMARY_ORDER
+        if (blocks := shown.get(disposition))
+    )
+    # Every line of the table is a slot, so the page is protected as a whole
+    # page with the table in it would be.
+    return _place_environments(
+        page, -1, {index: "view" if index == span.start else "" for index in span}, summary="",
+        environments={"view": view, "": ""}, protect=True,
+    )
 
 
 def _coverage_summary(coverage: CoverageSummary) -> str:

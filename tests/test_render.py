@@ -1001,7 +1001,7 @@ def _informal_project(tmp_path: Path, setting: str) -> Path:
         f"{subgroups}/lagrange.md": "---\ndeclaration: theorem\n---\n\n# Lagrange's theorem\n\n"
         "A subgroup's order divides the group's.\n\n## Depends on\n\n- [Subgroup](subgroup.md)\n",
         "coverage/README.md": "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
-        "| Groups | MAPPED | Informal notes |\n",
+        f"| Groups | DECOMPOSED | [Subgroups](../{subgroups}/README.md) |\n",
     }
     for relative, text in pages.items():
         (blueprint / relative).parent.mkdir(parents=True, exist_ok=True)
@@ -1031,6 +1031,9 @@ def test_a_project_that_tracks_no_lean_shows_no_lean_progress(tmp_path: Path, tr
     # The book's hero is the rail's, which has neither, tracked or not.
     assert "Formalization blueprint" not in site and "bp-hero-bar" not in site
     assert "Lagrange" in site and "Why subgroups come first." in site
+    # The coverage view counts the statements either way, and their states only when tracked.
+    coverage = (tmp_path / "out/coverage/README.md").read_text(encoding="utf-8")
+    assert ("<summary>2 statements</summary>" in coverage) is not tracked
 
 
 def test_a_hero_that_tracks_no_lean_keeps_its_claim_and_ways_in(tmp_path: Path) -> None:
@@ -1806,8 +1809,68 @@ def test_coverage_is_reachable_once_the_landing_page_stops_listing_it(
 
     nav = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
     overview = (tmp_path / "out/README.md").read_text(encoding="utf-8")
-    assert "[Coverage](coverage/README.md)" in nav
+    # A section of its own, so navigation.indexes does not make it the page
+    # the Mathematics heading opens.
+    assert nav.endswith("    - Coverage\n        - [Coverage](coverage/README.md)\n")
     assert 'href="coverage/index.html"' in overview
+
+
+def test_the_coverage_page_shows_its_contract_as_the_coverage_view(tmp_path: Path) -> None:
+    """Each disposition gets a heading with its count, and each row its area.
+    A DECOMPOSED row lists the statements it reaches, in book order, in place
+    of evidence that is only links; other evidence, and the rest of the page,
+    stay as written."""
+    project = _project(tmp_path)
+    (project / "blueprint/coverage/README.md").write_text(
+        "# Coverage\n\nWhat the project covers.\n\n"
+        "| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        "| Preamble | OUT | Not a target |\n"
+        "| Results (Ch. 1) | DECOMPOSED | [Top](../roadmap/top.md) and [Base](../roadmap/base.md) |\n"
+        "| Base alone | DECOMPOSED | [Base](../roadmap/base.md) is the base object |\n"
+        "| Top only | DECOMPOSED | [Top](../roadmap/top.md) |\n"
+        "| Later | DEFERRED | [Top](../roadmap/top.md) waits for a milestone |\n"
+        "\n## After\n\n| x | y |\n| - | - |\n| 1 | 2 |\n",
+        encoding="utf-8",
+    )
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    page = (tmp_path / "out/coverage/README.md").read_text(encoding="utf-8")
+    assert "| Area | Coverage | Evidence |" not in page
+    assert "What the project covers.\n" in page and "## After\n\n| x | y |\n| - | - |\n| 1 | 2 |\n" in page
+    headings = ["## Decomposed (3) {#coverage-decomposed}", "## Deferred (1) {#coverage-deferred}"]
+    headings.append("## Out of scope (1) {#coverage-out}")
+    assert [page.index(heading) for heading in headings] == sorted(page.index(heading) for heading in headings)
+    assert "**Preamble**  \nNot a target\n" in page
+    assert "**Later**  \n[Top](../roadmap/README.md#top) waits for a milestone\n" in page
+    assert "**Base alone**  \n[Base](../roadmap/README.md#base) is the base object\n" in page
+    top = '<a class="bp-ref bp-ref-fully_proved" href="../roadmap/index.html#top">Top</a>'
+    assert f"**Top only**  \n{top}\n" in page
+    # Evidence that is only links gives way to the list, in book order.
+    assert "**Results (Ch. 1)**\n\n" in page and "and [Base]" not in page
+    (summary,) = re.findall(r'<details class="bp-dependencies" data-search-exclude><summary>([^<]*)</summary>', page)
+    count, *states = summary.split(" · ")
+    assert count == "2 statements"
+    assert {state.split(" ", 1)[1] for state in states} <= {state.label for state in STATES}
+    assert page.index('href="../roadmap/index.html#base">Base</a>') < page.index(top)
+    assert not [warning for warning in report.warnings if "coverage view" in warning]
+
+
+def test_a_coverage_page_render_cannot_read_is_published_as_written_with_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The view falls back to the page as written, and says so."""
+    project = _project(tmp_path)
+    monkeypatch.setattr(render_module, "contract_table", lambda text: None)
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert (
+        "coverage/README.md: the coverage view found no contract table in the page render publishes, "
+        "so the site shows the page as written"
+    ) in report.warnings
+    page = (tmp_path / "out/coverage/README.md").read_text(encoding="utf-8")
+    assert "| Project scope | MAPPED | Source audit pending |" in page
 
 
 def test_a_hoisted_body_keeps_its_other_links_working(tmp_path: Path) -> None:

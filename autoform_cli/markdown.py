@@ -492,6 +492,19 @@ def visible_prose(value: str) -> str:
     return _collapse("".join(_visible_parts(tree, hidden=False)))
 
 
+def text_besides_links(value: str) -> str | None:
+    """Return the text a reader sees in ``value`` once its links are left out,
+    or None when the renderer cannot process it."""
+
+    tree = render_tree(value)
+    if tree is None:
+        return None
+    for element in tree.iter():
+        if _local_name(element) == "a":
+            element.set("hidden", "")
+    return _collapse("".join(_visible_parts(tree, hidden=False)))
+
+
 def has_substance(visible: str) -> bool:
     """Whether anything a reader could act on survives emphasis and punctuation."""
 

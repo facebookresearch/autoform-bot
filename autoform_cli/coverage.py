@@ -206,7 +206,7 @@ def validate_coverage_roles(
         if role is None:
             continue
 
-        targets = _coverage_target_nodes(graph, coverage, entry.evidence, by_path=by_path)
+        targets = coverage_target_nodes(graph, coverage, entry.evidence, by_path=by_path)
         reached = {node_id: _leaves(contained, node_id) for node_id in targets}
         failing = [
             article_path(node_id)
@@ -267,14 +267,16 @@ def _first(paths: list[str], shown: int) -> str:
     return ", ".join(paths[:shown]) + (f" and {rest} more" if rest > 0 else "")
 
 
-def _coverage_target_nodes(
+def coverage_target_nodes(
     graph: Graph,
     coverage: CoverageSummary,
     evidence: str,
     *,
     by_path: dict[Path, str],
 ) -> tuple[str, ...]:
-    """Resolve the roadmap nodes visibly linked by one coverage evidence cell.
+    """The roadmap nodes one coverage evidence cell visibly links, in link
+    order and once each. External links, fragments and links to files that are
+    not nodes are left out, and a link to a container names the container.
 
     *by_path* maps each article's resolved path to its node. The caller builds
     it once for all rows, since resolving every article's path per row would
@@ -317,6 +319,36 @@ def _leaves(contained: dict[str, list[str]], root_id: str) -> set[str]:
         else:
             found.add(node_id)
     return found
+
+
+def contract_table(text: str) -> tuple[range, tuple[tuple[str, ...], ...]] | None:
+    """The lines of ``text``, a page as render publishes it, that hold the
+    coverage table, and each row's cells; None unless exactly one table there
+    has the contract's header.
+
+    The table is found as :func:`load_coverage` finds it and ends at the first
+    blank line, as it does. Render reads it from the page it publishes, where
+    each link already points where the site puts its target.
+    """
+
+    view = content(text)
+    lines = view.lines
+    headers = [
+        index
+        for index in range(len(lines) - 1)
+        if not view.is_hidden(index)
+        and not view.is_hidden(index + 1)
+        and _cells(lines[index]) == _EXPECTED_HEADER
+        and len(separator := _cells(lines[index + 1])) == 3
+        and all(_SEPARATOR.fullmatch(cell) for cell in separator)
+    ]
+    if len(headers) != 1:
+        return None
+    end = headers[0] + 2
+    while end < len(lines) and lines[end].strip():
+        end += 1
+    source = text.splitlines()
+    return range(headers[0], end), tuple(_cells(source[index]) for index in range(headers[0] + 2, end))
 
 
 def _parse_table(text: str) -> tuple[list[CoverageEntry], list[CoverageIssue]]:
@@ -753,6 +785,8 @@ __all__ = [
     "CoverageIssue",
     "CoverageRoleIssue",
     "CoverageSummary",
+    "contract_table",
+    "coverage_target_nodes",
     "load_coverage",
     "validate_coverage_roles",
 ]
