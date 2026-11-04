@@ -954,7 +954,7 @@
     hitRows = scored.slice(0, 20).map(function (pair) { return pair[1]; });
     activeHit = hitRows.length ? 0 : -1;
     hits.replaceChildren();
-    if (!hitRows.length) hits.append(el("li", "pm-note", "No theorem or Lean name matches."));
+    if (!hitRows.length) hits.append(el("li", "pm-note", tracked() ? "No theorem or Lean name matches." : "No theorem matches."));
     hitRows.forEach(function (row, index) {
       var item = el("li"), button = el("button", "pm-hit");
       button.type = "button"; button.setAttribute("role", "option"); button.setAttribute("aria-selected", String(index === activeHit));
@@ -1633,6 +1633,8 @@
   styled.then(function () { return fetchJSON("index.json"); }).then(function (index) {
     if (!L) throw new Error("the map's layout script did not load");
     model.index = index;
+    // A project that tracks no Lean has no Lean names to search for.
+    if (!tracked()) { search.placeholder = "Search theorems by name"; search.setAttribute("aria-label", search.placeholder); }
     if (!index.regions.length) {
       var nothing = "Nothing is on the map yet: the roadmap has no results.";
       readerInner.replaceChildren(el("p", "pm-kicker", "Whole project"), el("h2", "", plain(index.title)), el("p", "pm-empty", nothing));

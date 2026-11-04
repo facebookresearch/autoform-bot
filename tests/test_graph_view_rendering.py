@@ -635,7 +635,7 @@ def test_explorer_search_draws_its_magnifier_and_shortcut_hint_in_css() -> None:
     """U+2315 is not in Plus Jakarta Sans and sat off the box's line, and "( / )" read as debug output."""
     script, style = _viewer_source(), dag_viewer._STYLE
     assert "⌕" not in style and "( / )" not in script
-    assert 'refs.search.placeholder = "Search titles and Lean names";' in script
+    assert 'refs.search.placeholder = leanNames ? "Search titles and Lean names" : "Search titles";' in script
     # A currentColor square masked by an inline SVG draws the magnifier in the muted text colour.
     assert "background: currentColor; color: var(--dag-muted);" in style
     assert "-webkit-mask: var(--dag-magnifier) center / 14px no-repeat; mask: var(--dag-magnifier)" in style

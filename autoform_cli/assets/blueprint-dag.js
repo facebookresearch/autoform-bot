@@ -253,6 +253,8 @@
       ui$selectedStatuses = new Set(presentStatuses), ui$reading = Boolean(firstBundle && firstBundle.readingSource),
       ui$overviewOnly = false, ui$filtersTouched = false, ui$relationIds = null,
       ui$requestedNode = firstBundle && firstBundle.nodeId || null, ui$outlineLimit = 120;
+    // A project that tracks no Lean (render marks its pages) has no Lean names to search for.
+    var leanNames = !host.closest('[data-tracks-lean="false"]');
     var dom$announcement, dom$body, dom$breadcrumb, dom$browse, dom$browseToggle, dom$browsePopover,
       dom$error, dom$filterPopover, dom$filterSummary, dom$filters, dom$graphMode, dom$hiddenButton,
       dom$inspector, dom$inspectorInner, dom$inventory, dom$inventoryList, dom$inventoryRows,
@@ -622,8 +624,8 @@
       dom$outlineToggle.setAttribute("aria-expanded", "false");
       var searchWrap = dom$searchWrap = element("div", "bp-dag-search-wrap");
       dom$search = element("input", "bp-dag-search");
-      dom$search.type = "search"; dom$search.placeholder = "Search titles and Lean names";
-      dom$search.setAttribute("aria-label", "Search titles and Lean names");
+      dom$search.type = "search"; dom$search.placeholder = leanNames ? "Search titles and Lean names" : "Search titles";
+      dom$search.setAttribute("aria-label", dom$search.placeholder);
       dom$search.setAttribute("aria-controls", "bp-dag-search-results-" + instance);
       dom$searchResults = element("div", "bp-dag-search-results"); dom$searchResults.id = "bp-dag-search-results-" + instance;
       dom$searchResults.setAttribute("role", "region"); dom$searchResults.setAttribute("aria-label", "Search results");
@@ -1017,7 +1019,8 @@
         more.addEventListener("keydown", searchResultKeydown);
         dom$searchResults.appendChild(more);
       }
-      if (!matches.length) dom$searchResults.appendChild(element("p", "bp-dag-overview", "No matching title, statement, article id, or Lean name."));
+      if (!matches.length) dom$searchResults.appendChild(element("p", "bp-dag-overview",
+        leanNames ? "No matching title, statement, article id, or Lean name." : "No matching title, statement, or article id."));
       if (ui$searchLoading) dom$searchResults.appendChild(element("p", "bp-dag-overview", "Searching the whole roadmap…"));
       else if (ui$searchError) dom$searchResults.appendChild(element("p", "bp-dag-overview", "Whole-roadmap search is unavailable; showing this view."));
       dom$searchResults.hidden = false;

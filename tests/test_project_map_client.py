@@ -319,9 +319,14 @@ def test_a_project_that_tracks_no_lean_shows_no_progress(tmp_path: Path, tracks_
       assert.strictEqual($$('.pm-legend').length, tracked ? 1 : 0);
       assert.strictEqual($('.pm-reader').querySelectorAll('.pm-bar').length, tracked ? 1 : 0);
       assert.strictEqual($$('.pm-bar').length, tracked ? 2 : 0);
-      // A selected result's chip says its status; with nothing to say, there is no chip.
+      // The search box offers Lean names only where the project tracks them, and so does a search that finds nothing.
       const search = $('.pm-search').querySelector('input');
-      search.value = 'Subgroup.card_dvd'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      const offer = tracked ? 'Search theorems by name or Lean name' : 'Search theorems by name';
+      assert.deepStrictEqual([search.placeholder, search.getAttribute('aria-label')], [offer, offer]);
+      search.value = 'zzz'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      assert.strictEqual($('.pm-hits').textContent, tracked ? 'No theorem or Lean name matches.' : 'No theorem matches.');
+      // A selected result's chip says its status; with nothing to say, there is no chip.
+      search.value = 'Subgroup.card_dvd'; emit(search, 'input'); await wait(5);
       emit(search, 'keydown', {key: 'Enter'}); await wait(40);
       assert.strictEqual($('.pm-reader').querySelector('h2').textContent, "Lagrange's theorem");
       assert.deepStrictEqual($$('.pm-chip', $('.pm-reader')).map(chip => chip.textContent), tracked ? ['fully proved'] : []);

@@ -341,16 +341,21 @@ def empty_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str
 
 
 @pytest.fixture(scope="module")
-def site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
-    """Serve a blueprint as render and MkDocs publish it, under Material's styles and scripts."""
+def site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """Serve a blueprint as render and MkDocs publish it, under Material's styles and scripts.
+
+    A test can pass a project setting for the roadmap's README, such as ``tracks_lean: false``.
+    """
     from mkdocs.commands.build import build
     from mkdocs.config import load_config
 
     project = tmp_path_factory.mktemp("site") / "project"
     scaffold_project(project, title="Explorer fixture")
     roadmap = project / "blueprint/roadmap"
+    setting = getattr(request, "param", "")
     (roadmap / "README.md").write_text(
-        "# Fixture roadmap\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n",
+        (f"---\n{setting}\n---\n\n" if setting else "")
+        + "# Fixture roadmap\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n",
         encoding="utf-8",
     )
     for chapter in ("Algebra", "Topology"):
@@ -1465,6 +1470,21 @@ def test_the_published_landing_page_is_one_full_page_explorer_opened_by_its_hero
     page.reload()
     _ready_site(page)
     playwright.expect(page.locator("#bp-live-activity")).to_have_count(0)
+
+
+@pytest.mark.parametrize(("site_url", "tracked"), [("", True), ("tracks_lean: false", False)], indirect=["site_url"])
+def test_search_offers_lean_names_only_in_a_project_that_tracks_lean(
+    desktop_page: object, site_url: str, tracked: bool
+) -> None:
+    """A project that tracks no Lean has none to search for: its search box, and a search that finds nothing, say so."""
+    page = _open_site(desktop_page, site_url, "index.html")
+    offer = "Search titles and Lean names" if tracked else "Search titles"
+    nothing = "No matching title, statement, " + ("article id, or Lean name." if tracked else "or article id.")
+    search = page.locator(".bp-dag-search")
+    playwright.expect(search).to_have_attribute("placeholder", offer)
+    playwright.expect(search).to_have_attribute("aria-label", offer)
+    search.fill("zzz")
+    playwright.expect(page.locator(".bp-dag-search-results")).to_contain_text(nothing)
 
 
 @pytest.mark.parametrize("width", (390, 1280))
