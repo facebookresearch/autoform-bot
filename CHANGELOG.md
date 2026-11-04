@@ -450,6 +450,9 @@ date when the release is tagged.
   `\varprojlim`. MathJax builds them from `\mmlToken`, which the page's TeX input
   turns off, so each showed a red `\notallowed`; they are now written without
   it, and a project macro of the same name still replaces one (#544).
+- **Table headers in the reading pane.** A table too wide for the explorer's
+  reading pane no longer breaks its headers mid-word ("Dependen t"): a cell
+  keeps its words whole, and the table scrolls.
 - **Import-closure scan.** `work import-impact --module-scope import-closure`
   reads uncaptured `.lean` files only in the root libraries' module trees and
   in dependency packages. It no longer reads other nested checkouts, such as

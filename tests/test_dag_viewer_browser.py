@@ -1848,6 +1848,26 @@ def test_published_explorer_controls_keep_their_own_styles_under_material(
     assert page.locator(".bp-dag-head").evaluate("head => head.scrollWidth <= head.clientWidth + 1")
 
 
+def test_a_reading_pane_table_keeps_its_words_whole(desktop_page: object, site_url: str) -> None:
+    """The pane breaks a long word anywhere, so a table squeezed into it broke its headers mid-word ("Dependen t")."""
+    page = _open_site(desktop_page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
+    headers, path = page.locator(".bp-reading-body > .bp-reading-source").evaluate("""source => {
+      const table = html => { const node = source.appendChild(document.createElement('table')); node.innerHTML = html; return node; };
+      const words = ['Dependent', 'Unwitnessed', 'Disposition', 'Statement', 'Reference', 'Coverage', 'Evidence'];
+      const wide = table('<tr>' + words.map(word => '<th>' + word + '</th>').join('') + '</tr>');
+      const named = table('<tr><td><code>Mathlib.AlgebraicGeometry.EllipticCurve.Projective.Point.toAffineLiftZeroEquivOfIsUnit</code></td></tr>');
+      const lines = node => {
+        const range = document.createRange(); range.selectNodeContents(node);
+        return new Set(Array.from(range.getClientRects(), rect => Math.round(rect.top))).size;
+      };
+      return [Array.from(wide.querySelectorAll('th'), lines), lines(named.querySelector('code'))];
+    }""")
+    # Seven headers don't fit the pane: each keeps its line, and the table scrolls instead.
+    assert headers == [1] * 7
+    # Material breaks code anywhere, so a long name in a cell doesn't widen its table past the pane.
+    assert path > 1
+
+
 def _assert_site_chrome_is_reachable(page: object) -> None:
     """The header and heading are visible, and each is the element a click would hit."""
     for chrome in (
