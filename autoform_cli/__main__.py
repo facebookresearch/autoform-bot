@@ -1680,7 +1680,7 @@ def _abstraction(args: argparse.Namespace) -> int:
             cluster, _ = abstraction.decide(root, args.cluster, "target", file=args.file, note=args.note)
             message = f"cluster {cluster.cluster_id} will be raised into {args.file}"
         else:
-            action = "raised" if args.raised else "dismissed"
+            action = "raised" if args.raised is not None else "dismissed"
             cluster, _ = abstraction.decide(
                 root, args.cluster, action, file=args.file, declaration=args.raised or "", note=args.note
             )

@@ -122,6 +122,8 @@ def test_decisions_choose_a_target_and_close_a_cluster(monkeypatch, tmp_path: Pa
 
     code, _, err = _cli(["abstraction", "close", first, str(project), "--dismissed"], monkeypatch)
     assert code == 2 and "note" in err
+    code, _, err = _cli(["abstraction", "close", first, str(project), "--raised", "", "--note", "x"], monkeypatch)
+    assert code == 2 and "declaration" in err and abstraction.select(root, first).status == "open"
     code, out, _ = _cli(
         ["abstraction", "close", first, str(project), "--raised", "Shared.foo_le", "--file", "Shared/Foo.lean"],
         monkeypatch,

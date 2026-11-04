@@ -9,9 +9,12 @@ code](../../../autoform_cli/reference/abstraction.md)). It lives in the debrief
 store, `abstractions/TODO.md`, which every worktree shares; a copy stays on it
 until a run raises or dismisses it.
 
-Raise copies only once no worker is running, after the frontier loop has
-stopped and before the orchestrator debrief, so the step needs no claims and no
-dependency tracking.
+Raise copies once none of this run's workers is running, after the frontier
+loop has stopped and before the orchestrator debrief, so the step needs no
+dependency tracking. Another session may still hold claims: when the run uses
+claims, the refactor subagent atomically acquires the claim targets of every
+article whose Lean it edits and of the target module, and if any is refused it
+leaves the cluster open.
 
 1. Run `autoform abstraction list <PROJECT> --json`; without open clusters,
    there is nothing to do.
@@ -26,7 +29,9 @@ dependency tracking.
 3. Give each cluster to one refactor subagent, one at a time, in a worktree on
    the shared branch, with the cluster's JSON and target file. It states the
    declaration once in the target file, public, named for what it states and no
-   more general than every copy needs; replaces each copy with a use of it; and
+   more general than every copy needs; replaces each copy, and the source it
+   was copied from, with a use of it, or makes the source the shared
+   declaration when the source's module is the target; and
    follows [import edits](../SKILL.md#import-edits) for each import it adds. It
    changes proofs only, not an article's statement, recorded `lean:`
    declaration or assertions: a cluster that needs that is a revision under the
