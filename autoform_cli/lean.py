@@ -750,7 +750,9 @@ def _indexed_source_snapshot(
             continue
         found, line_counts[relative_path] = _scan(text, relative_path)
         for declaration in found:
-            by_name.setdefault(declaration.name, []).append(declaration)
+            # Lean declares no name its grammar refuses, such as `$typeName.x` in a syntax quotation.
+            if _CONTINUATION_IDENTIFIER.fullmatch(declaration.name):
+                by_name.setdefault(declaration.name, []).append(declaration)
     source_digest = digest.hexdigest()
     return IndexedSourceSnapshot(
         SourceIndex(
@@ -1441,8 +1443,8 @@ def _continuation_name(text: str) -> str | None:
     return name
 
 
-#: A name as ``alias`` takes one: it starts with a letter, ``_`` or ``«``.
-_ALIAS_NAME = r"(?:«[^«»]*»|[^\W\d])(?:«[^«»]*»|[^\s:(){}\[\]⦃⦄,«»⟨⟩])*"
+#: A name as ``alias`` takes one: an identifier by the grammar above.
+_ALIAS_NAME = _CONTINUATION_IDENTIFIER.pattern
 #: What follows ``alias``: one name, or ``⟨mp, mpr⟩`` naming the two directions
 #: of an iff, either of which may be ``_``; then ``:=`` and, unless it is on the
 #: next line, the target.
@@ -1475,7 +1477,7 @@ def _aliases(
         candidates = (target.removeprefix("_root_."),)
     else:
         candidates = tuple(".".join([*namespaces[:depth], target]) for depth in range(len(namespaces), -1, -1))
-    atomic = target is not None and _ONE_COMPONENT.fullmatch(target) is not None
+    atomic = target is not None and _FIELD_NAME.fullmatch(target) is not None
     iff = match["name"] is None
     alias = Alias(candidates, atomic, iff)
     return [
@@ -1483,9 +1485,6 @@ def _aliases(
         for name in ([match["mp"], match["mpr"]] if iff else [match["name"]])
         if name != "_"
     ]
-
-
-_ONE_COMPONENT = re.compile(r"(?:«[^«»]*»|[^.«»])+")
 
 
 _RAW_OPEN = re.compile(r'r(#*)"')

@@ -96,6 +96,11 @@ date when the release is tagged.
   index reads in Mathlib reads as before; a spelling no Mathlib name has, such
   as `Nat..add`, `a«b»c` or `«a«b»`, now splits into components as that grammar
   splits it.
+- **Lean index names.** The Lean index leaves out names Lean cannot declare,
+  such as `$typeName.toBitVec_nsmul`, which it read from commands inside
+  syntax quotations (14 in Mathlib). An `alias` name takes Lean's identifier
+  characters: `alias ℘ := t` declares `℘`, and `alias Жук := t`, which Lean
+  refuses, declares nothing.
 - **Search index size.** `dependencies/index.json` no longer repeats links the
   explorer doesn't read. A row whose route the explorer opens drops its context
   `url`, and only container rows keep `data_url`, since every page names its
