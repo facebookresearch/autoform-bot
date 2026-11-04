@@ -177,16 +177,14 @@ sorted by `article_path` and `code`. Each also carries a `message` and
 `option`, `value`, `location` (the `set_option` as `path:line` relative to the
 Lean root), and `scope` (`file`, `section`, `declaration`, or `proof`), sorted
 by name. The catalog limit warnings under [Elaboration
-limits](#elaboration-limits) fill `declarations`. Six warnings leave it empty:
+limits](#elaboration-limits) fill `declarations`; the others leave it empty:
 `atlas-omission`, at `atlas.json`, names what loading ignored in that file;
 `invalid-pinned-list` the same for the [pinned name lists](pinned-names.md);
 `decomposed-without-declaration`, at `coverage/README.md`, names a `DECOMPOSED`
 row's links that reach no declaration leaf; `duplicate-lean-target`, at each
 target involved, names the others taking the same credit; `node-too-large`, at
 the node's article, gives its span against the project's median; and
-`invalid-implementation-note`, at the note or folder, gives `check`'s warning.
-The warnings about a source or coverage link earlier versions did not read take
-their finding's code and leave it empty too. A
+`invalid-implementation-note`, at the note or folder, gives `check`'s warning. A
 target (a leaf carrying `declaration:`) recording `statement: formalized` takes
 progress credit for its first `lean:` name, and a `mathlib: true` one Mathlib
 credit for its first `mathlib_declaration` name, compared as Lean names:
@@ -247,8 +245,6 @@ one of three findings reports a statement that does not, checked in this order:
 The prose is read as the site publishes it, without headings, code blocks, and
 diagrams; inline code and mathematics count. A status word that begins a
 sentence ("Pending Mathlib PR 1234 ...") passes, and so does a marker written
-without punctuation; both are left to review. A real statement that opens
-`Unknown: ...` or `Pending: ...` is reported and needs rewording, and so does
-one written in symbols alone, such as `⊥ ≠ ⊤.`. A reference-style link is read
+without punctuation; both are left to review. A reference-style link is read
 without its definition when that sits in a later section. Coverage evidence is
 held to the same placeholder rule.
