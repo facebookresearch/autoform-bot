@@ -12,9 +12,10 @@ import html
 import posixpath
 import re
 from dataclasses import dataclass, field
-from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+
+import html5lib
 
 #: The attribute through which each element links to, or loads, another file.
 _LINK_ATTRIBUTES = {
@@ -52,27 +53,28 @@ class _Page:
     cards: list[str] = field(default_factory=list)
 
 
-class _PageParser(HTMLParser):
+class _PageParser:
+    """Collect links and evidence from one complete HTML5 document tree."""
+
     def __init__(self, page: _Page) -> None:
-        super().__init__(convert_charrefs=True)
         self.page = page
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        values: dict[str, str] = {}
-        for name, value in attrs:
-            # A browser keeps the first of two equal attribute names.
-            values.setdefault(name, value or "")
-        if "id" in values:
-            self.page.ids.add(values["id"])
-        if tag == "a" and "name" in values:
-            self.page.ids.add(values["name"])
-        attribute = _LINK_ATTRIBUTES.get(tag)
-        if attribute is not None and attribute in values:
-            self.page.links.append(values[attribute])
-        if tag == "div" and "bp-thmwrapper" in values.get("class", "").split() and "data-autoform-node-id" in values:
-            self.page.cards.append(values["data-autoform-node-id"])
-
-    handle_startendtag = handle_starttag
+    def feed(self, text: str) -> None:
+        document = html5lib.parse(text, treebuilder="etree", namespaceHTMLElements=False)
+        for element in document.iter():
+            if not isinstance(element.tag, str):
+                continue
+            tag = element.tag.rpartition("}")[2]
+            values = element.attrib
+            if "id" in values:
+                self.page.ids.add(values["id"])
+            if tag == "a" and "name" in values:
+                self.page.ids.add(values["name"])
+            attribute = _LINK_ATTRIBUTES.get(tag)
+            if attribute is not None and attribute in values:
+                self.page.links.append(values[attribute])
+            if tag == "div" and "bp-thmwrapper" in values.get("class", "").split() and "data-autoform-node-id" in values:
+                self.page.cards.append(values["data-autoform-node-id"])
 
 
 def check_site(site_dir: str | Path, source_dir: str | Path | None = None) -> SiteReport:
@@ -105,7 +107,6 @@ def check_site(site_dir: str | Path, source_dir: str | Path | None = None) -> Si
         page = _Page()
         parser = _PageParser(page)
         parser.feed(text)
-        parser.close()
         pages[name] = page
     files: dict[str, str | None] = {}
     # A missing file many pages link to, such as a shared stylesheet, is reported once, with a count.

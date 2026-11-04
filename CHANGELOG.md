@@ -379,6 +379,10 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Site evidence.** `site check` reads an HTML5 element tree, so
+  markup-shaped text in raw-text elements cannot supply phantom anchors or
+  statement cards, or create false missing-link warnings.
+
 - **Unlistable project root.** `project inspect` no longer reports
   `project-changed-during-inspection` on every run for a project root that
   cannot be listed. A root that can still be searched (mode 0311) gets its
