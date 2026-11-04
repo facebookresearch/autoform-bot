@@ -21,7 +21,7 @@ date when the release is tagged.
   `audit` say which, and `audit` reports it as `invalid-pinned-list`. No exit
   status changes, render never publishes a list, and a project without the
   folder sees no change ([Pinned name
-  lists](autoform_cli/reference/pinned-names.md)).
+  lists](autoform_cli/reference/pinned-names.md), #626).
 - **Worktrees.** `autoform project worktrees` reports which linked worktrees
   are safe to remove after a run and what protects the rest: changes, Git
   operations, unintegrated commits, processes, recent activity and live leases
