@@ -16,18 +16,16 @@ they reported to you into your own answer.
 There is no `autoform` on `PATH` in a Lean project. Run it from `<PROJECT>` as
 `uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform`, where the root is the
 absolute plugin directory holding `skills/`, `pyproject.toml`, and
-`autoform_cli/`; give a subagent that prefix, with the root filled in, and its
-task.
+`autoform_cli/`; give a subagent that prefix, with the root filled in.
 
 Run `autoform debrief orchestrator form <PROJECT> --skill
 setup|roadmap|formalize`, naming the skill that ran (see the
 [CLI reference](../../autoform_cli/README.md#debrief)). If it says orchestrator
 debriefs are disabled, stop: there is nothing to do.
 
-Otherwise answer the form from your own experience of the run and store the
-answer with `autoform debrief orchestrator record <PROJECT> --skill <SKILL>`,
-from `--answer FILE` or standard input. If `record` rejects it, correct it and
-resubmit.
+Otherwise answer the form from your experience of the run and store the answer
+with `autoform debrief orchestrator record <PROJECT> --skill <SKILL>`, from
+`--answer FILE` or standard input. If `record` rejects it, correct and resubmit.
 
 When the answer reports friction with AutoformBot, `record` writes a draft issue
 for `facebookresearch/autoform-bot` outside the working tree and prints its
@@ -35,10 +33,9 @@ absolute path. The user does not see command output, so end your final report
 with the draft as a Markdown link to the whole path, exactly as printed and in
 angle brackets; the draft usually lives under `.git`, which editors hide:
 `[Draft AutoformBot issue](</home/me/proj/.git/autoform/debriefs/issues/RUN_ID.md>)`.
-Say that nothing has been sent and that the link at the bottom of the draft
-opens the issue form pre-filled with the recorded draft, so edits belong in the
-form; if `record` says the draft is too long for a link, say instead that the
-link fills in only the title. Do not paste that link itself. Never submit the
-issue yourself, with `gh` or otherwise: the user reviews it, edits it, and sends
-it. The draft is only as private as your answer, so leave project-specific
-content out of it.
+Say that nothing was sent and that the link at the bottom of the draft opens the
+issue form pre-filled with the recorded draft, so edits belong in the form; if
+`record` says the draft is too long for a link, say instead that the link fills
+in only the title. Do not paste that link. Never submit the issue yourself, with
+`gh` or otherwise: the user reviews it, edits it, and sends it. The draft is
+only as private as your answer, so leave project-specific content out of it.

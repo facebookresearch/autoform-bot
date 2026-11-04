@@ -88,8 +88,7 @@ still has one.
 target, `bridged` for a result introduced between source targets, and
 `background` for prerequisite mathematics.
 
-Frontmatter is optional; a container that only supplies prose and placement
-needs none.
+Frontmatter is optional.
 
 The optional `area` field groups the chapters, and deeper containers naming a
 chapter's area, into regions of the project map, and Topics heads each area's

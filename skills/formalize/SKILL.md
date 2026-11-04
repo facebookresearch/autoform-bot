@@ -22,8 +22,7 @@ work context <NODE> <PROJECT> --json` and, before its first edit, saves the
 output of `autoform audit <PROJECT>/blueprint --lean-root <PROJECT> --json` as
 its baseline audit. The phase is derived; never author ready, running, retrying,
 failed, or blocked scheduler states. If a command refuses for a missing
-`article_id`, make the repair its message names, validate, and commit before
-starting work.
+`article_id`, make the repair its message names, validate, and commit first.
 
 For a direct formalization request, use a compatible native persistent Goal when
 available and repeat frontier passes as below. When a run starts or resumes,
@@ -123,11 +122,10 @@ replaces `statement: retracted` with `statement: formalized`. Never add a new
 use of a deprecated declaration. Search the pinned Mathlib checkout before
 adding helpers, and use the shared Lean LSP and REPL with `<PROJECT>` as the
 project path. Finish with the focused Lake target, declaring the result in a
-module the library root imports or the lakefile's globs cover: CI compiles and
-audits only the default build. Check the recorded declaration with `#print
-axioms`; do not accept `sorry`, new axioms, unsafe shortcuts, a weaker theorem,
-unused hypotheses (see below), or an unrelated declaration, except as the
-open-statement policy below allows.
+module the library root imports or the lakefile's globs cover. Check the
+recorded declaration with `#print axioms`; do not accept `sorry`, new axioms,
+unsafe shortcuts, a weaker theorem, unused hypotheses (see below), or an
+unrelated declaration, except as the open-statement policy below allows.
 
 Before stating an article's result and before adding a helper, run `autoform
 search` over the blueprint of `<PROJECT>` and its usable shared libraries for
@@ -151,9 +149,8 @@ the faithful statement as a `theorem` whose whole body is `sorry` (not
 Batteries' `theorem_wanted` or `proof_wanted`) and records `statement:
 formalized`, or writes the full proof and, on acceptance, records both
 assertions. That `sorry` is never part of the type, a helper, a definition, or a
-`where` clause, nor one case of a recursive proof. A definition is never left
-open. In both policies the proof phase completes the proof of an already
-recorded statement without changing that statement.
+`where` clause, nor one case of a recursive proof. In both policies the proof
+phase leaves an already recorded statement unchanged and completes its proof.
 
 Under the open policy a proof may use the open statements its Markdown
 dependencies reach; `autoform work assumptions --json` lists the exact
@@ -199,8 +196,7 @@ audit <PROJECT>/blueprint --lean-root <PROJECT>`. Resolve every finding this
 work introduced on the selected article (match `article_path` and `code`, not
 `reason`, with the baseline audit), except a `lean-target-deprecated` that the
 revision contract expects. Delete every note the audit reports as
-`stale-implementation-note`, including another article's, such as a container's
-this proof completed or one an earlier commit left behind; the audit fails until
+`stale-implementation-note`, including another article's; the audit fails until
 they are all gone. Report other pre-existing findings instead of fixing them. A
 `catalog-unbounded-limit` or `catalog-unscoped-limit` warning describes existing
 Lean code and never fails the audit: report it, and change that code only when
@@ -211,26 +207,24 @@ review check`, which fails on a formalized statement until Human Review has
 filed its read-backs and approval. Never write read-backs or `review_approved`
 yourself. Hand each newly formalized statement, and each article whose
 read-backs or approval the result made stale (an import edit's repairs
-included), to Human Review; until that review lands, the gate stays red wherever
-the result is integrated.
+included), to Human Review.
 
 Commit the verified result in its worktree and rebase onto or merge the current
 shared branch. On the result, run the default `lake build` and `autoform audit`,
 delete every note the audit now reports as stale in a follow-up commit, and
-confirm that dependency readiness is unchanged and that the selected article
-differs from its starting `article_revision` only by this worker's edits; if
-integration changed the candidate, repeat the review, check, and audit. With the
-review marker, then run `autoform review check` with `--lean-root`, which needs
-that build, and report its findings for every article they name. For an import
-edit, re-run `autoform work import-impact` on the result; if integration brought
-in a change to an article it lists as affected, the candidate changed too:
-capture a fresh baseline of that article on the shared branch. In a run without
-claims, send the lead that report's `affected_claim_targets` and land the edit
-only once the lead confirms that no other worker holds them. Without authority
-to update or push the shared branch, without the lead's answer, or when
-integration fails, report the branch and commit for handoff. When the run uses
-claims, the [claim rules](references/claims.md#integration-and-handoff) say how
-to renew, keep, hand off, and release the claim set.
+confirm that dependency readiness is unchanged and the selected article differs
+from its starting `article_revision` only by this worker's edits; if integration
+changed the candidate, repeat the review, check, and audit. With the review
+marker, then run `autoform review check` with `--lean-root`, which needs that
+build, and report its findings for every article they name. For an import edit,
+re-run `autoform work import-impact` on the result; if integration brought in a
+change to an article it lists as affected, the candidate changed too: capture a
+fresh baseline of that article on the shared branch. In a run without claims,
+send the lead that report's `affected_claim_targets` and land the edit only once
+the lead confirms no other worker holds them. Without authority to update or
+push the shared branch, without the lead's answer, or when integration fails,
+report the branch and commit for handoff. When the run uses claims, follow the
+[claim rules](references/claims.md#integration-and-handoff) for the claim set.
 
 When `AUTOFORM_SUBAGENT_DEBRIEF=1`, the agent that worked an attempt follows
 the [subagent debrief steps](references/debrief-subagent.md) before reporting.

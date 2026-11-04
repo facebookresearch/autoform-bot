@@ -28,8 +28,7 @@ package name, target directory, and whether publication is wanted. Without
 explicit publication approval, make no remote changes.
 
 The [Cabannes thesis project](assets/cabannes-thesis-project/README.md) shows a
-set-up project with a deliberately partial DAG. Read it, but do not copy it:
-`project new` and `init` write the layout; its notes illustrate later skills.
+set-up project with a deliberately partial DAG. Read it, but do not copy it.
 
 For a new repository, create the project in an absent target directory:
 

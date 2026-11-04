@@ -2,14 +2,13 @@
 
 ## Search contract
 
-`autoform search` is a read-only projection of Markdown: it writes nothing,
-builds no index, and starts no process. An article is a hit only when every
-term of the query is a substring of one of its fields, not necessarily the
-same field for each term; this rule, the JSON shape, and the exit codes are
-the contract. How terms are cut, folded, shortened, and ranked may change
-(`search.py` describes it; `terms` in the JSON shows what was searched). Case,
-width, accents, typographic dashes and quotes, and invisible characters do not
-matter. The fields, best first:
+`autoform search` is a projection of Markdown: it writes nothing, builds no
+index, and starts no process. An article is a hit only when every query term is
+a substring of one of its fields, not necessarily the same field for each term;
+this rule, the JSON shape, and the exit codes are the contract. How terms are
+cut, folded, shortened, and ranked may change (`search.py` describes it; `terms`
+in the JSON shows what was searched). Case, width, accents, typographic dashes
+and quotes, and invisible characters do not matter. The fields, best first:
 
 - `title`, without its Markdown markup;
 - `lean`, the last component of each `lean:` and `mathlib_declaration` name, or
@@ -76,23 +75,21 @@ index file, adds one `note:` line on stderr naming the package and the flags
 that search it, and changes nothing else; the note only checks that the file
 exists, and `library list` decides whether the package is usable.
 
-The index is the file `autoform-library-index.jsonl` at the package root, or
-the file given as `--library NAME=PATH`. Its format,
-`autoform-library-index/v0`, may change without notice until it becomes `v1`.
-Before an index is used, search checks, by reading files, that the checkout
-is at the locked revision and pins the index's toolchain and direct
-dependencies, that the Lean files under the indexed directories are exactly
-the indexed modules with the recorded digests, and that the index is one
-generation. It refuses, with exit 2 and a message that begins `library NAME:`,
-a package that is not locked, not checked out, a path dependency, replaced by
-`.lake/package-overrides.json`, without an index, or failing a check, and every
-library of a project whose `.lake` or packages directory is a symbolic link.
-One refused library refuses the whole call, blueprint hits included. A package
-replaced with `lake --packages=` is not detected. Search verifies module names,
-files, and digests and the header's toolchain, dependencies, and source
-directories, but not the declaration records, a module's `module_doc` or
-`module_system`, or the header's `generator`, `probe`, or `package`, so these
-can be forged.
+The index is the file `autoform-library-index.jsonl` at the package root, or the
+file given as `--library NAME=PATH`. Its format, `autoform-library-index/v0`,
+may change without notice until it becomes `v1`. Before an index is used, search
+checks, by reading files, that the checkout is at the locked revision and pins
+the index's toolchain and direct dependencies, that the Lean files under the
+indexed directories are exactly the indexed modules with the recorded digests,
+and that the index is one generation. It refuses, with exit 2 and a message that
+begins `library NAME:`, a package that is not locked, not checked out, a path
+dependency, replaced by `.lake/package-overrides.json`, without an index, or
+failing a check, and every library of a project whose `.lake` or packages
+directory is a symbolic link. One refused library refuses the whole call,
+blueprint hits included. A package replaced with `lake --packages=` is not
+detected. Search does not verify the declaration records, a module's
+`module_doc` or `module_system`, or the header's `generator`, `probe`, or
+`package`, so these can be forged.
 
 A declaration matches when every term occurs in its last name component
 (`lean`), docstring, module header (`module_doc`), full name (also without
@@ -141,11 +138,10 @@ reports that is not in the source file exits 2 and names the declaration and
 its module: the source is not the one the library was built from.
 
 `--check` writes nothing. It exits 0 when the index at the root is current, 1
-when it is stale (as when there is no index), with the reason on standard
-error, and 2 when it cannot tell: the package root does not exist, the index
-exists but cannot be read, or the build is missing or stale. Run it in the
-library's CI after the build, with the same `--lib` flags, and pin the
-Autoform revision: the bytes of an index depend on it.
+when it is stale (as when there is no index), with the reason on standard error,
+and 2 when it cannot tell: the package root does not exist, the index exists but
+cannot be read, or the build is missing or stale. Run it in the library's CI
+after the build, with the same `--lib` flags, and pin the Autoform revision.
 
 The generator has been tested on Lean 4.34.1 and 4.35.0 only, CI runs its real
 tests on 4.35.0, and it is not supported on Windows. It exits 2, before it runs
