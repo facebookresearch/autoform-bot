@@ -61,7 +61,7 @@ and a list nested hundreds of levels deep, beyond what the site's converter can
 read.
 
 `check` also warns about a formula that defines a command or uses one the site
-turns off ([MathJax](../README.md#mathjax) lists them); the rest of the page is
+turns off ([MathJax](site.md#mathjax) lists them); the rest of the page is
 published as written. Put the project's notation in `blueprint/tex-macros.json`.
 
 `check --no-site-warnings` leaves these page warnings, and what would stop
