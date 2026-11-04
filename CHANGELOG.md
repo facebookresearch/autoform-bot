@@ -503,6 +503,10 @@ date when the release is tagged.
   structure's limits. For a constructor or other name the index does not read
   directly under a project type, `check` names the type's `path:line` in a
   declaration article instead of pointing to `.lake` (#509).
+- **`class abbrev` and `class inductive`.** The Lean source index reads
+  `class abbrev C` and `class inductive D` as declarations of `C` and `D`, as
+  Lean does, not as classes named `abbrev` and `inductive`. In Mathlib this
+  indexes 10 classes it missed, such as `Finite`, `ExpChar` and `IsGCDMonoid`.
 - **Dotted namespaces.** The Lean source index and `audit`'s limit scan open
   a scope for each component of `namespace A.B` or `section A.B`, and `end`
   closes one per component of its name, as Lean does: `end B` after
