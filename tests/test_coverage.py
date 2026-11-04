@@ -696,11 +696,13 @@ def test_ignores_fenced_tables_and_accepts_escaped_pipes(tmp_path: Path) -> None
 
 
 def test_the_contract_table_is_found_in_a_page_as_render_publishes_it() -> None:
-    """A fenced example is no contract, a row's cells split as the parser
-    splits them, and the table ends at the first blank line."""
+    """A fenced example, or a header line with no separator below it, is no
+    contract, a row's cells split as the parser splits them, and the table
+    ends at the first blank line."""
     page = (
         "---\ntitle: Coverage\n---\n\n# Coverage\n\n"
         "```markdown\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n| Example | MAPPED | x |\n```\n\n"
+        "| Area | Coverage | Evidence |\nwith no separator below it.\n\n"
         "| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
         "| Main theorem | `DECOMPOSED` | [Top](../roadmap/README.md#top) |\n"
         "| Rest | OUT | Case A \\| Case B |\n"
@@ -708,7 +710,7 @@ def test_the_contract_table_is_found_in_a_page_as_render_publishes_it() -> None:
     )
 
     assert contract_table(page) == (
-        range(12, 16),
+        range(15, 19),
         (
             ("Main theorem", "`DECOMPOSED`", "[Top](../roadmap/README.md#top)"),
             ("Rest", "OUT", "Case A | Case B"),

@@ -133,11 +133,12 @@ from .markdown import (
     boxed,
     converted_alone,
     directory_path,
-    has_substance,
+    frontmatter_end,
     mask_fences_and_comments,
     header_title,
     link_targets,
     name_text,
+    only_links,
     page_title,
     published_page,
     relative_link,
@@ -145,7 +146,6 @@ from .markdown import (
     rendered_visible_text,
     site_converter,
     statement_and_notes,
-    text_besides_links,
     title_text,
     yaml_string,
 )
@@ -2396,7 +2396,7 @@ def _render_summary_nav(
     # simplify without stranding it.
     coverage = destination / "coverage/README.md"
     if coverage.is_file():
-        title = title_text(_first_h1(coverage.read_text(encoding="utf-8")) or "Coverage")
+        title = title_text(_first_h1(coverage.read_text(encoding="utf-8")) or "Coverage") or "Coverage"
         # A section of its own: navigation.indexes takes a section's README as
         # the page its heading opens, which made Mathematics open this one.
         lines += [f"    - {title}", f"        - [{title}](coverage/README.md)"]
@@ -2520,10 +2520,6 @@ _COVERAGE_HEADINGS = {
     "DEFERRED": "Deferred",
     "OUT": "Out of scope",
 }
-#: The words that join a list of links and say nothing besides them.
-_CONNECTIVES = re.compile(r"\b(?:and|or)\b")
-
-
 def _render_coverage_page(
     page: str,
     *,
@@ -2539,10 +2535,10 @@ def _render_coverage_page(
     view, or None when the page holds no table with the contract's rows.
 
     Each disposition gets a heading with its count, and its rows follow in the
-    author's order, each led by its area. A DECOMPOSED row lists the
-    declarations its links reach, in book order, with their status. Its
-    evidence stays as written unless it is only links to roadmap articles,
-    which the list shows; every other row shows its evidence as written.
+    author's order, each led by its area and its evidence as written. A
+    DECOMPOSED row also lists the declarations its links reach, as the role
+    checks read them, in book order and with their status. The list replaces
+    evidence that is only links, each straight to one of those declarations.
     """
 
     found = contract_table(page)
@@ -2551,20 +2547,18 @@ def _render_coverage_page(
     span, rows = found
     above = next((match for line in reversed(_content_lines(page)[: span.start]) if (match := _HEADING.match(line))), None)
     level = min(len(above.group(1)) + 1, 6) if above else 2
-    body = _document_body(page)
-    affected = "<" in body
-    references = _convert_body(body)[1] if affected else None
+    shared = _shared_references(page)
 
     def authored(text: str) -> str:
-        # As on a chapter page, an affected page's own Markdown is parsed
-        # before it sits beside render's HTML.
-        return _protect_markdown_in_html(text, references=references, force=True) if affected else text
+        # As on a chapter page: once a "<" makes render parse the page's own
+        # Markdown, the rows written from its cells are parsed with it.
+        return text if shared is None else _protect_markdown_in_html(text, references=shared, force=True)
 
     children = _containment_children(graph)
     shown: dict[str, list[str]] = {}
     for entry, (area, _, evidence) in zip(coverage.entries, rows):
         statements: list[str] = []
-        only_links = False
+        listed_only = False
         if entry.disposition == "DECOMPOSED":
             targets = coverage_target_nodes(graph, coverage, entry.evidence, by_path=node_sources)
             reached = dict.fromkeys(
@@ -2574,28 +2568,29 @@ def _render_coverage_page(
                 if _is_countable(graph, leaf, containers)
             )
             statements = sorted(reached, key=lambda node_id: (rank.get(node_id, len(rank)), node_id))
-            besides = text_besides_links(evidence)
-            only_links = (
+            # Each link names one listed statement, no part of a page, and
+            # nothing else is written: no image, no other link, no other words.
+            written = link_targets(entry.evidence)
+            listed_only = (
                 bool(statements)
-                and besides is not None
-                and not has_substance(_CONNECTIVES.sub("", besides))
-                and len(set(link_targets(entry.evidence))) == len(targets)
+                and len(set(written)) == len(targets)
+                and all(_is_countable(graph, node_id, containers) for node_id in targets)
+                and not any(urlsplit(target).fragment for target in written)
+                and only_links(evidence, len(written))
             )
-        references_html = _node_references(statements, graph=graph, statuses=statuses, links=links)
-        lead = f"**{area}**"
-        if not only_links:
-            lead += f"  \n{evidence}"
-        elif len(statements) == 1:
-            lead += f"  \n{references_html}"
-        block = authored(lead)
-        if len(statements) > 1:
+        # As HTML, so an area the author wrote in bold stays bold.
+        block = authored(f"<strong>{area}</strong>" if listed_only else f"<strong>{area}</strong>  \n{evidence}")
+        listed = _node_references(statements, graph=graph, statuses=statuses, links=links)
+        if len(statements) == 1:
+            block += f'\n\n<div class="bp-dependency-body">{listed}</div>'
+        elif statements:
             counted = f"{len(statements):,} statements"
             if graph.tracks_lean:
                 selected = {node_id: statuses[node_id] for node_id in statements}
                 counted += "".join(f" · {count:,} {state.label}" for state, count in status.summarize(selected))
             block += (
                 f'\n\n<details class="bp-dependencies" data-search-exclude><summary>{html.escape(counted)}</summary>'
-                f'<div class="bp-dependency-body">{references_html}</div></details>'
+                f'<div class="bp-dependency-body">{listed}</div></details>'
             )
         shown.setdefault(entry.disposition, []).append(block)
     view = "\n\n".join(
@@ -3454,6 +3449,16 @@ def _chapter_layout(
     return lead, slots
 
 
+def _shared_references(narrative: str) -> dict[str, tuple[str, str]] | None:
+    """The reference definitions each stretch of ``narrative`` is parsed with,
+    when a "<" anywhere in it, its title included, makes render parse its
+    Markdown before render's HTML sits beside it; None when nothing does."""
+
+    lines = narrative.splitlines()
+    body = "\n".join(lines[frontmatter_end(lines) :])
+    return _convert_body(body)[1] if "<" in body else None
+
+
 def _place_environments(
     narrative: str, lead: int, slots: dict[int, str], *, summary: str, environments: dict[str, str],
     protect: bool = False,
@@ -3466,10 +3471,8 @@ def _place_environments(
     lines = narrative.splitlines()
     output: list[str] = []
     pending: list[str] = []
-    affected = protect and "<" in _document_body(narrative)
-    references = None
-    if affected:
-        _, references, _ = _convert_body(_document_body(narrative))
+    references = _shared_references(narrative) if protect else None
+    affected = references is not None
 
     def flush() -> None:
         if pending:

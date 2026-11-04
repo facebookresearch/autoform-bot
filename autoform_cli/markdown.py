@@ -492,17 +492,28 @@ def visible_prose(value: str) -> str:
     return _collapse("".join(_visible_parts(tree, hidden=False)))
 
 
-def text_besides_links(value: str) -> str | None:
-    """Return the text a reader sees in ``value`` once its links are left out,
-    or None when the renderer cannot process it."""
+#: The words that join a list of links and say nothing besides them.
+_CONNECTIVES = re.compile(r"\b(?:and|or)\b")
+
+
+def only_links(value: str, links: int) -> bool:
+    """Whether a reader sees nothing in ``value`` but ``links`` links and the
+    commas and words that join them: no image, no other link, and no other
+    text. False when the renderer cannot process it."""
 
     tree = render_tree(value)
     if tree is None:
-        return None
+        return False
+    seen = 0
     for element in tree.iter():
-        if _local_name(element) == "a":
+        name = _local_name(element)
+        if name == "img":
+            return False
+        if name == "a":
+            seen += 1
             element.set("hidden", "")
-    return _collapse("".join(_visible_parts(tree, hidden=False)))
+    rest = _collapse("".join(_visible_parts(tree, hidden=False)))
+    return seen == links and not has_substance(_CONNECTIVES.sub("", rest))
 
 
 def has_substance(visible: str) -> bool:
@@ -1314,5 +1325,6 @@ __all__ = [
     "yaml_string",
     "strip_line_comments",
     "first_unclosed_fence",
+    "only_links",
     "visible_prose",
 ]

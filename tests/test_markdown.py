@@ -29,7 +29,7 @@ from autoform_cli.markdown import (
     render_html,
     rendered_visible_text,
     resolved_path,
-    text_besides_links,
+    only_links,
     visible_prose,
 )
 
@@ -785,17 +785,20 @@ def test_visible_prose_keeps_inline_code_and_drops_hidden_text() -> None:
 
 
 @pytest.mark.parametrize(
-    ("source", "expected"),
+    ("source", "links", "expected"),
     [
-        ("[A](a.md), [B](b.md), and [C](c.md)", ", , and"),
-        ("[`K(X)`](a.md)", ""),
-        ("[A](a.md) uses Exercise 6.2", "uses Exercise 6.2"),
-        ("See <https://example.test/notes>.", "See ."),
-        ("No links here", "No links here"),
+        ("[A](a.md), [B](b.md), and [C](c.md)", 3, True),
+        ("[A](a.md); [B](b.md) or [C](c.md).", 3, True),
+        ("[`K(X)`](a.md)", 1, True),
+        ("[A](a.md) uses Exercise 6.2", 1, False),
+        ("[A](a.md) <https://example.test/paper>", 1, False),
+        ("[A](a.md) ![scan](scan.png)", 1, False),
+        ("[A](a.md)", 2, False),
+        ("No links here", 0, False),
     ],
 )
-def test_text_besides_links_leaves_out_every_link(source: str, expected: str) -> None:
-    assert text_besides_links(source) == expected
+def test_only_links_wants_the_links_counted_and_nothing_else(source: str, links: int, expected: bool) -> None:
+    assert only_links(source, links) is expected
 
 
 def test_visible_text_survives_markup_nested_thousands_deep() -> None:

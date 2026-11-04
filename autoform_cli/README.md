@@ -370,7 +370,7 @@ The machine-checkable `coverage/README.md` contract contains one
   `coverage-role-mismatch`; any other link reaching no declaration leaf, such as
   prose or `not_ready` leaves that declare nothing yet, is a
   `decomposed-without-declaration` warning. The site's coverage view lists the
-  declarations the row reaches, with their status.
+  declarations the row reaches.
 - `DEFERRED` and `OUT` record an explicit later milestone or exclusion.
 
 Audit JSON includes canonical rows, the exact coverage source hash, and counts,
