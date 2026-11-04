@@ -11,6 +11,17 @@ date when the release is tagged.
 
 ### Added
 
+- **Pinned name lists.** A JSON Lines file in `blueprint/libraries/`, schema
+  `autoform-pinned-names/v0`, names the declarations a library holds at one
+  pinned revision; a wiki that cites Mathlib can generate one. Once a list holds
+  a name, `check` warns about a `mathlib_declaration` name that no list holds,
+  one the lists pin to different sources, a deprecated one, and a `mathlib_file`
+  other than the first name's module path. A list whose file or header breaks
+  the schema is left out, and a bad record is skipped; `check`, `render` and
+  `audit` say which, and `audit` reports it as `invalid-pinned-list`. No exit
+  status changes, render never publishes a list, and a project without the
+  folder sees no change ([Pinned name
+  lists](autoform_cli/reference/pinned-names.md), #626).
 - **Worktrees.** `autoform project worktrees` reports which linked worktrees
   are safe to remove after a run and what protects the rest: changes, Git
   operations, unintegrated commits, processes, recent activity and live leases
@@ -69,6 +80,12 @@ date when the release is tagged.
 
 ### Changed
 
+- **Statements go by their names.** A statement's heading and every link to it,
+  in Uses, Used by and Assumes, show its name instead of a generated number:
+  "Theorem 55 (Bézout's theorem)" reads "Bézout's theorem", with the kind on a
+  small line above the name. A title that is only the kind word, or empty, is
+  named by the kind. Statements that share a title now read alike. Anchors and
+  links into a page don't change (#612).
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
@@ -209,11 +226,10 @@ date when the release is tagged.
   filter links still open there; without JavaScript they refresh to it. They
   load no explorer, stylesheet or data of their own, and
   `dependencies/full.json` is no longer written (#597).
-- **Book order.** Previous/Next, the site nav, statement numbers, Next up and
-  the explorer's outline and search follow one reading order, down the
-  containment tree, so a landing-page shortcut no longer reorders the book and
-  sites get new statement numbers. Pages their parent does not link now join
-  the site nav and Previous/Next, after the pages it links (#495).
+- **Book order.** Previous/Next, the site nav, Next up and the explorer's
+  outline and search follow one reading order, down the containment tree, so a
+  landing-page shortcut no longer reorders the book. Pages their parent does not
+  link now join the site nav and Previous/Next, after the pages it links (#495).
 - **Book copy.** The landing lead keeps link text, code, formulas and whole
   sentences. Next up says which Lean step is next. A chapter's progress is one
   line of counts whose status meanings show on hover, gone when the chapter has
@@ -410,6 +426,11 @@ date when the release is tagged.
   cannot be listed. A root that can still be searched (mode 0311) gets its
   report, and the library commands read it; one that cannot be searched
   reports `unreadable-file`.
+- **Pin files read mid-write.** `library index`, and every command that checks
+  a library's index against its checkout, read the library's pin files until
+  two reads agree, so a write that lands during a read is read again. Pins that
+  keep changing are refused as changing, where they were reported as over 1 MiB
+  or unreadable.
 - **Decision files on Windows.** `project inspect` and the library commands
   read `lean-toolchain`, the lakefiles and the manifests in text mode on
   Windows, which turned CRLF into LF and stopped at a 0x1A byte. They now read
@@ -494,6 +515,10 @@ date when the release is tagged.
   structure's limits. For a constructor or other name the index does not read
   directly under a project type, `check` names the type's `path:line` in a
   declaration article instead of pointing to `.lake` (#509).
+- **`class abbrev` and `class inductive`.** The Lean source index reads
+  `class abbrev C` and `class inductive D` as declarations of `C` and `D`, as
+  Lean does, not as classes named `abbrev` and `inductive`. In Mathlib this
+  indexes 10 classes it missed, such as `Finite`, `ExpChar` and `IsGCDMonoid`.
 - **Dotted namespaces.** The Lean source index and `audit`'s limit scan open
   a scope for each component of `namespace A.B` or `section A.B`, and `end`
   closes one per component of its name, as Lean does: `end B` after

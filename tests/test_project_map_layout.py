@@ -2,23 +2,16 @@
 
 from __future__ import annotations
 
-import json
-import shutil
-import subprocess
 from pathlib import Path
 
-import pytest
+from tests.dom_fixture import run_dom
 
-_NODE = shutil.which("node")
 _LAYOUT = Path(__file__).resolve().parents[1] / "autoform_cli/assets/project-map-layout.js"
-pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for map layout tests")
 
 _HARNESS = r"""
-const fs = require('fs'), vm = require('vm'), assert = require('assert');
-const context = {window: {}};
-vm.createContext(context);
-vm.runInContext(fs.readFileSync(LAYOUT, 'utf8'), context, {timeout: 2000});
-const L = context.window.AutoformMapLayout, {MIN_W, MIN_H, GAP} = L.constants;
+const assert = require('assert');
+load(args.layout);
+const L = window.AutoformMapLayout, {MIN_W, MIN_H, GAP} = L.constants;
 const DESKTOP = {w: 900, h: 780}, PHONE = {w: 390, h: 700}, EPS = 1e-6;
 function summary(id, results) {
   return {id, title: 'Part ' + id, results, status: {}, parts: 0, api: [], api_total: 0, imports_total: 0, file: id + '.json'};
@@ -86,9 +79,7 @@ function checkRoutes(routes, boxes) {
 
 
 def _run(body: str) -> None:
-    script = "const LAYOUT=" + json.dumps(str(_LAYOUT)) + ";\n" + _HARNESS + body
-    completed = subprocess.run([_NODE, "-e", script], capture_output=True, text=True, timeout=30)
-    assert completed.returncode == 0, completed.stdout[-2000:] + completed.stderr[-6000:]
+    run_dom(_HARNESS + body, args={"layout": str(_LAYOUT)}, timeout=30)
 
 
 def test_opening_regions_are_readable_on_desktop_and_phone_and_repeatable() -> None:
