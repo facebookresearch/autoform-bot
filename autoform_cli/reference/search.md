@@ -31,12 +31,12 @@ digit while `^` and `_` stay, so `S^1` does not find `S¹`, nor `H_0` `H₀`. A
 name with a dot, underscore, or digit is searched exactly. Hits sort by the
 best field any term matched, and last by node ID.
 
-`--state` (`proved` excludes `fully_proved`) and `--declaration` apply before
-`total_matches` is counted, and `--limit` after. Both are deprecated and go in
-0.8.0: filter the JSON hits' `state` and `declaration`, with `--limit` at least
-`total_matches`. `--declaration def` also keeps `noncomputable def`, not
-`definition`. A kind no article declares gets a note on standard error, or, when
-no requested kind is declared, exit 2 naming the kinds in use.
+`--state` (`proved` does not include `fully_proved`) and `--declaration` apply
+before `total_matches` is counted, and `--limit` after. `--declaration def`
+also keeps `noncomputable def`, but not `definition`. When no article declares
+any of the requested kinds, search refuses with exit 2 and names the kinds in
+use; a requested kind no article declares, beside one that some article does,
+gets a note on standard error.
 
 `--json` writes `autoform-search/v1`: `schema`, `source_revision`,
 `open_statements`, `query`, `terms`, `filters` (`declaration` and `state`,
