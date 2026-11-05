@@ -54,7 +54,7 @@ _CALLBACKS = [
     "element", "button", "readingLabel", "bindNodeLink", "safeHref", "buildShell", "bindEvents", "syncControls",
     "setBrowse", "setFilters", "trailList", "renderBreadcrumb", "routeTrail", "semanticParent",
     "refreshReadingLabels", "tooltip", "sourceNodes", "inCurrentScope", "focusMap", "mapControl", "clearSelection",
-    "revealAll", "statusLabel",
+    "revealAll", "statusLabel", "plainTitle",
 ]
 
 

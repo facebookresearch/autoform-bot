@@ -1344,7 +1344,7 @@
       var handleTitle = close ? "" : readingLabel("span", "bp-dag-sheet-title", title, record && record.reading_title);
       dom$sheetHandle.replaceChildren(close ? "×" : record && record.result && record.status ? swatch(record.status) : "", handleTitle);
       if (handleTitle) refreshReadingLabels(dom$sheetHandle);
-      dom$sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");
+      dom$sheetHandle.setAttribute("aria-label", close ? "Close reading" : plainTitle(title, record && record.reading_title) + ", reading");
       dom$sheetHandle.title = !opened ? "Open reading" : navigation && sheetLayout() && !host.classList.contains("bp-dag-sheet-full") ? "Expand reading" : "Close reading";
       if (collapsed) {
         if (dom$inspectorInner.contains(document.activeElement)) dom$sheetHandle.focus();

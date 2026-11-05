@@ -2576,19 +2576,22 @@ def test_explorer_title_math_has_no_raw_tex_tooltips_or_clipped_focus_rings(
 def test_tab_titles_and_place_lines_read_title_math_as_text(
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
 ) -> None:
-    """A tab title or a search hit's place line cannot typeset: a formula reads as text and code keeps its dollars."""
+    """A tab title, a place line or a label cannot typeset: a formula reads as text and code keeps its dollars."""
     from tests.test_integrated_explorer_browser import _routes
 
     page, site_url = desktop_page, marked_math_site_url
     _routes(page, site_url, marked_math_runtime, graph_client=True)
     page.goto(_site_route(page, site_url, "algebra"))
     _ready_site(page)
+    handle = page.locator(".bp-dag-sheet-handle")
     playwright.expect(page).to_have_title("Groups ZZ/n and code $literal$")
+    playwright.expect(handle).to_have_attribute("aria-label", "Groups ZZ/n and code $literal$, reading")
     page.locator(".bp-dag-search").fill("algebra/title-foundation")
     hit = page.locator('.bp-dag-result[data-result-id="algebra/title-foundation"]')
     playwright.expect(hit.locator(".bp-dag-result-place")).to_have_text("Groups ZZ/n and code $literal$")
     hit.click()
     playwright.expect(page).to_have_title("Groups ℤ/n and code $literal$")
+    playwright.expect(handle).to_have_attribute("aria-label", "Groups ℤ/n and code $literal$, reading")
 
 
 def test_failed_reader_reconciliation_opens_current_permalink_in_fresh_native_tab(

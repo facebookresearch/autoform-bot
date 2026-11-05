@@ -311,8 +311,9 @@ def test_the_phone_reader_peeks_opens_to_half_or_covers_the_map() -> None:
     # The handle names the page, typesetting its TeX, with a status mark only for a statement.
     assert 'refs.sheetHandle.replaceChildren(close ? "×" : record && record.result && record.status ? swatch(record.status) : "", handleTitle);' in script
     assert 'readingLabel("span", "bp-dag-sheet-title", title,' in script
-    # Its accessible name starts with the title it shows; an open desktop reader over the overview closes with ×.
-    assert 'refs.sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");' in script
+    # Its accessible name starts with the title it shows, as text; an open desktop reader over the overview closes with ×.
+    assert ('refs.sheetHandle.setAttribute("aria-label", close ? "Close reading" : '
+            'plainTitle(title, record && record.reading_title) + ", reading");') in script
     assert "Toggle mathematical reading" not in script
     assert "close = opened && !sheetLayout() && state.overviewOnly" in script
     assert "var page = currentBundle || data" in script
