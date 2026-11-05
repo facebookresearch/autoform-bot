@@ -142,7 +142,7 @@ date when the release is tagged.
   `roadmap/README.md` says, and counts the rest. A page whose published
   table is not the contract's gets no view, and render warns. The rest of the
   page is unchanged. In the sidebar the page is the book's last entry, named by
-  its title, and Mathematics no longer opens it (#631).
+  its title, and Mathematics no longer opens it (#631, #645).
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
