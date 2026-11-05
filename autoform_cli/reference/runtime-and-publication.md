@@ -17,9 +17,8 @@ lexical local-source check, not a Lean build, kernel check, or proof-honesty
 review. The `lean targets` check holds every finding that needs the Lean root,
 and an unusable Lean root or unreadable source fails only that check. The
 bundled example intentionally exits nonzero while its declared coverage still
-holds `MAPPED` rows. The doctor is read-only and local:
-it does not invoke Git, GitHub, subprocesses, network services, claims,
-renderers, or dashboards, and it writes no file.
+holds `MAPPED` rows. The doctor is read-only and local: it runs no Git, GitHub,
+subprocess, network service, claim, renderer or dashboard, and writes no file.
 
 ## Runtime contract
 
@@ -41,20 +40,19 @@ load. The `runtime` module docstring describes it for Python consumers.
 
 ## Publication contract
 
-`autoform render` publishes the book, derived progress, and the bounded
-project, chapter, and nested-scope projections the book reads; the old
-dependency pages redirect to the book. Rendering
-never reads a `graph.json` or an operational queue;
-[wiki references](wiki-links.md) are also derived. Hidden files and directories,
-including `.implementation-notes`, are omitted; render reads no implementation
-notes; `check` validates them. A `.autoform` directory and symlinks,
-credentials, logs, provider state, and agent/task state outside hidden
-directories fail the render rather than leak. Source and output directories must
-be disjoint. Render refuses a blueprint path that differs only in case from a
-file it writes at a fixed path ([the site page](site.md#files-render-writes)
-lists them), and two blueprint paths that differ only in case or Unicode form. A
-blueprint file at exactly `dependencies.json` or `javascripts/blueprint-dag.js`
-is left out of the site with a warning.
+`autoform render` publishes the book, derived progress, and the bounded project,
+chapter, and nested-scope projections the book reads; the old dependency pages
+redirect to the book. Rendering never reads a `graph.json` or an operational
+queue; [wiki references](wiki-links.md) are also derived. Hidden files and
+directories, such as `.implementation-notes`, are omitted; only `check` reads
+the notes. A `.autoform` directory and symlinks, credentials, logs, provider
+state, and agent/task state outside hidden directories fail the render rather
+than leak. Source and output directories must be disjoint. Render refuses a
+blueprint path that differs only in case from a file it writes at a fixed path
+([the site page](site.md#files-render-writes) lists them), and two blueprint
+paths that differ only in case or Unicode form. A blueprint file at exactly
+`dependencies.json` or `javascripts/blueprint-dag.js` is left out of the site
+with a warning.
 
 The search index and graph breadcrumbs may carry `reading_title` (`inline-parts-v1`):
 captured title text and publisher-derived text, code and marked TeX parts.
@@ -66,43 +64,45 @@ Every render writes `publication.json`, schema `autoform-publication/v3`, with
 blueprint and Lean-source hashes (the Lean-source hash is empty when render
 reads no Lean sources), Git ref, article and dependency counts, the site's file
 inventory, and available views (`project`, `chapter` and `full` name the old
-dependency pages). It holds no timestamp or absolute path, so
-identical inputs produce identical output files. The dashboard accepts only a v3
-site and reports an older one as stale until render replaces it. Render reads
+dependency pages). `autoform` names the Autoform that rendered it: its version,
+and its commit and repository when known. `inventory` gives every file the
+verified commit holds below the blueprint (else every file or skipped folder
+render read) its site URL, repository URL or reason left out; a file's role is
+its first folder (`roadmap`, `sources`, `coverage`, `links`), else `hidden` for
+a dot name, else `other`. It holds no timestamp or absolute path, so identical
+inputs and Autoform produce identical output files. The dashboard accepts only a
+v3 site and reports an older one as stale until render replaces it. Render reads
 the blueprint and the Lean sources once each; an edit saved during a render
-waits for the next one, and until then the dashboard reports the built site as
-stale. Under `--review`, an article or cited passage edited during extraction
-fails the render instead ([review](../README.md#review)).
+waits for the next one. Under `--review`, an article or cited passage edited
+during extraction fails the render instead ([review](../README.md#review)).
 
 Repository links appear only when the Lean bytes match one locally available Git
 commit, recorded by its full object ID; a clean checkout that Git converts on
 checkout still matches. Otherwise the render stays local, keeps source notes in
 the site, records no Git ref, and warns with the first mismatch. Links into the
 blueprint (an article's Markdown source, a source note) also need the
-blueprint's bytes in that commit; when they differ, render keeps the code links,
-keeps source notes in the site, and warns with the first mismatch, or, for a
-blueprint outside the repository or in a nested checkout, does the same without
-a warning. When render reads no Lean file (native Windows, or a project with no
-`.lean` file yet), it records the Git ref only if the blueprint matches it.
+blueprint's bytes in that commit; when they differ, render keeps the code links
+and source notes and warns, silently for a blueprint outside the repository or
+in a nested checkout. With no Lean file read (native Windows, or no `.lean` file
+yet), it records the Git ref only if the blueprint matches it.
 
 Render replaces only an empty directory or a complete `autoform-publication/v2`
 or v3 site whose files match its inventory (`.DS_Store` and `._*` are ignored),
-and refuses anything else, including a legacy v1 output, which you remove once
-by hand. A failed or refused render leaves the output as it was. The site is
-built in a hidden `.autoform-publication-*` directory beside the output (the
-repository root for `--output site-src`) and swapped in at once; renders into
-one parent directory take turns when it can be locked. A build directory a
-killed render leaves behind is covered by the setup ignore rules but may hold
-the previous site, so inspect it before deleting it. On filesystems without an
-atomic exchange the previous site is first renamed to
-`.autoform-publication-backup-<name>`, which the next render moves back if the
-swap died midway. On macOS `fsync` does not flush the drive's cache, so a power
-loss can still lose the newest site. Native Windows reads the blueprint and the
-output as two pathname captures that must agree, commits through the backup
-swap without a lock, and reads the Lean sources only for an explicit
-`--lean-root`, which then fails closed. Without one it publishes no code
-links; when a published statement names a `lean:` declaration it warns, and
-`--require-declarations` makes it exit 1.
+and refuses anything else, such as a legacy v1 output. A failed or refused
+render leaves the output as it was. The site is built in a hidden
+`.autoform-publication-*` directory beside the output (the repository root for
+`--output site-src`) and swapped in at once; renders into one parent directory
+take turns when it can be locked. A build directory a killed render leaves
+behind is covered by the setup ignore rules but may hold the previous site, so
+inspect it before deleting it. On filesystems without an atomic exchange the
+previous site is first renamed to `.autoform-publication-backup-<name>`, which
+the next render moves back if the swap died midway. On macOS `fsync` does not
+flush the drive's cache, so a power loss can still lose the newest site. Native
+Windows reads the blueprint and the output as two pathname captures that must
+agree, commits through the backup swap without a lock, and reads the Lean
+sources only for an explicit `--lean-root`, which then fails closed. Without one
+it publishes no code links; when a published statement names a `lean:`
+declaration it warns, and `--require-declarations` makes it exit 1.
 
 Check the site MkDocs builds from render's output for what the build broke:
 

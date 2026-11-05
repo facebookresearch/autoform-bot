@@ -137,6 +137,25 @@ def _git_tree_oids(
     return result
 
 
+def tracked_files(root: str | Path, commit: str, directory: Path) -> list[str] | None:
+    """Every file *commit* holds below *directory*, a directory of the working
+    tree at *root*, relative to it, in one ``ls-tree``; ``None`` when the tree
+    cannot be read."""
+
+    top_level = repository_top_level(root)
+    if top_level is None:
+        return None
+    try:
+        prefix = Path(directory).resolve().relative_to(top_level).as_posix()
+    except ValueError:
+        return None
+    completed = run_git(top_level, "ls-tree", "-rz", "--full-tree", "--name-only", commit, "--", f":(literal){prefix}")
+    if completed.returncode != 0:
+        return None
+    start = len(prefix) + 1
+    return sorted(os.fsdecode(path)[start:] for path in completed.stdout.split(b"\0") if path)
+
+
 def detect_repository_url(root: str | Path) -> str | None:
     """Find the project's web URL from the CI environment or the git remote."""
     repository = (
@@ -308,5 +327,6 @@ __all__ = [
     "git",
     "repository_top_level",
     "run_git",
+    "tracked_files",
     "verify_repository_snapshot",
 ]

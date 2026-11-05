@@ -11,6 +11,7 @@ fixed, so the tool writes it.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import os
 import re
@@ -18,6 +19,7 @@ import stat
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -481,10 +483,8 @@ def plugin_pin(
 
     running_root = _here()
     root = _checkout_root(running_root) or _marketplace_checkout()
-    if root is None:
-        return "", ""
-    ref = _git("rev-parse", "HEAD", root=root)
-    if ref is None or not _FULL_SHA.fullmatch(ref) or not _git_checkout_clean(root):
+    ref = _clean_head(root) if root is not None else None
+    if root is None or ref is None:
         return "", ""
     source = _select_remote_source(root, ref)
     if source is None:
@@ -520,6 +520,46 @@ def plugin_pin(
     ):
         return "", ""
     return source, ref
+
+
+def _clean_head(root: Path) -> str | None:
+    """The commit checked out at *root*, unless a tracked file differs from it."""
+
+    ref = _git("rev-parse", "HEAD", root=root)
+    return ref if ref is not None and _FULL_SHA.fullmatch(ref) and _git_checkout_clean(root) else None
+
+
+@cache
+def autoform_revision() -> tuple[str, str, str]:
+    """The running Autoform's version, then the commit and the repository its
+    code came from, each empty when nothing records it.
+
+    First the ``direct_url.json`` pip and uv write for an install from Git, as
+    generated CI makes, then the checkout this CLI runs out of, whose commit
+    counts only while no tracked file differs from it, as :func:`plugin_pin`
+    requires. A repository that is not a credential-free HTTPS source is left
+    out, since the site publishes it.
+    """
+
+    try:
+        distribution = importlib.metadata.distribution("autoform")
+    except importlib.metadata.PackageNotFoundError:
+        distribution = None
+    version = distribution.version if distribution is not None else ""
+    try:
+        recorded = json.loads((distribution.read_text("direct_url.json") if distribution else None) or "null")
+    except ValueError:
+        recorded = None
+    vcs = recorded.get("vcs_info") if isinstance(recorded, dict) else None
+    commit = vcs.get("commit_id") if isinstance(vcs, dict) and vcs.get("vcs") == "git" else None
+    if isinstance(commit, str) and _FULL_SHA.fullmatch(commit.lower()):
+        url = recorded.get("url")
+        return version, commit.lower(), (_normalize_autoform_source(url) if isinstance(url, str) else None) or ""
+    root = _checkout_root(_here())
+    ref = _clean_head(root) if root is not None else None
+    if root is None or ref is None:
+        return version, "", ""
+    return version, ref, _select_remote_source(root, ref) or ""
 
 
 def _checkout_pin(templates: tuple[tuple[str, bytes, int], ...]) -> tuple[str, str]:
@@ -1112,6 +1152,7 @@ __all__ = [
     "DEFAULT_AUTOFORM_SOURCE",
     "ScaffoldError",
     "ScaffoldResult",
+    "autoform_revision",
     "plugin_pin",
     "scaffold_project",
 ]

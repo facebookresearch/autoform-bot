@@ -67,7 +67,13 @@ from ._fs import is_within as _is_within
 from ._fs import relative as _relative
 from ._fs import resolve as _resolve
 from ._fs import resolving_once
-from ._repository import detect_ref, detect_repository_url, repository_top_level, verify_repository_snapshot
+from ._repository import (
+    detect_ref,
+    detect_repository_url,
+    repository_top_level,
+    tracked_files,
+    verify_repository_snapshot,
+)
 from ._tree_snapshot import (
     TreeChangedError,
     TreeSelection,
@@ -172,6 +178,7 @@ from .review import (
     readback_errors,
     review_states,
 )
+from .scaffold import autoform_revision
 from .skeleton import NodeSkeleton, SkeletonReport, _plural, source_passage
 from .status import is_definition
 from .testimony import formula_problems, split_testimony, typesetting_warnings
@@ -552,6 +559,10 @@ class _Publication:
     typed: frozenset[Path]
     #: Captured articles whose outgoing links are not published as live links.
     unavailable_source_ids: frozenset[str] = frozenset()
+    #: The captured files the site links in the repository instead, and where.
+    linked: dict[Path, str] = field(default_factory=dict)
+    #: The captured files the site leaves out, and why, as a reason code.
+    omitted: dict[Path, str] = field(default_factory=dict)
 
 
 def _publication(
@@ -742,6 +753,8 @@ def _publication(
             reader.close()
 
     files: dict[Path, str | bytes] = {}
+    linked: dict[Path, str] = {}
+    omitted: dict[Path, str] = {}
     for source in sorted(snapshot):
         if within is not None and not _is_within(source, within):
             continue
@@ -749,17 +762,21 @@ def _publication(
         # Source notes leave the site entirely once readers can reach them in
         # the repository, so the book has one reference surface rather than two.
         if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
+            linked[source] = _source_href(sources_base, relative.parts[1:])
             continue
         # Read-back cards are testimony about a statement, shown in its review
         # panel under --review, never pages of their own.
         if relative.parts[:1] == (READBACKS_DIR,):
+            omitted[source] = "review-testimony"
             continue
         # The graph has read atlas.json, and nothing on the site reads it. It may
         # name articles in unpublished folders, so it stays out of the site.
         if relative.as_posix().casefold() == "atlas.json":
+            omitted[source] = "graph-input"
             continue
         # The graph has read the pinned name lists too, and nothing on the site reads them.
         if relative.parent.as_posix() == PINNED_NAMES_FOLDER and relative.suffix == ".jsonl":
+            omitted[source] = "graph-input"
             continue
         if _resolve(source) in node_sources:
             if _resolve(source) in articles:
@@ -772,6 +789,7 @@ def _publication(
                     f"{relative.as_posix()}: is not UTF-8 text, as a Markdown page must be, so the site leaves it "
                     "out; save it as UTF-8"
                 )
+                omitted[source] = "not-utf8"
                 continue
             text, found = published(written, source, destination / relative)
             files[source] = (
@@ -782,12 +800,14 @@ def _publication(
                 else _protect_narrative_markdown(text)
             )
         elif relative.as_posix() in written_over:
-            continue
+            # The project's MathJax script is read into the site's own.
+            omitted[source] = "mathjax-config" if relative.as_posix() == MATHJAX_SCRIPT else "generated"
         elif source.suffix.lower() in _STATIC_SUFFIXES:
             files[source] = snapshot[source]
         elif source.suffix.lower() == ".canvas":
-            continue  # an Obsidian canvas, which the vault keeps for itself
+            omitted[source] = "canvas"  # an Obsidian canvas, which the vault keeps for itself
         else:
+            omitted[source] = "unsupported-type"
             warnings.append(
                 f"{relative.as_posix()}: the site leaves out {source.suffix.lower() or 'extensionless'} "
                 "files, since a browser could run one as the site's own page; write it as Markdown, "
@@ -803,7 +823,7 @@ def _publication(
         warnings.extend(script_warnings)
     return _Publication(
         groups, targets, node_sources, files, statements, script, warnings, frozenset(typed),
-        frozenset(unavailable_source_ids),
+        frozenset(unavailable_source_ids), linked, omitted,
     )
 
 
@@ -1064,6 +1084,9 @@ def render_site(
             captured = [name for name, _ in snapshot.files]
             reviews, review_warnings = _review_disclosures(blueprint, graph, review(), cards, macros, captured)
         source_revision = _source_revision(snapshot)
+        # The inventory lists every file the verified commit holds, hidden ones
+        # included, where capture records a hidden folder as one entry.
+        tracked = tracked_files(repo_root, commit, blueprint) if links_blueprint and commit else None
         report = _publish(
             destination,
             expected,
@@ -1081,6 +1104,8 @@ def render_site(
                 unpublished_nodes=unpublished_nodes,
                 files=_captured_files(snapshot, copy),
                 reviews=reviews,
+                left_out=snapshot.omitted,
+                tracked=tracked,
             ),
         )
     report.warnings[:0] = recovered
@@ -1119,8 +1144,12 @@ def _render_pages(
     unpublished_nodes: frozenset[str],
     files: dict[Path, bytes],
     reviews: dict[str, str],
+    left_out: tuple[tuple[str, str], ...] = (),
+    tracked: list[str] | None = None,
 ) -> RenderReport:
-    """Write the site into *destination* from the private copy at *blueprint*."""
+    """Write the site into *destination* from the private copy at *blueprint*:
+    *left_out* is what capture did not read, and *tracked* every file the
+    verified commit holds below the blueprint, if one was verified."""
     # A missing or stale packaged runtime is a publication failure, not an
     # unhandled CLI exception or a reason to publish a different renderer.
     # Capture it once before writing any staged files; _publish keeps the old site.
@@ -1154,6 +1183,8 @@ def _render_pages(
         graph, blueprint, files, destination=destination, sources_base=sources_base, unpublished=unpublished
     )
     revisions = {"source_revision": source_revision, "lean_source_revision": lean_source_revision}
+    version, commit, source = autoform_revision()
+    revisions["autoform"] = {"version": version, "commit": commit or None, "source": source or None}
     # Written first, so a Lean walk by a concurrent render skips this stage;
     # rewritten with the file inventory once every page exists.
     _write_publication_manifest(destination, graph, linker, coverage=coverage, **revisions)
@@ -1357,7 +1388,8 @@ def _render_pages(
         asset = destination / relative
         asset.parent.mkdir(parents=True, exist_ok=True)
         asset.write_text(contents, encoding="utf-8")
-    _write_publication_manifest(destination, graph, linker, coverage=coverage, **revisions)
+    inventory = _inventory(graph, site, blueprint, destination, files, left_out, tracked)
+    _write_publication_manifest(destination, graph, linker, coverage=coverage, inventory=inventory, **revisions)
     return report
 
 
@@ -1960,9 +1992,12 @@ def _write_publication_manifest(
     coverage: CoverageSummary,
     source_revision: str,
     lean_source_revision: str,
+    autoform: dict[str, str | None],
+    inventory: dict[str, object] | None = None,
 ) -> None:
     paths = sorted(_relative(path, destination).as_posix() for path in destination.rglob("*"))
     manifest = {
+        "autoform": autoform,
         "complete": True,
         "coverage": {
             "complete": coverage.complete,
@@ -1986,6 +2021,8 @@ def _write_publication_manifest(
         "dependencies": graph.edge_count,
         "views": ["book", "progress", "project", "chapter", "full"],
     }
+    if inventory is not None:
+        manifest["inventory"] = inventory
     encoded = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
     # Replaced, never truncated in place: a Lean capture that read an empty
     # manifest would index the stage's copies.
@@ -1998,6 +2035,70 @@ def _write_publication_manifest(
         os.replace(temporary, destination / PUBLICATION_MANIFEST)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _inventory(
+    graph: Graph,
+    site: _Publication,
+    blueprint: Path,
+    destination: Path,
+    captured: Collection[Path],
+    left_out: tuple[tuple[str, str], ...],
+    tracked: list[str] | None,
+) -> dict[str, object]:
+    """Where each blueprint file went, by its path in the blueprint: its URL on
+    the site, from the site's root; the repository URL the site links instead;
+    or why the site leaves it out. Every file the verified commit holds when
+    there is one (basis ``commit``), else every file render captured and each
+    folder it skipped (basis ``capture``).
+
+    The reasons: ``hidden``, ``unpublished``, ``generated`` (render writes its
+    own file there), ``mathjax-config`` (read into the site's script),
+    ``review-testimony`` (read-back cards), ``graph-input`` (read by the graph
+    only), ``not-utf8``, ``canvas``, ``unsupported-type`` and ``not-captured``
+    (in the commit, not in the tree render read).
+    """
+
+    def url(page: Path, anchor: str = "") -> str:
+        relative = _relative(page, destination)
+        if relative.suffix.lower() in PAGE_SUFFIXES:
+            relative = relative.with_suffix(".html")
+        return _as_published(quote(relative.as_posix(), safe="/")) + (f"#{anchor}" if anchor else "")
+
+    # Render writes these over a page the blueprint has there; a chapter's page is built from its narrative.
+    written = set(_site_paths(graph)) - {_group_page(group).as_posix() for group in site.groups}
+    published = {
+        relative: url(destination / relative)
+        for relative in (_relative(source, blueprint).as_posix() for source in site.files)
+        if relative not in written
+    }
+    published.update(
+        (_relative(node.path, blueprint).as_posix(), url(*site.targets[node_id]))
+        for node_id, node in graph.nodes.items()
+        if node.path in captured and node_id in site.targets
+    )
+    linked = {_relative(source, blueprint).as_posix(): href for source, href in site.linked.items()}
+    omitted = {_relative(source, blueprint).as_posix(): reason for source, reason in site.omitted.items()}
+    omitted.update((relative, "generated") for source in site.files if (relative := _relative(source, blueprint).as_posix()) in written)
+    unpublished = [name for name, kind in left_out if kind == "unpublished"]
+
+    def reason(name: str) -> str:
+        # Capture leaves out hidden names, and the top-level names render writes itself.
+        if _is_hidden(PurePosixPath(name)):
+            return "hidden"
+        if any(name == folder or name.startswith(f"{folder}/") for folder in unpublished):
+            return "unpublished"
+        return "generated" if "/" not in name and name in _GENERATED_FILES else "not-captured"
+
+    if tracked is None:
+        omitted.update((name, "unpublished" if kind == "unpublished" else reason(name)) for name, kind in left_out)
+        basis = "capture"
+    else:
+        # Captured files are in the commit, though Git may spell a name in another Unicode form.
+        placed = {unicodedata.normalize("NFC", name) for name in (*published, *linked, *omitted)}
+        omitted.update((name, reason(name)) for name in tracked if unicodedata.normalize("NFC", name) not in placed)
+        basis = "commit"
+    return {"basis": basis, "published": published, "linked": linked, "omitted": omitted}
 
 
 def _group_nodes(graph: Graph) -> dict[str, list[str]]:

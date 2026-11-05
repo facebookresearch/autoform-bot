@@ -11,6 +11,14 @@ date when the release is tagged.
 
 ### Added
 
+- **Publication inventory.** `publication.json` says where each blueprint file
+  went (`inventory`): for every file the verified commit holds below the
+  blueprint, or else every file render read, its URL on the site, the
+  repository URL the site links instead, or why the site leaves it out, such as
+  `hidden`, `unpublished`, `generated` or `graph-input`. It also names the
+  Autoform that rendered it (`autoform`: its version, and its commit and
+  repository when an install from Git or an unmodified checkout records them).
+  The schema stays `autoform-publication/v3`.
 - **Verify workflow off.** `init --no-verify-workflow` writes
   `.github/workflows/autoform-verify.yml` as a stub, for a project the
   generated workflow can't fit, such as one whose roadmap several Lake projects

@@ -1061,6 +1061,62 @@ def test_plugin_pin_is_empty_outside_a_checkout(monkeypatch: pytest.MonkeyPatch)
     assert scaffold_module.plugin_pin() == ("", "")
 
 
+class _Distribution:
+    """An installed ``autoform`` as ``importlib.metadata`` reports it."""
+
+    version = "0.6.0"
+
+    def __init__(self, direct_url: dict[str, object] | None) -> None:
+        self._direct_url = direct_url
+
+    def read_text(self, name: str) -> str | None:
+        return json.dumps(self._direct_url) if name == "direct_url.json" and self._direct_url is not None else None
+
+
+@pytest.fixture
+def revision(monkeypatch: pytest.MonkeyPatch):
+    """Call ``autoform_revision`` afresh, as each process does once."""
+
+    def call(direct_url: dict[str, object] | None, checkout: Path | None = None) -> tuple[str, str, str]:
+        monkeypatch.setattr(scaffold_module.importlib.metadata, "distribution", lambda _name: _Distribution(direct_url))
+        monkeypatch.setattr(scaffold_module, "_checkout_root", lambda _directory: checkout)
+        scaffold_module.autoform_revision.cache_clear()
+        return scaffold_module.autoform_revision()
+
+    yield call
+    scaffold_module.autoform_revision.cache_clear()
+
+
+def test_the_autoform_revision_is_the_commit_an_install_from_git_records(revision) -> None:
+    """Generated CI runs Autoform with uvx from Git, which records the commit and repository it built."""
+    commit = "1cf2ca825fec5e6d3303e24374e218bf3e8ab5c1"
+    direct_url = {
+        "url": "https://github.com/facebookresearch/autoform-bot.git",
+        "vcs_info": {"vcs": "git", "commit_id": commit, "requested_revision": "main"},
+    }
+
+    assert revision(direct_url) == ("0.6.0", commit, "https://github.com/facebookresearch/autoform-bot.git")
+
+
+def test_the_autoform_revision_publishes_no_repository_with_credentials(revision) -> None:
+    commit = "1cf2ca825fec5e6d3303e24374e218bf3e8ab5c1"
+    direct_url = {"url": "https://token@github.com/o/r.git", "vcs_info": {"vcs": "git", "commit_id": commit}}
+
+    assert revision(direct_url) == ("0.6.0", commit, "")
+
+
+def test_the_autoform_revision_of_a_checkout_counts_only_while_it_is_unmodified(revision, tmp_path: Path) -> None:
+    """An editable install records a directory, not a commit, so the checkout answers, as plugin_pin's does."""
+    checkout = tmp_path / "autoform"
+    head = _autoform_checkout(checkout, "https://github.com/facebookresearch/autoform-bot.git")
+    editable = {"url": checkout.as_uri(), "dir_info": {"editable": True}}
+
+    assert revision(editable, checkout) == ("0.6.0", head, "https://github.com/facebookresearch/autoform-bot.git")
+    (checkout / "autoform_cli" / "scaffold.py").write_text("# edited\n", encoding="utf-8")
+    assert revision(editable, checkout) == ("0.6.0", "", "")
+    assert revision(None, None) == ("0.6.0", "", "")
+
+
 def _repository(path: Path, remote: str, *, advertise: bool = True) -> str:
     """Make *path* a real one-commit checkout and return its HEAD sha."""
     path.mkdir(parents=True, exist_ok=True)

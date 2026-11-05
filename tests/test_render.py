@@ -3019,10 +3019,12 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path
             "source_path": "coverage/README.md",
             "source_sha256": manifest["coverage"]["source_sha256"],
         },
+        "autoform": manifest["autoform"],
         "dependencies": 1,
         "directories": manifest["directories"],
         "files": manifest["files"],
         "git_ref": ref,
+        "inventory": manifest["inventory"],
         "lean_source_revision": manifest["lean_source_revision"],
         "nodes": 3,
         "schema": "autoform-publication/v3",
@@ -3035,6 +3037,84 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path
         path: hashlib.sha256(data).hexdigest() for path, data in first.items() if path != PUBLICATION_MANIFEST
     }
     assert str(tmp_path).encode() not in b"".join(first.values())
+
+
+def test_publication_json_says_where_each_file_render_read_went(tmp_path: Path) -> None:
+    """Every file render read, and every folder capture skipped, has its URL
+    on the site or the reason the site leaves it out (#593)."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    for name, data in {
+        ".implementation-notes/plan.md": b"# Plan\n",
+        "roadmap/.draft.md": b"# Draft\n",
+        "roadmap/drafts/README.md": b"---\npublished: false\n---\n\n# Drafts\n",
+        "roadmap/drafts/idea.md": b"# Idea\n",
+        "figures/torus.png": b"\x89PNG\r\n\x1a\n",
+        "board.canvas": b"{}",
+        "notes.docx": b"PK",
+        "legacy.md": b"# Legacy \xff\n",
+        "readbacks/top.json": b"{}",
+        "libraries/names.jsonl": b"{}\n",
+        "SUMMARY.md": b"- [Old](README.md)\n",
+        "javascripts/mathjax.js": b"window.MathJax = {};\n",
+    }.items():
+        (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
+        (blueprint / name).write_bytes(data)
+
+    render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    manifest = json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert manifest["inventory"] == {
+        "basis": "capture",
+        "published": {
+            "README.md": "index.html",
+            "coverage/README.md": "coverage/index.html",
+            "figures/torus.png": "figures/torus.png",
+            "roadmap/README.md": "roadmap/index.html",
+            "roadmap/base.md": "roadmap/index.html#base",
+            "roadmap/top.md": "roadmap/index.html#top",
+        },
+        "linked": {},
+        "omitted": {
+            ".implementation-notes": "hidden",
+            "SUMMARY.md": "generated",
+            "board.canvas": "canvas",
+            "javascripts/mathjax.js": "mathjax-config",
+            "legacy.md": "not-utf8",
+            "libraries/names.jsonl": "graph-input",
+            "notes.docx": "unsupported-type",
+            "readbacks/top.json": "review-testimony",
+            "roadmap/.draft.md": "hidden",
+            "roadmap/drafts": "unpublished",
+        },
+    }
+    assert set(manifest["autoform"]) == {"version", "commit", "source"}
+
+
+def test_publication_json_lists_every_file_the_verified_commit_holds(tmp_path: Path) -> None:
+    """With a verified commit, the inventory is that commit's files, each file
+    of a hidden folder included, and a source note the site links in the
+    repository names its URL there."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    for name in (".implementation-notes/plan.md", "sources/.draft.md", "figures/old.png"):
+        (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
+        (blueprint / name).write_bytes(b"# Note\n")
+    ref = _commit_project(project)
+    # Deleted since the commit: render never read it.
+    (blueprint / "figures/old.png").unlink()
+
+    render_site(blueprint, tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    inventory = json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["inventory"]
+    assert inventory["basis"] == "commit"
+    assert inventory["linked"] == {"sources/paper.md": f"{_REPOSITORY}/blob/{ref}/blueprint/sources/paper.md"}
+    assert inventory["omitted"] == {
+        ".implementation-notes/plan.md": "hidden",
+        "figures/old.png": "not-captured",
+        "sources/.draft.md": "hidden",
+    }
+    assert inventory["published"]["roadmap/top.md"] == "roadmap/index.html#top"
 
 
 def test_publication_revision_frames_binary_paths_and_contents() -> None:
