@@ -38,6 +38,9 @@ from .markdown import (
 from .markdown import HEADING as _HEADING
 
 
+#: A display formula written inside a paragraph, ``$$...$$``. There the site reads ``\[...\]`` as escaped
+#: brackets, such as a citation, not as a formula.
+_DISPLAY_MATH = re.compile(r"(?<!\\)\$\$(.+?)(?<!\\)\$\$", re.DOTALL)
 #: An inline link or image; its label may hold bracket pairs, as the page reads it.
 _MARKDOWN_LINK_TEXT = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\([^)]*\)")
 #: A full, collapsed or shortcut reference link: ``[text][label]``, ``[label][]`` or ``[label]``.
@@ -923,13 +926,33 @@ def _extract_summary(body: list[str], references: dict[str, str], *, limit: int 
         if unescape(_strip_markup(text)).strip():
             paragraph.append(text)
     # Inline math may wrap across the paragraph's lines, so markup is read in the whole paragraph.
-    summary = " ".join(unescape(_strip_markup("\n".join(paragraph))).split())
+    text = "\n".join(paragraph)
+    # A summary is one line, so a display formula inside the paragraph shows inline there.
+    for display in reversed(list(_DISPLAY_MATH.finditer(_code_masked(text)))):
+        text = text[: display.start()] + "\\(" + text[display.start(1) : display.end(1)] + "\\)" + text[display.end() :]
+    summary = " ".join(unescape(_strip_markup(text)).split())
     if not summary:
         return None
     if len(summary) <= limit:
         return summary
     clipped = summary[: limit - 1].rsplit(" ", 1)[0]
+    # A clip that would cut a formula or code span stops before it, so the summary opens none it doesn't close.
+    for start, stop in _markup_spans(summary):
+        if start < len(clipped) < stop:
+            clipped = summary[:start] or summary[:stop]
+            break
     return (clipped or summary[: limit - 1]).rstrip() + "…"
+
+
+def _code_masked(text: str) -> str:
+    """Return *text* with its code spans blanked, so the dollars and brackets in them open no formula."""
+    return _CODE_SPAN.sub(lambda match: _blank(match) if match[1] else match[0], text)
+
+
+def _markup_spans(text: str) -> list[tuple[int, int]]:
+    """Return the spans of *text*'s code spans and inline math, in order; code is read first, as the page reads it."""
+    code = [match.span() for match in _CODE_SPAN.finditer(text) if match[1]]
+    return sorted((*code, *(match.span() for match in _INLINE_MATH.finditer(_code_masked(text)))))
 
 
 def _strip_markup(text: str) -> str:
@@ -943,12 +966,9 @@ def _strip_markup(text: str) -> str:
     def strip(prose: str) -> str:
         return _HTML_TAG.sub("", prose).replace("**", "").replace("__", "")
 
-    code = [match for match in _CODE_SPAN.finditer(text) if match[1]]
-    code_masked = _CODE_SPAN.sub(lambda match: _blank(match) if match[1] else match[0], text)
-    spans = sorted(match.span() for match in (*code, *_INLINE_MATH.finditer(code_masked)))
     parts: list[str] = []
     end = 0
-    for start, stop in spans:
+    for start, stop in _markup_spans(text):
         # A code span inside inline math is already kept with it.
         if start < end:
             continue
