@@ -839,6 +839,57 @@ def test_cross_references_point_at_anchors_on_the_chapter(tmp_path: Path) -> Non
     assert 'href="https://github.com/owner/repo/issues/42">#42' in page
 
 
+def test_a_statement_shows_its_lean_declaration_under_it(tmp_path: Path) -> None:
+    """A theorem shows its statement and never its proof; a definition shows whole, its body after `:=` included."""
+    project = _project(tmp_path)
+    (project / "Project/Basic.lean").write_text(
+        "namespace Project\n\n/-- The base. -/\ndef Base : Nat :=\n  0 + 0\n\n"
+        "theorem top : True := by\n  -- the proof\n  trivial\n\nend Project\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    # Each block follows its statement box, and search leaves it out.
+    blocks = re.findall(r'</div>\n\n<div class="bp-lean-source" data-search-exclude="1">\n(.*?)\n</div>', page, re.S)
+    assert blocks == [
+        '<pre class="bp-lean"><code><span class="bp-lean-keyword">def</span> Base : Nat :=\n  0 + 0</code></pre>',
+        '<pre class="bp-lean"><code><span class="bp-lean-keyword">theorem</span> top : True</code></pre>',
+    ]
+
+
+def test_a_long_declaration_folds_and_a_statement_shows_three_at_most(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    alternatives = "".join(f"  | {n} => {n}\n" for n in range(14))
+    theorems = "".join(f"theorem t{n} : True := trivial\n" for n in range(3))
+    (project / "Project/Basic.lean").write_text(
+        f"namespace Project\n\ndef Base : Nat → Nat\n{alternatives}\ntheorem top : True := trivial\n{theorems}\nend Project\n",
+        encoding="utf-8",
+    )
+    _edit(project / "blueprint/roadmap/top.md", "lean: Project.top\n", "lean: Project.top, Project.t0, Project.t1, Project.t2\n")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    assert '<details class="bp-lean-fold"><summary><code>Project.Base</code> · 15 lines</summary><pre class="bp-lean">' in page
+    top = page.split('data-autoform-node-id="top"', 1)[1].split('<div class="bp-lean-source"', 1)[1].split("</div>", 1)[0]
+    assert re.findall(r"theorem</span> (\w+) : True</code>", top) == ["top", "t0", "t1"]
+
+
+def test_a_catalog_or_an_unread_name_shows_no_lean_declaration(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    index = lean_module.index_project(project)
+    linker = lean_module.SourceLinker(index, sources={Path("Project/Basic.lean"): (project / "Project/Basic.lean").read_bytes()})
+
+    assert render_module._lean_blocks(SimpleNamespace(catalog=None, lean="Project.Base"), linker)
+    # A catalog can list hundreds of names, so it shows none, as it shows no code icons.
+    assert render_module._lean_blocks(SimpleNamespace(catalog="module", lean="Project.Base"), linker) == []
+    assert render_module._lean_blocks(SimpleNamespace(catalog=None, lean="Project.Missing"), linker) == []
+    # Without the captured files there is no text to show.
+    assert render_module._lean_blocks(SimpleNamespace(catalog=None, lean="Project.Base"), lean_module.SourceLinker(index)) == []
+
+
 def test_a_dependency_list_drops_its_separators(tmp_path: Path) -> None:
     """Every wrapped line of a Uses list ended in " ·", and a wrapped entry could leave its dot on a line of its own."""
     project = _project(tmp_path)
@@ -887,15 +938,16 @@ def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tm
     # Material draws a details element as a boxed admonition with a pencil
     # icon; these selectors outrank its own and take that off.
     css = render_module._stylesheet()
-    box = re.search(r"\.md-typeset details\.bp-dependencies \{([^}]+)\}", css).group(1)
+    line = r"\.md-typeset :is\(details\.bp-dependencies, details\.bp-lean-fold\)"
+    box = re.search(line + r" \{([^}]+)\}", css).group(1)
     for declaration in ("padding: 0;", "border: 0;", "box-shadow: none;", "background: none;", "color: var(--bp-muted);"):
         assert declaration in box
-    summary = re.search(r"\.md-typeset details\.bp-dependencies > summary \{([^}]+)\}", css).group(1)
+    summary = re.search(line + r" > summary \{([^}]+)\}", css).group(1)
     assert "background: none;" in summary and "padding: 0.2rem 0;" in summary
-    assert ".md-typeset details.bp-dependencies > summary::before { display: none; }" in css
-    assert re.search(r"\.md-typeset details\.bp-dependencies > summary::after \{[^}]*position: static;", css)
+    assert re.search(line + r" > summary::before \{ display: none; \}", css)
+    assert re.search(line + r" > summary::after \{[^}]*position: static;", css)
     touch = re.search(r"@media \(pointer: coarse\) \{\s*([^{}]+)\{([^}]+)\}", css)
-    assert touch.group(1).strip() == ".md-typeset details.bp-dependencies > summary"
+    assert touch.group(1).strip() == ".md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary"
     assert "min-height: 44px;" in touch.group(2)
 
 

@@ -107,6 +107,7 @@ from .lean import (
     resolve_lean_root,
     snapshot_project_sources,
 )
+from .library.declarations import _header
 from .library.pinned_names import FOLDER as PINNED_NAMES_FOLDER
 from .markdown import (
     _BRACKET_ESCAPE,
@@ -1017,6 +1018,7 @@ def render_site(
             links_blueprint=links_blueprint,
             spellings=spellings,
             root_prefix=root_prefix,
+            sources=dict(lean.source_files),
         )
         reviews: dict[str, str] = {}
         review_warnings: list[str] = []
@@ -3627,6 +3629,7 @@ def _render_environment(
         "</h4>",
         *_search_names(node),
         *boxed(statement, STATEMENT_BOX),
+        *_lean_blocks(node, linker),
     ]
     if remainder:
         lines.extend(boxed(remainder, NOTES_BOX))
@@ -3950,6 +3953,52 @@ def _lean_presentation(
     more = f" and {rest} more, listed in its declaration ledger" if rest else ""
     rows = [("Lean", " · ".join(shown) + more)] if fallback else []
     return code_links, rows, linked, unresolved
+
+
+#: How many of a statement's Lean names show their declaration under it, and how many lines one shows before it folds.
+_LEAN_BLOCK_NAMES = 3
+_LEAN_BLOCK_LINES = 14
+#: The Lean a block marks: comments, strings and keywords, each named by its group.
+_LEAN_TOKEN = re.compile(
+    r"(?P<comment>/-.*?-/|--[^\n]*)"
+    r'|(?P<string>"(?:\\.|[^"\\])*")'
+    r"|(?<![\w.'!?])(?P<keyword>theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom|example"
+    r"|where|extends|deriving|fun|λ|let|have|show|from|by|at|with|match|if|then|else|do|return|for|in|calc"
+    r"|noncomputable|private|protected|partial|unsafe|termination_by|decreasing_by|Type|Prop|Sort|sorry)(?![\w'!?])",
+    re.DOTALL,
+)
+
+
+def _lean_blocks(node: Node, linker: SourceLinker) -> list[str]:
+    """The statement's first Lean declarations as written, under its statement.
+
+    A theorem shows its statement and not its proof; anything else shows whole, a definition's body
+    included. A long declaration folds. A catalog shows none, as it shows no code icons.
+    """
+    if node.catalog is not None:
+        return []
+    blocks: list[str] = []
+    found = (linker.excerpt(name) for name in declaration_names(node.lean or ""))
+    for declaration, text in [excerpt for excerpt in found if excerpt is not None][:_LEAN_BLOCK_NAMES]:
+        if declaration.keyword in ("theorem", "lemma"):
+            text = _header(text, 0)
+        code = f'<pre class="bp-lean"><code>{_lean_code(text)}</code></pre>'
+        count = text.count("\n") + 1
+        if count > _LEAN_BLOCK_LINES:
+            summary = f"<code>{_typed(declaration.name, one_line=True)}</code> · {count} lines"
+            code = f'<details class="bp-lean-fold"><summary>{summary}</summary>{code}</details>'
+        blocks.append(code)
+    return ["", '<div class="bp-lean-source" data-search-exclude="1">', *blocks, "</div>", ""] if blocks else []
+
+
+def _lean_code(text: str) -> str:
+    """``text``, Lean, as HTML the page's Markdown leaves as typed, its comments, strings and keywords marked."""
+    parts: list[str] = []
+    end = 0
+    for token in _LEAN_TOKEN.finditer(text):
+        parts += [_typed(text[end : token.start()]), f'<span class="bp-lean-{token.lastgroup}">{_typed(token[0])}</span>']
+        end = token.end()
+    return "".join(parts) + _typed(text[end:])
 
 
 def _search_names(node: Node) -> list[str]:
@@ -4770,10 +4819,10 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   margin: 0.6rem 0 0 2rem;
 }}
 /* Material styles every details element as a collapsible admonition: a
-   bordered box, a tinted summary and a pencil icon. This one is a quiet line
+   bordered box, a tinted summary and a pencil icon. These are quiet lines
    under each statement, so the selectors outrank Material's and take that
    chrome off, keeping only its chevron, which turns when the line opens. */
-.md-typeset details.bp-dependencies {{
+.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) {{
   margin: 0.65rem 0 0 2rem;
   padding: 0;
   border: 0;
@@ -4784,7 +4833,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-size: 0.72rem;
   color: var(--bp-muted);
 }}
-.md-typeset details.bp-dependencies > summary {{
+.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary {{
   display: flex;
   align-items: center;
   width: fit-content;
@@ -4796,17 +4845,17 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   cursor: pointer;
   user-select: none;
 }}
-.md-typeset details.bp-dependencies > summary::before {{ display: none; }}
-.md-typeset details.bp-dependencies > summary::after {{
+.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary::before {{ display: none; }}
+.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary::after {{
   position: static;
   flex: none;
   width: 1em;
   height: 1em;
   margin-left: 0.25em;
 }}
-.md-typeset details.bp-dependencies > summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
 @media (pointer: coarse) {{
-  .md-typeset details.bp-dependencies > summary {{ min-height: 44px; }}
+  .md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary {{ min-height: 44px; }}
 }}
 .bp-dependency-body {{ margin-top: 0.35rem; color: var(--bp-fg); }}
 .bp-review {{
@@ -4841,6 +4890,14 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   border-left: 3px solid var(--bp-rule);
 }}
 .bp-skeleton-meta {{ margin-bottom: 0.5rem; }}
+/* A statement's Lean declarations, under it, in the page's code colors. */
+.bp-lean-source {{ margin: 0.6rem 0 0 2rem; }}
+/* Material's code box is the block's only frame. */
+.bp-lean-source .bp-lean {{ padding: 0; border: 0; }}
+.md-typeset details.bp-lean-fold {{ margin: 0 0 0.4rem; }}
+.bp-lean-keyword {{ color: var(--md-code-hl-keyword-color); }}
+.bp-lean-comment {{ color: var(--md-code-hl-comment-color); }}
+.bp-lean-string {{ color: var(--md-code-hl-string-color); }}
 /* A card too wide for the page scrolls, with a shade at each edge it can
    scroll toward: covers in the review panel's color scroll with the content
    and hide the shade at the end it has reached. */

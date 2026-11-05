@@ -29,8 +29,10 @@ from autoform_cli._tree_snapshot import (
 )
 from autoform_cli.lean import (
     Alias,
+    Declaration,
     SourceLinker,
     declaration_names,
+    declaration_text,
     index_project,
     index_project_names,
     open_project_sources,
@@ -4007,6 +4009,53 @@ def test_no_link_without_repository_coordinates(tmp_path: Path) -> None:
     assert linker.url("Outer.alpha") is None
     # The location is still known, so the page can still say where the code is.
     assert linker.location("Outer.alpha") is not None
+
+
+def test_a_declarations_text_ends_before_the_next_line_at_its_indent() -> None:
+    lines = [
+        "/-- A doc. -/",
+        "@[simp] theorem top (n : Nat) :",
+        "    n = n := by",
+        "  rfl",
+        "-- a note on what follows",
+        "def f : Nat → Nat",
+        "  | 0 => 1",
+        "",
+        "  | n + 1 => n",
+        "where",
+        "  helper : Nat := 0",
+        "",
+        "attribute [simp] f",
+        "  structure Inner where",
+        "    x : Nat",
+        "  theorem inner : True := trivial",
+        "end P",
+    ]
+
+    def text(line: int) -> str:
+        return declaration_text(lines, Declaration("P.x", Path("P.lean"), line, "def"))
+
+    # The docstring above stays out, and the comment, attribute and end after it end it.
+    assert text(2) == "\n".join(lines[1:4])
+    # Alternatives, a blank line inside it and its where block are its own.
+    assert text(6) == "\n".join(lines[5:11])
+    # An indented declaration ends at the next line at its own indent.
+    assert text(14) == "\n".join(lines[13:15])
+    assert text(16) == lines[15]
+
+
+def test_an_excerpt_reads_the_captured_file(tmp_path: Path) -> None:
+    index = _index(tmp_path)
+    linker = SourceLinker(index=index, sources={Path("Project/Basic.lean"): _SOURCE.encode()})
+
+    alpha = linker.excerpt("Outer.alpha")
+    assert alpha is not None and alpha[0] == index.find("Outer.alpha")
+    assert alpha[1] == "def alpha : Nat := 1"
+    gamma = linker.excerpt("Outer.Inner.gamma")
+    assert gamma is not None and gamma[1] == "protected noncomputable def gamma : Nat := 2"
+    assert linker.excerpt("Outer.missing") is None
+    # A file the render did not capture has no excerpt.
+    assert SourceLinker(index=index).excerpt("Outer.alpha") is None
 
 
 def _git_commit(root: Path, message: str, path: str = ".") -> str:
