@@ -1857,6 +1857,114 @@ def test_the_explorer_draws_its_breadcrumb_once(desktop_page: object, site_url: 
     playwright.expect(page.locator(".bp-dag-book")).to_have_count(0)
 
 
+_STATEMENT_PAGE = "dependencies/chapters/algebra.html#node=algebra%2Fresult"
+
+
+def _widths(page: object) -> dict[str, float]:
+    """Each pane's width, 0 for a hidden one, and the body's."""
+    return page.evaluate("""() => Object.fromEntries([["body", ".bp-dag-body"], ["topics", ".bp-dag-navigation"],
+      ["map", ".bp-dag-main"], ["reading", ".bp-reading-pane"]].map(([name, selector]) =>
+      [name, document.querySelector(selector).getBoundingClientRect().width]))""")
+
+
+def _drag(page: object, splitter: object, x: float) -> None:
+    box = splitter.bounding_box()
+    assert box is not None
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(x, box["y"] + box["height"] / 2, steps=8)
+    page.mouse.up()
+    _paint_frame(page)
+
+
+def test_the_reading_pane_drags_to_80_percent_and_keeps_that_width_on_the_next_page(desktop_page: object, site_url: str) -> None:
+    """Jack asked to be able to give the wiki articles 80%: Topics hidden, the reader drags to 80% of the body."""
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    topics, reading = page.get_by_role("separator", name="Resize Topics"), page.get_by_role("separator", name="Resize the reading pane")
+    before = _widths(page)
+    # With Topics shown, the map keeps 160px.
+    _drag(page, reading, 10)
+    assert _widths(page)["reading"] == pytest.approx(before["body"] - before["topics"] - 160, abs=2)
+    topics.focus()
+    page.keyboard.press("Enter")
+    playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
+    playwright.expect(page.get_by_role("button", name="Show Topics")).to_be_focused()
+    body = page.locator(".bp-dag-body").bounding_box()
+    _drag(page, reading, body["x"] + 0.2 * body["width"])
+    wide = _widths(page)
+    assert wide["reading"] == pytest.approx(0.8 * wide["body"], abs=2)
+    assert wide["map"] == pytest.approx(0.2 * wide["body"], abs=2)
+    # The choice holds on the next page, and a double-click puts the reader back at its usual width.
+    _open_site(page, site_url, "dependencies/chapters/topology.html#node=topology%2Fresult")
+    again = _widths(page)
+    assert again["topics"] == 0 and again["reading"] == pytest.approx(wide["reading"], abs=2)
+    reading.dblclick()
+    _paint_frame(page)
+    assert _widths(page)["reading"] == pytest.approx(max(360, 0.39 * again["body"]), abs=2)
+    page.get_by_role("button", name="Show Topics").click()
+    playwright.expect(page.locator(".bp-dag-navigation")).to_be_visible()
+    playwright.expect(topics).to_be_focused()
+
+
+def test_a_pane_hides_from_its_splitter_or_the_map_only_button_and_its_tab_brings_it_back(
+    desktop_page: object, site_url: str,
+) -> None:
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    reading = page.get_by_role("separator", name="Resize the reading pane")
+    full = _widths(page)
+    # Keys move the splitter: Left widens the reader by 16px, Shift+Left by 64.
+    reading.focus()
+    page.keyboard.press("ArrowLeft")
+    page.keyboard.press("Shift+ArrowLeft")
+    _paint_frame(page)
+    assert _widths(page)["reading"] == pytest.approx(full["reading"] + 80, abs=2)
+    # Dragged nearly shut, the reader hides when the drag ends, and the map takes its place.
+    body = page.locator(".bp-dag-body").bounding_box()
+    _drag(page, reading, body["x"] + body["width"] - 40)
+    playwright.expect(page.locator(".bp-reading-pane")).to_be_hidden()
+    show = page.get_by_role("button", name="Show the reading pane")
+    playwright.expect(show).to_be_focused()
+    assert _widths(page)["map"] == pytest.approx(full["body"] - full["topics"], abs=2)
+    show.click()
+    playwright.expect(page.locator(".bp-reading-pane")).to_be_visible()
+    # Map only hides both panes, and pressed again brings both back.
+    map_only = page.get_by_role("button", name="Map only")
+    map_only.click()
+    playwright.expect(map_only).to_have_attribute("aria-pressed", "true")
+    assert _widths(page)["map"] == pytest.approx(full["body"], abs=2)
+    playwright.expect(page.get_by_role("separator")).to_have_count(0)
+    map_only.click()
+    playwright.expect(map_only).to_have_attribute("aria-pressed", "false")
+    playwright.expect(page.locator(".bp-dag-navigation")).to_be_visible()
+    playwright.expect(page.locator(".bp-reading-pane")).to_be_visible()
+
+
+def test_the_map_holds_its_camera_while_a_pane_is_dragged_and_settles_after(desktop_page: object, site_url: str) -> None:
+    """A drag that turns the stage from portrait to landscape repacks the map once, when it ends, not on every frame."""
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    page.get_by_role("separator", name="Resize Topics").focus()
+    page.keyboard.press("Enter")
+    _paint_frame(page)
+    stage = page.locator(".bp-dag-stage")
+    portrait = stage.bounding_box()
+    assert portrait is not None and portrait["width"] < portrait["height"]
+    map_host = page.locator(".bp-whole-map")
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "portrait")
+    splitter = page.get_by_role("separator", name="Resize the reading pane").bounding_box()
+    body = page.locator(".bp-dag-body").bounding_box()
+    assert splitter is not None and body is not None
+    page.mouse.move(splitter["x"] + splitter["width"] / 2, splitter["y"] + splitter["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(body["x"] + body["width"] - 300, splitter["y"] + splitter["height"] / 2, steps=8)
+    _paint_frame(page)
+    _paint_frame(page)
+    landscape = stage.bounding_box()
+    assert landscape is not None and landscape["width"] > landscape["height"]
+    assert map_host.get_attribute("data-pm-packed") == "portrait"
+    page.mouse.up()
+    playwright.expect(map_host).to_have_attribute("data-pm-packed", "landscape")
+
+
 def test_published_explorer_controls_keep_their_own_styles_under_material(
     desktop_page: object, site_url: str
 ) -> None:

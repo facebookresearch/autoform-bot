@@ -59,6 +59,14 @@ date when the release is tagged.
   On one CI runner ATLAS's check took 60 s with the flag instead of 255 s, and
   render printed every warning it skipped. A scaffolded project keeps its
   workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
+- **Panes you can resize and hide.** In the book's workspace, Topics and the
+  reading pane resize from splitters on their inner edges, by pointer or
+  keys, up to a reader of all but 160px of the map. A pane dragged nearly
+  shut, or whose splitter takes Enter, hides, and a tab at the map's edge
+  brings it back; "Map only" in the trail row hides both. The choice holds
+  on every page of the site, and a double-click on a splitter restores the
+  usual width. While a pane is dragged the map holds its camera, and it
+  settles once the drag ends. A phone keeps its sheet.
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project. Regions (authored areas, or the top-level
   chapters) open into their parts and parts into their results as the camera
