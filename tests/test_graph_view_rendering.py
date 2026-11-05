@@ -450,7 +450,10 @@ def test_reading_pane_sizes_put_the_statement_first() -> None:
         assert rule is not None, selector
         return rule.group(1)
 
-    notes = ".bp-reading-body :is(.bp-thmnotes, .bp-meta, .bp-progress-states), .bp-reading-body details.bp-dependencies"
+    notes = (
+        ".bp-reading-body :is(.bp-thmnotes, .bp-meta, .bp-progress-states), "
+        ".bp-reading-body :is(details.bp-dependencies, details.bp-lean-fold)"
+    )
     labels = (
         ".bp-reading-body :is(.bp-thmnotes h6, .bp-thmcaption, .bp-key, .bp-mark, .bp-progress-kicker, "
         ".bp-next-kicker, .bp-hero-kicker)"

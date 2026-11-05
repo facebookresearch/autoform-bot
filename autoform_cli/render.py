@@ -54,9 +54,9 @@ import unicodedata
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
-from itertools import islice
 from functools import lru_cache
 from html.parser import HTMLParser
+from itertools import islice
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
@@ -96,6 +96,8 @@ from .graph import (
 )
 from .graph_views import _containers, _countable, _is_countable, _module_inventories
 from .lean import (
+    _DECLARATION_KEYWORDS,
+    _DECLARATION_MODIFIERS,
     _REPLACEABLE_SCHEMAS,
     PUBLICATION_MANIFEST,
     PUBLICATION_SCHEMA,
@@ -3630,7 +3632,8 @@ def _render_environment(
         "</h4>",
         *_search_names(node),
         *boxed(statement, STATEMENT_BOX),
-        *_lean_blocks(node, linker),
+        # A review shows a card's Lean in its packet, after the read-back, so the Lean does not frame the testimony.
+        *(_lean_blocks(node, linker) if node.id not in reviews else []),
     ]
     if remainder:
         lines.extend(boxed(remainder, NOTES_BOX))
@@ -3956,16 +3959,18 @@ def _lean_presentation(
     return code_links, rows, linked, unresolved
 
 
-#: How many of a statement's Lean names show their declaration under it, and how many lines one shows before it folds.
+#: How many of a statement's Lean names show their declaration under it.
 _LEAN_BLOCK_NAMES = 3
+#: The most lines a declaration shows open; a longer one folds whole.
 _LEAN_BLOCK_LINES = 14
-#: The Lean a block marks: comments, strings and keywords, each named by its group.
+#: The Lean a block marks: comments, strings and keywords, each named by its group. The declaration keywords and
+#: modifiers are the index's own.
 _LEAN_TOKEN = re.compile(
     r"(?P<comment>/-.*?-/|--[^\n]*)"
     r'|(?P<string>"(?:\\.|[^"\\])*")'
-    r"|(?<![\w.'!?])(?P<keyword>theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom|example"
+    rf"|(?<![\w.'!?])(?P<keyword>{_DECLARATION_KEYWORDS}|{_DECLARATION_MODIFIERS}|example"
     r"|where|extends|deriving|fun|λ|let|have|show|from|by|at|with|match|if|then|else|do|return|for|in|calc"
-    r"|noncomputable|private|protected|partial|unsafe|termination_by|decreasing_by|Type|Prop|Sort|sorry)(?![\w'!?])",
+    r"|termination_by|decreasing_by|Type|Prop|Sort|sorry)(?![\w'!?])",
     re.DOTALL,
 )
 
@@ -3973,14 +3978,14 @@ _LEAN_TOKEN = re.compile(
 def _lean_blocks(node: Node, linker: SourceLinker) -> list[str]:
     """The statement's first Lean declarations as written, under its statement.
 
-    A theorem shows its statement and not its proof; anything else shows whole, a definition's body
-    included. A long declaration folds. A catalog shows none, as it shows no code icons.
+    A theorem or lemma shows its statement and not its proof; anything else shows whole, a definition's
+    body included. A long declaration folds. A catalog shows none, as it shows no code icons.
     """
     if node.catalog is not None:
         return []
     blocks: list[str] = []
-    found = (linker.excerpt(name) for name in declaration_names(node.lean or ""))
-    for declaration, text in islice((excerpt for excerpt in found if excerpt is not None), _LEAN_BLOCK_NAMES):
+    found = filter(None, map(linker.excerpt, declaration_names(node.lean or "")))
+    for declaration, text in islice(found, _LEAN_BLOCK_NAMES):
         if declaration.keyword in ("theorem", "lemma"):
             text = _header(text, 0)
         code = f'<pre class="bp-lean"><code>{_lean_code(text)}</code></pre>'

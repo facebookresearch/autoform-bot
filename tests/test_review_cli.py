@@ -882,6 +882,23 @@ def test_the_site_keeps_a_card_on_one_line_whatever_it_holds(
     assert len(bodies) == 2 and all(html.unescape(body).endswith(injected) for body in bodies)
 
 
+def test_a_review_shows_a_cards_lean_only_after_its_read_back(tmp_path: Path, extraction: _Extraction) -> None:
+    """A review shows a card's Lean only in its packet, after the read-back, so the Lean does not frame the testimony."""
+    blueprint = _blueprint(tmp_path)
+    (tmp_path / "Review.lean").write_text(
+        "namespace Review\n\ntheorem result : True := trivial\n\ntheorem other : True := trivial\n\nend Review\n",
+        encoding="utf-8",
+    )
+    _prepare(blueprint, tmp_path)
+
+    assert main(["render", str(blueprint), "--lean-root", str(tmp_path), "-o", str(tmp_path / "book")]) == 0
+    assert _render(blueprint, tmp_path) == 0
+    book = (tmp_path / "book/roadmap/basics/README.md").read_text(encoding="utf-8")
+    reviewed = (tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8")
+    assert book.count('<div class="bp-lean-source"') == 2
+    assert reviewed.count('<details class="bp-review"') == 2 and "bp-lean-source" not in reviewed
+
+
 def _review_panel(page: str, node: str) -> str:
     """The review disclosure under the statement ``node`` on a chapter page."""
 

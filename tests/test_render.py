@@ -861,6 +861,10 @@ def test_a_statement_shows_its_lean_declaration_under_it(tmp_path: Path) -> None
         '<pre class="bp-lean"><code><span class="bp-lean-keyword">theorem</span> top : True</code></pre>\n'
         '<pre class="bp-lean"><code><span class="bp-lean-keyword">lemma</span> small : 0 &lt; (<span class="bp-lean-keyword">fun</span> n : Nat =&gt; n) 1</code></pre>',
     ]
+    # The keywords are the index's own, Batteries' commands and modifiers included.
+    assert render_module._lean_code("public theorem_wanted w : True") == (
+        '<span class="bp-lean-keyword">public</span> <span class="bp-lean-keyword">theorem_wanted</span> w : True'
+    )
 
 
 def test_a_long_declaration_folds_and_a_statement_shows_three_at_most(tmp_path: Path) -> None:

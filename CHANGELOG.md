@@ -30,14 +30,15 @@ date when the release is tagged.
   recovered and how to re-create the checkout; ignored files such as `.lake`
   are not kept (#435).
 - **Lean under each statement.** A statement whose `lean:` names resolve
-  shows the first three declarations as written, under its statement: a
-  theorem or lemma its statement without the proof, anything else whole, a
-  definition's body included, from the attributes on the lines above it. A
-  body written at the keyword's own indent is cut short. One over 14 lines
-  folds behind a line that names it. Keywords, comments and strings take the
-  page's code colors; site search skips the code, and a catalog shows none.
-  Render cuts the text from the Lean sources it captured, so a render without
-  them shows none.
+  shows the first three declarations under it, as written from the attribute
+  lines above the keyword, without the section's variables: a theorem or lemma
+  without its proof, anything else whole, a definition's body included. A body
+  written at the keyword's own indent is cut short. A declaration over 14
+  lines folds behind a line that names it. Keywords, comments and strings take
+  the page's code colors, in the map's reading pane too; site search skips the
+  code. A catalog shows none, and a `--review` render leaves the Lean to each
+  card's review, after its read-back. Render cuts the text from the Lean
+  sources it captured, so a render without them shows none.
 - **Check without site warnings.** `check --no-site-warnings` skips the
   warnings about the pages the site would publish, which `render` prints too,
   and still reads the notes under `blueprint/sources/`, which a render that

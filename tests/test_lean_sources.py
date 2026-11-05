@@ -4047,7 +4047,7 @@ def test_a_declarations_text_ends_before_the_next_line_at_its_indent() -> None:
 def test_a_declaration_keeps_its_attributes_closing_brackets_and_trailing_clauses() -> None:
     lines = [
         "/-- A doc. -/",
-        "@[simp]",
+        "@[simp] -- a note",
         "protected theorem box (α : Nat)",
         "    (h : α = α",
         ") : α = α := rfl",
@@ -4070,7 +4070,8 @@ def test_a_declaration_keeps_its_attributes_closing_brackets_and_trailing_clause
     def text(line: int) -> str:
         return declaration_text(lines, Declaration("P.x", Path("P.lean"), line, "def"))
 
-    # Its attributes and modifiers above it are its own, and its docstring is not; a closing bracket starts no command.
+    # Its attributes and modifiers above it are its own, a comment after them included, and its docstring is not; a
+    # closing bracket starts no command.
     assert text(3) == "\n".join(lines[1:5])
     assert text(6) == "\n".join(lines[5:8])
     # Alternatives and a deriving clause at its indent are its own; the deriving instance command is not.
@@ -4086,6 +4087,16 @@ def test_an_excerpt_counts_lines_as_the_index_does(tmp_path: Path) -> None:
 
     assert linker.excerpt("Outer.alpha")[1] == "def alpha : Nat := 1"
     assert linker.excerpt("Outer.beta")[1] == "def beta : Nat := 2"
+
+
+def test_a_file_whose_lines_the_index_counts_otherwise_shows_no_excerpt(tmp_path: Path) -> None:
+    """A lone carriage return in a string ends a line to the index, so every later excerpt would be wrong."""
+    text = 'namespace Outer\n\ndef alpha : String := "a\rb"\n\ndef beta : Nat := 2\n\nend Outer\n'
+    index = _index(tmp_path, text)
+    linker = SourceLinker(index=index, sources={Path("Project/Basic.lean"): text.encode()})
+
+    assert index.find("Outer.beta").line == 6
+    assert linker.excerpt("Outer.alpha") is None and linker.excerpt("Outer.beta") is None
 
 
 def test_an_excerpt_reads_the_captured_file(tmp_path: Path) -> None:
