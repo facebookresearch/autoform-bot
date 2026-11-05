@@ -10,7 +10,7 @@ cleanup.
 
 A claim key is a slug and digest of any string, not a validated node id, so a
 shared resource, or a Lean helper no article owns (under the
-`lean/<slug>-<digest>` key `work impact` reports), is locked like a node.
+`lean/<slug>-<digest>` key both impact commands report), is locked like a node.
 Parallel agents get one Git worktree each; builds take no claim.
 
 `acquire`, `renew`, and `release` change all their targets in one atomic push,

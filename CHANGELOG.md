@@ -115,6 +115,16 @@ date when the release is tagged.
 
 ### Changed
 
+- **Helpers beside an article are its own.** `work impact` and
+  `work import-impact` give a declaration no article names, and no named
+  `parent` ancestor owns, to the one article that names declarations in its
+  module, when exactly one does. A worker's own helpers no longer get a `lean/`
+  claim key of their own, and in `work impact` that article also counts for
+  `undeclared_dependencies` and `unused_statement_dependencies`. In a module
+  several articles share, the helpers keep their own keys (#492).
+- **Wrong import-impact module.** `work import-impact` refuses a `MODULE`
+  outside the project before the freshness check and the probe; when the
+  article's declarations are in one module, the error names it (#492).
 - **Statements go by their names.** A statement's heading and every link to it,
   in Uses, Used by and Assumes, show its name instead of a generated number:
   "Theorem 55 (Bézout's theorem)" reads "Bézout's theorem", with the kind on a
