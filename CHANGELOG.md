@@ -115,6 +115,9 @@ date when the release is tagged.
 
 ### Changed
 
+- **Vault pages on Windows.** `autoform-visualize` writes the dependency
+  summary and structure pages with LF line endings on Windows too, as on every
+  other system, so a vault regenerated on both no longer flips them.
 - **Helpers beside an article are its own.** `work impact` and
   `work import-impact` give a declaration no article names, and no named
   `parent` ancestor owns, to the one article that names declarations in its

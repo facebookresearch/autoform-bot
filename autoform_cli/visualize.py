@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import os
 import re
-import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
 from . import graph_views, status
+from ._fs import atomic_write
 from .graph import GraphValidationError, load_graph
 from .markdown import blueprint_root, relative_link
 from .readback import READBACKS_DIR
@@ -44,29 +43,11 @@ def _destination(path: Path) -> Path:
     return path.parent.resolve() / path.name
 
 
-def _replace(source: Path, destination: Path) -> None:
-    os.replace(source, destination)
-
-
 def _atomic_write(destination: Path, contents: str) -> None:
-    """Atomically replace *destination* from a temporary file beside it."""
+    """Replace *destination* with *contents* in one step, as UTF-8 with the
+    newlines as given, on every system."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=destination.parent,
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
-        text=True,
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(contents)
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary.chmod(0o644)
-        _replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
+    atomic_write(destination, contents.encode("utf-8"), mode=0o644)
 
 
 def _preflight_structure(destination: Path) -> None:
