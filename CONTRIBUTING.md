@@ -38,15 +38,11 @@ each `AUTOFORM_REQUIRE_*` variable below, so it fails where a local run skips:
 
 `autoform_cli/assets/` holds the book/map's shared JS and CSS.
 With Node 22.23.2, run `make build-explorer`, `make check-explorer`, and browser tests.
-Compression renames only private properties, never graph/index/route/history
-fields, and uses no unsafe transforms or dropped logs.
 See [explorer ownership and failure boundaries](docs/explorer-design.md) before changing the client.
 
-The kernel probe `autoform_cli/probes/audit_probe.lean` is copied verbatim to
-`.github/autoform_audit.py`; after editing it, run `python3 scripts/sync_audit_probe.py`
-to sync the template and example. Check without a project (silent when clean):
-`elan run "$(cat tests/fixtures/library-project/lean-toolchain)" lean
-autoform_cli/probes/audit_probe.lean`.
+After editing `autoform_cli/probes/audit_probe.lean`, run `python3 scripts/sync_audit_probe.py`
+and check the probe without a project (silent when clean): `elan run
+"$(cat tests/fixtures/library-project/lean-toolchain)" lean autoform_cli/probes/audit_probe.lean`.
 
 `tests/test_real_repl.py` skips unless `AUTOFORM_RUN_REAL_REPL_TESTS=1`. To run
 it locally, build its fixture and install the oldest supported toolchain first:
