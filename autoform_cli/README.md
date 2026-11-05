@@ -233,9 +233,9 @@ checkout's commit when it runs from one, as in `autoform 0.6.0 (745a88599469)`.
 
 Create a new project's vault, site configuration, and CI. Existing files are
 left alone, so the same command repairs a project. `--force` instead overwrites
-every file `init` manages with its template, `blueprint/roadmap/README.md`,
-`blueprint/coverage/README.md`, `README.md` and `mkdocs.yml` included, and
-replaces a root `.gitignore` rather than adding to it:
+every file `init` manages, `blueprint/roadmap/README.md`,
+`blueprint/coverage/README.md`, `README.md` and `mkdocs.yml` included, except a
+turned-off verify workflow, and replaces a root `.gitignore`:
 
 ```bash
 autoform init . --title "Finite Flat Group Schemes" \
@@ -243,7 +243,7 @@ autoform init . --title "Finite Flat Group Schemes" \
 ```
 
 [Project setup](reference/project-setup.md#init) gives the `.gitignore` rules,
-the names `init` refuses, and the Autoform pin without which CI is omitted.
+refused names, `--no-verify-workflow`, and the pin without which CI is omitted.
 
 ### project
 

@@ -141,7 +141,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     init.add_argument(
         "--force",
         action="store_true",
-        help="overwrite files that already exist; a case or Unicode variant of a managed path is still refused",
+        help="overwrite files that already exist, except a turned-off verify workflow; a case or Unicode variant "
+        "of a managed path is still refused",
+    )
+    init.add_argument(
+        "--no-verify-workflow",
+        action="store_true",
+        help="write the verify workflow as a stub that keeps its name and triggers but builds and audits nothing; "
+        "init keeps it from then on",
     )
     init.add_argument("--json", action="store_true", help="write stable machine-readable output")
 
@@ -708,6 +715,7 @@ def _init(args: argparse.Namespace) -> int:
             autoform_source=args.autoform_source,
             autoform_ref=args.autoform_ref,
             force=args.force,
+            verify_workflow=not args.no_verify_workflow,
         )
     except ScaffoldError as error:
         for issue in error.issues:
@@ -720,10 +728,13 @@ def _init(args: argparse.Namespace) -> int:
 
     print(f"{target}: {len(result.written)} files written")
     for path in result.written:
-        print(f"  + {path}")
+        print(f"  + {path}" + (" (verification turned off)" if path == result.verify_workflow_off else ""))
     for path in result.skipped:
         needs_pin = result.unpinned and path != ".github/CODEOWNERS.autoform.example" and ".github" in path
-        note = "no Autoform ref to pin" if needs_pin else "exists, left alone"
+        if path == result.verify_workflow_off:
+            note = "verification turned off on purpose, kept"
+        else:
+            note = "no Autoform ref to pin" if needs_pin else "exists, left alone"
         print(f"  = {path} ({note})")
     print("Next: describe the project in blueprint/README.md, then add chapters "
           "as roadmap/<chapter>/README.md.")
@@ -731,8 +742,10 @@ def _init(args: argparse.Namespace) -> int:
         # Flush first: stdout is block-buffered when piped, so without this the
         # warning jumps ahead of the file list it is explaining.
         sys.stdout.flush()
+        # A turned-off verify workflow is a stub that needs no pin, so only the rest is missing.
+        missing = "The rest of CI was" if result.verify_workflow_off else "CI was"
         print(
-            "\nCI was not written: generated workflows install Autoform from a Git\n"
+            f"\n{missing} not written: generated workflows install Autoform from a Git\n"
             "ref, and this Autoform is not running from a checkout, so there is\n"
             "nothing to pin. Re-run with the commit to add them:\n"
             "  autoform init --autoform-ref <40-char-sha>",

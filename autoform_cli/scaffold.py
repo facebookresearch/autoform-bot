@@ -72,6 +72,44 @@ _TEMPLATE_PATHS = frozenset(
         "theme/main.html",
     }
 )
+#: The generated verify workflow, and the stub `init --no-verify-workflow`
+#: writes there instead. `init` keeps a file there with the stub's marker line,
+#: even with --force, so a project's choice to turn verification off sticks.
+#: The stub lives here, not under templates/, which holds what every project gets.
+_VERIFY_WORKFLOW = ".github/workflows/autoform-verify.yml"
+#: The marker starts a line of the stub, after any indentation or byte order
+#: mark, and a reason may follow it.
+_VERIFY_WORKFLOW_MARKER = b"# autoform: verify workflow turned off"
+_VERIFY_WORKFLOW_OFF_LINE = re.compile(rb"(?:\xef\xbb\xbf)?\s*" + re.escape(_VERIFY_WORKFLOW_MARKER) + rb"(?![\w-])")
+_VERIFY_WORKFLOW_STUB = _VERIFY_WORKFLOW_MARKER + b"""
+# `autoform init --no-verify-workflow` wrote this in place of the generated
+# verify workflow, which builds and audits the Lean project. `autoform init`,
+# with or without --force, keeps a file here that carries the line above;
+# delete this file and run `autoform init` to get the verify workflow back.
+# It keeps the verify workflow's name, triggers and job, so anything that waits
+# on "autoform verify", such as a required check or the Pages deploy, still runs:
+# the site then publishes commits that nothing built or audited.
+
+name: autoform verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report that verification is turned off
+        run: >-
+          echo "::notice title=autoform verify::Verification is turned off for this
+          project (autoform init --no-verify-workflow); nothing was built or audited."
+"""
 #: Where `claude plugin install` records the marketplace each plugin came from.
 _PLUGIN_REGISTRY = Path.home() / ".claude" / "plugins" / "known_marketplaces.json"
 
@@ -510,6 +548,8 @@ class ScaffoldResult:
     written: tuple[str, ...]
     skipped: tuple[str, ...]
     unpinned: bool = False
+    #: The verify workflow's path when the project has it turned off; not part of the JSON.
+    verify_workflow_off: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -937,13 +977,17 @@ def scaffold_project(
     autoform_source: str = "",
     autoform_ref: str = "",
     force: bool = False,
+    verify_workflow: bool = True,
 ) -> ScaffoldResult:
     """Write the blueprint vault, site config, and CI into *target*.
 
     Existing files are never overwritten unless *force* is set, except that
     missing Autoform rules are appended through a retained regular root
     ``.gitignore`` descriptor. Skipped paths report everything else the repair
-    left in place.
+    left in place. Without *verify_workflow*, the verify workflow's path gets a
+    stub that keeps its name and triggers but only reports that verification is
+    off, replacing a workflow already there. A file at that path with the
+    stub's marker line is kept even with *force*.
     """
 
     requested = Path(target).expanduser()
@@ -1001,6 +1045,14 @@ def scaffold_project(
         autoform_source=source,
         autoform_ref=ref,
     )
+    if not verify_workflow:
+        stub_file = _ScaffoldFile(_VERIFY_WORKFLOW, _VERIFY_WORKFLOW_STUB, 0o644)
+        # The stub runs no Autoform, so it needs no pinned ref either.
+        if _VERIFY_WORKFLOW in omitted:
+            planned, omitted = (*planned, stub_file), tuple(path for path in omitted if path != _VERIFY_WORKFLOW)
+        else:
+            planned = tuple(stub_file if file.relative == _VERIFY_WORKFLOW else file for file in planned)
+    turned_off = _verify_workflow_is_off(root / _VERIFY_WORKFLOW)
     # Checked before anything is written, even with --force, so a refusal
     # leaves the project unchanged.
     collisions = _case_collisions(root, [planned_file.relative for planned_file in planned])
@@ -1022,7 +1074,11 @@ def scaffold_project(
                 raise ScaffoldError(
                     [f"refusing to write outside the project through a link: {probe}"]
                 )
-        if destination.exists() and not force:
+        if planned_file.relative == _VERIFY_WORKFLOW and turned_off:
+            skipped.append(planned_file.relative)
+            continue
+        replace = force or (planned_file.relative == _VERIFY_WORKFLOW and not verify_workflow)
+        if destination.exists() and not replace:
             if planned_file.relative == ".gitignore":
                 if _append_gitignore_rules(destination, planned_file.content):
                     written.append(planned_file.relative)
@@ -1038,7 +1094,18 @@ def scaffold_project(
     order = {_destination(relative): index for index, (relative, _content, _mode) in enumerate(templates)}
     skipped.sort(key=order.__getitem__)
 
-    return ScaffoldResult(title.strip(), tuple(written), tuple(skipped), unpinned)
+    off = _VERIFY_WORKFLOW if turned_off or not verify_workflow else None
+    return ScaffoldResult(title.strip(), tuple(written), tuple(skipped), unpinned, off)
+
+
+def _verify_workflow_is_off(path: Path) -> bool:
+    """Whether *path* holds the stub `init --no-verify-workflow` writes: a line of it starts with the marker."""
+
+    try:
+        content, _mode = _read_bounded_regular_file(path, limit=_MAX_TEMPLATE_FILE_BYTES, label="verify workflow")
+    except ScaffoldError:
+        return False
+    return any(_VERIFY_WORKFLOW_OFF_LINE.match(line) for line in content.splitlines())
 
 
 __all__ = [
