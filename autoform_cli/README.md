@@ -306,44 +306,21 @@ Validate structure and, with `--lean-root`, that every `lean:` name exists:
 autoform check blueprint --lean-root .
 ```
 
-`check` validates the graph contract ([Validation](reference/validation-and-audit.md#validation)).
-With `--lean-root` it resolves names only in the project's own Lean files, not
-in Mathlib or other dependencies under `.lake`. A name not found, unless the
-error gives its type's `path:line` (see Validation), adds a note at the end of
-the output: a shared library's declaration belongs in the article's
-implementation note.
+With `--lean-root`, `check` resolves names only in the project's own Lean files,
+not in Mathlib or other dependencies under `.lake`. A name not found, unless the
+error gives its type's `path:line`
+([Validation](reference/validation-and-audit.md#validation)), adds a note at the
+end of the output: a shared library's declaration belongs in the article's
+implementation note. It also warns about a shared library's declaration that
+[cites a source](reference/search.md#citing-declarations) an unproved article
+reaches, a library index it cannot read or parse, a library with such a
+declaration that fails verification against its checkout, and Lake files it
+cannot use. None changes the exit status.
 
-With `--lean-root`, `check` also warns about each declaration of a usable,
-checked-out shared library (see `autoform library list`) whose own docstring
-cites an arXiv paper or DOI that an unproved article reaches through its
-`## Sources` links, or through a blueprint Markdown page such a link names
-(link text, and pages over 4 MiB, are not read). Identifiers match in their
-usual forms: versions; `abs`, `pdf`, `html`, `e-print` and `src` URLs;
-old-style ids such as `math.AG/0210149`; arXiv's DOIs; `https://doi.org/` and
-`dx.doi.org` links, percent-encoded or not; and the labels `arXiv:`, `arXiv`,
-`doi:` and `DOI`, also in backticks, emphasis or a table cell. Silence it by
-naming the declaration in full in an implementation note, a page under
-`blueprint/sources/` or one a `## Sources` link names, or in project Lean, in
-full or by its last name component. Declarations citing a source only through
-their module docstring share one warning, silenced by naming the module, or in
-full a citing declaration; importing the module names it, importing only an
-umbrella module above it does not. A module catalog, or a container whose scope
-holds a target and is all proved, reaches nothing; a bare number cites nothing; and a
-last-component match counts any identifier, comments and strings included, so a
-generic one such as `symm` can hide the warning. Reuse such a declaration and
-name it in the note of each article using it; when it does not apply, name it,
-with why, on the source's page under `blueprint/sources/`.
-
-`check` also warns when a library's index cannot be read or parsed, when a
-library with a citing declaration fails verification against its checkout, and
-when the project's Lake files cannot be used. None changes the exit status.
-
-`--no-site-warnings` skips the warnings about the pages the site would publish
-([Validation](reference/validation-and-audit.md#validation)), except those about
-notes under `blueprint/sources/`, for a run that renders next: `render` prints
-the rest, and fails where `check` would warn that it stops. The generated
+`--no-site-warnings` leaves the site's page warnings to a `render` that runs
+next ([Validation](reference/validation-and-audit.md#validation)); the generated
 `blueprint-pages.yml` passes it when its `AUTOFORM_REF`'s `check --help` lists
-it; `autoform-verify.yml` does not.
+it, and `autoform-verify.yml` does not.
 
 ### audit and coverage
 
@@ -473,10 +450,9 @@ reasons on stdout; `--timeout` is accepted only with `--review`.
 
 The gate is opt-in: commit `blueprint/.autoform-review` holding
 `autoform-review-policy/v1` and a line end; `autoform init` never writes it.
-With the marker, generated CI runs `review check` after the Lean build,
-without making advisory roadmap or coverage findings merge blockers, and
-deleting every card cannot turn it off. Without it, cards or `review_approved`
-fail CI.
+With the marker, generated CI runs `review check` after the Lean build, without
+making advisory roadmap or coverage findings merge blockers, and deleting every
+card cannot turn it off. Without it, cards or `review_approved` fail CI.
 
 `review_approved` is a drift checksum, not an authorization: anyone, an agent
 included, can paste the hash `review check` prints, and a current approval is
@@ -667,7 +643,7 @@ client. [The published site](reference/site.md#rendered-pages) gives the rest,
 Each area's contract has its own page:
 
 - [Validation and audit](reference/validation-and-audit.md): what `check` and `audit` refuse or warn about.
-- [Search](reference/search.md): `autoform search`, and searching a library the project depends on.
+- [Search](reference/search.md): `autoform search`, searching a library the project depends on, and a library declaration that cites a source.
 - [Pinned name lists](reference/pinned-names.md): a library's names at a pinned revision, and what `check` warns about them.
 - [Skeletons and statement review](reference/skeleton-and-review.md): what `skeleton` extracts, its hashes, read-back cards, and the `review` rules.
 - [Open statements](reference/open-statements.md): conditional results and the open-statement policy.

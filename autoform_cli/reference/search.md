@@ -160,3 +160,25 @@ which Lean cannot import together. A theorem two modules state the same way is
 indexed once, under the first of its modules in name order, with a warning on
 standard error naming the modules; each module's copy of a wanted name is
 indexed, and a record is identified by its name and module together.
+
+### Citing declarations
+
+`check --lean-root` warns about each declaration of a usable, checked-out
+library whose own docstring cites an arXiv paper or DOI that an unproved article
+reaches through its `## Sources` links, or through a blueprint Markdown page
+such a link names (link text, and pages over 4 MiB, are not read). Identifiers
+match in their usual forms: versions; `abs`, `pdf`, `html`, `e-print` and `src`
+URLs; old-style ids such as `math.AG/0210149`; arXiv's DOIs; `https://doi.org/`
+and `dx.doi.org` links, percent-encoded or not; and the labels `arXiv:`,
+`arXiv`, `doi:` and `DOI`, also in backticks, emphasis or a table cell. Silence
+it by naming the declaration in full in an implementation note, a page under
+`blueprint/sources/` or one a `## Sources` link names, or in project Lean, in
+full or by its last name component. Declarations citing a source only through
+their module docstring share one warning, silenced by naming the module, or in
+full a citing declaration; importing the module names it, importing only an
+umbrella module above it does not. A module catalog, or a container whose scope
+holds a target and is all proved, reaches nothing; a bare number cites nothing;
+and a last-component match counts any identifier, comments and strings included,
+so a generic one such as `symm` can hide the warning. Reuse such a declaration
+and name it in the note of each article using it; when it does not apply, name
+it, with why, on the source's page under `blueprint/sources/`.
