@@ -108,6 +108,9 @@ def test_the_map_walkthrough_overview_search_pivot_back_and_whole_project(webkit
         page.get_by_role("button", name="Whole project").click()
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Fixture library")
         playwright.expect(page.locator(".pm-trail li")).to_have_text(["Fixture library"])
+        # The map's own words are neutral: its top level is sections, on every site.
+        playwright.expect(page.locator(".pm-reader")).to_contain_text(re.compile(r"results in \d+ sections\."))
+        playwright.expect(page.locator(".pm-reader h3")).to_have_text("How the sections build on each other")
 
 
 def test_back_returns_the_reading_pane_to_where_it_was_scrolled(webkit_browser: object, map_url: str) -> None:
@@ -154,6 +157,7 @@ def test_one_click_picks_a_region_in_place_and_a_second_opens_it(webkit_browser:
         band = page.locator('.pm-part[data-part="algebra"] > rect')
         band.click(position={"x": 24, "y": 10})
         playwright.expect(page.locator(".pm-reader h2")).to_have_text("Algebra")
+        playwright.expect(page.locator(".pm-reader .pm-kicker")).to_have_text("Section")
         playwright.expect(page.locator('.pm-part.pm-picked[data-part="algebra"]')).to_have_count(1)
         playwright.expect(page.locator(".pm-reader .pm-used-by .pm-link-list button")).to_contain_text(["Analysis"])
         playwright.expect(page.locator('.pm-part.pm-used-by[data-part="analysis"]')).to_have_count(1)

@@ -354,7 +354,7 @@ def _group_wide_parts(part_parent: dict[str, str], title: dict[str, str], inside
     """Nest the children of any part wider than GROUP_LIMIT in generated groups, in place, so no level is wider.
 
     Children that link to each other form one community (a weak component of the sibling links), titled by its largest
-    member. Children that link to no sibling share one "Standalone topics" group. A level with more communities than
+    member. Children that link to no sibling share one "Standalone sections" group. A level with more communities than
     fit keeps the largest and nests the rest under "Smaller linked groups". A group with more members than fit splits
     into runs: a community's breadth first along its links, which keeps linked topics together, and the standalone
     topics in reading order (``first`` is each part's reading position); each run is titled by its largest member too.
@@ -383,8 +383,8 @@ def _group_wide_parts(part_parent: dict[str, str], title: dict[str, str], inside
         group = sorted((part for tree in trees for part in members(tree)), key=lambda m: (-weight(m), title[m], m))
         names = [title[m] for m in group[:2]]
         if len(group) > 2:
-            return f"{names[0]} and {len(group) - 1} {kind} topics"
-        return f"{names[0]} (2 topics)" if names[0] == names[1] else " and ".join(names)
+            return f"{names[0]} and {len(group) - 1} {kind} sections"
+        return f"{names[0]} (2 sections)" if names[0] == names[1] else " and ".join(names)
 
     def fit(trees: Sequence[_Tree], kind: str) -> list[_Tree]:
         # Consecutive runs of nearly equal length, as few as fit, nested again while they are still too many.
@@ -437,7 +437,7 @@ def _group_wide_parts(part_parent: dict[str, str], title: dict[str, str], inside
         level = crowd(communities, GROUP_LIMIT - (1 if loners else 0))
         # Topics that link to no sibling stay together, in reading order: grouping them by size would invent a structure.
         if loners:
-            level.append(("Standalone topics", fit(loners, "other")))
+            level.append(("Standalone sections", fit(loners, "other")))
         only = level[0]
         if len(level) == 1 and not isinstance(only, str):
             level = only[1]  # a single group would only repeat its parent, so what it holds takes its place

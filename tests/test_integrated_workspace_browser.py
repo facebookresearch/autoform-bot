@@ -535,7 +535,7 @@ def test_map_only_gives_an_overview_the_whole_body_and_its_tab_brings_back_the_h
     assert shut["map"] == pytest.approx(shut["body"], abs=2)
     page.get_by_role("button", name="Show the reading pane").click()
     playwright.expect(page.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_be_focused()
-    page.get_by_role("button", name="Show Topics").click()
+    page.get_by_role("button", name="Show Contents").click()
     _frames(page)
     back = page.evaluate(_PANE_WIDTHS)
     assert back["reading"] == pytest.approx(48, abs=2) and back["topics"] > 100
@@ -842,7 +842,7 @@ def test_long_ancestor_labels_and_full_reading_heading_stay_within_their_panes(
         assert max(top for top, _ in second) < min(bottom for _, bottom in second), boxes
         assert min(top for top, _ in second) >= max(bottom for _, bottom in first), boxes
     if width <= 1100:
-        page.get_by_role("button", name="Topics", exact=True).click()
+        page.get_by_role("button", name="Contents", exact=True).click()
     outline = page.locator(".bp-dag-navigation")
     playwright.expect(outline).to_be_visible()
     ancestor = outline.locator('[data-navigation-node-id="division-00"]')

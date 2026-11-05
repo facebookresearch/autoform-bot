@@ -243,7 +243,7 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert 'refs.stage.setAttribute("role", "region")' in script
     assert 'toolbar.setAttribute("role", "group")' in script
     assert 'refs.navigation = element("aside", "bp-dag-navigation")' in script
-    assert 'refs.navigation.setAttribute("aria-label", "Topics")' in script
+    assert 'refs.navigation.setAttribute("aria-label", "Contents")' in script
     assert 'renderNavigation()' in script
     # Only the publisher's controlled formula service refreshes mathematics;
     # navigation clones the complete reading source rather than graph summaries.
@@ -333,7 +333,7 @@ def test_rail_rows_show_a_status_swatch_and_a_lone_group_no_heading() -> None:
     """The rail is the semantic scope outline; leaf status belongs to result cards and search."""
     script = _viewer_source()
 
-    assert 'element("h2", "bp-outline-label", "Topics")' in script
+    assert 'element("h2", "bp-outline-label", "Contents")' in script
     from tests.test_qa_outline_navigation import _PROJECTION_PEERS, _run
 
     _run(r"""
@@ -361,7 +361,7 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
     assert 'element("span", "bp-dag-inventory-meta", [tracksLean ? statusLabel(node.status) : "", where].filter(Boolean).join(" · "))' in script
     assert 'var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;' in script
     assert 'element("span", "bp-dag-result-meta", statusLabel(match.node.status))' in script
-    assert 'element("span", "bp-dag-result-place", topic ? "Topic" + (place ? " in " + place : "") : place)' in script
+    assert 'element("span", "bp-dag-result-place", topic ? "Section" + (place ? " in " + place : "") : place)' in script
     for gone in ("bp-dag-node-id", "bp-dag-inventory-id", "bp-dag-result-id"):
         assert gone not in script and gone not in style
 

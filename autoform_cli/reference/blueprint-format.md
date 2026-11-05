@@ -81,7 +81,7 @@ target, `bridged` for a result introduced between source targets, and
 `background` for prerequisite mathematics.
 
 The optional `area` field groups the chapters, and deeper containers naming a
-chapter's area, into regions of the project map, and Topics heads each area's
+chapter's area, into sections of the project map, and Contents heads each area's
 chapters with its name; on a leaf it only labels the article. Use mathematical
 areas such as `Geometry & Topology`, not buckets such as `MathlibExt` or
 `catalog-01`. Autoform does not guess areas from paths, imports, or titles.

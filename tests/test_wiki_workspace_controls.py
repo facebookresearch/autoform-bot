@@ -488,7 +488,7 @@ def test_container_peers_follow_semantic_parents_through_collection_and_paginati
       const resultScope=record('result-scope','result-scope',{parent:'chapter',result:true});
       configure([collection,pagination,selected,sibling,direct,source,unrelated,resultScope,focus],[],selected.id);
       const before=snapshot(),peers=topicPeers(selected.id);
-      assert.strictEqual(peers.owner,owner);assert.equal(peers.title,'Other topics in '+owner.title);
+      assert.strictEqual(peers.owner,owner);assert.equal(peers.title,'More in '+owner.title);
       assert.deepEqual(peers.nodes.map(node=>node.id),[sibling.id,direct.id]);
       assert.equal(snapshot(),before,'Containment must not be inferred from paths or rewritten');
     """)
@@ -644,7 +644,7 @@ def test_container_peer_disclosure_has_canonical_scope_links_not_fake_results() 
       const selected=record('topic','topic',{parent:'chapter'}),peer=record('other','other',{parent:'chapter'});
       configure([selected,peer],[],selected.id);renderReaderContext();
       const details=marked(dom$readingNeighbors,'bp-reading-related-topics');assert(details);
-      assert.equal(details.children[0].textContent,'Other topics in '+owner.title);
+      assert.equal(details.children[0].textContent,'More in '+owner.title);
       const link=links(details)[0];assert.equal(link.href,peer.route);assert.equal(link.textContent,peer.title);
       assert.equal(click(link).defaultPrevented,true);
       assert.deepEqual(calls.at(-1),{id:peer.id,options:{history:'push',focus:'reading'}});

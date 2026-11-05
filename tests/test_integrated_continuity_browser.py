@@ -109,7 +109,7 @@ def _continuity_state(page: object) -> dict:
     return {
         **_surface(page),
         "query": page.locator(".bp-dag-search").input_value(),
-        "outline_open": page.get_by_role("button", name="Topics", exact=True).get_attribute("aria-expanded"),
+        "outline_open": page.get_by_role("button", name="Contents", exact=True).get_attribute("aria-expanded"),
     }
 
 
@@ -202,7 +202,7 @@ def test_edited_outgoing_entry_and_same_url_entries_restore_their_own_reading_an
     page.mouse.move(stage["x"] + stage["width"] * .88, stage["y"] + stage["height"] * .72)
     page.mouse.wheel(57, 39)
     page.locator(".bp-dag-search").fill(_TARGET_TITLE)
-    page.get_by_role("button", name="Topics", exact=True).click()
+    page.get_by_role("button", name="Contents", exact=True).click()
     _frames(page)
     edited = _scroll_and_back(page)
     assert edited["reading"] > 0 and edited["outline"] > 0 and edited["outline_open"] == "true"

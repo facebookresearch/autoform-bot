@@ -175,7 +175,7 @@
       if (chain.has(node.id) || node.navigation === "collection") walk(node.id, depth + 1);
     }
     function walk(id, depth) { (children.get(id) || []).forEach(function (node) { visit(node, depth); }); }
-    // As the map groups chapters into regions (project_map.py), Topics heads each run of an area's chapters with the
+    // As the map groups chapters into sections (project_map.py), Contents heads each run of an area's chapters with the
     // area's name, once the chapters name two areas and for an area of two chapters or more. Only the topics written at
     // the top count: a statement's area only labels it, a collection keeps its own subhead, and the map keeps a source
     // track whole, so the topics lifted out of one stay unheaded. A chapter without an area keeps its place unheaded,
@@ -548,7 +548,7 @@
         item.appendChild(link); list.appendChild(item);
         bindNodeLink(link, node.id, {history: "push", focus: true});
       });
-      dom$navigationInner.appendChild(element("h2", "bp-outline-label", "Topics")); dom$navigationInner.appendChild(list);
+      dom$navigationInner.appendChild(element("h2", "bp-outline-label", "Contents")); dom$navigationInner.appendChild(list);
       if (tree.entries.length < tree.total) {
         var more = button("bp-dag-navigation-more", "Show more topics");
         more.addEventListener("click", function () {
@@ -610,7 +610,7 @@
         return scoped ? peer.kind === "scope" && peer.scope === peer.id && peer.result !== true && semanticParent(peer) === owner.id :
           (peer.result === true || peer.catalog === "module") && peer.scope === focus.scope;
       });
-      return {owner: owner, title: (scoped ? "Other topics in " : "More in ") + owner.title, nodes: peers};
+      return {owner: owner, title: "More in " + owner.title, nodes: peers};
     }
 
     function buildShell() {
@@ -638,9 +638,9 @@
 
       var toolbar = element("div", "bp-dag-toolbar");
       toolbar.setAttribute("role", "group"); toolbar.setAttribute("aria-label", "Dependency explorer controls");
-      // Its name is its visible word, so speech input can say "Topics"; aria-expanded gives its state. It follows search, which a
-      // phone puts on a row of its own, so the tab order runs along the rows instead of from Topics up to search and back down.
-      dom$outlineToggle = button("bp-dag-button bp-dag-outline-toggle", "Topics");
+      // Its name is its visible word, so speech input can say "Contents"; aria-expanded gives its state. It follows search, which a
+      // phone puts on a row of its own, so the tab order runs along the rows instead of from Contents up to search and back down.
+      dom$outlineToggle = button("bp-dag-button bp-dag-outline-toggle", "Contents");
       dom$outlineToggle.setAttribute("aria-expanded", "false");
       var searchWrap = dom$searchWrap = element("div", "bp-dag-search-wrap");
       dom$search = element("input", "bp-dag-search");
@@ -682,7 +682,7 @@
 
       var body = dom$body = element("div", "bp-dag-body"), main = element("div", "bp-dag-main");
       dom$navigation = element("aside", "bp-dag-navigation");
-      dom$navigation.setAttribute("aria-label", "Topics");
+      dom$navigation.setAttribute("aria-label", "Contents");
       dom$navigationInner = element("div", "bp-dag-navigation-inner");
       dom$navigation.appendChild(dom$navigationInner); body.appendChild(dom$navigation);
       renderNavigation();
@@ -951,7 +951,7 @@
       globalListen(document, "pointerdown", function (event) { if (!card.contains(event.target)) hide(); }, true);
     }
 
-    // Topics and the reading pane can be dragged wider or narrower, or hidden, and the choice holds on every page of the
+    // Contents and the reading pane can be dragged wider or narrower, or hidden, and the choice holds on every page of the
     // site, scoped as Material scopes its own choices. Dragging a pane nearly shut hides it, as Enter on its splitter does;
     // a tab at the map's edge brings it back.
     function bindPanes() {
@@ -963,16 +963,16 @@
       if (!(panes.reading > 0 && panes.reading < 1)) delete panes.reading;
       var main = dom$body.querySelector(".bp-dag-main"), context = host.querySelector(".bp-dag-context");
       var paneOf = {topics: dom$navigation, reading: dom$inspector};
-      // In tab order Topics' splitter follows Topics, and the reader's comes just before the reader.
+      // In tab order Contents' splitter follows Contents, and the reader's comes just before the reader.
       function splitter(label, before) {
         var bar = element("div", "bp-dag-splitter"); bar.tabIndex = 0; bar.title = label + "; Enter hides, double-click or Delete resets";
         bar.setAttribute("role", "separator"); bar.setAttribute("aria-orientation", "vertical"); bar.setAttribute("aria-label", label);
         dom$body.insertBefore(bar, before); return bar;
       }
-      var bars = {topics: splitter("Resize Topics", main), reading: splitter("Resize the reading pane", dom$inspector)};
-      var tabs = {topics: button("bp-dag-pane-tab bp-dag-pane-tab-topics", "Topics", "Show Topics"),
+      var bars = {topics: splitter("Resize Contents", main), reading: splitter("Resize the reading pane", dom$inspector)};
+      var tabs = {topics: button("bp-dag-pane-tab bp-dag-pane-tab-topics", "Contents", "Show Contents"),
         reading: button("bp-dag-pane-tab bp-dag-pane-tab-reading", "Reading", "Show the reading pane")};
-      // Each tab comes in tab order where it sits: Topics' before the map, the reader's after it.
+      // Each tab comes in tab order where it sits: Contents' before the map, the reader's after it.
       main.prepend(tabs.topics); main.append(tabs.reading);
       // A drawn full-screen mark, like the theme switch beside it, so the trail row stays one line high.
       var mapOnly = button("bp-dag-map-only", "", "Map only"), svg = "http://www.w3.org/2000/svg", mark = document.createElementNS(svg, "svg");
@@ -998,11 +998,11 @@
         else host.style.removeProperty("--dag-reading-width");
         var shut = hidden("reading") && (hidden("topics") || !wide());
         pressed(mapOnly, shut);
-        mapOnly.title = (shut ? "Show " : "Hide ") + (wide() ? "Topics and the reading pane" : "the reading pane");
+        mapOnly.title = (shut ? "Show " : "Hide ") + (wide() ? "Contents and the reading pane" : "the reading pane");
         place();
       }
-      // Each pane's bounds: Topics 160-480px, the reader 300px up to where the map keeps 160px of the room the two share
-      // (the grid keeps that floor too, when Topics or the window changes later). A drawer floats over both and takes none.
+      // Each pane's bounds: Contents 160-480px, the reader 300px up to where the map keeps 160px of the room the two share
+      // (the grid keeps that floor too, when Contents or the window changes later). A drawer floats over both and takes none.
       function least(side) { return side === "topics" ? 160 : 300; }
       function most(side) { return side === "topics" ? 480 : dom$inspector.offsetWidth + main.offsetWidth - 160; }
       // Each splitter sits on its pane's inner edge and reports its pane's share of the width and the share's bounds; the
@@ -1073,7 +1073,7 @@
           show(side, true); (bars[side].hidden ? dom$sheetHandle : bars[side]).focus({preventScroll: true});
         });
       });
-      // Where Topics is a drawer, Map only hides the reader and closes the drawer, leaving the wide layout's Topics alone.
+      // Where Contents is a drawer, Map only hides the reader and closes the drawer, leaving the wide layout's Contents alone.
       mapOnly.addEventListener("click", function () {
         var shut = mapOnly.getAttribute("aria-pressed") === "true";
         panes.readingHidden = !shut;
@@ -1216,7 +1216,7 @@
         choose.appendChild(readingLabel("span", "bp-dag-result-title", match.node.title, (records.get(recordId(match.node)) || match.node).reading_title));
         if (tracksLean) choose.appendChild(element("span", "bp-dag-result-meta", statusLabel(match.node.status))).title = (palette[match.node.status] || {}).meaning || "";
         var place = placeOf(match.node), topic = (records.get(recordId(match.node)) || match.node).scope === match.node.id;
-        if (place || topic) choose.appendChild(element("span", "bp-dag-result-place", topic ? "Topic" + (place ? " in " + place : "") : place));
+        if (place || topic) choose.appendChild(element("span", "bp-dag-result-place", topic ? "Section" + (place ? " in " + place : "") : place));
         choose.addEventListener("click", function () { activateNode(match.node, true); }); item.appendChild(choose); list.appendChild(item);
         choose.addEventListener("keydown", searchResultKeydown);
       });
@@ -1292,7 +1292,7 @@
     }
     function mapUnavailable() {
       if (!alive || dom$stage.querySelector(".bp-dag-map-unavailable")) return;
-      var note = element("p", "bp-dag-map-unavailable", "The map could not load. Topics, search and the statement lists still work.");
+      var note = element("p", "bp-dag-map-unavailable", "The map could not load. Contents, search and the statement lists still work.");
       note.setAttribute("role", "status"); dom$stage.appendChild(note); dom$announcement.textContent = note.textContent;
     }
 
