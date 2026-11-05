@@ -19,6 +19,7 @@ BUDGETS = {
     "autoform_cli/reference/blueprint-format.md": 257,  # K5: the README's format sections.
     "autoform_cli/reference/claims-and-revisions.md": 164,
     "autoform_cli/reference/debrief.md": 45,
+    "autoform_cli/reference/links.md": 38,  # New in #601: the annotations that carry articles' facts.
     "autoform_cli/reference/open-statements.md": 180,
     "autoform_cli/reference/pinned-names.md": 41,
     "autoform_cli/reference/project-setup.md": 97,

@@ -156,6 +156,7 @@ from ._managed_output import (
     stage_output,
     validate_managed_output,
 )
+from .annotations import LINKS_DIR
 from .graph import Graph, GraphValidationError, Node, load_graph
 from .lean import (
     PACKET_SCHEMA,
@@ -790,9 +791,10 @@ def _comment_ranges(value: object, text: str | None, *, context: str) -> tuple[t
 
 
 def _graph_snapshot(graph: Graph) -> tuple[tuple[str, str, str], ...]:
-    """Fingerprint the exact Markdown articles used to choose declarations."""
+    """Fingerprint the exact Markdown articles used to choose declarations, and the annotations that carry their
+    facts, as a last row with no node ID."""
 
-    return tuple(
+    articles = tuple(
         (
             node.id,
             _article_path(node, graph),
@@ -800,14 +802,16 @@ def _graph_snapshot(graph: Graph) -> tuple[tuple[str, str, str], ...]:
         )
         for node in sorted(graph.nodes.values(), key=lambda item: item.id)
     )
+    return articles if graph.links_sha256 is None else (*articles, ("", LINKS_DIR, graph.links_sha256))
 
 
 def _blueprint_hash(graph: Graph, passages: dict[str, tuple[str | None, str | None, str]]) -> str:
     """Identify the exact, path-independent blueprint snapshot behind a report:
-    every article, and the passage each cites or why it has none."""
+    every article, the annotations that carry their facts, and the passage each
+    cites or why it has none."""
 
     material = json.dumps(
-        [(*row, *passages[row[0]]) for row in _graph_snapshot(graph)],
+        [(*row, *passages[row[0]]) if row[0] else row for row in _graph_snapshot(graph)],
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,

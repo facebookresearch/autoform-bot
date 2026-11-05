@@ -13,7 +13,8 @@ Unplaced leaves appear under “Other statements”, unplaced module catalogs un
 contents; large inventories belong in coverage, and a detailed container
 introduces its mathematics in prose and places statements under headings.
 
-Frontmatter records checked facts:
+Optional frontmatter, or in a project with `blueprint/links/` the article's
+[annotation](links.md), records checked facts:
 
 ```markdown
 ---
@@ -77,8 +78,6 @@ whatever its modifiers (such as `noncomputable`); an `axiom` still has one.
 `origin` records provenance for formalizable work: `cited` for a direct source
 target, `bridged` for a result introduced between source targets, and
 `background` for prerequisite mathematics.
-
-Frontmatter is optional.
 
 The optional `area` field groups the chapters, and deeper containers naming a
 chapter's area, into regions of the project map, and Topics heads each area's
@@ -158,7 +157,8 @@ Render omits the hidden directory from the site and the publication hash.
 
 ## Assertions and derived status
 
-An article asserts only facts a human or agent verified:
+An article asserts only facts a human or agent verified, in its frontmatter or,
+in a project with `blueprint/links/`, in its [annotation](links.md):
 
 | Key | Meaning |
 | --- | --- |

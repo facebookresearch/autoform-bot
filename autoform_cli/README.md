@@ -290,7 +290,8 @@ one. `--write` only adds each ID as the first frontmatter line, or as a
 frontmatter block of its own. It checks every article before writing the first,
 writes one only while its bytes still have the planned hash, and refuses one
 that changed or became a symlink; a rerun completes the plan. The runtime and
-`autoform work` see assigned IDs at once.
+`autoform work` see assigned IDs at once. Beside `blueprint/links/` it writes
+none: an ID goes in the article's [annotation](reference/links.md).
 
 ### claim
 
@@ -383,6 +384,7 @@ Each area's contract has its own page:
 - [Validation and audit](reference/validation-and-audit.md): what `check` and `audit` refuse or warn about.
 - [Search](reference/search.md): `autoform search`, searching a library the project depends on, and a library declaration that cites a source.
 - [Pinned name lists](reference/pinned-names.md): a library's names at a pinned revision, and what `check` warns about them.
+- [Annotations](reference/links.md): the literature-links annotations in `blueprint/links/` that carry articles' facts.
 - [Skeletons and statement review](reference/skeleton-and-review.md): what `skeleton` extracts, its hashes, read-back cards, and the `review` rules.
 - [Open statements](reference/open-statements.md): conditional results and the open-statement policy.
 - [Claims and revisions](reference/claims-and-revisions.md): leases and revising a published statement.

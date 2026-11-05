@@ -75,6 +75,7 @@ from ._tree_snapshot import (
     _update_digest,
     bind_directory_tree,
 )
+from .annotations import LINKS_DIR
 from .approvals import approval_statuses
 from .coverage import (
     COVERAGE_DISPOSITIONS,
@@ -755,6 +756,9 @@ def _publication(
             continue
         # The graph has read the pinned name lists too, and nothing on the site reads them.
         if relative.parent.as_posix() == PINNED_NAMES_FOLDER and relative.suffix == ".jsonl":
+            continue
+        # And the annotations, whose facts the pages show; spelled otherwise, loading warns and reads none.
+        if relative.parts[0].casefold() == LINKS_DIR:
             continue
         if _resolve(source) in node_sources:
             if _resolve(source) in articles:
@@ -1496,8 +1500,9 @@ def load_publication_source(blueprint_dir: str | Path) -> tuple[str, Graph]:
     """Read the blueprint once; return its publication revision and the graph of those bytes."""
     blueprint = blueprint_root(blueprint_dir)
     snapshot, _nodes = _capture_blueprint(blueprint)
-    # The graph reads the articles, the atlas and the pinned name lists.
-    with _private_copy(snapshot, prefix=("roadmap/", "atlas.json", f"{PINNED_NAMES_FOLDER}/")) as (_root, copy):
+    # The graph reads the articles, the annotations, the atlas and the pinned name lists.
+    prefix = ("roadmap/", f"{LINKS_DIR}/", "atlas.json", f"{PINNED_NAMES_FOLDER}/")
+    with _private_copy(snapshot, prefix=prefix) as (_root, copy):
         return _source_revision(snapshot), _load_graph(copy, blueprint)
 
 
@@ -3925,6 +3930,9 @@ def _review_disclosures(
         or node_id not in whole.nodes
         or whole.nodes[node_id].source_sha256 != graph.nodes[node_id].source_sha256
     ]
+    # The annotations carry the articles' facts.
+    if whole.links_sha256 != graph.links_sha256:
+        edited.append(ReviewFinding("", "review-snapshot-changed", f"blueprint/links/ changed {changed}"))
     if edited:
         raise ReviewError(edited)
     bundle = build_review_bundle(whole, skeleton, macros=macros)

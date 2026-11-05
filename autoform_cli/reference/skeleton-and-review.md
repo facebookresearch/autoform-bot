@@ -49,10 +49,10 @@ during extraction stops the whole command.
 
 `--output` records the `autoform-skeleton/v5` report, with no timestamp; only
 failure reasons quote absolute paths. It names the target set, whether it covers
-every target or a `--node` selection, and the exact blueprint, by a hash of
-every article and the passage each cites; a report whose selection, articles and
-unresolved declarations disagree cannot be built. Only a report selecting every
-article, with the blueprint's `lean:` names as targets, is review evidence.
+every target or a `--node` selection, and the blueprint, by a hash of every
+article, its [annotations](links.md) and cited passage; a report whose selection,
+articles and unresolved declarations disagree cannot be built. Only a report on
+every article, with the blueprint's `lean:` names as targets, is review evidence.
 
 ### Limits
 

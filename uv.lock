@@ -80,6 +80,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
     { name = "html5lib" },
+    { name = "literature-links" },
     { name = "markdown" },
     { name = "psutil" },
     { name = "pymdown-extensions" },
@@ -103,6 +104,7 @@ dev = [
 requires-dist = [
     { name = "fastmcp", specifier = ">=3.4.10,<4" },
     { name = "html5lib", specifier = ">=1.1,<2" },
+    { name = "literature-links", git = "https://github.com/mathlib-initiative/literature-links?rev=v1.0.2" },
     { name = "markdown", specifier = "==3.10.3" },
     { name = "mkdocs", marker = "extra == 'dev'", specifier = ">=1.6,<2" },
     { name = "mkdocs-literate-nav", marker = "extra == 'dev'", specifier = ">=0.6,<1" },
@@ -928,6 +930,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/43/4b/674af6ef2f97d56f0
 wheels = [
     { url = "https://files.pythonhosted.org/packages/81/db/e655086b7f3a705df045bf0933bdd9c2f79bb3c97bfef1384598bb79a217/keyring-25.7.0-py3-none-any.whl", hash = "sha256:be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f", size = 39160, upload-time = "2025-11-16T16:26:08.402Z" },
 ]
+
+[[package]]
+name = "literature-links"
+version = "1.0.2"
+source = { git = "https://github.com/mathlib-initiative/literature-links?rev=v1.0.2#e7eeafb823eb3bc64a8ab2077cd3569f572d459f" }
 
 [[package]]
 name = "markdown"
