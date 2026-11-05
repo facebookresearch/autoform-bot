@@ -77,14 +77,16 @@ _TEMPLATE_PATHS = frozenset(
 #: even with --force, so a project's choice to turn verification off sticks.
 #: The stub lives here, not under templates/, which holds what every project gets.
 _VERIFY_WORKFLOW = ".github/workflows/autoform-verify.yml"
-_VERIFY_WORKFLOW_OFF_MARKER = b"# autoform: verify workflow turned off"
+#: The marker, alone on its line or followed by a reason.
+_VERIFY_WORKFLOW_OFF_LINE = re.compile(rb"\s*# autoform: verify workflow turned off(?![\w-])")
 _VERIFY_WORKFLOW_OFF = b"""# autoform: verify workflow turned off
 # `autoform init --no-verify-workflow` wrote this in place of the generated
 # verify workflow, which builds and audits the Lean project. `autoform init`,
 # with or without --force, keeps a file here that carries the line above;
 # delete this file and run `autoform init` to get the verify workflow back.
 # It keeps the verify workflow's name, triggers and job, so anything that waits
-# on "autoform verify", such as a required check or the Pages deploy, still runs.
+# on "autoform verify", such as a required check or the Pages deploy, still runs:
+# the site then publishes commits that nothing built or audited.
 
 name: autoform verify
 
@@ -1095,7 +1097,7 @@ def scaffold_project(
 
 
 def _verify_workflow_is_off(path: Path) -> bool:
-    """Whether *path* holds the stub `init --no-verify-workflow` writes: a line of it is the marker."""
+    """Whether *path* holds the stub `init --no-verify-workflow` writes: a line of it starts with the marker."""
 
     if path.is_symlink() or not path.is_file():
         return False
@@ -1104,7 +1106,9 @@ def _verify_workflow_is_off(path: Path) -> bool:
             content = handle.read(_MAX_TEMPLATE_FILE_BYTES + 1)
     except OSError:
         return False
-    return len(content) <= _MAX_TEMPLATE_FILE_BYTES and _VERIFY_WORKFLOW_OFF_MARKER in content.splitlines()
+    return len(content) <= _MAX_TEMPLATE_FILE_BYTES and any(
+        _VERIFY_WORKFLOW_OFF_LINE.match(line) for line in content.splitlines()
+    )
 
 
 __all__ = [

@@ -243,7 +243,7 @@ autoform init . --title "Finite Flat Group Schemes" \
 ```
 
 [Project setup](reference/project-setup.md#init) gives the `.gitignore` rules,
-the names `init` refuses, and the Autoform pin without which CI is omitted.
+refused names, `--no-verify-workflow`, and the pin without which CI is omitted.
 
 ### project
 

@@ -741,8 +741,10 @@ def _init(args: argparse.Namespace) -> int:
         # Flush first: stdout is block-buffered when piped, so without this the
         # warning jumps ahead of the file list it is explaining.
         sys.stdout.flush()
+        # A turned-off verify workflow is a stub that needs no pin, so only the rest is missing.
+        missing = "The rest of CI was" if result.verify_workflow_off else "CI was"
         print(
-            "\nCI was not written: generated workflows install Autoform from a Git\n"
+            f"\n{missing} not written: generated workflows install Autoform from a Git\n"
             "ref, and this Autoform is not running from a checkout, so there is\n"
             "nothing to pin. Re-run with the commit to add them:\n"
             "  autoform init --autoform-ref <40-char-sha>",

@@ -82,16 +82,15 @@ allowed. Ask when either is unknown, and report the pair and why. Do not add the
 `require` or fetch the library into the project; the user decides that.
 
 `project new` writes the complete Autoform vault, site, ignore rules, and CI, so
-no later `init` is needed. The rules ignore the derived `site/`, `site-src/`,
-`.autoform-publication-*/`, and `blueprint/dependencies.md`. For an incomplete
-existing repository, run `autoform init` through the same
-`uv run --project "$AUTOFORM_PLUGIN_ROOT"` prefix: it writes the whole vault,
-keeps existing files, and reports what it left alone. Do not hand-build any of
-the vault. Without `--autoform-ref`, both write CI only when they can verify the
-Autoform commit that ran them; otherwise find the commit the plugin was
-installed from and run `init` on the target with `--autoform-ref <40-char-sha>`,
-or report that CI was not configured. Never invent a ref or workflow source;
-`init` refuses a branch, a tag, or an abbreviated sha.
+no later `init` is needed. For an incomplete existing repository, run
+`autoform init` through the same `uv run --project "$AUTOFORM_PLUGIN_ROOT"`
+prefix: it writes the whole vault, keeps existing files, and reports what it
+left alone. Do not hand-build any of the vault. Without `--autoform-ref`, both
+write CI only when they can verify the Autoform commit that ran them; otherwise
+find the commit the plugin was installed from and run `init` on the target with
+`--autoform-ref <40-char-sha>`, or report that CI was not configured. Never
+invent a ref or workflow source; `init` refuses a branch, a tag, or an
+abbreviated sha.
 
 Neither `project new` nor `init` adds the Lean REPL that the REPL tool runs.
 Require `leanprover-community/repl` under the name `repl` at the commit of the
@@ -114,7 +113,8 @@ Put the project's notation in `blueprint/tex-macros.json` as MathJax
 The [CLI reference](../../autoform_cli/README.md#publishing-and-the-dashboard)
 says when Pages deploys, and [open
 statements](../../autoform_cli/reference/open-statements.md#open-statements)
-what the generated verify workflow audits. `init` also writes
+what the generated verify workflow audits. Where several Lake projects back the
+roadmap, `init --no-verify-workflow` turns it off. `init` also writes
 `.github/CODEOWNERS.autoform.example`, which GitHub does not read; the
 [template](../../autoform_cli/templates/github/CODEOWNERS.autoform.example)
 says how to activate it. Do not guess owners; activate it only with names the

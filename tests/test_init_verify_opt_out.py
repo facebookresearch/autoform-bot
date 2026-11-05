@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from autoform_cli import scaffold as scaffold_module
 from autoform_cli.__main__ import main
 from autoform_cli.scaffold import scaffold_project
@@ -70,16 +72,39 @@ def test_init_keeps_a_turned_off_workflow_even_with_force(tmp_path: Path, capsys
     assert f"  = {_VERIFY} (verification turned off on purpose, kept)\n" in capsys.readouterr().out
 
 
-def test_a_project_comment_above_the_marker_keeps_it_turned_off(tmp_path: Path) -> None:
+def test_opting_out_without_a_ref_writes_the_stub_and_reports_it_once(tmp_path: Path, capsys) -> None:
+    project = tmp_path / "project"
+
+    assert main(["init", str(project), "--autoform-source", _SOURCE, "--no-verify-workflow"]) == 0
+
+    captured = capsys.readouterr()
+    assert (project / _VERIFY).read_bytes() == _STUB
+    assert not (project / ".github" / "workflows" / "blueprint-pages.yml").exists()
+    assert f"  + {_VERIFY} (verification turned off)\n" in captured.out
+    assert captured.out.count(_VERIFY) == 1
+    assert "The rest of CI was not written" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("edit", "kept"),
+    [
+        (lambda stub: b"# Kept off: our own CI builds the Lean.\n" + stub, b"# Kept off: our own CI builds the Lean.\n"),
+        (lambda stub: stub.replace(b"turned off\n", b"turned off: our own CI builds the Lean \n", 1), b"# autoform"),
+    ],
+    ids=["comment-above", "reason-after"],
+)
+def test_a_project_edit_around_the_marker_keeps_it_turned_off(tmp_path: Path, edit, kept: bytes) -> None:
     project = tmp_path / "project"
     _scaffold(project, verify_workflow=False)
     path = project / _VERIFY
-    path.write_bytes(b"# Kept off: our own CI builds the Lean.\n" + path.read_bytes())
+    path.write_bytes(edit(path.read_bytes()))
+    edited = path.read_bytes()
 
     result = _scaffold(project, force=True)
 
     assert _VERIFY in result.skipped
-    assert path.read_bytes().startswith(b"# Kept off: our own CI builds the Lean.\n")
+    assert path.read_bytes() == edited
+    assert edited.startswith(kept)
 
 
 def test_deleting_the_stub_brings_the_verify_workflow_back(tmp_path: Path) -> None:
