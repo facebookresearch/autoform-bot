@@ -61,17 +61,15 @@ inventory math uses bounded viewer-owned jobs. Map labels and unsupported or
 failed/stalled math stay literal. Original titles, relations and status are unchanged.
 
 Every render writes `publication.json`, schema `autoform-publication/v3`, with
-blueprint and Lean-source hashes (the Lean-source hash is empty when render
-reads no Lean sources), Git ref, article and dependency counts, the site's file
-inventory, and available views (`project`, `chapter` and `full` name the old
-dependency pages). `autoform` names the Autoform that rendered it: its version,
-and its commit and repository when known. `inventory` gives every file the
-verified commit holds below the blueprint (else every file or skipped folder
-render read) its site URL, repository URL or reason left out; a file's role is
-its first folder (`roadmap`, `sources`, `coverage`, `links`), else `hidden` for
-a dot name, else `other`. It holds no timestamp or absolute path, so identical
-inputs and Autoform produce identical output files. The dashboard accepts only a
-v3 site and reports an older one as stale until render replaces it. Render reads
+blueprint and Lean-source hashes, Git ref, article and dependency counts, the
+site's file inventory, and available views. `autoform` names the Autoform that
+rendered it: its version, and its commit and repository when known. `inventory`
+gives each blueprint file the verified commit holds (else each one render read)
+its site URL, repository URL or reason left out; a file's role is its first
+folder (`roadmap`, `sources`, `coverage`, `links`), else `hidden` for a dot
+name, else `other`. It holds no timestamp or absolute path, so identical inputs
+and Autoform produce identical output files. The dashboard accepts only a v3
+site and reports an older one as stale until render replaces it. Render reads
 the blueprint and the Lean sources once each; an edit saved during a render
 waits for the next one. Under `--review`, an article or cited passage edited
 during extraction fails the render instead ([review](../README.md#review)).
@@ -81,28 +79,30 @@ commit, recorded by its full object ID; a clean checkout that Git converts on
 checkout still matches. Otherwise the render stays local, keeps source notes in
 the site, records no Git ref, and warns with the first mismatch. Links into the
 blueprint (an article's Markdown source, a source note) also need the
-blueprint's bytes in that commit; when they differ, render keeps the code links
-and source notes and warns, silently for a blueprint outside the repository or
-in a nested checkout. With no Lean file read (native Windows, or no `.lean` file
-yet), it records the Git ref only if the blueprint matches it.
+blueprint's bytes in that commit; when they differ, render keeps the code links,
+keeps source notes in the site, and warns with the first mismatch, or, for a
+blueprint outside the repository or in a nested checkout, does the same without
+a warning. When render reads no Lean file (native Windows, or a project with no
+`.lean` file yet), it records the Git ref only if the blueprint matches it.
 
 Render replaces only an empty directory or a complete `autoform-publication/v2`
 or v3 site whose files match its inventory (`.DS_Store` and `._*` are ignored),
-and refuses anything else, such as a legacy v1 output. A failed or refused
-render leaves the output as it was. The site is built in a hidden
-`.autoform-publication-*` directory beside the output (the repository root for
-`--output site-src`) and swapped in at once; renders into one parent directory
-take turns when it can be locked. A build directory a killed render leaves
-behind is covered by the setup ignore rules but may hold the previous site, so
-inspect it before deleting it. On filesystems without an atomic exchange the
-previous site is first renamed to `.autoform-publication-backup-<name>`, which
-the next render moves back if the swap died midway. On macOS `fsync` does not
-flush the drive's cache, so a power loss can still lose the newest site. Native
-Windows reads the blueprint and the output as two pathname captures that must
-agree, commits through the backup swap without a lock, and reads the Lean
-sources only for an explicit `--lean-root`, which then fails closed. Without one
-it publishes no code links; when a published statement names a `lean:`
-declaration it warns, and `--require-declarations` makes it exit 1.
+and refuses anything else, including a legacy v1 output, which you remove once
+by hand. A failed or refused render leaves the output as it was. The site is
+built in a hidden `.autoform-publication-*` directory beside the output (the
+repository root for `--output site-src`) and swapped in at once; renders into
+one parent directory take turns when it can be locked. A build directory a
+killed render leaves behind is covered by the setup ignore rules but may hold
+the previous site, so inspect it before deleting it. On filesystems without an
+atomic exchange the previous site is first renamed to
+`.autoform-publication-backup-<name>`, which the next render moves back if the
+swap died midway. On macOS `fsync` does not flush the drive's cache, so a power
+loss can still lose the newest site. Native Windows reads the blueprint and the
+output as two pathname captures that must agree, commits through the backup
+swap without a lock, and reads the Lean sources only for an explicit
+`--lean-root`, which then fails closed. Without one it publishes no code
+links; when a published statement names a `lean:` declaration it warns, and
+`--require-declarations` makes it exit 1.
 
 Check the site MkDocs builds from render's output for what the build broke:
 
