@@ -77,9 +77,11 @@ _TEMPLATE_PATHS = frozenset(
 #: even with --force, so a project's choice to turn verification off sticks.
 #: The stub lives here, not under templates/, which holds what every project gets.
 _VERIFY_WORKFLOW = ".github/workflows/autoform-verify.yml"
-#: The marker, alone on its line or followed by a reason.
-_VERIFY_WORKFLOW_OFF_LINE = re.compile(rb"\s*# autoform: verify workflow turned off(?![\w-])")
-_VERIFY_WORKFLOW_OFF = b"""# autoform: verify workflow turned off
+#: The marker starts a line of the stub, after any indentation or byte order
+#: mark, and a reason may follow it.
+_VERIFY_WORKFLOW_MARKER = b"# autoform: verify workflow turned off"
+_VERIFY_WORKFLOW_OFF_LINE = re.compile(rb"(?:\xef\xbb\xbf)?\s*" + re.escape(_VERIFY_WORKFLOW_MARKER) + rb"(?![\w-])")
+_VERIFY_WORKFLOW_STUB = _VERIFY_WORKFLOW_MARKER + b"""
 # `autoform init --no-verify-workflow` wrote this in place of the generated
 # verify workflow, which builds and audits the Lean project. `autoform init`,
 # with or without --force, keeps a file here that carries the line above;
@@ -1044,12 +1046,12 @@ def scaffold_project(
         autoform_ref=ref,
     )
     if not verify_workflow:
-        stub_file = _ScaffoldFile(_VERIFY_WORKFLOW, _VERIFY_WORKFLOW_OFF, 0o644)
+        stub_file = _ScaffoldFile(_VERIFY_WORKFLOW, _VERIFY_WORKFLOW_STUB, 0o644)
         # The stub runs no Autoform, so it needs no pinned ref either.
-        planned = (*(stub_file if file.relative == _VERIFY_WORKFLOW else file for file in planned),)
-        if stub_file not in planned:
-            planned = (*planned, stub_file)
-        omitted = tuple(path for path in omitted if path != _VERIFY_WORKFLOW)
+        if _VERIFY_WORKFLOW in omitted:
+            planned, omitted = (*planned, stub_file), tuple(path for path in omitted if path != _VERIFY_WORKFLOW)
+        else:
+            planned = tuple(stub_file if file.relative == _VERIFY_WORKFLOW else file for file in planned)
     turned_off = _verify_workflow_is_off(root / _VERIFY_WORKFLOW)
     # Checked before anything is written, even with --force, so a refusal
     # leaves the project unchanged.
@@ -1099,16 +1101,11 @@ def scaffold_project(
 def _verify_workflow_is_off(path: Path) -> bool:
     """Whether *path* holds the stub `init --no-verify-workflow` writes: a line of it starts with the marker."""
 
-    if path.is_symlink() or not path.is_file():
-        return False
     try:
-        with path.open("rb") as handle:
-            content = handle.read(_MAX_TEMPLATE_FILE_BYTES + 1)
-    except OSError:
+        content, _mode = _read_bounded_regular_file(path, limit=_MAX_TEMPLATE_FILE_BYTES, label="verify workflow")
+    except ScaffoldError:
         return False
-    return len(content) <= _MAX_TEMPLATE_FILE_BYTES and any(
-        _VERIFY_WORKFLOW_OFF_LINE.match(line) for line in content.splitlines()
-    )
+    return any(_VERIFY_WORKFLOW_OFF_LINE.match(line) for line in content.splitlines())
 
 
 __all__ = [

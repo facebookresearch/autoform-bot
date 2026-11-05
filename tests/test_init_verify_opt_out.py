@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from autoform_cli import scaffold as scaffold_module
 from autoform_cli.__main__ import main
@@ -13,30 +14,24 @@ _SOURCE = "https://example.test/autoform.git"
 _REF = "1" * 40
 _VERIFY = ".github/workflows/autoform-verify.yml"
 _WORKFLOWS = Path(__file__).resolve().parents[1] / "autoform_cli" / "templates" / "github" / "workflows"
-_STUB = scaffold_module._VERIFY_WORKFLOW_OFF
+_STUB = scaffold_module._VERIFY_WORKFLOW_STUB
 
 
 def _scaffold(project: Path, **kwargs):
     return scaffold_project(project, title="Opt Out", autoform_source=_SOURCE, autoform_ref=_REF, **kwargs)
 
 
-def _surface(text: str) -> str:
-    """A workflow's name, triggers and permissions: what a deploy or required check sees."""
-
-    start = text.index("name: autoform verify\n")
-    end = min(text.index(marker, start) for marker in ("\nenv:", "\nconcurrency:", "\njobs:") if marker in text[start:])
-    return text[start:end].strip()
-
-
 def test_the_stub_keeps_the_verify_workflow_name_triggers_and_job() -> None:
     real = (_WORKFLOWS / "autoform-verify.yml").read_text(encoding="utf-8")
     stub = _STUB.decode("utf-8")
 
-    assert _surface(stub) == _surface(real)
-    assert "jobs:\n  build:\n    name: build\n" in real
-    assert "jobs:\n  build:\n    name: build\n" in stub
+    # Parsed as GitHub would: a deploy or required check waits on the name, triggers and job.
+    parsed, verify = yaml.safe_load(stub), yaml.safe_load(real.replace("{{", "").replace("}}", ""))
+    surface = ("name", True, "permissions")  # PyYAML reads the `on` key as True.
+    assert [parsed[key] for key in surface] == [verify[key] for key in surface]
+    assert parsed["jobs"]["build"]["name"] == verify["jobs"]["build"]["name"] == "build"
     assert stub.startswith("# autoform: verify workflow turned off\n")
-    assert "AUTOFORM" not in stub.replace("autoform init", "")
+    assert "AUTOFORM" not in stub
 
 
 def test_opting_out_writes_the_stub_and_keeps_the_audit_helper(tmp_path: Path, capsys) -> None:
@@ -86,25 +81,43 @@ def test_opting_out_without_a_ref_writes_the_stub_and_reports_it_once(tmp_path: 
 
 
 @pytest.mark.parametrize(
-    ("edit", "kept"),
+    "edit",
     [
-        (lambda stub: b"# Kept off: our own CI builds the Lean.\n" + stub, b"# Kept off: our own CI builds the Lean.\n"),
-        (lambda stub: stub.replace(b"turned off\n", b"turned off: our own CI builds the Lean \n", 1), b"# autoform"),
+        lambda stub: b"# Kept off: our own CI builds the Lean.\n" + stub,
+        lambda stub: stub.replace(b"turned off\n", b"turned off: our own CI builds the Lean \n", 1),
+        lambda stub: b"\xef\xbb\xbf" + stub,
     ],
-    ids=["comment-above", "reason-after"],
+    ids=["comment-above", "reason-after", "byte-order-mark"],
 )
-def test_a_project_edit_around_the_marker_keeps_it_turned_off(tmp_path: Path, edit, kept: bytes) -> None:
+def test_a_project_edit_around_the_marker_keeps_it_turned_off(tmp_path: Path, edit) -> None:
     project = tmp_path / "project"
     _scaffold(project, verify_workflow=False)
     path = project / _VERIFY
     path.write_bytes(edit(path.read_bytes()))
     edited = path.read_bytes()
+    assert edited != _STUB
 
     result = _scaffold(project, force=True)
 
     assert _VERIFY in result.skipped
     assert path.read_bytes() == edited
-    assert edited.startswith(kept)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [b"# autoform: verify workflow turned offline\n", b"name: x  # autoform: verify workflow turned off\n"],
+    ids=["longer-word", "mid-line"],
+)
+def test_the_marker_text_inside_another_line_does_not_turn_it_off(tmp_path: Path, line: bytes) -> None:
+    project = tmp_path / "project"
+    _scaffold(project)
+    path = project / _VERIFY
+    path.write_bytes(line + path.read_bytes())
+
+    result = _scaffold(project, force=True)
+
+    assert _VERIFY in result.written
+    assert result.verify_workflow_off is None
 
 
 def test_deleting_the_stub_brings_the_verify_workflow_back(tmp_path: Path) -> None:

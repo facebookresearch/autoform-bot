@@ -18,8 +18,9 @@ date when the release is tagged.
   reports that nothing was built or audited, so a required check passes and
   the Pages deploy goes on, publishing commits nothing verified. Later `init`
   runs, `--force` included, keep a file there with the stub's marker line;
-  delete it to get the workflow back. `.github/autoform_audit.py` is still
-  written ([Project setup](autoform_cli/reference/project-setup.md#init), #402).
+  delete it to get the workflow back. With a ref, `.github/autoform_audit.py` is
+  still written ([Project setup](autoform_cli/reference/project-setup.md#init),
+  #402).
 - **Pinned name lists.** A JSON Lines file in `blueprint/libraries/`, schema
   `autoform-pinned-names/v0`, names the declarations a library holds at one
   pinned revision; a wiki that cites Mathlib can generate one. Once a list holds

@@ -16,8 +16,8 @@ and imports), not a lowercase rename.
 
 `init --no-verify-workflow` replaces `.github/workflows/autoform-verify.yml`
 with a stub, kept by `init --force`, that passes and checks nothing, so Pages
-publishes unverified commits. Run the [audit after a build](open-statements.md),
-whose script `init` still writes, in the project's own CI.
+publishes unverified commits. A project whose `lean:` names all lie in its root
+package can run the [audit after a build](open-statements.md) in its own CI.
 
 ### Workflow pins
 
@@ -27,7 +27,7 @@ installed plugin was copied from), when a safe remote (Autoform's canonical
 repository, then `origin`, then `upstream`, then a unique remaining one) has a
 cached tracking ref containing it, tracked files are clean, and the templates
 and any installed plugin copy match it; an explicit `--autoform-source` gets no
-default ref. Without a ref the CI workflows are omitted.
+default ref. Without a ref the CI workflows are omitted, except that stub.
 
 ## project new
 
@@ -48,7 +48,7 @@ errors name a code:
   sticky directory owned by you or root; run `chmod g-w,o-w` on it.
 - `project-parent-busy`: another creation held the parent's lock for 30 seconds.
 - `project-parent-changed`: the parent path stopped naming the locked
-  directory, and nothing was published.
+  directory; nothing was published, but a stage may remain in the original one.
 - `project-create-commit-uncertain`: publication started but its outcome could
   not be confirmed; locate the project before retrying.
 

@@ -141,7 +141,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     init.add_argument(
         "--force",
         action="store_true",
-        help="overwrite files that already exist; a case or Unicode variant of a managed path is still refused",
+        help="overwrite files that already exist, except a turned-off verify workflow; a case or Unicode variant "
+        "of a managed path is still refused",
     )
     init.add_argument(
         "--no-verify-workflow",

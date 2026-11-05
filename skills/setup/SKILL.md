@@ -114,13 +114,13 @@ The [CLI reference](../../autoform_cli/README.md#publishing-and-the-dashboard)
 says when Pages deploys, and [open
 statements](../../autoform_cli/reference/open-statements.md#open-statements)
 what the generated verify workflow audits. Where several Lake projects back the
-roadmap, `init --no-verify-workflow` turns it off. `init` also writes
-`.github/CODEOWNERS.autoform.example`, which GitHub does not read; the
-[template](../../autoform_cli/templates/github/CODEOWNERS.autoform.example)
-says how to activate it. Do not guess owners; activate it only with names the
-user gives, never silently. Report that new rules cannot protect their own
-activation unless equivalent coverage already exists on the pull request's base
-branch.
+roadmap, offer `init --no-verify-workflow`; Pages then publishes unverified
+commits. `init` also writes `.github/CODEOWNERS.autoform.example`, which GitHub
+does not read; the
+[template](../../autoform_cli/templates/github/CODEOWNERS.autoform.example) says
+how to activate it. Do not guess owners; activate it only with names the user
+gives, never silently. Report that new rules cannot protect their own activation
+unless equivalent coverage already exists on the pull request's base branch.
 
 After it runs, fill in what only a human or a source can supply: the project
 description in `blueprint/README.md`, the coverage contract, and a verified
