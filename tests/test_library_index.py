@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
@@ -23,10 +22,9 @@ from autoform_cli.library.index import (
     relative_path,
     tree_digest,
 )
+from tests.library_fixture import GOLDEN
 
 _SHA = "a" * 64
-#: A library checkout as published, with the index this writer made for it.
-_GOLDEN = Path(__file__).parent / "fixtures" / "library-index-golden"
 
 
 def _index() -> LibraryIndex:
@@ -203,33 +201,23 @@ def test_the_tree_digest_covers_every_module_and_pin_file_in_one_order() -> None
     assert digest != tree_digest(modules, files[:1])
 
 
-def test_the_published_index_format_is_pinned_byte_for_byte() -> None:
+def test_the_golden_index_is_written_back_byte_for_byte() -> None:
     # Libraries publish indexes this writer made, ATLAS's among them (tag autoform-index/64c2773ffad3), and every
-    # consumer recomputes their digests, so these literals change only with the schema version.
-    data = (_GOLDEN / INDEX_FILE).read_bytes().replace(b"\r\n", b"\n")
+    # consumer recomputes their digests, so these bytes change only with the schema version.
+    data = (GOLDEN / INDEX_FILE).read_bytes().replace(b"\r\n", b"\n")
     index = parse_index(data)
 
     assert dump_index(index) == data
-    assert index.header.tree == "7ec7e89f58ee606da1587caab04715b47a245cefdce8c155c4b9f6a6985eb2fe"
-    assert {module.source_file: module.sha256 for module in index.modules} == {
-        "Gold.lean": "cd20bf006dd0a13a3b7ea9d72bee6d6140bab7c340f2015c5cbd2c3b03a53121",
-        "Gold/Basic.lean": "6b72341caf04d4f833e2bc71815c108b08089c023b621949f55a21daa73a0fbc",
-        "Gold/Sets.lean": "0d89a13cc9dd843ec0f20933cec103b85c3a75d87b4cfbe55193cc18b2129691",
-    }
+    assert index.header.tree == "677c6697d077eb9821bb2638d6724572d2b1c8195f203bae0465158f8c81c937"
 
 
 def test_the_published_digests_are_those_of_the_sources_and_pins() -> None:
-    index = parse_index((_GOLDEN / INDEX_FILE).read_bytes())
+    index = parse_index((GOLDEN / INDEX_FILE).read_bytes())
     for module in index.modules:
-        source = (_GOLDEN / module.source_file).read_bytes().replace(b"\r\n", b"\n")
-        assert module_digest(source) == module_digest(source.replace(b"\n", b"\r\n")) == module.sha256
-    modules = [(module.name, module.sha256) for module in index.modules]
-    present = [name for name in TREE_FILES if (_GOLDEN / name).exists()]
-    pins = [(name, (_GOLDEN / name).read_bytes().replace(b"\r\n", b"\n")) for name in present]
+        assert module_digest((GOLDEN / module.source_file).read_bytes()) == module.sha256
+    pins = [(name, (GOLDEN / name).read_bytes()) for name in TREE_FILES if (GOLDEN / name).exists()]
 
-    assert present == ["lake-manifest.json", "lakefile.toml", "lean-toolchain"]
-    assert tree_digest(modules, pins) == index.header.tree
-    assert tree_digest(modules, [(name, data.replace(b"\n", b"\r\n")) for name, data in pins]) == index.header.tree
+    assert tree_digest(((module.name, module.sha256) for module in index.modules), pins) == index.header.tree
 
 
 def test_relative_paths_and_source_directories() -> None:

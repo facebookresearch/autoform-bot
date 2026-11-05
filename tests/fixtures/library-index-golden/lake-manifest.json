@@ -4,6 +4,18 @@
  "lakeDir": ".lake",
  "packages": [
   {
+   "name": "batteries",
+   "scope": "",
+   "inherited": false,
+   "configFile": "lakefile.toml",
+   "manifestFile": "lake-manifest.json",
+   "type": "git",
+   "url": "https://example.invalid/batteries",
+   "rev": "3333333333333333333333333333333333333333",
+   "inputRev": "main",
+   "subDir": null
+  },
+  {
    "name": "mathlib",
    "scope": "",
    "inherited": false,
