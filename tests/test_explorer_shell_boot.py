@@ -60,7 +60,7 @@ def test_cold_mount_adopts_the_loaded_index_and_only_its_route_renders(entry: st
       const firstBundle={nodeId:fixture.entry,scope:fixture.entry==='roadmap'?'roadmap':'scope-0',
         graph:payload,readingSource:{},dataURL:'https://example.test/dependencies.json'};
       const navigation={getIndex(){events.push('index');return loaded?index:null;}};
-      const host={querySelector(){return null;},classList:{add(){},remove(){},toggle(){}}};
+      const host={querySelector(){return null;},closest(){return null;},classList:{add(){},remove(){},toggle(){}}};
       const window={location:{href:'https://example.test/roadmap/index.html',origin:'https://example.test'}};
       const start=productionSource.indexOf('  function mount('),end=productionSource.indexOf('    function globalListen(',start);
       assert(start>=0&&end>start,'The real cold-mount boundary must exist');

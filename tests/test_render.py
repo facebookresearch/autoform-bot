@@ -1033,6 +1033,30 @@ def test_a_project_that_tracks_no_lean_shows_no_lean_progress(tmp_path: Path, tr
     assert "Lagrange" in site and "Why subgroups come first." in site
 
 
+@pytest.mark.parametrize("tracked", [True, False])
+def test_a_project_that_tracks_no_lean_tells_the_shell_and_the_map(tmp_path: Path, tracked: bool) -> None:
+    """Every page's shell container carries the attribute the explorer's stylesheet keys on, and the map's index a flag."""
+    blueprint = _informal_project(tmp_path, "" if tracked else "tracks_lean: false\n")
+
+    render_site(blueprint, tmp_path / "out")
+
+    shells = [
+        text for page in sorted((tmp_path / "out").rglob("*.md"))
+        if 'class="bp-explorer-page"' in (text := page.read_text(encoding="utf-8"))
+    ]
+    # The book's pages; the explorer's old pages only send readers on to them.
+    assert any("Why subgroups come first." in text for text in shells) and len(shells) > 2
+    marked = [text for text in shells if '<div class="bp-explorer-page" data-tracks-lean="false" markdown="1">' in text]
+    assert len(marked) == (0 if tracked else len(shells))
+    index = json.loads((tmp_path / "out" / project_map.MAP_DIRECTORY / "index.json").read_text(encoding="utf-8"))
+    assert index.get("tracks_lean", "absent") == ("absent" if tracked else False)
+
+
+def test_the_shell_hides_its_status_filter_on_the_page_attribute() -> None:
+    assert ('[data-tracks-lean="false"] :is(.bp-dag-filters, .bp-dag-sheet-handle .bp-dag-swatch) '
+            '{ display: none !important; }') in dag_viewer._STYLE
+
+
 def test_a_hero_that_tracks_no_lean_keeps_its_claim_and_ways_in(tmp_path: Path) -> None:
     blueprint = _informal_project(tmp_path, "tracks_lean: false\n")
     graph = load_graph(blueprint)
