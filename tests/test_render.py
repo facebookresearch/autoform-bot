@@ -1199,7 +1199,10 @@ def test_a_project_that_tracks_no_lean_shows_no_lean_progress(tmp_path: Path, tr
     summary = "2 statements · 1 ready to state · 1 planned" if tracked else "2 statements"
     assert f"<summary>{summary}</summary>" in coverage and coverage.count("<details") == 1
     assert coverage.index('#subgroup"') < coverage.index('#lagrange"')
-    assert "<strong>Notes</strong>  \n[Reading notes](../roadmap/algebra/groups/notes.md)\n" in coverage
+    assert (
+        '<p markdown="span"><strong>Notes</strong></p>\n\n'
+        '<p markdown="span">[Reading notes](../roadmap/algebra/groups/notes.md)</p>\n'
+    ) in coverage
 
 
 @pytest.mark.parametrize("tracked", [True, False])
@@ -1986,6 +1989,8 @@ def test_the_book_nav_nests_each_page_under_its_folder_whatever_the_book_order(t
         ("![Coverage](banner.png)", "Coverage"),
         # Bare in a list item, this would read as a nested list.
         ("1\\. Coverage", "1. Coverage"),
+        # The nav reads the label as Markdown, so marks the reader sees stay marks.
+        ("Coverage \\*draft\\*", "Coverage &#42;draft&#42;"),
     ],
 )
 def test_coverage_is_reachable_once_the_landing_page_stops_listing_it(
@@ -2083,7 +2088,7 @@ def test_the_coverage_page_shows_its_contract_as_the_coverage_view(tmp_path: Pat
 
     order = [
         "What the project covers.\n",
-        "## Decomposed (11) {#coverage-decomposed}\n",
+        "\n## Decomposed (11) {#coverage-decomposed}\n",
         f"{row('Results (Ch. 1)')}\n\n{both}\n\n",
         f"{row('Base alone', '[Base](../roadmap/README.md#base) is the base object')}\n\n{one(base)}\n\n",
         f"{row('Top only')}\n\n{one(top)}\n\n",
@@ -2095,11 +2100,11 @@ def test_the_coverage_page_shows_its_contract_as_the_coverage_view(tmp_path: Pat
         f"{row('Twice')}\n\n{one(top)}\n\n",
         f"{row('Both ways', '[Roadmap](../roadmap/README.md) and [Top](../roadmap/README.md#top)')}\n\n{both}\n\n",
         f"{row('Marked', '[Top](../roadmap/README.md#top)*')}\n\n{one(top)}\n\n",
-        "## Deferred (1) {#coverage-deferred}\n",
+        "\n## Deferred (1) {#coverage-deferred}\n",
         f"{row('Later', '[Top](../roadmap/README.md#top) and [Base](../roadmap/README.md#base)')}\n",
-        "## Out of scope (1) {#coverage-out}\n",
+        "\n## Out of scope (1) {#coverage-out}\n",
         f"{row('**Preamble**', 'Not a target')}\n",
-        "## After\n\n| x | y |\n| - | - |\n| 1 | 2 |\n",
+        "\n## After\n\n| x | y |\n| - | - |\n| 1 | 2 |\n",
     ]
     for part in order:
         assert page.count(part) == 1, part
@@ -2215,7 +2220,7 @@ def test_a_coverage_view_beside_an_autolink_keeps_the_page_protected(tmp_path: P
     assert '<a href="https://example.test/paper">https://example.test/paper</a>' in page
     assert "<strong><strong>Cited</strong></strong>" in page
     assert "<p>What the project covers.</p>" in page and "<p>After the table.</p>" in page
-    assert "## Out of scope (1) {#coverage-out}" in page
+    assert "\n## Out of scope (1) {#coverage-out}\n" in page
     assert not [warning for warning in report.warnings if "coverage view" in warning]
 
 
