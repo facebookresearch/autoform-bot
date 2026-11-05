@@ -580,7 +580,11 @@ def test_an_unused_kind_beside_one_in_use_adds_nothing_and_the_cli_names_it(tmp_
         assert cli.main([*command, *extra]) == 0
         captured = capsys.readouterr()
         assert "hyperplane" in captured.out
-        assert captured.err == "note: no article declares kind thm, so the search used only the other kinds\n"
+        assert captured.err == (
+            "warning[deprecated]: autoform search --declaration is deprecated and will be removed in 0.8.0; "
+            'filter each hit\'s "declaration" in --json output instead\n'
+            "note: no article declares kind thm, so the search used only the other kinds\n"
+        )
     # The note is not part of the JSON, whose filters keep every requested kind.
     assert json.loads(captured.out)["filters"]["declaration"] == ["theorem", "thm"]
 
@@ -762,7 +766,11 @@ def test_search_cli_emits_stable_json(tmp_path: Path, capsys) -> None:
     command = ["search", str(project), "Separating  AFFINE", "--json", "--state", "can_prove", "--limit", "5"]
 
     assert cli.main(command) == 0
-    first = capsys.readouterr().out
+    first, warning = capsys.readouterr()
+    assert warning == (
+        "warning[deprecated]: autoform search --state is deprecated and will be removed in 0.8.0; "
+        'filter each hit\'s "state" in --json output instead\n'
+    )
     assert cli.main(command) == 0
     assert capsys.readouterr().out == first
 

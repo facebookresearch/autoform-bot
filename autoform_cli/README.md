@@ -468,9 +468,9 @@ Inspect the current Markdown-derived formalization frontier, and list the open
 statements and the articles that rest on them:
 
 ```bash
-autoform work list . --lean-root .
-autoform work list . --lean-root . --json
-autoform work context chapter/result . --lean-root . --json
+autoform work list .
+autoform work list . --json
+autoform work context chapter/result . --json
 autoform work assumptions .
 autoform work assumptions blueprint --json
 ```
@@ -528,7 +528,7 @@ Before adding an article or a Lean helper, check the blueprint for its result:
 ```bash
 autoform search . "separating hyperplane" --lean-root .
 autoform search . "non-ambiguous" --lean-root . --json --limit 20
-autoform search blueprint "interlacing" --state proved --state fully_proved
+autoform search blueprint "interlacing"
 autoform library list .
 autoform library index . --lib MathlibExt
 ```

@@ -1196,6 +1196,12 @@ def _work(args: argparse.Namespace) -> int:
         return _work_assumptions(args)
     if args.work_command in {"impact", "import-impact"}:
         return _work_impact(args)
+    if args.lean_root is not None:
+        _warn_deprecated(
+            f"autoform work {args.work_command} --lean-root",
+            "0.8.0",
+            "source_file will then be null, and search --lean-root prints a Lean name's file and line",
+        )
     # Only loading the roadmap can fail on the project's paths; printing the
     # result stays outside, so an output error is not reported as one.
     try:
@@ -1281,6 +1287,12 @@ def _work(args: argparse.Namespace) -> int:
 
 
 def _search(args: argparse.Namespace) -> int:
+    if args.states:
+        _warn_deprecated("autoform search --state", "0.8.0", 'filter each hit\'s "state" in --json output instead')
+    if args.declarations:
+        _warn_deprecated(
+            "autoform search --declaration", "0.8.0", 'filter each hit\'s "declaration" in --json output instead'
+        )
     # Only reading the blueprint and the libraries can fail on the project's
     # paths; printing the result stays outside, so an output error is not
     # reported as one.
@@ -1713,6 +1725,12 @@ def _human_text(value: object) -> str:
         character if character.isprintable() else character.encode("unicode_escape").decode("ascii")
         for character in str(value)
     )
+
+
+def _warn_deprecated(spelling: str, removal: str, instead: str) -> None:
+    """Warn on stderr that *spelling* goes in release *removal*; stdout and the exit code stay the same."""
+
+    print(f"warning[deprecated]: {spelling} is deprecated and will be removed in {removal}; {instead}", file=sys.stderr)
 
 
 def _ascii_text(value: object) -> str:

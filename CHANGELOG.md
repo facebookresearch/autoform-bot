@@ -449,6 +449,21 @@ date when the release is tagged.
   `AUTOFORM_REF` still refuses both, so move the pin before relying on the
   warnings.
 
+### Deprecated
+
+Each prints one `warning[deprecated]:` line on standard error, with or without
+`--json`, and changes nothing else.
+
+- **`autoform search --state`.** Filter each `--json` hit's `state` instead,
+  under a `--limit` high enough, since the flag filtered before the limit.
+  Removed in 0.8.0.
+- **`autoform search --declaration`.** Filter each `--json` hit's
+  `declaration` the same way; `def` also kept `noncomputable def`. Removed in
+  0.8.0.
+- **`autoform work list --lean-root` and `work context --lean-root`.**
+  `source_file` will be null; `search --lean-root` prints a Lean name's file and
+  line. Removed in 0.8.0.
+
 ### Removed
 
 - **Previous/Next links.** Render no longer ends each book page, or the
