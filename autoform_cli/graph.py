@@ -38,8 +38,9 @@ from .markdown import (
 from .markdown import HEADING as _HEADING
 
 
-#: A display formula written inside a paragraph: ``$$...$$`` or ``\[...\]``.
-_DISPLAY_MATH = re.compile(r"(?<!\\)\$\$(.+?)(?<!\\)\$\$|(?<!\\)\\\[(.+?)(?<!\\)\\\]", re.DOTALL)
+#: A display formula written inside a paragraph, ``$$...$$``. There the site reads ``\[...\]`` as escaped
+#: brackets, such as a citation, not as a formula.
+_DISPLAY_MATH = re.compile(r"(?<!\\)\$\$(.+?)(?<!\\)\$\$", re.DOTALL)
 #: An inline link or image; its label may hold bracket pairs, as the page reads it.
 _MARKDOWN_LINK_TEXT = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\([^)]*\)")
 #: A full, collapsed or shortcut reference link: ``[text][label]``, ``[label][]`` or ``[label]``.
@@ -928,8 +929,7 @@ def _extract_summary(body: list[str], references: dict[str, str], *, limit: int 
     text = "\n".join(paragraph)
     # A summary is one line, so a display formula inside the paragraph shows inline there.
     for display in reversed(list(_DISPLAY_MATH.finditer(_code_masked(text)))):
-        formula = text[slice(*display.span(1 if display[1] is not None else 2))]
-        text = text[: display.start()] + "\\(" + formula + "\\)" + text[display.end() :]
+        text = text[: display.start()] + "\\(" + text[display.start(1) : display.end(1)] + "\\)" + text[display.end() :]
     summary = " ".join(unescape(_strip_markup(text)).split())
     if not summary:
         return None

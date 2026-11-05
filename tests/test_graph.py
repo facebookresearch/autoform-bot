@@ -207,12 +207,12 @@ def test_summary_shows_a_display_formula_in_its_paragraph_inline(tmp_path: Path)
     _node(
         blueprint,
         "topic.md",
-        "# Class equation\n\nThen $$|G| = |Z(G)| + \\sum_i |G : C_G(g_i)|$$ for a finite\ngroup, and \\[n\n= 1\\] here;"
+        "# Class equation\n\nThen $$|G| = |Z(G)| +\n\\sum_i |G : C_G(g_i)|$$ for a finite group, as in \\[1\\];"
         " the code `$$x$$` and the price \\$$5 stay.\n",
     )
 
     assert load_graph(blueprint).nodes["topic"].summary == (
-        "Then \\(|G| = |Z(G)| + \\sum_i |G : C_G(g_i)|\\) for a finite group, and \\(n = 1\\) here;"
+        "Then \\(|G| = |Z(G)| + \\sum_i |G : C_G(g_i)|\\) for a finite group, as in \\[1\\];"
         " the code `$$x$$` and the price \\$$5 stay."
     )
 

@@ -474,8 +474,8 @@ date when the release is tagged.
 - **Summaries with formulas.** An article's summary, the line the explorer's
   lists show under its title, no longer ends inside a formula or code span,
   which showed it as raw TeX: a clip that would cut one stops before it. A
-  display formula inside the summary's paragraph, `$$...$$` or `\[...\]`, shows
-  inline there.
+  display formula inside the summary's paragraph, `$$...$$`, shows inline
+  there.
 - **Book order.** A link inside an HTML comment no longer places its page in
   the book's order: a commented-out chapter link moved that chapter forward in
   `SUMMARY.md`, though the page showed it later (#535).
