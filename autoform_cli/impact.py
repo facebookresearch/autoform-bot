@@ -1147,6 +1147,7 @@ def compute_impact(
     proof_impacted.sort(key=lambda item: item.id)
 
     by_id = {article.id: article for article in articles}
+    module_articles = _module_articles(records, named)
     helpers: list[ImpactHelper] = []
     for name in sorted(meaning | proof):
         record = records[name]
@@ -1154,7 +1155,7 @@ def compute_impact(
             continue
         path, line = locate(record) if locate is not None else (None, None)
         impact = "statement" if name in meaning else "proof"
-        owners = _owners(record, records, named)
+        owners = _helper_owners(record, records, named, module_articles)
         targets = _claim_targets_for(name, owners, by_id)
         helpers.append(
             ImpactHelper(name, record.kind, impact, record.module, path, line, owners, targets)
@@ -1165,7 +1166,7 @@ def compute_impact(
     # revision as surely as a path to the revised article does.
     anchors = {revised.id}
     for name in revised_names:
-        anchors.update(named.get(name) or _owners(records[name], records, named))
+        anchors.update(named.get(name) or _helper_owners(records[name], records, named, module_articles))
     impacted = (*statement_impacted, *proof_impacted)
     undeclared = sorted(
         item.id for item in impacted if item.id not in anchors and not _reaches(item.id, anchors, by_id)
@@ -1211,7 +1212,8 @@ def compute_impact(
     )
     for name in revised_names:
         if name not in named:
-            others.update(_claim_targets_for(name, _owners(records[name], records, named), by_id))
+            owners = _helper_owners(records[name], records, named, module_articles)
+            others.update(_claim_targets_for(name, owners, by_id))
     claim_targets = (revised.claim_target, *sorted(others - {revised.claim_target}))
     return ImpactReport(
         source_revision=source_revision,
@@ -1256,6 +1258,9 @@ def compute_module_import_impact(
     belongs to the repository's generator, so it is not a claim target.
     """
 
+    if module not in modules:
+        # Either spelling of a quoted component names the module, such as the inventory's `H.«α»` for Lean's `H.α`.
+        module = next((name for name in modules if _name_key(name) == _name_key(module)), module)
     if module not in modules:
         raise ImpactError(f"not a loaded project module: {module}")
 
@@ -1320,15 +1325,17 @@ def compute_module_import_impact(
     unresolved_articles.sort(key=lambda article: article.id)
 
     module_claim_target = _module_claim_target(module)
-    # Helpers keep the parent-chain rule under either scope: a narrowed chain
+    # Helpers keep the default scope's rule under either scope: a narrowed chain
     # is only shorter, so every helper the default scope reports keeps its key.
+    # `work impact` owns helpers by the same rule, so the two agree on keys.
+    module_articles = _module_articles(records, named)
     affected_helpers = tuple(
         ModuleImpactedHelper(record.name, record.module, _helper_claim_target(record.name))
         for record in sorted(records.values(), key=lambda record: record.name)
         if record.module in affected_set
         and not record.internal
         and record.name not in named
-        and not _owners(record, records, named)
+        and not _helper_owners(record, records, named, module_articles)
     )
     affected_claim_targets = tuple(
         sorted(
@@ -1469,6 +1476,34 @@ def _owners(
     return ()
 
 
+def _module_articles(records: Mapping[str, ConstantRecord], named: Mapping[str, list[str]]) -> dict[str, set[str]]:
+    """The articles naming declarations in each module."""
+
+    module_articles: dict[str, set[str]] = {}
+    for name, article_ids in named.items():
+        module_articles.setdefault(records[name].module, set()).update(article_ids)
+    return module_articles
+
+
+def _helper_owners(
+    record: ConstantRecord,
+    records: Mapping[str, ConstantRecord],
+    named: Mapping[str, list[str]],
+    module_articles: Mapping[str, set[str]],
+) -> tuple[str, ...]:
+    """``record``'s owners through the parent chain, else the one article naming declarations in its module.
+
+    A worker's own helpers beside its article's declarations are its own,
+    public or private. A module several articles share keeps them unowned.
+    """
+
+    owners = _owners(record, records, named)
+    if owners:
+        return owners
+    in_module = module_articles.get(record.module, set())
+    return tuple(in_module) if len(in_module) == 1 else ()
+
+
 def _ancestors(record: ConstantRecord, records: Mapping[str, ConstantRecord]) -> Iterator[str]:
     """The ``parent`` chain of ``record``, nearest first, stopping where it repeats."""
 
@@ -1570,7 +1605,11 @@ def _load_impact_evidence(
     module: str | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
 ) -> _ImpactEvidence:
-    """Load one freshness-bound roadmap, source, module, and Lean environment."""
+    """Load one freshness-bound roadmap, source, module, and Lean environment.
+
+    A ``module`` outside the project is refused from the source inventory
+    alone, before the freshness check and the probe.
+    """
 
     runtime = load_runtime_graph(project_or_blueprint)
     source_revision = runtime.source_revision
@@ -1608,11 +1647,13 @@ def _load_impact_evidence(
             source_snapshot,
             strict_module_ownership=require_modules,
         )
+        if module is not None:
+            module_paths = _module_source_paths(libraries, source_snapshot, strict=True)
+            module = _check_import_module(module, selected, module_paths, source_snapshot)
         selected_modules = imports
         declaration_modules = None
         if module_scope == IMPORT_CLOSURE_SCOPE:
-            if module not in local_modules:
-                raise ImpactError(f"not a project module: {module}")
+            assert module is not None
             captured = dict(source_snapshot.source_files)
             # Libraries sharing a srcDir map the same files; each is read once.
             pairs = dict.fromkeys(
@@ -1809,6 +1850,39 @@ def _linguist_generated(root: Path, relative: str) -> bool:
     except ValueError:  # Git printed a name that is not UTF-8
         return False
     return output is not None and output.rsplit(": ", 1)[-1] in ("set", "true")
+
+
+def _check_import_module(
+    module: str,
+    selected: ImpactArticle,
+    module_paths: Mapping[str, str],
+    snapshot: IndexedSourceSnapshot,
+) -> str:
+    """Return the inventory's spelling of ``module``; refuse one outside the project, naming the article's module.
+
+    Workers often pass the module they mean to import.
+    """
+
+    modules_by_path = {path: name for name, path in module_paths.items()}
+    homes = sorted(
+        {
+            modules_by_path[declaration.path.as_posix()]
+            for name in selected.declarations
+            if (declaration := snapshot.index.find(name)) is not None
+            and declaration.path.as_posix() in modules_by_path
+        }
+    )
+    usage = "MODULE is the project module whose imports change, the file that gains or loses the import"
+    # By component, as the probe's evidence is read: Lean prints H/α.lean as `H.α`, the inventory as `H.«α»`.
+    # The import closure and the probe's imports then read one spelling of it.
+    matches = [name for name in module_paths if _name_key(name) == _name_key(module)]
+    if not matches:
+        here = f" (for {selected.id}: {homes[0]})" if len(homes) == 1 else ""
+        raise ImpactError(
+            f"{module} is not a module of this project. {usage}{here}, not the module it imports: "
+            "an import from Mathlib or another dependency is reported for the project file that adds it"
+        )
+    return matches[0]
 
 
 def _locator(

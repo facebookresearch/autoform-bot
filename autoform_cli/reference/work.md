@@ -55,17 +55,17 @@ Markdown dependency paths (`undeclared_dependencies`: impacted articles with no
 Markdown path to the revised article, to one naming a revised declaration, or,
 when none names it, to an owner), deprecated declarations and their users,
 whether the revision is contained (the selected article's target is its only
-claim target), and the complete `claim_targets` set. A helper shared by several
-articles adds every owner's claim; an unowned helper, or a revised declaration
-no article names, is claimed under every nearest owner's target or a stable
-`lean/<slug>-<digest>` target. `unused_statement_dependencies`, the stated
-articles whose Markdown statement rests on the revised declarations, directly or
-through other statement dependencies, but that the probe does not find
-statement-impacted, join `claim_targets` too. `mathlib: true` articles are
-left out. The probe refuses a loaded root-package module missing from the
-repository's source inventory, which skips nested Git checkouts, ignored
-directories such as `build`, and symlinked directories, and a module an `M.*`
-or `M.+` glob finds that it did not load.
+claim target), and the complete `claim_targets` set. A helper or revised
+declaration no article names is claimed under each article naming its nearest
+named `parent` ancestor, else the only article naming declarations in its
+module, else a stable `lean/<slug>-<digest>` target.
+`unused_statement_dependencies`, the stated articles whose Markdown statement
+rests on the revised declarations, directly or through other statement
+dependencies, but that the probe does not find statement-impacted, join
+`claim_targets` too. `mathlib: true` articles are left out. The probe refuses a
+loaded root-package module missing from the repository's source inventory, which
+skips nested Git checkouts, ignored directories such as `build`, and symlinked
+directories, and a module an `M.*` or `M.+` glob finds that it did not load.
 
 The command refuses if the roadmap or the Lean sources change during the probe.
 JSON uses `autoform-impact/v1`, bound to the Markdown `source_revision`, the
@@ -88,6 +88,7 @@ the root libraries' Lake roots and globs. Modules that removing an import drops
 from the build are not listed. Like `work impact`, the probe refuses a
 root-package module the captured inventory lacks, and one whose loaded source
 or artifact is not the captured root one, so a dependency cannot shadow it.
+A non-project `MODULE` is refused first, naming the article's module if unique.
 
 Under `--module-scope import-closure` the candidates are `MODULE` and every
 root-package module whose source contains each component of a candidate's name,
@@ -95,7 +96,7 @@ repeated until none is added; Lean loads them and what they import. Only those
 modules must be built, and stale-build advice names only them. An article owns a
 declaration when one of its `lean:` names equals it or is a dotted prefix of it,
 so `affected_articles` may list more articles and `article_local` is always
-`false`; `affected_unowned_helpers` keep the parent-chain rule, and
+`false`; `affected_unowned_helpers` keep the default scope's rule, and
 `unresolved_articles` leaves out a name the source index places outside
 `affected_modules` but lists one in a file no `lean_lib` builds. An uncaptured
 `.lean` file that may import a candidate, in a root library's module tree or a
@@ -120,8 +121,7 @@ make it `true`. It is `false` outside a Git work tree or when Git fails.
 chain, a declaration in an affected module, with those `modules`, and
 `selected_affected` says whether the selected article is one.
 `unresolved_articles` reports local declarations absent from the loaded
-environment without blocking unrelated edits, and each
-`affected_unowned_helpers` entry carries its own claim target and key.
-`article_local` holds only when `selected_affected` does,
-`affected_claim_targets` is empty, and no other article has unresolved
-declarations.
+environment without blocking unrelated edits, and `affected_unowned_helpers`
+carry their own claim targets and keys, as in `work impact`. `article_local`
+holds only when `selected_affected` does, `affected_claim_targets` is empty, and
+no other article has unresolved declarations.
