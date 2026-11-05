@@ -262,7 +262,7 @@ def test_an_unparsable_release_manifest_is_not_published(
     resource = SimpleNamespace(read_bytes=lambda: content)
     monkeypatch.setattr(create_module, "files", lambda package: SimpleNamespace(joinpath=lambda name: resource))
 
-    error = _refused(tmp_path / "Project", "project-create-validation-failed", release_id=None)
+    error = _refused(tmp_path / "Project", "project-create-validation-failed")
 
     assert error.message == create_module._MANIFEST_MESSAGE
 

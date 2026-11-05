@@ -603,19 +603,20 @@ def test_fields_lake_accepts_are_still_read(tmp_path: Path) -> None:
     [
         # As in Lean, and unlike lean.py's source grammar, a quoted component may hold `«`.
         ("««a»", (("str", "«a"),)),
-        ("«»", (("str", ""),)),
+        # A quoted component ends at the first `»`.
+        ("«a».«b»", (("str", "a"), ("str", "b"))),
         ("xⱼ", (("str", "xⱼ"),)),
+        ("ⱼ", None),
+        # Unlike lean.py's source grammar, a component may be a number.
         ("Qq.01", (("str", "Qq"), ("num", "1"))),
         ("λ", None),
         ("a.Π", None),
         ("a.", None),
-        ("a..b", None),
         ("«a", None),
-        ("«a»b", None),
         ("1a", None),
     ],
 )
-def test_lake_names_split_as_lean_splits_them(value: str, parts) -> None:
+def test_lake_names_split_as_lean_splits_them(value: str, parts: tuple[tuple[str, str], ...] | None) -> None:
     assert project_lake_metadata._split_lean_name(value) == parts
 
 

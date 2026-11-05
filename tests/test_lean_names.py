@@ -8,7 +8,9 @@ gives what its copy gave.
 
 lean_probe and the generated audit helper keep readers of their own, since neither
 may import the package. lean_probe reads every name the grammar takes into the
-same components, and the helper reads every spelling as lean_probe does.
+same components, and the helper reads every spelling as lean_probe does. Lake's
+names, in project/_lake_metadata.py, use the grammar's character classes under
+Lake's own rules: a quoted component may hold «, and a component may be a number.
 """
 
 from __future__ import annotations
