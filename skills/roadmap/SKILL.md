@@ -114,11 +114,11 @@ result and for each intermediate result its proof proves or cites, as the
 ### Coverage, milestones and the DAG
 
 Enumerate the entire adopted boundary in `blueprint/coverage/README.md`, with
-the dispositions the [CLI
-reference](../../autoform_cli/README.md#audit-and-coverage) defines. `DEFERRED`
-needs an explicit user decision or concrete external blocker; treat any other
-`DEFERRED` row as queued work, and never defer merely to shorten the run.
-Compare the table with the source structure yourself.
+the dispositions the [coverage
+contract](../../autoform_cli/reference/blueprint-format.md#coverage) defines.
+`DEFERRED` needs an explicit user decision or concrete external blocker; treat
+any other `DEFERRED` row as queued work, and never defer merely to shorten the
+run. Compare the table with the source structure yourself.
 
 Write milestone pages under `blueprint/roadmap/` by mathematical significance,
 then one fine article per coherent unit with one unique main result. Do not turn
@@ -137,7 +137,7 @@ such as Mathlib gaps, prior art, and candidate declaration names in
 `blueprint/.implementation-notes/<article_id>.md`, never a transcript, a secret,
 or a machine-local path, and never link a note from an article; a shared library
 declaration that does not apply is recorded on the source's page instead. The
-[note rules](../../autoform_cli/README.md#articles-and-containment) say when a
+[note rules](../../autoform_cli/reference/blueprint-format.md) say when a
 note is stale and how to repair an orphan. Move an article by moving its file; a
 page written afresh takes the old page's `article_id` line in the same edit. A
 commit that deletes or merges an article moves what is still useful from its
@@ -193,7 +193,7 @@ do not replace reader-facing mathematical prose. Its assertion keys describe the
 whole tracked module: set `statement: formalized` only when all inventoried
 public declarations exist, and `proof: formalized` only when every included
 implementation or proof is complete under the repository's trust policy. The
-[catalog rules](../../autoform_cli/README.md#articles-and-containment) say which
+[catalog rules](../../autoform_cli/reference/blueprint-format.md) say which
 names go in `lean` and which only in the declaration ledger; a keyword-declared
 public name left out of `lean` or unresolved means the catalog must not carry
 formalized assertions. A catalog holds back what depends on it, so a dependent
