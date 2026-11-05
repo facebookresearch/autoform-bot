@@ -4044,6 +4044,50 @@ def test_a_declarations_text_ends_before_the_next_line_at_its_indent() -> None:
     assert text(16) == lines[15]
 
 
+def test_a_declaration_keeps_its_attributes_closing_brackets_and_trailing_clauses() -> None:
+    lines = [
+        "/-- A doc. -/",
+        "@[simp]",
+        "protected theorem box (α : Nat)",
+        "    (h : α = α",
+        ") : α = α := rfl",
+        "def config : Nat × Nat := {",
+        "  fst := 0, snd := 0",
+        "}",
+        "inductive Color",
+        "| red",
+        "| blue",
+        "deriving Repr",
+        "",
+        "deriving instance BEq for Color",
+        "def count : Nat → Nat",
+        "  | 0 => 0",
+        "  | n + 1 => count n",
+        "termination_by n => n",
+        "decreasing_by simp",
+    ]
+
+    def text(line: int) -> str:
+        return declaration_text(lines, Declaration("P.x", Path("P.lean"), line, "def"))
+
+    # Its attributes and modifiers above it are its own, and its docstring is not; a closing bracket starts no command.
+    assert text(3) == "\n".join(lines[1:5])
+    assert text(6) == "\n".join(lines[5:8])
+    # Alternatives and a deriving clause at its indent are its own; the deriving instance command is not.
+    assert text(9) == "\n".join(lines[8:12])
+    assert text(15) == "\n".join(lines[14:19])
+
+
+def test_an_excerpt_counts_lines_as_the_index_does(tmp_path: Path) -> None:
+    """A form feed or a line separator in a comment is no line end to the index, so it shifts no later excerpt."""
+    text = "namespace Outer\n\n/- page\x0cbreak\u2028here -/\ndef alpha : Nat := 1\r\n\ndef beta : Nat := 2\n\nend Outer\n"
+    index = _index(tmp_path, text)
+    linker = SourceLinker(index=index, sources={Path("Project/Basic.lean"): text.encode()})
+
+    assert linker.excerpt("Outer.alpha")[1] == "def alpha : Nat := 1"
+    assert linker.excerpt("Outer.beta")[1] == "def beta : Nat := 2"
+
+
 def test_an_excerpt_reads_the_captured_file(tmp_path: Path) -> None:
     index = _index(tmp_path)
     linker = SourceLinker(index=index, sources={Path("Project/Basic.lean"): _SOURCE.encode()})
@@ -4052,7 +4096,8 @@ def test_an_excerpt_reads_the_captured_file(tmp_path: Path) -> None:
     assert alpha is not None and alpha[0] == index.find("Outer.alpha")
     assert alpha[1] == "def alpha : Nat := 1"
     gamma = linker.excerpt("Outer.Inner.gamma")
-    assert gamma is not None and gamma[1] == "protected noncomputable def gamma : Nat := 2"
+    # Its attribute on the line above is its own.
+    assert gamma is not None and gamma[1] == "@[simp]\nprotected noncomputable def gamma : Nat := 2"
     assert linker.excerpt("Outer.missing") is None
     # A file the render did not capture has no excerpt.
     assert SourceLinker(index=index).excerpt("Outer.alpha") is None

@@ -32,10 +32,12 @@ date when the release is tagged.
 - **Lean under each statement.** A statement whose `lean:` names resolve
   shows the first three declarations as written, under its statement: a
   theorem or lemma its statement without the proof, anything else whole, a
-  definition's body included. One over 14 lines folds behind a line that
-  names it. Keywords, comments and strings take the page's code colors; site
-  search skips the code, and a catalog shows none. Render cuts the text from
-  the Lean sources it captured, so a render without them shows none.
+  definition's body included, from the attributes on the lines above it. A
+  body written at the keyword's own indent is cut short. One over 14 lines
+  folds behind a line that names it. Keywords, comments and strings take the
+  page's code colors; site search skips the code, and a catalog shows none.
+  Render cuts the text from the Lean sources it captured, so a render without
+  them shows none.
 - **Check without site warnings.** `check --no-site-warnings` skips the
   warnings about the pages the site would publish, which `render` prints too,
   and still reads the notes under `blueprint/sources/`, which a render that

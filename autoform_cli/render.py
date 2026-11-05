@@ -54,6 +54,7 @@ import unicodedata
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
+from itertools import islice
 from functools import lru_cache
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
@@ -3979,7 +3980,7 @@ def _lean_blocks(node: Node, linker: SourceLinker) -> list[str]:
         return []
     blocks: list[str] = []
     found = (linker.excerpt(name) for name in declaration_names(node.lean or ""))
-    for declaration, text in [excerpt for excerpt in found if excerpt is not None][:_LEAN_BLOCK_NAMES]:
+    for declaration, text in islice((excerpt for excerpt in found if excerpt is not None), _LEAN_BLOCK_NAMES):
         if declaration.keyword in ("theorem", "lemma"):
             text = _header(text, 0)
         code = f'<pre class="bp-lean"><code>{_lean_code(text)}</code></pre>'
@@ -4895,6 +4896,8 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 /* Material's code box is the block's only frame. */
 .bp-lean-source .bp-lean {{ padding: 0; border: 0; }}
 .md-typeset details.bp-lean-fold {{ margin: 0 0 0.4rem; }}
+/* A flex summary drops the space between the name and its line count. */
+.md-typeset details.bp-lean-fold > summary {{ gap: 0.3em; }}
 .bp-lean-keyword {{ color: var(--md-code-hl-keyword-color); }}
 .bp-lean-comment {{ color: var(--md-code-hl-comment-color); }}
 .bp-lean-string {{ color: var(--md-code-hl-string-color); }}

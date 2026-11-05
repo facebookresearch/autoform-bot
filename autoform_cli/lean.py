@@ -96,8 +96,9 @@ _SCANNED_LINE = re.compile(
     rf"|{_DECLARATION_KEYWORDS})"
 )
 #: What may start a line at a declaration's own indent and still belong to it: an alternative, a
-#: ``where`` block or a trailing clause.
-_CONTINUATION = re.compile(r"\s*(?:\||(?:where|deriving|termination_by|decreasing_by)\b)")
+#: ``where`` block, a trailing clause (not the ``deriving instance`` command) or a closing bracket,
+#: which starts no command.
+_CONTINUATION = re.compile(r"\s*(?:\||[)\]}⟩⦄]|(?:where|deriving(?!\s+instance\b)|termination_by|decreasing_by)\b)")
 # Core command heads and their modifiers cannot supply a declaration's name.
 # Compare complete identifiers: `open'`, `Qualified.open` and `«open»` are names.
 # These cover the core command parsers and their stock syntax extensions. The
@@ -1618,15 +1619,20 @@ def declaration_names(lean: str) -> list[str]:
 
 
 def declaration_text(lines: list[str], declaration: Declaration) -> str:
-    """``declaration`` as written in ``lines``, its file's lines: from its keyword's line to its own last line.
+    """``declaration`` as written in ``lines``, its file's lines: from its attributes and modifiers on the
+    lines above its keyword, if any, to its own last line.
 
     The index records only where a declaration starts. It ends before the next line indented no deeper
-    than its first that is not an alternative, a ``where`` block or a trailing clause: a comment, an
-    attribute, the next command or an ``end``. A body written at that indent is cut short there.
+    than its keyword's that is not an alternative, a ``where`` block, a trailing clause or a closing
+    bracket: a comment, an attribute, the next command or an ``end``. A body written at that indent is
+    cut short there.
     """
 
     first = lines[declaration.line - 1]
     indent = len(first) - len(first.lstrip())
+    start = declaration.line - 1
+    while start and lines[start - 1].strip() and _MODIFIER_LINE.fullmatch(lines[start - 1]):
+        start -= 1
     end = declaration.line
     for number in range(declaration.line, len(lines)):
         line = lines[number]
@@ -1635,7 +1641,7 @@ def declaration_text(lines: list[str], declaration: Declaration) -> str:
         if len(line) - len(line.lstrip()) <= indent and not _CONTINUATION.match(line):
             break
         end = number + 1
-    return "\n".join(lines[declaration.line - 1 : end])
+    return "\n".join(lines[start:end])
 
 
 @dataclass(frozen=True, slots=True)
@@ -1663,7 +1669,9 @@ class SourceLinker:
         if declaration is None or declaration.path not in self.sources:
             return None
         if declaration.path not in self._lines:
-            self._lines[declaration.path] = self.sources[declaration.path].decode("utf-8", "replace").splitlines()
+            # Split as the index counts lines, at line feeds only.
+            text = self.sources[declaration.path].decode("utf-8", "replace")
+            self._lines[declaration.path] = [line.removesuffix("\r") for line in text.split("\n")]
         return declaration, declaration_text(self._lines[declaration.path], declaration)
 
     def location(self, name: str) -> Declaration | None:

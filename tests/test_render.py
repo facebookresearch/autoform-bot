@@ -843,19 +843,23 @@ def test_a_statement_shows_its_lean_declaration_under_it(tmp_path: Path) -> None
     """A theorem shows its statement and never its proof; a definition shows whole, its body after `:=` included."""
     project = _project(tmp_path)
     (project / "Project/Basic.lean").write_text(
-        "namespace Project\n\n/-- The base. -/\ndef Base : Nat :=\n  0 + 0\n\n"
-        "theorem top : True := by\n  -- the proof\n  trivial\n\nend Project\n",
+        "namespace Project\n\n/-- The base. -/\ndef Base : String :=\n  \"a < b\" -- c & d\n\n"
+        "theorem top : True := by\n  -- the proof\n  trivial\n\nlemma small : 0 < (fun n : Nat => n) 1 := by\n  decide\n\nend Project\n",
         encoding="utf-8",
     )
+    _edit(project / "blueprint/roadmap/top.md", "lean: Project.top\n", "lean: Project.top, Project.small\n")
 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
 
     # Each block follows its statement box, and search leaves it out.
     blocks = re.findall(r'</div>\n\n<div class="bp-lean-source" data-search-exclude="1">\n(.*?)\n</div>', page, re.S)
+    # Its strings and comments are marked and escaped, and a lemma, like a theorem, shows no proof.
     assert blocks == [
-        '<pre class="bp-lean"><code><span class="bp-lean-keyword">def</span> Base : Nat :=\n  0 + 0</code></pre>',
-        '<pre class="bp-lean"><code><span class="bp-lean-keyword">theorem</span> top : True</code></pre>',
+        '<pre class="bp-lean"><code><span class="bp-lean-keyword">def</span> Base : String :=\n'
+        '  <span class="bp-lean-string">&quot;a &lt; b&quot;</span> <span class="bp-lean-comment">-- c &amp; d</span></code></pre>',
+        '<pre class="bp-lean"><code><span class="bp-lean-keyword">theorem</span> top : True</code></pre>\n'
+        '<pre class="bp-lean"><code><span class="bp-lean-keyword">lemma</span> small : 0 &lt; (<span class="bp-lean-keyword">fun</span> n : Nat =&gt; n) 1</code></pre>',
     ]
 
 
@@ -864,15 +868,20 @@ def test_a_long_declaration_folds_and_a_statement_shows_three_at_most(tmp_path: 
     alternatives = "".join(f"  | {n} => {n}\n" for n in range(14))
     theorems = "".join(f"theorem t{n} : True := trivial\n" for n in range(3))
     (project / "Project/Basic.lean").write_text(
-        f"namespace Project\n\ndef Base : Nat → Nat\n{alternatives}\ntheorem top : True := trivial\n{theorems}\nend Project\n",
+        f"namespace Project\n\ndef Base : Nat → Nat\n{alternatives}\ndef Open : Nat → Nat\n{alternatives[alternatives.index('  | 1 '):]}\n"
+        f"theorem top : True := trivial\n{theorems}\nend Project\n",
         encoding="utf-8",
     )
-    _edit(project / "blueprint/roadmap/top.md", "lean: Project.top\n", "lean: Project.top, Project.t0, Project.t1, Project.t2\n")
+    _edit(project / "blueprint/roadmap/base.md", "lean: Project.Base\n", "lean: Project.Base, Project.Open\n")
+    # A name with no declaration takes none of the three places.
+    _edit(project / "blueprint/roadmap/top.md", "lean: Project.top\n", "lean: Project.missing, Project.top, Project.t0, Project.t1, Project.t2\n")
 
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
 
     assert '<details class="bp-lean-fold"><summary><code>Project.Base</code> · 15 lines</summary><pre class="bp-lean">' in page
+    # Fourteen lines still show open.
+    assert '</details>\n<pre class="bp-lean"><code><span class="bp-lean-keyword">def</span> Open' in page
     top = page.split('data-autoform-node-id="top"', 1)[1].split('<div class="bp-lean-source"', 1)[1].split("</div>", 1)[0]
     assert re.findall(r"theorem</span> (\w+) : True</code>", top) == ["top", "t0", "t1"]
 
