@@ -290,8 +290,7 @@ one. `--write` only adds each ID as the first frontmatter line, or as a
 frontmatter block of its own. It checks every article before writing the first,
 writes one only while its bytes still have the planned hash, and refuses one
 that changed or became a symlink; a rerun completes the plan. The runtime and
-`autoform work` see assigned IDs at once. Beside `blueprint/links/` it writes
-none: an ID goes in the article's [annotation](reference/links.md).
+`autoform work` see assigned IDs at once.
 
 ### claim
 

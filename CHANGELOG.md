@@ -21,8 +21,8 @@ date when the release is tagged.
   left out is warned about, counted, and `check` adds literature-links' own
   validation. Render never publishes the folder, the runtime source revision
   and skeleton fingerprints cover it, and `migrate article-ids --write` writes
-  no ID beside it. Autoform now depends on literature-links 1.0.2, from its Git
-  tag.
+  no ID beside it. Autoform now depends on literature-links 1.0.2, pinned to its
+  commit.
 - **Verify workflow off.** `init --no-verify-workflow` writes
   `.github/workflows/autoform-verify.yml` as a stub, for a project the
   generated workflow can't fit, such as one whose roadmap several Lake projects
