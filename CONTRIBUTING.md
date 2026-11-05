@@ -40,9 +40,9 @@ each `AUTOFORM_REQUIRE_*` variable below, so it fails where a local run skips:
 With Node 22.23.2, run `make build-explorer`, `make check-explorer`, and browser tests.
 See [explorer ownership and failure boundaries](docs/explorer-design.md) before changing the client.
 
-After editing `autoform_cli/probes/audit_probe.lean`, run `python3 scripts/sync_audit_probe.py`
-and check the probe without a project (silent when clean): `elan run
-"$(cat tests/fixtures/library-project/lean-toolchain)" lean autoform_cli/probes/audit_probe.lean`.
+After editing the audit probe, run `python3 scripts/sync_audit_probe.py` and
+check it: `elan run "$(cat tests/fixtures/library-project/lean-toolchain)" lean
+autoform_cli/probes/audit_probe.lean` prints nothing when it is clean.
 
 `tests/test_real_repl.py` skips unless `AUTOFORM_RUN_REAL_REPL_TESTS=1`. To run
 it locally, build its fixture and install the oldest supported toolchain first:
