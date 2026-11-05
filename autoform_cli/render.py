@@ -2645,17 +2645,27 @@ def _render_coverage_page(
 
 
 def _coverage_summary(coverage: CoverageSummary) -> str:
-    """Count the declared source areas by disposition, without a percentage."""
+    """Count the declared source areas by disposition, without a percentage.
+
+    Split areas lead, as "all" or "N of M"; the other dispositions follow.
+    """
 
     counts = coverage.counts
     total = len(coverage.entries)
     if not total:
         return ""
-    return f"{total:,} source {'area' if total == 1 else 'areas'}: " + " · ".join(
+    areas = f"{total:,} source {'area' if total == 1 else 'areas'}"
+    split = counts["DECOMPOSED"]
+    if split == total:
+        return f"{areas}, {'all ' if total > 1 else ''}{_COVERAGE_WORDS['DECOMPOSED']}"
+    rest = " · ".join(
         f"{counts[disposition]:,} {_COVERAGE_WORDS[disposition]}"
         for disposition in _COVERAGE_SUMMARY_ORDER
-        if counts[disposition]
+        if counts[disposition] and disposition != "DECOMPOSED"
     )
+    if not split:
+        return f"{areas}: {rest}"
+    return f"{split:,} of {areas} {_COVERAGE_WORDS['DECOMPOSED']} · {rest}"
 
 
 def _render_hero(
@@ -2680,7 +2690,8 @@ def _render_hero(
     them. With *ready_href* the ready figure links the list of what it counts,
     and *book_href* puts the way into the book right under the claim. A project
     that tracks no Lean has no progress to show, so its hero keeps the title,
-    the claim, the way in and the coverage line.
+    the way in and the coverage line, and its claim is the README's whole opening
+    prose rather than its first sentence.
     """
     tracked = graph.tracks_lean
     leaves = _countable(graph)
@@ -2754,12 +2765,12 @@ def _render_hero(
         "What the sources cover</a>"
         "</div>"
     )
-    lead = _lead_sentence(body)
+    leads = _lead_paragraphs(body, whole=not tracked)
     return (
         '<div class="bp-hero">'
         + ("" if rail or not tracked else '<div class="bp-hero-kicker">Formalization blueprint</div>')
         + f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
-        + (f'<p class="bp-hero-lead">{lead}</p>' if lead else "")
+        + "".join(f'<p class="bp-hero-lead">{lead}</p>' for lead in leads)
         # In its own block: Markdown breaks an inline link between blocks apart.
         + (f"<div>{ways_in}</div>" if ways_in else "")
         + (f'<p class="bp-hero-status">{sentence}</p>' if sentence else "")
@@ -2778,25 +2789,31 @@ def _render_hero(
     )
 
 
-def _lead_sentence(body: str) -> str:
-    """The blueprint's own opening sentence, for the hero.
+def _lead_paragraphs(body: str, *, whole: bool = False) -> list[str]:
+    """The blueprint's own opening prose, for the hero: its first sentence, or
+    with *whole* every paragraph from the first until a heading or list.
 
     Written by a human in `blueprint/README.md`, so it says what the project is
     far better than anything derived from the graph could. Prose only: a
-    heading or a list is structure rather than a claim. The first paragraph
-    with words is read through the site's own converter, so code and formulas
-    keep their contents, a link keeps its words without its target, and an
-    image, such as a badge, is dropped.
+    heading or a list is structure rather than a claim. Each paragraph with
+    words is read through the site's own converter, so code and formulas keep
+    their contents, a link keeps its words without its target, and an image,
+    such as a badge, is dropped.
     """
     lines = mask_fences_and_comments(body.splitlines())
+    found: list[str] = []
     if _read_page(body)[1]:
         # Check flags this page, and the landing page then shows only its
-        # title and lead, as text: the first prose block, escaped as typed.
+        # title and lead, as text: the prose blocks, escaped as typed.
         for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
             typed = " ".join(block.split())
+            if found and re.match(r"#|[-*+]\s|\d+[.)]\s", typed):
+                break
             if typed and not typed.startswith(("#", "-", "*", "<", "|", ">", "!", "[")):
-                return _lead_html([("text", typed)])
-        return ""
+                found.append(_lead_html([("text", typed)], whole=whole))
+                if not whole:
+                    break
+        return found
     # Each block is read alone, so raw HTML elsewhere does not hide the lead,
     # with the reference definitions its links may name. Only lines the site's
     # converter reads as definitions, so a footnote never becomes a paragraph.
@@ -2804,11 +2821,15 @@ def _lead_sentence(body: str) -> str:
     for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
         tree = render_tree(f"{block}\n\n{definitions}", allow_html=False) if block.strip() else None
         page = tree.find("body") if tree is not None else None
-        for paragraph in page if page is not None else ():
-            parts = _lead_parts(paragraph) if paragraph.tag == "p" else []
+        for element in page if page is not None else ():
+            if found and (element.tag in {"ul", "ol"} or _HEADING_TAG.fullmatch(element.tag)):
+                return found
+            parts = _lead_parts(element) if element.tag == "p" else []
             if any(kind in {"code", "math"} or (kind == "text" and value.strip()) for kind, value in parts):
-                return _lead_html(parts)
-    return ""
+                found.append(_lead_html(parts, whole=whole))
+                if not whole:
+                    return found
+    return found
 
 
 def _lead_parts(element: object) -> list[tuple[str, str]]:
@@ -2846,8 +2867,8 @@ def _lead_parts(element: object) -> list[tuple[str, str]]:
     return parts
 
 
-def _lead_html(parts: list[tuple[str, str]]) -> str:
-    """The first sentence of ``parts`` as escaped HTML.
+def _lead_html(parts: list[tuple[str, str]], *, whole: bool = False) -> str:
+    """The first sentence of ``parts`` as escaped HTML, or with *whole* all of it.
 
     The hero is raw HTML, so Markdown never runs over it. Escaping every part
     means the only tags are the emphasis, code and formula span built here,
@@ -2865,7 +2886,7 @@ def _lead_html(parts: list[tuple[str, str]]) -> str:
         # Code and formulas stand in as one character no rule below matches.
         plain += value if kind == "text" else "\x01" if kind in {"code", "math"} else ""
     cut = len(plain)
-    for stop in re.finditer(r"\.\s+(?![a-z])", plain):
+    for stop in () if whole else re.finditer(r"\.\s+(?![a-z])", plain):
         before = plain[: stop.start()]
         words = [word.lstrip("(") for word in before.split()] or [""]
         word, previous = words[-1], words[-2] if len(words) > 1 else ""
@@ -2880,7 +2901,8 @@ def _lead_html(parts: list[tuple[str, str]]) -> str:
             continue
         cut = stop.start()
         break
-    cut = len(plain[:cut].rstrip().rstrip(".").rstrip())
+    kept = plain[:cut].rstrip()
+    cut = len(kept if whole else kept.rstrip(".").rstrip())
     begin = len(plain) - len(plain.lstrip())
     shown: list[str] = []
     opened: list[str] = []
@@ -2899,7 +2921,7 @@ def _lead_html(parts: list[tuple[str, str]]) -> str:
         else:
             opened.pop()
             shown.append(f"</{value}>")
-    return "".join(shown) + "".join(f"</{tag}>" for tag in reversed(opened)) + "."
+    return "".join(shown) + "".join(f"</{tag}>" for tag in reversed(opened)) + ("" if whole else ".")
 
 
 #: Words whose period does not end the hero's sentence.
