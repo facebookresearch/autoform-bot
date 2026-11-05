@@ -713,6 +713,31 @@ def visible_prose(value: str) -> str:
     return _collapse("".join(_visible_parts(tree, hidden=False)))
 
 
+#: What may stand between the links of a list that says nothing besides them:
+#: spaces, commas, semicolons, periods and "and".
+_LINK_LIST_JOINERS = re.compile(r"(?:[\s,;.]|\band\b)*", re.IGNORECASE)
+
+
+def only_links(value: str, links: int) -> bool:
+    """Whether a reader sees nothing in ``value`` but ``links`` links, joined
+    by commas, semicolons, periods or "and": no image, no other link, and no
+    other text or mark. False when the renderer cannot process it."""
+
+    tree = render_tree(value)
+    if tree is None:
+        return False
+    seen = 0
+    for element in tree.iter():
+        name = _local_name(element)
+        if name == "img":
+            return False
+        if name == "a":
+            seen += 1
+            element.set("hidden", "")
+    rest = _collapse("".join(_visible_parts(tree, hidden=False)))
+    return seen == links and _LINK_LIST_JOINERS.fullmatch(rest) is not None
+
+
 def has_substance(visible: str) -> bool:
     """Whether anything a reader could act on survives emphasis and punctuation."""
 
@@ -1542,5 +1567,6 @@ __all__ = [
     "yaml_string",
     "strip_line_comments",
     "first_unclosed_fence",
+    "only_links",
     "visible_prose",
 ]

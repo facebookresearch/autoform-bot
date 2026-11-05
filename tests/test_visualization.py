@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -728,18 +729,16 @@ def test_marker_inside_authored_content_does_not_claim_ownership(tmp_path: Path)
 def test_atomic_write_failure_preserves_the_previous_graph(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from autoform_cli import visualize
-
     blueprint = tmp_path / "blueprint"
     _write_node(blueprint / "roadmap" / "only.md", "Only")
     output = blueprint / "dependencies.md"
     output.write_text(_MERMAID_PAGE, encoding="utf-8")
 
-    def fail_replace(source: Path, destination: Path) -> None:
-        assert source.parent == destination.parent == blueprint.resolve()
+    def fail_replace(source: str, destination: Path, **_: object) -> None:
+        assert Path(source).parent == destination.parent == blueprint.resolve()
         raise OSError("replace failed")
 
-    monkeypatch.setattr(visualize, "_replace", fail_replace)
+    monkeypatch.setattr(os, "replace", fail_replace)
 
     with pytest.raises(OSError, match="replace failed"):
         export_graph(blueprint)
@@ -752,18 +751,16 @@ def test_atomic_write_failure_preserves_the_previous_graph(
 def test_atomic_write_failure_preserves_the_previous_structure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from autoform_cli import visualize
-
     blueprint = tmp_path / "blueprint"
     _write_node(blueprint / "roadmap" / "only.md", "Only")
     output = export_structure(blueprint)
     previous = output.read_text(encoding="utf-8")
 
-    def fail_replace(source: Path, destination: Path) -> None:
-        assert source.parent == destination.parent == blueprint.resolve()
+    def fail_replace(source: str, destination: Path, **_: object) -> None:
+        assert Path(source).parent == destination.parent == blueprint.resolve()
         raise OSError("replace failed")
 
-    monkeypatch.setattr(visualize, "_replace", fail_replace)
+    monkeypatch.setattr(os, "replace", fail_replace)
 
     with pytest.raises(OSError, match="replace failed"):
         export_structure(blueprint)

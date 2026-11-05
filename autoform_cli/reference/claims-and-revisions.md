@@ -10,7 +10,7 @@ cleanup.
 
 A claim key is a slug and digest of any string, not a validated node id, so a
 shared resource, or a Lean helper no article owns (under the
-`lean/<slug>-<digest>` key `work impact` reports), is locked like a node.
+`lean/<slug>-<digest>` key both impact commands report), is locked like a node.
 Parallel agents get one Git worktree each; builds take no claim.
 
 `acquire`, `renew`, and `release` change all their targets in one atomic push,
@@ -153,8 +153,8 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
    retracts only that article and the dependents whose text the revision
    rewrites (`statement: retracted`, no `proof`, `lean:` kept for `work
    impact`), edits only Markdown, releases any claims, and leaves the Lean side
-   to Formalize; the [Roadmap skill](../../skills/roadmap/SKILL.md) gives the
-   procedure.
+   to Formalize; [Roadmap](../../skills/roadmap/SKILL.md#claims-and-revisions)
+   adds when to claim, rebase and report.
 
 With the review marker, a commit that drops a declaration from an article's
 `lean:` also deletes that declaration's read-back cards under

@@ -17,7 +17,7 @@ from functools import partial
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from . import _page_pool, debrief, debrief_orchestrator, status
+from . import _page_pool, abstraction, debrief, debrief_orchestrator, status
 from ._repository import git
 from .approvals import ApprovalStatus, approval_statuses
 from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
@@ -141,7 +141,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     init.add_argument(
         "--force",
         action="store_true",
-        help="overwrite files that already exist; a case or Unicode variant of a managed path is still refused",
+        help="overwrite files that already exist, except a turned-off verify workflow; a case or Unicode variant "
+        "of a managed path is still refused",
+    )
+    init.add_argument(
+        "--no-verify-workflow",
+        action="store_true",
+        help="write the verify workflow as a stub that keeps its name and triggers but builds and audits nothing; "
+        "init keeps it from then on",
     )
     init.add_argument("--json", action="store_true", help="write stable machine-readable output")
 
@@ -505,6 +512,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     debrief_render = debrief_subparsers.add_parser("render", help="rebuild Markdown views of the records")
     debrief_render.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
 
+    abstraction_parser = subparsers.add_parser(
+        "abstraction", help="copied code that subagent debriefs reported, to raise into shared declarations"
+    )
+    abstraction_subparsers = abstraction_parser.add_subparsers(dest="abstraction_command", required=True)
+    abstraction_list = abstraction_subparsers.add_parser("list", help="list clusters of copied code")
+    abstraction_list.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+    abstraction_list.add_argument("--all", action="store_true", help="include raised and dismissed clusters")
+    abstraction_list.add_argument("--json", action="store_true", help="write stable machine-readable output")
+    abstraction_target = abstraction_subparsers.add_parser(
+        "target", help="record the shared file a cluster should be raised into"
+    )
+    abstraction_target.add_argument("cluster", help="cluster ID, or the entry ID of one of its copies")
+    abstraction_target.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+    abstraction_target.add_argument("--file", required=True, help="Lean file, relative to the project root")
+    abstraction_target.add_argument("--note", default="", help="why this file")
+    abstraction_close = abstraction_subparsers.add_parser("close", help="record that a cluster was raised or dismissed")
+    abstraction_close.add_argument("cluster", help="cluster ID, or the entry ID of one of its copies")
+    abstraction_close.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
+    resolution = abstraction_close.add_mutually_exclusive_group(required=True)
+    resolution.add_argument("--raised", metavar="DECLARATION", help="the shared declaration the copies now use")
+    resolution.add_argument("--dismissed", action="store_true", help="leave the copies as they are")
+    abstraction_close.add_argument("--file", default="", help="Lean file holding the shared declaration")
+    abstraction_close.add_argument("--note", default="", help="why; required with --dismissed")
+
     migrate = subparsers.add_parser("migrate", help="plan or apply authored migrations")
     migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
     article_ids = migrate_subparsers.add_parser(
@@ -664,6 +695,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _claim(args)
     if args.command == "debrief":
         return _debrief(args)
+    if args.command == "abstraction":
+        return _abstraction(args)
     if args.command == "migrate":
         return _migrate(args)
     if args.command == "skeleton":
@@ -708,6 +741,7 @@ def _init(args: argparse.Namespace) -> int:
             autoform_source=args.autoform_source,
             autoform_ref=args.autoform_ref,
             force=args.force,
+            verify_workflow=not args.no_verify_workflow,
         )
     except ScaffoldError as error:
         for issue in error.issues:
@@ -720,10 +754,13 @@ def _init(args: argparse.Namespace) -> int:
 
     print(f"{target}: {len(result.written)} files written")
     for path in result.written:
-        print(f"  + {path}")
+        print(f"  + {path}" + (" (verification turned off)" if path == result.verify_workflow_off else ""))
     for path in result.skipped:
         needs_pin = result.unpinned and path != ".github/CODEOWNERS.autoform.example" and ".github" in path
-        note = "no Autoform ref to pin" if needs_pin else "exists, left alone"
+        if path == result.verify_workflow_off:
+            note = "verification turned off on purpose, kept"
+        else:
+            note = "no Autoform ref to pin" if needs_pin else "exists, left alone"
         print(f"  = {path} ({note})")
     print("Next: describe the project in blueprint/README.md, then add chapters "
           "as roadmap/<chapter>/README.md.")
@@ -731,8 +768,10 @@ def _init(args: argparse.Namespace) -> int:
         # Flush first: stdout is block-buffered when piped, so without this the
         # warning jumps ahead of the file list it is explaining.
         sys.stdout.flush()
+        # A turned-off verify workflow is a stub that needs no pin, so only the rest is missing.
+        missing = "The rest of CI was" if result.verify_workflow_off else "CI was"
         print(
-            "\nCI was not written: generated workflows install Autoform from a Git\n"
+            f"\n{missing} not written: generated workflows install Autoform from a Git\n"
             "ref, and this Autoform is not running from a checkout, so there is\n"
             "nothing to pin. Re-run with the commit to add them:\n"
             "  autoform init --autoform-ref <40-char-sha>",
@@ -1610,6 +1649,8 @@ def _debrief(args: argparse.Namespace) -> int:
     except (debrief.DebriefError, OSError) as error:
         print(f"error: {_human_text(error)}", file=sys.stderr)
         return 2
+    if entry.answer.copied_code:
+        _refresh_abstraction_todo(args.target)
     if args.json:
         print(json.dumps(
             {"attempt_id": entry.attempt_id, "outcome": entry.outcome, "path": str(path)},
@@ -1618,6 +1659,69 @@ def _debrief(args: argparse.Namespace) -> int:
         ))
     else:
         print(_human_text(f"recorded debrief {entry.attempt_id} ({entry.outcome_label}) at {path}"))
+    return 0
+
+
+def _refresh_abstraction_todo(target: str) -> Path | None:
+    """Rewrite abstractions/TODO.md; a failure only warns, since the records and decisions it shows are stored."""
+    try:
+        return abstraction.render_todo(debrief.debrief_root(target), debrief.project_dir(target))
+    except (debrief.DebriefError, OSError) as error:
+        print(f"warning: the abstraction to-do list was not refreshed: {_human_text(error)}", file=sys.stderr)
+        return None
+
+
+def _abstraction(args: argparse.Namespace) -> int:
+    try:
+        root = debrief.debrief_root(args.target)
+        project = debrief.project_dir(args.target)
+        if args.abstraction_command == "list":
+            selected = [
+                cluster for cluster in abstraction.clusters(root) if args.all or cluster.status == "open"
+            ]
+            todo = _refresh_abstraction_todo(args.target)
+            if args.json:
+                print(abstraction.to_json(project, selected))
+                return 0
+            if not selected:
+                print("no copied code to raise")
+            for cluster in selected:
+                state = abstraction.present(project, cluster)
+                raised = " raised as " if cluster.status == "raised" else " last raised as "
+                print(_human_text(
+                    f"{cluster.cluster_id} [{cluster.status}] target: {cluster.file or 'not chosen'}"
+                    + (raised + cluster.declaration if cluster.declaration else "")
+                ))
+                for copy in cluster.copies:
+                    gone = " (no longer present)" if state.get(copy.entry_id) is False else ""
+                    print(_human_text(
+                        f"  {copy.entry_id} {copy.copy_file or '?'} {copy.copy_declaration or '(inline)'}"
+                        f" <- {copy.source_file or '?'} {copy.source_declaration or '(inline)'}"
+                        f" [{copy.kind or '?'}, {copy.node_id}]{gone}"
+                    ))
+            if todo is not None:
+                print(_human_text(f"to-do list: {todo}"))
+            return 0
+        if args.abstraction_command == "target":
+            cluster, decision = abstraction.decide(root, args.cluster, "target", file=args.file, note=args.note)
+            message = f"cluster {cluster.cluster_id} will be raised into {args.file}"
+        else:
+            # `--raised ""` is a raise without a declaration, which decide refuses, not a dismissal.
+            action = "raised" if args.raised is not None else "dismissed"
+            cluster, decision = abstraction.decide(
+                root, args.cluster, action, file=args.file, declaration=args.raised or "", note=args.note
+            )
+            message = f"cluster {cluster.cluster_id} {action}"
+    except (GraphValidationError, RuntimeProjectionError) as error:
+        for issue in error.issues:
+            print(f"error: {_human_text(issue)}", file=sys.stderr)
+        return 2
+    except (abstraction.AbstractionError, debrief.DebriefError, OSError) as error:
+        print(f"error: {_human_text(error)}", file=sys.stderr)
+        return 2
+    # The decision covers the copies the cluster held when it was made; a copy recorded since `list` is among them.
+    print(_human_text(f"{message}, covering {', '.join(decision.entries)}"))
+    _refresh_abstraction_todo(args.target)
     return 0
 
 

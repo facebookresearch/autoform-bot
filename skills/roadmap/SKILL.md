@@ -26,13 +26,12 @@ subagent that prefix.
 ## Own the whole pass
 
 Honor a request explicitly limited to inspection, audit, status, or
-visualization. Otherwise, a direct user invocation of Roadmap requests one
-complete planning pass over the source boundary named by the user or already
-adopted by the vault.
+visualization. Otherwise, a direct user invocation of Roadmap explicitly
+requests persistent execution of one complete planning pass over the source
+boundary named by the user or already adopted by the vault.
 
-That direct invocation explicitly requests persistent execution. When the
-runtime exposes a model-callable Goal lifecycle, use it before other work:
-continue a compatible active Goal or create one for a complete, validated,
+When the runtime exposes a model-callable Goal lifecycle, use it before other
+work: continue a compatible active Goal or create one for a complete, validated,
 reconciled, and committed roadmap of that source boundary, with no token budget
 unless the user supplied one. Never replace an unrelated active Goal, ask the
 user to invoke another command, shell out to a host's interactive goal command,
@@ -63,9 +62,8 @@ Inventory and exposition are independent axes: a catalog ledger can close the
 inventory axis but does not make an area `DECOMPOSED`. A future-work slice
 cannot stand in for a repository-wide inventory; keep existing, wishlist,
 conjectural, and planned mathematics in one book and DAG. `DECOMPOSED` means
-represented by declaration articles, not unfinished, so it may describe
-mathematics already implemented in Lean. A checked local declaration is valid
-grounding; do not invent an external citation or historical-source claim.
+represented by declaration articles, so it may describe mathematics already
+implemented in Lean. A checked local declaration is valid grounding.
 
 ## Ground and decompose
 
@@ -105,9 +103,8 @@ result and for each intermediate result its proof proves or cites, as the
   `lean:` names only a declaration in the project's own Lean files.
 - A refusal (exit 2) is not an empty result: resolve what it reports without
   adding the article, and search again; one that names a library is handled as
-  the search steps say, since you cannot change another repository's index. A
-  dependency link to a page not yet written causes one, so search for a whole
-  batch before writing the first.
+  the search steps say. A dependency link to a page not yet written causes one,
+  so search for a whole batch before writing the first.
 - When another formalizable article already states the result, link to it from
   each article that needs it, under `## Depends on` or `## Proof depends on`,
   and from the coverage row, instead of adding a node.
@@ -117,24 +114,21 @@ result and for each intermediate result its proof proves or cites, as the
 ### Coverage, milestones and the DAG
 
 Enumerate the entire adopted boundary in `blueprint/coverage/README.md`, with
-the dispositions the
-[CLI reference](../../autoform_cli/README.md#audit-and-coverage) defines.
-`DEFERRED` needs an explicit user decision or concrete external blocker; treat
-any other `DEFERRED` row as queued work, and never defer merely to shorten the
-run. `coverage.complete` only checks declared rows, so compare the table with
-the source structure yourself.
+the dispositions the [CLI
+reference](../../autoform_cli/README.md#audit-and-coverage) defines. `DEFERRED`
+needs an explicit user decision or concrete external blocker; treat any other
+`DEFERRED` row as queued work, and never defer merely to shorten the run.
+Compare the table with the source structure yourself.
 
 Write milestone pages under `blueprint/roadmap/` by mathematical significance,
-then one fine article per coherent unit with one unique main result. For an
-existing repository, coherent grouping is allowed only when the exact ledger
-still reconciles every public declaration. Do not turn existing formalization
-into fictional future work. Put genuine statement prerequisites under
-`## Depends on`, proof-only prerequisites under `## Proof depends on`, and a
-result the source's proof cites that the planned Lean proof will not use under
-`## Informally uses`, which no status counts. Never delete or reverse a genuine
-article edge to make a chapter-level or scope-level projection acyclic. After
-creating pages, run `autoform migrate article-ids blueprint --write` to give new
-articles a durable `article_id`.
+then one fine article per coherent unit with one unique main result. Do not turn
+existing formalization into fictional future work. Put genuine statement
+prerequisites under `## Depends on`, proof-only prerequisites under `## Proof
+depends on`, and a result the source's proof cites that the planned Lean proof
+will not use under `## Informally uses`, which no status counts. Never delete or
+reverse a genuine article edge to make a chapter-level or scope-level projection
+acyclic. After creating pages, run `autoform migrate article-ids blueprint
+--write` to give new articles a durable `article_id`.
 
 ### Articles and implementation notes
 
@@ -144,12 +138,11 @@ such as Mathlib gaps, prior art, and candidate declaration names in
 or a machine-local path, and never link a note from an article; a shared library
 declaration that does not apply is recorded on the source's page instead. The
 [note rules](../../autoform_cli/README.md#articles-and-containment) say when a
-note is stale, which `autoform audit` reports and you then delete, and how to
-repair an orphan. Move an article by moving its file; a page written afresh
-takes the old page's `article_id` line in the same edit. A commit that deletes
-or merges an article moves what is still useful from its note into a surviving
-article's note and deletes the note. Read and write no note while `check` warns
-`.implementation-notes` is a link.
+note is stale and how to repair an orphan. Move an article by moving its file; a
+page written afresh takes the old page's `article_id` line in the same edit. A
+commit that deletes or merges an article moves what is still useful from its
+note into a surviving article's note and deletes the note. Read and write no
+note while `check` warns `.implementation-notes` is a link.
 
 ### Claims and revisions
 
@@ -168,16 +161,14 @@ contract](../../autoform_cli/reference/claims-and-revisions.md#revision-contract
 says. An article without `lean:` just loses `statement` and `proof`, a
 Human-Review Lean revision is recorded in the implementation note, and a
 dependent found only now means releasing and acquiring the whole set again under
-the no-hold-and-wait rule when the project uses claims. Formalize
-may land `lean:` on the branch it works from after your checkout, with or
-without claims. Before the revision lands on that branch, and so before
-releasing any claim, bring it up to date with that branch by rebase or merge,
-retract any revised article that gained `lean:` there, repeat the Finish step's
-final validation, and commit the retraction as a new commit. When the revision
-lands later through a pull request, report the revised articles that had no
-`lean:` on that branch at your last update, and list them in the pull request's
-description if you open it, so whoever merges it retracts any that have gained
-`lean:` by then.
+the no-hold-and-wait rule when the project uses claims. Before the revision
+lands on the branch Formalize works from, and so before releasing any claim,
+bring it up to date with that branch by rebase or merge, retract any revised
+article that gained `lean:` there, repeat the Finish step's final validation,
+and commit the retraction as a new commit. When the revision lands later through
+a pull request, report the revised articles that had no `lean:` on that branch
+at your last update, and list them in the pull request's description if you open
+it, so whoever merges it retracts any that have gained `lean:` by then.
 
 ### Policies, statuses and catalogs
 
@@ -198,9 +189,8 @@ deeper trust and axiom review to Agent Review.
 
 Use `catalog: module` only as a source inventory for one existing Lean module.
 It may accompany exposition, but names, signatures, status tables, and imports
-do not replace reader-facing mathematical prose. A catalog leaf omits
-`declaration` and is never dispatchable proof work. Its assertion keys describe
-the whole tracked module: set `statement: formalized` only when all inventoried
+do not replace reader-facing mathematical prose. Its assertion keys describe the
+whole tracked module: set `statement: formalized` only when all inventoried
 public declarations exist, and `proof: formalized` only when every included
 implementation or proof is complete under the repository's trust policy. The
 [catalog rules](../../autoform_cli/README.md#articles-and-containment) say which

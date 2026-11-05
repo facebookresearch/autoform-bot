@@ -3,17 +3,16 @@
 ## Open statements
 
 By default a project runs the strict policy: CI rejects every `sorry`, so a
-theorem's statement lands only together with its proof, and a statement waits
-until the proof's prerequisites are proved. `open_statements: allowed` in
+theorem's statement lands only with its proof, and a statement waits until the
+proof's prerequisites are proved. `open_statements: allowed` in
 `roadmap/README.md` lets a theorem's statement land with a `sorry` proof. Such
 an article, a theorem whose statement is formalized and whose proof is not, is
-an open statement; CI audits it only through the declarations its `lean:`
-names. A proof that uses open statements compiles and records `proof:
-formalized`, but is reported as conditionally proved, never as fully proved.
-Status, `work`, and the site derive that from the Markdown dependencies and CI
-from what the Lean uses, so CI can print `sorry-free` for an article the site
-shows as conditional. CI is never the looser of the two: a Lean reach the
-Markdown does not declare fails.
+an open statement; CI audits it only through the declarations its `lean:` names.
+A proof that uses open statements compiles and records `proof: formalized`, but
+is reported as conditionally proved, never fully proved. Status, `work`, and the
+site derive that from the Markdown dependencies and CI from what the Lean uses,
+so CI can print `sorry-free` for an article the site shows as conditional. CI is
+never the looser of the two: a Lean reach the Markdown does not declare fails.
 
 State every theorem as a `theorem` with a `sorry` proof, not with
 `theorem_wanted` or `proof_wanted`. A dependent can cite the `sorry` proof, but
@@ -28,23 +27,20 @@ What is open:
   until Formalize restates and proves it or the marker and `lean:` are removed.
 - A theorem never stated is not open even with `lean:`; CI rejects its `sorry`.
 - A definition is never open: CI rejects a `sorry` in it, and its statement
-  phase waits until its proof prerequisites are stated. A retracted definition
-  is not open, but what rests on it assumes the open statements its body
-  reaches.
+  phase waits until its proof prerequisites are stated. What rests on a
+  retracted definition assumes the open statements its body reaches.
 - A module catalog is never open, even while pending: CI rejects a `sorry` in
   a declaration only it lists and nothing assumes it, though what rests on one
   with `lean:` assumes the open statements its own dependencies reach.
 
-Turn the policy back off only once no open statement remains: the strict audit
-rejects every `sorry`, and strict status shows a proof resting on one as
-proved, not conditional.
+Turn the policy back off only once no open statement remains: strict status
+shows a proof resting on one as proved, not conditional.
 
 Write an open statement's proof as exactly `sorry`: never in its type, a helper,
-a definition or a `where` clause, never inherited from a declaration outside the
-root package, and never as one case of a recursive proof, since Lean-generated
-auxiliaries count as helpers. `lake build --wfail` and `warningAsError` cannot
-be combined with open statements; the generated workflow runs plain `lake
-build`.
+a definition or a `where` clause, never inherited from outside the root package,
+and never as one case of a recursive proof, since Lean-generated auxiliaries
+count as helpers. `lake build --wfail` and `warningAsError` cannot be combined
+with open statements; the generated workflow runs plain `lake build`.
 
 The generated `autoform-verify.yml` reads the policy with `python3
 .github/autoform_audit.py --policy blueprint`, which prints `allowed` or
@@ -104,9 +100,8 @@ lean`, with the project's search path in `AUTOFORM_AUDIT_LEAN_PATH` and
 The audits' errors, each naming what to change:
 
 - `NAME depends on unexpected axiom AX` for a root-package declaration, with
-  `AX` such as `Lean.trustCompiler`, or `sorryAx` under the strict audit; the
-  strict audit ends with `root-package declarations failed the kernel-trust
-  audit`.
+  `AX` such as `Lean.trustCompiler`, or `sorryAx` under the strict audit; that
+  audit ends with `root-package declarations failed the kernel-trust audit`.
 - `NAME [ID] is not a declaration of the Lean build; fix the article's lean:
   name or build the module that declares it`: a theorem in a file no target
   imports, or inside a string, passes `autoform check --lean-root` but not this.
@@ -117,8 +112,7 @@ The audits' errors, each naming what to change:
 - `NAME depends on X, which no module of the build declares`, or for a `lean:`
   name outside the root package `NAME [ID] is outside the root package and
   depends on X, which no module of the build declares`.
-- `unsafe or partial declaration: NAME`, with a `partial def` under its own
-  name.
+- `unsafe or partial declaration: NAME`, with a `partial def` under its name.
 - `NAME [ID] is Lean's compiled copy of a recursive definition; name the
   definition itself`, for a `lean:` name that is a `NAME._unsafe_rec` copy.
 - `kernel replay of the root package failed: ...`, naming the first

@@ -253,6 +253,8 @@
       ui$selectedStatuses = new Set(presentStatuses), ui$reading = Boolean(firstBundle && firstBundle.readingSource),
       ui$overviewOnly = false, ui$filtersTouched = false, ui$relationIds = null,
       ui$requestedNode = firstBundle && firstBundle.nodeId || null, ui$outlineLimit = 120;
+    // A project that tracks no Lean (render marks its pages) has no Lean progress to show or Lean names to search for.
+    var tracksLean = !host.closest('[data-tracks-lean="false"]');
     var dom$announcement, dom$body, dom$breadcrumb, dom$browse, dom$browseToggle, dom$browsePopover,
       dom$error, dom$filterPopover, dom$filterSummary, dom$filters, dom$graphMode, dom$hiddenButton,
       dom$inspector, dom$inspectorInner, dom$inventory, dom$inventoryList, dom$inventoryRows,
@@ -265,6 +267,8 @@
 
     buildShell();
     bindEvents();
+    bindLeanCards();
+    bindPanes();
     // The router has already validated its index, so the first route, a
     // direct theorem entry included, reads its records. Only the route
     // renders the first view, after projecting with them.
@@ -421,7 +425,7 @@
       ui$selectedStatuses = new Set(presentStatuses);
       var legacy = bundle.parameters || {};
       if (legacy.view === "list") ui$mode = "list";
-      if (legacy.status) ui$selectedStatuses = new Set(legacy.status.split(",").filter(function (key) { return palette[key]; }));
+      if (legacy.status && tracksLean) ui$selectedStatuses = new Set(legacy.status.split(",").filter(function (key) { return palette[key]; }));
       if (ui$selected) ui$selectedStatuses.add(ui$selected.status);
       // Decide only after the outline has proved and hidden duplicated child
       // indexes. A canonical scope ID alone is not a request to read a result.
@@ -622,8 +626,8 @@
       dom$outlineToggle.setAttribute("aria-expanded", "false");
       var searchWrap = dom$searchWrap = element("div", "bp-dag-search-wrap");
       dom$search = element("input", "bp-dag-search");
-      dom$search.type = "search"; dom$search.placeholder = "Search titles and Lean names";
-      dom$search.setAttribute("aria-label", "Search titles and Lean names");
+      dom$search.type = "search"; dom$search.placeholder = tracksLean ? "Search titles and Lean names" : "Search titles";
+      dom$search.setAttribute("aria-label", dom$search.placeholder);
       dom$search.setAttribute("aria-controls", "bp-dag-search-results-" + instance);
       dom$searchResults = element("div", "bp-dag-search-results"); dom$searchResults.id = "bp-dag-search-results-" + instance;
       dom$searchResults.setAttribute("role", "region"); dom$searchResults.setAttribute("aria-label", "Search results");
@@ -869,6 +873,174 @@
       globalListen(window, "resize", syncSheetAccessibility);
       if (navigation) [dom$readingBody, dom$navigation, dom$inventoryScroll].forEach(function (pane) { pane.addEventListener("scroll", remember); });
     }
+    // A name in a statement's Lean shows the declaration it names in a card while it is hovered or focused. The card is
+    // a copy of the one render hid in the name's block; the pointer can move onto it to read or scroll it.
+    function bindLeanCards() {
+      var card = element("div", "bp-lean-card md-typeset"), shown = null, timer = 0;
+      card.id = "bp-lean-card-" + instance; card.setAttribute("role", "tooltip"); card.hidden = true; host.appendChild(card);
+      // A click in the card focuses it, so a reader can select its text or drag its scrollbar without closing it.
+      card.tabIndex = -1;
+      function show(ref) {
+        clearTimeout(timer);
+        // A name the reader replaced while the pointer rested on it shows nothing.
+        if (ref === shown || !ref.isConnected) return;
+        var name = ref.getAttribute("data-lean-name"), block = ref.closest(".bp-lean-source");
+        var entry = block && Array.from(block.querySelectorAll(".bp-lean-names > [data-lean-name]")).find(function (item) {
+          return item.getAttribute("data-lean-name") === name;
+        });
+        hide();
+        if (!entry) return;
+        shown = ref; ref.setAttribute("aria-describedby", card.id);
+        card.replaceChildren(element("p", "bp-lean-card-name", name));
+        Array.from(entry.childNodes).forEach(function (child) { card.appendChild(child.cloneNode(true)); });
+        card.hidden = false; card.scrollTop = 0; place();
+      }
+      // Under the name, or over it when the window has no room below; never past the window's sides.
+      function place() {
+        var box = shown.getBoundingClientRect(), below = box.bottom + 6 + card.offsetHeight <= window.innerHeight - 8;
+        card.style.left = Math.max(8, Math.min(box.left, window.innerWidth - card.offsetWidth - 8)) + "px";
+        card.style.top = Math.max(8, below ? box.bottom + 6 : box.top - 6 - card.offsetHeight) + "px";
+      }
+      function hide() {
+        clearTimeout(timer);
+        if (shown) shown.removeAttribute("aria-describedby");
+        shown = null; card.hidden = true;
+      }
+      function leave(event) {
+        if (shown && (shown.contains(event.relatedTarget) || card.contains(event.relatedTarget))) return;
+        clearTimeout(timer); if (shown) timer = setTimeout(hide, 150);
+      }
+      function nameAt(event) { return event.target.closest(".bp-lean-ref"); }
+      // A pointer that only crosses a name on its way elsewhere opens no card.
+      dom$readingBody.addEventListener("pointerover", function (event) {
+        var ref = nameAt(event);
+        if (ref && event.pointerType !== "touch") { clearTimeout(timer); timer = setTimeout(function () { show(ref); }, shown ? 0 : 250); }
+      });
+      dom$readingBody.addEventListener("pointerout", leave);
+      card.addEventListener("pointerover", function () { clearTimeout(timer); });
+      card.addEventListener("pointerout", leave);
+      dom$readingBody.addEventListener("focusin", function (event) { var ref = nameAt(event); if (ref) show(ref); else hide(); });
+      dom$readingBody.addEventListener("focusout", function (event) {
+        if (!dom$readingBody.contains(event.relatedTarget) && !card.contains(event.relatedTarget)) hide();
+      });
+      // A focused name keeps its card as the reader scrolls it into view; a hovered one's closes.
+      dom$readingBody.addEventListener("scroll", function () { if (shown && shown === document.activeElement) place(); else hide(); });
+      // Escape closes the card, wherever focus is, before it would close the reader.
+      globalListen(document, "keydown", function (event) {
+        if (event.key === "Escape" && shown) { event.preventDefault(); event.stopPropagation(); hide(); }
+      }, true);
+      // A press outside the card closes it, or cancels one about to open.
+      globalListen(document, "pointerdown", function (event) { if (!card.contains(event.target)) hide(); }, true);
+    }
+
+    // Topics and the reading pane can be dragged wider or narrower, or hidden, and the choice holds on every page of the
+    // site. Dragging a pane nearly shut hides it, as Enter on its splitter does; a tab at the map's edge brings it back.
+    function bindPanes() {
+      var key = "autoform:book-panes:v1", panes = {};
+      try { panes = JSON.parse(window.localStorage.getItem(key)) || {}; } catch (error) { panes = {}; }
+      var main = dom$body.querySelector(".bp-dag-main"), context = host.querySelector(".bp-dag-context");
+      function splitter(label) {
+        var bar = element("div", "bp-dag-splitter"); bar.tabIndex = 0; bar.title = label + "; double-click resets";
+        bar.setAttribute("role", "separator"); bar.setAttribute("aria-orientation", "vertical"); bar.setAttribute("aria-label", label);
+        bar.setAttribute("aria-valuemin", "0"); bar.setAttribute("aria-valuemax", "100");
+        dom$body.appendChild(bar); return bar;
+      }
+      var bars = {topics: splitter("Resize Topics"), reading: splitter("Resize the reading pane")};
+      var tabs = {topics: button("bp-dag-pane-tab bp-dag-pane-tab-topics", "Topics", "Show Topics"),
+        reading: button("bp-dag-pane-tab bp-dag-pane-tab-reading", "Reading", "Show the reading pane")};
+      main.append(tabs.topics, tabs.reading);
+      // A drawn full-screen mark, like the theme switch beside it, so the trail row stays one line high.
+      var mapOnly = button("bp-dag-map-only", "", "Map only"), svg = "http://www.w3.org/2000/svg", mark = document.createElementNS(svg, "svg");
+      mark.setAttribute("viewBox", "0 0 20 20"); mark.setAttribute("aria-hidden", "true");
+      var corners = document.createElementNS(svg, "path");
+      corners.setAttribute("d", "M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5");
+      corners.setAttribute("fill", "none"); corners.setAttribute("stroke", "currentColor"); corners.setAttribute("stroke-width", "1.5");
+      mark.appendChild(corners); mapOnly.appendChild(mark);
+      context.insertBefore(mapOnly, context.querySelector(".bp-dag-theme"));
+      function wide() { return !window.matchMedia || window.matchMedia("(min-width: 1101px)").matches; }
+      function hidden(side) { return Boolean(panes[side + "Hidden"]) && !sheetLayout() && (side === "reading" || wide()); }
+      function apply() {
+        var focused = document.activeElement;
+        ["topics", "reading"].forEach(function (side) {
+          var pane = side === "topics" ? dom$navigation : dom$inspector, hide = hidden(side);
+          var lost = hide && (pane.contains(focused) || bars[side] === focused);
+          host.classList.toggle("bp-dag-" + side + "-hidden", hide);
+          tabs[side].hidden = !hide;
+          if (lost) tabs[side].focus();
+        });
+        if (panes.topics) host.style.setProperty("--dag-navigation-width", panes.topics + "px");
+        else host.style.removeProperty("--dag-navigation-width");
+        if (panes.reading) host.style.setProperty("--dag-reading-width", "minmax(300px, " + (100 * panes.reading).toFixed(2) + "%)");
+        else host.style.removeProperty("--dag-reading-width");
+        var shut = hidden("reading") && (hidden("topics") || !wide());
+        mapOnly.setAttribute("aria-pressed", String(shut)); mapOnly.title = shut ? "Show Topics and the reading pane" : "Hide Topics and the reading pane";
+        place();
+      }
+      // Each splitter sits on its pane's inner edge; the overview's collapsed reader and a drawer have none.
+      function place() {
+        var width = dom$body.clientWidth || 1;
+        bars.topics.hidden = !wide() || sheetLayout() || hidden("topics");
+        bars.reading.hidden = sheetLayout() || hidden("reading") || dom$inspector.offsetWidth < 100;
+        if (!bars.topics.hidden) {
+          bars.topics.style.left = (dom$navigation.offsetWidth - 4) + "px";
+          bars.topics.setAttribute("aria-valuenow", String(Math.round(100 * dom$navigation.offsetWidth / width)));
+        }
+        if (!bars.reading.hidden) {
+          bars.reading.style.left = (dom$inspector.offsetLeft - 4) + "px";
+          bars.reading.setAttribute("aria-valuenow", String(Math.round(100 * dom$inspector.offsetLeft / width)));
+        }
+      }
+      function save() { try { window.localStorage.setItem(key, JSON.stringify(panes)); } catch (error) { /* A preference only. */ } }
+      // A width from the pointer or the keys, kept within bounds: Topics 160-480px, the reader 300px up to all but 160px of the
+      // map. Returns whether the pane was pulled nearly shut, which hides it when the drag ends.
+      function resizeTo(side, size) {
+        var width = dom$body.clientWidth;
+        if (side === "topics") panes.topics = Math.round(Math.min(480, Math.max(160, size)));
+        else panes.reading = Math.min(width - dom$navigation.offsetWidth - 160, Math.max(300, size)) / width;
+        apply();
+        return size < (side === "topics" ? 100 : 160);
+      }
+      function current(side) { return side === "topics" ? dom$navigation.offsetWidth : dom$inspector.offsetWidth; }
+      function show(side, shown) { panes[side + "Hidden"] = !shown; apply(); save(); }
+      Object.keys(bars).forEach(function (side) {
+        var bar = bars[side];
+        bar.addEventListener("pointerdown", function (event) {
+          if (event.button !== 0) return;
+          event.preventDefault(); bar.focus({preventScroll: true});
+          if (bar.setPointerCapture) bar.setPointerCapture(event.pointerId);
+          host.classList.add("bp-dag-resizing");
+          var shut = false;
+          function move(moved) {
+            var box = dom$body.getBoundingClientRect();
+            shut = resizeTo(side, side === "topics" ? moved.clientX - box.left : box.right - moved.clientX);
+          }
+          function end() {
+            ["pointermove", "pointerup", "pointercancel"].forEach(function (type, index) { bar.removeEventListener(type, index ? end : move); });
+            host.classList.remove("bp-dag-resizing");
+            if (shut) panes[side + "Hidden"] = true;
+            apply(); save();
+          }
+          ["pointermove", "pointerup", "pointercancel"].forEach(function (type, index) { bar.addEventListener(type, index ? end : move); });
+        });
+        bar.addEventListener("dblclick", function () { delete panes[side]; apply(); save(); });
+        bar.addEventListener("keydown", function (event) {
+          var step = event.shiftKey ? 64 : 16, grow = side === "topics" ? "ArrowRight" : "ArrowLeft", shrink = side === "topics" ? "ArrowLeft" : "ArrowRight";
+          if (event.key === grow || event.key === shrink) resizeTo(side, current(side) + (event.key === grow ? step : -step));
+          else if (event.key === "Home" || event.key === "End") resizeTo(side, (event.key === "End") === (side === "topics") ? Infinity : 0);
+          else if (event.key === "Enter") show(side, false);
+          else return;
+          event.preventDefault(); save();
+        });
+        tabs[side].addEventListener("click", function () { show(side, true); bars[side].focus({preventScroll: true}); });
+      });
+      mapOnly.addEventListener("click", function () {
+        var shut = mapOnly.getAttribute("aria-pressed") === "true";
+        panes.topicsHidden = panes.readingHidden = !shut; apply(); save();
+      });
+      if (window.ResizeObserver) { var ro = new ResizeObserver(place); ro.observe(dom$inspector); ro.observe(dom$navigation); observers.push(ro); }
+      globalListen(window, "resize", apply);
+      apply();
+    }
 
     function statusLabel(key) { return (palette[key] || {}).label || key.replace(/_/g, " "); }
     function renderStatusFields() {
@@ -998,7 +1170,7 @@
       matches.slice(0, ui$searchLimit).forEach(function (match) {
         var item = element("li"), choose = button("bp-dag-result", ""); choose.dataset.resultId = match.node.id;
         choose.appendChild(readingLabel("span", "bp-dag-result-title", match.node.title, (records.get(recordId(match.node)) || match.node).reading_title));
-        choose.appendChild(element("span", "bp-dag-result-meta", statusLabel(match.node.status))).title = (palette[match.node.status] || {}).meaning || "";
+        if (tracksLean) choose.appendChild(element("span", "bp-dag-result-meta", statusLabel(match.node.status))).title = (palette[match.node.status] || {}).meaning || "";
         var place = placeOf(match.node), topic = (records.get(recordId(match.node)) || match.node).scope === match.node.id;
         if (place || topic) choose.appendChild(element("span", "bp-dag-result-place", topic ? "Topic" + (place ? " in " + place : "") : place));
         choose.addEventListener("click", function () { activateNode(match.node, true); }); item.appendChild(choose); list.appendChild(item);
@@ -1017,7 +1189,8 @@
         more.addEventListener("keydown", searchResultKeydown);
         dom$searchResults.appendChild(more);
       }
-      if (!matches.length) dom$searchResults.appendChild(element("p", "bp-dag-overview", "No matching title, statement, article id, or Lean name."));
+      if (!matches.length) dom$searchResults.appendChild(element("p", "bp-dag-overview",
+        tracksLean ? "No matching title, statement, article id, or Lean name." : "No matching title, statement, or article id."));
       if (ui$searchLoading) dom$searchResults.appendChild(element("p", "bp-dag-overview", "Searching the whole roadmap…"));
       else if (ui$searchError) dom$searchResults.appendChild(element("p", "bp-dag-overview", "Whole-roadmap search is unavailable; showing this view."));
       dom$searchResults.hidden = false;
@@ -1069,7 +1242,7 @@
             (sheetLayout() && host.classList.contains("bp-dag-sheet-full")) || (bundle && bundle.isCurrent && !bundle.isCurrent())) return;
         var control = mapControl();
         if (control) control.focus({preventScroll: true});
-        if (!control || document.activeElement !== control) dom$filterSummary.focus({preventScroll: true});
+        if (!control || document.activeElement !== control) (tracksLean ? dom$filterSummary : dom$search).focus({preventScroll: true});
         remember();
       }); });
     }
@@ -1355,8 +1528,8 @@
         rowTitle.id = rowId + "-title";
         if (titleParts) Array.prototype.forEach.call(rowTitle.querySelectorAll(".arithmatex"), function (math) { math.replaceWith(pendingMath(math.textContent)); });
         var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;
-        var rowMeta = row.appendChild(element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (where ? " · " + where : "")));
-        rowMeta.title = (palette[node.status] || {}).meaning || ""; rowMeta.id = rowId + "-meta";
+        var rowMeta = row.appendChild(element("span", "bp-dag-inventory-meta", [tracksLean ? statusLabel(node.status) : "", where].filter(Boolean).join(" · ")));
+        rowMeta.title = tracksLean && (palette[node.status] || {}).meaning || ""; rowMeta.id = rowId + "-meta";
         // A row is named by its title and status line; its summary is the description, so a name is not 400 characters long.
         row.setAttribute("aria-labelledby", rowId + "-title " + rowId + "-meta");
         if (navigation && node.summary) { var summary = row.appendChild(summaryLine(node)); summary.id = rowId + "-summary"; row.setAttribute("aria-describedby", summary.id); }

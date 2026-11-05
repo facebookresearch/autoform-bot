@@ -60,7 +60,7 @@ def test_cold_mount_adopts_the_loaded_index_and_only_its_route_renders(entry: st
       const firstBundle={nodeId:fixture.entry,scope:fixture.entry==='roadmap'?'roadmap':'scope-0',
         graph:payload,readingSource:{},dataURL:'https://example.test/dependencies.json'};
       const navigation={getIndex(){events.push('index');return loaded?index:null;}};
-      const host={querySelector(){return null;},classList:{add(){},remove(){},toggle(){}}};
+      const host={querySelector(){return null;},closest(){return null;},classList:{add(){},remove(){},toggle(){}}};
       const window={location:{href:'https://example.test/roadmap/index.html',origin:'https://example.test'}};
       const start=productionSource.indexOf('  function mount('),end=productionSource.indexOf('    function globalListen(',start);
       assert(start>=0&&end>start,'The real cold-mount boundary must exist');
@@ -68,6 +68,8 @@ def test_cold_mount_adopts_the_loaded_index_and_only_its_route_renders(entry: st
       const seams=`
         function buildShell() {events.push('shell');dom$search={removeAttribute(){}};}
         function bindEvents() {events.push('bind');}
+        function bindLeanCards() {events.push('lean-cards');}
+        function bindPanes() {events.push('panes');}
         function updateProjection() {events.push('project');}
         function renderNavigation() {events.push('outline');} function refresh() {events.push('refresh');}
         function resize() {events.push('resize');}
@@ -87,10 +89,10 @@ def test_cold_mount_adopts_the_loaded_index_and_only_its_route_renders(entry: st
       const bootstrap=eval('('+productionSource.slice(start,end)+'\nreturn {requestedNode:ui$requestedNode,useIndex};\n'+helpers+'\n'+seams+'})');
       assert.equal(bootstrap(host,payload,1,firstBundle,navigation).requestedNode,fixture.entry);
       // Adopting the index renders nothing and lays nothing out: only the route renders the first view.
-      assert.deepEqual(events,['shell','bind','index','optional-wiki','route']);
+      assert.deepEqual(events,['shell','bind','lean-cards','panes','index','optional-wiki','route']);
       // An index that arrives after the mount is adopted and rendered at once.
       events.length=0;loaded=false;const client=bootstrap(host,payload,1,firstBundle,navigation);
-      assert.deepEqual(events,['shell','bind','index','route']);
+      assert.deepEqual(events,['shell','bind','lean-cards','panes','index','route']);
       events.length=0;client.useIndex(index);assert.deepEqual(events,['optional-wiki','project','outline','refresh']);
       events.length=0;client.useIndex(index);assert.deepEqual(events,[]);
       assert.throws(()=>bootstrap(host,payload,1,firstBundle,null),/complete mathematical page and navigation/);

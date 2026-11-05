@@ -1,20 +1,18 @@
 # Autoform skeletons and statement review
 
-What `autoform skeleton` extracts and writes, the hashes that bind it, the
-read-back cards a blind auditor writes, and the rules the `review` commands
-apply. The [CLI reference](../README.md#skeleton) gives the synopses, exit
-statuses and safety rules.
+What `autoform skeleton` extracts and writes, its hashes, read-back cards, and
+the `review` rules. The [CLI reference](../README.md#skeleton) gives the
+synopses, exit statuses and safety rules.
 
 ## Skeleton contract
 
 The skeleton of a `lean:` declaration is its elaborated signature, then every
 project declaration its *statement* rests on, transitively, quoted from the
 sources in dependency order: a definition with its body, a theorem with its type
-only. A theorem's proof is never emitted, though Lean's axiom analysis reads it,
-so a proof edit can change the reported trust context. Each skeleton reports the
-axioms the declaration rests on (a `sorry` shows as `sorryAx`) and, by name, the
-non-core constants it assumes from Mathlib or another dependency, which are
-trusted and not expanded.
+only, though Lean's axiom analysis reads its proof, so a proof edit can change
+the reported trust context. Each skeleton reports the axioms the declaration
+rests on (a `sorry` shows as `sorryAx`) and, by name, the non-core constants it
+assumes from Mathlib or another dependency, which are trusted and not expanded.
 
 For each module that declares a selected target, `skeleton` runs a probe with
 `lake env lean` against the built project, so a packet reads as it does to a
@@ -128,12 +126,11 @@ key; all are advisory checksums when candidate code controls the checkout.
 
 A read-back is a blind agent's mathematical-English account of one packet,
 recorded with `review record`. Cards live at
-`blueprint/readbacks/<article_id>/<encoded-declaration>.md` and hold the exact
-packet, its evidence hash as `packet:`, the statement hash as `statement:` (a
-record, never compared), an unauthenticated `model:` label the coordinator
-supplies, and the testimony. Loading rejects missing or unknown fields,
-altered packets, identity mismatches, non-canonical cards, and malformed or
-empty testimony.
+`blueprint/readbacks/<article_id>/<encoded-declaration>.md` and hold the packet,
+its evidence hash as `packet:`, the statement hash as `statement:` (a record,
+never compared), an unauthenticated `model:` label the coordinator supplies, and
+the testimony. Loading rejects missing or unknown fields, altered packets,
+identity mismatches, non-canonical cards, and malformed or empty testimony.
 
 Testimony is plain text with TeX formulas between dollar signs, written by the
 rules in `skills/human-review/references/readback.md`. It is refused for

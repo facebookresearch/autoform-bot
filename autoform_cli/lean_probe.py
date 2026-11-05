@@ -647,9 +647,9 @@ class LeanLibrary:
 def lean_libraries(lean_root: str | Path) -> tuple[LeanLibrary, ...]:
     """Read the project's library targets from its Lake configuration.
 
-    A TOML manifest is read directly. A Lean manifest is evaluated by Lake
+    ``lakefile.toml`` is read directly. ``lakefile.lean`` is evaluated by Lake
     itself through ``lake translate-config``, the same way the generated verify
-    workflow reads the root package name, so both manifest languages are
+    workflow reads the root package name, so both configuration languages are
     handled without a second parser for Lean syntax. When both exist, Lake
     builds from ``lakefile.lean``, so that is the one read here too.
 

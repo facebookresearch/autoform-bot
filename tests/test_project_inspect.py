@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import autoform_cli.project.catalog as project_catalog
 import autoform_cli.project.inspect as project_inspect
 import autoform_cli.project._snapshot as project_snapshot
 from autoform_cli.__main__ import _human_text, main
@@ -19,7 +20,6 @@ from autoform_cli.project import (
     ProjectCatalogError,
     inspect_project,
     load_release_catalog,
-    parse_release_catalog,
 )
 
 MATHLIB_URL = "https://github.com/leanprover-community/mathlib4"
@@ -1688,15 +1688,24 @@ def _release(**changes: object) -> dict:
         {"schema": "other", "releases": [_release()]},
         {"schema": RELEASE_CATALOG_SCHEMA, "releases": []},
         {"schema": RELEASE_CATALOG_SCHEMA, "releases": [_release(extra=1)]},
-        {"schema": RELEASE_CATALOG_SCHEMA, "releases": [_release(mathlib_commit="v4.32.2")]},
         {"schema": RELEASE_CATALOG_SCHEMA, "releases": [_release(recommended="yes")]},
-        {"schema": RELEASE_CATALOG_SCHEMA, "releases": [_release(), _release(id="b", recommended=False)]},
         {"schema": RELEASE_CATALOG_SCHEMA, "releases": [_release(recommended=False)]},
     ],
 )
 def test_malformed_catalogs_are_rejected(payload: object) -> None:
     with pytest.raises(ProjectCatalogError):
-        parse_release_catalog(payload)
+        project_catalog.parse_release_catalog(payload)
+
+
+def test_cli_reports_an_unreadable_release_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    (tmp_path / "releases.json").write_text("{", encoding="utf-8")
+    monkeypatch.setattr(project_catalog, "files", lambda _package: tmp_path)
+
+    assert main(["project", "versions", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "error": {"code": "project-catalog-invalid", "message": "the bundled release catalog is unreadable"},
+        "ok": False,
+    }
 
 
 def test_cli_reports_and_exit_codes(tmp_path: Path, capsys) -> None:

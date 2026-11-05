@@ -49,7 +49,8 @@ tests own the root `.gitignore`'s required rules.
   example needs newer behavior, update its source and full SHA together, update
   the substitution assertions, and run the example through that exact pin.
 - Lean and Mathlib use tested matching release tags, such as `v4.32.2`; they do
-  not follow the Autoform full-SHA rule. For each release, regenerate
-  `production_module_roots` from Lake package configs and update the private
-  creation bundle, catalog identity, and complete `lake update` manifest
-  together (a direct-Mathlib-only manifest is invalid), then run `lake build`.
+  not follow the Autoform full-SHA rule. For each release, update the catalog
+  entry and its complete `lake update` manifest together (a direct-Mathlib-only
+  manifest is invalid). Add any new top-level entry of the toolchain's library,
+  and any new library root in the Lake package configs, to `_RESERVED_ROOTS` in
+  `autoform_cli/project/create.py`, then run `lake build`.

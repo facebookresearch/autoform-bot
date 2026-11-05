@@ -156,6 +156,14 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-math a { color: var(--pm-link); }
 .pm-math code { padding: 1px 4px; border-radius: 4px; background: var(--pm-bg); font: 12.5px var(--pm-mono); }
 .pm-math pre { overflow: auto; padding: 8px; border-radius: 6px; background: var(--pm-bg); font: 12px/1.45 var(--pm-mono); }
+/* A statement's Lean declarations, as the book shows them under it. The pre is the box, so its code takes none of
+   the inline code's padding and the first line keeps its indent; the book's own rule would take the pre's padding. */
+.pm-math .bp-lean-source { margin: 10px 0 0; }
+.pm-math .bp-lean-source .bp-lean { padding: 8px; }
+.pm-math pre code { padding: 0; background: none; font: inherit; }
+.pm-math .bp-lean-keyword { color: var(--pm-accent); }
+.pm-math .bp-lean-comment { color: var(--pm-muted); }
+.pm-math .bp-lean-string { color: var(--pm-proved); }
 .pm-math .bp-thmnotes, .pm-math .bp-meta { margin-top: 10px; color: var(--pm-muted); font-size: 12.5px; }
 .pm-math .bp-thmnotes h6 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .02em; }
 .pm-math .bp-row { display: flex; gap: 8px; padding: 2px 0; }

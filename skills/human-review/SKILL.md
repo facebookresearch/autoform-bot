@@ -62,12 +62,10 @@ open statements in its `Assumes` row, never as proved or sorry-free.
 
 ## Review formalized statements through blind read-backs
 
-The person compares the article statement and cited passage, the elaborated
-Lean signature, and the project definitions it rests on with a *read-back*: a
-blind rendering in mathematical English of what one exact Lean packet literally
-asserts. Use the `review` commands in the
-[CLI reference](../../autoform_cli/README.md#review); `review check` is the
-one judge of whether cards and approvals are current.
+A *read-back* is a blind rendering in mathematical English of what one exact
+Lean packet literally asserts. Use the `review` commands in the [CLI
+reference](../../autoform_cli/README.md#review); `review check` is the one judge
+of whether cards and approvals are current.
 
 1. Confirm that the repository has opted in with the
    `blueprint/.autoform-review` policy marker, the line
@@ -80,13 +78,12 @@ one judge of whether cards and approvals are current.
    `review-article-shape`. Every `origin: cited` Lean article must cite an exact
    line range in a local, non-Markdown source snapshot. Build the Lean project,
    prepare the blind packets, and keep their manifest with the coordinator.
-2. Obtain a read-back for every packet that has none or whose card
-   `review check` reports invalid. Never write one yourself: you know what the
-   code is meant to say. Launch an independent sub-agent in a fresh workspace
-   containing only that packet, under its opaque hash filename, and
-   [the read-back reference](references/readback.md). Do not give it the
-   repository, article, source passage, packet manifest, or a revealing task
-   description. Ask for testimony only.
+2. Obtain a read-back for every packet that has none or whose card `review
+   check` reports invalid. Never write one yourself. Launch an independent
+   sub-agent in a fresh workspace containing only that packet, under its opaque
+   hash filename, and [the read-back reference](references/readback.md). Do not
+   give it the repository, article, source passage, packet manifest, or a
+   revealing task description. Ask for testimony only.
 3. Back in the coordinator's workspace, record the testimony through the CLI
    with the packet directory, the article ID, and the declaration. Never
    hand-author or repair a card's path, hashes, or frontmatter.

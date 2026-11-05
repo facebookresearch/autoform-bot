@@ -15,8 +15,6 @@ There is no `autoform` on `PATH`. Run it from the project under review as
 absolute plugin directory holding `skills/` and `pyproject.toml`; give a
 subagent that prefix.
 
-Select the rubric from the artifact under review.
-
 - For a roadmap or blueprint, read [roadmap quality](references/roadmap-quality.md),
   inspect its declared sources and coverage boundary, and validate its DAG.
 - For Lean code, read [faithfulness](references/faithfulness.md),

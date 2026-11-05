@@ -41,6 +41,9 @@ from .markdown import (
 from .markdown import HEADING as _HEADING
 
 
+#: A display formula written inside a paragraph, ``$$...$$``. There the site reads ``\[...\]`` as escaped
+#: brackets, such as a citation, not as a formula.
+_DISPLAY_MATH = re.compile(r"(?<!\\)\$\$(.+?)(?<!\\)\$\$", re.DOTALL)
 #: An inline link or image; its label may hold bracket pairs, as the page reads it.
 _MARKDOWN_LINK_TEXT = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\([^)]*\)")
 #: A full, collapsed or shortcut reference link: ``[text][label]``, ``[label][]`` or ``[label]``.
@@ -67,12 +70,16 @@ _FRONTMATTER_KEYS = frozenset(
         "open_statements",
         "published",
         "tracks_lean",
+        "coverage_list_limit",
     }
 )
 _FORMALIZED = "formalized"
 _RETRACTED = "retracted"
 _TRUE = frozenset({"true", "yes"})
 _FALSE = frozenset({"false", "no"})
+#: How many statements a coverage row lists beside evidence it keeps, unless
+#: ``roadmap/README.md`` sets ``coverage_list_limit``.
+_COVERAGE_LIST_LIMIT = 50
 _CATALOG_DECLARATION_KEYS = frozenset(
     {"declaration", "mathlib", "mathlib_declaration", "mathlib_file"}
 )
@@ -171,6 +178,9 @@ class Graph:
     #: statement may land with a ``sorry`` proof. Absent or ``forbidden`` keeps
     #: the strict policy, where CI rejects every ``sorry``.
     open_statements: bool = False
+    #: ``coverage_list_limit`` in ``roadmap/README.md``: how many statements a
+    #: coverage row lists beside evidence it keeps before it counts the rest.
+    coverage_list_limit: int = _COVERAGE_LIST_LIMIT
     #: Folders whose ``README.md`` says ``published: false``: check validates
     #: them, and render leaves them out of the site.
     unpublished: tuple[Path, ...] = ()
@@ -253,6 +263,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     policy_page = (blueprint / "roadmap" / "README.md").resolve()
     open_statements = False
     tracks_lean = True
+    coverage_list_limit = _COVERAGE_LIST_LIMIT
 
     for source in sources:
         canonical = source.path.resolve()
@@ -300,6 +311,17 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     warnings.append(f"{node.id}: tracks_lean accepts only true or false; ignored")
                 else:
                     tracks_lean = tracked.casefold() in _TRUE
+            limit = node.metadata.get("coverage_list_limit")
+            if limit is not None:
+                if canonical != policy_page:
+                    warnings.append(
+                        f"{node.id}: coverage_list_limit is a project setting, read only in roadmap/README.md; "
+                        "ignored here"
+                    )
+                elif not re.fullmatch(r"[1-9][0-9]*", limit):
+                    warnings.append(f"{node.id}: coverage_list_limit accepts only a whole number from 1; ignored")
+                else:
+                    coverage_list_limit = int(limit)
             # A role that describes containers is ignored with a warning on a declaration article (#325).
             if node.metadata.get("navigation", "topic") != "topic" and "declaration" in node.metadata:
                 warnings.append(f"{node.id}: 'navigation' describes containers, not declaration articles; ignored here")
@@ -438,6 +460,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         blueprint_dir=blueprint,
         nodes=nodes,
         open_statements=open_statements,
+        coverage_list_limit=coverage_list_limit,
         unpublished=unpublished,
         tracks_lean=tracks_lean,
         warnings=tuple(warnings),
@@ -999,13 +1022,33 @@ def _extract_summary(body: list[str], references: dict[str, str], *, limit: int 
         if unescape(_strip_markup(text)).strip():
             paragraph.append(text)
     # Inline math may wrap across the paragraph's lines, so markup is read in the whole paragraph.
-    summary = " ".join(unescape(_strip_markup("\n".join(paragraph))).split())
+    text = "\n".join(paragraph)
+    # A summary is one line, so a display formula inside the paragraph shows inline there.
+    for display in reversed(list(_DISPLAY_MATH.finditer(_code_masked(text)))):
+        text = text[: display.start()] + "\\(" + text[display.start(1) : display.end(1)] + "\\)" + text[display.end() :]
+    summary = " ".join(unescape(_strip_markup(text)).split())
     if not summary:
         return None
     if len(summary) <= limit:
         return summary
     clipped = summary[: limit - 1].rsplit(" ", 1)[0]
+    # A clip that would cut a formula or code span stops before it, so the summary opens none it doesn't close.
+    for start, stop in _markup_spans(summary):
+        if start < len(clipped) < stop:
+            clipped = summary[:start] or summary[:stop]
+            break
     return (clipped or summary[: limit - 1]).rstrip() + "…"
+
+
+def _code_masked(text: str) -> str:
+    """Return *text* with its code spans blanked, so the dollars and brackets in them open no formula."""
+    return _CODE_SPAN.sub(_blank_code, text)
+
+
+def _markup_spans(text: str) -> list[tuple[int, int]]:
+    """Return the spans of *text*'s code spans and inline math, in order; code is read first, as the page reads it."""
+    code = [match.span() for match in _CODE_SPAN.finditer(text) if match[1]]
+    return sorted((*code, *(match.span() for match in _INLINE_MATH.finditer(_code_masked(text)))))
 
 
 def _strip_markup(text: str) -> str:
@@ -1019,12 +1062,9 @@ def _strip_markup(text: str) -> str:
     def strip(prose: str) -> str:
         return _HTML_TAG.sub("", prose).replace("**", "").replace("__", "")
 
-    code = [match for match in _CODE_SPAN.finditer(text) if match[1]]
-    code_masked = _CODE_SPAN.sub(_blank_code, text)
-    spans = sorted(match.span() for match in (*code, *_INLINE_MATH.finditer(code_masked)))
     parts: list[str] = []
     end = 0
-    for start, stop in spans:
+    for start, stop in _markup_spans(text):
         # A code span inside inline math is already kept with it.
         if start < end:
             continue

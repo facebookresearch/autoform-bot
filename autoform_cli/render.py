@@ -56,6 +56,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from html.parser import HTMLParser
+from itertools import islice
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
@@ -80,6 +81,8 @@ from .approvals import approval_statuses
 from .coverage import (
     COVERAGE_DISPOSITIONS,
     CoverageSummary,
+    contract_table,
+    coverage_target_nodes,
     load_coverage,
     validate_coverage_roles,
 )
@@ -93,20 +96,33 @@ from .graph import (
     unpublished_content,
     unpublished_node_ids,
 )
-from .graph_views import _containers, _countable, _is_countable, _module_inventories
+from .graph_views import (
+    _containers,
+    _containment_children,
+    _countable,
+    _is_countable,
+    _leaf_descendants,
+    _module_inventories,
+)
 from .lean import (
+    _CONTINUATION_IDENTIFIER,
+    _DECLARATION_KEYWORDS,
+    _DECLARATION_MODIFIERS,
     _REPLACEABLE_SCHEMAS,
     PUBLICATION_MANIFEST,
     PUBLICATION_SCHEMA,
+    Declaration,
     IndexedSourceSnapshot,
     LeanSourceError,
     SourceIndex,
     SourceLinker,
+    bound_names,
     declaration_names,
     index_failure_message,
     resolve_lean_root,
     snapshot_project_sources,
 )
+from .library.declarations import _header
 from .library.pinned_names import FOLDER as PINNED_NAMES_FOLDER
 from .markdown import (
     _BRACKET_ESCAPE,
@@ -125,9 +141,12 @@ from .markdown import (
     boxed,
     converted_alone,
     directory_path,
+    frontmatter_end,
     mask_fences_and_comments,
     header_title,
+    link_targets,
     name_text,
+    only_links,
     page_title,
     published_page,
     relative_link,
@@ -194,6 +213,9 @@ _SKIPPED_DIRECTORIES = frozenset({".obsidian", ".trash", ".git"})
 
 #: Transcriptions of the paper being formalised. Vault material, not chapters.
 SOURCES_DIR = "sources"
+#: The coverage contract's page, compared without regard to case, as a disk
+#: that ignores case serves it.
+COVERAGE_PAGE = "coverage/readme.md"
 #: Hidden siblings of the output: a site being built, a replaced one, or a backup.
 _STAGE_PREFIX = ".autoform-publication-"
 #: How a filesystem says it lacks an operation (an atomic exchange, a directory sync).
@@ -753,7 +775,13 @@ def _publication(
                 )
                 continue
             text, found = published(written, source, destination / relative)
-            files[source] = shown_as_typed(text) if found else _protect_narrative_markdown(text)
+            files[source] = (
+                shown_as_typed(text) if found
+                # Render shows the contract's table as the coverage view, and
+                # protects the stretches around it then, as on a chapter page.
+                else text if relative.as_posix().casefold() == COVERAGE_PAGE
+                else _protect_narrative_markdown(text)
+            )
         elif relative.as_posix() in written_over:
             continue
         elif source.suffix.lower() in _STATIC_SUFFIXES:
@@ -1018,6 +1046,7 @@ def render_site(
             links_blueprint=links_blueprint,
             spellings=spellings,
             root_prefix=root_prefix,
+            sources=dict(lean.source_files),
         )
         reviews: dict[str, str] = {}
         review_warnings: list[str] = []
@@ -1116,6 +1145,7 @@ def _render_pages(
     coverage_warnings += (f"{subject}: {omission}" for subject, omission in pinned_list_omissions(graph))
     statuses = status.derive(graph)
     used_by = _reverse_edges(graph)
+    formalizing = _formalizing(graph)
     # Sources leave the site only for a directory the verified commit holds.
     sources_base = _sources_base(blueprint, repo_root, linker) if sources else None
     stops = _in_the_way(blueprint, graph, files)
@@ -1191,6 +1221,34 @@ def _render_pages(
             encoding="utf-8",
         )
 
+    coverage_page = next(
+        (
+            destination / relative
+            for relative in (_relative(source, blueprint) for source in site.files)
+            if relative.as_posix().casefold() == COVERAGE_PAGE
+        ),
+        None,
+    )
+    if coverage_page is not None and coverage_page not in site.typed:
+        staged = coverage_page.read_text(encoding="utf-8")
+        shown = _render_coverage_page(
+            staged,
+            coverage=coverage,
+            graph=graph,
+            statuses=statuses,
+            containers=containers,
+            links=_anchored_links(targets, coverage_page),
+            node_sources=node_sources,
+            rank={node_id: index for index, node_id in enumerate(order)},
+        )
+        if shown is None:
+            report.warnings.append(
+                f"{coverage.source_path}: the page render publishes does not hold the contract's table as audit "
+                "reads it, so the site shows the page without the coverage view"
+            )
+            shown = _protect_narrative_markdown(staged)
+        coverage_page.write_text(shown, encoding="utf-8")
+
     for group, node_ids in groups.items():
         page = group_pages[group]
         page.parent.mkdir(parents=True, exist_ok=True)
@@ -1201,6 +1259,7 @@ def _render_pages(
             graph=graph,
             statuses=statuses,
             used_by=used_by,
+            formalizing=formalizing,
             linker=linker,
             page=page,
             targets=targets,
@@ -1280,7 +1339,7 @@ def _render_pages(
             _integrated_page(
                 page.read_text(encoding="utf-8"), page=page, destination=destination,
                 payload=payload, scope=scope, owner=owner,
-                prepared=True,
+                prepared=True, tracks_lean=graph.tracks_lean,
             ),
             encoding="utf-8",
         )
@@ -1305,7 +1364,7 @@ def _render_pages(
 
 def _integrated_page(
     text: str, *, page: Path, destination: Path, payload: Path, scope: str, owner: str | None = None,
-    prepared: bool = False,
+    prepared: bool = False, tracks_lean: bool = True,
 ) -> str:
     """Keep a complete published page readable before moving it into the shared UI.
 
@@ -1335,8 +1394,10 @@ def _integrated_page(
         page_href=_as_published(relative_link(page, page, ".html")),
         scope=scope,
     )
+    # A project that tracks no Lean says so on the container, and the explorer's stylesheet hides its Lean progress.
+    lean = "" if tracks_lean else ' data-tracks-lean="false"'
     return (
-        header + '\n<div class="bp-explorer-page" markdown="1">\n'
+        header + f'\n<div class="bp-explorer-page"{lean} markdown="1">\n'
         + f'<div class="bp-reading-source"{node} data-page-title="{html.escape(title, quote=True)}" markdown="1">\n\n'
         + body + '\n\n</div>\n\n' + explorer + '\n</div>\n'
     )
@@ -2348,8 +2409,15 @@ def _render_summary_nav(
     # simplify without stranding it.
     coverage = destination / "coverage/README.md"
     if coverage.is_file():
-        title = title_text(_first_h1(coverage.read_text(encoding="utf-8")) or "Coverage")
-        lines.append(f"    - [{title}](coverage/README.md)")
+        # Named by its title, as a chapter is; "Coverage" when only its file names it.
+        named = _header_title(coverage.read_text(encoding="utf-8"))
+        title = name_text(named) if named and named != _file_title(coverage) else "Coverage"
+        # Last inside the book: navigation.indexes takes a section's first
+        # README page as the page its heading opens, which made Mathematics
+        # open this one, and a section of its own showed an empty pane on a
+        # narrow screen.
+        roots = children.get(None, [])
+        lines.append(f"{'    ' * (2 if roots else 1)}- [{title}](coverage/README.md)")
     return "\n".join(lines) + "\n"
 
 def _render_landing_page(
@@ -2460,6 +2528,121 @@ _COVERAGE_WORDS = {
     "DEFERRED": "left for later",
     "OUT": "out of scope",
 }
+
+
+#: A heading element's tag.
+_HEADING_TAG = re.compile(r"h[1-6]")
+#: The coverage view's heading for each disposition.
+_COVERAGE_HEADINGS = {
+    "DECOMPOSED": "Decomposed",
+    "MAPPED": "Mapped",
+    "INVENTORIED": "Inventoried",
+    "DEFERRED": "Deferred",
+    "OUT": "Out of scope",
+}
+
+
+def _render_coverage_page(
+    page: str,
+    *,
+    coverage: CoverageSummary,
+    graph: Graph,
+    statuses: dict[str, status.NodeStatus],
+    containers: frozenset[str],
+    links: Mapping[str, str],
+    node_sources: dict[Path, str],
+    rank: Mapping[str, int],
+) -> str | None:
+    """The coverage ``page`` with its contract table shown as the coverage
+    view, or None when the page holds no table with the contract's rows.
+
+    Each disposition gets a heading with its count, and its rows follow in the
+    author's order, each led by its area and its evidence as written. A
+    DECOMPOSED row also lists the declarations its links reach, as the role
+    checks read them, in book order and with their status. The list replaces
+    evidence that is only links, each straight to one of those declarations;
+    beside evidence it keeps, which links to where the rest are, it shows the
+    project's :attr:`Graph.coverage_list_limit` and counts the rest.
+    """
+
+    found = contract_table(page, coverage.entries)
+    if found is None:
+        return None
+    span, rows = found
+    lines = page.splitlines()
+    # One level below the heading the site shows above the table, whatever its spelling.
+    above = render_tree("\n".join(lines[frontmatter_end(lines) : span.start]))
+    tags = [str(element.tag) for element in above.iter()] if above is not None else []
+    levels = [int(tag[1]) for tag in tags if _HEADING_TAG.fullmatch(tag)]
+    level = min(levels[-1] + 1, 6) if levels else 2
+    shared = _shared_references(page)
+
+    def authored(text: str) -> str:
+        # As on a chapter page: once a "<" makes render parse the page's own
+        # Markdown, the rows written from its cells are parsed with it.
+        return text if shared is None else _protect_markdown_in_html(text, references=shared, force=True)
+
+    children = _containment_children(graph)
+    shown: dict[str, list[str]] = {}
+    for entry, (area, _, evidence) in zip(coverage.entries, rows):
+        statements: list[str] = []
+        listed_only = False
+        if entry.disposition == "DECOMPOSED":
+            targets = coverage_target_nodes(graph, coverage, entry.evidence, by_path=node_sources)
+            reached = dict.fromkeys(
+                leaf
+                for target in targets
+                for leaf in _leaf_descendants(children, target)
+                if _is_countable(graph, leaf, containers)
+            )
+            statements = sorted(reached, key=lambda node_id: (rank.get(node_id, len(rank)), node_id))
+            # Each link names one listed statement, no part of a page, and
+            # nothing else is written: no image, no other link, no other words.
+            written = link_targets(entry.evidence)
+            listed_only = (
+                bool(statements)
+                and len(set(written)) == len(targets)
+                and all(_is_countable(graph, node_id, containers) for node_id in targets)
+                and not any(urlsplit(target).fragment for target in written)
+                and only_links(evidence, len(written))
+            )
+        # Each cell in a block of its own, read as inline Markdown, as the
+        # table read it: a "$" or "*" in one cannot pair with one in the
+        # other. As HTML, so an area the author wrote in bold stays bold.
+        block = authored(
+            f'<p markdown="span"><strong>{area}</strong></p>'
+            + ("" if listed_only else f'\n\n<p markdown="span">{evidence}</p>')
+        )
+        if statements:
+            # Evidence the list replaces was the author's own links, so it is
+            # listed in full; beside evidence that stays, a long list is cut.
+            limit = len(statements) if listed_only else graph.coverage_list_limit
+            listed = _node_references(statements[:limit], graph=graph, statuses=statuses, links=links)
+            if len(statements) > limit:
+                listed += f' <span class="bp-ref-sep">·</span> and {len(statements) - limit:,} more'
+            counted = f"{len(statements):,} statement{'' if len(statements) == 1 else 's'}"
+            if graph.tracks_lean:
+                selected = {node_id: statuses[node_id] for node_id in statements}
+                counted += "".join(f" · {count:,} {state.label}" for state, count in status.summarize(selected))
+            # One statement is shown open, as the link it replaces was.
+            block += (
+                f'\n\n<details class="bp-dependencies" data-search-exclude{" open" if len(statements) == 1 else ""}>'
+                f'<summary>{html.escape(counted)}</summary><div class="bp-dependency-body">{listed}</div></details>'
+            )
+        shown.setdefault(entry.disposition, []).append(block)
+    view = "\n\n".join(
+        "\n\n".join(
+            [f"{'#' * level} {_COVERAGE_HEADINGS[disposition]} ({len(blocks):,}) {{#coverage-{disposition.lower()}}}", *blocks]
+        )
+        for disposition in _COVERAGE_SUMMARY_ORDER
+        if (blocks := shown.get(disposition))
+    )
+    # Every line of the table is a slot, so the page is protected as a whole
+    # page with the table in it would be.
+    return _place_environments(
+        page, -1, {index: "view" if index == span.start else "" for index in span}, summary="",
+        environments={"view": view, "": ""}, protect=True,
+    )
 
 
 def _coverage_summary(coverage: CoverageSummary) -> str:
@@ -3146,6 +3329,15 @@ def _declaration_label(node: Node) -> str:
     return DECLARATION_LABELS.get(command.casefold()) or command[:1].upper() + command[1:] or "Node"
 
 
+def _formalizing(graph: Graph) -> dict[str, str]:
+    """The statement each ``lean:`` name formalizes: the first that names it, a catalog only if none else does."""
+    found: dict[str, str] = {}
+    for node in sorted(graph.nodes.values(), key=lambda node: node.catalog is not None):
+        for name in declaration_names(node.lean or ""):
+            found.setdefault(name, node.id)
+    return found
+
+
 def _reverse_edges(graph: Graph) -> dict[str, list[str]]:
     used_by: dict[str, list[str]] = {node_id: [] for node_id in graph.nodes}
     for node in graph.nodes.values():
@@ -3161,6 +3353,7 @@ def _render_chapter(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     used_by: dict[str, list[str]],
+    formalizing: Mapping[str, str],
     linker: SourceLinker,
     page: Path,
     targets: dict[str, tuple[Path, str]],
@@ -3185,6 +3378,7 @@ def _render_chapter(
             graph=graph,
             statuses=statuses,
             used_by=used_by,
+            formalizing=formalizing,
             linker=linker,
             links=links,
             repo_root=repo_root,
@@ -3321,6 +3515,21 @@ def _chapter_layout(
     return lead, slots
 
 
+def _shared_references(narrative: str) -> dict[str, tuple[str, str]] | None:
+    """The reference definitions each stretch of ``narrative`` is parsed with,
+    when a "<" anywhere in it, its title included, makes render parse its
+    Markdown before render's HTML sits beside it; None when nothing does."""
+
+    lines = narrative.splitlines()
+    # A header ends at its closing "---", as _protect_narrative_markdown reads
+    # it; one never closed is no header.
+    start = 0
+    if lines and lines[0].strip() == "---":
+        start = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
+    body = "\n".join(lines[start:])
+    return _convert_body(body)[1] if "<" in body else None
+
+
 def _place_environments(
     narrative: str, lead: int, slots: dict[int, str], *, summary: str, environments: dict[str, str],
     protect: bool = False,
@@ -3333,10 +3542,8 @@ def _place_environments(
     lines = narrative.splitlines()
     output: list[str] = []
     pending: list[str] = []
-    affected = protect and "<" in _document_body(narrative)
-    references = None
-    if affected:
-        _, references, _ = _convert_body(_document_body(narrative))
+    references = _shared_references(narrative) if protect else None
+    affected = references is not None
 
     def flush() -> None:
         if pending:
@@ -3557,6 +3764,7 @@ def _render_environment(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     used_by: dict[str, list[str]],
+    formalizing: Mapping[str, str],
     linker: SourceLinker,
     links: Mapping[str, str],
     repo_root: Path,
@@ -3646,6 +3854,8 @@ def _render_environment(
         "</h4>",
         *_search_names(node),
         *boxed(statement, STATEMENT_BOX),
+        # A review shows a card's Lean in its packet, after the read-back, so the Lean does not frame the testimony.
+        *(_lean_blocks(node, linker, links=links, formalizing=formalizing) if node.id not in reviews else []),
     ]
     if remainder:
         lines.extend(boxed(remainder, NOTES_BOX))
@@ -3969,6 +4179,138 @@ def _lean_presentation(
     more = f" and {rest} more, listed in its declaration ledger" if rest else ""
     rows = [("Lean", " · ".join(shown) + more)] if fallback else []
     return code_links, rows, linked, unresolved
+
+
+#: How many of a statement's Lean names show their declaration under it.
+_LEAN_BLOCK_NAMES = 3
+#: The most lines a declaration shows open; a longer one folds whole.
+_LEAN_BLOCK_LINES = 14
+#: The most lines of a declaration the card for a name in it shows.
+_LEAN_CARD_LINES = 12
+#: The Lean a block marks: comments, strings and keywords, each named by its group, and the names it may link.
+#: The declaration keywords and modifiers are the index's own.
+_LEAN_TOKEN = re.compile(
+    r"(?P<comment>/-.*?-/|--[^\n]*)"
+    r'|(?P<string>"(?:\\.|[^"\\])*")'
+    rf"|(?<![\w.'!?])(?P<keyword>{_DECLARATION_KEYWORDS}|{_DECLARATION_MODIFIERS}|example"
+    r"|where|extends|deriving|fun|λ|let|have|show|from|by|at|with|match|if|then|else|do|return|for|in|calc"
+    r"|termination_by|decreasing_by|Type|Prop|Sort|sorry)(?![\w'!?])"
+    rf"|(?<![\w.'!?»])(?P<name>{_CONTINUATION_IDENTIFIER.pattern})",
+    re.DOTALL,
+)
+
+
+#: What follows a field or an argument being given (``mul_comm := …``, ``(n := 3)``) or declared (``base : Nat``).
+_GIVEN = re.compile(r"\s*:=")
+_DECLARED = re.compile(r"\s*:(?!=)")
+#: What comes before a field's or a named argument's name: ``(n := 3)``, ``{ a := 1, b := 2 }``, ``{ s with b := 2 }``.
+_SLOT = re.compile(r"(?:[({,]|\bwith)\s*$")
+#: An attribute list still open before a name: ``@[simp, ext``.
+_ATTRIBUTE = re.compile(r"@\[[^\]]*$")
+
+
+def _lean_blocks(
+    node: Node,
+    linker: SourceLinker,
+    *,
+    links: Mapping[str, str],
+    formalizing: Mapping[str, str],
+) -> list[str]:
+    """The statement's first Lean declarations as written, under its statement.
+
+    A theorem or lemma shows its statement and not its proof; anything else shows whole, a definition's
+    body included. A long declaration folds. A catalog shows none, as it shows no code icons.
+
+    A name in them that the project declares links to the statement that formalizes it, else to its
+    source, and the block carries a card for each, hidden, that the book shows on hover.
+    """
+    if node.catalog is not None:
+        return []
+    blocks: list[str] = []
+    named: dict[str, Declaration] = {}
+    found = filter(None, map(linker.excerpt, declaration_names(node.lean or "")))
+    for declaration, text in islice(found, _LEAN_BLOCK_NAMES):
+        if declaration.keyword in ("theorem", "lemma"):
+            text = _header(text, 0)
+        bound = bound_names(text)
+
+        def reference(written: str) -> str | None:
+            resolved = None if written.split(".", 1)[0] in bound else linker.resolve(written, declaration)
+            # A one-letter name is almost always a variable the file declares, which the index cannot see. The card,
+            # the link and the formalizing statement go by name, so a declaration the index files under another of
+            # its name's declarations, or under none, links nothing rather than the wrong one.
+            if resolved is None or len(resolved[1]) < 2 or linker.location(resolved[0].name) != resolved[0]:
+                return None
+            target, prefix = resolved
+            named.setdefault(target.name, target)
+            href = links[formalizing[target.name]] if target.name in formalizing else linker.url(target.name)
+            name, rest = html.escape(target.name, quote=True), _typed(written[len(prefix) :])
+            if href is None:
+                return f'<span class="bp-lean-ref" tabindex="0" data-lean-name="{name}">{_typed(prefix)}</span>{rest}'
+            href = html.escape(href, quote=True)
+            return f'<a class="bp-lean-ref" href="{href}" data-lean-name="{name}">{_typed(prefix)}</a>{rest}'
+
+        code = f'<pre class="bp-lean"><code>{_lean_code(text, reference)}</code></pre>'
+        count = text.count("\n") + 1
+        if count > _LEAN_BLOCK_LINES:
+            summary = f"<code>{_typed(declaration.name, one_line=True)}</code> · {count} lines"
+            code = f'<details class="bp-lean-fold"><summary>{summary}</summary>{code}</details>'
+        blocks.append(code)
+    if not blocks:
+        return []
+    cards = [card for target in named.values() if (card := _lean_card(target, linker))]
+    hidden = ['<div class="bp-lean-names" hidden>', *cards, "</div>"] if cards else []
+    return ["", '<div class="bp-lean-source" data-search-exclude="1">', *blocks, *hidden, "</div>", ""]
+
+
+def _lean_card(declaration: Declaration, linker: SourceLinker) -> str | None:
+    """What the book shows on hovering *declaration*'s name: its statement, or its first lines, and its file."""
+    excerpt = linker.excerpt(declaration.name)
+    if excerpt is None:
+        return None
+    text = excerpt[1]
+    if declaration.keyword in ("theorem", "lemma"):
+        text = _header(text, 0)
+    lines = text.split("\n")
+    if len(lines) > _LEAN_CARD_LINES:
+        text = "\n".join([*lines[:_LEAN_CARD_LINES], "  ⋯"])
+    where = _typed(f"{declaration.path.as_posix()}:{declaration.line}", one_line=True)
+    name = html.escape(declaration.name, quote=True)
+    return (
+        # Material's search ends an excluded element at the first closing tag of its kind, so each card excludes itself.
+        f'<div data-lean-name="{name}" data-search-exclude="1">'
+        f'<pre class="bp-lean"><code>{_lean_code(text)}</code></pre><p class="bp-lean-where">{where}</p></div>'
+    )
+
+
+def _lean_code(text: str, reference: Callable[[str], str | None] = lambda _written: None) -> str:
+    """``text``, Lean, as HTML the page's Markdown leaves as typed, its comments, strings and keywords marked,
+    and each name *reference* links linked.
+
+    None of these is a reference: tactics, after ``by`` or ``decreasing_by``, to the end; a name in an attribute
+    list; a name before ``:=`` in a field's or a named argument's place (after ``(``, ``{``, ``,`` or ``with``,
+    or at a line's start unless the line before ends in a result type's colon); a name starting a line before
+    ``:``, a field being declared.
+    """
+    parts: list[str] = []
+    end = 0
+    tactics = False
+    for token in _LEAN_TOKEN.finditer(text):
+        tactics = tactics or token.lastgroup == "keyword" and token[0] in ("by", "decreasing_by")
+        if token.lastgroup == "name":
+            start = text.rfind("\n", 0, token.start()) + 1
+            before = text[start : token.start()]
+            opens_line = not before.strip()
+            slot = opens_line and not text[:start].rstrip().endswith(":") or _SLOT.search(before)
+            given = slot and _GIVEN.match(text, token.end()) or opens_line and _DECLARED.match(text, token.end())
+            marked = None if tactics or given or _ATTRIBUTE.search(before) else reference(token[0])
+            if marked is None:
+                continue
+        else:
+            marked = f'<span class="bp-lean-{token.lastgroup}">{_typed(token[0])}</span>'
+        parts += [_typed(text[end : token.start()]), marked]
+        end = token.end()
+    return "".join(parts) + _typed(text[end:])
 
 
 def _search_names(node: Node) -> list[str]:
@@ -4789,10 +5131,10 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   margin: 0.6rem 0 0 2rem;
 }}
 /* Material styles every details element as a collapsible admonition: a
-   bordered box, a tinted summary and a pencil icon. This one is a quiet line
+   bordered box, a tinted summary and a pencil icon. These are quiet lines
    under each statement, so the selectors outrank Material's and take that
    chrome off, keeping only its chevron, which turns when the line opens. */
-.md-typeset details.bp-dependencies {{
+.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) {{
   margin: 0.65rem 0 0 2rem;
   padding: 0;
   border: 0;
@@ -4803,7 +5145,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-size: 0.72rem;
   color: var(--bp-muted);
 }}
-.md-typeset details.bp-dependencies > summary {{
+.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary {{
   display: flex;
   align-items: center;
   width: fit-content;
@@ -4815,17 +5157,17 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   cursor: pointer;
   user-select: none;
 }}
-.md-typeset details.bp-dependencies > summary::before {{ display: none; }}
-.md-typeset details.bp-dependencies > summary::after {{
+.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary::before {{ display: none; }}
+.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary::after {{
   position: static;
   flex: none;
   width: 1em;
   height: 1em;
   margin-left: 0.25em;
 }}
-.md-typeset details.bp-dependencies > summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
+.md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary:hover {{ color: var(--bp-link-hover); text-decoration: underline; }}
 @media (pointer: coarse) {{
-  .md-typeset details.bp-dependencies > summary {{ min-height: 44px; }}
+  .md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary {{ min-height: 44px; }}
 }}
 .bp-dependency-body {{ margin-top: 0.35rem; color: var(--bp-fg); }}
 .bp-review {{
@@ -4860,6 +5202,19 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   border-left: 3px solid var(--bp-rule);
 }}
 .bp-skeleton-meta {{ margin-bottom: 0.5rem; }}
+/* A statement's Lean declarations, under it, in the page's code colors. */
+.bp-lean-source {{ margin: 0.6rem 0 0 2rem; }}
+/* Material's code box is the block's only frame. */
+.bp-lean-source .bp-lean {{ padding: 0; border: 0; }}
+.md-typeset details.bp-lean-fold {{ margin: 0 0 0.4rem; }}
+/* A flex summary drops the space between the name and its line count. */
+.md-typeset details.bp-lean-fold > summary {{ gap: 0.3em; }}
+.bp-lean-keyword {{ color: var(--md-code-hl-keyword-color); }}
+.bp-lean-comment {{ color: var(--md-code-hl-comment-color); }}
+.bp-lean-string {{ color: var(--md-code-hl-string-color); }}
+/* A name the project declares: dotted until hovered, so the code still reads as code. */
+.md-typeset .bp-lean-ref {{ color: inherit; text-decoration: underline dotted; text-underline-offset: 0.2em; }}
+.md-typeset .bp-lean-ref:is(:hover, :focus-visible) {{ color: var(--bp-link-hover); text-decoration-style: solid; }}
 /* A card too wide for the page scrolls, with a shade at each edge it can
    scroll toward: covers in the review panel's color scroll with the content
    and hide the shade at the end it has reached. */

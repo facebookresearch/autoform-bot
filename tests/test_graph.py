@@ -184,6 +184,39 @@ def test_summary_clips_a_long_paragraph_at_a_word(tmp_path: Path) -> None:
     assert summary == " ".join(f"word{index}" for index in range(61)) + "…"
 
 
+@pytest.mark.parametrize("markup", ["$a + b = c$", "\\(a + b = c\\)", "`a + b = c`"])
+def test_summary_clips_before_a_formula_or_code_span_the_clip_would_cut(tmp_path: Path, markup: str) -> None:
+    blueprint = tmp_path / "blueprint"
+    words = " ".join(f"word{index}" for index in range(60))
+    # The 420-character limit falls inside the markup, which starts at character 414.
+    _node(blueprint, "topic.md", f"# Topic\n\n{words} so {markup} holds.\n")
+
+    assert load_graph(blueprint).nodes["topic"].summary == words + " so…"
+
+
+def test_summary_keeps_a_formula_longer_than_its_limit_whole(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    formula = "$" + " + ".join(f"x_{{{index}}}" for index in range(100)) + "$"
+    _node(blueprint, "topic.md", f"# Topic\n\n{formula} is a long sum.\n")
+
+    assert load_graph(blueprint).nodes["topic"].summary == formula + "…"
+
+
+def test_summary_shows_a_display_formula_in_its_paragraph_inline(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "topic.md",
+        "# Class equation\n\nThen $$|G| = |Z(G)| +\n\\sum_i |G : C_G(g_i)|$$ for a finite group, as in \\[1\\];"
+        " the code `$$x$$` and the price \\$$5 stay.\n",
+    )
+
+    assert load_graph(blueprint).nodes["topic"].summary == (
+        "Then \\(|G| = |Z(G)| + \\sum_i |G : C_G(g_i)|\\) for a finite group, as in \\[1\\];"
+        " the code `$$x$$` and the price \\$$5 stay."
+    )
+
+
 def test_authored_atlas_manifest_groups_nodes_independently_of_paths(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "algebra.md", "# Algebra\n")
@@ -2574,6 +2607,47 @@ def test_tracks_lean_set_outside_the_roadmap_root_is_ignored_with_a_warning(
     assert main(["check", str(blueprint)]) == 0
     assert (
         f"warning: {node_id}: tracks_lean is a project setting, read only in roadmap/README.md; ignored here"
+        in capsys.readouterr().out.splitlines()
+    )
+
+
+@pytest.mark.parametrize(("value", "limit"), [(None, 50), ("20", 20), ('"7"', 7)])
+def test_coverage_list_limit_is_read_from_the_roadmap_root(tmp_path: Path, value: str | None, limit: int) -> None:
+    blueprint = tmp_path / "blueprint"
+    setting = "" if value is None else f"coverage_list_limit: {value}\n"
+    _roadmap_page(blueprint, "README.md", f"---\n{setting}---\n\n# Roadmap\n")
+    _node(blueprint, "result.md", "# Result\n", declaration="theorem")
+
+    assert load_graph(blueprint).coverage_list_limit == limit
+
+
+@pytest.mark.parametrize("value", ["0", "-3", "ten", "1.5", "\u0663"])
+def test_a_coverage_list_limit_that_is_not_a_whole_number_from_1_is_ignored_with_a_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], value: str
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", f"---\ncoverage_list_limit: {value}\n---\n\n# Roadmap\n")
+    _node(blueprint, "result.md", "# Result\n")
+
+    assert load_graph(blueprint).coverage_list_limit == 50
+    assert main(["check", str(blueprint)]) == 0
+    assert (
+        "warning: roadmap: coverage_list_limit accepts only a whole number from 1; ignored"
+        in capsys.readouterr().out.splitlines()
+    )
+
+
+def test_coverage_list_limit_set_outside_the_roadmap_root_is_ignored_with_a_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "---\n---\n\n# Roadmap\n")
+    _node(blueprint, "result.md", "# Result\n", coverage_list_limit="5")
+
+    assert load_graph(blueprint).coverage_list_limit == 50
+    assert main(["check", str(blueprint)]) == 0
+    assert (
+        "warning: result: coverage_list_limit is a project setting, read only in roadmap/README.md; ignored here"
         in capsys.readouterr().out.splitlines()
     )
 

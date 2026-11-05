@@ -29,6 +29,7 @@ from autoform_cli.markdown import (
     render_html,
     rendered_visible_text,
     resolved_path,
+    only_links,
     visible_prose,
 )
 
@@ -875,6 +876,30 @@ def test_visible_prose_leaves_out_headings_code_blocks_and_diagrams(source: str)
 def test_visible_prose_keeps_inline_code_and_drops_hidden_text() -> None:
     assert visible_prose("Use `Nat.add_zero`.") == "Use Nat.add_zero."
     assert visible_prose("<span hidden>secret</span> shown") == "shown"
+
+
+@pytest.mark.parametrize(
+    ("source", "links", "expected"),
+    [
+        ("[A](a.md), [B](b.md), and [C](c.md)", 3, True),
+        ("[A](a.md); [B](b.md) And [C](c.md).", 3, True),
+        ("[`K(X)`](a.md)", 1, True),
+        ("[A](a.md) uses Exercise 6.2", 1, False),
+        # "or" offers a choice, and a mark is the author's word on the links.
+        ("[A](a.md) or [B](b.md)", 2, False),
+        ("[A](a.md), [B](b.md), …", 2, False),
+        ("[A](a.md)*", 1, False),
+        ("[A](a.md) ✗ and [B](b.md) (?)", 2, False),
+        ("[A](a.md) → [B](b.md)", 2, False),
+        ("~~[A](a.md)~~", 1, False),
+        ("[A](a.md) <https://example.test/paper>", 1, False),
+        ("[A](a.md) ![scan](scan.png)", 1, False),
+        ("[A](a.md)", 2, False),
+        ("No links here", 0, False),
+    ],
+)
+def test_only_links_wants_the_links_counted_and_nothing_else(source: str, links: int, expected: bool) -> None:
+    assert only_links(source, links) is expected
 
 
 def test_visible_text_survives_markup_nested_thousands_deep() -> None:
