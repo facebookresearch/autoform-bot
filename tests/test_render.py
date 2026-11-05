@@ -2133,21 +2133,19 @@ def test_coverage_cells_are_read_as_the_table_read_them(tmp_path: Path) -> None:
     assert "<p>Closing prose.</p>" in built
 
 
-def test_a_long_list_beside_evidence_is_cut_but_one_that_replaces_it_is_not(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_long_list_beside_evidence_is_cut_but_one_that_replaces_it_is_not(tmp_path: Path) -> None:
     """Beside evidence that stays, which links where the rest are, a row lists
-    its first statements and counts the others. A list that replaces the
-    author's links is shown in full."""
+    as many statements as the project's coverage_list_limit says and counts the
+    others. A list that replaces the author's links is shown in full."""
     project = _project(tmp_path)
+    readme = project / "blueprint/roadmap/README.md"
+    readme.write_text(readme.read_text(encoding="utf-8").replace("---\n---\n", "---\ncoverage_list_limit: 1\n---\n", 1))
     (project / "blueprint/coverage/README.md").write_text(
         "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
         "| Chapter | DECOMPOSED | [Roadmap](../roadmap/README.md) |\n"
         "| Results | DECOMPOSED | [Top](../roadmap/top.md) and [Base](../roadmap/base.md) |\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(render_module, "_COVERAGE_LIST_LIMIT", 1)
-
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
     page = (tmp_path / "out/coverage/README.md").read_text(encoding="utf-8")

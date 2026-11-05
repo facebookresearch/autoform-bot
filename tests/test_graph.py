@@ -2316,6 +2316,47 @@ def test_tracks_lean_set_outside_the_roadmap_root_is_ignored_with_a_warning(
     )
 
 
+@pytest.mark.parametrize(("value", "limit"), [(None, 50), ("20", 20), ('"7"', 7)])
+def test_coverage_list_limit_is_read_from_the_roadmap_root(tmp_path: Path, value: str | None, limit: int) -> None:
+    blueprint = tmp_path / "blueprint"
+    setting = "" if value is None else f"coverage_list_limit: {value}\n"
+    _roadmap_page(blueprint, "README.md", f"---\n{setting}---\n\n# Roadmap\n")
+    _node(blueprint, "result.md", "# Result\n", declaration="theorem")
+
+    assert load_graph(blueprint).coverage_list_limit == limit
+
+
+@pytest.mark.parametrize("value", ["0", "-3", "ten", "1.5", "\u0663"])
+def test_a_coverage_list_limit_that_is_not_a_whole_number_from_1_is_ignored_with_a_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], value: str
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", f"---\ncoverage_list_limit: {value}\n---\n\n# Roadmap\n")
+    _node(blueprint, "result.md", "# Result\n")
+
+    assert load_graph(blueprint).coverage_list_limit == 50
+    assert main(["check", str(blueprint)]) == 0
+    assert (
+        "warning: roadmap: coverage_list_limit accepts only a whole number from 1; ignored"
+        in capsys.readouterr().out.splitlines()
+    )
+
+
+def test_coverage_list_limit_set_outside_the_roadmap_root_is_ignored_with_a_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "---\n---\n\n# Roadmap\n")
+    _node(blueprint, "result.md", "# Result\n", coverage_list_limit="5")
+
+    assert load_graph(blueprint).coverage_list_limit == 50
+    assert main(["check", str(blueprint)]) == 0
+    assert (
+        "warning: result: coverage_list_limit is a project setting, read only in roadmap/README.md; ignored here"
+        in capsys.readouterr().out.splitlines()
+    )
+
+
 def test_check_prints_the_warnings_loading_gives_after_its_article_checks_settings_first(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
