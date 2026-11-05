@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import autoform_cli.project._lake_metadata as project_lake_metadata
 import autoform_cli.project.catalog as project_catalog
 import autoform_cli.project.inspect as project_inspect
 import autoform_cli.project._snapshot as project_snapshot
@@ -595,6 +596,27 @@ def test_fields_lake_accepts_are_still_read(tmp_path: Path) -> None:
 
     assert result.ok
     assert result.compatibility.status == "supported"
+
+
+@pytest.mark.parametrize(
+    ("value", "parts"),
+    [
+        # As in Lean, and unlike lean.py's source grammar, a quoted component may hold `«`.
+        ("««a»", (("str", "«a"),)),
+        ("«»", (("str", ""),)),
+        ("xⱼ", (("str", "xⱼ"),)),
+        ("Qq.01", (("str", "Qq"), ("num", "1"))),
+        ("λ", None),
+        ("a.Π", None),
+        ("a.", None),
+        ("a..b", None),
+        ("«a", None),
+        ("«a»b", None),
+        ("1a", None),
+    ],
+)
+def test_lake_names_split_as_lean_splits_them(value: str, parts) -> None:
+    assert project_lake_metadata._split_lean_name(value) == parts
 
 
 @pytest.mark.parametrize("version", [5, 6, "0.6.0"])
