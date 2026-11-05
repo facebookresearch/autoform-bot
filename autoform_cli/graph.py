@@ -71,12 +71,16 @@ _FRONTMATTER_KEYS = frozenset(
         "open_statements",
         "published",
         "tracks_lean",
+        "coverage_list_limit",
     }
 )
 _FORMALIZED = "formalized"
 _RETRACTED = "retracted"
 _TRUE = frozenset({"true", "yes"})
 _FALSE = frozenset({"false", "no"})
+#: How many statements a coverage row lists beside evidence it keeps, unless
+#: ``roadmap/README.md`` sets ``coverage_list_limit``.
+_COVERAGE_LIST_LIMIT = 50
 _CATALOG_DECLARATION_KEYS = frozenset(
     {"declaration", "mathlib", "mathlib_declaration", "mathlib_file"}
 )
@@ -169,6 +173,9 @@ class Graph:
     #: statement may land with a ``sorry`` proof. Absent or ``forbidden`` keeps
     #: the strict policy, where CI rejects every ``sorry``.
     open_statements: bool = False
+    #: ``coverage_list_limit`` in ``roadmap/README.md``: how many statements a
+    #: coverage row lists beside evidence it keeps before it counts the rest.
+    coverage_list_limit: int = _COVERAGE_LIST_LIMIT
     #: Folders whose ``README.md`` says ``published: false``: check validates
     #: them, and render leaves them out of the site.
     unpublished: tuple[Path, ...] = ()
@@ -243,6 +250,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     policy_page = (blueprint / "roadmap" / "README.md").resolve()
     open_statements = False
     tracks_lean = True
+    coverage_list_limit = _COVERAGE_LIST_LIMIT
 
     for source in sources:
         canonical = source.path.resolve()
@@ -290,6 +298,17 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     warnings.append(f"{node.id}: tracks_lean accepts only true or false; ignored")
                 else:
                     tracks_lean = tracked.casefold() in _TRUE
+            limit = node.metadata.get("coverage_list_limit")
+            if limit is not None:
+                if canonical != policy_page:
+                    warnings.append(
+                        f"{node.id}: coverage_list_limit is a project setting, read only in roadmap/README.md; "
+                        "ignored here"
+                    )
+                elif not re.fullmatch(r"[1-9][0-9]*", limit):
+                    warnings.append(f"{node.id}: coverage_list_limit accepts only a whole number from 1; ignored")
+                else:
+                    coverage_list_limit = int(limit)
             # A role that describes containers is ignored with a warning on a declaration article (#325).
             if node.metadata.get("navigation", "topic") != "topic" and "declaration" in node.metadata:
                 warnings.append(f"{node.id}: 'navigation' describes containers, not declaration articles; ignored here")
@@ -390,6 +409,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         blueprint_dir=blueprint,
         nodes=nodes,
         open_statements=open_statements,
+        coverage_list_limit=coverage_list_limit,
         unpublished=unpublished,
         tracks_lean=tracks_lean,
         warnings=tuple(warnings),

@@ -2529,9 +2529,6 @@ _COVERAGE_WORDS = {
 }
 
 
-#: How many statements a coverage row lists beside evidence that stays; the
-#: rest are counted, and the evidence links to where they are.
-_COVERAGE_LIST_LIMIT = 50
 #: A heading element's tag.
 _HEADING_TAG = re.compile(r"h[1-6]")
 #: The coverage view's heading for each disposition.
@@ -2563,8 +2560,8 @@ def _render_coverage_page(
     DECOMPOSED row also lists the declarations its links reach, as the role
     checks read them, in book order and with their status. The list replaces
     evidence that is only links, each straight to one of those declarations;
-    beside evidence it keeps, it shows the first
-    :data:`_COVERAGE_LIST_LIMIT` and counts the rest.
+    beside evidence it keeps, which links to where the rest are, it shows the
+    project's :attr:`Graph.coverage_list_limit` and counts the rest.
     """
 
     found = contract_table(page, coverage.entries)
@@ -2618,7 +2615,7 @@ def _render_coverage_page(
         if statements:
             # Evidence the list replaces was the author's own links, so it is
             # listed in full; beside evidence that stays, a long list is cut.
-            limit = len(statements) if listed_only else _COVERAGE_LIST_LIMIT
+            limit = len(statements) if listed_only else graph.coverage_list_limit
             listed = _node_references(statements[:limit], graph=graph, statuses=statuses, links=links)
             if len(statements) > limit:
                 listed += f' <span class="bp-ref-sep">·</span> and {len(statements) - limit:,} more'

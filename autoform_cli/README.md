@@ -195,6 +195,7 @@ An article asserts only facts a human or agent verified:
 | `open_statements: allowed` | Project policy, valid only in `roadmap/README.md`: a theorem's statement may land with a `sorry` proof (see [Open statements](reference/open-statements.md#open-statements)). Absent or `forbidden` keeps the strict policy. |
 | `published: false` | Folder setting, valid only in the `README.md` of a folder below `roadmap/`: `check` and `audit` validate the folder and everything in it, but render leaves it out of the site and of the publication hash. No link on a published roadmap article may point into it, whether a dependency, a source or prose; a link from any other page keeps only its text, with a warning. `audit` and render reject coverage evidence that points into it. A folder inside an unpublished one is unpublished too, whatever its own README says. |
 | `tracks_lean: false` | Project setting, read only in `roadmap/README.md`: the project writes no Lean, so the book's pages show no Lean progress (no landing figures or Next up, no status marks on statements or status dots on references to them, no chapter progress lines, no status filter or status words in the explorer, and no tints, progress bars or status words on the whole-project map, whose cards name their kind instead; neither search box mentions Lean names, though both still match them). Absent or `true` keeps it. Anywhere else under `roadmap/`, or with another value, `check` warns and the setting is ignored. |
+| `coverage_list_limit: 50` | Project setting, read only in `roadmap/README.md`: how many statements the coverage page lists under a row whose evidence it keeps, before it counts the rest; a list that replaces the evidence is shown in full. Absent means 50. Anywhere else under `roadmap/`, or with a value that is not a whole number from 1, `check` warns and the setting is ignored. |
 
 Progress is *derived* from the DAG on every run, so it cannot go stale.
 Readiness depends on the [policy](reference/open-statements.md#open-statements).
@@ -358,8 +359,7 @@ axis-qualified `Area` labels, unrelated to an article's `area:` field:
 labels are invalid. A broad inventory row may link a container and classify
 every catalog below it.
 
-The contract is read as published Markdown and fails closed; `coverage.py`
-gives the edge cases:
+The contract is read as published Markdown and fails closed:
 
 - A table in an HTML comment or a code block is not the contract, nor is a
   table, row, or cell under its own or an ancestor's `hidden` attribute; CSS,
