@@ -41,6 +41,8 @@ _EXTENSION_KEYS = frozenset(
 #: Extension keys that hold a JSON boolean.
 _FLAGS = frozenset({"not_ready", "mathlib"})
 _STATUSES = frozenset({"formalized", "stated", "retracted"})
+#: The repository a ``lean`` end names to link a Mathlib declaration.
+MATHLIB = "https://github.com/leanprover-community/mathlib4"
 _END_TYPES = frozenset({"pdf", "latex", "html", "lean", "generic"})
 #: What ``catalog`` cannot sit beside, as graph's _CATALOG_DECLARATION_KEYS.
 _DECLARATION_KEYS = frozenset({"declaration", "mathlib", "mathlib_declaration", "mathlib_file"})
@@ -359,7 +361,7 @@ def _facts(node_id: str, entries: list[tuple[dict[str, Any], str]], project: str
                 continue
             elif _local(end.get("uri"), base) == project:
                 own.append((name, end.get("role")))
-            elif "mathlib" in ours:
+            elif isinstance(end.get("uri"), str) and end["uri"].removesuffix("/").removesuffix(".git") == MATHLIB:
                 mathlib_names.append(name)
                 module = location.get("module")
                 if module is not None and (written := text(module, "location.module")):
@@ -369,7 +371,7 @@ def _facts(node_id: str, entries: list[tuple[dict[str, Any], str]], project: str
                         drops.add(_SEVERAL, f"{node_id} (location.module)")
             else:
                 drops.add(
-                    f"Lean ends naming another project are left out, unless their annotation sets {NAMESPACE} mathlib",
+                    "Lean ends naming a project other than this one or Mathlib are left out",
                     node_id,
                 )
 

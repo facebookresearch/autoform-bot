@@ -104,7 +104,7 @@ dev = [
 requires-dist = [
     { name = "fastmcp", specifier = ">=3.4.10,<4" },
     { name = "html5lib", specifier = ">=1.1,<2" },
-    { name = "literature-links", git = "https://github.com/mathlib-initiative/literature-links?rev=v1.0.2" },
+    { name = "literature-links", git = "https://github.com/mathlib-initiative/literature-links?rev=e7eeafb823eb3bc64a8ab2077cd3569f572d459f" },
     { name = "markdown", specifier = "==3.10.3" },
     { name = "mkdocs", marker = "extra == 'dev'", specifier = ">=1.6,<2" },
     { name = "mkdocs-literate-nav", marker = "extra == 'dev'", specifier = ">=0.6,<1" },
@@ -934,7 +934,7 @@ wheels = [
 [[package]]
 name = "literature-links"
 version = "1.0.2"
-source = { git = "https://github.com/mathlib-initiative/literature-links?rev=v1.0.2#e7eeafb823eb3bc64a8ab2077cd3569f572d459f" }
+source = { git = "https://github.com/mathlib-initiative/literature-links?rev=e7eeafb823eb3bc64a8ab2077cd3569f572d459f#e7eeafb823eb3bc64a8ab2077cd3569f572d459f" }
 
 [[package]]
 name = "markdown"

@@ -95,7 +95,11 @@ def test_an_article_s_annotations_carry_its_facts(tmp_path: Path) -> None:
                 ),
                 _about("lagrange", id=ARTICLE_ID, object=[MATHLIB], extensions={"org.autoform": {"mathlib": True}}),
             ],
-            "card.jsonl": [_about("card", kind="noncomputable def", status="formalized", object=[_own("Groups.card")])],
+            "card.jsonl": [
+                _about("card", kind="noncomputable def", status="formalized", object=[_own("Groups.card")]),
+                # Mathlib's repository names a Mathlib declaration, without the flag that says the result is there.
+                _about("card", object=[{**MATHLIB, "uri": MATHLIB["uri"] + ".git/"}]),
+            ],
             "unlinked.jsonl": [_about("unlinked", object=[])],
         },
     )
@@ -117,6 +121,7 @@ def test_an_article_s_annotations_carry_its_facts(tmp_path: Path) -> None:
     )
     # A definition is complete once stated, so "formalized" asserts no proof.
     assert (card.lean, card.statement_formalized, card.proof_formalized) == ("Groups.card", True, False)
+    assert (card.mathlib, card.mathlib_declaration) == (False, "Subgroup.card_subgroup_dvd_card")
     assert (unlinked.lean, unlinked.declaration, unlinked.statement_formalized) == (None, None, False)
 
 
@@ -173,7 +178,7 @@ def test_an_article_without_an_annotation_keeps_its_frontmatter(tmp_path: Path) 
 
 
 def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path) -> None:
-    blueprint = _blueprint(tmp_path, {stem: None for stem in "abcdefghijklmnop"})
+    blueprint = _blueprint(tmp_path, {stem: None for stem in "abcdefghijklmnopq"})
     mathlib = {"org.autoform": {"mathlib": True}}
     _links(
         blueprint,
@@ -216,6 +221,10 @@ def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path
                     object=[MATHLIB, {**MATHLIB, "location": {"declaration": "P.two", "module": "Mathlib.P"}}],
                     extensions=mathlib,
                 ),
+                # The flag says the result is in Mathlib; only an end naming Mathlib's repository names its declaration.
+                _about(
+                    "q", object=[{**MATHLIB, "uri": "https://github.com/ImperialCollegeLondon/FLT"}], extensions=mathlib
+                ),
             ]
         },
     )
@@ -235,7 +244,7 @@ def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path
         "unknown org.autoform keys are left out (1): d (colour)",
         "settings stay in README frontmatter, so in an annotation they are left out (1): d (published)",
         "an article's annotations give one key several values, so the first is kept (2): e (kind), p (location.module)",
-        "Lean ends naming another project are left out, unless their annotation sets org.autoform mathlib (1): f",
+        "Lean ends naming a project other than this one or Mathlib are left out (2): f, q",
         "catalog is left out beside a kind or a Mathlib link (1): h",
         "Lean ends that name no declaration are left out (1): j",
         "status retracted is left out beside org.autoform mathlib true (1): k",
@@ -248,6 +257,7 @@ def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path
     )
     assert graph.nodes["n"].statement_formalized and not graph.nodes["m"].statement_formalized
     assert graph.nodes["o"].article_id == ARTICLE_ID
+    assert (graph.nodes["q"].mathlib, graph.nodes["q"].mathlib_declaration) == (True, None)
 
 
 def test_a_warning_names_the_first_five_places(tmp_path: Path) -> None:
