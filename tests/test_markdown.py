@@ -788,9 +788,16 @@ def test_visible_prose_keeps_inline_code_and_drops_hidden_text() -> None:
     ("source", "links", "expected"),
     [
         ("[A](a.md), [B](b.md), and [C](c.md)", 3, True),
-        ("[A](a.md); [B](b.md) or [C](c.md).", 3, True),
+        ("[A](a.md); [B](b.md) And [C](c.md).", 3, True),
         ("[`K(X)`](a.md)", 1, True),
         ("[A](a.md) uses Exercise 6.2", 1, False),
+        # "or" offers a choice, and a mark is the author's word on the links.
+        ("[A](a.md) or [B](b.md)", 2, False),
+        ("[A](a.md), [B](b.md), …", 2, False),
+        ("[A](a.md)*", 1, False),
+        ("[A](a.md) ✗ and [B](b.md) (?)", 2, False),
+        ("[A](a.md) → [B](b.md)", 2, False),
+        ("~~[A](a.md)~~", 1, False),
         ("[A](a.md) <https://example.test/paper>", 1, False),
         ("[A](a.md) ![scan](scan.png)", 1, False),
         ("[A](a.md)", 2, False),

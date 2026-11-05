@@ -1216,31 +1216,43 @@ def _render_pages(
             encoding="utf-8",
         )
 
-    coverage_page = next(
-        (
-            destination / relative
-            for relative in (_relative(source, blueprint) for source in site.files)
-            if relative.as_posix().casefold() == COVERAGE_PAGE
-        ),
-        None,
+    # _publication staged every page so named unprotected. The contract is
+    # coverage/README.md as spelled, or the one page so named on a disk that
+    # ignores case; any other is protected as usual.
+    named = [
+        relative
+        for relative in (_relative(source, blueprint) for source in site.files)
+        if relative.as_posix().casefold() == COVERAGE_PAGE
+    ]
+    contract = next(
+        (relative for relative in named if relative.as_posix() == coverage.source_path),
+        named[0] if len(named) == 1 else None,
     )
-    if coverage_page is not None and coverage_page not in site.typed:
+    for relative in named:
+        coverage_page = destination / relative
+        if coverage_page in site.typed:
+            continue
         staged = coverage_page.read_text(encoding="utf-8")
-        shown = _render_coverage_page(
-            staged,
-            coverage=coverage,
-            graph=graph,
-            statuses=statuses,
-            containers=containers,
-            links=_anchored_links(targets, coverage_page),
-            node_sources=node_sources,
-            rank={node_id: index for index, node_id in enumerate(order)},
+        shown = (
+            _render_coverage_page(
+                staged,
+                coverage=coverage,
+                graph=graph,
+                statuses=statuses,
+                containers=containers,
+                links=_anchored_links(targets, coverage_page),
+                node_sources=node_sources,
+                rank={node_id: index for index, node_id in enumerate(order)},
+            )
+            if relative == contract
+            else None
         )
         if shown is None:
-            report.warnings.append(
-                f"{coverage.source_path}: the coverage view found no contract table in the page render "
-                "publishes, so the site shows the page as written"
-            )
+            if relative == contract:
+                report.warnings.append(
+                    f"{coverage.source_path}: the page render publishes does not hold the contract's table as "
+                    "audit reads it, so the site shows the page without the coverage view"
+                )
             shown = _protect_narrative_markdown(staged)
         coverage_page.write_text(shown, encoding="utf-8")
 
@@ -2403,10 +2415,15 @@ def _render_summary_nav(
     # simplify without stranding it.
     coverage = destination / "coverage/README.md"
     if coverage.is_file():
-        title = title_text(_first_h1(coverage.read_text(encoding="utf-8")) or "Coverage") or "Coverage"
-        # A section of its own: navigation.indexes takes a section's README as
-        # the page its heading opens, which made Mathematics open this one.
-        lines += [f"    - {title}", f"        - [{title}](coverage/README.md)"]
+        # Named by its title, as a chapter is; "Coverage" when only its file names it.
+        named = _header_title(coverage.read_text(encoding="utf-8"))
+        title = name_text(named) if named and named != _file_title(coverage) else "Coverage"
+        # Last inside the book: navigation.indexes takes a section's first
+        # README page as the page its heading opens, which made Mathematics
+        # open this one, and a section of its own showed an empty pane on a
+        # narrow screen.
+        roots = children.get(None, [])
+        lines.append(f"{'    ' * (2 if roots else 1)}- [{title}](coverage/README.md)")
     return "\n".join(lines) + "\n"
 
 def _render_landing_page(
@@ -2519,6 +2536,11 @@ _COVERAGE_WORDS = {
 }
 
 
+#: How many statements a coverage row lists beside evidence that stays; the
+#: rest are counted, and the evidence links to where they are.
+_COVERAGE_LIST_LIMIT = 50
+#: A heading element's tag.
+_HEADING_TAG = re.compile(r"h[1-6]")
 #: The coverage view's heading for each disposition.
 _COVERAGE_HEADINGS = {
     "DECOMPOSED": "Decomposed",
@@ -2527,6 +2549,8 @@ _COVERAGE_HEADINGS = {
     "DEFERRED": "Deferred",
     "OUT": "Out of scope",
 }
+
+
 def _render_coverage_page(
     page: str,
     *,
@@ -2545,15 +2569,21 @@ def _render_coverage_page(
     author's order, each led by its area and its evidence as written. A
     DECOMPOSED row also lists the declarations its links reach, as the role
     checks read them, in book order and with their status. The list replaces
-    evidence that is only links, each straight to one of those declarations.
+    evidence that is only links, each straight to one of those declarations;
+    beside evidence it keeps, it shows the first
+    :data:`_COVERAGE_LIST_LIMIT` and counts the rest.
     """
 
-    found = contract_table(page)
-    if found is None or len(found[1]) != len(coverage.entries) or any(len(row) != 3 for row in found[1]):
+    found = contract_table(page, coverage.entries)
+    if found is None:
         return None
     span, rows = found
-    above = next((match for line in reversed(_content_lines(page)[: span.start]) if (match := _HEADING.match(line))), None)
-    level = min(len(above.group(1)) + 1, 6) if above else 2
+    lines = page.splitlines()
+    # One level below the heading the site shows above the table, whatever its spelling.
+    above = render_tree("\n".join(lines[frontmatter_end(lines) : span.start]))
+    tags = [str(element.tag) for element in above.iter()] if above is not None else []
+    levels = [int(tag[1]) for tag in tags if _HEADING_TAG.fullmatch(tag)]
+    level = min(levels[-1] + 1, 6) if levels else 2
     shared = _shared_references(page)
 
     def authored(text: str) -> str:
@@ -2585,19 +2615,28 @@ def _render_coverage_page(
                 and not any(urlsplit(target).fragment for target in written)
                 and only_links(evidence, len(written))
             )
-        # As HTML, so an area the author wrote in bold stays bold.
-        block = authored(f"<strong>{area}</strong>" if listed_only else f"<strong>{area}</strong>  \n{evidence}")
-        listed = _node_references(statements, graph=graph, statuses=statuses, links=links)
-        if len(statements) == 1:
-            block += f'\n\n<div class="bp-dependency-body">{listed}</div>'
-        elif statements:
-            counted = f"{len(statements):,} statements"
+        # Each cell in a block of its own, read as inline Markdown, as the
+        # table read it: a "$" or "*" in one cannot pair with one in the
+        # other. As HTML, so an area the author wrote in bold stays bold.
+        block = authored(
+            f'<p markdown="span"><strong>{area}</strong></p>'
+            + ("" if listed_only else f'\n\n<p markdown="span">{evidence}</p>')
+        )
+        if statements:
+            # Evidence the list replaces was the author's own links, so it is
+            # listed in full; beside evidence that stays, a long list is cut.
+            limit = len(statements) if listed_only else _COVERAGE_LIST_LIMIT
+            listed = _node_references(statements[:limit], graph=graph, statuses=statuses, links=links)
+            if len(statements) > limit:
+                listed += f' <span class="bp-ref-sep">·</span> and {len(statements) - limit:,} more'
+            counted = f"{len(statements):,} statement{'' if len(statements) == 1 else 's'}"
             if graph.tracks_lean:
                 selected = {node_id: statuses[node_id] for node_id in statements}
                 counted += "".join(f" · {count:,} {state.label}" for state, count in status.summarize(selected))
+            # One statement is shown open, as the link it replaces was.
             block += (
-                f'\n\n<details class="bp-dependencies" data-search-exclude><summary>{html.escape(counted)}</summary>'
-                f'<div class="bp-dependency-body">{listed}</div></details>'
+                f'\n\n<details class="bp-dependencies" data-search-exclude{" open" if len(statements) == 1 else ""}>'
+                f'<summary>{html.escape(counted)}</summary><div class="bp-dependency-body">{listed}</div></details>'
             )
         shown.setdefault(entry.disposition, []).append(block)
     view = "\n\n".join(
@@ -3462,7 +3501,12 @@ def _shared_references(narrative: str) -> dict[str, tuple[str, str]] | None:
     Markdown before render's HTML sits beside it; None when nothing does."""
 
     lines = narrative.splitlines()
-    body = "\n".join(lines[frontmatter_end(lines) :])
+    # A header ends at its closing "---", as _protect_narrative_markdown reads
+    # it; one never closed is no header.
+    start = 0
+    if lines and lines[0].strip() == "---":
+        start = next((index + 1 for index in range(1, len(lines)) if lines[index].strip() == "---"), 0)
+    body = "\n".join(lines[start:])
     return _convert_body(body)[1] if "<" in body else None
 
 

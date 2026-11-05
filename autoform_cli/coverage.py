@@ -22,6 +22,7 @@ import json
 import os
 import re
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -275,8 +276,10 @@ def coverage_target_nodes(
     by_path: dict[Path, str],
 ) -> tuple[str, ...]:
     """The roadmap nodes one coverage evidence cell visibly links, in link
-    order and once each. External links, fragments and links to files that are
-    not nodes are left out, and a link to a container names the container.
+    order and once each. External links, links to a fragment of the coverage
+    page itself and links to files that are not nodes are left out; a link to
+    an article names its node, fragment or not, and a link to a container names
+    the container.
 
     *by_path* maps each article's resolved path to its node. The caller builds
     it once for all rows, since resolving every article's path per row would
@@ -321,14 +324,18 @@ def _leaves(contained: dict[str, list[str]], root_id: str) -> set[str]:
     return found
 
 
-def contract_table(text: str) -> tuple[range, tuple[tuple[str, ...], ...]] | None:
+def contract_table(
+    text: str, entries: Sequence[CoverageEntry]
+) -> tuple[range, tuple[tuple[str, ...], ...]] | None:
     """The lines of ``text``, a page as render publishes it, that hold the
     coverage table, and each row's cells; None unless exactly one table there
-    has the contract's header.
+    has the contract's header and its rows are ``entries``, area and
+    disposition alike, in order.
 
     The table is found as :func:`load_coverage` finds it and ends at the first
     blank line, as it does. Render reads it from the page it publishes, where
-    each link already points where the site puts its target.
+    each link already points where the site puts its target, and the page can
+    differ from the file the contract was read from: comments are gone.
     """
 
     view = content(text)
@@ -348,7 +355,13 @@ def contract_table(text: str) -> tuple[range, tuple[tuple[str, ...], ...]] | Non
     while end < len(lines) and lines[end].strip():
         end += 1
     source = text.splitlines()
-    return range(headers[0], end), tuple(_cells(source[index]) for index in range(headers[0] + 2, end))
+    rows = tuple(_cells(source[index]) for index in range(headers[0] + 2, end))
+    if len(rows) != len(entries) or any(
+        len(row) != 3 or row[0] != entry.area or _inline_code(row[1]).upper() != entry.disposition
+        for row, entry in zip(rows, entries)
+    ):
+        return None
+    return range(headers[0], end), rows
 
 
 def _parse_table(text: str) -> tuple[list[CoverageEntry], list[CoverageIssue]]:

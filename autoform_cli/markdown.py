@@ -492,14 +492,15 @@ def visible_prose(value: str) -> str:
     return _collapse("".join(_visible_parts(tree, hidden=False)))
 
 
-#: The words that join a list of links and say nothing besides them.
-_CONNECTIVES = re.compile(r"\b(?:and|or)\b")
+#: What may stand between the links of a list that says nothing besides them:
+#: spaces, commas, semicolons, periods and "and".
+_LINK_LIST_JOINERS = re.compile(r"(?:[\s,;.]|\band\b)*", re.IGNORECASE)
 
 
 def only_links(value: str, links: int) -> bool:
-    """Whether a reader sees nothing in ``value`` but ``links`` links and the
-    commas and words that join them: no image, no other link, and no other
-    text. False when the renderer cannot process it."""
+    """Whether a reader sees nothing in ``value`` but ``links`` links, joined
+    by commas, semicolons, periods or "and": no image, no other link, and no
+    other text or mark. False when the renderer cannot process it."""
 
     tree = render_tree(value)
     if tree is None:
@@ -513,7 +514,7 @@ def only_links(value: str, links: int) -> bool:
             seen += 1
             element.set("hidden", "")
     rest = _collapse("".join(_visible_parts(tree, hidden=False)))
-    return seen == links and not has_substance(_CONNECTIVES.sub("", rest))
+    return seen == links and _LINK_LIST_JOINERS.fullmatch(rest) is not None
 
 
 def has_substance(visible: str) -> bool:

@@ -95,12 +95,14 @@ date when the release is tagged.
 - **Coverage view.** The coverage page shows its contract's table as a view: a
   heading for each disposition with the number of rows under it, and each row
   led by its area, with its evidence as written. A `DECOMPOSED` row also lists
-  the declarations its links reach, in book order and with their status: one as
-  a link, more behind a line that counts them, with their states when the
-  project tracks Lean. The list replaces evidence that is only links, each
-  straight to one of those declarations. The rest of the page is unchanged. In
-  the sidebar the page has an entry of its own under Mathematics, which no
-  longer opens it (#631).
+  the declarations its links reach, in book order and with their status,
+  behind a line that counts them, with their states when the project tracks
+  Lean; a list of one is shown open. The list replaces evidence that is only
+  links, each straight to one of those declarations; beside evidence that
+  stays, it shows the first 50 and counts the rest. A page whose published
+  table is not the contract's keeps its table, with a warning. The rest of the
+  page is unchanged. In the sidebar the page is the book's last entry, named by
+  its title, and Mathematics no longer opens it (#631).
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
@@ -436,6 +438,9 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Reference links on chapters with a `<` in the title.** A `<` in a
+  chapter's title alone left reference-style links in its prose shown as typed
+  (#631).
 - **Unlistable project root.** `project inspect` no longer reports
   `project-changed-during-inspection` on every run for a project root that
   cannot be listed. A root that can still be searched (mode 0311) gets its
