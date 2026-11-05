@@ -153,6 +153,16 @@ date when the release is tagged.
   table is not the contract's gets no view, and render warns. The rest of the
   page is unchanged. In the sidebar the page is the book's last entry, named by
   its title, and Mathematics no longer opens it (#631, #645).
+- **One way to read a tree.** Lean sources, the blueprint and an output site
+  are read by path in one walk that never follows a symbolic link, and a second
+  walk must find the same folders, names and `stat` signatures; any difference
+  is a change, which the Lean commands retry as before. This replaces the
+  directory-descriptor capture and its Windows fallback (about 1,250 fewer
+  lines). On native Windows, `check`, `render` and the other Lean commands now
+  read Lean sources, so sites get code links there too, and `render
+  --require-declarations` no longer fails for declarations it could not look
+  up. A change that appears and is undone between the two walks is not seen,
+  as with the old engine between its checks.
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.

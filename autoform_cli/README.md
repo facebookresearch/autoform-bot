@@ -84,9 +84,7 @@ uv run --with mkdocs --with mkdocs-material --with mkdocs-literate-nav \
 ```
 
 Drop `--require-declarations` when reviewing work in progress, where a
-statement may name a Lean declaration that does not exist yet. On native
-Windows, run `check` and `render` without `--lean-root`; the site then has no
-code links or Lean code ([publication contract](reference/runtime-and-publication.md#publication-contract)).
+statement may name a Lean declaration that does not exist yet.
 
 `autoform dashboard . --site-dir site` then serves the built site on `127.0.0.1`
 until you stop it, with a read-only live overlay of current author claims. The

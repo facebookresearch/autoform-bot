@@ -1377,9 +1377,8 @@ def test_a_mathlib_article_shows_its_mathlib_declarations_as_text(tmp_path: Path
     # The row is the page's only change, and --require-declarations ignores it.
     before = (tmp_path / "without/roadmap/README.md").read_text(encoding="utf-8")
     assert page.replace(f'<div class="bp-meta">{row}</div>\n', "") == before
-    assert (shown.unresolved, shown.unchecked, shown.warnings) == (
+    assert (shown.unresolved, shown.warnings) == (
         without.unresolved,
-        without.unchecked,
         without.warnings,
     )
 
@@ -1517,7 +1516,7 @@ def test_a_catalog_links_a_few_lean_names_and_counts_the_rest() -> None:
     names = [f"Project.lemma_{index:02d}" for index in range(40)]
     node = SimpleNamespace(id="catalog", lean=", ".join(names), catalog="module")
     linker = SimpleNamespace(
-        indexed=True, url=lambda name: f"{_REPOSITORY}/blob/abc/Project.lean#{name}", location=lambda name: None
+        url=lambda name: f"{_REPOSITORY}/blob/abc/Project.lean#{name}", location=lambda name: None
     )
 
     icons, rows, linked, unresolved = render_module._lean_presentation(node, linker)

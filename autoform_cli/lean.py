@@ -569,7 +569,7 @@ def open_project_sources(
 
     root_path = directory_binding.lexical_absolute_path(root)
     try:
-        tree = BoundDirectoryTree(root_path, require_descriptor=True)
+        tree = BoundDirectoryTree(root_path)
     except TreeChangedError:
         raise
     except TreeSnapshotError as error:
@@ -1698,8 +1698,6 @@ class SourceLinker:
     index: SourceIndex
     repository_url: str | None = None
     ref: str | None = None
-    indexed: bool = True
-    """False when the sources were not read, so no name was looked up."""
     links_blueprint: bool = False
     """True when the blueprint's files are in ``ref``'s commit too, so links into it show the published bytes."""
     spellings: Mapping[str, str] = field(default_factory=dict)

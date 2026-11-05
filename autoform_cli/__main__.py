@@ -2281,8 +2281,7 @@ def _render(args: argparse.Namespace) -> int:
     print(f"{report.output_dir}: {report.pages} pages, {report.nodes} nodes, {report.linked} code links")
     for issue in (*report.unresolved, *report.warnings):
         print(f"warning: {issue}")
-    # A declaration that was never looked up is not known to exist.
-    if (report.unresolved or report.unchecked) and args.require_declarations:
+    if report.unresolved and args.require_declarations:
         return 1
     return 0
 

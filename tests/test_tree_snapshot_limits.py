@@ -23,21 +23,10 @@ from autoform_cli._tree_snapshot import (
     TreeSnapshotError,
     bind_directory_tree,
 )
-from tests.test_lean_sources import _require_descriptor_capture, _use_portable_capture
+from autoform_cli.lean import snapshot_project_sources
 
 
-def _capture(
-    root: Path,
-    selection: TreeSelection,
-    *,
-    portable: bool,
-    monkeypatch: pytest.MonkeyPatch,
-    digests: bool = False,
-) -> TreeSnapshot:
-    if portable:
-        _use_portable_capture(monkeypatch)
-    else:
-        _require_descriptor_capture()
+def _capture(root: Path, selection: TreeSelection, *, digests: bool = False) -> TreeSnapshot:
     with bind_directory_tree(root, selection=selection) as bound:
         return bound.capture(digests=digests)
 
@@ -71,7 +60,7 @@ def test_capture_limits_are_frozen() -> None:
         limits.max_entries = 2  # type: ignore[misc]
 
 
-def test_portable_file_capture_accepts_windows_path_and_handle_stat_views(
+def test_file_capture_accepts_windows_path_and_handle_stat_views(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -105,8 +94,6 @@ def test_portable_file_capture_accepts_windows_path_and_handle_stat_views(
     snapshot = _capture(
         root,
         _all_entries(TreeCaptureLimits()),
-        portable=True,
-        monkeypatch=monkeypatch,
     )
 
     assert snapshot.files == (("payload.cmd", b"payload"),)
@@ -123,16 +110,12 @@ def test_portable_file_capture_accepts_windows_path_and_handle_stat_views(
         _capture(
             root,
             _all_entries(TreeCaptureLimits()),
-            portable=True,
-            monkeypatch=monkeypatch,
         )
 
 
-@pytest.mark.parametrize("portable", [False, True])
 def test_entry_limit_counts_ignored_entries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    portable: bool,
 ) -> None:
     root = tmp_path / "tree"
     root.mkdir()
@@ -152,8 +135,6 @@ def test_entry_limit_counts_ignored_entries(
     snapshot = _capture(
         root,
         selection(2),
-        portable=portable,
-        monkeypatch=monkeypatch,
     )
 
     assert snapshot.files == ()
@@ -163,16 +144,12 @@ def test_entry_limit_counts_ignored_entries(
         _capture(
             root,
             selection(1),
-            portable=portable,
-            monkeypatch=monkeypatch,
         )
 
 
-@pytest.mark.parametrize("portable", [False, True])
 def test_maximum_python_byte_limit_does_not_overflow_the_reader(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    portable: bool,
 ) -> None:
     root = tmp_path / "tree"
     root.mkdir()
@@ -181,18 +158,14 @@ def test_maximum_python_byte_limit_does_not_overflow_the_reader(
     snapshot = _capture(
         root,
         _all_entries(TreeCaptureLimits(max_total_bytes=sys.maxsize)),
-        portable=portable,
-        monkeypatch=monkeypatch,
     )
 
     assert snapshot.files == (("payload", b"payload"),)
 
 
-@pytest.mark.parametrize("portable", [False, True])
 def test_total_byte_limit_accepts_the_boundary_and_rejects_one_more_byte(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    portable: bool,
 ) -> None:
     root = tmp_path / "tree"
     root.mkdir()
@@ -202,28 +175,22 @@ def test_total_byte_limit_accepts_the_boundary_and_rejects_one_more_byte(
     snapshot = _capture(
         root,
         _all_entries(TreeCaptureLimits(max_total_bytes=5)),
-        portable=portable,
-        monkeypatch=monkeypatch,
     )
 
     assert snapshot.files == (("a", b"12"), ("b", b"345"))
-    reader_name = "_read_portable_file" if portable else "_read_file"
-    original_reader = getattr(tree_snapshot_module, reader_name)
+    original_reader = tree_snapshot_module._read_file
     read_paths: list[str] = []
 
-    def record_read(*args, **kwargs):
-        path = args[0] if portable else args[1]
+    def record_read(path, *args, **kwargs):
         read_paths.append(Path(path).name)
-        return original_reader(*args, **kwargs)
+        return original_reader(path, *args, **kwargs)
 
-    monkeypatch.setattr(tree_snapshot_module, reader_name, record_read)
+    monkeypatch.setattr(tree_snapshot_module, "_read_file", record_read)
 
     with pytest.raises(TreeCaptureLimitError, match=r"^directory tree exceeds max_total_bytes=4$"):
         _capture(
             root,
             _all_entries(TreeCaptureLimits(max_total_bytes=4)),
-            portable=portable,
-            monkeypatch=monkeypatch,
         )
 
     assert read_paths == ["a"]
@@ -236,43 +203,7 @@ def test_file_read_cap_does_not_trust_an_underreported_size() -> None:
     assert budget.file_read_limit(0, 10) == 10
 
 
-def test_descriptor_and_portable_limits_capture_the_same_snapshot(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _require_descriptor_capture()
-    root = tmp_path / "tree"
-    (root / "nested").mkdir(parents=True)
-    (root / "nested" / "included").write_bytes(b"data")
-    (root / "ignored").write_bytes(b"ignored")
-    limits = TreeCaptureLimits(
-        max_entries=3,
-        max_total_bytes=4,
-    )
-    selection = TreeSelection(
-        include=lambda path, _mode: path.name == "included",
-        descend=lambda _path: True,
-        limits=limits,
-    )
-
-    descriptor_snapshot = _capture(
-        root,
-        selection,
-        portable=False,
-        monkeypatch=monkeypatch,
-    )
-    with monkeypatch.context() as portable_context:
-        portable_snapshot = _capture(
-            root,
-            selection,
-            portable=True,
-            monkeypatch=portable_context,
-        )
-
-    assert descriptor_snapshot == portable_snapshot
-
-
-def test_portable_capture_sanitizes_unsupported_reparse_points(
+def test_capture_sanitizes_unsupported_reparse_points(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -291,7 +222,6 @@ def test_portable_capture_sanitizes_unsupported_reparse_points(
     def unsupported_readlink(_path) -> str:
         raise ValueError("private unsupported reparse tag")
 
-    _use_portable_capture(monkeypatch)
     monkeypatch.setattr(tree_snapshot_module, "_is_reparse_point", is_reparse)
     monkeypatch.setattr(tree_snapshot_module.os, "readlink", unsupported_readlink)
 
@@ -305,11 +235,9 @@ def test_portable_capture_sanitizes_unsupported_reparse_points(
     assert "private" not in str(caught.value)
 
 
-@pytest.mark.parametrize("portable", [False, True])
 def test_capture_releases_its_state_without_cyclic_gc(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    portable: bool,
 ) -> None:
     root = tmp_path / "tree"
     root.mkdir()
@@ -322,7 +250,7 @@ def test_capture_releases_its_state_without_cyclic_gc(
     enabled = gc.isenabled()
     gc.disable()
     try:
-        snapshot = _capture(root, selection, portable=portable, monkeypatch=monkeypatch)
+        snapshot = _capture(root, selection)
         del selection
         assert released() is None
     finally:
@@ -364,7 +292,7 @@ def test_selected_capture_releases_its_state_without_cyclic_gc(
     enabled = gc.isenabled()
     gc.disable()
     try:
-        snapshot = _capture(root, selection, portable=False, monkeypatch=monkeypatch)
+        snapshot = _capture(root, selection)
         del selection
         assert released() is None
     finally:
@@ -403,16 +331,6 @@ def test_opaque_markers_require_selected_capture() -> None:
         )
 
 
-def test_selected_capture_refuses_portable_traversal(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (tmp_path / "a.src").write_bytes(b"a\n")
-
-    with pytest.raises(TreeSnapshotError, match="directory-descriptor traversal"):
-        _capture(tmp_path, _selected_sources(), portable=True, monkeypatch=monkeypatch)
-
-
 @pytest.mark.parametrize(("folder", "expected"), [("", "."), ("sub", "sub")])
 def test_strict_selection_still_rejects_unselected_churn(
     tmp_path: Path,
@@ -420,7 +338,6 @@ def test_strict_selection_still_rejects_unselected_churn(
     folder: str,
     expected: str,
 ) -> None:
-    _require_descriptor_capture()
     parent = tmp_path / folder if folder else tmp_path
     parent.mkdir(exist_ok=True)
     (parent / "notes.md").write_bytes(b"0\n")
@@ -431,7 +348,7 @@ def test_strict_selection_still_rejects_unselected_churn(
     _at_final_verification(monkeypatch, save)
 
     with pytest.raises(TreeChangedError) as error:
-        _capture(tmp_path, _all_entries(TreeCaptureLimits()), portable=False, monkeypatch=monkeypatch)
+        _capture(tmp_path, _all_entries(TreeCaptureLimits()))
 
     assert error.value.relative == expected
 
@@ -440,7 +357,6 @@ def test_selected_capture_ignores_unselected_churn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _require_descriptor_capture()
     (tmp_path / "kept.src").write_bytes(b"kept\n")
     (tmp_path / "out" / "deep").mkdir(parents=True)
     (tmp_path / "out" / "deep" / "page.html").write_bytes(b"0\n")
@@ -453,44 +369,11 @@ def test_selected_capture_ignores_unselected_churn(
 
     _at_final_verification(monkeypatch, rebuild)
 
-    snapshot = _capture(tmp_path, _selected_sources(), portable=False, monkeypatch=monkeypatch)
+    snapshot = _capture(tmp_path, _selected_sources())
 
     assert snapshot.directories == ("",)
     assert snapshot.files == (("kept.src", b"kept\n"),)
     assert snapshot.omitted == ()
-
-
-def test_selected_capture_relist_uses_the_selection_limits(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _require_descriptor_capture()
-    (tmp_path / "kept.src").write_bytes(b"kept\n")
-    (tmp_path / "notes.md").write_bytes(b"0\n")
-    selection = _selected_sources(limits=TreeCaptureLimits(max_entries=2))
-
-    snapshot = _capture(tmp_path, selection, portable=False, monkeypatch=monkeypatch)
-    assert snapshot.files == (("kept.src", b"kept\n"),)
-
-    # The scan lists two entries.  A temporary file that exists only while
-    # the folder is relisted pushes that relist over max_entries; the final
-    # verification sees two entries again.
-    original = tree_snapshot_module._tree_snapshot_checkpoint
-    temporary = tmp_path / "notes.md.tmp"
-
-    def checkpoint(name: str, path: str) -> None:
-        original(name, path)
-        if name == "after-directory-list" and path == "":
-            temporary.write_bytes(b"1\n")
-        elif name == "before-final-verification":
-            temporary.unlink(missing_ok=True)
-
-    monkeypatch.setattr(tree_snapshot_module, "_tree_snapshot_checkpoint", checkpoint)
-
-    with pytest.raises(TreeChangedError) as error:
-        _capture(tmp_path, selection, portable=False, monkeypatch=monkeypatch)
-
-    assert error.value.relative == "."
 
 
 @pytest.mark.parametrize(
@@ -514,7 +397,6 @@ def test_verification_recognizes_markers_like_the_scan(
     recognized: bool,
     named: str | None,
 ) -> None:
-    _require_descriptor_capture()
     (tmp_path / "kept.src").write_bytes(b"kept\n")
     folder = tmp_path / "X"
     folder.mkdir()
@@ -525,7 +407,7 @@ def test_verification_recognizes_markers_like_the_scan(
         markers=(OpaqueDirectoryMarker("m.json", 16, lambda data: data == b"ok"),),
     )
 
-    snapshot = _capture(tmp_path, selection, portable=False, monkeypatch=monkeypatch)
+    snapshot = _capture(tmp_path, selection)
     assert ("X" in snapshot.directories) is holds_selected_entry
 
     def change() -> None:
@@ -536,19 +418,17 @@ def test_verification_recognizes_markers_like_the_scan(
     _at_final_verification(monkeypatch, change)
     if named is not None:
         with pytest.raises(TreeChangedError) as error:
-            _capture(tmp_path, selection, portable=False, monkeypatch=monkeypatch)
+            _capture(tmp_path, selection)
         assert error.value.relative == named
         return
-    snapshot = _capture(tmp_path, selection, portable=False, monkeypatch=monkeypatch)
+    snapshot = _capture(tmp_path, selection)
     assert snapshot.directories == ("",)
     assert snapshot.files == (("kept.src", b"kept\n"),)
 
 
-@pytest.mark.parametrize("portable", [False, True])
 def test_a_digest_capture_keeps_each_files_sha256_instead_of_its_bytes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    portable: bool,
 ) -> None:
     root = tmp_path / "tree"
     (root / "nested").mkdir(parents=True)
@@ -558,18 +438,16 @@ def test_a_digest_capture_keeps_each_files_sha256_instead_of_its_bytes(
     (root / "nested" / "large").write_bytes(os.urandom(tree_snapshot_module._READ_CHUNK_BYTES * 5 // 2))
     selection = _all_entries(TreeCaptureLimits())
 
-    whole = _capture(root, selection, portable=portable, monkeypatch=monkeypatch)
-    hashed = _capture(root, selection, portable=portable, monkeypatch=monkeypatch, digests=True)
+    whole = _capture(root, selection)
+    hashed = _capture(root, selection, digests=True)
 
     digests = tuple((name, hashlib.sha256(data).digest()) for name, data in whole.files)
     assert hashed == replace(whole, files=digests)
 
 
-@pytest.mark.parametrize("portable", [False, True])
 def test_a_digest_capture_counts_file_bytes_against_the_total_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    portable: bool,
 ) -> None:
     root = tmp_path / "tree"
     root.mkdir()
@@ -579,8 +457,6 @@ def test_a_digest_capture_counts_file_bytes_against_the_total_limit(
     snapshot = _capture(
         root,
         _all_entries(TreeCaptureLimits(max_total_bytes=5)),
-        portable=portable,
-        monkeypatch=monkeypatch,
         digests=True,
     )
 
@@ -589,8 +465,6 @@ def test_a_digest_capture_counts_file_bytes_against_the_total_limit(
         _capture(
             root,
             _all_entries(TreeCaptureLimits(max_total_bytes=4)),
-            portable=portable,
-            monkeypatch=monkeypatch,
             digests=True,
         )
 
@@ -606,3 +480,22 @@ def test_a_digest_read_hashes_exactly_the_bytes_a_plain_read_returns() -> None:
 
         assert plain == (expected, len(expected))
         assert hashed == (hashlib.sha256(expected).digest(), len(expected))
+
+
+def test_lean_sources_are_indexed_on_every_platform(tmp_path: Path) -> None:
+    # Windows ran the descriptor-less fallback, which refused Lean sources; the
+    # one walk now reads them there too, and still skips build output and
+    # nested checkouts.
+    (tmp_path / "Project").mkdir()
+    (tmp_path / "Project" / "Basic.lean").write_text("theorem kept : True := trivial\n", encoding="utf-8")
+    (tmp_path / ".lake" / "build").mkdir(parents=True)
+    (tmp_path / ".lake" / "build" / "Built.lean").write_text("theorem built : True := trivial\n", encoding="utf-8")
+    (tmp_path / "vendor" / ".git").mkdir(parents=True)
+    (tmp_path / "vendor" / "Vendored.lean").write_text("theorem vendored : True := trivial\n", encoding="utf-8")
+
+    snapshot = snapshot_project_sources(tmp_path)
+
+    assert snapshot.index.find("kept") is not None
+    assert snapshot.index.find("built") is None
+    assert snapshot.index.find("vendored") is None
+

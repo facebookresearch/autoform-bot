@@ -29,9 +29,8 @@ renames, the next render moves it back before anything else. macOS metadata
 files are ignored when an existing site is matched against its inventory.
 Render never indexes a leftover staging directory as Lean source. On macOS
 ``fsync`` does not flush the drive's cache, so a power loss can still lose the
-newest site. Native Windows has no directory-descriptor traversal: render reads
-the blueprint and the output as two pathname captures that must agree and
-commits through the backup swap without a lock.
+newest site. Render reads the blueprint and the output by path in two walks
+that must agree. Native Windows commits through the backup swap without a lock.
 """
 
 from __future__ import annotations
@@ -75,7 +74,6 @@ from ._tree_snapshot import (
     TreeSnapshotError,
     _update_digest,
     bind_directory_tree,
-    descriptor_capture_supported,
 )
 from .approvals import approval_statuses
 from .coverage import (
@@ -112,9 +110,7 @@ from .lean import (
     PUBLICATION_MANIFEST,
     PUBLICATION_SCHEMA,
     Declaration,
-    IndexedSourceSnapshot,
     LeanSourceError,
-    SourceIndex,
     SourceLinker,
     bound_names,
     declaration_names,
@@ -464,8 +460,6 @@ class RenderReport:
     linked: int = 0
     unresolved: list[str] = field(default_factory=list)
     """A message for each published declaration not found, or defined more than once, in the sources."""
-    unchecked: bool = False
-    """A published declaration was not looked up because the sources were not read."""
     warnings: list[str] = field(default_factory=list)
 
 
@@ -990,21 +984,13 @@ def render_site(
         if coverage is None:
             raise PublicationError(["coverage contract could not be loaded"])
         expected = _destination_state(destination)
-        # Without descriptor capture every Lean capture fails closed. The implicit
-        # root is then not read and the site has no code links; an explicit Lean
-        # root asks for links, so it still fails. Like every Lean capture, this one
-        # skips each folder holding a complete publication.json: a finished site,
-        # mkdocs' copy of one, or a replaced site kept as a backup.
-        indexed = lean_root is not None or descriptor_capture_supported()
+        # Like every Lean capture, this one skips each folder holding a complete
+        # publication.json: a finished site, mkdocs' copy of one, or a replaced
+        # site kept as a backup.
         try:
-            lean = (
-                snapshot_project_sources(repo_root, exclude_roots=(copy_root,))
-                if indexed
-                else IndexedSourceSnapshot(SourceIndex(repo_root, {}, ""), revision="")
-            )
+            lean = snapshot_project_sources(repo_root, exclude_roots=(copy_root,))
         except OSError as error:
-            hint = "" if descriptor_capture_supported() else "; run without --lean-root to publish without code links"
-            raise PublicationError([index_failure_message(error) + hint]) from error
+            raise PublicationError([index_failure_message(error)]) from error
         repository_url = repository_url if repository_url is not None else detect_repository_url(repo_root)
         ref = ref if ref is not None else detect_ref(repo_root)
         sources = SOURCES_DIR in snapshot.directories
@@ -1042,7 +1028,6 @@ def render_site(
             lean.index,
             repository_url,
             linked,
-            indexed=indexed,
             links_blueprint=links_blueprint,
             spellings=spellings,
             root_prefix=root_prefix,
@@ -1161,20 +1146,6 @@ def _render_pages(
 
     report = RenderReport(output_dir=destination, warnings=[*coverage_warnings, *site.warnings])
     groups, targets, node_sources = site.groups, site.targets, site.node_sources
-    if not linker.indexed:
-        # Only the declarations a page would link are lost. A blueprint that
-        # names none publishes the same pages as a host that read the sources.
-        report.unchecked = any(
-            declaration_names(graph.nodes[node_id].lean or "")
-            for node_ids in groups.values()
-            for node_id in node_ids
-        )
-        if report.unchecked:
-            report.warnings.append(
-                "code links were skipped because this platform cannot capture Lean "
-                "sources safely (directory-descriptor traversal is unavailable); "
-                "render on Linux or macOS to link declarations"
-            )
     containers = _containers(graph)
     group_pages = {group: destination / _group_page(group) for group in groups}
     for source, content in site.files.items():
@@ -1406,8 +1377,7 @@ def _integrated_page(
 def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str]]:
     """Read the blueprint once, refusing what must not be published.
 
-    Through descriptors where the host has them; elsewhere (Windows) as two
-    pathname captures that must agree. Folders whose README says ``published:
+    As two walks by path that must agree. Folders whose README says ``published:
     false`` are left out before anything is refused or published, so no page,
     hash or check sees them; the node IDs in them come beside the snapshot.
     """
@@ -4148,10 +4118,7 @@ def _lean_presentation(
         url = linker.url(name)
         location = linker.location(name)
         code = f"<code>{html.escape(name)}</code>"
-        if not linker.indexed:
-            # The sources were not read, so "not found" would be false.
-            fallback.append(code)
-        elif url and node.catalog == "module":
+        if url and node.catalog == "module":
             fallback.append(f'<a href="{html.escape(url, quote=True)}">{code}</a>')
             linked += 1
         elif url:
