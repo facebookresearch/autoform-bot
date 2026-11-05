@@ -2888,3 +2888,103 @@ def test_a_phone_reader_opens_at_half_snaps_where_it_is_dragged_and_maps_back_fr
     drag_to(area["y"] + area["height"] - 10)
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     assert page.evaluate("history.length") == history_length
+
+
+_LEAN_FIXTURE = """namespace Fixture
+
+/-- The base object. -/
+def base (n : ℕ) : ℕ :=
+  match n with
+  | 0 => 1
+  | k + 1 => 2 * base k
+
+theorem result (n : ℕ) (h : 0 < n) :
+    base n ≥ n + 1 := by
+  sorry
+
+end Fixture
+"""
+
+
+@pytest.fixture(scope="module")
+def lean_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """A published site whose two statements name declarations in a Lean file render read."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("lean-site") / "project"
+    scaffold_project(project, title="Lean fixture")
+    (project / "Fixture").mkdir()
+    (project / "Fixture/Basic.lean").write_text(_LEAN_FIXTURE, encoding="utf-8")
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text("# Lean fixture\n\n- [Algebra](algebra/README.md)\n", encoding="utf-8")
+    folder = roadmap / "algebra"
+    folder.mkdir()
+    (folder / "README.md").write_text("# Algebra\n\n- [Base](base.md)\n- [Result](result.md)\n", encoding="utf-8")
+    (folder / "base.md").write_text(
+        "---\ndeclaration: def\nlean: Fixture.base\n---\n\n# Base\n\nThe base object.\n\n## Depends on\n\nNo prerequisites.\n",
+        encoding="utf-8",
+    )
+    (folder / "result.md").write_text(
+        "---\ndeclaration: theorem\nlean: Fixture.result\n---\n\n# Result\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", project / "site-src", lean_root=project)
+    build(load_config(config_file=str(project / "mkdocs.yml")))
+    with _served(project / "site") as url:
+        yield url
+
+
+def test_a_name_in_a_statements_lean_shows_its_declaration_and_leads_to_its_statement(
+    webkit_browser: object, lean_site_url: str,
+) -> None:
+    """Hovering or focusing a name in a statement's Lean shows its declaration, a definition with its body, and
+    following it opens the formalizing statement."""
+    with _page(webkit_browser, viewport={"width": 1280, "height": 800}) as page:
+        _offline(page, lean_site_url)
+        page.goto(f"{lean_site_url}/dependencies/chapters/algebra.html#node=algebra%2Fresult")
+        _ready_site(page)
+        viewer, card = page.locator(".bp-dag-viewer"), page.locator(".bp-lean-card")
+        block = page.locator('.bp-reading-body [data-autoform-node-id="algebra/result"] .bp-lean-source')
+        name = block.locator('.bp-lean-ref[data-lean-name="Fixture.base"]')
+        # Only the project's name links.
+        assert block.locator(".bp-lean-ref").all_inner_texts() == ["base"]
+        name.hover()
+        playwright.expect(card).to_be_visible()
+        playwright.expect(card).to_contain_text("def base (n : ℕ) : ℕ :=")
+        playwright.expect(card).to_contain_text("| k + 1 => 2 * base k")
+        playwright.expect(card).to_contain_text("Fixture/Basic.lean:4")
+        assert name.get_attribute("aria-describedby") == card.get_attribute("id")
+        page.keyboard.press("Escape")
+        playwright.expect(card).to_be_hidden()
+        # The pointer can rest on the card, and leaving both closes it; a hovered name's card closes as the reader scrolls.
+        page.mouse.move(2, 2)
+        name.hover()
+        playwright.expect(card).to_be_visible()
+        card.hover()
+        page.wait_for_timeout(300)
+        playwright.expect(card).to_be_visible()
+        page.mouse.move(2, 2)
+        playwright.expect(card).to_be_hidden()
+        name.hover()
+        playwright.expect(card).to_be_visible()
+        page.locator(".bp-reading-body").dispatch_event("scroll")
+        playwright.expect(card).to_be_hidden()
+        page.mouse.move(2, 2)
+        # The keyboard reaches the name and shows the same card, which stays as the reader scrolls and while the reader
+        # selects in it, and Escape closes it, not the reader.
+        name.focus()
+        playwright.expect(card).to_be_visible()
+        playwright.expect(card).to_contain_text("Fixture.base")
+        page.locator(".bp-reading-body").dispatch_event("scroll")
+        card.locator("pre").click()
+        playwright.expect(card).to_be_visible()
+        page.keyboard.press("Escape")
+        playwright.expect(card).to_be_hidden()
+        playwright.expect(viewer).to_have_class(re.compile(r"\bbp-dag-has-selection\b"))
+        playwright.expect(viewer).to_have_attribute("data-map-start", "algebra/result")
+        # Following the name opens the statement that formalizes it.
+        name.click()
+        playwright.expect(viewer).to_have_attribute("data-map-start", "algebra/base")
+        playwright.expect(card).to_be_hidden()
+

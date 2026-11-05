@@ -105,15 +105,18 @@ from .graph_views import (
     _module_inventories,
 )
 from .lean import (
+    _CONTINUATION_IDENTIFIER,
     _DECLARATION_KEYWORDS,
     _DECLARATION_MODIFIERS,
     _REPLACEABLE_SCHEMAS,
     PUBLICATION_MANIFEST,
     PUBLICATION_SCHEMA,
+    Declaration,
     IndexedSourceSnapshot,
     LeanSourceError,
     SourceIndex,
     SourceLinker,
+    bound_names,
     declaration_names,
     index_failure_message,
     resolve_lean_root,
@@ -1141,6 +1144,7 @@ def _render_pages(
     coverage_warnings += (f"{subject}: {omission}" for subject, omission in pinned_list_omissions(graph))
     statuses = status.derive(graph)
     used_by = _reverse_edges(graph)
+    formalizing = _formalizing(graph)
     # Sources leave the site only for a directory the verified commit holds.
     sources_base = _sources_base(blueprint, repo_root, linker) if sources else None
     stops = _in_the_way(blueprint, graph, files)
@@ -1266,6 +1270,7 @@ def _render_pages(
             graph=graph,
             statuses=statuses,
             used_by=used_by,
+            formalizing=formalizing,
             linker=linker,
             page=page,
             targets=targets,
@@ -3320,6 +3325,15 @@ def _declaration_label(node: Node) -> str:
     return DECLARATION_LABELS.get(command.casefold()) or command[:1].upper() + command[1:] or "Node"
 
 
+def _formalizing(graph: Graph) -> dict[str, str]:
+    """The statement each ``lean:`` name formalizes: the first that names it, a catalog only if none else does."""
+    found: dict[str, str] = {}
+    for node in sorted(graph.nodes.values(), key=lambda node: node.catalog is not None):
+        for name in declaration_names(node.lean or ""):
+            found.setdefault(name, node.id)
+    return found
+
+
 def _reverse_edges(graph: Graph) -> dict[str, list[str]]:
     used_by: dict[str, list[str]] = {node_id: [] for node_id in graph.nodes}
     for node in graph.nodes.values():
@@ -3335,6 +3349,7 @@ def _render_chapter(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     used_by: dict[str, list[str]],
+    formalizing: Mapping[str, str],
     linker: SourceLinker,
     page: Path,
     targets: dict[str, tuple[Path, str]],
@@ -3359,6 +3374,7 @@ def _render_chapter(
             graph=graph,
             statuses=statuses,
             used_by=used_by,
+            formalizing=formalizing,
             linker=linker,
             links=links,
             repo_root=repo_root,
@@ -3744,6 +3760,7 @@ def _render_environment(
     graph: Graph,
     statuses: dict[str, status.NodeStatus],
     used_by: dict[str, list[str]],
+    formalizing: Mapping[str, str],
     linker: SourceLinker,
     links: Mapping[str, str],
     repo_root: Path,
@@ -3834,7 +3851,7 @@ def _render_environment(
         *_search_names(node),
         *boxed(statement, STATEMENT_BOX),
         # A review shows a card's Lean in its packet, after the read-back, so the Lean does not frame the testimony.
-        *(_lean_blocks(node, linker) if node.id not in reviews else []),
+        *(_lean_blocks(node, linker, links=links, formalizing=formalizing) if node.id not in reviews else []),
     ]
     if remainder:
         lines.extend(boxed(remainder, NOTES_BOX))
@@ -4164,46 +4181,130 @@ def _lean_presentation(
 _LEAN_BLOCK_NAMES = 3
 #: The most lines a declaration shows open; a longer one folds whole.
 _LEAN_BLOCK_LINES = 14
-#: The Lean a block marks: comments, strings and keywords, each named by its group. The declaration keywords and
-#: modifiers are the index's own.
+#: The most lines of a declaration the card for a name in it shows.
+_LEAN_CARD_LINES = 12
+#: The Lean a block marks: comments, strings and keywords, each named by its group, and the names it may link.
+#: The declaration keywords and modifiers are the index's own.
 _LEAN_TOKEN = re.compile(
     r"(?P<comment>/-.*?-/|--[^\n]*)"
     r'|(?P<string>"(?:\\.|[^"\\])*")'
     rf"|(?<![\w.'!?])(?P<keyword>{_DECLARATION_KEYWORDS}|{_DECLARATION_MODIFIERS}|example"
     r"|where|extends|deriving|fun|λ|let|have|show|from|by|at|with|match|if|then|else|do|return|for|in|calc"
-    r"|termination_by|decreasing_by|Type|Prop|Sort|sorry)(?![\w'!?])",
+    r"|termination_by|decreasing_by|Type|Prop|Sort|sorry)(?![\w'!?])"
+    rf"|(?<![\w.'!?»])(?P<name>{_CONTINUATION_IDENTIFIER.pattern})",
     re.DOTALL,
 )
 
 
-def _lean_blocks(node: Node, linker: SourceLinker) -> list[str]:
+#: What follows a field or an argument being given (``mul_comm := …``, ``(n := 3)``) or declared (``base : Nat``).
+_GIVEN = re.compile(r"\s*:=")
+_DECLARED = re.compile(r"\s*:(?!=)")
+#: What comes before a field's or a named argument's name: ``(n := 3)``, ``{ a := 1, b := 2 }``, ``{ s with b := 2 }``.
+_SLOT = re.compile(r"(?:[({,]|\bwith)\s*$")
+#: An attribute list still open before a name: ``@[simp, ext``.
+_ATTRIBUTE = re.compile(r"@\[[^\]]*$")
+
+
+def _lean_blocks(
+    node: Node,
+    linker: SourceLinker,
+    *,
+    links: Mapping[str, str],
+    formalizing: Mapping[str, str],
+) -> list[str]:
     """The statement's first Lean declarations as written, under its statement.
 
     A theorem or lemma shows its statement and not its proof; anything else shows whole, a definition's
     body included. A long declaration folds. A catalog shows none, as it shows no code icons.
+
+    A name in them that the project declares links to the statement that formalizes it, else to its
+    source, and the block carries a card for each, hidden, that the book shows on hover.
     """
     if node.catalog is not None:
         return []
     blocks: list[str] = []
+    named: dict[str, Declaration] = {}
     found = filter(None, map(linker.excerpt, declaration_names(node.lean or "")))
     for declaration, text in islice(found, _LEAN_BLOCK_NAMES):
         if declaration.keyword in ("theorem", "lemma"):
             text = _header(text, 0)
-        code = f'<pre class="bp-lean"><code>{_lean_code(text)}</code></pre>'
+        bound = bound_names(text)
+
+        def reference(written: str) -> str | None:
+            resolved = None if written.split(".", 1)[0] in bound else linker.resolve(written, declaration)
+            # A one-letter name is almost always a variable the file declares, which the index cannot see. The card,
+            # the link and the formalizing statement go by name, so a declaration the index files under another of
+            # its name's declarations, or under none, links nothing rather than the wrong one.
+            if resolved is None or len(resolved[1]) < 2 or linker.location(resolved[0].name) != resolved[0]:
+                return None
+            target, prefix = resolved
+            named.setdefault(target.name, target)
+            href = links[formalizing[target.name]] if target.name in formalizing else linker.url(target.name)
+            name, rest = html.escape(target.name, quote=True), _typed(written[len(prefix) :])
+            if href is None:
+                return f'<span class="bp-lean-ref" tabindex="0" data-lean-name="{name}">{_typed(prefix)}</span>{rest}'
+            href = html.escape(href, quote=True)
+            return f'<a class="bp-lean-ref" href="{href}" data-lean-name="{name}">{_typed(prefix)}</a>{rest}'
+
+        code = f'<pre class="bp-lean"><code>{_lean_code(text, reference)}</code></pre>'
         count = text.count("\n") + 1
         if count > _LEAN_BLOCK_LINES:
             summary = f"<code>{_typed(declaration.name, one_line=True)}</code> · {count} lines"
             code = f'<details class="bp-lean-fold"><summary>{summary}</summary>{code}</details>'
         blocks.append(code)
-    return ["", '<div class="bp-lean-source" data-search-exclude="1">', *blocks, "</div>", ""] if blocks else []
+    if not blocks:
+        return []
+    cards = [card for target in named.values() if (card := _lean_card(target, linker))]
+    hidden = ['<div class="bp-lean-names" hidden>', *cards, "</div>"] if cards else []
+    return ["", '<div class="bp-lean-source" data-search-exclude="1">', *blocks, *hidden, "</div>", ""]
 
 
-def _lean_code(text: str) -> str:
-    """``text``, Lean, as HTML the page's Markdown leaves as typed, its comments, strings and keywords marked."""
+def _lean_card(declaration: Declaration, linker: SourceLinker) -> str | None:
+    """What the book shows on hovering *declaration*'s name: its statement, or its first lines, and its file."""
+    excerpt = linker.excerpt(declaration.name)
+    if excerpt is None:
+        return None
+    text = excerpt[1]
+    if declaration.keyword in ("theorem", "lemma"):
+        text = _header(text, 0)
+    lines = text.split("\n")
+    if len(lines) > _LEAN_CARD_LINES:
+        text = "\n".join([*lines[:_LEAN_CARD_LINES], "  ⋯"])
+    where = _typed(f"{declaration.path.as_posix()}:{declaration.line}", one_line=True)
+    name = html.escape(declaration.name, quote=True)
+    return (
+        # Material's search ends an excluded element at the first closing tag of its kind, so each card excludes itself.
+        f'<div data-lean-name="{name}" data-search-exclude="1">'
+        f'<pre class="bp-lean"><code>{_lean_code(text)}</code></pre><p class="bp-lean-where">{where}</p></div>'
+    )
+
+
+def _lean_code(text: str, reference: Callable[[str], str | None] = lambda _written: None) -> str:
+    """``text``, Lean, as HTML the page's Markdown leaves as typed, its comments, strings and keywords marked,
+    and each name *reference* links linked.
+
+    None of these is a reference: tactics, after ``by`` or ``decreasing_by``, to the end; a name in an attribute
+    list; a name before ``:=`` in a field's or a named argument's place (after ``(``, ``{``, ``,`` or ``with``,
+    or at a line's start unless the line before ends in a result type's colon); a name starting a line before
+    ``:``, a field being declared.
+    """
     parts: list[str] = []
     end = 0
+    tactics = False
     for token in _LEAN_TOKEN.finditer(text):
-        parts += [_typed(text[end : token.start()]), f'<span class="bp-lean-{token.lastgroup}">{_typed(token[0])}</span>']
+        tactics = tactics or token.lastgroup == "keyword" and token[0] in ("by", "decreasing_by")
+        if token.lastgroup == "name":
+            start = text.rfind("\n", 0, token.start()) + 1
+            before = text[start : token.start()]
+            opens_line = not before.strip()
+            slot = opens_line and not text[:start].rstrip().endswith(":") or _SLOT.search(before)
+            given = slot and _GIVEN.match(text, token.end()) or opens_line and _DECLARED.match(text, token.end())
+            marked = None if tactics or given or _ATTRIBUTE.search(before) else reference(token[0])
+            if marked is None:
+                continue
+        else:
+            marked = f'<span class="bp-lean-{token.lastgroup}">{_typed(token[0])}</span>'
+        parts += [_typed(text[end : token.start()]), marked]
         end = token.end()
     return "".join(parts) + _typed(text[end:])
 
@@ -5107,6 +5208,9 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-lean-keyword {{ color: var(--md-code-hl-keyword-color); }}
 .bp-lean-comment {{ color: var(--md-code-hl-comment-color); }}
 .bp-lean-string {{ color: var(--md-code-hl-string-color); }}
+/* A name the project declares: dotted until hovered, so the code still reads as code. */
+.md-typeset .bp-lean-ref {{ color: inherit; text-decoration: underline dotted; text-underline-offset: 0.2em; }}
+.md-typeset .bp-lean-ref:is(:hover, :focus-visible) {{ color: var(--bp-link-hover); text-decoration-style: solid; }}
 /* A card too wide for the page scrolls, with a shade at each edge it can
    scroll toward: covers in the review panel's color scroll with the content
    and hide the shade at the end it has reached. */
