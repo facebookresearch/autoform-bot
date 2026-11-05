@@ -158,7 +158,7 @@ declaration-kind, and node-size checks apply only to declaration articles.
 
 Versioned implementation notes live at
 `blueprint/.implementation-notes/<article_id>.md`, one per article, and survive
-article moves. Claims keep workers from editing the same leaf's note;
+article moves. A leaf's claim covers its note only while the leaf is worked on;
 containers have no claims. `check` warns about a malformed, empty, unreadable,
 symlinked, or orphaned note, so assign the article ID before creating its note.
 It also warns about a notes folder under `roadmap/` or capitalized differently,
@@ -218,8 +218,8 @@ row of its statement box.
 
 ## Commands
 
-This section is the single source of truth for the command line; skills link
-here, and every invocation in either is parse-checked against the real parser.
+This section gives the main commands' synopses and [Contracts](#contracts) the
+rest; skills link to both, and every invocation in all three is parse-checked.
 
 Commands are written as they appear on `PATH` with this package installed; in a
 consumer project, where it is not, run each from the project root with the
