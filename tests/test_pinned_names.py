@@ -134,6 +134,9 @@ _GOOD = name("Good.decl", "core", "Init.Good")
             id="reserved-coverage",
         ),
         pytest.param(_list(packages={}), "header: packages is not a value this schema allows", id="no-packages"),
+        pytest.param(
+            _list(packages={"mathlib": []}), "package mathlib is not a JSON object", id="package-not-an-object"
+        ),
         *(
             pytest.param(
                 _list(packages={"mathlib": {**MATHLIB, key: value}}),
@@ -146,6 +149,9 @@ _GOOD = name("Good.decl", "core", "Init.Good")
                 ("repository", "http://github.com/leanprover-community/mathlib4"),
                 # The address reads as github.com, but its host is another.
                 ("repository", "https://github.com@example.org/leanprover-community/mathlib4"),
+                ("repository", "https://github.com/leanprover-community/mathlib4?"),
+                ("repository", "https://github.com/leanprover-community/mathlib4#"),
+                ("repository", "https://github.com"),
                 ("revision", "v4.36.0"),
                 ("source_root", "src"),
                 ("source_root", "../src/"),
@@ -179,6 +185,11 @@ def test_a_list_whose_header_breaks_a_rule_is_left_out_whole(tmp_path: Path, dat
                 ("signature", {"signature": 1}),
                 ("deprecated", {"deprecated": {"replacement": "Nat.add_comm'", "since": "2024-01-01"}}),
             )
+        ),
+        pytest.param(
+            _list({**_NAT, "deprecated": "x"}, _GOOD),
+            "line 2: deprecated is not a value this schema allows",
+            id="deprecated-not-an-object",
         ),
         pytest.param(_list({**_NAT, "extra": 1}, _GOOD), "line 2: unexpected key extra", id="name-key"),
         pytest.param(

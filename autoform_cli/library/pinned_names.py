@@ -313,19 +313,14 @@ def _nonempty(value: object) -> bool:
 
 
 def _https(value: object) -> bool:
-    """Whether ``value`` is a plain https address: a host, and no user, query or fragment."""
+    """Whether ``value`` is a plain https address: a host and a path, and no user, query or fragment."""
 
-    if type(value) is not str or not value.isprintable() or " " in value:
+    # A trailing ? or # leaves an empty query or fragment, which urlsplit does not report.
+    if type(value) is not str or not value.isprintable() or any(character in value for character in " ?#"):
         return False
     try:
         parts = urlsplit(value)
-        return (
-            parts.scheme == "https"
-            and bool(parts.hostname)
-            and parts.username is None
-            and not parts.query
-            and not parts.fragment
-        )
+        return parts.scheme == "https" and bool(parts.hostname) and parts.username is None and bool(parts.path)
     except ValueError:
         return False
 
