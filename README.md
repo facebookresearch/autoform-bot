@@ -94,6 +94,11 @@ share this project; use claims, and push claims and verified results to `origin`
 Sessions on one machine share its memory, and each builds Lean, so start only as many as fit. They also share one
 Lean runtime, the process behind the plugin's Lean tools; [`servers/README.md`](servers/README.md) gives its limits.
 
+## Search and reuse
+
+Before adding a result, agents search the blueprint and every dependency that publishes a search
+index Autoform can verify, such as [ATLAS](https://github.com/facebookresearch/atlas-lean).
+
 ## Development
 
 Clone with `git clone https://github.com/facebookresearch/autoform-bot.git`, then follow
