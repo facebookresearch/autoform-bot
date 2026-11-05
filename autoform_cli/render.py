@@ -3105,6 +3105,21 @@ def _link_mask(line: str) -> str:
     return _BRACKET_ESCAPE.sub(_blank, _INLINE_MATH.sub(_blank, INLINE_CODE.sub(_blank, line)))
 
 
+def _inline_destination(line: str, match: re.Match[str]) -> str:
+    """The destination of *match*, an inline link or image in *line*, as the site reads it.
+
+    Python-Markdown drops the backslash before a character it escapes, so
+    ``base\\_lemma.md`` names ``base_lemma.md``, but not in code or math, which
+    it reads first. A reference definition's destination keeps its backslashes
+    on the site, so it is read as written.
+    """
+    start, end = match.span("target")
+    escaped = _body_converter().ESCAPED_CHARS
+    masked = _INLINE_MATH.sub(_blank, INLINE_CODE.sub(_blank, line))[start:end]
+    dropped = {escape.start() for escape in re.finditer(r"\\(.)", masked) if escape.group(1) in escaped}
+    return "".join(char for index, char in enumerate(line[start:end]) if index not in dropped)
+
+
 def _rewrite_links(
     text: str,
     *,
@@ -3251,7 +3266,7 @@ def _rewrite_links(
         pieces: list[str] = []
         end = 0
         for match in _MARKDOWN_IMAGE.finditer(_link_mask(line)):
-            raw = line[match.start("target") : match.end("target")]
+            raw = _inline_destination(line, match)
             if moved_target(raw) == "" and raw in unlinked:
                 pieces += [line[end : match.start()], line[match.start("label") : match.end("label")]]
                 end = match.end()
@@ -3259,7 +3274,7 @@ def _rewrite_links(
         pieces = []
         end = 0
         for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
-            raw = line[match.start("target") : match.end("target")]
+            raw = _inline_destination(line, match)
             href = moved_target(raw)
             if href is None or raw in (href, f"<{href}>"):  # nothing moved: keep the link as written
                 continue
@@ -3657,7 +3672,9 @@ def _body_converter():
     # The final page assigns heading IDs once, across all its statements.
     # attr_list still keeps an author's explicit {#id} here.
     converter.treeprocessors.deregister("toc")
-    converter.treeprocessors.register(_PublishedBodyLinks(converter), "published-body-links", 5)
+    # After unescaping (priority 0), as MkDocs reads links: before it, a
+    # destination written `a\_b.md` still holds an escape placeholder.
+    converter.treeprocessors.register(_PublishedBodyLinks(converter), "published-body-links", -1)
     return converter
 
 
