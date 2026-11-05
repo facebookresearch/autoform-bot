@@ -9,7 +9,7 @@ import pytest
 
 from autoform_cli.__main__ import main
 from autoform_cli._tree_snapshot import ALL_ENTRIES, bind_directory_tree
-from autoform_cli.lean import index_project, snapshot_project_sources
+from autoform_cli.lean import LeanSourceError, index_project, snapshot_project_sources
 from tests.test_render import _project
 
 
@@ -60,4 +60,6 @@ def test_a_junction_is_recorded_as_a_link_and_not_followed(tmp_path: Path) -> No
 
     assert [path for path, _target in snapshot.symlinks] == ["junction"]
     assert snapshot.files == ()
-    assert "outside" not in index_project(root).declarations
+    # A POSIX link to a folder is skipped by the Lean selection; a junction is refused. Neither is followed.
+    with pytest.raises(LeanSourceError, match="unsafe Lean source junction: symbolic links are not supported"):
+        index_project(root)
