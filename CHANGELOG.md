@@ -18,7 +18,7 @@ date when the release is tagged.
   `hidden`, `unpublished`, `generated` or `graph-input`. It also names the
   Autoform that rendered it (`autoform`: its version, and its commit and
   repository when an install from Git or an unmodified checkout records them).
-  The schema stays `autoform-publication/v3`.
+  The schema stays `autoform-publication/v3` (#658).
 - **Verify workflow off.** `init --no-verify-workflow` writes
   `.github/workflows/autoform-verify.yml` as a stub, for a project the
   generated workflow can't fit, such as one whose roadmap several Lake projects
