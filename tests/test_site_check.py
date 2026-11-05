@@ -265,3 +265,28 @@ def test_check_reports_only_the_broken_anchor_in_a_rendered_project_mkdocs_built
     assert "The last result." not in alias
     assert report.pages > 0
     assert report.issues == ("roadmap/ch/index.html: #nowhere names no anchor #nowhere on roadmap/ch/index.html",)
+
+
+@pytest.mark.parametrize("element", ["textarea", "title", "xmp", "iframe", "noembed", "noframes"])
+def test_markup_shaped_text_does_not_create_links_or_anchors(tmp_path: Path, element: str) -> None:
+    site = _site(
+        tmp_path / "site",
+        {"index.html": (
+            '<a href="#fake">missing anchor</a>'
+            f'<{element}><span id="fake"></span><a href="missing.html">example</a></{element}>'
+            '<span id="real"></span><a href="#real">kept</a>'
+        )},
+    )
+
+    assert check_site(site).issues == ("index.html: #fake names no anchor #fake on index.html",)
+
+
+@pytest.mark.parametrize("element", ["textarea", "xmp"])
+def test_statement_card_text_cannot_replace_a_missing_built_card(tmp_path: Path, element: str) -> None:
+    card = '<div class="bp-thmwrapper" data-autoform-node-id="ch/result">Result</div>'
+    site = _site(tmp_path / "site", {"index.html": f"<{element}>{card}</{element}>"})
+    source = _site(tmp_path / "source", {"index.md": card})
+
+    assert check_site(site, source).issues == (
+        "index.html: 1 of the 1 statement card(s) in index.md did not survive the build: ch/result",
+    )
