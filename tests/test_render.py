@@ -628,6 +628,37 @@ def test_titles_typeset_their_math_in_headings(tmp_path: Path) -> None:
     heading = page[page.index('id="top"') : page.index("</h4>", page.index('id="top"'))]
 
     assert f'<span class="bp-thmtitle">{typeset}</span>' in heading
+    # The "#" link's name is read aloud, not typeset, so its formula reads as text.
+    assert 'aria-label="Link to Top on ℝⁿ"' in heading
+
+
+@pytest.mark.parametrize(
+    ("title", "label"),
+    [
+        ("Top on $\\mathbb{R}^n$ and `$x$`", "Top on ℝⁿ and $x$"),
+        ("The `foo` lemma", "The `foo` lemma"),
+        ("$\\,$", "Theorem"),
+    ],
+    ids=["formula-and-code", "code", "reads-empty"],
+)
+def test_the_permalink_names_its_title_as_the_explorer_reads_it(tmp_path: Path, title: str, label: str) -> None:
+    """The "#" link's name reads its title as the explorer's tab does: each formula as text, code as typed, and the
+    statement's kind when the title reads as nothing."""
+    project = _project(tmp_path)
+    top = project / "blueprint/roadmap/top.md"
+    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", f"# {title}\n"), encoding="utf-8")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    heading = page[page.index('id="top"') : page.index("</h4>", page.index('id="top"'))]
+
+    assert f'aria-label="Link to {label}"' in heading
+
+
+def test_a_permalink_name_without_the_index_parts_reads_only_delimited_formulas() -> None:
+    """The search index gives no parts for a title with a link, and the explorer then reads only formulas in \\( \\),
+    so a literal $ stays. The "#" link's name does the same."""
+    assert render_module._plain_title("Top on \\(\\mathbb{R}^n\\) via [x](y)") == "Top on ℝⁿ via [x](y)"
+    assert render_module._plain_title("Costs $5 via [x](y)") == "Costs $5 via [x](y)"
 
 
 def test_next_up_typesets_a_chapter_title_once(tmp_path: Path) -> None:

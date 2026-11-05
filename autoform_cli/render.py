@@ -61,7 +61,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from markdown.treeprocessors import Treeprocessor
 
-from . import _page_pool, dag_viewer, graph_pages, graph_views, project_map, site_index, status
+from . import _page_pool, dag_viewer, graph_pages, graph_views, project_map, site_index, status, tex_plain
 from ._fs import is_within as _is_within
 from ._fs import relative as _relative
 from ._fs import resolve as _resolve
@@ -901,7 +901,10 @@ def _titled(published: str, authored: bytes | None, page: Path) -> str:
 
     text = published_page(authored.decode("utf-8")).removeprefix(PAGE_HEADER) if authored else ""
     later = _first_h1(text)
-    heading = page_title(text) or (rendered_visible_text(later) if later else None)
+    # The theme prints the title where nothing typesets it, so a formula reads as text.
+    heading = page_title(text, formula=tex_plain.visible) or (
+        rendered_visible_text(later, formula=tex_plain.visible) if later else None
+    )
     return f"---\n{header_title(heading or _file_title(page))}\n---\n" + published.removeprefix(PAGE_HEADER)
 
 
@@ -2756,8 +2759,8 @@ def _render_landing_page(
         "---",
         # The hero sets the H1 itself, so the page title has to be declared
         # rather than discovered from the first Markdown heading. The theme
-        # prints it as it is, so it is written as text.
-        f"title: {yaml_string(title_text(heading) or 'Blueprint')}",
+        # prints it as it is, so it is written as text, a formula included.
+        f"title: {yaml_string(name_text(rendered_visible_text(heading, formula=tex_plain.visible)) or 'Blueprint')}",
         # The sidebar would list this page alone, and the table of contents one
         # or two headings, so both give their width back.
         "hide:",
@@ -4289,7 +4292,7 @@ def _render_environment(
     shown = _display_title(node.title, caption)
     kind_line = f'<span class="bp-thmcaption" data-search-exclude>{html.escape(caption)}</span>' if shown else ""
     # The "#" link's only text is "#", so its name says which statement it links to.
-    permalink_label = f"Link to {shown or caption}"
+    permalink_label = f"Link to {(_plain_title(shown) if shown else '') or caption}"
 
     lines = [
         f'<div class="bp-thmwrapper {style}{status_class}" '
@@ -5037,6 +5040,16 @@ def _title_html(text: str, *, fallback: str | None = None) -> str:
         f'<span class="arithmatex">{html.escape(value)}</span>'
         for kind, value in reading["parts"]
     )
+
+
+def _plain_title(text: str) -> str:
+    """A title as the text an accessible name holds, read as the explorer's plainTitle reads it: with the parts the
+    search index records for a title with a formula, code as typed and each formula as :mod:`tex_plain` reads it;
+    otherwise only formulas in ``\\( \\)`` are read, so a literal ``$`` stays."""
+    reading = site_index._reading_label(text)
+    if reading is None:
+        return tex_plain.visible(text)
+    return "".join(tex_plain.math(value[2:-2]) if kind == "math" else value for kind, value in reading["parts"])
 
 
 def _display_title(title: str, caption: str) -> str:

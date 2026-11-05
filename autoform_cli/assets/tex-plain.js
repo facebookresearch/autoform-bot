@@ -1,13 +1,16 @@
 /* A formula's TeX as plain text, for places that cannot typeset one: a tab title, an accessible name, a tooltip, an
- * SVG label. The explorer and the map share this reducer, and tests/fixtures/tex-plain-cases.json pins its text for
- * each case. Unknown commands read as their names.
+ * SVG label. The explorer and the map share this reducer. Render's port, autoform_cli/tex_plain.py, gives the same
+ * text for each case in tests/fixtures/tex-plain-cases.json and each entry of these tables. Unknown commands read as
+ * their names.
  */
 (function () {
   "use strict";
   if (window.AutoformTexPlain) return;
 
+  // Tables hold only their own names, so a command named like an Object method, \toString say, reads as its name.
+  function own(entries) { return Object.assign(Object.create(null), entries); }
   function table(keys, values) {
-    var out = {}, chars = Array.from(values || "");
+    var out = Object.create(null), chars = Array.from(values || "");
     keys.split(" ").forEach(function (key, index) { out[key] = values ? chars[index] : true; });
     return out;
   }
@@ -15,7 +18,7 @@
   var SUP = table("0 1 2 3 4 5 6 7 8 9 + - = ( ) a b c d e f g h i j k l m n o p r s t u v w x y z ′",
     "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ′");
   var SUB = table("0 1 2 3 4 5 6 7 8 9 + - = ( ) a e h i j k l m n o p r s t u v x", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ");
-  var SYMBOLS = {
+  var SYMBOLS = own({
     alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε", varepsilon: "ε", zeta: "ζ", eta: "η", theta: "θ",
     vartheta: "ϑ", iota: "ι", kappa: "κ", lambda: "λ", mu: "μ", nu: "ν", xi: "ξ", pi: "π", varpi: "ϖ", rho: "ρ",
     varrho: "ϱ", sigma: "σ", varsigma: "ς", tau: "τ", upsilon: "υ", phi: "φ", varphi: "φ", chi: "χ", psi: "ψ",
@@ -36,18 +39,19 @@
     cup: " ∪ ", cap: " ∩ ", setminus: " ∖ ", times: " × ", cdot: " · ", otimes: " ⊗ ", oplus: " ⊕ ", wedge: " ∧ ",
     land: " ∧ ", vee: " ∨ ", lor: " ∨ ", mid: " ∣ ", nmid: " ∤ ", parallel: " ∥ ", perp: " ⊥ ", vdash: " ⊢ ",
     models: " ⊨ ", lhd: " ◁ ", unlhd: " ⊴ ", trianglelefteq: " ⊴ ", triangleleft: " ◁ "
-  };
+  });
   // After \not, a relation's negated sign.
-  var NEGATED = {"∈": "∉", "∋": "∌", "=": "≠", "≤": "≰", "≥": "≱", "⊂": "⊄", "⊆": "⊈", "⊃": "⊅", "⊇": "⊉", "∣": "∤",
-    "∥": "∦", "≡": "≢", "∼": "≁", "≃": "≄", "≅": "≇", "≈": "≉", "⊢": "⊬", "⊨": "⊭"};
-  var ESCAPES = {",": " ", ";": " ", ":": " ", " ": " ", "!": "", "|": "‖", "\\": " "};
+  var NEGATED = own({"∈": "∉", "∋": "∌", "=": "≠", "≤": "≰", "≥": "≱", "⊂": "⊄", "⊆": "⊈", "⊃": "⊅", "⊇": "⊉", "∣": "∤",
+    "∥": "∦", "≡": "≢", "∼": "≁", "≃": "≄", "≅": "≇", "≈": "≉", "⊢": "⊬", "⊨": "⊭"});
+  var ESCAPES = own({",": " ", ";": " ", ":": " ", " ": " ", "!": "", "|": "‖", "\\": " "});
   var OPERATORS = table("arccos arcsin arctan arg cos cosh cot coth csc deg det dim exp gcd hom inf ker lcm lg lim liminf " +
     "limsup ln log max min Pr sec sin sinh sup tan tanh");
-  var FONTS = table("mathrm mathit mathbf mathsf mathtt mathcal mathscr mathfrak operatorname text textrm textit textbf " +
+  var FONTS = table("mathrm mathit mathbf mathsf mathtt mathcal mathscr mathfrak text textrm textit textbf " +
     "textsf boldsymbol bm");
-  var ACCENTS = {bar: "\u0304", overline: "\u0305", hat: "\u0302", widehat: "\u0302", tilde: "\u0303",
-    widetilde: "\u0303", vec: "\u20d7", dot: "\u0307", ddot: "\u0308"};
+  var ACCENTS = own({bar: "\u0304", overline: "\u0305", hat: "\u0302", widehat: "\u0302", tilde: "\u0303",
+    widetilde: "\u0303", vec: "\u20d7", dot: "\u0307", ddot: "\u0308"});
   var SIZES = table("left right middle big Big bigg Bigg bigl bigr Bigl Bigr biggl biggr Biggl Biggr");
+  var STYLES = table("limits nolimits displaystyle textstyle scriptstyle scriptscriptstyle");
 
   // Whether s needs no parentheses beside a "/" or a script: one character, letters and digits, or one parenthesis.
   function atomic(s) {
@@ -71,12 +75,20 @@
   function math(tex) {
     tex = String(tex || "");
     var at = 0;
+    // An operator name, with a space when a letter or a command follows it.
+    function spaced(word) { return word + (/[A-Za-z\\]/.test(tex.charAt(at)) ? " " : ""); }
     // One argument: a braced group, a command or a character.
     function argument() {
       while (tex.charAt(at) === " ") at++;
       if (tex.charAt(at) === "{") { at++; return group(true); }
       if (tex.charAt(at) === "\\") return command();
-      return tex.charAt(at++);
+      return character();
+    }
+    // The character at at, whole even above U+FFFF, where charAt would split it.
+    function character() {
+      if (at >= tex.length) { at++; return ""; }
+      var c = String.fromCodePoint(tex.codePointAt(at)); at += c.length;
+      return c;
     }
     // Text up to the brace that closes the group, or to the end.
     function group(braced) {
@@ -93,7 +105,7 @@
     }
     function command() {
       var name = /^[A-Za-z]+/.exec(tex.slice(++at));
-      if (!name) { var c = tex.charAt(at++); return ESCAPES[c] !== undefined ? ESCAPES[c] : c; }
+      if (!name) { var c = character(); return ESCAPES[c] !== undefined ? ESCAPES[c] : c; }
       name = name[0]; at += name.length;
       if (tex.charAt(at) === "*") at++;
       if (/^[dt]?frac$/.test(name)) { var top = argument(); return paren(top) + "/" + paren(argument()); }
@@ -107,13 +119,18 @@
         return index + "√" + paren(argument());
       }
       if (name === "mathbb") return Array.from(argument()).map(function (c) { return DOUBLE[c] || c; }).join("");
+      if (name === "operatorname") return spaced(argument());
       if (FONTS[name]) return argument();
       if (ACCENTS[name]) return Array.from(argument()).map(function (c) { return c + ACCENTS[name]; }).join("");
       if (name === "pmod") return " (mod " + argument() + ")";
       if (name === "begin" || name === "end") { argument(); return " "; }
-      if (name === "not") { var sign = argument(), bare = sign.trim(); return sign.replace(bare, NEGATED[bare] || bare + "\u0338"); }
+      if (name === "not") {
+        var sign = argument(), bare = sign.trim();
+        return sign.replace(bare, function () { return NEGATED[bare] || bare + "\u0338"; });
+      }
       if (SIZES[name]) { if (tex.charAt(at) === ".") at++; return ""; }
-      if (OPERATORS[name]) return name + (/[A-Za-z\\]/.test(tex.charAt(at)) ? " " : "");
+      if (STYLES[name]) return "";
+      if (OPERATORS[name]) return spaced(name);
       return SYMBOLS[name] !== undefined ? SYMBOLS[name] : name;
     }
     // Runs of spaces collapse, and none stays inside a bracket or before a comma.

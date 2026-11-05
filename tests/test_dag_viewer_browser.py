@@ -639,8 +639,8 @@ def test_phone_peek_typesets_the_pages_own_chapter_title_without_borrowing_a_cat
     _ready_site(page)
     page.evaluate("window.__chapterHandleDocument=document")
     _complete_source(page, expected)
-    # The tab cannot typeset, so it reads the page's own title with the formula as text; a project macro reads as its name.
-    assert page_title == r"Groups \(\ZZ/n\) and code $literal$" and page.title() == "Groups ZZ/n and code $literal$"
+    # Render writes the page's own title as text, since nothing typesets it, and the tab reads it as it is.
+    assert page_title == "Groups ZZ/n and code $literal$" and page.title() == page_title
     _close_phone_reading(page)
     _paint_frame(page)
     _assert_native_handle_math(page)

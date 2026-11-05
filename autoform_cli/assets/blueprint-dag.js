@@ -48,8 +48,8 @@
   }
 
   // A tab title, a place line or an accessible name cannot typeset, so a formula there reads as tex-plain.js makes it.
-  // With parts for the same title, its code keeps its dollars; otherwise only formulas in \( \) are reduced, as a
-  // page's own title writes them, so a literal $ stays.
+  // With parts for the same title, its code keeps its dollars; otherwise only formulas in \( \) are reduced, so a
+  // literal $ stays.
   function plainTitle(text, label) {
     var parts = label && label.format === "inline-parts-v1" && label.source === text && Array.isArray(label.parts) && label.parts;
     if (!parts) return text.replace(/\\\(([\s\S]*?)\\\)/g, function (_m, tex) { return window.AutoformTexPlain.math(tex); });
