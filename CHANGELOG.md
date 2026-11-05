@@ -451,18 +451,20 @@ date when the release is tagged.
 
 ### Deprecated
 
-Each prints one `warning[deprecated]:` line on standard error, with or without
-`--json`, and changes nothing else.
+Each prints one `warning[deprecated]:` line on standard error once its arguments
+parse, with or without `--json`, and changes nothing else.
 
-- **`autoform search --state`.** Filter each `--json` hit's `state` instead,
-  under a `--limit` high enough, since the flag filtered before the limit.
-  Removed in 0.8.0.
-- **`autoform search --declaration`.** Filter each `--json` hit's
-  `declaration` the same way; `def` also kept `noncomputable def`. Removed in
-  0.8.0.
+- **`autoform search --state`.** Filter each `--json` hit's `state` instead, with
+  `--limit` at least `total_matches`, since the flag filters before the limit.
+  Removed in 0.8.0 (#647).
+- **`autoform search --declaration`.** Filter each `--json` hit's `declaration`
+  the same way, comparing case-insensitively and allowing leading modifiers
+  (`def` keeps `noncomputable def` and `public def`); a misspelled kind then
+  matches nothing instead of exiting 2. Removed in 0.8.0 (#647).
 - **`autoform work list --lean-root` and `work context --lean-root`.**
-  `source_file` will be null; `search --lean-root` prints a Lean name's file and
-  line. Removed in 0.8.0.
+  `lean_targets[].source_file` stays in `autoform-work/v2`, always null;
+  `search --lean-root` prints a Lean name's file and line. Removed in 0.8.0
+  (#647).
 
 ### Removed
 

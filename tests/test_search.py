@@ -19,6 +19,15 @@ from tests.search_fixture import _article, _project
 
 
 _LEAN_SOURCE = "namespace Project\n\ntheorem separation : True := trivial\n\nend Project\n"
+_STATE_DEPRECATED = (
+    "warning[deprecated]: autoform search --state is deprecated and will be removed in 0.8.0; "
+    'filter each hit\'s "state" in --json output instead, with --limit at least total_matches\n'
+)
+_DECLARATION_DEPRECATED = (
+    "warning[deprecated]: autoform search --declaration is deprecated and will be removed in 0.8.0; "
+    'filter each hit\'s "declaration" in --json output instead, ignoring case and leading modifiers, '
+    "with --limit at least total_matches\n"
+)
 
 
 def _ids(project: Path, query: str, **options: object) -> list[str]:
@@ -580,11 +589,8 @@ def test_an_unused_kind_beside_one_in_use_adds_nothing_and_the_cli_names_it(tmp_
         assert cli.main([*command, *extra]) == 0
         captured = capsys.readouterr()
         assert "hyperplane" in captured.out
-        assert captured.err == (
-            "warning[deprecated]: autoform search --declaration is deprecated and will be removed in 0.8.0; "
-            'filter each hit\'s "declaration" in --json output instead\n'
-            "note: no article declares kind thm, so the search used only the other kinds\n"
-        )
+        note = "note: no article declares kind thm, so the search used only the other kinds\n"
+        assert captured.err == _DECLARATION_DEPRECATED + note
     # The note is not part of the JSON, whose filters keep every requested kind.
     assert json.loads(captured.out)["filters"]["declaration"] == ["theorem", "thm"]
 
@@ -767,10 +773,7 @@ def test_search_cli_emits_stable_json(tmp_path: Path, capsys) -> None:
 
     assert cli.main(command) == 0
     first, warning = capsys.readouterr()
-    assert warning == (
-        "warning[deprecated]: autoform search --state is deprecated and will be removed in 0.8.0; "
-        'filter each hit\'s "state" in --json output instead\n'
-    )
+    assert warning == _STATE_DEPRECATED
     assert cli.main(command) == 0
     assert capsys.readouterr().out == first
 
@@ -950,6 +953,15 @@ def test_search_cli_reports_errors_on_stderr_with_exit_2(
 
     assert cli.main(["search", str(project), "convex", "--limit", "0"]) == 2
     assert capsys.readouterr().err == "error: search limit must be a positive integer\n"
+
+    # A failing run warns first too, once per spelling, with or without --json.
+    for extra in ([], ["--json"]):
+        assert cli.main(["search", str(project), "convex", "--state", "proved", "--declaration", "nosuch", *extra]) == 2
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        warnings, _, error = captured.err.partition("error: ")
+        assert warnings == _STATE_DEPRECATED + _DECLARATION_DEPRECATED
+        assert error.startswith("no article declares kind nosuch; this blueprint uses: ") and error.count("\n") == 1
 
     for arguments in (["--state", "finished"], ["--limit", "many"]):
         with pytest.raises(SystemExit) as refused:
