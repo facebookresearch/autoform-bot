@@ -12,19 +12,16 @@ from autoform_cli.project import (
     ProjectCatalogError,
     load_library_catalog,
     load_release_catalog,
-    parse_library_catalog,
 )
+from autoform_cli.project.catalog import parse_library_catalog
 
 _BUNDLED = json.loads(files("autoform_cli.project").joinpath("libraries.json").read_text(encoding="utf-8"))
 _RELEASES = load_release_catalog()
 
 
 def _release_package_names(release_id: str) -> set[str]:
-    descriptor = json.loads(
-        files("autoform_cli.project").joinpath(f"creation-release-{release_id}.json").read_text(encoding="utf-8")
-    )
     manifest = json.loads(
-        files("autoform_cli.project").joinpath(descriptor["lake_manifest"]).read_text(encoding="utf-8")
+        files("autoform_cli.project").joinpath(f"release-manifest-{release_id}.json").read_text(encoding="utf-8")
     )
     return {entry["name"].casefold() for entry in manifest["packages"]}
 
@@ -45,10 +42,17 @@ def test_bundled_atlas_entry_is_offered_at_its_published_index() -> None:
 
 
 def test_every_entry_is_pinned_on_a_listed_release_and_locks_its_own_require() -> None:
+    # `project new` reads the catalog as it is; `tests/test_project_create.py` checks what it writes from it.
     release_ids = {release.id for release in _RELEASES.releases}
-    for library in load_library_catalog().libraries:
+    libraries = load_library_catalog().libraries
+    assert len({library.name for library in libraries}) == len(libraries)
+    for library in libraries:
         assert library.release in release_ids
+        assert re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", library.name)
         assert re.fullmatch(r"[0-9a-f]{40}", library.commit)
+        assert type(library.offered) is bool and library.module_roots
+        assert all(re.fullmatch(r"[A-Z][A-Za-z0-9]*", root) for root in library.module_roots)
+        assert len({root.casefold() for root in library.module_roots}) == len(library.module_roots)
         direct = [entry for entry in library.manifest_packages if not entry["inherited"]]
         assert direct == [entry for entry in library.manifest_packages if entry["name"] == library.name]
         assert direct[0]["url"] == library.git
@@ -78,41 +82,14 @@ _ATLAS = ("libraries", 0)
     "payload",
     [
         _mutated(("schema",), "autoform-project-library-catalog/v0"),
-        _mutated(("extra",), 1),
-        _mutated(("libraries",), {}),
         _mutated(("libraries",), ["atlas"]),
         _mutated((*_ATLAS, "extra"), 1),
         _mutated((*_ATLAS, "offered"), KeyError),
-        _mutated((*_ATLAS, "name"), "at las"),
-        _mutated((*_ATLAS, "git"), "http://github.com/zibo-yang/atlas-lean"),
-        _mutated((*_ATLAS, "git"), 'https://github.com/x/"y'),
-        _mutated((*_ATLAS, "git"), "https://github.com/x/y\\z"),
-        _mutated((*_ATLAS, "commit"), "0CA59C787215C3638311B0A14AF59AAAE3208F6B"),
-        _mutated((*_ATLAS, "commit"), "0ca59c78"),
-        _mutated((*_ATLAS, "release"), "lean-v9.9.9-mathlib-v9.9.9"),
-        _mutated((*_ATLAS, "offered"), "no"),
-        _mutated((*_ATLAS, "module_roots"), []),
-        _mutated((*_ATLAS, "module_roots"), "MathlibExt"),
-        _mutated((*_ATLAS, "module_roots"), ["mathlibExt"]),
-        _mutated((*_ATLAS, "module_roots"), ["Cslib", "CSLIB"]),
-        _mutated((*_ATLAS, "manifest_packages"), []),
-        _mutated((*_ATLAS, "manifest_packages", 0, "rev"), "1" * 40),
-        _mutated((*_ATLAS, "manifest_packages", 0, "inputRev"), "main"),
-        _mutated((*_ATLAS, "manifest_packages", 0, "url"), "https://github.com/zibo-yang/atlas-lean"),
-        _mutated((*_ATLAS, "manifest_packages", 1, "inherited"), False),
-        _mutated((*_ATLAS, "manifest_packages", 0), "atlas"),
     ],
 )
 def test_malformed_catalog_is_refused(payload: dict) -> None:
     with pytest.raises(ProjectCatalogError):
-        parse_library_catalog(payload, _RELEASES)
-
-
-def test_duplicate_library_names_are_refused() -> None:
-    payload = copy.deepcopy(_BUNDLED)
-    payload["libraries"].append(copy.deepcopy(payload["libraries"][0]))
-    with pytest.raises(ProjectCatalogError):
-        parse_library_catalog(payload, _RELEASES)
+        parse_library_catalog(payload)
 
 
 def test_bundled_catalog_uses_the_current_schema() -> None:

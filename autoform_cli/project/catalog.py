@@ -8,7 +8,6 @@ from dataclasses import asdict, dataclass
 from importlib.resources import files
 
 RELEASE_CATALOG_SCHEMA = "autoform-project-release-catalog/v1"
-_COMMIT = re.compile(r"[0-9a-f]{40}")
 _ELAN_LEAN4_RELEASE = re.compile(
     r"(?:(?:leanprover/lean4:)?v?)([0-9]+\.[0-9]+\.[0-9]+(?:-[^ \t\r\n]+)?)"
 )
@@ -102,31 +101,14 @@ def parse_release_catalog(payload: object) -> ReleaseCatalog:
         releases = tuple(SupportedRelease(**entry) for entry in payload["releases"])
     except (KeyError, TypeError) as error:
         raise ProjectCatalogError("the release catalog is malformed") from error
-    for release in releases:
-        strings = (release.id, release.lean_toolchain, release.mathlib_git, release.mathlib_rev, release.mathlib_commit)
-        if (
-            not all(isinstance(value, str) and value for value in strings)
-            or not isinstance(release.recommended, bool)
-            or not _COMMIT.fullmatch(release.mathlib_commit)
-        ):
-            raise ProjectCatalogError(f"release {release.id!r} is malformed")
-    pairs = {(release.lean_toolchain, release.mathlib_commit) for release in releases}
-    if (
-        not releases
-        or len({release.id for release in releases}) != len(releases)
-        or len(pairs) != len(releases)
-        or sum(release.recommended for release in releases) != 1
-    ):
-        raise ProjectCatalogError("releases need unique ids and pairs, with exactly one recommended")
+    # ReleaseCatalog.recommended needs exactly one; `tests/test_project_create.py`
+    # checks the rest of the bundled data.
+    if sum(release.recommended is True for release in releases) != 1:
+        raise ProjectCatalogError("the release catalog needs exactly one recommended release")
     return ReleaseCatalog(releases)
 
 
 LIBRARY_CATALOG_SCHEMA = "autoform-project-library-catalog/v1"
-_LIBRARY_FIELDS = frozenset({"name", "git", "commit", "release", "offered", "module_roots", "manifest_packages"})
-_LAKE_PACKAGE = re.compile(r"[A-Za-z][A-Za-z0-9]*")
-_MODULE_ROOT = re.compile(r"[A-Z][A-Za-z0-9]*")
-# Spliced into a TOML basic string, so no quote, backslash, or control character.
-_LIBRARY_GIT = re.compile(r"https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,58 +137,19 @@ def load_library_catalog() -> LibraryCatalog:
         payload = json.loads(files(__package__).joinpath("libraries.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise ProjectCatalogError("the bundled library catalog is unreadable") from error
-    return parse_library_catalog(payload, load_release_catalog())
+    return parse_library_catalog(payload)
 
 
-def parse_library_catalog(payload: object, releases: ReleaseCatalog) -> LibraryCatalog:
+def parse_library_catalog(payload: object) -> LibraryCatalog:
     try:
         if payload["schema"] != LIBRARY_CATALOG_SCHEMA:
             raise ProjectCatalogError("the library catalog has an unsupported schema")
-        if set(payload) != {"schema", "libraries"} or type(payload["libraries"]) is not list:
-            raise ProjectCatalogError("the library catalog is malformed")
         libraries = tuple(_parse_library(entry) for entry in payload["libraries"])
     except (KeyError, TypeError) as error:
         raise ProjectCatalogError("the library catalog is malformed") from error
-    release_ids = {release.id for release in releases.releases}
-    if len({library.name for library in libraries}) != len(libraries):
-        raise ProjectCatalogError("library names must be unique")
-    for library in libraries:
-        if library.release not in release_ids:
-            raise ProjectCatalogError(f"library {library.name!r} names a release the release catalog does not list")
     return LibraryCatalog(libraries)
 
 
 def _parse_library(entry: object) -> SharedLibrary:
-    if type(entry) is not dict or set(entry) != _LIBRARY_FIELDS:
-        raise ProjectCatalogError("a library entry is malformed")
-    name, git, commit, roots, packages = (
-        entry["name"], entry["git"], entry["commit"], entry["module_roots"], entry["manifest_packages"]
-    )
-    if not (
-        type(name) is str
-        and _LAKE_PACKAGE.fullmatch(name)
-        and type(git) is str
-        and _LIBRARY_GIT.fullmatch(git)
-        and type(commit) is str
-        and _COMMIT.fullmatch(commit)
-        and type(entry["release"]) is str
-        and type(entry["offered"]) is bool
-        and type(roots) is list
-        and roots
-        and all(type(root) is str and _MODULE_ROOT.fullmatch(root) for root in roots)
-        and len({root.casefold() for root in roots}) == len(roots)
-        and type(packages) is list
-        and packages
-        and all(type(package) is dict for package in packages)
-    ):
-        raise ProjectCatalogError(f"library {name!r} is malformed")
-    direct = [package for package in packages if package.get("inherited") is False]
-    if (
-        len(direct) != 1
-        or direct[0].get("name") != name
-        or direct[0].get("url") != git
-        or direct[0].get("rev") != commit
-        or direct[0].get("inputRev") != commit
-    ):
-        raise ProjectCatalogError(f"library {name!r} does not lock its own require at its commit")
-    return SharedLibrary(name, git, commit, entry["release"], entry["offered"], tuple(roots), tuple(packages))
+    roots, packages = tuple(entry["module_roots"]), tuple(entry["manifest_packages"])
+    return SharedLibrary(**{**entry, "module_roots": roots, "manifest_packages": packages})

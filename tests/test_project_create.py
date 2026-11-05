@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -23,8 +24,8 @@ from autoform_cli import scaffold as scaffold_module
 from autoform_cli.__main__ import main
 from autoform_cli.graph import load_graph
 from autoform_cli.project import (
-    LibraryCatalog,
     ProjectCreateError,
+    ReleaseCatalog,
     create_project,
     inspect_project,
     load_library_catalog,
@@ -37,6 +38,9 @@ _RELEASE = "lean-v4.32.2-mathlib-v4.32.2"
 _CATALOG = load_release_catalog().releases
 _SOURCE = "https://example.test/owner/autoform.git"
 _CORE_FILES = ("lean-toolchain", "lakefile.toml", "lake-manifest.json", "src/Project.lean")
+_LOCK_FIELDS = {"url", "type", "subDir", "scope", "rev", "name", "manifestFile", "inputRev", "inherited", "configFile"}
+# A plain HTTPS Git URL, safe in a TOML basic string: no credentials, query, quote, backslash or control character.
+_PLAIN_HTTPS_GIT = re.compile(r"https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+")
 _UNLISTED_LAKEFILE = (
     'name = "Project"\n'
     'version = "0.1.0"\n'
@@ -212,20 +216,12 @@ def test_stray_files_in_local_templates_are_not_published(tmp_path: Path, monkey
     assert "README.md~" not in result.written
 
 
-@pytest.mark.parametrize("relative", _CORE_FILES)
-def test_a_template_cannot_replace_a_core_project_file(
-    relative: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    templates = tmp_path / "templates"
-    shutil.copytree(create_module._TEMPLATES, templates)
-    (templates / relative).parent.mkdir(exist_ok=True)
-    (templates / relative).write_text("template\n", encoding="utf-8")
-    monkeypatch.setattr(create_module, "_TEMPLATES", templates)
-    monkeypatch.setattr(scaffold_module, "_TEMPLATE_PATHS", scaffold_module._TEMPLATE_PATHS | {relative})
+def test_templates_and_generated_files_never_collide() -> None:
+    destinations = {scaffold_module._destination(relative) for relative in scaffold_module._TEMPLATE_PATHS}
 
-    error = _refused(tmp_path / "Project", "project-create-validation-failed")
-
-    assert error.message == create_module._CONTRACTS_MESSAGE
+    assert len(destinations) == len(scaffold_module._TEMPLATE_PATHS)
+    assert not {path for path in destinations if path in _CORE_FILES or path.startswith("src/")}
+    assert not {path for path in destinations if any(other.startswith(f"{path}/") for other in destinations)}
 
 
 def test_group_writable_installed_templates_publish_canonical_modes(
@@ -250,15 +246,12 @@ def test_group_writable_installed_templates_publish_canonical_modes(
 
 
 def test_missing_release_manifest_is_not_published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    release = load_release_catalog().recommended
-    descriptor = create_module._load_creation_release_descriptor(release)
-    monkeypatch.setattr(
-        create_module,
-        "_load_creation_release_descriptor",
-        lambda _release: replace(descriptor, manifest_resource="missing-release-manifest.json"),
-    )
+    unbundled = replace(load_release_catalog().recommended, id="lean-v4.32.2-mathlib-unbundled")
+    monkeypatch.setattr(create_module, "load_release_catalog", lambda: ReleaseCatalog((unbundled,)))
 
-    _refused(tmp_path / "Project", "project-create-validation-failed")
+    error = _refused(tmp_path / "Project", "project-create-validation-failed", release_id=None)
+
+    assert error.message == create_module._MANIFEST_MESSAGE
 
 
 def test_creates_complete_supported_project(tmp_path: Path) -> None:
@@ -346,6 +339,16 @@ def test_creates_complete_supported_project(tmp_path: Path) -> None:
         "LEANIR",
         "Mathlib",
         "MathLib",
+        "Archive",
+        "Cache",
+        "Counterexamples",
+        "MathlibTest",
+        "Init",
+        "Lake",
+        "LakeMain",
+        "LeanChecker",
+        "Leanc",
+        "Std",
         123,
     ],
 )
@@ -353,93 +356,44 @@ def test_rejects_invalid_package_before_writing(tmp_path: Path, package: object)
     _refused(tmp_path / "project", "project-name-invalid", package=package)
 
 
-def test_every_release_has_creation_contracts() -> None:
-    public_catalog = load_release_catalog()
-    public_json = public_catalog.to_json()
-    assert "production_module_roots" not in public_json
-    assert "project_manifest" not in public_json
-    for release in public_catalog.releases:
-        descriptor = create_module._load_creation_release_descriptor(release)
-        bundle = create_module._load_release_bundle(release)
-        assert descriptor.manifest_resource.endswith(".json")
-        assert bundle.module_roots == {
-            "Aesop",
-            "Archive",
-            "Batteries",
-            "Cache",
-            "Cli",
-            "Counterexamples",
-            "ImportGraph",
-            "Init",
-            "Lake",
-            "Lean",
-            "LeanSearchClient",
-            "Mathlib",
-            "MathlibTest",
-            "Plausible",
-            "ProofWidgets",
-            "Qq",
-            "Std",
+@pytest.mark.parametrize("release", _CATALOG, ids=lambda release: release.id)
+def test_every_release_ships_the_lake_manifests_project_new_writes(release) -> None:
+    # `project new` writes the bundled data as it is, so a broken release or library fails here, before it ships.
+    assert [item.id for item in _CATALOG].count(release.id) == 1
+    pair = (release.lean_toolchain, release.mathlib_commit)
+    assert [(item.lean_toolchain, item.mathlib_commit) for item in _CATALOG].count(pair) == 1
+    assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", release.id)  # it names the manifest resource
+    assert create_module._LEAN_TOOLCHAIN.fullmatch(release.lean_toolchain)
+    assert re.fullmatch(r"[0-9a-f]{40}", release.mathlib_commit)  # `match` lowercases only the project's commit
+    assert _PLAIN_HTTPS_GIT.fullmatch(release.mathlib_git)  # the lakefile splices it and the revision
+    assert create_module._valid_mathlib_revision(release.mathlib_rev)
+    assert type(release.recommended) is bool
+    libraries = [library for library in load_library_catalog().libraries if library.release == release.id]
+    for library in (None, *libraries):
+        assert library is None or _PLAIN_HTTPS_GIT.fullmatch(library.git)  # the lakefile splices it too
+        manifest = create_module._release_manifest(release, library)
+        packages = manifest.pop("packages")
+        assert manifest == {
+            "version": "1.2.0", "packagesDir": ".lake/packages", "name": "", "lakeDir": ".lake", "fixedToolchain": False
         }
-
-
-@pytest.mark.parametrize("resource", ["manifest\ue000.json", "manifest\U0001f600.json"])
-def test_release_metadata_names_its_manifest_below_the_surrogate_range(
-    monkeypatch: pytest.MonkeyPatch, resource: str
-) -> None:
-    release = load_release_catalog().recommended
-    name = f"creation-release-{release.id}.json"
-    payload = json.loads(create_module.files("autoform_cli.project").joinpath(name).read_bytes())
-    payload["lake_manifest"] = resource
-
-    class Resources:
-        def joinpath(self, _name: str) -> Resources:
-            return self
-
-        def read_bytes(self) -> bytes:
-            return json.dumps(payload).encode()
-
-    monkeypatch.setattr(create_module, "files", lambda _package: Resources())
-
-    with pytest.raises(ProjectCreateError) as raised:
-        create_module._load_creation_release_descriptor(release)
-
-    assert raised.value.code == "project-create-validation-failed"
-
-
-@pytest.mark.parametrize("missing", ["Aesop", "Archive", "Counterexamples"])
-def test_release_metadata_must_cover_manifest_and_mathlib_production_roots(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str
-) -> None:
-    release = load_release_catalog().recommended
-    descriptor = create_module._load_creation_release_descriptor(release)
-    changed = replace(descriptor, module_roots=tuple(root for root in descriptor.module_roots if root != missing))
-    monkeypatch.setattr(create_module, "_load_creation_release_descriptor", lambda _release: changed)
-
-    _refused(tmp_path / "Project", "project-create-validation-failed")
-
-
-@pytest.mark.parametrize("corruption", ["top-level-key", "revision", "credentials", "traversal", "inherited-type"])
-def test_release_bundle_rejects_non_generated_manifest_shapes(corruption: str) -> None:
-    release = load_release_catalog().recommended
-    descriptor = create_module._load_creation_release_descriptor(release)
-    bundle = create_module._load_release_bundle(release)
-    payload = json.loads(bundle.manifest_bytes)
-    if corruption == "top-level-key":
-        payload["unexpected"] = True
-    elif corruption == "revision":
-        payload["packages"][1]["rev"] = "main"
-    elif corruption == "credentials":
-        payload["packages"][1]["url"] = "https://user:secret@example.test/repo"
-    elif corruption == "traversal":
-        payload["packages"][1]["manifestFile"] = "../lake-manifest.json"
-    else:
-        payload["packages"][1]["inherited"] = 1
-
-    with pytest.raises(ProjectCreateError) as raised:
-        create_module._parse_release_bundle(json.dumps(payload).encode(), release, descriptor.module_roots)
-
-    assert raised.value.code == "project-create-validation-failed"
+        names = [entry["name"].casefold() for entry in packages]
+        assert len(set(names)) == len(names)  # Lake refuses two packages of one name
+        if library is None:
+            assert set(names) <= {root.casefold() for root in create_module._RESERVED_ROOTS}
+        for entry in packages:
+            assert set(entry) == _LOCK_FIELDS and re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", entry["name"])
+            assert entry["type"] == "git" and _PLAIN_HTTPS_GIT.fullmatch(entry["url"])
+            assert re.fullmatch(r"[0-9a-f]{40}", entry["rev"]) and entry["inputRev"].isprintable() and entry["inputRev"]
+            assert type(entry["inherited"]) is bool and type(entry["scope"]) is str and entry["subDir"] is None
+            assert entry["manifestFile"] == "lake-manifest.json"
+            assert entry["configFile"] in {"lakefile.lean", "lakefile.toml"}
+        direct = [entry for entry in packages if not entry["inherited"]]
+        own = [] if library is None else [library.name]
+        assert [entry["name"] for entry in direct] == [*own, "mathlib"]
+        mathlib = direct[-1]
+        assert (mathlib["url"], mathlib["inputRev"], mathlib["rev"], mathlib["configFile"]) == (
+            release.mathlib_git, release.mathlib_rev, release.mathlib_commit, "lakefile.lean"
+        )
 
 
 def test_package_name_reserves_the_longest_lake_artifact_filename(tmp_path: Path) -> None:
@@ -778,42 +732,6 @@ def test_injected_build_failure_preserves_the_empty_stage(tmp_path: Path, monkey
     stages = list(tmp_path.glob(".autoform-new-*"))
     assert len(stages) == 1
     assert not list(stages[0].iterdir())
-
-
-def test_invalid_planned_roadmap_is_never_published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    target = tmp_path / "project"
-    original = create_module._build_project_plan
-
-    def corrupt(*args, **kwargs):
-        return tuple(
-            type(item)(item.relative, b"No H1 title.\n", item.mode)
-            if item.relative == "blueprint/roadmap/README.md"
-            else item
-            for item in original(*args, **kwargs)
-        )
-
-    monkeypatch.setattr(create_module, "_build_project_plan", corrupt)
-
-    _refused(target, "project-create-validation-failed")
-
-
-@pytest.mark.parametrize("corruption", ["relative", "mode"])
-def test_plan_requires_safe_paths_and_file_modes_before_writing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, corruption: str
-) -> None:
-    original = create_module._build_project_plan
-
-    def corrupt(*args, **kwargs):
-        first, *rest = original(*args, **kwargs)
-        changed = {
-            "relative": type(first)(Path(first.relative), first.content, first.mode),
-            "mode": type(first)(first.relative, first.content, 0o666),
-        }[corruption]
-        return (changed, *rest)
-
-    monkeypatch.setattr(create_module, "_build_project_plan", corrupt)
-
-    _refused(tmp_path / "Project", "project-create-validation-failed")
 
 
 def test_close_failure_after_publish_reports_that_the_target_exists(
@@ -2043,28 +1961,6 @@ def test_library_roots_and_packages_are_reserved(tmp_path: Path, package: str) -
 
 def test_library_roots_are_reserved_only_with_the_library(tmp_path: Path) -> None:
     create_project(tmp_path / "Project", package="WantedExt", release_id=_ATLAS_RELEASE)
-
-
-def _catalog_with_packages(*packages: dict) -> LibraryCatalog:
-    atlas = load_library_catalog().get("atlas")
-    return LibraryCatalog((replace(atlas, manifest_packages=(_ATLAS_ENTRY, *packages)),))
-
-
-@pytest.mark.parametrize(
-    "extra",
-    [
-        {**_CSLIB_ENTRY, "rev": "7c8f6c0f"},  # not a full commit
-        {**_CSLIB_ENTRY, "url": "http://github.com/leanprover/cslib"},
-        {**_CSLIB_ENTRY, "extra": 1},
-        {**_CSLIB_ENTRY, "name": "batteries"},  # the release already locks it
-        {**_CSLIB_ENTRY, "name": "Mathlib"},  # case-folded duplicate
-    ],
-)
-def test_malformed_library_entries_are_refused_before_writing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: dict
-) -> None:
-    monkeypatch.setattr(create_module, "load_library_catalog", lambda: _catalog_with_packages(extra))
-    _refused(tmp_path / "Project", "project-create-validation-failed", release_id=None, library="atlas")
 
 
 def test_cli_creates_a_library_project(tmp_path: Path, capsys) -> None:
