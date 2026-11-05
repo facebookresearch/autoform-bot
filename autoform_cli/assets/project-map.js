@@ -203,7 +203,7 @@
   var stageSize = null;      // the stage the world was packed for
   function packRoot() {
     var root = part(ROOT), top = L.packLevels(model.index, stageSize);
-    // On the host, so the page can tell when the world repacks.
+    // For the browser tests: the shape the world was last packed for.
     host.dataset.pmPacked = stageSize.w >= stageSize.h ? "landscape" : "portrait";
     root.box = top.root;
     root.kids.forEach(function (id) { part(id).box = top.boxes[id] || null; });

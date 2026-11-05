@@ -454,11 +454,13 @@
           var relations = target.querySelector(".bp-dependencies"); if (relations) relations.open = true;
           if (!bundle.snapshot) dom$readingBody.scrollTop += target.getBoundingClientRect().top - dom$readingBody.getBoundingClientRect().top - 24;
         }
-        if (bundle.focus && !mapRequested && dom$readingBody && !bundle.snapshot) {
+        // A hidden reader takes no focus; the map does, as when the map is asked for.
+        var readerShown = !host.classList.contains("bp-dag-reading-hidden");
+        if (bundle.focus && !mapRequested && readerShown && dom$readingBody && !bundle.snapshot) {
           var readingTarget = dom$readingBody.querySelector(".bp-reading-current .bp-thmheading") ||
             dom$readingBody.querySelector(".bp-reading-current") || dom$readingBody.querySelector("h1");
           if (readingTarget) { readingTarget.tabIndex = -1; readingTarget.focus({preventScroll: true}); }
-        } else if (bundle.focus && mapRequested && !bundle.snapshot) {
+        } else if (bundle.focus && (mapRequested || !readerShown) && !bundle.snapshot) {
           var control = mapControl(); if (control) control.focus({preventScroll: true});
         }
         resolve();
@@ -934,18 +936,23 @@
     }
 
     // Topics and the reading pane can be dragged wider or narrower, or hidden, and the choice holds on every page of the
-    // site. Dragging a pane nearly shut hides it, as Enter on its splitter does; a tab at the map's edge brings it back.
+    // site and on other Autoform sites on its host. Dragging a pane nearly shut hides it, as Enter on its splitter does; a
+    // tab at the map's edge brings it back.
     function bindPanes() {
       var key = "autoform:book-panes:v1", panes = {};
-      try { panes = JSON.parse(window.localStorage.getItem(key)) || {}; } catch (error) { panes = {}; }
+      try { panes = JSON.parse(window.localStorage.getItem(key)); } catch (error) { panes = null; }
+      // A stored value of another shape, or a width that isn't a number, is dropped rather than written into the grid.
+      if (!panes || typeof panes !== "object" || Array.isArray(panes)) panes = {};
+      ["topics", "reading"].forEach(function (side) { if (!Number.isFinite(panes[side])) delete panes[side]; });
       var main = dom$body.querySelector(".bp-dag-main"), context = host.querySelector(".bp-dag-context");
-      function splitter(label) {
-        var bar = element("div", "bp-dag-splitter"); bar.tabIndex = 0; bar.title = label + "; double-click resets";
+      var paneOf = {topics: dom$navigation, reading: dom$inspector};
+      // In tab order Topics' splitter follows Topics, and the reader's comes just before the reader.
+      function splitter(label, before) {
+        var bar = element("div", "bp-dag-splitter"); bar.tabIndex = 0; bar.title = label + "; Enter hides, double-click or Delete resets";
         bar.setAttribute("role", "separator"); bar.setAttribute("aria-orientation", "vertical"); bar.setAttribute("aria-label", label);
-        bar.setAttribute("aria-valuemin", "0"); bar.setAttribute("aria-valuemax", "100");
-        dom$body.appendChild(bar); return bar;
+        dom$body.insertBefore(bar, before); return bar;
       }
-      var bars = {topics: splitter("Resize Topics"), reading: splitter("Resize the reading pane")};
+      var bars = {topics: splitter("Resize Topics", main), reading: splitter("Resize the reading pane", dom$inspector)};
       var tabs = {topics: button("bp-dag-pane-tab bp-dag-pane-tab-topics", "Topics", "Show Topics"),
         reading: button("bp-dag-pane-tab bp-dag-pane-tab-reading", "Reading", "Show the reading pane")};
       main.append(tabs.topics, tabs.reading);
@@ -962,8 +969,7 @@
       function apply() {
         var focused = document.activeElement;
         ["topics", "reading"].forEach(function (side) {
-          var pane = side === "topics" ? dom$navigation : dom$inspector, hide = hidden(side);
-          var lost = hide && (pane.contains(focused) || bars[side] === focused);
+          var hide = hidden(side), lost = hide && (paneOf[side].contains(focused) || bars[side] === focused);
           host.classList.toggle("bp-dag-" + side + "-hidden", hide);
           tabs[side].hidden = !hide;
           if (lost) tabs[side].focus();
@@ -973,10 +979,11 @@
         if (panes.reading) host.style.setProperty("--dag-reading-width", "minmax(300px, " + (100 * panes.reading).toFixed(2) + "%)");
         else host.style.removeProperty("--dag-reading-width");
         var shut = hidden("reading") && (hidden("topics") || !wide());
-        mapOnly.setAttribute("aria-pressed", String(shut)); mapOnly.title = shut ? "Show Topics and the reading pane" : "Hide Topics and the reading pane";
+        pressed(mapOnly, shut); mapOnly.title = shut ? "Show Topics and the reading pane" : "Hide Topics and the reading pane";
         place();
       }
-      // Each splitter sits on its pane's inner edge; the overview's collapsed reader and a drawer have none.
+      // Each splitter sits on its pane's inner edge and reports its pane's share of the width; the overview's collapsed
+      // reader and a drawer have none.
       function place() {
         var width = dom$body.clientWidth || 1;
         bars.topics.hidden = !wide() || sheetLayout() || hidden("topics");
@@ -987,20 +994,20 @@
         }
         if (!bars.reading.hidden) {
           bars.reading.style.left = (dom$inspector.offsetLeft - 4) + "px";
-          bars.reading.setAttribute("aria-valuenow", String(Math.round(100 * dom$inspector.offsetLeft / width)));
+          bars.reading.setAttribute("aria-valuenow", String(Math.round(100 * dom$inspector.offsetWidth / width)));
         }
       }
       function save() { try { window.localStorage.setItem(key, JSON.stringify(panes)); } catch (error) { /* A preference only. */ } }
-      // A width from the pointer or the keys, kept within bounds: Topics 160-480px, the reader 300px up to all but 160px of the
-      // map. Returns whether the pane was pulled nearly shut, which hides it when the drag ends.
+      // A width from the pointer or the keys, kept within bounds: Topics 160-480px, the reader 300px up to where the map keeps
+      // 160px (the grid keeps that floor too, when Topics or the window changes later). A drawer floats over the map and
+      // takes none of it. Returns whether the pane was pulled nearly shut, which hides it when the drag ends.
       function resizeTo(side, size) {
         var width = dom$body.clientWidth;
-        if (side === "topics") panes.topics = Math.round(Math.min(480, Math.max(160, size)));
-        else panes.reading = Math.min(width - dom$navigation.offsetWidth - 160, Math.max(300, size)) / width;
+        if (side === "topics") panes.topics = Math.round(clamp(size, 160, 480));
+        else panes.reading = clamp(size, 300, width - (wide() ? dom$navigation.offsetWidth : 0) - 160) / width;
         apply();
         return size < (side === "topics" ? 100 : 160);
       }
-      function current(side) { return side === "topics" ? dom$navigation.offsetWidth : dom$inspector.offsetWidth; }
       function show(side, shown) { panes[side + "Hidden"] = !shown; apply(); save(); }
       Object.keys(bars).forEach(function (side) {
         var bar = bars[side];
@@ -1009,7 +1016,8 @@
           event.preventDefault(); bar.focus({preventScroll: true});
           if (bar.setPointerCapture) bar.setPointerCapture(event.pointerId);
           host.classList.add("bp-dag-resizing");
-          var shut = false;
+          // A pane dragged shut comes back at the width it had before the drag.
+          var shut = false, before = panes[side];
           function move(moved) {
             var box = dom$body.getBoundingClientRect();
             shut = resizeTo(side, side === "topics" ? moved.clientX - box.left : box.right - moved.clientX);
@@ -1017,25 +1025,38 @@
           function end() {
             ["pointermove", "pointerup", "pointercancel"].forEach(function (type, index) { bar.removeEventListener(type, index ? end : move); });
             host.classList.remove("bp-dag-resizing");
-            if (shut) panes[side + "Hidden"] = true;
+            if (shut) { panes[side + "Hidden"] = true; panes[side] = before; }
             apply(); save();
           }
           ["pointermove", "pointerup", "pointercancel"].forEach(function (type, index) { bar.addEventListener(type, index ? end : move); });
         });
-        bar.addEventListener("dblclick", function () { delete panes[side]; apply(); save(); });
+        function reset() { delete panes[side]; apply(); save(); }
+        bar.addEventListener("dblclick", reset);
         bar.addEventListener("keydown", function (event) {
           var step = event.shiftKey ? 64 : 16, grow = side === "topics" ? "ArrowRight" : "ArrowLeft", shrink = side === "topics" ? "ArrowLeft" : "ArrowRight";
-          if (event.key === grow || event.key === shrink) resizeTo(side, current(side) + (event.key === grow ? step : -step));
-          else if (event.key === "Home" || event.key === "End") resizeTo(side, (event.key === "End") === (side === "topics") ? Infinity : 0);
+          if (event.key === grow || event.key === shrink) resizeTo(side, paneOf[side].offsetWidth + (event.key === grow ? step : -step));
+          else if (event.key === "Home" || event.key === "End") resizeTo(side, event.key === "End" ? Infinity : 0);
           else if (event.key === "Enter") show(side, false);
+          else if (event.key === "Delete") reset();
           else return;
           event.preventDefault(); save();
         });
-        tabs[side].addEventListener("click", function () { show(side, true); bars[side].focus({preventScroll: true}); });
+        // An overview's reader comes back as its collapsed handle, which has no splitter: the handle takes focus.
+        tabs[side].addEventListener("click", function () {
+          show(side, true); (bars[side].hidden ? dom$sheetHandle : bars[side]).focus({preventScroll: true});
+        });
       });
+      // Where Topics is a drawer, Map only hides the reader and closes the drawer, leaving the wide layout's Topics alone.
       mapOnly.addEventListener("click", function () {
         var shut = mapOnly.getAttribute("aria-pressed") === "true";
-        panes.topicsHidden = panes.readingHidden = !shut; apply(); save();
+        panes.readingHidden = !shut;
+        if (wide()) panes.topicsHidden = !shut;
+        else if (!shut && host.classList.contains("bp-dag-outline-open")) {
+          host.classList.remove("bp-dag-outline-open");
+          if (dom$outlineToggle) dom$outlineToggle.setAttribute("aria-expanded", "false");
+          remember();
+        }
+        apply(); save();
       });
       if (window.ResizeObserver) { var ro = new ResizeObserver(place); ro.observe(dom$inspector); ro.observe(dom$navigation); observers.push(ro); }
       globalListen(window, "resize", apply);

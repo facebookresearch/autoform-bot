@@ -538,7 +538,7 @@ def test_explorer_head_switches_materials_palette_from_the_trail_row() -> None:
     assert "width: 32px; min-height: 32px;" in rule and "border: 0;" in rule
     # A drawn icon, not a glyph each fallback font sizes its own way; touch reaches 44px through ::after, not a taller row.
     assert ".bp-dag-viewer .bp-dag-theme svg { display: block; width: 18px; height: 18px;" in style
-    assert '.bp-dag-viewer .bp-dag-theme::after { content: ""; position: absolute; inset: -6px; }' in style and "position: relative;" in rule
+    assert '.bp-dag-viewer :is(.bp-dag-theme, .bp-dag-map-only)::after { content: ""; position: absolute; inset: -6px; }' in style and "position: relative;" in rule
     coarse = style.split("@media (pointer: coarse) {\n", 1)[1].split("\n}", 1)[0]
     assert ".bp-dag-theme" not in coarse and '"◐"' not in script
 
