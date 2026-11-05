@@ -1330,7 +1330,8 @@ def _qualified(namespaces: list[str], name: str) -> str:
 # `'`, `!`, `?` and subscripts; or quoted, guillemets around any other text, so
 # `«»` and `«a.b c»` are components. Lean also lets a quoted component hold `«`:
 # no real name does, and refusing it keeps a stray `«` in source text from
-# reaching ahead to the next `»`.
+# reaching ahead to the next `»`. project/_lake_metadata.py reads Lake names with
+# _ID_LETTER and _ID_REST, so those two stay exactly Lean's classes.
 _QUOTED_COMPONENT = r"«[^«»]*»"
 _ID_LETTER = (
     r"A-Za-z_\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u017f"
