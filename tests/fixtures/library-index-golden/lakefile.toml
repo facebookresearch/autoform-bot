@@ -1,0 +1,10 @@
+name = "gold"
+defaultTargets = ["Gold"]
+
+[[require]]
+name = "mathlib"
+git = "https://example.invalid/mathlib"
+rev = "main"
+
+[[lean_lib]]
+name = "Gold"
