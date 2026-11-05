@@ -385,3 +385,10 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-viewer.bp-dag-viewer .bp-dag-map-unavailable { position: absolute; top: 50%; left: 50%; width: max-content; max-width: calc(100% - 32px); margin: 0; padding: 10px 14px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); background: var(--dag-bg); color: var(--dag-muted); box-shadow: var(--dag-e1); font-size: 14px; line-height: 1.45; text-align: center; transform: translate(-50%, -50%); }
 /* The map dims what the filter leaves out and hides nothing; a list still offers what it hid. */
 .bp-dag-integrated:has(.bp-dag-stage:not([hidden]) > .bp-whole-map) .bp-dag-hidden-button { display: none !important; }
+/* The card a name in a statement's Lean shows on hover or focus: the declaration it names, and its file. */
+.bp-dag-viewer .bp-lean-card { position: fixed; z-index: 30; width: max-content; max-width: min(560px, calc(100vw - 16px)); max-height: min(360px, 50vh); overflow: auto; padding: 8px 12px; border: 1px solid var(--dag-overlay-border); border-radius: var(--dag-radius-panel); background: var(--dag-bg); color: var(--dag-fg); font-size: 12px; box-shadow: var(--dag-e2); }
+.bp-dag-viewer .bp-lean-card[hidden] { display: none; }
+/* The card is the code's only frame, as the block is its statement's. */
+.bp-dag-viewer .bp-lean-card :is(.bp-lean, .bp-lean > code) { margin: 0; padding: 0; border: 0; background: none; }
+.bp-dag-viewer .bp-lean-card-name { margin: 0 0 6px; font-family: var(--dag-mono); font-weight: 600; overflow-wrap: anywhere; }
+.bp-dag-viewer .bp-lean-card .bp-lean-where { margin: 6px 0 0; color: var(--dag-muted); font-family: var(--dag-mono); }

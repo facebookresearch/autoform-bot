@@ -99,6 +99,8 @@ _SCANNED_LINE = re.compile(
 #: a ``where`` block, a trailing clause (not the ``deriving instance`` command) or a closing bracket,
 #: which starts no command.
 _CONTINUATION = re.compile(r"\s*(?:[|)\]}⟩⦄]|(?:where|deriving(?!\s+instance\b)|termination_by|decreasing_by)\b)")
+#: An ``open`` command's namespaces, up to the clause, if any, that limits what it opens.
+_OPEN = re.compile(r"^[ \t]*open[ \t]+(?:scoped[ \t]+)?([^\n(]*)", re.MULTILINE)
 # Core command heads and their modifiers cannot supply a declaration's name.
 # Compare complete identifiers: `open'`, `Qualified.open` and `«open»` are names.
 # These cover the core command parsers and their stock syntax extensions. The
@@ -1337,6 +1339,12 @@ _ID_LETTER = (
 _ID_REST = rf"[{_ID_LETTER}0-9'!?\u2080-\u2089\u2090-\u209c\u1d62-\u1d6a\u2c7c]*"
 _ID_COMPONENT = rf"(?:{_QUOTED_COMPONENT}|[{_ID_LETTER}]{_ID_REST})"
 _CONTINUATION_IDENTIFIER = re.compile(rf"{_ID_COMPONENT}(?:\.{_ID_COMPONENT})*")
+#: The names a binder introduces: before the colon of a bracketed binder, or after ``fun``, a quantifier,
+#: ``let``, ``have`` or ``obtain``. An instance binder with no name binds none.
+_BINDER = re.compile(
+    rf"(?:[(\[{{⦃]\s*((?:{_ID_COMPONENT}\s+)*{_ID_COMPONENT})\s*:(?!=)"
+    rf"|(?:\b(?:fun|let|have|obtain)\b|[λ∀∃])!?\s*((?:{_ID_COMPONENT}\s+)*{_ID_COMPONENT}))"
+)
 #: Lean's ASCII identifiers (isIdFirstAscii and isIdRestAscii): the only module
 #: names the impact probe imports and a library index holds.
 _ASCII_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_'!?]*")
@@ -1642,6 +1650,22 @@ def declaration_text(lines: list[str], declaration: Declaration) -> str:
     return "\n".join(lines[start:end])
 
 
+def _opened(text: str) -> list[tuple[int, list[str]]]:
+    """Each ``open`` command in *text*: its line and the namespaces it opens, scoping ignored."""
+
+    found = []
+    for match in _OPEN.finditer(text):
+        names = re.split(r"\s(?:hiding|renaming|in)\b", match[1])[0]
+        found.append((text.count("\n", 0, match.start()) + 1, _CONTINUATION_IDENTIFIER.findall(names)))
+    return found
+
+
+def bound_names(text: str) -> frozenset[str]:
+    """The local names a binder in *text*, Lean, introduces, which name no declaration there."""
+
+    return frozenset(name for match in _BINDER.finditer(text) for name in (match[1] or match[2]).split())
+
+
 @dataclass(frozen=True, slots=True)
 class SourceLinker:
     """Build permalinks into, and excerpts of, the project's Lean sources."""
@@ -1660,6 +1684,7 @@ class SourceLinker:
     sources: Mapping[Path, bytes] = field(default_factory=dict)
     """Each captured Lean file's bytes, by its path below the Lean root."""
     _lines: dict[Path, list[str]] = field(default_factory=dict, repr=False, compare=False)
+    _opens: dict[Path, list[tuple[int, list[str]]]] = field(default_factory=dict, repr=False, compare=False)
 
     def excerpt(self, name: str) -> tuple[Declaration, str] | None:
         """*name*'s declaration and its text as written, or ``None`` if *name* or its file was not captured
@@ -1675,6 +1700,34 @@ class SourceLinker:
             self._lines[declaration.path] = lines
         lines = self._lines[declaration.path]
         return (declaration, declaration_text(lines, declaration)) if declaration.line <= len(lines) else None
+
+    def resolve(self, written: str, within: Declaration) -> tuple[Declaration, str] | None:
+        """The declaration *written*, a name in *within*'s text, refers to, and the part of *written* that
+        names it, or ``None`` if none was indexed: in ``Base.succ``, ``Base`` may name a declaration whose
+        field ``succ`` is.
+
+        Like Lean, look in each namespace around *within*, innermost first, then in each namespace an
+        ``open`` above it in its file names. The index knows no local names or ``variable`` binders;
+        callers skip what :func:`bound_names` finds.
+        """
+        if within.path not in self._opens:
+            self._opens[within.path] = _opened(self.sources.get(within.path, b"").decode("utf-8", "replace"))
+        opened = [name for line, names in self._opens[within.path] if line <= within.line for name in names]
+        parts = _name_parts(within.name)[:-1]
+        spaces = [".".join(parts[:count]) for count in range(len(parts), -1, -1)]
+        spaces += [f"{space}.{name}".lstrip(".") for name in opened for space in spaces]
+        written_parts = _name_parts(written)
+        for count in range(len(written_parts), 0, -1):
+            prefix = ".".join(written_parts[:count])
+            if prefix.startswith("_root_."):
+                candidates = [prefix.removeprefix("_root_.")]
+            else:
+                candidates = [f"{space}.{prefix}" if space else prefix for space in spaces]
+            for candidate in candidates:
+                found = self.index.find(candidate)
+                if found is not None and found != within:
+                    return found, prefix
+        return None
 
     def location(self, name: str) -> Declaration | None:
         return self.index.find(name)
@@ -1709,6 +1762,7 @@ __all__ = [
     "SourceIndex",
     "SourceLinker",
     "bind_project_source_snapshot",
+    "bound_names",
     "declaration_names",
     "declaration_text",
     "index_failure_message",

@@ -31,6 +31,7 @@ from autoform_cli.lean import (
     Alias,
     Declaration,
     SourceLinker,
+    bound_names,
     declaration_names,
     declaration_text,
     index_project,
@@ -4112,6 +4113,40 @@ def test_an_excerpt_reads_the_captured_file(tmp_path: Path) -> None:
     assert linker.excerpt("Outer.missing") is None
     # A file the render did not capture has no excerpt.
     assert SourceLinker(index=index).excerpt("Outer.alpha") is None
+
+
+def test_a_name_resolves_in_its_namespaces_then_in_what_its_file_opens(tmp_path: Path) -> None:
+    text = (
+        "namespace A\ndef base : Nat := 0\ndef fact : Nat → Nat\n  | 0 => 1\n  | n + 1 => fact n\n"
+        "namespace B\ndef base : Nat := 1\ndef top : Nat := base + A.base\nend B\nend A\n"
+        "namespace Tools\ndef twice (x : Nat) : Nat := x + x\nend Tools\n"
+        "open Tools in\ndef after : Nat := twice 1 + A.B.top.succ\n"
+    )
+    index = _index(tmp_path, text)
+    linker = SourceLinker(index=index, sources={Path("Project/Basic.lean"): text.encode()})
+
+    def resolved(written: str, within: str) -> tuple[str, str] | None:
+        found = linker.resolve(written, index.find(within))
+        return found and (found[0].name, found[1])
+
+    # The innermost namespace first, then the outer ones, then the root.
+    assert resolved("base", "A.B.top") == ("A.B.base", "base")
+    assert resolved("A.base", "A.B.top") == ("A.base", "A.base")
+    assert resolved("_root_.A.base", "A.B.top") == ("A.base", "_root_.A.base")
+    # A namespace an open above names, and the name before a field, which names no declaration itself.
+    assert resolved("twice", "after") == ("Tools.twice", "twice")
+    assert resolved("A.B.top.succ", "after") == ("A.B.top", "A.B.top")
+    assert resolved("twice", "A.B.top") is None
+    # A declaration does not name itself: its recursive call names nothing else.
+    assert resolved("fact", "A.fact") is None
+    assert resolved("missing", "A.B.top") is None
+
+
+def test_a_binder_names_no_declaration() -> None:
+    assert bound_names("theorem top {α : Type} [inst : Group α] [Ring α] (n m : Nat) (h : 0 < n) :") == {"α", "inst", "n", "m", "h"}
+    assert bound_names("∀ x ∈ s, ∃! y, fun z => let w := z; have hw : w = z := rfl") == {"x", "y", "z", "w", "hw"}
+    # An instance binder with no name and a default value bind nothing.
+    assert bound_names("[Group G] (x := 0)") == frozenset()
 
 
 def _git_commit(root: Path, message: str, path: str = ".") -> str:
