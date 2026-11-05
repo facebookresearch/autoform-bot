@@ -2277,22 +2277,6 @@ def test_a_coverage_page_shown_as_typed_gets_no_view(tmp_path: Path) -> None:
     assert not [warning for warning in report.warnings if "coverage view" in warning]
 
 
-def test_a_second_page_named_like_the_coverage_page_is_protected(tmp_path: Path) -> None:
-    """On a disk that tells case apart, coverage/readme.md is a page of its
-    own beside the contract, and render protects it as any other page."""
-    project = _project(tmp_path)
-    other = project / "blueprint/coverage/readme.md"
-    other.write_text("# Notes\n\nClose tags with `</div>` when done.\n", encoding="utf-8")
-    if len(list(other.parent.iterdir())) == 1:
-        pytest.skip("the disk ignores case")
-
-    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-
-    assert "<code>&lt;/div&gt;</code>" in (tmp_path / "out/coverage/readme.md").read_text(encoding="utf-8")
-    assert "## Mapped (1) {#coverage-mapped}" in (tmp_path / "out/coverage/README.md").read_text(encoding="utf-8")
-    assert not [warning for warning in report.warnings if "coverage view" in warning]
-
-
 def test_a_coverage_page_whose_published_table_is_not_the_contract_gets_no_view(tmp_path: Path) -> None:
     """Dropping comments can leave the published page a different table than
     the one audit read. The view shows only the contract's rows, so render

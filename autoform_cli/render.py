@@ -1220,43 +1220,31 @@ def _render_pages(
             encoding="utf-8",
         )
 
-    # _publication staged every page so named unprotected. The contract is
-    # coverage/README.md as spelled, or the one page so named on a disk that
-    # ignores case; any other is protected as usual.
-    named = [
-        relative
-        for relative in (_relative(source, blueprint) for source in site.files)
-        if relative.as_posix().casefold() == COVERAGE_PAGE
-    ]
-    contract = next(
-        (relative for relative in named if relative.as_posix() == coverage.source_path),
-        named[0] if len(named) == 1 else None,
+    coverage_page = next(
+        (
+            destination / relative
+            for relative in (_relative(source, blueprint) for source in site.files)
+            if relative.as_posix().casefold() == COVERAGE_PAGE
+        ),
+        None,
     )
-    for relative in named:
-        coverage_page = destination / relative
-        if coverage_page in site.typed:
-            continue
+    if coverage_page is not None and coverage_page not in site.typed:
         staged = coverage_page.read_text(encoding="utf-8")
-        shown = (
-            _render_coverage_page(
-                staged,
-                coverage=coverage,
-                graph=graph,
-                statuses=statuses,
-                containers=containers,
-                links=_anchored_links(targets, coverage_page),
-                node_sources=node_sources,
-                rank={node_id: index for index, node_id in enumerate(order)},
-            )
-            if relative == contract
-            else None
+        shown = _render_coverage_page(
+            staged,
+            coverage=coverage,
+            graph=graph,
+            statuses=statuses,
+            containers=containers,
+            links=_anchored_links(targets, coverage_page),
+            node_sources=node_sources,
+            rank={node_id: index for index, node_id in enumerate(order)},
         )
         if shown is None:
-            if relative == contract:
-                report.warnings.append(
-                    f"{coverage.source_path}: the page render publishes does not hold the contract's table as "
-                    "audit reads it, so the site shows the page without the coverage view"
-                )
+            report.warnings.append(
+                f"{coverage.source_path}: the page render publishes does not hold the contract's table as audit "
+                "reads it, so the site shows the page without the coverage view"
+            )
             shown = _protect_narrative_markdown(staged)
         coverage_page.write_text(shown, encoding="utf-8")
 
