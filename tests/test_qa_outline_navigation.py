@@ -76,7 +76,7 @@ window.matchMedia=()=>({matches:true});
 )
 
 _PHONE_CALLBACKS = [
-    "captureState", "snapshotForRoute", "applyRoute", "selection", "restoreState", "setFilters", "setBrowse", "sheetLayout", "mapControl",
+    "captureState", "snapshotForRoute", "applyRoute", "plainTitle", "selection", "restoreState", "setFilters", "setBrowse", "sheetLayout", "mapControl",
 ]
 
 _INVENTORY_PEERS = _OUTLINE_PEERS + r"""

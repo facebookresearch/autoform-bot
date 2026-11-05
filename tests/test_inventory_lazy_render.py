@@ -27,7 +27,7 @@ function original(name) {
 }
 const names=['element','readingLabel','refreshReadingLabels','button','bindNodeLink','statusLabel','searchScore','rankMatches','inventoryNodes','inCurrentScope','sourceNodes','renderInventory',
   'setMode','refresh','snapshotForRoute','selection','restoreState','writeLocation','renderReaderContext','topicPeers','semanticParent',
-  'placeOf','recordId','pendingMath','summaryLine','searchMatches','adoptIndex','useIndex'];
+  'placeOf','plainTitle','recordId','pendingMath','summaryLine','searchMatches','adoptIndex','useIndex'];
 const constants=['LIST_PAGE','plural','num','pressed'].map(name=>{
   const start=source.indexOf('  var '+name+' =');assert(start>=0);
   const declaration=source.slice(start,source.indexOf('\n',start));new vm.Script(declaration);return declaration;
