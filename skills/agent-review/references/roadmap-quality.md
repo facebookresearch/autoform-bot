@@ -8,11 +8,11 @@ scope against the sources, then inspect the fine DAG and its coarse roadmap.
 1. Read the coverage contract and the cited source passages; summaries are not
    substitutes for the source.
 2. Run `autoform check` with `--lean-root` and inspect the project, chapter, and
-   node-neighborhood graphs. Treat each warning that a shared library
-   declaration's docstring cites one of the blueprint's sources as a library hit
-   for item 5, and a warning about a module's docstring as a hit for each
-   declaration it counts; search the module's name with `--library` to list
-   them all.
+   node-neighborhood graphs. Treat each warning that a library declaration's
+   docstring cites a blueprint source as a library hit for item 5, and one about
+   a module's docstring as a hit for each declaration it counts: search the
+   module's name with `--library`, `--json`, and `--limit` at least its
+   `total_matches`, and keep the hits whose `module` is exactly that name.
 3. Inspect every milestone and every node in the requested review scope, with
    its hidden `blueprint/.implementation-notes/<article_id>.md` when present.
 4. Distinguish statement prerequisites from proof-only prerequisites.

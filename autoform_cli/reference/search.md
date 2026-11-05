@@ -77,67 +77,67 @@ exists, and `library list` decides whether the package is usable.
 
 The index is the file `autoform-library-index.jsonl` at the package root, or the
 file given as `--library NAME=PATH`. Its format, `autoform-library-index/v0`,
-may change without notice until it becomes `v1`. Before an index is used, search
-checks, by reading files, that the checkout is at the locked revision and pins
-the index's toolchain and direct dependencies, that the Lean files under the
-indexed directories are exactly the indexed modules with the recorded digests,
-and that the index is one generation. It refuses, with exit 2 and a message that
-begins `library NAME:`, a package that is not locked, not checked out, a path
-dependency, replaced by `.lake/package-overrides.json`, without an index, or
-failing a check, and every library of a project whose `.lake` or packages
-directory is a symbolic link. One refused library refuses the whole call,
-blueprint hits included. A package replaced with `lake --packages=` is not
-detected. Search does not verify the declaration records, a module's
-`module_doc` or `module_system`, or the header's `generator`, `probe`, or
-`package`, so these can be forged.
+may change without notice until it becomes `v1`, and a library hit's fields with
+it. Before an index is used, search checks that the checkout is at the locked
+revision and pins the index's toolchain and direct dependencies, that the Lean
+files under the indexed directories are exactly the indexed modules with the
+recorded digests, and that the index is one generation. It refuses, with exit 2
+and a message that begins `library NAME:`, a package that is not locked, not
+checked out, a path dependency, replaced by `.lake/package-overrides.json`,
+without an index, or failing a check, and, on POSIX, every library of a project
+whose `.lake` or packages directory is a symbolic link. One refused library
+refuses the whole call, blueprint hits included. A package replaced with
+`lake --packages=` is not detected. Search does not verify the declaration
+records, a module's `module_doc` or `module_system`, or the header's
+`generator`, `probe`, or `package`, so these can be forged.
 
 A declaration matches when every term occurs in its last name component
 (`lean`), docstring, module header (`module_doc`), full name (also without
 `_root_.` and `«»`) or module (`qualified_names`), the constants in its type
-(`mentions`), or its keyword (`kind`), ranked in that order, with `complete`
-before `wanted` among otherwise equal hits. `--state` and `--declaration` apply
-to articles only; `--limit` applies to each list.
+(`mentions`), or its keyword (`kind`), ranked in that order, then `complete`
+before `wanted`, and last by name and module. `--state` and `--declaration`
+apply to articles only; `--limit` applies to each list.
 
 With `--library` the JSON schema is `autoform-search/v2`: every
-`autoform-search/v1` key keeps its meaning, and `libraries` lists, in the
-order given, `name`, `revision`, `index_schema`, `generator`, `probe`,
-`differences`, `total_matches`, and `hits`. A hit carries the declaration's
-`name`, `kind`, `status`, `module`, `source_file`, `line`, `signature`,
-`statement`, `docstring`, `mentions`, `auto_named`, `module_system` (`false`
-for a file a Lean module file cannot import), `matched_fields`, `module_doc`
-(the module header when it matched, otherwise `null`), and `import`, the line
-that makes a `complete` declaration available (`null` for a `wanted` one,
-which carries no proof). `differences` lists the library's toolchain and each
-direct dependency whose locked revision is not the project's, as objects with
-`what` (`lean_toolchain` or `dependency`), `name` (`null` for the toolchain),
-`library`, and `project` (`null` when the project locks no such dependency or
-either side is a path dependency); it does not say the library fails to build.
-Without `--library` the output stays `autoform-search/v1`, byte for byte.
+`autoform-search/v1` key keeps its meaning, and `libraries` lists, in the order
+given, `name`, `revision`, `index_schema`, `generator`, `probe`, `differences`,
+`total_matches`, and `hits`. A hit carries the declaration's `name`, `kind`,
+`status`, `module`, `source_file`, `line`, `signature`, `statement`,
+`docstring`, `mentions`, `auto_named`, `module_system` (`false` for a file a
+Lean module file cannot import), `matched_fields`, `module_doc` (the module
+header when it matched, otherwise `null`), and `import`, the line that makes a
+`complete` declaration available (`null` for a `wanted` one, which carries no
+proof). `differences` lists the library's toolchain and each direct dependency
+whose locked revision is not the project's, as objects with `what`
+(`lean_toolchain` or `dependency`), `name` (`null` for the toolchain), `library`
+and `project` (`null` for a side that is a path dependency, and `project` also
+when the project lacks it); it does not say the library fails to build. Without
+`--library` the output stays `autoform-search/v1`, byte for byte.
 
 #### Publishing an index
 
 `autoform library index ROOT` writes `autoform-library-index.jsonl` at the
 package root of a built library, from the modules of every `lean_lib` of the
-package, or of those `--lib` names. It is the only library command that runs
-Lean and Lake, and it imports the library's modules, so run it on a trusted
-checkout or in a sandbox. It does not build: a missing or stale build exits 2
-with the `lake build` command for the indexed targets and the first module
-Lake found unbuilt. The freshness check rewrites Lake's `.hash` files, so
-`.lake` must be writable. `--timeout` takes a positive number of seconds. The
-index records the Autoform version that wrote it, so the command refuses to
-run from an Autoform that is not installed. The index is written whole or not
-at all; a failed write says why and whether the previous index is unchanged.
+package, or of those `--lib` names. It imports the library's modules, so run it
+on a trusted checkout or in a sandbox. It does not build: a missing or stale
+build exits 2 with the `lake build` command for the indexed targets and the
+first module Lake found unbuilt. The freshness check, which `--check` also runs,
+rewrites Lake's `.hash` files, so `.lake` must be writable. `--timeout` takes a
+positive number of seconds (default 600). The index records the Autoform version
+that wrote it, so the command refuses to run from an Autoform that is not
+installed. The index is written whole or not at all; a failed write says why and
+whether the previous index is unchanged.
 
 `library/declarations.py` says which declarations are indexed (those a user
-wrote with a declaration keyword), their `line`, and where a `statement` is
-cut (never inside the body). One that rests on `sorry` or on an axiom other
-than `propext`, `Quot.sound` and `Classical.choice` is left out, with a count
-on standard error. A `theorem_wanted`, `proof_wanted`, `def_wanted` or
+wrote with a declaration keyword), their `line`, and where a `statement` is cut
+(in two rare cases, inside the body). One that rests on `sorry` or on an axiom
+other than `propext`, `Quot.sound` and `Classical.choice` is left out, with a
+count on standard error. A `theorem_wanted`, `proof_wanted`, `def_wanted` or
 `instance_wanted` result is indexed with status `wanted`. A range the probe
-reports that is not in the source file exits 2 and names the declaration and
-its module: the source is not the one the library was built from.
+reports that is not in the source file exits 2 and names the declaration and its
+module: the source is not the one the library was built from.
 
-`--check` writes nothing. It exits 0 when the index at the root is current, 1
+`--check` writes no index. It exits 0 when the index at the root is current, 1
 when it is stale (as when there is no index), with the reason on standard error,
 and 2 when it cannot tell: the package root does not exist, the index exists but
 cannot be read, or the build is missing or stale. Run it in the library's CI

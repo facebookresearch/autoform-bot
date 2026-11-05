@@ -27,10 +27,12 @@ belongs to an absolute value (a ``|`` and a closing ``|`` with no space inside,
 as in ``|x|``, or, at the start of a line, a ``|`` that follows a ``:``, a
 comma or an infix sign and has a closing ``|`` before any ``=>``), a ``|`` that
 is part of an operator such as ``<|`` being no bar; and, for an ``inductive``
-type, the first ``|``. The statement may be cut short and never holds a part
-of the body. A wanted placeholder has no alternatives and no ``where``: its
-statement runs to the end of the command, or to its ``:=`` when a
-``def_wanted`` or ``instance_wanted`` is written with a body.
+type, the first ``|``. The statement may be cut short. It holds part of the
+body in two known cases: a ``let`` in the type defined by alternatives keeps
+the body's later alternatives, and a quoted name with an unbalanced bracket,
+such as ``«a(b»``, keeps the whole body. A wanted placeholder has no
+alternatives and no ``where``: its statement runs to its ``:=``, or to the end
+of the command.
 """
 
 from __future__ import annotations
@@ -420,9 +422,9 @@ def _header(text: str, start: int, *, wanted: bool = False) -> str:
     followed by a `=>`, outside brackets, comments and strings. For an `inductive` type it
     starts at the first `|`, which opens a constructor. Two things that look like a body
     are part of the header: the `:=` of a `let` or `have` written in the type, and a `|` that
-    opens an absolute value. Where the text does not show which it is, the header ends: it may
-    be cut short, and never holds a part of the body. A wanted command has no alternatives and
-    no `where`, so only a `:=` ends its header.
+    opens an absolute value. Where the text does not show which it is, the header ends, so it
+    may be cut short. It holds part of the body in the two cases the module docstring names. A
+    wanted command has no alternatives and no `where`, so only a `:=` ends its header.
     """
 
     #: Whether a `let` or `have` of the header still waits for its `:=`.
