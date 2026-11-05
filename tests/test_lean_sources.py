@@ -4120,7 +4120,7 @@ def test_a_name_resolves_in_its_namespaces_then_in_what_its_file_opens(tmp_path:
         "namespace A\ndef base : Nat := 0\ndef fact : Nat → Nat\n  | 0 => 1\n  | n + 1 => fact n\n"
         "namespace B\ndef base : Nat := 1\ndef top : Nat := base + A.base\nend B\nend A\n"
         "namespace Tools\ndef twice (x : Nat) : Nat := x + x\nend Tools\n"
-        "open Tools in\ndef after : Nat := twice 1 + A.B.top.succ\n"
+        "def before : Nat := twice 0\nopen Tools in\ndef after : Nat := twice 1 + A.B.top.succ\n"
     )
     index = _index(tmp_path, text)
     linker = SourceLinker(index=index, sources={Path("Project/Basic.lean"): text.encode()})
@@ -4136,10 +4136,53 @@ def test_a_name_resolves_in_its_namespaces_then_in_what_its_file_opens(tmp_path:
     # A namespace an open above names, and the name before a field, which names no declaration itself.
     assert resolved("twice", "after") == ("Tools.twice", "twice")
     assert resolved("A.B.top.succ", "after") == ("A.B.top", "A.B.top")
-    assert resolved("twice", "A.B.top") is None
-    # A declaration does not name itself: its recursive call names nothing else.
+    assert resolved("twice", "before") is None
+    # A declaration's own name and its recursive call name it, so nothing else.
     assert resolved("fact", "A.fact") is None
+    assert resolved("base", "A.B.base") is None
     assert resolved("missing", "A.B.top") is None
+
+
+def test_a_name_resolves_only_to_what_its_file_can_see(tmp_path: Path) -> None:
+    files = {
+        "Project/Deep.lean": "def deep : Nat := 0\ndef twin : Nat := 1\n",
+        "Project/Near.lean": (
+            "import Project.Deep -- through Near\n\ndef near : Nat := 0\nprivate def hidden : Nat := 0\n"
+            "def twin : Nat := 0\ndef pair : Nat := 0\ntheorem_wanted wish : True\n"
+        ),
+        "Project/Far.lean": "def far : Nat := 0\ndef pair : Nat := 1\n",
+        # A file Path.with_suffix refuses.
+        "Project/..lean": "def dots : Nat := 0\n",
+        "Project/Basic.lean": (
+            "/-! Usage:\nimport Project.Far\nopen Inside\n-/\nimport Project.Near\n\n"
+            "namespace Tools\nprotected def thrice : Nat := 3\nend Tools\n\n"
+            "namespace Inside\ndef inner : Nat := 0\nend Inside\n\n"
+            "open Tools\n\nprivate def own : Nat := 0\ndef foo : Nat := 0\n\nnamespace A\n"
+            "def top : Nat := near + hidden + far + deep + thrice + Tools.thrice + twin + pair\n"
+            "  + own + later + foo + wish + inner\n"
+            "def foo : Nat := 1\nend A\n\ndef later : Nat := 0\n"
+        ),
+    }
+    index = _index_files(tmp_path, files)
+    linker = SourceLinker(index=index, sources={Path(name): text.encode() for name, text in files.items()})
+
+    def resolved(written: str) -> str | None:
+        found = linker.resolve(written, index.find("A.top"))
+        return found and found[0].name + "@" + found[0].path.stem
+
+    # What the file imports, directly or through another, and its own declarations above, private ones included.
+    assert [resolved(name) for name in ("near", "deep", "own", "Tools.thrice")] == [
+        "near@Near", "deep@Deep", "own@Basic", "Tools.thrice@Basic",
+    ]
+    # Another file's private declaration, a file imported or a namespace opened only in a comment, a wanted
+    # placeholder, a protected name without its namespace, and a declaration below in the file, which Lean has not
+    # read yet.
+    assert [resolved(name) for name in ("hidden", "far", "inner", "wish", "thrice", "later")] == [None] * 6
+    # A namespace's declaration below gives way to the root's above.
+    assert resolved("foo") == "foo@Basic"
+    # A name the index holds twice in what the file sees links nothing (Lean would reject it); of two that share a
+    # name, the one it sees.
+    assert (resolved("twin"), resolved("pair")) == (None, "pair@Near")
 
 
 def test_a_binder_names_no_declaration() -> None:
@@ -4147,6 +4190,20 @@ def test_a_binder_names_no_declaration() -> None:
     assert bound_names("∀ x ∈ s, ∃! y, fun z => let w := z; have hw : w = z := rfl") == {"x", "y", "z", "w", "hw"}
     # An instance binder with no name and a default value bind nothing.
     assert bound_names("[Group G] (x := 0)") == frozenset()
+    # A match alternative's and an anonymous constructor's pattern, a big operator and a set-builder bind names; a
+    # constructor or field in a pattern is no binder.
+    assert bound_names("| .node _ left _ right => left") == {"_", "left", "right"}
+    assert bound_names("fun ⟨a, b⟩ => a") == bound_names("fun ⟨a, b⟩ ↦ f a") == {"a", "b"}
+    assert bound_names("let ⟨c, hc⟩ := h") == bound_names("have ⟨c, hc⟩ := h") == {"c", "hc"}
+    assert bound_names("λ x => x") == {"x"} and bound_names("⦃x y : α⦄") == {"x", "y"}
+    assert bound_names("∑ i in range n, f i + ∏ j ∈ s, g j") == {"i", "j"}
+    assert bound_names("{x | p x} ∪ {y : ℕ // 0 < y}") == {"x", "y"}
+    # A where block's fields, arguments and all, and its local helpers.
+    assert bound_names("instance : Mul Foo where\n  mul a b := a\n  one := 1") == {"mul", "one"}
+    assert bound_names("def f : Nat := go 0\nwhere\n  go (k : Nat) : Nat := k") == {"go", "k"}
+    # Tactics, where obtain binds, are never linked; an empty alternative in a string binds nothing.
+    assert bound_names("obtain ⟨c, hc⟩ := h") == bound_names("obtain hp := p") == frozenset()
+    assert bound_names('"a|=>b"') == frozenset()
 
 
 def _git_commit(root: Path, message: str, path: str = ".") -> str:

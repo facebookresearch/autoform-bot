@@ -96,15 +96,15 @@ from .graph import (
 )
 from .graph_views import _containers, _countable, _is_countable, _module_inventories
 from .lean import (
+    _CONTINUATION_IDENTIFIER,
     _DECLARATION_KEYWORDS,
     _DECLARATION_MODIFIERS,
-    _CONTINUATION_IDENTIFIER,
     _REPLACEABLE_SCHEMAS,
     PUBLICATION_MANIFEST,
     PUBLICATION_SCHEMA,
+    Declaration,
     IndexedSourceSnapshot,
     LeanSourceError,
-    Declaration,
     SourceIndex,
     SourceLinker,
     bound_names,
@@ -3995,7 +3995,22 @@ _LEAN_TOKEN = re.compile(
 )
 
 
-def _lean_blocks(node: Node, linker: SourceLinker, *, links: Mapping[str, str], formalizing: Mapping[str, str]) -> list[str]:
+#: What follows a field or an argument being given (``mul_comm := …``, ``(n := 3)``) or declared (``base : Nat``).
+_GIVEN = re.compile(r"\s*:=")
+_DECLARED = re.compile(r"\s*:(?!=)")
+#: What comes before a field's or a named argument's name: ``(n := 3)``, ``{ a := 1, b := 2 }``, ``{ s with b := 2 }``.
+_SLOT = re.compile(r"(?:[({,]|\bwith)\s*$")
+#: An attribute list still open before a name: ``@[simp, ext``.
+_ATTRIBUTE = re.compile(r"@\[[^\]]*$")
+
+
+def _lean_blocks(
+    node: Node,
+    linker: SourceLinker,
+    *,
+    links: Mapping[str, str],
+    formalizing: Mapping[str, str],
+) -> list[str]:
     """The statement's first Lean declarations as written, under its statement.
 
     A theorem or lemma shows its statement and not its proof; anything else shows whole, a definition's
@@ -4014,10 +4029,12 @@ def _lean_blocks(node: Node, linker: SourceLinker, *, links: Mapping[str, str], 
             text = _header(text, 0)
         bound = bound_names(text)
 
-        def reference(written: str, within: Declaration = declaration, bound: frozenset[str] = bound) -> str | None:
-            resolved = None if written.split(".", 1)[0] in bound else linker.resolve(written, within)
-            # A one-letter name is almost always a variable the file declares, which the index cannot see.
-            if resolved is None or len(resolved[1]) < 2:
+        def reference(written: str) -> str | None:
+            resolved = None if written.split(".", 1)[0] in bound else linker.resolve(written, declaration)
+            # A one-letter name is almost always a variable the file declares, which the index cannot see. The card,
+            # the link and the formalizing statement go by name, so a declaration the index files under another of
+            # its name's declarations, or under none, links nothing rather than the wrong one.
+            if resolved is None or len(resolved[1]) < 2 or linker.location(resolved[0].name) != resolved[0]:
                 return None
             target, prefix = resolved
             named.setdefault(target.name, target)
@@ -4053,20 +4070,35 @@ def _lean_card(declaration: Declaration, linker: SourceLinker) -> str | None:
     if len(lines) > _LEAN_CARD_LINES:
         text = "\n".join([*lines[:_LEAN_CARD_LINES], "  ⋯"])
     where = _typed(f"{declaration.path.as_posix()}:{declaration.line}", one_line=True)
+    name = html.escape(declaration.name, quote=True)
     return (
-        f'<div data-lean-name="{html.escape(declaration.name, quote=True)}"><pre class="bp-lean"><code>'
-        f'{_lean_code(text)}</code></pre><p class="bp-lean-where">{where}</p></div>'
+        # Material's search ends an excluded element at the first closing tag of its kind, so each card excludes itself.
+        f'<div data-lean-name="{name}" data-search-exclude="1">'
+        f'<pre class="bp-lean"><code>{_lean_code(text)}</code></pre><p class="bp-lean-where">{where}</p></div>'
     )
 
 
 def _lean_code(text: str, reference: Callable[[str], str | None] = lambda _written: None) -> str:
     """``text``, Lean, as HTML the page's Markdown leaves as typed, its comments, strings and keywords marked,
-    and each name *reference* links linked."""
+    and each name *reference* links linked.
+
+    None of these is a reference: tactics, after ``by`` or ``decreasing_by``, to the end; a name in an attribute
+    list; a name before ``:=`` in a field's or a named argument's place (after ``(``, ``{``, ``,`` or ``with``,
+    or at a line's start unless the line before ends in a result type's colon); a name starting a line before
+    ``:``, a field being declared.
+    """
     parts: list[str] = []
     end = 0
+    tactics = False
     for token in _LEAN_TOKEN.finditer(text):
+        tactics = tactics or token.lastgroup == "keyword" and token[0] in ("by", "decreasing_by")
         if token.lastgroup == "name":
-            marked = reference(token[0])
+            start = text.rfind("\n", 0, token.start()) + 1
+            before = text[start : token.start()]
+            opens_line = not before.strip()
+            slot = opens_line and not text[:start].rstrip().endswith(":") or _SLOT.search(before)
+            given = slot and _GIVEN.match(text, token.end()) or opens_line and _DECLARED.match(text, token.end())
+            marked = None if tactics or given or _ATTRIBUTE.search(before) else reference(token[0])
             if marked is None:
                 continue
         else:
@@ -4976,7 +5008,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-lean-comment {{ color: var(--md-code-hl-comment-color); }}
 .bp-lean-string {{ color: var(--md-code-hl-string-color); }}
 /* A name the project declares: dotted until hovered, so the code still reads as code. */
-.md-typeset .bp-lean-ref {{ color: inherit; text-decoration: underline dotted; text-underline-offset: 0.2em; cursor: pointer; }}
+.md-typeset .bp-lean-ref {{ color: inherit; text-decoration: underline dotted; text-underline-offset: 0.2em; }}
 .md-typeset .bp-lean-ref:is(:hover, :focus-visible) {{ color: var(--bp-link-hover); text-decoration-style: solid; }}
 /* A card too wide for the page scrolls, with a shade at each edge it can
    scroll toward: covers in the review panel's color scroll with the content

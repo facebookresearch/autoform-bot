@@ -2896,7 +2896,8 @@ def lean_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 def test_a_name_in_a_statements_lean_shows_its_declaration_and_leads_to_its_statement(
     webkit_browser: object, lean_site_url: str,
 ) -> None:
-    """Jack asked to read what a statement's Lean names on hover, a definition with its body, and to follow it."""
+    """Hovering or focusing a name in a statement's Lean shows its declaration, a definition with its body, and
+    following it opens the formalizing statement."""
     with _page(webkit_browser, viewport={"width": 1280, "height": 800}) as page:
         _offline(page, lean_site_url)
         page.goto(f"{lean_site_url}/dependencies/chapters/algebra.html#node=algebra%2Fresult")
@@ -2904,7 +2905,7 @@ def test_a_name_in_a_statements_lean_shows_its_declaration_and_leads_to_its_stat
         viewer, card = page.locator(".bp-dag-viewer"), page.locator(".bp-lean-card")
         block = page.locator('.bp-reading-body [data-autoform-node-id="algebra/result"] .bp-lean-source')
         name = block.locator('.bp-lean-ref[data-lean-name="Fixture.base"]')
-        # The binders n and h stay text.
+        # Only the project's name links.
         assert block.locator(".bp-lean-ref").all_inner_texts() == ["base"]
         name.hover()
         playwright.expect(card).to_be_visible()
@@ -2914,10 +2915,28 @@ def test_a_name_in_a_statements_lean_shows_its_declaration_and_leads_to_its_stat
         assert name.get_attribute("aria-describedby") == card.get_attribute("id")
         page.keyboard.press("Escape")
         playwright.expect(card).to_be_hidden()
-        # The keyboard reaches the name and shows the same card, and Escape closes it, not the reader.
+        # The pointer can rest on the card, and leaving both closes it; a hovered name's card closes as the reader scrolls.
+        page.mouse.move(2, 2)
+        name.hover()
+        playwright.expect(card).to_be_visible()
+        card.hover()
+        page.wait_for_timeout(300)
+        playwright.expect(card).to_be_visible()
+        page.mouse.move(2, 2)
+        playwright.expect(card).to_be_hidden()
+        name.hover()
+        playwright.expect(card).to_be_visible()
+        page.locator(".bp-reading-body").dispatch_event("scroll")
+        playwright.expect(card).to_be_hidden()
+        page.mouse.move(2, 2)
+        # The keyboard reaches the name and shows the same card, which stays as the reader scrolls and while the reader
+        # selects in it, and Escape closes it, not the reader.
         name.focus()
         playwright.expect(card).to_be_visible()
         playwright.expect(card).to_contain_text("Fixture.base")
+        page.locator(".bp-reading-body").dispatch_event("scroll")
+        card.locator("pre").click()
+        playwright.expect(card).to_be_visible()
         page.keyboard.press("Escape")
         playwright.expect(card).to_be_hidden()
         playwright.expect(viewer).to_have_class(re.compile(r"\bbp-dag-has-selection\b"))

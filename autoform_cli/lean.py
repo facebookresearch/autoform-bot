@@ -54,6 +54,7 @@ import unicodedata
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from itertools import takewhile
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote_from_bytes
 
@@ -1339,12 +1340,25 @@ _ID_LETTER = (
 _ID_REST = rf"[{_ID_LETTER}0-9'!?\u2080-\u2089\u2090-\u209c\u1d62-\u1d6a\u2c7c]*"
 _ID_COMPONENT = rf"(?:{_QUOTED_COMPONENT}|[{_ID_LETTER}]{_ID_REST})"
 _CONTINUATION_IDENTIFIER = re.compile(rf"{_ID_COMPONENT}(?:\.{_ID_COMPONENT})*")
-#: The names a binder introduces: before the colon of a bracketed binder, or after ``fun``, a quantifier,
-#: ``let``, ``have`` or ``obtain``. An instance binder with no name binds none.
+#: The names a binder introduces: before the colon of a bracketed binder, after ``fun``, a quantifier, a big
+#: operator, ``let`` or ``have``, or before the bar of a set-builder or subtype. An instance binder with no name
+#: binds none. Tactics, where ``obtain`` and ``rintro`` bind, are never linked.
 _BINDER = re.compile(
     rf"(?:[(\[{{⦃]\s*((?:{_ID_COMPONENT}\s+)*{_ID_COMPONENT})\s*:(?!=)"
-    rf"|(?:\b(?:fun|let|have|obtain)\b|[λ∀∃])!?\s*((?:{_ID_COMPONENT}\s+)*{_ID_COMPONENT}))"
+    rf"|(?:\b(?:fun|let|have)\b|[λ∀∃∑∏⋃⋂⨆⨅])!?\s*((?:{_ID_COMPONENT}\s+)*{_ID_COMPONENT})"
+    rf"|{{\s*((?:{_ID_COMPONENT}\s+)*{_ID_COMPONENT})\s*(?:\||//))"
 )
+#: Where a pattern binds names: a match alternative before its ``=>``, or an anonymous constructor after ``fun``,
+#: ``λ``, ``let`` or ``have``.
+_PATTERN = re.compile(
+    r"\|(?!\|)([^|\n]*?)=>|(?:\b(?:fun|let|have)\b|λ)\s*(⟨[^\n]*?)(?:=>|↦|:=|$)", re.MULTILINE
+)
+#: The indent of a ``where`` block's first line, whose fields and local helpers are names it declares.
+_WHERE = re.compile(r"\bwhere[ \t]*\n([ \t]+)")
+#: A name in a pattern that is no part of a dotted name, so neither a constructor nor a field.
+_PATTERN_NAME = re.compile(rf"(?<![\w.'!?»]){_ID_COMPONENT}(?![\w.'!?«])")
+#: The modules an ``import`` command names.
+_IMPORT = re.compile(r"^[ \t]*(?:(?:public|private|meta)[ \t]+)*import[ \t]+(?:all[ \t]+)?([^\n]*)", re.MULTILINE)
 #: Lean's ASCII identifiers (isIdFirstAscii and isIdRestAscii): the only module
 #: names the impact probe imports and a library index holds.
 _ASCII_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_'!?]*")
@@ -1653,6 +1667,7 @@ def declaration_text(lines: list[str], declaration: Declaration) -> str:
 def _opened(text: str) -> list[tuple[int, list[str]]]:
     """Each ``open`` command in *text*: its line and the namespaces it opens, scoping ignored."""
 
+    text = _without_lean_comments(text, mask_literals=True)
     found = []
     for match in _OPEN.finditer(text):
         names = re.split(r"\s(?:hiding|renaming|in)\b", match[1])[0]
@@ -1661,9 +1676,18 @@ def _opened(text: str) -> list[tuple[int, list[str]]]:
 
 
 def bound_names(text: str) -> frozenset[str]:
-    """The local names a binder in *text*, Lean, introduces, which name no declaration there."""
+    """The local names the binders, patterns and ``where`` block in *text*, Lean, introduce."""
 
-    return frozenset(name for match in _BINDER.finditer(text) for name in (match[1] or match[2]).split())
+    # A big operator's binders end at its ``in``: ``∑ i in range n``.
+    bound = {
+        name
+        for match in _BINDER.finditer(text)
+        for name in takewhile(lambda name: name != "in", match[match.lastindex].split())
+    }
+    bound.update(name for match in _PATTERN.finditer(text) for name in _PATTERN_NAME.findall(match[match.lastindex]))
+    if where := _WHERE.search(text):
+        bound.update(re.findall(rf"^{where[1]}({_ID_COMPONENT})", text[where.start() :], re.MULTILINE))
+    return frozenset(bound)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1685,6 +1709,9 @@ class SourceLinker:
     """Each captured Lean file's bytes, by its path below the Lean root."""
     _lines: dict[Path, list[str]] = field(default_factory=dict, repr=False, compare=False)
     _opens: dict[Path, list[tuple[int, list[str]]]] = field(default_factory=dict, repr=False, compare=False)
+    _imports: dict[Path, frozenset[Path]] = field(default_factory=dict, repr=False, compare=False)
+    _modules: dict[str, list[Path]] = field(default_factory=dict, repr=False, compare=False)
+    _direct: dict[Path, list[Path]] = field(default_factory=dict, repr=False, compare=False)
 
     def excerpt(self, name: str) -> tuple[Declaration, str] | None:
         """*name*'s declaration and its text as written, or ``None`` if *name* or its file was not captured
@@ -1703,12 +1730,15 @@ class SourceLinker:
 
     def resolve(self, written: str, within: Declaration) -> tuple[Declaration, str] | None:
         """The declaration *written*, a name in *within*'s text, refers to, and the part of *written* that
-        names it, or ``None`` if none was indexed: in ``Base.succ``, ``Base`` may name a declaration whose
-        field ``succ`` is.
+        names it, or ``None``: in ``Base.succ`` that part is ``Base``, and ``.succ`` is a field or dot
+        notation on it.
 
-        Like Lean, look in each namespace around *within*, innermost first, then in each namespace an
-        ``open`` above it in its file names. The index knows no local names or ``variable`` binders;
-        callers skip what :func:`bound_names` finds.
+        Look among the project's own declarations: in each namespace around *within*, innermost first, as Lean
+        does, then the root, then each namespace an ``open`` above it names, taking the first that *within* can
+        see (:meth:`_visible`); Lean weighs the root and the opens together. ``None`` if that is *within*
+        itself, which its own name and a recursive call name, or if the index holds two it can see, which Lean
+        would reject. The index knows no Mathlib names, no local names and no ``variable`` binders; callers
+        skip what :func:`bound_names` finds.
         """
         if within.path not in self._opens:
             self._opens[within.path] = _opened(self.sources.get(within.path, b"").decode("utf-8", "replace"))
@@ -1724,10 +1754,52 @@ class SourceLinker:
             else:
                 candidates = [f"{space}.{prefix}" if space else prefix for space in spaces]
             for candidate in candidates:
-                found = self.index.find(candidate)
-                if found is not None and found != within:
-                    return found, prefix
+                found = self.index.occurrences(candidate)
+                seen = [declaration for declaration in found if self._visible(declaration, within, prefix)]
+                if within in found or len(seen) > 1:
+                    return None
+                if seen:
+                    return seen[0], prefix
         return None
+
+    def _visible(self, declaration: Declaration, within: Declaration, written: str) -> bool:
+        """Whether Lean, reading *within*, sees *declaration* as *written*: one above it in its file, or one
+        neither private nor a wanted placeholder in a file it imports, directly or through others. A protected
+        one needs its last namespace written."""
+        if declaration.protected and len(_name_parts(written)) < 2:
+            return False
+        if declaration.path == within.path:
+            return declaration.line < within.line
+        return (
+            not declaration.private
+            and declaration.keyword not in _WANTED_KEYWORDS
+            and declaration.path in self._imported(within.path)
+        )
+
+    def _imported(self, path: Path) -> frozenset[Path]:
+        """The captured files *path* imports, directly or through others."""
+        if not self._modules:
+            for source in self.sources:
+                # A module is named from its package's source root, which can lie below the Lean root. The stem,
+                # not with_suffix, takes a file named ``..lean``.
+                parts = (*source.parts[:-1], source.stem)
+                for start in range(len(parts)):
+                    self._modules.setdefault(".".join(parts[start:]), []).append(source)
+        if path not in self._imports:
+            seen: set[Path] = set()
+            pending = [path]
+            while pending:
+                current = pending.pop()
+                if current not in self._direct:
+                    text = self.sources.get(current, b"").decode("utf-8", "replace")
+                    commands = _IMPORT.findall(_without_lean_comments(text, mask_literals=True))
+                    modules = [module for command in commands for module in command.split()]
+                    self._direct[current] = [source for module in modules for source in self._modules.get(module, ())]
+                fresh = [source for source in self._direct[current] if source not in seen]
+                seen.update(fresh)
+                pending += fresh
+            self._imports[path] = frozenset(seen)
+        return self._imports[path]
 
     def location(self, name: str) -> Declaration | None:
         return self.index.find(name)
