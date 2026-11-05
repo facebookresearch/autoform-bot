@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from importlib.resources import files
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 # Lake reads TOML 1.0, as the pinned tomli does; from Python 3.15 tomllib parses 1.1.
@@ -250,6 +251,18 @@ def test_missing_release_manifest_is_not_published(tmp_path: Path, monkeypatch: 
     monkeypatch.setattr(create_module, "load_release_catalog", lambda: ReleaseCatalog((unbundled,)))
 
     error = _refused(tmp_path / "Project", "project-create-validation-failed", release_id=None)
+
+    assert error.message == create_module._MANIFEST_MESSAGE
+
+
+@pytest.mark.parametrize("content", [b'{"packages": [', b'{"packages": "\xff"}'], ids=["truncated", "not-utf-8"])
+def test_an_unparsable_release_manifest_is_not_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes
+) -> None:
+    resource = SimpleNamespace(read_bytes=lambda: content)
+    monkeypatch.setattr(create_module, "files", lambda package: SimpleNamespace(joinpath=lambda name: resource))
+
+    error = _refused(tmp_path / "Project", "project-create-validation-failed")
 
     assert error.message == create_module._MANIFEST_MESSAGE
 
