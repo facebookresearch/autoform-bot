@@ -120,7 +120,7 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
      applies, the revision is blocked: release any claims and report it.
      Record what happened in the revision commit and report. Use an
      implementation note only until [its deletion
-     rule](../README.md#articles-and-containment) applies.
+     rule](blueprint-format.md) applies.
 
    An unused statement dependency rules out the contained route and is
    re-reviewed under the revised meaning, X' on the expand route and X's new
