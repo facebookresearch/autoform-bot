@@ -208,7 +208,10 @@ def write_graph_pages(
     # The whole-project map reads the same records and typed relations, one level per file.
     # Data beside the search index, not pages: like the index, these files are not among the pages returned.
     map_records, map_relations = project_map.records_from_view(complete, metadata)
-    project_map.write_project_map(destination / project_map.MAP_DIRECTORY, project_map.build_project_map(map_records, map_relations))
+    project_map.write_project_map(
+        destination / project_map.MAP_DIRECTORY,
+        project_map.build_project_map(map_records, map_relations, tracks_lean=graph.tracks_lean),
+    )
     if captured_sources is not None:
         references = site_index.extract_wiki_links(
             complete, captured_sources=captured_sources, source_paths=source_paths, metadata=metadata,

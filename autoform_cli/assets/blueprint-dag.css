@@ -391,3 +391,7 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-viewer .bp-lean-card :is(.bp-lean, .bp-lean > code) { margin: 0; padding: 0; border: 0; background: none; }
 .bp-dag-viewer .bp-lean-card-name { margin: 0 0 6px; font-family: var(--dag-mono); font-weight: 600; overflow-wrap: anywhere; }
 .bp-dag-viewer .bp-lean-card .bp-lean-where { margin: 6px 0 0; color: var(--dag-muted); font-family: var(--dag-mono); }
+
+/* A project that tracks no Lean (render marks its pages data-tracks-lean="false"): no status filter, and no status on
+   the phone's reading handle. Search hits and Browse rows leave out their status themselves. */
+[data-tracks-lean="false"] :is(.bp-dag-filters, .bp-dag-sheet-handle .bp-dag-swatch) { display: none !important; }

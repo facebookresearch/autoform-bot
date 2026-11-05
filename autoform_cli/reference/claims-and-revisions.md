@@ -153,8 +153,8 @@ Markdown (step 6); Formalize carries out the Lean side (steps 1 to 5).
    retracts only that article and the dependents whose text the revision
    rewrites (`statement: retracted`, no `proof`, `lean:` kept for `work
    impact`), edits only Markdown, releases any claims, and leaves the Lean side
-   to Formalize; the [Roadmap skill](../../skills/roadmap/SKILL.md) gives the
-   procedure.
+   to Formalize; [Roadmap](../../skills/roadmap/SKILL.md#claims-and-revisions)
+   adds when to claim, rebase and report.
 
 With the review marker, a commit that drops a declaration from an article's
 `lean:` also deletes that declaration's read-back cards under

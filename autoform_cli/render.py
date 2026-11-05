@@ -1289,7 +1289,7 @@ def _render_pages(
             _integrated_page(
                 page.read_text(encoding="utf-8"), page=page, destination=destination,
                 payload=payload, scope=scope, owner=owner,
-                prepared=True,
+                prepared=True, tracks_lean=graph.tracks_lean,
             ),
             encoding="utf-8",
         )
@@ -1314,7 +1314,7 @@ def _render_pages(
 
 def _integrated_page(
     text: str, *, page: Path, destination: Path, payload: Path, scope: str, owner: str | None = None,
-    prepared: bool = False,
+    prepared: bool = False, tracks_lean: bool = True,
 ) -> str:
     """Keep a complete published page readable before moving it into the shared UI.
 
@@ -1344,8 +1344,10 @@ def _integrated_page(
         page_href=_as_published(relative_link(page, page, ".html")),
         scope=scope,
     )
+    # A project that tracks no Lean says so on the container, and the explorer's stylesheet hides its Lean progress.
+    lean = "" if tracks_lean else ' data-tracks-lean="false"'
     return (
-        header + '\n<div class="bp-explorer-page" markdown="1">\n'
+        header + f'\n<div class="bp-explorer-page"{lean} markdown="1">\n'
         + f'<div class="bp-reading-source"{node} data-page-title="{html.escape(title, quote=True)}" markdown="1">\n\n'
         + body + '\n\n</div>\n\n' + explorer + '\n</div>\n'
     )
