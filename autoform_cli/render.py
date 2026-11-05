@@ -126,16 +126,17 @@ from .library.declarations import _header
 from .library.pinned_names import FOLDER as PINNED_NAMES_FOLDER
 from .markdown import (
     _BRACKET_ESCAPE,
+    _CODE_SPAN,
     _INLINE_MATH,
     FORMULA_CLASS,
     GENERATED_VIEWS,
-    INLINE_CODE,
     NOTES_BOX,
     PAGE_HEADER,
     PAGE_SUFFIXES,
     RETIRED_VIEWS,
     STATEMENT_BOX,
     _blank,
+    _blank_code,
     blueprint_root,
     boxed,
     converted_alone,
@@ -2072,7 +2073,7 @@ def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> lis
         text = source.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return []  # the site leaves out a page that is not UTF-8, as check warns
-    _outside_fences(published_page(text), collect)
+    _outside_fences(published_page(text), collect, joined=True)
     return linked_sources
 
 
@@ -3096,13 +3097,13 @@ def _as_published(href: str) -> str:
 
 
 def _link_mask(line: str) -> str:
-    """*line* with its code spans, inline math and bracket escapes blanked.
+    """*line*, or a block's lines joined, with its code spans, inline math and bracket escapes blanked.
 
     The site reads code and math before links and an escaped bracket as text,
-    as ``markdown.link_targets`` does for check. Blanking keeps every offset,
-    so a link matched in the mask reads its label and target back from *line*.
+    as check does. Blanking keeps every offset, so a link matched in the mask
+    reads its label and target back from *line*.
     """
-    return _BRACKET_ESCAPE.sub(_blank, _INLINE_MATH.sub(_blank, INLINE_CODE.sub(_blank, line)))
+    return _BRACKET_ESCAPE.sub(_blank, _INLINE_MATH.sub(_blank, _CODE_SPAN.sub(_blank_code, line)))
 
 
 def _rewrite_links(
@@ -3232,14 +3233,22 @@ def _rewrite_links(
         # masking never adds, so a line without one has nothing to move.
         if "[" not in line:
             return line
+        # A definition whose title is on the next line is one block, and is
+        # rewritten a line at a time, as before.
+        if "\n" in line and _LINK_DEFINITION.match(line.partition("\n")[0]):
+            return "\n".join(map(rewrite, line.split("\n")))
         # A reference definition carries the destination for every `[x][label]`
         # on the page. Rewriting only inline links leaves it pointing at the
         # unpublished path and the rendered link dangles.
         definition = _LINK_DEFINITION.match(line)
+        # Lines read together are one definition only where the site reads one.
+        if definition is not None and "\n" in line and not _SITE_LINK_DEFINITION.match(line):
+            definition = None
         if definition is not None:
             href = moved_target(definition.group("target"))
             if href == "" and definition.group("target") in unlinked:
-                return ""
+                # A label over two lines keeps both, so every later line stays where it was written.
+                return "\n" * line.count("\n")
             if href:
                 indent, label = definition.group("indent"), definition.group("label")
                 # Python-Markdown reads a definition's destination only up to
@@ -3251,6 +3260,9 @@ def _rewrite_links(
         pieces: list[str] = []
         end = 0
         for match in _MARKDOWN_IMAGE.finditer(_link_mask(line)):
+            # As for a link below, a destination on a later line is published as written.
+            if "\n" in line[match.end("label") : match.start("target")]:
+                continue
             raw = line[match.start("target") : match.end("target")]
             if moved_target(raw) == "" and raw in unlinked:
                 pieces += [line[end : match.start()], line[match.start("label") : match.end("label")]]
@@ -3259,16 +3271,23 @@ def _rewrite_links(
         pieces = []
         end = 0
         for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
+            # A destination on a later line is published as written, as before:
+            # in a quote, the mask keeps the marker in front of it.
+            if "\n" in line[match.end("label") : match.start("target")]:
+                continue
             raw = line[match.start("target") : match.end("target")]
             href = moved_target(raw)
             if href is None or raw in (href, f"<{href}>"):  # nothing moved: keep the link as written
                 continue
             label = line[match.start("label") : match.end("label")]
-            pieces += [line[end : match.start()], f"[{label}]({bracketed(href)})" if href else label]
+            # A title on the next line goes, but a moved link keeps its line, so every later line stays where
+            # it was written. A link cut down to its label does not, as a break there could end the paragraph.
+            breaks = "\n" * line.count("\n", match.end("label"), match.end())
+            pieces += [line[end : match.start()], f"[{label}]({bracketed(href)}{breaks})" if href else label]
             end = match.end()
         return "".join(pieces) + line[end:]
 
-    return _outside_fences(text, rewrite, page=True)
+    return _outside_fences(text, rewrite, page=True, joined=True)
 
 
 def _in_working_tree(path: Path, root: Path) -> bool:

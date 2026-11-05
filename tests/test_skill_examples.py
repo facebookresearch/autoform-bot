@@ -605,7 +605,7 @@ def test_markdown_links_and_anchors_resolve(repo_root: Path) -> None:
     for page in _tracked_markdown(repo_root):
         where = page.relative_to(repo_root).as_posix()
         text = page.read_text(encoding="utf-8")
-        for line, target in markdown_links(text):
+        for line, target, _ in markdown_links(text):
             if re.match(r"[a-z][a-z0-9+.-]*:|/", target) or (where, target) in _GENERATED_LINKS:
                 continue
             checked += 1
