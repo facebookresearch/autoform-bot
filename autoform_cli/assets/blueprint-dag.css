@@ -276,6 +276,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 /* The status rule and the bold head already mark a theorem, so the workspace sets its statement upright. */
 .bp-dag-integrated .theorem-style-plain > .bp-thmcontent { font-style: normal; }
 .bp-reading-body pre, .bp-reading-body table { max-width: 100%; overflow: auto; }
+/* A table cell keeps its words whole: a column held at Material's 100px minimum split a longer header mid-word ("Dependen t"). */
+.bp-reading-source :is(th, td) { overflow-wrap: break-word; }
 .bp-reading-body img, .bp-reading-body svg { max-width: 100%; }
 .bp-reading-body .bp-node { border-radius: 8px; }
 /* The current statement takes the contents row's tint and left bar inside the column; an offset outline ran past it. */
