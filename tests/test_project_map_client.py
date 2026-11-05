@@ -330,13 +330,17 @@ def test_a_project_that_tracks_no_lean_shows_no_progress(tmp_path: Path, tracks_
       emit(search, 'keydown', {key: 'Enter'}); await wait(40);
       assert.strictEqual($('.pm-reader').querySelector('h2').textContent, "Lagrange's theorem");
       assert.deepStrictEqual($$('.pm-chip', $('.pm-reader')).map(chip => chip.textContent), tracked ? ['fully proved'] : []);
+      // The header bands draw bars, and a card's line names an unfinished status; or no bars, and the line names only
+      // the result's kind.
+      assert.strictEqual($$('.pm-seg').length > 0, tracked);
+      const lines = $$('.pm-card-meta').map(node => node.textContent);
+      assert(lines.length, 'a card line is drawn');
+      assert(tracked ? lines.some(line => /ready to prove|planned/.test(line)) : lines.every(line => /^(Theorem|Lemma)( · |$)/.test(line)),
+        lines.join('; '));
       if (!tracked) {
-        // No status words anywhere on the map, no bars in the header bands, and a card's line names only its kind.
+        // No status words in the map's labels.
         const said = $$('text').map(node => node.textContent).filter(text => /fully proved|ready to prove|planned|finished/.test(text));
         assert.deepStrictEqual(said, []);
-        assert.strictEqual($$('.pm-seg').length, 0);
-        const lines = $$('.pm-card-meta').map(node => node.textContent);
-        assert(lines.every(line => /^(Theorem|Lemma)( · |$)/.test(line)), lines.join('; '));
       }
       console.log('progress ok');
     """, _library(tmp_path, captions=captions, tracks_lean=tracks_lean))

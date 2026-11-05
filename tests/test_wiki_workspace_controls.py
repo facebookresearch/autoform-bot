@@ -153,7 +153,7 @@ var currentBundle={nodeId:'chapter',scope:'chapter',title:'Authored topic',url:'
 var instance=1,trail=[],data={title:'Authored topic',nodes:[],edges:[]};
 var ui$mode='graph',ui$selectedStatuses=new Set(['planned']);
 var presentStatuses=['planned'],ui$relationIds=new Set(['F']);
-var ui$mathJob=null,leanNames=true;
+var ui$mathJob=null,tracksLean=true;
 function globalListen(target,type,callback) {target.addEventListener(type,callback);}
 class MutationObserver {observe(){}}
 function renderStatusFields(){}function renderNavigation(){}

@@ -632,8 +632,9 @@
       setText(keep(labelLayer, "ct:" + row.id + ":" + index, "text", {x: b.x + pad, y: b.y + pad + 13 + index * 17, class: "pm-card-title" + cls}), line);
     });
     if (b.h >= 52) {
-      // The card's fill says it is finished, the common case; the line names any other status.
-      var stub = view.stubs[row.id], meta = [tracked() && tileKind(row.status) === "done" ? "" : standing(row),
+      // The card's fill says it is finished, the common case; the line names any other status, or where the project
+      // tracks no Lean, the result's kind.
+      var stub = view.stubs[row.id], meta = [tileKind(row.status) === "done" ? "" : standing(row),
         stub && stub.usedBy ? "used " + num(stub.usedBy) + "× elsewhere" : ""].filter(Boolean).join(" · ");
       if (meta) setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: b.y + b.h - pad, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
     }
@@ -1008,11 +1009,13 @@
       var stat = el("div", "pm-stat"); stat.append(el("strong", "", pair[0]), el("span", "", pair[1])); stats.append(stat);
     });
     sideInner.append(stats, bar(index.status));
-    var legend = el("div", "pm-legend");
-    [["done", "finished"], ["progress", "in progress"], ["planned", "planned"]].forEach(function (pair) {
-      var item = el("span"), swatch = el("i"); swatch.style.background = color(pair[0]); item.append(swatch, document.createTextNode(pair[1])); legend.append(item);
-    });
-    if (tracked()) sideInner.append(legend);
+    if (tracked()) {
+      var legend = el("div", "pm-legend");
+      [["done", "finished"], ["progress", "in progress"], ["planned", "planned"]].forEach(function (pair) {
+        var item = el("span"), swatch = el("i"); swatch.style.background = color(pair[0]); item.append(swatch, document.createTextNode(pair[1])); legend.append(item);
+      });
+      sideInner.append(legend);
+    }
     // The links the map draws: a picked part's arrows to its neighbours, and the routes between a part's results.
     var key = el("div", "pm-edge-key");
     [["pm-key-link", 2.5, "a picked part, to what uses it"], ["pm-route", 1.25, "a result, to what uses it"], ["pm-route pm-proof", 1.25, "used only in proofs"]].forEach(function (row) {

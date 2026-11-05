@@ -69,7 +69,7 @@ def build_project_map(
 
     Records arrive in reading order (the book's own order); every level keeps it,
     so the layout can fall back on it wherever dependencies leave a tie.
-    Without ``tracks_lean`` the index says so, and the map shows no Lean progress.
+    With ``tracks_lean=False`` the index says the project tracks no Lean, and the map shows no Lean progress.
     """
     by_id = {str(record["id"]): record for record in records}
     order = {key: index for index, key in enumerate(by_id)}

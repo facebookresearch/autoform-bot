@@ -352,7 +352,7 @@ def site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFa
     project = tmp_path_factory.mktemp("site") / "project"
     scaffold_project(project, title="Explorer fixture")
     roadmap = project / "blueprint/roadmap"
-    setting = getattr(request, "param", "")
+    setting = getattr(request, "param", None)
     (roadmap / "README.md").write_text(
         (f"---\n{setting}\n---\n\n" if setting else "")
         + "# Fixture roadmap\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n",
@@ -1472,11 +1472,12 @@ def test_the_published_landing_page_is_one_full_page_explorer_opened_by_its_hero
     playwright.expect(page.locator("#bp-live-activity")).to_have_count(0)
 
 
-@pytest.mark.parametrize(("site_url", "tracked"), [("", True), ("tracks_lean: false", False)], indirect=["site_url"])
-def test_search_offers_lean_names_only_in_a_project_that_tracks_lean(
+# None shares the module's unparametrized site rather than building a second copy of it.
+@pytest.mark.parametrize(("site_url", "tracked"), [(None, True), ("tracks_lean: false", False)], indirect=["site_url"])
+def test_a_project_that_tracks_no_lean_offers_no_lean_names_or_statuses(
     desktop_page: object, site_url: str, tracked: bool
 ) -> None:
-    """A project that tracks no Lean has none to search for: its search box, and a search that finds nothing, say so."""
+    """A project that tracks no Lean has none to search for and no status to filter by or show; Browse rows keep their place."""
     page = _open_site(desktop_page, site_url, "index.html")
     offer = "Search titles and Lean names" if tracked else "Search titles"
     nothing = "No matching title, statement, " + ("article id, or Lean name." if tracked else "or article id.")
@@ -1485,6 +1486,27 @@ def test_search_offers_lean_names_only_in_a_project_that_tracks_lean(
     playwright.expect(search).to_have_attribute("aria-label", offer)
     search.fill("zzz")
     playwright.expect(page.locator(".bp-dag-search-results")).to_contain_text(nothing)
+    search.fill("Base")
+    results = page.locator(".bp-dag-result")
+    playwright.expect(results.first).to_be_visible()
+    playwright.expect(page.locator(".bp-dag-result-meta")).to_have_count(results.count() if tracked else 0)
+    search.fill("")
+    if tracked:
+        playwright.expect(page.locator(".bp-dag-filter-summary")).to_be_visible()
+    else:
+        playwright.expect(page.locator(".bp-dag-filter-summary")).to_be_hidden()
+    _browse_contents(page, "All statements")
+    meta = page.locator('.bp-dag-inventory-row[data-inventory-node-id="algebra/base"] .bp-dag-inventory-meta')
+    playwright.expect(meta).to_be_visible()
+    playwright.expect(meta).to_have_text(re.compile(r".+ · Algebra") if tracked else "Algebra")
+    # An old link's status filter narrows the list only where the reader can see the filter and undo it.
+    page.goto("about:blank")
+    page.goto(f"{site_url}/index.html#view=list&status=fully_proved")
+    playwright.expect(page.locator(".bp-dag-inventory")).to_be_visible()
+    if tracked:
+        playwright.expect(page.locator(".bp-dag-hidden-button")).to_be_visible()
+    else:
+        playwright.expect(page.locator(".bp-dag-hidden-button")).to_be_hidden()
 
 
 @pytest.mark.parametrize("width", (390, 1280))

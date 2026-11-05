@@ -70,7 +70,7 @@ date when the release is tagged.
   dependency references and the chapter progress lines. The explorer drops its
   status filter and status words, and the whole-project map its tints, progress
   bars and status words; its cards name their kind instead. Neither search box
-  offers Lean names. Check warns about the
+  mentions Lean names, though both still match them. Check warns about the
   setting anywhere else under `roadmap/`, or with a value other than true or
   false, and ignores it.
 

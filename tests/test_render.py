@@ -1052,20 +1052,9 @@ def test_a_project_that_tracks_no_lean_tells_the_shell_and_the_map(tmp_path: Pat
     assert index.get("tracks_lean", "absent") == ("absent" if tracked else False)
 
 
-def test_the_shell_keys_its_hidden_progress_on_the_page_attribute() -> None:
-    # The explorer's stylesheet hides the status filter and status words, in one block at the end of the file that
-    # keys every rule on the attribute render sets.
-    css = dag_viewer._STYLE
-    start = css.index("/* A project that tracks no Lean")
-    assert "data-tracks-lean" not in css[:start]
-    rules = re.findall(r"([^{}]+)\{([^{}]+)\}", re.sub(r"/\*.*?\*/", "", css[start:], flags=re.DOTALL))
-    assert rules
-    for selectors, body in rules:
-        assert selectors.strip().startswith('[data-tracks-lean="false"] '), selectors
-        assert body.strip() == "display: none !important;", body
-    hidden = " ".join(selectors for selectors, _ in rules)
-    for surface in (".bp-dag-filters", ".bp-dag-result-meta", ".bp-dag-inventory-meta", ".bp-dag-sheet-handle .bp-dag-swatch"):
-        assert surface in hidden, surface
+def test_the_shell_hides_its_status_filter_on_the_page_attribute() -> None:
+    assert ('[data-tracks-lean="false"] :is(.bp-dag-filters, .bp-dag-sheet-handle .bp-dag-swatch) '
+            '{ display: none !important; }') in dag_viewer._STYLE
 
 
 def test_a_hero_that_tracks_no_lean_keeps_its_claim_and_ways_in(tmp_path: Path) -> None:

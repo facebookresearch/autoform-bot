@@ -253,8 +253,8 @@
       ui$selectedStatuses = new Set(presentStatuses), ui$reading = Boolean(firstBundle && firstBundle.readingSource),
       ui$overviewOnly = false, ui$filtersTouched = false, ui$relationIds = null,
       ui$requestedNode = firstBundle && firstBundle.nodeId || null, ui$outlineLimit = 120;
-    // A project that tracks no Lean (render marks its pages) has no Lean names to search for.
-    var leanNames = !host.closest('[data-tracks-lean="false"]');
+    // A project that tracks no Lean (render marks its pages) has no Lean progress to show or Lean names to search for.
+    var tracksLean = !host.closest('[data-tracks-lean="false"]');
     var dom$announcement, dom$body, dom$breadcrumb, dom$browse, dom$browseToggle, dom$browsePopover,
       dom$error, dom$filterPopover, dom$filterSummary, dom$filters, dom$graphMode, dom$hiddenButton,
       dom$inspector, dom$inspectorInner, dom$inventory, dom$inventoryList, dom$inventoryRows,
@@ -423,7 +423,7 @@
       ui$selectedStatuses = new Set(presentStatuses);
       var legacy = bundle.parameters || {};
       if (legacy.view === "list") ui$mode = "list";
-      if (legacy.status) ui$selectedStatuses = new Set(legacy.status.split(",").filter(function (key) { return palette[key]; }));
+      if (legacy.status && tracksLean) ui$selectedStatuses = new Set(legacy.status.split(",").filter(function (key) { return palette[key]; }));
       if (ui$selected) ui$selectedStatuses.add(ui$selected.status);
       // Decide only after the outline has proved and hidden duplicated child
       // indexes. A canonical scope ID alone is not a request to read a result.
@@ -624,7 +624,7 @@
       dom$outlineToggle.setAttribute("aria-expanded", "false");
       var searchWrap = dom$searchWrap = element("div", "bp-dag-search-wrap");
       dom$search = element("input", "bp-dag-search");
-      dom$search.type = "search"; dom$search.placeholder = leanNames ? "Search titles and Lean names" : "Search titles";
+      dom$search.type = "search"; dom$search.placeholder = tracksLean ? "Search titles and Lean names" : "Search titles";
       dom$search.setAttribute("aria-label", dom$search.placeholder);
       dom$search.setAttribute("aria-controls", "bp-dag-search-results-" + instance);
       dom$searchResults = element("div", "bp-dag-search-results"); dom$searchResults.id = "bp-dag-search-results-" + instance;
@@ -1000,7 +1000,7 @@
       matches.slice(0, ui$searchLimit).forEach(function (match) {
         var item = element("li"), choose = button("bp-dag-result", ""); choose.dataset.resultId = match.node.id;
         choose.appendChild(readingLabel("span", "bp-dag-result-title", match.node.title, (records.get(recordId(match.node)) || match.node).reading_title));
-        choose.appendChild(element("span", "bp-dag-result-meta", statusLabel(match.node.status))).title = (palette[match.node.status] || {}).meaning || "";
+        if (tracksLean) choose.appendChild(element("span", "bp-dag-result-meta", statusLabel(match.node.status))).title = (palette[match.node.status] || {}).meaning || "";
         var place = placeOf(match.node), topic = (records.get(recordId(match.node)) || match.node).scope === match.node.id;
         if (place || topic) choose.appendChild(element("span", "bp-dag-result-place", topic ? "Topic" + (place ? " in " + place : "") : place));
         choose.addEventListener("click", function () { activateNode(match.node, true); }); item.appendChild(choose); list.appendChild(item);
@@ -1020,7 +1020,7 @@
         dom$searchResults.appendChild(more);
       }
       if (!matches.length) dom$searchResults.appendChild(element("p", "bp-dag-overview",
-        leanNames ? "No matching title, statement, article id, or Lean name." : "No matching title, statement, or article id."));
+        tracksLean ? "No matching title, statement, article id, or Lean name." : "No matching title, statement, or article id."));
       if (ui$searchLoading) dom$searchResults.appendChild(element("p", "bp-dag-overview", "Searching the whole roadmap…"));
       else if (ui$searchError) dom$searchResults.appendChild(element("p", "bp-dag-overview", "Whole-roadmap search is unavailable; showing this view."));
       dom$searchResults.hidden = false;
@@ -1072,7 +1072,7 @@
             (sheetLayout() && host.classList.contains("bp-dag-sheet-full")) || (bundle && bundle.isCurrent && !bundle.isCurrent())) return;
         var control = mapControl();
         if (control) control.focus({preventScroll: true});
-        if (!control || document.activeElement !== control) dom$filterSummary.focus({preventScroll: true});
+        if (!control || document.activeElement !== control) (tracksLean ? dom$filterSummary : dom$search).focus({preventScroll: true});
         remember();
       }); });
     }
@@ -1358,8 +1358,8 @@
         rowTitle.id = rowId + "-title";
         if (titleParts) Array.prototype.forEach.call(rowTitle.querySelectorAll(".arithmatex"), function (math) { math.replaceWith(pendingMath(math.textContent)); });
         var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;
-        var rowMeta = row.appendChild(element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (where ? " · " + where : "")));
-        rowMeta.title = (palette[node.status] || {}).meaning || ""; rowMeta.id = rowId + "-meta";
+        var rowMeta = row.appendChild(element("span", "bp-dag-inventory-meta", [tracksLean ? statusLabel(node.status) : "", where].filter(Boolean).join(" · ")));
+        rowMeta.title = tracksLean && (palette[node.status] || {}).meaning || ""; rowMeta.id = rowId + "-meta";
         // A row is named by its title and status line; its summary is the description, so a name is not 400 characters long.
         row.setAttribute("aria-labelledby", rowId + "-title " + rowId + "-meta");
         if (navigation && node.summary) { var summary = row.appendChild(summaryLine(node)); summary.id = rowId + "-summary"; row.setAttribute("aria-describedby", summary.id); }
