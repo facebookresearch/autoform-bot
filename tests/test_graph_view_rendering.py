@@ -355,8 +355,9 @@ def test_explorer_shows_statuses_and_areas_but_never_internal_ids() -> None:
     script = _viewer_source()
     style = dag_viewer.render_container("graph.json")
 
-    # A row keeps its status and says where it lives, below the list's own page or the root, or else its area.
-    assert 'element("span", "bp-dag-inventory-meta", statusLabel(node.status) + (where ? " · " + where : ""))' in script
+    # A row says its status where the project tracks Lean, and where it lives: below the list's own page or the root,
+    # or else its area.
+    assert 'element("span", "bp-dag-inventory-meta", [tracksLean ? statusLabel(node.status) : "", where].filter(Boolean).join(" · "))' in script
     assert 'var where = navigation && placeOf(node, currentBundle && currentBundle.scope) || node.area;' in script
     assert 'element("span", "bp-dag-result-meta", statusLabel(match.node.status))' in script
     assert 'element("span", "bp-dag-result-place", topic ? "Topic" + (place ? " in " + place : "") : place)' in script
@@ -450,9 +451,12 @@ def test_reading_pane_sizes_put_the_statement_first() -> None:
         assert rule is not None, selector
         return rule.group(1)
 
-    notes = ".bp-reading-body :is(.bp-thmnotes, .bp-meta, .bp-progress-states), .bp-reading-body details.bp-dependencies"
+    notes = (
+        ".bp-reading-body :is(.bp-thmnotes, .bp-meta, .bp-progress-states), "
+        ".bp-reading-body :is(details.bp-dependencies, details.bp-lean-fold)"
+    )
     labels = (
-        ".bp-reading-body :is(.bp-thmnotes h6, .bp-key, .bp-mark, .bp-progress-kicker, "
+        ".bp-reading-body :is(.bp-thmnotes h6, .bp-thmcaption, .bp-key, .bp-mark, .bp-progress-kicker, "
         ".bp-next-kicker, .bp-hero-kicker)"
     )
     totals = ".bp-reading-body :is(.bp-progress-total, .bp-next-title)"
@@ -635,7 +639,7 @@ def test_explorer_search_draws_its_magnifier_and_shortcut_hint_in_css() -> None:
     """U+2315 is not in Plus Jakarta Sans and sat off the box's line, and "( / )" read as debug output."""
     script, style = _viewer_source(), dag_viewer._STYLE
     assert "⌕" not in style and "( / )" not in script
-    assert 'refs.search.placeholder = "Search titles and Lean names";' in script
+    assert 'refs.search.placeholder = tracksLean ? "Search titles and Lean names" : "Search titles";' in script
     # A currentColor square masked by an inline SVG draws the magnifier in the muted text colour.
     assert "background: currentColor; color: var(--dag-muted);" in style
     assert "-webkit-mask: var(--dag-magnifier) center / 14px no-repeat; mask: var(--dag-magnifier)" in style

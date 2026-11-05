@@ -57,11 +57,10 @@ address, in any case, unless shown in code; an attribute list (the braces of a
 code fence may only name its language, as in ```` ```{.lean} ````, and options
 such as `title` or `linenums`); a code fence Autoform or the site reads as left
 open where an article, a statement, its notes, or a stretch of a chapter ends;
-and a list nested hundreds of levels deep, beyond what the site's converter can
-read.
+and a list nested hundreds of levels deep, past what the site's converter reads.
 
 `check` also warns about a formula that defines a command or uses one the site
-turns off ([MathJax](../README.md#mathjax) lists them); the rest of the page is
+turns off ([MathJax](site.md#mathjax) lists them); the rest of the page is
 published as written. Put the project's notation in `blueprint/tex-macros.json`.
 
 `check --no-site-warnings` leaves these page warnings, and what would stop
@@ -170,14 +169,15 @@ not a declaration of the Lean build.
 
 A warning never fails the audit: `clean` and the exit status depend on findings
 alone. The text output prints a `warning: <path>: <code>: <message>` line for
-each, after the error lines. `--json` lists them after `findings` as
-`warnings`, sorted by `article_path` and `code`. Each also carries a `message`
-and `declarations`, one object per affected declaration and setting with its
-`name`, `option`, `value`, `location` (the `set_option` as `path:line` relative
-to the Lean root), and `scope` (`file`, `section`, `declaration`, or `proof`),
-sorted by name. The catalog limit warnings under [Elaboration
-limits](#elaboration-limits) fill `declarations`. Five warnings leave it empty:
+each, after the error lines. `--json` lists them after `findings` as `warnings`,
+sorted by `article_path` and `code`. Each also carries a `message` and
+`declarations`, one object per affected declaration and setting with its `name`,
+`option`, `value`, `location` (the `set_option` as `path:line` relative to the
+Lean root), and `scope` (`file`, `section`, `declaration`, or `proof`), sorted
+by name. The catalog limit warnings under [Elaboration
+limits](#elaboration-limits) fill `declarations`. Six warnings leave it empty:
 `atlas-omission`, at `atlas.json`, names what loading ignored in that file;
+`invalid-pinned-list` the same for the [pinned name lists](pinned-names.md);
 `decomposed-without-declaration`, at `coverage/README.md`, names a `DECOMPOSED`
 row's links that reach no declaration leaf; `duplicate-lean-target`, at each
 target involved, names the others taking the same credit; `node-too-large`, at

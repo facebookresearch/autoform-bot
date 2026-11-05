@@ -11,6 +11,17 @@ date when the release is tagged.
 
 ### Added
 
+- **Pinned name lists.** A JSON Lines file in `blueprint/libraries/`, schema
+  `autoform-pinned-names/v0`, names the declarations a library holds at one
+  pinned revision; a wiki that cites Mathlib can generate one. Once a list holds
+  a name, `check` warns about a `mathlib_declaration` name that no list holds,
+  one the lists pin to different sources, a deprecated one, and a `mathlib_file`
+  other than the first name's module path. A list whose file or header breaks
+  the schema is left out, and a bad record is skipped; `check`, `render` and
+  `audit` say which, and `audit` reports it as `invalid-pinned-list`. No exit
+  status changes, render never publishes a list, and a project without the
+  folder sees no change ([Pinned name
+  lists](autoform_cli/reference/pinned-names.md), #626).
 - **Worktrees.** `autoform project worktrees` reports which linked worktrees
   are safe to remove after a run and what protects the rest: changes, Git
   operations, unintegrated commits, processes, recent activity and live leases
@@ -18,6 +29,27 @@ date when the release is tagged.
   it with `git worktree remove`, never `--force`, and reports the free space
   recovered and how to re-create the checkout; ignored files such as `.lake`
   are not kept (#435).
+- **Lean under each statement.** A statement whose `lean:` names resolve
+  shows the first three declarations under it, as written from the attribute
+  lines above the keyword, without the section's variables: a theorem or lemma
+  without its proof, anything else whole, a definition's body included. A body
+  written at the keyword's own indent is cut short. A declaration over 14
+  lines folds behind a line that names it. Keywords, comments and strings take
+  the page's code colors, in the map's reading pane too; site search skips the
+  code. A catalog shows none, and a `--review` render leaves the Lean to each
+  card's review, after its read-back. Render cuts the text from the Lean
+  sources it captured, so a render without them shows none.
+- **Names in a statement's Lean.** A name in those declarations that the
+  project declares shows that declaration in a card when the book's reader
+  hovers or focuses it: a definition whole, its first 12 lines if longer, a
+  theorem its statement, with its file and line. A name some statement
+  formalizes links to that statement; another links to its source, or takes
+  keyboard focus when the site has no source links. Render looks a name up
+  among the project's own declarations, in the namespaces around the
+  declaration and those its file opens, and takes only one the file can see:
+  one above it in that file, or one not private in a file it imports.
+  Binders, patterns, fields, attributes, tactics, one-letter names and names
+  the project does not declare, such as Mathlib's, stay text.
 - **Check without site warnings.** `check --no-site-warnings` skips the
   warnings about the pages the site would publish, which `render` prints too,
   and still reads the notes under `blueprint/sources/`, which a render that
@@ -56,7 +88,10 @@ date when the release is tagged.
 - **Projects that track no Lean.** `tracks_lean: false` in
   `roadmap/README.md` takes Lean progress out of the book's pages: the landing
   page's figures and Next up, the statement status marks, the status dots on
-  dependency references and the chapter progress lines. Check warns about the
+  dependency references and the chapter progress lines. The explorer drops its
+  status filter and status words, and the whole-project map its tints, progress
+  bars and status words; its cards name their kind instead. Neither search box
+  mentions Lean names, though both still match them. Check warns about the
   setting anywhere else under `roadmap/`, or with a value other than true or
   false, and ignores it.
 
@@ -65,6 +100,12 @@ date when the release is tagged.
 - **Vault pages on Windows.** `autoform-visualize` writes the dependency
   summary and structure pages with LF line endings on Windows too, as on every
   other system, so a vault regenerated on both no longer flips them.
+- **Statements go by their names.** A statement's heading and every link to it,
+  in Uses, Used by and Assumes, show its name instead of a generated number:
+  "Theorem 55 (Bézout's theorem)" reads "Bézout's theorem", with the kind on a
+  small line above the name. A title that is only the kind word, or empty, is
+  named by the kind. Statements that share a title now read alike. Anchors and
+  links into a page don't change (#612).
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
@@ -205,11 +246,10 @@ date when the release is tagged.
   filter links still open there; without JavaScript they refresh to it. They
   load no explorer, stylesheet or data of their own, and
   `dependencies/full.json` is no longer written (#597).
-- **Book order.** Previous/Next, the site nav, statement numbers, Next up and
-  the explorer's outline and search follow one reading order, down the
-  containment tree, so a landing-page shortcut no longer reorders the book and
-  sites get new statement numbers. Pages their parent does not link now join
-  the site nav and Previous/Next, after the pages it links (#495).
+- **Book order.** Previous/Next, the site nav, Next up and the explorer's
+  outline and search follow one reading order, down the containment tree, so a
+  landing-page shortcut no longer reorders the book. Pages their parent does not
+  link now join the site nav and Previous/Next, after the pages it links (#495).
 - **Book copy.** The landing lead keeps link text, code, formulas and whole
   sentences. Next up says which Lean step is next. A chapter's progress is one
   line of counts whose status meanings show on hover, gone when the chapter has
@@ -406,6 +446,11 @@ date when the release is tagged.
   cannot be listed. A root that can still be searched (mode 0311) gets its
   report, and the library commands read it; one that cannot be searched
   reports `unreadable-file`.
+- **Pin files read mid-write.** `library index`, and every command that checks
+  a library's index against its checkout, read the library's pin files until
+  two reads agree, so a write that lands during a read is read again. Pins that
+  keep changing are refused as changing, where they were reported as over 1 MiB
+  or unreadable.
 - **Decision files on Windows.** `project inspect` and the library commands
   read `lean-toolchain`, the lakefiles and the manifests in text mode on
   Windows, which turned CRLF into LF and stopped at a 0x1A byte. They now read
@@ -490,6 +535,10 @@ date when the release is tagged.
   structure's limits. For a constructor or other name the index does not read
   directly under a project type, `check` names the type's `path:line` in a
   declaration article instead of pointing to `.lake` (#509).
+- **`class abbrev` and `class inductive`.** The Lean source index reads
+  `class abbrev C` and `class inductive D` as declarations of `C` and `D`, as
+  Lean does, not as classes named `abbrev` and `inductive`. In Mathlib this
+  indexes 10 classes it missed, such as `Finite`, `ExpChar` and `IsGCDMonoid`.
 - **Dotted namespaces.** The Lean source index and `audit`'s limit scan open
   a scope for each component of `namespace A.B` or `section A.B`, and `end`
   closes one per component of its name, as Lean does: `end B` after

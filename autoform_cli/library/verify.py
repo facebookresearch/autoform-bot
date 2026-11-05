@@ -40,6 +40,7 @@ from .locate import (
     HeadError,
     LakeWorkspace,
     LibraryError,
+    _SNAPSHOT_ATTEMPTS,
     PinError,
     WorkspaceError,
     checkout_paths,
@@ -89,11 +90,16 @@ class CheckoutPins:
 
 
 def checkout_pins(root: Path) -> CheckoutPins:
-    """Read the pins of the package at ``root``; ``WorkspaceError`` when its manifest cannot be used."""
+    """Read the pins of the package at ``root`` until two reads agree; ``WorkspaceError`` when its manifest cannot be used."""
 
     for relative in TREE_FILES:
         _require_plain_file(root, relative)
-    pins = _snapshot.capture_decision_snapshot(root)
+    for _attempt in range(_SNAPSHOT_ATTEMPTS):
+        pins = _snapshot.capture_decision_snapshot(root)
+        if pins == _snapshot.capture_decision_snapshot(root):
+            break
+    else:
+        raise PinError("its pin files changed while they were being read; retry after the checkout is idle")
     for relative in TREE_FILES:
         # Only a file that is not there is absent; one that cannot be read must not leave the digest.
         if pins.file(relative).state not in ("missing", "regular"):

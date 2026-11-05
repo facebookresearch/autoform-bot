@@ -153,7 +153,7 @@ var currentBundle={nodeId:'chapter',scope:'chapter',title:'Authored topic',url:'
 var instance=1,trail=[],data={title:'Authored topic',nodes:[],edges:[]};
 var ui$mode='graph',ui$selectedStatuses=new Set(['planned']);
 var presentStatuses=['planned'],ui$relationIds=new Set(['F']);
-var ui$mathJob=null;
+var ui$mathJob=null,tracksLean=true;
 function globalListen(target,type,callback) {target.addEventListener(type,callback);}
 class MutationObserver {observe(){}}
 function renderStatusFields(){}function renderNavigation(){}
@@ -506,7 +506,7 @@ def test_missing_ownership_and_root_topic_sidebar_duplication_produce_no_peer_di
     """)
 
 
-def _weighted_publisher_fixture(tmp_path: Path) -> tuple[Graph, dict, dict, dict]:
+def _weighted_publisher_fixture(tmp_path: Path) -> tuple[Graph, dict, dict]:
     # Direct Node tuples model original weighted pairs at this private boundary.
     # load_graph de-duplicates ordinary Markdown references; these multiplicities
     # are synthetic arithmetic coverage, not a source-parser or Lean proof claim.
@@ -517,17 +517,16 @@ def _weighted_publisher_fixture(tmp_path: Path) -> tuple[Graph, dict, dict, dict
         "B": Node("B", "B", tmp_path / "B.md", ("F",), proof_dependencies=("F",) * 4, declaration="theorem"),
     }
     graph = Graph(tmp_path, nodes)
-    numbers = {"A": "Definition 1", "F": "Theorem 1", "B": "Theorem 2"}
     links = {key: "https://example.test/chapter/" + key + ".html" for key in nodes}
     used_by = {key: [other.id for other in nodes.values() if key in other.dependencies] for key in nodes}
-    return graph, numbers, links, used_by
+    return graph, links, used_by
 
 
 def test_reader_keeps_exact_weighted_relations_separate_from_closed_structural_details(tmp_path: Path) -> None:
-    graph, numbers, routes, used_by = _weighted_publisher_fixture(tmp_path)
-    before = copy.deepcopy((graph, numbers, routes, used_by))
+    graph, routes, used_by = _weighted_publisher_fixture(tmp_path)
+    before = copy.deepcopy((graph, routes, used_by))
     markup = render._dependency_disclosure(
-        graph.nodes["F"], graph=graph, statuses=status.derive(graph), numbers=numbers, used_by=used_by, links=routes,
+        graph.nodes["F"], graph=graph, statuses=status.derive(graph), used_by=used_by, links=routes,
     )
     tree = html5lib.parseFragment(markup, namespaceHTMLElements=False)
     details = next(tree.iter("details"))
@@ -539,15 +538,15 @@ def test_reader_keeps_exact_weighted_relations_separate_from_closed_structural_d
     outgoing = [node for node in tree.iter("a") if node.get("href") == routes["B"]]
     assert len(incoming) == 2 and len(outgoing) == 1
     for link in incoming:
-        assert "".join(link.itertext()) == "Definition 1 (A)"
+        assert "".join(link.itertext()) == "A"
         assert link.get("aria-label") is None, "Counts must describe, not replace, the naturally rendered name"
         assert link.get("title") == "2 statement dependencies, 3 proof dependencies", (
             "Suppressed proof-only rows must retain their original proof information"
         )
-    assert "".join(outgoing[0].itertext()) == "Theorem 2 (B)"
+    assert "".join(outgoing[0].itertext()) == "B"
     assert outgoing[0].get("aria-label") is None
     assert outgoing[0].get("title") == "4 proof dependencies"
-    assert (graph, numbers, routes, used_by) == before
+    assert (graph, routes, used_by) == before
     # The same captured pair counts accompany the actual closed, unweighted
     # structural controls. The redesign adds no second relation panel.
     _run(r"""
@@ -565,12 +564,12 @@ def test_reader_keeps_exact_weighted_relations_separate_from_closed_structural_d
 
 
 def test_dependency_annotation_preserves_validated_title_parts_and_default_reference_bytes(tmp_path: Path) -> None:
-    graph, numbers, routes, used_by = _weighted_publisher_fixture(tmp_path)
-    default = render._node_references(["A"], graph=graph, statuses=status.derive(graph), numbers=numbers, links=routes)
-    assert default == '<a class="bp-ref bp-ref-can_state" href="https://example.test/chapter/A.html">Definition 1 (A)</a>'
+    graph, routes, used_by = _weighted_publisher_fixture(tmp_path)
+    default = render._node_references(["A"], graph=graph, statuses=status.derive(graph), links=routes)
+    assert default == '<a class="bp-ref bp-ref-can_state" href="https://example.test/chapter/A.html">A</a>'
     graph.nodes["A"] = dataclasses.replace(graph.nodes["A"], title=r'Groups $x$ and `$literal$` "quoted" & rings')
     before = copy.deepcopy(graph)
-    kwargs = {"graph": graph, "statuses": status.derive(graph), "numbers": numbers, "links": routes}
+    kwargs = {"graph": graph, "statuses": status.derive(graph), "links": routes}
     plain = html5lib.parseFragment(render._node_references(["A"], **kwargs), namespaceHTMLElements=False)
     annotated_markup = render._node_references(["A"], **kwargs, relation_node=graph.nodes["F"])
     marked = html5lib.parseFragment(annotated_markup, namespaceHTMLElements=False)
@@ -602,13 +601,13 @@ def test_valid_source_shared_statement_and_proof_reference_exposes_both_original
     assert graph.nodes["F"].statement_dependencies == ("A",) and graph.nodes["F"].proof_dependencies == ("A",)
     before = copy.deepcopy(graph)
     markup = render._dependency_disclosure(
-        graph.nodes["F"], graph=graph, statuses=status.derive(graph), numbers={"A": "Definition 1", "F": "Theorem 1"},
+        graph.nodes["F"], graph=graph, statuses=status.derive(graph),
         used_by={"A": ["F"], "F": []}, links={"A": "A.html", "F": "F.html"},
     )
     tree = html5lib.parseFragment(markup, namespaceHTMLElements=False)
     link = next(tree.iter("a"))
     assert link.get("href") == "A.html"
-    assert "".join(link.itertext()) == "Definition 1 (A)"
+    assert "".join(link.itertext()) == "A"
     assert link.get("aria-label") is None
     assert link.get("title") == "1 statement dependency, 1 proof dependency"
     assert "Proof uses" not in "".join(tree.itertext())

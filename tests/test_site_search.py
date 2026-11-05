@@ -107,6 +107,25 @@ def test_each_statement_card_is_one_search_record_holding_its_lean_names(tmp_pat
     assert check_site(project / "site", project / "site-src").issues == ()
 
 
+def test_a_statements_lean_and_its_name_cards_stay_out_of_search(tmp_path: Path) -> None:
+    """Material's search ends an excluded element at the first closing tag of its kind, so a card after the first in a
+    block reached the index."""
+    project = _project(tmp_path)
+    (project / "Project" / "Basic.lean").write_text(
+        "namespace Project\n\ndef alpha : Nat := 1\n\ndef beta : Nat := 1\n\ntheorem first : alpha = beta := rfl\n\n"
+        "theorem first_aux : True := trivial\n\ntheorem second : True := trivial\n\nend Project\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", project / "site-src", lean_root=project)
+    chapter = (project / "site-src/roadmap/ch/README.md").read_text(encoding="utf-8")
+    assert chapter.count('<div data-lean-name="Project.') == 2
+
+    text = " ".join(record["text"] for record in _records(project))
+    assert "Project.first" in text
+    # Neither the block nor a card, whose file line is a path and a line number, reaches the index.
+    assert "alpha" not in text and "beta" not in text and "Basic.lean:" not in text
+
+
 @pytest.mark.parametrize("title", ("Theorem", "Definition"))
 def test_a_kind_only_title_keeps_its_own_search_record_and_canonical_anchor(tmp_path: Path, title: str) -> None:
     project = _project(tmp_path)
@@ -125,8 +144,9 @@ def test_a_kind_only_title_keeps_its_own_search_record_and_canonical_anchor(tmp_
     page = (project / "site/roadmap/ch/index.html").read_text(encoding="utf-8")
     tree = html5lib.parse(page, treebuilder="etree", namespaceHTMLElements=False)
     heading = next(node for node in tree.iter("h4") if node.get("id") == "first")
-    hidden = [node for node in heading.iter("span") if "hidden" in node.attrib]
-    assert len(hidden) == 1 and "".join(hidden[0].itertext()) == title
+    # The title is the name it shows, once: no kind line above it repeats the word.
+    spans = {node.get("class"): "".join(node.itertext()) for node in heading.iter("span") if node.get("class")}
+    assert spans.get("bp-thmtitle") == title and "bp-thmcaption" not in spans
 
 
 def test_isolating_notes_headings_keeps_every_card_and_heading_whole(tmp_path: Path) -> None:

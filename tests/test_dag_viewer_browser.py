@@ -341,16 +341,21 @@ def empty_consumer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str
 
 
 @pytest.fixture(scope="module")
-def site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
-    """Serve a blueprint as render and MkDocs publish it, under Material's styles and scripts."""
+def site_url(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """Serve a blueprint as render and MkDocs publish it, under Material's styles and scripts.
+
+    A test can pass a project setting for the roadmap's README, such as ``tracks_lean: false``.
+    """
     from mkdocs.commands.build import build
     from mkdocs.config import load_config
 
     project = tmp_path_factory.mktemp("site") / "project"
     scaffold_project(project, title="Explorer fixture")
     roadmap = project / "blueprint/roadmap"
+    setting = getattr(request, "param", None)
     (roadmap / "README.md").write_text(
-        "# Fixture roadmap\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n",
+        (f"---\n{setting}\n---\n\n" if setting else "")
+        + "# Fixture roadmap\n\n- [Algebra](algebra/README.md)\n- [Topology](topology/README.md)\n",
         encoding="utf-8",
     )
     for chapter in ("Algebra", "Topology"):
@@ -438,14 +443,12 @@ def _reference_counts(relations: list[list[object]], owner_id: str, target_id: s
     return counts
 
 
-def _numbered_reference(disclosure: object, target: object, href: str, counts: tuple[int, int]) -> object:
-    """Match natural numbered fixture names and their exact typed descriptions."""
+def _named_reference(disclosure: object, target: object, href: str, counts: tuple[int, int]) -> object:
+    """Match a reference by the name its statement shows, and its exact typed descriptions."""
     playwright.expect(target).to_have_count(1)
-    caption = target.locator(".bp-thmheading > .bp-thmcaption").text_content()
-    number = target.locator(".bp-thmheading > .bp-thmlabel").text_content()
     title = target.locator(".bp-thmheading > .bp-thmtitle").text_content()
-    assert isinstance(caption, str) and isinstance(number, str) and isinstance(title, str)
-    label = f"{caption.strip()} {number.strip()} ({title.strip()})"
+    assert isinstance(title, str)
+    label = title.strip()
     link = disclosure.locator("a.bp-ref").filter(has_text=re.compile(r"^" + re.escape(label) + r"$"))
     playwright.expect(link).to_have_count(1)
     playwright.expect(link).to_have_text(label)
@@ -477,7 +480,7 @@ def _open_dependency(card: object, consumer: _ExplorerConsumer, target_id: str) 
     playwright.expect(target.locator(".bp-thmheading > .bp-thmtitle")).to_have_text(
         consumer.records[target_id]["title"]
     )
-    return _numbered_reference(
+    return _named_reference(
         disclosure, target, consumer.route(target_id), _reference_counts(consumer.relations, owner_id, target_id)
     )
 
@@ -1469,6 +1472,43 @@ def test_the_published_landing_page_is_one_full_page_explorer_opened_by_its_hero
     playwright.expect(page.locator("#bp-live-activity")).to_have_count(0)
 
 
+# None shares the module's unparametrized site rather than building a second copy of it.
+@pytest.mark.parametrize(("site_url", "tracked"), [(None, True), ("tracks_lean: false", False)], indirect=["site_url"])
+def test_a_project_that_tracks_no_lean_offers_no_lean_names_or_statuses(
+    desktop_page: object, site_url: str, tracked: bool
+) -> None:
+    """A project that tracks no Lean has none to search for and no status to filter by or show; Browse rows keep their place."""
+    page = _open_site(desktop_page, site_url, "index.html")
+    offer = "Search titles and Lean names" if tracked else "Search titles"
+    nothing = "No matching title, statement, " + ("article id, or Lean name." if tracked else "or article id.")
+    search = page.locator(".bp-dag-search")
+    playwright.expect(search).to_have_attribute("placeholder", offer)
+    playwright.expect(search).to_have_attribute("aria-label", offer)
+    search.fill("zzz")
+    playwright.expect(page.locator(".bp-dag-search-results")).to_contain_text(nothing)
+    search.fill("Base")
+    results = page.locator(".bp-dag-result")
+    playwright.expect(results.first).to_be_visible()
+    playwright.expect(page.locator(".bp-dag-result-meta")).to_have_count(results.count() if tracked else 0)
+    search.fill("")
+    if tracked:
+        playwright.expect(page.locator(".bp-dag-filter-summary")).to_be_visible()
+    else:
+        playwright.expect(page.locator(".bp-dag-filter-summary")).to_be_hidden()
+    _browse_contents(page, "All statements")
+    meta = page.locator('.bp-dag-inventory-row[data-inventory-node-id="algebra/base"] .bp-dag-inventory-meta')
+    playwright.expect(meta).to_be_visible()
+    playwright.expect(meta).to_have_text(re.compile(r".+ · Algebra") if tracked else "Algebra")
+    # An old link's status filter narrows the list only where the reader can see the filter and undo it.
+    page.goto("about:blank")
+    page.goto(f"{site_url}/index.html#view=list&status=fully_proved")
+    playwright.expect(page.locator(".bp-dag-inventory")).to_be_visible()
+    if tracked:
+        playwright.expect(page.locator(".bp-dag-hidden-button")).to_be_visible()
+    else:
+        playwright.expect(page.locator(".bp-dag-hidden-button")).to_be_hidden()
+
+
 @pytest.mark.parametrize("width", (390, 1280))
 def test_dashboard_live_activity_follows_the_integrated_landing_and_soft_navigation(
     desktop_page: object, site_url: str, width: int,
@@ -1996,8 +2036,8 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     assert index_response.ok
     last_card = _reading_card(page, last_id)
     playwright.expect(last_card.locator(".bp-thmheading > .bp-thmtitle")).to_have_text("Later 54")
-    last = _numbered_reference(relations, last_card, _site_route(page, site_url, last_id),
-                               _reference_counts(_decoded_relations(index_response.json()), "topology/result", last_id))
+    last = _named_reference(relations, last_card, _site_route(page, site_url, last_id),
+                            _reference_counts(_decoded_relations(index_response.json()), "topology/result", last_id))
     last.scroll_into_view_if_needed()
     _assert_hit(page, last)
     last.click()
@@ -2848,3 +2888,103 @@ def test_a_phone_reader_opens_at_half_snaps_where_it_is_dragged_and_maps_back_fr
     drag_to(area["y"] + area["height"] - 10)
     playwright.expect(handle).to_have_attribute("aria-expanded", "false")
     assert page.evaluate("history.length") == history_length
+
+
+_LEAN_FIXTURE = """namespace Fixture
+
+/-- The base object. -/
+def base (n : ℕ) : ℕ :=
+  match n with
+  | 0 => 1
+  | k + 1 => 2 * base k
+
+theorem result (n : ℕ) (h : 0 < n) :
+    base n ≥ n + 1 := by
+  sorry
+
+end Fixture
+"""
+
+
+@pytest.fixture(scope="module")
+def lean_site_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """A published site whose two statements name declarations in a Lean file render read."""
+    from mkdocs.commands.build import build
+    from mkdocs.config import load_config
+
+    project = tmp_path_factory.mktemp("lean-site") / "project"
+    scaffold_project(project, title="Lean fixture")
+    (project / "Fixture").mkdir()
+    (project / "Fixture/Basic.lean").write_text(_LEAN_FIXTURE, encoding="utf-8")
+    roadmap = project / "blueprint/roadmap"
+    (roadmap / "README.md").write_text("# Lean fixture\n\n- [Algebra](algebra/README.md)\n", encoding="utf-8")
+    folder = roadmap / "algebra"
+    folder.mkdir()
+    (folder / "README.md").write_text("# Algebra\n\n- [Base](base.md)\n- [Result](result.md)\n", encoding="utf-8")
+    (folder / "base.md").write_text(
+        "---\ndeclaration: def\nlean: Fixture.base\n---\n\n# Base\n\nThe base object.\n\n## Depends on\n\nNo prerequisites.\n",
+        encoding="utf-8",
+    )
+    (folder / "result.md").write_text(
+        "---\ndeclaration: theorem\nlean: Fixture.result\n---\n\n# Result\n\nThe main result.\n\n## Depends on\n\n- [Base](base.md)\n",
+        encoding="utf-8",
+    )
+    render_site(project / "blueprint", project / "site-src", lean_root=project)
+    build(load_config(config_file=str(project / "mkdocs.yml")))
+    with _served(project / "site") as url:
+        yield url
+
+
+def test_a_name_in_a_statements_lean_shows_its_declaration_and_leads_to_its_statement(
+    webkit_browser: object, lean_site_url: str,
+) -> None:
+    """Hovering or focusing a name in a statement's Lean shows its declaration, a definition with its body, and
+    following it opens the formalizing statement."""
+    with _page(webkit_browser, viewport={"width": 1280, "height": 800}) as page:
+        _offline(page, lean_site_url)
+        page.goto(f"{lean_site_url}/dependencies/chapters/algebra.html#node=algebra%2Fresult")
+        _ready_site(page)
+        viewer, card = page.locator(".bp-dag-viewer"), page.locator(".bp-lean-card")
+        block = page.locator('.bp-reading-body [data-autoform-node-id="algebra/result"] .bp-lean-source')
+        name = block.locator('.bp-lean-ref[data-lean-name="Fixture.base"]')
+        # Only the project's name links.
+        assert block.locator(".bp-lean-ref").all_inner_texts() == ["base"]
+        name.hover()
+        playwright.expect(card).to_be_visible()
+        playwright.expect(card).to_contain_text("def base (n : ℕ) : ℕ :=")
+        playwright.expect(card).to_contain_text("| k + 1 => 2 * base k")
+        playwright.expect(card).to_contain_text("Fixture/Basic.lean:4")
+        assert name.get_attribute("aria-describedby") == card.get_attribute("id")
+        page.keyboard.press("Escape")
+        playwright.expect(card).to_be_hidden()
+        # The pointer can rest on the card, and leaving both closes it; a hovered name's card closes as the reader scrolls.
+        page.mouse.move(2, 2)
+        name.hover()
+        playwright.expect(card).to_be_visible()
+        card.hover()
+        page.wait_for_timeout(300)
+        playwright.expect(card).to_be_visible()
+        page.mouse.move(2, 2)
+        playwright.expect(card).to_be_hidden()
+        name.hover()
+        playwright.expect(card).to_be_visible()
+        page.locator(".bp-reading-body").dispatch_event("scroll")
+        playwright.expect(card).to_be_hidden()
+        page.mouse.move(2, 2)
+        # The keyboard reaches the name and shows the same card, which stays as the reader scrolls and while the reader
+        # selects in it, and Escape closes it, not the reader.
+        name.focus()
+        playwright.expect(card).to_be_visible()
+        playwright.expect(card).to_contain_text("Fixture.base")
+        page.locator(".bp-reading-body").dispatch_event("scroll")
+        card.locator("pre").click()
+        playwright.expect(card).to_be_visible()
+        page.keyboard.press("Escape")
+        playwright.expect(card).to_be_hidden()
+        playwright.expect(viewer).to_have_class(re.compile(r"\bbp-dag-has-selection\b"))
+        playwright.expect(viewer).to_have_attribute("data-map-start", "algebra/result")
+        # Following the name opens the statement that formalizes it.
+        name.click()
+        playwright.expect(viewer).to_have_attribute("data-map-start", "algebra/base")
+        playwright.expect(card).to_be_hidden()
+

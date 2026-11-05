@@ -572,14 +572,46 @@ def test_statement_headings_and_references_do_not_repeat_the_kind(tmp_path: Path
     page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     base, top = page[page.index('id="base"') : page.index('id="top"')], page[page.index('id="top"') :]
 
-    # A title that is only the kind word leaves no empty parentheses behind.
-    assert "bp-thmtitle" not in base
-    assert '<span class="bp-thmtitle">Top (finite case)</span>' in top
-    assert 'href="#top">Theorem 1 (Top (finite case))</a>' in base
-    assert 'href="#base">Definition 1</a>' in top
+    # A title that is only the kind word is the name, shown once with no kind above it.
+    assert "bp-thmcaption" not in base
+    assert '<span class="bp-thmtitle">Definition</span>' in base
+    assert (
+        '<span class="bp-thmcaption" data-search-exclude>Theorem</span><span class="bp-thmtitle">Top (finite case)</span>'
+    ) in top
+    assert 'href="#top">Top (finite case)</a>' in base
+    assert 'href="#base">Definition</a>' in top
     # The graph keeps the authored titles.
     chapter = json.loads((tmp_path / "out/dependencies/chapters/roadmap.json").read_text(encoding="utf-8"))
     assert {node["id"]: node["title"] for node in chapter["nodes"]} == titles
+
+
+def test_a_sources_own_numbering_stays_in_the_heading_and_its_links(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    top = project / "blueprint/roadmap/top.md"
+    top.write_text(top.read_text(encoding="utf-8").replace("# Top\n", "# Theorem 7.7 (Bézout)\n"), encoding="utf-8")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    base, top_card = page[page.index('id="base"') : page.index('id="top"')], page[page.index('id="top"') :]
+
+    # Only the generated counter went: the title, with the source's number, heads the statement as written.
+    heading = top_card.split("</h4>")[0]
+    assert '<span class="bp-thmcaption" data-search-exclude>Theorem</span>' in heading
+    assert '<span class="bp-thmtitle">Theorem 7.7 (Bézout)</span>' in heading
+    assert 'href="#top">Theorem 7.7 (Bézout)</a>' in base
+
+
+def test_a_statement_with_an_empty_title_is_named_by_its_kind(tmp_path: Path) -> None:
+    """An H1 of only whitespace loads with an empty title; without a number its heading and links would show nothing."""
+    project = _project(tmp_path)
+    base = project / "blueprint/roadmap/base.md"
+    base.write_text(base.read_text(encoding="utf-8").replace("# Base\n", "# \t\n"), encoding="utf-8")
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url="", ref="")
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    heading = page[page.index('id="base"') :].split("</h4>")[0]
+
+    assert '<span class="bp-thmtitle">Definition</span>' in heading and "bp-thmcaption" not in heading
+    assert 'aria-label="Link to Definition"' in heading
+    assert 'href="#base">Definition</a>' in page[page.index('id="top"') :]
 
 
 def test_titles_typeset_their_math_in_headings(tmp_path: Path) -> None:
@@ -640,7 +672,7 @@ def test_a_declaration_with_no_caption_reads_as_written(tmp_path: Path) -> None:
 
     assert '<span class="bp-thmcaption" data-search-exclude>Definition</span>' in page
     assert '<span class="bp-thmcaption" data-search-exclude>Short exact sequence</span>' in page
-    assert 'href="#top">Short exact sequence 1 (Top)</a>' in page
+    assert 'href="#top">Top</a>' in page
 
 
 def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -> None:
@@ -659,12 +691,13 @@ def test_a_chapter_places_statements_in_the_authored_narrative(tmp_path: Path) -
     assert '<div class="bp-search-names" hidden>Project.top</div>' in page
     assert 'data-autoform-node-id="base"' in page
     assert 'data-autoform-node-id="top"' in page
+    # A statement is headed by its name, with its kind above it and no generated number.
     assert (
         '<span class="bp-thmcaption" data-search-exclude>Definition</span>'
-        '<span class="bp-thmlabel" data-search-exclude>1</span>'
+        '<span class="bp-thmtitle">Base</span>'
     ) in page
     # The permalink keeps its accessible name while search excludes its punctuation.
-    assert '<a class="bp-permalink" href="#base" aria-label="Link to Definition 1" data-search-exclude>#</a>' in page
+    assert '<a class="bp-permalink" href="#base" aria-label="Link to Base" data-search-exclude>#</a>' in page
     assert '<span class="bp-thmtitle">Top</span>' in page
     assert "The main result." in page
     assert "<strong>2</strong> fully proved" in page
@@ -801,9 +834,168 @@ def test_cross_references_point_at_anchors_on_the_chapter(tmp_path: Path) -> Non
     assert 'class="bp-reading-source"' in page and 'class="bp-dag-viewer"' in page
     assert '<details class="bp-dependencies"><summary>Uses 1</summary>' in page
     assert '<span class="bp-key">Statement uses</span>' in page
-    assert 'href="#base">Definition 1 (Base)' in page
-    assert 'href="#top">Theorem 1 (Top)' in page
+    assert 'href="#base">Base</a>' in page
+    assert 'href="#top">Top</a>' in page
     assert 'href="https://github.com/owner/repo/issues/42">#42' in page
+
+
+def test_a_statement_shows_its_lean_declaration_under_it(tmp_path: Path) -> None:
+    """A theorem shows its statement and never its proof; a definition shows whole, its body after `:=` included."""
+    project = _project(tmp_path)
+    (project / "Project/Basic.lean").write_text(
+        "namespace Project\n\n/-- The base. -/\ndef Base : String :=\n  \"a < b\" -- c & d\n\n"
+        "theorem top : True := by\n  -- the proof\n  trivial\n\nlemma small : 0 < (fun n : Nat => n) 1 := by\n  decide\n\nend Project\n",
+        encoding="utf-8",
+    )
+    _edit(project / "blueprint/roadmap/top.md", "lean: Project.top\n", "lean: Project.top, Project.small\n")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    # Each block follows its statement box, and search leaves it out.
+    blocks = re.findall(r'</div>\n\n<div class="bp-lean-source" data-search-exclude="1">\n(.*?)\n</div>', page, re.S)
+    # Its strings and comments are marked and escaped, and a lemma, like a theorem, shows no proof.
+    assert blocks == [
+        '<pre class="bp-lean"><code><span class="bp-lean-keyword">def</span> Base : String :=\n'
+        '  <span class="bp-lean-string">&quot;a &lt; b&quot;</span> <span class="bp-lean-comment">-- c &amp; d</span></code></pre>',
+        '<pre class="bp-lean"><code><span class="bp-lean-keyword">theorem</span> top : True</code></pre>\n'
+        '<pre class="bp-lean"><code><span class="bp-lean-keyword">lemma</span> small : 0 &lt; (<span class="bp-lean-keyword">fun</span> n : Nat =&gt; n) 1</code></pre>',
+    ]
+    # The keywords are the index's own, Batteries' commands and modifiers included.
+    assert render_module._lean_code("public theorem_wanted w : True") == (
+        '<span class="bp-lean-keyword">public</span> <span class="bp-lean-keyword">theorem_wanted</span> w : True'
+    )
+
+
+def test_a_long_declaration_folds_and_a_statement_shows_three_at_most(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    alternatives = "".join(f"  | {n} => {n}\n" for n in range(14))
+    theorems = "".join(f"theorem t{n} : True := trivial\n" for n in range(3))
+    (project / "Project/Basic.lean").write_text(
+        f"namespace Project\n\ndef Base : Nat → Nat\n{alternatives}\ndef Open : Nat → Nat\n{alternatives[alternatives.index('  | 1 '):]}\n"
+        f"theorem top : True := trivial\n{theorems}\nend Project\n",
+        encoding="utf-8",
+    )
+    _edit(project / "blueprint/roadmap/base.md", "lean: Project.Base\n", "lean: Project.Base, Project.Open\n")
+    # A name with no declaration takes none of the three places.
+    _edit(project / "blueprint/roadmap/top.md", "lean: Project.top\n", "lean: Project.missing, Project.top, Project.t0, Project.t1, Project.t2\n")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+    assert '<details class="bp-lean-fold"><summary><code>Project.Base</code> · 15 lines</summary><pre class="bp-lean">' in page
+    # Fourteen lines still show open.
+    assert '</details>\n<pre class="bp-lean"><code><span class="bp-lean-keyword">def</span> Open' in page
+    top = page.split('data-autoform-node-id="top"', 1)[1].split('<div class="bp-lean-source"', 1)[1].split("</div>", 1)[0]
+    assert re.findall(r"theorem</span> (\w+) : True</code>", top) == ["top", "t0", "t1"]
+
+
+def test_a_catalog_or_an_unread_name_shows_no_lean_declaration(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    index = lean_module.index_project(project)
+    linker = lean_module.SourceLinker(index, sources={Path("Project/Basic.lean"): (project / "Project/Basic.lean").read_bytes()})
+
+    def blocks(lean: str, catalog: str | None = None, linker: lean_module.SourceLinker = linker) -> list[str]:
+        return render_module._lean_blocks(SimpleNamespace(catalog=catalog, lean=lean), linker, links={}, formalizing={})
+
+    assert blocks("Project.Base")
+    # A catalog can list hundreds of names, so it shows none, as it shows no code icons.
+    assert blocks("Project.Base", "module") == []
+    assert blocks("Project.Missing") == []
+    # Without the captured files there is no text to show.
+    assert blocks("Project.Base", linker=lean_module.SourceLinker(index)) == []
+
+
+def test_a_name_in_a_lean_block_links_its_statement_and_carries_its_card(tmp_path: Path) -> None:
+    """A name in a statement's Lean links the statement that formalizes it and carries its declaration's card."""
+    project = _project(tmp_path)
+    (project / "Project/Basic.lean").write_text(
+        "namespace Project\n\ndef Base : Nat := 0\n\ndef e : Nat := 2\n\ndef count : Nat := 3\n\n"
+        "def helper (n : Nat) : Nat :=\n  n + Base\n\ntheorem helper_pos : 0 < helper 1 := by\n  simp [helper]\n\n"
+        "lemma helper_le : helper 0 ≤ helper 1 := by\n  omega\n\n"
+        "def twelve : Nat → Nat\n" + "".join(f"  | {n} => {n}\n" for n in range(10)) + "  | _ => 0\n\n"
+        "def thirteen : Nat → Nat\n" + "".join(f"  | {n} => {n}\n" for n in range(11)) + "  | _ => 0\n\n"
+        "def long : Nat → Nat\n" + "".join(f"  | {n} => {n}\n" for n in range(13)) + "  | _ => 0\n\n"
+        "namespace Inner\ndef twice (x : Nat) : Nat := x + x\nend Inner\n\nopen Inner in\n"
+        "theorem top (count : Nat) : twice count = helper e + Base.succ + long 0 := by\n  sorry\n\nend Project\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    top = page.split('data-autoform-node-id="top"', 1)[1].split('<div class="bp-lean-source" data-search-exclude="1">\n', 1)[1]
+    code, cards = top.split("</code></pre>", 1)
+
+    # A name a statement formalizes links to it, the part before a field included; one only the sources declare is
+    # a name the keyboard can reach. Binders and one-letter names, which may be variables, stay text.
+    assert code == (
+        '<pre class="bp-lean"><code><span class="bp-lean-keyword">theorem</span> top (count : Nat) : '
+        '<span class="bp-lean-ref" tabindex="0" data-lean-name="Project.Inner.twice">twice</span> count = '
+        '<span class="bp-lean-ref" tabindex="0" data-lean-name="Project.helper">helper</span> e + '
+        '<a class="bp-lean-ref" href="#base" data-lean-name="Project.Base">Base</a>.succ + '
+        '<span class="bp-lean-ref" tabindex="0" data-lean-name="Project.long">long</span> 0'
+    )
+    # Each name's card holds its declaration and file, once, hidden in the block; a long one shows its first lines.
+    hidden = cards.split('<div class="bp-lean-names" hidden>\n', 1)[1].split("\n</div>\n</div>", 1)[0]
+    entries = dict(re.findall(r'<div data-lean-name="([^"]+)" data-search-exclude="1">(.*?)</div>', hidden, re.S))
+    assert list(entries) == ["Project.Inner.twice", "Project.helper", "Project.Base", "Project.long"]
+    assert entries["Project.helper"] == (
+        '<pre class="bp-lean"><code><span class="bp-lean-keyword">def</span> helper (n : Nat) : Nat :=\n  n + Base</code></pre>'
+        '<p class="bp-lean-where">Project/Basic.lean:9</p>'
+    )
+    assert "  | 10 =&gt; 10\n  ⋯</code>" in entries["Project.long"] and "| 11 " not in entries["Project.long"]
+
+    # A theorem's card shows its statement and never its proof.
+    index = lean_module.index_project(project)
+    linker = lean_module.SourceLinker(index, sources={Path("Project/Basic.lean"): (project / "Project/Basic.lean").read_bytes()})
+    card = render_module._lean_card(index.find("Project.helper_pos"), linker)
+    assert card is not None and "helper_pos : 0 &lt; helper 1</code>" in card and "simp" not in card
+    card = render_module._lean_card(index.find("Project.helper_le"), linker)
+    assert card is not None and "helper_le : helper 0 ≤ helper 1</code>" in card and "omega" not in card
+    # Twelve lines show whole; a thirteenth is cut.
+    twelve, thirteen = (render_module._lean_card(index.find(f"Project.{n}"), linker) for n in ("twelve", "thirteen"))
+    assert twelve is not None and thirteen is not None
+    assert "⋯" not in twelve and "  | _ =&gt; 0" in twelve and "  ⋯</code>" in thirteen
+    # A link is escaped as an attribute.
+    node = SimpleNamespace(catalog=None, lean="Project.top")
+    links, formalizing = {"base": 'b?x=1&y="2"'}, {"Project.Base": "base"}
+    blocks = render_module._lean_blocks(node, linker, links=links, formalizing=formalizing)
+    link = '<a class="bp-lean-ref" href="b?x=1&amp;y=&quot;2&quot;" data-lean-name="Project.Base">Base</a>'
+    assert link in "\n".join(blocks)
+
+
+def test_a_private_declaration_whose_name_another_file_shares_links_nothing(tmp_path: Path) -> None:
+    """The card, the link and the formalizing statement go by name, which the index files under the public one."""
+    project = _project(tmp_path)
+    (project / "Project/Other.lean").write_text(
+        "namespace Project\n\ntheorem helper : True := trivial\n\nend Project\n", encoding="utf-8"
+    )
+    (project / "Project/Basic.lean").write_text(
+        "namespace Project\n\ndef Base : Nat := 0\n\nprivate def helper : Nat := 1\n\n"
+        "theorem top : helper = Base + 1 := rfl\n\nend Project\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    top = page.split('data-autoform-node-id="top"', 1)[1].split("</code></pre>", 1)[0]
+
+    assert 'data-lean-name="Project.Base"' in top and "Project.helper" not in top
+
+
+def test_a_field_an_argument_or_a_tactic_is_no_reference() -> None:
+    """A field given or declared, a named argument, an attribute and tactics name no declaration in reach."""
+    linked = render_module._lean_code(
+        "@[ext] { s with base := base, f (n := base) }\n  base : Nat\nx : List Base := base\ny :\n"
+        "    Base := base decreasing_by simp_wf; base",
+        lambda written: f"[{written}]",
+    )
+    # An attribute is no reference; a result type before ``:=`` is, on its own line too.
+    assert linked == (
+        '@[ext] { [s] <span class="bp-lean-keyword">with</span> base := [base], [f] (n := [base]) }\n'
+        '  base : [Nat]\nx : [List] [Base] := [base]\ny :\n'
+        '    [Base] := [base] <span class="bp-lean-keyword">decreasing_by</span> simp_wf; base'
+    )
 
 
 def test_a_dependency_list_drops_its_separators(tmp_path: Path) -> None:
@@ -854,15 +1046,16 @@ def test_the_dependency_line_counts_both_directions_without_admonition_chrome(tm
     # Material draws a details element as a boxed admonition with a pencil
     # icon; these selectors outrank its own and take that off.
     css = render_module._stylesheet()
-    box = re.search(r"\.md-typeset details\.bp-dependencies \{([^}]+)\}", css).group(1)
+    line = r"\.md-typeset :is\(details\.bp-dependencies, details\.bp-lean-fold\)"
+    box = re.search(line + r" \{([^}]+)\}", css).group(1)
     for declaration in ("padding: 0;", "border: 0;", "box-shadow: none;", "background: none;", "color: var(--bp-muted);"):
         assert declaration in box
-    summary = re.search(r"\.md-typeset details\.bp-dependencies > summary \{([^}]+)\}", css).group(1)
+    summary = re.search(line + r" > summary \{([^}]+)\}", css).group(1)
     assert "background: none;" in summary and "padding: 0.2rem 0;" in summary
-    assert ".md-typeset details.bp-dependencies > summary::before { display: none; }" in css
-    assert re.search(r"\.md-typeset details\.bp-dependencies > summary::after \{[^}]*position: static;", css)
+    assert re.search(line + r" > summary::before \{ display: none; \}", css)
+    assert re.search(line + r" > summary::after \{[^}]*position: static;", css)
     touch = re.search(r"@media \(pointer: coarse\) \{\s*([^{}]+)\{([^}]+)\}", css)
-    assert touch.group(1).strip() == ".md-typeset details.bp-dependencies > summary"
+    assert touch.group(1).strip() == ".md-typeset :is(details.bp-dependencies, details.bp-lean-fold) > summary"
     assert "min-height: 44px;" in touch.group(2)
 
 
@@ -998,6 +1191,30 @@ def test_a_project_that_tracks_no_lean_shows_no_lean_progress(tmp_path: Path, tr
     # The book's hero is the rail's, which has neither, tracked or not.
     assert "Formalization blueprint" not in site and "bp-hero-bar" not in site
     assert "Lagrange" in site and "Why subgroups come first." in site
+
+
+@pytest.mark.parametrize("tracked", [True, False])
+def test_a_project_that_tracks_no_lean_tells_the_shell_and_the_map(tmp_path: Path, tracked: bool) -> None:
+    """Every page's shell container carries the attribute the explorer's stylesheet keys on, and the map's index a flag."""
+    blueprint = _informal_project(tmp_path, "" if tracked else "tracks_lean: false\n")
+
+    render_site(blueprint, tmp_path / "out")
+
+    shells = [
+        text for page in sorted((tmp_path / "out").rglob("*.md"))
+        if 'class="bp-explorer-page"' in (text := page.read_text(encoding="utf-8"))
+    ]
+    # The book's pages; the explorer's old pages only send readers on to them.
+    assert any("Why subgroups come first." in text for text in shells) and len(shells) > 2
+    marked = [text for text in shells if '<div class="bp-explorer-page" data-tracks-lean="false" markdown="1">' in text]
+    assert len(marked) == (0 if tracked else len(shells))
+    index = json.loads((tmp_path / "out" / project_map.MAP_DIRECTORY / "index.json").read_text(encoding="utf-8"))
+    assert index.get("tracks_lean", "absent") == ("absent" if tracked else False)
+
+
+def test_the_shell_hides_its_status_filter_on_the_page_attribute() -> None:
+    assert ('[data-tracks-lean="false"] :is(.bp-dag-filters, .bp-dag-sheet-handle .bp-dag-swatch) '
+            '{ display: none !important; }') in dag_viewer._STYLE
 
 
 def test_a_hero_that_tracks_no_lean_keeps_its_claim_and_ways_in(tmp_path: Path) -> None:
@@ -1230,7 +1447,7 @@ def test_module_catalog_is_separate_from_formalization_progress(
     assert roadmap.status_counts == (("fully_proved", 2), ("can_state", 1), ("inventory_checked", 1))
     chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
     assert (
-        '<span class="bp-thmcaption" data-search-exclude>Module</span><span class="bp-thmlabel" data-search-exclude>1</span>'
+        '<span class="bp-thmcaption" data-search-exclude>Module</span><span class="bp-thmtitle">Existing module</span>'
     ) in chapter
     assert "A checked inventory of an existing Lean module." in chapter
     assert "<strong>2</strong> fully proved" in chapter
@@ -1460,7 +1677,7 @@ def test_a_topic_of_unchecked_catalogs_counts_each_as_a_pending_inventory(tmp_pa
         assert f'<h4 class="bp-thmheading" id="{name}">' in book
     assert book.count('●<span class="bp-mark-label">inventory pending</span>') == 3
     assert (
-        '<a class="bp-ref bp-ref-planned" title="1 statement dependency" href="#a">Module 1 (Module A)</a>'
+        '<a class="bp-ref bp-ref-planned" title="1 statement dependency" href="#a">Module A</a>'
     ) in book
     assert "ready to state" not in book
     structure = (out / "structure.md").read_text(encoding="utf-8")
@@ -3970,7 +4187,7 @@ def test_render_reads_each_page_of_the_book_once_for_its_order(tmp_path: Path, m
     monkeypatch.setattr(render_module, "_book_links", counted)
     render_site(project / "blueprint", tmp_path / "out", lean_root=project)
 
-    # Statement numbers, the search index and SUMMARY.md share one walk.
+    # The search index and SUMMARY.md share one walk.
     assert read and len(read) == len(set(read))
 
 
@@ -4100,7 +4317,7 @@ def test_a_cycle_releases_a_sibling_on_it_not_one_waiting_behind_it() -> None:
     "variant",
     ("as-written", "landing-shortcut", "only-zeta-linked", "no-landing-page", "unlinked-scope", "unlisted-result"),
 )
-def test_statement_numbers_rise_down_each_page_and_across_chapters(tmp_path: Path, variant: str) -> None:
+def test_the_reading_order_runs_down_each_page_and_across_chapters(tmp_path: Path, variant: str) -> None:
     """A landing-page shortcut does not reorder the book. A page or result
     its parent does not list follows the listed ones, as one run."""
     project = _book_order_project(tmp_path)
@@ -4132,14 +4349,18 @@ def test_statement_numbers_rise_down_each_page_and_across_chapters(tmp_path: Pat
 
     render_site(blueprint, out, lean_root=project)
 
-    numbers = [
-        int(number)
+    # The search index reads the statements in the order the pages show them.
+    statements = [
+        node_id
         for page in pages
-        for number in re.findall(
-            r'class="bp-thmlabel"[^>]*>(\d+)<', (out / "roadmap" / page / "README.md").read_text(encoding="utf-8")
+        for node_id in re.findall(
+            r'<div class="bp-thmwrapper [^"]*" data-autoform-node-id="([^"]+)"',
+            (out / "roadmap" / page / "README.md").read_text(encoding="utf-8"),
         )
     ]
-    assert numbers == list(range(1, 7 + (variant == "unlisted-result") + 2 * (variant == "unlinked-scope")))
+    assert len(statements) == 6 + (variant == "unlisted-result") + 2 * (variant == "unlinked-scope")
+    index = json.loads((out / "dependencies/index.json").read_text(encoding="utf-8"))
+    assert [node["id"] for node in index["nodes"] if node["id"] in statements] == statements
     if variant == "landing-shortcut":
         # The nav reads the book in order: the shortcut does not move it.
         assert _summary_chapters(out) == ["zeta", "alpha", "irrationality-proof"]
@@ -4246,7 +4467,7 @@ def test_a_conditional_proof_names_the_open_statements_it_assumes(
     assert '●<span class="bp-mark-label">conditionally proved</span>' in top
     assert (
         '<span class="bp-key">Assumes</span><span class="bp-value">'
-        '<a class="bp-ref bp-ref-can_prove" href="#open">Theorem 1 (Open)</a>'
+        '<a class="bp-ref bp-ref-can_prove" href="#open">Open</a>'
         " (open statements without a recorded Lean proof)</span>"
     ) in top
     # Only the conditional proof carries the row; the open statement assumes nothing.
