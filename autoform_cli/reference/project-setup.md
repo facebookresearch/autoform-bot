@@ -6,14 +6,18 @@ reference](../README.md#init) gives the synopses.
 ## init
 
 `init` appends the missing Autoform rules to an existing root `.gitignore`,
-which must be a regular file with one link; when it cannot verify the append,
-the error says the file may be partial: inspect it before retrying. Even with
-`--force`, `init` refuses before writing anything when it finds an entry that
-differs from a path it manages only in letter case or Unicode form (a
-`Blueprint/` Lean library, `MkDocs.yml`), a managed directory it cannot list,
-or a root `Readme.md` or `readme.md`. The vault is always `blueprint/`, so a
-Lean library named `Blueprint` needs a different library name (its lakefile
-`lean_lib`, root module and imports), not a lowercase rename.
+which must be a regular file with one link. Even with `--force`, `init` refuses
+before writing anything when it finds an entry that differs from a path it
+manages only in letter case or Unicode form (a `Blueprint/` Lean library,
+`MkDocs.yml`), a managed directory it cannot list, or a root `Readme.md` or
+`readme.md`. The vault is always `blueprint/`, so a Lean library named
+`Blueprint` needs a different library name (its lakefile `lean_lib`, root module
+and imports), not a lowercase rename.
+
+`init --no-verify-workflow` replaces `.github/workflows/autoform-verify.yml`
+with a stub, kept by `init --force`, that passes and checks nothing, so Pages
+publishes unverified commits. A project whose `lean:` names all lie in its root
+package can run the [audit after a build](open-statements.md) in its own CI.
 
 ### Workflow pins
 
@@ -23,7 +27,7 @@ installed plugin was copied from), when a safe remote (Autoform's canonical
 repository, then `origin`, then `upstream`, then a unique remaining one) has a
 cached tracking ref containing it, tracked files are clean, and the templates
 and any installed plugin copy match it; an explicit `--autoform-source` gets no
-default ref. Without a ref the CI workflows are omitted.
+default ref. Without a ref the CI workflows are omitted, except that stub.
 
 ## project new
 
@@ -31,28 +35,24 @@ A failure or interrupt after staging can leave a hidden `.autoform-new-*`
 directory in the parent, which the error mentions; inspect it before removing
 it. The published tree has modes 0755 for directories and executables and 0644
 for other files, whatever the umask. Its `lakefile.toml` sets
-`enableArtifactCache = true` and `restoreAllArtifacts = true`, so checkouts on
-the same toolchain share builds through Lake's artifact cache while each
-module's `.olean` stays in `.lake/build`. Package names cannot shadow Mathlib
-libraries such as `Archive` or `Counterexamples`. Workflows are pinned as
-[`init`](#workflow-pins) pins them. Apart from local Git reads, the command runs
-no subprocess, Lake, Lean, or network operation. Its errors name a code:
+`enableArtifactCache = true` and `restoreAllArtifacts = true`. Package names
+cannot shadow Mathlib libraries such as `Archive` or `Counterexamples`.
+Workflows are pinned as [`init`](#workflow-pins) pins them. Apart from local Git
+reads, the command runs no subprocess, Lake, Lean, or network operation. Its
+errors name a code:
 
 - `project-parent-inaccessible` or `project-path-is-symlink`: the parent and
   its ancestors must be readable real directories, not links; on macOS, use
   `/private/tmp` rather than the `/tmp` symlink.
 - `project-parent-unsafe`: the parent is group- or world-writable and not a
   sticky directory owned by you or root; run `chmod g-w,o-w` on it.
-- `project-parent-busy`: another creation held the parent's lock for 30
-  seconds; retry once it is done.
+- `project-parent-busy`: another creation held the parent's lock for 30 seconds.
 - `project-parent-changed`: the parent path stopped naming the locked
-  directory. Nothing was published, but an `.autoform-new-*` stage may remain
-  in the original directory; inspect it before removing it.
+  directory; nothing was published, but a stage may remain in the original one.
 - `project-create-commit-uncertain`: publication started but its outcome could
   not be confirmed; locate the project before retrying.
 
-Creation fails closed, including on Windows, where POSIX descriptor traversal,
-advisory locking, directory sync, or atomic no-replace rename is unavailable.
+Without the POSIX calls it needs, as on Windows, creation fails closed.
 
 ### Toolchains
 

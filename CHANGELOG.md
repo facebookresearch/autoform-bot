@@ -11,6 +11,16 @@ date when the release is tagged.
 
 ### Added
 
+- **Verify workflow off.** `init --no-verify-workflow` writes
+  `.github/workflows/autoform-verify.yml` as a stub, for a project the
+  generated workflow can't fit, such as one whose roadmap several Lake projects
+  back. The stub keeps the workflow's name, triggers and `build` job and only
+  reports that nothing was built or audited, so a required check passes and
+  the Pages deploy goes on, publishing commits nothing verified. Later `init`
+  runs, `--force` included, keep a file there with the stub's marker line;
+  delete it to get the workflow back. With a ref, `.github/autoform_audit.py` is
+  still written ([Project setup](autoform_cli/reference/project-setup.md#init),
+  #402).
 - **Pinned name lists.** A JSON Lines file in `blueprint/libraries/`, schema
   `autoform-pinned-names/v0`, names the declarations a library holds at one
   pinned revision; a wiki that cites Mathlib can generate one. Once a list holds
@@ -59,6 +69,14 @@ date when the release is tagged.
   On one CI runner ATLAS's check took 60 s with the flag instead of 255 s, and
   render printed every warning it skipped. A scaffolded project keeps its
   workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
+- **Panes you can resize and hide.** In the book's workspace, Topics and the
+  reading pane resize from splitters on their inner edges, by pointer or
+  keys, up to a reader of all but 160px of the map. A pane dragged nearly
+  shut, or whose splitter takes Enter, hides, and a tab at the map's edge
+  brings it back; "Map only" in the trail row hides both. The choice holds
+  on every page of the site, and a double-click on a splitter restores the
+  usual width. While a pane is dragged the map holds its camera, and it
+  settles once the drag ends. A phone keeps its sheet.
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project. Regions (authored areas, or the top-level
   chapters) open into their parts and parts into their results as the camera
@@ -97,6 +115,16 @@ date when the release is tagged.
 
 ### Changed
 
+- **Helpers beside an article are its own.** `work impact` and
+  `work import-impact` give a declaration no article names, and no named
+  `parent` ancestor owns, to the one article that names declarations in its
+  module, when exactly one does. A worker's own helpers no longer get a `lean/`
+  claim key of their own, and in `work impact` that article also counts for
+  `undeclared_dependencies` and `unused_statement_dependencies`. In a module
+  several articles share, the helpers keep their own keys (#492).
+- **Wrong import-impact module.** `work import-impact` refuses a `MODULE`
+  outside the project before the freshness check and the probe; when the
+  article's declarations are in one module, the error names it (#492).
 - **Statements go by their names.** A statement's heading and every link to it,
   in Uses, Used by and Assumes, show its name instead of a generated number:
   "Theorem 55 (Bézout's theorem)" reads "Bézout's theorem", with the kind on a

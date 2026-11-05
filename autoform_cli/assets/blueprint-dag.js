@@ -268,6 +268,7 @@
     buildShell();
     bindEvents();
     bindLeanCards();
+    bindPanes();
     // The router has already validated its index, so the first route, a
     // direct theorem entry included, reads its records. Only the route
     // renders the first view, after projecting with them.
@@ -930,6 +931,115 @@
       }, true);
       // A press outside the card closes it, or cancels one about to open.
       globalListen(document, "pointerdown", function (event) { if (!card.contains(event.target)) hide(); }, true);
+    }
+
+    // Topics and the reading pane can be dragged wider or narrower, or hidden, and the choice holds on every page of the
+    // site. Dragging a pane nearly shut hides it, as Enter on its splitter does; a tab at the map's edge brings it back.
+    function bindPanes() {
+      var key = "autoform:book-panes:v1", panes = {};
+      try { panes = JSON.parse(window.localStorage.getItem(key)) || {}; } catch (error) { panes = {}; }
+      var main = dom$body.querySelector(".bp-dag-main"), context = host.querySelector(".bp-dag-context");
+      function splitter(label) {
+        var bar = element("div", "bp-dag-splitter"); bar.tabIndex = 0; bar.title = label + "; double-click resets";
+        bar.setAttribute("role", "separator"); bar.setAttribute("aria-orientation", "vertical"); bar.setAttribute("aria-label", label);
+        bar.setAttribute("aria-valuemin", "0"); bar.setAttribute("aria-valuemax", "100");
+        dom$body.appendChild(bar); return bar;
+      }
+      var bars = {topics: splitter("Resize Topics"), reading: splitter("Resize the reading pane")};
+      var tabs = {topics: button("bp-dag-pane-tab bp-dag-pane-tab-topics", "Topics", "Show Topics"),
+        reading: button("bp-dag-pane-tab bp-dag-pane-tab-reading", "Reading", "Show the reading pane")};
+      main.append(tabs.topics, tabs.reading);
+      // A drawn full-screen mark, like the theme switch beside it, so the trail row stays one line high.
+      var mapOnly = button("bp-dag-map-only", "", "Map only"), svg = "http://www.w3.org/2000/svg", mark = document.createElementNS(svg, "svg");
+      mark.setAttribute("viewBox", "0 0 20 20"); mark.setAttribute("aria-hidden", "true");
+      var corners = document.createElementNS(svg, "path");
+      corners.setAttribute("d", "M3 7.5V3h4.5M12.5 3H17v4.5M17 12.5V17h-4.5M7.5 17H3v-4.5");
+      corners.setAttribute("fill", "none"); corners.setAttribute("stroke", "currentColor"); corners.setAttribute("stroke-width", "1.5");
+      mark.appendChild(corners); mapOnly.appendChild(mark);
+      context.insertBefore(mapOnly, context.querySelector(".bp-dag-theme"));
+      function wide() { return !window.matchMedia || window.matchMedia("(min-width: 1101px)").matches; }
+      function hidden(side) { return Boolean(panes[side + "Hidden"]) && !sheetLayout() && (side === "reading" || wide()); }
+      function apply() {
+        var focused = document.activeElement;
+        ["topics", "reading"].forEach(function (side) {
+          var pane = side === "topics" ? dom$navigation : dom$inspector, hide = hidden(side);
+          var lost = hide && (pane.contains(focused) || bars[side] === focused);
+          host.classList.toggle("bp-dag-" + side + "-hidden", hide);
+          tabs[side].hidden = !hide;
+          if (lost) tabs[side].focus();
+        });
+        if (panes.topics) host.style.setProperty("--dag-navigation-width", panes.topics + "px");
+        else host.style.removeProperty("--dag-navigation-width");
+        if (panes.reading) host.style.setProperty("--dag-reading-width", "minmax(300px, " + (100 * panes.reading).toFixed(2) + "%)");
+        else host.style.removeProperty("--dag-reading-width");
+        var shut = hidden("reading") && (hidden("topics") || !wide());
+        mapOnly.setAttribute("aria-pressed", String(shut)); mapOnly.title = shut ? "Show Topics and the reading pane" : "Hide Topics and the reading pane";
+        place();
+      }
+      // Each splitter sits on its pane's inner edge; the overview's collapsed reader and a drawer have none.
+      function place() {
+        var width = dom$body.clientWidth || 1;
+        bars.topics.hidden = !wide() || sheetLayout() || hidden("topics");
+        bars.reading.hidden = sheetLayout() || hidden("reading") || dom$inspector.offsetWidth < 100;
+        if (!bars.topics.hidden) {
+          bars.topics.style.left = (dom$navigation.offsetWidth - 4) + "px";
+          bars.topics.setAttribute("aria-valuenow", String(Math.round(100 * dom$navigation.offsetWidth / width)));
+        }
+        if (!bars.reading.hidden) {
+          bars.reading.style.left = (dom$inspector.offsetLeft - 4) + "px";
+          bars.reading.setAttribute("aria-valuenow", String(Math.round(100 * dom$inspector.offsetLeft / width)));
+        }
+      }
+      function save() { try { window.localStorage.setItem(key, JSON.stringify(panes)); } catch (error) { /* A preference only. */ } }
+      // A width from the pointer or the keys, kept within bounds: Topics 160-480px, the reader 300px up to all but 160px of the
+      // map. Returns whether the pane was pulled nearly shut, which hides it when the drag ends.
+      function resizeTo(side, size) {
+        var width = dom$body.clientWidth;
+        if (side === "topics") panes.topics = Math.round(Math.min(480, Math.max(160, size)));
+        else panes.reading = Math.min(width - dom$navigation.offsetWidth - 160, Math.max(300, size)) / width;
+        apply();
+        return size < (side === "topics" ? 100 : 160);
+      }
+      function current(side) { return side === "topics" ? dom$navigation.offsetWidth : dom$inspector.offsetWidth; }
+      function show(side, shown) { panes[side + "Hidden"] = !shown; apply(); save(); }
+      Object.keys(bars).forEach(function (side) {
+        var bar = bars[side];
+        bar.addEventListener("pointerdown", function (event) {
+          if (event.button !== 0) return;
+          event.preventDefault(); bar.focus({preventScroll: true});
+          if (bar.setPointerCapture) bar.setPointerCapture(event.pointerId);
+          host.classList.add("bp-dag-resizing");
+          var shut = false;
+          function move(moved) {
+            var box = dom$body.getBoundingClientRect();
+            shut = resizeTo(side, side === "topics" ? moved.clientX - box.left : box.right - moved.clientX);
+          }
+          function end() {
+            ["pointermove", "pointerup", "pointercancel"].forEach(function (type, index) { bar.removeEventListener(type, index ? end : move); });
+            host.classList.remove("bp-dag-resizing");
+            if (shut) panes[side + "Hidden"] = true;
+            apply(); save();
+          }
+          ["pointermove", "pointerup", "pointercancel"].forEach(function (type, index) { bar.addEventListener(type, index ? end : move); });
+        });
+        bar.addEventListener("dblclick", function () { delete panes[side]; apply(); save(); });
+        bar.addEventListener("keydown", function (event) {
+          var step = event.shiftKey ? 64 : 16, grow = side === "topics" ? "ArrowRight" : "ArrowLeft", shrink = side === "topics" ? "ArrowLeft" : "ArrowRight";
+          if (event.key === grow || event.key === shrink) resizeTo(side, current(side) + (event.key === grow ? step : -step));
+          else if (event.key === "Home" || event.key === "End") resizeTo(side, (event.key === "End") === (side === "topics") ? Infinity : 0);
+          else if (event.key === "Enter") show(side, false);
+          else return;
+          event.preventDefault(); save();
+        });
+        tabs[side].addEventListener("click", function () { show(side, true); bars[side].focus({preventScroll: true}); });
+      });
+      mapOnly.addEventListener("click", function () {
+        var shut = mapOnly.getAttribute("aria-pressed") === "true";
+        panes.topicsHidden = panes.readingHidden = !shut; apply(); save();
+      });
+      if (window.ResizeObserver) { var ro = new ResizeObserver(place); ro.observe(dom$inspector); ro.observe(dom$navigation); observers.push(ro); }
+      globalListen(window, "resize", apply);
+      apply();
     }
 
     function statusLabel(key) { return (palette[key] || {}).label || key.replace(/_/g, " "); }

@@ -131,7 +131,8 @@ def test_type_uses_impact_statements_and_theorem_values_impact_proofs() -> None:
 def test_module_import_impact_reports_reverse_import_scope_without_blocking() -> None:
     records = {
         "Demo.Base.value": _rec("Demo.Base.value", module="Demo.Base"),
-        "Demo.Base.helper": _rec("Demo.Base.helper", module="Demo.Base"),
+        # Demo.Mid holds no article's declaration, so its helper has no owner.
+        "Demo.Mid.helper": _rec("Demo.Mid.helper", module="Demo.Mid"),
         "Demo.Use.result": _rec("Demo.Use.result", module="Demo.Use"),
         "Demo.Down.result": _rec("Demo.Down.result", module="Demo.Down"),
         "Demo.Other.result": _rec("Demo.Other.result", module="Demo.Other"),
@@ -140,6 +141,7 @@ def test_module_import_impact_reports_reverse_import_scope_without_blocking() ->
         "Demo.Base": ModuleEvidence("Demo.Base", "/project/Demo/Base.lean"),
         "Demo.Use": ModuleEvidence("Demo.Use", "/project/Demo/Use.lean", ("Demo.Base",)),
         "Demo.Down": ModuleEvidence("Demo.Down", "/project/Demo/Down.lean", ("Demo.Use",)),
+        "Demo.Mid": ModuleEvidence("Demo.Mid", "/project/Demo/Mid.lean", ("Demo.Base",)),
         "Demo.Other": ModuleEvidence("Demo.Other", "/project/Demo/Other.lean"),
     }
     articles = (
@@ -159,7 +161,7 @@ def test_module_import_impact_reports_reverse_import_scope_without_blocking() ->
         lean_source_revision="sources",
     )
 
-    assert report.affected_modules == ("Demo.Base", "Demo.Down", "Demo.Use")
+    assert report.affected_modules == ("Demo.Base", "Demo.Down", "Demo.Mid", "Demo.Use")
     assert [(article.id, article.modules) for article in report.affected_articles] == [
         ("base", ("Demo.Base",)),
         ("down", ("Demo.Down",)),
@@ -171,13 +173,13 @@ def test_module_import_impact_reports_reverse_import_scope_without_blocking() ->
         for helper in report.affected_unowned_helpers
     ] == [
         (
-            "Demo.Base.helper",
-            "Demo.Base",
-            _lean_key("Demo.Base.helper"),
-            claims.author_claim_key(_lean_key("Demo.Base.helper")),
+            "Demo.Mid.helper",
+            "Demo.Mid",
+            _lean_key("Demo.Mid.helper"),
+            claims.author_claim_key(_lean_key("Demo.Mid.helper")),
         )
     ]
-    assert report.affected_claim_targets == ("af_use", "down", _lean_key("Demo.Base.helper"))
+    assert report.affected_claim_targets == ("af_use", "down", _lean_key("Demo.Mid.helper"))
     assert report.module_claim_key == claims.author_claim_key(report.module_claim_target)
     assert report.claim_keys == tuple(claims.author_claim_key(target) for target in report.claim_targets)
     assert report.affected_claim_keys == tuple(
@@ -328,19 +330,23 @@ def test_module_import_impact_lists_articles_through_the_helpers_they_own() -> N
 
 
 def test_module_import_impact_is_not_article_local_with_an_unowned_helper() -> None:
+    # Demo is the library root: no article names a declaration there, so its helper has no owner.
     records = {
-        "Demo.main": _rec("Demo.main"),
+        "Demo.Sel.main": _rec("Demo.Sel.main", module="Demo.Sel"),
         "Demo.helper": _rec("Demo.helper"),
     }
-    modules = {"Demo": ModuleEvidence("Demo", "/project/Demo.lean")}
-    selected = ImpactArticle("chapter/sel", None, ("Demo.main",))
+    modules = {
+        "Demo.Sel": ModuleEvidence("Demo.Sel", "/project/Demo/Sel.lean"),
+        "Demo": ModuleEvidence("Demo", "/project/Demo.lean", ("Demo.Sel",)),
+    }
+    selected = ImpactArticle("chapter/sel", None, ("Demo.Sel.main",))
 
-    report = compute_module_import_impact(records, modules, (selected,), selected, "Demo", source_revision="rev")
+    report = compute_module_import_impact(records, modules, (selected,), selected, "Demo.Sel", source_revision="rev")
     assert report.affected_claim_targets == (_lean_key("Demo.helper"),)
     assert report.article_local is False
 
     alone = compute_module_import_impact(
-        {"Demo.main": records["Demo.main"]}, modules, (selected,), selected, "Demo", source_revision="rev"
+        {"Demo.Sel.main": records["Demo.Sel.main"]}, modules, (selected,), selected, "Demo.Sel", source_revision="rev"
     )
     assert alone.article_local is True
     assert (
@@ -352,11 +358,16 @@ def test_module_import_impact_is_not_article_local_with_an_unowned_helper() -> N
 def test_import_closure_scope_owns_records_by_name_prefix_even_without_the_parent_loaded() -> None:
     # Demo.Foo is declared in a module the narrowed probe did not load, so the
     # lemma's loaded parent is missing; the article naming Demo.Foo still owns it.
+    # The lemma sits in a module no article names declarations in, so no article
+    # owns it as a module-mate either.
     records = {
-        "Demo.Foo.lemma": _rec("Demo.Foo.lemma", module="Demo.B"),
+        "Demo.Foo.lemma": _rec("Demo.Foo.lemma", module="Demo.C"),
         "Demo.B.main": _rec("Demo.B.main", module="Demo.B"),
     }
-    modules = {"Demo.B": ModuleEvidence("Demo.B", "/project/Demo/B.lean")}
+    modules = {
+        "Demo.B": ModuleEvidence("Demo.B", "/project/Demo/B.lean"),
+        "Demo.C": ModuleEvidence("Demo.C", "/project/Demo/C.lean", ("Demo.B",)),
+    }
     articles = (
         ImpactArticle("chapter/sel", None, ("Demo.B.main",)),
         ImpactArticle("chapter/x", "af_x", ("Demo.Foo",)),
@@ -387,6 +398,77 @@ def test_import_closure_scope_is_never_article_local() -> None:
 
     assert report.selected_affected is True
     assert report.article_local is False
+
+
+def test_module_import_impact_gives_a_helper_to_the_one_article_of_its_module() -> None:
+    # A worker's helpers beside its article's declarations are its own, public or private.
+    records = {
+        "Demo.Sel.main": _rec("Demo.Sel.main", module="Demo.Sel"),
+        "Demo.Sel.helper": _rec("Demo.Sel.helper", module="Demo.Sel"),
+        "_private.Demo.Sel.0.Demo.Sel.aux": _rec(
+            "_private.Demo.Sel.0.Demo.Sel.aux", module="Demo.Sel", user_name="Demo.Sel.aux"
+        ),
+        "Demo.X.main": _rec("Demo.X.main", module="Demo.X"),
+        "Demo.X.helper": _rec("Demo.X.helper", module="Demo.X"),
+        "Demo.Shared.a": _rec("Demo.Shared.a", module="Demo.Shared"),
+        "Demo.Shared.b": _rec("Demo.Shared.b", module="Demo.Shared"),
+        "Demo.Shared.helper": _rec("Demo.Shared.helper", module="Demo.Shared"),
+    }
+    modules = {
+        "Demo.Sel": ModuleEvidence("Demo.Sel", "/project/Demo/Sel.lean"),
+        "Demo.X": ModuleEvidence("Demo.X", "/project/Demo/X.lean", ("Demo.Sel",)),
+        "Demo.Shared": ModuleEvidence("Demo.Shared", "/project/Demo/Shared.lean", ("Demo.Sel",)),
+    }
+    articles = (
+        ImpactArticle("chapter/sel", None, ("Demo.Sel.main",)),
+        ImpactArticle("chapter/x", "af_x", ("Demo.X.main",)),
+        ImpactArticle("chapter/a", "af_a", ("Demo.Shared.a",)),
+        ImpactArticle("chapter/b", "af_b", ("Demo.Shared.b",)),
+    )
+
+    own = compute_module_import_impact(
+        {name: records[name] for name in records if name.startswith(("Demo.Sel", "_private"))},
+        {"Demo.Sel": modules["Demo.Sel"]},
+        articles[:1],
+        articles[0],
+        "Demo.Sel",
+        source_revision="rev",
+    )
+    assert own.affected_unowned_helpers == ()
+    assert own.article_local is True
+
+    report = compute_module_import_impact(records, modules, articles, articles[0], "Demo.Sel", source_revision="rev")
+    # Another article's helper is that article's, not a helper key of its own;
+    # a module several articles share keeps its helpers unowned, since which one owns them is unknown.
+    assert [helper.name for helper in report.affected_unowned_helpers] == ["Demo.Shared.helper"]
+    assert report.affected_claim_targets == ("af_a", "af_b", "af_x", _lean_key("Demo.Shared.helper"))
+
+
+@pytest.mark.parametrize("shared", [False, True])
+def test_work_impact_and_import_impact_claim_a_module_helper_under_one_key(shared: bool) -> None:
+    # Revising Base.value proof-impacts Sel's helper; Sel's worker then edits Sel's imports.
+    records = _records(
+        _rec("Demo.Base.value", "def", module="Demo.Base"),
+        _rec("Demo.Sel.helper", module="Demo.Sel", value_uses=("Demo.Base.value",)),
+        _rec("Demo.Sel.main", module="Demo.Sel", value_uses=("Demo.Sel.helper",)),
+        _rec("Demo.Sel.other", module="Demo.Sel"),
+    )
+    modules = {
+        "Demo.Base": ModuleEvidence("Demo.Base", "/project/Demo/Base.lean"),
+        "Demo.Sel": ModuleEvidence("Demo.Sel", "/project/Demo/Sel.lean", ("Demo.Base",)),
+    }
+    base = _article("chapter/base", "Demo.Base.value", article_id="af_base")
+    sel = _article("chapter/sel", "Demo.Sel.main")
+    articles = (base, sel, _article("chapter/other", "Demo.Sel.other")) if shared else (base, sel)
+
+    revision = _impact(records, articles, "chapter/base")
+    edit = compute_module_import_impact(records, modules, articles, sel, "Demo.Sel", source_revision="rev")
+
+    (helper,) = revision.helpers
+    expected = _lean_key("Demo.Sel.helper") if shared else sel.claim_target
+    assert helper.claim_targets == (expected,)
+    assert expected in set(revision.claim_targets) & {*edit.claim_targets, *edit.affected_claim_targets}
+    assert edit.article_local is not shared
 
 
 def test_constructor_edges_carry_an_inductive_s_meaning() -> None:
@@ -1003,9 +1085,37 @@ def test_markdown_paths_count_from_every_article_a_revised_declaration_belongs_t
     assert unowned.claim_targets == ("r", _lean_key("A.loose"))
 
 
+def test_a_revised_declaration_no_article_names_belongs_to_its_module_s_one_article() -> None:
+    records = _records(
+        _rec("A.R", "def"),
+        _rec("A.M", "def", module="Demo.M"),
+        _rec("A.mHelper", "def", module="Demo.M"),
+        _rec("A.useHelper", type_uses=("A.mHelper",)),
+        _rec("A.inlinesHelper"),
+    )
+    articles = [
+        _article("r", "A.R"),
+        _article("m", "A.M"),
+        _article("uses-helper", "A.useHelper", dependencies=("m",)),
+        _article("inlines-helper", "A.inlinesHelper", dependencies=("m",), statement_dependencies=("m",), stated=True),
+    ]
+
+    report = _impact(records, articles, "r", ["A.mHelper"])
+
+    # m is the only article naming declarations in Demo.M, so A.mHelper is m's:
+    # a path to m declares uses-helper, and inlines-helper rests on it through m.
+    assert _ids(report.statement_impacted) == ["uses-helper"]
+    assert report.undeclared_dependencies == ()
+    assert report.unused_statement_dependencies == ("inlines-helper",)
+    assert report.claim_targets == ("r", "inlines-helper", "m", "uses-helper")
+
+
 def test_an_unowned_helper_claim_key_is_ref_safe_for_any_name() -> None:
     names = ("_private.Demo.Extra.0.A.priv", "A.«weird name»", "«∀»", "A." + "long" * 20)
-    records = _records(_rec("A.base", "def"), *(_rec(name, type_uses=("A.base",)) for name in names))
+    # The helpers sit in a module no article names declarations in, so none owns them.
+    records = _records(
+        _rec("A.base", "def"), *(_rec(name, module="Demo.Extra", type_uses=("A.base",)) for name in names)
+    )
     articles = [_article("base", "A.base")]
 
     report = _impact(records, articles, "base")
@@ -2068,7 +2178,7 @@ def test_import_closure_scope_rejects_a_module_no_library_selects(tmp_path: Path
     lean_root = _closure_lean_root(tmp_path)
     _stub_probe(monkeypatch)
 
-    with pytest.raises(ImpactError, match="not a project module: Demo.Nope"):
+    with pytest.raises(ImpactError, match="Demo.Nope is not a module of this project"):
         module_import_impact(project, _BASE_ID, "Demo.Nope", lean_root=lean_root, module_scope="import-closure")
 
 
@@ -2435,6 +2545,67 @@ def test_cli_import_impact_matches_module_names_by_component(
     assert '[\\"H\\", \\"1\\"]' in calls[0]["probe"]
 
 
+@pytest.mark.parametrize("spelling", ["H.α", "H.«α»"])
+def test_cli_import_impact_names_a_non_ascii_module_either_way(
+    tmp_path: Path, monkeypatch, capsys, spelling: str
+) -> None:
+    # Lean prints H/α.lean as `H.α`, and the inventory, so the refusal's hint, as `H.«α»`; each names the module.
+    lean_root = tmp_path / "lean"
+    (lean_root / "H").mkdir(parents=True)
+    (lean_root / "lakefile.toml").write_text('name = "H"\n\n[[lean_lib]]\nname = "H"\n', encoding="utf-8")
+    (lean_root / "H.lean").write_text("", encoding="utf-8")
+    (lean_root / "H" / "α.lean").write_text("", encoding="utf-8")
+    artifacts = lean_root.resolve() / ".lake/build/lib/lean"
+    alpha = ModuleEvidence("H.α", str((lean_root / "H" / "α.lean").resolve()), (), str(artifacts / "H" / "α.olean"))
+    root = ModuleEvidence("H", str((lean_root / "H.lean").resolve()), ("H.α",), str(artifacts / "H.olean"))
+    _stub_probe(monkeypatch, [_payload("H.stem", module="H.α")], modules=(alpha, root))
+    project = tmp_path / "project"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    _write_article(project, "stem.md", metadata=["declaration: definition", "statement: formalized", "lean: H.stem"])
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/stem", spelling, str(project), "--lean-root", str(lean_root), "--json"]
+    )
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    assert report["module"] == "H.α"
+    assert report["affected_modules"] == ["H", "H.α"]
+
+
+def test_cli_import_closure_reads_a_quoted_spelling_of_a_module_as_its_plain_name(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    # `H.«B»` is `H.B`; the narrowed probe must import it although its own file never names `H` and `B`.
+    lean_root = tmp_path / "lean"
+    (lean_root / "H").mkdir(parents=True)
+    (lean_root / "lakefile.toml").write_text(
+        'name = "H"\n\n[[lean_lib]]\nname = "H"\nglobs = ["H.*"]\n', encoding="utf-8"
+    )
+    (lean_root / "H.lean").write_text("", encoding="utf-8")
+    (lean_root / "H" / "B.lean").write_text("theorem stem : True := trivial\n", encoding="utf-8")
+    artifacts = lean_root.resolve() / ".lake/build/lib/lean"
+    modules = tuple(
+        ModuleEvidence(name, str((lean_root / path).resolve()), (), str(artifacts / path.replace(".lean", ".olean")))
+        for name, path in (("H", "H.lean"), ("H.B", "H/B.lean"))
+    )
+    calls = _stub_probe(monkeypatch, [_payload("H.stem", module="H.B")], modules=modules)
+    project = tmp_path / "project"
+    _write_article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
+    _write_article(project, "stem.md", metadata=["declaration: definition", "statement: formalized", "lean: H.stem"])
+
+    code = cli.main(
+        ["work", "import-impact", "chapter/stem", "H.«B»", str(project), "--lean-root", str(lean_root), "--json",
+         "--module-scope", "import-closure"]
+    )
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    assert "import H.B" in calls[0]["probe"].splitlines()
+    assert json.loads(output.out)["module"] == "H.B"
+
+
 def test_cli_import_impact_accepts_another_spelling_of_the_lean_root(tmp_path: Path, monkeypatch, capsys) -> None:
     # On a case-insensitive file system `--lean-root` may differ in case from
     # the on-disk path Lean reports; a symbolic link gives the same two
@@ -2470,7 +2641,24 @@ def test_cli_import_impact_rejects_an_unknown_module(tmp_path: Path, monkeypatch
     output = capsys.readouterr()
     assert code == 2
     assert output.out == ""
-    assert "error: not a loaded project module: Missing" in output.err
+    assert "error: Missing is not a module of this project. MODULE is the project module whose imports change" in (
+        output.err
+    )
+
+
+def test_cli_import_impact_names_the_edited_module_before_the_probe(tmp_path: Path, monkeypatch, capsys) -> None:
+    project = _blueprint_project(tmp_path, "Demo")
+    lean_root = _stub_lean_root(tmp_path)
+    calls = _stub_probe(monkeypatch, modules=(ModuleEvidence("Demo", str((lean_root / "Demo.lean").resolve())),))
+
+    # The module being imported is refused before the freshness check and the probe, naming the right one.
+    code = cli.main(
+        ["work", "import-impact", _BASE_ID, "Mathlib.Order.Basic", str(project), "--lean-root", str(lean_root)]
+    )
+    output = capsys.readouterr()
+    assert code == 2 and calls == []
+    assert "Mathlib.Order.Basic is not a module of this project" in output.err
+    assert "(for chapter/base: Demo), not the module it imports" in output.err
 
 
 @pytest.mark.parametrize(
@@ -2599,6 +2787,45 @@ def test_cli_import_impact_accepts_a_root_lake_does_not_build(tmp_path: Path, mo
     output = capsys.readouterr()
     assert code == 0, output.err
     assert json.loads(output.out)["affected_modules"] == ["Extra", "Foo.Basic"]
+
+
+def test_cli_import_impact_reports_a_project_module_other_than_the_article_s(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    project = _blueprint_project(tmp_path, "Foo")
+    lean_root = _unbuilt_root_lean(tmp_path)
+    _stub_probe(
+        monkeypatch,
+        records=[_payload("Foo.base", kind="def", module="Foo.Basic")],
+        modules=(
+            ModuleEvidence("Foo.Basic", str((lean_root / "Foo/Basic.lean").resolve())),
+            ModuleEvidence("Extra", str((lean_root / "Foo/Extra.lean").resolve()), ("Foo.Basic",)),
+        ),
+    )
+
+    code = cli.main(["work", "import-impact", _BASE_ID, "Extra", str(project), "--lean-root", str(lean_root), "--json"])
+
+    output = capsys.readouterr()
+    assert code == 0, output.err
+    report = json.loads(output.out)
+    assert (report["module"], report["affected_modules"]) == ("Extra", ["Extra"])
+    assert report["selected_affected"] is False
+    assert report["article_local"] is False
+
+
+def test_cli_import_impact_names_the_module_lake_builds_for_the_article(tmp_path: Path, monkeypatch, capsys) -> None:
+    # Foo/Basic.lean is under both srcDirs; Lake builds it only as Foo.Basic, not as Extra's Basic.
+    project = _blueprint_project(tmp_path, "Foo")
+    lean_root = _unbuilt_root_lean(tmp_path)
+    calls = _stub_probe(monkeypatch)
+
+    code = cli.main(
+        ["work", "import-impact", _BASE_ID, "Mathlib.Order.Basic", str(project), "--lean-root", str(lean_root)]
+    )
+
+    output = capsys.readouterr()
+    assert code == 2 and calls == []
+    assert "(for chapter/base: Foo.Basic), not the module it imports" in output.err
 
 
 def test_cli_import_impact_refuses_a_loaded_module_no_library_builds(tmp_path: Path, monkeypatch, capsys) -> None:
