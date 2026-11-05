@@ -107,8 +107,7 @@ authored areas and global search; graphs and pages are derived. See the
 ## Search and reuse
 
 Before adding a result, agents search the blueprint and every dependency that publishes a search
-index Autoform can verify, such as [ATLAS](https://github.com/facebookresearch/atlas-lean). The paper
-[*Search Before You Prove*](docs/papers/search-and-reuse/search-and-reuse.pdf) explains and evaluates it.
+index Autoform can verify, such as [ATLAS](https://github.com/facebookresearch/atlas-lean).
 
 ## Development
 
