@@ -488,6 +488,9 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Finished cards on the map.** A finished statement's card no longer prints
+  "fully proved" under its title, since its fill already says so; the line
+  names a status only for an unfinished statement.
 - **Reference links on chapters with a `<` in the title.** A `<` in a
   chapter's title alone left reference-style links in its prose shown as typed
   (#631).
