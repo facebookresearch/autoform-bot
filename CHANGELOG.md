@@ -116,12 +116,16 @@ date when the release is tagged.
   dependency references and the chapter progress lines. The explorer drops its
   status filter and status words, and the whole-project map its tints, progress
   bars and status words; its cards name their kind instead. Neither search box
-  mentions Lean names, though both still match them. Check warns about the
-  setting anywhere else under `roadmap/`, or with a value other than true or
-  false, and ignores it.
+  mentions Lean names, though both still match them. In place of the figures,
+  the landing hero shows the README's opening paragraphs, up to its first
+  heading or list. Check warns about the setting anywhere else under
+  `roadmap/`, or with a value other than true or false, and ignores it.
 
 ### Changed
 
+- **The landing's coverage line** leads with the source areas split into
+  statements: "5 source areas, all split into statements", or "3 of 5 source
+  areas split into statements" before the other dispositions.
 - **Vault pages on Windows.** `autoform-visualize` writes the dependency
   summary and structure pages with LF line endings on Windows too, as on every
   other system, so a vault regenerated on both no longer flips them.

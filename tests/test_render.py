@@ -1250,6 +1250,37 @@ def test_a_hero_that_tracks_no_lean_keeps_its_claim_and_ways_in(tmp_path: Path) 
     assert "Formalization blueprint" in wide and "Fully proved" in wide and "bp-hero-bar" in wide
 
 
+def test_a_hero_that_tracks_no_lean_shows_the_readmes_opening_prose(tmp_path: Path) -> None:
+    """With no figures to show, the hero carries the README's paragraphs up to its first heading or list."""
+    readme = "# Notes\n\nThese notes cover rings. They start from groups.\n\nEach chapter ends with exercises.\n\n## Plan\n\nLater.\n"
+    coverage, _issues = render_module.load_coverage(_informal_project(tmp_path, "tracks_lean: false\n"))
+    untracked = load_graph(_informal_project(tmp_path / "untracked", "tracks_lean: false\n"))
+    tracked = load_graph(_informal_project(tmp_path / "tracked", ""))
+    whole = ['<p class="bp-hero-lead">These notes cover rings. They start from groups.</p>',
+             '<p class="bp-hero-lead">Each chapter ends with exercises.</p>']
+    for rail in (False, True):
+        hero = render_module._render_hero(
+            "Notes", readme, untracked, derive(untracked), coverage=coverage, coverage_href="coverage/", rail=rail
+        )
+        assert re.findall(r'<p class="bp-hero-lead">.*?</p>', hero) == whole, rail
+        assert "Later" not in hero
+        hero = render_module._render_hero(
+            "Notes", readme, tracked, derive(tracked), coverage=coverage, coverage_href="coverage/", rail=rail
+        )
+        assert re.findall(r'<p class="bp-hero-lead">.*?</p>', hero) == ['<p class="bp-hero-lead">These notes cover rings.</p>']
+
+
+@pytest.mark.parametrize(("readme", "leads"), [
+    ("# T\n\nOne. Two.\n\nThree with `x`.\n\n## H\n\nFour.\n", ["One. Two.", "Three with <code>x</code>."]),
+    ("# T\n\nOne.\n\n- item\n\nTwo.\n", ["One."]),
+    ("# T\n\n![badge](b.svg)\n\nOne.\n\n> A quote.\n\nTwo\n\n1. first\n\nThree.\n", ["One.", "Two"]),
+    ("# T\n\n- item\n\nOne.\n", ["One."]),
+])
+def test_the_whole_lead_runs_from_the_first_paragraph_to_a_heading_or_list(readme: str, leads: list[str]) -> None:
+    """Structure before the first paragraph is skipped; a heading or list after it ends the lead; other blocks are passed over."""
+    assert render_module._lead_paragraphs(readme, whole=True) == leads
+
+
 @pytest.mark.parametrize("tracked", [True, False])
 def test_a_project_that_tracks_no_lean_never_says_every_statement_is_fully_proved(
     tmp_path: Path, tracked: bool
@@ -1401,6 +1432,18 @@ def test_coverage_summary_tracks_every_canonical_disposition() -> None:
     entries = tuple(CoverageEntry(f"Area {n}", "MAPPED", "Pending", n) for n in range(1234))
     summary = render_module._coverage_summary(CoverageSummary(COVERAGE_SCHEMA, "README.md", "0" * 64, entries))
     assert summary.startswith("1,234 ") and " 1,234 " in summary
+
+
+@pytest.mark.parametrize(("dispositions", "line"), [
+    (["DECOMPOSED"], "1 source area, split into statements"),
+    (["DECOMPOSED"] * 3, "3 source areas, all split into statements"),
+    (["DECOMPOSED", "MAPPED", "OUT"], "1 of 3 source areas split into statements · 1 not yet settled · 1 out of scope"),
+    (["MAPPED", "MAPPED"], "2 source areas: 2 not yet settled"),
+])
+def test_the_coverage_line_says_how_many_source_areas_are_split(dispositions: list[str], line: str) -> None:
+    """Every project's landing says how many of its source areas are split into statements, "all" or "N of M"."""
+    entries = tuple(CoverageEntry(f"Area {n}", disposition, "Why", n) for n, disposition in enumerate(dispositions))
+    assert render_module._coverage_summary(CoverageSummary(COVERAGE_SCHEMA, "README.md", "0" * 64, entries)) == line
 
 
 def test_single_target_uses_singular_completion_copy(tmp_path: Path) -> None:
@@ -1806,7 +1849,7 @@ def test_the_rail_hero_keeps_two_figures_and_the_coverage_counts_and_hides_nothi
 ])
 def test_the_hero_lead_is_the_whole_first_sentence_as_readable_html(readme: str, lead: str) -> None:
     """The README's link targets never reach the hero, code and formulas keep their contents, and abbreviations and initials do not end it."""
-    assert render_module._lead_sentence(readme) == lead
+    assert render_module._lead_paragraphs(readme) == ([lead] if lead else [])
 
 
 def test_the_legends_count_what_the_scope_views_count(tmp_path: Path) -> None:
