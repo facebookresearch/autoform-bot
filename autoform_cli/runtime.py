@@ -1,8 +1,32 @@
 """Build a versioned, immutable runtime projection of a Markdown roadmap.
 
-The roadmap Markdown remains authoritative.  This module copies the validated
-canonical graph into a stable in-memory contract for read-only consumers; it
-never reads or writes a second graph artifact or any operational state.
+This module copies the validated canonical graph into a stable in-memory
+contract for read-only consumers. The user-facing rules are the runtime
+contract in ``autoform_cli/reference/runtime-and-publication.md``.
+
+The schema ``autoform-runtime/v5`` is deeply immutable, and its declared
+authority is ``markdown-articles``: the adapter copies hierarchy, typed
+statement, proof and informal dependencies, authored assertions, derived
+progress, provenance, and optional local Lean source locations, but provides no
+persistence or write API. A node's informal dependencies keep a link ``check``
+warns closes a cycle. ``RuntimeGraph.as_dict()`` and ``to_json()`` are
+deterministic compatibility snapshots for consumers, not an authored or
+generated graph file.
+
+Every article remains in the view so consumers can preserve the book's
+arbitrary containment hierarchy. A node is dispatchable only when it is both a
+formalizable article and a leaf; narrative containers and prose-only leaves are
+never proof work units, and module inventories are non-formalizable,
+non-dispatchable source records. The source revision hashes exact roadmap
+article paths and bytes, excluding timestamps, absolute paths, Git state, and
+operational state. Optional Lean locations come from a local lexical scan and
+do not by themselves establish compilation or proof correctness.
+
+Projection fails when an article's bytes no longer match the digest recorded
+when the graph was loaded, so a source revision never labels node data parsed
+from older bytes. A hand-built node without a digest makes no snapshot claim:
+its ``source_sha256`` stays null and the revision covers whatever bytes its
+article holds at projection time.
 """
 
 from __future__ import annotations
@@ -13,12 +37,12 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
+from ._fs import directory_path, resolved_path
 from .graph import Graph, load_graph, roadmap_symlink_issues
-from .lean import LeanSourceError, declaration_names, index_failure_message, index_project, resolve_lean_root
-from .markdown import directory_path, resolved_path
+from .lean import LeanSourceError, declaration_names, index_failure_message, index_project_names, resolve_lean_root
 from .status import derive, is_definition
 
-RUNTIME_SCHEMA = "autoform-runtime/v3"
+RUNTIME_SCHEMA = "autoform-runtime/v5"
 RUNTIME_AUTHORITY = "markdown-articles"
 
 
@@ -123,18 +147,22 @@ class RuntimeNode:
     mathlib: bool
     mathlib_declarations: tuple[str, ...]
     mathlib_file: str | None
+    catalog: str | None = None
+    informal_dependencies: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
             "article_id": self.article_id,
             "article_path": self.article_path,
             "assertions": self.assertions.as_dict(),
+            "catalog": self.catalog,
             "declaration": self.declaration,
             "dependencies": list(self.dependencies),
             "depth": self.depth,
             "dispatchable": self.dispatchable,
             "formalizable": self.formalizable,
             "id": self.id,
+            "informal_dependencies": list(self.informal_dependencies),
             "lean_targets": [target.as_dict() for target in self.lean_targets],
             "mathlib": self.mathlib,
             "mathlib_declarations": list(self.mathlib_declarations),
@@ -281,7 +309,12 @@ def build_runtime_graph(
         expected_dependencies = _ordered_union(node.statement_dependencies, node.proof_dependencies)
         if node.dependencies != expected_dependencies:
             issues.append(f"{node.id}: dependency union does not match typed dependencies")
-        for dependency in (*node.statement_dependencies, *node.proof_dependencies, *node.dependencies):
+        for dependency in (
+            *node.statement_dependencies,
+            *node.proof_dependencies,
+            *node.dependencies,
+            *node.informal_dependencies,
+        ):
             if dependency not in node_ids:
                 issues.append(f"{node.id}: dependency does not name a runtime node: {dependency}")
 
@@ -330,8 +363,10 @@ def build_runtime_graph(
             root = resolve_lean_root(lean_root)
         except LeanSourceError as error:
             raise RuntimeProjectionError([str(error)]) from error
+        # A target's file is all the projection reads, so only sources that could declare one are scanned.
+        names = {name for node in graph.nodes.values() for name in declaration_names(node.lean or "")}
         try:
-            lean_index = index_project(root)
+            lean_index = index_project_names(root, names)
         except OSError as error:
             raise RuntimeProjectionError([index_failure_message(error)]) from error
 
@@ -355,11 +390,15 @@ def build_runtime_graph(
                 parent=node.parent,
                 depth=node.depth,
                 declaration=node.declaration,
+                catalog=node.catalog,
                 formalizable=node.formalizable,
-                dispatchable=node.formalizable and node_id not in parents,
+                dispatchable=(
+                    node.catalog is None and node.formalizable and node_id not in parents
+                ),
                 statement_dependencies=node.statement_dependencies,
                 proof_dependencies=node.proof_dependencies,
                 dependencies=node.dependencies,
+                informal_dependencies=node.informal_dependencies,
                 assertions=RuntimeAssertions(
                     statement_formalized=node.statement_formalized,
                     statement_retracted=node.statement_retracted,
@@ -553,11 +592,15 @@ def _validate_runtime(runtime: RuntimeGraph) -> None:
             issues.append(f"{node.id}: runtime parent does not resolve")
         if node.dependencies != _ordered_union(node.statement_dependencies, node.proof_dependencies):
             issues.append(f"{node.id}: runtime dependency union is inconsistent")
-        if any(dependency not in nodes for dependency in node.dependencies):
+        if any(dependency not in nodes for dependency in (*node.dependencies, *node.informal_dependencies)):
             issues.append(f"{node.id}: runtime dependency does not resolve")
         has_children = node.id in parents_with_children
         if node.dispatchable and (not node.formalizable or has_children):
             issues.append(f"{node.id}: dispatchable node is not a formalizable leaf")
+        if node.catalog is not None and node.dispatchable:
+            issues.append(f"{node.id}: catalog node is dispatchable")
+        if node.catalog not in {None, "module"}:
+            issues.append(f"{node.id}: runtime catalog kind is unsupported")
         if Path(node.article_path).is_absolute() or PureWindowsPath(node.article_path).is_absolute():
             issues.append(f"{node.id}: runtime article path is absolute")
     if runtime.article_count != len(runtime.nodes):

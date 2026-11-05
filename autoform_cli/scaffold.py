@@ -15,12 +15,14 @@ import json
 import os
 import re
 import stat
-import subprocess
-import tempfile
 import unicodedata
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from ._fs import atomic_write
+from ._repository import git, run_git
 
 _TEMPLATES = Path(__file__).resolve().parent / "templates"
 _MAX_GITIGNORE_BYTES = 1024 * 1024
@@ -41,6 +43,7 @@ _DOTTED = {
 DEFAULT_AUTOFORM_SOURCE = "https://github.com/facebookresearch/autoform-bot.git"
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _REMOTE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_EXACT_TAG_REF = re.compile(r"refs/tags/[A-Za-z0-9][A-Za-z0-9._/-]*")
 _SOURCE_HOST = re.compile(
     r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
@@ -58,7 +61,6 @@ _TEMPLATE_PATHS = frozenset(
         "blueprint/README.md",
         "blueprint/coverage/README.md",
         "blueprint/gitignore",
-        "blueprint/javascripts/mathjax.js",
         "blueprint/roadmap/README.md",
         "blueprint/sources/README.md",
         "github/CODEOWNERS.autoform.example",
@@ -118,17 +120,9 @@ def _git(*args: str, root: Path | None = None) -> str | None:
     """Read a value from an Autoform checkout, defaulting to this one."""
 
     try:
-        done = subprocess.run(
-            ["git", "--no-replace-objects", "-C", str(root or _here()), *args],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return git(root or _here(), *args)
+    except UnicodeError:
         return None
-    value = done.stdout.strip()
-    return value if done.returncode == 0 and value else None
 
 
 def _checkout_root(directory: Path) -> Path | None:
@@ -235,37 +229,17 @@ def _normalize_autoform_source(source: str, *, allow_github_scp: bool = False) -
 def _git_checkout_clean(root: Path) -> bool:
     """Whether *root* has no tracked or staged changes from ``HEAD``."""
 
-    git = ["git", "--no-optional-locks", "--no-replace-objects", "-c", "core.fsmonitor=false"]
     options = ["--quiet", "--no-ext-diff", "--no-textconv", "HEAD", "--"]
-    try:
-        return all(
-            subprocess.run(
-                [*git, "-C", str(root), "diff", *cached, *options],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-                check=False,
-            ).returncode
-            == 0
-            for cached in ((), ("--cached",))
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
+    return all(
+        run_git(root, "-c", "core.fsmonitor=false", "diff", *cached, *options).returncode == 0
+        for cached in ((), ("--cached",))
+    )
 
 
 def _git_bytes(root: Path, *args: str, limit: int) -> bytes | None:
     """Run a bounded local Git object query."""
 
-    try:
-        done = subprocess.run(
-            ["git", "--no-optional-locks", "--no-replace-objects", "-C", str(root), *args],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
+    done = run_git(root, *args)
     if done.returncode != 0 or len(done.stdout) > limit:
         return None
     return done.stdout
@@ -280,8 +254,30 @@ def _safe_remote_source(root: Path, remote: str) -> str | None:
     return _normalize_autoform_source(source, allow_github_scp=True)
 
 
-def _remote_contains_ref(root: Path, remote: str, ref: str) -> bool:
-    """Whether a cached tracking ref for *remote* contains *ref*."""
+def _exact_tag_destinations(root: Path, remote: str) -> set[str]:
+    """Tags *remote*'s own fetch refspecs write by exact name, glob-free."""
+
+    encoded = _git_bytes(
+        root,
+        "config",
+        "--get-all",
+        f"remote.{remote}.fetch",
+        limit=_MAX_GIT_REMOTE_LIST_BYTES,
+    )
+    try:
+        refspecs = encoded.decode("utf-8").splitlines() if encoded else []
+    except UnicodeError:
+        return set()
+    destinations = set()
+    for refspec in refspecs:
+        _, colon, destination = refspec.removeprefix("+").partition(":")
+        if colon and _EXACT_TAG_REF.fullmatch(destination):
+            destinations.add(destination)
+    return destinations
+
+
+def _remote_contains_ref(root: Path, remote: str, ref: str, tags: set[str]) -> bool:
+    """Whether a cached tracking ref for *remote*, or one of *tags*, contains *ref*."""
 
     prefix = f"refs/remotes/{remote}/"
     contained = _git_bytes(
@@ -291,6 +287,7 @@ def _remote_contains_ref(root: Path, remote: str, ref: str) -> bool:
         "--count=1",
         "--format=%(refname)",
         prefix,
+        *sorted(tags),
         limit=_MAX_GIT_REMOTE_LIST_BYTES,
     )
     if contained is None:
@@ -299,11 +296,13 @@ def _remote_contains_ref(root: Path, remote: str, ref: str) -> bool:
         refs = contained.decode("utf-8").splitlines()
     except UnicodeError:
         return False
-    return bool(refs) and all(name.startswith(prefix) and name != prefix for name in refs)
+    return bool(refs) and all(
+        (name.startswith(prefix) and name != prefix) or name in tags for name in refs
+    )
 
 
 def _select_remote_source(root: Path, ref: str) -> str | None:
-    """Choose a safe remote whose cached tracking refs contain *ref*.
+    """Choose a safe remote whose cached tracking refs or fetched tags contain *ref*.
 
     Prefer Autoform's canonical source, then conventional ``origin`` and
     ``upstream`` names. Without those, accept only one distinct safe source so
@@ -317,9 +316,20 @@ def _select_remote_source(root: Path, ref: str) -> str | None:
         names = encoded.decode("utf-8").splitlines()
     except UnicodeError:
         return None
+    valid = [name for name in names if _REMOTE_NAME.fullmatch(name) is not None]
+    # `git clone --depth 1 --branch <tag>` (Claude Code, Muse Code) leaves no
+    # refs/remotes/ at all, only the tag and a refspec naming it. Count the tag
+    # as evidence for the one remote whose refspec fetches it by exact name; a
+    # tag several remotes claim, or one created without such a refspec, counts
+    # for none of them. A remote whose name is not read might claim it too, so
+    # with one present no tag counts.
+    tags = {name: _exact_tag_destinations(root, name) if len(valid) == len(names) else set() for name in valid}
+    names = valid
+    claimed = Counter(tag for destinations in tags.values() for tag in destinations)
     candidates: dict[str, str] = {}
     for name in names:
-        if _REMOTE_NAME.fullmatch(name) is None or not _remote_contains_ref(root, name, ref):
+        own = {tag for tag in tags[name] if claimed[tag] == 1}
+        if not _remote_contains_ref(root, name, ref, own):
             continue
         source = _safe_remote_source(root, name)
         if source is not None:
@@ -445,9 +455,9 @@ def plugin_pin(
     the root of a checkout: a directory that merely sits inside somebody else's
     repository answers questions about that repository.
 
-    Tracked checkout files must be clean, a cached tracking ref for the selected
-    remote must contain HEAD, and the committed renderer plus template paths,
-    bytes, and executable-bit classifications must match both the retained
+    Tracked checkout files must be clean, a cached tracking ref or fetched tag
+    for the selected remote must contain HEAD, and the committed renderer plus
+    template paths, bytes, and executable-bit classifications must match both the retained
     template bytes and any installed plugin copy. Otherwise the source and
     commit do not describe fetchable scaffold behavior, so no pin is returned.
     Every Git identity and tree query ignores local replacement objects.
@@ -899,33 +909,6 @@ def _append_gitignore_rules(path: Path, required: bytes) -> bool:
                 pass
 
 
-def _atomic_write(
-    destination: Path,
-    content: bytes,
-    *,
-    mode: int,
-) -> None:
-    """Replace *destination* from a same-directory temporary file.
-
-    Replacing rather than truncating is essential when an existing destination
-    has hard links: ``--force`` must not modify another path to the old inode.
-    """
-
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=destination.parent, prefix=f".{destination.name}.", suffix=".tmp"
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as output:
-            output.write(content)
-            output.flush()
-            os.fsync(output.fileno())
-        temporary.chmod(mode)
-        os.replace(temporary, destination)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def _within(path: Path, root: Path) -> bool:
     """True when *path* resolves to somewhere at or beneath *root*.
 
@@ -1099,7 +1082,8 @@ def scaffold_project(
             skipped.append(planned_file.relative)
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write(destination, planned_file.content, mode=planned_file.mode)
+        # Replaced, not truncated, so --force leaves other hard links to the old file alone.
+        atomic_write(destination, planned_file.content, mode=planned_file.mode)
         written.append(planned_file.relative)
     # Report omitted workflows and files left alone in template order, as
     # they were before the plan was shared with `project new`.

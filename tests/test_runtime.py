@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import pickle
 from collections.abc import Callable
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from autoform_cli.runtime import (
     RUNTIME_AUTHORITY,
     RUNTIME_SCHEMA,
     RuntimeProjectionError,
+    _validate_runtime,
     build_runtime_graph,
     load_runtime_graph,
     resolve_runtime_paths,
@@ -110,7 +112,7 @@ def test_loads_identical_runtime_from_project_or_blueprint(tmp_path: Path) -> No
     from_project = load_runtime_graph(project)
     from_blueprint = load_runtime_graph(project / "blueprint")
 
-    assert RUNTIME_SCHEMA == "autoform-runtime/v3"
+    assert RUNTIME_SCHEMA == "autoform-runtime/v5"
     assert from_project == from_blueprint
     assert from_project.schema == RUNTIME_SCHEMA
     assert from_project.authority == RUNTIME_AUTHORITY
@@ -127,6 +129,7 @@ def test_loads_identical_runtime_from_project_or_blueprint(tmp_path: Path) -> No
     assert from_project.dispatchable_count == 2
     assert from_project.dependency_count == 1
     assert from_project.maximum_depth == 3
+    assert from_project.nodes[0].as_dict()["catalog"] is None
 
 
 def test_preserves_hierarchy_typed_dependencies_and_dispatchability(tmp_path: Path) -> None:
@@ -156,6 +159,63 @@ def test_preserves_hierarchy_typed_dependencies_and_dispatchability(tmp_path: Pa
     assert result.status.fully_proved
     assert not result.status.defined
     assert result.dispatchable
+
+
+def test_runtime_lists_informal_dependencies_apart_from_counted_ones(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    _article(
+        project,
+        "chapter/section/remark.md",
+        title="Remark",
+        prose="A remark.\n\n## Informally uses\n\n- [Result](result.md)",
+        statement_dependencies=("base.md",),
+    )
+
+    runtime = load_runtime_graph(project)
+    remark = runtime.get("chapter/section/remark")
+
+    assert remark is not None
+    assert remark.informal_dependencies == ("chapter/section/result",)
+    assert remark.dependencies == ("chapter/section/base",)
+    assert remark.as_dict()["informal_dependencies"] == ["chapter/section/result"]
+    assert runtime.get("chapter/section/base").as_dict()["informal_dependencies"] == []
+    assert runtime.dependency_count == 2
+
+
+def test_runtime_exposes_a_settled_module_catalog_without_dispatching_it(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    ledger = project / "blueprint/sources/catalog.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Catalog declarations\n", encoding="utf-8")
+    _article(
+        project,
+        "chapter/catalog.md",
+        title="Existing module",
+        catalog="module",
+        lean="Project.base",
+        statement="formalized",
+        proof="formalized",
+        sources=("../../sources/catalog.md",),
+    )
+
+    catalog = load_runtime_graph(project).get("chapter/catalog")
+
+    assert catalog is not None
+    assert catalog.catalog == "module"
+    assert catalog.as_dict()["catalog"] == "module"
+    assert not catalog.formalizable
+    assert not catalog.dispatchable
+    assert catalog.status.state == "fully_proved"
+
+
+@pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
+def test_runtime_node_pickle_round_trip(tmp_path: Path, protocol: int) -> None:
+    node = replace(load_runtime_graph(_project(tmp_path)).nodes[0], catalog="module")
+
+    restored = pickle.loads(pickle.dumps(node, protocol=protocol))
+
+    assert restored == node
+    assert restored.catalog == "module"
 
 
 def test_exposes_provenance_mathlib_and_optional_lean_locations(tmp_path: Path) -> None:
@@ -361,12 +421,12 @@ def test_runtime_translates_source_index_io_failure(
 ) -> None:
     project = _project(tmp_path)
 
-    def fail_index(root: Path):
+    def fail_index(root: Path, names: set[str]):
         if reason is not None:
             raise LeanSourceError(reason)
         raise OSError(f"private host detail: {root}")
 
-    monkeypatch.setattr("autoform_cli.runtime.index_project", fail_index)
+    monkeypatch.setattr("autoform_cli.runtime.index_project_names", fail_index)
 
     with pytest.raises(RuntimeProjectionError) as error:
         load_runtime_graph(project, lean_root=project)
@@ -398,6 +458,39 @@ def test_adapter_rejects_inconsistent_hand_built_graph_without_host_paths(tmp_pa
         "chapter/section/base: dependency union does not match typed dependencies",
     )
     assert str(tmp_path) not in str(error.value)
+
+
+def test_adapter_never_dispatches_a_hand_built_catalog_with_a_declaration(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    canonical = load_graph(project / "blueprint")
+    nodes = dict(canonical.nodes)
+    base = nodes["chapter/section/base"]
+    nodes[base.id] = replace(base, catalog="module")
+
+    runtime = build_runtime_graph(Graph(canonical.blueprint_dir, nodes), project_root=project)
+
+    assert not runtime.get(base.id).dispatchable
+
+
+def test_runtime_validation_rejects_a_dispatchable_catalog(tmp_path: Path) -> None:
+    runtime = load_runtime_graph(_project(tmp_path))
+    nodes = tuple(
+        replace(node, catalog="module") if node.id == "chapter/section/base" else node for node in runtime.nodes
+    )
+
+    with pytest.raises(RuntimeProjectionError, match="catalog node is dispatchable"):
+        _validate_runtime(replace(runtime, nodes=nodes))
+
+
+def test_adapter_rejects_a_hand_built_unknown_catalog_kind(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    canonical = load_graph(project / "blueprint")
+    nodes = dict(canonical.nodes)
+    roadmap = nodes["roadmap"]
+    nodes[roadmap.id] = replace(roadmap, catalog="book")
+
+    with pytest.raises(RuntimeProjectionError, match="runtime catalog kind is unsupported"):
+        build_runtime_graph(Graph(canonical.blueprint_dir, nodes), project_root=project)
 
 
 def _policy_project(tmp_path: Path, policy: str | None) -> Path:

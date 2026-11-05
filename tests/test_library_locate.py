@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -47,6 +49,26 @@ def test_a_workspace_lists_its_locked_packages_by_unescaped_name(tmp_path: Path)
         ("my-pkg", "git", REV, False),
     ]
     assert workspace.overridden == frozenset()
+
+
+def test_the_toolchain_is_the_first_line_trimmed_of_elan_whitespace_only(tmp_path: Path) -> None:
+    project = _project(tmp_path, [entry("atlas")])
+    (project / "lean-toolchain").write_text("\u3000 leanprover/lean4:v4.34.1\x1c\u00a0\t\nnext\n", encoding="utf-8")
+
+    assert read_workspace(project).lean_toolchain == "leanprover/lean4:v4.34.1\x1c"
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX permissions that apply")
+def test_a_root_that_can_be_searched_but_not_listed_is_read(tmp_path: Path) -> None:
+    # Every read used to fail as a project that kept changing.
+    project = _project(tmp_path, [entry("atlas")])
+    project.chmod(0o311)
+    try:
+        workspace = read_workspace(project)
+    finally:
+        project.chmod(0o755)
+
+    assert workspace.lean_toolchain == "leanprover/lean4:v4.34.1"
 
 
 def test_packages_dir_defaults_and_must_stay_inside_the_project(tmp_path: Path) -> None:

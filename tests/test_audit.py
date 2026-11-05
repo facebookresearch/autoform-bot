@@ -8,29 +8,11 @@ from pathlib import Path
 import pytest
 
 import autoform_cli.audit as audit_module
-from autoform_cli.audit import audit_blueprint, audit_graph
-from autoform_cli.elaboration_limits import limits_in_force
+from autoform_cli.audit import AuditWarning, DeclarationLimit, audit_blueprint, audit_graph
+from autoform_cli.elaboration_limits import limits_by_line, limits_in_force
 from autoform_cli.graph import Graph, Node, load_graph
 from autoform_cli.lean import LeanSourceError, index_project
-
-
-def _ensure_chapter(blueprint: Path, relative: str) -> None:
-    """Give a chapter directory its chapter page, as every real vault has.
-
-    Containment comes from nested `README.md` articles, so a directory without
-    one is refused at load. Fixtures that only happen to nest are not trying to
-    model that fault; the tests that are do it explicitly.
-    """
-    parts = Path(relative).parts
-    if len(parts) < 2:
-        return
-    chapter = blueprint / "roadmap" / parts[0]
-    page = chapter / "README.md"
-    if not page.exists():
-        chapter.mkdir(parents=True, exist_ok=True)
-        page.write_text(
-            "---\n---\n\n# " + parts[0].replace("-", " ").title() + "\n", encoding="utf-8"
-        )
+from tests.blueprint_fixture import _ensure_chapter
 
 
 def _article(
@@ -89,6 +71,14 @@ def _finding_map(blueprint: Path, *, lean_root: Path | None = None) -> dict[str,
     return findings
 
 
+def _warning_map(blueprint: Path, *, lean_root: Path | None = None) -> dict[str, list[tuple[str, str]]]:
+    result = audit_blueprint(blueprint, lean_root=lean_root)
+    warnings: dict[str, list[tuple[str, str]]] = {}
+    for warning in result.warnings:
+        warnings.setdefault(warning.article_path, []).append((warning.code, warning.message))
+    return warnings
+
+
 def test_clean_audit_has_stable_machine_readable_representation(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
@@ -111,30 +101,31 @@ def test_clean_audit_has_stable_machine_readable_representation(tmp_path: Path) 
     assert first.findings == ()
     assert first.clean
     assert first.coverage is not None
-    assert first.coverage.counts == {"MAPPED": 0, "DECOMPOSED": 0, "DEFERRED": 0, "OUT": 1}
+    assert first.coverage.counts == {
+        "MAPPED": 0,
+        "DECOMPOSED": 0,
+        "INVENTORIED": 0,
+        "DEFERRED": 0,
+        "OUT": 1,
+    }
     assert first.as_dict()["findings"] == []
     assert second.to_json() == first.to_json()
     assert str(tmp_path) not in first.to_json()
 
 
-def test_audit_rejects_implementation_notes_left_after_proof(tmp_path: Path) -> None:
+def test_audit_rejects_implementation_notes_only_after_proof(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     article_id = "af_0123456789abcdef01234567"
-    _article(
-        blueprint,
-        "result.md",
-        article_id=article_id,
-        declaration="theorem",
-        statement="formalized",
-        proof="formalized",
-        lean="Project.result",
-    )
+    unproved = {"declaration": "theorem", "statement": "formalized", "lean": "Project.result"}
+    _article(blueprint, "result.md", article_id=article_id, **unproved)
     notes = blueprint / ".implementation-notes"
     notes.mkdir()
     note = notes / f"{article_id}.md"
     note.write_text("route\n", encoding="utf-8")
+    assert audit_blueprint(blueprint).clean
 
+    _article(blueprint, "result.md", article_id=article_id, proof="formalized", **unproved)
     findings = _finding_map(blueprint)["roadmap/result.md"]
     assert findings == [
         (
@@ -147,7 +138,8 @@ def test_audit_rejects_implementation_notes_left_after_proof(tmp_path: Path) -> 
     assert audit_blueprint(blueprint).clean
 
 
-def test_audit_allows_implementation_notes_while_work_is_unproved(tmp_path: Path) -> None:
+def test_audit_never_asks_to_delete_a_note_behind_a_linked_notes_folder(tmp_path: Path) -> None:
+    """Deleting it would delete a file outside the vault; the loader warns about the link instead."""
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     article_id = "af_0123456789abcdef01234567"
@@ -157,32 +149,47 @@ def test_audit_allows_implementation_notes_while_work_is_unproved(tmp_path: Path
         article_id=article_id,
         declaration="theorem",
         statement="formalized",
+        proof="formalized",
         lean="Project.result",
     )
-    notes = blueprint / ".implementation-notes"
-    notes.mkdir()
-    (notes / f"{article_id}.md").write_text("next route\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / f"{article_id}.md").write_text("route\n", encoding="utf-8")
+    try:
+        (blueprint / ".implementation-notes").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
 
-    assert audit_blueprint(blueprint).clean
+    result = audit_blueprint(blueprint)
+
+    assert result.clean
+    assert [(warning.article_path, warning.code) for warning in result.warnings] == [
+        (".implementation-notes", "invalid-implementation-note")
+    ]
 
 
-@pytest.mark.parametrize(("proof_complete", "stale"), [(False, False), (True, True)])
+@pytest.mark.parametrize(
+    ("child", "stale"),
+    [
+        pytest.param({}, False, id="no-formalizable-child"),
+        pytest.param(
+            {"declaration": "theorem", "statement": "formalized", "lean": "Project.result"}, False, id="unproved-child"
+        ),
+        pytest.param(
+            {"declaration": "theorem", "statement": "formalized", "proof": "formalized", "lean": "Project.result"},
+            True,
+            id="proved-child",
+        ),
+    ],
+)
 def test_container_note_is_stale_when_its_formalizable_subtree_is_proved(
-    tmp_path: Path, proof_complete: bool, stale: bool
+    tmp_path: Path, child: dict[str, str], stale: bool
 ) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     container_id = "af_0123456789abcdef01234567"
     _article(blueprint, "chapter/README.md", article_id=container_id)
-    child_metadata = {
-        "article_id": "af_89abcdef0123456701234567",
-        "declaration": "theorem",
-        "statement": "formalized",
-        "lean": "Project.result",
-    }
-    if proof_complete:
-        child_metadata["proof"] = "formalized"
-    _article(blueprint, "chapter/result.md", **child_metadata)
+    _article(blueprint, "chapter/result.md", article_id="af_89abcdef0123456701234567", **child)
     notes = blueprint / ".implementation-notes"
     notes.mkdir()
     (notes / f"{container_id}.md").write_text("chapter route\n", encoding="utf-8")
@@ -192,84 +199,36 @@ def test_container_note_is_stale_when_its_formalizable_subtree_is_proved(
     assert ("stale-implementation-note" in codes) is stale
 
 
-def test_container_note_stays_while_a_nested_formalizable_article_is_unproved(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("unproved", "proved"),
+    [
+        ("a.md", "b.md"),
+        ("b.md", "a.md"),
+        ("a.md", "section/done.md"),
+        ("z.md", "section/done.md"),
+        ("section/open.md", "done.md"),
+    ],
+)
+def test_container_note_stays_while_any_article_in_its_scope_is_unproved(
+    tmp_path: Path, unproved: str, proved: str
 ) -> None:
+    # Two sibling leaves in either order, an open leaf on either side of a proved section, and an open nested leaf.
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     container_id = "af_0123456789abcdef01234567"
     _article(blueprint, "chapter/README.md", article_id=container_id)
+    if "section/" in unproved + proved:
+        _article(blueprint, "chapter/section/README.md", article_id="af_200000000000000000000000")
+    theorem = {"declaration": "theorem", "statement": "formalized"}
+    _article(blueprint, f"chapter/{unproved}", article_id="af_100000000000000000000000", lean="Project.open", **theorem)
     _article(
         blueprint,
-        "chapter/done.md",
-        article_id="af_100000000000000000000000",
-        declaration="theorem",
-        statement="formalized",
-        proof="formalized",
-        lean="Project.done",
-    )
-    _article(blueprint, "chapter/section/README.md", article_id="af_200000000000000000000000")
-    _article(
-        blueprint,
-        "chapter/section/open.md",
+        f"chapter/{proved}",
         article_id="af_300000000000000000000000",
-        declaration="theorem",
-        statement="formalized",
-        lean="Project.open",
-    )
-    notes = blueprint / ".implementation-notes"
-    notes.mkdir()
-    (notes / f"{container_id}.md").write_text("chapter route\n", encoding="utf-8")
-
-    assert audit_blueprint(blueprint).clean
-
-
-@pytest.mark.parametrize("leaf", ["a.md", "z.md"])
-def test_container_note_stays_while_a_direct_article_is_unproved_beside_a_proved_section(
-    tmp_path: Path, leaf: str
-) -> None:
-    blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
-    container_id = "af_0123456789abcdef01234567"
-    _article(blueprint, "chapter/README.md", article_id=container_id)
-    _article(
-        blueprint,
-        f"chapter/{leaf}",
-        article_id="af_100000000000000000000000",
-        declaration="theorem",
-        statement="formalized",
-        lean="Project.open",
-    )
-    _article(blueprint, "chapter/section/README.md", article_id="af_200000000000000000000000")
-    _article(
-        blueprint,
-        "chapter/section/done.md",
-        article_id="af_300000000000000000000000",
-        declaration="theorem",
-        statement="formalized",
-        proof="formalized",
         lean="Project.done",
+        proof="formalized",
+        **theorem,
     )
-    notes = blueprint / ".implementation-notes"
-    notes.mkdir()
-    (notes / f"{container_id}.md").write_text("chapter route\n", encoding="utf-8")
-
-    assert audit_blueprint(blueprint).clean
-
-
-@pytest.mark.parametrize("unproved_first", [True, False])
-def test_container_note_stays_while_any_sibling_is_unproved(
-    tmp_path: Path, unproved_first: bool
-) -> None:
-    blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
-    container_id = "af_0123456789abcdef01234567"
-    _article(blueprint, "chapter/README.md", article_id=container_id)
-    proved = {"declaration": "theorem", "statement": "formalized", "proof": "formalized"}
-    unproved = {"declaration": "theorem", "statement": "formalized"}
-    first, second = (unproved, proved) if unproved_first else (proved, unproved)
-    _article(blueprint, "chapter/a.md", article_id="af_100000000000000000000000", lean="Project.a", **first)
-    _article(blueprint, "chapter/b.md", article_id="af_200000000000000000000000", lean="Project.b", **second)
     notes = blueprint / ".implementation-notes"
     notes.mkdir()
     (notes / f"{container_id}.md").write_text("chapter route\n", encoding="utf-8")
@@ -321,19 +280,37 @@ def test_a_container_note_counts_a_leaf_marked_not_ready_as_the_site_does(tmp_pa
     assert findings == (set() if layout == "deferred-leaf" else stale)
 
 
-def test_container_note_without_formalizable_descendants_is_not_stale(tmp_path: Path) -> None:
+@pytest.mark.parametrize("proved", [False, True])
+def test_a_container_note_never_counts_a_catalog_marked_not_ready(tmp_path: Path, proved: bool) -> None:
+    # The site counts no catalog as a target, so a catalog neither holds a note nor makes it stale.
     blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        "| Inventory | INVENTORIED | [Chapter](../roadmap/chapter/README.md) |",
+    )
+    (blueprint / "sources").mkdir()
+    (blueprint / "sources/ledger.md").write_text("# Ledger\n", encoding="utf-8")
     container_id = "af_0123456789abcdef01234567"
     _article(blueprint, "chapter/README.md", article_id=container_id)
-    _article(blueprint, "chapter/overview.md", article_id="af_89abcdef0123456701234567")
+    checked = {"statement": "formalized", "proof": "formalized"}
+    _article(
+        blueprint,
+        "chapter/inventory.md",
+        sources=("../../sources/ledger.md",),
+        catalog="module",
+        not_ready="true",
+        **({"lean": "Project.inventory", **checked} if proved else {}),
+    )
+    if not proved:
+        _article(blueprint, "chapter/done.md", declaration="theorem", lean="Project.done", **checked)
     notes = blueprint / ".implementation-notes"
     notes.mkdir()
-    (notes / f"{container_id}.md").write_text("chapter plan\n", encoding="utf-8")
+    (notes / f"{container_id}.md").write_text("chapter route\n", encoding="utf-8")
 
-    codes = {finding.code for finding in audit_blueprint(blueprint).findings}
+    findings = {(finding.article_path, finding.code) for finding in audit_blueprint(blueprint).findings}
 
-    assert "stale-implementation-note" not in codes
+    assert findings == (set() if proved else {("roadmap/chapter/README.md", "stale-implementation-note")})
 
 
 def test_container_note_audit_handles_deep_containment_iteratively(
@@ -395,24 +372,95 @@ def test_audit_reports_invalid_note_at_its_blueprint_path(
 
     result = audit_blueprint(blueprint)
 
-    assert [(finding.article_path, finding.code) for finding in result.findings] == [
-        (f".implementation-notes/{filename}", "invalid-graph")
+    assert result.clean
+    assert [(warning.article_path, warning.code) for warning in result.warnings] == [
+        (f".implementation-notes/{filename}", "invalid-implementation-note")
     ]
 
 
-def test_audit_reports_a_misplaced_notes_directory_where_it_is(tmp_path: Path) -> None:
+def test_audit_reports_a_notes_path_that_is_a_file_at_that_path(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "result.md")
+    (blueprint / ".implementation-notes").write_text("route\n", encoding="utf-8")
+
+    result = audit_blueprint(blueprint)
+
+    assert result.clean
+    assert [(warning.article_path, warning.code) for warning in result.warnings] == [
+        (".implementation-notes", "invalid-implementation-note")
+    ]
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="permissions do not bind root")
+@pytest.mark.parametrize(
+    ("locked", "mode", "path"),
+    [
+        (".implementation-notes", 0, ".implementation-notes"),
+        (".implementation-notes", 0o644, ".implementation-notes/af_111111111111111111111111.md"),
+        ("", 0o311, "."),
+    ],
+    ids=["unlistable-notes-folder", "unsearchable-notes-folder", "unlistable-blueprint"],
+)
+def test_audit_reports_notes_that_cannot_be_read(tmp_path: Path, locked: str, mode: int, path: str) -> None:
+    """A proved article sends audit looking for its stale note, which it must not crash on."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(
+        blueprint,
+        "result.md",
+        article_id="af_0123456789abcdef01234567",
+        declaration="theorem",
+        statement="formalized",
+        proof="formalized",
+        lean="Project.result",
+    )
+    (blueprint / ".implementation-notes").mkdir()
+    (blueprint / ".implementation-notes" / "af_111111111111111111111111.md").write_text("route\n", encoding="utf-8")
+    directory = blueprint / locked
+    directory.chmod(mode)
+    try:
+        result = audit_blueprint(blueprint)
+    finally:
+        directory.chmod(0o755)
+
+    assert result.clean
+    assert [(warning.article_path, warning.code) for warning in result.warnings] == [
+        (path, "invalid-implementation-note")
+    ]
+
+
+def test_coverage_may_not_link_into_an_unpublished_folder(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _article(blueprint, "drafts/README.md", published="false")
+    _article(blueprint, "drafts/idea.md", declaration="theorem")
+    _coverage(
+        blueprint, "| Area | Coverage | Evidence |\n| --- | --- | --- |\n| Ideas | DECOMPOSED | [Idea](../roadmap/drafts/idea.md) |"
+    )
+
+    assert ("unpublished-coverage-target", "coverage link names an unpublished folder, which render omits: "
+            "'../roadmap/drafts/idea.md' (line 5)") in {
+        (finding.code, finding.reason) for finding in audit_blueprint(blueprint).findings
+    }
+
+
+@pytest.mark.parametrize("folder", ["roadmap", "roadmap/chapter"])
+def test_audit_reports_a_misplaced_notes_directory_where_it_is(tmp_path: Path, folder: str) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     article_id = "af_0123456789abcdef01234567"
     _article(blueprint, "result.md", article_id=article_id, declaration="theorem")
-    misplaced = blueprint / "roadmap" / ".implementation-notes"
-    misplaced.mkdir()
+    misplaced = blueprint / folder / ".implementation-notes"
+    misplaced.mkdir(parents=True)
     (misplaced / f"{article_id}.md").write_text("Mathlib gap.\n", encoding="utf-8")
 
-    paths = {finding.article_path for finding in audit_blueprint(blueprint).findings}
+    result = audit_blueprint(blueprint)
 
-    assert f"roadmap/.implementation-notes/{article_id}.md" in paths
-    assert ".implementation-notes" not in paths
+    # Hidden entries are no part of the roadmap, as for render, so the directory itself is named.
+    assert result.clean
+    assert [(warning.article_path, warning.code) for warning in result.warnings] == [
+        (f"{folder}/.implementation-notes", "invalid-implementation-note")
+    ]
 
 
 def test_audit_reports_formalizable_structure(tmp_path: Path) -> None:
@@ -456,12 +504,158 @@ def test_audit_requires_mathlib_declaration_and_declaration_intent_on_evidenced_
     assert "roadmap/exposition.md" not in findings
 
 
+def test_audit_accepts_an_explicit_non_dispatchable_module_catalog(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Existing module | INVENTORIED | "
+        "[Catalog](../roadmap/existing-module.md) |",
+    )
+    ledger = blueprint / "sources" / "existing-module.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Existing module declarations\n", encoding="utf-8")
+    _article(
+        blueprint,
+        "existing-module.md",
+        catalog="module",
+        lean="Existing.alpha",
+        statement="formalized",
+        proof="formalized",
+        sources=("../sources/existing-module.md",),
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Existing.lean").write_text(
+        "namespace Existing\ntheorem alpha : True := by trivial\nend Existing\n",
+        encoding="utf-8",
+    )
+
+    result = audit_blueprint(blueprint, lean_root=lean_root)
+
+    assert result.clean
+    payload = json.loads(result.to_json())
+    assert payload["coverage"]["schema"] == "autoform-coverage/v2"
+    assert payload["coverage"]["counts"]["INVENTORIED"] == 1
+    assert payload["coverage"]["entries"][0]["disposition"] == "INVENTORIED"
+
+
+def test_audit_requires_module_catalog_lean_targets_to_resolve(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Existing module | INVENTORIED | "
+        "[Catalog](../roadmap/existing-module.md) |",
+    )
+    ledger = blueprint / "sources" / "existing-module.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Existing module declarations\n", encoding="utf-8")
+    _article(
+        blueprint,
+        "existing-module.md",
+        catalog="module",
+        lean="Missing.noSuchDeclaration",
+        statement="formalized",
+        proof="formalized",
+        sources=("../sources/existing-module.md",),
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Other.lean").write_text(
+        "theorem Existing.other : True := by trivial\n",
+        encoding="utf-8",
+    )
+
+    findings = _finding_map(blueprint, lean_root=lean_root)
+
+    assert findings["roadmap/existing-module.md"] == [
+        (
+            "lean-target-not-found",
+            "Lean declaration target was not found: Missing.noSuchDeclaration; "
+            "a name Lean generates is not indexed and belongs in the catalog's ledger",
+        )
+    ]
+
+
+def test_audit_surfaces_invalid_module_catalog_evidence(
+    tmp_path: Path,
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(
+        blueprint,
+        "existing-module.md",
+        catalog="module",
+        statement="formalized",
+        proof="formalized",
+    )
+
+    findings = _finding_map(blueprint)["roadmap/existing-module.md"]
+
+    assert {code for code, _reason in findings} == {"invalid-graph"}
+    reasons = {reason for _code, reason in findings}
+    assert any("needs the lean: names of the public declarations it inventories" in reason for reason in reasons)
+
+
+def test_audit_reports_a_catalog_that_links_no_ledger_under_sources(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "existing-module.md", catalog="module", sources=("https://example.com/ledger.md",))
+
+    assert _finding_map(blueprint)["roadmap/existing-module.md"] == [
+        (
+            "catalog-missing-ledger",
+            "module catalog links no declaration ledger under blueprint/sources/ from '## Sources'",
+        )
+    ]
+
+
+def test_audit_reports_a_catalog_container_once(tmp_path: Path) -> None:
+    """A catalog that contains articles is reported as such, and only as such.
+
+    The walk that checks a row's role stops at leaves, so a catalog container
+    was also called unclassified inventory although the row reached it, here
+    once directly and once through a containing chapter.
+    """
+    blueprint = tmp_path / "blueprint"
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Existing modules | INVENTORIED | [Modules](../roadmap/modules/README.md) |\n"
+        "| Library | INVENTORIED | [Library](../roadmap/library/README.md) |",
+    )
+    ledger = blueprint / "sources" / "ledger.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Module declarations\n", encoding="utf-8")
+    _article(blueprint, "modules/README.md", catalog="module", sources=("../../sources/ledger.md",))
+    _article(blueprint, "modules/basic.md", catalog="module", sources=("../../sources/ledger.md",))
+    _article(blueprint, "library/README.md", depends=False)
+    _article(blueprint, "library/extra/README.md", catalog="module", sources=("../../../sources/ledger.md",))
+    _article(blueprint, "library/extra/more.md", catalog="module", sources=("../../../sources/ledger.md",))
+
+    findings = _finding_map(blueprint)
+
+    reason = "catalog article has contained articles; a module catalog must be a leaf"
+    assert findings == {
+        "roadmap/library/extra/README.md": [("catalog-container", reason)],
+        "roadmap/modules/README.md": [("catalog-container", reason)],
+    }
+
+
 def test_audit_validates_local_source_links_without_network_access(tmp_path: Path, monkeypatch) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     source = blueprint / "sources" / "paper.md"
     source.parent.mkdir(parents=True)
     source.write_text("# Paper\n\n## Theorem\n", encoding="utf-8")
+    # attr_list is enabled in the generated config, so `{#id}` is the anchor, not the heading's slug.
+    (blueprint / "sources" / "attr.md").write_text(
+        "---\n---\n\n# Paper\n\n## A result {#main-result .highlight data-kind=result}\n\nText.\n", encoding="utf-8"
+    )
     (blueprint / ".drafts").mkdir()
     (blueprint / ".drafts" / "notes.md").write_text("# Notes\n", encoding="utf-8")
     (blueprint / "sources" / ".private").mkdir()
@@ -473,6 +667,7 @@ def test_audit_validates_local_source_links_without_network_access(tmp_path: Pat
         origin="cited",
         sources=(
             "../../sources/paper.md#theorem",
+            "../../sources/attr.md#main-result",
             "../../sources/missing.md",
             "../../../outside.md",
             "../../.drafts/notes.md",
@@ -621,16 +816,23 @@ def test_audit_validates_lean_targets_only_when_root_is_supplied(tmp_path: Path)
     ]
 
 
-def test_audit_checks_the_public_declaration_beside_an_earlier_private_twin(tmp_path: Path) -> None:
+def test_audit_checks_the_lean_target_kind_past_the_declaration_s_modifiers(tmp_path: Path) -> None:
+    """Render and progress read `def` in `noncomputable def`; audit looked up the whole value, found no
+    command, and skipped the kind check without a word."""
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
-    _article(blueprint, "result.md", declaration="theorem", statement="formalized", lean="Project.result")
+    _article(blueprint, "wrong-kind.md", declaration="noncomputable def", statement="formalized", lean="Project.fact")
+    _article(blueprint, "right-kind.md", declaration="public theorem", statement="formalized", lean="Project.fact")
     lean_root = tmp_path / "lean"
     lean_root.mkdir()
-    (lean_root / "A.lean").write_text("private def Project.result : Nat := 1\n", encoding="utf-8")
-    (lean_root / "B.lean").write_text("theorem Project.result : True := trivial\n", encoding="utf-8")
+    (lean_root / "Fact.lean").write_text("theorem Project.fact : True := trivial\n", encoding="utf-8")
 
-    assert "roadmap/result.md" not in _finding_map(blueprint, lean_root=lean_root)
+    findings = _finding_map(blueprint, lean_root=lean_root)
+
+    assert findings["roadmap/wrong-kind.md"] == [
+        ("lean-target-kind-mismatch", "Lean target kind theorem does not match declaration intent noncomputable def")
+    ]
+    assert "roadmap/right-kind.md" not in findings
 
 
 def test_audit_reports_a_target_defined_more_than_once_and_checks_nothing_else_of_it(tmp_path: Path) -> None:
@@ -698,6 +900,50 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
     }
 
 
+def test_audit_rejects_a_wanted_target_behind_a_proved_catalog(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(
+        blueprint,
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Existing modules | INVENTORIED | "
+        "[Proved](../roadmap/proved.md), [Stated](../roadmap/stated.md) |",
+    )
+    ledger = blueprint / "sources" / "existing-module.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Existing module declarations\n", encoding="utf-8")
+    for relative, proof in (("proved.md", {"proof": "formalized"}), ("stated.md", {})):
+        _article(
+            blueprint,
+            relative,
+            catalog="module",
+            lean="W.sturm W.ofSturm",
+            statement="formalized",
+            sources=("../sources/existing-module.md",),
+            **proof,
+        )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Wanted.lean").write_text(
+        "namespace W\ntheorem_wanted sturm : True\nalias ofSturm := sturm\nend W\n", encoding="utf-8"
+    )
+
+    assert _finding_map(blueprint, lean_root=lean_root) == {
+        "roadmap/proved.md": [
+            (
+                "lean-target-wanted",
+                "lean target W.ofSturm is an alias of a theorem_wanted, which defers its proof or "
+                "construction, so it cannot back proof: formalized",
+            ),
+            (
+                "lean-target-wanted",
+                "lean target W.sturm is a theorem_wanted, which defers its proof or construction, "
+                "so it cannot back proof: formalized",
+            ),
+        ],
+    }
+
+
 def test_audit_reports_lean_targets_declared_deprecated(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
@@ -711,11 +957,14 @@ def test_audit_reports_lean_targets_declared_deprecated(tmp_path: Path) -> None:
         "after-previous.md": "Project.afterPrevious",
         "old-alias.md": "Project.oldAlias",
         "after-alias.md": "Project.afterAlias",
+        "twin.md": "Project.twin",
     }
     for relative, name in targets.items():
         _article(blueprint, relative, declaration="theorem", statement="formalized", lean=name)
     lean_root = tmp_path / "lean"
     lean_root.mkdir()
+    # The public declaration beside an earlier private twin is the one checked.
+    (lean_root / "A.lean").write_text("private def Project.twin : Nat := 1\n", encoding="utf-8")
     source = [
         "theorem Project.fresh : True := trivial",
         "",
@@ -748,6 +997,7 @@ def test_audit_reports_lean_targets_declared_deprecated(tmp_path: Path) -> None:
         "@[deprecated Project.fresh]",
         "alias Project.oldAlias := Project.fresh",
         "theorem Project.afterAlias : True := trivial",
+        "theorem Project.twin : True := trivial",
     ]
     (lean_root / "Old.lean").write_text("\n".join(source) + "\n", encoding="utf-8")
 
@@ -858,6 +1108,7 @@ def test_audit_reads_an_alias_s_limits_and_wanted_command_from_its_target(tmp_pa
     )
     _article(blueprint, "forward.md", declaration="theorem", statement="formalized", lean="Project.bigForward")
     _article(blueprint, "wide.md", declaration="theorem", statement="formalized", lean="wide")
+    _article(blueprint, "good.md", declaration="theorem", statement="formalized", proof="formalized", lean="N.good")
     lean_root = tmp_path / "lean"
     lean_root.mkdir()
     source = [
@@ -876,6 +1127,14 @@ def test_audit_reads_an_alias_s_limits_and_wanted_command_from_its_target(tmp_pa
     (lean_root / "Aliases.lean").write_text("\n".join(source) + "\n", encoding="utf-8")
     # An alias the index cannot place still has its own limits.
     (lean_root / "Wide.lean").write_text("set_option maxHeartbeats 400000\nalias wide := Nat.succ_le_succ\n", encoding="utf-8")
+    # B.lean declares its `N.aux` only after the alias and A.lean declares one
+    # too, so the index cannot place the alias and reads no limit for it.
+    (lean_root / "A.lean").write_text("namespace N\nprivate theorem aux : True := trivial\nend N\n", encoding="utf-8")
+    (lean_root / "B.lean").write_text(
+        "set_option maxHeartbeats 0 in\ntheorem aux : True := trivial\n"
+        "namespace N\nalias good := aux\nprivate theorem aux : True := trivial\nend N\n",
+        encoding="utf-8",
+    )
 
     assert _finding_map(blueprint, lean_root=lean_root) == {
         "roadmap/small.md": [
@@ -929,7 +1188,8 @@ def test_audit_measures_an_alias_by_its_target_s_span(tmp_path: Path) -> None:
     with (lean_root / "big.lean").open("a", encoding="utf-8") as source:
         source.write("alias Project.bigAlias := Project.big\n")
 
-    assert _finding_map(blueprint, lean_root=lean_root) == {
+    assert _finding_map(blueprint, lean_root=lean_root) == {}
+    assert _warning_map(blueprint, lean_root=lean_root) == {
         "roadmap/big.md": [
             (
                 "node-too-large",
@@ -937,6 +1197,61 @@ def test_audit_measures_an_alias_by_its_target_s_span(tmp_path: Path) -> None:
                 "6-line median; split it into pull-request-sized nodes",
             )
         ]
+    }
+
+
+def test_a_source_span_ends_at_its_own_file_s_next_declaration(tmp_path: Path) -> None:
+    # B.lean's X.foo bounds X.bar, though A.lean declares an X.foo too.
+    root = tmp_path / "lean"
+    root.mkdir()
+    (root / "A.lean").write_text("theorem X.foo : True := trivial\n", encoding="utf-8")
+    (root / "B.lean").write_text(
+        "theorem X.bar : True := trivial\n" + "\n" * 8 + "theorem X.foo : True := trivial\n" + "\n" * 9
+        + "theorem X.baz : True := trivial\n",
+        encoding="utf-8",
+    )
+
+    index = index_project(root)
+    assert audit_module._source_spans(index)[index.find("X.bar")] == 9
+
+
+def test_a_field_does_not_end_its_structure_s_source_span(tmp_path: Path) -> None:
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Entry.lean").write_text(
+        "structure Entry where\n  value : Nat\n  label : String\n\ntheorem after : True := trivial\n",
+        encoding="utf-8",
+    )
+
+    spans = audit_module._source_spans(index_project(lean_root))
+    assert {declaration.name: span for declaration, span in spans.items()} == {
+        "Entry": 4,
+        "Entry.value": 1,
+        "Entry.label": 1,
+        "after": 1,
+    }
+
+
+def test_a_field_s_limits_come_from_the_structure_in_its_own_file(tmp_path: Path) -> None:
+    """The structure's name may be declared elsewhere too, and a quoted field name may hold a dot."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "value.md", declaration="def", statement="formalized", lean="Big.value")
+    _article(blueprint, "quoted.md", declaration="def", statement="formalized", lean="Big.«a.b»")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "A.lean").write_text(
+        "set_option maxHeartbeats 0 in\nstructure Big where\n  value : Nat\n  «a.b» : Nat\n", encoding="utf-8"
+    )
+    # B.lean's structure starts below A.lean's, but it is not the field's.
+    (lean_root / "B.lean").write_text(
+        "theorem pad : True := trivial\n\nstructure Big where\n  other : Nat\n", encoding="utf-8"
+    )
+
+    reason = "lean target {} has no maxHeartbeats limit: `set_option maxHeartbeats 0` at A.lean:1; set a finite limit"
+    assert _finding_map(blueprint, lean_root=lean_root) == {
+        "roadmap/value.md": [("lean-target-unbounded-limit", reason.format("Big.value"))],
+        "roadmap/quoted.md": [("lean-target-unbounded-limit", reason.format("Big.«a.b»"))],
     }
 
 
@@ -1084,42 +1399,253 @@ def test_the_limit_scan_reads_commands_at_the_declaration_s_indentation() -> Non
     assert found(6) == [("maxHeartbeats", 0, "declaration"), ("maxRecDepth", 2000, "proof")]
 
 
-def test_audit_reads_deprecation_from_the_captured_source_generation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_the_limit_scan_closes_one_scope_per_name_component() -> None:
+    # `end B` after `namespace A.B` leaves A open, and `end C.D` closes C too.
+    lines = [
+        "namespace A.B",
+        "end B",
+        "set_option maxHeartbeats 0",
+        "theorem inside : True := trivial",
+        "end A",
+        "theorem after : True := trivial",
+        "namespace C",
+        "set_option maxRecDepth 4096",
+        "namespace D",
+        "end C.D",
+        "theorem later : True := trivial",
+        "namespace O",
+        "namespace «a.b c»",
+        "end «a.b c»",
+        "set_option maxHeartbeats 0",
+        "end O",
+        "theorem last : True := trivial",
+    ]
+
+    def found(line: int) -> list[tuple[str, int, str]]:
+        return [(setting.option, setting.value, setting.scope) for setting in limits_in_force(lines, line)]
+
+    assert found(4) == [("maxHeartbeats", 0, "section")]
+    assert found(6) == []
+    assert found(11) == []
+    assert found(17) == []
+
+
+def test_the_limit_scan_reads_several_indentations_in_one_batch() -> None:
+    # A catalog asks for all its declarations in a file at once, and this file
+    # indents the one inside its namespace.
+    lines = [
+        "set_option maxHeartbeats 800000",
+        "namespace Project",
+        "  set_option maxRecDepth 4096",
+        "  theorem inner : True := by",
+        "    set_option maxHeartbeats 0 in",
+        "    trivial",
+        "end Project",
+        "set_option synthInstance.maxHeartbeats 0 in",
+        "theorem outer : True := trivial",
+    ]
+    found = limits_by_line(lines, (4, 9))
+
+    def settings(line: int) -> list[tuple[str, int, int, str]]:
+        return [(setting.option, setting.value, setting.line, setting.scope) for setting in found[line]]
+
+    assert settings(4) == [
+        ("maxHeartbeats", 800000, 1, "file"),
+        ("maxRecDepth", 4096, 3, "section"),
+        ("maxHeartbeats", 0, 5, "proof"),
+    ]
+    assert settings(9) == [
+        ("maxHeartbeats", 800000, 1, "file"),
+        ("synthInstance.maxHeartbeats", 0, 8, "declaration"),
+    ]
+
+
+def test_audit_warns_once_per_catalog_and_code_about_elaboration_limits(tmp_path: Path) -> None:
+    """A catalog inventories code that already exists, so its limits never fail the audit.
+
+    By path, inventory-extra.md sorts before inventory.md, although node
+    inventory sorts before node inventory-extra.
+    """
     blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
-    _article(
+    _coverage(
         blueprint,
-        "result.md",
-        declaration="theorem",
-        statement="formalized",
-        lean="Project.result",
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Existing module | INVENTORIED | [Inventory](../roadmap/inventory.md), "
+        "[Extra](../roadmap/inventory-extra.md), [Scoped](../roadmap/scoped.md) |",
     )
+    ledger = blueprint / "sources" / "ledger.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Module declarations\n", encoding="utf-8")
+    catalogs = {
+        # A name listed twice counts once, and one that does not resolve not at all.
+        "inventory.md": "Inv.delta Inv.alpha Inv.gamma Inv.beta Inv.alpha Inv.missing",
+        "inventory-extra.md": "Inv.gamma Inv.alpha",
+        "scoped.md": "Inv.gamma",
+    }
+    for relative, names in catalogs.items():
+        _article(blueprint, relative, catalog="module", lean=names, sources=("../sources/ledger.md",))
+    _article(blueprint, "beta.md", declaration="theorem", statement="formalized", lean="Inv.beta")
     lean_root = tmp_path / "lean"
     lean_root.mkdir()
-    source = lean_root / "Project.lean"
-    source.write_text(
-        "@[deprecated Project.fresh] theorem Project.result : True := trivial\n",
+    source = [
+        "set_option maxHeartbeats 800000",
+        "namespace Inv",
+        "theorem alpha : True := trivial",
+        "set_option synthInstance.maxHeartbeats 0 in",
+        "theorem beta : True := trivial",
+        "set_option maxHeartbeats 400000 in",
+        "theorem gamma : True := trivial",
+        "section",
+        "set_option maxRecDepth 4096",
+        "theorem delta : True := by",
+        "  set_option maxHeartbeats 0 in",
+        "  trivial",
+        "end",
+        "end Inv",
+    ]
+    (lean_root / "Inv.lean").write_text("\n".join(source) + "\n", encoding="utf-8")
+
+    result = audit_blueprint(blueprint, lean_root=lean_root)
+
+    # A declaration article's limits stay findings.
+    assert [(finding.article_path, finding.code) for finding in result.findings] == [
+        ("roadmap/beta.md", "lean-target-unbounded-limit"),
+        ("roadmap/beta.md", "lean-target-unscoped-limit"),
+        ("roadmap/inventory.md", "lean-target-not-found"),
+    ]
+
+    def limit(name: str, option: str, value: int, line: int, scope: str) -> DeclarationLimit:
+        return DeclarationLimit(f"Inv.{name}", option, value, f"Inv.lean:{line}", scope)
+
+    file_wide = ("maxHeartbeats", 800000, 1, "file")
+    inherit = "catalogued declarations inherit a file- or section-wide raised"
+    assert result.warnings == (
+        AuditWarning(
+            "roadmap/inventory-extra.md",
+            "catalog-unscoped-limit",
+            "1 of 2 catalogued declarations inherits a file- or section-wide raised maxHeartbeats limit "
+            "(Inv.alpha at Inv.lean:1); existing code: change it only on request, and "
+            "`set_option maxHeartbeats N in` on the declarations that need it must pass a rebuild",
+            (limit("alpha", *file_wide),),
+        ),
+        AuditWarning(
+            "roadmap/inventory.md",
+            "catalog-unbounded-limit",
+            "2 of 4 catalogued declarations have no maxHeartbeats limit or no synthInstance.maxHeartbeats "
+            "limit (Inv.beta at Inv.lean:4 and 1 more); existing code: change it only on request, and "
+            "a finite limit must pass a rebuild",
+            (
+                limit("beta", "synthInstance.maxHeartbeats", 0, 4, "declaration"),
+                limit("delta", "maxHeartbeats", 0, 11, "proof"),
+            ),
+        ),
+        AuditWarning(
+            "roadmap/inventory.md",
+            "catalog-unscoped-limit",
+            f"3 of 4 {inherit} maxHeartbeats or maxRecDepth limit (Inv.alpha at Inv.lean:1 and 2 more); "
+            "existing code: change it only on request, and `set_option maxHeartbeats N in` or "
+            "`set_option maxRecDepth N in` on the declarations that need it must pass a rebuild",
+            (
+                limit("alpha", *file_wide),
+                limit("beta", *file_wide),
+                limit("delta", *file_wide),
+                limit("delta", "maxRecDepth", 4096, 9, "section"),
+            ),
+        ),
+    )
+    assert json.loads(result.to_json()) == result.as_dict()
+
+
+def test_a_catalog_reads_an_alias_s_limits_from_its_target(tmp_path: Path) -> None:
+    """An alias has its target's limits, and an alias listed beside its target counts once."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "alias.md", catalog="module", lean="P.small")
+    _article(blueprint, "both.md", catalog="module", lean="P.small P.big")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Big.lean").write_text(
+        "namespace P\nset_option maxHeartbeats 0 in\ntheorem big : True := trivial\nalias small := big\nend P\n",
         encoding="utf-8",
     )
-    real_snapshot_project_sources = audit_module.snapshot_project_sources
+    message = (
+        "1 of 1 catalogued declaration has no maxHeartbeats limit (P.big at Big.lean:2); "
+        "existing code: change it only on request, and a finite limit must pass a rebuild"
+    )
+    limit = (DeclarationLimit("P.big", "maxHeartbeats", 0, "Big.lean:2", "declaration"),)
 
-    def snapshot_then_rewrite(root: Path):
-        snapshot = real_snapshot_project_sources(root)
-        source.write_text("theorem Project.result : True := trivial\n", encoding="utf-8")
-        return snapshot
+    assert audit_blueprint(blueprint, lean_root=lean_root).warnings == (
+        AuditWarning("roadmap/alias.md", "catalog-unbounded-limit", message, limit),
+        AuditWarning("roadmap/both.md", "catalog-unbounded-limit", message, limit),
+    )
 
-    monkeypatch.setattr(audit_module, "snapshot_project_sources", snapshot_then_rewrite)
 
-    findings = _finding_map(blueprint, lean_root=lean_root)
+def test_audit_takes_a_structure_field_as_a_definition_or_a_theorem(tmp_path: Path) -> None:
+    """Issue #498: a field's projection is a theorem when the field is a proposition, which the index cannot see."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    kinds = (("def", "value"), ("definition", "value"), ("theorem", "pos"), ("lemma", "pos"), ("structure", "value"))
+    for declaration, field in kinds:
+        lean = f"Project.Entry.{field}"
+        _article(blueprint, f"{declaration}.md", declaration=declaration, statement="formalized", lean=lean)
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Entry.lean").write_text(
+        "structure Project.Entry where\n  value : Nat\n  pos : 0 < value\n", encoding="utf-8"
+    )
 
-    assert findings["roadmap/result.md"] == [
+    assert _finding_map(blueprint, lean_root=lean_root) == {
+        "roadmap/structure.md": [
+            ("lean-target-kind-mismatch", "Lean target kind field does not match declaration intent structure")
+        ]
+    }
+
+
+def test_audit_reads_a_field_s_elaboration_limits_at_its_structure(tmp_path: Path) -> None:
+    """Lean elaborates a field with its structure, so the structure's `set_option ... in` covers it."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "value.md", declaration="def", statement="formalized", lean="P.Big.value")
+    _article(blueprint, "catalog.md", catalog="module", lean="P.Big.value")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Big.lean").write_text(
+        "namespace P\nset_option maxHeartbeats 0 in\nstructure Big where\n  value : Nat\nend P\n", encoding="utf-8"
+    )
+
+    result = audit_blueprint(blueprint, lean_root=lean_root)
+    # The catalog's ledger and inventory findings are not this test's.
+    assert [(item.code, item.reason) for item in result.findings if item.article_path == "roadmap/value.md"] == [
         (
-            "lean-target-deprecated",
-            "lean target Project.result is deprecated; point lean: at its replacement",
+            "lean-target-unbounded-limit",
+            "lean target P.Big.value has no maxHeartbeats limit: `set_option maxHeartbeats 0` at Big.lean:2; "
+            "set a finite limit",
         )
     ]
+    limit = (DeclarationLimit("P.Big.value", "maxHeartbeats", 0, "Big.lean:2", "declaration"),)
+    assert [(warning.code, warning.declarations) for warning in result.warnings] == [("catalog-unbounded-limit", limit)]
+
+
+def test_a_field_does_not_take_its_structure_s_deprecation(tmp_path: Path) -> None:
+    """Lean puts a structure's attributes on the structure alone, even when a field shares its line."""
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "b.md", declaration="structure", statement="formalized", lean="P.B")
+    for name in ("B.toA", "B.b", "Q.q"):
+        _article(blueprint, f"{name.lower()}.md", declaration="def", statement="formalized", lean=f"P.{name}")
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    deprecated = '@[deprecated "use C" (since := "2026-01-01")]'
+    (lean_root / "D.lean").write_text(
+        f"namespace P\n{deprecated}\nstructure B extends toA : A where\n  b : Nat\n"
+        f"{deprecated}\nstructure Q where q : Nat\nend P\n",
+        encoding="utf-8",
+    )
+
+    assert _finding_map(blueprint, lean_root=lean_root) == {
+        "roadmap/b.md": [("lean-target-deprecated", "lean target P.B is deprecated; point lean: at its replacement")]
+    }
 
 
 def test_audit_checks_irreducible_def_kinds(tmp_path: Path) -> None:
@@ -1329,30 +1855,104 @@ def test_audit_points_a_noncanonical_readme_at_the_page_itself(tmp_path: Path) -
     ]
 
 
-def test_audit_reports_a_container_holding_too_many_articles(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("metadata", "leaves", "limit"),
+    [
+        pytest.param({}, 25, 24, id="chapter"),
+        pytest.param({"navigation": "module"}, 120, 120, id="module-page-at-the-explorer-limit"),
+        pytest.param({"navigation": "module"}, 121, 120, id="module-page-over-the-explorer-limit"),
+    ],
+)
+def test_audit_limits_a_chapter_to_24_articles_and_a_module_page_to_what_the_explorer_maps(
+    tmp_path: Path, metadata: dict[str, str], leaves: int, limit: int
+) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     _article(blueprint, "README.md", depends=False)
-    for index in range(25):
+    _article(blueprint, "chapter/README.md", depends=False, **metadata)
+    for index in range(leaves):
+        _article(blueprint, f"chapter/unit-{index:03d}.md", declaration="theorem")
+
+    findings = _finding_map(blueprint).get("roadmap/chapter/README.md", [])
+
+    assert findings == (
+        []
+        if leaves <= limit
+        else [
+            (
+                "overfull-container",
+                f"article directly contains {leaves} articles, more than the {limit}-article limit; "
+                "group them into chapters",
+            )
+        ]
+    )
+
+
+def test_audit_allows_a_wide_repository_subject_index(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    for index in range(33):
+        _article(blueprint, f"subject-{index:02d}/README.md", depends=False)
+
+    assert audit_blueprint(blueprint).clean
+
+
+@pytest.mark.parametrize(
+    ("chapters", "leaves", "limit"),
+    [
+        pytest.param(0, 25, 24, id="flat-root"),
+        pytest.param(30, 1, 24, id="subject-index-with-a-leaf"),
+        pytest.param(65, 0, 64, id="wide-subject-index"),
+    ],
+)
+def test_audit_limits_the_root_as_a_subject_index_only_when_every_child_is_a_chapter(
+    tmp_path: Path, chapters: int, leaves: int, limit: int
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    for index in range(chapters):
+        _article(blueprint, f"subject-{index:02d}/README.md", depends=False)
+    for index in range(leaves):
         _article(blueprint, f"unit-{index:02d}.md", declaration="theorem")
 
-    findings = _finding_map(blueprint)["roadmap/README.md"]
-
-    assert findings == [
+    assert _finding_map(blueprint)["roadmap/README.md"] == [
         (
             "overfull-container",
-            "article directly contains 25 articles, more than the 24-article limit; "
+            f"article directly contains {chapters + leaves} articles, more than the {limit}-article limit; "
             "group them into chapters",
         )
     ]
 
 
-def test_audit_reports_nodes_that_are_large_outliers_for_their_project(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("spans", "warnings"),
+    [
+        pytest.param(
+            {f"Project.small{index}": 6 for index in range(5)} | {"Project.big": 420},
+            {
+                "roadmap/big.md": [
+                    (
+                        "node-too-large",
+                        "node's Lean declarations span 420 lines against this project's "
+                        "6-line median; split it into pull-request-sized nodes",
+                    )
+                ]
+            },
+            id="large-outlier",
+        ),
+        # Every node clears the absolute floor, but none is an outlier here, so a
+        # project whose units are uniformly long is not gated on its own norm.
+        pytest.param({f"Project.long{index}": 300 for index in range(5)}, {}, id="uniformly-long"),
+    ],
+)
+def test_audit_measures_node_size_against_the_project_rather_than_a_fixed_limit(
+    tmp_path: Path, spans: dict[str, int], warnings: dict[str, list[tuple[str, str]]]
+) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     _article(blueprint, "README.md", depends=False)
-    spans = {f"Project.small{index}": 6 for index in range(5)}
-    spans["Project.big"] = 420
     for name in spans:
         _article(
             blueprint,
@@ -1364,20 +1964,53 @@ def test_audit_reports_nodes_that_are_large_outliers_for_their_project(tmp_path:
         )
     lean_root = _lean_project(tmp_path, spans)
 
-    findings = _finding_map(blueprint, lean_root=lean_root)
-
-    assert findings == {
-        "roadmap/big.md": [
-            (
-                "node-too-large",
-                "node's Lean declarations span 420 lines against this project's "
-                "6-line median; split it into pull-request-sized nodes",
-            )
-        ]
-    }
+    assert audit_blueprint(blueprint, lean_root=lean_root).clean
+    assert _warning_map(blueprint, lean_root=lean_root) == warnings
 
 
-def test_audit_measures_source_spans_from_the_captured_index(
+def test_unrelated_small_nodes_never_fail_the_audit_of_an_unchanged_node(tmp_path: Path) -> None:
+    # Finished work landing elsewhere lowers the median, so a node nobody
+    # touched crosses the limit, as in issue #429 (an unchanged 413-line node).
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "README.md", depends=False)
+    spans = {f"Project.mid{index}": 107 + index % 2 for index in range(10)} | {"Project.big": 413}
+    for name in spans:
+        _article(
+            blueprint,
+            f"{name.rsplit('.', 1)[-1]}.md",
+            declaration="theorem",
+            statement="formalized",
+            proof="formalized",
+            lean=name,
+        )
+    lean_root = _lean_project(tmp_path, spans)
+    before = audit_blueprint(blueprint, lean_root=lean_root)
+    for index in range(11):
+        name = f"Project.cohort{index}"
+        _article(
+            blueprint,
+            f"cohort{index}.md",
+            declaration="theorem",
+            statement="formalized",
+            proof="formalized",
+            lean=name,
+        )
+        (lean_root / f"cohort{index}.lean").write_text(
+            f"theorem {name} : True := by\n" + "  trivial\n" * 39, encoding="utf-8"
+        )
+
+    after = audit_blueprint(blueprint, lean_root=lean_root)
+
+    assert before.findings == after.findings
+    assert before.clean and after.clean
+    assert [warning.code for warning in before.warnings] == []
+    assert [(warning.article_path, warning.code) for warning in after.warnings] == [
+        ("roadmap/big.md", "node-too-large")
+    ]
+
+
+def test_audit_reads_deprecation_and_source_spans_from_the_captured_source_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     blueprint = tmp_path / "blueprint"
@@ -1395,21 +2028,29 @@ def test_audit_measures_source_spans_from_the_captured_index(
             lean=name,
         )
     lean_root = _lean_project(tmp_path, spans)
+    big = lean_root / "big.lean"
+    big.write_text("@[deprecated Project.fresh] " + big.read_text(encoding="utf-8"), encoding="utf-8")
     real_snapshot_project_sources = audit_module.snapshot_project_sources
 
-    def snapshot_then_mutate(root: Path):
+    def snapshot_then_rewrite(root: Path):
         snapshot = real_snapshot_project_sources(root)
-        (root / "big.lean").write_text(
-            "theorem Project.big : True := trivial\n", encoding="utf-8"
-        )
+        big.write_text("theorem Project.big : True := trivial\n", encoding="utf-8")
         return snapshot
 
-    monkeypatch.setattr(audit_module, "snapshot_project_sources", snapshot_then_mutate)
+    monkeypatch.setattr(audit_module, "snapshot_project_sources", snapshot_then_rewrite)
 
-    findings = _finding_map(blueprint, lean_root=lean_root)
+    result = audit_blueprint(blueprint, lean_root=lean_root)
 
-    assert findings["roadmap/big.md"] == [
+    assert [(finding.article_path, finding.code, finding.reason) for finding in result.findings] == [
         (
+            "roadmap/big.md",
+            "lean-target-deprecated",
+            "lean target Project.big is deprecated; point lean: at its replacement",
+        )
+    ]
+    assert [(warning.article_path, warning.code, warning.message) for warning in result.warnings] == [
+        (
+            "roadmap/big.md",
             "node-too-large",
             "node's Lean declarations span 420 lines against this project's "
             "6-line median; split it into pull-request-sized nodes",
@@ -1436,7 +2077,7 @@ def test_audit_reports_source_index_io_failure_without_host_details(
     lean_root = tmp_path / "lean"
     lean_root.mkdir()
 
-    def fail_snapshot(root: Path):
+    def fail_snapshot(root: Path, **_kwargs):
         if reason is not None:
             raise LeanSourceError(reason)
         raise OSError(f"private host detail: {root}")
@@ -1451,42 +2092,18 @@ def test_audit_reports_source_index_io_failure_without_host_details(
     assert str(tmp_path) not in result.to_json()
 
 
-def test_audit_measures_node_size_against_the_project_rather_than_a_fixed_limit(
-    tmp_path: Path,
-) -> None:
-    blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
-    _article(blueprint, "README.md", depends=False)
-    spans = {f"Project.long{index}": 300 for index in range(5)}
-    for name in spans:
-        _article(
-            blueprint,
-            f"{name.rsplit('.', 1)[-1]}.md",
-            declaration="theorem",
-            statement="formalized",
-            proof="formalized",
-            lean=name,
-        )
-    lean_root = _lean_project(tmp_path, spans)
-
-    result = audit_blueprint(blueprint, lean_root=lean_root)
-
-    # Every node clears the absolute floor, but none is an outlier here, so a
-    # project whose units are uniformly long is not gated on its own norm.
-    assert result.clean
-
-
-def test_audit_is_read_only(tmp_path: Path) -> None:
+def test_audit_is_read_only_and_skips_a_hidden_coverage_file_as_render_does(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     _article(blueprint, "result.md", declaration="theorem")
+    (blueprint / "coverage" / ".draft.md").write_text("[Gone](../roadmap/gone.md)\n", encoding="utf-8")
     before = {
         path.relative_to(blueprint).as_posix(): path.read_bytes()
         for path in sorted(blueprint.rglob("*"))
         if path.is_file()
     }
 
-    audit_blueprint(blueprint)
+    result = audit_blueprint(blueprint)
 
     after = {
         path.relative_to(blueprint).as_posix(): path.read_bytes()
@@ -1494,34 +2111,7 @@ def test_audit_is_read_only(tmp_path: Path) -> None:
         if path.is_file()
     }
     assert after == before
-
-
-def test_an_explicit_attr_list_anchor_resolves(tmp_path: Path) -> None:
-    """`attr_list` is enabled in the generated config, so `{#id}` is the anchor.
-
-    Deriving the slug from the heading text regardless reported a link that
-    MkDocs renders correctly as source-anchor-not-found.
-    """
-    blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
-    _article(blueprint, "README.md", depends=False)
-    _article(
-        blueprint,
-        "cited.md",
-        declaration="theorem",
-        origin="cited",
-        sources=("../sources/paper.md#main-result",),
-    )
-    paper = blueprint / "sources" / "paper.md"
-    paper.parent.mkdir(parents=True, exist_ok=True)
-    paper.write_text(
-        "---\n---\n\n# Paper\n\n## A result {#main-result .highlight data-kind=result}\n\nText.\n",
-        encoding="utf-8",
-    )
-
-    codes = {finding.code for finding in audit_blueprint(blueprint).findings}
-
-    assert "source-anchor-not-found" not in codes
+    assert "coverage/.draft.md" not in {finding.article_path for finding in result.findings}
 
 
 @pytest.mark.parametrize(
@@ -1545,16 +2135,17 @@ def test_audit_requires_statement_prose_outside_code_comments_and_headings(tmp_p
 
 
 @pytest.mark.parametrize(
-    "prose",
+    ("prose", "depends"),
     [
-        "### Setting\n\nLet $X$ be a set.",
-        "Let $X$ be a set.\n\n```lean\ntheorem draft : True := trivial\n```",
+        ("### Setting\n\nLet $X$ be a set.", True),
+        ("Let $X$ be a set.\n\n```lean\ntheorem draft : True := trivial\n```", True),
+        pytest.param("A statement.\n\n## DEPENDS ON\n\nNone.", False, id="depends-heading-read-without-regard-to-case"),
     ],
 )
-def test_audit_accepts_a_statement_with_subheadings_or_code(tmp_path: Path, prose: str) -> None:
+def test_audit_accepts_a_statement_with_subheadings_or_code(tmp_path: Path, prose: str, depends: bool) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
-    _article(blueprint, "chapter/result.md", prose=prose, declaration="theorem")
+    _article(blueprint, "chapter/result.md", prose=prose, depends=depends, declaration="theorem")
 
     assert audit_blueprint(blueprint).clean
 
@@ -1585,20 +2176,6 @@ def test_audit_ignores_a_depends_heading_that_is_not_published(tmp_path: Path) -
     codes = {code for code, _reason in _finding_map(blueprint)["roadmap/chapter/result.md"]}
 
     assert codes == {"missing-depends-section"}
-
-
-def test_audit_reads_the_depends_heading_without_regard_to_case(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
-    _article(
-        blueprint,
-        "chapter/result.md",
-        prose="A statement.\n\n## DEPENDS ON\n\nNone.",
-        depends=False,
-        declaration="theorem",
-    )
-
-    assert audit_blueprint(blueprint).clean
 
 
 def test_audit_reports_a_depends_section_lost_behind_an_unclosed_comment(tmp_path: Path) -> None:
@@ -1678,6 +2255,7 @@ def test_audit_reports_a_statement_that_shows_a_reader_nothing(tmp_path: Path, p
         "TODO state it",
         "$$\nn + 0 = n\n$$",
         "`Nat.add_zero`",
+        pytest.param("```x``` is inline code here.", id="inline-backticks-are-not-a-fence"),
         "<div>\n\n    For all n.\n\n</div>",
         "TODO-lists form a monoid.",
         "Unknown-variance case: the sample mean is normal.",
@@ -1702,14 +2280,23 @@ def test_a_statement_from_a_fence_that_never_closes_keeps_its_statement_finding(
     }
 
 
-def test_audit_reports_an_unclosed_code_fence(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("frontmatter", "line"),
+    [
+        pytest.param("", 13, id="plain"),
+        # The frontmatter is not published, so a `<!--` there cannot comment out the fence below it.
+        pytest.param("# <!-- draft\n", 14, id="after-a-frontmatter-comment"),
+    ],
+)
+def test_audit_reports_an_unclosed_code_fence(tmp_path: Path, frontmatter: str, line: int) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     path = _article(blueprint, "chapter/result.md", declaration="theorem")
-    path.write_text(path.read_text(encoding="utf-8") + "\n```lean\n#check result\n", encoding="utf-8")
+    text = path.read_text(encoding="utf-8").replace("---\n", f"---\n{frontmatter}", 1)
+    path.write_text(text + "\n```lean\n#check result\n", encoding="utf-8")
 
     assert _finding_map(blueprint)["roadmap/chapter/result.md"] == [
-        ("unclosed-code-fence", "code fence opened on line 13 never closes")
+        ("unclosed-code-fence", f"code fence opened on line {line} never closes")
     ]
 
 
@@ -1738,19 +2325,6 @@ def test_audit_reports_an_unclosed_code_fence_in_a_chapter_article(tmp_path: Pat
     ]
 
 
-def test_audit_does_not_treat_inline_backticks_as_a_fence(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
-    path = _article(blueprint, "chapter/result.md", declaration="theorem")
-    path.write_text(path.read_text(encoding="utf-8") + "\n```x``` is inline code here.\n", encoding="utf-8")
-
-    codes = {
-        code
-        for code, _reason in _finding_map(blueprint).get(path.relative_to(blueprint).as_posix(), [])
-    }
-    assert "unclosed-code-fence" not in codes
-
-
 def test_audit_graph_does_not_reread_an_article_for_fences(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
@@ -1776,28 +2350,17 @@ def test_audit_accepts_a_closed_code_fence_after_a_frontmatter_comment(tmp_path:
     assert "unclosed-code-fence" not in codes
 
 
-def test_audit_reports_an_unclosed_code_fence_after_a_frontmatter_comment(tmp_path: Path) -> None:
-    # The frontmatter is not published, so a `<!--` there cannot comment out the fence below it.
+def test_statement_findings_say_what_is_wrong_only_on_formalizable_articles(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
-    path = _article(blueprint, "chapter/result.md", declaration="theorem")
-    text = path.read_text(encoding="utf-8").replace("---\n", "---\n# <!-- draft\n", 1)
-    path.write_text(text + "\n```lean\n#check result\n", encoding="utf-8")
-
-    assert _finding_map(blueprint)["roadmap/chapter/result.md"] == [
-        ("unclosed-code-fence", "code fence opened on line 14 never closes")
-    ]
-
-
-def test_statement_findings_say_what_is_wrong(tmp_path: Path) -> None:
-    blueprint = tmp_path / "blueprint"
-    _coverage(blueprint)
+    _article(blueprint, "chapter/README.md", prose="TODO")
     _article(blueprint, "chapter/none.md", prose="", declaration="theorem")
     _article(blueprint, "chapter/todo.md", prose="TODO", declaration="theorem")
     _article(blueprint, "chapter/rule.md", prose="---", declaration="theorem")
 
     findings = _finding_map(blueprint)
 
+    assert "roadmap/chapter/README.md" not in findings
     assert findings["roadmap/chapter/none.md"] == [
         ("missing-statement-text", "formalizable article has no statement text outside its H2 sections")
     ]
@@ -1812,16 +2375,73 @@ def test_statement_findings_say_what_is_wrong(tmp_path: Path) -> None:
     ]
 
 
-def test_audit_leaves_a_placeholder_alone_outside_formalizable_articles(tmp_path: Path) -> None:
+def _duplicate_warnings(blueprint: Path) -> dict[str, str]:
+    return {
+        warning.article_path: warning.message
+        for warning in audit_blueprint(blueprint).warnings
+        if warning.code == "duplicate-lean-target"
+    }
+
+
+def test_audit_warns_when_two_articles_take_credit_for_one_declaration(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
-    _article(blueprint, "chapter/README.md", prose="TODO")
-    _article(blueprint, "chapter/result.md", declaration="theorem")
+    # Each pair spells one Lean name two ways: _root_. and «» quoting drop out.
+    _article(blueprint, "a.md", declaration="theorem", statement="formalized", lean="Ns.foo Ns.helper")
+    _article(blueprint, "b.md", declaration="theorem", statement="formalized", proof="formalized", lean="_root_.Ns.«foo»")
+    _article(blueprint, "c.md", declaration="theorem", mathlib="true", mathlib_declaration="Nat.add_comm")
+    _article(blueprint, "d.md", declaration="theorem", mathlib="true", mathlib_declaration="_root_.«Nat».add_comm")
 
-    assert "roadmap/chapter/README.md" not in _finding_map(blueprint)
+    result = audit_blueprint(blueprint)
+
+    tail = "so one declaration gets credit more than once; keep it first in only one article"
+    assert _duplicate_warnings(blueprint) == {
+        "roadmap/a.md": f"its first lean name, Ns.foo, is also first in roadmap/b.md, {tail}",
+        "roadmap/b.md": f"its first lean name, _root_.Ns.«foo», is also first in roadmap/a.md, {tail}",
+        "roadmap/c.md": f"its first mathlib_declaration name, Nat.add_comm, is also first in roadmap/d.md, {tail}",
+        "roadmap/d.md": f"its first mathlib_declaration name, _root_.«Nat».add_comm, is also first in roadmap/c.md, {tail}",
+    }
+    # A warning never fails the audit.
+    assert not {finding.code for finding in result.findings} & {"duplicate-lean-target"}
+    assert [warning["code"] for warning in json.loads(result.to_json())["warnings"]] == ["duplicate-lean-target"] * 4
 
 
-def test_bundled_example_has_no_statement_or_unclosed_fence_finding(repo_root: Path) -> None:
+def test_audit_leaves_supporting_catalog_repeated_distinct_and_placeholder_names_alone(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    formalized = {"declaration": "theorem", "statement": "formalized"}
+    # Names after the first support an article and may recur, even as another article's first name.
+    _article(blueprint, "supporting/a.md", lean="P.a P.shared", **formalized)
+    _article(blueprint, "supporting/b.md", lean="P.b P.shared P.a", **formalized)
+    _article(blueprint, "supporting/c.md", declaration="theorem", mathlib="true", mathlib_declaration="Nat.c Nat.both")
+    _article(blueprint, "supporting/d.md", declaration="theorem", mathlib="true", mathlib_declaration="Nat.d Nat.both")
+    # Progress counts only targets: no module catalog, container or leaf without a declaration.
+    _article(blueprint, "catalog/inventory.md", catalog="module", lean="P.listed", statement="formalized")
+    _article(blueprint, "catalog/article.md", lean="P.listed", **formalized)
+    _article(blueprint, "chapter/README.md", lean="P.chapter", **formalized)
+    _article(blueprint, "chapter/leaf.md", lean="P.chapter", **formalized)
+    _article(blueprint, "undeclared/a.md", statement="formalized", lean="P.undeclared")
+    _article(blueprint, "undeclared/b.md", lean="P.undeclared", **formalized)
+    # One article repeating its own name.
+    _article(blueprint, "repeated/a.md", lean="P.again P.again", **formalized)
+    # Distinct names, including a quoted component that holds a dot.
+    _article(blueprint, "distinct/a.md", lean="P.x.y", **formalized)
+    _article(blueprint, "distinct/b.md", lean="P.«x.y»", **formalized)
+    # A migration keeps the old article as a retracted or planned placeholder naming the same declaration.
+    _article(blueprint, "migration/new.md", lean="P.moved", **formalized)
+    _article(blueprint, "migration/retracted.md", declaration="theorem", statement="retracted", lean="P.moved")
+    _article(blueprint, "migration/planned.md", declaration="theorem", lean="P.moved")
+    _article(blueprint, "migration/upstream.md", declaration="theorem", mathlib="true", mathlib_declaration="Nat.moved")
+    _article(blueprint, "migration/unasserted.md", declaration="theorem", mathlib_declaration="Nat.moved")
+    # Lean credit and Mathlib credit are separate domains.
+    _article(blueprint, "domains/local.md", lean="Nat.both", **formalized)
+    _article(blueprint, "domains/upstream.md", declaration="theorem", mathlib="true", mathlib_declaration="Nat.both")
+
+    assert "invalid-graph" not in {finding.code for finding in audit_blueprint(blueprint).findings}
+    assert _duplicate_warnings(blueprint) == {}
+
+
+def test_bundled_example_has_no_statement_or_fence_finding_and_credits_each_declaration_once(repo_root: Path) -> None:
     blueprint = repo_root / "skills" / "setup" / "assets" / "cabannes-thesis-project" / "blueprint"
 
     codes = {finding.code for finding in audit_blueprint(blueprint).findings}
@@ -1832,3 +2452,4 @@ def test_bundled_example_has_no_statement_or_unclosed_fence_finding(repo_root: P
         "placeholder-statement-text",
         "unclosed-code-fence",
     }
+    assert _duplicate_warnings(blueprint) == {}

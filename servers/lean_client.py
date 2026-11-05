@@ -35,6 +35,7 @@ _RUNTIME_SOURCES = (
     Path(__file__).resolve(),
     PACKAGE_ROOT / "servers" / "lean_runtime.py",
     PACKAGE_ROOT / "servers" / "batch_diagnostics.py",
+    PACKAGE_ROOT / "servers" / "_process.py",
     PACKAGE_ROOT / "servers" / "lsp" / "server.py",
     PACKAGE_ROOT / "servers" / "repl" / "core.py",
     PACKAGE_ROOT / "servers" / "repl" / "pool.py",

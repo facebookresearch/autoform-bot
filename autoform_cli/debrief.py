@@ -12,16 +12,9 @@ runtime, not from the agent.
 This module also owns the store that :mod:`autoform_cli.debrief_orchestrator`
 shares for the per-run orchestrator debrief.
 
-Configuration (environment):
-
-``AUTOFORM_SUBAGENT_DEBRIEF``
-    ``1`` / ``true`` / ``yes`` makes ``form`` print the form; otherwise it says
-    subagent debriefs are disabled and the agent skips the step.
-``AUTOFORM_DEBRIEF_DIR``
-    Absolute store directory outside the working tree. Defaults to
-    ``autoform/debriefs`` inside the repository's Git common directory, which
-    every worktree of a checkout shares and Git never tracks, else to
-    ``$XDG_STATE_HOME/autoform/debriefs/<project>-<hash>``.
+Records are bounded and normalised to the form's schema, and created
+exclusively without following symbolic links, so a record is complete or
+absent and never overwritten.
 
 Store layout (see :mod:`autoform_cli.debrief_store` for the file discipline)::
 
@@ -44,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from . import debrief_store as store
-from .lean import _git
+from ._repository import git
 from .runtime import RuntimeNode, load_runtime_graph, resolve_runtime_paths
 
 SCHEMA_VERSION = 1
@@ -154,7 +147,7 @@ def enabled() -> bool:
 
 
 def _git_dir(project: Path, flag: str) -> Path | None:
-    output = _git(project, "rev-parse", "--path-format=absolute", flag)
+    output = git(project, "rev-parse", "--path-format=absolute", flag)
     path = Path(output) if output else None
     return path.resolve() if path is not None and path.is_absolute() and path.is_dir() else None
 

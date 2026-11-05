@@ -20,10 +20,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from servers.repl.core import (
-    _inherit_clean_env,
+from servers._process import (
     _kill_subprocesses,
     _wait_for_live_process_group_exit,
+    inherit_clean_env,
 )
 
 logger = logging.getLogger(__name__)
@@ -118,7 +118,7 @@ def _run(argv: list[str], root: Path, timeout: float) -> tuple[int, bytes | None
         process = subprocess.Popen(
             argv,
             cwd=root,
-            env={**_inherit_clean_env(), "TMPDIR": scratch},
+            env={**inherit_clean_env(), "TMPDIR": scratch},
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

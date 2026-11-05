@@ -9,7 +9,8 @@ Vivien Cabannes, *From Weakly Supervised Learning to Active Labeling*, PhD
 thesis, 2022. Stable public record: [arXiv:2209.11629](https://arxiv.org/abs/2209.11629).
 
 The initial DAG is anchored in the “Infimum Loss” chapter. These labels occur
-in `infimum/core.tex` in the public e-print source; verify them again against
+in `infimum/core.tex` in the public
+[e-print source](https://export.arxiv.org/e-print/2209.11629); verify them again against
 the source revision adopted by the project:
 
 | Blueprint target | Source label |
@@ -25,9 +26,10 @@ notes and must not replace source inspection.
 
 ## Supporting formalization
 
-The [Full Supervision chapter](../roadmap/full-supervision/README.md) separates
-the Lean definition `CabannesThesis.supervision` and its elementary
-non-ambiguity lemma from the stronger source-level supervision-recovery target.
-These are implementation support nodes, not additional claims about the thesis
-source. Both are in
+The [Full Supervision chapter](../roadmap/full-supervision/README.md) holds the
+Lean definition `CabannesThesis.supervision`. Its elementary non-ambiguity
+lemma is filed with the [Infimum Loss](../roadmap/infimum-loss/README.md)
+theorems, distinct from the stronger source-level supervision-recovery target.
+Both are implementation support nodes, not additional claims about the thesis
+source, and both are in
 [src/CabannesThesis/Basic.lean](../../src/CabannesThesis/Basic.lean#L20).

@@ -8,7 +8,7 @@ pp.explicit = true
 [[require]]
 name = "batteries"
 git = "https://github.com/leanprover-community/batteries"
-rev = "f2effa3d803fda822b1f97b806c47cf2adfbcbc2"
+rev = "66e469188fe07963e5cf666c7d4433f45b8131c5"
 
 [[lean_lib]]
 name = "Fix"

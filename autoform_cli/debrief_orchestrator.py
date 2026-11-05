@@ -8,18 +8,11 @@ writes a draft issue for AutoformBot's tracker, with local paths replaced by
 placeholders, and returns a link that opens it pre-filled. Nothing is sent: the
 user reviews, edits, and submits the issue themselves.
 
-Configuration (environment):
-
-``AUTOFORM_DEBRIEF``
-    On by default. ``0`` / ``false`` / ``no`` / ``off`` makes ``form`` say
-    orchestrator debriefs are disabled, and the agent skips the step.
-``AUTOFORM_DEBRIEF_DIR``
-    The store, shared with subagent debriefs (see :func:`debrief.debrief_root`).
-
 Store layout::
 
     runs/<run_id>.json      one RunRecord per run, schema_version 1
-    issues/<run_id>.md      draft issue, written only when there is AutoformBot friction
+    issues/<run_id>.md      draft issue, written only when there is AutoformBot friction;
+                            it ends with a link that opens the issue form pre-filled
 """
 
 from __future__ import annotations
@@ -36,6 +29,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 from . import debrief_store as store
+from ._repository import git
 from .debrief import (
     MAX_ANSWER_BYTES,
     DebriefError,
@@ -49,7 +43,6 @@ from .debrief import (
     parse_answer,
     project_dir,
 )
-from .lean import _git
 
 SCHEMA_VERSION = 1
 DEBRIEF_ENV = "AUTOFORM_DEBRIEF"
@@ -131,7 +124,7 @@ def autoform_version() -> str:
         version = importlib.metadata.version("autoform")
     except importlib.metadata.PackageNotFoundError:
         version = "unknown"
-    commit = _git(Path(__file__).resolve().parent.parent, "rev-parse", "--short=12", "HEAD")
+    commit = git(Path(__file__).resolve().parent.parent, "rev-parse", "--short=12", "HEAD")
     return f"{version} ({commit})" if commit else version
 
 
@@ -321,6 +314,28 @@ def _issue_body(entry: RunRecord, redactions: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _draft_text(title: str, body: str, url: str, url_has_body: bool) -> str:
+    """The draft as stored: the issue, then a footer with the link that is not part of it.
+
+    The link can hold the whole draft, thousands of characters, so it lives here
+    rather than in the agent's report. It is built when the draft is written, so
+    the footer says, before the link, where edits go.
+    """
+    if url_has_body:
+        note = (
+            "The link holds the draft as it was recorded, so make your edits in the form; if you edited this "
+            "file, copy its title into the form's title and the text between the title and this footer over "
+            f"its body. [Open the AutoformBot issue form pre-filled with the recorded draft]({url})"
+        )
+    else:
+        note = (
+            "The draft is too long for a link, so the link fills in only the title as it was recorded: paste "
+            "the text between the title and this footer as the body, and copy the title into the form's title "
+            f"if you edited it. [Open the AutoformBot issue form]({url})"
+        )
+    return f"# {title}\n\n{body}\n---\n\nNot part of the issue; nothing has been sent. {note}\n"
+
+
 def issue_url(title: str, body: str) -> tuple[str, bool]:
     """A new-issue link pre-filled with the draft, or with the title alone when the body is too long."""
     base = f"https://github.com/{ISSUE_REPOSITORY}/issues/new?"
@@ -365,7 +380,8 @@ def record(
             title, body = _issue_title(entry, redactions), _issue_body(entry, redactions)
             url, url_has_body = issue_url(title, body)
             with store.open_subdir(root_fd, ISSUES) as issues:
-                store.create_exclusive(issues, f"{name}.md", f"# {title}\n\n{body}".encode("utf-8"))
+                draft = _draft_text(title, body, url, url_has_body)
+                store.create_exclusive(issues, f"{name}.md", draft.encode("utf-8"))
             issue = DraftIssue(title, body, root / ISSUES / f"{name}.md", url, url_has_body)
     return entry, root / RUNS / f"{name}.json", issue
 

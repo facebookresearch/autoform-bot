@@ -16,8 +16,8 @@ import pytest
 from servers import batch_diagnostics as batch
 from servers.lean_runtime import DEFAULT_LSP_TIMEOUT, LeanRuntimeServices
 from servers.lsp import server as lsp
-from tests.test_lsp_protocol import _real_lean_project, _requires_real_lean
-from tests.test_shared_lean_runtime import make_lake_project, runtime_config
+from tests.lean_fixture import _real_lean_project, _requires_real_lean
+from tests.runtime_fixture import make_lake_project, runtime_config
 
 _CLEAN = "No diagnostics — file compiles cleanly."
 

@@ -7,7 +7,18 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..search import SearchError, SearchResult, _lean_name, _normalize, _ranks, _words, search_blueprint
+from ..search import (
+    SearchError,
+    SearchResult,
+    field_ranks,
+    lean_name,
+    normalize,
+    query_words,
+    rank_key,
+    search_blueprint,
+    typed_words,
+    unquoted,
+)
 from .index import INDEX_SCHEMA, IndexDeclaration, LibraryIndex, shorten
 from .locate import canonical_name, read_workspace
 from .verify import Difference, load_library
@@ -135,11 +146,12 @@ def search_with_libraries(
         project_or_blueprint, query, lean_root=lean_root, states=states, declarations=declarations, limit=limit
     )
     workspace = read_workspace(lean_root)
-    words = _words(query)
+    words = query_words(query)
+    typed = typed_words(query, words)
     results: list[LibraryResult] = []
     for name, index_path in libraries:
         verified = load_library(workspace, name, index_path)
-        total, hits = match_index(verified.index, words, blueprint.terms, limit)
+        total, hits = match_index(verified.index, words, blueprint.terms, limit, typed)
         results.append(
             LibraryResult(
                 name=name,
@@ -156,35 +168,44 @@ def search_with_libraries(
 
 
 def match_index(
-    index: LibraryIndex, words: tuple[str, ...], terms: tuple[str, ...], limit: int
+    index: LibraryIndex,
+    words: tuple[str, ...],
+    terms: tuple[str, ...],
+    limit: int,
+    typed: frozenset[str],
 ) -> tuple[int, tuple[LibraryHit, ...]]:
-    """Return how many declarations hold every term, and the first ``limit`` of them in order."""
+    """Return how many declarations hold every term, and the first ``limit`` of them in order.
+
+    ``typed`` holds the query's words as typed, which rank a declaration
+    they name exactly before its equals.
+    """
 
     modules = {module.name: module for module in index.modules}
     # A header is shared by every declaration of its module, so it is folded once.
-    headers = {module.name: _normalize(module.module_doc or "") for module in index.modules}
-    matches: list[tuple[int, bool, int, bool, str, str, tuple[int, ...]]] = []
+    headers = {module.name: normalize(module.module_doc or "") for module in index.modules}
+    matches: list[tuple[int, bool, int, bool, bool, str, str, tuple[int, ...]]] = []
     for declaration in index.declarations:
-        name = _normalize(declaration.name)
+        name = normalize(declaration.name)
         fields = {
-            "lean": _normalize(declaration.name.rpartition(".")[2]),
-            "docstring": _normalize(declaration.docstring or ""),
+            "lean": normalize(declaration.name.rpartition(".")[2]),
+            "docstring": normalize(declaration.docstring or ""),
             "module_doc": headers[declaration.module],
-            "qualified_names": f"{name}\n{_normalize(declaration.module)}",
-            "mentions": _normalize("\n".join(declaration.mentions)),
+            # The name also without ``_root_.`` and quoting marks, so a namespace
+            # that a quoted component spells is found here.
+            "qualified_names": "\n".join(dict.fromkeys([name, unquoted(name), normalize(declaration.module)])),
+            "mentions": normalize("\n".join(declaration.mentions)),
             "kind": declaration.kind,
-            # Not a field of its own: the name between a dot and a space, so a
-            # term is looked up as the whole name or as its last components.
-            "lean_names": f".{_lean_name(name)} ",
+            # Not a field of its own: the name between a dot and a newline, which
+            # no name holds, so a term is looked up as the whole name or as its
+            # last components.
+            "lean_names": f".{lean_name(name)}\n",
         }
-        ranks = _ranks(terms, fields, LIBRARY_FIELDS)
+        ranks = field_ranks(terms, fields, LIBRARY_FIELDS)
         if ranks is None:
             continue
         matches.append(
             (
-                min(ranks),
-                _ranks(words, fields, LIBRARY_FIELDS) is None,
-                max(ranks),
+                *rank_key(ranks, words, fields, LIBRARY_FIELDS, typed, (declaration.name,)),
                 declaration.status == "wanted",
                 declaration.name,
                 declaration.module,
@@ -192,7 +213,8 @@ def match_index(
             )
         )
     # The best field first, then the words as typed, then the better worst
-    # field, then a complete result before a wanted one, then by name.
+    # field, then a declaration a query word names exactly, then a complete
+    # result before a wanted one, then by name.
     matches.sort()
     by_key = {(declaration.name, declaration.module): declaration for declaration in index.declarations}
     hits = []

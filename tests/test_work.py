@@ -12,82 +12,8 @@ import pytest
 from autoform_cli import __main__ as cli, work as work_module
 from autoform_cli.runtime import load_runtime_graph
 from autoform_cli.work import WORK_SCHEMA, WorkError, list_ready_work, work_context
-
-
-def _article(
-    project: Path,
-    name: str,
-    *,
-    title: str,
-    metadata: list[str],
-    depends: str = "",
-    proof_depends: str = "",
-) -> None:
-    path = project / "blueprint/roadmap/chapter" / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = ["---", *metadata, "---", "", f"# {title}", "", "A precise statement."]
-    if depends:
-        text.extend(["", "## Depends on", "", f"- [dependency]({depends})"])
-    if proof_depends:
-        text.extend(["", "## Proof depends on", "", f"- [dependency]({proof_depends})"])
-    path.write_text("\n".join(text) + "\n", encoding="utf-8")
-
-
-def _edit(project: Path, name: str, old: str, new: str) -> Path:
-    path = project / "blueprint/roadmap/chapter" / name
-    text = path.read_text(encoding="utf-8")
-    assert old in text
-    path.write_text(text.replace(old, new), encoding="utf-8")
-    return path
-
-
-def _project(tmp_path: Path) -> Path:
-    project = tmp_path / "project"
-    _article(project, "README.md", title="Chapter", metadata=["article_id: af_0000000000000000000000c0"])
-    _article(
-        project,
-        "base.md",
-        title="Base",
-        metadata=[
-            "article_id: af_000000000000000000000001",
-            "declaration: definition",
-            "statement: formalized",
-            "lean: Project.base",
-        ],
-    )
-    _article(
-        project,
-        "state.md",
-        title="State me",
-        metadata=[
-            "article_id: af_000000000000000000000002",
-            "declaration: theorem",
-        ],
-        depends="base.md",
-    )
-    _article(
-        project,
-        "prove.md",
-        title="Prove me",
-        metadata=[
-            "article_id: af_000000000000000000000003",
-            "declaration: theorem",
-            "statement: formalized",
-            "lean: Project.prove",
-        ],
-        depends="base.md",
-    )
-    _article(
-        project,
-        "blocked.md",
-        title="Blocked",
-        metadata=[
-            "article_id: af_000000000000000000000004",
-            "declaration: theorem",
-        ],
-        depends="state.md",
-    )
-    return project
+from tests.audit_fixture import _load_helper
+from tests.work_fixture import _article, _edit, _project
 
 
 def test_lists_only_the_markdown_derived_ready_frontier(tmp_path: Path) -> None:
@@ -765,6 +691,24 @@ def test_work_assumptions_under_the_strict_policy_lists_articles_with_nothing_op
     assert capsys.readouterr().out == "Open statements: forbidden\n"
 
 
+def test_informal_links_leave_the_assumption_contract_unchanged(tmp_path: Path) -> None:
+    project = _policy_project(tmp_path, "allowed")
+    before = work_module.assumption_contract(project).as_dict()
+    # Counted, prove's link would let it reach the open theorem; base's closes a
+    # cycle through the open theorem, which check only warns about.
+    for name, target in (("prove.md", "open.md"), ("corollary.md", "open.md"), ("base.md", "uses.md")):
+        path = project / "blueprint/roadmap/chapter" / name
+        text = path.read_text(encoding="utf-8")
+        path.write_text(text + f"\n## Informally uses\n\n- [link]({target})\n", encoding="utf-8")
+
+    after = work_module.assumption_contract(project).as_dict()
+
+    assert after["source_revision"] != before["source_revision"]
+    assert {**after, "source_revision": None} == {**before, "source_revision": None}
+    _edit(project, "prove.md", "## Informally uses", "## Proof depends on")
+    assert work_module.assumption_contract(project).as_dict()["articles"] != before["articles"]
+
+
 def test_work_assumptions_under_the_open_policy_bounds_each_article(
     tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -874,6 +818,120 @@ def test_work_assumptions_does_not_open_a_never_stated_theorem_naming_a_draft_le
         for article in articles.values()
         for name in ("Project.open_thm", "Project.open_aux")
     )
+
+
+def test_work_assumptions_never_opens_a_pending_catalog(repo_root: Path, tmp_path: Path, capsys) -> None:
+    """A stated, unproved catalog licenses no sorry, so nothing that rests on it assumes it."""
+    project = _policy_project(tmp_path, "allowed")
+    _article(
+        project,
+        "catalog.md",
+        title="Module",
+        metadata=["catalog: module", "statement: formalized", "lean: Project.reduction Project.listed"],
+    )
+    _article(
+        project,
+        "after.md",
+        title="After",
+        metadata=["declaration: theorem", "statement: formalized", "proof: formalized", "lean: Project.after"],
+        proof_depends="catalog.md",
+    )
+
+    assert cli.main(["work", "assumptions", str(project), "--json"]) == 0
+    output = capsys.readouterr().out
+    articles = {article["id"]: article for article in json.loads(output)["articles"]}
+
+    # The proved article owns the name both list, so the catalog keeps only its own.
+    assert articles["chapter/catalog"] == _contract_article("chapter/catalog", None, "can_prove", ["Project.listed"])
+    assert articles["chapter/after"] == _contract_article("chapter/after", None, "proved", ["Project.after"])
+
+    contract = tmp_path / "contract.json"
+    contract.write_text(output, encoding="utf-8")
+    entries = _load_helper(repo_root).load_assumption_contract(contract)
+    assert {entry.name for entry in entries if entry.is_open} == {
+        "Project.open_aux",
+        "Project.open_thm",
+        "Project.prove",
+        "Project.uses",
+    }
+
+
+def test_work_assumptions_reach_through_a_pending_catalog_as_through_a_proved_article(tmp_path: Path, capsys) -> None:
+    """What rests on a catalog with `lean:` assumes the open statements the catalog rests on, never the catalog."""
+    project = _policy_project(tmp_path, "allowed")
+    _article(
+        project,
+        "catalog.md",
+        title="Module",
+        metadata=["catalog: module", "statement: formalized", "lean: Project.listed"],
+        depends="open.md",
+    )
+    _article(
+        project,
+        "after.md",
+        title="After",
+        metadata=["declaration: theorem", "statement: formalized", "proof: formalized", "lean: Project.after"],
+        proof_depends="catalog.md",
+    )
+    open_declarations = ("Project.open_aux", "Project.open_thm")
+
+    assert cli.main(["work", "assumptions", str(project), "--json"]) == 0
+    articles = {article["id"]: article for article in json.loads(capsys.readouterr().out)["articles"]}
+    assert articles["chapter/catalog"] == _contract_article(
+        "chapter/catalog", None, "can_prove", ["Project.listed"], assumes=("chapter/open",), allowed=open_declarations
+    )
+    assert articles["chapter/after"] == _contract_article(
+        "chapter/after", None, "conditional", ["Project.after"], assumes=("chapter/open",), allowed=open_declarations
+    )
+
+
+def test_work_assumptions_under_the_strict_policy_lists_each_catalog_whole(tmp_path: Path, capsys) -> None:
+    """Nothing is open under the strict policy, so a pending catalog keeps a name a proved article lists too."""
+    project = _policy_project(tmp_path, "forbidden")
+    _article(
+        project,
+        "catalog.md",
+        title="Module",
+        metadata=["catalog: module", "statement: formalized", "lean: Project.reduction Project.listed"],
+    )
+
+    assert cli.main(["work", "assumptions", str(project), "--json"]) == 0
+    articles = {article["id"]: article for article in json.loads(capsys.readouterr().out)["articles"]}
+    assert articles["chapter/catalog"] == _contract_article(
+        "chapter/catalog", None, "can_prove", ["Project.reduction", "Project.listed"]
+    )
+
+
+def test_work_assumptions_leaves_a_name_a_pending_catalog_shares_open_through_its_owner(
+    repo_root: Path, tmp_path: Path, capsys
+) -> None:
+    """The audit refuses a name both open and not open, so a pending catalog drops an open article's name."""
+    project = _policy_project(tmp_path, "allowed")
+    _article(
+        project,
+        "catalog.md",
+        title="Module",
+        metadata=["catalog: module", "statement: formalized", "lean: Project.open_thm Project.listed"],
+    )
+    helper = _load_helper(repo_root)
+    contract = tmp_path / "contract.json"
+
+    assert cli.main(["work", "assumptions", str(project), "--json"]) == 0
+    output = capsys.readouterr().out
+    articles = {article["id"]: article for article in json.loads(output)["articles"]}
+    assert articles["chapter/catalog"]["declarations"] == ["Project.listed"]
+    contract.write_text(output, encoding="utf-8")
+    entries = helper.load_assumption_contract(contract)
+    assert [(entry.article, entry.is_open) for entry in entries if entry.name == "Project.open_thm"] == [
+        ("chapter/open", True)
+    ]
+
+    # A proved catalog that lists the name contradicts its open owner, and the audit still refuses it.
+    _edit(project, "catalog.md", "statement: formalized\n", "statement: formalized\nproof: formalized\n")
+    assert cli.main(["work", "assumptions", str(project), "--json"]) == 0
+    contract.write_text(capsys.readouterr().out, encoding="utf-8")
+    with pytest.raises(helper.AuditInputError, match="Project.open_thm is an open statement of chapter/open"):
+        helper.load_assumption_contract(contract)
 
 
 def test_work_assumptions_text_labels_only_conditional_articles_as_conditional(tmp_path: Path, capsys) -> None:

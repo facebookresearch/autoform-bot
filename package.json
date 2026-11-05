@@ -1,0 +1,13 @@
+{
+  "name": "autoform-explorer-build",
+  "private": true,
+  "scripts": {
+    "build:explorer": "node scripts/build-explorer.mjs",
+    "check:explorer": "node scripts/build-explorer.mjs --check"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "jsdom": "26.1.0",
+    "terser": "5.51.2"
+  }
+}

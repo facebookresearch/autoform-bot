@@ -33,7 +33,6 @@ _EXPECTED = {
     "blueprint/.gitignore",
     "blueprint/README.md",
     "blueprint/coverage/README.md",
-    "blueprint/javascripts/mathjax.js",
     "blueprint/roadmap/README.md",
     "blueprint/sources/README.md",
     "mkdocs.yml",
@@ -223,7 +222,13 @@ def test_scaffolded_vault_has_a_valid_incomplete_coverage_contract(tmp_path: Pat
 
     assert issues == ()
     assert coverage is not None
-    assert coverage.counts == {"MAPPED": 1, "DECOMPOSED": 0, "DEFERRED": 0, "OUT": 0}
+    assert coverage.counts == {
+        "MAPPED": 1,
+        "DECOMPOSED": 0,
+        "INVENTORIED": 0,
+        "DEFERRED": 0,
+        "OUT": 0,
+    }
     assert not coverage.complete
 
 
@@ -257,6 +262,7 @@ def test_substitutions_reach_the_site_config(tmp_path: Path) -> None:
     # Quoted: a title is a YAML scalar, not bare text pasted after a colon.
     assert 'site_name: "Finite Flat"' in mkdocs
     assert 'repo_url: "https://example.test/repo"' in mkdocs
+    assert "- navigation.prune" in mkdocs
 
     verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
     assert 'AUTOFORM_SOURCE: "https://example.test/autoform.git"' in verify
@@ -308,7 +314,7 @@ def test_force_overwrites(tmp_path: Path) -> None:
     ("relative", "expected"),
     [
         ("mkdocs.yml", b'site_name: "Finite Flat"'),
-        ("blueprint/javascripts/mathjax.js", b"window.MathJax"),
+        ("theme/main.html", b'{% extends "base.html" %}'),
     ],
 )
 def test_force_atomically_breaks_hard_links_for_rendered_and_static_files(
@@ -638,6 +644,8 @@ def test_scaffolded_blueprint_tracks_authored_structure(tmp_path: Path) -> None:
 
     assert "dependencies.md" in ignored
     assert "structure.md" not in ignored
+    # A read-back write killed by SIGTERM or SIGKILL leaves its staging file.
+    assert ".autoform-readback-*.tmp" in ignored
 
 
 def test_scaffolded_theme_defers_navigation_to_the_book(tmp_path: Path) -> None:
@@ -653,7 +661,7 @@ def test_scaffolded_theme_defers_navigation_to_the_book(tmp_path: Path) -> None:
 
     # Material renders previous/next in its footer partial; overriding the
     # whole footer suppresses it, because Autoform derives reading order from
-    # the vault and prints it at the bottom of book pages only.
+    # the vault and shows it in the sidebar.
     assert '{% block footer %}' in theme
     assert "md-footer" in theme
     assert "md-footer__link" not in theme
@@ -661,6 +669,32 @@ def test_scaffolded_theme_defers_navigation_to_the_book(tmp_path: Path) -> None:
     assert "md_in_html" in mkdocs
     assert "custom_dir: theme" in mkdocs
     assert "name: material" in mkdocs
+
+
+def test_the_scaffolded_site_follows_the_readers_light_or_dark_setting(tmp_path: Path) -> None:
+    """One `scheme: slate` made every published blueprint dark for every reader.
+
+    Material picks the entry whose media query matches, shows the entry's
+    toggle to switch to the next, and draws the first before its script runs,
+    so light comes first. The explorer's own switch clicks these entries.
+    """
+    import yaml
+
+    scaffold_project(tmp_path, title="Finite Flat")
+    mkdocs = (tmp_path / "mkdocs.yml").read_text(encoding="utf-8")
+    # The whole file carries a python/name tag that safe_load refuses; the theme block is plain YAML.
+    theme = mkdocs[mkdocs.index("\ntheme:\n") : mkdocs.index("\nplugins:")]
+
+    palette = yaml.safe_load(theme)["theme"]["palette"]
+
+    assert [(entry["media"], entry["scheme"]) for entry in palette] == [
+        ("(prefers-color-scheme: light)", "default"),
+        ("(prefers-color-scheme: dark)", "slate"),
+    ]
+    assert [entry["toggle"] for entry in palette] == [
+        {"icon": "material/weather-night", "name": "Use dark theme"},
+        {"icon": "material/weather-sunny", "name": "Use light theme"},
+    ]
 
 
 def test_generated_ci_pins_the_checkout_that_scaffolded_it(
@@ -693,6 +727,132 @@ def test_generated_ci_pins_the_checkout_that_scaffolded_it(
     assert re.fullmatch(r"[0-9a-f]{40}", ref), "the pin must be an immutable commit"
     assert ref == head
     assert "@main" not in verify
+
+
+def test_generated_ci_rebuilds_opted_in_statement_review_evidence(tmp_path: Path) -> None:
+    """The gate is opt-in: init writes the step that honours the marker, never
+    the marker itself, neither for a new project nor on repair."""
+
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    verify = (tmp_path / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8")
+
+    assert 'marker="blueprint/.autoform-review"' in verify
+    assert "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620" in verify
+    assert "review cards or approvals exist without $marker" in verify
+    assert "review_approved[[:space:]]*:' -- blueprint/roadmap" in verify
+    assert "AUTOFORM_REVIEW_ENABLED=true" in verify
+    # The check derives its own evidence, so CI extracts once.
+    assert "autoform review check blueprint --lean-root .\n" in verify
+    assert not (tmp_path / "blueprint/.autoform-review").exists()
+    # A rerun repairs what is missing, and the marker is not missing.
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    assert not (tmp_path / "blueprint/.autoform-review").exists()
+
+
+def _gnu_sha256sum(tmp_path: Path) -> bool:
+    """Whether ``sha256sum --check --strict`` works here, as on GitHub's runners."""
+
+    probe = tmp_path / "sha256-probe"
+    probe.write_bytes(b"")
+    line = f"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  {probe}\n"
+    try:
+        checked = subprocess.run(["sha256sum", "--check", "--strict"], input=line, text=True, capture_output=True)
+    except OSError:
+        return False
+    return checked.returncode == 0
+
+
+@pytest.mark.parametrize(
+    ("setup", "status", "enabled", "message"),
+    [
+        ("nothing", 0, False, ""),
+        ("cards", 1, False, "review cards or approvals exist without blueprint/.autoform-review"),
+        ("approval", 1, False, "review cards or approvals exist without blueprint/.autoform-review"),
+        ("marker", 0, True, ""),
+        ("marker with cards", 0, True, ""),
+        ("wrong marker", 1, False, "invalid Autoform review policy marker"),
+        ("linked marker", 1, False, "invalid Autoform review policy marker"),
+    ],
+)
+def test_the_review_gate_runs_with_the_marker_and_fails_on_reviews_without_it(
+    tmp_path: Path, setup: str, status: int, enabled: bool, message: str
+) -> None:
+    """The workflow's Detect step, run as CI runs it: the check is on only with
+    a valid marker, and cards or approvals without one fail instead of going
+    unchecked."""
+
+    yaml = pytest.importorskip("yaml")
+    if shutil.which("bash") is None or shutil.which("git") is None:
+        pytest.skip("needs bash and git")
+    if "marker" in setup and setup != "linked marker" and not _gnu_sha256sum(tmp_path):
+        pytest.skip("needs GNU sha256sum, as on GitHub's runners")
+    project = tmp_path / "project"
+    scaffold_project(project, title="Finite Flat", autoform_ref="1" * 40)
+    steps = yaml.safe_load((project / ".github/workflows/autoform-verify.yml").read_text(encoding="utf-8"))["jobs"]
+    (script,) = [step["run"] for job in steps.values() for step in job.get("steps", []) if step.get("name") == "Detect statement review"]
+    marker = project / "blueprint/.autoform-review"
+    if setup in {"cards", "marker with cards"}:
+        (project / "blueprint/readbacks/af_0123456789abcdef01234567").mkdir(parents=True)
+    if setup == "approval":
+        (project / "blueprint/roadmap/result.md").write_text(
+            "---\nreview_approved: sha256:" + "a" * 64 + "\n---\n\n# Result\n", encoding="utf-8"
+        )
+    if setup in {"marker", "marker with cards"}:
+        marker.write_text("autoform-review-policy/v1\n", encoding="utf-8")
+    elif setup == "wrong marker":
+        marker.write_text("autoform-review-policy/v2\n", encoding="utf-8")
+    elif setup == "linked marker":
+        (tmp_path / "elsewhere").write_text("autoform-review-policy/v1\n", encoding="utf-8")
+        marker.symlink_to(tmp_path / "elsewhere")
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+    environment = tmp_path / "github-env"
+    environment.write_text("", encoding="utf-8")
+
+    ran = subprocess.run(
+        ["bash", "-c", script],
+        cwd=project,
+        env={**os.environ, "GITHUB_ENV": str(environment)},
+        capture_output=True,
+        text=True,
+    )
+
+    assert ran.returncode == status, ran.stderr
+    assert ("AUTOFORM_REVIEW_ENABLED=true" in environment.read_text(encoding="utf-8")) == enabled
+    assert message in ran.stderr
+
+
+# What a statement-review step mentions: a review or skeleton command, a
+# --review flag, the skeleton report's directory or artifact, or Lean set up
+# for the review.
+_REVIEW_MARKERS = ("autoform review", "autoform skeleton", "--review", "autoform-skeleton", "for statement review")
+
+
+@pytest.mark.parametrize(
+    ("name", "gated"),
+    [
+        ("autoform-verify.yml", "Verify statement reviews"),
+    ],
+)
+def test_statement_review_steps_run_only_in_projects_that_opted_in(tmp_path: Path, name: str, gated: str) -> None:
+    """A project without the review marker never extracts a skeleton report,
+    and its Lean-mapped articles need no durable article_id, so a review step
+    that ran there would fail its CI. Steps are found by what they mention, not
+    by name, so a step added later is held to the gate too."""
+
+    yaml = pytest.importorskip("yaml")
+    scaffold_project(tmp_path, title="Finite Flat", autoform_ref="1" * 40)
+    jobs = yaml.safe_load((tmp_path / ".github/workflows" / name).read_text(encoding="utf-8"))["jobs"]
+    review = [
+        step
+        for job in jobs.values()
+        for step in job.get("steps", [])
+        if any(marker in json.dumps(step) for marker in _REVIEW_MARKERS)
+    ]
+
+    assert gated in [step.get("name") for step in review]
+    for step in review:
+        assert step.get("if") == "env.AUTOFORM_REVIEW_ENABLED == 'true'", f"{step.get('name')} runs without the opt-in"
 
 
 def test_explicit_pin_overrides_the_checkout(tmp_path: Path) -> None:
@@ -1047,6 +1207,83 @@ def test_plugin_pin_skips_a_remote_whose_url_is_not_utf8(
     assert scaffold_module.plugin_pin() == (scaffold_module.DEFAULT_AUTOFORM_SOURCE, head)
 
 
+def _tag_clone(tmp_path: Path, *options: str) -> tuple[Path, str]:
+    """Clone tag v0.6.0 at depth 1, as marketplace installs do; return clone and tag sha."""
+    source = tmp_path / "source"
+    tagged = _autoform_checkout(source, "https://example.test/unused.git", advertise=False)
+    _git_output(source, "tag", "v0.6.0")
+    _git_output(source, "commit", "-q", "--allow-empty", "-m", "after the tag")
+    _git_output(tmp_path, "clone", "-q", "--bare", str(source), "bare.git")
+    clone = tmp_path / "clone"
+    _git_output(
+        tmp_path,
+        "-c",
+        "advice.detachedHead=false",
+        "clone",
+        "-q",
+        "--depth",
+        "1",
+        "--branch",
+        "v0.6.0",
+        *options,
+        (tmp_path / "bare.git").as_uri(),
+        str(clone),
+    )
+    _git_output(clone, "remote", "set-url", "origin", "https://example.test/fork.git")
+    return clone, tagged
+
+
+@pytest.mark.parametrize("options", [(), ("--single-branch",)], ids=["claude", "muse"])
+def test_plugin_pin_accepts_a_depth_one_tag_clone(
+    options: tuple[str, ...], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude Code and Muse Code clone a marketplace ref with no refs/remotes/."""
+    clone, tagged = _tag_clone(tmp_path, *options)
+    assert _git_output(clone, "for-each-ref", "--format=%(refname)") == "refs/tags/v0.6.0"
+    _run_from(monkeypatch, clone)
+
+    assert scaffold_module.plugin_pin() == ("https://example.test/fork.git", tagged)
+
+
+def test_plugin_pin_omits_a_local_commit_on_top_of_a_tag_clone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clone, _ = _tag_clone(tmp_path)
+    _git_output(clone, "commit", "-q", "--allow-empty", "-m", "local")
+    _run_from(monkeypatch, clone)
+
+    assert scaffold_module.plugin_pin() == ("", "")
+
+
+@pytest.mark.parametrize("claims_tag", [False, True])
+def test_a_fetched_tag_is_credited_only_to_the_remote_that_fetched_it(
+    claims_tag: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A preferred canonical remote must not borrow the fork's tag; a shared one counts for neither."""
+    clone, tagged = _tag_clone(tmp_path)
+    _git_output(clone, "remote", "add", "upstream", scaffold_module.DEFAULT_AUTOFORM_SOURCE)
+    if claims_tag:
+        _git_output(
+            clone, "config", "--add", "remote.upstream.fetch", "+refs/tags/v0.6.0:refs/tags/v0.6.0"
+        )
+    _run_from(monkeypatch, clone)
+
+    expected = ("", "") if claims_tag else ("https://example.test/fork.git", tagged)
+    assert scaffold_module.plugin_pin() == expected
+
+
+def test_a_remote_with_an_unread_name_keeps_a_fetched_tag_from_counting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A remote whose name pinning does not read might fetch the same tag, so the tag counts for nobody."""
+    clone, _ = _tag_clone(tmp_path)
+    _git_output(clone, "config", "remote._x.url", "https://example.test/other.git")
+    _git_output(clone, "config", "--add", "remote._x.fetch", "+refs/tags/v0.6.0:refs/tags/v0.6.0")
+    _run_from(monkeypatch, clone)
+
+    assert scaffold_module.plugin_pin() == ("", "")
+
+
 @pytest.mark.parametrize(
     "changed",
     [
@@ -1103,6 +1340,31 @@ def test_direct_checkout_pin_requires_a_matching_tracked_surface(
         (checkout / "autoform_cli" / "templates" / "README.md").chmod(0o755)
 
     assert scaffold_module.plugin_pin() == ("", "")
+
+
+def test_checkout_pin_ignores_git_variables_that_name_another_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = tmp_path / "checkout"
+    head = _autoform_checkout(checkout, "https://example.test/autoform.git")
+    hooked = tmp_path / "hooked"
+    hooked.mkdir()
+    _git_output(hooked, "init", "-q")
+    # A file the checkout lacks, so Git asked about the hook's repository sees changes.
+    (hooked / "hooked.txt").write_text("the hook's repository\n")
+    _git_output(hooked, "add", "hooked.txt")
+    _git_output(hooked, "commit", "-q", "-m", "the hook's repository")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    _run_from(monkeypatch, checkout)
+    # A Git hook runs with GIT_DIR and GIT_INDEX_FILE naming its own repository.
+    # Before, Git took any directory for that repository's work tree.
+    monkeypatch.setenv("GIT_DIR", str(hooked / ".git"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(hooked / ".git" / "index"))
+
+    assert scaffold_module._checkout_root(plain) is None
+    assert scaffold_module._git_checkout_clean(checkout)
+    assert scaffold_module.plugin_pin() == ("https://example.test/autoform.git", head)
 
 
 def test_direct_checkout_pin_ignores_unrelated_untracked_files(

@@ -1,5 +1,7 @@
 -- Autoform skeleton probe helpers. This file is a Python-format template: `{{`/`}}`
--- are literal braces and single-brace fields are filled by autoform_cli.skeleton.
+-- are literal braces and single-brace fields are filled by
+-- lean_probe.render_probe_template, which adds `output_env` and
+-- `output_limit`: the variable naming the records file, and its byte cap.
 -- Autoform compiles it with `lake env lean -o` into a module outside the project,
 -- which it never modifies. Each probe imports one root module and this module and
 -- only calls `AutoformSkeleton.main`, so no project name, notation, or option is

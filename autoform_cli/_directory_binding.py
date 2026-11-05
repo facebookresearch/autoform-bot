@@ -77,7 +77,7 @@ class RetainedDirectory:
         if self._closed:
             return
         self._closed = True
-        _close_quietly(self._descriptor)
+        close_quietly(self._descriptor)
 
     def __del__(self) -> None:
         self.close()
@@ -126,7 +126,7 @@ def open_directory(path: str | Path) -> RetainedDirectory:
         raise DirectoryChangedError("directory root changed while it was opened") from error
     finally:
         if binding is None:
-            _close_quietly(descriptor)
+            close_quietly(descriptor)
     if binding is None:
         raise DirectoryChangedError("directory root changed while it was opened")
     return binding
@@ -162,7 +162,7 @@ def _root_is_symlink(path: Path) -> bool:
         return False
 
 
-def _close_quietly(descriptor: int) -> None:
+def close_quietly(descriptor: int) -> None:
     try:
         os.close(descriptor)
     except OSError:
@@ -173,6 +173,7 @@ __all__ = [
     "DIRECTORY_BINDING_SUPPORTED",
     "DirectoryChangedError",
     "RetainedDirectory",
+    "close_quietly",
     "lexical_absolute_path",
     "open_directory",
 ]

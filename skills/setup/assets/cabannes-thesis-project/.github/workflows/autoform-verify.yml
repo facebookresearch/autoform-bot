@@ -13,7 +13,7 @@ permissions:
 
 env:
   AUTOFORM_SOURCE: "https://github.com/facebookresearch/autoform-bot.git"
-  AUTOFORM_REF: "0288506b87e2e2f70b7446bf0cf7145006138d74"
+  AUTOFORM_REF: "31a1767bf04f28de7c1326db0dc50345a9787cf5"
 
 concurrency:
   group: autoform-verify-${{ github.ref }}
@@ -136,3 +136,35 @@ jobs:
             echo "the audit probe did not end with its success line" >&2
             exit 1
           fi
+
+      # The explicit policy marker keeps deleting every card from disabling the
+      # review check. Removing the policy itself remains a visible policy edit.
+      - name: Detect statement review
+        run: |
+          set -euo pipefail
+          marker="blueprint/.autoform-review"
+          has_review_artifacts=false
+          if [[ -d blueprint/readbacks ]] || \
+            git grep -q '^[[:space:]]*review_approved[[:space:]]*:' -- blueprint/roadmap; then
+            has_review_artifacts=true
+          fi
+          if [[ -e "$marker" || -L "$marker" ]]; then
+            if [[ ! -f "$marker" || -L "$marker" ]] || \
+              ! echo "ad00ec55a215821b56f924782e25d7a77fff6696ee23cc465af20476b545b620  $marker" \
+                | sha256sum --check --strict; then
+              echo "invalid Autoform review policy marker: $marker" >&2
+              exit 1
+            fi
+            echo "AUTOFORM_REVIEW_ENABLED=true" >> "$GITHUB_ENV"
+          elif [[ "$has_review_artifacts" == true ]]; then
+            echo "review cards or approvals exist without $marker" >&2
+            exit 1
+          fi
+
+      # The check derives its evidence from its own extraction, so no committed
+      # stale report can certify a changed blueprint or Lean tree.
+      - name: Verify statement reviews
+        if: env.AUTOFORM_REVIEW_ENABLED == 'true'
+        run: >-
+          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          autoform review check blueprint --lean-root .

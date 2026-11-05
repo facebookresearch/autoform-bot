@@ -1,0 +1,7 @@
+{
+  "schema": "autoform-atlas/v1",
+  "areas": {
+    "Foundations": ["full-supervision"],
+    "Learning Theory": ["infimum-loss"]
+  }
+}

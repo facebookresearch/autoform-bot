@@ -16,7 +16,7 @@ from autoform_cli import __main__ as cli
 from autoform_cli import debrief
 from autoform_cli import debrief_orchestrator as orchestrator
 from autoform_cli import debrief_store as store
-from tests.test_work import _article, _edit, _project
+from tests.work_fixture import _article, _edit, _project
 
 PROVE = "af_000000000000000000000003"
 ANSWER = json.dumps({"nothing_to_report": True})
@@ -416,6 +416,7 @@ def test_orchestrator_record_drafts_an_issue_without_local_paths(monkeypatch, tm
                         monkeypatch, answer)
 
     assert code == 0 and "nothing has been sent" in out
+    assert "https://" not in out
     [draft] = (debrief.debrief_root(project) / "issues").iterdir()
     text = draft.read_text()
     assert str(project) not in text and str(Path.home()) not in text and "/home/someone" not in text
@@ -427,10 +428,34 @@ def test_orchestrator_record_drafts_an_issue_without_local_paths(monkeypatch, tm
     assert "### 2. second" in text and "**AutoformBot:** " in text
     assert _git(project, "status", "--porcelain") == ""
 
-    [url] = re.findall(r"open: (\S+)", out)
+    assert out.splitlines()[-1] == (
+        "nothing has been sent; the draft ends with a link that opens the issue form pre-filled with the draft as "
+        "it was recorded"
+    )
+    issue, footer = text.split("\n---\n\n")
+    [url] = re.findall(r"\]\((https://\S+)\)", footer)
+    # The link is built once, so the footer says, before the link, where edits go.
+    assert footer == (
+        "Not part of the issue; nothing has been sent. The link holds the draft as it was recorded, so make your "
+        "edits in the form; if you edited this file, copy its title into the form's title and the text between "
+        "the title and this footer over its body. [Open the AutoformBot issue form pre-filled with the recorded "
+        f"draft]({url})\n"
+    )
     assert url.startswith("https://github.com/facebookresearch/autoform-bot/issues/new?title=")
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
-    assert f"# {query['title'][0]}\n\n{query['body'][0]}" == text
+    assert f"# {query['title'][0]}\n\n{query['body'][0]}" == issue
+
+
+def test_orchestrator_record_prints_the_drafts_absolute_path(monkeypatch, tmp_path: Path) -> None:
+    project = _repo(tmp_path)
+    monkeypatch.chdir(project)
+    monkeypatch.setenv("HOME", str(tmp_path))  # a home shortened to ~ would not be the path
+    answer = json.dumps({"autoform_friction": [{"what": "x"}]})
+    code, out, _ = _cli(["debrief", "orchestrator", "record", ".", "--skill", "formalize"], monkeypatch, answer)
+    assert code == 0
+    [printed] = re.findall(r"drafted an issue for \S+ at (\S+)", out)
+    [draft] = (debrief.debrief_root(project) / "issues").iterdir()
+    assert Path(printed).is_absolute() and Path(printed) == draft
 
 
 def test_orchestrator_issue_redacts_the_project_path_as_given_and_resolved(monkeypatch, tmp_path: Path) -> None:
@@ -456,7 +481,32 @@ def test_orchestrator_issue_link_drops_a_body_too_long_for_a_url(monkeypatch, tm
     issue = json.loads(out)["issue"]
     assert issue["url_has_body"] is False and "body=" not in issue["url"]
     assert len(issue["url"]) <= orchestrator.MAX_ISSUE_URL
-    assert "friction 19" in Path(issue["path"]).read_text()
+    text = Path(issue["path"]).read_text()
+    assert "friction 19" in text
+    _issue, footer = text.split("\n---\n\n")
+    assert footer == (
+        "Not part of the issue; nothing has been sent. The draft is too long for a link, so the link fills in "
+        "only the title as it was recorded: paste the text between the title and this footer as the body, and "
+        f"copy the title into the form's title if you edited it. [Open the AutoformBot issue form]({issue['url']})\n"
+    )
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(issue["url"]).query)
+    assert query == {"title": [text.splitlines()[0].removeprefix("# ")]}
+
+
+def test_orchestrator_record_says_when_the_draft_is_too_long_for_a_link(monkeypatch, tmp_path: Path) -> None:
+    project = _repo(tmp_path)
+    items = [{"what": f"friction {index}", "impact": "x" * 500} for index in range(debrief.MAX_ITEMS)]
+    code, out, _ = _cli(
+        ["debrief", "orchestrator", "record", str(project), "--skill", "roadmap"],
+        monkeypatch,
+        json.dumps({"autoform_friction": items}),
+    )
+    assert code == 0
+    assert out.splitlines()[-1] == (
+        "nothing has been sent; the draft is too long for a link, so its footer opens the issue form with the "
+        "title only"
+    )
+    assert out.count("nothing has been sent") == 1 and "https://" not in out
 
 
 def test_orchestrator_record_rejects_bad_answers_and_skips_tampered_runs(monkeypatch, tmp_path: Path) -> None:

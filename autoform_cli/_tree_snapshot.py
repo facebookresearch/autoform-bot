@@ -32,6 +32,7 @@ from . import _directory_binding as directory_binding
 from ._directory_binding import (
     DirectoryChangedError,
     RetainedDirectory,
+    close_quietly,
     lexical_absolute_path,
     open_directory,
 )
@@ -144,16 +145,16 @@ class TreeSelection:
 
 @dataclass(frozen=True, slots=True)
 class OpaqueDirectoryMarker:
-    """A bounded marker that makes its containing directory opaque.
+    """A marker that makes its containing directory opaque.
 
-    The capture engine reads this small, bounded surface before it visits any
-    descendants.  A recognized marker is not kept: each later look recognizes
-    it afresh.  A presence-only marker accepts any entry kind without reading
+    The capture engine reads this surface, through ``max_bytes`` or whole when
+    that is ``None``, before it visits any descendants.  A recognized marker is
+    not kept: each later look recognizes it afresh.  A presence-only marker accepts any entry kind without reading
     it; this is for directory sentinels such as a nested checkout's ``.git``.
     """
 
     name: str
-    max_bytes: int
+    max_bytes: int | None
     recognizes: Callable[[bytes], bool]
     presence_only: bool = False
 
@@ -162,8 +163,8 @@ class OpaqueDirectoryMarker:
             raise ValueError("opaque marker name must be one portable path component")
         if not isinstance(self.presence_only, bool):
             raise ValueError("opaque marker presence_only must be a boolean")
-        if _invalid_limit(self.max_bytes):
-            raise ValueError("opaque marker max_bytes must be a non-negative integer")
+        if self.max_bytes is not None and _invalid_limit(self.max_bytes):
+            raise ValueError("opaque marker max_bytes must be a non-negative integer or None")
 
 
 ALL_ENTRIES = TreeSelection(
@@ -578,7 +579,7 @@ def capture_directory_descriptor(
                     relevant_names.append(name)
                 finally:
                     if child_descriptor is not None:
-                        _close_descriptor(child_descriptor)
+                        close_quietly(child_descriptor)
                 continue
             if not selection.include(relative_path, metadata.st_mode):
                 if selected_only:
@@ -807,13 +808,6 @@ def _normalized_name(name: str) -> str:
     return unicodedata.normalize("NFC", name).casefold()
 
 
-def _close_descriptor(descriptor: int) -> None:
-    try:
-        os.close(descriptor)
-    except OSError:
-        pass
-
-
 def _stable_entry_identity(signature: tuple[int, ...]) -> tuple[int, int, int]:
     """Identity fields unaffected by writes below a directory."""
 
@@ -895,7 +889,7 @@ def _opaque_marker(
             if _vanished_in_selected_capture(error, selection):
                 continue
             raise
-        if size <= marker.max_bytes and marker.recognizes(data):
+        if (marker.max_bytes is None or size <= marker.max_bytes) and marker.recognizes(data):
             budget.add_file_bytes(size)
             return None
     return names
@@ -1051,7 +1045,7 @@ def _require_no_inputs(
                 budget=budget,
             )
     finally:
-        _close_descriptor(child_descriptor)
+        close_quietly(child_descriptor)
 
 
 def _read_file(
@@ -1087,7 +1081,7 @@ def _read_file(
         return data, size
     finally:
         if descriptor is not None:
-            _close_descriptor(descriptor)
+            close_quietly(descriptor)
 
 
 def _read_prefix(stream, length: int) -> bytes:
@@ -1216,7 +1210,7 @@ def _verify_snapshot(
                 raise _TreeChanged(child_relative)
         finally:
             if child_descriptor is not None:
-                _close_descriptor(child_descriptor)
+                close_quietly(child_descriptor)
 
     try:
         verify_directory(root_descriptor, "")
@@ -1396,7 +1390,7 @@ def _read_portable_file(
         return data, size
     finally:
         if descriptor is not None:
-            _close_descriptor(descriptor)
+            close_quietly(descriptor)
 
 
 def _portable_directory_identities(root: Path) -> tuple[tuple[int, int], ...]:

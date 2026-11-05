@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "autoform"
-version = "0.5.0"
+version = "0.6.0"
 description = "Markdown-blueprint roadmaps with Lean LSP and REPL servers"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "fastmcp>=3.4.5,<4",
+    "fastmcp>=3.4.10,<4",
     "psutil>=5.9",
     # Lake 4.32 reads TOML 1.0. Tomli 2.4 enables TOML 1.1 syntax, so use the
     # same pinned 1.0 parser on every supported Python version.
@@ -35,12 +35,16 @@ autoform-lean-runtime = "servers.lean_runtime:main"
 [project.optional-dependencies]
 # Kept as an empty compatibility extra for existing plugin launch commands.
 repl = []
+browser = [
+    "playwright==1.62.0",
+]
 dev = [
     "mkdocs>=1.6,<2",
     "mkdocs-material>=9.5,<10",
     "mkdocs-literate-nav>=0.6,<1",
-    "pymdown-extensions>=11.0.1,<12",
     "pytest>=7.0",
+    # Runs the real-Lean skeleton tests on every CI core.
+    "pytest-xdist>=3.6,<4",
     "ruff>=0.4",
 ]
 
@@ -49,6 +53,10 @@ packages = ["autoform_cli", "servers"]
 
 [tool.ruff]
 line-length = 120
+
+[tool.ruff.per-file-target-version]
+# Generated projects' CI runs this helper with the runner's python3, which can be 3.10.
+"autoform_cli/templates/github/autoform_audit.py" = "py310"
 
 [tool.uv]
 # cryptography (pulled in by fastmcp -> authlib/joserfc and mcp -> pyjwt[crypto]) stopped

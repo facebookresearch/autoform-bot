@@ -21,7 +21,7 @@ from autoform_cli.library.search import (
 )
 from autoform_cli.search import SEARCH_SCHEMA, SearchError, search_blueprint
 from tests.library_fixture import MATHLIB_REV, REV, declaration, entry, make_library, manifest
-from tests.test_search import _project
+from tests.search_fixture import _project
 
 _DOCS = {"Lib.Convex": "Hahn-Banach separation in locally convex spaces."}
 
@@ -91,6 +91,41 @@ def test_a_whole_lean_name_matches_as_the_name(tmp_path: Path) -> None:
 
     assert _names(library, "IsCompact.exists_isMinOn") == ["IsCompact.exists_isMinOn", "Lib.Convex.cites"]
     assert _matched(library, "IsCompact.exists_isMinOn")["IsCompact.exists_isMinOn"] == ("lean",)
+
+
+def test_a_namespace_inside_quoting_marks_matches_as_a_namespace(tmp_path: Path) -> None:
+    library = _library(tmp_path, declaration("Lib.«weird name».bar", docstring=None))
+
+    # The space belongs to the quoted component, so `Lib.weird` names no declaration.
+    assert _matched(library, "Lib.weird") == {"Lib.«weird name».bar": ("qualified_names",)}
+    assert _matched(library, "bar") == {"Lib.«weird name».bar": ("lean",)}
+
+
+def test_the_exact_name_key_follows_the_field_keys_and_precedes_the_status(tmp_path: Path) -> None:
+    library = _library(
+        tmp_path,
+        declaration("Lib.foo", docstring=None),
+        declaration("Lib.foo'", docstring=None, status="wanted"),
+        declaration("Lib.bar", docstring="A separation."),
+        declaration("Lib.bar'", docstring=None),
+    )
+
+    # By status and name alone the complete Lib.foo would come first.
+    assert _names(library, "Lib.foo'") == ["Lib.foo'", "Lib.foo"]
+    assert _names(library, "foo'") == ["Lib.foo'", "Lib.foo"]
+    # A better worst field still comes first: Lib.bar' finds `separation` only in its module header.
+    assert _names(library, "Lib.bar' separation") == ["Lib.bar", "Lib.bar'"]
+
+
+def test_a_filler_word_names_no_declaration(tmp_path: Path) -> None:
+    library = _library(
+        tmp_path,
+        declaration("Lib.FreeGroup.of", docstring="Group units."),
+        declaration("Lib.Abelian.thing", docstring="Group units."),
+    )
+
+    # `of` is dropped from the terms, so it does not name Lib.FreeGroup.of.
+    assert _names(library, "group of units") == ["Lib.Abelian.thing", "Lib.FreeGroup.of"]
 
 
 def test_hits_sort_by_field_then_typed_form_then_status_then_name(tmp_path: Path) -> None:

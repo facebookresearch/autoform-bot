@@ -1,53 +1,56 @@
 # AutoformBot agent guidance
 
-User instructions override this file. Use [CONTRIBUTING.md](CONTRIBUTING.md)
-for contribution, style, and validation practices. Use the
-[development skill](skills/develop-plugin/SKILL.md) for product-development
+User instructions override this file. [CONTRIBUTING.md](CONTRIBUTING.md)
+covers contribution, style, and validation; the
+[development skill](skills/develop-plugin/SKILL.md) covers product-development
 workflow and cross-file maintenance.
 
 ## Product judgment
 
-- Before fixing, restacking, or merging an existing proposal, identify the
-  concrete user outcome or maintenance burden it improves. A request to resolve
-  review blockers does not prove that the proposal belongs in the repository.
-- Optimize for repository quality and a good, simple product—not merged line
-  count, PR count, or green checks. Documentation and tests that merely validate
-  their own planning state are not a substitute for useful behavior.
-- Treat declining, closing, deleting, or replacing a proposal as a successful
-  engineering outcome when it removes duplication, obsolete machinery, or
-  needless repository state. Preserve genuinely reusable insight in the owning
-  skill or a focused issue. Remove the inferior artifact only when authorized;
-  otherwise recommend its closure or removal.
+- Name the user outcome or maintenance burden before fixing, restacking, or
+  merging a proposal; a request to resolve review blockers does not justify it.
+- Optimize for repository quality and a simple product, not PR count, green
+  checks, or docs and tests that only validate their own planning state.
+- Closing or replacing a proposal that removes duplication is a success. Keep
+  reusable insight in the owning skill or an issue; remove an artifact only when
+  authorized, and otherwise recommend removing it.
 
 ## Repository invariants
 
 - Treat current `main` as the product baseline unless an explicitly documented
   stack says otherwise. Unmerged replacements do not supersede it.
 - Develop the plugin here and exercise installed behavior in an independent Lean
-  consumer checkout. The bundled Cabannes thesis is a compatibility example,
-  never a source of product-specific exceptions.
-- Markdown under `blueprint/roadmap/` is the authored roadmap and dependency
-  graph. Versioned implementation handoffs live only in hidden, per-article
-  files under `blueprint/.implementation-notes/`; they are not mathematics or
-  graph state. Rendered sites, Mermaid graphs, dashboards, and runtime
-  projections are derived views, not another durable scheduler or graph.
-- In consumer formalization work, Lean imports are allowed. Follow Formalize's
-  `autoform work import-impact` policy: baseline the affected articles and
-  repeat that evidence after rebuilding, check them for active conflicts, and
-  expand ownership only for validated downstream changes; when using claims,
-  also claim the article/module and check reported claim keys. Never replace
-  that evidence boundary with a blanket import ban.
+  consumer. The bundled Cabannes thesis is never a source of product exceptions.
+- Markdown under `blueprint/roadmap/` is the only roadmap and dependency graph.
+  Implementation handoffs live only in per-article files under
+  `blueprint/.implementation-notes/`; rendered sites, dashboards, and runtime
+  projections are derived views ([CLI reference](autoform_cli/README.md)).
+- In consumer formalization work, Lean imports are allowed;
+  [Formalize](skills/formalize/SKILL.md#import-edits) owns that policy. Never
+  replace it with a blanket import ban.
 - Public CLI and JSON shapes are contracts. Lean server work requires an
   explicit project root, bounded time and output, verified descendant cleanup,
   and no retry after dispatch with an unknown outcome. A project root is not an
   OS sandbox.
-- Claims are optional; when used, they coordinate across machines through Git
-  `refs/autoform-claims/*`. Only the dashboard's publication overlay is
-  loopback-only, ephemeral, and excluded from the vault and public site. Pushing
-  claims or publishing requires user-supplied authority.
-- The bundled example mirrors generated workflows (modulo its Autoform pin), the
-  audit helper, and site configuration (modulo project fields); keep their
-  focused equivalence tests aligned. Do not assume other templates, including
-  ignore rules, are equivalent.
-- Keep release versions synchronized across `pyproject.toml`, `uv.lock`, Claude
+- Claims are optional and coordinate through Git `refs/autoform-claims/*`; the
+  dashboard's publication overlay is loopback-only, ephemeral, and kept out of
+  the vault and public site. Pushing claims or publishing requires
+  user-supplied authority.
+- The bundled example mirrors only the artifacts listed under
+  [generated mirrors](skills/develop-plugin/references/repository-contracts.md#generated-mirrors);
+  ignore rules are not among them.
+- Note each change worth knowing about under Unreleased in `CHANGELOG.md`, and
+  keep release versions synchronized across `pyproject.toml`, `uv.lock`, Claude
   and Muse manifests, and the semantic base of Codex's cachebuster version.
+
+## Inform, don't break
+
+Autoform's commands inform the orchestrator; they must not break a codebase
+(#325). A new check that a repository could fail warns and keeps the exit
+status, so a repository that passed before still passes and the orchestrator
+decides. A command exits nonzero only when it cannot give a correct answer:
+unreadable input, a stale or missing build it would otherwise misreport, a
+contract it cannot honor, or evidence it would have to forge. Never add a
+refusal to the graph loader, where it stops every command. The
+[CLI reference](autoform_cli/README.md) gives each command's exit statuses and
+warnings.

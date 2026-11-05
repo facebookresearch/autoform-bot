@@ -11,23 +11,31 @@ import json
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+
+from .jsonl import (
+    MAX_FILE_BYTES as MAX_INDEX_BYTES,
+    MAX_LINE_BYTES,
+    RecordError as LibraryIndexError,
+    _decode,
+    _field,
+    _keys,
+    _module_name,
+    _record,
+    relative_path,
+    shorten,
+)
 
 #: Provisional until the generator has shown it can produce every field.
 INDEX_SCHEMA = "autoform-library-index/v0"
 INDEX_FILE = "autoform-library-index.jsonl"
-MAX_INDEX_BYTES = 64 * 1024 * 1024
-MAX_LINE_BYTES = 1024 * 1024
 #: The files beside the sources whose bytes decide what the library builds against.
 TREE_FILES = ("lake-manifest.json", "lakefile.lean", "lakefile.toml", "lean-toolchain")
 #: The keyword a declaration is written with.
 KINDS = ("abbrev", "class", "def", "inductive", "instance", "lemma", "opaque", "structure", "theorem")
 STATUSES = ("complete", "wanted")
 _DEPENDENCY_TYPES = ("git", "path")
-_MODULE_COMPONENT = re.compile(r"[A-Za-z_][A-Za-z0-9_'!?]*")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _OBJECT_ID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
-_ECHO_LIMIT = 80
 _HEADER_KEYS = frozenset(
     {"record", "schema", "generator", "probe", "package", "source_dirs", "lean_toolchain", "dependencies", "tree"}
 )
@@ -47,10 +55,6 @@ _DECLARATION_KEYS = frozenset(
         "auto_named",
     }
 )
-
-
-class LibraryIndexError(ValueError):
-    """An index file is not one this reader accepts."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,16 +188,6 @@ def tree_digest(modules: Iterable[tuple[str, str]], files: Iterable[tuple[str, b
     return digest.hexdigest()
 
 
-def relative_path(value: object) -> PurePosixPath | None:
-    """Return ``value`` as a path that stays inside the directory it is joined to, or ``None``."""
-
-    if type(value) is not str or not value or any(character in value for character in "\\:\0"):
-        return None
-    if value.startswith("/") or any(part in ("", ".", "..") for part in value.split("/")):
-        return None
-    return PurePosixPath(value)
-
-
 def covers(source_dirs: Sequence[str], path: str) -> bool:
     """Whether ``path`` is a library root file ``X.lean`` or lies under ``X/`` for a source directory ``X``."""
 
@@ -203,14 +197,7 @@ def covers(source_dirs: Sequence[str], path: str) -> bool:
 def parse_index(data: bytes) -> LibraryIndex:
     """Decode an untrusted index, refusing whatever the schema does not describe."""
 
-    if len(data) > MAX_INDEX_BYTES:
-        raise LibraryIndexError(f"index is larger than {MAX_INDEX_BYTES // (1024 * 1024)} MiB")
-    if data.startswith(b"\xef\xbb\xbf"):
-        raise LibraryIndexError("index starts with a byte-order mark")
-    try:
-        text = data.decode("utf-8")
-    except UnicodeError:
-        raise LibraryIndexError("index is not valid UTF-8") from None
+    text = _decode(data, "index", MAX_INDEX_BYTES)
     if not text:
         raise LibraryIndexError("index has no header")
     if not text.endswith("\n"):
@@ -226,7 +213,7 @@ def parse_index(data: bytes) -> LibraryIndex:
             raise LibraryIndexError(f"index line {number} is an empty line")
         if len(line.encode("utf-8")) > MAX_LINE_BYTES:
             raise LibraryIndexError(f"index line {number} is longer than {MAX_LINE_BYTES // 1024} KiB")
-        record = _record(line, number)
+        record = _record(line, f"index line {number}")
         kind = record.get("record")
         if number == 1:
             if kind != "header":
@@ -262,55 +249,6 @@ def parse_index(data: bytes) -> LibraryIndex:
     )
 
 
-def _record(line: str, number: int) -> dict[str, object]:
-    def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
-        record: dict[str, object] = {}
-        for key, value in pairs:
-            if key in record:
-                raise LibraryIndexError(f"index line {number} repeats the key {shorten(key)}")
-            record[key] = value
-        return record
-
-    def constant(_name: str) -> None:
-        raise ValueError("constant")
-
-    try:
-        record = json.loads(line, object_pairs_hook=unique, parse_constant=constant)
-    except LibraryIndexError:
-        raise
-    except (RecursionError, ValueError):
-        raise LibraryIndexError(f"index line {number} is not JSON") from None
-    if type(record) is not dict:
-        raise LibraryIndexError(f"index line {number} is not a JSON object")
-    try:
-        # A \ud800 escape decodes to a lone surrogate, which no UTF-8 text can hold.
-        json.dumps(record, ensure_ascii=False).encode("utf-8")
-    except UnicodeEncodeError:
-        raise LibraryIndexError(f"index line {number} holds text that is not valid Unicode") from None
-    return record
-
-
-def shorten(value: object) -> str:
-    """Return ``value`` as text cut to a short length, for echoing text that a third party chose."""
-
-    text = str(value)
-    return text if len(text) <= _ECHO_LIMIT else text[:_ECHO_LIMIT] + "..."
-
-
-def _keys(record: dict[str, object], expected: frozenset[str], where: str) -> None:
-    for key in sorted(record.keys() - expected):
-        raise LibraryIndexError(f"{where}: unexpected key {shorten(key)}")
-    for key in sorted(expected - record.keys()):
-        raise LibraryIndexError(f"{where}: {key} is missing")
-
-
-def _field(record: dict[str, object], key: str, where: str, accepts) -> object:
-    value = record[key]
-    if not accepts(value):
-        raise LibraryIndexError(f"{where}: {key} is not a value this schema allows")
-    return value
-
-
 def _text(value: object) -> bool:
     return type(value) is str
 
@@ -325,10 +263,6 @@ def _optional_text(value: object) -> bool:
 
 def _flag(value: object) -> bool:
     return type(value) is bool
-
-
-def _module_name(value: object) -> bool:
-    return type(value) is str and all(_MODULE_COMPONENT.fullmatch(part) for part in value.split("."))
 
 
 def _header(record: dict[str, object]) -> IndexHeader:

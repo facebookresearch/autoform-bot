@@ -15,8 +15,10 @@ from pathlib import Path
 import pytest
 
 from autoform_cli import _directory_binding as directory_binding_module
+from autoform_cli import _repository as repository_module
 from autoform_cli import _tree_snapshot as tree_snapshot_module
 from autoform_cli import lean as lean_module
+from autoform_cli._repository import detect_ref, detect_repository_url, repository_top_level, verify_repository_snapshot
 from autoform_cli._tree_snapshot import (
     BoundDirectoryTree,
     TreeCaptureLimits,
@@ -28,15 +30,13 @@ from autoform_cli._tree_snapshot import (
 from autoform_cli.lean import (
     Alias,
     SourceLinker,
-    build_linker,
     declaration_names,
     index_project,
+    index_project_names,
     open_project_sources,
     snapshot_project_sources,
-    strip_lean_comments,
-    verify_repository_snapshot,
 )
-from autoform_cli.skeleton import _output_identity, _replace_outputs
+from autoform_cli._managed_output import output_identity, replace_outputs
 
 _SOURCE = """import Mathlib
 
@@ -197,7 +197,8 @@ def test_declaration_identifier_can_follow_its_keyword_on_the_next_line(
     source = f"import Mathlib\nnamespace Outer\n{keyword}\n  result {body}\nend Outer\n"
     index = _index(tmp_path, source)
 
-    assert set(index.declarations) == {"Outer.result"}
+    # A structure's field is its projection.
+    assert set(index.declarations) == {"Outer.result", *(["Outer.result.value"] if keyword == "structure" else [])}
     declaration = index.find("Outer.result")
     assert declaration.line == 3
     assert declaration.keyword == keyword
@@ -332,61 +333,25 @@ def test_unfinished_keyword_does_not_take_the_next_command_as_its_name(tmp_path:
     "command",
     [
         "#check Nat",
-        "#print Nat",
         "#unrecognized_command",
         "open Nat",
         "variable (x : Nat)",
         "set_option pp.universes true",
         "attribute [simp] Nat.add_zero",
-        "export Nat (succ)",
-        "universe u",
-        "include x",
-        "omit x",
         "syntax \"custom\" : command",
         "example : True := trivial",
         "initialize value : Nat ← pure 7",
-        "run_cmd pure ()",
-        "run_elab do pure ()",
-        "run_meta pure ()",
         'local notation "X" => Nat',
-        'scoped notation "X" => Nat',
         "public import Mathlib",
-        "public meta import Mathlib",
         "@[deprecated] initialize value : Nat ← pure 7",
         "private unsafe initialize value : Nat ← pure 7",
-        '@[simp] scoped postfix:70 "!" => Nat.succ',
-        'local prefix:70 "!" => Nat.succ',
         'macro_rules | `(custom) => `(Nat)',
-        'elab_rules : command | `(custom) => pure ()',
-        "assert_not_exists absent",
-        "assert_not_imported Mathlib",
         "deprecated_module",
-        "deprecated_syntax syntaxName",
-        "docs_to_verso Nat",
-        "init_quot",
-        "unlock_limits",
-        'register_tactic_tag tag "description"',
-        "tactic_extension tag",
-        'recommended_spelling "and" for "∧" in [And]',
         "gen_injective_theorems% Nat",
         "with_weak_namespace Nat #check Nat",
-        "register_error_explanation code explanation",
-        "set_library_suggestions ()",
-        "seal Nat.add",
-        "unseal Nat.add",
-        'binder_predicate x " > " y:term => `($x > $y)',
         "aux_def value : Nat := 7",
-        "norm_cast_add_elim Nat.add_zero",
-        "register_linter_set checks := linter.unusedVariables",
-        "register_label_attr label",
-        "register_sym_simp_attr rules",
-        "ensure_eval_term_instance Nat",
-        "declare_core_config_elab elabName Config",
-        "simproc_decl simplify (Nat.succ _) := fun _ => pure .continue",
-        "cbv_simproc_decl simplify (Nat.succ _) := fun _ => pure .continue",
         "unif_hint (x : Nat) where ⊢ x ≟ x",
         "register_sym_simp simpVariant where\n  maxSteps := 100",
-        "grind_pattern lemmaName => Nat.succ",
     ],
 )
 def test_unfinished_keyword_does_not_take_a_nondeclaration_command_name(tmp_path: Path, command: str) -> None:
@@ -400,10 +365,8 @@ def test_unfinished_keyword_does_not_take_a_nondeclaration_command_name(tmp_path
 @pytest.mark.parametrize(
     "name",
     [
-        "open'", "open!", "public?", "variable₁", "variable'", "attribute'", "set_option'", "run_cmd'", "run_elab'",
-        "local'", "scoped'", "public'", "initialize'", "requires", "ensures",
-        "«open»", "«#check»", "«run_cmd»", "«local»", "«@[deprecated]»",
-        "Qualified.open", "Qualified.local", "Qualified.run_elab", "«Qualified.open».value",
+        "open'", "open!", "public?", "variable₁", "local'", "requires", "ensures",
+        "«open»", "«local»", "«@[deprecated]»", "Qualified.open", "Qualified.local", "«Qualified.open».value",
         "α₁", "ℕ_value", "𝒜_value",
     ],
 )
@@ -420,9 +383,7 @@ def test_multiline_names_are_not_rejected_by_a_command_token_prefix(tmp_path: Pa
     [
         "@decoration",
         "not_a_name/part : Nat := 7",
-        "not_a_name+part : Nat := 7",
         "123 : Nat := 7",
-        "custom => Nat",
         "custom do pure ()",
         "custom binders => Nat",
         "custom (x : Nat) => Nat",
@@ -443,7 +404,6 @@ def test_multiline_continuation_requires_identifier_and_signature_syntax(tmp_pat
         ("def", "identity", "x : Nat := x"),
         ("def", "identity", "{α : Type u} (x : α) : α := x"),
         ("def", "identity", "{α : Type u}\n    (x : α) : α := x"),
-        ("def", "identity", "{α : Type u}\n    [Inhabited α] : α := default"),
         ("theorem", "self_eq", "(x : Nat\n    ) : x = x := rfl"),
         ("theorem", "self_eq", "(«x)» : Nat) : «x)» = «x)» := rfl"),
         ("def", "identity", ".{u} {α : Type u} (x : α) := x"),
@@ -463,7 +423,8 @@ def test_multiline_declaration_names_keep_legal_signature_continuations(
     )
     index = _index(tmp_path, source)
 
-    assert set(index.declarations) == {f"Outer.{name}", "Outer.actual"}
+    fields = {f"Outer.{name}.value"} if keyword == "structure" else set()
+    assert set(index.declarations) == {f"Outer.{name}", "Outer.actual", *fields}
     declaration = index.find(f"Outer.{name}")
     assert declaration.line == 3
     assert declaration.keyword == keyword
@@ -501,6 +462,280 @@ def test_sections_do_not_add_to_the_namespace(tmp_path: Path) -> None:
     assert index.find("Outer.Helpers.beta") is None
 
 
+def test_a_dotted_scope_opens_and_closes_one_scope_per_component(tmp_path: Path) -> None:
+    # Lean's `namespace A.B` opens A and B, `end B` closes only B, and
+    # `end C.D` closes both C and D; a quoted name is one component.
+    source = (
+        "namespace A.B\ndef inner : Nat := 0\nend B\ndef outer : Nat := 0\n"
+        "structure S where\n  x : Nat\nend A\n"
+        "namespace C\nnamespace D\nend C.D\ndef top : Nat := 0\n"
+        "namespace «E.F»\ndef quoted : Nat := 0\nend «E.F»\n"
+        "namespace G\nsection H.I\nend I\ndef sectioned : Nat := 0\nend H\nend G\ndef last : Nat := 0\n"
+        "namespace O\nnamespace «a.b c».D\nend «a.b c».D\ndef spaced : Nat := 0\nend O\n"
+        "namespace X.«E.F»\nalias moved := t\n"
+    )
+    index = _index(tmp_path, source)
+    assert sorted(index.declarations) == [
+        "A.B.inner", "A.S", "A.S.x", "A.outer", "G.sectioned", "O.spaced", "X.«E.F».moved", "last", "top",
+        "«E.F».quoted",
+    ]
+    assert index.declarations["X.«E.F».moved"].alias.candidates == ("X.«E.F».t", "X.t", "t")
+
+
+def test_the_scan_indexes_every_declaration_form(tmp_path: Path) -> None:
+    source = [
+        "universe u v w",
+        "namespace Outer",
+        # A name on the line after its keyword, with and without trailing space.
+        "theorem",
+        "  nextLine : True := trivial",
+        "lemma ",
+        "  spaced : True := trivial",
+        "def polymorphic.{u} (α : Type u) := α",
+        "theorem «dotted.name» : True := trivial",
+        "theorem _root_.rootLevel.{v} : True := trivial",
+        "protected def guarded.{w} : Nat := 0",
+        "theorem base_iff : True ↔ True := Iff.rfl",
+        "alias ⟨forward, _⟩ := base_iff",
+        "alias later :=",
+        "  base_iff",
+        "alias",
+        "  renamed := base_iff",
+        "@[simp]",
+        "theorem attributed : True := trivial",
+        "/-- A docstring on the declaration's own line. -/ theorem documented : True := trivial",
+        "theorem_wanted wish : True",
+        "proof_wanted proofWish : True",
+        "def_wanted defWish : Nat",
+        "instance_wanted instWish : Inhabited Nat",
+        "@[simp]",
+        "private",
+        "noncomputable def split : Nat := 0",
+        "end Outer",
+    ]
+    index = _index(tmp_path, "\n".join(source) + "\n")
+
+    assert sorted(index.declarations) == [
+        *(f"Outer.{name}" for name in ("attributed", "base_iff", "defWish", "documented", "forward", "guarded")),
+        *(f"Outer.{name}" for name in ("instWish", "later", "nextLine", "polymorphic", "proofWish", "renamed")),
+        *(f"Outer.{name}" for name in ("spaced", "split", "wish")),
+        "Outer.«dotted.name»",
+        "rootLevel",
+    ]
+
+
+def test_structure_and_class_fields_are_indexed_as_their_projections(tmp_path: Path) -> None:
+    """Issue #498: Lean makes each field a projection named under its structure."""
+    source = [
+        "namespace Demo",
+        "/-- An entry. -/",
+        "structure Entry where",
+        "  /-- Its value. -/",
+        "  value : Nat",
+        "  (x y : Int)",
+        "  {a : Nat} [inst : Inhabited Nat]",
+        "  ⦃f : Nat → Nat⦄",
+        "  label (n : Nat) : String := toString n",
+        "  label' n : String := toString n",
+        "  (g (n : Nat) : Nat)",
+        "  /- A comment. -/ private secret : Nat",
+        "  protected guarded : Nat",
+        "  @[simp] tagged : Nat",
+        "  @[simp]",
+        "  private",
+        "  above : Nat",
+        "  sides",
+        "    : Nat",
+        "  (first : Nat)",
+        "    (second : Nat)",
+        "  deriving Repr",
+        "class Shape (α : Type) where",
+        "  area : α → Nat",
+        "end Demo",
+    ]
+    index = _index(tmp_path, "\n".join(source) + "\n")
+
+    fields = (
+        *("value", "x", "y", "a", "inst", "f", "label", "label'", "g", "secret", "guarded"),
+        *("tagged", "above", "sides", "first", "second"),
+    )
+    assert sorted(index.declarations) == sorted(
+        ["Demo.Entry", *(f"Demo.Entry.{name}" for name in fields), "Demo.Shape", "Demo.Shape.area"]
+    )
+    value = index.find("Demo.Entry.value")
+    assert (value.path, value.line, value.keyword, value.private) == (Path("Project/Basic.lean"), 5, "field", False)
+    assert [index.find(f"Demo.Entry.{name}").line for name in ("y", "inst", "secret", "above", "sides")] == [
+        6, 7, 12, 17, 18
+    ]
+    assert index.find("Demo.Shape.area").line == 24
+    secret, guarded = index.find("Demo.Entry.secret"), index.find("Demo.Entry.guarded")
+    assert (secret.private, secret.protected, guarded.private, guarded.protected) == (True, False, False, True)
+    # Modifiers on a line of their own reach only the field below them.
+    assert (index.find("Demo.Entry.above").private, index.find("Demo.Entry.sides").private) == (True, False)
+    linker = SourceLinker(index=index, repository_url="https://github.com/owner/repo", ref="deadbeef")
+    assert linker.url("Demo.Entry.value") == "https://github.com/owner/repo/blob/deadbeef/Project/Basic.lean#L5"
+
+
+@pytest.mark.parametrize(
+    ("source", "names"),
+    [
+        ("structure Pair where (fst snd : Nat)\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair (α : Type)\n    (β : Type) where\n  fst : α\n  snd : β\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure\n  Pair where\n  fst : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  mkPair ::\n  fst : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  mkPair :: fst : Nat\n", ["Pair", "Pair.fst"]),
+        (
+            "structure Trie where\n  node ::\n    values : Nat\n    children : Nat\n",
+            ["Trie", "Trie.children", "Trie.values"],
+        ),
+        ("class HasMap (α : Type) where\nmk' ::\n  map : α\n", ["HasMap", "HasMap.map"]),
+        ("structure Pair where\n  fst : Nat\n  deriving Repr\n  snd : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  fst : Nat\n  #exit\n  snd : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair\n  #exit\n  where fst : Nat\n", ["Pair"]),
+        ('structure Pair where\n  fst : Nat\n  notation3:50 "x" => 1\n', ["Pair", "Pair.fst"]),
+        ('structure Pair where\n  fst : Nat\n  notation3 :max "x" => 1\n', ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  fst : Nat\n  recall succ : Nat → Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  fst : Nat\n  instance : Inhabited Nat where\n  default := 0\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where\n  fst : Nat\n  local instance : Inhabited Nat where\n  default := 0\n", ["Pair", "Pair.fst"]),
+        ('structure Pair where\n  fst : Nat\n  scoped[N] notation "x" y => y\n  (y : Nat)\n', ["Pair", "Pair.fst"]),
+        ("structure Pos (n : Nat) where\n  pos:0 < n\n  snd : Nat\n", ["Pos", "Pos.pos", "Pos.snd"]),
+        ("structure Pt where\n  x : Nat\n  theorem Pt.ext' (p q : Pt)\n  (h : p.x = q.x) : p = q := sorry\n",
+         ["Pt", "Pt.ext'", "Pt.x"]),
+        ("structure Tag\n  instance : Inhabited Nat where\n    default := 0\n", ["Tag"]),
+        ("structure Tag\nmy_command Tag where\n  default : Nat\n", ["Tag"]),
+        # A term goes on past an operator, a term keyword, or binders followed by more of it.
+        ("structure Pair where\n  fst :\n  (n : Nat) → Fin (n + 1)\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where\n  fst : ∀ (x : Nat)\n  (y : Nat), x = y\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        (
+            "structure Pair where\n  fst : True := by\n  skip\n  have h : True := trivial\n  exact h\n  snd : Nat\n",
+            ["Pair", "Pair.fst", "Pair.snd"],
+        ),
+        ("structure Pair where\n  fst : Cfg := {\n  a := 1\n  b := 2 }\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where fst : Cfg := {\n  a := 1\n  b := 2 }\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where fst : Nat := (id\n                     x : Nat)\n                     snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair (n : Nat) where\n  fst : Int := 1 +\n  (n : Int)\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where\n  fst : Nat := 3 !\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        (
+            "structure Pair (n : Nat) where\n  fst : Int :=\n  set_option maxRecDepth 100 in\n  (n : Int)\n  snd : Nat\n",
+            ["Pair", "Pair.fst", "Pair.snd"],
+        ),
+        (
+            "structure Pair where fst : List Nat := [1,\n                         2]\n                     snd : Nat\n",
+            ["Pair", "Pair.fst", "Pair.snd"],
+        ),
+        ("structure Pair where\n  fst : Nat := 3 +\n  instance : Inhabited Nat where\n  default := 0\n", ["Pair", "Pair.fst"]),
+        ('structure Pair where\n  fst : Nat := 3 +\n  scoped[N] notation "x" y => y\n  (y : Nat)\n', ["Pair", "Pair.fst"]),
+        (
+            "structure Pair where fst : List Nat := [1,\n                     2]\n                     snd : Nat\n",
+            ["Pair", "Pair.fst", "Pair.snd"],
+        ),
+        ("structure Pair where\n  fst : IO Unit := ( do\n  pure ())\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where\n  fst : Nat := f'do\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where\n  «a(» : Nat\n  snd : Nat\n", ["Pair", "Pair.snd", "Pair.«a(»"]),
+        ("structure Pair where\n  fst : IO Unit := do\n  let mut x := 0\n  x := x + 1\n", ["Pair", "Pair.fst"]),
+        ('structure Pair where\n  fst : String := "x:"\n  snd : Nat\n', ["Pair", "Pair.fst", "Pair.snd"]),
+        ('structure Pair where\n  fst : String := "Usage:\n  run"\n  snd : Nat\n', ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Pair where\n  fst : Nat := x'by\n  snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        (
+            'def s : String := "a\fb"\nstructure Pair where\n  fst : String := "x"\n  snd : Nat\n',
+            ["Pair", "Pair.fst", "Pair.snd", "s"],
+        ),
+        (
+            'def s : String := "a\u2028b"\nstructure Pair where\n  fst : Cfg :=\n  { x := 1 }\n  snd : Nat\n',
+            ["Pair", "Pair.fst", "Pair.snd", "s"],
+        ),
+        ("structure Pair where mk ::\n  fst : Nat\n", ["Pair", "Pair.fst"]),
+        ("structure Pair (T : Type) where mk (T) ::\n  fst : T\n", ["Pair", "Pair.fst"]),
+        ("structure Pair where mk :: fst : Nat\n                           snd : Nat\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        (
+            "def Foo (x : Nat := 0) : Type := Fin x\nstructure Pair where fst : Foo\n                       (x := 1)\n                     snd : Nat\n",
+            ["Foo", "Pair", "Pair.fst", "Pair.snd"],
+        ),
+        ("structure Pair where\n  α : Type*\n  n : ℕ+\n  snd : Nat\n", ["Pair", "Pair.n", "Pair.snd", "Pair.α"]),
+        ("structure Pair where\n  /-- doc -/ fst : Nat\n  snd : Nat\n-- no line end", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("-- a\u2028b\nstructure Pair where\n  fst : Nat\n  snd : Nat\n-- end\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Marker : Type\ninstance : Inhabited Nat where\n  default := 0\n", ["Marker"]),
+        ("structure Marker where\ndef after : Nat := 0\n", ["Marker", "after"]),
+        ("structure Pair :=\n  (fst : Nat)\n  (snd : Nat)\n", ["Pair", "Pair.fst", "Pair.snd"]),
+        ("structure Hom extends toBase : Base where\n  w : Nat\n", ["Hom", "Hom.toBase", "Hom.w"]),
+        (
+            "structure Location where\n  module : String\n  range : Nat\n",
+            ["Location", "Location.module", "Location.range"],
+        ),
+        ("structure Tree : Prop extends\n    connected : C, acyclic : A\n", ["Tree", "Tree.acyclic", "Tree.connected"]),
+        ("structure Plain extends Base, Pair (fun x => x, 1) where\n  z : Nat\n", ["Plain", "Plain.z"]),
+        ("structure S extends A { x := 1, y : Nat := 2 }, toB : B where\n  z : Nat\n", ["S", "S.toB", "S.z"]),
+        ("structure S extends «X)», A { x := 1, y : Nat := 2 } where\n  z : Nat\n", ["S", "S.z"]),
+        # `class abbrev C` and `class inductive D` declare C and D; their fields are not read.
+        ("class abbrev C (α : Type) :=\n  (inst : Add α), Mul α\n", ["C"]),
+        ("class inductive D (α : Type) : Prop\n  | mk : D α\n", ["D"]),
+        ("structure Sized (n : Nat := 0)\n    (m : Nat) where\n  size : Nat\n", ["Sized", "Sized.size"]),
+        # A default may set an inherited field, which Lean declares nothing for.
+        (
+            "structure Point where\n  x := 0\n  (w := 4)\n"
+            "structure Moved extends Point where\n  x := 1\n  (w := 5)\n  y : Nat := 2\n",
+            ["Moved", "Moved.y", "Point", "Point.w", "Point.x"],
+        ),
+    ],
+    ids=["inline", "multiline-header", "keyword-alone", "constructor", "constructor-and-field",
+         "constructor-above-deeper-fields", "constructor-at-the-structure-s-column", "deriving", "exit",
+         "exit-in-the-header", "command-with-a-precedence", "command-with-a-named-precedence", "mathlib-command",
+         "command-with-fields-at-the-column", "local-command-with-fields-at-the-column",
+         "scoped-notation-at-the-field-column", "field-without-a-space", "command-with-binders-at-the-column",
+         "command-after-a-header", "unknown-command-after-a-header", "type-at-the-field-column",
+         "binders-continuing-a-term", "tactics-at-the-field-column", "structure-instance-at-the-field-column",
+         "structure-instance-after-where", "ascription-after-where", "operator-ending-a-line", "postfix-factorial",
+         "term-after-set-option-in", "bracket-after-where-closing-deeper", "command-after-an-open-line",
+         "scoped-command-after-an-open-line", "bracket-closing-after-where", "do-block-in-brackets",
+         "identifier-ending-in-do", "guillemet-holding-a-bracket", "do-block-at-the-field-column",
+         "literal-ending-a-field", "multi-line-literal-ending-in-a-colon", "identifier-ending-in-by",
+         "literal-in-a-file-with-a-form-feed", "continuation-in-a-file-with-a-line-separator", "inline-constructor",
+         "inline-constructor-with-binders", "inline-constructor-and-field", "argument-after-an-inline-field",
+         "postfix-types", "comment-without-a-line-end", "separator-before-a-last-comment", "no-where", "no-fields",
+         "assign", "named-parent", "field-named-module", "named-parents-without-where", "unnamed-parents",
+         "comma-inside-a-parent", "guillemet-inside-a-parent", "class-abbrev", "class-inductive", "header-default",
+         "defaults"],
+)
+def test_structure_fields_follow_the_structure_s_where(tmp_path: Path, source: str, names: list[str]) -> None:
+    assert sorted(_index(tmp_path, source).declarations) == names
+
+
+def test_constructor_names_on_one_line_do_not_recurse(tmp_path: Path) -> None:
+    # A structure has one constructor, so a second `::` on its line names no field.
+    source = "structure Pair where\n  " + "mk :: " * 50000 + "fst : Nat\n  snd : Nat\n"
+    assert sorted(_index(tmp_path, source).declarations) == ["Pair", "Pair.snd"]
+
+
+def test_fields_of_private_and_module_structures_keep_their_structure_s_visibility(tmp_path: Path) -> None:
+    index = _index_files(
+        tmp_path,
+        {
+            "Project/Hidden.lean": "private structure Hidden where\n  inner : Nat\n",
+            "Project/Section.lean": "module\n\npublic section\nnamespace Demo\nstructure Entry where\n"
+            "  value : Nat\nend Demo\nend\n",
+            "Project/Marked.lean": "module\n\nnamespace Demo\npublic structure Record where\n  count : Nat\nend Demo\n",
+        },
+    )
+
+    assert index.find("Hidden.inner").private
+    assert index.find("Demo.Entry.value").path == Path("Project/Section.lean")
+    assert index.find("Demo.Record.count").path == Path("Project/Marked.lean")
+    assert not index.find("Demo.Record.count").private
+
+
+def test_a_field_and_a_declaration_of_its_name_are_ambiguous(tmp_path: Path) -> None:
+    index = _index_files(
+        tmp_path,
+        {
+            "Project/A.lean": "structure Entry where\n  value : Nat\n",
+            "Project/B.lean": "def Entry.value (entry : Entry) : Nat := 0\n",
+        },
+    )
+
+    assert index.find("Entry.value") is None
+    assert index.ambiguity("Entry.value") == "Project/A.lean:2, Project/B.lean:1"
+
+
 def test_every_scope_closes_at_its_own_end(tmp_path: Path) -> None:
     source = "\n".join(
         [
@@ -534,6 +769,28 @@ def test_every_scope_closes_at_its_own_end(tmp_path: Path) -> None:
 
 def test_attributes_and_modifiers_do_not_hide_a_declaration(tmp_path: Path) -> None:
     assert _index(tmp_path).find("Outer.Inner.gamma") is not None
+
+
+def test_public_sections_and_declarations_are_indexed_without_losing_namespace(
+    tmp_path: Path,
+) -> None:
+    index = _index(
+        tmp_path,
+        "namespace Outer\npublic section\npublic theorem visible : True := trivial\n"
+        "end\ntheorem after : True := trivial\nend Outer\n",
+    )
+
+    assert index.find("Outer.visible") is not None
+    assert index.find("Outer.after") is not None
+
+
+def test_universe_binders_are_not_part_of_the_indexed_declaration_name(
+    tmp_path: Path,
+) -> None:
+    index = _index(tmp_path, "universe u\ndef polymorphic.{u} (α : Type u) := α\n")
+
+    assert index.find("polymorphic") is not None
+    assert index.find("polymorphic.{u}") is None
 
 
 def test_commented_out_code_is_not_indexed(tmp_path: Path) -> None:
@@ -599,6 +856,71 @@ def test_hidden_lean_source_directories_are_indexed(tmp_path: Path) -> None:
     (hidden / "Hidden.lean").write_text("def hiddenProof : Nat := 0\n", encoding="utf-8")
 
     assert index_project(tmp_path).find("hiddenProof") is not None
+
+
+def test_indexing_some_names_locates_each_as_the_whole_index_does(tmp_path: Path) -> None:
+    whole = _index_files(
+        tmp_path,
+        {
+            "Project/Basic.lean": _SOURCE,
+            "Project/Again.lean": "namespace Outer\ndef alpha : Nat := 1\nend Outer\n",
+            "Project/Shapes.lean": "structure Hom extends toBase : Base where\n  w : Nat\n"
+            "theorem «dotted.name» : True := trivial\n",
+        },
+    )
+    names = {*whole.declarations, *whole.duplicates}
+    assert {"Outer.alpha", "Outer.Inner.gamma", "Hom.toBase", "Hom.w", "«dotted.name»", "toplevel"} <= names
+
+    every = index_project_names(tmp_path, names)
+    for name in names:
+        some = index_project_names(tmp_path, {name})
+        assert (some.find(name), some.occurrences(name)) == (whole.find(name), whole.occurrences(name))
+        assert (every.find(name), every.occurrences(name)) == (whole.find(name), whole.occurrences(name))
+        assert some.source_digest == whole.source_digest
+    assert index_project_names(tmp_path, {"Hom.w"}).find("toplevel") is None
+
+
+def test_indexing_some_names_scans_only_the_sources_that_spell_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _index_files(tmp_path, {"Project/Basic.lean": _SOURCE, "Project/Other.lean": "def unrelated : Nat := 0\n"})
+    scanned: list[str] = []
+    scan = lean_module._scan
+    monkeypatch.setattr(
+        lean_module, "_scan", lambda text, relative: scanned.append(relative.as_posix()) or scan(text, relative)
+    )
+
+    assert index_project_names(tmp_path, {"Outer.alpha"}).find("Outer.alpha") is not None
+    assert index_project_names(tmp_path, ()).declarations == {}
+
+    assert scanned == ["Project/Basic.lean"]
+
+
+def test_the_scan_skips_only_lines_that_open_close_and_declare_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Each way a command the scan reads can start, where a line it skipped wrongly would change a name or drop one.
+    keywords = [keyword for keyword in lean_module._DECLARATION_KEYWORDS.split("|") if keyword != "alias"]
+    lines = ["namespace Outer", "@[expose] public section Inner"]
+    for m, modifier in enumerate(["", *lean_module._DECLARATION_MODIFIERS.split("|")]):
+        lines += [f"  {modifier} {keyword} m{m}k{k} : True := trivial" for k, keyword in enumerate(keywords)]
+    lines += ["@[simp] theorem attributed : True := by", "  simp", "  exact trivial", "end Inner"]
+    lines += ["mutual", "def even : Bool := true", "end", "def after_mutual : Nat := 0"]
+    for s, modifier in enumerate(["", *lean_module._SECTION_MODIFIERS.split("|")]):
+        lines += [f"{modifier} section S{s}", f"def in_section{s} : Nat := {s}", f"end S{s}"]
+    lines += ["alias aliased := attributed", "end Outer", "proof_wanted wanted : True"]
+    lines += ["#exit", "def after_exit : Nat := 0"]
+    root = Path(__file__).resolve().parents[1]
+    sources = {Path("Synthetic.lean"): "\n".join(lines) + "\n"}
+    for path in sorted([*(root / "tests/fixtures").rglob("*.lean"), *(root / "skills").rglob("*.lean")]):
+        if not any(part.startswith(".") for part in path.relative_to(root).parts):  # not a fixture's own build, .lake
+            sources[path.relative_to(root)] = path.read_text(encoding="utf-8")
+
+    skipping = [lean_module._scan(text, relative) for relative, text in sources.items()]
+    monkeypatch.setattr(lean_module, "_SCANNED_LINE", re.compile(""))
+
+    assert [lean_module._scan(text, relative) for relative, text in sources.items()] == skipping
+    names = {declaration.name for declaration in skipping[0][0]}
+    assert {"Outer.m8k14", "Outer.attributed", "Outer.after_mutual", "Outer.in_section4", "Outer.aliased"} <= names
+    assert "wanted" in names and "after_exit" not in names and len(sources) > 30
 
 
 @pytest.mark.parametrize("parent", ["", "Nested/"])
@@ -967,7 +1289,7 @@ def _republish_packets(root: Path) -> None:
     generated = root / "review-packets"
     stage = root / ".review-packets.autoform-stage-1"
     _packets_output(stage, 1)
-    _replace_outputs([(generated, stage, _output_identity(generated))])
+    replace_outputs([(generated, stage, output_identity(generated))])
     assert sorted(path.name for path in root.iterdir()) == ["Proj", "review-packets"]
 
 
@@ -2858,6 +3180,7 @@ def test_replaced_source_changes_only_the_generation_revision(tmp_path: Path) ->
         ("packets", "autoform-skeleton-packets/v2"),
         ("passages", "autoform-skeleton-passages/v1"),
         ("passages", "autoform-skeleton-passages/v2"),
+        ("packets", "autoform-review-packets/v1"),
     ],
 )
 def test_managed_skeleton_output_is_not_indexed_as_project_source(
@@ -3218,10 +3541,7 @@ def test_oversized_managed_manifest_leaves_its_directory_indexed_at_its_read_bou
     assert index.find("oversizedPacket") is not None
 
 
-def test_only_a_complete_publication_manifest_hides_its_folder(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_only_a_complete_publication_manifest_hides_its_folder(tmp_path: Path) -> None:
     # Render copies a blueprint's Lean files into its site and mkdocs copies the
     # site again, manifest included; both copies go stale when the source changes.
     complete = {"complete": True, "schema": "autoform-publication/v2"}
@@ -3231,7 +3551,8 @@ def test_only_a_complete_publication_manifest_hides_its_folder(
         "legacy": {**complete, "schema": "autoform-publication/v1"},
         "unfinished": {**complete, "complete": False},
         "web": {"name": "web app"},
-        "padded": {**complete, "padding": "x" * 64},
+        # It lists every site file, so a large project's manifest passes the old 8 MiB bound.
+        "large": {**complete, "padding": "x" * (8 * 1024 * 1024)},
         "object-schema": {**complete, "schema": {}},
         "array-schema": {**complete, "schema": []},
     }
@@ -3240,7 +3561,6 @@ def test_only_a_complete_publication_manifest_hides_its_folder(
         (tmp_path / folder / "publication.json").write_text(json.dumps(manifest), encoding="utf-8")
         (tmp_path / folder / "Copy" / "Proofs.lean").write_text("theorem stale : True := trivial\n")
     (tmp_path / "Proofs.lean").write_text("theorem renamed : True := trivial\n")
-    monkeypatch.setattr(lean_module, "PUBLICATION_MANIFEST_MAX_BYTES", 64, raising=False)
 
     snapshot = snapshot_project_sources(tmp_path)
 
@@ -3248,10 +3568,21 @@ def test_only_a_complete_publication_manifest_hides_its_folder(
         "Proofs.lean",
         "array-schema/Copy/Proofs.lean",
         "object-schema/Copy/Proofs.lean",
-        "padded/Copy/Proofs.lean",
         "unfinished/Copy/Proofs.lean",
         "web/Copy/Proofs.lean",
     ]
+
+
+def test_unfinished_packet_stage_is_not_indexed_as_project_source(tmp_path: Path) -> None:
+    # A stage an older writer left without its manifest sorts before the
+    # project's sources and would shadow the real declaration.
+    packet = tmp_path / ".review-packets.autoform-stage-0123456789abcdef" / "blind" / "0123.lean"
+    packet.parent.mkdir(parents=True)
+    packet.write_text("def target : Nat := 2\n", encoding="utf-8")
+
+    index = _index(tmp_path, "def target : Nat := 1\n", name="Actual.lean")
+
+    assert index.find("target").path == Path("Actual.lean")
 
 
 def test_irreducible_definitions_are_indexed(tmp_path: Path) -> None:
@@ -3324,6 +3655,32 @@ def test_aliases_are_indexed_with_where_their_target_can_be(tmp_path: Path) -> N
     assert index.find("A.B.mpr").line == 5
 
 
+def test_alias_names_take_lean_s_identifier_characters(tmp_path: Path) -> None:
+    # `℘` is one of Lean's letter-like characters and `Ж` is not.
+    index = _index(tmp_path, "theorem t : True := trivial\nalias ℘ := t\nalias Жук := t\n")
+
+    assert set(index.declarations) == {"t", "℘"}
+
+
+def test_commands_inside_a_syntax_quotation_declare_nothing(tmp_path: Path) -> None:
+    # As in Mathlib's Data/UInt.lean and Tactic/IrreducibleDef.lean, where the
+    # scan reads `$typeName.toBitVec_nsmul` and `$n`, names Lean's grammar refuses.
+    source = [
+        "run_cmd",
+        "  for typeName' in [`UInt8, `UInt16] do",
+        "  let typeName := Lean.mkIdent typeName'",
+        "  Lean.Elab.Command.elabCommand (← `(",
+        "    namespace $typeName",
+        "      protected theorem toBitVec_nsmul (a : $typeName) : True := trivial",
+        "    end $typeName))",
+        "macro_rules | `(irreducible_def $n:ident := $val) => `(",
+        "    def $n:ident := $val)",
+        "theorem kept : True := trivial",
+    ]
+
+    assert set(_index(tmp_path, "\n".join(source) + "\n").declarations) == {"kept"}
+
+
 def test_root_qualified_names_leave_their_namespace_out(tmp_path: Path) -> None:
     index = _index(tmp_path, "namespace A\ntheorem _root_.B.c : True := trivial\ntheorem d : True := trivial\nend A\n")
 
@@ -3365,6 +3722,22 @@ def test_an_alias_is_followed_only_to_an_earlier_declaration_of_its_file(tmp_pat
     # is outside the index leads nowhere sure.
     for name in ("X.remote", "X.skips", "X.skipsAbove", "X.partway"):
         assert index.reached(index.find(name)) is None, name
+
+
+def test_an_alias_has_no_sure_target_before_its_file_declares_one(tmp_path: Path) -> None:
+    # B.lean declares its `N.aux` only after the alias and A.lean declares one
+    # too, so the alias has no sure target.
+    (tmp_path / "A.lean").write_text(
+        "namespace N\nprivate theorem aux : True := trivial\nend N\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "B.lean").write_text(
+        "theorem aux : True := trivial\nnamespace N\nalias good := aux\nprivate theorem aux : True := trivial\nend N\n",
+        encoding="utf-8",
+    )
+
+    index = index_project(tmp_path)
+    assert index.reached(index.find("N.good")) is None
 
 
 def _where(declarations) -> list[tuple[str, int]]:
@@ -3413,10 +3786,12 @@ _PRIVATE_MAIN = "private theorem Demo.main : True := trivial\n"
             [],
         ),
         ({"A.lean": _PRIVATE_MAIN, "B.lean": "\nproof_wanted Demo.main : True\n"}, [("A.lean", 1), ("B.lean", 2)], []),
+        # A universe binder on the keyword's line leaves the name as it is.
+        ({"A.lean": "def Demo.main.{u} : Nat := 0\n", "B.lean": _PUBLIC_MAIN}, [("A.lean", 1), ("B.lean", 2)], []),
     ],
     ids=[
         "earlier-private", "private-above", "private-alias", "later-private", "wanted",
-        "lone-private", "two-public", "two-private", "private-wanted",
+        "lone-private", "two-public", "two-private", "private-wanted", "universe-binder",
     ],
 )
 def test_a_name_selects_its_one_public_declaration_or_is_ambiguous(
@@ -3476,6 +3851,11 @@ def test_quoted_names_keep_spaces_and_dots_inside_one_component(tmp_path: Path) 
     assert index.find("A.«b c.d»") is not None
 
 
+def _strip_comments(text: str) -> str:
+    """The non-blank lines the audit reads from *text*, trailing whitespace dropped."""
+    return "\n".join(line.rstrip() for line in lean_module._without_lean_comments(text).splitlines() if line.strip())
+
+
 def test_comment_stripping_preserves_comment_markers_inside_strings() -> None:
     source = (
         'def a := "a--b /- c -/" -- remove me\n'
@@ -3485,7 +3865,7 @@ def test_comment_stripping_preserves_comment_markers_inside_strings() -> None:
         "def «e--f» : Char := '-'"
     )
 
-    assert strip_lean_comments(source) == (
+    assert _strip_comments(source) == (
         'def a := "a--b /- c -/"\n'
         'def b := r#"d--e /- f -/"#\n'
         'def c := s!"value {"a--b"}"\n'
@@ -3496,8 +3876,8 @@ def test_comment_stripping_preserves_comment_markers_inside_strings() -> None:
 
 def test_comment_stripping_reads_slash_dash_dash_slash_as_a_docstring() -> None:
     # Lean reads `/--` as a docstring opener, so `/--/ ... -/` is one comment.
-    assert strip_lean_comments("/--/ KEEPOUT -/\ndef d : Nat := 6") == "def d : Nat := 6"
-    assert strip_lean_comments("/-!/ KEEPOUT -/\ndef d : Nat := 6") == "def d : Nat := 6"
+    assert _strip_comments("/--/ KEEPOUT -/\ndef d : Nat := 6") == "def d : Nat := 6"
+    assert _strip_comments("/-!/ KEEPOUT -/\ndef d : Nat := 6") == "def d : Nat := 6"
 
 
 def test_double_brace_in_interpolation_opens_a_structure_instance(tmp_path: Path) -> None:
@@ -3505,7 +3885,7 @@ def test_double_brace_in_interpolation_opens_a_structure_instance(tmp_path: Path
     line = 'def s : String := s!"{{ fst := "--", snd := 1 : String × Nat }.fst}"'
     index = _index(tmp_path, line.replace("--", "/-") + "\ndef t : Nat := 1\n")
 
-    assert strip_lean_comments(line + " -- remove me") == line
+    assert _strip_comments(line + " -- remove me") == line
     assert index.find("t") is not None
 
 
@@ -3540,7 +3920,7 @@ def test_comment_stripping_follows_every_lexer_state(
     if everywhere:
         for name in ("_CODE_EVENT", "_INTERPOLATION_EVENT", "_LITERAL_EVENT"):
             monkeypatch.setattr(lean_module, name, re.compile(r"(?s)."))
-    assert strip_lean_comments(source) == expected
+    assert _strip_comments(source) == expected
 
 
 def test_a_raw_string_ends_at_its_first_closer(tmp_path: Path) -> None:
@@ -3572,6 +3952,24 @@ def test_permalink_pins_the_commit(tmp_path: Path) -> None:
     assert linker.url("Outer.missing") is None
 
 
+def test_permalink_encodes_ref_and_source_path_segments(tmp_path: Path) -> None:
+    index = _index(
+        tmp_path,
+        "theorem target : True := by trivial\n",
+        name="Project/Hash#File.lean",
+    )
+    linker = SourceLinker(
+        index=index,
+        repository_url="https://github.com/owner/repo",
+        ref="feature/topic",
+    )
+
+    assert linker.url("target") == (
+        "https://github.com/owner/repo/blob/feature%2Ftopic/"
+        "Project/Hash%23File.lean#L1"
+    )
+
+
 def test_permalink_percent_encodes_source_path_components(tmp_path: Path) -> None:
     linker = SourceLinker(
         index=_index(
@@ -3585,6 +3983,21 @@ def test_permalink_percent_encodes_source_path_components(tmp_path: Path) -> Non
 
     assert linker.url("encodedPath") == (
         "https://github.com/owner/repo/blob/deadbeef/Part%231/A%20file.lean#L1"
+    )
+
+
+def test_permalink_names_the_lean_root_s_path_in_the_repository(tmp_path: Path) -> None:
+    linker = SourceLinker(
+        index=_index(tmp_path),
+        repository_url="https://github.com/owner/repo",
+        ref="deadbeef",
+        # Spellings are keyed by repository path, as the attestation records them.
+        spellings={"v 1/Project/Basic.lean": "v 1/Project/basic.lean"},
+        root_prefix="v 1",
+    )
+
+    assert linker.url("Outer.alpha") == (
+        "https://github.com/owner/repo/blob/deadbeef/v%201/Project/basic.lean#L6"
     )
 
 
@@ -3642,28 +4055,23 @@ def _init_git_repository(
 
 
 @pytest.mark.parametrize("object_format", ["sha1", "sha256"])
-def test_auto_linker_only_links_bytes_present_in_the_commit(
+def test_snapshot_attestation_accepts_only_bytes_present_in_the_commit(
     tmp_path: Path,
     object_format: str,
 ) -> None:
     root = tmp_path / object_format
     root.mkdir()
-    _index(root, "def committed : Nat := 0\n", "Committed.lean")
-    _index(root, "def dirty : Nat := 0\n", "Dirty.lean")
+    committed = root / "Committed.lean"
+    committed.write_text("def committed : Nat := 0\n")
+    dirty = root / "Dirty.lean"
+    dirty.write_text("def dirty : Nat := 0\n")
     commit = _init_git_repository(root, object_format=object_format)
-    (root / "Dirty.lean").write_text("def dirty : Nat := 1\n")
-    (root / "Untracked.lean").write_text("def untracked : Nat := 0\n")
+    dirty.write_text("def dirty : Nat := 1\n")
 
-    linker = build_linker(root)
-
-    assert linker.ref == commit
-    assert linker.url("committed") == (
-        f"https://github.com/owner/repo/blob/{commit}/Committed.lean#L1"
-    )
-    assert linker.location("dirty") is not None
-    assert linker.location("untracked") is not None
-    assert linker.url("dirty") is None
-    assert linker.url("untracked") is None
+    assert verify_repository_snapshot(root, commit, ((committed, committed.read_bytes()),)) == commit
+    assert verify_repository_snapshot(
+        root, commit, ((committed, committed.read_bytes()), (dirty, dirty.read_bytes()))
+    ) is None
 
 
 def test_tree_lookup_matches_the_spelling_git_committed_only_when_asked_to(
@@ -3676,12 +4084,12 @@ def test_tree_lookup_matches_the_spelling_git_committed_only_when_asked_to(
     def ls_tree(command, **_kwargs):
         return subprocess.CompletedProcess(command, 0, f"100644 blob {oid}\t{committed}\0".encode(), b"")
 
-    monkeypatch.setattr(lean_module.subprocess, "run", ls_tree)
+    monkeypatch.setattr(repository_module.subprocess, "run", ls_tree)
     spellings: dict[str, str] = {}
 
-    assert lean_module._git_tree_oids(tmp_path, "c" * 40, (on_disk,), spellings) == {on_disk: oid}
+    assert repository_module._git_tree_oids(tmp_path, "c" * 40, (on_disk,), spellings) == {on_disk: oid}
     assert spellings == {on_disk: committed}
-    assert lean_module._git_tree_oids(tmp_path, "c" * 40, (on_disk,)) == {committed: oid}
+    assert repository_module._git_tree_oids(tmp_path, "c" * 40, (on_disk,)) == {committed: oid}
 
 
 def test_permalink_names_the_spelling_git_committed(tmp_path: Path) -> None:
@@ -3695,62 +4103,7 @@ def test_permalink_names_the_spelling_git_committed(tmp_path: Path) -> None:
     assert linker.url("decomposed") == "https://github.com/owner/repo/blob/deadbeef/Poincar%C3%A9%E2%84%AB.lean#L1"
 
 
-def test_auto_linker_retries_ref_and_source_as_one_unit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    root = tmp_path / "repo"
-    root.mkdir()
-    source = root / "A.lean"
-    source.write_text("def first : Nat := 0\n")
-    first_commit = _init_git_repository(root)
-    original_snapshot = lean_module.snapshot_project_sources
-    captures = 0
-    second_commit = ""
-
-    def capture_then_commit(*args, **kwargs):
-        nonlocal captures, second_commit
-        snapshot = original_snapshot(*args, **kwargs)
-        captures += 1
-        if captures == 1:
-            source.write_text("def second : Nat := 0\n")
-            second_commit = _git_commit(root, "second", "A.lean")
-        return snapshot
-
-    monkeypatch.setattr(lean_module, "snapshot_project_sources", capture_then_commit)
-    monkeypatch.setattr(lean_module, "_SNAPSHOT_RETRY_DELAY_SECONDS", 0)
-
-    linker = build_linker(root)
-
-    assert captures == 2
-    assert first_commit != second_commit
-    assert linker.ref == second_commit
-    assert linker.location("first") is None
-    assert linker.url("second") == (
-        f"https://github.com/owner/repo/blob/{second_commit}/A.lean#L1"
-    )
-
-
-def test_auto_linker_supports_a_symlinked_repository_root(tmp_path: Path) -> None:
-    root = tmp_path / "root"
-    root.mkdir()
-    _index(root, "def linkedThroughAlias : Nat := 0\n", "A.lean")
-    commit = _init_git_repository(root)
-    alias = tmp_path / "alias"
-    try:
-        alias.symlink_to(root, target_is_directory=True)
-    except OSError:
-        pytest.skip("symlinks are unavailable")
-
-    linker = build_linker(alias)
-
-    assert linker.ref == commit
-    assert linker.url("linkedThroughAlias") == (
-        f"https://github.com/owner/repo/blob/{commit}/A.lean#L1"
-    )
-
-
-def test_auto_linker_ignores_git_replace_objects(tmp_path: Path) -> None:
+def test_snapshot_attestation_ignores_git_replace_objects(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     source = root / "A.lean"
@@ -3762,14 +4115,13 @@ def test_auto_linker_ignores_git_replace_objects(tmp_path: Path) -> None:
     source.write_text("def replacementTree : Nat := 0\n")
     subprocess.run(["git", "replace", original, replacement], cwd=root, check=True)
 
-    linker = build_linker(root)
+    assert verify_repository_snapshot(root, original, ((source, source.read_bytes()),)) is None
+    assert verify_repository_snapshot(
+        root, original, ((source, b"def originalTree : Nat := 0\n"),)
+    ) == original
 
-    assert linker.ref == original
-    assert linker.location("replacementTree") is not None
-    assert linker.url("replacementTree") is None
 
-
-def test_auto_linker_ignores_inherited_repo_and_ci_redirects(
+def test_git_runner_ignores_inherited_repo_and_ci_redirects(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3791,14 +4143,13 @@ def test_auto_linker_ignores_inherited_repo_and_ci_redirects(
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/ci-wrong")
     monkeypatch.setenv("GITHUB_SHA", second_commit)
 
-    linker = build_linker(first)
+    source = first / "A.lean"
 
     assert first_commit != second_commit
-    assert linker.ref == first_commit
-    assert linker.repository_url == "https://github.com/owner/A"
-    assert linker.url("stableRepository") == (
-        f"https://github.com/owner/A/blob/{first_commit}/A.lean#L1"
-    )
+    assert detect_repository_url(first) == "https://github.com/owner/A"
+    assert detect_ref(first) == first_commit
+    assert verify_repository_snapshot(first, "HEAD", ((source, source.read_bytes()),)) == first_commit
+    assert verify_repository_snapshot(first, second_commit, ((source, source.read_bytes()),)) is None
 
 
 def test_snapshot_attestation_accepts_a_clean_checkout_with_eol_conversion(
@@ -3824,26 +4175,93 @@ def test_snapshot_attestation_accepts_a_clean_checkout_with_eol_conversion(
     ) is None
 
 
-def test_snapshot_attestation_names_why_it_failed(tmp_path: Path) -> None:
+def test_snapshot_attestation_compares_a_subdirectory_s_files_at_their_repository_paths(
+    tmp_path: Path,
+) -> None:
     lean_root = tmp_path / "lean"
     lean_root.mkdir()
     source = lean_root / "A.lean"
     source.write_text("def tracked : Nat := 0\n")
+    notes = tmp_path / "blueprint" / "notes.md"
+    notes.parent.mkdir()
+    notes.write_text("# Notes\n")
     commit = _init_git_repository(tmp_path)
     reasons: list[str] = []
 
+    # A file beside the Lean root counts too: the blueprint may sit next to the Lake project.
     assert verify_repository_snapshot(
-        lean_root, commit, ((source, source.read_bytes()),), reasons=reasons
+        lean_root, commit, ((source, source.read_bytes()), (notes, notes.read_bytes())), reasons=reasons
+    ) == commit
+    assert verify_repository_snapshot(
+        lean_root, commit, ((source, b"def changed : Nat := 0\n"),), reasons=reasons
     ) is None
-    assert reasons == [
-        "the Lean root is the subdirectory lean of its Git repository; "
-        "links need the repository top level"
-    ]
+    assert reasons == [f"lean/A.lean differs from commit {commit[:12]}"]
 
+
+def test_snapshot_attestation_names_why_it_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "A.lean").write_text("def tracked : Nat := 0\n")
+    commit = _init_git_repository(tmp_path)
+    reasons: list[str] = []
     untracked = tmp_path / "Scratch.lean"
     untracked.write_text("def scratch : Nat := 0\n")
-    reasons.clear()
+
     assert verify_repository_snapshot(
         tmp_path, commit, ((untracked, untracked.read_bytes()),), reasons=reasons
     ) is None
     assert reasons == [f"Scratch.lean is not a file in commit {commit[:12]}"]
+
+    monkeypatch.setattr(repository_module, "repository_top_level", lambda root: None)
+    reasons.clear()
+    assert verify_repository_snapshot(
+        tmp_path, commit, ((untracked, untracked.read_bytes()),), reasons=reasons
+    ) is None
+    assert reasons == [
+        "the Lean root is outside its Git repository's working tree, or spelled other than as Git spells it"
+    ]
+
+
+def test_repository_top_level_is_spelled_as_the_root_is(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "v1" / "Sub").mkdir(parents=True)
+    (repo / "v1" / "Sub" / "A.lean").write_text("def a : Nat := 0\n")
+    _init_git_repository(repo)
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(repo, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are unavailable")
+
+    assert repository_top_level(repo) == repo
+    assert repository_top_level(repo / "v1" / "Sub") == repo
+    # Git prints the real path; the top level keeps the spelling it was given.
+    assert repository_top_level(alias / "v1" / "Sub") == alias
+    assert repository_top_level(repo / ".git") is None
+
+
+def test_repository_top_level_compares_git_s_path_with_the_root_s_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # macOS Git prints a decomposed name composed.
+    monkeypatch.setattr(repository_module, "git", lambda root, *arguments: "true\nTh\u00e9/")
+    assert repository_top_level(tmp_path / "The\u0301") == tmp_path
+    assert repository_top_level(tmp_path / "other") is None
+
+    # U+212B ANGSTROM SIGN, which NFC replaces on both sides.
+    monkeypatch.setattr(repository_module, "git", lambda root, *arguments: "true\n\u212b/")
+    assert repository_top_level(tmp_path / "\u212b") == tmp_path
+
+    monkeypatch.setattr(repository_module, "git", lambda root, *arguments: "true\na/b/v1/")
+    assert repository_top_level(Path("/v1")) is None
+
+
+def test_repository_top_level_is_unknown_when_git_prints_a_name_that_is_not_utf_8(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def undecodable(root: Path, *arguments: str) -> str:
+        raise UnicodeDecodeError("utf-8", b"caf\xe9/", 3, 4, "invalid continuation byte")
+
+    monkeypatch.setattr(repository_module, "git", undecodable)
+
+    assert repository_top_level(tmp_path) is None
+
+

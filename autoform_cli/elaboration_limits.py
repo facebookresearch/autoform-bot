@@ -8,17 +8,29 @@ every later declaration whether or not it needs one, and ``0`` removes the
 limit, letting elaboration run indefinitely instead of failing.
 
 Like the declaration index, this is a lexical pass over comment-free source
-lines. It tracks ``namespace``/``section``/``mutual``/``end`` nesting and
-reads commands at the declaration's own indentation, so a more deeply
-indented ``set_option`` is part of the proof above it. That is enough for
-code written in the ordinary way, and it reports nothing it cannot see.
+lines. It tracks ``namespace``/``section``/``mutual``/``end`` nesting,
+including ``noncomputable section`` and the module system's ``@[expose] public
+section``, and reads commands at the declaration's own indentation, so a more
+deeply indented ``set_option`` is part of the proof above it. That is enough
+for code written in the ordinary way, and it reports nothing it cannot see.
+
+The audit reports a file- or section-wide raise for the reason Mathlib's
+``linter.style.setOption`` rejects unscoped heartbeat limits, and accepts a
+raise put on the declaration itself with ``set_option ... in``, which is
+Mathlib practice. A catalog inventories code that already exists, so its
+limits are warnings, not findings; its message reads, for example, ``2 of 40
+catalogued declarations have no maxHeartbeats limit (Inv.alpha at Inv.lean:1
+and 1 more); existing code: change it only on request, and a finite limit
+must pass a rebuild``, and an alias listed beside its target counts once.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+
+from .lean import _CONTINUATION_IDENTIFIER, _name_parts
 
 #: Lean's defaults for the limits this module reads.
 LIMIT_DEFAULTS = {
@@ -75,20 +87,47 @@ def limits_in_force(lines: Sequence[str], line: int) -> tuple[LimitSetting, ...]
     declaration is returned, followed by every setting inside its proof.
     """
 
-    if not 0 < line <= len(lines):
-        return ()
+    return limits_by_line(lines, (line,)).get(line, ())
+
+
+def limits_by_line(lines: Sequence[str], starts: Iterable[int]) -> dict[int, tuple[LimitSetting, ...]]:
+    """Return :func:`limits_in_force` for each line in ``starts``.
+
+    The file is read once per indentation those lines start at, not once per
+    line, so the cost stays linear in the file however many declarations it holds.
+    """
+
     # Commands start at the declaration's indentation, so a file that indents
     # its commands inside a namespace is read the same way as one that does not.
-    target = lines[line - 1]
-    indent = len(target) - len(target.lstrip())
+    by_indent: dict[int, set[int]] = {}
+    for line in starts:
+        if 0 < line <= len(lines):
+            target = lines[line - 1]
+            by_indent.setdefault(len(target) - len(target.lstrip()), set()).add(line)
+    return {line: found for indent, group in by_indent.items() for line, found in _scan(lines, indent, group).items()}
+
+
+def _components(text: str) -> int:
+    """How many scopes the name at the start of ``text`` opens or closes: one per component, and one for no name."""
+
+    name = _CONTINUATION_IDENTIFIER.match(text.lstrip())
+    return len(_name_parts(name.group())) if name else 1
+
+
+def _scan(lines: Sequence[str], indent: int, starts: set[int]) -> dict[int, tuple[LimitSetting, ...]]:
+    """Read the limits for the declarations on ``starts``, which all start at ``indent``."""
 
     def is_command(text: str) -> bool:
         stripped = text.strip()
         return bool(stripped) and len(text) - len(text.lstrip()) <= indent and not _CONTINUATION.match(stripped)
 
+    found: dict[int, list[LimitSetting]] = {}
     scopes: list[dict[str, LimitSetting]] = [{}]
     pending: dict[str, LimitSetting] = {}
-    for number, text in enumerate(lines[: line - 1], start=1):
+    for number, text in enumerate(lines[: max(starts)], start=1):
+        if number in starts:
+            in_force = {**scopes[-1], **pending}
+            found[number] = [in_force[option] for option in sorted(in_force)]
         if not is_command(text):
             continue
         stripped = text.strip()
@@ -104,25 +143,25 @@ def limits_in_force(lines: Sequence[str], line: int) -> tuple[LimitSetting, ...]
         if limit is not None and rest is stripped and limit.group(3) is None:
             scope = "file" if len(scopes) == 1 else "section"
             scopes[-1][limit.group(1)] = _setting(limit, number, scope)
-        elif _SCOPE_OPEN.match(rest):
-            # A wrapper before ``mutual`` reaches every declaration in the block.
-            scopes.append({**scopes[-1], **pending})
-        elif _SCOPE_CLOSE.match(rest) and len(scopes) > 1:
-            scopes.pop()
+        elif opened := _SCOPE_OPEN.match(rest):
+            # A wrapper before ``mutual`` reaches every declaration in the block,
+            # and ``namespace A.B`` opens a scope for each component.
+            scopes.extend({**scopes[-1], **pending} for _ in range(_components(rest[opened.end() :])))
+        elif closed := _SCOPE_CLOSE.match(rest):
+            del scopes[max(1, len(scopes) - _components(rest[closed.end() :])) :]
         pending = {}
 
-    in_force = {**scopes[-1], **pending}
-    found = [in_force[option] for option in sorted(in_force)]
-    for number in range(line, len(lines) + 1):
-        text = lines[number - 1]
-        if number > line and is_command(text):
-            break
-        found.extend(_setting(limit, number, "proof") for limit in _LIMIT.finditer(text))
-    return tuple(found)
+    for line, settings in found.items():
+        for number in range(line, len(lines) + 1):
+            text = lines[number - 1]
+            if number > line and is_command(text):
+                break
+            settings.extend(_setting(limit, number, "proof") for limit in _LIMIT.finditer(text))
+    return {line: tuple(settings) for line, settings in found.items()}
 
 
 def _setting(limit: re.Match[str], line: int, scope: str) -> LimitSetting:
     return LimitSetting(limit.group(1), int(limit.group(2).replace("_", "")), line, scope)
 
 
-__all__ = ["LIMIT_DEFAULTS", "LimitSetting", "limits_in_force"]
+__all__ = ["LIMIT_DEFAULTS", "LimitSetting", "limits_by_line", "limits_in_force"]

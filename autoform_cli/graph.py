@@ -10,22 +10,50 @@ a second graph file that could drift from the book.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import stat
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, replace
+from html import unescape
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from ._fs import is_within as _is_within
 from .lean import declaration_names
-from .markdown import directory_path, link_definitions, link_targets, mask_code_and_comments, resolved_path
+from .library.pinned_names import PinnedLists, load_pinned_lists, name_warnings
+from .markdown import (
+    INLINE_CODE,
+    _INLINE_MATH,
+    _blank,
+    _is_hidden_path,
+    directory_path,
+    link_definitions,
+    link_targets,
+    markdown_links,
+    mask_code_and_comments,
+    resolved_path,
+)
+from .markdown import HEADING as _HEADING
 
 
-_HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
+#: An inline link or image; its label may hold bracket pairs, as the page reads it.
+_MARKDOWN_LINK_TEXT = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\([^)]*\)")
+#: A full, collapsed or shortcut reference link: ``[text][label]``, ``[label][]`` or ``[label]``.
+_REFERENCE_LINK_TEXT = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])+)\](?:\[([^\[\]]*)\])?")
+_HTML_TAG = re.compile(r"<[A-Za-z/!][^>]*>")
+# A code span may wrap across the paragraph's lines, as the page reads it. An
+# escaped character is matched first, so an escaped backtick opens no span;
+# inside one a backslash is literal, so ``a\`` still closes it.
+_CODE_SPAN = re.compile(r"\\.|" + INLINE_CODE.pattern, re.DOTALL)
 ARTICLE_ID_PATTERN = re.compile(r"af_[0-9a-f]{24}\Z")
 _FRONTMATTER_KEYS = frozenset(
     {
         "article_id",
+        "area",
+        "navigation",
+        "catalog",
         "declaration",
         "lean",
         "statement",
@@ -36,20 +64,31 @@ _FRONTMATTER_KEYS = frozenset(
         "not_ready",
         "origin",
         "discussion",
+        "review_approved",
         "open_statements",
+        "published",
+        "tracks_lean",
     }
 )
 _FORMALIZED = "formalized"
 _RETRACTED = "retracted"
 _TRUE = frozenset({"true", "yes"})
 _FALSE = frozenset({"false", "no"})
+_CATALOG_DECLARATION_KEYS = frozenset(
+    {"declaration", "mathlib", "mathlib_declaration", "mathlib_file"}
+)
 
 #: ``## Depends on`` carries the prerequisites needed to *state* a node;
 #: ``## Proof depends on`` carries the extra prerequisites its *proof* needs.
 #: Both are graph edges, mirroring where leanblueprint places ``\uses``.
 _STATEMENT_SECTION = "depends on"
 _PROOF_SECTION = "proof depends on"
+#: ``## Informally uses`` names what the source's argument cites but the Lean
+#: proof need not use. Its links resolve like dependencies, but derived status
+#: never counts them, and one that cannot be used is a check warning.
+_INFORMAL_SECTION = "informally uses"
 _SOURCES_SECTION = "sources"
+ATLAS_SCHEMA = "autoform-atlas/v1"
 IMPLEMENTATION_NOTES_DIR = ".implementation-notes"
 
 
@@ -77,6 +116,8 @@ class Node:
     dependencies: tuple[str, ...]
     statement_dependencies: tuple[str, ...] = ()
     proof_dependencies: tuple[str, ...] = ()
+    #: ``## Informally uses`` links, less any already among ``dependencies``.
+    informal_dependencies: tuple[str, ...] = ()
     kind: str = "node"
     lean: str | None = None
     declaration: str | None = None
@@ -97,6 +138,17 @@ class Node:
     depth: int = 0
     article_id: str | None = None
     source_sha256: str | None = None
+    catalog: str | None = None
+    summary: str | None = None
+    area: str | None = None
+    #: Presentation only: a collection is transparent in a mathematical
+    #: overview; a source is a book or other provenance, not a peer topic.
+    navigation: str | None = None
+    #: Hash of the complete review surface a person approved. Unlike the
+    #: skeleton alone, this binds the article, source, and read-backs. Kept as
+    #: written: ``review check`` reports a value that is not the current hash,
+    #: malformed or not, so loading never refuses one.
+    review_approved: str | None = None
 
     @property
     def formalizable(self) -> bool:
@@ -114,6 +166,22 @@ class Graph:
     #: statement may land with a ``sorry`` proof. Absent or ``forbidden`` keeps
     #: the strict policy, where CI rejects every ``sorry``.
     open_statements: bool = False
+    #: Folders whose ``README.md`` says ``published: false``: check validates
+    #: them, and render leaves them out of the site.
+    unpublished: tuple[Path, ...] = ()
+    #: ``tracks_lean: false`` in ``roadmap/README.md``: the project writes no
+    #: Lean, so the site shows no Lean progress.
+    tracks_lean: bool = True
+    #: What check warns about from loading without failing: a project setting
+    #: it ignores because it is misplaced or has an unknown value, then
+    #: ``## Informally uses`` links that do not resolve to another article and
+    #: the heading written below a dependency heading, where its links count.
+    #: Last come the pinned name lists' warnings about ``mathlib_declaration``
+    #: and ``mathlib_file``. :func:`informal_cycle_warnings` adds the links
+    #: whose target depends on the article.
+    warnings: tuple[str, ...] = ()
+    #: The pinned name lists in ``blueprint/libraries/``, or None without that folder.
+    pinned_names: PinnedLists | None = None
 
     @property
     def edge_count(self) -> int:
@@ -122,6 +190,10 @@ class Graph:
     def children(self, node_id: str) -> tuple[str, ...]:
         """Return the direct contained articles of *node_id*."""
         return tuple(node.id for node in self.nodes.values() if node.parent == node_id)
+
+    def lean_names(self) -> tuple[str, ...]:
+        """Return the distinct ``lean:`` names, in node order."""
+        return tuple(dict.fromkeys(name for node in self.nodes.values() for name in declaration_names(node.lean or "")))
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +205,9 @@ class _ParsedNode:
     proof_targets: tuple[str, ...]
     source_targets: tuple[str, ...]
     metadata: dict[str, str]
+    summary: str | None
+    informal_targets: tuple[str, ...] = ()
+    informal_warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,12 +233,13 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     parsed: list[_ParsedNode] = []
     canonical_ids: dict[Path, str] = {}
     node_ids: dict[str, Path] = {}
-    sources, discovery_issues = _discover_nodes(blueprint)
+    sources, discovery_issues, warnings = _discover_nodes(blueprint)
     issues.extend(discovery_issues)
     article_ids: dict[str, str] = {}
     source_hashes = {source.id: source.source_sha256 for source in sources}
     policy_page = (blueprint / "roadmap" / "README.md").resolve()
     open_statements = False
+    tracks_lean = True
 
     for source in sources:
         canonical = source.path.resolve()
@@ -199,19 +275,42 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                     )
                 else:
                     open_statements = policy == "allowed"
+            # Unlike open_statements and published, this setting never refuses a vault (#325): misplaced, or with a
+            # value other than true or false, it is ignored with a warning.
+            tracked = node.metadata.get("tracks_lean")
+            if tracked is not None:
+                if canonical != policy_page:
+                    warnings.append(
+                        f"{node.id}: tracks_lean is a project setting, read only in roadmap/README.md; ignored here"
+                    )
+                elif tracked.casefold() not in _TRUE | _FALSE:
+                    warnings.append(f"{node.id}: tracks_lean accepts only true or false; ignored")
+                else:
+                    tracks_lean = tracked.casefold() in _TRUE
+            # A role that describes containers is ignored with a warning on a declaration article (#325).
+            if node.metadata.get("navigation", "topic") != "topic" and "declaration" in node.metadata:
+                warnings.append(f"{node.id}: 'navigation' describes containers, not declaration articles; ignored here")
+                del node.metadata["navigation"]
+            if "published" in node.metadata and (canonical.name != "README.md" or canonical == policy_page):
+                issues.append(
+                    f"{node.id}: published is a folder setting; set it in a folder's README.md below roadmap/"
+                )
             parsed.append(node)
 
-    if not issues:
-        issues.extend(_implementation_note_issues(blueprint, article_ids))
     if issues:
         raise GraphValidationError(issues)
+    # A note no command can use leaves the graph whole, so it is warned about, never refused (#325).
+    warnings.extend(_implementation_note_warnings(blueprint, article_ids))
 
     parents = _article_parents(parsed, blueprint / "roadmap")
     issues.extend(_containment_cycles(parents))
     if issues:
         raise GraphValidationError(issues)
+    unpublished = tuple(sorted(node.path.parent for node in parsed if node.metadata.get("published") in _FALSE))
+    issues.extend(_unpublished_link_issues(sources, unpublished))
     nodes: dict[str, Node] = {}
     for parsed_node in parsed:
+        warnings.extend(parsed_node.informal_warnings)
 
         def resolve(targets: tuple[str, ...], node: _ParsedNode = parsed_node) -> list[str]:
             resolved: list[str] = []
@@ -231,6 +330,15 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         dependencies.extend(
             dependency for dependency in proof_dependencies if dependency not in dependencies
         )
+        informal_dependencies: list[str] = []
+        for target in parsed_node.informal_targets:
+            dependency, issue = _resolve_target(parsed_node, target, blueprint, canonical_ids, "informal target")
+            if issue:
+                warnings.append(issue)
+            elif dependency == parsed_node.id:
+                warnings.append(f"{parsed_node.id}: informally uses itself")
+            elif dependency not in dependencies and dependency not in informal_dependencies:
+                informal_dependencies.append(dependency)
         metadata = parsed_node.metadata
         nodes[parsed_node.id] = Node(
             id=parsed_node.id,
@@ -239,8 +347,10 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             dependencies=tuple(dependencies),
             statement_dependencies=tuple(statement_dependencies),
             proof_dependencies=tuple(proof_dependencies),
+            informal_dependencies=tuple(informal_dependencies),
             kind="article",
             declaration=metadata.get("declaration"),
+            catalog=metadata.get("catalog"),
             lean=metadata.get("lean"),
             statement_formalized=metadata.get("statement") == _FORMALIZED,
             statement_retracted=metadata.get("statement") == _RETRACTED,
@@ -256,38 +366,224 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             depth=_article_depth(parsed_node.id, parents),
             article_id=metadata.get("article_id"),
             source_sha256=source_hashes[parsed_node.id],
+            summary=parsed_node.summary,
+            navigation=metadata.get("navigation"),
+            area=metadata.get("area"),
+            review_approved=metadata.get("review_approved"),
         )
 
+    for node_id, area in _atlas_assignments(blueprint, nodes)[0].items():
+        nodes[node_id] = replace(nodes[node_id], area=area)
     if not issues:
         issues.extend(_find_cycles(nodes))
     if issues:
         raise GraphValidationError(issues)
-    return Graph(blueprint_dir=blueprint, nodes=nodes, open_statements=open_statements)
+    pinned_names = load_pinned_lists(blueprint)
+    # With no usable list there is nothing to compare against; each list left out is a problem of its own.
+    if pinned_names is not None and pinned_names.names:
+        for node in nodes.values():
+            warnings.extend(name_warnings(pinned_names, node.id, node.mathlib_declaration, node.mathlib_file))
+    return Graph(
+        blueprint_dir=blueprint,
+        nodes=nodes,
+        open_statements=open_statements,
+        unpublished=unpublished,
+        tracks_lean=tracks_lean,
+        warnings=tuple(warnings),
+        pinned_names=pinned_names,
+    )
 
 
-def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
+def _unpublished_link_issues(sources: list[_NodeSource], unpublished: tuple[Path, ...]) -> list[str]:
+    """Name each link from a published page into an unpublished folder, which the site lacks.
+
+    Render rewrites a page's links as text, applying their ``..`` steps, so they
+    are read that way here: a dependency, a source and a prose link alike.
+    """
+    if not unpublished:
+        return []
+    issues = []
+    for source in sources:
+        if any(_is_within(source.path, folder) for folder in unpublished):
+            continue
+        for _, target in markdown_links(source.text):
+            try:
+                split = urlsplit(target)
+            except ValueError:
+                continue  # never a path into the folder; other checks report it
+            spelled = Path(os.path.normpath(source.path.parent / unquote(split.path)))
+            if not (split.scheme or split.netloc) and any(_is_within(spelled, folder) for folder in unpublished):
+                issues.append(f"{source.id}: links to {target!r}, in an unpublished folder render omits")
+    return issues
+
+
+def unpublished_content(files: tuple[tuple[str, bytes], ...]) -> tuple[str, ...]:
+    """The folders captured *files* mark ``published: false``.
+
+    For render, which leaves those folders out before it loads the graph. A
+    README that cannot be read here fails ``load_graph`` too.
+    """
+    folders = []
+    for name, data in files:
+        parts = name.split("/")
+        if len(parts) > 2 and parts[0] == "roadmap" and parts[-1] == "README.md":
+            try:
+                metadata = _parse_frontmatter(name, data.decode("utf-8").splitlines())[0]
+            except UnicodeError:
+                continue
+            if metadata.get("published") in _FALSE:
+                folders.append(name.removesuffix("/README.md"))
+    return tuple(folders)
+
+
+def unpublished_node_ids(files: tuple[tuple[str, bytes], ...], folders: tuple[str, ...]) -> frozenset[str]:
+    """The node IDs of the articles in *folders*, as ``_article_id`` names them: a folder's README is the folder.
+
+    For render's atlas warnings, since atlas entries name node IDs, not
+    article IDs.
+    """
+    return frozenset(
+        name.removeprefix("roadmap/").removesuffix(".md").removesuffix("/README")
+        for name, _data in files
+        if name.endswith(".md") and any(name.startswith(f"{folder}/") for folder in folders)
+    )
+
+
+def atlas_omissions(graph: Graph, unpublished: frozenset[str] = frozenset()) -> list[str]:
+    """Say what ``blueprint/atlas.json`` asks for that loading ignored, for check, render and audit to warn about.
+
+    Render's graph lacks the nodes in unpublished folders; *unpublished* names
+    them, so their entries draw no warning there, as they draw none in check.
+    """
+    return _atlas_assignments(graph.blueprint_dir, graph.nodes, unpublished)[1]
+
+
+def pinned_list_omissions(graph: Graph) -> tuple[tuple[str, str], ...]:
+    """Name each pinned name list loading left out or skipped records of, and why, for check, render and audit."""
+    return () if graph.pinned_names is None else graph.pinned_names.problems
+
+
+def _atlas_assignments(
+    blueprint: Path, nodes: dict[str, Node], unpublished: frozenset[str] = frozenset()
+) -> tuple[dict[str, str], list[str]]:
+    """Read the optional authored taxonomy: the areas it assigns, and what it leaves out.
+
+    The file only assigns areas, so nothing in it stops a command. An article's
+    own ``area:`` wins, the first area listing a node wins, and a file that is
+    not readable ``autoform-atlas/v1`` JSON is ignored whole.
+    """
+    path = blueprint / "atlas.json"
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return {}, ["ignored, since it is not a regular file inside the blueprint"]
+        with path.open("rb") as handle:
+            raw = handle.read()
+    except FileNotFoundError:
+        return {}, []
+    except OSError as error:
+        return {}, [f"ignored, since it cannot be read: {error.strerror}"]
+    try:
+        payload = json.loads(raw)
+    except (ValueError, RecursionError) as error:
+        return {}, [f"ignored, since it is not valid JSON: {error}"]
+    if not isinstance(payload, dict) or payload.get("schema") != ATLAS_SCHEMA:
+        return {}, [f"ignored, since its schema is not {ATLAS_SCHEMA!r}"]
+    areas = payload.get("areas")
+    if not isinstance(areas, dict):
+        return {}, ["ignored, since its 'areas' is not an object"]
+    assigned: dict[str, str] = {}
+    omissions: list[str] = []
+    for area, node_ids in areas.items():
+        if not area.strip() or not isinstance(node_ids, list):
+            omissions.append(f"area {area!r} is ignored; it needs a name and an array of roadmap node ids")
+            continue
+        for node_id in node_ids:
+            if isinstance(node_id, str) and node_id in unpublished:
+                continue
+            if not isinstance(node_id, str) or node_id not in nodes:
+                omissions.append(f"{node_id!r} under {area!r} is ignored, since no roadmap node has that id")
+            elif node_id in assigned:
+                omissions.append(f"{node_id!r} under {area!r} is ignored, since {assigned[node_id]!r} already holds it")
+            elif nodes[node_id].area not in {None, area}:
+                omissions.append(
+                    f"{node_id!r} under {area!r} is ignored, since its frontmatter area is {nodes[node_id].area!r}"
+                )
+            else:
+                assigned[node_id] = area
+    return assigned, omissions
+
+
+def catalogs_without_ledger(graph: Graph) -> list[str]:
+    """Name each module catalog with no ``## Sources`` link into ``blueprint/sources/``.
+
+    The catalog contract asks for a declaration ledger there. A link that points
+    there at no file, or at a hidden path, is a source link that check and audit
+    report for every article, so this reads the links alone and touches no file.
+    """
+    sources = graph.blueprint_dir / "sources"
+    return [
+        node.id
+        for node in graph.nodes.values()
+        if node.catalog is not None and not any(_links_into(node.path, target, sources) for target in node.sources)
+    ]
+
+
+def _links_into(article: Path, target: str, directory: Path) -> bool:
+    """Whether the local link ``target`` in ``article`` points beneath ``directory``."""
+    try:
+        split = urlsplit(target)
+    except ValueError:
+        return False
+    if split.scheme or split.netloc or not split.path:
+        return False
+    return directory in Path(os.path.normpath(article.parent / unquote(split.path))).parents
+
+
+def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str], list[str]]:
+    """Read the roadmap's articles; return them, the errors, and the warnings."""
     roadmap_root = blueprint / "roadmap"
+    # A case-insensitive filesystem opens Roadmap/ as roadmap/, but render lists the folder
+    # as spelled and a case-sensitive one finds none, so it is refused everywhere (#595).
+    try:
+        spellings = sorted(path.name for path in blueprint.iterdir() if path.name.casefold() == "roadmap")
+    except OSError:
+        spellings = []
+    if spellings and "roadmap" not in spellings:
+        hint = f"rename {spellings[0]} to roadmap (in Git: git mv through a temporary name)"
+        return [], [f"roadmap directory does not exist: {roadmap_root}; {hint}"], []
     if not roadmap_root.is_dir():
-        return [], [f"roadmap directory does not exist: {roadmap_root}"]
+        return [], [f"roadmap directory does not exist: {roadmap_root}"], []
 
     symlink_issues = roadmap_symlink_issues(blueprint)
     if symlink_issues:
         # Containment and ids are read from paths, so one symbolic link can make two
         # pages each other's parent; refuse the layout before anything is read.
-        return [], symlink_issues
+        return [], symlink_issues, []
 
     issues: list[str] = []
+    warnings: list[str] = []
     sources: list[_NodeSource] = []
     roadmap_root = roadmap_root.resolve()
 
     def unlistable(exc: OSError) -> None:
         issues.append(f"cannot list roadmap directory {exc.filename}: {exc.strerror}")
 
-    # Unlike a glob, a walk reports each directory it cannot list.
-    entries = sorted(
-        Path(directory, name) for directory, _, files in os.walk(roadmap_root, onerror=unlistable) for name in files
-    )
+    # Unlike a glob, a walk reports each directory it cannot list. Render omits
+    # hidden entries, so they are no part of the roadmap here either.
+    entries: list[Path] = []
+    for directory, directories, files in os.walk(roadmap_root, onerror=unlistable):
+        for name in directories:
+            if name.casefold() == IMPLEMENTATION_NOTES_DIR.casefold():
+                misplaced = (Path(directory) / name).relative_to(roadmap_root.parent).as_posix()
+                warnings.append(
+                    f"{misplaced}: implementation notes directory belongs at the blueprint root, "
+                    f"as {IMPLEMENTATION_NOTES_DIR}; nothing reads it here"
+                )
+        directories[:] = [name for name in directories if not name.startswith(".")]
+        entries.extend(Path(directory, name) for name in files if not name.startswith("."))
+    entries.sort()
     issues.sort()  # a walk visits directories in arbitrary order
+    warnings.sort()
     for path in entries:
         if path.suffix != ".md" and path.name.casefold() != "readme.md":
             continue
@@ -319,11 +615,11 @@ def _discover_nodes(blueprint: Path) -> tuple[list[_NodeSource], list[str]]:
         )
 
     issues.extend(_chapter_issues(roadmap_root))
-    return sources, issues
+    return sources, issues, warnings
 
 
 def roadmap_symlink_issues(blueprint: Path) -> list[str]:
-    """Report the symbolic links among ``roadmap/`` and every path beneath it.
+    """Report the symbolic links among ``roadmap/`` and the paths beneath it that are not hidden.
 
     Graph loading and runtime projection share this policy, so ``autoform check``
     accepts exactly the roadmaps the runtime does.
@@ -332,7 +628,10 @@ def roadmap_symlink_issues(blueprint: Path) -> list[str]:
     roadmap = blueprint / "roadmap"
     # os.path.islink is False for a path it cannot stat, which discovery then reports; Path.is_symlink raises
     # before 3.14.
-    paths = [roadmap] if roadmap.is_symlink() else [path for path in sorted(roadmap.rglob("*")) if os.path.islink(path)]
+    # Hidden entries, such as an editor's lock symlink, are no part of the roadmap.
+    paths = [roadmap] if roadmap.is_symlink() else [
+        path for path in sorted(roadmap.rglob("*")) if os.path.islink(path) and not _is_hidden_path(path, roadmap)
+    ]
     return [f"roadmap contains a symbolic link: {path.relative_to(blueprint).as_posix()}" for path in paths]
 
 
@@ -364,12 +663,14 @@ def _chapter_issues(roadmap_root: Path) -> list[str]:
     """
 
     try:
-        chapters = sorted(path for path in roadmap_root.iterdir() if path.is_dir())
+        chapters = sorted(path for path in roadmap_root.iterdir() if path.is_dir() and not path.name.startswith("."))
     except OSError:
         return []
     issues = []
     for chapter in chapters:
-        articles = [path for path in chapter.rglob("*.md") if os.path.isfile(path)]
+        articles = [
+            path for path in chapter.rglob("*.md") if os.path.isfile(path) and not _is_hidden_path(path, chapter)
+        ]
         if not articles:
             continue
         if os.path.isfile(chapter / "README.md"):
@@ -383,7 +684,7 @@ def _chapter_issues(roadmap_root: Path) -> list[str]:
     return issues
 
 
-def _implementation_note_issues(
+def _implementation_note_warnings(
     blueprint: Path, article_ids: dict[str, str]
 ) -> list[str]:
     """Validate hidden, per-article implementation notes.
@@ -433,10 +734,12 @@ def _implementation_note_issues(
         # Hidden entries, such as an editor's lock symlink, are never notes.
         if path.name.startswith("."):
             continue
-        if path.is_symlink():
-            issues.append(f"{relative}: implementation note must be a regular file")
+        try:
+            mode = path.lstat().st_mode  # a folder that can be listed but not searched fails here
+        except OSError as error:
+            issues.append(f"{relative}: cannot read implementation note: {error}")
             continue
-        if not path.is_file():
+        if not stat.S_ISREG(mode):
             issues.append(f"{relative}: implementation note must be a regular file")
             continue
         if path.suffix != ".md" or not ARTICLE_ID_PATTERN.fullmatch(path.stem):
@@ -473,7 +776,9 @@ def _article_id(path: Path, roadmap_root: Path) -> str:
 
 def _article_parents(parsed: list[_ParsedNode], roadmap_root: Path) -> dict[str, str | None]:
     """Infer strict single-parent containment from nested README articles."""
-    by_path = {node.path.resolve(): node.id for node in parsed}
+    # Node paths are resolved, and discovery refused every link under roadmap/,
+    # so a README that is a node is found as spelled.
+    by_path = {node.path: node.id for node in parsed}
     parents: dict[str, str | None] = {}
     for node in parsed:
         candidate = node.path.parent
@@ -481,7 +786,7 @@ def _article_parents(parsed: list[_ParsedNode], roadmap_root: Path) -> dict[str,
             candidate = candidate.parent
         parent: str | None = None
         while _is_within(candidate, roadmap_root):
-            readme = (candidate / "README.md").resolve()
+            readme = candidate / "README.md"
             if readme in by_path:
                 parent = by_path[readme]
                 break
@@ -523,9 +828,11 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
     targets: dict[str, list[str]] = {
         _STATEMENT_SECTION: [],
         _PROOF_SECTION: [],
+        _INFORMAL_SECTION: [],
         _SOURCES_SECTION: [],
     }
     section: str | None = None
+    misplaced: list[str] = []
 
     # Fences, comments and indented code are read as the page and the audit
     # read them, so a section a reader sees never loses its links here, and a
@@ -545,6 +852,12 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
             if level <= 2:
                 heading_key = heading_text.casefold()
                 section = heading_key if level == 2 and heading_key in targets else None
+            elif section in (_STATEMENT_SECTION, _PROOF_SECTION) and heading_text.casefold() == _INFORMAL_SECTION:
+                # A deeper heading stays inside the section above it, so these links count.
+                misplaced.append(
+                    f"{node_id}: '{heading.group(1)} {heading_text}' is read as part of '## {section.capitalize()}', "
+                    "so its links count; write it as '## Informally uses'"
+                )
             continue
         if section is not None:
             targets[section].extend(link_targets(line, references))
@@ -563,8 +876,86 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         tuple(targets[_PROOF_SECTION]),
         tuple(targets[_SOURCES_SECTION]),
         metadata,
+        _extract_summary(body, references),
+        tuple(targets[_INFORMAL_SECTION]),
+        tuple(misplaced),
     )
     return parsed, []
+
+
+def _extract_summary(body: list[str], references: dict[str, str], *, limit: int = 420) -> str | None:
+    """Return the first reader-facing prose paragraph from a roadmap article.
+
+    ``body`` is the article below its frontmatter with fences, comments and
+    indented code already masked, and ``references`` its link definitions, so
+    the summary reads what the page shows.
+    """
+
+    def unwrap(link: re.Match[str]) -> str:
+        # Without a definition, the page shows a reference link's brackets as written.
+        label = " ".join((link.group(2) or link.group(1)).lower().split())
+        return link.group(1) if label in references else link.group(0)
+
+    paragraph: list[str] = []
+    excluded = False
+    for raw in body:
+        heading = _HEADING.match(raw)
+        if heading:
+            if paragraph:
+                break
+            excluded = len(heading.group(1)) == 2 and heading.group(2).strip().casefold() in {
+                _STATEMENT_SECTION,
+                _PROOF_SECTION,
+                _INFORMAL_SECTION,
+                _SOURCES_SECTION,
+            }
+            continue
+        text = raw.strip()
+        # The page ends a paragraph at a reference definition, as at a blank line.
+        if not text or link_definitions([raw]):
+            if paragraph:
+                break
+            continue
+        if excluded or text.startswith(("- ", "* ", "+ ", "> ", "|", "$$", "\\[", "<div")):
+            continue
+        text = _MARKDOWN_LINK_TEXT.sub(r"\1", text)
+        text = _REFERENCE_LINK_TEXT.sub(unwrap, text)
+        if unescape(_strip_markup(text)).strip():
+            paragraph.append(text)
+    # Inline math may wrap across the paragraph's lines, so markup is read in the whole paragraph.
+    summary = " ".join(unescape(_strip_markup("\n".join(paragraph))).split())
+    if not summary:
+        return None
+    if len(summary) <= limit:
+        return summary
+    clipped = summary[: limit - 1].rsplit(" ", 1)[0]
+    return (clipped or summary[: limit - 1]).rstrip() + "…"
+
+
+def _strip_markup(text: str) -> str:
+    """Drop inline HTML and strong emphasis from *text*, but not from its code or math.
+
+    A tag runs from ``<`` and a letter, ``/`` or ``!`` to ``>``, so stripping
+    across inline math read ``For $0 <a$ and $r > 0$`` as one tag. Code spans,
+    then inline math, are read first, as the page reads them.
+    """
+
+    def strip(prose: str) -> str:
+        return _HTML_TAG.sub("", prose).replace("**", "").replace("__", "")
+
+    code = [match for match in _CODE_SPAN.finditer(text) if match[1]]
+    code_masked = _CODE_SPAN.sub(lambda match: _blank(match) if match[1] else match[0], text)
+    spans = sorted(match.span() for match in (*code, *_INLINE_MATH.finditer(code_masked)))
+    parts: list[str] = []
+    end = 0
+    for start, stop in spans:
+        # A code span inside inline math is already kept with it.
+        if start < end:
+            continue
+        parts.extend((strip(text[end:start]), text[start:stop]))
+        end = stop
+    parts.append(strip(text[end:]))
+    return "".join(parts)
 
 
 def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], int, list[str]]:
@@ -602,6 +993,13 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
             continue
         metadata[key] = value
 
+    if "catalog" in metadata:
+        for key in sorted(_CATALOG_DECLARATION_KEYS.intersection(metadata)):
+            issues.append(
+                f"{node_id}: 'catalog' cannot be combined with declaration-specific "
+                f"frontmatter key {key!r}"
+            )
+
     if metadata.get("statement") == _RETRACTED:
         if "lean" not in metadata:
             issues.append(
@@ -619,7 +1017,13 @@ def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], 
         issues.append(f"{node_id}: proof: formalized needs statement: formalized")
     formalized = [key for key in ("statement", "proof") if metadata.get(key) == _FORMALIZED]
     if formalized and not declaration_names(metadata.get("lean", "")):
-        issues.append(f"{node_id}: {formalized[0]}: formalized needs the lean: declaration that formalizes it")
+        if metadata.get("catalog") is not None:
+            issues.append(
+                f"{node_id}: {formalized[0]}: formalized on a module catalog needs the lean: names "
+                "of the public declarations it inventories"
+            )
+        else:
+            issues.append(f"{node_id}: {formalized[0]}: formalized needs the lean: declaration that formalizes it")
     return metadata, end + 1, issues
 
 
@@ -631,6 +1035,14 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
         if not ARTICLE_ID_PATTERN.fullmatch(value):
             return value, f"{location}: malformed article_id {value!r}"
         return value, None
+    if key == "catalog":
+        if folded != "module":
+            return value, f"{location}: 'catalog' accepts only 'module'"
+        return folded, None
+    if key == "navigation":
+        if folded not in {"topic", "collection", "source", "transparent", "module"}:
+            return value, f"{location}: 'navigation' accepts topic, collection, source, transparent, or module"
+        return folded, None
     if key == "statement":
         if folded not in {_FORMALIZED, _RETRACTED}:
             return value, (
@@ -641,7 +1053,7 @@ def _normalize_value(node_id: str, line_number: int, key: str, value: str) -> tu
         if folded != _FORMALIZED:
             return value, f"{location}: {key!r} accepts only {_FORMALIZED!r}; omit the key otherwise"
         return folded, None
-    if key in {"mathlib", "not_ready"}:
+    if key in {"mathlib", "not_ready", "published"}:
         if folded not in _TRUE | _FALSE:
             return value, f"{location}: {key!r} accepts only true or false"
         return folded, None
@@ -667,38 +1079,59 @@ def _resolve_target(
     target: str,
     blueprint: Path,
     canonical_ids: dict[Path, str],
+    label: str = "dependency target",
 ) -> tuple[str | None, str | None]:
     try:
         split = urlsplit(target)
     except ValueError:
-        return None, f"{node.id}: dependency target must be a relative Markdown path: {target!r}"
+        return None, f"{node.id}: {label} must be a relative Markdown path: {target!r}"
     if split.scheme or split.netloc or split.query:
-        return None, f"{node.id}: dependency target must be a relative Markdown path: {target!r}"
+        return None, f"{node.id}: {label} must be a relative Markdown path: {target!r}"
     raw_path = unquote(split.path)
     if not raw_path:
-        return None, f"{node.id}: dependency target must name a Markdown file: {target!r}"
+        return None, f"{node.id}: {label} must name a Markdown file: {target!r}"
     if "\x00" in raw_path:
-        return None, f"{node.id}: dependency target contains an invalid path: {target!r}"
+        return None, f"{node.id}: {label} contains an invalid path: {target!r}"
     relative = Path(raw_path)
     if relative.is_absolute() or relative.suffix != ".md":
-        return None, f"{node.id}: dependency target must be a relative .md file: {target!r}"
+        return None, f"{node.id}: {label} must be a relative .md file: {target!r}"
 
     # A path that leaves the blueprint as spelled escapes it; nothing outside is looked at.
-    if not _is_within(Path(os.path.normpath(node.path.parent / relative)), blueprint):
-        return None, f"{node.id}: dependency target escapes the blueprint directory: {target!r}"
+    spelled = Path(os.path.normpath(node.path.parent / relative))
+    if not _is_within(spelled, blueprint):
+        return None, f"{node.id}: {label} escapes the blueprint directory: {target!r}"
+    # Render's copy has no hidden folder, so it cannot step through one and back out either.
+    if any(part.startswith(".") and part != ".." for part in relative.parts):
+        return None, f"{node.id}: {label} names a hidden path, which render omits: {target!r}"
+    # Node paths are resolved, and discovery refused every link under roadmap/.
+    # So ".." steps that stay in roadmap/, then plain names, reach a node as
+    # spelled; anything else is looked up on disk below. Windows paths compare
+    # without case, which a case-sensitive folder does not, so there the disk decides.
+    steps = raw_path.split("/")
+    up = next((n for n, step in enumerate(steps) if step != ".."), len(steps))
+    roadmap = blueprint / "roadmap"
+    if (
+        os.name != "nt"
+        and all(step and not step.startswith(".") for step in steps[up:])
+        and _is_within(node.path.parent, roadmap)
+        and up <= len(node.path.parent.parts) - len(roadmap.parts)
+    ):
+        dependency = canonical_ids.get(node.path.parents[up].joinpath(*steps[up:]))
+        if dependency is not None:
+            return dependency, None
     resolved = resolved_path(node.path.parent / relative)
     if resolved is None:
         # The kernel reaches a file behind a link only `readlink` refuses.
         why = "cannot be resolved" if os.path.exists(node.path.parent / relative) else "does not exist"
-        return None, f"{node.id}: dependency target {why}: {target!r}"
+        return None, f"{node.id}: {label} {why}: {target!r}"
     if not _is_within(resolved, blueprint):
-        return None, f"{node.id}: dependency target escapes the blueprint directory: {target!r}"
+        return None, f"{node.id}: {label} escapes the blueprint directory: {target!r}"
     # Before Python 3.14, `Path.is_file` raises under an unreadable directory.
     if not os.path.isfile(resolved):
-        return None, f"{node.id}: dependency target does not exist: {target!r}"
+        return None, f"{node.id}: {label} does not exist: {target!r}"
     dependency = canonical_ids.get(resolved)
     if dependency is None:
-        return None, f"{node.id}: dependency target is not a node: {target!r}"
+        return None, f"{node.id}: {label} is not a node: {target!r}"
     return dependency, None
 
 
@@ -743,17 +1176,44 @@ def _find_cycles(nodes: dict[str, Node]) -> list[str]:
     return issues
 
 
-def _is_within(path: Path, directory: Path) -> bool:
-    try:
-        path.relative_to(directory)
-    except ValueError:
-        return False
-    return True
+def informal_cycle_warnings(graph: Graph) -> list[str]:
+    """Name each informal link whose target depends on its article, through counted edges.
+
+    Status never reads the link, so it closes no cycle there; drawn beside the
+    dependencies, it would. Only check reports these, so loading does not pay
+    for the searches.
+    """
+    nodes = graph.nodes
+    issues: list[str] = []
+    for node in nodes.values():
+        for target in node.informal_dependencies:
+            # Breadth first from the target, so the path named is a shortest one.
+            previous: dict[str, str | None] = {target: None}
+            queue = deque([target])
+            while queue and node.id not in previous:
+                current = queue.popleft()
+                for dependency in nodes[current].dependencies:
+                    if dependency not in previous:
+                        previous[dependency] = current
+                        queue.append(dependency)
+            if node.id in previous:
+                path: list[str] = []
+                step: str | None = node.id
+                while step is not None:
+                    path.append(step)
+                    step = previous[step]
+                issues.append(f"{node.id}: informally uses {target}, which depends on it: {' -> '.join(reversed(path))}")
+    return issues
 
 
 __all__ = [
     "Graph",
     "GraphValidationError",
     "Node",
+    "atlas_omissions",
+    "catalogs_without_ledger",
     "load_graph",
+    "pinned_list_omissions",
+    "unpublished_content",
+    "unpublished_node_ids",
 ]

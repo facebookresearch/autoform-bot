@@ -18,8 +18,9 @@ from types import SimpleNamespace
 import psutil
 import pytest
 
+from servers._process import processes_with_token
 from servers.lsp import server as lsp
-from tests.test_impact import _SKELETON_FIXTURE, _lean_toolchain_available
+from tests.lean_fixture import _real_lean_project, _requires_real_lean
 
 
 class _FakeStream:
@@ -336,9 +337,11 @@ def test_abort_retries_the_token_sweep_before_reaping_the_leader(monkeypatch):
     # Each scan of the first attempt finds a process carrying the token, so
     # one is left after SIGKILL; the retry's first scan finds none.
     scans = iter([[_FakeTokenCarrier(events)]] * 3)
+    # Asserting inside the scan would only be retried by abort, so record.
+    calls: list[tuple[str, str]] = []
 
-    def scan(token):
-        assert token == "session-token"
+    def scan(name, token):
+        calls.append((name, token))
         events.append("scan")
         return next(scans, [])
 
@@ -346,7 +349,7 @@ def test_abort_retries_the_token_sweep_before_reaping_the_leader(monkeypatch):
         events.append("reap")
         owned.wait()
 
-    monkeypatch.setattr(lsp, "_processes_with_token", scan)
+    monkeypatch.setattr(lsp, "processes_with_token", scan)
     monkeypatch.setattr(lsp, "_terminate_process_group", lambda process_group_id: events.append("group"))
     monkeypatch.setattr(lsp, "_reap_process", reap)
     monkeypatch.setattr(lsp.time, "sleep", lambda delay: None)
@@ -357,6 +360,7 @@ def test_abort_retries_the_token_sweep_before_reaping_the_leader(monkeypatch):
     # the retired group again, and the leader was reaped only after a sweep
     # found nothing left.
     assert events == ["group", "scan", "SIGTERM", "scan", "SIGKILL", "scan", "scan", "reap"]
+    assert calls == [(lsp._SESSION_TOKEN_ENV, "session-token")] * 4
     assert session.process is None
 
 
@@ -366,7 +370,7 @@ def test_token_sweep_signals_only_what_its_latest_scan_found(monkeypatch):
     session = _owned_session(_FakeProcess(), "session-token")
     signals: list[str] = []
     scans = iter([[_FakeTokenCarrier(signals)], []])
-    monkeypatch.setattr(lsp, "_processes_with_token", lambda token: next(scans, []))
+    monkeypatch.setattr(lsp, "processes_with_token", lambda name, token: next(scans, []))
     monkeypatch.setattr(lsp, "_terminate_process_group", lambda process_group_id: None)
     monkeypatch.setattr(lsp, "_reap_process", lambda owned: owned.wait())
 
@@ -539,7 +543,7 @@ def test_abort_refuses_to_signal_a_pre_reaped_leader_with_live_group(monkeypatch
 
     monkeypatch.setattr(
         lsp,
-        "_process_group_has_live_members",
+        "process_group_has_live_members",
         lambda process_group_id: True,
     )
     monkeypatch.setattr(
@@ -575,7 +579,9 @@ def test_token_scan_finds_only_the_processes_carrying_the_token():
     }
     try:
         # Popen returns once the child has exec'd, so its environment is set.
-        assert [process.pid for process in lsp._processes_with_token(token)] == [processes["this session"].pid]
+        assert [process.pid for process in processes_with_token(lsp._SESSION_TOKEN_ENV, token)] == [
+            processes["this session"].pid
+        ]
     finally:
         for process in processes.values():
             process.kill()
@@ -605,7 +611,25 @@ def test_token_scan_leaves_out_processes_it_cannot_read(monkeypatch):
     monkeypatch.setattr(psutil, "pids", lambda: list(candidates))
     monkeypatch.setattr(psutil, "Process", lambda pid: candidates[pid])
 
-    assert lsp._processes_with_token("session-token") == [candidates[1]]
+    assert processes_with_token(lsp._SESSION_TOKEN_ENV, "session-token") == [candidates[1]]
+
+
+def test_token_scan_reads_the_variable_it_is_given(monkeypatch):
+    class Candidate:
+        def __init__(self, environment):
+            self.environment = environment
+
+        def environ(self):
+            return self.environment
+
+    candidates = {
+        1: Candidate({"OTHER_TOKEN": "session-token"}),
+        2: Candidate({lsp._SESSION_TOKEN_ENV: "session-token"}),
+    }
+    monkeypatch.setattr(psutil, "pids", lambda: list(candidates))
+    monkeypatch.setattr(psutil, "Process", lambda pid: candidates[pid])
+
+    assert processes_with_token("OTHER_TOKEN", "session-token") == [candidates[1]]
 
 
 def test_token_scan_fails_when_the_process_table_cannot_be_read(monkeypatch):
@@ -616,7 +640,7 @@ def test_token_scan_fails_when_the_process_table_cannot_be_read(monkeypatch):
 
     # The attempt fails, so close and abort retry instead of reaping the leader.
     with pytest.raises(RuntimeError, match="cannot read the process table"):
-        lsp._processes_with_token("session-token")
+        processes_with_token(lsp._SESSION_TOKEN_ENV, "session-token")
 
 
 @pytest.mark.parametrize(
@@ -635,14 +659,14 @@ def test_token_scan_fails_on_any_other_environment_error(monkeypatch, error):
     # Only exited and unreadable processes are passed over; anything else
     # fails the attempt, so close and abort retry.
     with pytest.raises(type(error)):
-        lsp._processes_with_token("session-token")
+        processes_with_token(lsp._SESSION_TOKEN_ENV, "session-token")
 
 
 @pytest.mark.parametrize("token", [None, ""], ids=["none", "empty"])
 def test_token_scan_refuses_a_missing_token(token):
     # A missing token would match every process without the variable.
     with pytest.raises(ValueError, match="nonempty"):
-        lsp._processes_with_token(token)
+        processes_with_token(lsp._SESSION_TOKEN_ENV, token)
 
 
 def test_concurrent_abort_and_close_serialize_owned_cleanup(monkeypatch):
@@ -967,23 +991,6 @@ def test_close_stops_workers_orphaned_before_close():
             _kill_quietly(child)
         if session.process is not None:
             session.abort()
-
-
-_requires_real_lean = pytest.mark.skipif(
-    not _lean_toolchain_available(), reason="needs lake and the fixture's Lean toolchain"
-)
-
-
-def _real_lean_project(root: Path, main: str, **modules: str) -> Path:
-    (root / "Probe").mkdir(parents=True)
-    (root / "lean-toolchain").write_text(
-        (_SKELETON_FIXTURE / "lean-toolchain").read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    (root / "lakefile.toml").write_text('name = "probe"\n\n[[lean_lib]]\nname = "Probe"\n', encoding="utf-8")
-    (root / "Probe" / "Main.lean").write_text(main, encoding="utf-8")
-    for name, text in modules.items():
-        (root / "Probe" / f"{name}.lean").write_text(text, encoding="utf-8")
-    return root
 
 
 def _command_mentions(process: psutil.Process, text: str) -> bool:

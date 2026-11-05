@@ -1,80 +1,104 @@
-# AutoformBot
+<h1 align="center"><img src="assets/autoform-small.svg" width="88" alt=""><br>AutoformBot</h1>
 
-A plugin for Claude Code and Codex that helps turn mathematical papers and
-notes into Lean 4 formalizations: plan the work, write proofs, and review
-progress from your coding assistant.
+<p align="center">
+  <strong>Turn a paper or your notes into a Lean 4 formalization you can check.</strong><br>
+  A plugin for your coding assistant: Claude Code, Muse Code or Codex.
+</p>
+
+<p align="center">
+  <a href="#what-you-get">What you get</a> · <a href="#installation">Installation</a> ·
+  <a href="#quick-start">Quick start</a> · <a href="skills/setup/assets/cabannes-thesis-project/README.md">Example</a>
+</p>
+
+## What you get
+
+Point AutoformBot at a paper, a book chapter or your notes. It plans the formalization, has agents carry it out in Lean,
+and shows exactly what is proved. See the [example project](skills/setup/assets/cabannes-thesis-project/README.md).
+
+```mermaid
+flowchart LR
+  setup["<b>setup</b><br>Lean project and blueprint"] --> roadmap["<b>roadmap</b><br>articles and dependencies"]
+  source(["Paper or notes"]) --> roadmap
+  roadmap --> formalize["<b>formalize</b><br>Lean definitions and proofs"]
+  roadmap & formalize -.-> review["<b>human-review</b> · <b>agent-review</b><br>inspect the plan or the proofs"]
+  roadmap & formalize --> site[("Blueprint site<br>book and dependency map")]
+```
 
 ## Installation
 
-Requires Python 3.10+, [`uv`](https://docs.astral.sh/uv/), Git, and Lean 4
-v4.27.0 or newer with Lake.
+Requires Python 3.11+, [`uv`](https://docs.astral.sh/uv/), Git, and Lean 4 v4.27.0 or newer with Lake.
 
 **Claude Code**
 
 ```bash
-claude plugin marketplace add facebookresearch/autoform-bot
+claude plugin marketplace add facebookresearch/autoform-bot@v0.6.0
 claude plugin install autoform@autoform
+```
+
+**Muse Code**
+
+```bash
+muse plugins marketplace add autoform 'https://github.com/facebookresearch/autoform-bot.git#v0.6.0'
+muse plugins install autoform@autoform
 ```
 
 **Codex**
 
 ```bash
-codex plugin marketplace add facebookresearch/autoform-bot --ref main
+codex plugin marketplace add facebookresearch/autoform-bot --ref v0.6.0
 codex plugin add autoform@autoform
 ```
 
-After installing, start a new session in the repository you want to inspect or
-set up.
+These commands install release 0.6.0. Then start a new session in your project, or anywhere for a new project.
+
+<details>
+<summary>Other install options</summary>
+
+- **On Claude Code before 2.1.71**, run `claude plugin marketplace add 'facebookresearch/autoform-bot#v0.6.0'` instead.
+- **To follow `main`**, drop the `@v0.6.0` or `#v0.6.0` suffix, and give Codex `--ref main`.
+- **To move from `main` onto the release**, remove the `autoform` marketplace, then run the commands above.
+  Claude Code: `claude plugin marketplace remove autoform`. Codex: `codex plugin marketplace remove autoform`.
+  Muse Code: `muse plugins remove autoform`, then `muse plugins marketplace remove autoform`.
+
+</details>
 
 ## Quick start
 
-Use these skills from your agent window; users do not need to learn or run its
-commands:
+Type these into your coding assistant; it runs AutoformBot's CLI for you.
 
-| Task | Claude Code | Codex |
-| --- | --- | --- |
-| Set up the project | `/autoform:setup` | `$autoform:setup` |
-| Plan from a paper or notes | `/autoform:roadmap` | `$autoform:roadmap` |
-| Write Lean definitions and proofs | `/autoform:formalize` | `$autoform:formalize` |
-| Review the roadmap and progress | `/autoform:human-review` | `$autoform:human-review` |
-| Request an independent AI review | `/autoform:agent-review` | `$autoform:agent-review` |
+| Step | Claude Code, Muse Code | Codex | What it does |
+| :-: | --- | --- | --- |
+| 1 | `/autoform:setup` | `$autoform:setup` | Set up the Lean project and blueprint |
+| 2 | `/autoform:roadmap` | `$autoform:roadmap` | Plan from a paper or notes |
+| 3 | `/autoform:formalize` | `$autoform:formalize` | Write Lean definitions and proofs |
+| Any time | `/autoform:human-review` | `$autoform:human-review` | Review the roadmap, progress and statements |
+| Any time | `/autoform:agent-review` | `$autoform:agent-review` | Request an independent AI review |
 
-Start with `setup`, then use `roadmap` to plan your formalization and
-`formalize` to work through it. Use either review command to inspect the plan
-or the resulting formalization.
+For example, invoke `roadmap` and ask: "Build a complete roadmap for Sections 2–4 of `paper.pdf`." Keep the source
+in your project, or give a path the agent can read.
 
-For example, invoke `roadmap` and ask:
+## Run several sessions
 
-> Build a complete roadmap for Sections 2–4 of `paper.pdf`.
+One session runs only so many agents at once, so for a large project, run several sessions. In Codex, one session may
+be enough once you raise `max_threads` under `[agents]` in `~/.codex/config.toml`. Sessions divide the work by
+claiming roadmap articles on a shared claim board, kept as Git refs on the project's `origin`.
 
-Keep the source file in your project or provide an accessible path.
+1. Give each session its own clone of the project, with the same `origin` and the same branch (not a `git worktree`).
+2. Tell each session that other sessions share the project, and let it push claims and verified results to
+   `origin`. Do this even when they all start together: each one sees an empty claim board and would otherwise work
+   without claims.
 
-Setup changes local files by default. Creating or pushing a remote repository,
-enabling GitHub Pages, and publishing blueprint content require an explicit
-request; content published through Pages is public.
+For example, invoke `formalize` in each session and ask: "Formalize the results that are ready. Four other sessions
+share this project; use claims, and push claims and verified results to `origin`."
 
-## Blueprint model
-
-Autoform keeps the roadmap and dependency graph as Markdown under
-`blueprint/`; publication graphs and pages are derived. See the
-[blueprint format and CLI reference](autoform_cli/README.md) for the complete
-format and command contracts, or browse the
-[Cabannes thesis example](skills/setup/assets/cabannes-thesis-project/README.md).
+Sessions on one machine share its memory, and each builds Lean, so start only as many as fit. They also share one
+Lean runtime, the process behind the plugin's Lean tools; [`servers/README.md`](servers/README.md) gives its limits.
 
 ## Development
 
-```bash
-git clone https://github.com/facebookresearch/autoform-bot.git
-cd autoform-bot
-make setup
-make lint
-make test
-make check-example
-```
+Clone with `git clone https://github.com/facebookresearch/autoform-bot.git`, then follow
+[CONTRIBUTING.md](CONTRIBUTING.md). The [blueprint format and CLI reference](autoform_cli/README.md),
+[`servers/README.md`](servers/README.md) and the [changelog](CHANGELOG.md) cover the rest. MIT [license](LICENSE).
 
-Lean server architecture and operations are documented in
-[`servers/README.md`](servers/README.md).
-
-## License
-
-[MIT](LICENSE).
+Issues and ideas are welcome. After a setup, roadmap or formalize run, your agent may end its report with a link to a
+draft issue about where AutoformBot got in its way; you decide whether to send it. `AUTOFORM_DEBRIEF=0` turns this off.

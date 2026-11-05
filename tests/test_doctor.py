@@ -139,6 +139,15 @@ def test_audit_findings_fail_only_the_audit_check(tmp_path: Path) -> None:
     assert _checks(result)["audit"] == (False, "1 finding(s): declared-coverage-gap")
 
 
+def test_review_approval_does_not_fail_the_roadmap_audit(tmp_path: Path) -> None:
+    project = _clean_project(tmp_path, metadata=("declaration: theorem", "review_approved: sha256:" + "a" * 64))
+
+    result = diagnose_project(project)
+
+    assert result.clean
+    assert _checks(result)["audit"] == (True, "roadmap audit passed")
+
+
 def test_optional_lean_targets_report_success_missing_and_kind_mismatch(tmp_path: Path) -> None:
     project = _clean_project(
         tmp_path,
@@ -166,6 +175,48 @@ def test_optional_lean_targets_report_success_missing_and_kind_mismatch(tmp_path
     source.write_text("def Project.result : Nat := 1\n", encoding="utf-8")
     mismatch = diagnose_project(project, lean_root=lean_root)
     assert _checks(mismatch)["lean targets"] == (False, "1 finding(s): lean-target-kind-mismatch")
+
+
+def test_module_catalog_targets_must_resolve(tmp_path: Path) -> None:
+    project = _clean_project(
+        tmp_path,
+        metadata=(
+            "catalog: module",
+            "lean: Missing.noSuchDeclaration",
+            "statement: formalized",
+            "proof: formalized",
+        ),
+    )
+    article = project / "blueprint" / "roadmap" / "result.md"
+    article.write_text(
+        article.read_text(encoding="utf-8")
+        + "\n## Sources\n\n- [ledger](../sources/catalog.md)\n",
+        encoding="utf-8",
+    )
+    ledger = project / "blueprint" / "sources" / "catalog.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("# Catalog\n", encoding="utf-8")
+    (project / "blueprint" / "coverage" / "README.md").write_text(
+        "# Coverage\n\n"
+        "| Area | Coverage | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Existing module | INVENTORIED | [Catalog](../roadmap/result.md) |\n",
+        encoding="utf-8",
+    )
+    lean_root = tmp_path / "lean"
+    lean_root.mkdir()
+    (lean_root / "Other.lean").write_text(
+        "theorem Existing.other : True := by trivial\n",
+        encoding="utf-8",
+    )
+
+    result = diagnose_project(project, lean_root=lean_root)
+
+    assert not result.clean
+    assert _checks(result)["lean targets"] == (
+        False,
+        "1 finding(s): lean-target-not-found",
+    )
 
 
 def test_a_deprecated_lean_target_fails_the_lean_targets_check(tmp_path: Path) -> None:
@@ -223,7 +274,7 @@ def test_an_unindexable_lean_source_fails_only_the_lean_targets_check(tmp_path: 
     assert str(tmp_path) not in result.to_json()
 
 
-def test_an_oversized_node_fails_the_lean_targets_check_not_the_audit(tmp_path: Path) -> None:
+def test_an_oversized_node_fails_neither_the_lean_targets_check_nor_the_audit(tmp_path: Path) -> None:
     project = _clean_project(tmp_path)
     lean_root = tmp_path / "lean"
     lean_root.mkdir()
@@ -236,7 +287,7 @@ def test_an_oversized_node_fails_the_lean_targets_check_not_the_audit(tmp_path: 
     result = diagnose_project(project, lean_root=lean_root)
 
     assert _checks(result)["audit"] == (True, "roadmap audit passed")
-    assert _checks(result)["lean targets"] == (False, "1 finding(s): node-too-large")
+    assert _checks(result)["lean targets"] == (True, "all asserted local Lean targets resolve")
 
 
 def test_doctor_captures_the_lean_sources_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
