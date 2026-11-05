@@ -54,6 +54,7 @@ import unicodedata
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from itertools import takewhile
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote_from_bytes
 
@@ -95,6 +96,12 @@ _SCANNED_LINE = re.compile(
     rf"\s*(?:#exit|namespace|section|mutual|end|@\[|{_SECTION_MODIFIERS}|{_DECLARATION_MODIFIERS}"
     rf"|{_DECLARATION_KEYWORDS})"
 )
+#: What may start a line indented no deeper than a declaration and still belong to it: an alternative,
+#: a ``where`` block, a trailing clause (not the ``deriving instance`` command) or a closing bracket,
+#: which starts no command.
+_CONTINUATION = re.compile(r"\s*(?:[|)\]}⟩⦄]|(?:where|deriving(?!\s+instance\b)|termination_by|decreasing_by)\b)")
+#: An ``open`` command's namespaces, up to the clause, if any, that limits what it opens.
+_OPEN = re.compile(r"^[ \t]*open[ \t]+(?:scoped[ \t]+)?([^\n(]*)", re.MULTILINE)
 # Core command heads and their modifiers cannot supply a declaration's name.
 # Compare complete identifiers: `open'`, `Qualified.open` and `«open»` are names.
 # These cover the core command parsers and their stock syntax extensions. The
@@ -1333,6 +1340,25 @@ _ID_LETTER = (
 _ID_REST = rf"[{_ID_LETTER}0-9'!?\u2080-\u2089\u2090-\u209c\u1d62-\u1d6a\u2c7c]*"
 _ID_COMPONENT = rf"(?:{_QUOTED_COMPONENT}|[{_ID_LETTER}]{_ID_REST})"
 _CONTINUATION_IDENTIFIER = re.compile(rf"{_ID_COMPONENT}(?:\.{_ID_COMPONENT})*")
+#: The names a binder introduces: before the colon of a bracketed binder, after ``fun``, a quantifier, a big
+#: operator, ``let`` or ``have``, or before the bar of a set-builder or subtype. An instance binder with no name
+#: binds none. Tactics, where ``obtain`` and ``rintro`` bind, are never linked.
+_BINDER = re.compile(
+    rf"(?:[(\[{{⦃]\s*((?:{_ID_COMPONENT}\s+)*{_ID_COMPONENT})\s*:(?!=)"
+    rf"|(?:\b(?:fun|let|have)\b|[λ∀∃∑∏⋃⋂⨆⨅])!?\s*((?:{_ID_COMPONENT}\s+)*{_ID_COMPONENT})"
+    rf"|{{\s*((?:{_ID_COMPONENT}\s+)*{_ID_COMPONENT})\s*(?:\||//))"
+)
+#: Where a pattern binds names: a match alternative before its ``=>``, or an anonymous constructor after ``fun``,
+#: ``λ``, ``let`` or ``have``.
+_PATTERN = re.compile(
+    r"\|(?!\|)([^|\n]*?)=>|(?:\b(?:fun|let|have)\b|λ)\s*(⟨[^\n]*?)(?:=>|↦|:=|$)", re.MULTILINE
+)
+#: The indent of a ``where`` block's first line, whose fields and local helpers are names it declares.
+_WHERE = re.compile(r"\bwhere[ \t]*\n([ \t]+)")
+#: A name in a pattern that is no part of a dotted name, so neither a constructor nor a field.
+_PATTERN_NAME = re.compile(rf"(?<![\w.'!?»]){_ID_COMPONENT}(?![\w.'!?«])")
+#: The modules an ``import`` command names.
+_IMPORT = re.compile(r"^[ \t]*(?:(?:public|private|meta)[ \t]+)*import[ \t]+(?:all[ \t]+)?([^\n]*)", re.MULTILINE)
 #: Lean's ASCII identifiers (isIdFirstAscii and isIdRestAscii): the only module
 #: names the impact probe imports and a library index holds.
 _ASCII_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_'!?]*")
@@ -1614,9 +1640,59 @@ def declaration_names(lean: str) -> list[str]:
     return _DECLARATION_NAME.findall(lean)
 
 
+def declaration_text(lines: list[str], declaration: Declaration) -> str:
+    """``declaration`` as written in ``lines``, its file's lines: from its attributes and modifiers on the
+    lines above its keyword, if any, to its own last line.
+
+    The index records only where a declaration starts. It ends before the next line indented no deeper
+    than its keyword's that is not an alternative, a ``where`` block, a trailing clause or a closing
+    bracket: a comment, an attribute, the next command or an ``end``. A body written at that indent is
+    cut short there.
+    """
+
+    start = declaration.line - 1
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    # An attribute line can end in a comment, as the index, which reads lines without their comments, allows.
+    while start and (head := lines[start - 1].split("--", 1)[0]).strip() and _MODIFIER_LINE.fullmatch(head):
+        start -= 1
+    end = declaration.line
+    for number, line in enumerate(lines[declaration.line :], declaration.line + 1):
+        if line.strip():
+            if len(line) - len(line.lstrip()) <= indent and not _CONTINUATION.match(line):
+                break
+            end = number
+    return "\n".join(lines[start:end])
+
+
+def _opened(text: str) -> list[tuple[int, list[str]]]:
+    """Each ``open`` command in *text*: its line and the namespaces it opens, scoping ignored."""
+
+    text = _without_lean_comments(text, mask_literals=True)
+    found = []
+    for match in _OPEN.finditer(text):
+        names = re.split(r"\s(?:hiding|renaming|in)\b", match[1])[0]
+        found.append((text.count("\n", 0, match.start()) + 1, _CONTINUATION_IDENTIFIER.findall(names)))
+    return found
+
+
+def bound_names(text: str) -> frozenset[str]:
+    """The local names the binders, patterns and ``where`` block in *text*, Lean, introduce."""
+
+    # A big operator's binders end at its ``in``: ``∑ i in range n``.
+    bound = {
+        name
+        for match in _BINDER.finditer(text)
+        for name in takewhile(lambda name: name != "in", match[match.lastindex].split())
+    }
+    bound.update(name for match in _PATTERN.finditer(text) for name in _PATTERN_NAME.findall(match[match.lastindex]))
+    if where := _WHERE.search(text):
+        bound.update(re.findall(rf"^{where[1]}({_ID_COMPONENT})", text[where.start() :], re.MULTILINE))
+    return frozenset(bound)
+
+
 @dataclass(frozen=True, slots=True)
 class SourceLinker:
-    """Build permalinks into the project's Lean sources."""
+    """Build permalinks into, and excerpts of, the project's Lean sources."""
 
     index: SourceIndex
     repository_url: str | None = None
@@ -1629,6 +1705,101 @@ class SourceLinker:
     """Committed path of each repository path whose name Git stores under another spelling."""
     root_prefix: str = ""
     """The Lean root's path below the repository's top level, or empty at the top level."""
+    sources: Mapping[Path, bytes] = field(default_factory=dict)
+    """Each captured Lean file's bytes, by its path below the Lean root."""
+    _lines: dict[Path, list[str]] = field(default_factory=dict, repr=False, compare=False)
+    _opens: dict[Path, list[tuple[int, list[str]]]] = field(default_factory=dict, repr=False, compare=False)
+    _imports: dict[Path, frozenset[Path]] = field(default_factory=dict, repr=False, compare=False)
+    _modules: dict[str, list[Path]] = field(default_factory=dict, repr=False, compare=False)
+    _direct: dict[Path, list[Path]] = field(default_factory=dict, repr=False, compare=False)
+
+    def excerpt(self, name: str) -> tuple[Declaration, str] | None:
+        """*name*'s declaration and its text as written, or ``None`` if *name* or its file was not captured
+        or its file's lines cannot be counted as the index counts them."""
+        declaration = self.index.find(name)
+        if declaration is None or declaration.path not in self.sources:
+            return None
+        if declaration.path not in self._lines:
+            text = self.sources[declaration.path].decode("utf-8", "replace")
+            # The index also ends a line at a lone carriage return, which Lean allows only in a literal or a
+            # comment; rather than count lines as it does, a file holding one shows no declarations.
+            lines = [] if re.search("\r(?!\n)", text) else [line.removesuffix("\r") for line in text.split("\n")]
+            self._lines[declaration.path] = lines
+        lines = self._lines[declaration.path]
+        return (declaration, declaration_text(lines, declaration)) if declaration.line <= len(lines) else None
+
+    def resolve(self, written: str, within: Declaration) -> tuple[Declaration, str] | None:
+        """The declaration *written*, a name in *within*'s text, refers to, and the part of *written* that
+        names it, or ``None``: in ``Base.succ`` that part is ``Base``, and ``.succ`` is a field or dot
+        notation on it.
+
+        Look among the project's own declarations: in each namespace around *within*, innermost first, as Lean
+        does, then the root, then each namespace an ``open`` above it names, taking the first that *within* can
+        see (:meth:`_visible`); Lean weighs the root and the opens together. ``None`` if that is *within*
+        itself, which its own name and a recursive call name, or if the index holds two it can see, which Lean
+        would reject. The index knows no Mathlib names, no local names and no ``variable`` binders; callers
+        skip what :func:`bound_names` finds.
+        """
+        if within.path not in self._opens:
+            self._opens[within.path] = _opened(self.sources.get(within.path, b"").decode("utf-8", "replace"))
+        opened = [name for line, names in self._opens[within.path] if line <= within.line for name in names]
+        parts = _name_parts(within.name)[:-1]
+        spaces = [".".join(parts[:count]) for count in range(len(parts), -1, -1)]
+        spaces += [f"{space}.{name}".lstrip(".") for name in opened for space in spaces]
+        written_parts = _name_parts(written)
+        for count in range(len(written_parts), 0, -1):
+            prefix = ".".join(written_parts[:count])
+            if prefix.startswith("_root_."):
+                candidates = [prefix.removeprefix("_root_.")]
+            else:
+                candidates = [f"{space}.{prefix}" if space else prefix for space in spaces]
+            for candidate in candidates:
+                found = self.index.occurrences(candidate)
+                seen = [declaration for declaration in found if self._visible(declaration, within, prefix)]
+                if within in found or len(seen) > 1:
+                    return None
+                if seen:
+                    return seen[0], prefix
+        return None
+
+    def _visible(self, declaration: Declaration, within: Declaration, written: str) -> bool:
+        """Whether Lean, reading *within*, sees *declaration* as *written*: one above it in its file, or one
+        neither private nor a wanted placeholder in a file it imports, directly or through others. A protected
+        one needs its last namespace written."""
+        if declaration.protected and len(_name_parts(written)) < 2:
+            return False
+        if declaration.path == within.path:
+            return declaration.line < within.line
+        return (
+            not declaration.private
+            and declaration.keyword not in _WANTED_KEYWORDS
+            and declaration.path in self._imported(within.path)
+        )
+
+    def _imported(self, path: Path) -> frozenset[Path]:
+        """The captured files *path* imports, directly or through others."""
+        if not self._modules:
+            for source in self.sources:
+                # A module is named from its package's source root, which can lie below the Lean root. The stem,
+                # not with_suffix, takes a file named ``..lean``.
+                parts = (*source.parts[:-1], source.stem)
+                for start in range(len(parts)):
+                    self._modules.setdefault(".".join(parts[start:]), []).append(source)
+        if path not in self._imports:
+            seen: set[Path] = set()
+            pending = [path]
+            while pending:
+                current = pending.pop()
+                if current not in self._direct:
+                    text = self.sources.get(current, b"").decode("utf-8", "replace")
+                    commands = _IMPORT.findall(_without_lean_comments(text, mask_literals=True))
+                    modules = [module for command in commands for module in command.split()]
+                    self._direct[current] = [source for module in modules for source in self._modules.get(module, ())]
+                fresh = [source for source in self._direct[current] if source not in seen]
+                seen.update(fresh)
+                pending += fresh
+            self._imports[path] = frozenset(seen)
+        return self._imports[path]
 
     def location(self, name: str) -> Declaration | None:
         return self.index.find(name)
@@ -1663,7 +1834,9 @@ __all__ = [
     "SourceIndex",
     "SourceLinker",
     "bind_project_source_snapshot",
+    "bound_names",
     "declaration_names",
+    "declaration_text",
     "index_failure_message",
     "index_project",
     "resolve_lean_root",

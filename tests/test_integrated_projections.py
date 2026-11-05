@@ -62,7 +62,7 @@ var dom$hiddenButton = new Element('button'), dom$searchResults = new Element('d
 var dom$inventory = new Element('section'), dom$inventoryList = new Element('ul'), dom$inventoryRows;
 var dom$inventorySummary = new Element('span'), dom$loadMore = new Element('button'), dom$inventoryScroll = new Element('div');
 dom$inventory.appendChild(new Element('h2'));
-var data, palette, byId, incident, statusCounts, presentStatuses;
+var data, palette, byId, incident, statusCounts, presentStatuses, tracksLean = true;
 var contextGraph, sharedIndex, currentBundle;
 var records, navigation, calls;
 var ui$selected, ui$selectedStatuses;

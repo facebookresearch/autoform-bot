@@ -11,6 +11,16 @@ date when the release is tagged.
 
 ### Added
 
+- **Verify workflow off.** `init --no-verify-workflow` writes
+  `.github/workflows/autoform-verify.yml` as a stub, for a project the
+  generated workflow can't fit, such as one whose roadmap several Lake projects
+  back. The stub keeps the workflow's name, triggers and `build` job and only
+  reports that nothing was built or audited, so a required check passes and
+  the Pages deploy goes on, publishing commits nothing verified. Later `init`
+  runs, `--force` included, keep a file there with the stub's marker line;
+  delete it to get the workflow back. With a ref, `.github/autoform_audit.py` is
+  still written ([Project setup](autoform_cli/reference/project-setup.md#init),
+  #402).
 - **Pinned name lists.** A JSON Lines file in `blueprint/libraries/`, schema
   `autoform-pinned-names/v0`, names the declarations a library holds at one
   pinned revision; a wiki that cites Mathlib can generate one. Once a list holds
@@ -36,6 +46,27 @@ date when the release is tagged.
   with `abstractions/TODO.md` as the to-do list. At the end of a Formalize run
   the lead gives each open cluster to a refactor subagent, which acquires the
   claims it needs when the run uses claims (#491).
+- **Lean under each statement.** A statement whose `lean:` names resolve
+  shows the first three declarations under it, as written from the attribute
+  lines above the keyword, without the section's variables: a theorem or lemma
+  without its proof, anything else whole, a definition's body included. A body
+  written at the keyword's own indent is cut short. A declaration over 14
+  lines folds behind a line that names it. Keywords, comments and strings take
+  the page's code colors, in the map's reading pane too; site search skips the
+  code. A catalog shows none, and a `--review` render leaves the Lean to each
+  card's review, after its read-back. Render cuts the text from the Lean
+  sources it captured, so a render without them shows none.
+- **Names in a statement's Lean.** A name in those declarations that the
+  project declares shows that declaration in a card when the book's reader
+  hovers or focuses it: a definition whole, its first 12 lines if longer, a
+  theorem its statement, with its file and line. A name some statement
+  formalizes links to that statement; another links to its source, or takes
+  keyboard focus when the site has no source links. Render looks a name up
+  among the project's own declarations, in the namespaces around the
+  declaration and those its file opens, and takes only one the file can see:
+  one above it in that file, or one not private in a file it imports.
+  Binders, patterns, fields, attributes, tactics, one-letter names and names
+  the project does not declare, such as Mathlib's, stay text.
 - **Check without site warnings.** `check --no-site-warnings` skips the
   warnings about the pages the site would publish, which `render` prints too,
   and still reads the notes under `blueprint/sources/`, which a render that
@@ -45,6 +76,14 @@ date when the release is tagged.
   On one CI runner ATLAS's check took 60 s with the flag instead of 255 s, and
   render printed every warning it skipped. A scaffolded project keeps its
   workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
+- **Panes you can resize and hide.** In the book's workspace, Topics and the
+  reading pane resize from splitters on their inner edges, by pointer or
+  keys, up to a reader of all but 160px of the map. A pane dragged nearly
+  shut, or whose splitter takes Enter, hides, and a tab at the map's edge
+  brings it back; "Map only" in the trail row hides both. The choice holds
+  on every page of the site, and a double-click on a splitter restores the
+  usual width. While a pane is dragged the map holds its camera, and it
+  settles once the drag ends. A phone keeps its sheet.
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project. Regions (authored areas, or the top-level
   chapters) open into their parts and parts into their results as the camera
@@ -74,18 +113,42 @@ date when the release is tagged.
 - **Projects that track no Lean.** `tracks_lean: false` in
   `roadmap/README.md` takes Lean progress out of the book's pages: the landing
   page's figures and Next up, the statement status marks, the status dots on
-  dependency references and the chapter progress lines. Check warns about the
+  dependency references and the chapter progress lines. The explorer drops its
+  status filter and status words, and the whole-project map its tints, progress
+  bars and status words; its cards name their kind instead. Neither search box
+  mentions Lean names, though both still match them. Check warns about the
   setting anywhere else under `roadmap/`, or with a value other than true or
   false, and ignores it.
 
 ### Changed
 
+- **Helpers beside an article are its own.** `work impact` and
+  `work import-impact` give a declaration no article names, and no named
+  `parent` ancestor owns, to the one article that names declarations in its
+  module, when exactly one does. A worker's own helpers no longer get a `lean/`
+  claim key of their own, and in `work impact` that article also counts for
+  `undeclared_dependencies` and `unused_statement_dependencies`. In a module
+  several articles share, the helpers keep their own keys (#492).
+- **Wrong import-impact module.** `work import-impact` refuses a `MODULE`
+  outside the project before the freshness check and the probe; when the
+  article's declarations are in one module, the error names it (#492).
 - **Statements go by their names.** A statement's heading and every link to it,
   in Uses, Used by and Assumes, show its name instead of a generated number:
   "Theorem 55 (Bézout's theorem)" reads "Bézout's theorem", with the kind on a
   small line above the name. A title that is only the kind word, or empty, is
   named by the kind. Statements that share a title now read alike. Anchors and
   links into a page don't change (#612).
+- **Coverage view.** The coverage page shows its contract's table as a view: a
+  heading for each disposition with the number of rows under it, and each row
+  led by its area, with its evidence as written. A `DECOMPOSED` row also lists
+  the declarations its links reach, in book order and with their status,
+  behind a line that counts them, with their states when the project tracks
+  Lean; a list of one is shown open. The list replaces evidence that is only
+  links, each straight to one of those declarations; beside evidence that
+  stays, it shows the first 50 and counts the rest. A page whose published
+  table is not the contract's gets no view, and render warns. The rest of the
+  page is unchanged. In the sidebar the page is the book's last entry, named by
+  its title, and Mathematics no longer opens it (#631).
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
@@ -421,6 +484,9 @@ date when the release is tagged.
 
 ### Fixed
 
+- **Reference links on chapters with a `<` in the title.** A `<` in a
+  chapter's title alone left reference-style links in its prose shown as typed
+  (#631).
 - **Unlistable project root.** `project inspect` no longer reports
   `project-changed-during-inspection` on every run for a project root that
   cannot be listed. A root that can still be searched (mode 0311) gets its

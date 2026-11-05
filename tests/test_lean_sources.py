@@ -29,8 +29,11 @@ from autoform_cli._tree_snapshot import (
 )
 from autoform_cli.lean import (
     Alias,
+    Declaration,
     SourceLinker,
+    bound_names,
     declaration_names,
+    declaration_text,
     index_project,
     index_project_names,
     open_project_sources,
@@ -4007,6 +4010,200 @@ def test_no_link_without_repository_coordinates(tmp_path: Path) -> None:
     assert linker.url("Outer.alpha") is None
     # The location is still known, so the page can still say where the code is.
     assert linker.location("Outer.alpha") is not None
+
+
+def test_a_declarations_text_ends_before_the_next_line_at_its_indent() -> None:
+    lines = [
+        "/-- A doc. -/",
+        "@[simp] theorem top (n : Nat) :",
+        "    n = n := by",
+        "  rfl",
+        "-- a note on what follows",
+        "def f : Nat → Nat",
+        "  | 0 => 1",
+        "",
+        "  | n + 1 => n",
+        "where",
+        "  helper : Nat := 0",
+        "",
+        "attribute [simp] f",
+        "  structure Inner where",
+        "    x : Nat",
+        "  theorem inner : True := trivial",
+        "end P",
+    ]
+
+    def text(line: int) -> str:
+        return declaration_text(lines, Declaration("P.x", Path("P.lean"), line, "def"))
+
+    # The docstring above stays out, and the comment, attribute and end after it end it.
+    assert text(2) == "\n".join(lines[1:4])
+    # Alternatives, a blank line inside it and its where block are its own.
+    assert text(6) == "\n".join(lines[5:11])
+    # An indented declaration ends at the next line at its own indent.
+    assert text(14) == "\n".join(lines[13:15])
+    assert text(16) == lines[15]
+
+
+def test_a_declaration_keeps_its_attributes_closing_brackets_and_trailing_clauses() -> None:
+    lines = [
+        "/-- A doc. -/",
+        "@[simp] -- a note",
+        "protected theorem box (α : Nat)",
+        "    (h : α = α",
+        ") : α = α := rfl",
+        "def config : Nat × Nat := {",
+        "  fst := 0, snd := 0",
+        "}",
+        "inductive Color",
+        "| red",
+        "| blue",
+        "deriving Repr",
+        "",
+        "deriving instance BEq for Color",
+        "def count : Nat → Nat",
+        "  | 0 => 0",
+        "  | n + 1 => count n",
+        "termination_by n => n",
+        "decreasing_by simp",
+    ]
+
+    def text(line: int) -> str:
+        return declaration_text(lines, Declaration("P.x", Path("P.lean"), line, "def"))
+
+    # Its attributes and modifiers above it are its own, a comment after them included, and its docstring is not; a
+    # closing bracket starts no command.
+    assert text(3) == "\n".join(lines[1:5])
+    assert text(6) == "\n".join(lines[5:8])
+    # Alternatives and a deriving clause at its indent are its own; the deriving instance command is not.
+    assert text(9) == "\n".join(lines[8:12])
+    assert text(15) == "\n".join(lines[14:19])
+
+
+def test_an_excerpt_counts_lines_as_the_index_does(tmp_path: Path) -> None:
+    """A form feed or a line separator in a comment is no line end to the index, so it shifts no later excerpt."""
+    text = "namespace Outer\n\n/- page\x0cbreak\u2028here -/\ndef alpha : Nat := 1\r\n\ndef beta : Nat := 2\n\nend Outer\n"
+    index = _index(tmp_path, text)
+    linker = SourceLinker(index=index, sources={Path("Project/Basic.lean"): text.encode()})
+
+    assert linker.excerpt("Outer.alpha")[1] == "def alpha : Nat := 1"
+    assert linker.excerpt("Outer.beta")[1] == "def beta : Nat := 2"
+
+
+def test_a_file_whose_lines_the_index_counts_otherwise_shows_no_excerpt(tmp_path: Path) -> None:
+    """A lone carriage return in a string ends a line to the index, so every later excerpt would be wrong."""
+    text = 'namespace Outer\n\ndef alpha : String := "a\rb"\n\ndef beta : Nat := 2\n\nend Outer\n'
+    index = _index(tmp_path, text)
+    linker = SourceLinker(index=index, sources={Path("Project/Basic.lean"): text.encode()})
+
+    assert index.find("Outer.beta").line == 6
+    assert linker.excerpt("Outer.alpha") is None and linker.excerpt("Outer.beta") is None
+
+
+def test_an_excerpt_reads_the_captured_file(tmp_path: Path) -> None:
+    index = _index(tmp_path)
+    linker = SourceLinker(index=index, sources={Path("Project/Basic.lean"): _SOURCE.encode()})
+
+    alpha = linker.excerpt("Outer.alpha")
+    assert alpha is not None and alpha[0] == index.find("Outer.alpha")
+    assert alpha[1] == "def alpha : Nat := 1"
+    gamma = linker.excerpt("Outer.Inner.gamma")
+    # Its attribute on the line above is its own.
+    assert gamma is not None and gamma[1] == "@[simp]\nprotected noncomputable def gamma : Nat := 2"
+    assert linker.excerpt("Outer.missing") is None
+    # A file the render did not capture has no excerpt.
+    assert SourceLinker(index=index).excerpt("Outer.alpha") is None
+
+
+def test_a_name_resolves_in_its_namespaces_then_in_what_its_file_opens(tmp_path: Path) -> None:
+    text = (
+        "namespace A\ndef base : Nat := 0\ndef fact : Nat → Nat\n  | 0 => 1\n  | n + 1 => fact n\n"
+        "namespace B\ndef base : Nat := 1\ndef top : Nat := base + A.base\nend B\nend A\n"
+        "namespace Tools\ndef twice (x : Nat) : Nat := x + x\nend Tools\n"
+        "def before : Nat := twice 0\nopen Tools in\ndef after : Nat := twice 1 + A.B.top.succ\n"
+    )
+    index = _index(tmp_path, text)
+    linker = SourceLinker(index=index, sources={Path("Project/Basic.lean"): text.encode()})
+
+    def resolved(written: str, within: str) -> tuple[str, str] | None:
+        found = linker.resolve(written, index.find(within))
+        return found and (found[0].name, found[1])
+
+    # The innermost namespace first, then the outer ones, then the root.
+    assert resolved("base", "A.B.top") == ("A.B.base", "base")
+    assert resolved("A.base", "A.B.top") == ("A.base", "A.base")
+    assert resolved("_root_.A.base", "A.B.top") == ("A.base", "_root_.A.base")
+    # A namespace an open above names, and the name before a field, which names no declaration itself.
+    assert resolved("twice", "after") == ("Tools.twice", "twice")
+    assert resolved("A.B.top.succ", "after") == ("A.B.top", "A.B.top")
+    assert resolved("twice", "before") is None
+    # A declaration's own name and its recursive call name it, so nothing else.
+    assert resolved("fact", "A.fact") is None
+    assert resolved("base", "A.B.base") is None
+    assert resolved("missing", "A.B.top") is None
+
+
+def test_a_name_resolves_only_to_what_its_file_can_see(tmp_path: Path) -> None:
+    files = {
+        "Project/Deep.lean": "def deep : Nat := 0\ndef twin : Nat := 1\n",
+        "Project/Near.lean": (
+            "import Project.Deep -- through Near\n\ndef near : Nat := 0\nprivate def hidden : Nat := 0\n"
+            "def twin : Nat := 0\ndef pair : Nat := 0\ntheorem_wanted wish : True\n"
+        ),
+        "Project/Far.lean": "def far : Nat := 0\ndef pair : Nat := 1\n",
+        # A file Path.with_suffix refuses.
+        "Project/..lean": "def dots : Nat := 0\n",
+        "Project/Basic.lean": (
+            "/-! Usage:\nimport Project.Far\nopen Inside\n-/\nimport Project.Near\n\n"
+            "namespace Tools\nprotected def thrice : Nat := 3\nend Tools\n\n"
+            "namespace Inside\ndef inner : Nat := 0\nend Inside\n\n"
+            "open Tools\n\nprivate def own : Nat := 0\ndef foo : Nat := 0\n\nnamespace A\n"
+            "def top : Nat := near + hidden + far + deep + thrice + Tools.thrice + twin + pair\n"
+            "  + own + later + foo + wish + inner\n"
+            "def foo : Nat := 1\nend A\n\ndef later : Nat := 0\n"
+        ),
+    }
+    index = _index_files(tmp_path, files)
+    linker = SourceLinker(index=index, sources={Path(name): text.encode() for name, text in files.items()})
+
+    def resolved(written: str) -> str | None:
+        found = linker.resolve(written, index.find("A.top"))
+        return found and found[0].name + "@" + found[0].path.stem
+
+    # What the file imports, directly or through another, and its own declarations above, private ones included.
+    assert [resolved(name) for name in ("near", "deep", "own", "Tools.thrice")] == [
+        "near@Near", "deep@Deep", "own@Basic", "Tools.thrice@Basic",
+    ]
+    # Another file's private declaration, a file imported or a namespace opened only in a comment, a wanted
+    # placeholder, a protected name without its namespace, and a declaration below in the file, which Lean has not
+    # read yet.
+    assert [resolved(name) for name in ("hidden", "far", "inner", "wish", "thrice", "later")] == [None] * 6
+    # A namespace's declaration below gives way to the root's above.
+    assert resolved("foo") == "foo@Basic"
+    # A name the index holds twice in what the file sees links nothing (Lean would reject it); of two that share a
+    # name, the one it sees.
+    assert (resolved("twin"), resolved("pair")) == (None, "pair@Near")
+
+
+def test_a_binder_names_no_declaration() -> None:
+    assert bound_names("theorem top {α : Type} [inst : Group α] [Ring α] (n m : Nat) (h : 0 < n) :") == {"α", "inst", "n", "m", "h"}
+    assert bound_names("∀ x ∈ s, ∃! y, fun z => let w := z; have hw : w = z := rfl") == {"x", "y", "z", "w", "hw"}
+    # An instance binder with no name and a default value bind nothing.
+    assert bound_names("[Group G] (x := 0)") == frozenset()
+    # A match alternative's and an anonymous constructor's pattern, a big operator and a set-builder bind names; a
+    # constructor or field in a pattern is no binder.
+    assert bound_names("| .node _ left _ right => left") == {"_", "left", "right"}
+    assert bound_names("fun ⟨a, b⟩ => a") == bound_names("fun ⟨a, b⟩ ↦ f a") == {"a", "b"}
+    assert bound_names("let ⟨c, hc⟩ := h") == bound_names("have ⟨c, hc⟩ := h") == {"c", "hc"}
+    assert bound_names("λ x => x") == {"x"} and bound_names("⦃x y : α⦄") == {"x", "y"}
+    assert bound_names("∑ i in range n, f i + ∏ j ∈ s, g j") == {"i", "j"}
+    assert bound_names("{x | p x} ∪ {y : ℕ // 0 < y}") == {"x", "y"}
+    # A where block's fields, arguments and all, and its local helpers.
+    assert bound_names("instance : Mul Foo where\n  mul a b := a\n  one := 1") == {"mul", "one"}
+    assert bound_names("def f : Nat := go 0\nwhere\n  go (k : Nat) : Nat := k") == {"go", "k"}
+    # Tactics, where obtain binds, are never linked; an empty alternative in a string binds nothing.
+    assert bound_names("obtain ⟨c, hc⟩ := h") == bound_names("obtain hp := p") == frozenset()
+    assert bound_names('"a|=>b"') == frozenset()
 
 
 def _git_commit(root: Path, message: str, path: str = ".") -> str:

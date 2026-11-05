@@ -141,9 +141,9 @@ declaration the module writes with a declaration keyword, as the Lean source
 index records them; a structure field the index records may go there instead
 of the ledger. Names Lean generates, such as constructors,
 derived or unnamed instances, and `@[ext]`, `@[simps]`, or `@[to_additive]`
-results, and declarations the index cannot see yet, behind `nonrec` or `meta`
-or written `class inductive`, go in the ledger as supporting entries, never in
-`lean:`; a `private` name never goes in `lean:`.
+results, and declarations the index cannot see yet, behind `nonrec` or `meta`,
+go in the ledger as supporting entries, never in `lean:`; a `private` name
+never goes in `lean:`.
 A completed catalog may assert `statement: formalized` and `proof: formalized`
 once the complete module has been checked.
 
@@ -193,7 +193,7 @@ An article asserts only facts a human or agent verified:
 | `review_approved: sha256:<64 hex>` | The hash of the complete review surface someone approved for this article. It shows that surface is unchanged, not who approved it. |
 | `open_statements: allowed` | Project policy, valid only in `roadmap/README.md`: a theorem's statement may land with a `sorry` proof (see [Open statements](reference/open-statements.md#open-statements)). Absent or `forbidden` keeps the strict policy. |
 | `published: false` | Folder setting, valid only in the `README.md` of a folder below `roadmap/`: `check` and `audit` validate the folder and everything in it, but render leaves it out of the site and of the publication hash. No link on a published roadmap article may point into it, whether a dependency, a source or prose; a link from any other page keeps only its text, with a warning. `audit` and render reject coverage evidence that points into it. A folder inside an unpublished one is unpublished too, whatever its own README says. |
-| `tracks_lean: false` | Project setting, read only in `roadmap/README.md`: the project writes no Lean, so the book's pages show no Lean progress (no landing figures or Next up, no status marks on statements or status dots on their dependency references, no chapter progress lines). Absent or `true` keeps it. Anywhere else under `roadmap/`, or with another value, `check` warns and the setting is ignored. |
+| `tracks_lean: false` | Project setting, read only in `roadmap/README.md`: the project writes no Lean, so the book's pages show no Lean progress (no landing figures or Next up, no status marks on statements or status dots on references to them, no chapter progress lines, no status filter or status words in the explorer, and no tints, progress bars or status words on the whole-project map, whose cards name their kind instead; neither search box mentions Lean names, though both still match them). Absent or `true` keeps it. Anywhere else under `roadmap/`, or with another value, `check` warns and the setting is ignored. |
 
 Progress is *derived* from the DAG on every run, so it cannot go stale.
 Readiness depends on the [policy](reference/open-statements.md#open-statements).
@@ -232,9 +232,9 @@ checkout's commit when it runs from one, as in `autoform 0.6.0 (745a88599469)`.
 
 Create a new project's vault, site configuration, and CI. Existing files are
 left alone, so the same command repairs a project. `--force` instead overwrites
-every file `init` manages with its template, `blueprint/roadmap/README.md`,
-`blueprint/coverage/README.md`, `README.md` and `mkdocs.yml` included, and
-replaces a root `.gitignore` rather than adding to it:
+every file `init` manages, `blueprint/roadmap/README.md`,
+`blueprint/coverage/README.md`, `README.md` and `mkdocs.yml` included, except a
+turned-off verify workflow, and replaces a root `.gitignore`:
 
 ```bash
 autoform init . --title "Finite Flat Group Schemes" \
@@ -242,7 +242,7 @@ autoform init . --title "Finite Flat Group Schemes" \
 ```
 
 [Project setup](reference/project-setup.md#init) gives the `.gitignore` rules,
-the names `init` refuses, and the Autoform pin without which CI is omitted.
+refused names, `--no-verify-workflow`, and the pin without which CI is omitted.
 
 ### project
 
@@ -290,7 +290,7 @@ uv run --with mkdocs --with mkdocs-material --with mkdocs-literate-nav \
 Drop `--require-declarations` when reviewing work in progress, where a
 statement may name a Lean declaration that does not exist yet. On native
 Windows, run `check` and `render` without `--lean-root`; the site then has no
-code links ([publication contract](reference/runtime-and-publication.md#publication-contract)).
+code links or Lean code ([publication contract](reference/runtime-and-publication.md#publication-contract)).
 
 `autoform dashboard . --site-dir site` then serves the built site on `127.0.0.1`
 until you stop it, with a read-only live overlay of current author claims. The
@@ -305,44 +305,21 @@ Validate structure and, with `--lean-root`, that every `lean:` name exists:
 autoform check blueprint --lean-root .
 ```
 
-`check` validates the graph contract ([Validation](reference/validation-and-audit.md#validation)).
-With `--lean-root` it resolves names only in the project's own Lean files, not
-in Mathlib or other dependencies under `.lake`. A name not found, unless the
-error gives its type's `path:line` (see Validation), adds a note at the end of
-the output: a shared library's declaration belongs in the article's
-implementation note.
+With `--lean-root`, `check` resolves names only in the project's own Lean files,
+not in Mathlib or other dependencies under `.lake`. A name not found, unless the
+error gives its type's `path:line`
+([Validation](reference/validation-and-audit.md#validation)), adds a note at the
+end of the output: a shared library's declaration belongs in the article's
+implementation note. It also warns about a shared library's declaration that
+[cites a source](reference/search.md#citing-declarations) an unproved article
+reaches, a library index it cannot read or parse, a library with such a
+declaration that fails verification against its checkout, and Lake files it
+cannot use. None changes the exit status.
 
-With `--lean-root`, `check` also warns about each declaration of a usable,
-checked-out shared library (see `autoform library list`) whose own docstring
-cites an arXiv paper or DOI that an unproved article reaches through its
-`## Sources` links, or through a blueprint Markdown page such a link names
-(link text, and pages over 4 MiB, are not read). Identifiers match in their
-usual forms: versions; `abs`, `pdf`, `html`, `e-print` and `src` URLs;
-old-style ids such as `math.AG/0210149`; arXiv's DOIs; `https://doi.org/` and
-`dx.doi.org` links, percent-encoded or not; and the labels `arXiv:`, `arXiv`,
-`doi:` and `DOI`, also in backticks, emphasis or a table cell. Silence it by
-naming the declaration in full in an implementation note, a page under
-`blueprint/sources/` or one a `## Sources` link names, or in project Lean, in
-full or by its last name component. Declarations citing a source only through
-their module docstring share one warning, silenced by naming the module, or in
-full a citing declaration; importing the module names it, importing only an
-umbrella module above it does not. A module catalog, or a container whose scope
-holds a target and is all proved, reaches nothing; a bare number cites nothing; and a
-last-component match counts any identifier, comments and strings included, so a
-generic one such as `symm` can hide the warning. Reuse such a declaration and
-name it in the note of each article using it; when it does not apply, name it,
-with why, on the source's page under `blueprint/sources/`.
-
-`check` also warns when a library's index cannot be read or parsed, when a
-library with a citing declaration fails verification against its checkout, and
-when the project's Lake files cannot be used. None changes the exit status.
-
-`--no-site-warnings` skips the warnings about the pages the site would publish
-([Validation](reference/validation-and-audit.md#validation)), except those about
-notes under `blueprint/sources/`, for a run that renders next: `render` prints
-the rest, and fails where `check` would warn that it stops. The generated
+`--no-site-warnings` leaves the site's page warnings to a `render` that runs
+next ([Validation](reference/validation-and-audit.md#validation)); the generated
 `blueprint-pages.yml` passes it when its `AUTOFORM_REF`'s `check --help` lists
-it; `autoform-verify.yml` does not.
+it, and `autoform-verify.yml` does not.
 
 ### audit and coverage
 
@@ -472,10 +449,9 @@ reasons on stdout; `--timeout` is accepted only with `--review`.
 
 The gate is opt-in: commit `blueprint/.autoform-review` holding
 `autoform-review-policy/v1` and a line end; `autoform init` never writes it.
-With the marker, generated CI runs `review check` after the Lean build,
-without making advisory roadmap or coverage findings merge blockers, and
-deleting every card cannot turn it off. Without it, cards or `review_approved`
-fail CI.
+With the marker, generated CI runs `review check` after the Lean build, without
+making advisory roadmap or coverage findings merge blockers, and deleting every
+card cannot turn it off. Without it, cards or `review_approved` fail CI.
 
 `review_approved` is a drift checksum, not an authorization: anyone, an agent
 included, can paste the hash `review check` prints, and a current approval is
@@ -666,7 +642,7 @@ client. [The published site](reference/site.md#rendered-pages) gives the rest,
 Each area's contract has its own page:
 
 - [Validation and audit](reference/validation-and-audit.md): what `check` and `audit` refuse or warn about.
-- [Search](reference/search.md): `autoform search`, and searching a library the project depends on.
+- [Search](reference/search.md): `autoform search`, searching a library the project depends on, and a library declaration that cites a source.
 - [Pinned name lists](reference/pinned-names.md): a library's names at a pinned revision, and what `check` warns about them.
 - [Skeletons and statement review](reference/skeleton-and-review.md): what `skeleton` extracts, its hashes, read-back cards, and the `review` rules.
 - [Open statements](reference/open-statements.md): conditional results and the open-statement policy.
