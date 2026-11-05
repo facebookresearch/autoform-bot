@@ -306,21 +306,19 @@ Validate structure and, with `--lean-root`, that every `lean:` name exists:
 autoform check blueprint --lean-root .
 ```
 
-`check` validates the graph contract ([Validation](reference/validation-and-audit.md#validation)).
-With `--lean-root` it resolves names only in the project's own Lean files, not
-in Mathlib or other dependencies under `.lake`. A name not found, unless the
-error gives its type's `path:line` (see Validation), adds a note at the end of
-the output: a shared library's declaration belongs in the article's
-implementation note.
-With `--lean-root`, `check` also warns about a shared library's declaration that
+With `--lean-root`, `check` resolves names only in the project's own Lean files,
+not in Mathlib or other dependencies under `.lake`. A name not found, unless the
+error gives its type's `path:line`
+([Validation](reference/validation-and-audit.md#validation)), adds a note at the
+end of the output: a shared library's declaration belongs in the article's
+implementation note. It also warns about a shared library's declaration that
 [cites a source](reference/search.md#citing-declarations) an unproved article
 reaches, a library index it cannot read or parse, a library with such a
 declaration that fails verification against its checkout, and Lake files it
 cannot use. None changes the exit status.
 
-`--no-site-warnings` leaves the warnings about the pages the site would publish
-to a `render` that runs next
-([Validation](reference/validation-and-audit.md#validation)); the generated
+`--no-site-warnings` leaves the site's page warnings to a `render` that runs
+next ([Validation](reference/validation-and-audit.md#validation)); the generated
 `blueprint-pages.yml` passes it when its `AUTOFORM_REF`'s `check --help` lists
 it, and `autoform-verify.yml` does not.
 

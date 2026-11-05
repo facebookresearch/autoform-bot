@@ -13,7 +13,7 @@ BUDGETS = {
     "CONTRIBUTING.md": 87,
     "docs/explorer-design.md": 65,  # Internal architecture and failure contracts, not another user guide.
     "README.md": 120,
-    "autoform_cli/README.md": 681,  # K5: command contracts moved to their reference pages.
+    "autoform_cli/README.md": 679,  # K5: command contracts moved to their reference pages.
     "autoform_cli/project/README.md": 120,
     "autoform_cli/reference/claims-and-revisions.md": 164,
     "autoform_cli/reference/debrief.md": 45,
