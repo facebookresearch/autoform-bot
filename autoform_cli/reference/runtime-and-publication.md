@@ -51,7 +51,7 @@ notes; `check` validates them. A `.autoform` directory and symlinks,
 credentials, logs, provider state, and agent/task state outside hidden
 directories fail the render rather than leak. Source and output directories must
 be disjoint. Render refuses a blueprint path that differs only in case from a
-file it writes at a fixed path ([render](../README.md#visualize-and-render)
+file it writes at a fixed path ([the site page](site.md#files-render-writes)
 lists them), and two blueprint paths that differ only in case or Unicode form. A
 blueprint file at exactly `dependencies.json` or `javascripts/blueprint-dag.js`
 is left out of the site with a warning.

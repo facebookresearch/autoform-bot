@@ -157,7 +157,7 @@ declaration-kind, and node-size checks apply only to declaration articles.
 
 Versioned implementation notes live at
 `blueprint/.implementation-notes/<article_id>.md`, one per article, and survive
-article moves. Claims keep workers from editing the same leaf's note;
+article moves. A leaf's claim covers its note only while the leaf is worked on;
 containers have no claims. `check` warns about a malformed, empty, unreadable,
 symlinked, or orphaned note, so assign the article ID before creating its note.
 It also warns about a notes folder under `roadmap/` or capitalized differently,
@@ -217,8 +217,8 @@ row of its statement box.
 
 ## Commands
 
-This section is the single source of truth for the command line; skills link
-here, and every invocation in either is parse-checked against the real parser.
+This section gives the main commands' synopses and [Contracts](#contracts) the
+rest; skills link to both, and every invocation in all three is parse-checked.
 
 Commands are written as they appear on `PATH` with this package installed; in a
 consumer project, where it is not, run each from the project root with the
@@ -657,93 +657,9 @@ autoform render blueprint --output site-src --lean-root . --require-declarations
 ```
 
 `render` never writes into the vault. Once the roadmap has articles, the landing
-page combines the mathematical reader and dependency map in one full-page client.
-`dependencies.md` and the old pages under `dependencies/` redirect to the
-matching book page, keeping the address's fragment when JavaScript runs;
-`structure.md` links the book.
-Complete published statements, proofs and citations remain the reading content.
-The index `dependencies/index.json`, project payload `dependencies.json`, and
-other `dependencies/` payloads are internal to this viewer; their schemas may change.
-`dependencies/map/` is a second, standalone page:
-one zoomable map of the whole project, which loads `dependencies/map/data/` one
-level at a time and shows each result's statement from its article.
-A formal statement links to its canonical article or containing chapter card;
-legacy `#node=<id>`, view and filter links redirect there, not to a second viewer.
-A `lean:` declaration resolving to a repository permalink gets a source link;
-a catalog's Lean row shows its first eight names and counts the rest.
-Render percent-encodes each
-link it writes from file and folder names, such as the book's dependency
-links; a Markdown link it moves keeps its decoded spelling and starts with `./`
-when its first segment holds a colon, so no name can make a `javascript:` URL.
-
-Render writes no Mermaid graph of its own. Authored Mermaid remains supported in
-the vault and book, drawn in strict mode with plain-text labels and loaded only
-on a page that has one: click callbacks and HTML in labels do not work, links to
-URLs do. Point `mkdocs.yml` at `docs_dir: site-src` and enable `md_in_html` and
-a `pymdownx.superfences` mermaid fence (see the [setup
-template](templates/mkdocs.yml)); list the generated
-`javascripts/blueprint-mermaid.js`, not the Mermaid library. The [publication
-contract](reference/runtime-and-publication.md#publication-contract) gives the
-schema and when render replaces an earlier site.
-
-`render` writes `javascripts/mathjax.js`, `stylesheets/blueprint.css`,
-`javascripts/blueprint-mermaid.js`, `javascripts/blueprint-live.js`,
-`javascripts/blueprint-dag.js`, and `assets/autoform.svg` over the vault's
-copies, and writes `SUMMARY.md`, `structure.md`, `publication.json`,
-`dependencies.md`, `dependencies.json`, the `dependencies/` pages, and the
-chapter pages it consolidates; a vault copy of one of these is not published. A
-directory holding a file at any of these paths, or a file where one of their
-folders goes, stops `render` with its path before anything is written, and `check` warns about
-it. The stale root `dependencies.html`, `graph.html`, and `progress.md` are kept
-out of the site. A `tex-macros.json` directory that holds files leaves the site
-without project macros, with a warning.
-
-Besides its Markdown pages, a vault publishes only images (`.png`, `.jpg`,
-`.jpeg`, `.gif`, `.webp`, `.avif`, `.bmp`, `.ico`), `.pdf`, and plain-text
-`.txt`, `.csv`, `.json`, `.bib`, `.tex`, and `.lean` files, whatever the case of
-the suffix. The site leaves out any other file under `blueprint/`, such as an
-`.html` page, an `.svg`, a script, or a stylesheet, and `check` and `render`
-warn about it by path: write it as Markdown, an image, a PDF, or plain text, or
-keep it outside `blueprint/`. An Obsidian `.canvas` file and a [pinned name
-list](reference/pinned-names.md) are left out silently, as `.obsidian` is, and a
-Markdown page that is not UTF-8 with a warning. A link to a file the site leaves
-out, a hidden path outside `sources/`, or a page in a `published: false` folder
-keeps only its text; `check` and `render` warn about each such link to a hidden
-path or an unpublished folder.
-
-#### MathJax
-
-`mkdocs.yml` lists `javascripts/mathjax.js`, the site's MathJax configuration,
-before the MathJax bundle, as `autoform init` writes both. It expects MathJax
-3.2.2, loads it itself when no bundle is listed, and leaves formulas as typed
-under any other release. An assignment to `window.MathJax` in another script,
-such as the snippet Material's documentation gives, is ignored with a console
-error. The articles on a page share one TeX input with the packages base, ams,
-noundefined, boldsymbol, mathtools, braket, mhchem, and amscd (`CD` diagrams),
-and the project's macros from `blueprint/tex-macros.json`, written as MathJax's
-`tex.macros` is: a name maps to a body, `[body, arguments]`, or `[body,
-arguments, default]`.
-
-That input turns off `\label`, `\mmlToken`, `\DeclareMathOperator`, the
-paired-delimiter and tag-form commands of mathtools, and `\mathtoolsset`, and
-leaves off the packages MathJax would load on demand: cancel, bbox, enclose,
-color, html, unicode, action, newcommand, extpfeil, verb, and bussproofs. So
-`\newcommand`, `\def`, `\require`, `\cancel`, `\bbox`, `\color`, `\href`,
-`\unicode`, and any other command those packages do not define show in red and
-do nothing, however a formula or macro reaches them. A macro may not take one of
-their names; `check` and `render` warn about a macro they leave out, judging the
-copy of `tex-macros.json` that `render` reads once and publishes. `\bmod`,
-`\pmod`, `\mod`, `\varliminf`, `\varlimsup`, `\varinjlim` and `\varprojlim`,
-which MathJax builds from `\mmlToken`, are written again without it, and a
-project macro of the same name replaces one. Each read-back
-card has its own TeX input with only base, ams, and noundefined. Only renderer-marked
-formulas, such as `$...$` in Markdown, are typeset. Formulas in links, controls and
-navigation get no extra MathJax tab stop, menu or accessibility explorer. Refreshes
-retain earlier glyph styles; graph labels, metadata titles, `discussion:` values,
-home-page leads and Material navigation/ToC stay typed. Explorer reading links and
-breadcrumbs typeset publisher-derived title parts with project macros. A formula paints only within
-its own line and block, and an inline formula wider than its paragraph is cut at
-its edge, so write one that wide as a display, which scrolls.
+page combines the mathematical reader and dependency map in one full-page
+client. [The published site](reference/site.md#rendered-pages) gives the rest,
+[MathJax](reference/site.md#mathjax) included.
 
 ## Contracts
 
@@ -759,6 +675,6 @@ Each area's contract has its own page:
 - [Debriefs](reference/debrief.md): what the debrief commands ask, store and print.
 - [Copied code](reference/abstraction.md): how `autoform abstraction` clusters copies and records decisions.
 - [Project setup](reference/project-setup.md): what `init` and `project` write, refuse and report.
-- [The published site](reference/site.md): subdirectory projects, the dashboard overlay, and Pages deploys and reports.
+- [The published site](reference/site.md): what render writes and publishes, MathJax, subdirectory projects, the dashboard overlay, and Pages deploys and reports.
 - [Runtime and publication](reference/runtime-and-publication.md): `doctor`, the in-memory runtime projection and the published site.
 - [Upgrading](../CHANGELOG.md#upgrading-from-050): what a repository meets on a new version, including what CI at an older `AUTOFORM_REF` rejects.
