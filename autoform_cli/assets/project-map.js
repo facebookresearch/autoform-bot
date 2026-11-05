@@ -203,6 +203,8 @@
   var stageSize = null;      // the stage the world was packed for
   function packRoot() {
     var root = part(ROOT), top = L.packLevels(model.index, stageSize);
+    // On the host, so the page can tell when the world repacks.
+    host.dataset.pmPacked = stageSize.w >= stageSize.h ? "landscape" : "portrait";
     root.box = top.root;
     root.kids.forEach(function (id) { part(id).box = top.boxes[id] || null; });
     root.kids.forEach(function (id) { packChildren(part(id)); });
@@ -1521,9 +1523,12 @@
     } else if (event.key === "Escape" && !typing && !event.defaultPrevented) { event.preventDefault(); escape(); }
   });
   // The world is packed for the stage's shape: a resize refits the camera, and turning between portrait and landscape repacks.
-  if (window.ResizeObserver) new ResizeObserver(function () {
+  // While the book's panes are dragged the camera holds still, and the map settles once the drag ends.
+  var dragged = false;
+  function resized() {
     if (!stageSize) return;
     measure();
+    if (embedded && book.classList.contains("bp-dag-resizing")) { dragged = true; schedule(); return; }
     // The book hides its stage while it lists statements; the map waits until it shows again.
     if (size.w <= 1) return;
     var repack = stageSize.w <= 1 || (size.w >= size.h) !== (stageSize.w >= stageSize.h);
@@ -1537,7 +1542,8 @@
     if (embedded && (repack || missed)) { fromBook = null; show(book.getAttribute("data-map-start") || ""); }
     else if (embedded && state.focusPart === ROOT && !state.selected && !state.picked) fitProject();
     schedule();
-  }).observe(stage);
+  }
+  if (window.ResizeObserver) new ResizeObserver(resized).observe(stage);
   function report(error) {
     state.error = "Something went wrong: " + (error && error.message ? error.message : error) + ". Try again, or reload the page.";
     live.textContent = state.error;
@@ -1599,6 +1605,7 @@
     var start = book.getAttribute("data-map-start") || "", selects = book.classList.contains("bp-dag-has-selection");
     var letGo = bookSelects && !selects, regained = !bookSelects && selects;
     bookSelects = selects;
+    if (dragged && !book.classList.contains("bp-dag-resizing")) { dragged = false; resized(); }
     if (changed("data-map-statuses")) { readStatuses(); schedule(); }
     if (!model.parts.has(ROOT)) return;
     if (changed("data-map-start")) show(start);
