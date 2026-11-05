@@ -72,11 +72,10 @@ less) after waiting behind other hovers is refused before it starts.
 ## Settings
 
 Unless noted, every setting below is node-wide and read only when the runtime
-starts, from the environment of the process that starts it (an MCP adapter
-serving a tool call, or `uv run autoform-lean-runtime start`). After changing
-one, run `uv run autoform-lean-runtime stop` and make sure the next starter has
-the new value; `uv run autoform-lean-runtime status` shows the resolved values
-under `config`.
+starts, from the environment of the process that starts it (an MCP adapter, or
+`uv run autoform-lean-runtime start`). After changing one, run `uv run
+autoform-lean-runtime stop` and make sure the next starter has the new value;
+`uv run autoform-lean-runtime status` shows the resolved values under `config`.
 
 - `AUTOFORM_MAX_LEAN_PROJECTS` (default 4): projects with loaded Lean state.
 - `AUTOFORM_REPL_TOTAL_WORKERS` (default one per 32 GB of memory, at least 1)

@@ -15,26 +15,27 @@ BUDGETS = {
     "README.md": 120,
     "autoform_cli/README.md": 679,  # K5: command contracts moved to their reference pages.
     "autoform_cli/project/README.md": 120,
+    "autoform_cli/reference/abstraction.md": 37,  # New in #491; other docs' budgets fell by as much.
     "autoform_cli/reference/claims-and-revisions.md": 164,
     "autoform_cli/reference/debrief.md": 45,
-    "autoform_cli/reference/open-statements.md": 186,
+    "autoform_cli/reference/open-statements.md": 180,
     "autoform_cli/reference/pinned-names.md": 41,
     "autoform_cli/reference/project-setup.md": 97,
     "autoform_cli/reference/runtime-and-publication.md": 123,
-    "autoform_cli/reference/search.md": 184,
+    "autoform_cli/reference/search.md": 180,
     "autoform_cli/reference/site.md": 134,
-    "autoform_cli/reference/skeleton-and-review.md": 199,
+    "autoform_cli/reference/skeleton-and-review.md": 196,
     "autoform_cli/reference/validation-and-audit.md": 250,  # #193's credit rule; #485's list of captioned commands.
     "autoform_cli/reference/wiki-links.md": 20,  # Internal optional viewer transport; keep it on demand and concise.
     "autoform_cli/reference/work.md": 127,
-    "servers/README.md": 122,
-    "skills/agent-review/SKILL.md": 65,
-    "skills/debrief-orchestrator/SKILL.md": 47,
+    "servers/README.md": 121,
+    "skills/agent-review/SKILL.md": 63,
+    "skills/debrief-orchestrator/SKILL.md": 44,
     "skills/develop-plugin/SKILL.md": 34,
-    "skills/formalize/SKILL.md": 262,  # The worktree package copy (#275), leftover worktrees (#435).
-    "skills/human-review/SKILL.md": 113,
-    "skills/roadmap/SKILL.md": 257,
-    "skills/setup/SKILL.md": 175,  # A named donor's packages (#275).
+    "skills/formalize/SKILL.md": 258,  # The worktree package copy (#275), leftover worktrees (#435).
+    "skills/human-review/SKILL.md": 110,
+    "skills/roadmap/SKILL.md": 247,
+    "skills/setup/SKILL.md": 174,  # A named donor's packages (#275).
 }
 # All skills/*/references/*.md together, so a new reference file cannot dodge a budget.
 REFERENCES_BUDGET = 935

@@ -39,6 +39,13 @@ date when the release is tagged.
   it with `git worktree remove`, never `--force`, and reports the free space
   recovered and how to re-create the checkout; ignored files such as `.lake`
   are not kept (#435).
+- **Copied code.** With `AUTOFORM_SUBAGENT_DEBRIEF=1`, the subagent debrief
+  asks for the project code a worker copied (`copied_code`), apart from its
+  helper-lemma proposals. `autoform abstraction list|target|close` groups the
+  copies into clusters and records the lead's decisions in the debrief store,
+  with `abstractions/TODO.md` as the to-do list. At the end of a Formalize run
+  the lead gives each open cluster to a refactor subagent, which acquires the
+  claims it needs when the run uses claims (#491).
 - **Lean under each statement.** A statement whose `lean:` names resolve
   shows the first three declarations under it, as written from the attribute
   lines above the keyword, without the section's variables: a theorem or lemma

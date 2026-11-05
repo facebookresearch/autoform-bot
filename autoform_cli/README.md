@@ -87,8 +87,7 @@ still has one.
 target, `bridged` for a result introduced between source targets, and
 `background` for prerequisite mathematics.
 
-Frontmatter is optional; a container that only supplies prose and placement
-needs none.
+Frontmatter is optional.
 
 The optional `area` field groups the chapters, and deeper containers naming a
 chapter's area, into regions of the project map, and Topics heads each area's
@@ -650,6 +649,7 @@ Each area's contract has its own page:
 - [Claims and revisions](reference/claims-and-revisions.md): leases and revising a published statement.
 - [Work](reference/work.md): the frontier, open statements, and the impact of a Lean or import edit.
 - [Debriefs](reference/debrief.md): what the debrief commands ask, store and print.
+- [Copied code](reference/abstraction.md): how `autoform abstraction` clusters copies and records decisions.
 - [Project setup](reference/project-setup.md): what `init` and `project` write, refuse and report.
 - [The published site](reference/site.md): what render writes and publishes, MathJax, subdirectory projects, the dashboard overlay, and Pages deploys and reports.
 - [Runtime and publication](reference/runtime-and-publication.md): `doctor`, the in-memory runtime projection and the published site.
