@@ -589,7 +589,14 @@ parse, with or without `--json`, and changes nothing else.
   screen reader hears for the reading pane's button and for the page heading
   while the reader is collapsed showed a title's formula as TeX source, such
   as `$L^p$ spaces` or `\(L^p\) spaces`. They now read it as text,
-  `L^p spaces`, and a title's code keeps its dollars.
+  `Lᵖ spaces`, and a title's code keeps its dollars.
+- **TeX in map labels.** The map's card labels, tooltips and accessible names
+  kept a formula's commands as words glued to their neighbours, such as
+  `left(fracupright)`. One reducer, shared with the explorer, now reads
+  fractions, roots, scripts, operator names and the common symbols as text:
+  `(u/p)`, `√2`, `Lᵖ`, `x ↦ x²`. The map's search hits, Most-used results and
+  Uses and Used by lists typeset their formulas where the site's MathJax runs,
+  as its cards do.
 - **Reference links on chapters with a `<` in the title.** A `<` in a
   chapter's title alone left reference-style links in its prose shown as typed
   (#631).

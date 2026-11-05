@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,7 @@ function emit(node, type, {pointerId, pointerType, ...init} = {}) {
   node.dispatchEvent(event);
   return event;
 }
+eval(args.before);
 load(args.bundle);
 await wait(20);
 """
@@ -95,15 +97,16 @@ def _library(tmp_path: Path, *, captions: dict[str, str] | None = None, tracks_l
 
 
 def _walk(tmp_path: Path, script: str, map_dir: Path | None = None, *,
-          hash: str = "", hold: str = "", fail: str = "") -> str:
+          hash: str = "", hold: str = "", fail: str = "", before: str = "") -> str:
     """Run ``script`` on the rendered map page, opened at ``hash``, over the map at ``map_dir``.
 
     ``hold`` names a data file held until the script calls ``net.release``, and ``fail`` one whose first request fails.
+    ``before`` runs ahead of the map's script.
     """
     assets = dict(render._map_assets("Library"))
     bundle = tmp_path / "project-map.js"
     bundle.write_text(assets[render.MAP_SCRIPT], encoding="utf-8")
-    args = {"bundle": str(bundle), "map": str(map_dir or _library(tmp_path)), "hold": hold, "fail": fail}
+    args = {"bundle": str(bundle), "map": str(map_dir or _library(tmp_path)), "hold": hold, "fail": fail, "before": before}
     url = "https://blueprint.example.invalid/" + render.MAP_PAGE + hash
     return run_dom(_HARNESS + script, page=assets[render.MAP_PAGE], url=url, args=args)
 
@@ -263,6 +266,59 @@ def test_titles_with_tex_are_readable_on_the_map(tmp_path: Path) -> None:
       console.log('tex ok');
     """)
     assert "tex ok" in out
+
+
+def test_beside_the_explorer_the_map_reads_formulas_with_the_explorers_reducer(tmp_path: Path) -> None:
+    # The explorer's bundle and the map's script both carry tex-plain.js. The book runs its bundle first, so the map's
+    # copy leaves the reducer already on window in place.
+    explorer = Path(render.__file__).with_name("assets") / "blueprint-explorer.min.js"
+    before = (f"load({json.dumps(str(explorer))}); const explorerMath = window.AutoformTexPlain.math;"
+              " window.AutoformTexPlain.math = tex => '<' + explorerMath(tex) + '>';")
+    out = _walk(tmp_path, r"""
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'abel'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      assert.strictEqual($$('.pm-hit')[0].querySelector('.pm-hit-title').textContent, 'Abel summation for <ℝ>');
+      console.log('one reducer ok');
+    """, before=before)
+    assert "one reducer ok" in out
+
+
+def test_list_entries_with_formulas_go_to_the_sites_mathjax_a_list_at_a_time(tmp_path: Path) -> None:
+    library = tmp_path / "lists"
+    project_map.write_project_map(library, project_map.build_project_map([
+        {"id": "roadmap", "kind": "scope", "title": "Library", "parent": None, "result": False},
+        {"id": "Algebra", "kind": "scope", "title": "Algebra", "parent": "roadmap", "result": False, "area": "Algebra"},
+        {"id": "Analysis", "kind": "scope", "title": "Analysis", "parent": "roadmap", "result": False, "area": "Analysis"},
+        {"id": "Algebra/lagrange", "kind": "node", "title": "Lagrange's theorem", "parent": "Algebra", "result": True,
+         "status": "planned", "lean": "Subgroup.card_dvd"},
+        {"id": "Analysis/abel", "kind": "node", "title": r"Abel summation for $\mathbb{R}$", "parent": "Analysis",
+         "result": True, "status": "planned"},
+    ], [("Algebra/lagrange", "Analysis/abel", 1, 0)]))
+    out = _walk(tmp_path, r"""
+      const asked = [], R = ['\\(\\mathbb{R}\\)'];
+      window.AutoformMath = {refresh: root => { asked.push(root); return Promise.resolve(true); }};
+      const formulas = node => $$('.arithmatex', node).map(span => span.textContent);
+      // Picked, Analysis lists the result it exports most, and MathJax gets that list.
+      const rect = $$('.pm-part').find(node => node.getAttribute('data-part') === 'Analysis').querySelector('rect');
+      emit(rect, 'pointerdown', {button: 0, clientX: 30, clientY: 30, pointerId: 1});
+      emit(rect, 'pointerup', {button: 0, clientX: 30, clientY: 30, pointerId: 1}); await wait(40);
+      const most = $('.pm-reader').querySelector('.pm-more .pm-list');
+      assert.deepStrictEqual(formulas(most), R);
+      assert(asked.includes(most), 'the Most-used list goes to MathJax');
+      // So do the search hits, as one list.
+      const search = $('.pm-search').querySelector('input');
+      search.value = 'abel'; emit(search, 'focus'); emit(search, 'input'); await wait(20); emit(search, 'input'); await wait(5);
+      assert.deepStrictEqual(formulas($('.pm-hits')), R);
+      assert(asked.includes($('.pm-hits')) && !asked.some(root => root.closest && root.closest('.pm-hit')), 'one pass for the hits');
+      // And so does the list of what Lagrange's theorem uses.
+      search.value = 'Subgroup.card_dvd'; emit(search, 'input'); await wait(5);
+      emit(search, 'keydown', {key: 'Enter'}); await wait(40);
+      const uses = $('.pm-reader').querySelector('.pm-list');
+      assert.deepStrictEqual(formulas(uses), R);
+      assert(asked.some(root => root.contains(uses)), 'the Uses list goes to MathJax');
+      console.log('lists ok');
+    """, library)
+    assert "lists ok" in out
 
 
 def test_escaped_braces_and_norm_bars_stay_in_titles(tmp_path: Path) -> None:

@@ -15,6 +15,8 @@ from tests.test_integrated_publication import _decoded_relations, _project, _wri
 _NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(_NODE is None, reason="Node is needed for isolated projection tests")
 _CLIENT = Path(__file__).resolve().parents[1] / "autoform_cli/assets/blueprint-dag.js"
+# The explorer's bundle carries the reducer plainTitle reads a title's formulas with.
+_TEX_PLAIN = Path(__file__).resolve().parents[1] / "autoform_cli/assets/tex-plain.js"
 
 _LOADER = r"""
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
@@ -106,6 +108,7 @@ function configure(indexNodes, context, relations = []) {
 
 def _run(body: str, *, fixture: object = None) -> None:
     program = "var fixture = JSON.parse(fixtureText);\n" + _ENVIRONMENT + "\n"
+    program += "(function (window) {\n" + _TEX_PLAIN.read_text(encoding="utf-8") + "\n})(window);\n"
     script = "const CLIENT=" + json.dumps(str(_CLIENT)) + ";\n" + _LOADER
     script += "vm.runInContext(" + json.dumps('"use strict";\n') + "+constants[0]+"
     script += json.dumps(program) + "+functions+" + json.dumps(body)
@@ -300,6 +303,8 @@ def test_a_folded_trail_and_a_title_without_its_own_parts_read_formulas_as_text(
       assert.equal(plainTitle(groups, label(groups, parts)), 'Groups ℤ/n');
       assert.equal(plainTitle('Groups \\(\\mathbb{Z}/n\\) at $5', label(groups, parts)), 'Groups ℤ/n at $5');
       assert.equal(plainTitle(groups, undefined), groups);
+      const lp = 'Spaces $L^p$';
+      assert.equal(plainTitle(lp, label(lp, [['text', 'Spaces '], ['math', '\\(L^p\\)']])), 'Spaces Lᵖ');
       // The ellipsis names the ancestors it folds as text, in its tooltip and for screen readers.
       const crumb = (text, url, reading_title) => ({label: text, url, reading_title});
       const trail = [crumb('Library', 'https://example.test/math/roadmap/index.html'),
