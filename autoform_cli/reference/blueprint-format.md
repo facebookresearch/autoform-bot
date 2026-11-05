@@ -7,12 +7,11 @@ ordinary file's stable ID is its path without `.md`; a `README.md`'s is its
 directory path, and the root article's is `roadmap`.
 
 The H1 is the article's title. Container prose is the exposition; a standalone
-list item linking to a formalizable leaf places the leaf there in the published
-chapter. Unplaced leaves appear under “Other statements”,
-unplaced module catalogs under “Module inventories”. Keep the root article a
-short preface and table of contents, not an inventory of every milestone: large
-inventories belong in coverage, and a detailed container introduces its
-mathematics in prose and places statements under meaningful section headings.
+list item linking a formalizable leaf places it there in the published chapter.
+Unplaced leaves appear under “Other statements”, unplaced module catalogs under
+“Module inventories”. Keep the root article a short preface and table of
+contents; large inventories belong in coverage, and a detailed container
+introduces its mathematics in prose and places statements under headings.
 
 Frontmatter records checked facts:
 
@@ -111,12 +110,11 @@ about any role but `topic`, which the article ignores.
 {"schema":"autoform-atlas/v1","areas":{"Geometry & Topology":["topology","geometry"]}}
 ```
 
-Every listed value is a roadmap node id. A node takes the first area that
-lists it; an `area:` on the node wins. The file never stops a command: `check`
-and `render` warn about each ignored entry, or the whole file when it is not
-readable `autoform-atlas/v1` JSON, and `audit` reports each as an
-`atlas-omission` [warning](validation-and-audit.md#warnings). Render
-leaves the file out of the site; a page's link to it keeps only its text.
+Every listed value is a roadmap node id. A node takes the first area that lists
+it; an `area:` on the node wins. The file never stops a command: `check` and
+`render` warn about each ignored entry, or the whole file when it is not
+readable `autoform-atlas/v1` JSON. Render leaves the file out of the site; a
+page's link to it keeps only its text.
 
 A `catalog: module` leaf summarizes an existing Lean module and is never
 dispatched as a proof task. `audit` reports `catalog-container` for a catalog
@@ -239,7 +237,8 @@ The contract is read as published Markdown and fails closed:
   below it, rather than truncating the contract. A row holding an unclosed
   `<style>`, or evidence with a raw `<table>`, is refused.
 - Evidence holding only a code span, a comment, emphasis, an HTML tag, an
-  entity, an empty link such as `[ ](notes.md)`, or hidden text is rejected.
+  entity, an empty link such as `[ ](notes.md)`, or hidden text is rejected,
+  as is [placeholder](validation-and-audit.md#statement-text) evidence.
 - `INVENTORIED` and `DECOMPOSED` evidence needs a complete inline link to an
   existing roadmap article. Every local link must resolve, fragments included.
 
