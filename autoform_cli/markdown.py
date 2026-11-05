@@ -109,9 +109,11 @@ FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 #: renders as literal text, so accepting it would let unrendered evidence
 #: satisfy a coverage disposition.
 _INLINE_TARGET = re.compile(r"\(\s*(<[^>]+>|[^)\s]+)(?:\s+[^)]*)?\)")
-#: The same destination as the site reads it in a block, where a title after it
-#: may run onto the next line: the title is quoted or holds only balanced
+#: The same destination in a block, where a title after it may run onto the
+#: next line: as on the site, the title is quoted or holds only balanced
 #: parentheses, so a parenthesis that never closes leaves the link unclosed.
+#: The target is the first word, as in a line read alone, though the site makes
+#: an unquoted title part of the address.
 _BLOCK_TARGET = re.compile(
     r"""\(\s*(<[^>]+>|[^)\s]+)(?:\s+(?:"[^")]*"\s*|'[^')]*'\s*|(?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*))?\)"""
 )
@@ -399,10 +401,12 @@ def text_blocks(lines: list[str]) -> list[tuple[int, int]]:
     outside a quote that starts raw HTML, a reference definition over all its
     lines and each row of a table are read alone, and so is each line of
     indented code the mask leaves below one of them. So is a ``#`` heading
-    indented up to three spaces, as the loader has always read one, and a line
-    that starts with a block-level closing tag. The site keeps the heading in
-    the paragraph, and the tag where it closes no raw HTML, so a link that
-    wraps onto or off such a line goes unread.
+    indented up to three spaces, as the loader has always read one, a line
+    that starts with a block-level closing tag, and one that starts with a
+    block-level element closed on that line, such as ``<div>See</div>``, or a
+    void one, such as ``<hr/>``. The site keeps the heading in the paragraph,
+    the closing tag where it closes no raw HTML, and the text after the
+    element, so a link that wraps onto or off such a line goes unread.
     """
 
     blocks: list[tuple[int, int]] = []

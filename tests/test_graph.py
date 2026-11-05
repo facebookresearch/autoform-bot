@@ -1021,6 +1021,21 @@ def test_a_destination_whose_parenthesis_never_closes_is_read_as_before(
 
 
 @pytest.mark.parametrize(
+    "links",
+    ["- By [x](base.md see (the [y](other.md) notes", "- By [x](base.md see (the [y](other.md) notes\n  for more."],
+    ids=["one-line", "two-line"],
+)
+def test_a_link_inside_a_title_that_never_closes_counts_on_one_line_too(tmp_path: Path, links: str) -> None:
+    # The site leaves [x] unclosed and links [y]; read alone, the line ran [x]'s title on past [y].
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "other.md", "# Other\n")
+    _node(blueprint, "result.md", f"# Result\n\n## Depends on\n\n{links}\n")
+
+    assert load_graph(blueprint).nodes["result"].dependencies == ("base", "other")
+
+
+@pytest.mark.parametrize(
     ("links", "warning"),
     [
         ("- [The\n  page](missing.md)", "result: dependency target does not exist: 'missing.md'"),

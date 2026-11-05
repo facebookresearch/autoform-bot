@@ -188,14 +188,14 @@ class Graph:
     #: Lean, so the site shows no Lean progress.
     tracks_lean: bool = True
     #: What check warns about from loading without failing: a project setting
-    #: it ignores because it is misplaced or has an unknown value, then
-    #: ``## Informally uses`` links that do not resolve to another article and
-    #: the heading written below a dependency heading, where its links count,
-    #: and, in a wrapped link, such as one whose text wraps across lines, what
-    #: loading would otherwise refuse: a dependency that does not resolve,
-    #: names its own article or closes a cycle, or a link into an unpublished
-    #: folder. Last come the pinned name lists' warnings about
-    #: ``mathlib_declaration`` and ``mathlib_file``.
+    #: it ignores because it is misplaced or has an unknown value, a wrapped
+    #: link, such as one whose text wraps across lines, into an unpublished
+    #: folder, then ``## Informally uses`` links that do not resolve to another
+    #: article, the heading written below a dependency heading, where its links
+    #: count, and a wrapped dependency loading would otherwise refuse, as it
+    #: does not resolve, names its own article or closes a cycle. Last come the
+    #: pinned name lists' warnings about ``mathlib_declaration`` and
+    #: ``mathlib_file``.
     #: :func:`informal_cycle_warnings` adds the links whose target depends on
     #: the article.
     warnings: tuple[str, ...] = ()
@@ -946,9 +946,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
             continue
         if section is not None:
             alone[section].extend(target for line in body[start:stop] for target in link_targets(line, references))
-            # A block of one line without a backtick shows no link that line read alone missed.
-            if stop - start > 1 or "`" in body[start]:
-                targets[section].extend(target for _, target in _block_links(body[start:stop], references))
+            targets[section].extend(target for _, target in _block_links(body[start:stop], references))
 
     if title is None:
         issues.append(f"{node_id}: missing H1 title")
