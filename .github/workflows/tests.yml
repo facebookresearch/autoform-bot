@@ -339,6 +339,7 @@ jobs:
         run: >-
           uv run pytest -q
           tests/test_tree_snapshot_limits.py
+          tests/test_portable_source_capture.py
           tests/test_project_inspect.py
           tests/test_scaffold.py::test_scaffold_merges_autoform_rules_into_lake_gitignore
           tests/test_scaffold.py::test_windows_cross_interface_gitignore_identity_ignores_ctime_only
