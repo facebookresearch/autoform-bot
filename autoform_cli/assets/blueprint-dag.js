@@ -267,6 +267,7 @@
 
     buildShell();
     bindEvents();
+    bindLeanCards();
     // The router has already validated its index, so the first route, a
     // direct theorem entry included, reads its records. Only the route
     // renders the first view, after projecting with them.
@@ -870,6 +871,65 @@
       else globalListen(window, "resize", resize);
       globalListen(window, "resize", syncSheetAccessibility);
       if (navigation) [dom$readingBody, dom$navigation, dom$inventoryScroll].forEach(function (pane) { pane.addEventListener("scroll", remember); });
+    }
+    // A name in a statement's Lean shows the declaration it names in a card while it is hovered or focused. The card is
+    // a copy of the one render hid in the name's block; the pointer can move onto it to read or scroll it.
+    function bindLeanCards() {
+      var card = element("div", "bp-lean-card md-typeset"), shown = null, timer = 0;
+      card.id = "bp-lean-card-" + instance; card.setAttribute("role", "tooltip"); card.hidden = true; host.appendChild(card);
+      // A click in the card focuses it, so a reader can select its text or drag its scrollbar without closing it.
+      card.tabIndex = -1;
+      function show(ref) {
+        clearTimeout(timer);
+        // A name the reader replaced while the pointer rested on it shows nothing.
+        if (ref === shown || !ref.isConnected) return;
+        var name = ref.getAttribute("data-lean-name"), block = ref.closest(".bp-lean-source");
+        var entry = block && Array.from(block.querySelectorAll(".bp-lean-names > [data-lean-name]")).find(function (item) {
+          return item.getAttribute("data-lean-name") === name;
+        });
+        hide();
+        if (!entry) return;
+        shown = ref; ref.setAttribute("aria-describedby", card.id);
+        card.replaceChildren(element("p", "bp-lean-card-name", name));
+        Array.from(entry.childNodes).forEach(function (child) { card.appendChild(child.cloneNode(true)); });
+        card.hidden = false; card.scrollTop = 0; place();
+      }
+      // Under the name, or over it when the window has no room below; never past the window's sides.
+      function place() {
+        var box = shown.getBoundingClientRect(), below = box.bottom + 6 + card.offsetHeight <= window.innerHeight - 8;
+        card.style.left = Math.max(8, Math.min(box.left, window.innerWidth - card.offsetWidth - 8)) + "px";
+        card.style.top = Math.max(8, below ? box.bottom + 6 : box.top - 6 - card.offsetHeight) + "px";
+      }
+      function hide() {
+        clearTimeout(timer);
+        if (shown) shown.removeAttribute("aria-describedby");
+        shown = null; card.hidden = true;
+      }
+      function leave(event) {
+        if (shown && (shown.contains(event.relatedTarget) || card.contains(event.relatedTarget))) return;
+        clearTimeout(timer); if (shown) timer = setTimeout(hide, 150);
+      }
+      function nameAt(event) { return event.target.closest(".bp-lean-ref"); }
+      // A pointer that only crosses a name on its way elsewhere opens no card.
+      dom$readingBody.addEventListener("pointerover", function (event) {
+        var ref = nameAt(event);
+        if (ref && event.pointerType !== "touch") { clearTimeout(timer); timer = setTimeout(function () { show(ref); }, shown ? 0 : 250); }
+      });
+      dom$readingBody.addEventListener("pointerout", leave);
+      card.addEventListener("pointerover", function () { clearTimeout(timer); });
+      card.addEventListener("pointerout", leave);
+      dom$readingBody.addEventListener("focusin", function (event) { var ref = nameAt(event); if (ref) show(ref); else hide(); });
+      dom$readingBody.addEventListener("focusout", function (event) {
+        if (!dom$readingBody.contains(event.relatedTarget) && !card.contains(event.relatedTarget)) hide();
+      });
+      // A focused name keeps its card as the reader scrolls it into view; a hovered one's closes.
+      dom$readingBody.addEventListener("scroll", function () { if (shown && shown === document.activeElement) place(); else hide(); });
+      // Escape closes the card, wherever focus is, before it would close the reader.
+      globalListen(document, "keydown", function (event) {
+        if (event.key === "Escape" && shown) { event.preventDefault(); event.stopPropagation(); hide(); }
+      }, true);
+      // A press outside the card closes it, or cancels one about to open.
+      globalListen(document, "pointerdown", function (event) { if (!card.contains(event.target)) hide(); }, true);
     }
 
     function statusLabel(key) { return (palette[key] || {}).label || key.replace(/_/g, " "); }

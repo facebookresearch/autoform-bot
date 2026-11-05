@@ -39,6 +39,17 @@ date when the release is tagged.
   code. A catalog shows none, and a `--review` render leaves the Lean to each
   card's review, after its read-back. Render cuts the text from the Lean
   sources it captured, so a render without them shows none.
+- **Names in a statement's Lean.** A name in those declarations that the
+  project declares shows that declaration in a card when the book's reader
+  hovers or focuses it: a definition whole, its first 12 lines if longer, a
+  theorem its statement, with its file and line. A name some statement
+  formalizes links to that statement; another links to its source, or takes
+  keyboard focus when the site has no source links. Render looks a name up
+  among the project's own declarations, in the namespaces around the
+  declaration and those its file opens, and takes only one the file can see:
+  one above it in that file, or one not private in a file it imports.
+  Binders, patterns, fields, attributes, tactics, one-letter names and names
+  the project does not declare, such as Mathlib's, stay text.
 - **Check without site warnings.** `check --no-site-warnings` skips the
   warnings about the pages the site would publish, which `render` prints too,
   and still reads the notes under `blueprint/sources/`, which a render that

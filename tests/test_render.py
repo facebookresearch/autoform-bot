@@ -895,12 +895,107 @@ def test_a_catalog_or_an_unread_name_shows_no_lean_declaration(tmp_path: Path) -
     index = lean_module.index_project(project)
     linker = lean_module.SourceLinker(index, sources={Path("Project/Basic.lean"): (project / "Project/Basic.lean").read_bytes()})
 
-    assert render_module._lean_blocks(SimpleNamespace(catalog=None, lean="Project.Base"), linker)
+    def blocks(lean: str, catalog: str | None = None, linker: lean_module.SourceLinker = linker) -> list[str]:
+        return render_module._lean_blocks(SimpleNamespace(catalog=catalog, lean=lean), linker, links={}, formalizing={})
+
+    assert blocks("Project.Base")
     # A catalog can list hundreds of names, so it shows none, as it shows no code icons.
-    assert render_module._lean_blocks(SimpleNamespace(catalog="module", lean="Project.Base"), linker) == []
-    assert render_module._lean_blocks(SimpleNamespace(catalog=None, lean="Project.Missing"), linker) == []
+    assert blocks("Project.Base", "module") == []
+    assert blocks("Project.Missing") == []
     # Without the captured files there is no text to show.
-    assert render_module._lean_blocks(SimpleNamespace(catalog=None, lean="Project.Base"), lean_module.SourceLinker(index)) == []
+    assert blocks("Project.Base", linker=lean_module.SourceLinker(index)) == []
+
+
+def test_a_name_in_a_lean_block_links_its_statement_and_carries_its_card(tmp_path: Path) -> None:
+    """A name in a statement's Lean links the statement that formalizes it and carries its declaration's card."""
+    project = _project(tmp_path)
+    (project / "Project/Basic.lean").write_text(
+        "namespace Project\n\ndef Base : Nat := 0\n\ndef e : Nat := 2\n\ndef count : Nat := 3\n\n"
+        "def helper (n : Nat) : Nat :=\n  n + Base\n\ntheorem helper_pos : 0 < helper 1 := by\n  simp [helper]\n\n"
+        "lemma helper_le : helper 0 ≤ helper 1 := by\n  omega\n\n"
+        "def twelve : Nat → Nat\n" + "".join(f"  | {n} => {n}\n" for n in range(10)) + "  | _ => 0\n\n"
+        "def thirteen : Nat → Nat\n" + "".join(f"  | {n} => {n}\n" for n in range(11)) + "  | _ => 0\n\n"
+        "def long : Nat → Nat\n" + "".join(f"  | {n} => {n}\n" for n in range(13)) + "  | _ => 0\n\n"
+        "namespace Inner\ndef twice (x : Nat) : Nat := x + x\nend Inner\n\nopen Inner in\n"
+        "theorem top (count : Nat) : twice count = helper e + Base.succ + long 0 := by\n  sorry\n\nend Project\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    top = page.split('data-autoform-node-id="top"', 1)[1].split('<div class="bp-lean-source" data-search-exclude="1">\n', 1)[1]
+    code, cards = top.split("</code></pre>", 1)
+
+    # A name a statement formalizes links to it, the part before a field included; one only the sources declare is
+    # a name the keyboard can reach. Binders and one-letter names, which may be variables, stay text.
+    assert code == (
+        '<pre class="bp-lean"><code><span class="bp-lean-keyword">theorem</span> top (count : Nat) : '
+        '<span class="bp-lean-ref" tabindex="0" data-lean-name="Project.Inner.twice">twice</span> count = '
+        '<span class="bp-lean-ref" tabindex="0" data-lean-name="Project.helper">helper</span> e + '
+        '<a class="bp-lean-ref" href="#base" data-lean-name="Project.Base">Base</a>.succ + '
+        '<span class="bp-lean-ref" tabindex="0" data-lean-name="Project.long">long</span> 0'
+    )
+    # Each name's card holds its declaration and file, once, hidden in the block; a long one shows its first lines.
+    hidden = cards.split('<div class="bp-lean-names" hidden>\n', 1)[1].split("\n</div>\n</div>", 1)[0]
+    entries = dict(re.findall(r'<div data-lean-name="([^"]+)" data-search-exclude="1">(.*?)</div>', hidden, re.S))
+    assert list(entries) == ["Project.Inner.twice", "Project.helper", "Project.Base", "Project.long"]
+    assert entries["Project.helper"] == (
+        '<pre class="bp-lean"><code><span class="bp-lean-keyword">def</span> helper (n : Nat) : Nat :=\n  n + Base</code></pre>'
+        '<p class="bp-lean-where">Project/Basic.lean:9</p>'
+    )
+    assert "  | 10 =&gt; 10\n  ⋯</code>" in entries["Project.long"] and "| 11 " not in entries["Project.long"]
+
+    # A theorem's card shows its statement and never its proof.
+    index = lean_module.index_project(project)
+    linker = lean_module.SourceLinker(index, sources={Path("Project/Basic.lean"): (project / "Project/Basic.lean").read_bytes()})
+    card = render_module._lean_card(index.find("Project.helper_pos"), linker)
+    assert card is not None and "helper_pos : 0 &lt; helper 1</code>" in card and "simp" not in card
+    card = render_module._lean_card(index.find("Project.helper_le"), linker)
+    assert card is not None and "helper_le : helper 0 ≤ helper 1</code>" in card and "omega" not in card
+    # Twelve lines show whole; a thirteenth is cut.
+    twelve, thirteen = (render_module._lean_card(index.find(f"Project.{n}"), linker) for n in ("twelve", "thirteen"))
+    assert twelve is not None and thirteen is not None
+    assert "⋯" not in twelve and "  | _ =&gt; 0" in twelve and "  ⋯</code>" in thirteen
+    # A link is escaped as an attribute.
+    node = SimpleNamespace(catalog=None, lean="Project.top")
+    links, formalizing = {"base": 'b?x=1&y="2"'}, {"Project.Base": "base"}
+    blocks = render_module._lean_blocks(node, linker, links=links, formalizing=formalizing)
+    link = '<a class="bp-lean-ref" href="b?x=1&amp;y=&quot;2&quot;" data-lean-name="Project.Base">Base</a>'
+    assert link in "\n".join(blocks)
+
+
+def test_a_private_declaration_whose_name_another_file_shares_links_nothing(tmp_path: Path) -> None:
+    """The card, the link and the formalizing statement go by name, which the index files under the public one."""
+    project = _project(tmp_path)
+    (project / "Project/Other.lean").write_text(
+        "namespace Project\n\ntheorem helper : True := trivial\n\nend Project\n", encoding="utf-8"
+    )
+    (project / "Project/Basic.lean").write_text(
+        "namespace Project\n\ndef Base : Nat := 0\n\nprivate def helper : Nat := 1\n\n"
+        "theorem top : helper = Base + 1 := rfl\n\nend Project\n",
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    top = page.split('data-autoform-node-id="top"', 1)[1].split("</code></pre>", 1)[0]
+
+    assert 'data-lean-name="Project.Base"' in top and "Project.helper" not in top
+
+
+def test_a_field_an_argument_or_a_tactic_is_no_reference() -> None:
+    """A field given or declared, a named argument, an attribute and tactics name no declaration in reach."""
+    linked = render_module._lean_code(
+        "@[ext] { s with base := base, f (n := base) }\n  base : Nat\nx : List Base := base\ny :\n"
+        "    Base := base decreasing_by simp_wf; base",
+        lambda written: f"[{written}]",
+    )
+    # An attribute is no reference; a result type before ``:=`` is, on its own line too.
+    assert linked == (
+        '@[ext] { [s] <span class="bp-lean-keyword">with</span> base := [base], [f] (n := [base]) }\n'
+        '  base : [Nat]\nx : [List] [Base] := [base]\ny :\n'
+        '    [Base] := [base] <span class="bp-lean-keyword">decreasing_by</span> simp_wf; base'
+    )
 
 
 def test_a_dependency_list_drops_its_separators(tmp_path: Path) -> None:
