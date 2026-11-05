@@ -57,7 +57,9 @@ def map_paths() -> tuple[str, ...]:
             *(f"{MAP_DIRECTORY}/parts/{shard:02x}.json" for shard in range(SHARDS)))
 
 
-def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterable[Relation]) -> dict[str, object]:
+def build_project_map(
+    records: Sequence[Mapping[str, object]], relations: Iterable[Relation], *, tracks_lean: bool = True,
+) -> dict[str, object]:
     """Return ``{relative path: payload}`` for the map of one project.
 
     ``records`` are search-index entries with at least ``id``, ``kind``,
@@ -67,6 +69,7 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
 
     Records arrive in reading order (the book's own order); every level keeps it,
     so the layout can fall back on it wherever dependencies leave a tie.
+    With ``tracks_lean=False`` the index says the project tracks no Lean, and the map shows no Lean progress.
     """
     by_id = {str(record["id"]): record for record in records}
     order = {key: index for index, key in enumerate(by_id)}
@@ -328,6 +331,8 @@ def build_project_map(records: Sequence[Mapping[str, object]], relations: Iterab
         "regions": [summary(region) for region in regions], "region_edges": among.get(root, []),
         "facets": sorted(set(facet.values())),
     }
+    if not tracks_lean:
+        files["index.json"]["tracks_lean"] = False
     files["search.json"] = {
         "schema": SCHEMA,
         # Each part with its parent's position (-1 under the root), so search can rebuild any path.

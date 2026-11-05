@@ -270,7 +270,7 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-reading-body h2 { font-size: 22px; line-height: 1.4; }
 .bp-reading-body h3 { font-size: 17px; line-height: 1.4; }
 /* The book sizes notes, totals and labels in rem for Material's body size; beside the pane's 16px statement they would outrank it, so they step down here. */
-.bp-reading-body :is(.bp-thmnotes, .bp-meta, .bp-progress-states), .bp-reading-body details.bp-dependencies { font-size: 14px; }
+.bp-reading-body :is(.bp-thmnotes, .bp-meta, .bp-progress-states), .bp-reading-body :is(details.bp-dependencies, details.bp-lean-fold) { font-size: 14px; }
 .bp-reading-body :is(.bp-thmnotes h6, .bp-thmcaption, .bp-key, .bp-mark, .bp-progress-kicker, .bp-next-kicker, .bp-hero-kicker) { font-size: 12px; }
 .bp-reading-body :is(.bp-progress-total, .bp-next-title) { font-size: 16px; }
 /* The status rule and the bold head already mark a theorem, so the workspace sets its statement upright. */
@@ -385,3 +385,7 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-dag-viewer.bp-dag-viewer .bp-dag-map-unavailable { position: absolute; top: 50%; left: 50%; width: max-content; max-width: calc(100% - 32px); margin: 0; padding: 10px 14px; border: 1px solid var(--dag-border); border-radius: var(--dag-radius-control); background: var(--dag-bg); color: var(--dag-muted); box-shadow: var(--dag-e1); font-size: 14px; line-height: 1.45; text-align: center; transform: translate(-50%, -50%); }
 /* The map dims what the filter leaves out and hides nothing; a list still offers what it hid. */
 .bp-dag-integrated:has(.bp-dag-stage:not([hidden]) > .bp-whole-map) .bp-dag-hidden-button { display: none !important; }
+
+/* A project that tracks no Lean (render marks its pages data-tracks-lean="false"): no status filter, and no status on
+   the phone's reading handle. Search hits and Browse rows leave out their status themselves. */
+[data-tracks-lean="false"] :is(.bp-dag-filters, .bp-dag-sheet-handle .bp-dag-swatch) { display: none !important; }

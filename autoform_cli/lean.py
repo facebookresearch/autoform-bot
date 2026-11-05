@@ -95,6 +95,10 @@ _SCANNED_LINE = re.compile(
     rf"\s*(?:#exit|namespace|section|mutual|end|@\[|{_SECTION_MODIFIERS}|{_DECLARATION_MODIFIERS}"
     rf"|{_DECLARATION_KEYWORDS})"
 )
+#: What may start a line indented no deeper than a declaration and still belong to it: an alternative,
+#: a ``where`` block, a trailing clause (not the ``deriving instance`` command) or a closing bracket,
+#: which starts no command.
+_CONTINUATION = re.compile(r"\s*(?:[|)\]}⟩⦄]|(?:where|deriving(?!\s+instance\b)|termination_by|decreasing_by)\b)")
 # Core command heads and their modifiers cannot supply a declaration's name.
 # Compare complete identifiers: `open'`, `Qualified.open` and `«open»` are names.
 # These cover the core command parsers and their stock syntax extensions. The
@@ -1614,9 +1618,33 @@ def declaration_names(lean: str) -> list[str]:
     return _DECLARATION_NAME.findall(lean)
 
 
+def declaration_text(lines: list[str], declaration: Declaration) -> str:
+    """``declaration`` as written in ``lines``, its file's lines: from its attributes and modifiers on the
+    lines above its keyword, if any, to its own last line.
+
+    The index records only where a declaration starts. It ends before the next line indented no deeper
+    than its keyword's that is not an alternative, a ``where`` block, a trailing clause or a closing
+    bracket: a comment, an attribute, the next command or an ``end``. A body written at that indent is
+    cut short there.
+    """
+
+    start = declaration.line - 1
+    indent = len(lines[start]) - len(lines[start].lstrip())
+    # An attribute line can end in a comment, as the index, which reads lines without their comments, allows.
+    while start and (head := lines[start - 1].split("--", 1)[0]).strip() and _MODIFIER_LINE.fullmatch(head):
+        start -= 1
+    end = declaration.line
+    for number, line in enumerate(lines[declaration.line :], declaration.line + 1):
+        if line.strip():
+            if len(line) - len(line.lstrip()) <= indent and not _CONTINUATION.match(line):
+                break
+            end = number
+    return "\n".join(lines[start:end])
+
+
 @dataclass(frozen=True, slots=True)
 class SourceLinker:
-    """Build permalinks into the project's Lean sources."""
+    """Build permalinks into, and excerpts of, the project's Lean sources."""
 
     index: SourceIndex
     repository_url: str | None = None
@@ -1629,6 +1657,24 @@ class SourceLinker:
     """Committed path of each repository path whose name Git stores under another spelling."""
     root_prefix: str = ""
     """The Lean root's path below the repository's top level, or empty at the top level."""
+    sources: Mapping[Path, bytes] = field(default_factory=dict)
+    """Each captured Lean file's bytes, by its path below the Lean root."""
+    _lines: dict[Path, list[str]] = field(default_factory=dict, repr=False, compare=False)
+
+    def excerpt(self, name: str) -> tuple[Declaration, str] | None:
+        """*name*'s declaration and its text as written, or ``None`` if *name* or its file was not captured
+        or its file's lines cannot be counted as the index counts them."""
+        declaration = self.index.find(name)
+        if declaration is None or declaration.path not in self.sources:
+            return None
+        if declaration.path not in self._lines:
+            text = self.sources[declaration.path].decode("utf-8", "replace")
+            # The index also ends a line at a lone carriage return, which Lean allows only in a literal or a
+            # comment; rather than count lines as it does, a file holding one shows no declarations.
+            lines = [] if re.search("\r(?!\n)", text) else [line.removesuffix("\r") for line in text.split("\n")]
+            self._lines[declaration.path] = lines
+        lines = self._lines[declaration.path]
+        return (declaration, declaration_text(lines, declaration)) if declaration.line <= len(lines) else None
 
     def location(self, name: str) -> Declaration | None:
         return self.index.find(name)
@@ -1664,6 +1710,7 @@ __all__ = [
     "SourceLinker",
     "bind_project_source_snapshot",
     "declaration_names",
+    "declaration_text",
     "index_failure_message",
     "index_project",
     "resolve_lean_root",
