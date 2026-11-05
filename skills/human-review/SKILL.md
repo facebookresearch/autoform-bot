@@ -51,7 +51,7 @@ and autonomous rubric scoring to Agent Review.
 
 Treat the landing page's `Fully proved` percentage as the share of
 formalizable leaf targets that are fully proved, as the
-[derived status](../../autoform_cli/README.md#assertions-and-derived-status)
+[derived status](../../autoform_cli/reference/blueprint-format.md#assertions-and-derived-status)
 defines it, never as whole-source completion; read the declared source coverage
 in its linked coverage contract before making scope claims. A target marked
 `mathlib: true` follows the authored status contract; the marker is an author

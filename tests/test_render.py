@@ -3893,6 +3893,23 @@ def test_a_line_that_only_looks_like_a_definition_keeps_its_words_and_has_its_li
     assert f'[paper]: {paper} "The paper"' in chapter
 
 
+def test_definitions_on_consecutive_lines_are_each_rewritten(tmp_path: Path) -> None:
+    """Links are rewritten a block at a time, and a definition is a block of
+    its own, tab or not, with its title on the next line or not."""
+    project = _project(tmp_path)
+    roadmap = project / "blueprint" / "roadmap" / "README.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8")
+        + '\nSee [the base] and [the top].\n[the base]:\tbase.md\n[the top]:\ttop.md\n  "The top"\n',
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8").splitlines()
+    assert "[the base]: #base" in chapter and "[the top]: #top" in chapter
+
+
 @pytest.mark.parametrize(
     "rest", ["   ", "\t", '\t"The paper"', ' "The paper"\t', " 'The paper'", " (The paper)", " (The paper)\t"]
 )
@@ -4123,6 +4140,69 @@ def test_a_query_on_a_node_link_is_kept_before_its_anchor(tmp_path: Path) -> Non
 
     published = (tmp_path / "out/coverage/README.md").read_text(encoding="utf-8")
     assert "See [Top](../roadmap/README.md?plain=1#top) and [the overview](../README.md?plain=1)." in published
+
+
+def test_a_link_whose_text_wraps_points_at_its_card(tmp_path: Path) -> None:
+    """Read a line at a time, the link was published as written, to a file its chapter absorbs."""
+    project = _project(tmp_path)
+    _edit(project / "blueprint/roadmap/README.md", "develops the base object", "develops [the base\nobject](base.md)")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert "develops [the base\nobject](#base) before" in chapter
+
+
+def test_a_link_whose_text_wraps_in_code_is_published_as_typed(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    code = (
+        "As `[the base\nobject](base.md)` shows:\n\n    [the base\n    object](base.md)\n\n"
+        "```\n[the base\nobject](base.md)\n```\n"
+    )
+    _edit(project / "blueprint/roadmap/README.md", "## Definitions", f"{code}\n## Definitions")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert code in (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # A destination on the next line stays as written: in a quote, the marker before it is no target.
+        ("> See [the paper](\n> https://example.org/paper).\n", "> See [the paper](\n> https://example.org/paper).\n"),
+        ("> See [X](\n> x.md).\n", "> See [X](\n> x.md).\n"),
+        ("See ![the figure](\n../drafts/f.png) now.\nNext.\n", "See ![the figure](\n../drafts/f.png) now.\nNext.\n"),
+        # A title on the next line goes, but not its line, so every later line keeps its number.
+        ('See [X](x.md\n  "The X") here.\nNext.\n', "See [X](#x\n) here.\nNext.\n"),
+        ("[two\nlines]: ../drafts/idea.md\nNext.\n", "\n\nNext.\n"),
+        # The site reads no definition whose label holds a bracket.
+        ("[a [b\nc]: ../drafts/idea.md\n\nNext.\n", "[a [b\nc]: ../drafts/idea.md\n\nNext.\n"),
+        # A backtick in a comment, which the page never reads, pairs with none on the next line.
+        ("See <!-- a ` tick --> [X](x.md) and\nmore ` text.\n", "See <!-- a ` tick --> [X](#x) and\nmore ` text.\n"),
+    ],
+    ids=["quoted-url", "quoted-article", "image-below", "title-below", "two-line-label", "bracket-label", "comment-tick"],
+)
+def test_a_block_is_rewritten_in_its_own_lines(tmp_path: Path, text: str, expected: str) -> None:
+    """A body hoisted onto its chapter's page, one folder up, has its links rewritten a block at a time."""
+    from autoform_cli.render import _rewrite_links
+
+    blueprint = tmp_path / "blueprint"
+    source_dir = blueprint / "roadmap" / "ch" / "theorems"
+    page = tmp_path / "out" / "roadmap" / "ch" / "README.md"
+
+    rewritten = _rewrite_links(
+        text,
+        source_dir=source_dir,
+        page=page,
+        blueprint=blueprint,
+        destination=tmp_path / "out",
+        node_sources={(source_dir / "x.md").resolve(): "ch/theorems/x"},
+        targets={"ch/theorems/x": (page, "x")},
+        unpublished=(blueprint / "roadmap" / "ch" / "drafts",),
+    )
+
+    assert rewritten == expected
 
 
 def test_a_query_on_a_book_link_keeps_its_chapter_in_the_book(tmp_path: Path) -> None:
@@ -4420,6 +4500,9 @@ def test_an_escaped_link_destination_is_resolved_as_the_site_reads_it(tmp_path: 
     # A link that does not move stays as written.
     assert rewrite(r"See [the chapter](../other\_ch/README.md).") == r"See [the chapter](../other\_ch/README.md)."
     assert rewrite("[b]: base\\_lemma.md\n") == "[b]: base\\_lemma.md\n"
+    # A code span over a line break is one span, as on the site, so the link after it is read too;
+    # masked a line at a time, its closing backtick and the next one held the destination.
+    assert rewrite("See `a\nb` and [Base](base\\_lemma.md) or `c`.\n") == "See `a\nb` and [Base](#base_lemma) or `c`.\n"
     # Only an angle-bracketed destination can hold math: a bare one ends at its mask's blanks.
     # Python-Markdown escapes no %.
     line = r"[math](<\(b\_c\)\_d\%.md>)"
@@ -4568,6 +4651,19 @@ def test_a_comment_opener_in_code_hides_no_link_from_the_book_order(tmp_path: Pa
     authored = roadmap.read_text(encoding="utf-8")
     aside = "## Chapters\n\nHide a line with `<!--` before it.\n\n"
     roadmap.write_text(authored.replace("## Chapters\n\n", aside) + "\n<!-- TODO -->\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    assert _summary_chapters(out) == ["zeta", "alpha", "irrationality-proof"]
+
+
+def test_a_chapter_link_whose_text_wraps_places_its_chapter(tmp_path: Path) -> None:
+    """Read a line at a time, the link placed nothing, and zeta fell to the end of the book."""
+    project = _book_order_project(tmp_path)
+    _edit(
+        project / "blueprint/roadmap/README.md", "- [Zeta](zeta/README.md)", "- [The zeta\n  chapter](zeta/README.md)"
+    )
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out, lean_root=project)

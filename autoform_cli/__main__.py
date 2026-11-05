@@ -807,9 +807,9 @@ def _source_link_issues(graph: Graph) -> tuple[list[str], list[str]]:
     text alone. Render omits hidden files, so a hidden target is refused too,
     unless it is a note under ``sources/`` that exists. Only a repository link
     reaches that note, and render writes one when it links the other source
-    notes there, so it is only warned about: it must be committed. Fragments and
-    other schemes stay with ``audit``, whose anchor check renders each cited
-    note.
+    notes there, so it is only warned about: it must be committed. A link whose
+    text wraps across lines is only warned about too. Fragments and other
+    schemes stay with ``audit``, whose anchor check renders each cited note.
     """
     rejected = {
         "source-not-found": "does not resolve to a file",
@@ -821,7 +821,7 @@ def _source_link_issues(graph: Graph) -> tuple[list[str], list[str]]:
     }
     issues, warnings = [], []
     for node in graph.nodes.values():
-        for target in node.sources:
+        for target in (*node.sources, *node.wrapped_sources):
             located = target.partition("#")[0]
             issue = local_target_issue(node.path, located, graph.blueprint_dir, label="source")
             if issue is None or issue[0] not in rejected:
@@ -843,7 +843,9 @@ def _source_link_issues(graph: Graph) -> tuple[list[str], list[str]]:
                         )
                         continue
                     code = "source-not-found"
-            issues.append(f"{node.id}: source target {rejected[code]}: {target!r}")
+            # Check did not read a wrapped link before, so it warns (#325).
+            found = warnings if target in node.wrapped_sources else issues
+            found.append(f"{node.id}: source target {rejected[code]}: {target!r}")
     return issues, warnings
 
 

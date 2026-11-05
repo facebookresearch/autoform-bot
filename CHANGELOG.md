@@ -508,6 +508,20 @@ date when the release is tagged.
   digest as before. A decision file with a 0x1A byte or a CR CR LF line ending
   now parses and digests whole, so a 0x1A on `lean-toolchain`'s first line
   gets `invalid-lean-toolchain` instead of passing.
+- **Links whose text wraps.** A link whose text runs onto the next line of its
+  paragraph or list item is read as the site reads it. Loading dropped one in a
+  dependency section without a word, so Hartshorne's relative degree-zero
+  Picard functor gains the proof dependency it was written with. Render
+  published one as written, so a link to an article its chapter absorbs was
+  dead on the site, and a chapter linked that way had no place in the book's
+  order. Code spans are read as the site reads them too, so a link that an
+  escaped backtick or a code span from the line above hid is read. Since these
+  links went unread, a problem with one warns rather than fails: a dependency
+  that does not resolve, names its own article, closes a cycle or leads into
+  an unpublished folder is not counted, any link into an unpublished folder
+  warns, and check and audit warn about a broken one under `## Sources`, audit
+  about one in a coverage file. Every link read before still counts, even one
+  the site shows as code, and only those give an article its cited passage.
 - **Claims inside a Git hook.** The claim commands' Git ignores `GIT_DIR`,
   `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the other variables that point Git at
   another repository, as a hook sets them. With only `GIT_DIR` set, the board's
