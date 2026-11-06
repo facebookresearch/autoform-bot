@@ -1443,7 +1443,11 @@ def _print_library(library: LibraryResult) -> None:
     for difference in library.differences:
         what = difference.what if difference.name is None else difference.name
         if difference.project is None:
-            held = "the project has no lean-toolchain" if difference.name is None else "the project locks no revision of it"
+            held = (
+                "the project has no lean-toolchain"
+                if difference.name is None
+                else "the project locks no revision of it"
+            )
         else:
             held = f"project: {difference.project}"
         print(_human_text(f"  differs: {what} {difference.library} ({held})"))
