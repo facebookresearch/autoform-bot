@@ -21,8 +21,8 @@ says what is matched.
   Read each hit's statement, or a library hit's signature, and the counts the
   output opens with; narrow a query whose count shows the limit cut it short. A
   line ending in `...` is shortened; the JSON output has it whole.
-- A refusal (exit 2) is not an empty result. The skill says what to do with one,
-  except a refusal that names a library, handled below.
+- A refusal (exit 2) is not an empty result. The skill says what to do with one;
+  a warning that names a library is handled below.
 - A hit that is more general, a special case, or only similar does not replace
   the result: add the article, depending on the hit where it is used. A result
   may need several hits combined, such as a theorem and its converse.
@@ -36,16 +36,16 @@ If the listing fails, search the blueprint alone and tell the user once why no
 library was searched. Pass every package it reports as usable, and no other, to
 each search, even while the blueprint is empty, as `--library NAME`, together
 with `--lean-root` naming the same Lake project root. The others, such as a
-dependency without an index, are unchecked, as for a refused library: tell the
-user once, in one line, how many were left out for each reason the listing
+dependency without an index, are unchecked, as for a library a warning names: tell
+the user once, in one line, how many were left out for each reason the listing
 gives, and that whether they have the result is unknown.
 
-## A refusal that names a library
+## A warning that names a library
 
-A refusal that names a library (the CLI prints `error: library NAME: ...`) is
-not a blocker: rerun the same search without that library, continue, and tell
-the user which library was not searched, why, and that whether it has the
-result is unknown.
+A library the search cannot verify is left out, with
+`warning: library NAME: ...` on standard error (`refused` in `--json`), and the
+other results are still printed: continue, and tell the user which library was
+not searched, why, and that whether it has the result is unknown.
 
 ## Queries
 

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import autoform_cli.__main__ as cli
+import autoform_cli.library.generate as generation
 from autoform_cli.library.generate import (
     LIBRARY_MARKER,
     GenerateError,
@@ -716,6 +717,57 @@ def test_a_non_ascii_module_name_is_refused(tmp_path: Path) -> None:
         generate_index(root, runner=runner_for())
 
 
+def test_a_file_name_with_a_dot_is_refused_rather_than_mapped_onto_another_module(tmp_path: Path) -> None:
+    root = library(tmp_path, {"Lib/Foo.Bar.lean": B, "Lib/Foo/Bar.lean": B})
+    with pytest.raises(GenerateError, match=r"^Lib/Foo\.Bar\.lean has a dot in its file or directory name"):
+        generate_index(root, runner=runner_for())
+
+
+def test_two_files_that_map_to_one_module_are_refused(tmp_path: Path) -> None:
+    lakefile = (
+        'name = "lib"\n\n[[lean_lib]]\nname = "Lib"\nglobs = ["Lib.+"]\n\n'
+        '[[lean_lib]]\nname = "Copy"\nsrcDir = "x"\nroots = ["Lib"]\nglobs = ["Lib.+"]\n'
+    )
+    root = library(tmp_path, {"Lib/A.lean": B, "x/Lib/A.lean": B}, lakefile=lakefile)
+    with pytest.raises(GenerateError, match=r"^Lib/A\.lean and x/Lib/A\.lean both map to module Lib\.A$"):
+        library_sources(root)
+
+
+def test_a_source_changed_after_the_second_listing_is_refused(tmp_path: Path, monkeypatch) -> None:
+    # Each record is cut from the text read after the listings agree, so that read checks its digest too.
+    root = library(tmp_path)
+    inner = runner_for()
+    listing = generation._sources
+
+    def runner(probe: str, lean_root: Path, **options: object) -> str:
+        def then_edit(*args: object) -> dict[str, str]:
+            found = listing(*args)
+            (root / "Lib" / "B.lean").write_text(B + "-- edited\n", encoding="utf-8")
+            return found
+
+        monkeypatch.setattr(generation, "_sources", then_edit)
+        return inner(probe, lean_root, **options)
+
+    changed = r"^the sources changed while the probe ran \(Lib/B\.lean\); rebuild and rerun$"
+    with pytest.raises(GenerateError, match=changed):
+        generate_index(root, runner=runner)
+
+
+def test_an_unverified_toolchain_is_refused_before_the_lakefile_or_index_is_read(tmp_path: Path, monkeypatch) -> None:
+    root = library(tmp_path)
+
+    def evaluated(_root: Path) -> None:
+        raise AssertionError("lake translate-config ran under a toolchain the probe is not verified on")
+
+    # Reading a lakefile.lean's targets runs `lake translate-config`, and `--check` calls a missing index stale,
+    # which regenerating could not fix.
+    monkeypatch.setattr(generation, "lean_libraries", evaluated)
+    monkeypatch.setattr(generation, "VERIFIED_TOOLCHAINS", ("leanprover/lean4:v4.35.0",))
+    for command in (generate_index, check_index):
+        with pytest.raises(GenerateError, match="^the package pins leanprover/lean4:v4.34.1, but the library probe"):
+            command(root, runner=runner_for())
+
+
 def test_the_probe_imports_each_module_plainly_and_is_not_a_module_file() -> None:
     probe = render_library_probe(("Lib.B", "Lib.A"))
     lines = probe.splitlines()
@@ -849,18 +901,71 @@ def test_check_names_a_changed_module_without_running_lean(tmp_path: Path) -> No
 
 def test_check_reports_a_changed_pin_without_running_lean(tmp_path: Path) -> None:
     root, _runner, _generated, _path = _written(tmp_path)
-    (root / "lean-toolchain").write_text("leanprover/lean4:v4.34.0\n", encoding="utf-8")
+    # Another spelling of the verified toolchain: the pin file's bytes change.
+    (root / "lean-toolchain").write_text("v4.34.1\n", encoding="utf-8")
     assert check_index(root, runner=lambda *a, **k: 1 / 0) == (
         "the toolchain, the manifest or the Lake configuration changed since the index was generated",
     )
+    # A toolchain the probe is not verified on cannot be regenerated, so it is not reported as stale.
+    (root / "lean-toolchain").write_text("leanprover/lean4:v4.34.0\n", encoding="utf-8")
+    with pytest.raises(GenerateError, match="^the package pins leanprover/lean4:v4.34.0, but the library probe"):
+        check_index(root, runner=lambda *a, **k: 1 / 0)
 
 
 def test_check_catches_an_index_merged_from_two_current_ones(tmp_path: Path) -> None:
     # Every module digest is right and so is the tree, but a declaration record is not what generation gives.
     root, _runner, _generated, path = _written(tmp_path)
     stale = runner_for(record("M ", A, "Lib.A", "double_eq", "double_eq", signature="1 = 1"))
-    assert check_index(root, runner=stale) == ("the index differs from what generation gives for these sources",)
+    assert check_index(root, runner=stale) == (
+        "generation gives other records for these sources: 1 declaration (double_eq)",
+    )
     assert path.exists()
+
+
+def test_check_names_each_kind_of_record_generation_gives_otherwise(tmp_path: Path) -> None:
+    root, runner, generated, path = _written(tmp_path)
+    other = runner_for(
+        record("M ", A, "Lib.A", "double_eq", "double_eq", signature="1 = 1"),
+        headers={"Lib.A": "Another header.", "Lib.B": None},
+    )
+    assert check_index(root, runner=other) == (
+        "generation gives other records for these sources: 1 module (Lib.A); 1 declaration (double_eq)",
+    )
+    lines = generated.data.decode("utf-8").splitlines()
+    path.write_text("".join(json.dumps(json.loads(line)) + "\n" for line in lines), encoding="utf-8")
+    assert check_index(root, runner=runner) == (
+        "the index holds the records generation gives, but not in the bytes it writes",
+    )
+
+
+def _with_header(path: Path, **changes: object) -> None:
+    header, rest = path.read_text(encoding="utf-8").split("\n", 1)
+    record = {**json.loads(header), **changes}
+    path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n" + rest, encoding="utf-8")
+
+
+def test_check_names_a_header_field_generation_gives_otherwise(tmp_path: Path) -> None:
+    # Neither the tree nor the file pass covers the header's package, so only generation finds it.
+    root, runner, _generated, path = _written(tmp_path)
+    _with_header(path, package="other")
+    differs = "generation gives other records for these sources: the header's package"
+    assert check_index(root, runner=runner) == (differs,)
+
+
+def test_check_passes_on_an_index_another_autoform_version_wrote(tmp_path: Path) -> None:
+    root, runner, _generated, path = _written(tmp_path)
+    _with_header(path, generator="0.0.1")
+    assert check_index(root, runner=runner) == ()
+
+
+def test_check_names_another_probe_revision_without_running_lean(tmp_path: Path, monkeypatch) -> None:
+    root, _runner, _generated, path = _written(tmp_path)
+    _with_header(path, probe=2)
+    # Nor `lake translate-config`, which reading a lakefile.lean's targets runs.
+    monkeypatch.setattr(generation, "lean_libraries", lambda _root: 1 / 0)
+    assert check_index(root, runner=lambda *a, **k: 1 / 0) == (
+        "the index was made by probe revision 2, and this Autoform's is 1",
+    )
 
 
 def test_check_reports_a_missing_or_unreadable_index(tmp_path: Path) -> None:
@@ -931,20 +1036,50 @@ def test_check_cannot_tell_without_a_package_root(tmp_path: Path, monkeypatch, c
     assert capsys.readouterr().err == "error: the package root does not exist or is not a directory\n"
 
 
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0, reason="needs a mode that denies reading")
 def test_check_cannot_tell_from_an_index_it_cannot_read(tmp_path: Path, monkeypatch, capsys) -> None:
     root = library(tmp_path)
     _cli(monkeypatch, runner_for())
-    (root / INDEX_FILE).mkdir()
-    with pytest.raises(GenerateError, match=f"^{INDEX_FILE} exists but cannot be read: Is a directory$"):
+    (root / INDEX_FILE).write_text("{}\n", encoding="utf-8")
+    (root / INDEX_FILE).chmod(0)
+    with pytest.raises(GenerateError, match=f"^{INDEX_FILE} exists but cannot be read: Permission denied$"):
         check_index(root, runner=runner_for())
     assert cli.main(["library", "index", str(root), "--check"]) == 2
-    assert capsys.readouterr().err == f"error: {INDEX_FILE} exists but cannot be read: Is a directory\n"
-    (root / INDEX_FILE).rmdir()
-    if hasattr(os, "geteuid") and os.geteuid() != 0:
-        (root / INDEX_FILE).write_text("{}\n", encoding="utf-8")
-        (root / INDEX_FILE).chmod(0)
-        assert cli.main(["library", "index", str(root), "--check"]) == 2
-        assert capsys.readouterr().err == f"error: {INDEX_FILE} exists but cannot be read: Permission denied\n"
+    assert capsys.readouterr().err == f"error: {INDEX_FILE} exists but cannot be read: Permission denied\n"
+
+
+def test_check_cannot_tell_when_reading_the_index_fails(tmp_path: Path, monkeypatch) -> None:
+    root, runner, _generated, _path = _written(tmp_path)
+
+    def failing(path: Path) -> bytes:
+        raise OSError(errno.EIO, "Input/output error", str(path))
+
+    monkeypatch.setattr(generation, "_index_bytes", failing)
+    with pytest.raises(GenerateError, match=f"^{INDEX_FILE} exists but cannot be read: Input/output error$"):
+        check_index(root, runner=runner)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
+def test_check_reads_the_index_as_projects_do_so_a_link_or_a_pipe_is_stale(tmp_path: Path) -> None:
+    root, runner, _generated, path = _written(tmp_path)
+    stale = (f"{INDEX_FILE} is not a regular file, so no project reads it",)
+    path.rename(tmp_path / "elsewhere.jsonl")
+    path.symlink_to(tmp_path / "elsewhere.jsonl")
+    assert check_index(root, runner=runner) == stale
+    path.unlink()
+    # Opened without blocking: a pipe with no writer would hang a plain read.
+    os.mkfifo(path)
+    assert check_index(root, runner=runner) == stale
+    path.unlink()
+    path.mkdir()
+    assert check_index(root, runner=runner) == stale
+
+
+def test_a_root_with_an_unknown_home_directory_cannot_be_told(tmp_path: Path, monkeypatch, capsys) -> None:
+    _cli(monkeypatch, runner_for())
+    for flags in ([], ["--check"]):
+        assert cli.main(["library", "index", "~autoform-no-such-user/lib", *flags]) == 2
+        assert capsys.readouterr().err.startswith("error: the package root ")
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "soon"])

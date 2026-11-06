@@ -20,7 +20,7 @@ scope against the sources, then inspect the fine DAG and its coarse roadmap.
    result its proof proves or cites, over the blueprint and the project's
    usable shared libraries, as the
    [library search rules](../../formalize/references/library-search.md)
-   describe. List the queries run and any library refused.
+   describe. List the queries run and any library left out.
    - Each result hits its own article; a second article stating the same result
      is a duplicate. A hit whose `catalog` is `module` is an inventory listing
      the declaration, not a duplicate of the article that expounds it, and a

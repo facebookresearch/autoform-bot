@@ -102,9 +102,9 @@ result and for each intermediate result its proof proves or cites, as the
   and leave `lean:` unset until Formalize declares the result in the project:
   `lean:` names only a declaration in the project's own Lean files.
 - A refusal (exit 2) is not an empty result: resolve what it reports without
-  adding the article, and search again; one that names a library is handled as
-  the search steps say. A dependency link to a page not yet written causes one,
-  so search for a whole batch before writing the first.
+  adding the article, and search again; a warning that names a library is
+  handled as the search steps say. A dependency link to a page not yet written
+  causes a refusal, so search for a whole batch before writing the first.
 - When another formalizable article already states the result, link to it from
   each article that needs it, under `## Depends on` or `## Proof depends on`,
   and from the coverage row, instead of adding a node.

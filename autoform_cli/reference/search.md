@@ -54,8 +54,7 @@ A Lean target has `declaration`, `source_file` (relative to `--lean-root`), and
 `line`; the last two are null without `--lean-root`, when the lexical scan does
 not find the name, or when it finds several with none chosen (see
 [Validation](validation-and-audit.md#validation)). No hit is `"hits":[]` with
-exit 0. Human output opens with each list's match count, shortens statements,
-and is not a contract.
+exit 0. Human output is not a contract.
 
 Search rereads each article it matches against and refuses, with exit 2, bytes
 other than those the graph was built from, and a symlinked roadmap entry.
@@ -81,12 +80,11 @@ may change without notice until it becomes `v1`, and a library hit's fields with
 it. Before an index is used, search checks that the checkout is at the locked
 revision and pins the index's toolchain and direct dependencies, that the Lean
 files under the indexed directories are exactly the indexed modules with the
-recorded digests, and that the index is one generation. It refuses, with exit 2
-and a message that begins `library NAME:`, a package that is not locked, not
-checked out, a path dependency, replaced by `.lake/package-overrides.json`,
+recorded digests, and that the index is whole. It leaves out, with a
+`warning: library NAME:` line on standard error, a package that is not locked,
+not checked out, a path dependency, replaced by `.lake/package-overrides.json`,
 without an index, or failing a check, and, on POSIX, every library of a project
-whose `.lake` or packages directory is a symbolic link. One refused library
-refuses the whole call, blueprint hits included. A package replaced with
+whose `.lake` or packages directory is a symbolic link. A package replaced with
 `lake --packages=` is not detected. Search does not verify the declaration
 records, a module's `module_doc` or `module_system`, or the header's
 `generator`, `probe`, or `package`, so these can be forged.
@@ -101,17 +99,18 @@ apply to articles only; `--limit` applies to each list.
 With `--library` the JSON schema is `autoform-search/v2`: every
 `autoform-search/v1` key keeps its meaning, and `libraries` lists, in the order
 given, `name`, `revision`, `index_schema`, `generator`, `probe`, `differences`,
-`total_matches`, and `hits`. A hit carries the declaration's `name`, `kind`,
-`status`, `module`, `source_file`, `line`, `signature`, `statement`,
-`docstring`, `mentions`, `auto_named`, `module_system` (`false` for a file a
-Lean module file cannot import), `matched_fields`, `module_doc` (the module
-header when it matched, otherwise `null`), and `import`, the line that makes a
-`complete` declaration available (`null` for a `wanted` one, which carries no
-proof). `differences` lists the library's toolchain and each direct dependency
-whose locked revision is not the project's, as objects with `what`
-(`lean_toolchain` or `dependency`), `name` (`null` for the toolchain), `library`
-and `project` (`null` for a side that is a path dependency, and `project` also
-when the project lacks it); it does not say the library fails to build. Without
+`total_matches`, and `hits`, and `refused` lists each library left out, as
+`name` and `reason`. A hit carries the declaration's `name`, `kind`, `status`,
+`module`, `source_file`, `line`, `signature`, `statement`, `docstring`,
+`mentions`, `auto_named`, `module_system` (`false` for a file a Lean module file
+cannot import), `matched_fields`, `module_doc` (the module header when it
+matched, otherwise `null`), and `import`, the line that makes a `complete`
+declaration available (`null` for a `wanted` one, which carries no proof).
+`differences` lists the library's toolchain and each direct dependency whose
+locked revision is not the project's, as objects with `what` (`lean_toolchain`
+or `dependency`), `name` (`null` for the toolchain), `library` and `project`
+(`null` for a side that is a path dependency, and `project` also when the
+project lacks it); it does not say the library fails to build. Without
 `--library` the output stays `autoform-search/v1`, byte for byte.
 
 #### Publishing an index
@@ -137,9 +136,10 @@ count on standard error. A `theorem_wanted`, `proof_wanted`, `def_wanted` or
 reports that is not in the source file exits 2 and names the declaration and its
 module: the source is not the one the library was built from.
 
-`--check` writes no index. It exits 0 when the index at the root is current, 1
-when it is stale (as when there is no index), with the reason on standard error,
-and 2 when it cannot tell: the package root does not exist, the index exists but
+`--check` writes no index. It exits 0 when the index at the root is current,
+even if another Autoform version wrote it, 1 when it is stale (as when there is
+no index, it is not a regular file, or another probe revision made it), and 2
+when it cannot tell: the package root does not exist, the index exists but
 cannot be read, or the build is missing or stale. Run it in the library's CI
 after the build, with the same `--lib` flags, and pin the Autoform revision.
 

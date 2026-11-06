@@ -130,11 +130,11 @@ unrelated declaration, except as the open-statement policy below allows.
 Before stating an article's result and before adding a helper, run `autoform
 search` over the blueprint of `<PROJECT>` and its usable shared libraries for
 it, following the [search steps](references/library-search.md#search-steps),
-which also cover library hits and refusals that name a library.
+which also cover library hits and warnings that name a library.
 
 - A search for an article's own result finds that article, not a duplicate.
-- Retry a refusal that asks for it. Any other refusal that names no library
-  blocks the leaf: add no helper and report it as the blocker.
+- Retry a refusal that asks for it. Any other refusal blocks the leaf: add no
+  helper and report it as the blocker.
 - Use the declaration of a blueprint hit that states the helper only when the
   selected article's dependencies reach that hit's article, and as the
   open-statement policy below allows. A hit they do not reach is a missing

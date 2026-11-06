@@ -97,7 +97,7 @@ def read_workspace(root: str | Path) -> LakeWorkspace:
 def _workspace(root: Path, snapshot: DecisionSnapshot) -> LakeWorkspace:
     decoded = locked_packages(snapshot, MANIFEST)
     if decoded is None:
-        raise WorkspaceError("the Lean root has no lake-manifest.json; run `lake update` first")
+        raise WorkspaceError("the Lean root has no lake-manifest.json, so it locks no package")
     payload, packages = decoded
     try:
         validate_manifest_root(payload)
