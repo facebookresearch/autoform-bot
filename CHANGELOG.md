@@ -76,7 +76,8 @@ date when the release is tagged.
   `render --review` accepts a passage cut from one. A folder below `sources/`
   whose README says `published: false` stays off the site, as one below
   `roadmap/` does; only render reads the setting there. The nav lists the notes
-  after Coverage, headed by `sources/README.md` when there is one.
+  after Coverage, headed by `sources/README.md` when there is one, and the
+  landing page links that page beside the coverage view.
 - **Check without site warnings.** `check --no-site-warnings` skips the warnings
   about the pages the site would publish, which `render` prints too. The
   generated `blueprint-pages.yml` passes it, since render runs two steps later,

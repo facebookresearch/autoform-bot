@@ -1809,6 +1809,23 @@ def test_the_rail_hero_keeps_two_figures_and_the_coverage_counts_and_hides_nothi
     assert "last-child:nth-child(odd)" not in css
 
 
+def test_the_landing_hero_links_the_sources_page_beside_the_coverage_view(tmp_path: Path) -> None:
+    """The Sources page, sources/README.md, is linked from the hero beside the
+    coverage view, so a reader with the explorer running reaches the notes
+    too (#593). A project with no such page gets no link."""
+    project = _with_source_notes(tmp_path)
+    render_site(project / "blueprint", tmp_path / "bare", lean_root=project)
+    (project / "blueprint/sources/README.md").write_text("# Reading list\n\n- [Paper](paper.md)\n", encoding="utf-8")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    hero = (tmp_path / "out/README.md").read_text(encoding="utf-8").split('class="bp-hero-coverage"', 1)[1].split("</div>", 1)[0]
+    assert hero.index("bp-hero-coverage-link") < hero.index('<a class="bp-hero-sources-link" href="sources/index.html">Source notes</a>')
+    assert "bp-hero-sources-link" not in (tmp_path / "bare/README.md").read_text(encoding="utf-8")
+    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
+    assert ".bp-hero-coverage-link,\n.bp-hero-sources-link {" in css
+
+
 @pytest.mark.parametrize(("readme", "lead"), [
     (
         "# Zeta\n\nThis formalizes the preprint ([Zenodo 1](https://zenodo.org/records/1)), which claims more. Next.\n",

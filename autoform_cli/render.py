@@ -1183,6 +1183,17 @@ def _render_pages(
                 destination=destination,
                 targets=targets,
                 order=order,
+                # The page the Sources nav entry opens, when there is one.
+                sources_page=next(
+                    (
+                        destination / relative
+                        for source, content in site.files.items()
+                        if isinstance(content, str)
+                        and (relative := _relative(source, blueprint)).parent == Path(SOURCES_DIR)
+                        and relative.name.casefold() == "readme.md"
+                    ),
+                    None,
+                ),
             ),
             encoding="utf-8",
         )
@@ -2465,6 +2476,7 @@ def _render_landing_page(
     destination: Path,
     targets: dict[str, tuple[Path, str]] | None = None,
     order: Sequence[str] = (),
+    sources_page: Path | None = None,
 ) -> str:
     """The landing page: what this is, how far it has got, and what is next.
 
@@ -2492,6 +2504,7 @@ def _render_landing_page(
         ready_href=f"{book_href}#view=list&status=can_state,can_prove" if book_href else None,
         # Without a roadmap contents page the book starts here.
         book_href=None if book == Path("README.md") else book_href,
+        sources_href=_as_published(relative_link(sources_page, page, ".html")) if sources_page else None,
     )
     next_up = _next_target(
         graph,
@@ -2714,6 +2727,7 @@ def _render_hero(
     rail: bool = False,
     ready_href: str | None = None,
     book_href: str | None = None,
+    sources_href: str | None = None,
 ) -> str:
     """Open with the project's name, its one-line claim, and where it stands.
 
@@ -2723,7 +2737,8 @@ def _render_hero(
     blueprint has to answer. The explorer's reading pane (*rail*) gets the
     two progress figures only, and module inventories as one plain line under
     them. With *ready_href* the ready figure links the list of what it counts,
-    and *book_href* puts the way into the book right under the claim. A project
+    *book_href* puts the way into the book right under the claim, and
+    *sources_href* links the source notes beside the coverage view. A project
     that tracks no Lean has no progress to show, so its hero keeps the title,
     the way in and the coverage line, and its claim is the README's whole opening
     prose rather than its first sentence.
@@ -2798,7 +2813,8 @@ def _render_hero(
         + (f'<span class="bp-hero-coverage-counts">{html.escape(areas)}</span> ' if areas else "")
         + f'<a class="bp-hero-coverage-link" href="{html.escape(coverage_href, quote=True)}">'
         "What the sources cover</a>"
-        "</div>"
+        + (f'<a class="bp-hero-sources-link" href="{html.escape(sources_href, quote=True)}">Source notes</a>' if sources_href else "")
+        + "</div>"
     )
     leads = _lead_paragraphs(body, whole=not tracked)
     return (
@@ -4893,12 +4909,13 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-size: 0.72rem;
   color: var(--bp-muted);
 }}
-.bp-hero-coverage-link {{
-  margin-left: auto;
+.bp-hero-coverage-link,
+.bp-hero-sources-link {{
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 0.15em;
 }}
+.bp-hero-coverage-link {{ margin-left: auto; }}
 
 /* On the landing page the hero sits in the explorer's reading pane, or its
    sheet on phones, so it is set, like the pane's chapters, in px rather
