@@ -774,6 +774,14 @@ parse, with or without `--json`, and changes nothing else.
   `LiterateNavParseError`. Where MkDocs accepted the nav, a page could sit
   under the wrong chapter. A page beside its chapter's README now sits inside
   that chapter in the sidebar rather than next to it (#481).
+- **Claim board location.** When `git remote get-url origin` cannot run, runs
+  out of time or is killed, claim commands and `autoform dashboard` say they
+  cannot read the origin remote (`error: transport:` in `claim list`), where
+  they asked for `--repo` as outside a checkout, after which Formalize went on
+  without claims. A board path naming a user who does not exist, such as
+  `~nosuchuser/board.git`, is a one-line error in claim commands, the dashboard
+  and `project worktrees`, not a traceback, and an origin URL holding a byte
+  that is not UTF-8 is read as its path.
 - **Claims.** `autoform dashboard` runs its claim listing's Git in the
   dashboard's process group again, so Ctrl+C or a signal to that group stops
   Git along with the dashboard (#447). On macOS and Windows, a listing shows

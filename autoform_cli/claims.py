@@ -451,7 +451,11 @@ class ClaimBoard:
             raise ValueError("worker_id must not be empty")
         raw_repo_url = os.fspath(repo_url)
         if not _repository_is_remote(raw_repo_url):
-            raw_repo_url = str(Path(raw_repo_url).expanduser().resolve())
+            try:
+                raw_repo_url = str(Path(raw_repo_url).expanduser().resolve())
+            except RuntimeError as exc:
+                # Such as ~user naming no user, or a symbolic link loop.
+                raise ValueError(f"cannot resolve the claim board path {raw_repo_url!r}: {exc}") from None
         self.repo_url = raw_repo_url
         self.worker_id = worker_id
         self.scratch = Path(scratch)

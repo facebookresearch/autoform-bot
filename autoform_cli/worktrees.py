@@ -710,6 +710,14 @@ def _scan_processes() -> tuple[tuple[_Process, ...], tuple[_Process, ...]]:
     return tuple(processes), tuple(uninspected)
 
 
+def _local_board(path: str, base: Path) -> str:
+    """The claim board at ``path``, from ``base``; ``~user`` naming no user is an error, not a traceback."""
+    try:
+        return str((base / Path(path).expanduser()).resolve())
+    except RuntimeError as error:
+        raise WorktreeError(f"the claim board path {path!r} cannot be resolved: {error}") from None
+
+
 def _read_claims(top: Path, repo: str | None) -> tuple[str | None, tuple[tuple[str, str], ...]]:
     """The board read, or None without one, and the protections its leases give every worktree."""
     if repo is None:
@@ -720,9 +728,9 @@ def _read_claims(top: Path, repo: str | None) -> tuple[str | None, tuple[tuple[s
         if configured.returncode != 0 or not repo:
             raise WorktreeError(f"the origin remote could not be read: {_text(configured.stderr).strip()}")
         if not _repository_is_remote(repo):
-            repo = str((top / Path(repo).expanduser()).resolve())
+            repo = _local_board(repo, top)
     elif not _repository_is_remote(repo):
-        repo = str(Path(repo).expanduser().resolve())  # relative to the working directory, as for `dashboard`
+        repo = _local_board(repo, Path.cwd())  # relative to the working directory, as for `dashboard`
     shown = _without_credentials(repo)
     try:
         with tempfile.TemporaryDirectory(prefix="autoform-worktrees-") as temporary:

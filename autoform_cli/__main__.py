@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from . import _page_pool, abstraction, debrief, debrief_orchestrator, status
-from ._repository import git
+from ._repository import run_git
 from .approvals import ApprovalStatus, approval_statuses
 from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
 from .audit import audit_blueprint
@@ -1088,7 +1088,7 @@ def _dashboard(args: argparse.Namespace) -> int:
         else:
             with tempfile.TemporaryDirectory(prefix="autoform-dashboard-") as temporary:
                 run(Path(temporary) / "claims.git")
-    except (OSError, RuntimeProjectionError, ValueError) as error:
+    except (ClaimTransportError, OSError, RuntimeProjectionError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
@@ -2275,8 +2275,14 @@ def _claim_board(args: argparse.Namespace) -> ClaimBoard:
 
 
 def _origin_url(root: Path | None = None) -> str:
-    url = git(root or ".", "remote", "get-url", "origin")
-    if url is None:
+    result = run_git(root or ".", "remote", "get-url", "origin")
+    if result.returncode < 0:
+        # Git that could not run, ran out of time or was killed says nothing
+        # about the origin, and a board may still be there.
+        reason = os.fsdecode(result.stderr).strip() or f"git was stopped by signal {-result.returncode}"
+        raise ClaimTransportError(f"cannot read the origin remote: {reason}")
+    url = os.fsdecode(result.stdout).strip() if result.returncode == 0 else ""
+    if not url:
         raise ValueError("--repo is required outside a Git checkout with an origin remote")
     return url
 

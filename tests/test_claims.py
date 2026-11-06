@@ -828,6 +828,49 @@ def test_the_default_board_is_not_taken_from_a_repository_above_a_git_ceiling(
         _origin_url(work)
 
 
+_TIMED_OUT = "git remote could not run: timed out after 10 seconds"
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stderr", "reason"),
+    [(-1, _TIMED_OUT.encode(), _TIMED_OUT), (-9, b"", "git was stopped by signal 9")],
+    ids=["timeout", "signal"],
+)
+def test_claim_cli_list_labels_an_origin_git_could_not_read(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch, returncode: int, stderr: bytes, reason: str
+) -> None:
+    # Read as no origin, a slow `git remote get-url` sent Formalize on without
+    # claims, though a board may well be there.
+    def run_git(root: object, *arguments: str, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(["git", *arguments], returncode, b"", stderr)
+
+    monkeypatch.setattr("autoform_cli.__main__.run_git", run_git)
+
+    assert main(["claim", "list", "--worker-id", "w", "--scratch", str(tmp_path / "scratch")]) == 1
+    captured = capsys.readouterr()
+    assert (captured.out, captured.err) == ("", f"error: transport: cannot read the origin remote: {reason}\n")
+
+
+def test_an_origin_url_with_a_byte_that_is_not_utf8_is_read_as_its_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Decoded strictly, such a URL was an error with no label, which Formalize reads as no origin.
+    def run_git(root: object, *arguments: str, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(["git", *arguments], 0, b"/srv/caf\xff/claims.git\n", b"")
+
+    monkeypatch.setattr("autoform_cli.__main__.run_git", run_git)
+
+    assert _origin_url() == "/srv/caf\udcff/claims.git"
+
+
+def test_claim_cli_names_a_board_path_whose_home_cannot_be_found(tmp_path: Path, capsys) -> None:
+    board = "~autoform-no-such-user/claims.git"
+
+    assert main(["claim", "list", "--repo", board, "--worker-id", "w", "--scratch", str(tmp_path / "scratch")]) == 1
+    err = capsys.readouterr().err
+    # One line, not the RuntimeError traceback of Path.expanduser.
+    assert err.startswith(f"error: cannot resolve the claim board path '{board}': ")
+    assert err.count("\n") == 1
+
+
 def test_list_reads_a_lease_through_an_annotated_tag_as_read_does(tmp_path: Path, board_repo: Path) -> None:
     owner = _board(tmp_path, board_repo, "worker-a")
     assert owner.acquire("a", ttl=600)
