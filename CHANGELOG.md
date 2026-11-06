@@ -123,6 +123,13 @@ date when the release is tagged.
 
 ### Changed
 
+- **Mathlib results in review.** Agent Review's roadmap rubric says when a
+  declaration states an article's result, and has the reviewer quote the
+  hypotheses and conclusion of each `mathlib: true` article's declaration, and
+  of each library hit it takes to prove a result, before judging that. A
+  `mathlib: true` whose declaration does not state the result caps usability at
+  2, and Roadmap sets `mathlib: true` only when a verified upstream declaration
+  states it.
 - **The landing's coverage line** leads with the source areas split into
   statements: "5 source areas, all split into statements", or "3 of 5 source
   areas split into statements" before the other dispositions.

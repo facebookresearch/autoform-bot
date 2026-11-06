@@ -1,7 +1,6 @@
 # Roadmap-quality rubric
 
-Judge the mathematical plan, not the Lean proof quality. Review the declared
-scope against the sources, then inspect the fine DAG and its coarse roadmap.
+Judge the mathematical plan, not the Lean proof quality.
 
 ## Evidence
 
@@ -33,6 +32,17 @@ scope against the sources, then inspect the fine DAG and its coarse roadmap.
    - Read each library declaration a source page names: one named without a
      reason, or with a reason that does not hold for an article reaching that
      source, is a missed reuse.
+6. For each `mathlib: true` article in scope, and each library hit you take to
+   prove a result, quote the declaration's hypotheses and conclusion from the
+   pinned source, with section variables and instance arguments, and judge
+   whether it states the result. It does when its conclusion, read with any
+   convention the statement explains, such as `Nat.card` being 0 for an infinite
+   type, is the result's under the statement's hypotheses or fewer. It does not
+   when it is the additive form of a multiplicative statement or the reverse;
+   only part of the claim, such as one direction of an equivalence, a
+   divisibility or inequality where the statement has an equality, or a special
+   case of a general statement; or needs a hypothesis the statement lacks, such
+   as finiteness, nontriviality, primality, a nonzero exponent, or `[Finite α]`.
 
 ## Source fidelity and coverage — 40%
 
@@ -78,16 +88,16 @@ scope against the sources, then inspect the fine DAG and its coarse roadmap.
   derived from the DAG.
 - Uncertainty, Mathlib candidates, and unresolved source questions are explicit.
   Articles hold only frontmatter and informal mathematics, so Mathlib candidates
-  and other Lean-side findings are in the article's implementation note, never
-  in the article.
+  and other Lean-side findings are in the article's implementation note.
 
 ## Scores and verdict
 
 Use the same anchors on each axis: 5 complete and precise; 4 sound with minor
 issues; 3 useful but needing material cleanup; 2 materially incomplete or
-misleading; 1 mostly unreliable; 0 absent or vacuous. Weight the three axes
-40/40/20. Call the roadmap clean only when source fidelity and DAG quality are
-at least 4 and usability is at least 3. Reject when source fidelity or DAG
-quality is 2 or below. Missing source evidence caps source fidelity at 2; a node
-other than a catalog with several peer main results and no unique completion
-target caps DAG quality at 2.
+misleading; 1 mostly unreliable; 0 absent or vacuous. Call the roadmap clean
+only when source fidelity and DAG quality are at least 4 and usability is at
+least 3. Reject when source fidelity or DAG quality is 2 or below. Missing
+source evidence caps source fidelity at 2; a node other than a catalog with
+several peer main results and no unique completion target caps DAG quality at 2;
+a `mathlib: true` whose declaration does not state the result caps usability at
+2.
