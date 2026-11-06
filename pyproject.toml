@@ -25,6 +25,8 @@ dependencies = [
     # construction, not tokenising: browsers repair malformed markup rather than
     # reject it, and the repair decides what stays hidden.
     "html5lib>=1.1,<2",
+    # Reads blueprint/links/, the literature-links annotations that carry articles' facts (#601).
+    "literature-links @ git+https://github.com/mathlib-initiative/literature-links@e7eeafb823eb3bc64a8ab2077cd3569f572d459f",
 ]
 
 [project.scripts]
@@ -50,6 +52,10 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["autoform_cli", "servers"]
+
+[tool.hatch.metadata]
+# literature-links is not on PyPI; it installs from the commit its 1.0.2 tag names.
+allow-direct-references = true
 
 [tool.ruff]
 line-length = 120
