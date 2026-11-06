@@ -935,7 +935,7 @@ def test_list_names_no_claim_for_a_branch_whose_name_ends_in_a_claim_path(
     # ls-remote's patterns match the end of a ref, so this branch matches
     # refs/autoform-claims/*. Its name cut at the prefix's length was a key
     # whose fetch always failed, so the listing ended in contention.
-    _git("update-ref", "refs/heads/refs/autoform-claims/x", oids["lean/Foo"], cwd=board_repo)
+    _git("update-ref", "refs/heads/refs/autoform-claims/zz", oids["lean/Foo"], cwd=board_repo)
     reader = _board(tmp_path, board_repo, "worker-b")
     # As on a case-insensitive filesystem, the keys are then named and fetched by name.
     monkeypatch.setattr(reader, "_scratch_ignores_case", lambda: True)
@@ -1015,6 +1015,38 @@ def test_list_names_the_board_when_its_scratch_cannot_store_a_name_that_is_not_a
         # A claim key that Git could not store is no name to leave out.
         with pytest.raises(claims.ClaimTransportError, match="cannot lock ref"):
             reader.list(warn=warnings.append)
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        "error: some local refs could not be updated; try running\n"
+        " 'git remote prune board' to remove any old, conflicting branches\n",
+        "error: cannot lock ref '{ref}': there is a non-empty directory './{ref}' blocking reference '{ref}'\n",
+    ],
+    ids=["git-2.53", "apple-git-2.50"],
+)
+def test_list_names_the_board_when_a_key_and_a_folder_differ_only_in_case(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch, refusal: str
+) -> None:
+    oids = _plant_packed_leases(board_repo, ["lean/Foo", "lean/foo/bar"])
+    reader = _board(tmp_path, board_repo, "worker-b")
+    git = reader._git
+
+    def refused(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[0] != "fetch" or "--stdin" in args:
+            return git(args, **kwargs)
+        # What a case-insensitive scratch's Git says for the folder lean/foo
+        # beside the key lean/Foo, writing no ref. Neither names a case clash.
+        ref = args[-1].rpartition(":")[2].removesuffix("*") + "lean/foo"
+        return subprocess.CompletedProcess(["git", *args], 1, "", refusal.format(ref=ref))
+
+    monkeypatch.setattr(reader, "_git", refused)
+
+    assert [(lease["_key"], lease["_oid"]) for lease in reader.list()] == [
+        ("lean/Foo", oids["lean/Foo"]),
+        ("lean/foo/bar", oids["lean/foo/bar"]),
+    ]
 
 
 def test_list_on_a_case_insensitive_scratch_lists_both_keys_when_git_keeps_one_ref_silently(

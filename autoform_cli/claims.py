@@ -17,18 +17,19 @@ refuses such a fetch, except that some versions, such as Apple's 2.50, store one
 key's name holding the other key's lease without a word. So on such a scratch a
 listing whose fetch wrote any ref also names the board's claims, with one more
 command that downloads the board's list of refs, and fetches the claims again by
-name when two of them collide. A scratch that cannot store a name that is not a
-claim key, as APFS refuses one that is not UTF-8, fails the whole fetch, and the
-claims are then named and fetched by name too. ``claim list TARGET...`` names the targets' refs
-and fetches only those, so changes to other claims never make it retry and no
-other claim's lease is copied, and a target released meanwhile has the targets
-named again, never the whole board; over a network its cost still grows with the
-board's list of refs.
+name when two of them collide. A fetch Git refuses names them too, and fetches
+them by name when the names explain the refusal: a key beside a folder that
+differs from it only in case, or a name that is not a claim key, such as one
+APFS refuses because it is not UTF-8. ``claim list TARGET...`` names the
+targets' refs and fetches only those, so changes to other claims never make it
+retry and no other claim's lease is copied, and a target released meanwhile has
+the targets named again, never the whole board; over a network its cost still
+grows with the board's list of refs.
 
 A listing, by ``claim list`` or the one ``claim cleanup`` starts with, runs Git
 in its own process group, without a controlling terminal on Linux and macOS so
-``ssh`` cannot prompt on one, and stops a Git command that runs out of time or is
-interrupted together with everything it started; only removing its own refs
+``ssh`` cannot prompt on one, and stops a Git command that runs out of time or
+is interrupted together with everything it started; only removing its own refs
 afterwards runs in the caller's group. That holds on the main thread, where
 ``claim list`` and ``claim cleanup`` list. Off it, as in ``autoform dashboard``,
 a listing runs Git in the caller's process group and with its terminal: a
@@ -86,12 +87,16 @@ _MOVED_WANT = "not our ref"
 # How a fetch refuses a named ref the board no longer has, which is worth
 # fetching again only when the listing named its refs first.
 _MISSING_REF = "couldn't find remote ref"
-# How Git refuses to store two fetched refs whose names differ only in case:
-# with `core.ignorecase`, or by finding the other one's file already there.
-_CASE_COLLISION = ("only differ in casing", "reference already exists")
-# How Git refuses to store a fetched ref, such as one whose name is not UTF-8 on
-# APFS. A ref name holds no colon.
-_CANNOT_LOCK_RE = re.compile(r"cannot lock ref '([^:]*)': ")
+# How Git refuses to store fetched refs: two names, or a name and a folder, that
+# differ only in case on a case-insensitive scratch, or a name the filesystem
+# refuses, such as one that is not UTF-8 on APFS. The words change with Git's
+# version, so the board's names say which it was.
+_LOCAL_REFUSAL = (
+    "only differ in casing",
+    "reference already exists",
+    "cannot lock ref",
+    "some local refs could not be updated",
+)
 # The warning a fetch prints for a `--negotiation-tip` that matches no ref yet.
 _NEGOTIATION_TIP_WARNING = "warning: ignoring --negotiation-tip="
 # A peer's push holds a ref's lock file for milliseconds; one that outlasts
@@ -1159,9 +1164,10 @@ class ClaimBoard:
         again by name into numbered refs. Git refuses such a fetch, except that
         some versions, such as Apple's 2.50, store one key's name holding the
         other key's lease without a word, so a case-insensitive scratch names
-        the board's keys after a fetch that wrote any ref. A filesystem that
-        cannot store a name that is not a claim key, as APFS refuses one that
-        is not UTF-8, fails the whole fetch too, so the board's keys are named.
+        the board's keys after a fetch that wrote any ref. A fetch Git refuses
+        names them too, and they are fetched by name when they explain the
+        refusal: a key beside a folder that differs from it only in case, or a
+        name that is not a claim key, such as one APFS refuses as not UTF-8.
         With ``targets``, only the present targets are fetched by name, and a
         target released meanwhile has the targets named again, never the board.
         A board that refuses every attempt because claim refs moved raises
@@ -1217,11 +1223,11 @@ class ClaimBoard:
                     return claims, _left_out(refs, namespace, claims)
                 numbered = ((key, refs.get(f"{namespace}{index}")) for index, key in enumerate(keys))
                 return {key: oid for key, oid in numbered if oid is not None}, left_out
-            # A name the scratch cannot store fails the whole fetch.
-            unstorable = any(not _claims_by_key({ref: ""}, namespace) for ref in _CANNOT_LOCK_RE.findall(fetch.stderr))
-            if keys is None and (unstorable or any(marker in fetch.stderr for marker in _CASE_COLLISION)):
-                keys = name()
-                continue
+            if keys is None and any(marker in fetch.stderr for marker in _LOCAL_REFUSAL):
+                named = name()
+                if left_out or _collide_ignoring_case(named):
+                    keys = named
+                    continue
             failures += 1
             # A claim released after `ls-remote` named it is no longer there to fetch.
             retryable = _MOVED_WANT in fetch.stderr or (keys is not None and _MISSING_REF in fetch.stderr)

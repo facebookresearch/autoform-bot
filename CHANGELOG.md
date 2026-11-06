@@ -763,9 +763,11 @@ parse, with or without `--json`, and changes nothing else.
   and error messages show such a byte as `\xff`. A branch whose name ends in a
   claim's path, such as `refs/heads/refs/autoform-claims/x`, is no longer read
   as a claim; on macOS and Windows it could fail every full listing as
-  `contention:`. Except on Windows, a listing deletes the private refs left by
-  a listing on the same host that a signal stopped. On Python 3.11 and 3.12, a
-  listing step still running after five seconds gets the rest of its input
+  `contention:`. On those systems, a claim key beside a folder that differs
+  from it only in case, such as `lean/Foo` and `lean/foo/bar`, no longer fails
+  every full listing. Except on Windows, a listing deletes the private refs left
+  by a listing on the same host that a signal stopped. On Python 3.11 and 3.12,
+  a listing step still running after five seconds gets the rest of its input
   instead of running out of time. Claim commands work in a pre-receive hook, a
   `--timeout` above about 24 days no longer ends in an `OverflowError` once a
   step runs past five seconds, and a timeout says `ran out of time after <N>s
