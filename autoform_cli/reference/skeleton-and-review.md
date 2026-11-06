@@ -48,18 +48,17 @@ during extraction stops the whole command.
 ### Report
 
 `--output` records the `autoform-skeleton/v5` report, with no timestamp; only
-failure reasons quote absolute paths. It names the target set, whether it covers
-every target or a `--node` selection, and the exact blueprint, by a hash of
-every article and the passage each cites; a report whose selection, articles and
-unresolved declarations disagree cannot be built. Only a report selecting every
+failure reasons quote absolute paths. It names the target set (every target or a
+`--node` selection) and the blueprint, by a hash of every article, every file in
+[`links/`](links.md) and each cited passage; a report whose selection, articles
+and unresolved declarations disagree cannot be built. Only a report on every
 article, with the blueprint's `lean:` names as targets, is review evidence.
 
 ### Limits
 
-The Lake freshness check, the helper's build, and each probe have their own
-600-second budget; `--timeout SECONDS` sets the helper's and each probe's. At
-most eight probes run at a time. These limits are resource controls, not a
-security or authenticity boundary.
+The Lake freshness check, the helper's build, and each probe have 600 seconds
+each; `--timeout SECONDS` sets the last two. At most eight probes run at once.
+These limits are resource controls, not a security or authenticity boundary.
 
 Each phase is named on stderr as it starts: `skeleton: probing <n> modules...`
 when Lean probes start, `skeleton: assembling...` once none runs (the build must
@@ -67,18 +66,17 @@ still not change), and `skeleton: writing...` before `--output` or `--packets`.
 
 ### Packets and passages
 
-`--packets DIR` writes one comment-stripped packet per skeleton, named after
-its article and declaration, with a manifest of articles and hashes; a blind
-auditor gets the hash-named packets of `review prepare` instead. The
-destination must be empty or hold Autoform's packet manifest. Each run replaces
-the whole managed tree, aborts if the tree changes before commit, and preserves
-an old tree that changes later at a reported recovery path. Packet and passage
-manifests use their v2 schemas; v1 trees are recognized and replaced. An
-unresolved selected declaration blocks all packet and passage output, though
-`--output` still records the report. Destinations must be disjoint, not
-symlinks, and on filesystems with hard links and atomic renames. Combined
-outputs commit together and a failed commit restores the previous set, but a
-reader may briefly see outputs of different generations.
+`--packets DIR` writes one comment-stripped packet per skeleton, named after its
+article and declaration, with a manifest of articles and hashes; a blind auditor
+gets the hash-named packets of `review prepare` instead. The destination must be
+empty or hold Autoform's packet manifest. Each run replaces the whole managed
+tree, aborts if the tree changes before commit, and preserves an old tree that
+changes later at a reported recovery path. Packet and passage manifests are v2;
+v1 trees are recognized and replaced. An unresolved selected declaration blocks
+all packet and passage output, though `--output` still records the report.
+Destinations must be disjoint, not symlinks, and on filesystems with hard links
+and atomic renames. Combined outputs commit together and a failed commit
+restores the previous set, but a reader may briefly see mixed generations.
 
 A packet holds the signature, the same signature printed raw past project
 notation, the canonical kernel material, the statement as written (cut before
@@ -132,14 +130,13 @@ never compared), an unauthenticated `model:` label the coordinator supplies, and
 the testimony. Loading rejects missing or unknown fields, altered packets,
 identity mismatches, non-canonical cards, and malformed or empty testimony.
 
-Testimony is plain text with TeX formulas between dollar signs, written by the
-rules in `skills/human-review/references/readback.md`. It is refused for
-invisible or reordering characters, combining marks stacked over the lines
-around or with nothing to sit on, showing no letter or digit, or exceeding
-32 KiB or 500 lines; a write also refuses code points unassigned in its
-Python's Unicode data. A formula never invalidates testimony: one
-`testimony.formula_problems` cannot typeset is shown as typed, and render warns
-without changing its exit status.
+Testimony is plain text with TeX formulas between dollar signs, following
+`skills/human-review/references/readback.md`. It is refused for invisible or
+reordering characters, combining marks stacked over the lines around or with
+nothing to sit on, showing no letter or digit, or exceeding 32 KiB or 500 lines;
+a write also refuses code points unassigned in its Python's Unicode data. A
+formula never invalidates testimony: one `testimony.formula_problems` cannot
+typeset is shown as typed, and render warns without changing its exit status.
 
 A card file holds at most 4 MiB, and its frontmatter is read from its first 32
 lines. A larger, non-UTF-8, or unreadable file, or a directory or FIFO, at a
@@ -160,20 +157,18 @@ the paths of long declaration names.
 
 `review prepare` extracts every Lean-mapped article from the built tree and
 writes one blind packet per declaration under `blind/`, named by its hash, with
-a manifest for the coordinator. Each Lean-mapped article must be a
-declaration-sized leaf, or review commands refuse it with
-`review-article-shape`; module catalogs are not reviewed. An `origin: cited`
-article must link an in-vault, non-Markdown snapshot with an exact
-`#L<start>-L<end>` range, no article may cite blank lines, and preparation
-refuses a citation it cannot show.
+a manifest for the coordinator. Each such article must be a declaration-sized
+leaf, or review commands refuse it with `review-article-shape`; module catalogs
+are not reviewed. An `origin: cited` article must link an in-vault, non-Markdown
+snapshot with an exact `#L<start>-L<end>` range, no article may cite blank
+lines, and preparation refuses a citation it cannot show.
 
-`review record` runs no Lean. It refuses a packet whose bytes do not match its
-hash, a packet or testimony that is not a regular file (a FIFO is refused
-unread), an `article_id` the blueprint no longer has, and refused testimony,
-then files the card; replacing a different card needs `--expected-card-hash`.
-It warns about each formula a site would show as typed, with its exit status
-unchanged. A card from a stale packet is invalid under `review check`, so
-prepare and record again.
+`review record` runs no Lean. It refuses a packet not matching its hash, a
+non-regular packet or testimony file (a FIFO is refused unread), an `article_id`
+the blueprint no longer has, and refused testimony, then files the card;
+replacing a different card needs `--expected-card-hash`. It warns about each
+formula a site would show as typed, with its exit status unchanged. A card from
+a stale packet is invalid under `review check`, so prepare and record again.
 
 `review check` derives its evidence from its own extraction, never a committed
 file, and fails until every Lean-mapped article has current cards and a

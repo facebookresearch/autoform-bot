@@ -1,7 +1,8 @@
 """Compile an Autoform dependency graph from its Markdown blueprint.
 
-Markdown is both the human wiki and the sole authored graph representation:
-node paths are stable ids, frontmatter carries checked facts, and links under
+Markdown is the human wiki and, with the annotations in ``blueprint/links/``
+(:mod:`.annotations`), the sole authored graph representation: node paths are
+stable ids, frontmatter or an annotation carries checked facts, and links under
 the two dependency headings are typed edges. ``Graph`` is only a validated
 in-memory projection. It rejects broken links and cycles instead of persisting
 a second graph file that could drift from the book.
@@ -22,6 +23,9 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from ._fs import is_within as _is_within
+from .annotations import DECLARATION_KEYS as _CATALOG_DECLARATION_KEYS
+from .annotations import REJECTED, read_links
+from .annotations import SETTINGS as _SETTINGS
 from .lean import declaration_names
 from .library.pinned_names import PinnedLists, load_pinned_lists, name_warnings
 from .markdown import (
@@ -83,9 +87,6 @@ _FALSE = frozenset({"false", "no"})
 #: How many statements a coverage row lists beside evidence it keeps, unless
 #: ``roadmap/README.md`` sets ``coverage_list_limit``.
 _COVERAGE_LIST_LIMIT = 50
-_CATALOG_DECLARATION_KEYS = frozenset(
-    {"declaration", "mathlib", "mathlib_declaration", "mathlib_file"}
-)
 
 #: ``## Depends on`` carries the prerequisites needed to *state* a node;
 #: ``## Proof depends on`` carries the extra prerequisites its *proof* needs.
@@ -191,19 +192,23 @@ class Graph:
     #: Lean, so the site shows no Lean progress.
     tracks_lean: bool = True
     #: What check warns about from loading without failing: a project setting
-    #: it ignores because it is misplaced or has an unknown value, a wrapped
-    #: link, such as one whose text wraps across lines, into an unpublished
-    #: folder, then ``## Informally uses`` links that do not resolve to another
-    #: article, the heading written below a dependency heading, where its links
-    #: count, and a wrapped dependency loading would otherwise refuse, as it
-    #: does not resolve, names its own article or closes a cycle. Last come the
-    #: pinned name lists' warnings about ``mathlib_declaration`` and
-    #: ``mathlib_file``.
+    #: it ignores because it is misplaced or has an unknown value, then what
+    #: ``blueprint/links/`` leaves out and the frontmatter read or ignored beside
+    #: it, each counted, a wrapped link, such as one whose text wraps across
+    #: lines, into an unpublished folder, then ``## Informally uses`` links that
+    #: do not resolve to another article, the heading written below a dependency
+    #: heading, where its links count, and a wrapped dependency loading would
+    #: otherwise refuse, as it does not resolve, names its own article or closes
+    #: a cycle. Last come the pinned name lists' warnings about
+    #: ``mathlib_declaration`` and ``mathlib_file``.
     #: :func:`informal_cycle_warnings` adds the links whose target depends on
     #: the article.
     warnings: tuple[str, ...] = ()
     #: The pinned name lists in ``blueprint/libraries/``, or None without that folder.
     pinned_names: PinnedLists | None = None
+    #: A digest of ``blueprint/links/``, or None without that folder: the
+    #: annotations carry articles' facts, so revisions of the graph cover them.
+    links_sha256: str | None = None
 
     @property
     def edge_count(self) -> int:
@@ -245,7 +250,11 @@ class _NodeSource:
 
 
 def load_graph(blueprint_dir: str | Path) -> Graph:
-    """Load and validate Markdown nodes beneath *blueprint_dir*."""
+    """Load and validate Markdown nodes beneath *blueprint_dir*.
+
+    An article with an annotation in ``blueprint/links/`` takes its facts from
+    there, and only the settings from its frontmatter.
+    """
 
     given = Path(blueprint_dir).expanduser()
     if not os.path.isdir(given):
@@ -267,6 +276,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     open_statements = False
     tracks_lean = True
     coverage_list_limit = _COVERAGE_LIST_LIMIT
+    links = read_links(blueprint, {source.path: source.id for source in sources})
+    annotated: set[str] = set()
 
     for source in sources:
         canonical = source.path.resolve()
@@ -282,13 +293,35 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             continue
         canonical_ids[canonical] = source.id
         node_ids[source.id] = canonical
-        node, node_issues = _parse_node(source.id, canonical, source.text)
+        facts = None if links is None else links.facts.get(canonical)
+        text = source.text
+        if facts is not None:
+            annotated.add(source.id)
+            text, ignored = _settings_only(text)
+            if ignored:
+                beside = "frontmatter beside an annotation is ignored, except " + ", ".join(sorted(_SETTINGS))
+                links.drops.add(beside, source.id)
+        node, node_issues = _parse_node(source.id, canonical, text)
         issues.extend(node_issues)
         if node is not None:
+            for key, value in (facts or {}).items():
+                value, problem = _normalize_value(node.id, 0, key, value)
+                if problem:
+                    # Without the line number frontmatter would have, the message says what the key accepts.
+                    links.drops.add(REJECTED, f"{node.id} ({problem.removeprefix(f'{node.id}:0: ')})")
+                else:
+                    node.metadata[key] = value
+            if links is not None and links.sha256 is not None and facts is None and set(node.metadata) - _SETTINGS:
+                reason = "articles with no annotation keep their frontmatter facts; move them into blueprint/links/"
+                links.drops.add(reason, node.id)
             article_id = node.metadata.get("article_id")
             if article_id is not None:
                 previous = article_ids.get(article_id)
-                if previous is not None:
+                # An annotation never refuses the vault (#325).
+                if previous is not None and (node.id in annotated or previous in annotated):
+                    del node.metadata["article_id"]
+                    links.drops.add("article IDs another article already uses are left out", f"{node.id} ({previous})")
+                elif previous is not None:
                     issues.append(
                         f"{node.id}: duplicate article_id {article_id!r} also used by {previous}"
                     )
@@ -335,6 +368,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                 )
             parsed.append(node)
 
+    if links is not None:
+        warnings.extend(links.drops.warnings())
     if issues:
         raise GraphValidationError(issues)
     # A note no command can use leaves the graph whole, so it is warned about, never refused (#325).
@@ -468,6 +503,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         tracks_lean=tracks_lean,
         warnings=tuple(warnings),
         pinned_names=pinned_names,
+        links_sha256=None if links is None else links.sha256,
     )
 
 
@@ -1133,6 +1169,25 @@ def _strip_markup(text: str) -> str:
         end = stop
     parts.append(strip(text[end:]))
     return "".join(parts)
+
+
+def _settings_only(text: str) -> tuple[str, bool]:
+    """*text* with every frontmatter line but a setting's blanked, so lines keep their numbers; and whether any was."""
+    if not text.lstrip().startswith("---"):
+        return text, False  # most pages beside an annotation have no frontmatter, so are not split
+    lines = text.splitlines(keepends=True)
+    if lines[0].strip() != "---":
+        return text, False
+    end = next((index for index in range(1, len(lines)) if lines[index].strip() == "---"), None)
+    if end is None:
+        return text, False  # unterminated, which _parse_frontmatter reports
+    ignored = False
+    for index in range(1, end):
+        stripped = lines[index].strip()
+        if stripped and not stripped.startswith("#") and stripped.split(":", 1)[0].strip() not in _SETTINGS:
+            lines[index] = "\n"
+            ignored = True
+    return "".join(lines), ignored
 
 
 def _parse_frontmatter(node_id: str, lines: list[str]) -> tuple[dict[str, str], int, list[str]]:

@@ -91,8 +91,8 @@ claiming roadmap articles on a shared claim board, kept as Git refs on the proje
 For example, invoke `formalize` in each session and ask: "Formalize the results that are ready. Four other sessions
 share this project; use claims, and push claims and verified results to `origin`."
 
-Sessions on one machine share its memory, and each builds Lean, so start only as many as fit. They also share one
-Lean runtime, the process behind the plugin's Lean tools; [`servers/README.md`](servers/README.md) gives its limits.
+Sessions on one machine share its memory, and each builds Lean, so start only as many as fit. Sessions using one plugin
+installation also share the Lean runtime behind its tools; [`servers/README.md`](servers/README.md) gives its limits.
 
 ## Search and reuse
 

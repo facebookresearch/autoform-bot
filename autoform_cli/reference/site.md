@@ -5,22 +5,20 @@ What `render` publishes, and how the site is served, deployed and checked. The
 
 ## Rendered pages
 
-`dependencies.md` and the old pages under `dependencies/` redirect to the
-matching book page, keeping the address's fragment when JavaScript runs;
-`structure.md` links the book. Complete published statements, proofs and
-citations remain the reading content. The index `dependencies/index.json`,
-project payload `dependencies.json`, and other `dependencies/` payloads are
-internal to this viewer; their schemas may change. `dependencies/map/` is a
-second, standalone page: one zoomable map of the whole project, which loads
-`dependencies/map/data/` one level at a time and shows each result's statement
-from its article. A formal statement links to its canonical article or
-containing chapter card; legacy `#node=<id>`, view and filter links redirect
-there, not to a second viewer. A `lean:` declaration resolving to a repository
-permalink gets a source link; a catalog's Lean row shows its first eight names
-and counts the rest. Render percent-encodes each link it writes from file and
-folder names, such as the book's dependency links; a Markdown link it moves
-keeps its decoded spelling and starts with `./` when its first segment holds a
-colon, so no name can make a `javascript:` URL.
+`dependencies.md` and old pages under `dependencies/` redirect to the matching
+book page, keeping the address's fragment when JavaScript runs; `structure.md`
+links the book. The index `dependencies/index.json`, project payload
+`dependencies.json`, and other `dependencies/` payloads are internal to this
+viewer; their schemas may change. `dependencies/map/` is a standalone page: one
+zoomable map of the project, which loads `dependencies/map/data/` one level at a
+time and shows each result's statement from its article. A formal statement
+links to its canonical article or containing chapter card; legacy `#node=<id>`,
+view and filter links redirect there, not to a second viewer. A `lean:`
+declaration resolving to a repository permalink gets a source link; a catalog's
+Lean row shows its first eight names and counts the rest. Render percent-encodes
+each link it writes from file and folder names, such as the book's dependency
+links; a Markdown link it moves keeps its decoded spelling and starts with `./`
+when its first segment holds a colon, so no name can make a `javascript:` URL.
 
 Render writes no Mermaid graph of its own. Authored Mermaid remains supported in
 the vault and book, drawn in strict mode with plain-text labels and loaded only
@@ -36,28 +34,27 @@ schema and when render replaces an earlier site.
 
 `render` writes `javascripts/mathjax.js`, `stylesheets/blueprint.css`,
 `javascripts/blueprint-mermaid.js`, `javascripts/blueprint-live.js`,
-`javascripts/blueprint-dag.js`, and `assets/autoform.svg` over the vault's
-copies, and writes `SUMMARY.md`, `structure.md`, `publication.json`,
-`dependencies.md`, `dependencies.json`, the `dependencies/` pages, and the
-chapter pages it consolidates; a vault copy of one of these is not published. A
-directory holding a file at any of these paths, or a file where one of their
-folders goes, stops `render` with its path before anything is written, and `check` warns about
-it. The stale root `dependencies.html`, `graph.html`, and `progress.md` are kept
-out of the site. A `tex-macros.json` directory that holds files leaves the site
-without project macros, with a warning.
+`javascripts/blueprint-dag.js`, `assets/autoform.svg`, `SUMMARY.md`,
+`structure.md`, `publication.json`, `dependencies.md`, `dependencies.json`, the
+`dependencies/` pages, and the chapter pages it consolidates, over the vault's
+copies. A directory holding a file at any of these paths, or a file where one of
+their folders goes, stops `render` with its path before anything is written, and
+`check` warns about it. The stale root `dependencies.html`, `graph.html`, and
+`progress.md` are kept out of the site. A `tex-macros.json` directory that holds
+files leaves the site without project macros, with a warning.
 
 Besides its Markdown pages, a vault publishes only images (`.png`, `.jpg`,
 `.jpeg`, `.gif`, `.webp`, `.avif`, `.bmp`, `.ico`), `.pdf`, and plain-text
 `.txt`, `.csv`, `.json`, `.bib`, `.tex`, and `.lean` files, whatever the case of
 the suffix. The site leaves out any other file under `blueprint/`, such as an
-`.html` page, an `.svg`, or a script, and `check` and `render` warn about it by
-path, saying what to do. An Obsidian `.canvas` file and a [pinned name
-list](pinned-names.md) are left out silently, as `.obsidian` is, and a Markdown
-page that is not UTF-8 with a warning. When the verified commit holds the
-blueprint, `sources/` publishes only notes and images and links the rest there.
-A link to a file the site leaves out, a hidden path outside `sources/`, or a
-file in a `published: false` folder keeps only its text; `check` and `render`
-warn about each such link to a hidden path or an unpublished folder.
+`.html` page or an `.svg`, and `check` and `render` warn about it by path,
+saying what to do. An Obsidian `.canvas` file, a [pinned name
+list](pinned-names.md) and [`links/`](links.md) are left out silently, as
+`.obsidian` is, and a Markdown page that is not UTF-8 with a warning. At a
+verified commit, `sources/` publishes only notes and images and links the rest
+there. A link to a file the site leaves out, a hidden path outside `sources/`,
+or a file in a `published: false` folder keeps only its text; `check` and
+`render` warn about each such link to a hidden path or an unpublished folder.
 
 ## MathJax
 
@@ -65,25 +62,23 @@ warn about each such link to a hidden path or an unpublished folder.
 before the MathJax bundle, as `autoform init` writes both. It expects MathJax
 3.2.2, loads it itself when no bundle is listed, and leaves formulas as typed
 under any other release. An assignment to `window.MathJax` in another script,
-such as the snippet Material's documentation gives, is ignored with a console
-error. The articles on a page share one TeX input with the packages base, ams,
-noundefined, boldsymbol, mathtools, braket, mhchem, and amscd (`CD` diagrams),
-and the project's macros from `blueprint/tex-macros.json`, written as MathJax's
-`tex.macros` is: a name maps to a body, `[body, arguments]`, or `[body,
-arguments, default]`.
+such as Material's documented snippet, is ignored with a console error. The
+articles on a page share one TeX input with the packages base, ams, noundefined,
+boldsymbol, mathtools, braket, mhchem, and amscd (`CD` diagrams), and project
+macros from `blueprint/tex-macros.json`, written as MathJax's `tex.macros` is: a
+name maps to a body, `[body, arguments]`, or `[body, arguments, default]`.
 
 That input turns off `\label`, `\mmlToken`, `\DeclareMathOperator`, the
 paired-delimiter and tag-form commands of mathtools, and `\mathtoolsset`, and
 leaves off the packages MathJax would load on demand: cancel, bbox, enclose,
 color, html, unicode, action, newcommand, extpfeil, verb, and bussproofs. So
-`\newcommand`, `\def`, `\require`, `\cancel`, `\bbox`, `\color`, `\href`,
-`\unicode`, and any other command those packages do not define show in red and
-do nothing, however a formula or macro reaches them. A macro may not take one of
-their names; `check` and `render` warn about a macro they leave out, judging the
-copy of `tex-macros.json` that `render` reads once and publishes. `\bmod`,
-`\pmod`, `\mod`, `\varliminf`, `\varlimsup`, `\varinjlim` and `\varprojlim`,
-which MathJax builds from `\mmlToken`, are written again without it, and a
-project macro of the same name replaces one. Each read-back
+`\def`, `\require`, `\href`, and any other command those packages do not define
+show in red and do nothing, however a formula or macro reaches them. A macro may
+not take one of their names; `check` and `render` warn about a macro they leave
+out, judging the copy of `tex-macros.json` that `render` reads once and
+publishes. `\bmod`, `\pmod`, `\mod`, `\varliminf`, `\varlimsup`, `\varinjlim`
+and `\varprojlim`, which MathJax builds from `\mmlToken`, are written again
+without it, and a project macro of the same name replaces one. Each read-back
 card has its own TeX input with only base, ams, and noundefined. Only renderer-marked
 formulas, such as `$...$` in Markdown, are typeset. Formulas in links, controls and
 navigation get no extra MathJax tab stop, menu or accessibility explorer. Refreshes

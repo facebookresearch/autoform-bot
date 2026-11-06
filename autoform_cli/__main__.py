@@ -19,6 +19,7 @@ from urllib.parse import unquote, urlsplit
 
 from . import _page_pool, abstraction, debrief, debrief_orchestrator, status
 from ._repository import git
+from .annotations import scan as scan_links
 from .approvals import ApprovalStatus, approval_statuses
 from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
 from .audit import audit_blueprint
@@ -264,7 +265,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     project_inspect.add_argument("--json", action="store_true", help="write stable machine-readable output")
     project_versions = project_subparsers.add_parser(
-        "versions", help="list bundled known-good Lean and Mathlib releases"
+        "versions", help="list bundled Lean and Mathlib releases"
     )
     project_versions.add_argument("--json", action="store_true", help="write stable machine-readable output")
     project_worktrees = project_subparsers.add_parser(
@@ -363,8 +364,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         choices=(MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE),
         default=MODULE_IMPORT_SCOPE,
         metavar="SCOPE",
-        help=f"{MODULE_IMPORT_SCOPE} (default) loads every root library; {IMPORT_CLOSURE_SCOPE} loads, and needs "
-        "built, only files that may import MODULE: affected_modules stay exact, affected_articles may over-report",
+        help=f"{MODULE_IMPORT_SCOPE} (default) loads every root library; {IMPORT_CLOSURE_SCOPE} imports only the root "
+        "and glob modules that may import MODULE: affected_modules stay exact, affected_articles may over-report",
     )
     search = subparsers.add_parser(
         "search", help="find articles by title, Lean name, or statement text before adding one"
@@ -431,7 +432,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         dest="libraries",
         metavar="NAME",
-        help="index this lean_lib (repeatable); default: every lean_lib of the package",
+        help="index this lean_lib and the package's libraries it imports (repeatable); default: every lean_lib",
     )
     library_index.add_argument(
         "--check",
@@ -1007,6 +1008,7 @@ def _check(args: argparse.Namespace) -> int:
         + list(graph.warnings)
         + informal_cycle_warnings(graph)
         + source_warnings
+        + scan_links(graph.blueprint_dir)
     ):
         print(f"warning: {warning}")
     # What the site would leave out or show as typed, and what would stop
@@ -1194,7 +1196,7 @@ def _project(args: argparse.Namespace) -> int:
         if args.json:
             print(catalog.to_json())
             return 0
-        print("Known-good Lean/Mathlib releases:")
+        print("Bundled Lean/Mathlib releases:")
         for release in catalog.releases:
             print(f"  {release.id}{' [recommended]' if release.recommended else ''}")
             print(f"    Lean: {release.lean_toolchain}")
@@ -1426,24 +1428,23 @@ def _unsearched_library_note(target: str, lean_root: str | None) -> str | None:
     The note is best effort: any failure to read the project leaves it out.
     """
 
-    candidates = [Path(lean_root)] if lean_root else [Path(target), Path(target).parent]
-    for root in candidates:
-        try:
-            if not (root / "lake-manifest.json").is_file():
-                continue
-            names = indexed_packages(root)
-        except (LibraryError, WorkspaceError, OSError, ValueError):
+    # Only the searched project's own root: an enclosing Lake project is not one it depends on.
+    try:
+        root = Path(lean_root) if lean_root else resolve_runtime_paths(target).project_root
+        if not (root / "lake-manifest.json").is_file():
             return None
-        if not names:
-            return None
-        listed = " and ".join(names)
-        flags = " ".join(f"--library {_shell_quote_one_line(name)}" for name in names)
-        verb, pronoun = ("publishes a search index", "it") if len(names) == 1 else ("publish search indexes", "them")
-        return _human_text(
-            f"note: {listed} {verb} this search did not read; search {pronoun} too with "
-            f"--lean-root {_shell_quote_one_line(str(root))} {flags}"
-        )
-    return None
+        names = indexed_packages(root)
+    except (LibraryError, RuntimeProjectionError, WorkspaceError, OSError, ValueError):
+        return None
+    if not names:
+        return None
+    listed = " and ".join(names)
+    flags = " ".join(f"--library {_shell_quote_one_line(name)}" for name in names)
+    verb, pronoun = ("publishes a search index", "it") if len(names) == 1 else ("publish search indexes", "them")
+    return _human_text(
+        f"note: {listed} {verb} this search did not read; search {pronoun} too with "
+        f"--lean-root {_shell_quote_one_line(str(root))} {flags}"
+    )
 
 
 def _print_library(library: LibraryResult) -> None:
@@ -1483,7 +1484,13 @@ def _library_index(args: argparse.Namespace) -> int:
     options = {"libraries": tuple(args.libraries), "timeout": args.timeout}
     try:
         if args.check:
-            reasons = check_index(args.target, **options)
+            warnings: list[str] = []
+            try:
+                reasons = check_index(args.target, **options, warnings=warnings)
+            finally:
+                # Printed even when the check then fails: a warning can say why.
+                for warning in warnings:
+                    print(f"warning: {_human_text(warning)}", file=sys.stderr)
             for reason in reasons:
                 print(f"stale: {_human_text(reason)}", file=sys.stderr)
             if not reasons:
@@ -1511,6 +1518,8 @@ def _library_index(args: argparse.Namespace) -> int:
     )
     # Flush first: stdout is block-buffered when piped, and the warnings explain the count.
     sys.stdout.flush()
+    if generated.build_note:
+        print(_human_text(f"note: {generated.build_note}"), file=sys.stderr)
     for shared in generated.shared:
         print(
             _human_text(
@@ -1944,7 +1953,7 @@ def _claim(args: argparse.Namespace) -> int:
 
 
 def _claim_list(args: argparse.Namespace) -> int:
-    """List claims; stdout carries only the JSON, and a failure's line on stderr says what kind it is."""
+    """List claims; stdout carries only the JSON, and stderr labels a failure to reach or read the board."""
     targets: dict[str, str] = {}
     for node_id in args.node_id:
         key = author_claim_key(node_id)

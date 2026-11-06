@@ -75,10 +75,10 @@ fails, report the error and that the project builds once a retry from the failed
 validation step succeeds. Never run a bare `lake update` in such a project.
 
 For a library outside the catalog, pass `--lean-toolchain` and `--mathlib-rev`
-set to what the library's `lean-toolchain` and `lake-manifest.json` lock at the
-revision the user plans to require; a read-only fetch of those two files is
-allowed. Ask when either is unknown, and report the pair and why. Do not add the
-`require` or fetch the library into the project; the user decides that.
+set to what its `lean-toolchain` and `lake-manifest.json` lock at the revision
+the user names, writing `4.34.1` as `v4.34.1`; a read-only fetch of both files
+is fine. Ask when the revision or either value is unknown, and report the pair
+and why. Do not add the `require` or fetch the library into the project.
 
 `project new` writes the complete Autoform vault, site, ignore rules, and CI, so
 no later `init` is needed. For an incomplete existing repository, run

@@ -67,8 +67,8 @@ lead has one of them give up what it holds. Before choosing none, run `autoform
 claim list` once, with any `--worker-id`: an unexpired claim means another
 session uses them. If the command fails, as it does without an `origin`, tell
 the user and go on without claims; after `error: timeout:`, `error: transport:`
-or `error: contention:` the board exists but could not be read, so run it once
-more, then ask the user before going on without them. A claim excludes only
+or `error: contention:` the board could not be read, so run it once more, then
+ask the user before going on without them. A claim excludes only
 workers that also claim, and `work list` does not read the board, so on such a
 project every worker claims: tell each subagent so, and follow the [claim
 rules](references/claims.md) at each step.
@@ -82,17 +82,17 @@ telling the lead: one the landing unlocked, else one in its container, else any.
 Lean imports are allowed; never pre-block a proof for needing one. Before an
 effective module header or import change, run `autoform work import-impact`,
 rerunning it with `--module-scope import-closure` when the default scope cannot
-build or load every root library. When the run uses claims, follow the [import
-claims](references/claims.md#import-edits) from then on; otherwise send the lead
-the report's `claim_targets` and `affected_claim_targets` and wait for its
-answer. Unless the user has paused skeleton evidence, capture baseline skeleton
-evidence for the report's currently built, named affected articles and, when the
-edit removes an import, for the articles of modules only that import kept in the
-build. The affected articles are not a lock: do not acquire or edit them because
-they are listed, and treat unresolved declarations as unknown validation scope,
-not proof they are unaffected. After rebuilding, repeat any baseline skeleton
-evidence and use Agent Review to judge semantic changes; repair each article
-that needs changes under the review gates of the [revision
+build or load every root library; report a failure that remains. With claims,
+follow the [import claims](references/claims.md#import-edits) from then on;
+otherwise send the lead the report's `claim_targets` and
+`affected_claim_targets` and wait for its answer. Unless the user has paused
+skeleton evidence, capture baseline skeleton evidence for the report's currently
+built, named affected articles and, when the edit removes an import, for the
+articles of modules only that import kept in the build. The affected articles
+are not a lock: do not acquire or edit them because they are listed, and treat
+unresolved declarations as unknown validation scope. After rebuilding, repeat
+any baseline skeleton evidence and use Agent Review to judge semantic changes;
+repair each article that needs changes under the review gates of the [revision
 contract](../../autoform_cli/reference/claims-and-revisions.md#revision-contract).
 Stop for an active conflict or failed validation, not for a blanket import rule;
 disclosure alone is neither. With or without claims, a `module_generated` root

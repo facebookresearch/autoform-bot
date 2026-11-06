@@ -3702,6 +3702,7 @@ def test_publication_json_says_where_each_file_render_read_went(tmp_path: Path) 
         "legacy.md": b"# Legacy \xff\n",
         "readbacks/top.json": b"{}",
         "libraries/names.jsonl": b"{}\n",
+        "links/notes.jsonl": b"\n",
         "SUMMARY.md": b"- [Old](README.md)\n",
         "javascripts/mathjax.js": b"window.MathJax = {};\n",
     }.items():
@@ -3732,6 +3733,7 @@ def test_publication_json_says_where_each_file_render_read_went(tmp_path: Path) 
             "javascripts/mathjax.js": "mathjax-config",
             "legacy.md": "not-utf8",
             "libraries/names.jsonl": "graph-input",
+            "links/notes.jsonl": "graph-input",
             "notes.docx": "unsupported-type",
             "progress.md": "generated",
             "readbacks/top.json": "review-testimony",

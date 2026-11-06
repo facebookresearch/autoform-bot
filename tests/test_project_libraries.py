@@ -58,7 +58,8 @@ def test_every_entry_is_pinned_on_a_listed_release_and_locks_its_own_require() -
         assert direct[0]["url"] == library.git
         assert direct[0]["rev"] == direct[0]["inputRev"] == library.commit
         # Offline proxy for "every package its require brings in": the entries the
-        # release does not already lock. Task 5's real build proves completeness.
+        # release does not already lock. No test or CI job builds a catalog library,
+        # so completeness is unchecked.
         added = {entry["name"].casefold() for entry in library.manifest_packages}
         assert not added & _release_package_names(library.release)
 
