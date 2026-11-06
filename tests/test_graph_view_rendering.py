@@ -311,8 +311,9 @@ def test_the_phone_reader_peeks_opens_to_half_or_covers_the_map() -> None:
     # The handle names the page, typesetting its TeX, with a status mark only for a statement.
     assert 'refs.sheetHandle.replaceChildren(close ? "×" : record && record.result && record.status ? swatch(record.status) : "", handleTitle);' in script
     assert 'readingLabel("span", "bp-dag-sheet-title", title,' in script
-    # Its accessible name starts with the title it shows; an open desktop reader over the overview closes with ×.
-    assert 'refs.sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");' in script
+    # Its accessible name starts with the title it shows, as text; an open desktop reader over the overview closes with ×.
+    assert ('refs.sheetHandle.setAttribute("aria-label", close ? "Close reading" : '
+            'plainTitle(title, record && record.reading_title) + ", reading");') in script
     assert "Toggle mathematical reading" not in script
     assert "close = opened && !sheetLayout() && state.overviewOnly" in script
     assert "var page = currentBundle || data" in script
@@ -476,7 +477,8 @@ def test_explorer_names_its_scope_once_and_lists_only_its_ancestors_above_it() -
     assert 'refs.breadcrumb.replaceChildren(trailList(' in breadcrumb
     assert 'refreshReadingLabels(refs.breadcrumb)' in breadcrumb
     assert 'reading_title: pending.reading_title' in script and 'reading_title: record.reading_title' in script
-    assert 'refs.pageHeading.textContent = currentBundle && currentBundle.title || data.title;' in script
+    assert ('refs.pageHeading.textContent = plainTitle(currentBundle && currentBundle.title || data.title, '
+            '(records.get(page.nodeId) || {}).reading_title);') in script
     assert 'element("h1", "bp-dag-navigation-title"' not in script
     assert 'link.setAttribute("aria-current", "page")' in script
     assert ":is(.bp-dag-breadcrumb, .bp-dag-navigation-path) li + li::before { content: \"/\";" in style
@@ -630,7 +632,7 @@ def test_workspace_header_presses_one_view_and_gives_the_trail_its_own_row() -> 
     # The real renderer folds before layout rather than hiding ancestor nodes
     # a second time; its summary retains their complete accessible labels.
     assert 'refs.breadcrumb.replaceChildren(trailList(entries, null, !sheetLayout()));' in script
-    assert 'entries.slice(1, -2).map(function (entry) { return entry.label; }).join(" / ")' in script
+    assert 'entries.slice(1, -2).map(function (entry) { return plainTitle(entry.label, entry.reading_title); }).join(" / ")' in script
     # A phone keeps search and Topics on the first row too; Topics on the second pushed the toolbar to three rows.
     assert "search-wrap { flex-basis: 100%; }" not in phones
 

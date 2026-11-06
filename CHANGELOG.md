@@ -575,6 +575,12 @@ parse, with or without `--json`, and changes nothing else.
   than 1 with a traceback. A refusal names a stale index before a merged or
   edited one, the missing-manifest refusal no longer suggests `lake update`, and
   the note naming an unsearched library quotes the flags it suggests.
+- **TeX in tab titles.** The explorer's browser tab title, the topic line
+  under a search hit or list row, the folded breadcrumb's "…", and what a
+  screen reader hears for the reading pane's button and for the page heading
+  while the reader is collapsed showed a title's formula as TeX source, such
+  as `$L^p$ spaces` or `\(L^p\) spaces`. They now read it as text,
+  `L^p spaces`, and a title's code keeps its dollars.
 - **Reference links on chapters with a `<` in the title.** A `<` in a
   chapter's title alone left reference-style links in its prose shown as typed
   (#631).
