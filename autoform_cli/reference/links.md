@@ -22,5 +22,5 @@ holding `{"object": {"type": "lean", "uri": "../.."}}` makes every end without a
 Loading never refuses a vault over the folder (#325): every fact it leaves out
 draws a counted warning saying why. It checks only the fields it reads, and
 `check` adds literature-links' validation. Beside the folder, `migrate
-article-ids --write` writes no ID: until `autoform links set` exists, give a new
+article-ids --write` writes no ID: until Autoform writes annotations, give a new
 article's ID as its annotation's `id`.
