@@ -203,7 +203,7 @@
   var stageSize = null;      // the stage the world was packed for
   function packRoot() {
     var root = part(ROOT), top = L.packLevels(model.index, stageSize);
-    // On the host, so the page can tell when the world repacks.
+    // For the browser tests: the shape the world was last packed for.
     host.dataset.pmPacked = stageSize.w >= stageSize.h ? "landscape" : "portrait";
     root.box = top.root;
     root.kids.forEach(function (id) { part(id).box = top.boxes[id] || null; });
@@ -636,7 +636,7 @@
     if (b.h >= 52) {
       // The card's fill says it is finished, the common case; the line names any other status, or where the project
       // tracks no Lean, the result's kind.
-      var stub = view.stubs[row.id], meta = [tileKind(row.status) === "done" ? "" : standing(row),
+      var stub = view.stubs[row.id], meta = [group(row.status) === "done" ? "" : standing(row),
         stub && stub.usedBy ? "used " + num(stub.usedBy) + "× elsewhere" : ""].filter(Boolean).join(" · ");
       if (meta) setText(keep(labelLayer, "cm:" + row.id, "text", {x: b.x + pad, y: b.y + b.h - pad, class: "pm-card-meta" + cls}), clip(meta, Math.max(4, Math.floor(width / CARD_META_EM))));
     }

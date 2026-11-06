@@ -2,7 +2,7 @@
 
 The index comes from another repository. It is used only when the checkout is
 at the locked commit, its sources and pin files are the ones the index was
-generated from, and the index as a whole is one generation.
+generated from, and the index is whole.
 
 Only each module's ``name``, ``source_file`` and ``sha256`` and the header's
 toolchain, dependencies and source directories are checked. An edit to the
@@ -218,7 +218,10 @@ def _load_library(
         refuse,
     )
     if tree_digest(((module.name, module.sha256) for module in index.modules), pins.files) != index.header.tree:
-        raise refuse("its index does not match its sources and pins as a whole; it was merged or edited, not generated")
+        raise refuse(
+            "its index is stale: the library's pin files (lean-toolchain, lakefile, lake-manifest.json) changed "
+            "since the index was generated, or the index was merged or edited"
+        )
     return VerifiedLibrary(name, head.lower(), index, _differences(workspace, index))
 
 

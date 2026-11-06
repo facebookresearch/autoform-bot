@@ -1,7 +1,6 @@
 # Proof-integrity rubric
 
-Judge whether the proof chain is genuine kernel-checked mathematical work. A plausible tactic block
-is insufficient when its dependencies are hollow.
+Judge whether the proof chain is genuine kernel-checked mathematical work.
 
 ## Evidence
 
@@ -12,8 +11,7 @@ is insufficient when its dependencies are hollow.
    `sorry`, `admit`, and raw `axiom`, then inspect every relevant hit rather than trusting grep alone.
 4. Read the source to determine whether it proves the claimed result; difficulty or missing local
    infrastructure does not justify axiomatizing content that the source proves.
-5. In a repository with an explicit audited axiom ledger, apply that repository's ledger and
-   discharge policy in addition to this rubric.
+5. If the repository has an explicit audited axiom ledger, also apply it and its discharge policy.
 
 ## Open statements
 

@@ -12,6 +12,7 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+from ..lean import _is_name
 from .jsonl import (
     MAX_FILE_BYTES as MAX_INDEX_BYTES,
     MAX_LINE_BYTES,
@@ -175,7 +176,10 @@ def tree_digest(modules: Iterable[tuple[str, str]], files: Iterable[tuple[str, b
 
     A declaration's status and printed type can change when another module
     does, so two current indexes can merge, line by line, into a stale one
-    whose module digests are all right. Only generation can produce this value.
+    whose module digests are all right; that index records another value. So
+    does one whose pin files changed since it was generated. The digest holds
+    no key: anyone can recompute it, so it shows an index is whole, not who
+    made it.
     """
 
     digest = hashlib.sha256(b"autoform-library-tree/v0\0")
@@ -317,9 +321,19 @@ def _module(record: dict[str, object], number: int, source_dirs: tuple[str, ...]
     def source_file(value: object) -> bool:
         return relative_path(value) is not None and value.endswith(".lean") and covers(source_dirs, value)
 
+    path = _field(record, "source_file", where, source_file)
+    # The name is the file's path below a directory above its source directory (the index does not
+    # record Lake's srcDir): an index that names another module would print an import line for a
+    # file that is not this one.
+    tail = record["name"].replace(".", "/") + ".lean"
+    base = path.removesuffix(tail)
+    if not f"/{path}".endswith(f"/{tail}") or not any(
+        covers((directory,), path) and directory.startswith(base) for directory in source_dirs
+    ):
+        raise LibraryIndexError(f"{where}: its name is not the module its source_file holds")
     return IndexModule(
         name=record["name"],
-        source_file=_field(record, "source_file", where, source_file),
+        source_file=path,
         sha256=_field(
             record, "sha256", where, lambda value: type(value) is str and _SHA256.fullmatch(value) is not None
         ),
@@ -329,8 +343,8 @@ def _module(record: dict[str, object], number: int, source_dirs: tuple[str, ...]
 
 
 def _declaration(record: dict[str, object], number: int) -> IndexDeclaration:
-    if not _name(record.get("name")):
-        raise LibraryIndexError(f"index line {number}: declaration has no name")
+    if not _is_name(record.get("name")):
+        raise LibraryIndexError(f"index line {number}: declaration name is not a Lean name")
     where = f"declaration {shorten(record['name'])}"
     _keys(record, _DECLARATION_KEYS, where)
     return IndexDeclaration(

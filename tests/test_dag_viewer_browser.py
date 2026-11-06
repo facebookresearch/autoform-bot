@@ -1877,14 +1877,34 @@ def _drag(page: object, splitter: object, x: float) -> None:
     _paint_frame(page)
 
 
+def _inside(page: object, inner: str, outer: str) -> bool:
+    """Whether every element matching INNER lies wholly inside the first element matching OUTER."""
+    return page.evaluate("""([inner, outer]) => {
+      const b = document.querySelector(outer).getBoundingClientRect();
+      return [...document.querySelectorAll(inner)].every(element => {
+        const a = element.getBoundingClientRect();
+        return a.left >= b.left - 1 && a.right <= b.right + 1 && a.top >= b.top - 1 && a.bottom <= b.bottom + 1;
+      });
+    }""", [inner, outer])
+
+
 def test_the_reading_pane_drags_to_80_percent_and_keeps_that_width_on_the_next_page(desktop_page: object, site_url: str) -> None:
-    """Jack asked to be able to give the wiki articles 80%: Topics hidden, the reader drags to 80% of the body."""
+    """With Topics hidden the reader drags to 80% of the body; the map keeps 160px whatever changes later."""
     page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
     topics, reading = page.get_by_role("separator", name="Resize Topics"), page.get_by_role("separator", name="Resize the reading pane")
     before = _widths(page)
-    # With Topics shown, the map keeps 160px.
+    # With Topics shown, the map keeps 160px, and its zoom bar wraps to fit it.
     _drag(page, reading, 10)
-    assert _widths(page)["reading"] == pytest.approx(before["body"] - before["topics"] - 160, abs=2)
+    narrow = _widths(page)
+    assert narrow["reading"] == pytest.approx(before["body"] - before["topics"] - 160, abs=2)
+    assert abs(int(reading.get_attribute("aria-valuenow")) - 100 * narrow["reading"] / narrow["body"]) <= 1
+    assert abs(int(reading.get_attribute("aria-valuemin")) - 100 * 300 / narrow["body"]) <= 1
+    assert abs(int(reading.get_attribute("aria-valuemax")) - 100 * narrow["reading"] / narrow["body"]) <= 1
+    assert _inside(page, ".bp-whole-map .pm-tools button", ".bp-dag-main")
+    # Each splitter sits in tab order beside its pane, and Topics' tab before the map.
+    assert page.evaluate("""() => document.querySelector('[aria-label="Resize Topics"]').previousElementSibling.matches('.bp-dag-navigation') &&
+      document.querySelector('[aria-label="Resize the reading pane"]').nextElementSibling.matches('.bp-reading-pane') &&
+      document.querySelector('.bp-dag-main').firstElementChild.matches('.bp-dag-pane-tab-topics')""")
     topics.focus()
     page.keyboard.press("Enter")
     playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
@@ -1894,16 +1914,42 @@ def test_the_reading_pane_drags_to_80_percent_and_keeps_that_width_on_the_next_p
     wide = _widths(page)
     assert wide["reading"] == pytest.approx(0.8 * wide["body"], abs=2)
     assert wide["map"] == pytest.approx(0.2 * wide["body"], abs=2)
-    # The choice holds on the next page, and a double-click puts the reader back at its usual width.
+    # The choice holds on the next page.
     _open_site(page, site_url, "dependencies/chapters/topology.html#node=topology%2Fresult")
     again = _widths(page)
     assert again["topics"] == 0 and again["reading"] == pytest.approx(wide["reading"], abs=2)
-    reading.dblclick()
-    _paint_frame(page)
-    assert _widths(page)["reading"] == pytest.approx(max(360, 0.39 * again["body"]), abs=2)
+    # Topics coming back, or growing to its widest, takes from the reader and leaves the map its 160px.
     page.get_by_role("button", name="Show Topics").click()
     playwright.expect(page.locator(".bp-dag-navigation")).to_be_visible()
     playwright.expect(topics).to_be_focused()
+    assert _widths(page)["map"] == pytest.approx(160, abs=2)
+    page.keyboard.press("End")
+    _paint_frame(page)
+    widest = _widths(page)
+    assert widest["topics"] == pytest.approx(480, abs=2) and widest["map"] == pytest.approx(160, abs=2)
+    _assert_hit(page, topics)
+    # A double-click puts the reader back at its usual width, and Delete does the same for Topics, as does a Mac's delete
+    # key.
+    reading.dblclick()
+    topics.focus()
+    page.keyboard.press("Delete")
+    _paint_frame(page)
+    usual = _widths(page)
+    assert usual["topics"] == pytest.approx(216, abs=2)
+    assert usual["reading"] == pytest.approx(max(360, 0.39 * usual["body"]), abs=2)
+    page.keyboard.press("End")
+    page.keyboard.press("Backspace")
+    _paint_frame(page)
+    assert _widths(page)["topics"] == pytest.approx(216, abs=2)
+    # Home gives the reader its smallest width.
+    reading.focus()
+    page.keyboard.press("Home")
+    _paint_frame(page)
+    assert _widths(page)["reading"] == pytest.approx(300, abs=2)
+    # Topics' splitter, focused when the window narrows to the drawer's layout, hands focus to the drawer's toggle.
+    topics.focus()
+    page.set_viewport_size({"width": 1000, "height": 800})
+    playwright.expect(page.get_by_role("button", name="Topics", exact=True)).to_be_focused()
 
 
 def test_a_pane_hides_from_its_splitter_or_the_map_only_button_and_its_tab_brings_it_back(
@@ -1925,8 +1971,19 @@ def test_a_pane_hides_from_its_splitter_or_the_map_only_button_and_its_tab_bring
     show = page.get_by_role("button", name="Show the reading pane")
     playwright.expect(show).to_be_focused()
     assert _widths(page)["map"] == pytest.approx(full["body"] - full["topics"], abs=2)
+    # The tab brings it back at the width it had before the drag.
     show.click()
     playwright.expect(page.locator(".bp-reading-pane")).to_be_visible()
+    assert _widths(page)["reading"] == pytest.approx(full["reading"] + 80, abs=2)
+    # A drag ends when the browser takes back its pointer.
+    box = reading.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    viewer = page.locator(".bp-dag-viewer")
+    playwright.expect(viewer).to_have_class(re.compile(r"\bbp-dag-resizing\b"))
+    reading.dispatch_event("lostpointercapture")
+    playwright.expect(viewer).not_to_have_class(re.compile(r"\bbp-dag-resizing\b"))
+    page.mouse.up()
     # Map only hides both panes, and pressed again brings both back.
     map_only = page.get_by_role("button", name="Map only")
     map_only.click()
@@ -1939,8 +1996,173 @@ def test_a_pane_hides_from_its_splitter_or_the_map_only_button_and_its_tab_bring
     playwright.expect(page.locator(".bp-reading-pane")).to_be_visible()
 
 
-def test_the_map_holds_its_camera_while_a_pane_is_dragged_and_settles_after(desktop_page: object, site_url: str) -> None:
-    """A drag that turns the stage from portrait to landscape repacks the map once, when it ends, not on every frame."""
+def test_a_reader_hidden_over_the_list_leaves_its_tab_focused_and_a_pick_then_focuses_the_map(
+    desktop_page: object, site_url: str,
+) -> None:
+    # Hidden over the statement list, the reader leaves its tab focused beside the rows, not over them.
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    _browse_contents(page, "All statements")
+    page.get_by_role("separator", name="Resize the reading pane").focus()
+    page.keyboard.press("Enter")
+    playwright.expect(page.locator(".bp-reading-pane")).to_be_hidden()
+    playwright.expect(page.get_by_role("button", name="Show the reading pane")).to_be_focused()
+    assert page.evaluate("""() => { const tab = document.querySelector('.bp-dag-pane-tab-reading').getBoundingClientRect();
+      return [...document.querySelectorAll('.bp-dag-inventory-row')].every(row => row.getBoundingClientRect().right <= tab.left + 1); }""")
+    # With only the reader hidden, a statement picked from the list focuses the map rather than the hidden reader.
+    page.locator('.bp-dag-inventory-row[data-inventory-node-id="algebra/base"]').focus()
+    page.keyboard.press("Enter")
+    playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-start", "algebra/base")
+    page.wait_for_function("() => document.querySelector('.bp-whole-map').contains(document.activeElement)")
+
+
+def test_between_721_and_1100px_only_the_reader_resizes_and_map_only_closes_the_topics_drawer(
+    desktop_page: object, site_url: str,
+) -> None:
+    page = desktop_page
+    page.set_viewport_size({"width": 1000, "height": 800})
+    # A stored preference of another shape is ignored, and replaced on the next change. The site is served from the root.
+    page.add_init_script("localStorage.setItem('autoform:book-panes:v1:/', '5')")
+    _open_site(page, site_url, _STATEMENT_PAGE)
+    playwright.expect(page.get_by_role("separator", name="Resize Topics")).to_be_hidden()
+    reading = page.get_by_role("separator", name="Resize the reading pane")
+    full = _widths(page)
+    # The open drawer floats over the map, so it doesn't lower the reader's limit.
+    toggle = page.get_by_role("button", name="Topics", exact=True)
+    toggle.click()
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "true")
+    _drag(page, reading, 10)
+    assert _widths(page)["reading"] == pytest.approx(full["body"] - 160, abs=2)
+    map_only = page.get_by_role("button", name="Map only")
+    map_only.click()
+    playwright.expect(map_only).to_have_attribute("aria-pressed", "true")
+    playwright.expect(map_only).to_have_attribute("title", "Show the reading pane")
+    playwright.expect(toggle).to_have_attribute("aria-expanded", "false")
+    playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
+    assert _widths(page)["map"] == pytest.approx(full["body"], abs=2)
+    # Map only here leaves the wide layout's Topics as it was.
+    page.set_viewport_size({"width": 1280, "height": 800})
+    playwright.expect(page.locator(".bp-dag-navigation")).to_be_visible()
+
+
+def test_a_width_no_drag_could_give_is_dropped_and_a_reader_saved_too_wide_leaves_the_map_160px(
+    desktop_page: object, site_url: str,
+) -> None:
+    """A reader saved on a wider screen leaves the map its 160px in each layout with a reader, Topics shown or not.
+
+    The choice is this site's: another site on the host hid its Topics, which stay shown here.
+    """
+    page = desktop_page
+    page.add_init_script("""localStorage.setItem('autoform:book-panes:v1:/', JSON.stringify({topics: -50, reading: 0.94}));
+      localStorage.setItem('autoform:book-panes:v1:/other-book/', JSON.stringify({topicsHidden: true}))""")
+    _open_site(page, site_url, _STATEMENT_PAGE)
+    shown = _widths(page)
+    assert shown["topics"] == pytest.approx(216, abs=2) and shown["map"] == pytest.approx(160, abs=2)
+    page.get_by_role("separator", name="Resize Topics").focus()
+    page.keyboard.press("Enter")
+    playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
+    assert _widths(page)["map"] == pytest.approx(160, abs=2)
+    page.set_viewport_size({"width": 1000, "height": 800})
+    playwright.expect(page.get_by_role("separator", name="Resize Topics")).to_be_hidden()
+    assert _widths(page)["map"] == pytest.approx(160, abs=2)
+
+
+def test_without_the_map_a_statement_picked_with_the_reader_hidden_focuses_the_filter(
+    desktop_page: object, site_url: str,
+) -> None:
+    page = _offline(desktop_page, site_url)
+    page.route("**/javascripts/project-map.js", lambda route: route.abort())
+    page.goto(f"{site_url}/{_STATEMENT_PAGE}")
+    playwright.expect(page.locator(".bp-dag-stage > .bp-dag-map-unavailable")).to_have_count(1)
+    playwright.expect(page.locator(".bp-reading-body > .bp-reading-source")).to_have_count(1)
+    page.get_by_role("separator", name="Resize the reading pane").focus()
+    page.keyboard.press("Enter")
+    playwright.expect(page.locator(".bp-reading-pane")).to_be_hidden()
+    _browse_contents(page, "All statements")
+    page.locator('.bp-dag-inventory-row[data-inventory-node-id="algebra/base"]').focus()
+    page.keyboard.press("Enter")
+    playwright.expect(page.locator(".bp-dag-filter-summary")).to_be_focused()
+
+
+def test_a_touch_screen_gets_24px_splitters_on_the_panes_edges(webkit_browser: object, site_url: str) -> None:
+    with _page(webkit_browser, viewport={"width": 1280, "height": 800}, has_touch=True) as page:
+        _open_site(page, site_url, _STATEMENT_PAGE)
+        for name, edge in (("Resize Topics", "right"), ("Resize the reading pane", "left")):
+            splitter = page.get_by_role("separator", name=name)
+            box = splitter.bounding_box()
+            pane = page.locator(".bp-dag-navigation" if edge == "right" else ".bp-reading-pane").bounding_box()
+            assert box["width"] == pytest.approx(24, abs=0.5), name
+            assert box["x"] + box["width"] / 2 == pytest.approx(pane["x"] + (pane["width"] if edge == "right" else 0), abs=1), name
+        # The edge moves as far as the pointer does, though pressed 8px off the splitter's middle.
+        topics = page.get_by_role("separator", name="Resize Topics").bounding_box()
+        start = _widths(page)
+        page.mouse.move(topics["x"] + topics["width"] / 2 + 8, topics["y"] + topics["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(topics["x"] + topics["width"] / 2 + 48, topics["y"] + topics["height"] / 2, steps=8)
+        page.mouse.up()
+        _paint_frame(page)
+        assert _widths(page)["topics"] == pytest.approx(start["topics"] + 40, abs=2)
+        # It still drags: the reader to its widest leaves the map 160px.
+        before = _widths(page)
+        _drag(page, page.get_by_role("separator", name="Resize the reading pane"), 10)
+        assert _widths(page)["reading"] == pytest.approx(before["body"] - before["topics"] - 160, abs=2)
+
+
+@pytest.mark.parametrize("site_url", [None, "tracks_lean: false"], indirect=True)
+def test_a_page_opened_with_the_reader_hidden_leaves_focus_where_it_was(desktop_page: object, site_url: str) -> None:
+    """Opening a page focuses nothing in its place: neither the filter nor search takes the focus the map would."""
+    page = desktop_page
+    page.add_init_script("localStorage.setItem('autoform:book-panes:v1:/', JSON.stringify({readingHidden: true}))")
+    _open_site(page, site_url, _STATEMENT_PAGE)
+    playwright.expect(page.locator(".bp-reading-pane")).to_be_hidden()
+    page.wait_for_function("() => document.querySelector('.bp-whole-map svg[tabindex=\"0\"]')")
+    _paint_frame(page)
+    assert page.evaluate("() => !document.activeElement.matches('.bp-dag-filter-summary, .bp-dag-search')")
+
+
+def test_topics_drags_wider_and_dragged_shut_comes_back_at_that_width(desktop_page: object, site_url: str) -> None:
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    topics = page.get_by_role("separator", name="Resize Topics")
+    start = _widths(page)
+    body = page.locator(".bp-dag-body").bounding_box()
+    _drag(page, topics, body["x"] + start["topics"] + 40)
+    wider = _widths(page)
+    assert wider["topics"] == pytest.approx(start["topics"] + 40, abs=3)
+    _drag(page, topics, body["x"] + 40)
+    playwright.expect(page.locator(".bp-dag-navigation")).to_be_hidden()
+    show = page.get_by_role("button", name="Show Topics")
+    playwright.expect(show).to_be_focused()
+    show.click()
+    _paint_frame(page)
+    assert _widths(page)["topics"] == pytest.approx(wider["topics"], abs=2)
+
+
+def test_a_stored_width_that_is_not_a_number_is_dropped(desktop_page: object, site_url: str) -> None:
+    page = desktop_page
+    page.add_init_script("localStorage.setItem('autoform:book-panes:v1:/', JSON.stringify({topics: 'wide', reading: 'x'}))")
+    _open_site(page, site_url, _STATEMENT_PAGE)
+    widths = _widths(page)
+    assert widths["topics"] == pytest.approx(216, abs=2)
+    assert widths["reading"] == pytest.approx(max(360, 0.39 * widths["body"]), abs=2)
+
+
+def test_forced_colours_keep_the_splitter_line_and_map_onlys_pressed_look(desktop_page: object, site_url: str) -> None:
+    page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
+    page.emulate_media(forced_colors="active")
+    highlight = page.evaluate("""() => { const probe = document.createElement('div'); probe.style.background = 'Highlight';
+      document.body.append(probe); const colour = getComputedStyle(probe).backgroundColor; probe.remove(); return colour; }""")
+    page.get_by_role("separator", name="Resize the reading pane").hover()
+    page.wait_for_function("""colour => getComputedStyle(document.querySelector('[aria-label="Resize the reading pane"]'), '::after')
+      .backgroundColor === colour""", arg=highlight, timeout=5_000)
+    map_only = page.get_by_role("button", name="Map only")
+    map_only.click()
+    playwright.expect(map_only).to_have_attribute("aria-pressed", "true")
+    # A 2px border marks it pressed, and its reach stays 44px.
+    assert map_only.evaluate("button => [getComputedStyle(button).borderTopWidth, getComputedStyle(button, '::after').top]") == [
+        "2px", "-8px"]
+
+
+def test_the_map_repacks_after_a_pane_drag_not_during_it(desktop_page: object, site_url: str) -> None:
+    """A drag that turns the stage from portrait to landscape repacks the map when it ends, not mid-drag."""
     page = _open_site(desktop_page, site_url, _STATEMENT_PAGE)
     page.get_by_role("separator", name="Resize Topics").focus()
     page.keyboard.press("Enter")

@@ -21,11 +21,12 @@ says what is matched.
   Read each hit's statement, or a library hit's signature, and the counts the
   output opens with; narrow a query whose count shows the limit cut it short. A
   line ending in `...` is shortened; the JSON output has it whole.
-- A refusal (exit 2) is not an empty result. The skill says what to do with one,
-  except a refusal that names a library, handled below.
-- A hit that is more general, a special case, or only similar does not replace
-  the result: add the article, depending on the hit where it is used. A result
-  may need several hits combined, such as a theorem and its converse.
+- A refusal (exit 2) is not an empty result. The skill says what to do with one;
+  a warning that names a library is handled below.
+- A blueprint hit that is more general, or any hit that is a special case or
+  only similar, does not replace the result: add the article, depending on the
+  hit where it is used. Library hits that together state the result, such as a
+  theorem and its converse, count as one hit that states it.
 
 ## Which libraries
 
@@ -36,16 +37,16 @@ If the listing fails, search the blueprint alone and tell the user once why no
 library was searched. Pass every package it reports as usable, and no other, to
 each search, even while the blueprint is empty, as `--library NAME`, together
 with `--lean-root` naming the same Lake project root. The others, such as a
-dependency without an index, are unchecked, as for a refused library: tell the
-user once, in one line, how many were left out for each reason the listing
+dependency without an index, are unchecked, as for a library a warning names: tell
+the user once, in one line, how many were left out for each reason the listing
 gives, and that whether they have the result is unknown.
 
-## A refusal that names a library
+## A warning that names a library
 
-A refusal that names a library (the CLI prints `error: library NAME: ...`) is
-not a blocker: rerun the same search without that library, continue, and tell
-the user which library was not searched, why, and that whether it has the
-result is unknown.
+A library the search cannot verify is left out, with
+`warning: library NAME: ...` on standard error (`refused` in `--json`), and the
+other results are still printed: continue, and tell the user which library was
+not searched, why, and that whether it has the result is unknown.
 
 ## Queries
 
@@ -69,16 +70,15 @@ statement, and treat that as the hit. The wanted entry is usually in the same
 module as the statement `def`: search the hit's module name, or its last
 component, as its own query.
 
-A `complete` hit that states an article's own result does not replace the
-article, and replaces proving the result only if it states it at full strength
-(see the search steps). Keep the article, declare the result in the project
-(`lean:` records its name on acceptance), and prove it from the library
-declaration. For a definition, the project's declaration keeps the keyword the
-article's `declaration:` names, copies the library declaration's modifiers (such
-as `noncomputable`), which the hit's `statement` in the JSON output shows, and
-is defined as the library's declaration, for example `def X := Lib.X`, never a
-second copy of its body. Do not set `mathlib: true`; it means the result was
-upstreamed into Mathlib.
+A `complete` hit for an article's own result does not replace the article. One
+that [states it](../../agent-review/references/roadmap-quality.md#evidence)
+replaces proving it: declare the result in the project (`lean:` records its name
+on acceptance), and prove it from the library declaration. For a definition, the
+project's declaration keeps the keyword the article's `declaration:` names,
+copies the library declaration's modifiers (such as `noncomputable`), which the
+hit's `statement` in the JSON output shows, and is defined as the library's
+declaration, for example `def X := Lib.X`, never a second copy of its body. Do
+not set `mathlib: true`; it means the result was upstreamed into Mathlib.
 
 A library hit is not a source. Cite the original source, which a hit's
 docstring may name (the full docstring is in the JSON output), as the

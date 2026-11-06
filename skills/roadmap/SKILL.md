@@ -59,8 +59,7 @@ and record each module and declaration name, with any separate literary
 provenance, under `blueprint/sources/`.
 
 Inventory and exposition are independent axes: a catalog ledger can close the
-inventory axis but does not make an area `DECOMPOSED`. A future-work slice
-cannot stand in for a repository-wide inventory; keep existing, wishlist,
+inventory axis but does not make an area `DECOMPOSED`. Keep existing, wishlist,
 conjectural, and planned mathematics in one book and DAG. `DECOMPOSED` means
 represented by declaration articles, so it may describe mathematics already
 implemented in Lean. A checked local declaration is valid grounding.
@@ -102,9 +101,9 @@ result and for each intermediate result its proof proves or cites, as the
   and leave `lean:` unset until Formalize declares the result in the project:
   `lean:` names only a declaration in the project's own Lean files.
 - A refusal (exit 2) is not an empty result: resolve what it reports without
-  adding the article, and search again; one that names a library is handled as
-  the search steps say. A dependency link to a page not yet written causes one,
-  so search for a whole batch before writing the first.
+  adding the article, and search again; a warning that names a library is
+  handled as the search steps say. A dependency link to a page not yet written
+  causes a refusal, so search for a whole batch before writing the first.
 - When another formalizable article already states the result, link to it from
   each article that needs it, under `## Depends on` or `## Proof depends on`,
   and from the coverage row, instead of adding a node.
@@ -178,14 +177,15 @@ statements](../../autoform_cli/reference/open-statements.md#open-statements)
 explains it. Change it only on the user's request and only once CI meets its
 requirements, and turn it back off only once no open statement remains.
 
-Assert `statement: formalized`, `proof: formalized`, or `mathlib: true` only
-after exact verification. For declaration leaves, record exact compiled names in
-`lean`. Set `proof: formalized` for a theorem or lemma only after checking that
-its proof is complete and contains no placeholder or proof-wanted mechanism. An
-axiom or wanted placeholder does not justify a formalized proof; a definition of
-a conjecture proposition formalizes its statement representation, not the
-conjecture. Set `mathlib: true` only for an exact verified upstream result. Hand
-deeper trust and axiom review to Agent Review.
+Assert `statement: formalized` or `proof: formalized` only after exact
+verification, and `mathlib: true` only when verified Mathlib declarations
+[state the result](../agent-review/references/roadmap-quality.md#evidence). For
+declaration leaves, record exact compiled names in `lean`. Set
+`proof: formalized` for a theorem or lemma only after checking that its proof is
+complete and contains no placeholder or proof-wanted mechanism. An axiom or
+wanted placeholder does not justify a formalized proof; a definition of a
+conjecture proposition formalizes its statement representation, not the
+conjecture. Hand deeper trust and axiom review to Agent Review.
 
 Use `catalog: module` only as a source inventory for one existing Lean module.
 It may accompany exposition, but names, signatures, status tables, and imports
@@ -229,10 +229,9 @@ Finish only when the adopted boundary has no `MAPPED` rows, every `DECOMPOSED`
 area links source-grounded declaration articles, every `INVENTORIED` area links
 exact catalogs, affected pages and the graph agree, and the latest commit
 contains every change from the pass; a repository inventory also needs every
-in-scope declaration reconciled. Do not stop after discovery, a coarse
-proposal, one chapter, or unchanged validation. Report the material delta,
-evidence, remaining blockers, and the next execution frontier, and for a
-repository inventory the existing/formalized versus wishlist/conjectural/planned
-counts and the reconciliation gaps. Before reporting, follow
+in-scope declaration reconciled. Report the material delta, evidence, remaining
+blockers, and the next execution frontier, and for a repository inventory the
+existing/formalized versus wishlist/conjectural/planned counts and the
+reconciliation gaps. Before reporting, follow
 [Debrief Orchestrator](../debrief-orchestrator/SKILL.md) with `--skill roadmap`.
 Mark an active Goal complete only after these conditions hold.

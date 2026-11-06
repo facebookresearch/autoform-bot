@@ -1,7 +1,6 @@
 # Faithfulness rubric
 
-Judge whether the Lean statement captures the source statement at full strength. Do not score proof
-quality here.
+Judge whether the Lean statement captures the source statement at full strength, not proof quality.
 
 ## Evidence
 

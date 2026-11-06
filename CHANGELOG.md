@@ -11,6 +11,19 @@ date when the release is tagged.
 
 ### Added
 
+- **Publication inventory.** `publication.json` says where each blueprint file
+  went (`inventory`): for every file the verified commit holds below the
+  blueprint, or else every file render read and each entry it skipped, its URL
+  on the site, the repository URL the site links instead, or why the site leaves
+  it out (`hidden`, `unpublished`, `generated`, `mathjax-config`,
+  `review-testimony`, `graph-input`, `not-utf8`, `canvas`, `unsupported-type` or
+  `not-captured`). A hidden or `published: false` folder is one entry, so
+  nothing in it is named. A file's role follows from its path: its first folder
+  (`roadmap`, `sources`, `coverage`), else `hidden` for a dot name, else
+  `other`. It also names the Autoform that rendered it, best effort (`autoform`:
+  its version, its commit when an install from Git or an unmodified checkout
+  records one, and its repository only on github.com). The schema stays
+  `autoform-publication/v3` (#658).
 - **Verify workflow off.** `init --no-verify-workflow` writes
   `.github/workflows/autoform-verify.yml` as a stub, for a project the
   generated workflow can't fit, such as one whose roadmap several Lake projects
@@ -73,13 +86,15 @@ date when the release is tagged.
   copied beside them. At a verified commit, a hidden note, the folder itself and
   its other files, such as scans, data or a type the site leaves out, are linked
   in the repository, a note's image of one keeps its text, with a warning, and
-  `render --review` accepts a passage cut from one. A folder below `sources/`
-  whose README says `published: false` stays off the site, as one below
-  `roadmap/` does, and every link into it, coverage evidence included, keeps its
-  text, with a warning; check's graph does not read the setting there, so render
-  and check warn about a README whose setting does not parse. The nav lists the
-  notes after Coverage, headed by `sources/README.md` when there is one, and the
-  landing page links that page beside the coverage view.
+  `render --review` accepts a passage cut from one; `publication.json`'s
+  inventory lists the notes and images as `published` and the other captured
+  files there as `linked`. A folder below `sources/` whose README says
+  `published: false` stays off the site, as one below `roadmap/` does, and every
+  link into it, coverage evidence included, keeps its text, with a warning;
+  check's graph does not read the setting there, so render and check warn about
+  a README whose setting does not parse. The nav lists the notes after Coverage,
+  headed by `sources/README.md` when there is one, and the landing page links
+  that page beside the coverage view.
 - **Check without site warnings.** `check --no-site-warnings` skips the warnings
   about the pages the site would publish, which `render` prints too. The
   generated `blueprint-pages.yml` passes it, since render runs two steps later,
@@ -89,12 +104,15 @@ date when the release is tagged.
   its workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
 - **Panes you can resize and hide.** In the book's workspace, Topics and the
   reading pane resize from splitters on their inner edges, by pointer or
-  keys, up to a reader of all but 160px of the map. A pane dragged nearly
+  keys, and the map always keeps at least 160px. A pane dragged nearly
   shut, or whose splitter takes Enter, hides, and a tab at the map's edge
   brings it back; "Map only" in the trail row hides both. The choice holds
-  on every page of the site, and a double-click on a splitter restores the
-  usual width. While a pane is dragged the map holds its camera, and it
-  settles once the drag ends. A phone keeps its sheet.
+  on every page of the site, as the theme's own choices do; a double-click,
+  Delete or a Mac's delete key on a splitter restores the usual width.
+  While a pane is dragged the map holds its camera, and it settles once the
+  drag ends. Where touch is the main pointer, as on a tablet, the splitters
+  are 24px wide, and Windows' forced colours keep the splitter's line and
+  Map only's pressed look. A phone keeps its sheet.
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project. Regions (authored areas, or the top-level
   chapters) open into their parts and parts into their results as the camera
@@ -134,9 +152,27 @@ date when the release is tagged.
 
 ### Changed
 
+- **Mathlib results in review.** Agent Review's roadmap rubric says when cited
+  declarations state an article's result, and has the reviewer quote their
+  hypotheses and conclusions before judging. A `mathlib: true` that fails this
+  caps the rubric's usability score at 2, and Roadmap sets `mathlib: true` only
+  when verified Mathlib declarations state the result (#668). Formalize's library
+  search rules, which Roadmap follows, use the same definition: a library hit
+  that needs only hypotheses the result gives or implies, or several that
+  together state it, is reused like an exact one (#679).
 - **The landing's coverage line** leads with the source areas split into
   statements: "5 source areas, all split into statements", or "3 of 5 source
   areas split into statements" before the other dispositions.
+- **Search warns about a library it cannot verify.** `search --library` leaves
+  out a library it cannot verify, with a `warning: library NAME:` line on
+  standard error and, in `--json`, an entry under the new `refused` key, and
+  still prints the blueprint's hits and the other libraries'. It exited 2 and
+  printed nothing (#325).
+- **Library index check.** `library index --check` counts an index as current
+  when only the Autoform version that wrote it differs, so a new release no
+  longer turns a publishing library's check red. An index another probe
+  revision made is stale, said without running Lean, and a stale index names
+  the records generation gives otherwise.
 - **Vault pages on Windows.** `autoform-visualize` writes the dependency
   summary and structure pages with LF line endings on Windows too, as on every
   other system, so a vault regenerated on both no longer flips them.
@@ -537,6 +573,21 @@ parse, with or without `--json`, and changes nothing else.
 
 ### Fixed
 
+- **Finished cards on the map.** A finished statement's card no longer prints
+  "fully proved" under its title, since its fill already says so; the line
+  names a status only for an unfinished statement.
+- **Library index guarantees.** `library index` and `--check` refuse a
+  toolchain the probe is not verified on before `lake translate-config` reads a
+  `lakefile.lean`, and refuse a source file with a dot in its path, or two files
+  that map to one module, which failed at the probe or dropped a file. Search
+  leaves out, with a warning, a library whose index names a module other than
+  the one its `source_file` holds, or a declaration whose name is not a Lean
+  name, such as one holding a newline. `--check` reads the index as search does,
+  so on POSIX a symbolic link, named pipe or directory there is stale rather
+  than followed or waited on, and a root under an unknown `~user` exits 2 rather
+  than 1 with a traceback. A refusal names a stale index before a merged or
+  edited one, the missing-manifest refusal no longer suggests `lake update`, and
+  the note naming an unsearched library quotes the flags it suggests.
 - **Reference links on chapters with a `<` in the title.** A `<` in a
   chapter's title alone left reference-style links in its prose shown as typed
   (#631).
