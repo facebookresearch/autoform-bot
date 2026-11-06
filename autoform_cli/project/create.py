@@ -427,7 +427,7 @@ def _version_warnings(version: _ProjectVersion) -> tuple[tuple[str, str], ...]:
             (
                 "project-release-unlisted",
                 f"{version.lean_toolchain} with Mathlib {version.mathlib_rev} does not name a bundled "
-                "known-good release by its tag or full commit, so no lake-manifest.json was written. "
+                "release by its tag or full commit, so no lake-manifest.json was written. "
                 "Run `lake update` in the project to resolve and lock Mathlib; it needs network access and "
                 "also downloads the Mathlib build cache. The project's lean-toolchain must match the "
                 "lean-toolchain of that Mathlib revision.",

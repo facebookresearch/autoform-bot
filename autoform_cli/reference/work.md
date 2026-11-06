@@ -77,12 +77,12 @@ modules, so run them only in a trusted checkout or sandbox.
 
 ## Work import-impact
 
-`import-impact` is advisory and edits no authored roadmap or Lean source, though
-its Lake freshness check may refresh build hash sidecars. By default the probe
-imports every module of the root libraries, so each must be built in this
-checkout (a build in another clone or worktree does not count): a missing or
-stale build exits 2 with the `lake build` command for those libraries, how many
-modules were checked, and the first one Lake found unbuilt. `affected_modules`
+`import-impact` is advisory and edits no authored roadmap or Lean source. Its
+Lake freshness check may refresh build hash sidecars and, with the artifact
+cache `project new` turns on, restore artifacts another checkout built from the
+same inputs. By default the probe imports every root library module: a missing
+or stale build exits 2 with the `lake build` command, how many modules were
+checked, and the first one Lake found unbuilt. `affected_modules`
 is `MODULE` and every loaded module that imports it, transitively, complete over
 the root libraries' Lake roots and globs. Modules that removing an import drops
 from the build are not listed. Like `work impact`, the probe refuses a
@@ -92,8 +92,8 @@ A non-project `MODULE` is refused first, naming the article's module if unique.
 
 Under `--module-scope import-closure` the candidates are `MODULE` and every
 root-package module whose source contains each component of a candidate's name,
-repeated until none is added; Lean loads them and what they import. Only those
-modules must be built, and stale-build advice names only them. An article owns a
+repeated until none is added. Lean loads the candidate roots and glob modules
+and what they import, and stale-build advice names only those. An article owns a
 declaration when one of its `lean:` names equals it or is a dotted prefix of it,
 so `affected_articles` may list more articles and `article_local` is always
 `false`; `affected_unowned_helpers` keep the default scope's rule, and
