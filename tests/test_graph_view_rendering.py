@@ -538,7 +538,7 @@ def test_explorer_head_switches_materials_palette_from_the_trail_row() -> None:
     assert "width: 32px; min-height: 32px;" in rule and "border: 0;" in rule
     # A drawn icon, not a glyph each fallback font sizes its own way; touch reaches 44px through ::after, not a taller row.
     assert ".bp-dag-viewer .bp-dag-theme svg { display: block; width: 18px; height: 18px;" in style
-    assert '.bp-dag-viewer .bp-dag-theme::after { content: ""; position: absolute; inset: -6px; }' in style and "position: relative;" in rule
+    assert '.bp-dag-viewer :is(.bp-dag-theme, .bp-dag-map-only)::after { content: ""; position: absolute; inset: -6px; }' in style and "position: relative;" in rule
     coarse = style.split("@media (pointer: coarse) {\n", 1)[1].split("\n}", 1)[0]
     assert ".bp-dag-theme" not in coarse and '"◐"' not in script
 
@@ -695,7 +695,7 @@ def test_focus_and_the_current_statement_do_not_borrow_status_blue() -> None:
     assert "color-mix(in srgb, var(--dag-link) 45%" not in style and "52%" not in style
     assert [rule.split(" {")[0] for rule in style.splitlines() if rule.startswith(".bp-dag-viewer") and ":focus-visible {" in rule] == [
         ".bp-dag-viewer :is(button, a, [tabindex]):focus-visible",
-        ".bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body, .bp-dag-sheet-handle):focus-visible",
+        ".bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body, .bp-dag-sheet-handle, .bp-dag-pane-tab):focus-visible",
     ]
     assert ":focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }" in style
     assert [rule for rule in style.splitlines() if "outline:" in rule and "focus-visible" in rule and "solid var(--dag-link)" not in rule] == []
@@ -728,6 +728,24 @@ def _contrast(first: str, second: str) -> float:
 
     high, low = sorted((luminance(first), luminance(second)), reverse=True)
     return (high + 0.05) / (low + 0.05)
+
+
+def test_the_pane_splitters_keep_their_targets_on_touch_and_their_marks_in_forced_colours() -> None:
+    """The splitters were 8px wide on a touch screen, and forced colours dropped their line and Map only's pressed look."""
+    style = dag_viewer._STYLE
+    # The line stays centred however wide the splitter is.
+    assert ".bp-dag-splitter::after { content: \"\"; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px;" in style
+    assert "@media (pointer: coarse) { .bp-dag-splitter { width: 24px; } }" in style
+    # Forced colours replace backgrounds, so the line and the pressed look use system colours, and a border for the latter.
+    forced = style.split("@media (forced-colors: active) {\n", 1)[1].split("\n}", 1)[0]
+    assert (".bp-dag-splitter:hover::after, .bp-dag-resizing .bp-dag-splitter:focus::after "
+            "{ background: Highlight; forced-color-adjust: none; }") in forced
+    assert ".bp-dag-viewer .bp-dag-map-only[aria-pressed=true] { border: 2px solid Highlight; }" in forced
+    # The border would take 4px of the pressed button's 44px reach.
+    assert ".bp-dag-viewer .bp-dag-map-only[aria-pressed=true]::after { inset: -8px; }" in forced
+    # A focused splitter shows the ring without its line, except while dragged.
+    assert ".bp-dag-splitter:focus-visible::after" not in style
+    assert ".bp-dag-splitter:hover::after, .bp-dag-resizing .bp-dag-splitter:focus::after { background: var(--dag-link); }" in style
 
 
 def test_dark_explorer_cards_read_against_the_page_toned_map() -> None:
