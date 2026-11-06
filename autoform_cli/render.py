@@ -81,6 +81,7 @@ from ._tree_snapshot import (
     _update_digest,
     bind_directory_tree,
 )
+from .annotations import LINKS_DIR
 from .approvals import approval_statuses
 from .coverage import (
     COVERAGE_DISPOSITIONS,
@@ -624,6 +625,7 @@ def _publication(
         if _relative(source, blueprint).as_posix() not in written_over
         and (
             _relative(source, blueprint).parts[:1] == (READBACKS_DIR,)
+            or _relative(source, blueprint).parts[0].casefold() == LINKS_DIR
             or source.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
             or (source.suffix.lower() in PAGE_SUFFIXES and not _is_utf8(snapshot[source]))
         )
@@ -771,6 +773,10 @@ def _publication(
             continue
         # The graph has read the pinned name lists too, and nothing on the site reads them.
         if relative.parent.as_posix() == PINNED_NAMES_FOLDER and relative.suffix == ".jsonl":
+            omitted[source] = "graph-input"
+            continue
+        # And the annotations, whose facts the pages show; spelled otherwise, loading warns and reads none.
+        if relative.parts[0].casefold() == LINKS_DIR:
             omitted[source] = "graph-input"
             continue
         if _resolve(source) in node_sources:
@@ -1527,8 +1533,9 @@ def load_publication_source(blueprint_dir: str | Path) -> tuple[str, Graph]:
     """Read the blueprint once; return its publication revision and the graph of those bytes."""
     blueprint = blueprint_root(blueprint_dir)
     snapshot, _nodes = _capture_blueprint(blueprint)
-    # The graph reads the articles, the atlas and the pinned name lists.
-    with _private_copy(snapshot, prefix=("roadmap/", "atlas.json", f"{PINNED_NAMES_FOLDER}/")) as (_root, copy):
+    # The graph reads the articles, the annotations, the atlas and the pinned name lists.
+    prefix = ("roadmap/", f"{LINKS_DIR}/", "atlas.json", f"{PINNED_NAMES_FOLDER}/")
+    with _private_copy(snapshot, prefix=prefix) as (_root, copy):
         return _source_revision(snapshot), _load_graph(copy, blueprint)
 
 
@@ -4041,6 +4048,9 @@ def _review_disclosures(
         or node_id not in whole.nodes
         or whole.nodes[node_id].source_sha256 != graph.nodes[node_id].source_sha256
     ]
+    # The annotations carry the articles' facts.
+    if whole.links_sha256 != graph.links_sha256:
+        edited.append(ReviewFinding("", "review-snapshot-changed", f"blueprint/links/ changed {changed}"))
     if edited:
         raise ReviewError(edited)
     bundle = build_review_bundle(whole, skeleton, macros=macros)
@@ -4108,13 +4118,14 @@ def _folded(name: str) -> str:
 def _left_out(cited: PurePosixPath, written_over: Collection[str]) -> bool:
     """Whether the site leaves out the captured file at ``cited``, a path in
     the blueprint as captured, as :func:`_publication` does: a file under
-    ``readbacks/``, the atlas, a file render writes its own over (one of
+    ``readbacks/`` or ``links/``, the atlas, a file render writes its own over (one of
     ``written_over``, the :func:`_site_paths`), or one that is neither a page
     nor a file the site copies. Notes under ``sources/`` count as published,
     on the site or at the verified commit."""
 
     return (
         cited.parts[:1] == (READBACKS_DIR,)
+        or cited.parts[0].casefold() == LINKS_DIR
         or cited.as_posix().casefold() == "atlas.json"
         or cited.as_posix() in written_over
         or cited.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)

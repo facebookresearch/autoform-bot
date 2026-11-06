@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ._fs import atomic_write
+from .annotations import LINKS_DIR, links_exist
 from .graph import GraphValidationError, load_graph
 from .markdown import blueprint_root
 
@@ -114,12 +115,21 @@ def write_article_ids(blueprint_dir: str | Path) -> tuple[ArticleIdentityEntry, 
     the plan was made from, so an article edited meanwhile is refused: every
     article is checked before the first is written, and again just before its
     own replacement. The plan is deterministic, so after such a refusal,
-    running the command again completes it.
+    running the command again completes it. Beside ``blueprint/links/`` it
+    writes nothing, and refuses when there is an ID to write, since frontmatter
+    beside an annotation is ignored.
     """
 
     plan = plan_article_ids(blueprint_dir)
     blueprint = blueprint_root(blueprint_dir)
     pending = [entry for entry in plan.entries if not entry.assigned]
+    if pending and links_exist(blueprint):
+        raise ArticleIdWriteError(
+            [
+                f"{LINKS_DIR}/ exists, where an article's facts, its ID among them, live in its annotation: give each "
+                "planned ID, which the command lists without --write, as its annotation's id; nothing written"
+            ]
+        )
     prepared: list[tuple[ArticleIdentityEntry, Path, bytes, int]] = []
     issues: list[str] = []
     for entry in pending:

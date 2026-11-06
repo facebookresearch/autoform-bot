@@ -19,6 +19,7 @@ from urllib.parse import unquote, urlsplit
 
 from . import _page_pool, abstraction, debrief, debrief_orchestrator, status
 from ._repository import git
+from .annotations import scan as scan_links
 from .approvals import ApprovalStatus, approval_statuses
 from .article_identity import ArticleIdWriteError, plan_article_ids, write_article_ids
 from .audit import audit_blueprint
@@ -1007,6 +1008,7 @@ def _check(args: argparse.Namespace) -> int:
         + list(graph.warnings)
         + informal_cycle_warnings(graph)
         + source_warnings
+        + scan_links(graph.blueprint_dir)
     ):
         print(f"warning: {warning}")
     # What the site would leave out or show as typed, and what would stop
