@@ -14,7 +14,7 @@ from autoform_cli.library.index import INDEX_FILE
 from autoform_cli.library.locate import LibraryError, read_workspace
 from autoform_cli.library.verify import Difference, load_library
 from autoform_cli.project import _snapshot
-from tests.library_fixture import MATHLIB_REV, REV, build_index, entry, make_library, manifest, write_index
+from tests.library_fixture import GOLDEN, MATHLIB_REV, REV, build_index, entry, make_library, manifest, write_index
 
 
 def _load(library, name: str = "atlas", index_path: Path | None = None):
@@ -36,6 +36,17 @@ def test_a_current_index_is_loaded_with_its_revision(tmp_path: Path) -> None:
     assert (verified.name, verified.revision) == ("atlas", REV)
     assert [item.name for item in verified.index.declarations] == ["Lib.Convex.separation"]
     assert verified.differences == ()
+
+
+def test_the_golden_index_is_loaded_as_published(tmp_path: Path) -> None:
+    # The consumer accepts the checkout whose index test_library_index pins byte for byte.
+    library = make_library(tmp_path, name="gold", sources={}, declarations=())
+    shutil.copytree(GOLDEN, library.root, dirs_exist_ok=True)
+
+    verified = _load(library, "gold")
+
+    assert (verified.name, verified.revision) == ("gold", REV)
+    assert verified.differences == (Difference("dependency", "batteries", "3" * 40, None),)
 
 
 def test_a_package_in_a_sub_directory_or_with_a_quoted_name_is_loaded(tmp_path: Path) -> None:
