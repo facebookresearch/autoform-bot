@@ -154,14 +154,14 @@ A wanted target matches the intent its command mirrors: `theorem_wanted` and
 wanted target backs a proved article: `lean-target-wanted` reports one named,
 directly or through an alias, by an article that records `proof: formalized`, or
 by a definition that records `statement: formalized`, since a stated definition
-counts as proved, and warns about one backing a theorem's `statement:
-formalized`, which no dependent can cite. A placeholder carries no `sorry`, so
-no `sorry` check catches one. The generated verify workflow's kernel-trust audit
-passes a `lean:` name that resolves only to a root-package placeholder, or a
-public alias of one, only for an article the assumption contract records as
-`stated`, `can_prove`, `can_state`, `planned` or `not_ready`; any other state
-fails, including `mathlib` and an unknown one. Any other `private` declaration
-is reported as not a declaration of the Lean build.
+counts as proved. One behind an open statement warns, since no dependent can
+cite it. A placeholder carries no `sorry`, so no `sorry` check catches one. The
+generated verify workflow's kernel-trust audit passes a `lean:` name that
+resolves only to a root-package placeholder, or a public alias of one, only for
+an article the assumption contract records as `stated`, `can_prove`,
+`can_state`, `planned` or `not_ready`; any other state fails, including
+`mathlib` and an unknown one. Any other `private` declaration is reported as not
+a declaration of the Lean build.
 
 ### Warnings
 
@@ -181,14 +181,14 @@ row's links that reach no declaration leaf; `duplicate-lean-target`, at each
 target involved, names the others taking the same credit; `node-too-large`, at
 the node's article, gives its span against the project's median; and
 `invalid-implementation-note`, at the note or folder, gives `check`'s warning.
-A broken link earlier versions missed, and a theorem's wanted target, warn under
-their finding's code instead. A target (a leaf carrying `declaration:`)
-recording `statement: formalized` takes progress credit for its first `lean:`
-name, and a `mathlib: true` one Mathlib credit for its first
-`mathlib_declaration` name, compared as Lean names: `_root_.` and `«»` quoting
-drop out, and `«x.y»` stays one component. Later names, catalogs, containers and
-a target recording neither, such as a `statement: retracted` placeholder left by
-a migration, take no credit.
+A broken link earlier versions missed warns under its finding's code instead,
+and an open statement's wanted target under `lean-target-wanted`. A target (a
+leaf carrying `declaration:`) recording `statement: formalized` takes progress
+credit for its first `lean:` name, and a `mathlib: true` one Mathlib credit for
+its first `mathlib_declaration` name, compared as Lean names: `_root_.` and `«»`
+quoting drop out, and `«x.y»` stays one component. Later names, catalogs,
+containers and a target recording neither, such as a `statement: retracted`
+placeholder left by a migration, take no credit.
 
 ### Structure
 

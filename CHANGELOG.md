@@ -178,10 +178,11 @@ date when the release is tagged.
 
 ### Changed
 
-- **Audit warns about a theorem a wanted placeholder states.** With
-  `--lean-root`, `audit` warns under `lean-target-wanted` about a theorem that
-  records only `statement: formalized` against a `theorem_wanted` or
-  `proof_wanted` target, which no dependent can cite. `clean` does not change.
+- **Audit warns about an open statement a wanted placeholder states.** Under
+  `open_statements: allowed`, `audit` with `--lean-root` warns under
+  `lean-target-wanted` about a theorem that records only `statement: formalized`
+  against a `theorem_wanted` or `proof_wanted` target, which no dependent can
+  cite. `clean` does not change.
 - **Setup's library rule and Formalize's import-impact rerun.** For a library
   outside the catalog, Setup writes the Lean version with its `v`, as
   `project new` requires, and asks when the library's revision is unknown.

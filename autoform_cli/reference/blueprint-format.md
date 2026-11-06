@@ -136,7 +136,7 @@ lists and, for a name they do not find, say that a generated name belongs in
 the ledger. They cannot prove the list omits no newly added public
 declaration; completeness remains an authored assertion. `audit --lean-root`
 applies the [elaboration-limit](validation-and-audit.md#elaboration-limits)
-warnings and `lean-target-wanted` to a catalog; the deprecation,
+warnings and the `lean-target-wanted` finding to a catalog; the deprecation,
 declaration-kind, and node-size checks apply only to declaration articles.
 
 Versioned implementation notes live at
