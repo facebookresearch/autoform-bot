@@ -124,18 +124,22 @@ date when the release is tagged.
   to send every note to the repository (#593). Images under `sources/` are
   copied beside them. At a verified commit, a hidden note, the folder itself and
   its other files, such as scans, data or a type the site leaves out, are linked
-  in the repository, a note's image of one keeps its text, with a warning, and
-  `render --review` accepts a passage cut from one it reads, which a hidden one
-  is not; `publication.json`'s inventory lists the notes and images as
-  `published` and the other captured files there as `linked`. A folder below
-  `sources/` whose README says `published: false` stays off the site, as one
-  below `roadmap/` does, and every link into it, coverage evidence included,
-  keeps its text, with a warning. Check's graph does not read the setting there,
-  so render and check warn about a README whose setting does not parse, and
-  about `published` where it takes no effect: in `sources/README.md`, another
-  spelling of a README, or a note's frontmatter. The nav lists the notes after
-  Coverage, headed by `sources/README.md` when there is one, and the landing
-  page links that page beside the coverage view.
+  in the repository; a link to a file there that the commit lacks, such as a
+  scan kept out of git, keeps only its text, with a warning, rather than failing
+  the strict build. A note's image of a linked file keeps its text, with a
+  warning, and `render --review` accepts a passage cut from one it reads, which
+  a hidden one is not; `publication.json`'s inventory lists the notes and images
+  as `published` and the other captured files there as `linked`. A reference
+  definition in a quote or a list item moves as any other does. A folder below
+  `sources/` whose README says `published: false` stays off the site, with or
+  without a verified commit, as one below `roadmap/` does, and every link into
+  it, coverage evidence included, keeps its text, with a warning;
+  `render --review` refuses a passage from it. Check's graph does not read the
+  setting there, so render and check warn about a README whose setting does not
+  parse, and about a `published: false` where it takes no effect: in
+  `sources/README.md`, another spelling of a README, or a note's frontmatter.
+  The nav lists the notes after Coverage, headed by `sources/README.md` when
+  there is one, and the landing page links that page beside the coverage view.
 - **Check without site warnings.** `check --no-site-warnings` skips the warnings
   about the pages the site would publish, which `render` prints too. The
   generated `blueprint-pages.yml` passes it, since render runs two steps later,

@@ -42,6 +42,7 @@ import json
 import os
 import re
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import groupby
@@ -368,8 +369,7 @@ def _links(
                 start = masked.find("[", start + 1, stop)
                 continue
             if not image:
-                if begin == 0:
-                    links.append((start, link[0]))
+                links.append((start, link[0]))
                 if reading_images:
                     ranges.append((start + 1, close))
             elif reading_images and inline is None:
@@ -1360,14 +1360,15 @@ def local_target_issue(
     *,
     label: str,
     unpublished: tuple[Path, ...] = (),
-    accepted: tuple[Path, ...] = (),
+    accepted: Mapping[Path, frozenset[str] | None] | None = None,
 ) -> tuple[str, str] | None:
     """Return ``(code, reason)`` when a local link does not resolve, or names a path render omits.
 
     ``source_path`` is the file containing the link, ``boundary`` the directory
     the link may not escape, and ``unpublished`` the folders render leaves out.
-    A link into one of ``accepted``, folders render leaves out but whose links
-    it publishes as their text, is fine. External schemes are the reader's
+    A link to one of ``accepted``, files render leaves out but whose links it
+    publishes as their text, is fine, though not with a fragment that names
+    none of the anchors it maps the file to. External schemes are the reader's
     problem and are reported as fine. A fragment on a Markdown target must
     name a real heading.
     """
@@ -1398,7 +1399,15 @@ def local_target_issue(
     if any(is_within(spelled, folder) for folder in unpublished):
         reason = f"{label} link names an unpublished folder, which render omits: {target!r}"
         return f"unpublished-{label}-target", reason
-    if any(is_within(spelled, folder) for folder in accepted):
+    # A `..` after a name, as in `nope/../idea.md`, resolves only where that
+    # name exists, which the copy cannot say for a folder it leaves out, so
+    # such a spelling takes the checks below.
+    steps = Path(raw_path).parts
+    leading = next((index for index, step in enumerate(steps) if step != ".."), len(steps))
+    if accepted and spelled in accepted and ".." not in steps[leading:]:
+        anchors = accepted[spelled]
+        if split.fragment and anchors is not None and unquote(split.fragment) not in anchors:
+            return f"{label}-anchor-not-found", f"{label} link fragment does not resolve: {target!r}"
         return None
     candidate = resolved_path(source_path.parent / raw_path if raw_path else source_path)
     if candidate is None:
@@ -1639,6 +1648,7 @@ __all__ = [
     "mask_code_and_comments",
     "mask_fences_and_comments",
     "published_tables",
+    "reference_images",
     "relative_link",
     "render_html",
     "render_tree",

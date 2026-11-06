@@ -2674,6 +2674,45 @@ def test_coverage_evidence_in_an_unpublished_folder(tmp_path: Path, folder: str)
 
 
 @pytest.mark.parametrize(
+    ("target", "issue"),
+    [
+        ("../sources/drafts/idea.md#idea", None),
+        ("../sources/drafts/gone.md", "coverage link does not resolve to a file: '../sources/drafts/gone.md'"),
+        ("../sources/drafts/idea.md#gone", "coverage link fragment does not resolve: '../sources/drafts/idea.md#gone'"),
+        (
+            "../sources/drafts/nope/../idea.md",
+            "coverage link does not resolve to a file: '../sources/drafts/nope/../idea.md'",
+        ),
+    ],
+    ids=["a-heading-it-has", "a-missing-file", "a-missing-heading", "a-step-back-out-of-a-missing-folder"],
+)
+def test_coverage_evidence_in_an_unpublished_folder_below_sources_must_resolve(
+    tmp_path: Path, target: str, issue: str | None
+) -> None:
+    """Render leaves the folder out of its copy, yet evidence there must name a
+    file the folder holds, and a heading it has, as render required before
+    such a folder stayed off the site, and as audit does."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "sources/drafts").mkdir(parents=True)
+    (blueprint / "sources/drafts/README.md").write_text("---\npublished: false\n---\n\n# Drafts\n", encoding="utf-8")
+    (blueprint / "sources/drafts/idea.md").write_text("# Idea\n", encoding="utf-8")
+    (blueprint / "coverage/README.md").write_text(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        f"| Top | DECOMPOSED | [Top](../roadmap/top.md), from [the idea]({target}). |\n",
+        encoding="utf-8",
+    )
+
+    if issue is None:
+        render_site(blueprint, tmp_path / "out", lean_root=project)
+        assert "from the idea." in (tmp_path / "out/coverage/README.md").read_text(encoding="utf-8")
+        return
+    with pytest.raises(PublicationError) as raised:
+        render_site(blueprint, tmp_path / "out", lean_root=project)
+    assert raised.value.issues == (f"coverage contract line 5: {issue}",)
+
+
+@pytest.mark.parametrize(
     ("readme", "issue"),
     [
         ("---\npublished: off\n---\n\n# Drafts\n", "sources/drafts/README.md:2: 'published' accepts only true or false"),
@@ -2684,8 +2723,9 @@ def test_coverage_evidence_in_an_unpublished_folder(tmp_path: Path, folder: str)
             "sources/drafts/README.md: sets published outside its frontmatter",
         ),
         ("---\nPublished: false\n---\n\n# Drafts\n", "sources/drafts/README.md:2: unsupported frontmatter key 'Published'"),
+        ("---\npublished: maybe\n---\n\n# Drafts\n", "sources/drafts/README.md:2: 'published' accepts only true or false"),
     ],
-    ids=["value", "unterminated", "no-frontmatter", "after-another-key", "key-case"],
+    ids=["value", "unterminated", "no-frontmatter", "after-another-key", "key-case", "maybe"],
 )
 def test_a_sources_readme_whose_published_setting_does_not_parse_is_warned_about(
     tmp_path: Path, readme: str, issue: str
@@ -2720,6 +2760,8 @@ def test_a_sources_readme_whose_published_setting_does_not_parse_is_warned_about
         ("sources/paper.md", "---\npublished: off\n---\n\n# Kept\n", "the note"),
         ("sources/notes.md", "# Kept\n\npublished: no\n", None),
         ("sources/book.md", "---\npublished: 2012\n---\n\n# Kept\n", None),
+        ("sources/paper.md", "---\npublished: true\n---\n\n# Kept\n", None),
+        ("sources/README.md", "---\npublished: true\n---\n\n# Kept\n", None),
     ],
     ids=[
         "sources-readme",
@@ -2733,15 +2775,17 @@ def test_a_sources_readme_whose_published_setting_does_not_parse_is_warned_about
         "note-value",
         "note-text",
         "note-year",
+        "note-yes",
+        "sources-readme-yes",
     ],
 )
 def test_published_where_it_takes_no_effect_below_sources_is_warned_about(
     tmp_path: Path, name: str, content: str, published: str | None
 ) -> None:
-    """Only a README.md below sources/ keeps its folder off the site, so a
-    published setting anywhere else there is warned about, whether or not it
-    parses, as is a README's publish; a note's text, or a year in its
-    frontmatter, sets nothing."""
+    """Only a README.md below sources/ keeps its folder off the site, so a no
+    anywhere else there is warned about, whether or not it parses, as is a
+    README's publish; a yes, which the site does anyway, a note's text and a
+    year in its frontmatter are not."""
     project = _with_source_notes(tmp_path)
     blueprint = project / "blueprint"
     (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
@@ -2866,6 +2910,8 @@ def test_a_notes_image_of_a_file_the_site_links_in_the_repository_keeps_its_text
     sources = project / "blueprint/sources"
     (sources / "scan.pdf").write_bytes(b"%PDF-1.4\n")
     (sources / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (sources / ".figures").mkdir()
+    (sources / ".figures/h.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     _edit(
         sources / "paper.md",
         "Transcribed statements from the paper.",
@@ -2929,6 +2975,11 @@ def test_a_notes_reference_image_of_a_file_the_site_links_in_the_repository_keep
         ("## Figures\n[h]: <diagram copy.svg>\n\n![Copy][h]", "Copy\n", "<diagram copy.svg>"),
         ("![Copy][w]\n\n[w]: <diagram copy.svg>\nsays which copy.", "Copy\n", "<diagram copy.svg>"),
         ("![Quoted][q] here\n\n> [q]: diagram.svg", "Quoted here", "diagram.svg"),
+        ("![Listed][l] here\n\n- [l]: diagram.svg", "Listed here", "diagram.svg"),
+        ("![Listed][l] here\n\n- [l]: diagram.svg\n  carried on", "Listed here", "diagram.svg"),
+        ("![Listed][l] here\n\n- > [l]: diagram.svg", "Listed here", "diagram.svg"),
+        ("![Quoted][q] here\n\n>\t[q]: diagram.svg", "Quoted here", "diagram.svg"),
+        ("![Copy][x]\n\nSome text\n[x]: <./diagram copy.svg>", "![Copy][x]", None),
         ("![Quoted][q] here\n\n> [q]:\tdiagram.svg", "Quoted here", "diagram.svg"),
         ("![#3 diagram][d]", "\\#3 diagram\n", "diagram.svg"),
         ("![ > 1. diagram](diagram.svg)", " \\> 1. diagram\n", "diagram.svg"),
@@ -2950,6 +3001,11 @@ def test_a_notes_reference_image_of_a_file_the_site_links_in_the_repository_keep
         "definition-under-a-heading",
         "definition-opening-a-paragraph",
         "definition-in-a-quote",
+        "definition-in-a-list-item",
+        "definition-in-a-list-item-carried-on",
+        "definition-in-a-quote-in-a-list-item",
+        "definition-after-a-quote-marker-and-a-tab",
+        "definition-carrying-on-a-paragraph",
         "definition-in-a-quote-with-a-tab",
         "hash",
         "inline-quote-marker",
@@ -5325,13 +5381,194 @@ def test_a_query_on_a_source_link_is_kept_out_of_the_file_name(tmp_path: Path) -
     assert "[the note](../sources/paper.md?plain=1#L3)" in chapter
 
 
-def test_a_missing_source_note_keeps_the_link_a_strict_build_rejects(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("page", "body", "kept", "warning"),
+    [
+        (
+            "roadmap/top.md",
+            "See [lemma 3](../sources/lemma-3.md).",
+            "See lemma 3.",
+            "top: links to '../sources/lemma-3.md', which the verified commit does not hold, so the site does not "
+            "link it",
+        ),
+        (
+            "sources/paper.md",
+            "See [p. 12](scan.pdf#page=12).",
+            "See p. 12.",
+            "sources/paper.md: links to 'scan.pdf#page=12', which the verified commit does not hold, so the site "
+            "does not link it",
+        ),
+        (
+            "sources/paper.md",
+            "See ![the plate](plate.png).",
+            "See the plate.",
+            "sources/paper.md: shows 'plate.png', which the verified commit does not hold, so it keeps only the "
+            "image's text",
+        ),
+        (
+            "sources/paper.md",
+            "See ![the plate][p].\n\n[p]: plate.png",
+            "See the plate.",
+            "sources/paper.md: shows 'plate.png', which the verified commit does not hold, so it keeps only the "
+            "image's text",
+        ),
+    ],
+    ids=["a-missing-note-from-a-chapter", "a-scan-kept-out-of-git", "an-image", "a-reference-image"],
+)
+def test_a_link_to_a_file_the_verified_commit_lacks_under_sources_keeps_its_text(
+    tmp_path: Path, page: str, body: str, kept: str, warning: str
+) -> None:
     """Every path under `sources/` went to the repository, so a missing note got
-    a link that 404s. Its site-relative link names a page the site does not
-    publish, so `mkdocs build --strict` fails instead of deploying it."""
-    chapter, _ = _render_statement_link(tmp_path, "[lemma 3](../sources/lemma-3.md)")
+    a link that 404s; kept on the site, it failed the strict build the Pages
+    workflow runs, which every note's links meet once notes are pages, though
+    a scan kept out of git builds locally. So the link keeps its text, with a
+    warning naming the file, and an image, inline or by reference, its own."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    if page == "roadmap/top.md":
+        _edit(blueprint / page, "The main result.", f"The main result. {body}")
+    else:
+        _edit(blueprint / page, "Transcribed statements from the paper.", body)
+    ref = _commit_project(project)
 
-    assert "[lemma 3](../sources/lemma-3.md)" in chapter
+    report = render_site(blueprint, tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    published = "roadmap/README.md" if page == "roadmap/top.md" else page
+    assert kept in (tmp_path / "out" / published).read_text(encoding="utf-8")
+    assert warning in report.warnings
+
+
+def test_a_file_the_commit_holds_but_the_checkout_lacks_is_linked_at_the_commit(tmp_path: Path) -> None:
+    """What the commit holds is read from the commit, so a scan or a note
+    deleted from the checkout after it was committed, or left out of a sparse
+    one, is linked at the commit, as a full checkout links it, not reported
+    missing; the site has no page for the note."""
+    project = _with_source_notes(tmp_path)
+    sources = project / "blueprint/sources"
+    (sources / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+    (sources / "other.md").write_text("---\n---\n\n# Other\n", encoding="utf-8")
+    _edit(
+        sources / "paper.md",
+        "Transcribed statements from the paper.",
+        "See [p. 12](scan.pdf#page=12) and [the other note](other.md).",
+    )
+    ref = _commit_project(project)
+    (sources / "scan.pdf").unlink()
+    (sources / "other.md").unlink()
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    note = (tmp_path / "out/sources/paper.md").read_text(encoding="utf-8")
+    repository = f"{_REPOSITORY}/blob/{ref}/blueprint/sources"
+    assert f"See [p. 12]({repository}/scan.pdf#page=12) and [the other note]({repository}/other.md)." in note
+    assert not [warning for warning in report.warnings if "does not hold" in warning]
+
+
+def test_a_hidden_source_note_the_commit_lacks_keeps_its_text(tmp_path: Path) -> None:
+    """Capture skips hidden files, so render verifies a commit that lacks an
+    uncommitted hidden note, whose repository link would 404. What the commit
+    holds is read from the commit, so the link keeps its text, with a warning,
+    as one to any file the commit lacks does."""
+    project = _with_source_notes(tmp_path)
+    top = project / "blueprint/roadmap/top.md"
+    _edit(top, "The main result.", "The main result. See [the draft](../sources/.draft.md).")
+    ref = _commit_project(project)
+    (project / "blueprint/sources/.draft.md").write_text("---\n---\n\n# Draft\n", encoding="utf-8")
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    assert "See the draft." in (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert (
+        "top: links to '../sources/.draft.md', which the verified commit does not hold, so the site does not link it"
+        in report.warnings
+    )
+
+
+def test_without_the_commits_file_list_a_hidden_source_note_keeps_its_repository_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When Git does not list the commit, the copy says what it holds, and the
+    copy has no hidden path, so a hidden note keeps its repository link."""
+    monkeypatch.setattr(render_module, "tracked_files", lambda *_args: None)
+
+    chapter, commit = _render_statement_link(tmp_path, "[the draft](../sources/.draft.md)", notes=(".draft.md",))
+
+    assert f"[the draft]({_REPOSITORY}/blob/{commit}/blueprint/sources/.draft.md)" in chapter
+
+
+@pytest.mark.parametrize(
+    ("definition", "published"),
+    [
+        ("> [s]: scan.pdf", "> [s]: {scan}"),
+        ("- [s]: scan.pdf", "- [s]: {scan}"),
+        ("1. [s]: scan.pdf", "1. [s]: {scan}"),
+        ("> - [s]: scan.pdf", "> - [s]: {scan}"),
+        ("- > [s]: scan.pdf", "- > [s]: {scan}"),
+        ("1. - [s]: scan.pdf", "1. - [s]: {scan}"),
+        (">\t[s]: scan.pdf", ">   [s]: {scan}"),
+        ("- [s]: scan.pdf\n  carried on", "- [s]: {scan}\n  carried on"),
+        ("- [w]: https://example.com\n  Our [copy of\n  the scan](scan.pdf).", "Our [copy of\n  the scan]({scan})."),
+        (
+            "- [w]: https://example.com\n  [v]: https://example.org\n  Our [copy of\n  the scan](scan.pdf).",
+            "Our [copy of\n  the scan]({scan}).",
+        ),
+        ("- [s]: missing.pdf\n- after", "* \n- after"),
+        ("- The book.\n- [s]: missing.pdf", "- The book.\n* "),
+        ("Text.\n- [s]: scan.pdf", "Text.\n- [s]: scan.pdf"),
+    ],
+    ids=[
+        "quote",
+        "bullet",
+        "ordered",
+        "quoted-bullet",
+        "quote-in-an-item",
+        "nested-item",
+        "tab-after-a-quote-marker",
+        "carried-on",
+        "wrapped-link-carried-on",
+        "wrapped-link-after-two-definitions",
+        "dropped",
+        "dropped-from-a-later-item",
+        "carrying-on-a-paragraph",
+    ],
+)
+def test_a_definition_in_a_quote_or_a_list_item_moves_as_any_other(
+    tmp_path: Path, definition: str, published: str
+) -> None:
+    """The site reads a definition in a quote or a list item too, after any
+    order of markers and once tabs are expanded, so one there naming a scan
+    under sources/ points at the repository at a verified commit, where it
+    named a file the site lacks and failed the strict build. The lines an item
+    carries on with are one paragraph, so a link wrapped there moves too. One
+    it drops leaves its item empty, as on the site, with `*` for `-`, which on
+    a later line would underline the item before as a heading. A marker that
+    carries on a paragraph opens nothing, so that line stays text."""
+    project = _with_source_notes(tmp_path)
+    sources = project / "blueprint/sources"
+    (sources / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+    _edit(sources / "paper.md", "Transcribed statements from the paper.", f"See [the scan][s].\n\n{definition}")
+    ref = _commit_project(project)
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    note = (tmp_path / "out/sources/paper.md").read_text(encoding="utf-8")
+    assert published.format(scan=f"{_REPOSITORY}/blob/{ref}/blueprint/sources/scan.pdf") in note
+
+
+def test_a_wrapped_link_after_a_list_items_definition_still_moves(tmp_path: Path) -> None:
+    """A list item that opens with a definition goes on in a paragraph the site
+    reads as one, so a link whose text wraps there still moves; read a line at
+    a time, it kept naming a node file its chapter absorbs."""
+    project = _project(tmp_path)
+    _edit(
+        project / "blueprint/roadmap/top.md",
+        "The main result.",
+        "The main result.\n\n- [w]: https://example.com/book\n  It uses [the base\n  object](base.md).",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert "It uses [the base\n  object](#base)." in (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
 
 
 def test_a_hidden_source_note_keeps_its_repository_link(tmp_path: Path) -> None:

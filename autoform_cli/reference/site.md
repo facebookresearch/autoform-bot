@@ -46,14 +46,14 @@ Besides its Markdown pages, a vault publishes only images (`.png`, `.jpg`,
 `.jpeg`, `.gif`, `.webp`, `.avif`, `.bmp`, `.ico`), `.pdf`, and plain-text
 `.txt`, `.csv`, `.json`, `.bib`, `.tex`, and `.lean` files, whatever the case of
 the suffix. The site leaves out any other file under `blueprint/`, such as an
-`.html` page or an `.svg`, and `check` and `render` warn about it by path,
-saying what to do. An Obsidian `.canvas` file, a [pinned name
-list](pinned-names.md) and [`links/`](links.md) are left out silently, as
-`.obsidian` is, and a Markdown page that is not UTF-8 with a warning. At a
-verified commit, `sources/` publishes only notes and images and links the rest
-there. A link to a file the site leaves out, a hidden path outside `sources/`,
-or a file in a `published: false` folder keeps only its text; `check` and
-`render` warn about each such link to a hidden path or an unpublished folder.
+`.html` page or an `.svg`, and `check` and `render` warn about it by path. An
+Obsidian `.canvas` file, a [pinned name list](pinned-names.md) and
+[`links/`](links.md) are left out silently, as `.obsidian` is, and a Markdown
+page that is not UTF-8 with a warning. At a verified commit, `sources/`
+publishes only notes and images and links any other file the commit holds there.
+A link to a file the site leaves out, a hidden path outside `sources/`, or a
+file in a `published: false` folder keeps only its text; `check` and `render`
+warn about each such link to a hidden path or an unpublished folder.
 
 ## MathJax
 

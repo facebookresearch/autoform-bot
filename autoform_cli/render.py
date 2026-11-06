@@ -151,6 +151,7 @@ from .markdown import (
     mask_fences_and_comments,
     header_title,
     link_targets,
+    markdown_anchors,
     name_text,
     only_links,
     page_title,
@@ -212,6 +213,11 @@ _LINK_DEFINITION = re.compile(
     r'(?P<target><[^>\r\n]+>|[^\s]+)'
     r'(?P<rest>[ \t]*(?:(?P<quote>["\'])(?:.*)(?P=quote)[ \t]*|\(.*\)[ \t]*)?)$'
 )
+#: Quote and list markers, in any order, before a definition the site reads in
+#: a quote or a list item, matched once tabs are expanded. The block reader
+#: joins a line that carries on a paragraph to it, so a marker on a line of its
+#: own opens a quote or an item.
+_DEFINITION_CONTAINER = re.compile(r"^(?: {0,3}(?:> ?|(?:[*+-]|\d+\.) +))+")
 #: A block marker an image's kept text may start with: a heading or quote
 #: marker, a bullet or rule character, or an ordered item's period.
 _KEPT_TEXT_MARKER = re.compile(r"^ {0,3}\d*(?P<char>(?<=\d)\.|(?<!\d)[#>*+-])")
@@ -528,6 +534,32 @@ def _unpublished_folders(snapshot: TreeSnapshot, root: Path) -> tuple[Path, ...]
     return tuple(root / name for name, kind in snapshot.omitted if kind == "unpublished")
 
 
+def _files_left_out(folders: Sequence[Path], copy: Path, blueprint: Path) -> dict[Path, frozenset[str] | None]:
+    """The files of *folders*, folders the copy at *copy* leaves out, where the
+    copy would hold them, read from *blueprint* itself, as capture skips them:
+    each with its heading anchors when it is a Markdown page, so evidence there
+    must name a file the folder holds, and a heading it has, as anywhere else."""
+
+    files: dict[Path, frozenset[str] | None] = {}
+    for folder in folders:
+        original = blueprint / _relative(folder, copy)
+        for root, directories, names in os.walk(original):
+            # Capture skips hidden paths and does not follow a symbolic link.
+            directories[:] = [name for name in directories if not name.startswith(".")]
+            for name in names:
+                path = Path(root) / name
+                if name.startswith(".") or path.is_symlink() or not path.is_file():
+                    continue
+                anchors = None
+                if path.suffix.casefold() == ".md":
+                    try:
+                        anchors = frozenset(markdown_anchors(path))
+                    except (OSError, UnicodeError):
+                        pass
+                files[Path(os.path.normpath(folder.resolve() / path.relative_to(original)))] = anchors
+    return files
+
+
 @dataclass(frozen=True, slots=True)
 class _Publication:
     """What render publishes from a blueprint's own files, and what it reports."""
@@ -695,6 +727,11 @@ def _publication(
             f"{label}: shows {target!r}, which the site links in the repository rather than copying, so it keeps "
             "only the image's text"
             if isinstance(target, _RepositoryImage)
+            else f"{label}: shows {target!r}, which the verified commit does not hold, so it keeps only the "
+            "image's text"
+            if isinstance(target, _MissingSourceImage)
+            else f"{label}: links to {target!r}, which the verified commit does not hold, so the site does not link it"
+            if isinstance(target, _MissingSource)
             else f"{label}: links to {target!r}, which is hidden or in an unpublished folder, so the site keeps "
             "only the link's text"
             for target in dict.fromkeys(dropped)
@@ -1013,7 +1050,9 @@ def render_site(
         omitted = _unpublished_folders(snapshot, copy)
         below_sources = tuple(folder for folder in omitted if _relative(folder, copy).parts[:1] == (SOURCES_DIR,))
         coverage, coverage_issues = load_coverage(
-            copy, unpublished=tuple(folder for folder in omitted if folder not in below_sources), accepted=below_sources
+            copy,
+            unpublished=tuple(folder for folder in omitted if folder not in below_sources),
+            accepted=_files_left_out(below_sources, copy, blueprint),
         )
         if coverage_issues:
             raise PublicationError(
@@ -1087,7 +1126,7 @@ def render_site(
         # hidden note or folder that stays off the site. The folder is linked then.
         if not sources and tracked is not None and SOURCES_DIR in snapshot.directories:
             sources = any(name.startswith(f"{SOURCES_DIR}/") for name in tracked)
-        sources_base = _sources_base(copy, copy_root, linker) if sources else None
+        sources_base = _sources_base(copy, copy_root, linker, tracked) if sources else None
         reviews: dict[str, str] = {}
         review_warnings: list[str] = []
         if review is not None:
@@ -1941,12 +1980,16 @@ def _skip_missing(_function: object, _path: str, error: BaseException | tuple) -
         raise exception
 
 
-def _sources_base(blueprint: Path, repo_root: Path, linker: SourceLinker) -> "_SourceBase | None":
+def _sources_base(
+    blueprint: Path, repo_root: Path, linker: SourceLinker, tracked: Sequence[str] | None = None
+) -> "_SourceBase | None":
     """Where `blueprint/sources/` lives in the repository, if it can be linked.
 
     Source notes are pages of the site, with the images they show. The rest of
     the folder, scans, extracts and data, is reached in the repository, as are
     a hidden note and the folder itself, so the site does not mirror it.
+    *tracked*, every file the commit holds below the blueprint, says which
+    files there a link can reach.
 
     Returns ``None`` when there are no repository coordinates to build a link
     from, or the blueprint's files are not in the linked commit. The folder is
@@ -1968,7 +2011,16 @@ def _sources_base(blueprint: Path, repo_root: Path, linker: SourceLinker) -> "_S
         for depth in range(1, len(parts) + 1):
             prefix = unicodedata.normalize("NFC", "/".join(parts[:depth]))
             spellings.setdefault(prefix, "/".join(committed_parts[:depth]))
-    return _SourceBase(linker.repository_url, linker.ref, relative, spellings)
+    held = None
+    if tracked is not None:
+        # A link may name a folder as well as a file, so each leading path counts too.
+        held = frozenset(
+            "/".join(parts[:depth])
+            for parts in (unicodedata.normalize("NFC", name).split("/") for name in tracked)
+            if parts[0] == SOURCES_DIR
+            for depth in range(1, len(parts) + 1)
+        )
+    return _SourceBase(linker.repository_url, linker.ref, relative, spellings, held)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1987,6 +2039,16 @@ class _SourceBase:
     relative: str
     spellings: Mapping[str, str] = field(default_factory=dict)
     """Committed captured paths and their leading folders, keyed by NFC form, since a link spells a path as typed."""
+    held: frozenset[str] | None = None
+    """What the commit holds under `sources/`, files and their leading folders, below the blueprint in NFC form;
+    ``None`` when Git did not list it."""
+
+    def holds(self, relative: Path, path: Path) -> bool:
+        """Whether the commit holds *relative*, a path below the blueprint that the copy would hold at *path*."""
+        if self.held is None:
+            # The copy has no hidden path, so a hidden one is taken as held, as check warns it must be.
+            return _is_hidden(relative) or os.path.exists(path)
+        return unicodedata.normalize("NFC", relative.as_posix()) in self.held
 
     def href(self, tail: tuple[str, ...]) -> str:
         verb = "blob" if tail else "tree"
@@ -3382,6 +3444,15 @@ class _RepositoryImage(str):
     under ``sources/`` once render verified the commit."""
 
 
+class _MissingSource(str):
+    """A destination under ``sources/``, among the targets :func:`_rewrite_links`
+    drops, that the verified commit does not hold, such as a scan kept out of git."""
+
+
+class _MissingSourceImage(_MissingSource):
+    """The same, as an image's destination."""
+
+
 def _rewrite_links(
     text: str,
     *,
@@ -3471,26 +3542,38 @@ def _rewrite_links(
         if relative is None:
             # Nothing outside the blueprint is published: "" keeps only the text.
             return ""
+        # A file the verified commit lacks under sources/, such as a scan kept
+        # out of git, has no repository link and no copy on the site, so its link
+        # keeps only its text, with a warning, rather than failing a strict build.
+        if (
+            sources_base is not None
+            and relative.parts[:1] == (SOURCES_DIR,)
+            and not sources_base.holds(relative, candidate)
+        ):
+            unlinked.add(raw)
+            if image:
+                unshown.add(raw)
+            if dropped is not None:
+                dropped.append(_MissingSourceImage(raw) if image else _MissingSource(raw))
+            return ""
         # A note and its images are pages and files of the site; the repository
-        # reaches the rest of sources/, a file of a type the site leaves out
-        # too. A repository link to a file the captured blueprint lacks would
-        # 404, so it stays site-relative, where a strict build reports the page
-        # missing. The capture skips hidden files, so a hidden note keeps its
-        # repository link, which resolves once the note is committed, as check warns.
+        # reaches the rest of sources/, a file of a type the site leaves out, and
+        # one the commit holds that the checkout lacks.
         if (
             sources_base is not None
             and relative.parts[:1] == (SOURCES_DIR,)
             and (
                 _is_hidden(relative)
+                or not os.path.exists(candidate)
                 or os.path.isdir(candidate)
                 or candidate in left_out
-                or (os.path.exists(candidate) and candidate.suffix.lower() not in _PUBLISHED_SOURCE_SUFFIXES)
+                or candidate.suffix.lower() not in _PUBLISHED_SOURCE_SUFFIXES
             )
         ):
             if image:
                 # A page cannot show a file from the repository, so its image keeps its text.
                 unlinked.add(raw)
-                repository_images.add(raw)
+                unshown.add(raw)
                 if dropped is not None:
                     dropped.append(_RepositoryImage(raw))
                 return ""
@@ -3515,8 +3598,9 @@ def _rewrite_links(
         return f"{href}{asked}{query}{separator}{fragment}"
 
     unlinked: set[str] = set()
-    # The image destinations the site links in the repository, which a page cannot show.
-    repository_images: set[str] = set()
+    # The image destinations a page cannot show: a file the site links in the
+    # repository, or one the verified commit lacks.
+    unshown: set[str] = set()
 
     def rewrite(line: str) -> str:
         # A link, an image and a definition each contain a bracket, which
@@ -3527,6 +3611,19 @@ def _rewrite_links(
         # rewritten a line at a time, as before.
         if "\n" in line and _LINK_DEFINITION.match(line.partition("\n")[0]):
             return "\n".join(map(rewrite, line.split("\n")))
+        # The site reads a definition after quote and list markers too, in any
+        # order once tabs are expanded, and the lines an item carries on with
+        # as one paragraph; one it drops leaves the quote or item empty.
+        first, newline, rest = line.partition("\n")
+        expanded = first.expandtabs(4)
+        container = _DEFINITION_CONTAINER.match(expanded)
+        if container is not None and _LINK_DEFINITION.match(inner := expanded[container.end() :]):
+            if (written := rewrite(inner)) != inner:
+                marker = expanded[: container.end()]
+                # A bare `-` on a list's later line would underline the line
+                # before it as a heading; `*` keeps the item in the same list.
+                first = f"{marker if written else re.sub(r'-(?= *$)', '*', marker)}{written}"
+            return f"{first}{newline}{rewrite(rest)}"
         # A reference definition carries the destination for every `[x][label]`
         # on the page. Rewriting only inline links leaves it pointing at the
         # unpublished path and the rendered link dangles.
@@ -3558,10 +3655,10 @@ def _rewrite_links(
                 pieces += [line[end : match.start()], _kept_text(line[match.start("label") : match.end("label")])]
                 end = match.end()
         line = "".join(pieces) + line[end:]
-        # So does a reference image of a file the site links in the repository;
-        # its definition stays, for a link that uses it.
+        # So does a reference image of a file a page cannot show. A definition
+        # the site links in the repository stays, for a link that uses it.
         for start, text_start, text_end, stop, raw in reversed(reference_images(line, references) if references else []):
-            if moved_target(raw, image=True) == "" and raw in repository_images:
+            if moved_target(raw, image=True) == "" and raw in unshown:
                 line = line[:start] + _kept_text(line[text_start:text_end]) + line[stop:]
         pieces = []
         end = 0
@@ -3593,15 +3690,23 @@ def _page_definitions(text: str) -> dict[str, str]:
     space. A later definition of a label replaces an earlier one, as on the
     site."""
 
-    # The lines the rewrite reads as definitions, found in the blocks it is given.
-    rewritten: set[str] = set()
+    # The lines the rewrite reads as definitions, found in the blocks it is
+    # given as it finds them, each with the definition it reads there, after
+    # any quote or list marker once tabs are expanded.
+    rewritten: dict[str, str] = {}
 
     def collect(line: str) -> str:
-        if "\n" in line and _LINK_DEFINITION.match(line.partition("\n")[0]):
+        first, newline, rest = line.partition("\n")
+        expanded = first.expandtabs(4)
+        container = _DEFINITION_CONTAINER.match(expanded)
+        if newline and _LINK_DEFINITION.match(first):
             for piece in line.split("\n"):
                 collect(piece)
-        elif _LINK_DEFINITION.match(line) and ("\n" not in line or _SITE_LINK_DEFINITION.match(line)):
-            rewritten.add(line)
+        elif container is not None and _LINK_DEFINITION.match(expanded[container.end() :]):
+            rewritten[first] = expanded[container.end() :]
+            collect(rest)
+        elif _LINK_DEFINITION.match(line) and (not newline or _SITE_LINK_DEFINITION.match(line)):
+            rewritten[line] = line
         return line
 
     _outside_fences(text, collect, page=True, joined=True)
@@ -3611,7 +3716,7 @@ def _page_definitions(text: str) -> dict[str, str]:
         read = _SITE_LINK_DEFINITION.match(_unquoted(line)[0].expandtabs(4))
         if read is not None:
             definitions[read.group(1).strip().lower()] = read.group(2)
-        elif line in rewritten and (written := _LINK_DEFINITION.match(line)):
+        elif (inner := rewritten.get(line)) is not None and (written := _LINK_DEFINITION.match(inner)):
             definitions[written.group("label").strip().lower()] = written.group("target")
     return definitions
 

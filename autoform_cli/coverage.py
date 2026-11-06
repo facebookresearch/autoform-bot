@@ -22,7 +22,7 @@ import json
 import os
 import re
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -140,12 +140,15 @@ class CoverageSummary:
 
 
 def load_coverage(
-    blueprint_dir: str | Path, *, unpublished: tuple[Path, ...] = (), accepted: tuple[Path, ...] = ()
+    blueprint_dir: str | Path,
+    *,
+    unpublished: tuple[Path, ...] = (),
+    accepted: Mapping[Path, frozenset[str] | None] | None = None,
 ) -> tuple[CoverageSummary | None, tuple[CoverageIssue, ...]]:
     """Read and validate ``coverage/README.md`` without modifying it; it may not link into *unpublished* folders.
 
-    A link into an *accepted* folder, which render leaves out but publishes the link's text for, counts as
-    resolved."""
+    A link to an *accepted* file, which render leaves out but publishes the link's text for, counts as
+    resolved, though not with a fragment that names none of the anchors it maps the file to."""
 
     blueprint = blueprint_root(blueprint_dir)
     path = blueprint / "coverage" / "README.md"
@@ -693,7 +696,7 @@ def _validate_evidence(
     blueprint: Path,
     coverage_path: Path,
     unpublished: tuple[Path, ...],
-    accepted: tuple[Path, ...] = (),
+    accepted: Mapping[Path, frozenset[str] | None] | None = None,
 ) -> list[CoverageIssue]:
     issues: list[CoverageIssue] = []
     roadmap = (blueprint / "roadmap").resolve()

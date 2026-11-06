@@ -184,8 +184,8 @@ unseen, and `tex-macros.json` is read once and compared with nothing.
 *Review* disclosure under every formalized statement: the approval state, the
 review hash, the cited passage, and for each declaration its card (current,
 invalid with reasons, or missing) before the exact packet; the statement hash,
-assumptions, and axioms are marked not bound. An edit during extraction fails
-with `review-snapshot-changed`. A passage cut from a file the site leaves out,
-such as a file under `readbacks/` or `atlas.json`, is refused with
-`review-source-unpublished`. Articles in `published: false` folders are reviewed
-but get no disclosure or warning, and module catalogs get none.
+assumptions, and axioms are marked not bound. A passage cut from a file the site
+leaves out (under `readbacks/`, `atlas.json`, in a `published: false` folder) is
+refused with `review-source-unpublished`; one the site links in the repository
+is accepted only at a verified commit. Articles in `published: false` folders
+are reviewed but get no disclosure or warning, and module catalogs get none.

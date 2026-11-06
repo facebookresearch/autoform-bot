@@ -812,12 +812,11 @@ def _source_link_issues(graph: Graph) -> tuple[list[str], list[str]]:
 
     Returns the errors, then the warnings. The generated workflows gate on
     ``check`` and run ``audit`` only as a report, and render publishes a missing
-    or escaping target broken: a page a strict MkDocs build cannot find, a
-    repository URL that 404s for a hidden note under ``sources/``, or the link's
-    text alone. Render omits hidden files, so a hidden target is refused too,
-    unless it is a note under ``sources/`` that exists. Only a repository link
-    reaches that note, which render writes once it verifies the commit, so it
-    is only warned about: it must be committed. A link whose
+    or escaping target broken: a page a strict MkDocs build cannot find, or the
+    link's text alone. Render omits hidden files, so a hidden target is refused
+    too, unless it is a note under ``sources/`` that exists. Only a repository
+    link reaches that note, which render writes once the verified commit holds
+    it, so it is only warned about: it must be committed. A link whose
     text wraps across lines is only warned about too. Fragments and other
     schemes stay with ``audit``, whose anchor check renders each cited note.
     """

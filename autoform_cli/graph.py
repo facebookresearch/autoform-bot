@@ -563,17 +563,20 @@ def unpublished_content(files: tuple[tuple[str, bytes], ...]) -> tuple[str, ...]
 _SETTING_LINE = re.compile(r"""\s*["']?(?P<key>publish(?:ed)?)["']?\s*:\s*(?P<value>.*)$""", re.IGNORECASE)
 #: A value that reads as a yes or a no, even one the frontmatter refuses, such as one with a comment.
 _YES_OR_NO = re.compile(r"""["']?(?:true|false|yes|no|on|off)["']?(?:\s+#.*)?\s*$""", re.IGNORECASE)
+#: The same, read as a no.
+_NO = re.compile(r"""["']?(?:false|no|off)["']?(?:\s+#.*)?\s*$""", re.IGNORECASE)
 
 
 def unpublished_setting_issues(files: Sequence[tuple[str, bytes]]) -> list[str]:
     """Why each Markdown page under ``sources/`` that tries to set
     ``published`` does not, so the site publishes what it meant to keep off:
-    a folder's README.md whose setting does not parse, and ``sources/README.md``,
-    another spelling of a README, or a note's frontmatter, where the setting
-    takes no effect. A line in a code block or a comment sets nothing, and
-    outside a README's frontmatter only a yes or a no reads as a setting, so a
-    date or a sentence that starts with the word is left alone. Check's graph
-    reads no source note, so nothing else reports these."""
+    a folder's README.md whose setting does not parse, and a no in
+    ``sources/README.md``, another spelling of a README, or a note's
+    frontmatter, where it takes no effect. A line in a code block or a
+    comment sets nothing, and outside a README's frontmatter only a yes or a
+    no reads as a setting, so a date or a sentence that starts with the word
+    is left alone. Check's graph reads no source note, so nothing else
+    reports these."""
 
     issues = []
     for name, data in files:
@@ -601,10 +604,11 @@ def unpublished_setting_issues(files: Sequence[tuple[str, bytes]]) -> list[str]:
             continue
         readme = parts[-1].rpartition(".")[0].casefold() == "readme"
         first = next((index for index, line in enumerate(lines) if line.strip()), -1)
-        # A note's publish key belongs to other tools, such as Obsidian Publish.
-        if "published" in metadata or any(
+        # The site publishes the page or folder either way, so only a no
+        # surprises; a note's publish key belongs to other tools, such as Obsidian Publish.
+        if metadata.get("published") in _FALSE or any(
             (readme or found["key"].casefold() == "published")
-            and _YES_OR_NO.match(found["value"])
+            and _NO.match(found["value"])
             and (index < front or (readme and index == first))
             for index, found in settings
         ):
