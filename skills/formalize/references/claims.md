@@ -34,11 +34,11 @@ owner's live affected claim is a conflict, malformed evidence is unverifiable,
 and an expired valid claim is not active. Before the edit, atomically acquire
 the report's `claim_targets`; an already-held same-worker article claim is
 upgraded, not released first. Recheck affected keys after acquisition and before
-integration. Before repairing any article that actually needs changes, listed as
-affected or not, atomically acquire the full held set plus its targets. On a
-refused import-claim acquisition or a recheck conflict, release the complete
-currently held import set before waiting or reporting, unless handing off an
-existing verified candidate as described below.
+integration; a recheck whose `claim list` fails counts as a conflict. Before
+repairing any article, listed as affected or not, atomically acquire the full
+held set plus its targets. On a refused import-claim acquisition or a recheck
+conflict, release the complete held import set before waiting or reporting,
+unless handing off a verified candidate as below.
 
 ## Generated import roots
 

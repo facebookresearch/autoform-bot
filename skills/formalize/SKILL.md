@@ -67,8 +67,8 @@ lead has one of them give up what it holds. Before choosing none, run `autoform
 claim list` once, with any `--worker-id`: an unexpired claim means another
 session uses them. If the command fails, as it does without an `origin`, tell
 the user and go on without claims; after `error: timeout:`, `error: transport:`
-or `error: contention:` the board exists but could not be read, so run it once
-more, then ask the user before going on without them. A claim excludes only
+or `error: contention:` the board could not be read, so run it once more, then
+ask the user before going on without them. A claim excludes only
 workers that also claim, and `work list` does not read the board, so on such a
 project every worker claims: tell each subagent so, and follow the [claim
 rules](references/claims.md) at each step.

@@ -1944,7 +1944,7 @@ def _claim(args: argparse.Namespace) -> int:
 
 
 def _claim_list(args: argparse.Namespace) -> int:
-    """List claims; stdout carries only the JSON, and a failure's line on stderr says what kind it is."""
+    """List claims; stdout carries only the JSON, and stderr labels a failure to reach or read the board."""
     targets: dict[str, str] = {}
     for node_id in args.node_id:
         key = author_claim_key(node_id)
