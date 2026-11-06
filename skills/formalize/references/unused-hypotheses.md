@@ -20,7 +20,7 @@ argument:
   `y n ≠ 0` where `x / 0 = 0`, keep it.
 - If the theorem genuinely holds without it, such as a limsup result that holds
   in the extended reals, keep the source's statement for the article and prove
-  the general one as a separate lemma that it follows from.
+  it from the general one: an existing declaration, or else a new lemma.
 
 Name a hypothesis you keep with a leading `_` and add one sentence to the
 article giving the reason in mathematical or source terms.

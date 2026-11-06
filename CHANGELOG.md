@@ -191,7 +191,10 @@ date when the release is tagged.
   when verified Mathlib declarations state the result (#668). Formalize's library
   search rules, which Roadmap follows, use the same definition: a library hit
   that needs only hypotheses the result gives or implies, or several that
-  together state it, is reused like an exact one (#679).
+  together state it, is reused like an exact one (#679). When a theorem holds
+  without one of the source's hypotheses, Formalize proves the source's
+  statement from a general declaration that already exists instead of re-proving
+  it as a new lemma (#686).
 - **The landing's coverage line** leads with the source areas split into
   statements: "5 source areas, all split into statements", or "3 of 5 source
   areas split into statements" before the other dispositions.
