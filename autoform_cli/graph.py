@@ -40,7 +40,6 @@ from .markdown import (
     text_blocks,
 )
 from .markdown import HEADING as _HEADING
-from .publishable import publishable_article
 
 
 #: A display formula written inside a paragraph, ``$$...$$``. There the site reads ``\[...\]`` as escaped
@@ -915,6 +914,9 @@ def _article_depth(node_id: str, parents: dict[str, str | None]) -> int:
 
 def _shown_as_typed(text: str) -> bool:
     """Whether the site shows the article ``text`` as typed, as render decides it."""
+    # local import: publishable loads the site's Markdown converter, which loading a graph otherwise never needs
+    from .publishable import publishable_article
+
     try:
         return bool(publishable_article(text)[1])
     except RecursionError:
