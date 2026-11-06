@@ -851,6 +851,7 @@ def test_a_later_h1_warns_with_its_line_and_stays_in_its_section(tmp_path: Path)
     assert graph.warnings == (
         "top: line 5: '# Aside' is a later H1, which stays in its section; the first H1 is the title",
     )
+    assert graph.nodes["top"].site_heading_warnings == ()
 
 
 def test_a_later_h1_named_informally_uses_warns_twice_in_line_order(tmp_path: Path) -> None:
@@ -904,39 +905,74 @@ def test_check_loads_an_article_whose_unclosed_fence_holds_a_comment(
     assert not any("the site reads" in warning for warning in warnings)
 
 
-def test_a_page_the_site_shows_as_typed_for_its_raw_html_has_no_heading_to_compare(tmp_path: Path) -> None:
+def test_a_page_the_site_shows_as_typed_for_its_raw_html_has_no_heading_to_compare(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     blueprint = tmp_path / "blueprint"
     # The site shows the page as typed for its <pre>, which check names, so
     # '#!' is no heading there, and '\#!' would only edit the script.
     _node(blueprint, "setup.md", "# Setup\n\n<pre>\n#!/bin/sh\n</pre>\n")
 
-    assert load_graph(blueprint).warnings == ()
+    assert load_graph(blueprint).nodes["setup"].site_heading_warnings != ()
+    assert main(["check", str(blueprint)]) == 0
+    warnings = [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning: ")]
+    assert "warning: setup: the site shows it as typed until these are fixed" in warnings
+    assert not any("the site reads" in warning for warning in warnings)
 
 
-def test_a_page_nested_deeper_than_the_converter_reads_has_no_heading_to_compare(tmp_path: Path) -> None:
+def test_a_page_nested_deeper_than_the_converter_reads_has_no_heading_to_compare(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     blueprint = tmp_path / "blueprint"
-    # Render shows the page as typed rather than stopping, so the loader neither stops nor compares headings.
+    # Render shows the page as typed rather than stopping, so check neither stops nor compares headings.
     deep = "".join("    " * depth + "- level\n" for depth in range(400))
     _node(blueprint, "top.md", f"# Top\n\n ## Proof\n\n{deep}")
 
-    assert load_graph(blueprint).warnings == ()
+    assert load_graph(blueprint).nodes["top"].site_heading_warnings != ()
+    assert main(["check", str(blueprint)]) == 0
+    warnings = [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning: ")]
+    assert "warning: top: the site shows it as typed until these are fixed" in warnings
+    assert not any("autoform reads" in warning for warning in warnings)
 
 
-def test_a_fence_only_the_loader_reads_keeps_the_heading_warning(tmp_path: Path) -> None:
+def test_a_chapter_shown_as_typed_for_a_stretch_has_no_heading_to_compare(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    # Base's statement takes the place of its link, so the code span that
+    # crosses that line ends before it on the page, and the <b> after it is
+    # markup there: the site shows the chapter as typed, '##Remarks' and all.
+    _roadmap_page(blueprint, "chapter/README.md", "# Chapter\n\n##Remarks\n\n`a\n- [Base](base.md)\nb` and `<b>x</b>`\n")
+    _node(blueprint, "chapter/base.md", "# Base\n", declaration="theorem")
+
+    assert load_graph(blueprint).nodes["chapter"].site_heading_warnings != ()
+    assert main(["check", str(blueprint)]) == 0
+    warnings = [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning: ")]
+    assert "warning: chapter: the site shows it as typed until these are fixed" in warnings
+    assert not any("the site reads" in warning for warning in warnings)
+
+
+def test_a_fence_only_the_loader_reads_keeps_the_heading_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "base.md", "# Base\n")
     # The page drops the comment, which leaves the ``` inside a line, so it opens
     # no fence there and the page shows a heading; the graph has no proof dependency.
     body = "# Top\n\nSee the code <!-- a note\nends here --> ```\n\n##Proof depends on\n\n- [Base](base.md)\n"
     _node(blueprint, "top.md", body)
+    warning = (
+        "top: line 8: the site reads '##Proof depends on' as a heading and autoform as text; "
+        "put a plain space after the '#' marks, or write '\\#' to keep it text"
+    )
 
     graph = load_graph(blueprint)
 
     assert graph.nodes["top"].dependencies == ()
-    assert graph.warnings == (
-        "top: line 8: the site reads '##Proof depends on' as a heading and autoform as text; "
-        "put a plain space after the '#' marks, or write '\\#' to keep it text",
-    )
+    assert graph.warnings == ()
+    assert graph.nodes["top"].site_heading_warnings == (warning,)
+    assert main(["check", str(blueprint)]) == 0
+    assert f"warning: {warning}" in capsys.readouterr().out.splitlines()
 
 
 @pytest.mark.parametrize(
@@ -978,7 +1014,8 @@ def test_a_heading_the_site_reads_differently_warns_and_keeps_its_reading(
 
     node = graph.nodes["top"]
     assert (node.statement_dependencies, node.proof_dependencies) == (statement, proof)
-    assert graph.warnings == (f"top: line 7: {warning}",)
+    assert graph.warnings == ()
+    assert node.site_heading_warnings == (f"top: line 7: {warning}",)
 
 
 @pytest.mark.parametrize(
@@ -998,10 +1035,14 @@ def test_a_hash_line_that_is_a_section_to_both_readers_or_neither_does_not_warn(
     blueprint = tmp_path / "blueprint"
     _node(blueprint, "top.md", f"# Top\n\nSome text.\n\n{lines}")
 
-    assert load_graph(blueprint).warnings == ()
+    graph = load_graph(blueprint)
+
+    assert (graph.warnings, graph.nodes["top"].site_heading_warnings) == ((), ())
 
 
-def test_an_indented_heading_warns_only_where_its_article_is_a_page(tmp_path: Path) -> None:
+def test_an_indented_heading_warns_only_where_its_article_is_a_page(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     blueprint = tmp_path / "blueprint"
     body = "# {}\n\nThe statement.\n\n ## Remarks\n\nA remark.\n"
     _node(blueprint, "page.md", body.format("Page"))
@@ -1013,13 +1054,57 @@ def test_an_indented_heading_warns_only_where_its_article_is_a_page(tmp_path: Pa
     _node(blueprint, "held/part.md", "# Part\n")
     # Render leaves out an unpublished folder, so a leaf that holds only one keeps its box.
     _roadmap_page(blueprint, "shut/README.md", _node_text(body.format("Shut"), declaration="theorem"))
-    _node(blueprint, "shut/drafts/README.md", "# Drafts\n", published="false")
+    _node(blueprint, "shut/drafts/README.md", body.format("Drafts"), published="false")
 
     graph = load_graph(blueprint)
 
     indented = "line {}: autoform reads ' ## Remarks' as a heading and the site as text, since it is indented; "
     fix = "remove the spaces before the '#', or write '\\#' to keep it text"
-    assert graph.warnings == (f"held: {indented.format(8)}{fix}", f"page: {indented.format(7)}{fix}")
+    held, page = f"held: {indented.format(8)}{fix}", f"page: {indented.format(7)}{fix}"
+    assert graph.warnings == ()
+    assert {node.id: node.site_heading_warnings for node in graph.nodes.values() if node.site_heading_warnings} == {
+        "held": (held,),
+        "page": (page,),
+        "shut/drafts": (f"shut/drafts: {indented.format(8)}{fix}",),
+    }
+    # Check counts the unpublished folder as a child of the leaf above it, and
+    # reads the folder, yet it warns only where render would.
+    assert main(["check", str(blueprint)]) == 0
+    assert [line for line in capsys.readouterr().out.splitlines() if "autoform reads" in line] == [
+        f"warning: {held}",
+        f"warning: {page}",
+    ]
+
+
+def test_check_and_render_report_the_headings_the_site_reads_otherwise(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _roadmap_page(blueprint, "README.md", "# Roadmap\n\n- [Top](top.md)\n")
+    _node(blueprint, "top.md", "# Top\n\n##Remarks\n\nA remark.\n\n ## Notes\n\nA note.\n")
+    (blueprint / "README.md").write_text("# Book\n\n- [Roadmap](roadmap/README.md)\n", encoding="utf-8")
+    (blueprint / "coverage").mkdir()
+    (blueprint / "coverage/README.md").write_text(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n| Top | MAPPED | The page |\n",
+        encoding="utf-8",
+    )
+    expected = [
+        "warning: top: line 5: the site reads '##Remarks' as a heading and autoform as text; "
+        "put a plain space after the '#' marks, or write '\\#' to keep it text",
+        "warning: top: line 9: autoform reads ' ## Notes' as a heading and the site as text, since it is indented; "
+        "remove the spaces before the '#', or write '\\#' to keep it text",
+    ]
+
+    def printed() -> list[str]:
+        return [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning: top: line ")]
+
+    assert main(["check", str(blueprint)]) == 0
+    assert printed() == expected
+    # The flag leaves the site's warnings to render, these among them.
+    assert main(["check", str(blueprint), "--no-site-warnings"]) == 0
+    assert printed() == []
+    assert main(["render", str(blueprint), "-o", str(tmp_path / "site")]) == 0
+    assert printed() == expected
 
 
 _TOP_HINT = "top: missing H1 title; the site reads line 3, '#Top', as one: put a plain space after the '#'"
@@ -1190,7 +1275,8 @@ def test_a_heading_indented_under_a_line_still_opens_its_section(tmp_path: Path)
 
     assert graph.nodes["result"].dependencies == ("base",)
     # The site reads the line on into the paragraph above it.
-    assert graph.warnings == (
+    assert graph.warnings == ()
+    assert graph.nodes["result"].site_heading_warnings == (
         "result: line 6: autoform reads '  ## Depends on' as a heading and the site as text, since it is indented; "
         "remove the spaces before the '#', or write '\\#' to keep it text",
     )
