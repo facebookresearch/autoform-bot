@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -13,6 +15,7 @@ import time
 import urllib.parse
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -354,7 +357,7 @@ def test_expired_rejects_nonfinite_default_comparison_clock(
         claims.ClaimBoard.expired({"expires_at": 200.0})
 
 
-def test_cleanup_removes_only_expired_snapshot_entries(
+def test_cleanup_removes_only_the_entries_its_listing_shows_expired(
     tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(claims.time, "time", lambda: 1_000.0)
@@ -499,6 +502,21 @@ def test_planted_nonfinite_lease_is_rejected_by_strict_json_parser(
         board.read("strict-json")
 
 
+def test_a_lease_that_is_not_utf8_is_malformed_read_alone_as_in_a_listing(tmp_path: Path, board_repo: Path) -> None:
+    lease = {"schema": claims.CLAIM_SCHEMA, "owner": "caf\xe9", "resource": "node", "acquired_at": 0, "expires_at": 1}
+    message = tmp_path / "lease"
+    message.write_bytes(json.dumps(lease, ensure_ascii=False).encode("latin-1"))
+    tree = _git("mktree", cwd=board_repo, input_text="")
+    # Told nothing, Git reads the byte as Latin-1 and stores it as UTF-8.
+    commit = _git("-c", "i18n.commitEncoding=latin-1", "commit-tree", tree, "-F", str(message), cwd=board_repo)
+    _git("update-ref", claims.CLAIM_REF_PREFIX + "node", commit, cwd=board_repo)
+    board = _board(tmp_path, board_repo, "worker-a")
+
+    with pytest.raises(claims.MalformedLeaseError, match="invalid lease JSON"):
+        board.read("node")
+    assert board.list()[0]["_malformed"] is True
+
+
 def test_acquire_rejects_nonfinite_clock_before_commit_or_push(
     tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -553,7 +571,7 @@ def test_list_sees_a_claim_change_made_just_before_its_fetch(
     assert not any(lease["_malformed"] for lease in listed)
 
 
-def test_list_returns_its_verified_snapshot_when_refs_change_while_leases_are_parsed(
+def test_list_returns_the_leases_it_fetched_when_refs_change_while_leases_are_parsed(
     tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     owner = _board(tmp_path, board_repo, "worker-a")
@@ -794,6 +812,20 @@ def test_the_board_ignores_git_variables_that_name_another_repository(
     assert _git("count-objects", cwd=hooked).startswith("0 objects")
 
 
+def test_the_board_works_in_a_pre_receive_hooks_quarantine(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = _board(tmp_path, board_repo, "worker-a")
+    assert owner.acquire_many(["a"], ttl=600)
+    # A pre-receive hook runs in the receiving repository's quarantine, in which
+    # Git refuses every ref update. Before, the scratch could not be prepared.
+    monkeypatch.setenv("GIT_QUARANTINE_PATH", str(tmp_path / "incoming"))
+    rival = _board(tmp_path, board_repo, "worker-b")
+
+    assert [lease["owner"] for lease in rival.list()] == ["worker-a"]
+    assert rival.acquire_many(["b"], ttl=600)
+
+
 def test_the_default_board_is_the_origin_of_the_checkout_even_under_a_hook(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -942,6 +974,177 @@ def test_list_lists_claim_keys_that_differ_only_in_case_on_any_filesystem(
     assert reader._git(["for-each-ref", "refs/"]).stdout == ""
 
 
+def test_list_names_no_claim_for_a_branch_whose_name_ends_in_a_claim_path(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    oids = _plant_packed_leases(board_repo, ["lean/Foo", "lean/foo"])
+    # ls-remote's patterns match the end of a ref, so this branch matches
+    # refs/autoform-claims/*. Its name cut at the prefix's length was a key
+    # whose fetch always failed, so the listing ended in contention.
+    _git("update-ref", "refs/heads/refs/autoform-claims/zz", oids["lean/Foo"], cwd=board_repo)
+    # Named by splitlines(), this ref was a key c whose fetch always failed too.
+    _git("update-ref", claims.CLAIM_REF_PREFIX + "c\u2028x", oids["lean/Foo"], cwd=board_repo)
+    reader = _board(tmp_path, board_repo, "worker-b")
+    # As on a case-insensitive filesystem, the keys are then named and fetched by name.
+    monkeypatch.setattr(reader, "_scratch_ignores_case", lambda: True)
+    warnings: list[str] = []
+
+    assert [item["_key"] for item in reader.list(warn=warnings.append)] == ["lean/Foo", "lean/foo"]
+    # The branch is no claim ref left out; the name holding U+2028 is.
+    assert warnings == ["left out 1 claim ref(s) whose name is not a valid claim key"]
+
+
+def test_list_leaves_out_a_claim_ref_whose_name_is_not_utf8_and_says_how_many(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _new_board_repo(tmp_path, "reftable")
+    oid = _plant_lease(repo, "a")
+    _git("update-ref", claims.CLAIM_REF_PREFIX + "bad\udcff", oid, cwd=repo)
+    # A reftable scratch stores the name, as one on ext4 does; APFS refuses it.
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "init.defaultRefFormat")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "reftable")
+    scratch = tmp_path / "scratch"
+
+    assert main(_args(repo, scratch, "list")) == 0
+    captured = capsys.readouterr()
+    assert [lease["_key"] for lease in json.loads(captured.out)] == ["a"]
+    assert [line for line in captured.err.splitlines() if line.startswith("warning:")] == [
+        "warning: left out 1 claim ref(s) whose name is not a valid claim key"
+    ]
+    # The listing's private refs are deleted, the one with that name too.
+    assert subprocess.run(["git", "for-each-ref"], cwd=scratch, capture_output=True, check=True).stdout == b""
+
+
+def test_list_reads_a_ref_name_holding_a_line_separator_as_one_name(tmp_path: Path, board_repo: Path) -> None:
+    a, b = _plant_lease(board_repo, "a"), _plant_lease(board_repo, "b")
+    # Git allows U+2028 in a ref name, and str.splitlines() splits there: this
+    # ref read as `a` holding b's lease.
+    _git("update-ref", claims.CLAIM_REF_PREFIX + "a\u2028x", b, cwd=board_repo)
+    reader = _board(tmp_path, board_repo, "worker-b")
+    warnings: list[str] = []
+
+    listed = reader.list(warn=warnings.append)
+
+    assert [(lease["_key"], lease["_oid"], lease["_malformed"]) for lease in listed] == [
+        ("a", a, False),
+        ("b", b, False),
+    ]
+    assert warnings == ["left out 1 claim ref(s) whose name is not a valid claim key"]
+    assert _git("for-each-ref", "refs/autoform-list/", cwd=reader.scratch) == ""
+
+
+def test_a_ref_name_holding_a_line_separator_is_no_claim_of_the_key_it_ends_in(
+    tmp_path: Path, board_repo: Path
+) -> None:
+    c = _plant_lease(board_repo, "c")
+    # ls-remote matches a pattern against a name's end, and splitlines() cut
+    # this one at U+2028, so it read as b's claim, holding c's lease.
+    _git("update-ref", f"{claims.CLAIM_REF_PREFIX}b\u2028/{claims.CLAIM_REF_PREFIX}b", c, cwd=board_repo)
+    reader = _board(tmp_path, board_repo, "worker-b")
+
+    assert reader.list(["b"]) == []
+    assert [(lease["_key"], lease["_oid"]) for lease in reader.list(["b", "c"])] == [("c", c)]
+    assert reader.acquire("b", ttl=600)
+
+
+@pytest.mark.parametrize(
+    "lookalike",
+    ["refs/{ref}", "refs/tags/{ref}", "refs/heads/{ref}", "refs/remotes/{ref}", "refs/remotes/{ref}/HEAD"],
+    ids=["refs", "tag", "branch", "remote-branch", "remote-head"],
+)
+def test_a_target_released_before_its_fetch_is_not_read_from_a_ref_ending_in_its_path(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch, lookalike: str
+) -> None:
+    ref = claims.CLAIM_REF_PREFIX + "b"
+    # For a name the board lacks, Git fetches such a ref instead.
+    _git("update-ref", lookalike.format(ref=ref), _plant_lease(board_repo, "b", owner="mallory"), cwd=board_repo)
+    a, _ = _plant_lease(board_repo, "a"), _plant_lease(board_repo, "b")
+    reader = _board(tmp_path, board_repo, "worker-b")
+    remote_oids = reader._remote_oids
+    released: list[str] = []
+
+    def released_after_naming(keys: Sequence[str], git: object = None) -> dict[str, str]:
+        oids = remote_oids(keys, git)
+        if not released:
+            # Another worker releases b after ls-remote named it.
+            released.append(ref)
+            _git("update-ref", "-d", ref, cwd=board_repo)
+        return oids
+
+    monkeypatch.setattr(reader, "_remote_oids", released_after_naming)
+
+    assert [(lease["_key"], lease["_oid"]) for lease in reader.list(["a", "b"])] == [("a", a)]
+
+
+@pytest.mark.parametrize(("name", "names_the_board"), [("bad\udcff", True), ("b", False)])
+def test_list_names_the_board_when_its_scratch_cannot_store_a_name_that_is_not_a_claim_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, names_the_board: bool
+) -> None:
+    repo = _new_board_repo(tmp_path, "reftable")
+    oid = _plant_lease(repo, "a")
+    _git("update-ref", claims.CLAIM_REF_PREFIX + name, oid, cwd=repo)
+    reader = _board(tmp_path, repo, "worker-b")
+    git = reader._git
+
+    def cannot_store(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[0] != "fetch" or "--stdin" in args:
+            return git(args, **kwargs)
+        # What Git 2.53 says on APFS for a name that is not UTF-8, writing no ref.
+        ref = args[-1].rpartition(":")[2].removesuffix("*") + name
+        err = f"error: cannot lock ref '{ref}': Unable to create '{ref}.lock': Operation not permitted\n"
+        return subprocess.CompletedProcess(["git", *args], 1, "", err)
+
+    monkeypatch.setattr(reader, "_git", cannot_store)
+    warnings: list[str] = []
+
+    if names_the_board:
+        assert [lease["_key"] for lease in reader.list(warn=warnings.append)] == ["a"]
+        assert warnings == ["left out 1 claim ref(s) whose name is not a valid claim key"]
+        assert git(["for-each-ref", "refs/"]).stdout == ""
+    else:
+        # A claim key that Git could not store is no name to leave out.
+        with pytest.raises(claims.ClaimTransportError, match="cannot lock ref"):
+            reader.list(warn=warnings.append)
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        "error: some local refs could not be updated; try running\n"
+        " 'git remote prune board' to remove any old, conflicting branches\n",
+        "error: cannot lock ref '{ref}': there is a non-empty directory './{ref}' blocking reference '{ref}'\n",
+    ],
+    ids=["git-2.53", "apple-git-2.50-folder-first"],
+)
+def test_list_names_the_board_when_a_key_and_a_folder_differ_only_in_case(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch, refusal: str
+) -> None:
+    oids = _plant_packed_leases(board_repo, ["lean/Foo", "lean/foo/bar"])
+    reader = _board(tmp_path, board_repo, "worker-b")
+    git = reader._git
+
+    def refused(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[0] != "fetch" or "--stdin" in args:
+            return git(args, **kwargs)
+        # What a case-insensitive scratch's Git does with the folder lean/foo
+        # beside the key lean/Foo: it writes one of the two refs, which one
+        # depending on the version, then refuses in words that name no case
+        # clash. Apple's 2.50 names the non-empty directory when the folder
+        # sorts first.
+        namespace = args[-1].rpartition(":")[2].removesuffix("*")
+        git([*args[:-1], f"+{claims.CLAIM_REF_PREFIX}lean/Foo:{namespace}lean/Foo"])
+        return subprocess.CompletedProcess(["git", *args], 1, "", refusal.format(ref=f"{namespace}lean/foo"))
+
+    monkeypatch.setattr(reader, "_git", refused)
+
+    assert [(lease["_key"], lease["_oid"]) for lease in reader.list()] == [
+        ("lean/Foo", oids["lean/Foo"]),
+        ("lean/foo/bar", oids["lean/foo/bar"]),
+    ]
+    assert git(["for-each-ref", "refs/"]).stdout == ""
+
+
 def test_list_on_a_case_insensitive_scratch_lists_both_keys_when_git_keeps_one_ref_silently(
     tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -967,6 +1170,94 @@ def test_list_on_a_case_insensitive_scratch_lists_both_keys_when_git_keeps_one_r
         ("lean/foo", oids["lean/foo"], False),
     ]
     assert git(["for-each-ref", "refs/"]).stdout == ""
+
+
+@pytest.mark.parametrize("released", [False, True], ids=["alone", "another-claim-released-meanwhile"])
+def test_list_keeps_a_keys_lease_when_git_folds_a_name_that_is_no_key_into_it(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch, released: bool
+) -> None:
+    oids = _plant_packed_leases(board_repo, ["j", "k", "kelvin"])
+    # U+212A KELVIN SIGN is no claim key, and a case-insensitive filesystem folds it into k.
+    packed = board_repo / "packed-refs"
+    kelvin = f"{claims.CLAIM_REF_PREFIX}\u212a\n"
+    packed.write_text(packed.read_text().replace(f"{claims.CLAIM_REF_PREFIX}kelvin\n", kelvin))
+    reader = _board(tmp_path, board_repo, "worker-b")
+    git = reader._git
+
+    def folds_without_a_word(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if released and args[0] == "ls-remote" and f" {claims.CLAIM_REF_PREFIX}j\n" in packed.read_text():
+            # Another worker releases j after the fetch copied the board, so the
+            # scratch keeps as many refs as the board then has names.
+            _git("update-ref", "-d", f"{claims.CLAIM_REF_PREFIX}j", cwd=board_repo)
+        proc = git(args, **kwargs)
+        if args[0] == "fetch" and "--stdin" not in args and proc.returncode == 0:
+            # What Apple's Git 2.50 leaves: exit 0, and one ref named k holding the other's lease.
+            namespace = args[-1].rpartition(":")[2].removesuffix("*")
+            git(["update-ref", f"{namespace}k", oids["kelvin"]])
+            if f"{namespace}\u212a" in git(["for-each-ref", "--format=%(refname)", namespace]).stdout.split("\n"):
+                git(["update-ref", "-d", f"{namespace}\u212a"])
+        return proc
+
+    monkeypatch.setattr(reader, "_git", folds_without_a_word)
+    monkeypatch.setattr(reader, "_scratch_ignores_case", lambda: True)
+    warnings: list[str] = []
+
+    listed = [] if released else [("j", oids["j"])]
+    assert [(item["_key"], item["_oid"]) for item in reader.list(warn=warnings.append)] == [*listed, ("k", oids["k"])]
+    assert warnings == ["left out 1 claim ref(s) whose name is not a valid claim key"]
+    assert git(["for-each-ref", "refs/"]).stdout == ""
+
+
+def test_list_on_a_case_insensitive_scratch_finds_a_key_whose_folder_a_name_took_in(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    oids = _plant_packed_leases(board_repo, ["Kyat", "k/x"])
+    # `K/y@` is no claim key, and a case-insensitive filesystem stores k/x in its folder K.
+    packed = board_repo / "packed-refs"
+    named = f"{claims.CLAIM_REF_PREFIX}K/y@\n"
+    packed.write_text(packed.read_text().replace(f"{claims.CLAIM_REF_PREFIX}Kyat\n", named))
+    reader = _board(tmp_path, board_repo, "worker-b")
+    git = reader._git
+
+    def folder_takes_it_in(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        proc = git(args, **kwargs)
+        if args[0] == "fetch" and "--stdin" not in args and proc.returncode == 0:
+            # What Git leaves there: k/x's lease under the name K/x, a key the board does not have.
+            namespace = args[-1].rpartition(":")[2].removesuffix("*")
+            git(["update-ref", f"{namespace}K/x", oids["k/x"]])
+            if f"{namespace}k/x" in git(["for-each-ref", "--format=%(refname)", namespace]).stdout.split("\n"):
+                git(["update-ref", "-d", f"{namespace}k/x"])
+        return proc
+
+    monkeypatch.setattr(reader, "_git", folder_takes_it_in)
+    monkeypatch.setattr(reader, "_scratch_ignores_case", lambda: True)
+    warnings: list[str] = []
+
+    assert [(item["_key"], item["_oid"]) for item in reader.list(warn=warnings.append)] == [("k/x", oids["k/x"])]
+    assert warnings == ["left out 1 claim ref(s) whose name is not a valid claim key"]
+    assert git(["for-each-ref", "refs/"]).stdout == ""
+
+
+def test_a_claim_acquired_during_a_full_listing_does_not_send_it_to_fetch_by_name(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    oid = _plant_lease(board_repo, "a")
+    reader = _board(tmp_path, board_repo, "worker-b")
+    git = reader._git
+    commands: list[list[str]] = []
+
+    def acquired_meanwhile(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        if args[0] == "ls-remote" and [command[0] for command in commands].count("ls-remote") == 1:
+            # Another worker acquires b after the fetch copied the board.
+            _plant_lease(board_repo, "b")
+        return git(args, **kwargs)
+
+    monkeypatch.setattr(reader, "_git", acquired_meanwhile)
+    monkeypatch.setattr(reader, "_scratch_ignores_case", lambda: True)
+
+    assert [(lease["_key"], lease["_oid"]) for lease in reader.list()] == [("a", oid)]
+    assert not [command for command in commands if command[0] == "fetch" and "--stdin" in command]
 
 
 def test_scratch_ignores_case_as_its_filesystem_does(tmp_path: Path) -> None:
@@ -1761,6 +2052,36 @@ def test_a_hook_refusal_stays_an_error_even_if_a_lock_came_and_went(
     assert not isinstance(raised.value, claims.ClaimRefLockedError)
 
 
+def test_a_claim_is_taken_when_the_boards_hook_prints_a_byte_that_is_not_utf8(tmp_path: Path, board_repo: Path) -> None:
+    # Before, reading the hook's words failed the acquire after its push went through.
+    hook = board_repo / "hooks" / "pre-receive"
+    hook.write_bytes(b"#!/bin/sh\ncat >/dev/null\nprintf 'caf\\377 accepted\\n' >&2\n")
+    hook.chmod(0o755)
+    board = _board(tmp_path, board_repo, "worker-a")
+
+    assert board.acquire("node")
+    assert _holds(board, "node")
+
+
+def test_a_refused_push_names_a_byte_of_its_output_that_is_not_utf8(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board = _board(tmp_path, board_repo, "worker-a")
+    git = board._git
+
+    def declined_push(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[0] != "push":
+            return git(args, **kwargs)
+        # Git's output reads a byte that is not UTF-8 as a surrogate.
+        return subprocess.CompletedProcess(["git", *args], 1, "", "remote: caf\udcff is closed\n")
+
+    monkeypatch.setattr(board, "_git", declined_push)
+
+    with pytest.raises(claims.ClaimTransportError) as raised:
+        board.acquire("node")
+    assert str(raised.value) == "claim CAS push failed: remote: caf\\xff is closed"
+
+
 def test_reference_already_exists_on_an_unseen_board_is_an_error_for_a_batch_with_an_update(
     tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1944,7 +2265,7 @@ def test_git_stops_at_the_deadline_and_names_the_step(tmp_path: Path) -> None:
         board._git(_alias("hang", "sleep 30"), deadline=started + 0.5, step="hanging")
 
     assert timed_out.value.step == "hanging"
-    assert str(timed_out.value) == "no answer from the claim board while hanging"
+    assert str(timed_out.value) == "ran out of time while hanging"
     assert time.monotonic() - started < 10
 
 
@@ -2017,6 +2338,84 @@ def test_git_sends_its_input_once_to_a_slow_step(tmp_path: Path, monkeypatch: py
     echoed = board._git(_alias("echo", "sleep 1; cat"), input_text="once\n", progress=lambda step: None)
 
     assert echoed.stdout == "once\n"
+
+
+def test_git_sends_a_slow_step_more_input_than_a_pipe_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Before Python 3.13, a communicate call after one that timed out sent none
+    # of the input left, so a slow step whose input outgrew the pipe never ended.
+    board = _scratch_board(tmp_path)
+    monkeypatch.setattr(claims, "_PROGRESS_AFTER_S", 0.2)
+
+    counted = board._git(
+        _alias("count", "sleep 1; wc -c"),
+        input_bytes=b"x" * 200_000,
+        deadline=time.monotonic() + 60,
+        progress=lambda step: None,
+    )
+
+    assert counted.stdout.strip() == b"200000"
+
+
+class _InlineThread:
+    """A thread whose target runs at start(), so it has ended before the caller goes on."""
+
+    def __init__(self, target, args=(), daemon=None) -> None:
+        self.run = lambda: target(*args)
+
+    def start(self) -> None:
+        self.run()
+
+
+def test_a_slow_steps_input_is_left_to_the_thread_that_sends_and_closes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board = _scratch_board(tmp_path)
+    # The sender has closed the input before communicate starts, which must not flush or close it again.
+    inline = SimpleNamespace(
+        Thread=_InlineThread, current_thread=threading.current_thread, main_thread=threading.main_thread
+    )
+    monkeypatch.setattr(claims, "threading", inline)
+
+    counted = board._git(_alias("count", "wc -c"), input_bytes=b"x" * 1000, progress=lambda step: None)
+
+    assert counted.stdout.strip() == b"1000"
+
+
+class _TimedOutOnce:
+    """A process whose first wait times out, recording each wait's timeout."""
+
+    stdin = None
+
+    def __init__(self) -> None:
+        self.timeouts: list[float] = []
+
+    def communicate(self, input: object = None, timeout: float | None = None) -> tuple[str, str]:
+        self.timeouts.append(timeout)
+        if len(self.timeouts) == 1:
+            raise subprocess.TimeoutExpired("git", timeout)
+        return "", ""
+
+
+@pytest.mark.parametrize(
+    ("limit", "waits"),
+    [(8.0, [5.0, 3.0]), (3e6, [5.0, claims._LONGEST_WAIT_S - 5.0])],
+    ids=["deadline", "longest-wait"],
+)
+def test_a_slow_step_waits_out_only_the_rest_of_its_limit(limit: float, waits: list[float]) -> None:
+    # poll() refuses a wait past about 24.8 days, which a --timeout may ask for.
+    process = _TimedOutOnce()
+    steps: list[str] = []
+
+    claims._communicate(process, None, limit, "fetching", steps.append)
+
+    assert (process.timeouts, steps) == (waits, ["fetching"])
+
+
+def test_list_takes_a_timeout_longer_than_one_wait_may_be(tmp_path: Path, board_repo: Path) -> None:
+    owner = _board(tmp_path, board_repo, "worker-a")
+    assert owner.acquire_many(["a"], ttl=600)
+
+    assert [lease["_key"] for lease in _board(tmp_path, board_repo, "worker-b").list(timeout=3e6)] == ["a"]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
@@ -2190,7 +2589,7 @@ def test_list_of_targets_fetches_only_their_refs_whatever_the_board_size(
         assert [lease["_key"] for lease in reader.list(["k0"])] == ["k0"]
         fetches = [kwargs for args, kwargs in calls if args[0] == "fetch"]
         assert len(fetches) == 1
-        [refspec] = str(fetches[0]["input_text"]).splitlines()
+        [refspec] = [line for line in str(fetches[0]["input_text"]).splitlines() if not line.startswith("^")]
         assert refspec.startswith(f"+{claims.CLAIM_REF_PREFIX}k0:")
         assert not any(f"{claims.CLAIM_REF_PREFIX}*" in args for args, _ in calls)
         counts.append(len(calls))
@@ -2317,6 +2716,180 @@ def test_git_ends_with_its_caller_when_the_caller_is_terminated(tmp_path: Path) 
 
     assert caller.wait(timeout=10) == -signal.SIGTERM
     _assert_gone(int(pid_file.read_text()))
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Windows deletes no listing's refs")
+def test_a_listing_deletes_the_refs_a_stopped_listing_left_and_keeps_a_running_ones(
+    tmp_path: Path, board_repo: Path
+) -> None:
+    oid = _plant_lease(board_repo, "a")
+    scratch = tmp_path / "scratch"
+    fetched = tmp_path / "fetched"
+    # Another listing on the same scratch, waiting after its fetch.
+    script = (
+        "import pathlib, time\n"
+        "from autoform_cli import claims\n"
+        "def wait(self, listed, git):\n"
+        f"    pathlib.Path({str(fetched)!r}).touch()\n"
+        "    time.sleep(60)\n"
+        "claims.ClaimBoard._read_listed = wait\n"
+        f"claims.ClaimBoard(pathlib.Path({str(board_repo)!r}), 'w', pathlib.Path({str(scratch)!r})).list()\n"
+    )
+    running = subprocess.Popen([sys.executable, "-c", script], cwd=Path(claims.__file__).parents[1])
+    try:
+        started_by = time.monotonic() + 30
+        while not fetched.exists():
+            assert running.poll() is None, "the other listing ended"
+            assert time.monotonic() < started_by, "the other listing never fetched"
+            time.sleep(0.05)
+        reader = claims.ClaimBoard(board_repo, "worker-b", scratch)
+        host = claims._this_host()
+
+        assert [lease["_key"] for lease in reader.list()] == ["a"]
+        [ref] = _git("for-each-ref", "--format=%(refname)", claims._LIST_REF_PREFIX, cwd=scratch).split()
+        assert ref.startswith(f"{claims._LIST_REF_PREFIX}{host}-{running.pid}-") and ref.endswith("/a")
+        # Stopped by a signal, it never deletes its refs.
+        running.terminate()
+        running.wait(timeout=10)
+        # Another host's listing and an older version's, whose process this host cannot test.
+        kept = [f"{claims._LIST_REF_PREFIX}{int(host, 16) ^ 1:08x}-{running.pid}-{'0' * 32}/a"]
+        kept.append(f"{claims._LIST_REF_PREFIX}{'0' * 32}/a")
+        for ref in kept:
+            _git("update-ref", ref, oid, cwd=scratch)
+
+        assert [lease["_key"] for lease in reader.list()] == ["a"]
+        assert _git("for-each-ref", "--format=%(refname)", claims._LIST_REF_PREFIX, cwd=scratch).split() == sorted(kept)
+    finally:
+        running.kill()
+        running.wait(timeout=10)
+
+
+def _gone_pid() -> int:
+    """The process ID of a process that has ended, as a stopped listing's."""
+    ended = subprocess.Popen([sys.executable, "-c", ""])
+    ended.wait()
+    return ended.pid
+
+
+def _listing_refs(scratch: Path) -> list[str]:
+    refs = _git("for-each-ref", "--format=%(refname)", claims._LIST_REF_PREFIX, cwd=scratch)
+    return [ref for ref in refs.split("\n") if ref]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Windows deletes no listing's refs")
+def test_a_listing_deletes_stopped_namespaces_but_a_ref_beside_its_own_lock_file(
+    tmp_path: Path, board_repo: Path
+) -> None:
+    _plant_lease(board_repo, "a")
+    reader = _board(tmp_path, board_repo, "worker-b")
+    reader._ensure_scratch()
+    oid = _git("hash-object", "-w", "--stdin", cwd=reader.scratch, input_text="fetched\n").strip()
+    pid, host = _gone_pid(), claims._this_host()
+    held, locked = (f"{claims._LIST_REF_PREFIX}{host}-{pid}-{digit * 32}/author/" for digit in "01")
+    # Keys in folders, as the CLI's are. A name holding U+2028 beside `a` is
+    # one more ref to delete, not a second deletion of `a`.
+    for ref in (f"{held}a", f"{held}a\u2028x", f"{locked}a", f"{locked}b"):
+        _git("update-ref", ref, oid, cwd=reader.scratch)
+    # A deletion that stopped midway leaves the ref's lock file, and Git
+    # refuses a batch that deletes that ref.
+    _plant_ref_lock(reader.scratch, f"{locked}a")
+    # A fetch that stopped midway leaves the lock file of a ref it never
+    # wrote, which blocks no deletion.
+    _plant_ref_lock(reader.scratch, f"{held}c")
+
+    assert [lease["_key"] for lease in reader.list()] == ["a"]
+    assert _listing_refs(reader.scratch) == [f"{locked}a"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Windows deletes no listing's refs")
+def test_the_prune_runs_no_git_while_packed_refs_lock_is_held(tmp_path: Path, board_repo: Path) -> None:
+    reader = _board(tmp_path, board_repo, "worker-b")
+    reader._ensure_scratch()
+    oid = _git("hash-object", "-w", "--stdin", cwd=reader.scratch, input_text="fetched\n").strip()
+    pid, host = _gone_pid(), claims._this_host()
+    stopped = [f"{claims._LIST_REF_PREFIX}{host}-{pid}-{digit * 32}/a" for digit in "012"]
+    for ref in stopped:
+        _git("update-ref", ref, oid, cwd=reader.scratch)
+    # Every deletion takes packed-refs.lock, so Git would wait a second for
+    # the held lock, then refuse.
+    lock = reader.scratch / "packed-refs.lock"
+    lock.touch()
+    commands: list[str] = []
+
+    def git(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args[0])
+        return reader._git(args, **kwargs)
+
+    reader._prune_stopped_listings(git)
+
+    assert commands == []
+    assert _listing_refs(reader.scratch) == stopped
+    lock.unlink()
+    reader._prune_stopped_listings(git)
+    assert commands == ["for-each-ref", "update-ref"]
+    assert _listing_refs(reader.scratch) == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Windows deletes no listing's refs")
+def test_a_deletion_git_refuses_costs_the_prune_one_command_and_fails_nothing(tmp_path: Path, board_repo: Path) -> None:
+    reader = _board(tmp_path, board_repo, "worker-b")
+    reader._ensure_scratch()
+    oid = _git("hash-object", "-w", "--stdin", cwd=reader.scratch, input_text="fetched\n").strip()
+    pid, host = _gone_pid(), claims._this_host()
+    stopped = [f"{claims._LIST_REF_PREFIX}{host}-{pid}-{digit * 32}/a" for digit in "012"]
+    for ref in stopped:
+        _git("update-ref", ref, oid, cwd=reader.scratch)
+    commands: list[str] = []
+
+    def git(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args[0])
+        if args[0] == "update-ref":
+            # Another Git takes packed-refs.lock after the prune looked for it, so Git refuses every deletion.
+            (reader.scratch / "packed-refs.lock").touch()
+        return reader._git(args, **kwargs)
+
+    reader._prune_stopped_listings(git)
+
+    assert commands == ["for-each-ref", "update-ref"]
+    assert _listing_refs(reader.scratch) == stopped
+
+
+def test_off_linux_the_host_name_alone_names_the_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(claims, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(claims, "_BOOT_ID", str(tmp_path / "missing"))
+
+    assert claims._this_host() == hashlib.sha256(os.fsencode(socket.gethostname())).hexdigest()[:8]
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="/proc tells a host's processes apart on Linux")
+def test_a_listing_on_a_linux_host_proc_cannot_name_deletes_no_listings_refs(
+    tmp_path: Path, board_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _plant_lease(board_repo, "a")
+    reader = _board(tmp_path, board_repo, "worker-b")
+    reader._ensure_scratch()
+    oid = _git("hash-object", "-w", "--stdin", cwd=reader.scratch, input_text="fetched\n").strip()
+    # Containers in one pod share the host name and the boot ID, so with those
+    # alone, another container's running listing could look stopped.
+    partial = hashlib.sha256(os.fsencode(f"{socket.gethostname()}\0{Path(claims._BOOT_ID).read_text().strip()}"))
+    stopped = f"{claims._LIST_REF_PREFIX}{partial.hexdigest()[:8]}-{_gone_pid()}-{'0' * 32}/a"
+    _git("update-ref", stopped, oid, cwd=reader.scratch)
+    monkeypatch.setattr(claims, "_PID_NAMESPACE", str(tmp_path / "missing"))
+
+    assert claims._this_host() is None
+    assert [lease["_key"] for lease in reader.list()] == ["a"]
+    assert _listing_refs(reader.scratch) == [stopped]
+
+
+def test_a_listing_on_windows_deletes_no_listings_refs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    board = _scratch_board(tmp_path)
+    calls: list[list[str]] = []
+    # os.kill(pid, 0) ends the process there, so no listing's process can be tested.
+    monkeypatch.setattr(claims, "os", SimpleNamespace(name="nt"))
+
+    board._prune_stopped_listings(lambda args, **kwargs: calls.append(args))
+
+    assert calls == []
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
@@ -2480,8 +3053,8 @@ def test_list_of_targets_reads_only_them_on_a_board_of_thousands(
         ("k3549", last, False),
     ]
     [fetch] = [kwargs for args, kwargs in calls if args[0] == "fetch"]
-    assert len(str(fetch["input_text"]).splitlines()) == 2
-    assert len(calls) <= 6
+    assert len([line for line in str(fetch["input_text"]).splitlines() if not line.startswith("^")]) == 2
+    assert len(calls) <= 7
     assert time.monotonic() - started < 15
 
 
@@ -2542,6 +3115,43 @@ def test_claim_cli_transport_failure_is_nonzero(tmp_path: Path, capsys) -> None:
     missing = tmp_path / "missing" / "claims.git"
     assert main(_args(missing, tmp_path / "scratch", "acquire", "node")) == 1
     assert "error:" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows writes a lone surrogate in a path as UTF-8, not as that byte")
+@pytest.mark.parametrize("command", [("acquire", "node"), ("cleanup",)])
+def test_claim_cli_names_a_byte_of_the_boards_path_that_is_not_utf8(
+    tmp_path: Path, capsys, command: tuple[str, ...]
+) -> None:
+    # Git's message names the board. Read with a surrogate for that byte, it
+    # could not be printed.
+    missing = tmp_path / "bo\udcffard"
+    assert main(_args(missing, tmp_path / "scratch", *command)) == 1
+    assert "bo\\xffard' does not appear to be a git repository" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="APFS refuses a name that is not UTF-8, and Windows writes a lone surrogate as UTF-8",
+)
+def test_claim_cli_names_a_lock_file_on_a_board_whose_path_is_not_utf8(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(claims, "_LOCK_GRACE_S", 0.1)
+    repo = tmp_path / "bo\udcffard"
+    _git("init", "--bare", "--quiet", str(repo))
+    key = claims.author_claim_key("node")
+    _plant_ref_lock(repo, claims.CLAIM_REF_PREFIX + key)
+    _plant_ref_lock(repo, claims.CLAIM_REF_PREFIX + "bad\udcff")
+    named = f"bo\\xffard/{claims.CLAIM_REF_PREFIX}{key}.lock (modified 2023-11-14T22:13:20Z)"
+
+    # Printed on stdout with a surrogate for that byte, the lock's path ended
+    # `claim acquire` in a UnicodeEncodeError.
+    assert main(_args(repo, tmp_path / "scratch", "acquire", "node")) == 1
+    assert named in capsys.readouterr().out
+    assert main(_args(repo, tmp_path / "scratch", "list")) == 0
+    warned = capsys.readouterr().err
+    assert named in warned
+    assert f"blocks updates of {claims.CLAIM_REF_PREFIX}bad\\xff;" in warned
 
 
 def test_claim_cli_refuses_malformed_remote_lease(tmp_path: Path, board_repo: Path, capsys) -> None:
@@ -2722,7 +3332,7 @@ def test_claim_cli_list_labels_a_timeout(tmp_path: Path, capsys, monkeypatch) ->
 
     assert captured.out == ""
     assert captured.err == (
-        "error: timeout: no answer from the claim board within 1s while fetching the claim board\n"
+        "error: timeout: ran out of time after 1s while fetching the claim board\n"
     )
 
 
@@ -2753,7 +3363,9 @@ def test_claim_cli_list_labels_contention(tmp_path: Path, board_repo: Path, caps
 def test_claim_cli_list_names_a_slow_step_on_stderr(tmp_path: Path, board_repo: Path, capsys, monkeypatch) -> None:
     seen: dict[str, object] = {}
 
-    def slow(self: claims.ClaimBoard, keys: object = None, *, timeout: object = None, progress=None) -> list[object]:
+    def slow(
+        self: claims.ClaimBoard, keys: object = None, *, timeout: object = None, progress=None, warn=None
+    ) -> list[object]:
         seen.update(keys=keys, timeout=timeout)
         progress("fetching 1 claim refs")
         return []
@@ -2772,7 +3384,9 @@ def test_claim_cli_list_without_targets_passes_none_and_the_default_timeout(
 ) -> None:
     seen: dict[str, object] = {}
 
-    def record(self: claims.ClaimBoard, keys: object = None, *, timeout: object = None, progress=None) -> list[object]:
+    def record(
+        self: claims.ClaimBoard, keys: object = None, *, timeout: object = None, progress=None, warn=None
+    ) -> list[object]:
         seen.update(keys=keys, timeout=timeout)
         return []
 

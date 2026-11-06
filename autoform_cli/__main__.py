@@ -1970,12 +1970,15 @@ def _claim_list(args: argparse.Namespace) -> int:
     def progress(step: str) -> None:
         print(f"claim list: {step}...", file=sys.stderr, flush=True)
 
+    def warn(message: str) -> None:
+        print(f"warning: {message}", file=sys.stderr)
+
     try:
         board = _claim_board(args)
-        leases = board.list(list(targets) or None, timeout=args.timeout, progress=progress)
+        leases = board.list(list(targets) or None, timeout=args.timeout, progress=progress, warn=warn)
     except ClaimTimeoutError as exc:
         print(
-            f"error: timeout: no answer from the claim board within {args.timeout:g}s while {exc.step}",
+            f"error: timeout: ran out of time after {args.timeout:g}s while {exc.step}",
             file=sys.stderr,
         )
         return 1
