@@ -354,7 +354,7 @@ def test_unfinished_keyword_does_not_take_a_nondeclaration_command_name(tmp_path
 @pytest.mark.parametrize(
     "name",
     [
-        "open'", "open!", "public?", "variable₁", "local'",
+        "open'", "open!", "public?", "variable₁", "local'", "requires", "ensures",
         "«open»", "«local»", "«@[deprecated]»", "Qualified.open", "Qualified.local", "«Qualified.open».value",
         "α₁", "ℕ_value", "𝒜_value",
     ],
@@ -3742,20 +3742,24 @@ def test_a_declaration_keeps_its_attributes_closing_brackets_and_trailing_clause
     assert text(15) == "\n".join(lines[14:19])
 
 
-def test_an_excerpt_holds_the_name_after_a_keyword_that_ends_its_line() -> None:
-    lines = [
-        "theorem", "foo : True := trivial", "class inductive", "Good : Prop", "| intro", "theorem -- why",
-        "bar : True := trivial", "theorem", "-- why", "baz : True := trivial", "def after : Nat := 0",
-    ]
-
-    def text(line: int) -> str:
-        return declaration_text(lines, Declaration("P.x", Path("P.lean"), line, "def"))
-
-    assert text(1) == "\n".join(lines[0:2])
-    assert text(3) == "\n".join(lines[2:5])
-    # A comment after the keyword, or on a line of its own, is no name, as the index reads it.
-    assert text(6) == "\n".join(lines[5:7])
-    assert text(8) == "\n".join(lines[7:10])
+@pytest.mark.parametrize(
+    "written",
+    [
+        "theorem\nfoo : True := trivial",
+        "class inductive\nGood : Prop\n| intro",
+        # A comment after the keyword, or on lines of its own, is no name, as the index reads it.
+        "theorem -- why\nfoo : True := trivial",
+        "theorem\n-- why\nfoo : True := trivial",
+        "theorem /- why -/\nfoo : True := trivial",
+        "theorem\n/- why\n-/\nfoo : True := trivial",
+        "class inductive /- why -/\nGood : Prop\n| intro",
+        # Nor is a `--` in a string.
+        '@[deprecated "a -- b" (since := "2026-01-01")] theorem\nfoo : True := trivial',
+    ],
+)
+def test_an_excerpt_holds_the_name_after_a_keyword_that_ends_its_line(written: str) -> None:
+    lines = [*written.split("\n"), "def after : Nat := 0"]
+    assert declaration_text(lines, Declaration("P.x", Path("P.lean"), 1, "def")) == written
 
 
 def test_an_excerpt_counts_lines_as_the_index_does(tmp_path: Path) -> None:

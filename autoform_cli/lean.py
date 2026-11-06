@@ -1608,7 +1608,7 @@ def declaration_names(lean: str) -> list[str]:
     return _DECLARATION_NAME.findall(lean)
 
 
-def declaration_text(lines: list[str], declaration: Declaration) -> str:
+def declaration_text(lines: list[str], declaration: Declaration, masked: list[str] | None = None) -> str:
     """``declaration`` as written in ``lines``, its file's lines: from its attributes and modifiers on the
     lines above its keyword, if any, to its own last line.
 
@@ -1616,7 +1616,8 @@ def declaration_text(lines: list[str], declaration: Declaration) -> str:
     than its keyword's that is not an alternative, a ``where`` block, a trailing clause or a closing
     bracket: a comment, an attribute, the next command or an ``end``. A body written at that indent is
     cut short there. When the keyword ends its line, the line holding the name is its own, whatever its
-    indent.
+    indent. ``masked`` is ``lines`` without comments and with literals blanked, as the index reads them;
+    it is worked out from ``lines`` when not given.
     """
 
     start = declaration.line - 1
@@ -1625,7 +1626,9 @@ def declaration_text(lines: list[str], declaration: Declaration) -> str:
     while start and (head := lines[start - 1].split("--", 1)[0]).strip() and _MODIFIER_LINE.fullmatch(head):
         start -= 1
     end = declaration.line
-    declaration_match = _DECLARATION.match(lines[declaration.line - 1].split("--", 1)[0])
+    if masked is None:
+        masked = _without_lean_comments("\n".join(lines), mask_literals=True).split("\n")
+    declaration_match = _DECLARATION.match(masked[declaration.line - 1])
     rest = declaration_match and (
         _CLASS_VARIANT.match(declaration_match.group(2) or "")[2]
         if declaration_match.group(1) == "class"
@@ -1634,7 +1637,7 @@ def declaration_text(lines: list[str], declaration: Declaration) -> str:
     if declaration_match and not rest:
         # The keyword ends its line, so the name opens the next one that holds more than a comment, perhaps at the
         # keyword's column.
-        end = next((number for number, line in enumerate(lines[end:], end + 1) if line.split("--", 1)[0].strip()), end)
+        end = next((number for number, line in enumerate(masked[end:], end + 1) if line.strip()), end)
     for number, line in enumerate(lines[end:], end + 1):
         if line.strip():
             if len(line) - len(line.lstrip()) <= indent and not _CONTINUATION.match(line):
@@ -1684,7 +1687,7 @@ class SourceLinker:
     """The Lean root's path below the repository's top level, or empty at the top level."""
     sources: Mapping[Path, bytes] = field(default_factory=dict)
     """Each captured Lean file's bytes, by its path below the Lean root."""
-    _lines: dict[Path, list[str]] = field(default_factory=dict, repr=False, compare=False)
+    _lines: dict[Path, tuple[list[str], list[str]]] = field(default_factory=dict, repr=False, compare=False)
     _opens: dict[Path, list[tuple[int, list[str]]]] = field(default_factory=dict, repr=False, compare=False)
     _imports: dict[Path, frozenset[Path]] = field(default_factory=dict, repr=False, compare=False)
     _modules: dict[str, list[Path]] = field(default_factory=dict, repr=False, compare=False)
@@ -1701,9 +1704,10 @@ class SourceLinker:
             # The index also ends a line at a lone carriage return, which Lean allows only in a literal or a
             # comment; rather than count lines as it does, a file holding one shows no declarations.
             lines = [] if re.search("\r(?!\n)", text) else [line.removesuffix("\r") for line in text.split("\n")]
-            self._lines[declaration.path] = lines
-        lines = self._lines[declaration.path]
-        return (declaration, declaration_text(lines, declaration)) if declaration.line <= len(lines) else None
+            masked = _without_lean_comments("\n".join(lines), mask_literals=True).split("\n")
+            self._lines[declaration.path] = (lines, masked)
+        lines, masked = self._lines[declaration.path]
+        return (declaration, declaration_text(lines, declaration, masked)) if declaration.line <= len(lines) else None
 
     def resolve(self, written: str, within: Declaration) -> tuple[Declaration, str] | None:
         """The declaration *written*, a name in *within*'s text, refers to, and the part of *written* that
