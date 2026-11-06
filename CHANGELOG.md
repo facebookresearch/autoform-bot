@@ -333,14 +333,14 @@ date when the release is tagged.
 - **Claims.** `claim list TARGET...` fetches and reads only those claims.
   `--timeout` (120 seconds by default) bounds a listing's reads of the board,
   though not the lock-file check after it. A slow step is named on stderr, and a
-  failure goes to stderr labelled `timeout:`, `contention:` or `transport:` with
-  nothing on stdout. Git no longer waits at its own terminal password prompt in
-  claim commands, though `ssh`, a credential helper or an askpass program can
-  still prompt. A `claim list` or `claim cleanup` listing that runs out of time
-  or is interrupted no longer leaves its transport running. Formalize treats a
-  labelled `claim list` failure as an unreadable board, not as a board without
-  claims, and an import-edit recheck whose `claim list` fails as a conflict
-  (#432).
+  failure to reach or read the board goes to stderr labelled `timeout:`,
+  `contention:` or `transport:` with nothing on stdout. Git no longer waits at
+  its own terminal password prompt in claim commands, though `ssh`, a credential
+  helper or an askpass program can still prompt. A `claim list` or
+  `claim cleanup` listing that runs out of time or is interrupted no longer
+  leaves its transport running. Formalize treats a labelled `claim list` failure
+  as an unreadable board, not as a board without claims, and an import-edit
+  recheck whose `claim list` fails as a conflict (#432).
 - **Work packages and sessions.** A Formalize subagent may keep its worktree
   for a package of related leaves that the lead confirms together, holding only
   the leaf it has taken and taking the next once `work context` shows it ready.
