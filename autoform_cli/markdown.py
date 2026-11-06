@@ -762,8 +762,9 @@ def is_placeholder(visible: str) -> bool:
     Rejecting those pushed authors toward vaguer wording to satisfy the checker.
 
     The gap this leaves is a marker followed by other punctuation or none, as
-    in "TODO. Choose a milestone" or "TODO choose a milestone". That reads as prose to any rule cheap enough to trust,
-    so it is left to human review rather than guessed at.
+    in "TODO. Choose a milestone" or "TODO choose a milestone". That reads as
+    prose to any rule cheap enough to trust, so it is left to human review
+    rather than guessed at.
     """
 
     stripped = re.sub(r"[*_~\\]", "", visible)
@@ -948,11 +949,12 @@ def article_parts(text: str) -> ArticleParts:
     This is the one definition of where a statement ends, for the audit and
     for the published page alike. A heading counts only where
     :func:`mask_fences_and_comments` leaves it visible, so ``## Proof`` inside a
-    fenced block, an indented code block, or an HTML comment ends nothing, and a
-    heading below level two belongs to whatever it sits in. A fence that never
-    closes is read as text, unlike in :func:`content`, so a heading after it
-    still counts. A comment that never closes hides every heading after it; the
-    audit then reports the sections it cannot see.
+    fenced block or an HTML comment ends nothing; nor does one in an indented
+    code block, too deep for ``HEADING``. A heading below level two belongs to
+    whatever it sits in. A fence that never closes is read as text, unlike in
+    :func:`content`, so a heading after it still counts. A comment that never
+    closes hides every heading after it; the audit then reports the sections it
+    cannot see.
     """
 
     lines = text.splitlines()

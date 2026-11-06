@@ -60,7 +60,7 @@ it as open to the end of the file. An HTML comment that never closes, even one
 opened in inline code or an indented code block, hides every later heading and
 dependency link: the graph loses those edges, one opened in the statement puts
 the rest of the article in the theorem box; `check` warns about one outside
-code, and the audit about a hidden `## Depends on`.
+code, and the audit about a formalizable article's hidden `## Depends on`.
 
 `## Depends on` lists what the article needs to be *stated*,
 `## Proof depends on` what only its *proof* needs, and `## Informally uses` what
