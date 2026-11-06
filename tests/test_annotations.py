@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 import sys
@@ -14,7 +15,8 @@ from literature_links import discovery
 from autoform_cli.__main__ import main
 from autoform_cli.annotations import Drops, _annotations, _walk
 from autoform_cli.graph import load_graph
-from autoform_cli.render import _left_out, load_publication_source
+from autoform_cli.render import _left_out, _review_disclosures, load_publication_source
+from autoform_cli.review import ReviewError
 from autoform_cli.runtime import load_runtime_graph
 from autoform_cli.skeleton import blueprint_hash
 
@@ -27,6 +29,9 @@ MATHLIB = {
     "version": "v4.33.0",
     "location": {"declaration": "Subgroup.card_subgroup_dvd_card", "module": "Mathlib.GroupTheory.Coset.Card"},
 }
+#: Another Mathlib declaration in MATHLIB's file.
+SAME_FILE = {**MATHLIB, "location": {**MATHLIB["location"], "declaration": "Subgroup.index_mul_card"}}
+REVIEWED = {"area": "Group theory", "review_approved": "0" * 64}
 BESIDE = (
     "frontmatter beside an annotation is ignored, except coverage_list_limit, open_statements, published, tracks_lean"
 )
@@ -79,7 +84,9 @@ def _own(name: str, role: str | None = None) -> dict[str, object]:
 
 
 def test_an_article_s_annotations_carry_its_facts(tmp_path: Path) -> None:
-    blueprint = _blueprint(tmp_path, {"lagrange": None, "card": None, "unlinked": None, "inventory": None})
+    blueprint = _blueprint(
+        tmp_path, {"README": None, "lagrange": None, "card": None, "unlinked": None, "inventory": None}
+    )
     _links(
         blueprint,
         {
@@ -91,12 +98,23 @@ def test_an_article_s_annotations_carry_its_facts(tmp_path: Path) -> None:
                     status="formalized",
                     # Credit goes by role, never by position.
                     object=[_own("Groups.card_dvd", "supports"), _own("Groups.lagrange", "states")],
-                    extensions={"org.autoform": {"origin": "cited", "not_ready": False, "discussion": 42}},
+                    extensions={"org.autoform": {"origin": "cited", "not_ready": False, "discussion": 42, **REVIEWED}},
                 ),
-                _about("lagrange", id=ARTICLE_ID, object=[MATHLIB], extensions={"org.autoform": {"mathlib": True}}),
+                # Two Mathlib names in one file give that file.
+                _about(
+                    "lagrange",
+                    id=ARTICLE_ID,
+                    object=[MATHLIB, SAME_FILE],
+                    extensions={"org.autoform": {"mathlib": True}},
+                ),
             ],
+            "README.jsonl": [_about("README", extensions={"org.autoform": {"navigation": "collection"}})],
             "card.jsonl": [
-                _about("card", kind="noncomputable def", status="formalized", object=[_own("Groups.card")]),
+                # A subject end that is no roadmap article leaves the annotation about the one it names.
+                {
+                    **_about("card", kind="noncomputable def", status="formalized", object=[_own("Groups.card")]),
+                    "subject": [*_about("card")["subject"], {"type": "generic", "uri": "../README.md"}],
+                },
                 # Mathlib's repository names a Mathlib declaration, without the flag that says the result is there.
                 _about("card", object=[{**MATHLIB, "uri": MATHLIB["uri"] + ".git/"}]),
             ],
@@ -123,9 +141,14 @@ def test_an_article_s_annotations_carry_its_facts(tmp_path: Path) -> None:
     )
     assert (lagrange.statement_formalized, lagrange.proof_formalized) == (True, True)
     assert (lagrange.origin, lagrange.not_ready, lagrange.discussion) == ("cited", False, "42")
+    assert (lagrange.area, lagrange.review_approved, graph.nodes["roadmap"].navigation) == (
+        REVIEWED["area"],
+        REVIEWED["review_approved"],
+        "collection",
+    )
     assert (lagrange.mathlib, lagrange.mathlib_declaration, lagrange.mathlib_file) == (
         True,
-        "Subgroup.card_subgroup_dvd_card",
+        "Subgroup.card_subgroup_dvd_card, Subgroup.index_mul_card",
         "Mathlib/GroupTheory/Coset/Card.lean",
     )
     # A definition is complete once stated, so "formalized" asserts no proof.
@@ -194,7 +217,7 @@ def test_an_article_without_an_annotation_keeps_its_frontmatter(tmp_path: Path) 
 
 
 def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path) -> None:
-    blueprint = _blueprint(tmp_path, {stem: None for stem in "abcdefghijklmnopqrst"})
+    blueprint = _blueprint(tmp_path, {stem: None for stem in "abcdefghijklmnopqrstuw"})
     mathlib = {"org.autoform": {"mathlib": True}}
     _links(
         blueprint,
@@ -208,17 +231,36 @@ def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path
                 _about("b", status="formalized", object=[_own("B.one"), _own("B.two")]),
                 _about("c", status="partial"),
                 _about(
-                    "d", kind=5, extensions={"org.autoform": {"not_ready": "yes", "colour": "red", "published": False}}
+                    "d",
+                    kind=5,
+                    # Nothing a file writes breaks a line, here in a key's name.
+                    extensions={
+                        "org.autoform": {"not_ready": "yes", "colour\nwarning: forged": "red", "published": False}
+                    },
                 ),
                 _about("e", kind="theorem"),
                 _about("e", kind="lemma"),
                 _about(
-                    "f", object=[{"type": "lean", "uri": "https://example.com/other", "location": {"declaration": "F"}}]
+                    "f",
+                    status="formalized",
+                    object=[
+                        {
+                            "type": "lean",
+                            "uri": "https://example.com/other",
+                            "location": {"declaration": "F"},
+                            "role": "states",
+                        },
+                        _own("F.helper"),
+                    ],
                 ),
                 _about("g", extensions={"org.autoform": {"origin": "invented"}}),
                 _about("h", kind="theorem", extensions={"org.autoform": {"catalog": "module"}}),
                 _about("i", extensions={"org.autoform": 1}),
-                _about("j", object=[{"location": {"module": "J.Module"}}]),
+                _about(
+                    "j",
+                    status="formalized",
+                    object=[{"location": {"module": "J.Module"}, "role": "states"}, _own("J.helper")],
+                ),
                 _about("k", status="retracted", object=[_own("K.main")]),
                 _about("k", object=[MATHLIB], extensions=mathlib),
                 # Nothing a file writes breaks a line, in a warning or on the site.
@@ -244,6 +286,14 @@ def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path
                 # Stated by Mathlib, or by an end left out, the article credits none of the project's declarations.
                 _about("r", status="formalized", object=[{**MATHLIB, "role": "states"}, _own("R.helper")]),
                 _about("s", status="formalized", object=[_own("S.main\a", "states"), _own("S.helper")]),
+                # Two declarations with role states are not one.
+                _about("u", status="formalized", object=[_own("U.one", "states"), _own("U.two", "states")]),
+                # Another project as a whole can state the article too.
+                _about(
+                    "w",
+                    status="formalized",
+                    object=[{"type": "lean", "uri": "https://example.com/other", "role": "states"}, _own("W.main")],
+                ),
                 # The file is the first name's, which gives none.
                 _about(
                     "t",
@@ -264,20 +314,21 @@ def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path
         "annotations about no roadmap article are left out (1): links/bad.jsonl:3",
         "annotations about several articles are left out (1): links/bad.jsonl:4",
         "a status needs a Lean declaration of this project, so it is left out (1): a",
-        "a status needs one Lean declaration with role states, or a single one with no role, so it is left out (2): b, m",
+        "a status needs one Lean declaration with role states, or a single one with no role, so it is left out "
+        "(3): b, m, u",
         "status values Autoform does not read are left out (1): c (partial)",
         "annotation values Autoform does not accept are left out (7): d (not_ready), d (kind), i (extensions), "
         "l (kind), l (object type) and 2 more",
-        "unknown org.autoform keys are left out (1): d (colour)",
+        "unknown org.autoform keys are left out (1): d (colour\\nwarning: forged)",
         "settings stay in README frontmatter, so in an annotation they are left out (1): d (published)",
         "an article's annotations give one key several values, so the first is kept (1): e (kind)",
         "Lean ends whose uri is neither this project nor https://github.com/leanprover-community/mathlib4 are left out "
         "(2): f (F), q (Subgroup.card_subgroup_dvd_card)",
+        "a status is left out when an end with role states is not a declaration of this project (5): f, j, r, s, w",
         "catalog is left out beside a kind or a Mathlib link (1): h",
         "Lean ends that name no declaration are left out (1): j",
         "status retracted is left out beside org.autoform mathlib true (1): k",
         "Mathlib modules other than the first name's are left out (2): p (Mathlib.P), t (Mathlib.T)",
-        "a status is left out when an end with role states is not a declaration of this project (2): r, s",
     )
     assert (graph.nodes["b"].lean, graph.nodes["b"].statement_formalized) == ("B.one, B.two", False)
     assert (graph.nodes["e"].declaration, graph.nodes["h"].catalog, graph.nodes["l"].declaration) == (
@@ -311,15 +362,20 @@ def test_a_warning_names_the_first_five_places(tmp_path: Path) -> None:
 def test_an_annotation_about_part_of_an_article_is_about_no_article(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path, {"result": None})
     # A fragment or a query names a part of the page, and a backslash separates folders on Windows alone.
-    uris = ["../roadmap/result.md#proof", "../roadmap/result.md?view=1", "..\\roadmap\\result.md"]
+    uris = [
+        "../roadmap/result.md#proof",
+        "../roadmap/result.md?view=1",
+        "..\\roadmap\\result.md",
+        "//[x/roadmap/result.md",
+    ]
     rows = [{"subject": [{"type": "generic", "uri": uri}], "kind": "lemma"} for uri in uris]
     _links(blueprint, {"parts.jsonl": rows})
     graph = load_graph(blueprint)
 
     assert graph.nodes["result"].declaration is None
     assert graph.warnings == (
-        "annotations about no roadmap article are left out (3): links/parts.jsonl:1, links/parts.jsonl:2, "
-        "links/parts.jsonl:3",
+        "annotations about no roadmap article are left out (4): links/parts.jsonl:1, links/parts.jsonl:2, "
+        "links/parts.jsonl:3, links/parts.jsonl:4",
     )
 
 
@@ -336,13 +392,36 @@ def test_warnings_name_places_in_one_order_on_every_disk(tmp_path: Path) -> None
     )
 
 
-def test_an_id_another_article_uses_is_left_out_without_refusing(tmp_path: Path) -> None:
-    blueprint = _blueprint(tmp_path, {"first": f"article_id: {ARTICLE_ID}", "second": None})
-    _links(blueprint, {"second.jsonl": [_about("second", id=ARTICLE_ID)]})
+@pytest.mark.parametrize("annotated", ["first", "second"])
+def test_an_id_another_article_uses_is_left_out_without_refusing(tmp_path: Path, annotated: str) -> None:
+    other = "second" if annotated == "first" else "first"
+    blueprint = _blueprint(tmp_path, {annotated: None, other: f"article_id: {ARTICLE_ID}"})
+    _links(blueprint, {f"{annotated}.jsonl": [_about(annotated, id=ARTICLE_ID)]})
     graph = load_graph(blueprint)
 
+    # The first article loaded keeps the ID, whichever of the two carries it in an annotation.
     assert (graph.nodes["first"].article_id, graph.nodes["second"].article_id) == (ARTICLE_ID, None)
     assert "article IDs another article already uses are left out (1): second (first)" in graph.warnings
+
+
+def test_a_value_frontmatter_would_refuse_is_left_out_saying_what_the_key_accepts(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path, {"result": None})
+    _links(blueprint, {"result.jsonl": [_about("result", extensions={"org.autoform": {"origin": "invented"}})]})
+
+    assert load_graph(blueprint).warnings == (
+        "annotation values Autoform does not accept are left out (1): result ('origin' accepts cited, bridged, or "
+        "background)",
+    )
+
+
+def test_an_annotation_nested_too_deeply_is_left_out(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path, {"result": None})
+    deep = json.loads("[" * 600 + "]" * 600)
+    _links(blueprint, {"result.jsonl": [_about("result", kind="lemma", extensions={"x": deep})]})
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["result"].declaration is None
+    assert graph.warnings == ("annotations nested too deeply to read are left out (1): links/result.jsonl:1",)
 
 
 def test_a_symbolic_link_in_the_folder_is_not_followed(tmp_path: Path) -> None:
@@ -414,16 +493,27 @@ def test_a_defaults_file_that_cannot_be_used_leaves_out_the_annotations_below_it
     )
 
 
-@pytest.mark.parametrize("spelling", ["Links", "links-file"])
+@pytest.mark.parametrize("spelling", ["Links", "links-file", "links-symlink"])
 def test_a_folder_that_is_not_links_is_read_nowhere(tmp_path: Path, spelling: str, capsys) -> None:
     blueprint = _blueprint(tmp_path, {"result": None, "old": "declaration: theorem"})
     revision = load_runtime_graph(blueprint).source_revision
     if spelling == "Links":
         _links(blueprint, {"result.jsonl": [_about("result", kind="lemma")]})
         (blueprint / "links").rename(blueprint / "Links")
-        warning = "a folder spelled other than links is not read; rename it (in Git: git mv through a temporary name) (1): Links"
+        warning = (
+            "a folder spelled other than links is not read; rename it (in Git: git mv through a temporary name) "
+            "(1): Links"
+        )
     else:
-        (blueprint / "links").write_text("not a folder", encoding="utf-8")
+        if spelling == "links-file":
+            (blueprint / "links").write_text("not a folder", encoding="utf-8")
+        else:
+            (tmp_path / "elsewhere").mkdir()
+            elsewhere = _links(tmp_path / "elsewhere", {"result.jsonl": [_about("result", kind="lemma")]})
+            try:
+                (blueprint / "links").symlink_to(elsewhere, target_is_directory=True)
+            except OSError:
+                pytest.skip("symlinks are unavailable")
         warning = "blueprint/links is not a folder, so no annotation is read (1): links"
     graph = load_graph(blueprint)
 
@@ -466,6 +556,43 @@ def test_check_adds_literature_links_validation_and_keeps_its_exit_status(tmp_pa
     assert [warning.split(" (not JSON")[0] for warning in graph.warnings] == [left_out]
 
 
+@pytest.mark.parametrize("unreadable", [True, False], ids=["unreadable", "defaults-alone"])
+def test_check_says_nothing_again_that_loading_warns_about(tmp_path: Path, unreadable: bool, capsys) -> None:
+    blueprint = _blueprint(tmp_path, {"result": None})
+    folder = _links(blueprint, {})
+    if unreadable:
+        below = [_about("result")]
+        _links(
+            blueprint, {"shape.jsonl": ["[1]"], **{f"{name}/below.jsonl": below for name in ("bad", "odd", "linked")}}
+        )
+        (folder / "bytes.jsonl").write_bytes(b"\xff\n")
+        (folder / "bad" / "_defaults.json").write_text("[]", encoding="utf-8")
+        (folder / "odd" / "_defaults.json").mkdir()
+        try:
+            (folder / "linked" / "_defaults.json").symlink_to(folder / "_defaults.json")
+        except OSError:
+            pass  # the other folders still show it
+    loaded = load_graph(blueprint).warnings
+
+    assert main(["check", str(blueprint)]) == 0
+    printed = capsys.readouterr().out.splitlines()
+    assert bool(loaded) is unreadable and all(f"warning: {warning}" in printed for warning in loaded)
+    # Nor does check report a folder of defaults alone, which holds no annotation yet.
+    assert not [line for line in printed if line.startswith("warning: literature-links:")]
+
+
+def test_review_refuses_annotations_changed_after_its_snapshot(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path, {"result": None})
+    _links(blueprint, {"result.jsonl": [_about("result", kind="lemma")]})
+    earlier = dataclasses.replace(load_graph(blueprint), links_sha256="0" * 64)
+
+    with pytest.raises(ReviewError) as refused:
+        _review_disclosures(blueprint, earlier, None, {}, {}, ())
+    assert [(finding.code, finding.reason.split(" while")[0]) for finding in refused.value.findings] == [
+        ("review-snapshot-changed", "blueprint/links/ changed")
+    ]
+
+
 def test_render_reads_the_annotations_and_never_publishes_them(tmp_path: Path, capsys) -> None:
     blueprint = _blueprint(tmp_path, {"result": None, "drafts/README": "published: false", "drafts/idea": None})
     both = [*_about("result")["subject"], *_about("drafts/idea")["subject"]]
@@ -503,12 +630,21 @@ def test_revisions_cover_the_annotations(tmp_path: Path) -> None:
     linked = load_runtime_graph(blueprint).source_revision, blueprint_hash(load_graph(blueprint))
     (folder / "result.jsonl").write_text(json.dumps(_about("result", kind="theorem")) + "\n", encoding="utf-8")
     edited = load_runtime_graph(blueprint).source_revision, blueprint_hash(load_graph(blueprint))
+    # Hidden files are read nowhere, so they change nothing.
+    (folder / ".DS_Store").write_bytes(b"\0")
+    (folder / ".draft.jsonl").write_text(json.dumps(_about("result", kind="lemma")) + "\n", encoding="utf-8")
+    hidden = load_runtime_graph(blueprint).source_revision, load_graph(blueprint).nodes["result"].declaration
+    (folder / "result.jsonl").rename(folder / "renamed.jsonl")
+    renamed = load_runtime_graph(blueprint).source_revision, blueprint_hash(load_graph(blueprint))
     # A defaults file that cannot be used changes what loads below it, though no byte read changes.
     (folder / "nested" / "_defaults.json").mkdir(parents=True)
     unusable = load_runtime_graph(blueprint).source_revision, blueprint_hash(load_graph(blueprint))
 
-    assert len({before[0], linked[0], edited[0], unusable[0]}) == 4
-    assert len({before[1], linked[1], edited[1], unusable[1]}) == 4
+    # Without the folder, the revision is the one main gives.
+    assert before[0] == "0571905d3806a4ac230097caca7aa5b49f3d4753f53172594ac959aca323dd99"
+    assert hidden == (edited[0], "theorem")
+    assert len({before[0], linked[0], edited[0], renamed[0], unusable[0]}) == 5
+    assert len({before[1], linked[1], edited[1], renamed[1], unusable[1]}) == 5
 
 
 @pytest.mark.parametrize("assigned", [False, True], ids=["an-id-to-write", "none-to-write"])
@@ -520,6 +656,15 @@ def test_migrate_article_ids_writes_nothing_beside_the_folder(tmp_path: Path, as
     assert main(["migrate", "article-ids", str(blueprint), "--write"]) == (0 if assigned else 2)
     assert ("nothing written" in capsys.readouterr().err) is not assigned
     assert (blueprint / "roadmap" / "result.md").read_bytes() == page
+
+
+def test_migrate_article_ids_writes_beside_a_file_named_links(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path, {"result": "declaration: theorem"})
+    (blueprint / "links").write_text("not a folder", encoding="utf-8")
+
+    # Loading reads no annotation there, so the IDs go into frontmatter as before.
+    assert main(["migrate", "article-ids", str(blueprint), "--write"]) == 0
+    assert load_graph(blueprint).nodes["result"].article_id is not None
 
 
 def test_literature_links_is_imported_only_for_a_folder(tmp_path: Path) -> None:

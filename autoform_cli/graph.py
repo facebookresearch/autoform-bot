@@ -23,6 +23,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from ._fs import is_within as _is_within
+from .annotations import DECLARATION_KEYS as _CATALOG_DECLARATION_KEYS
 from .annotations import REJECTED, read_links
 from .annotations import SETTINGS as _SETTINGS
 from .lean import declaration_names
@@ -83,9 +84,6 @@ _FALSE = frozenset({"false", "no"})
 #: How many statements a coverage row lists beside evidence it keeps, unless
 #: ``roadmap/README.md`` sets ``coverage_list_limit``.
 _COVERAGE_LIST_LIMIT = 50
-_CATALOG_DECLARATION_KEYS = frozenset(
-    {"declaration", "mathlib", "mathlib_declaration", "mathlib_file"}
-)
 
 #: ``## Depends on`` carries the prerequisites needed to *state* a node;
 #: ``## Proof depends on`` carries the extra prerequisites its *proof* needs.
@@ -298,7 +296,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             annotated.add(source.id)
             text, ignored = _settings_only(text)
             if ignored:
-                links.drops.add("frontmatter beside an annotation is ignored, except " + ", ".join(sorted(_SETTINGS)), source.id)
+                beside = "frontmatter beside an annotation is ignored, except " + ", ".join(sorted(_SETTINGS))
+                links.drops.add(beside, source.id)
         node, node_issues = _parse_node(source.id, canonical, text)
         issues.extend(node_issues)
         if node is not None:

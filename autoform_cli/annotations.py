@@ -44,8 +44,8 @@ _STATUSES = frozenset({"formalized", "stated", "retracted"})
 #: The repository a ``lean`` end names to link a Mathlib declaration.
 MATHLIB = "https://github.com/leanprover-community/mathlib4"
 _END_TYPES = frozenset({"pdf", "latex", "html", "lean", "generic"})
-#: What ``catalog`` cannot sit beside, as graph's _CATALOG_DECLARATION_KEYS.
-_DECLARATION_KEYS = frozenset({"declaration", "mathlib", "mathlib_declaration", "mathlib_file"})
+#: What ``catalog`` cannot sit beside, in frontmatter or an annotation.
+DECLARATION_KEYS = frozenset({"declaration", "mathlib", "mathlib_declaration", "mathlib_file"})
 _SEVERAL = "an article's annotations give one key several values, so the first is kept"
 _DEFAULTS = "_defaults.json"
 _LINES = (".jsonl", ".ndjson")
@@ -87,9 +87,11 @@ class Links:
 
 
 def links_exist(blueprint: Path) -> bool:
-    """Whether the blueprint holds an entry named exactly ``links``; a case-insensitive disk finds ``Links`` too."""
+    """Whether ``blueprint/links`` is the folder loading reads: an entry named exactly ``links``, which a disk that
+    ignores case would find as ``Links`` too, that is a folder and not a symbolic link."""
+    folder = blueprint / LINKS_DIR
     try:
-        return LINKS_DIR in os.listdir(blueprint)
+        return LINKS_DIR in os.listdir(blueprint) and not os.path.islink(folder) and folder.is_dir()
     except OSError:
         return False
 
@@ -103,19 +105,17 @@ def read_links(blueprint: Path, articles: dict[Path, str]) -> Links | None:
     folder = blueprint / LINKS_DIR
     if not links_exist(blueprint):
         try:
-            spellings = sorted(name for name in os.listdir(blueprint) if name.casefold() == LINKS_DIR)
+            names = os.listdir(blueprint)
         except OSError:
-            spellings = []
-        if not spellings:
+            names = []
+        if LINKS_DIR in names:
+            drops.add(f"blueprint/{LINKS_DIR} is not a folder, so no annotation is read", LINKS_DIR)
+        elif spellings := sorted(name for name in names if name.casefold() == LINKS_DIR):
+            # Read on a disk that ignores case and not on one that doesn't, it is read on neither (#595).
+            rename = "rename it (in Git: git mv through a temporary name)"
+            drops.add(f"a folder spelled other than {LINKS_DIR} is not read; {rename}", spellings[0])
+        else:
             return None
-        # Read on a disk that ignores case and not on one that doesn't, it is read on neither (#595).
-        drops.add(
-            f"a folder spelled other than {LINKS_DIR} is not read; rename it (in Git: git mv through a temporary name)",
-            spellings[0],
-        )
-        return Links({}, drops, None)
-    if os.path.islink(folder) or not folder.is_dir():
-        drops.add(f"blueprint/{LINKS_DIR} is not a folder, so no annotation is read", LINKS_DIR)
         return Links({}, drops, None)
     contents, broken = _walk(folder, drops)
     digest = hashlib.sha256(b"autoform-links/v1\0")
@@ -152,7 +152,7 @@ def read_links(blueprint: Path, articles: dict[Path, str]) -> Links | None:
 def scan(blueprint: Path) -> list[str]:
     """literature-links' own report on ``blueprint/links/``, for ``check``: what its validation rejects."""
     folder = blueprint / LINKS_DIR
-    if not links_exist(blueprint) or os.path.islink(folder) or not folder.is_dir():
+    if not links_exist(blueprint):
         return []
     from literature_links import discovery
 
@@ -181,12 +181,13 @@ def _walk(folder: Path, drops: Drops) -> tuple[dict[str, bytes], set[str]]:
     pending = [str(folder)]
     while pending:
         directory = pending.pop()
+        here = directory[top:].replace(os.sep, "/")
         try:
             with os.scandir(directory) as entries:
                 children = sorted(entries, key=lambda entry: entry.name)
         except OSError as error:
-            where = f"{LINKS_DIR}/{directory[top:]}".replace(os.sep, "/")
-            drops.add("folders in blueprint/links/ that cannot be listed are left out", f"{where} ({error.strerror})")
+            place = f"{LINKS_DIR}/{here} ({error.strerror})"
+            drops.add("folders in blueprint/links/ that cannot be listed are left out", place)
             continue
         folders = []
         for entry in children:
@@ -196,8 +197,8 @@ def _walk(folder: Path, drops: Drops) -> tuple[dict[str, bytes], set[str]]:
             place = f"{LINKS_DIR}/{relative}"
             try:
                 regular = entry.is_file(follow_symlinks=False)
-                if entry.name == _DEFAULTS and (entry.is_symlink() or not regular):
-                    broken.add(directory[top:].replace(os.sep, "/"))
+                if entry.name == _DEFAULTS and not regular:
+                    broken.add(here)
                 if entry.is_symlink():
                     drops.add("symbolic links in blueprint/links/ are not followed", place)
                 elif entry.is_dir(follow_symlinks=False):
@@ -209,7 +210,7 @@ def _walk(folder: Path, drops: Drops) -> tuple[dict[str, bytes], set[str]]:
                     drops.add("files in blueprint/links/ that are not regular files are left out", place)
             except OSError as error:
                 if entry.name == _DEFAULTS:
-                    broken.add(directory[top:].replace(os.sep, "/"))
+                    broken.add(here)
                 drops.add("files in blueprint/links/ that cannot be read are left out", f"{place} ({error.strerror})")
         pending.extend(reversed(folders))  # by name, so every disk gives the warnings in one order
     return contents, broken
@@ -322,7 +323,8 @@ def _facts(node_id: str, entries: list[tuple[dict[str, Any], str]], project: str
         if flag:
             written = ("true" if value else "false") if isinstance(value, bool) else None
         elif isinstance(value, str) or (number and type(value) is int):
-            written = str(value) if str(value).isprintable() and str(value) else None
+            written = str(value)
+            written = written if written and written.isprintable() else None
         else:
             written = None
         if written is None:
@@ -362,8 +364,14 @@ def _facts(node_id: str, entries: list[tuple[dict[str, Any], str]], project: str
                 drops.add(REJECTED, f"{node_id} (object type)")
                 continue
             location = end.get("location")
-            if end["type"] != "lean" or location is None:
-                continue  # without a location, a whole project: the defaults make an end the annotation leaves out
+            if end["type"] != "lean":
+                continue
+            if location is None:
+                # A whole project: the defaults give one to an annotation that names no end. Another one stating the
+                # article leaves none of this project's declarations to credit.
+                if end.get("role") == "states" and _local(end.get("uri"), base) != project:
+                    stated_elsewhere = True
+                continue
             name = location.get("declaration") if isinstance(location, dict) else None
             if name is None:
                 drops.add("Lean ends that name no declaration are left out", node_id)
@@ -397,7 +405,7 @@ def _facts(node_id: str, entries: list[tuple[dict[str, Any], str]], project: str
         facts["lean"] = ", ".join(dict.fromkeys([*(states if len(states) == 1 else []), *names]))
     if mathlib_names:
         facts["mathlib_declaration"] = ", ".join(dict.fromkeys(mathlib_names))
-    inventory = facts.get("catalog", "").casefold() == "module" and not _DECLARATION_KEYS & facts.keys()
+    inventory = facts.get("catalog", "").casefold() == "module" and not DECLARATION_KEYS & facts.keys()
     credited = inventory or len(states) == 1 or (len(names) == 1 and all(role is None for _name, role in own))
     status = facts.pop("status", None)
     if status in _STATUSES:
@@ -421,7 +429,7 @@ def _facts(node_id: str, entries: list[tuple[dict[str, Any], str]], project: str
                 facts["proof"] = "formalized"
     elif status is not None and status != "not_formalized":
         drops.add("status values Autoform does not read are left out", f"{node_id} ({status})")
-    if "catalog" in facts and _DECLARATION_KEYS & facts.keys():
+    if "catalog" in facts and DECLARATION_KEYS & facts.keys():
         del facts["catalog"]
         drops.add("catalog is left out beside a kind or a Mathlib link", node_id)
     return facts
