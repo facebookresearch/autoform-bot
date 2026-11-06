@@ -75,15 +75,15 @@ stale. Under `--review`, an article or cited passage edited during extraction
 fails the render instead ([review](../README.md#review)).
 
 Repository links appear only when the Lean bytes match one locally available Git
-commit, recorded by its full object ID; a clean checkout that Git converts on
-checkout still matches. Otherwise the render stays local, keeps source notes in
-the site, records no Git ref, and warns with the first mismatch. Links into the
-blueprint (an article's Markdown source, a source note) also need the
-blueprint's bytes in that commit; when they differ, render keeps the code links,
-keeps source notes in the site, and warns with the first mismatch, or, for a
-blueprint outside the repository or in a nested checkout, does the same without
-a warning. When render reads no Lean file (a project with no `.lean` file yet),
-it records the Git ref only if the blueprint matches it.
+commit, recorded by its full object ID; a clean checkout Git converts still
+matches. Otherwise the render stays local, records no Git ref, and warns with
+the first mismatch. Links into the blueprint (an article's Markdown source, and
+under `sources/` a hidden note or a file other than a note or an image) also
+need the blueprint's bytes in that commit; when they differ, render keeps the
+code links, copies those files into the site, and warns with the first mismatch,
+or, for a blueprint outside the repository or in a nested checkout, does the
+same without a warning. When render reads no Lean file, it records the Git ref
+only if the blueprint matches it.
 
 Render replaces only an empty directory or a complete `autoform-publication/v2`
 or v3 site whose files match its inventory (`.DS_Store` and `._*` are ignored),

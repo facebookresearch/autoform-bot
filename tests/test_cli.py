@@ -316,10 +316,10 @@ def test_check_warns_about_markup_the_site_shows_as_typed(tmp_path: Path, capsys
     assert "warning: result: the site shows it as typed until these are fixed" in out
 
 
-def test_check_leaves_the_site_warnings_to_render_but_reads_source_notes(tmp_path: Path, capsys) -> None:
-    """``--no-site-warnings`` drops only the page warnings render reports, and
-    changes no exit status. Source notes still draw theirs: a render that links
-    them in the repository never reads them. Check's own graph warnings stay."""
+def test_check_leaves_the_site_warnings_to_render(tmp_path: Path, capsys) -> None:
+    """``--no-site-warnings`` drops the page warnings render reports, the source
+    notes' included, since render reads them as pages too (#593), and changes no
+    exit status. Check's own graph warnings stay."""
 
     blueprint = _with_body(
         _clean_blueprint(tmp_path), "<script>alert(1)</script>\n\n## Informally uses\n\n- [Gap](gap.md)"
@@ -332,8 +332,8 @@ def test_check_leaves_the_site_warnings_to_render_but_reads_source_notes(tmp_pat
     assert main(["check", str(blueprint)]) == 0
     plain = capsys.readouterr().out.splitlines()
     assert {informal, f"warning: result: {typed}", f"warning: sources/paper.md: {typed}"} <= set(plain)
-    site = [line for line in plain if line.startswith("warning: result: ") and line != informal]
-    assert len(site) == 2
+    site = [line for line in plain if line.startswith(("warning: result: ", "warning: sources/")) and line != informal]
+    assert len(site) == 4
     assert main(["check", str(blueprint), "--no-site-warnings"]) == 0
     assert capsys.readouterr().out.splitlines() == [line for line in plain if line not in site]
 

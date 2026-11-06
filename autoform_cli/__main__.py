@@ -162,7 +162,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     check.add_argument(
         "--no-site-warnings",
         action="store_true",
-        help="leave the warnings about the site's pages to render, which reports them; source notes are still read",
+        help="leave the warnings about the site's pages to render, which reports them",
     )
 
     audit = subparsers.add_parser("audit", help="audit roadmap completeness and checked facts")
@@ -1010,10 +1010,12 @@ def _check(args: argparse.Namespace) -> int:
     ):
         print(f"warning: {warning}")
     # What the site would leave out or show as typed, and what would stop
-    # render; none of it fails check. Render reports the same, except for the
-    # source notes it links in the repository instead, so the flag keeps those.
+    # render; none of it fails check. Render reports the same, so the flag
+    # leaves all of it to render.
+    if args.no_site_warnings:
+        return 0
     with _page_pool.allowed(args.page_workers):
-        issues = publication_issues(graph, Path(args.blueprint_dir), sources_only=args.no_site_warnings)
+        issues = publication_issues(graph, Path(args.blueprint_dir))
     for warning in issues:
         print(f"warning: {warning}")
     return 0

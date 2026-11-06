@@ -226,16 +226,15 @@ _REFUSED_COMMITS = {
 _PUBLICATION_LOCK_WAIT_SECONDS = 30.0
 #: Derived views this command rewrites; stale copies must not leak into the site.
 _GENERATED_FILES = GENERATED_VIEWS | {graph_pages.PROJECT_PAYLOAD, PUBLICATION_MANIFEST}
+#: The images a page may show.
+_IMAGE_SUFFIXES = frozenset({".avif", ".bmp", ".gif", ".ico", ".jpeg", ".jpg", ".png", ".webp"})
 #: The files a vault may publish as they are, besides its Markdown pages: a
 #: browser shows these, or offers to save them, and runs nothing in them.
 #: Anything else may be served as the site's own markup, so it is left out.
-_STATIC_SUFFIXES = frozenset(
-    {
-        ".avif", ".bmp", ".gif", ".ico", ".jpeg", ".jpg", ".png", ".webp",
-        ".pdf",
-        ".bib", ".csv", ".json", ".lean", ".tex", ".txt",
-    }
-)
+_STATIC_SUFFIXES = _IMAGE_SUFFIXES | {".pdf", ".bib", ".csv", ".json", ".lean", ".tex", ".txt"}
+#: What the site publishes from sources/ once render verified the commit, which
+#: holds the folder's other files: the notes and the images they show.
+_PUBLISHED_SOURCE_SUFFIXES = frozenset({*PAGE_SUFFIXES, *_IMAGE_SUFFIXES})
 _LOCAL_ONLY_NAMES = frozenset(
     {
         ".autoform",
@@ -471,17 +470,13 @@ class PublicationError(ValueError):
         super().__init__("; ".join(self.issues))
 
 
-def publication_issues(graph: Graph, blueprint: Path, *, sources_only: bool = False) -> list[str]:
+def publication_issues(graph: Graph, blueprint: Path) -> list[str]:
     """What ``autoform check`` reports about the site for ``graph``: the
     warnings :func:`_publication` gives for the pages and files render would
     publish, then what would stop render, the inputs it refuses to capture
-    and the files in the way of its own. Source notes are read as pages
-    wherever the site would link them instead, so the verdict does not depend
-    on the clone's remote.
-
-    With ``sources_only``, only the warnings about the files under
-    ``sources/``, which a render that links them in the repository never
-    reads. It reads the rest as this does.
+    and the files in the way of its own. The files under ``sources/`` are read
+    as a render without repository links publishes them, so the verdict does
+    not depend on the clone's remote.
     """
 
     # The root load_graph took, so every node's path lies below it.
@@ -491,8 +486,6 @@ def publication_issues(graph: Graph, blueprint: Path, *, sources_only: bool = Fa
         snapshot, _nodes = _capture_blueprint(blueprint)
     except PublicationError as exc:
         # Render refuses the same inputs, and says so as errors.
-        if sources_only:
-            return []
         return [f"{issue}; autoform render stops until this is fixed" for issue in exc.issues]
     files = _captured_files(snapshot, blueprint)
     with resolving_once():
@@ -503,10 +496,7 @@ def publication_issues(graph: Graph, blueprint: Path, *, sources_only: bool = Fa
             destination=blueprint,
             sources_base=None,
             unpublished=_unpublished_folders(snapshot, blueprint),
-            within=blueprint / SOURCES_DIR if sources_only else None,
         )
-    if sources_only:
-        return site.warnings
     stops = _in_the_way(blueprint, graph, files)
     return [*site.warnings, *(f"{issue}; autoform render stops until this is fixed" for issue in stops)]
 
@@ -557,12 +547,10 @@ def _publication(
     destination: Path,
     sources_base: "_SourceBase | None",
     unpublished: tuple[Path, ...] = (),
-    within: Path | None = None,
 ) -> _Publication:
     """The pages and files the site for ``graph`` gets from ``snapshot``, the
     bytes render captured by path, and the warnings about them: each page's,
-    named by its node or its file, then the MathJax configuration's. With
-    ``within``, only the files below that folder are read and warned about.
+    named by its node or its file, then the MathJax configuration's.
 
     Every page an author wrote is untrusted, so each is published as the
     text :func:`~autoform_cli.publishable.publishable_article` returns for it
@@ -706,7 +694,7 @@ def _publication(
     pages = [
         (node_id, node, snapshot[node.path])
         for node_id, node in graph.nodes.items()
-        if node.path in snapshot and (within is None or _is_within(node.path, within))
+        if node.path in snapshot
     ]
     reader = _page_pool.reader(
         ((captured.decode("utf-8"), node.path, targets[node_id][0]) for node_id, node, captured in pages),
@@ -738,12 +726,14 @@ def _publication(
 
     files: dict[Path, str | bytes] = {}
     for source in sorted(snapshot):
-        if within is not None and not _is_within(source, within):
-            continue
         relative = _relative(source, blueprint)
-        # Source notes leave the site entirely once readers can reach them in
-        # the repository, so the book has one reference surface rather than two.
-        if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
+        # With the commit verified, a source note is a page and its images are
+        # copied; the folder's scans and data are reached in the repository.
+        if (
+            sources_base is not None
+            and relative.parts[:1] == (SOURCES_DIR,)
+            and source.suffix.lower() not in _PUBLISHED_SOURCE_SUFFIXES
+        ):
             continue
         # Read-back cards are testimony about a statement, shown in its review
         # panel under --review, never pages of their own.
@@ -789,13 +779,12 @@ def _publication(
                 "save it as an image (PNG, JPEG, GIF, WebP), a PDF or plain text, "
                 "or keep it outside blueprint/"
             )
-    if within is None and blueprint / TEX_MACROS not in snapshot and any(
+    if blueprint / TEX_MACROS not in snapshot and any(
         _is_within(source, blueprint / TEX_MACROS) for source in snapshot
     ):
         warnings.append(f"{TEX_MACROS}: is a directory, so the site has no project macros; make it a JSON file")
     script, script_warnings = mathjax_script(snapshot.get(blueprint / MATHJAX_SCRIPT), snapshot.get(blueprint / TEX_MACROS))
-    if within is None:
-        warnings.extend(script_warnings)
+    warnings.extend(script_warnings)
     return _Publication(
         groups, targets, node_sources, files, statements, script, warnings, frozenset(typed),
         frozenset(unavailable_source_ids),
@@ -1131,7 +1120,7 @@ def _render_pages(
     statuses = status.derive(graph)
     used_by = _reverse_edges(graph)
     formalizing = _formalizing(graph)
-    # Sources leave the site only for a directory the verified commit holds.
+    # Scans and data leave the site only for a directory the verified commit holds.
     sources_base = _sources_base(blueprint, repo_root, linker) if sources else None
     stops = _in_the_way(blueprint, graph, files)
     if stops:
@@ -1262,7 +1251,16 @@ def _render_pages(
     )
     report.pages += 1
     (destination / "SUMMARY.md").write_text(
-        _render_summary_nav(book_pages, destination=destination, overview=overview),
+        _render_summary_nav(
+            book_pages,
+            destination=destination,
+            overview=overview,
+            source_pages=[
+                destination / relative
+                for source, content in site.files.items()
+                if isinstance(content, str) and (relative := _relative(source, blueprint)).parts[:1] == (SOURCES_DIR,)
+            ],
+        ),
         encoding="utf-8",
     )
 
@@ -1842,16 +1840,14 @@ def _skip_missing(_function: object, _path: str, error: BaseException | tuple) -
 def _sources_base(blueprint: Path, repo_root: Path, linker: SourceLinker) -> "_SourceBase | None":
     """Where `blueprint/sources/` lives in the repository, if it can be linked.
 
-    Source notes are a reader's transcription of the paper being formalised.
-    Publishing them put a second copy of the reference on the site, at a URL
-    nothing links deliberately and every `## Sources` list pointed at, so the
-    book kept handing readers a page that was neither the book nor the paper.
-    They stay in the vault and the site links out to them instead.
+    Source notes are pages of the site, with the images they show. The rest of
+    the folder, scans, extracts and data, is reached in the repository, as are
+    a hidden note and the folder itself, so the site does not mirror it.
 
     Returns ``None`` when there are no repository coordinates to build a link
-    from, or the blueprint's files are not in the linked commit. The pages are
-    then published as before, because a site with no sources and no way to
-    reach them is worse than a redundant page.
+    from, or the blueprint's files are not in the linked commit. The folder is
+    then published as any other, because a site with no way to reach its scans
+    is worse than one that copies them.
     """
     if not linker.repository_url or not linker.ref or not linker.links_blueprint:
         return None
@@ -2332,6 +2328,7 @@ def _render_summary_nav(
     *,
     destination: Path,
     overview: Path,
+    source_pages: Sequence[Path] = (),
 ) -> str:
     """Write one mathematical site nav with the book's real chapters.
 
@@ -2345,7 +2342,8 @@ def _render_summary_nav(
     tree is written depth first in book order. The book order walks the
     containment tree (:func:`_reading_walk`), so a page always comes after
     its chapter. Nesting by folder rather than by depth alone keeps each
-    level one step below its parent, which literate-nav requires.
+    level one step below its parent, which literate-nav requires. The source
+    notes, *source_pages*, follow the book in a section of their own.
     """
     # SUMMARY.md is a navigation manifest, not a searchable content page. A
     # repository-wide book can make this one generated page larger than every
@@ -2377,18 +2375,65 @@ def _render_summary_nav(
     # What counts as done belongs beside the book it qualifies. The landing
     # page used to be the only route to it, which made the page impossible to
     # simplify without stranding it.
+    # Last inside the book: navigation.indexes takes a section's first README
+    # page as the page its heading opens, which made Mathematics open the
+    # coverage page, and a section of its own showed an empty pane on a narrow
+    # screen.
+    depth = 2 if children.get(None) else 1
     coverage = destination / "coverage/README.md"
     if coverage.is_file():
         # Named by its title, as a chapter is; "Coverage" when only its file names it.
         named = _header_title(coverage.read_text(encoding="utf-8"))
         title = name_text(named) if named and named != _file_title(coverage) else "Coverage"
-        # Last inside the book: navigation.indexes takes a section's first
-        # README page as the page its heading opens, which made Mathematics
-        # open this one, and a section of its own showed an empty pane on a
-        # narrow screen.
-        roots = children.get(None, [])
-        lines.append(f"{'    ' * (2 if roots else 1)}- [{title}](coverage/README.md)")
+        lines.append(f"{'    ' * depth}- [{title}](coverage/README.md)")
+    lines += _source_nav([page for page in source_pages if page.is_file()], destination=destination, depth=depth)
     return "\n".join(lines) + "\n"
+
+
+def _source_nav(notes: list[Path], *, destination: Path, depth: int) -> list[str]:
+    """The nav entries for the published source *notes*, at *depth*: the
+    folder's README heading the rest, else a section of their own, named as
+    the coverage entry is. A subfolder's README heads its folder's notes, as a
+    chapter's README heads its pages."""
+
+    if not notes:
+        return []
+    folder = destination / SOURCES_DIR
+    heads = {page.parent: page for page in notes if page.name.casefold() == "readme.md"}
+    top = heads.get(folder)
+    children: dict[Path | None, list[Path]] = {}
+    for page in sorted(notes):
+        if page == top:
+            continue
+        start = page.parent.parent if heads.get(page.parent) == page else page.parent
+        above = [start, *(parent for parent in start.parents if _is_within(parent, folder))]
+        parent = next((heads[path] for path in above if path in heads and heads[path] != page), None)
+        children.setdefault(None if parent == top else parent, []).append(page)
+
+    def title(page: Path) -> str:
+        text = page.read_text(encoding="utf-8")
+        named = _header_title(text)
+        if page.name.casefold() == "readme.md" and named in (None, _file_title(page)):
+            # Named by its folder when only its file names it, as Coverage is "Coverage".
+            return name_text(page.parent.name)
+        return name_text(named) if named else title_text(_first_h1(text) or page.stem)
+
+    named = _header_title(top.read_text(encoding="utf-8")) if top else None
+    label = name_text(named) if top and named and named != _file_title(top) else "Sources"
+    lines = [f"{'    ' * depth}- [{label}]({_relative(top, destination).as_posix()})" if top else f"{'    ' * depth}- {label}"]
+    stack = [(page, depth + 1) for page in reversed(children.get(None, []))]
+    while stack:
+        page, level = stack.pop()
+        entry = f"[{title(page)}]({_relative(page, destination).as_posix()})"
+        if top is None and level == depth + 1 and page in heads.values() and not children.get(page):
+            # Under a heading with no page, navigation.indexes would make a lone
+            # README the page the heading opens, so it gets a heading of its own.
+            lines += [f"{'    ' * level}- {title(page)}", f"{'    ' * (level + 1)}- {entry}"]
+            continue
+        lines.append(f"{'    ' * level}- {entry}")
+        stack.extend((child, level + 1) for child in reversed(children.get(page, [])))
+    return lines
+
 
 def _render_landing_page(
     text: str,
@@ -3139,8 +3184,9 @@ def _rewrite_links(
     Three things move. Node files stop being pages once their chapter absorbs
     them, so a link naming one becomes an anchor. A node's body is hoisted out
     of its own directory onto the chapter page, so its remaining relative links
-    have to be recomputed from there. And source notes are not published at
-    all when *sources_base* says where to reach them in the repository.
+    have to be recomputed from there. And what the site does not publish from
+    ``sources/`` (a hidden note, the folder itself, scans and data) is reached
+    in the repository when *sources_base* says where.
 
     The site holds only the blueprint, so an inline link to a file outside it,
     such as a source note's evidence link to a Lean file, keeps its text and
@@ -3210,14 +3256,19 @@ def _rewrite_links(
         # atlas.json stays off the site, so a link to it keeps only its text.
         if relative.as_posix().casefold() == "atlas.json":
             return ""
-        # A repository link to a note the captured blueprint lacks would 404, so
-        # it stays site-relative, where a strict build reports the page missing.
-        # The capture skips hidden files, so a hidden note keeps its repository
+        # A note and its images are pages and files of the site. A repository
+        # link to a file the captured blueprint lacks would 404, so it stays
+        # site-relative, where a strict build reports the page missing. The
+        # capture skips hidden files, so a hidden note keeps its repository
         # link, which resolves once the note is committed, as check warns.
         if (
             sources_base is not None
             and relative.parts[:1] == (SOURCES_DIR,)
-            and (os.path.exists(candidate) or _is_hidden(relative))
+            and (
+                _is_hidden(relative)
+                or os.path.isdir(candidate)
+                or (os.path.exists(candidate) and candidate.suffix.lower() not in _PUBLISHED_SOURCE_SUFFIXES)
+            )
         ):
             return f"{_source_href(sources_base, relative.parts[1:])}{asked}{query}{separator}{fragment}"
         published = destination / relative

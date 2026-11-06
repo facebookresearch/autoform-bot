@@ -67,10 +67,16 @@ date when the release is tagged.
   one above it in that file, or one not private in a file it imports.
   Binders, patterns, fields, attributes, tactics, one-letter names and names
   the project does not declare, such as Mathlib's, stay text.
+- **Source pages.** Markdown notes under `blueprint/sources/` are pages of the
+  site, and links to them stay on it, where a render with repository links
+  used to send every note to the repository (#593). The images they show are
+  copied beside them; a hidden note, the folder itself and its other files,
+  such as scans and data, are still linked at the verified commit. The nav
+  lists the notes after Coverage, headed by `sources/README.md` when there is
+  one.
 - **Check without site warnings.** `check --no-site-warnings` skips the
-  warnings about the pages the site would publish, which `render` prints too,
-  and still reads the notes under `blueprint/sources/`, which a render that
-  links them in the repository never reads. The generated
+  warnings about the pages the site would publish, which `render` prints too.
+  The generated
   `blueprint-pages.yml` passes it, since render runs two steps later, when its
   `AUTOFORM_REF`'s `check --help` lists it, so an older pin runs the full check.
   On one CI runner ATLAS's check took 60 s with the flag instead of 255 s, and
