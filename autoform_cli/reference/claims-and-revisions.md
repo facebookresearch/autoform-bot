@@ -30,17 +30,17 @@ report, not a lock: every acquire, renew, and release checks ownership again.
 
 `claim list TARGET...` lists only those targets' claims, in the same JSON,
 leaving out a target without a claim; a duplicate target exits 2. It fetches
-only those refs but still downloads the board's list of refs, branches
-included. `--timeout SECONDS` (default 120) bounds the listing's Git commands,
-not the removal of its own refs afterwards, and a step still running after five
-seconds is named on stderr as `claim list: <step>...`. `claim list`, and the
-listing `claim cleanup` starts with, run Git without a terminal on Linux and
-macOS, and stop a command that times out or is interrupted with everything it
-started. A failed `claim list` exits 1 with nothing on stdout and, after any
-progress lines, an error on stderr that starts `error: timeout:` when time ran
-out, naming the step; `error: contention:` when the board refused three fetches
-because claims kept moving; or `error: transport:` for any other failure to
-reach or read the board. Other errors, such as a missing `origin` or
+only those refs but still downloads the board's whole list of refs.
+`--timeout SECONDS` (default 120) bounds the listing's Git commands, not
+removing its own refs afterwards, and a step still running after five seconds is
+named on stderr as `claim list: <step>...`. `claim list`, and the listing
+`claim cleanup` starts with, run Git without a terminal on Linux and macOS, and
+stop a command that times out or is interrupted with everything it started. A
+failed `claim list` exits 1 with nothing on stdout and, after any progress
+lines, an error on stderr that may span lines and starts `error: timeout:` when
+time ran out, naming the step; `error: contention:` when the board refused three
+fetches because claims kept moving; or `error: transport:` for any other failure
+to reach or read the board. Other errors, such as a missing `origin` or
 `--worker-id`, have no label. Claim commands run Git with
 `GIT_TERMINAL_PROMPT=0` and no input, but `ssh`, a credential helper or an
 askpass program can still prompt, and a command waits for it until its time
