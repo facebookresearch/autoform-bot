@@ -258,7 +258,6 @@ autoform search . "separating hyperplane" --lean-root .
 autoform search . "non-ambiguous" --lean-root . --json --limit 20
 autoform search blueprint "interlacing"
 autoform library list .
-autoform library index . --lib MathlibExt
 ```
 
 `search` takes the project or blueprint directory, then one quoted query; both
@@ -370,7 +369,7 @@ Each area's contract has its own page:
 
 - [Blueprint format](reference/blueprint-format.md): articles, frontmatter assertions, derived status, and the coverage contract.
 - [Validation and audit](reference/validation-and-audit.md): what `check` and `audit` refuse or warn about.
-- [Search](reference/search.md): `autoform search`, searching a library the project depends on, and a library declaration that cites a source.
+- [Search](reference/search.md): `autoform search`, searching a library the project depends on, publishing a library's index, and a library declaration that cites a source.
 - [Pinned name lists](reference/pinned-names.md): a library's names at a pinned revision, and what `check` warns about them.
 - [Annotations](reference/links.md): the literature-links annotations in `blueprint/links/` that carry articles' facts.
 - [Skeletons and statement review](reference/skeleton-and-review.md): what `skeleton` extracts, its hashes, read-back cards, and the `review` rules.

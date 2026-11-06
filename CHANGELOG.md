@@ -11,18 +11,31 @@ date when the release is tagged.
 
 ### Added
 
+- **Publication inventory.** `publication.json` says where each blueprint file
+  went (`inventory`): for every file the verified commit holds below the
+  blueprint, or else every file render read and each entry it skipped, its URL
+  on the site, the repository URL the site links instead, or why the site leaves
+  it out (`hidden`, `unpublished`, `generated`, `mathjax-config`,
+  `review-testimony`, `graph-input`, `not-utf8`, `canvas`, `unsupported-type` or
+  `not-captured`). A hidden or `published: false` folder is one entry, so
+  nothing in it is named. A file's role follows from its path: its first folder
+  (`roadmap`, `sources`, `coverage`, `links`), else `hidden` for a dot name,
+  else `other`. It also names the Autoform that rendered it, best effort
+  (`autoform`: its version, its commit when an install from Git or an unmodified
+  checkout records one, and its repository only on github.com). The schema stays
+  `autoform-publication/v3` (#658).
 - **Annotations carry articles' facts.** In a project with `blueprint/links/`,
-  an article's literature-links annotation carries what its frontmatter did:
-  its Lean names, status, kind, article ID, Mathlib link and the `org.autoform`
-  keys ([Annotations](autoform_cli/reference/links.md), #601). The settings
-  stay in README frontmatter. Other frontmatter beside an annotation is
-  ignored, and an article without an annotation keeps its frontmatter, each
-  with a warning. Loading never refuses a vault over the folder: every fact
-  left out is warned about, counted, and `check` adds literature-links' own
-  validation. Render never publishes the folder, the runtime source revision
-  and skeleton fingerprints cover it, and `migrate article-ids --write` writes
-  no ID beside it. Autoform now depends on literature-links 1.0.2, pinned to its
-  commit.
+  an article's literature-links annotation carries what its frontmatter did: its
+  Lean names, status, kind, article ID, Mathlib link and the `org.autoform` keys
+  ([Annotations](autoform_cli/reference/links.md), #601). The settings stay in
+  README frontmatter. Other frontmatter beside an annotation is ignored, and an
+  article without an annotation keeps its frontmatter, each with a warning.
+  Loading never refuses a vault over the folder: every fact left out is warned
+  about, counted, and `check` adds literature-links' own validation. Render
+  never publishes the folder, whose files the inventory lists as `graph-input`;
+  the runtime source revision and skeleton fingerprints cover it, and
+  `migrate article-ids --write` writes no ID beside it. Autoform now depends on
+  literature-links 1.0.2, pinned to its commit.
 - **Verify workflow off.** `init --no-verify-workflow` writes
   `.github/workflows/autoform-verify.yml` as a stub, for a project the
   generated workflow can't fit, such as one whose roadmap several Lake projects
@@ -90,12 +103,15 @@ date when the release is tagged.
   workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
 - **Panes you can resize and hide.** In the book's workspace, Topics and the
   reading pane resize from splitters on their inner edges, by pointer or
-  keys, up to a reader of all but 160px of the map. A pane dragged nearly
+  keys, and the map always keeps at least 160px. A pane dragged nearly
   shut, or whose splitter takes Enter, hides, and a tab at the map's edge
   brings it back; "Map only" in the trail row hides both. The choice holds
-  on every page of the site, and a double-click on a splitter restores the
-  usual width. While a pane is dragged the map holds its camera, and it
-  settles once the drag ends. A phone keeps its sheet.
+  on every page of the site, as the theme's own choices do; a double-click,
+  Delete or a Mac's delete key on a splitter restores the usual width.
+  While a pane is dragged the map holds its camera, and it settles once the
+  drag ends. Where touch is the main pointer, as on a tablet, the splitters
+  are 24px wide, and Windows' forced colours keep the splitter's line and
+  Map only's pressed look. A phone keeps its sheet.
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project. Regions (authored areas, or the top-level
   chapters) open into their parts and parts into their results as the camera
@@ -138,6 +154,16 @@ date when the release is tagged.
 - **The landing's coverage line** leads with the source areas split into
   statements: "5 source areas, all split into statements", or "3 of 5 source
   areas split into statements" before the other dispositions.
+- **Search warns about a library it cannot verify.** `search --library` leaves
+  out a library it cannot verify, with a `warning: library NAME:` line on
+  standard error and, in `--json`, an entry under the new `refused` key, and
+  still prints the blueprint's hits and the other libraries'. It exited 2 and
+  printed nothing (#325).
+- **Library index check.** `library index --check` counts an index as current
+  when only the Autoform version that wrote it differs, so a new release no
+  longer turns a publishing library's check red. An index another probe
+  revision made is stale, said without running Lean, and a stale index names
+  the records generation gives otherwise.
 - **Vault pages on Windows.** `autoform-visualize` writes the dependency
   summary and structure pages with LF line endings on Windows too, as on every
   other system, so a vault regenerated on both no longer flips them.
@@ -484,6 +510,13 @@ date when the release is tagged.
   unpublished articles' IDs, returns only the folders. CI at an older
   `AUTOFORM_REF` still refuses both, so move the pin before relying on the
   warnings.
+- **Library listing.** Formalize tells the user about the packages
+  `library list` leaves out in one line that counts them by reason, not one line
+  each (nine or ten on a Mathlib project), and searches the blueprint alone when
+  the listing fails. Agent Review lists a module's declarations from the
+  `--json` hits whose `module` is exactly that module, with `--limit` at least
+  `total_matches`; searching the module's name also returned other modules'
+  declarations, and at most 20 (#204).
 
 ### Deprecated
 
@@ -531,6 +564,18 @@ parse, with or without `--json`, and changes nothing else.
 
 ### Fixed
 
+- **Library index guarantees.** `library index` and `--check` refuse a
+  toolchain the probe is not verified on before `lake translate-config` reads a
+  `lakefile.lean`, and refuse a source file with a dot in its path, or two files
+  that map to one module, which failed at the probe or dropped a file. Search
+  leaves out, with a warning, a library whose index names a module other than
+  the one its `source_file` holds, or a declaration whose name is not a Lean
+  name, such as one holding a newline. `--check` reads the index as search does,
+  so on POSIX a symbolic link, named pipe or directory there is stale rather
+  than followed or waited on, and a root under an unknown `~user` exits 2 rather
+  than 1 with a traceback. A refusal names a stale index before a merged or
+  edited one, the missing-manifest refusal no longer suggests `lake update`, and
+  the note naming an unsearched library quotes the flags it suggests.
 - **Reference links on chapters with a `<` in the title.** A `<` in a
   chapter's title alone left reference-style links in its prose shown as typed
   (#631).

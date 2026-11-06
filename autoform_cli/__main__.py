@@ -435,7 +435,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="index this lean_lib (repeatable); default: every lean_lib of the package",
     )
     library_index.add_argument(
-        "--check", action="store_true", help="write nothing; exit 1 when the index at the root is not current"
+        "--check",
+        action="store_true",
+        help="write no index (Lake still rewrites its .hash files); exit 1 when the index at the root is not current",
     )
     library_index.add_argument(
         "--timeout",
@@ -1342,8 +1344,6 @@ def _search(args: argparse.Namespace) -> int:
     libraries: tuple[LibraryResult, ...] = ()
     try:
         if args.libraries:
-            # A library that cannot be verified refuses the whole call: the
-            # blueprint hits alone would read as "this result is new".
             combined = search_with_libraries(args.target, args.query, libraries=args.libraries, **options)
             result, libraries = combined.blueprint, combined.libraries
         else:
@@ -1353,14 +1353,16 @@ def _search(args: argparse.Namespace) -> int:
         for issue in error.issues:
             print(f"error: {_human_text(issue)}", file=sys.stderr)
         return 2
-    except (SearchError, LibraryError, WorkspaceError) as error:
+    except (SearchError, WorkspaceError) as error:
         print(f"error: {_human_text(error)}", file=sys.stderr)
         return 2
     except (OSError, RuntimeError, ValueError):
         print("error: project, blueprint, or Lean root path cannot be read", file=sys.stderr)
         return 2
 
-    notes = []
+    # A library that cannot be verified warns rather than withholding the other hits (#325).
+    refused = () if combined is None else combined.refused
+    notes = [_human_text(f"warning: library {name}: {why}") for name, why in refused]
     if result.unused_declarations:
         kinds = ", ".join(result.unused_declarations)
         notes.append(_human_text(f"note: no article declares kind {kinds}, so the search used only the other kinds"))
@@ -1430,10 +1432,11 @@ def _unsearched_library_note(target: str, lean_root: str | None) -> str | None:
         if not names:
             return None
         listed = " and ".join(names)
-        flags = " ".join(f"--library {name}" for name in names)
+        flags = " ".join(f"--library {_shell_quote_one_line(name)}" for name in names)
         verb, pronoun = ("publishes a search index", "it") if len(names) == 1 else ("publish search indexes", "them")
         return _human_text(
-            f"note: {listed} {verb} this search did not read; search {pronoun} too with --lean-root {root} {flags}"
+            f"note: {listed} {verb} this search did not read; search {pronoun} too with "
+            f"--lean-root {_shell_quote_one_line(str(root))} {flags}"
         )
     return None
 
@@ -1443,7 +1446,11 @@ def _print_library(library: LibraryResult) -> None:
     for difference in library.differences:
         what = difference.what if difference.name is None else difference.name
         if difference.project is None:
-            held = "the project has no lean-toolchain" if difference.name is None else "the project does not lock it"
+            held = (
+                "the project has no lean-toolchain"
+                if difference.name is None
+                else "the project locks no revision of it"
+            )
         else:
             held = f"project: {difference.project}"
         print(_human_text(f"  differs: {what} {difference.library} ({held})"))

@@ -13,6 +13,7 @@ import stat
 import subprocess
 import threading
 import tracemalloc
+import unicodedata
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -3023,9 +3024,13 @@ def test_render_translates_source_index_io_failure(
     assert str(tmp_path) not in str(error.value)
 
 
-def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path) -> None:
+def test_render_is_deterministic_and_records_a_path_free_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     project = _project(tmp_path)
     ref = _commit_project(project)
+    revision = ("0.6.0", "1cf2ca825fec5e6d3303e24374e218bf3e8ab5c1", "")
+    monkeypatch.setattr(render_module, "autoform_revision", lambda: revision)
     outputs = [tmp_path / "first", tmp_path / "second"]
     for output in outputs:
         render_site(
@@ -3061,10 +3066,23 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path
             "source_path": "coverage/README.md",
             "source_sha256": manifest["coverage"]["source_sha256"],
         },
+        "autoform": {"version": "0.6.0", "commit": revision[1], "source": None},
         "dependencies": 1,
         "directories": manifest["directories"],
         "files": manifest["files"],
         "git_ref": ref,
+        "inventory": {
+            "basis": "commit",
+            "published": {
+                "README.md": "index.html",
+                "coverage/README.md": "coverage/index.html",
+                "roadmap/README.md": "roadmap/index.html",
+                "roadmap/base.md": "roadmap/index.html#base",
+                "roadmap/top.md": "roadmap/index.html#top",
+            },
+            "linked": {},
+            "omitted": {},
+        },
         "lean_source_revision": manifest["lean_source_revision"],
         "nodes": 3,
         "schema": "autoform-publication/v3",
@@ -3077,6 +3095,194 @@ def test_render_is_deterministic_and_records_a_path_free_manifest(tmp_path: Path
         path: hashlib.sha256(data).hexdigest() for path, data in first.items() if path != PUBLICATION_MANIFEST
     }
     assert str(tmp_path).encode() not in b"".join(first.values())
+
+
+def test_publication_json_says_where_each_file_render_read_went(tmp_path: Path) -> None:
+    """Every file render read, and every folder capture skipped, has its URL
+    on the site or the reason the site leaves it out (#593)."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    for name, data in {
+        ".implementation-notes/plan.md": b"# Plan\n",
+        "roadmap/.draft.md": b"# Draft\n",
+        "roadmap/drafts/README.md": b"---\npublished: false\n---\n\n# Drafts\n",
+        "roadmap/drafts/idea.md": b"# Idea\n",
+        "roadmap/drafts/inner/README.md": b"---\npublished: false\n---\n\n# Inner\n",
+        "roadmap/drafts/inner/plan.md": b"# Plan\n",
+        "roadmap/README.md": b"---\n---\n\n# Roadmap\n\n- [Base](base.md)\n- [Top](top.md)\n- [Lemma](<lemma \xc3\xa9.md>)\n",
+        "roadmap/lemma \u00e9.md": b"---\ndeclaration: lemma\n---\n\n# Lemma\n\nA lemma.\n",
+        "figures/torus.png": b"\x89PNG\r\n\x1a\n",
+        "figures/unit circle\u00e9.png": b"\x89PNG\r\n\x1a\n",
+        "progress.md": b"# Progress\n",
+        "atlas.json": json.dumps({"schema": "autoform-atlas/v1", "areas": {"Algebra": ["base"]}}).encode(),
+        "board.canvas": b"{}",
+        "notes.docx": b"PK",
+        "legacy.md": b"# Legacy \xff\n",
+        "readbacks/top.json": b"{}",
+        "libraries/names.jsonl": b"{}\n",
+        "links/notes.jsonl": b"\n",
+        "SUMMARY.md": b"- [Old](README.md)\n",
+        "javascripts/mathjax.js": b"window.MathJax = {};\n",
+    }.items():
+        (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
+        (blueprint / name).write_bytes(data)
+
+    render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    manifest = json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))
+    assert manifest["inventory"] == {
+        "basis": "capture",
+        "published": {
+            "README.md": "index.html",
+            "coverage/README.md": "coverage/index.html",
+            "figures/torus.png": "figures/torus.png",
+            "figures/unit circle\u00e9.png": "figures/unit%20circle%C3%A9.png",
+            "roadmap/README.md": "roadmap/index.html",
+            "roadmap/base.md": "roadmap/index.html#base",
+            "roadmap/lemma \u00e9.md": "roadmap/index.html#lemma%20%C3%A9",
+            "roadmap/top.md": "roadmap/index.html#top",
+        },
+        "linked": {},
+        "omitted": {
+            ".implementation-notes": "hidden",
+            "SUMMARY.md": "generated",
+            "atlas.json": "graph-input",
+            "board.canvas": "canvas",
+            "javascripts/mathjax.js": "mathjax-config",
+            "legacy.md": "not-utf8",
+            "libraries/names.jsonl": "graph-input",
+            "links/notes.jsonl": "graph-input",
+            "notes.docx": "unsupported-type",
+            "progress.md": "generated",
+            "readbacks/top.json": "review-testimony",
+            "roadmap/.draft.md": "hidden",
+            "roadmap/drafts": "unpublished",
+        },
+    }
+    _accounts_once(manifest["inventory"], [path.relative_to(blueprint).as_posix() for path in blueprint.rglob("*") if path.is_file()])
+
+
+def _accounts_once(inventory: dict, files: list[str]) -> None:
+    """Each file is a key of one map, or lies in the one folder key that
+    stands for it; no key is a file's twin, and none names nothing."""
+
+    keys = [key for name in ("published", "linked", "omitted") for key in inventory[name]]
+    assert len(keys) == len(set(keys))
+    for name in files:
+        assert sum(name == key or name.startswith(f"{key}/") for key in keys) == 1, name
+    assert all(any(name == key or name.startswith(f"{key}/") for name in files) for key in keys)
+
+
+def _committed(root: Path, ref: str, prefix: str = "") -> list[str]:
+    listed = subprocess.run(
+        ["git", "ls-tree", "-r", "-z", "--name-only", "--full-tree", ref], cwd=root, capture_output=True, check=True
+    ).stdout.decode()
+    return [name.removeprefix(prefix) for name in listed.split("\0") if name and name.startswith(prefix)]
+
+
+def test_publication_json_lists_every_file_the_verified_commit_holds(tmp_path: Path) -> None:
+    """With a verified commit, the inventory is that commit's files, a hidden
+    or unpublished folder as one key that names nothing in it, and a source
+    note the site links in the repository names its URL there."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    for name, data in {
+        ".implementation-notes/plan.md": b"# Note\n",
+        "sources/.draft.md": b"# Note\n",
+        "figures/old.png": b"# Note\n",
+        "roadmap/drafts/README.md": b"---\npublished: false\n---\n\n# Drafts\n",
+        "roadmap/drafts/private-idea.md": b"# Private idea\n",
+        "roadmap/drafts/inner/README.md": b"---\npublished: false\n---\n\n# Inner\n",
+        "dependencies.md": b"# Stale\n",
+        "graph.html": b"<p>Stale</p>\n",
+    }.items():
+        (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
+        (blueprint / name).write_bytes(data)
+    ref = _commit_project(project)
+    # Deleted since the commit: render never read it.
+    (blueprint / "figures/old.png").unlink()
+
+    render_site(blueprint, tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    manifest = (tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8")
+    inventory = json.loads(manifest)["inventory"]
+    assert inventory["basis"] == "commit"
+    assert inventory["linked"] == {"sources/paper.md": f"{_REPOSITORY}/blob/{ref}/blueprint/sources/paper.md"}
+    assert inventory["omitted"] == {
+        ".implementation-notes": "hidden",
+        "dependencies.md": "generated",
+        "figures/old.png": "not-captured",
+        "graph.html": "generated",
+        "roadmap/drafts": "unpublished",
+        "sources/.draft.md": "hidden",
+    }
+    assert inventory["published"]["roadmap/top.md"] == "roadmap/index.html#top"
+    assert "private-idea" not in manifest
+    _accounts_once(inventory, _committed(project, ref, "blueprint/"))
+
+
+def test_publication_json_lists_the_commit_of_a_blueprint_at_the_top_level(tmp_path: Path) -> None:
+    """A blueprint that is its own repository: Git's names have no folder to strip."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / ".gitignore").write_text("*.olean\n", encoding="utf-8")
+    (project / "Project").rename(blueprint / "Project")
+    (blueprint / "vendored").mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=blueprint, check=True)
+    # A submodule's commit is not a file of this repository.
+    gitlink = f"160000,{'1' * 40},vendored"
+    subprocess.run(["git", "update-index", "--add", "--cacheinfo", gitlink], cwd=blueprint, check=True)
+    ref = _git_commit(blueprint, "fixture")
+
+    render_site(blueprint, tmp_path / "out", lean_root=blueprint, repository_url=_REPOSITORY, ref=ref)
+
+    inventory = json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["inventory"]
+    assert inventory["basis"] == "commit"
+    assert inventory["omitted"] == {".gitignore": "hidden"}
+    assert inventory["published"]["Project/Basic.lean"] == "Project/Basic.lean"
+    files = [name for name in _committed(blueprint, ref) if name != "vendored"]
+    _accounts_once(inventory, files)
+    assert repository_module.tracked_files(blueprint, ref, blueprint) == sorted(files)
+
+
+def test_publication_json_keys_a_commit_by_the_names_git_gives(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS Git lists a name decomposed on disk in its composed form: the
+    inventory takes Git's spelling and lists the file, or its unpublished
+    folder, once. With no listing, or a blueprint the commit lacks, the
+    inventory is the capture's."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    figure = unicodedata.normalize("NFD", "figures/caf\u00e9.png")
+    drafts = unicodedata.normalize("NFD", "roadmap/br\u00fblons")
+    for name, data in {
+        figure: b"\x89PNG\r\n\x1a\n",
+        f"{drafts}/README.md": b"---\npublished: false\n---\n\n# Drafts\n",
+        f"{drafts}/idea.md": b"# Idea\n",
+    }.items():
+        (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
+        (blueprint / name).write_bytes(data)
+    ref = _commit_project(project)
+    listed = repository_module.tracked_files
+    monkeypatch.setattr(
+        render_module,
+        "tracked_files",
+        lambda *args: [unicodedata.normalize("NFC", name) for name in listed(*args)],
+    )
+
+    def inventory() -> dict:
+        render_site(blueprint, tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+        return json.loads((tmp_path / "out" / PUBLICATION_MANIFEST).read_text(encoding="utf-8"))["inventory"]
+
+    composed = inventory()
+    assert composed["published"]["figures/caf\u00e9.png"] == "figures/cafe%CC%81.png"
+    assert composed["omitted"] == {"roadmap/br\u00fblons": "unpublished"}
+    _accounts_once(composed, [unicodedata.normalize("NFC", name) for name in _committed(project, ref, "blueprint/")])
+
+    monkeypatch.setattr(render_module, "tracked_files", lambda *_args: None)
+    assert inventory()["basis"] == "capture"
+    monkeypatch.setattr(render_module, "tracked_files", listed)
+    (blueprint / "roadmap" / "top.md").write_text("# Top\n\nEdited since the commit.\n", encoding="utf-8")
+    assert inventory()["basis"] == "capture"
 
 
 def test_publication_revision_frames_binary_paths_and_contents() -> None:

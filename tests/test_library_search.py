@@ -12,10 +12,11 @@ import pytest
 
 from autoform_cli import __main__ as cli
 from autoform_cli.library.index import INDEX_SCHEMA
-from autoform_cli.library.locate import LibraryError
 from autoform_cli.library.search import (
     LIBRARY_FIELDS,
     SEARCH_LIBRARY_SCHEMA,
+    LibraryHit,
+    LibraryResult,
     library_argument,
     search_with_libraries,
 )
@@ -246,9 +247,10 @@ def test_the_result_is_search_v2_and_its_bytes_are_stable(tmp_path: Path) -> Non
     assert result.to_json() == json.dumps(payload, sort_keys=True, separators=(",", ":"))
     assert payload["schema"] == SEARCH_LIBRARY_SCHEMA == "autoform-search/v2"
     blueprint = search_blueprint(library.project, "separation", lean_root=library.project).as_dict()
-    assert {key: value for key, value in payload.items() if key not in ("schema", "libraries")} == {
+    assert {key: value for key, value in payload.items() if key not in ("schema", "libraries", "refused")} == {
         key: value for key, value in blueprint.items() if key != "schema"
     }
+    assert payload["refused"] == []
     assert blueprint["schema"] == SEARCH_SCHEMA == "autoform-search/v1"
     (atlas,) = payload["libraries"]
     assert {key: value for key, value in atlas.items() if key != "hits"} == {
@@ -287,14 +289,19 @@ def test_an_index_with_no_declarations_or_no_match_is_an_empty_answer(tmp_path: 
     assert (result.total_matches, result.hits) == (0, ())
 
 
-def test_one_refused_library_refuses_the_whole_call(tmp_path: Path) -> None:
+def test_a_refused_library_is_named_and_the_blueprint_is_still_searched(tmp_path: Path) -> None:
     library = _library(tmp_path, declaration())
     (library.root / "Lib/Convex.lean").write_text("theorem changed : True := trivial\n", encoding="utf-8")
 
-    with pytest.raises(LibraryError, match="library atlas: 1 source file differs from its index"):
-        search_with_libraries(library.project, "separation", lean_root=library.project, libraries=[("atlas", None)])
-    # The blueprint alone is still searchable.
-    assert search_blueprint(library.project, "separating").total_matches == 1
+    result = search_with_libraries(
+        library.project, "separating", lean_root=library.project, libraries=[("atlas", None)]
+    )
+
+    assert (result.blueprint.total_matches, result.libraries) == (1, ())
+    assert result.refused == (("atlas", "1 source file differs from its index: Lib/Convex.lean"),)
+    assert result.as_dict()["refused"] == [
+        {"name": "atlas", "reason": "1 source file differs from its index: Lib/Convex.lean"}
+    ]
 
 
 def test_a_library_named_twice_or_without_a_lean_root_is_refused(tmp_path: Path) -> None:
@@ -387,7 +394,7 @@ def test_search_cli_without_library_is_unchanged_by_this_feature(tmp_path: Path,
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["schema"] == "autoform-search/v1"
-    assert "libraries" not in payload
+    assert "libraries" not in payload and "refused" not in payload
 
 
 def test_search_cli_without_library_notes_a_package_that_publishes_an_index(tmp_path: Path, capsys) -> None:
@@ -403,6 +410,14 @@ def test_search_cli_without_library_notes_a_package_that_publishes_an_index(tmp_
         "note: atlas publishes a search index this search did not read; search it too with "
         f"--lean-root {library.project} --library atlas\n"
     )
+
+
+def test_search_cli_quotes_the_flags_it_suggests(tmp_path: Path, capsys) -> None:
+    library = _library(tmp_path / "two words", declaration())
+
+    assert cli.main(_cli(library, "separating")) == 0
+
+    assert f"--lean-root '{library.project}' --library atlas\n" in capsys.readouterr().err
 
 
 def test_search_cli_notes_the_library_on_stderr_and_keeps_the_json(tmp_path: Path, capsys) -> None:
@@ -514,6 +529,16 @@ def test_search_cli_escapes_library_text(tmp_path: Path, capsys) -> None:
     assert "Lib.Convex.separation (theorem, complete): A\\x07B\n" in out
 
 
+def test_search_cli_escapes_a_hits_source_file(capsys) -> None:
+    # The source directories are the library's choice, and a file under one prints on a line of its own.
+    hit = LibraryHit(declaration(), "s\u001b[2J/Lib/Convex.lean", True, None, ("lean",))
+    cli._print_library(LibraryResult("atlas", REV, INDEX_SCHEMA, "0.9.0", 1, (), 1, (hit,)))
+    out = capsys.readouterr().out
+
+    assert "\n  s\\x1b[2J/Lib/Convex.lean:3\n" in out
+    assert "\u001b" not in out
+
+
 def test_search_cli_prints_a_docstring_on_one_line_without_a_literal_newline(tmp_path: Path, capsys) -> None:
     library = _library(
         tmp_path,
@@ -536,18 +561,22 @@ def test_search_cli_says_when_the_project_does_not_lock_a_dependency(tmp_path: P
     out = capsys.readouterr().out
 
     assert "None" not in out
-    assert f"  differs: mathlib {MATHLIB_REV} (the project does not lock it)\n" in out
+    assert f"  differs: mathlib {MATHLIB_REV} (the project locks no revision of it)\n" in out
 
 
-def test_search_cli_refuses_a_library_it_cannot_verify_and_prints_no_blueprint_hits(tmp_path: Path, capsys) -> None:
+def test_search_cli_warns_about_a_library_it_cannot_verify_and_prints_the_blueprint_hits(
+    tmp_path: Path, capsys
+) -> None:
     library = _library(tmp_path, declaration())
     (library.root / "Lib/Convex.lean").write_text("theorem changed : True := trivial\n", encoding="utf-8")
 
-    assert cli.main([*_cli(library, "separating"), "--library", "atlas", "--json"]) == 2
+    assert cli.main([*_cli(library, "separating"), "--library", "atlas", "--json"]) == 0
     captured = capsys.readouterr()
 
-    assert captured.out == ""
-    assert captured.err == "error: library atlas: 1 source file differs from its index: Lib/Convex.lean\n"
+    payload = json.loads(captured.out)
+    assert (payload["total_matches"], payload["libraries"]) == (1, [])
+    assert payload["refused"] == [{"name": "atlas", "reason": "1 source file differs from its index: Lib/Convex.lean"}]
+    assert captured.err == "warning: library atlas: 1 source file differs from its index: Lib/Convex.lean\n"
 
 
 def test_search_cli_refuses_library_without_lean_root_or_with_a_malformed_argument(tmp_path: Path, capsys) -> None:
@@ -567,7 +596,7 @@ def test_search_cli_reports_a_project_without_a_manifest(tmp_path: Path, capsys)
     (library.project / "lake-manifest.json").unlink()
 
     assert cli.main([*_cli(library, "separation"), "--library", "atlas"]) == 2
-    assert capsys.readouterr().err == "error: the Lean root has no lake-manifest.json; run `lake update` first\n"
+    assert capsys.readouterr().err == "error: the Lean root has no lake-manifest.json, so it locks no package\n"
 
 
 def _deny(path: Path):
@@ -576,18 +605,19 @@ def _deny(path: Path):
     path.chmod(0)
 
 
-def test_search_cli_refuses_a_library_whose_checkout_cannot_be_read(tmp_path: Path, capsys) -> None:
+def test_search_cli_warns_about_a_library_whose_checkout_cannot_be_read(tmp_path: Path, capsys) -> None:
     library = _library(tmp_path, declaration())
     git = library.root / ".git"
     try:
         _deny(git)
-        assert cli.main([*_cli(library, "separation"), "--library", "atlas"]) == 2
+        assert cli.main([*_cli(library, "separating"), "--library", "atlas"]) == 0
     finally:
         git.chmod(0o755)
     captured = capsys.readouterr()
 
-    assert captured.out == ""
-    assert captured.err == "error: library atlas: its checkout cannot be read\n"
+    assert captured.out.startswith("1 of 1 matching article(s) shown.\n")
+    assert "Library atlas" not in captured.out
+    assert captured.err == "warning: library atlas: its checkout cannot be read\n"
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
@@ -609,4 +639,4 @@ def test_search_and_list_return_promptly_when_a_library_file_is_a_named_pipe(tmp
         assert "library atlas" in text.lower() or "atlas" in text
         assert "regular file" in text
         if "search" in command:
-            assert done.returncode == 2
+            assert done.returncode == 0

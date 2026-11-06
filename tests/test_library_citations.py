@@ -982,12 +982,12 @@ def test_an_index_that_cannot_be_read_is_named_and_never_fails_the_check(
 
 
 def test_a_declaration_name_cannot_forge_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    project = _consumer(tmp_path, declarations=_cited("Nat.foo\x1b[2K\rerror: forged"))
+    # A guillemet-quoted component may hold a bidirectional override, which prints escaped.
+    project = _consumer(tmp_path, declarations=_cited("Nat.\u00abfoo\u202e[2K error: forged\u00bb"))
 
     assert main(["check", str(project / "blueprint"), "--lean-root", str(project)]) == 0
     out = capsys.readouterr().out
-    assert "\x1b" not in out and "\r" not in out
-    assert "Nat.foo\\x1b[2K\\rerror: forged's docstring cites" in out
+    assert "\u202e" not in out and "\\u202e" in out
 
 
 def test_a_symlinked_lean_root_is_compared_like_its_target(

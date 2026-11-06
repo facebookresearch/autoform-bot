@@ -112,7 +112,7 @@ def test_library_list_cli_reports_an_unreadable_project_with_exit_2(tmp_path: Pa
     captured = capsys.readouterr()
 
     assert captured.out == ""
-    assert captured.err == "error: the Lean root has no lake-manifest.json; run `lake update` first\n"
+    assert captured.err == "error: the Lean root has no lake-manifest.json, so it locks no package\n"
 
 
 def test_a_package_whose_checkout_cannot_be_read_does_not_hide_the_others(tmp_path: Path, capsys) -> None:

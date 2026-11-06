@@ -20,7 +20,7 @@ from ..search import (
     unquoted,
 )
 from .index import INDEX_SCHEMA, IndexDeclaration, LibraryIndex, shorten
-from .locate import canonical_name, read_workspace
+from .locate import LibraryError, canonical_name, read_workspace
 from .verify import Difference, load_library
 
 SEARCH_LIBRARY_SCHEMA = "autoform-search/v2"
@@ -98,6 +98,8 @@ class LibraryResult:
 class LibrarySearch:
     blueprint: SearchResult
     libraries: tuple[LibraryResult, ...]
+    #: Each library that could not be searched, as its name as given and the reason.
+    refused: tuple[tuple[str, str], ...]
 
     def as_dict(self) -> dict[str, object]:
         # Every v1 key keeps its meaning; ``source_revision`` still covers the blueprint only.
@@ -105,6 +107,7 @@ class LibrarySearch:
             **self.blueprint.as_dict(),
             "schema": SEARCH_LIBRARY_SCHEMA,
             "libraries": [library.as_dict() for library in self.libraries],
+            "refused": [{"name": name, "reason": reason} for name, reason in self.refused],
         }
 
     def to_json(self) -> str:
@@ -130,10 +133,10 @@ def search_with_libraries(
     declarations: Sequence[str] = (),
     limit: int = 20,
 ) -> LibrarySearch:
-    """Search the blueprint and each named library, or refuse the whole call.
+    """Search the blueprint and each named library that passes its checks.
 
-    One library that cannot be searched refuses everything, the blueprint
-    results included: an answer without it would read as "this result is new".
+    A library that cannot be searched is left out and named in ``refused``,
+    so the caller can warn that whether it has the result is unknown.
     """
 
     if lean_root is None:
@@ -149,8 +152,13 @@ def search_with_libraries(
     words = query_words(query)
     typed = typed_words(query, words)
     results: list[LibraryResult] = []
+    refused: list[tuple[str, str]] = []
     for name, index_path in libraries:
-        verified = load_library(workspace, name, index_path)
+        try:
+            verified = load_library(workspace, name, index_path)
+        except LibraryError as error:
+            refused.append((name, error.reason))
+            continue
         total, hits = match_index(verified.index, words, blueprint.terms, limit, typed)
         results.append(
             LibraryResult(
@@ -164,7 +172,7 @@ def search_with_libraries(
                 hits=hits,
             )
         )
-    return LibrarySearch(blueprint, tuple(results))
+    return LibrarySearch(blueprint, tuple(results), tuple(refused))
 
 
 def match_index(

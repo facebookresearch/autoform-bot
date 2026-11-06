@@ -8,11 +8,11 @@ scope against the sources, then inspect the fine DAG and its coarse roadmap.
 1. Read the coverage contract and the cited source passages; summaries are not
    substitutes for the source.
 2. Run `autoform check` with `--lean-root` and inspect the project, chapter, and
-   node-neighborhood graphs. Treat each warning that a shared library
-   declaration's docstring cites one of the blueprint's sources as a library hit
-   for item 5, and a warning about a module's docstring as a hit for each
-   declaration it counts; search the module's name with `--library` to list
-   them all.
+   node-neighborhood graphs. Treat each warning that a library declaration's
+   docstring cites a blueprint source as a library hit for item 5, and one about
+   a module's docstring as a hit for each declaration it counts: search the
+   module's name with `--library`, `--json`, and `--limit` at least its
+   `total_matches`, and keep the hits whose `module` is exactly that name.
 3. Inspect every milestone and every node in the requested review scope, with
    its hidden `blueprint/.implementation-notes/<article_id>.md` when present.
 4. Distinguish statement prerequisites from proof-only prerequisites.
@@ -20,7 +20,7 @@ scope against the sources, then inspect the fine DAG and its coarse roadmap.
    result its proof proves or cites, over the blueprint and the project's
    usable shared libraries, as the
    [library search rules](../../formalize/references/library-search.md)
-   describe. List the queries run and any library refused.
+   describe. List the queries run and any library left out.
    - Each result hits its own article; a second article stating the same result
      is a duplicate. A hit whose `catalog` is `module` is an inventory listing
      the declaration, not a duplicate of the article that expounds it, and a

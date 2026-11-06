@@ -45,8 +45,8 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 /* Material's own sun or moon sits in the header this page hides, so the trail row ends in a quiet stand-in. */
 .bp-dag-viewer .bp-dag-theme { position: relative; flex: none; width: 32px; min-height: 32px; margin-left: 8px; padding: 0; border: 0; background: transparent; color: var(--dag-muted); font-size: 16px; line-height: 1; }
 .bp-dag-viewer .bp-dag-theme svg { display: block; width: 18px; height: 18px; margin: auto; color: var(--dag-fg); }
-/* The switch draws a 32px box and reaches 44px through its ::after, so on a phone the trail row stays one line high. */
-.bp-dag-viewer .bp-dag-theme::after { content: ""; position: absolute; inset: -6px; }
+/* The theme switch and Map only draw a 32px box and reach 44px through their ::after, so the trail row stays one line high. */
+.bp-dag-viewer :is(.bp-dag-theme, .bp-dag-map-only)::after { content: ""; position: absolute; inset: -6px; }
 .bp-dag-swatch { flex: none; width: 11px; height: 11px; border: 2px solid var(--dag-swatch-light-stroke); border-radius: 50%; background: var(--dag-swatch-light-fill); }
 [data-md-color-scheme=slate] .bp-dag-swatch { border-color: var(--dag-swatch-dark-stroke); background: var(--dag-swatch-dark-fill); }
 .bp-dag-toolbar { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 4px 16px 12px; font-size: 13px; }
@@ -83,8 +83,8 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 .bp-dag-button:not(:disabled):hover, .bp-dag-filter-summary:hover, .bp-dag-load-more:hover { border-color: var(--dag-link); color: var(--dag-link); }
 /* One solid ring for every control, 3.9:1 or more on every surface; rows draw it inside, where the rail or list would clip it. */
 .bp-dag-viewer :is(button, a, [tabindex]):focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }
-/* Controls inside a box that clips draw their ring inside it: the reader's handle sits in a pane that hides overflow. */
-.bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body, .bp-dag-sheet-handle):focus-visible { outline-offset: -2px; }
+/* Controls inside a box that clips draw their ring inside it: the reader's handle and the map's edge tabs sit in panes that hide overflow. */
+.bp-dag-viewer :is(.bp-dag-result, .bp-dag-inventory-row, .bp-dag-navigation-link, .bp-reading-body, .bp-dag-sheet-handle, .bp-dag-pane-tab):focus-visible { outline-offset: -2px; }
 /* Browse marks the list on screen in the pressed look, and its closed toggle carries that look while a list or the sources replace the map. */
 .bp-dag-browse-popover .bp-dag-button[aria-pressed=true], .bp-dag-pivot[aria-pressed=true], .bp-dag-viewer:has(.bp-dag-stage[hidden]) .bp-dag-browse > .bp-dag-button { border-color: var(--dag-link); background: color-mix(in srgb, var(--dag-link) 10%, var(--dag-bg)); color: var(--dag-link); }
 .bp-dag-filters { position: relative; flex: none; }
@@ -232,7 +232,7 @@ body.bp-dag-app-page .md-content__inner > p { display: none; }
 body.bp-dag-app-page .bp-explorer-page > .bp-reading-source { display: none; }
 body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: none !important; }
 .bp-dag-integrated { --dag-navigation-width: 216px; }
-.bp-dag-integrated .bp-dag-body { grid-template-columns: var(--dag-navigation-width) minmax(0, 1fr) var(--dag-reading-width, minmax(360px, 39%)); }
+.bp-dag-integrated .bp-dag-body { grid-template-columns: var(--dag-navigation-width) minmax(160px, 1fr) var(--dag-reading-width, minmax(360px, 39%)); }
 .bp-dag-integrated .bp-dag-head { display: block; padding: 0; }
 .bp-dag-integrated .bp-dag-context { display: flex; padding: 10px 16px 0; }
 /* The trail has the row to itself: each crumb keeps a few letters, the "…" its glyph, and a parent at most 24ch. */
@@ -326,7 +326,7 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated.bp-dag-overview-only.bp-dag-sheet-open .bp-reading-body h1 { padding-right: 32px; }
 }
 @media (max-width: 1100px) {
-  .bp-dag-integrated .bp-dag-body { grid-template-columns: minmax(0, 1fr) var(--dag-reading-width, minmax(340px, 43%)); }
+  .bp-dag-integrated .bp-dag-body { grid-template-columns: minmax(160px, 1fr) var(--dag-reading-width, minmax(340px, 43%)); }
   .bp-dag-integrated.bp-dag-overview-only:not(.bp-dag-sheet-open) .bp-dag-body { grid-template-columns: minmax(0, 1fr) 48px; }
   .bp-dag-integrated .bp-dag-navigation { display: none; }
   .bp-dag-integrated .bp-dag-outline-toggle { display: inline-flex; align-items: center; }
@@ -383,20 +383,30 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 @media (prefers-reduced-motion: reduce) { .bp-dag-integrated .bp-reading-pane { transition: none; } }
 
 /* Topics and the reading pane resize from splitters on their inner edges, and hide: a hidden pane leaves a tab at the map's
-   edge that brings it back. A splitter sits over the reading pane, which would otherwise take its inner half, and the
-   splitters and tabs stay under the head's menus. A phone keeps its sheet. */
+   edge that brings it back. The map keeps 160px in every layout with a reader, whatever width was saved. A splitter sits
+   over the reading pane, which would otherwise take its inner half, and the splitters and tabs stay under the head's menus.
+   A focused splitter shows the usual focus ring, and its line only while dragged or hovered. Where touch is the main
+   pointer, as on a tablet, the splitters are 24px wide. The statement list leaves the tabs room. A phone keeps its sheet. */
 .bp-dag-splitter { position: absolute; z-index: 11; top: 0; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; }
-.bp-dag-splitter::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; transition: background .12s; }
-.bp-dag-splitter:hover::after, .bp-dag-splitter:focus-visible::after, .bp-dag-resizing .bp-dag-splitter:focus::after { background: var(--dag-link); }
+.bp-dag-splitter::after { content: ""; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; transition: background .12s; }
+.bp-dag-splitter:hover::after, .bp-dag-resizing .bp-dag-splitter:focus::after { background: var(--dag-link); }
+@media (pointer: coarse) { .bp-dag-splitter { width: 24px; } }
 .bp-dag-resizing, .bp-dag-resizing * { cursor: col-resize !important; user-select: none; }
 .bp-dag-viewer .bp-dag-pane-tab { position: absolute; z-index: 7; top: 50%; padding: 14px 6px; border: 1px solid var(--dag-border); background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 12px; font-weight: 600; writing-mode: vertical-rl; box-shadow: var(--dag-e1); transform: translateY(-50%); cursor: pointer; }
 .bp-dag-viewer .bp-dag-pane-tab:hover { color: var(--dag-link); }
 .bp-dag-viewer .bp-dag-pane-tab-topics { left: 0; border-left: 0; border-radius: 0 var(--dag-radius-control) var(--dag-radius-control) 0; }
 .bp-dag-viewer .bp-dag-pane-tab-reading { right: 0; border-right: 0; border-radius: var(--dag-radius-control) 0 0 var(--dag-radius-control); }
-.bp-dag-viewer :is(.bp-dag-splitter, .bp-dag-pane-tab)[hidden] { display: none; }
+.bp-dag-viewer.bp-dag-topics-hidden .bp-dag-inventory { padding-left: 36px; }
+.bp-dag-viewer.bp-dag-reading-hidden .bp-dag-inventory { padding-right: 36px; }
 .bp-dag-viewer .bp-dag-map-only { position: relative; flex: none; width: 32px; min-height: 32px; margin-left: 8px; padding: 0; border: 0; border-radius: var(--dag-radius-control); background: transparent; color: var(--dag-fg); }
 .bp-dag-viewer .bp-dag-map-only svg { display: block; width: 18px; height: 18px; margin: auto; }
 .bp-dag-viewer .bp-dag-map-only[aria-pressed=true] { background: var(--dag-panel); color: var(--dag-link); }
+/* Windows' forced colours drop backgrounds, so the splitter's line and Map only's pressed look take the system's colours. */
+@media (forced-colors: active) {
+  .bp-dag-splitter:hover::after, .bp-dag-resizing .bp-dag-splitter:focus::after { background: Highlight; forced-color-adjust: none; }
+  .bp-dag-viewer .bp-dag-map-only[aria-pressed=true] { border: 2px solid Highlight; }
+  .bp-dag-viewer .bp-dag-map-only[aria-pressed=true]::after { inset: -8px; }
+}
 @media (min-width: 721px) {
   .bp-dag-viewer.bp-dag-integrated.bp-dag-reading-hidden .bp-reading-pane { display: none; }
   .bp-dag-viewer.bp-dag-integrated.bp-dag-reading-hidden .bp-dag-body { grid-template-columns: var(--dag-navigation-width) minmax(0, 1fr); }
@@ -406,8 +416,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 }
 @media (min-width: 1101px) {
   .bp-dag-viewer.bp-dag-integrated.bp-dag-topics-hidden .bp-dag-navigation { display: none; }
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-topics-hidden .bp-dag-body { grid-template-columns: minmax(0, 1fr) var(--dag-reading-width, minmax(360px, 39%)); }
-  .bp-dag-viewer.bp-dag-integrated.bp-dag-topics-hidden.bp-dag-overview-only:not(.bp-dag-sheet-open) .bp-dag-body { grid-template-columns: minmax(0, 1fr) 48px; }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-topics-hidden .bp-dag-body { grid-template-columns: minmax(160px, 1fr) var(--dag-reading-width, minmax(360px, 39%)); }
+  .bp-dag-viewer.bp-dag-integrated.bp-dag-topics-hidden.bp-dag-overview-only:not(.bp-dag-sheet-open, .bp-dag-reading-hidden) .bp-dag-body { grid-template-columns: minmax(0, 1fr) 48px; }
   .bp-dag-viewer.bp-dag-integrated.bp-dag-topics-hidden.bp-dag-reading-hidden .bp-dag-body { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 720px) {
