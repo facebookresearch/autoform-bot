@@ -609,7 +609,6 @@ parse, with or without `--json`, and changes nothing else.
   `(u/p)`, `√2`, `Lᵖ`, `x ↦ x²`. The map's search hits, Most-used results and
   Uses and Used by lists typeset their formulas where the site's MathJax runs,
   as its cards do.
-  `L^p spaces`, and a title's code keeps its dollars.
 - **Declarations split across lines.** A `class inductive` or `class abbrev`
   whose name, or whose `inductive` or `abbrev` with its name, opens the next
   line is indexed at the `class` line with its modifiers; it was missed, or
