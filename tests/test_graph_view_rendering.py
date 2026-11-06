@@ -252,7 +252,7 @@ def test_explorer_host_is_escaped_responsive_and_accessible() -> None:
     assert "window.AutoformMath.refresh(refs.readingBody)" in script
     assert "function readingLabel(" in script
     assert "refreshReadingLabels(refs.navigationInner)" in script
-    assert "refreshReadingLabels(refs.readingNeighbors)" in script
+    assert "refreshReadingLabels(section)" in script
     assert "refreshReadingLabels(refs.breadcrumb)" in script
     assert 'readingLabel("li", "", entry.label, entry.reading_title)' in script
     assert 'readingLabel("a", !className && index === 0 ? "bp-dag-book" : "", entry.label, entry.reading_title)' in script
@@ -404,16 +404,14 @@ def test_details_drop_instructions_and_label_paths_compactly() -> None:
         '"Mathematics knowledge map"',
     ):
         assert gone not in script, gone
-    # A result's relations show once, in the statement's own disclosure: no strip under the reader repeats them,
-    # which keeps only the topic's other pages and its concept links.
+    # A result's relations show once, in the statement's own disclosure: the reader adds only its back link to the topic.
     assert "bp-reading-links" not in script and '[["Prerequisites", links.before], ["Used by", links.after]]' not in script
     _run(r"""
       const base=record('B','chapter',{title:'Actual prerequisite'});
       configure([focus,base],[['B','F',2,3]]);renderReaderContext();
-      assert.equal(marked(dom$readingNeighbors,'bp-reading-links'),undefined,
+      assert.equal(marked(dom$readingContext,'bp-reading-links'),undefined,
         'The statement lists its own relations, so the reader must not repeat them');
-      assert.deepEqual(dom$readingNeighbors.children.map(child=>child.className),['bp-reading-related-topics']);
-      assert(links(dom$readingNeighbors).every(link=>link.getAttribute('aria-label')===null),'Topic links cannot claim dependency weights');
+      assert.deepEqual(dom$readingContext.children.map(child=>child.className),['bp-reading-around']);
     """)
     assert "function appendRelations(" not in script and "bp-dag-pivots" not in script
     assert '"Prerequisite"' not in script and '"Dependent"' not in script
@@ -798,7 +796,7 @@ def test_the_reader_opens_a_statements_own_relations_and_nothing_repeats_them() 
     assert '" items in this scope"' not in script and '"Mathematical regions"' not in script
     assert '" → Result → "' not in script
     assert 'var relations = target.querySelector(".bp-dependencies"); if (relations) relations.open = true;' in script
-    # What stays under the reader is #442's topic pages and concept links, never a second relations strip.
+    # An article ends with its concept links; no second relations strip comes back under the reader.
     for gone in ("bp-reading-links", '"bp-reading-related"'):
         assert gone not in script, gone
     for gone in (".bp-reading-links", ".bp-reading-related {", ".bp-reading-related a", ".bp-reading-related strong"):

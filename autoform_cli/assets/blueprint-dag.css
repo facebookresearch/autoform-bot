@@ -260,8 +260,8 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 .bp-outline-collection { display: block; padding: 10px 7px 4px; color: var(--dag-muted); font-size: 12px; font-weight: 600; }
 .bp-outline-label { margin: 0 7px 10px !important; font-size: 12px !important; color: var(--dag-muted); font-weight: 600; }
 .bp-dag-integrated .bp-reading-pane { position: relative; inset: auto; width: auto; max-width: none; height: 100%; max-height: none; min-width: 0; min-height: 0; visibility: visible; opacity: 1; transform: none; transition: none; border: 0; border-left: 1px solid var(--dag-border); border-radius: 0; box-shadow: none; overflow: hidden; }
-.bp-dag-integrated .bp-dag-inspector-inner { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; padding: 0; height: 100%; overflow: hidden; }
-.bp-reading-context:empty, .bp-reading-neighbors:empty { display: none; }
+.bp-dag-integrated .bp-dag-inspector-inner { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); min-width: 0; padding: 0; height: 100%; overflow: hidden; }
+.bp-reading-context:empty { display: none; }
 .bp-reading-context { grid-row: 1; min-width: 0; padding: 10px 22px; border-bottom: 1px solid var(--dag-border); overflow-wrap: anywhere; }
 .bp-reading-around { color: var(--dag-link); font-size: 13px; text-decoration: none; }
 .bp-reading-body { grid-row: 2; min-width: 0; min-height: 0; overflow: auto; padding: 24px 26px 60px; font-size: 16px; line-height: 1.6; scroll-padding-top: 24px; }
@@ -283,32 +283,15 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
 /* The current statement takes the contents row's tint and left bar inside the column; an offset outline ran past it. */
 /* The current statement takes a neutral tint: blue is a status colour. */
 .bp-reading-current { padding: 10px 12px 10px 15px; border-radius: 8px; background: color-mix(in srgb, var(--dag-fg) 6%, transparent); box-shadow: inset 3px 0 0 var(--dag-fg); }
-/* Under the statement, only a topic's other pages and its concept links: its relations are in its own Uses / Used by lists. */
-.bp-reading-neighbors { grid-row: 3; padding: 12px 22px; max-height: 192px; overflow: auto; border-top: 1px solid var(--dag-border); background: var(--dag-panel); }
-.bp-reading-related-topics { margin-top: 8px; font-size: 12px; color: var(--dag-muted); }
-.bp-reading-related-topics summary { cursor: pointer; font-weight: 600; }
-.bp-reading-topic-list { display: grid; gap: 5px; margin: 8px 0; padding: 0; list-style: none; }
-.bp-reading-related-topics a { color: var(--dag-link); }
-.bp-reading-wiki-links { margin-top: 8px; font-size: 12px; }
-.bp-reading-wiki-links summary { cursor: pointer; color: var(--dag-muted); font-weight: 600; }
-.bp-reading-wiki-related { display: grid; gap: 5px; margin-top: 10px; min-width: 0; }
-.bp-reading-wiki-related strong { color: var(--dag-muted); font-weight: 600; }
-.bp-reading-wiki-list { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
-.bp-reading-wiki-list a { color: var(--dag-link); }
-.bp-reading-wiki-notice { margin: 8px 0; color: var(--dag-muted); }
-.bp-reading-wiki-more { justify-self: start; border: 0; padding: 2px 0; background: transparent; color: var(--dag-link); font: inherit; cursor: pointer; }
-.bp-reading-wiki-more:focus-visible { outline: 2px solid var(--dag-link); outline-offset: 2px; }
-.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) { position: static; margin: 8px 0 0; padding: 0; border: 0; border-top: 1px solid var(--dag-border); border-radius: 0; background: transparent; color: var(--dag-fg); box-shadow: none; }
-.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary { position: static; display: list-item; margin: 0; padding: 8px 0; border: 0; background: transparent; color: var(--dag-muted); font: inherit; font-weight: 600; list-style: disclosure-closed inside; }
-.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics)[open] > summary { list-style-type: disclosure-open; }
-.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary::before,
-.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary::after { display: none; }
-.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary::-webkit-details-marker { display: inline; }
-.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-wiki-links, .bp-reading-related-topics) > summary::marker { display: inline; content: normal; color: var(--dag-muted); }
-.bp-reading-wiki-list a, .bp-reading-topic-list a { overflow-wrap: anywhere; line-height: 1.5; }
-/* The site clips a list holding a formula; these lists' links reach the list's
-   edges, so the clip would cut the sides of their focus rings. */
-.bp-dag-viewer.bp-dag-viewer :is(.bp-reading-topic-list, .bp-reading-wiki-list):has(mjx-container) { overflow-x: visible; }
+/* An article ends with its links to other articles and theirs to it, as two sections of its own that scroll with it. */
+.bp-reading-wiki-links { margin-top: 32px; border-top: 1px solid var(--dag-border); }
+.bp-reading-body .bp-reading-wiki-links h2 { margin: 20px 0 8px; font-size: 17px; }
+.bp-reading-wiki-list a { overflow-wrap: anywhere; }
+.bp-reading-wiki-notice { margin: 16px 0 0; color: var(--dag-muted); font-size: 14px; }
+.bp-reading-wiki-more { border: 0; padding: 2px 0; background: transparent; color: var(--dag-link); font: inherit; font-size: 14px; cursor: pointer; }
+/* The site clips a list holding a formula; this list's links reach its edges, so the clip would cut the sides of their
+   focus rings. */
+.bp-dag-viewer.bp-dag-viewer .bp-reading-wiki-list:has(mjx-container) { overflow-x: visible; }
 .bp-dag-integrated .bp-dag-inventory { left: 0 !important; }
 .bp-dag-integrated .bp-dag-inventory-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 16px; padding: 14px 16px; }
 .bp-dag-integrated .bp-dag-inventory-title { font-size: 17px; font-weight: 600; line-height: 1.3; white-space: normal; overflow-wrap: anywhere; }
@@ -357,13 +340,11 @@ body.bp-dag-app-page:has(.bp-dag-integrated) .md-content__inner > h1 { display: 
   .bp-dag-integrated.bp-dag-sheet-full .bp-dag-toolbar { display: none; }
   .bp-dag-integrated.bp-dag-sheet-full .bp-reading-map { display: block; position: absolute; z-index: 3; bottom: 16px; left: 50%; padding: 10px 24px; border: 1px solid var(--dag-overlay-border); border-radius: 999px; background: var(--dag-bg); color: var(--dag-fg); font: inherit; font-size: 14px; font-weight: 600; box-shadow: var(--dag-e2); transform: translateX(-50%); cursor: pointer; }
   .bp-dag-integrated .bp-reading-body { padding: 20px 22px 60px; }
-  .bp-dag-integrated .bp-reading-neighbors { max-height: 136px; }
   /* Open, the reader shows its heading right under the handle, so the handle keeps only its grabber; its name still says the title. */
   .bp-dag-integrated.bp-dag-sheet-open .bp-dag-sheet-handle :is(.bp-dag-sheet-title, .bp-dag-swatch) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  /* At half the reader has room for little more than the statement, so its topic and concept-link disclosures wait for full,
-     where they end clear of the Map pill. */
-  .bp-dag-integrated.bp-dag-sheet-open:not(.bp-dag-sheet-full) .bp-reading-neighbors { display: none; }
-  .bp-dag-integrated.bp-dag-sheet-full .bp-reading-neighbors { max-height: 208px; padding-bottom: 72px; }
+  /* At full the Map pill floats over the reader's foot, so the article's end, with its links, scrolls clear of it, and so
+     does whatever takes focus there. */
+  .bp-dag-integrated.bp-dag-sheet-full .bp-reading-body { padding-bottom: 72px; scroll-padding-bottom: 72px; }
   .bp-dag-integrated .bp-dag-context { padding-inline: 12px; }
   /* Keep every 44px control and both rows; trim only their outer padding, which leaves the map more of the screen. */
   .bp-dag-integrated .bp-dag-toolbar { padding: 4px 12px; gap: 6px; }

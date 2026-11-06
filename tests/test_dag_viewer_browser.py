@@ -2401,7 +2401,7 @@ def test_complete_reader_math_survives_navigation_and_paginated_authored_relatio
     assert documents == [urlsplit(first)._replace(fragment="").geturl()]
 
 
-def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_controls(
+def test_authored_explorer_title_math_keeps_native_outline_see_also_and_breadcrumb_controls(
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
 ) -> None:
     """Real published title parts and pinned CHTML keep code, focus, hrefs and native Enter intact."""
@@ -2418,12 +2418,11 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     _ready_site(page)
     # Wait for the actual optional layer's final reader refresh, not a timed
     # sleep that could race a replacement of otherwise-correct controls.
-    playwright.expect(page.locator(".bp-reading-wiki-links strong").first).to_have_text("Links to other concepts · 1")
+    playwright.expect(page.locator(".bp-reading-wiki-links h2").first).to_have_text("See also")
     outline = page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')
-    # The redesign lists a result's relations once, in the statement itself, so the related title is the topic peer's link.
-    related = page.locator('.bp-reading-topic-list a[href="' + foundation_route + '"]')
+    # The article links to the foundation, so the related title is its entry under "See also" at the article's end.
+    related = page.locator('.bp-reading-wiki-list a[href="' + foundation_route + '"]')
     around = page.locator(".bp-reading-around")
-    summary = page.locator(".bp-reading-related-topics summary")
     ancestor = page.locator(".bp-dag-breadcrumb a").filter(has=page.locator(".arithmatex"))
     playwright.expect(outline).to_have_attribute("href", scope_route)
     playwright.expect(related).to_have_attribute("href", foundation_route)
@@ -2431,20 +2430,18 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     page.evaluate("""foundation => {
       window.__titleMathDocument=document;window.__titleMathClicks=0;
       window.__titleMathControls=[document.querySelector('[data-navigation-node-id="algebra"]'),
-        Array.from(document.querySelectorAll('.bp-reading-topic-list a')).find(node=>node.href===foundation),
-        document.querySelector('.bp-reading-related-topics summary'),
+        Array.from(document.querySelectorAll('.bp-reading-wiki-list a')).find(node=>node.href===foundation),
         document.querySelector('.bp-dag-breadcrumb a:has(.arithmatex)')];
-      __titleMathControls[1].addEventListener('click',()=>__titleMathClicks++);
+      // The reader takes a click on a link in the article before the link hears it, so count where the click begins.
+      document.addEventListener('click',event=>{if(event.target.closest&&event.target.closest('a')===__titleMathControls[1])__titleMathClicks++;},true);
     }""", foundation_route)
     outline.focus()
     assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-dag-integrated'))") is True
     assert page.evaluate("() => document.activeElement===__titleMathControls[0] && __titleMathControls.every(node=>node.isConnected)")
     assert outline.evaluate("node=>node===__titleMathControls[0]")
     assert related.evaluate("node=>node===__titleMathControls[1]")
-    assert summary.evaluate("node=>node===__titleMathControls[2]")
-    assert ancestor.evaluate("node=>node===__titleMathControls[3]")
-    for control, tex in ((outline, r"\ZZ/n"), (around, r"\ZZ/n"),
-                         (related, r"\mathbb{Z}/n"), (summary, r"\ZZ/n"), (ancestor, r"\ZZ/n")):
+    assert ancestor.evaluate("node=>node===__titleMathControls[2]")
+    for control, tex in ((outline, r"\ZZ/n"), (around, r"\ZZ/n"), (related, r"\mathbb{Z}/n"), (ancestor, r"\ZZ/n")):
         playwright.expect(control.locator(".arithmatex")).to_have_count(1)
         playwright.expect(control.locator(".arithmatex")).to_have_attribute("data-autoform-math-source", r"\(" + tex + r"\)")
         playwright.expect(control.locator("mjx-container")).to_have_count(1)
@@ -2459,17 +2456,12 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
         assert control.locator("code .arithmatex, code mjx-container, [tabindex], [role=application]").count() == 0
         assert control.locator("mjx-merror, merror, script, iframe, img").count() == 0
         assert control.evaluate("node=>!node.classList.contains('arithmatex')")
-    assert summary.inner_text().startswith("More in Groups ")
     _assert_hit(page, outline)
     outline.locator("mjx-container").click(button="right")
     playwright.expect(page.get_by_role("menu")).to_have_count(0)
     page.keyboard.press("Escape")
-    summary.focus()
-    page.keyboard.press("Enter")
-    playwright.expect(page.locator(".bp-reading-related-topics")).to_have_attribute("open", "")
-    playwright.expect(summary).to_be_focused()
     related.focus()
-    assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-reading-neighbors'))") is True
+    assert page.evaluate("() => AutoformMath.refresh(document.querySelector('.bp-reading-wiki-links'))") is True
     playwright.expect(related).to_be_focused()
     playwright.expect(related).to_have_attribute("href", foundation_route)
     assert related.evaluate("node=>node===__titleMathControls[1]")
@@ -2480,7 +2472,7 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     assert page.evaluate("() => __titleMathClicks===1 && document===__titleMathDocument")
     # The actual authored math-bearing leaf is now the nonlinked current
     # breadcrumb, and its authored module remains a canonical ancestor link.
-    playwright.expect(page.locator(".bp-reading-wiki-links strong").first).to_have_text("Links to other concepts · 0")
+    playwright.expect(page.locator(".bp-reading-wiki-links h2")).to_have_text(["Linked from"])
     ancestor = page.locator(".bp-dag-breadcrumb a").filter(has=page.locator(".arithmatex"))
     current = page.locator('.bp-dag-breadcrumb li[aria-current="page"]')
     ancestor.evaluate("node=>window.__titleMathAncestor=node")
@@ -2562,7 +2554,7 @@ def test_explorer_title_math_has_no_raw_tex_tooltips_or_clipped_focus_rings(
     foundation_route = _site_route(page, site_url, "algebra/title-foundation")
     page.goto(_site_route(page, site_url, "algebra/title-target"))
     _ready_site(page)
-    related = page.locator('.bp-reading-topic-list a[href="' + foundation_route + '"]')
+    related = page.locator('.bp-reading-wiki-list a[href="' + foundation_route + '"]')
     playwright.expect(related.locator("mjx-container")).to_have_count(1)
     outline = page.locator('.bp-dag-navigation-link[data-navigation-node-id="algebra"]')
     ancestor = page.locator(".bp-dag-breadcrumb a").filter(has=page.locator(".arithmatex"))
@@ -3189,13 +3181,14 @@ def test_dragging_the_reader_without_handle_focus_keeps_the_selected_card_under_
 
 
 
-def test_a_phone_reader_keeps_half_for_the_statement_and_ends_full_clear_of_the_map_pill(mobile_page: object, site_url: str) -> None:
-    """At half the topic and concept-link disclosures took up to 136px of a 327px reader, and at full the Map pill covered their last row."""
+def test_a_phone_reader_gives_the_article_its_whole_height_and_ends_full_clear_of_the_map_pill(mobile_page: object, site_url: str) -> None:
+    """Disclosures pinned under the reader took up to 136px of a 327px reader at half; at full the Map pill covered their last row."""
     page = _open_site(mobile_page, site_url, "dependencies/chapters/algebra.html#node=algebra%2Fresult")
     handle = page.get_by_role("button", name=re.compile(r", reading$"))
     playwright.expect(handle).to_have_attribute("aria-expanded", "true")
-    neighbors = page.locator(".bp-reading-neighbors")
-    playwright.expect(neighbors).to_be_hidden()
+    body = page.locator(".bp-reading-body")
+    # Nothing is pinned under the article: it runs to the reader's foot.
+    assert body.evaluate("node => Math.abs(node.getBoundingClientRect().bottom - node.parentElement.getBoundingClientRect().bottom)") < 1
     box, area = handle.bounding_box(), page.locator(".bp-dag-body").bounding_box()
     assert box is not None and area is not None
     page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
@@ -3203,13 +3196,16 @@ def test_a_phone_reader_keeps_half_for_the_statement_and_ends_full_clear_of_the_
     page.mouse.move(box["x"] + box["width"] / 2, area["y"] + 20, steps=6)
     page.mouse.up()
     playwright.expect(page.locator(".bp-dag-viewer")).to_have_class(re.compile(r"\bbp-dag-sheet-full\b"))
-    if neighbors.evaluate("node => node.children.length"):
-        playwright.expect(neighbors).to_be_visible()
-        neighbors.evaluate("node => { node.scrollTop = node.scrollHeight; }")
-        _paint_frame(page)
-        last = neighbors.evaluate("node => node.lastElementChild.getBoundingClientRect().bottom")
-        pill = page.get_by_role("button", name="Show the map", exact=True).bounding_box()
-        assert pill is not None and last <= pill["y"]
+    # A long article, scrolled to its end, where its links to other articles are.
+    body.evaluate("""node => {
+      node.querySelector('.bp-reading-source').append(...Array.from({length: 60}, () => document.createElement('p')).map(p => (p.textContent = 'A line.', p)));
+      node.scrollTop = node.scrollHeight;
+    }""")
+    _paint_frame(page)
+    assert body.evaluate("node => node.scrollTop > 0")
+    last = body.evaluate("node => node.lastElementChild.getBoundingClientRect().bottom")
+    pill = page.get_by_role("button", name="Show the map", exact=True).bounding_box()
+    assert pill is not None and last <= pill["y"], (last, pill)
 
 def test_a_phone_reader_opens_at_half_snaps_where_it_is_dragged_and_maps_back_from_full(
     mobile_page: object, site_url: str,

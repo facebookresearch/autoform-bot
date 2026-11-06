@@ -894,30 +894,20 @@ def test_authored_sources_results_and_areas_have_distinct_real_views(
     assert page.url == site.route("roadmap")
 
 
-def test_zero_edge_native_article_keeps_closed_topic_links_and_complete_math(
+def test_zero_edge_native_article_has_no_topic_footer_and_its_peers_are_in_the_article(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:
     page, site = workspace_page, workspace_site
     _open(page, site, workspace_runtime, _ISOLATED)
     _selected(page, _ISOLATED)
-    details = page.locator(".bp-reading-related-topics")
-    playwright.expect(details).to_have_count(1)
-    assert details.get_attribute("open") is None
-    owner = site.records[_ISOLATED]["scope"]
-    topic_peers = [record["id"] for record in site.records.values()
-                   if record["id"] != _ISOLATED and record.get("scope") == owner
-                   and (record.get("result") is True or record.get("catalog") == "module")
-                   and record.get("navigation") not in {"collection", "transparent", "source"}]
-    assert _TARGET in topic_peers[:5], "The real published peer preview must contain the connected target"
-    playwright.expect(details.locator("summary")).to_have_text(f"More in {site.records[owner]['title']}")
+    # The reader lists no "More in" pages under the statement: the topic's article holds its other statements.
     card = _full_math(page, _ISOLATED, 2)
     assert "independent statement" in card.inner_text()
+    playwright.expect(page.locator(".bp-reading-pane")).not_to_contain_text("More in ")
     assert page.url == site.route(_ISOLATED)
-    details.locator("summary").click()
-    peer = details.get_by_role("link", name=_TARGET_TITLE, exact=True)
+    peer = page.locator(f'.bp-reading-body .bp-thmwrapper[data-autoform-node-id="{_TARGET}"]').get_by_role(
+        "link", name=re.compile(r"^Link to "))
     playwright.expect(peer).to_have_attribute("href", site.route(_TARGET))
-    assert peer.get_attribute("aria-label") is None
-    playwright.expect(peer).to_be_visible()
     peer.click()
     page.wait_for_url(site.route(_TARGET))
     _selected(page, _TARGET)
@@ -1008,10 +998,8 @@ def test_isolated_topic_link_opens_connected_result_and_its_real_edge(
     page.wait_for_url(site.route(_ISOLATED))
     _selected(page, _ISOLATED)
     _full_math(page, _ISOLATED, 2)
-    details = page.locator(".bp-reading-related-topics")
-    assert details.get_attribute("open") is None
-    details.locator("summary").click()
-    peer = details.get_by_role("link", name=_TARGET_TITLE, exact=True)
+    peer = page.locator(f'.bp-reading-body .bp-thmwrapper[data-autoform-node-id="{_TARGET}"]').get_by_role(
+        "link", name=re.compile(r"^Link to "))
     playwright.expect(peer).to_have_attribute("href", site.route(_TARGET))
     peer.click()
     page.wait_for_url(site.route(_TARGET))
@@ -1108,7 +1096,7 @@ def test_native_reader_and_library_links_remain_soft_navigation(
     assert page.evaluate("() => document === __workspaceDocument") is True
 
 
-def test_verified_concept_links_have_native_direction_navigation_back_and_known_empty_coverage(
+def test_verified_concept_links_end_the_article_as_see_also_and_linked_from_and_navigate_natively(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:
     page, site = workspace_page, workspace_site
@@ -1126,25 +1114,17 @@ def test_verified_concept_links_have_native_direction_navigation_back_and_known_
     _selected(page, _TARGET)
     card = _full_math(page)
     playwright.expect(card).to_contain_text(_LAST_SENTENCE)
-    disclosure = page.locator(".bp-reading-wiki-links")
-    # Until the real response is released, do not invent zero counts or links.
-    playwright.expect(disclosure).to_have_count(0)
+    links = page.locator(".bp-reading-body > .bp-reading-wiki-links")
+    # Until the real response is released, nothing is drawn: no empty lists and no counts.
+    playwright.expect(links).to_have_count(0)
     with page.expect_response(wiki_url) as delivered:
         held[0].continue_()
     assert delivered.value.status == 200 and delivered.value.json() == site.wiki_layer
-    playwright.expect(disclosure).to_have_count(1)
-    assert disclosure.get_attribute("open") is None
-    assert disclosure.locator("summary").evaluate("""summary =>
-      getComputedStyle(summary).display === 'list-item' &&
-      getComputedStyle(summary, '::-webkit-details-marker').display !== 'none' &&
-      getComputedStyle(summary, '::marker').display !== 'none'
-    """), "A compact native disclosure must retain its visible expansion marker"
-    disclosure.locator("summary").click()
-    parts = disclosure.locator(".bp-reading-wiki-related")
-    playwright.expect(parts).to_have_count(2)
-    outgoing, incoming = parts.nth(0), parts.nth(1)
-    playwright.expect(outgoing.locator("strong")).to_have_text("Links to other concepts · 2")
-    playwright.expect(incoming.locator("strong")).to_have_text("Linked from · 1")
+    playwright.expect(links).to_have_count(1)
+    # They end the article, open, and scroll with it: a heading and a list for each direction.
+    playwright.expect(links.locator("h2")).to_have_text(["See also", "Linked from"])
+    assert links.evaluate("section => section === section.parentElement.lastElementChild")
+    outgoing, incoming = links.locator("ul").nth(0), links.locator("ul").nth(1)
     playwright.expect(outgoing.get_by_role("link")).to_have_count(2)
     assert {link.get_attribute("href") for link in outgoing.get_by_role("link").all()} == {
         site.route(_OTHER), site.route(_ISOLATED),
@@ -1153,26 +1133,19 @@ def test_verified_concept_links_have_native_direction_navigation_back_and_known_
     playwright.expect(incoming.get_by_role("link", name=site.records[_ISOLATED]["title"], exact=True)).to_have_attribute(
         "href", site.route(_ISOLATED),
     )
-    playwright.expect(disclosure.locator(".bp-reading-wiki-notice")).to_have_count(0)
+    playwright.expect(links.locator(".bp-reading-wiki-notice")).to_have_count(0)
     outgoing.get_by_role("link", name=site.records[_OTHER]["title"], exact=True).click()
     page.wait_for_url(site.route(_OTHER))
     _selected(page, _OTHER)
     _full_math(page, _OTHER, 1)
-    assert disclosure.get_attribute("open") is None
-    disclosure.locator("summary").click()
-    parts = disclosure.locator(".bp-reading-wiki-related")
-    playwright.expect(parts.nth(0).locator("strong")).to_have_text("Links to other concepts · 0")
-    playwright.expect(parts.nth(0).get_by_role("link")).to_have_count(0)
-    playwright.expect(parts.nth(1).locator("strong")).to_have_text("Linked from · 1")
-    playwright.expect(parts.nth(1).get_by_role("link", name=_TARGET_TITLE, exact=True)).to_have_attribute(
-        "href", site.route(_TARGET),
-    )
+    # That page links nowhere, so it lists only what links to it.
+    playwright.expect(links.locator("h2")).to_have_text(["Linked from"])
+    playwright.expect(links.get_by_role("link", name=_TARGET_TITLE, exact=True)).to_have_attribute("href", site.route(_TARGET))
     page.go_back()
     page.wait_for_url(site.route(_TARGET))
     _selected(page, _TARGET)
     playwright.expect(_full_math(page)).to_contain_text(_LAST_SENTENCE)
-    # This real definition has formal dependents, but no authored concept links.
-    # The already-verified layer makes its empty disclosure genuinely known.
+    # This real definition has formal dependents, but no authored concept links, so nothing ends its article.
     assert not any(_BASE in pair for pair in site.wiki_pairs)
     base = page.locator(f'.bp-reading-body .bp-thmwrapper[data-autoform-node-id="{_BASE}"]')
     # The permalink shows "#" and is named for the statement it links to.
@@ -1182,7 +1155,7 @@ def test_verified_concept_links_have_native_direction_navigation_back_and_known_
     page.wait_for_url(site.route(_BASE))
     _selected(page, _BASE)
     playwright.expect(_full_math(page, _BASE, 0)).to_contain_text("The base value is zero.")
-    playwright.expect(disclosure).to_have_count(0)
+    playwright.expect(links).to_have_count(0)
     playwright.expect(page.locator(".bp-reading-wiki-notice")).to_have_count(0)
     page.go_back()
     page.wait_for_url(site.route(_TARGET))
@@ -1193,7 +1166,7 @@ def test_verified_concept_links_have_native_direction_navigation_back_and_known_
     assert page.evaluate("() => document === __workspaceDocument") is True
 
 
-def test_failed_optional_concept_transport_stays_unknown_without_breaking_math_or_navigation(
+def test_failed_optional_concept_transport_shows_no_links_and_keeps_math_and_navigation(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
 ) -> None:
     page, site = workspace_page, workspace_site
@@ -1206,17 +1179,7 @@ def test_failed_optional_concept_transport_stays_unknown_without_breaking_math_o
     _selected(page, _TARGET)
     card = _full_math(page)
     playwright.expect(card).to_contain_text(_LAST_SENTENCE)
-    disclosure = page.locator(".bp-reading-wiki-links")
-    playwright.expect(disclosure).to_have_count(1)
-    assert disclosure.get_attribute("open") is None
-    disclosure.locator("summary").click()
-    playwright.expect(disclosure.locator(".bp-reading-wiki-notice")).to_have_text(
-        "Concept links are unavailable for this publication.",
-    )
-    parts = disclosure.locator(".bp-reading-wiki-related")
-    playwright.expect(parts.nth(0).locator("strong")).to_have_text("Links to other concepts · unavailable")
-    playwright.expect(parts.nth(1).locator("strong")).to_have_text("Linked from · unavailable")
-    playwright.expect(disclosure.get_by_role("link")).to_have_count(0)
+    playwright.expect(page.locator(".bp-reading-wiki-links")).to_have_count(0)
     playwright.expect(page.locator(".bp-dag-error")).to_be_hidden()
     card.get_by_role("link", name="Read the counterpart identity", exact=True).click()
     page.wait_for_url(site.route(_OTHER))

@@ -198,8 +198,7 @@ date when the release is tagged.
 ### Changed
 
 - **Neutral labels.** The book's outline is headed "Contents" instead of
-  "Topics", on its toggle, its edge tab and its splitter too; its footer reads
-  "More in <section>" instead of "Other topics in <section>"; and search names
+  "Topics", on its toggle, its edge tab and its splitter too, and search names
   a topic "Section in <place>". The whole-project map calls its regions
   "sections", in its counts, its "How the sections build on each other" list,
   its kicker and the names of its grouped parts. Every site changes, those
@@ -254,6 +253,16 @@ date when the release is tagged.
   well as libraries; such a library must build completely. An index made earlier
   keeps its `--check` verdict, with a warning naming the files it leaves out,
   until it is regenerated (#325).
+- **Links at the end of an article.** In the book's reader, an article's links
+  to other articles, and theirs to it, end the article as "See also" and
+  "Linked from" lists that scroll with it. They were a "Concept links"
+  disclosure with counts, pinned under the reader beside a "More in <topic>"
+  list of the topic's other statements or pages. That list is gone: a
+  statement's neighbours are in its topic's article, on the map and in
+  Statements, a topic's are in Contents, and the link at the top of the reader
+  names the topic. An article with neither kind of link shows no lists, and
+  where some pages could not be read, a line says the lists may miss some.
+  Every site changes.
 - **Vault pages on Windows.** `autoform-visualize` writes the dependency
   summary and structure pages with LF line endings on Windows too, as on every
   other system, so a vault regenerated on both no longer flips them.

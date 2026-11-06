@@ -82,7 +82,7 @@ _PHONE_CALLBACKS = [
 _INVENTORY_PEERS = _OUTLINE_PEERS + r"""
 var ui$selected=null,ui$requestedNode='F',ui$query='',ui$relationIds=null,ui$listLimit=100,ui$mode='graph';
 var ui$selectedStatuses=new Set(['planned']),palette={planned:{label:'Planned'}};
-dom$readingContext=new Element('div');dom$readingNeighbors=new Element('div');
+dom$readingContext=new Element('div');
 dom$inventory=new Element('section');dom$inventory.appendChild(new Element('h2'));
 dom$inventoryList=new Element('ul');dom$inventorySummary=new Element('span');
 dom$inventoryScroll=new Element('div');dom$loadMore=new Element('button');
@@ -93,7 +93,7 @@ function setMode(mode,push) {modes.push({mode,push});ui$mode=mode;renderInventor
 
 _INVENTORY_CALLBACKS = [
     "element", "button", "readingLabel", "bindNodeLink", "refreshReadingLabels", "renderReaderContext",
-    "topicPeers", "semanticParent", "sourceNodes", "inCurrentScope", "inventoryNodes", "renderInventory", "statusLabel",
+    "semanticParent", "sourceNodes", "inCurrentScope", "inventoryNodes", "renderInventory", "statusLabel",
 ]
 
 
