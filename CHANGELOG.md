@@ -71,9 +71,10 @@ date when the release is tagged.
   site, and links to them stay on it, where a render with repository links used
   to send every note to the repository (#593). Images under `sources/` are
   copied beside them. At a verified commit, a hidden note, the folder itself and
-  its other files, such as scans and data, are still linked in the repository,
-  and a note's image of one keeps its text, with a warning. The nav lists the
-  notes after Coverage, headed by `sources/README.md` when there is one.
+  its other files, such as scans, data or a type the site leaves out, are linked
+  in the repository, a note's image of one keeps its text, with a warning, and
+  `render --review` accepts a passage cut from one. The nav lists the notes
+  after Coverage, headed by `sources/README.md` when there is one.
 - **Check without site warnings.** `check --no-site-warnings` skips the warnings
   about the pages the site would publish, which `render` prints too. The
   generated `blueprint-pages.yml` passes it, since render runs two steps later,

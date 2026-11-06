@@ -4,6 +4,7 @@ import html
 import json
 import os
 import re
+import subprocess
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -27,6 +28,7 @@ from autoform_cli.skeleton import (
     source_passage,
 )
 from tests.skeleton_fixtures import declaration as fixture_declaration
+from tests.test_lean_sources import _git_commit
 
 
 _RESULT_ID = "af_0123456789abcdef01234567"
@@ -1070,6 +1072,27 @@ def test_render_shows_a_passage_from_a_file_the_site_publishes(
     assert _render(blueprint, tmp_path) == 0
     panel = _review_panel((tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8"), "result")
     assert f"Source passage · {html.escape(path)}#L1-L1" in panel and "A published line." in panel
+
+
+def test_render_shows_a_passage_from_a_file_the_commit_links_under_sources(
+    tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Once render verifies the commit, the site links a file under sources/
+    it does not copy there, even one of a type it leaves out (#593), so a
+    passage cut from it is shown."""
+
+    blueprint = _blueprint(tmp_path)
+    source = blueprint / "sources/notes.js"
+    source.parent.mkdir(parents=True)
+    source.write_text("A line of a script.\n", encoding="utf-8")
+    _cite(blueprint / "roadmap/basics/result.md", "../../sources/notes.js#L1-L1")
+    _approve_every_article(blueprint, tmp_path, capsys)
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    ref = _git_commit(tmp_path, "fixture")
+
+    assert _render(blueprint, tmp_path, "--repository-url", "https://github.com/owner/repo", "--ref", ref) == 0
+    panel = _review_panel((tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8"), "result")
+    assert "Source passage · sources/notes.js#L1-L1" in panel and "A line of a script." in panel
 
 
 @pytest.mark.parametrize("spelled", ["READBACKS/notes\u00e9.txt", "READBACKS/notese\u0301.txt"], ids=["case", "case-and-form"])

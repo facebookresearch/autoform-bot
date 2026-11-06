@@ -1025,6 +1025,8 @@ def render_site(
             root_prefix=root_prefix,
             sources=dict(lean.source_files),
         )
+        # Scans and data leave the site only for a directory the verified commit holds.
+        sources_base = _sources_base(copy, copy_root, linker) if sources else None
         reviews: dict[str, str] = {}
         review_warnings: list[str] = []
         if review is not None:
@@ -1040,7 +1042,9 @@ def render_site(
                 raise ReviewError([ReviewFinding("", "readback-unlistable", str(error))]) from error
             macros = project_macros(_captured_files(snapshot, copy).get(copy / TEX_MACROS))
             captured = [name for name, _ in snapshot.files]
-            reviews, review_warnings = _review_disclosures(blueprint, graph, review(), cards, macros, captured)
+            reviews, review_warnings = _review_disclosures(
+                blueprint, graph, review(), cards, macros, captured, sources_linked=sources_base is not None
+            )
         source_revision = _source_revision(snapshot)
         report = _publish(
             destination,
@@ -1052,7 +1056,7 @@ def render_site(
                 coverage,
                 linker,
                 repo_root=copy_root,
-                sources=sources,
+                sources_base=sources_base,
                 source_revision=source_revision,
                 lean_source_revision=lean.revision,
                 unpublished=_unpublished_folders(snapshot, copy),
@@ -1090,7 +1094,7 @@ def _render_pages(
     linker: SourceLinker,
     *,
     repo_root: Path,
-    sources: bool,
+    sources_base: "_SourceBase | None",
     source_revision: str,
     lean_source_revision: str,
     unpublished: tuple[Path, ...] = (),
@@ -1123,8 +1127,6 @@ def _render_pages(
     statuses = status.derive(graph)
     used_by = _reverse_edges(graph)
     formalizing = _formalizing(graph)
-    # Scans and data leave the site only for a directory the verified commit holds.
-    sources_base = _sources_base(blueprint, repo_root, linker) if sources else None
     stops = _in_the_way(blueprint, graph, files)
     if stops:
         raise PublicationError(stops)
@@ -3272,24 +3274,19 @@ def _rewrite_links(
         if relative is None:
             # Nothing outside the blueprint is published: "" keeps only the text.
             return ""
-        if candidate in left_out:
-            # Nor is a file the site leaves out; its image or definition goes too.
-            unlinked.add(raw)
-            return ""
-        # atlas.json stays off the site, so a link to it keeps only its text.
-        if relative.as_posix().casefold() == "atlas.json":
-            return ""
-        # A note and its images are pages and files of the site. A repository
-        # link to a file the captured blueprint lacks would 404, so it stays
-        # site-relative, where a strict build reports the page missing. The
-        # capture skips hidden files, so a hidden note keeps its repository
-        # link, which resolves once the note is committed, as check warns.
+        # A note and its images are pages and files of the site; the repository
+        # reaches the rest of sources/, a file of a type the site leaves out
+        # too. A repository link to a file the captured blueprint lacks would
+        # 404, so it stays site-relative, where a strict build reports the page
+        # missing. The capture skips hidden files, so a hidden note keeps its
+        # repository link, which resolves once the note is committed, as check warns.
         if (
             sources_base is not None
             and relative.parts[:1] == (SOURCES_DIR,)
             and (
                 _is_hidden(relative)
                 or os.path.isdir(candidate)
+                or candidate in left_out
                 or (os.path.exists(candidate) and candidate.suffix.lower() not in _PUBLISHED_SOURCE_SUFFIXES)
             )
         ):
@@ -3300,6 +3297,13 @@ def _rewrite_links(
                     dropped.append(_RepositoryImage(raw))
                 return ""
             return f"{_source_href(sources_base, relative.parts[1:])}{asked}{query}{separator}{fragment}"
+        if candidate in left_out:
+            # Nor is a file the site leaves out; its image or definition goes too.
+            unlinked.add(raw)
+            return ""
+        # atlas.json stays off the site, so a link to it keeps only its text.
+        if relative.as_posix().casefold() == "atlas.json":
+            return ""
         published = destination / relative
         # relative_link percent-encodes for raw HTML and explorer payloads.
         # This is Markdown: keep its decoded spelling so an
@@ -3973,6 +3977,8 @@ def _review_disclosures(
     readbacks: Mapping[tuple[str, str], Readback],
     macros: Mapping[str, object],
     captured: Iterable[str],
+    *,
+    sources_linked: bool = False,
 ) -> tuple[dict[str, str], list[str]]:
     """Each Lean-mapped statement ``graph`` publishes, by node id, with its
     review: what a reviewer must trust, what a blind auditor says it means, and
@@ -3987,7 +3993,9 @@ def _review_disclosures(
     approval is judged by :func:`~autoform_cli.review.review_states`, as
     ``review check`` judges it, with ``readbacks`` and ``macros`` as the site
     has them. A passage shown must come from a file the site publishes, judged
-    by its name in ``captured``, the captured files' names.
+    by its name in ``captured``, the captured files' names, or with
+    ``sources_linked`` from one under ``sources/``, which the site links at the
+    verified commit when it does not publish it.
     """
 
     changed = "while the site was being rendered; rerun once the blueprint is idle"
@@ -4029,7 +4037,7 @@ def _review_disclosures(
                 # The locator ends in its line range; a file's name may hold a #.
                 cited = article.passage_locator.rpartition("#")[0]
                 cited = spellings.get(_folded(cited), cited)
-                if _left_out(PurePosixPath(cited), written_over):
+                if _left_out(PurePosixPath(cited), written_over, sources_linked=sources_linked):
                     reason = f"cites a passage from {cited}, a file the site leaves out"
                     edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
             continue
@@ -4072,14 +4080,16 @@ def _folded(name: str) -> str:
     return unicodedata.normalize("NFC", name).casefold()
 
 
-def _left_out(cited: PurePosixPath, written_over: Collection[str]) -> bool:
+def _left_out(cited: PurePosixPath, written_over: Collection[str], *, sources_linked: bool = False) -> bool:
     """Whether the site leaves out the captured file at ``cited``, a path in
     the blueprint as captured, as :func:`_publication` does: a file under
     ``readbacks/``, the atlas, a file render writes its own over (one of
     ``written_over``, the :func:`_site_paths`), or one that is neither a page
-    nor a file the site copies. Notes under ``sources/`` count as published,
-    on the site or at the verified commit."""
+    nor a file the site copies. With ``sources_linked``, every file under
+    ``sources/`` counts as published, on the site or at the verified commit."""
 
+    if sources_linked and cited.parts[:1] == (SOURCES_DIR,):
+        return False
     return (
         cited.parts[:1] == (READBACKS_DIR,)
         or cited.as_posix().casefold() == "atlas.json"

@@ -2173,6 +2173,35 @@ def test_the_source_nav_reads_for_any_note_name(tmp_path: Path) -> None:
     }
 
 
+def test_a_file_of_a_type_the_site_leaves_out_is_linked_at_the_commit_under_sources(tmp_path: Path) -> None:
+    """Once the commit is verified, every file under sources/ but a note or an
+    image is linked there (#593), one of a type the site leaves out too, so a
+    link to it keeps its target and render has nothing to warn about the file;
+    a note's image of one keeps its text, with a warning. Without the commit
+    the site leaves such a file out, as anywhere else."""
+    project = _with_source_notes(tmp_path)
+    sources = project / "blueprint/sources"
+    (sources / "scan.djvu").write_bytes(b"AT&TFORM")
+    (sources / "diagram.svg").write_text("<svg/>\n", encoding="utf-8")
+    _edit(sources / "paper.md", "Transcribed statements from the paper.", "The [scan](scan.djvu) and ![the diagram](diagram.svg).")
+    ref = _commit_project(project)
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+    local = render_site(project / "blueprint", tmp_path / "local", lean_root=project)
+
+    note = (tmp_path / "out/sources/paper.md").read_text(encoding="utf-8")
+    assert f"The [scan]({_REPOSITORY}/blob/{ref}/blueprint/sources/scan.djvu) and the diagram." in note
+    assert [warning for warning in report.warnings if "sources/" in warning] == [
+        "sources/paper.md: shows 'diagram.svg', which the site links in the repository rather than copying, so it "
+        "keeps only the image's text"
+    ]
+    assert "The scan and the diagram." in (tmp_path / "local/sources/paper.md").read_text(encoding="utf-8")
+    assert sorted(warning.partition(":")[0] for warning in local.warnings if "the site leaves out" in warning) == [
+        "sources/diagram.svg",
+        "sources/scan.djvu",
+    ]
+
+
 def test_a_notes_image_of_a_file_the_site_links_in_the_repository_keeps_its_text(tmp_path: Path) -> None:
     """A page cannot show a scan or a hidden file from the repository, so once
     the commit is verified a note's image of one keeps its text, with a
@@ -3765,7 +3794,9 @@ def test_source_notes_are_pages_and_their_scans_stay_in_the_repository(tmp_path:
 def test_render_and_check_without_site_warnings_print_every_site_warning(tmp_path: Path) -> None:
     """``check --no-site-warnings`` leaves the site's warnings to render, which
     reads the source notes too, now that they are pages (#593), so render
-    prints every warning plain check gives."""
+    prints every warning plain check gives here. Check reads sources/ as a
+    render without repository links does, so only it would warn about a file
+    there of a type the site leaves out, which render links at the commit."""
     project = _with_source_notes(tmp_path)
     blueprint = project / "blueprint"
     for page in (blueprint / "sources/paper.md", blueprint / "roadmap/README.md"):
