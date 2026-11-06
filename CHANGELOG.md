@@ -500,9 +500,9 @@ parse, with or without `--json`, and changes nothing else.
   with `python3 -m http.server --bind 127.0.0.1 --directory site 8000`; the live
   claim overlay and its `autoform-live/v1` payload go with the command. The Human
   Review skill and the serve line `autoform-visualize` writes into
-  `dependencies.md` now use such a server. Removed in 0.8.0 (#NNN).
+  `dependencies.md` now use such a server. Removed in 0.8.0 (#669).
 - **`autoform debrief subagent render`.** Nothing replaces it; the records stay
-  JSON under `records/` in the debrief store. Removed in 0.8.0 (#NNN).
+  JSON under `records/` in the debrief store. Removed in 0.8.0 (#669).
 
 ### Removed
 
