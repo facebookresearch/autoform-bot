@@ -48,6 +48,9 @@ def test_intel_macos_resolves_without_source_builds() -> None:
         "--no-cache",
         "--offline",
         "--no-install-project",
+        # Pure Python, it installs from Git, so building it needs no toolchain.
+        "--no-install-package",
+        "literature-links",
         "--python-platform",
         "x86_64-apple-darwin",
     )

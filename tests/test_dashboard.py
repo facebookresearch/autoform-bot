@@ -391,6 +391,12 @@ def test_localhost_is_bound_as_literal_loopback(
     assert observed["served"] is True
 
 
+_DASHBOARD_DEPRECATED = (
+    "warning[deprecated]: autoform dashboard's live claim overlay is deprecated and will be removed in 0.8.0; "
+    "the dashboard keeps serving the built site on loopback, without --repo and --scratch\n"
+)
+
+
 def test_dashboard_cli_resolves_project_site_and_stays_loopback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -426,4 +432,18 @@ def test_dashboard_cli_resolves_project_site_and_stays_loopback(
     assert observed["host"] == "127.0.0.1"
     assert observed["port"] == 0
     assert callable(observed["state"])
-    assert "http://127.0.0.1:43210/" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "http://127.0.0.1:43210/" in captured.out
+    assert captured.err == _DASHBOARD_DEPRECATED
+
+
+def test_dashboard_cli_warns_before_a_target_it_cannot_resolve(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from autoform_cli import __main__ as cli
+
+    assert cli.main(["dashboard", str(tmp_path / "missing")]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith(_DASHBOARD_DEPRECATED + "error: ")

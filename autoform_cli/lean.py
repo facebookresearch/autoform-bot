@@ -917,8 +917,10 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
             indents.extend(len(line) - len(line.lstrip()) for line in measured)
         return indents
 
+    # The line a class's variant or name was read from, which the class owns, as `inductive D` after a bare `class`.
+    read_with_class = -1
     for number, line in enumerate(lines, start=1):
-        if not _SCANNED_LINE.match(line):
+        if number - 1 == read_with_class or not _SCANNED_LINE.match(line):
             continue
         if _EXIT.match(line):
             return found, number - 1
@@ -952,7 +954,9 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
         declaration_match = _DECLARATION.match(line)
         if declaration_match:
             keyword = declaration_match.group(1)
-            body = declaration_match.group(2)
+            body = declaration_match.group(2) or ""
+            # `class abbrev C` and `class inductive D` declare C and D, whose fields are not read.
+            variant, body = _CLASS_VARIANT.match(body).groups() if keyword == "class" else (None, body)
             body_index = number - 1
             name = None
             if not body:
@@ -960,10 +964,9 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
                 if body_index == len(lines):
                     continue
                 body = lines[body_index].lstrip()
-                if keyword == "alias":
-                    if _ALIAS.match(body) is None:
-                        continue
-                else:
+                if keyword == "class" and variant is None:
+                    variant, body = _CLASS_VARIANT.match(body).groups()
+                if keyword != "alias":
                     name = _continuation_name(body)
                     if name is None:
                         continue
@@ -983,12 +986,10 @@ def _scan(text: str, relative: Path) -> tuple[list[Declaration], int]:
                 )
                 continue
             name = name or _name_token(body)
-            # `class abbrev C` and `class inductive D` declare C and D, whose fields are not read.
-            variant = name if keyword == "class" and name in ("abbrev", "inductive") else None
-            if variant:
-                name = _name_token(body.removeprefix(variant).lstrip())
             if name is None:
                 continue
+            if variant:
+                read_with_class = body_index
             # `_name_token` stops before the `{` in an explicit universe
             # binder, leaving the syntactic separator behind.
             name = name.removesuffix(".")
@@ -1393,6 +1394,11 @@ def _is_name(value: object) -> bool:
     )
 
 
+#: What follows ``class``: the ``abbrev`` or ``inductive`` of ``class abbrev C`` and ``class inductive D``, if
+#: any, then the rest.
+_CLASS_VARIANT = re.compile(r"(?:(abbrev|inductive)(?:\s+|$))?(.*)")
+
+
 def _name_token(text: str) -> str | None:
     """Read one possibly guillemet-quoted Lean identifier from ``text``."""
 
@@ -1404,10 +1410,11 @@ def _name_token(text: str) -> str | None:
 _FIELD_NAME = re.compile(_ID_COMPONENT)
 #: A parent that names its projection, ``toA : A`` in ``extends toA : A``.
 _NAMED_PARENT = re.compile(rf"({_ID_COMPONENT})\s*:(?![:=])")
-_SIGNATURE_WORDS = frozenset({"where", "extends", "requires", "ensures"})
-_NAME_FORBIDDEN = _COMMAND_HEADS | _COMMAND_MODIFIERS | {"where", "extends", "by", "do", "in", "let", "match"}
-#: ``module`` heads a file, not a command, so a field may have that name.
-_FIELD_FORBIDDEN = _NAME_FORBIDDEN - {"module"}
+#: What a structure field's name, or a declaration's on the line after its keyword, cannot be. ``module``
+#: heads a file, not a command, so a name may be ``module``.
+_FIELD_FORBIDDEN = (
+    (_COMMAND_HEADS - {"module"}) | _COMMAND_MODIFIERS | {"where", "extends", "by", "do", "in", "let", "match"}
+)
 #: A command at the field column ends the structure: a core one, or one of
 #: Mathlib's that reads like a field, `notation3:max "x" => 1` or `recall f : T`.
 _FIELD_ENDS = (_COMMAND_HEADS - {"module", "prelude", "import"}) | {"notation3", "recall"}
@@ -1432,59 +1439,19 @@ _BINDER_CLOSERS = {"(": ")", "{": "}", "[": "]", "⦃": "⦄"}
 
 
 def _continuation_name(text: str) -> str | None:
-    """Read a name followed by a possible declaration signature, not another command.
+    """Read the name on the line after a declaration keyword that ends its own line.
 
-    Only the new keyword-on-its-own-line case uses this conservative guard.
-    A name may stand alone or be followed by universe parameters, binders, a
-    type or a declaration value. A bracketed binder may continue on later
-    lines; source indexing does not elaborate its contents. Attribute lists,
-    command modifiers and arbitrary punctuation cannot be identifiers here.
+    Any identifier but a command word, a modifier or a keyword such as ``where`` is the name, when what
+    follows it may follow a declaration's name: nothing, an identifier, ``:``, ``|``, ``.`` (as in ``.{u}``)
+    or an opening bracket. Otherwise the keyword is a word in an attribute list split across lines, as in ``@[``,
+    ``instance``, ``high]``, or another command follows it, as ``gen_injective_theorems% Nat`` does.
     """
 
     match = _CONTINUATION_IDENTIFIER.match(text)
-    if match is None or match.group() in _NAME_FORBIDDEN:
+    if match is None or match.group() in _FIELD_FORBIDDEN:
         return None
-    name = match.group()
-    rest = text[match.end() :]
-    if rest.startswith(".{"):
-        # declId's universe list belongs to the signature, not the public name.
-        rest = rest[1:]
-    while rest.strip():
-        rest = rest.lstrip()
-        if rest.startswith((":", "|")):
-            return name
-        if rest[0] in _BINDER_CLOSERS:
-            closers: list[str] = []
-            position = 0
-            while position < len(rest):
-                char = rest[position]
-                if char == "«":
-                    end = rest.find("»", position + 1)
-                    if end == -1:
-                        return None
-                    position = end + 1
-                    continue
-                if char in _BINDER_CLOSERS:
-                    closers.append(_BINDER_CLOSERS[char])
-                elif char in _BINDER_CLOSERS.values():
-                    if not closers or char != closers.pop():
-                        return None
-                    if not closers:
-                        break
-                position += 1
-            if closers:
-                return name  # This binder can finish on a later line.
-            rest = rest[position + 1 :]
-            continue
-        binder = _CONTINUATION_IDENTIFIER.match(rest)
-        if binder is None:
-            return None
-        if binder.group() in _SIGNATURE_WORDS:
-            return name
-        if binder.group() in _NAME_FORBIDDEN:
-            return None
-        rest = rest[binder.end() :]
-    return name
+    rest = text[match.end() :].lstrip()
+    return match.group() if not rest or rest[0] in ":|.([{⦃" or _FIELD_NAME.match(rest) else None
 
 
 #: A name as ``alias`` takes one: an identifier by the grammar above.
@@ -1641,14 +1608,16 @@ def declaration_names(lean: str) -> list[str]:
     return _DECLARATION_NAME.findall(lean)
 
 
-def declaration_text(lines: list[str], declaration: Declaration) -> str:
+def declaration_text(lines: list[str], declaration: Declaration, masked: list[str] | None = None) -> str:
     """``declaration`` as written in ``lines``, its file's lines: from its attributes and modifiers on the
     lines above its keyword, if any, to its own last line.
 
     The index records only where a declaration starts. It ends before the next line indented no deeper
     than its keyword's that is not an alternative, a ``where`` block, a trailing clause or a closing
     bracket: a comment, an attribute, the next command or an ``end``. A body written at that indent is
-    cut short there.
+    cut short there. When the keyword ends its line, the line holding the name is its own, whatever its
+    indent. ``masked`` is ``lines`` without comments and with literals blanked, as the index reads them;
+    it is worked out from ``lines`` when not given.
     """
 
     start = declaration.line - 1
@@ -1657,7 +1626,19 @@ def declaration_text(lines: list[str], declaration: Declaration) -> str:
     while start and (head := lines[start - 1].split("--", 1)[0]).strip() and _MODIFIER_LINE.fullmatch(head):
         start -= 1
     end = declaration.line
-    for number, line in enumerate(lines[declaration.line :], declaration.line + 1):
+    if masked is None:
+        masked = _without_lean_comments("\n".join(lines), mask_literals=True).split("\n")
+    declaration_match = _DECLARATION.match(masked[declaration.line - 1])
+    rest = declaration_match and (
+        _CLASS_VARIANT.match(declaration_match.group(2) or "")[2]
+        if declaration_match.group(1) == "class"
+        else declaration_match.group(2)
+    )
+    if declaration_match and not rest:
+        # The keyword ends its line, so the name opens the next one that holds more than a comment, perhaps at the
+        # keyword's column.
+        end = next((number for number, line in enumerate(masked[end:], end + 1) if line.strip()), end)
+    for number, line in enumerate(lines[end:], end + 1):
         if line.strip():
             if len(line) - len(line.lstrip()) <= indent and not _CONTINUATION.match(line):
                 break
@@ -1706,7 +1687,7 @@ class SourceLinker:
     """The Lean root's path below the repository's top level, or empty at the top level."""
     sources: Mapping[Path, bytes] = field(default_factory=dict)
     """Each captured Lean file's bytes, by its path below the Lean root."""
-    _lines: dict[Path, list[str]] = field(default_factory=dict, repr=False, compare=False)
+    _lines: dict[Path, tuple[list[str], list[str]]] = field(default_factory=dict, repr=False, compare=False)
     _opens: dict[Path, list[tuple[int, list[str]]]] = field(default_factory=dict, repr=False, compare=False)
     _imports: dict[Path, frozenset[Path]] = field(default_factory=dict, repr=False, compare=False)
     _modules: dict[str, list[Path]] = field(default_factory=dict, repr=False, compare=False)
@@ -1723,9 +1704,10 @@ class SourceLinker:
             # The index also ends a line at a lone carriage return, which Lean allows only in a literal or a
             # comment; rather than count lines as it does, a file holding one shows no declarations.
             lines = [] if re.search("\r(?!\n)", text) else [line.removesuffix("\r") for line in text.split("\n")]
-            self._lines[declaration.path] = lines
-        lines = self._lines[declaration.path]
-        return (declaration, declaration_text(lines, declaration)) if declaration.line <= len(lines) else None
+            masked = _without_lean_comments("\n".join(lines), mask_literals=True).split("\n")
+            self._lines[declaration.path] = (lines, masked)
+        lines, masked = self._lines[declaration.path]
+        return (declaration, declaration_text(lines, declaration, masked)) if declaration.line <= len(lines) else None
 
     def resolve(self, written: str, within: Declaration) -> tuple[Declaration, str] | None:
         """The declaration *written*, a name in *within*'s text, refers to, and the part of *written* that

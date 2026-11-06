@@ -194,9 +194,11 @@ _GLOB_FILES = {
         # `M` is that one module, `M.*` the module and its submodules, `M.+` its submodules only.
         (["Lib.*"], ["Lib", "Lib.A", "Lib.A.Inner", "Lib.A.Inner.Leaf", "Lib.AB"]),
         (["Lib", "Lib.+"], ["Lib", "Lib.A", "Lib.A.Inner", "Lib.A.Inner.Leaf", "Lib.AB"]),
-        (["Lib", "Lib.A", "Lib.AB", "Lib.A.Inner", "Lib.A.Inner.Leaf"], None),
-        (["Lib", "Lib.A.*", "Lib.AB"], None),
-        (["Lib", "Lib.A", "Lib.A.+", "Lib.AB"], None),
+        # A glob that matches the root makes every module under it buildable, as for a library with
+        # no globs (Lake's isBuildableModule).
+        (["Lib"], None),
+        # A glob's directory under a root adds no source directory.
+        (["Lib", "Lib.A"], None),
     ],
 )
 def test_a_glob_selects_the_modules_lake_builds(tmp_path: Path, globs: list[str], selected: list[str] | None) -> None:
@@ -204,19 +206,18 @@ def test_a_glob_selects_the_modules_lake_builds(tmp_path: Path, globs: list[str]
     sources = library_sources(library(tmp_path, _GLOB_FILES, lakefile=lakefile))
     everything = sorted(name.removesuffix(".lean").replace("/", ".") for name in _GLOB_FILES)
     assert sorted(sources.modules) == (everything if selected is None else sorted(selected))
+    assert sources.source_dirs == ("Lib",)
 
 
 @pytest.mark.parametrize(
     ("globs", "unbuilt"),
     [
-        # One module only: nothing under it.
-        (["Lib"], "Lib/A.lean, Lib/A/Inner.lean, Lib/A/Inner/Leaf.lean, Lib/AB.lean"),
         # Submodules only: not the module itself.
         (["Lib.+"], "Lib.lean"),
-        (["Lib", "Lib.A.+", "Lib.AB"], "Lib/A.lean"),
+        (["Lib.A.+", "Lib.AB"], "Lib.lean, Lib/A.lean"),
         # A glob matches whole name components: `Lib.A.*` is not `Lib.AB`.
-        (["Lib", "Lib.A.*"], "Lib/AB.lean"),
-        (["Lib", "Lib.A", "Lib.AB", "Lib.A.Inner"], "Lib/A/Inner/Leaf.lean"),
+        (["Lib.A.*"], "Lib.lean, Lib/AB.lean"),
+        (["Lib.A", "Lib.AB", "Lib.A.Inner"], "Lib.lean, Lib/A/Inner/Leaf.lean"),
         # No glob: Lake builds no module, where a missing key builds the root.
         ([], "Lib.lean, Lib/A.lean, Lib/A/Inner.lean, Lib/A/Inner/Leaf.lean, Lib/AB.lean"),
     ],
@@ -239,6 +240,478 @@ def test_a_glob_of_one_library_does_not_select_a_file_of_another(tmp_path: Path)
     (root / "one" / "Lib" / "B.lean").write_text(B, encoding="utf-8")
     with pytest.raises(GenerateError, match=r"^one/Lib/B\.lean is under an indexed source directory"):
         library_sources(root)
+
+
+def test_a_glob_outside_the_roots_indexes_its_modules(tmp_path: Path) -> None:
+    lakefile = 'name = "lib"\n\n[[lean_lib]]\nname = "Lib"\nroots = ["Lib"]\nglobs = ["Lib.+", "Extra.+"]\n'
+    sources = library_sources(library(tmp_path, {"Lib/A.lean": B, "Extra/X.lean": B}, lakefile=lakefile))
+    assert sources.source_dirs == ("Extra", "Lib")
+    assert sources.modules == {"Extra.X": "Extra/X.lean", "Lib.A": "Lib/A.lean"}
+
+
+_THREE_LIBRARIES = (
+    'name = "lib"\n\n[[lean_lib]]\nname = "Lib"\nglobs = ["Lib.+"]\n\n'
+    '[[lean_lib]]\nname = "Base"\nglobs = ["Base.+"]\n\n'
+    '[[lean_lib]]\nname = "LibTest"\nglobs = ["LibTest.+"]\n'
+)
+
+
+def test_a_library_the_named_one_imports_is_indexed_with_it(tmp_path: Path) -> None:
+    files = {
+        "Lib/A.lean": "import Mathlib.Logic.Basic\nimport Base.Core -- why\n\ntheorem a : True := trivial\n",
+        "Base/Core.lean": B,
+        "Base/Other.lean": B,
+        "LibTest/T.lean": "import Lib.A\n",
+    }
+    sources = library_sources(library(tmp_path, files, lakefile=_THREE_LIBRARIES), ("Lib",))
+    assert (sources.libraries, sources.source_dirs) == (("Base", "Lib"), ("Base", "Lib"))
+    assert sorted(sources.modules) == ["Base.Core", "Base.Other", "Lib.A"]
+
+
+def test_an_import_after_a_comment_is_read_and_one_in_a_comment_is_not(tmp_path: Path) -> None:
+    files = {
+        "Lib/A.lean": "/- A header comment\nimport LibTest.T\n-/\nimport Base.Core\n",
+        "Base/Core.lean": B,
+        "LibTest/T.lean": B,
+    }
+    sources = library_sources(library(tmp_path, files, lakefile=_THREE_LIBRARIES), ("Lib",))
+    assert sources.libraries == ("Base", "Lib")
+
+
+def test_a_refusal_in_a_library_indexed_for_an_import_says_why_it_is_indexed(tmp_path: Path) -> None:
+    files = {"Lib/A.lean": "import Base.Core\n", "Base/Core.lean": B, "Base/Été.lean": B}
+    with pytest.raises(GenerateError) as raised:
+        library_sources(library(tmp_path, files, lakefile=_THREE_LIBRARIES), ("Lib",))
+    assert str(raised.value) == (
+        "Base/Été.lean is not a module name the index format holds (ASCII identifiers only) "
+        "(Base is indexed because Lib.A imports Base.Core)"
+    )
+
+
+_ROOT_ONLY = 'name = "lib"\n\n[[lean_lib]]\nname = "Lib"\n'
+_SCRATCH = {"Lib.lean": "import Lib.A\n", "Lib/A.lean": "import Lib.B\n", "Lib/B.lean": B, "Lib/Scratch.lean": B}
+
+
+def test_a_library_without_globs_indexes_every_module_it_can_build(tmp_path: Path) -> None:
+    # Lake builds Lib.Scratch when a consumer imports it, though `lake build Lib` does not.
+    sources = library_sources(library(tmp_path, _SCRATCH, lakefile=_ROOT_ONLY))
+    assert sorted(sources.modules) == ["Lib", "Lib.A", "Lib.B", "Lib.Scratch"]
+    assert sources.unbuilt == ("Lib.Scratch",)
+
+
+def test_a_root_that_is_no_module_name_is_not_read_as_a_glob(tmp_path: Path) -> None:
+    # No library builds Lib.Scratch with `lake build`, so each is asked whether it selects it, my-ext too.
+    sources = library_sources(library(tmp_path, _SCRATCH, lakefile=_ROOT_ONLY + '\n[[lean_lib]]\nname = "my-ext"\n'))
+    assert (sources.libraries, sources.unbuilt) == (("Lib", "my-ext"), ("Lib.Scratch",))
+
+
+def test_a_stale_build_names_the_modules_the_library_build_leaves_out(tmp_path: Path) -> None:
+    root = library(tmp_path, _SCRATCH, lakefile=_ROOT_ONLY)
+
+    def stale(*args: object, **options: object) -> str:
+        raise _stale(["Lib.Scratch"], "✖ [5/5] Building Lib.Scratch")
+
+    with pytest.raises(GenerateError) as raised:
+        generate_index(root, runner=stale)
+    assert str(raised.value) == (
+        "the build is missing or stale; run `lake build Lib Lib.Scratch` and index again "
+        "(Lake: ✖ [5/5] Building Lib.Scratch); "
+        "`lake build Lib` alone does not build Lib.Scratch, which no module it builds imports"
+    )
+
+
+def test_an_import_does_not_make_a_module_the_globs_leave_out_buildable(tmp_path: Path) -> None:
+    lakefile = 'name = "lib"\n\n[[lean_lib]]\nname = "Lib"\nglobs = ["Lib.A"]\n'
+    root = library(tmp_path, {"Lib/A.lean": "import Lib.B\n", "Lib/B.lean": B}, lakefile=lakefile)
+    refused = r"^Lib/B\.lean is under an indexed source directory but no indexed library"
+    with pytest.raises(GenerateError, match=refused):
+        library_sources(root)
+
+
+@pytest.mark.parametrize(
+    ("header", "libraries"),
+    [
+        ("module\n\ntheorem a : True := trivial\n#exit\nimport Base.Core\n", ("Lib",)),
+        ("module\n\npublic import Base.Core\n", ("Base", "Lib")),
+        ("module\nprelude\npublic meta import Base.Core\n", ("Base", "Lib")),
+        # Lake 4.2 to 4.9 wrote root files like this.
+        ("import «Base».Core\n", ("Base", "Lib")),
+    ],
+)
+def test_imports_are_read_from_the_header_only(tmp_path: Path, header: str, libraries: tuple[str, ...]) -> None:
+    files = {"Lib/A.lean": header, "Base/Core.lean": B}
+    sources = library_sources(library(tmp_path, files, lakefile=_THREE_LIBRARIES), ("Lib",))
+    assert sources.libraries == libraries
+
+
+def test_a_guillemet_component_holding_a_space_is_read_whole(tmp_path: Path) -> None:
+    # Base builds its root module Base, which `«Base Test».X` is not.
+    lakefile = 'name = "lib"\n\n[[lean_lib]]\nname = "Lib"\nglobs = ["Lib.+"]\n\n[[lean_lib]]\nname = "Base"\n'
+    sources = library_sources(library(tmp_path, {"Lib/A.lean": "import «Base Test».X\n"}, lakefile=lakefile), ("Lib",))
+    assert sources.libraries == ("Lib",)
+
+
+def test_a_root_file_s_guillemet_imports_name_the_modules_lake_builds_with_it(tmp_path: Path) -> None:
+    files = {"Foo.lean": "import «Foo».Basic\nimport «Foo».Defs\n", "Foo/Basic.lean": B, "Foo/Defs.lean": B}
+    sources = library_sources(library(tmp_path, files, lakefile='name = "foo"\n\n[[lean_lib]]\nname = "Foo"\n'))
+    assert sources.unbuilt == ()
+
+
+@pytest.mark.parametrize(
+    ("lakefile", "files"),
+    [
+        # A library without globs, and another whose glob lies under its directory.
+        (
+            'name = "lib"\n\n[[lean_lib]]\nname = "Foo"\n\n[[lean_lib]]\nname = "FooTest"\nglobs = ["Foo.Test.+"]\n',
+            {"Foo.lean": B, "Foo/Test/X.lean": B},
+        ),
+        # Two libraries with one root, each selecting a module of it.
+        (
+            'name = "lib"\n\n[[lean_lib]]\nname = "One"\nroots = ["Lib"]\nglobs = ["Lib.A"]\n\n'
+            '[[lean_lib]]\nname = "Two"\nroots = ["Lib"]\nglobs = ["Lib.B"]\n',
+            {"Lib/A.lean": B, "Lib/B.lean": B},
+        ),
+        # A root under another library's root.
+        (
+            'name = "lib"\n\n[[lean_lib]]\nname = "A"\nroots = ["Foo"]\n\n'
+            '[[lean_lib]]\nname = "B"\nroots = ["Foo.Bar"]\n',
+            {"Foo.lean": B, "Foo/Bar.lean": B},
+        ),
+    ],
+)
+def test_a_directory_two_libraries_share_holds_the_modules_of_both(
+    tmp_path: Path, lakefile: str, files: dict[str, str]
+) -> None:
+    sources = library_sources(library(tmp_path, files, lakefile=lakefile))
+    assert sorted(sources.modules.values()) == sorted(files)
+
+
+def test_an_imported_module_belongs_to_the_last_library_that_builds_it(tmp_path: Path) -> None:
+    # Lake's Package.findModule? searches the libraries from the last declared.
+    lakefile = (
+        'name = "lib"\n\n[[lean_lib]]\nname = "Wide"\nsrcDir = "a"\nroots = ["Foo"]\n\n'
+        '[[lean_lib]]\nname = "Narrow"\nsrcDir = "b"\nglobs = ["Foo.Bar"]\n\n'
+        '[[lean_lib]]\nname = "Main"\nglobs = ["Main.+"]\n'
+    )
+    files = {"a/Foo/Bar.lean": B, "b/Foo/Bar.lean": B, "Main/M.lean": "import Foo.Bar\n"}
+    sources = library_sources(library(tmp_path, files, lakefile=lakefile), ("Main",))
+    assert sources.libraries == ("Main", "Narrow")
+    assert sources.joined == (("Narrow", "Main.M", "Foo.Bar"),)
+    assert sources.modules == {"Foo.Bar": "b/Foo/Bar.lean", "Main.M": "Main/M.lean"}
+
+
+def test_a_library_without_globs_or_a_root_file_is_indexed_empty(tmp_path: Path) -> None:
+    lakefile = 'name = "lib"\n\n[[lean_lib]]\nname = "Lib"\nglobs = ["Lib.+"]\n\n[[lean_lib]]\nname = "Challenge"\n'
+    sources = library_sources(library(tmp_path, {"Lib/A.lean": B}, lakefile=lakefile))
+    assert (sources.libraries, sources.modules) == (("Challenge", "Lib"), {"Lib.A": "Lib/A.lean"})
+
+
+@pytest.mark.parametrize("b", [B, "import Lib.C\n"])
+def test_a_file_only_an_unnamed_library_builds_says_which(tmp_path: Path, b: str) -> None:
+    # An import in a file the index refuses joins nothing.
+    lakefile = (
+        'name = "lib"\n\n[[lean_lib]]\nname = "One"\nroots = ["Lib"]\nglobs = ["Lib.A"]\n\n'
+        '[[lean_lib]]\nname = "Two"\nroots = ["Lib"]\nglobs = ["Lib.B", "Lib.C"]\n'
+    )
+    root = library(tmp_path, {"Lib/A.lean": B, "Lib/B.lean": b, "Lib/C.lean": B}, lakefile=lakefile)
+    with pytest.raises(GenerateError) as raised:
+        library_sources(root, ("One",))
+    assert str(raised.value) == (
+        "Lib/B.lean, Lib/C.lean is under an indexed source directory but no indexed library builds it; "
+        "move it, or widen the library's globs, or index Two as well"
+    )
+
+
+def test_a_stray_file_s_import_joins_nothing_so_its_own_refusal_comes_first(tmp_path: Path) -> None:
+    lakefile = _THREE_LIBRARIES.replace('globs = ["Lib.+"]', 'globs = ["Lib.A"]')
+    files = {"Lib/A.lean": B, "Lib/Stray.lean": "import Base.Core\n", "Base/Core.lean": B, "Base/Été.lean": B}
+    with pytest.raises(GenerateError) as raised:
+        library_sources(library(tmp_path, files, lakefile=lakefile), ("Lib",))
+    assert str(raised.value) == (
+        "Lib/Stray.lean is under an indexed source directory but no indexed library builds it; "
+        "move it, or widen the library's globs"
+    )
+
+
+_JOINING = {"Lib/A.lean": "import Base.Core\n\ntheorem double_eq : True := trivial\n", "Base/Core.lean": B}
+
+
+def test_an_index_made_before_libraries_were_joined_keeps_its_verdict_with_a_warning(tmp_path: Path) -> None:
+    root = library(tmp_path, _JOINING, lakefile=_THREE_LIBRARIES)
+    legacy = library_sources(root, ("Lib",), legacy=True)
+    write_index(root, generate_index(root, sources=legacy, runner=runner_for(headers={"Lib.A": None})))
+    warnings: list[str] = []
+
+    assert check_index(root, libraries=("Lib",), runner=runner_for(headers={"Lib.A": None}), warnings=warnings) == ()
+    assert warnings == [
+        "the index leaves out Base/Core.lean, so `--check` notices a change there only when it changes an indexed "
+        "module's records, and a project reading the index never does; regenerate it, and have CI run "
+        "`lake build Base Lib` before checking; Base is indexed because Lib.A imports Base.Core"
+    ]
+
+    joined = runner_for(headers={"Lib.A": None, "Base.Core": None})
+    write_index(root, generate_index(root, libraries=("Lib",), runner=joined))
+    warnings.clear()
+    assert check_index(root, libraries=("Lib",), runner=joined, warnings=warnings) == ()
+    assert warnings == []
+
+
+def test_the_command_names_a_library_it_indexed_although_not_named(tmp_path: Path, monkeypatch, capsys) -> None:
+    root = library(tmp_path, _JOINING, lakefile=_THREE_LIBRARIES)
+    _cli(monkeypatch, runner_for(headers={"Lib.A": None, "Base.Core": None}))
+    assert cli.main(["library", "index", str(root), "--lib", "Lib"]) == 0
+    assert capsys.readouterr().err == (
+        "note: Base is indexed because Lib.A imports Base.Core; have CI run `lake build Base Lib` before checking\n"
+    )
+    assert cli.main(["library", "index", str(root), "--lib", "Lib", "--check"]) == 0
+
+
+def _failed_probe(detail: str):
+    def runner(probe: str, lean_root: Path, **options: object) -> str:
+        raise SkeletonError([f"the library index probe failed; is the project built with `lake build`?\n{detail}"])
+
+    return runner
+
+
+@pytest.mark.parametrize(
+    "refused",
+    ["a clash", "a failed probe", "a module not loaded", "a range outside the file", "a record too large", "an index too large"],
+)
+def test_a_refusal_after_the_probe_says_why_a_joined_library_is_indexed(tmp_path: Path, monkeypatch, refused: str) -> None:
+    root = library(tmp_path, _JOINING, lakefile=_THREE_LIBRARIES)
+    headers = {"Lib.A": None, "Base.Core": None}
+    huge = record("M ", B, "Base.Core", "other", "other", signature="x" * (1024 * 1024))
+    runner = {
+        "a clash": _failed_probe("error: import Base.Core failed, environment already contains 'double_eq' from Lib.A"),
+        "a failed probe": _failed_probe("error: boom"),
+        "a module not loaded": runner_for(headers={"Lib.A": None}),
+        "a range outside the file": runner_for(
+            record("M ", B, "Base.Core", "other", "other", range=[[1, 0], [90, 0]]), headers=headers
+        ),
+        "a record too large": runner_for(huge, headers=headers),
+        "an index too large": runner_for(headers=headers),
+    }[refused]
+    if refused == "an index too large":
+        monkeypatch.setattr("autoform_cli.library.generate.MAX_INDEX_BYTES", 10)
+    with pytest.raises(GenerateError) as raised:
+        generate_index(root, libraries=("Lib",), runner=runner)
+    assert str(raised.value).endswith(" (Base is indexed because Lib.A imports Base.Core)")
+
+
+def test_an_unreadable_glob_of_a_library_not_indexed_is_not_refused(tmp_path: Path) -> None:
+    lakefile = _THREE_LIBRARIES.replace('globs = ["LibTest.+"]', 'globs = ["«Lib Test».+"]')
+    # The import makes every library's globs be consulted for its owner.
+    files = {"Lib/A.lean": "import Mathlib.Logic.Basic\n"}
+    sources = library_sources(library(tmp_path, files, lakefile=lakefile), ("Lib",))
+    assert sources.libraries == ("Lib",)
+
+
+def test_an_import_of_a_file_only_another_library_builds_joins_that_library(tmp_path: Path) -> None:
+    lakefile = (
+        'name = "lib"\n\n[[lean_lib]]\nname = "One"\nroots = ["Lib"]\nglobs = ["Lib.A"]\n\n'
+        '[[lean_lib]]\nname = "Two"\nroots = ["Lib"]\nglobs = ["Lib.B"]\n'
+    )
+    root = library(tmp_path, {"Lib/A.lean": "import Lib.B\n", "Lib/B.lean": B}, lakefile=lakefile)
+    sources = library_sources(root, ("One",))
+    assert (sources.libraries, sources.joined) == (("One", "Two"), (("Two", "Lib.A", "Lib.B"),))
+
+
+_BASE_GLOBS = 'name = "Base"\nglobs = ["Base.+"]\n'
+
+
+@pytest.mark.parametrize(
+    ("bad", "base"),
+    [
+        ("a file that is not UTF-8", _BASE_GLOBS),
+        ("a symbolic link", _BASE_GLOBS),
+        ("a dot in a file name", _BASE_GLOBS),
+        ("a source directory outside the package", _BASE_GLOBS.replace("\nglobs", '\nsrcDir = "../outside"\nglobs')),
+        ("a glob it cannot read", _BASE_GLOBS.replace('"Base.+"]', '"Base.+", "Base.?"]')),
+        ("a glob module with no file", _BASE_GLOBS.replace('"Base.+"]', '"Base.+", "Base.Gone"]')),
+    ],
+)
+def test_a_source_refusal_in_a_library_indexed_for_an_import_says_why_it_is_indexed(
+    tmp_path: Path, bad: str, base: str
+) -> None:
+    lakefile = _THREE_LIBRARIES.replace(_BASE_GLOBS, base)
+    root = library(tmp_path, {"Lib/A.lean": "import Base.Core\n", "Base/Core.lean": B}, lakefile=lakefile)
+    if bad == "a symbolic link":
+        (root / "Base/Link.lean").symlink_to("Core.lean")
+    elif bad == "a file that is not UTF-8":
+        (root / "Base/Bad.lean").write_bytes(b"theorem \xff : True := trivial\n")
+    elif bad == "a dot in a file name":
+        (root / "Base/Bad.Name.lean").write_text(B, encoding="utf-8")
+    with pytest.raises(GenerateError) as raised:
+        library_sources(root, ("Lib",))
+    assert str(raised.value).endswith(" (Base is indexed because Lib.A imports Base.Core)")
+
+
+def test_an_import_of_a_file_indexed_already_joins_nothing(tmp_path: Path) -> None:
+    # All, declared last, also builds A.Foo, so Lake would build that import with it.
+    lakefile = (
+        'name = "lib"\n\n[[lean_lib]]\nname = "A"\n\n[[lean_lib]]\nname = "B"\n\n'
+        '[[lean_lib]]\nname = "All"\nglobs = ["A.+", "B.+"]\n'
+    )
+    files = {"A.lean": "import A.Foo\n", "A/Foo.lean": B, "B.lean": B}
+    sources = library_sources(library(tmp_path, files, lakefile=lakefile), ("A",))
+    assert (sources.libraries, sources.joined) == (("A",), ())
+
+
+@pytest.mark.parametrize(
+    ("joined", "files", "built", "unbuilt", "command"),
+    [
+        # `lake build B` would read the missing B.lean.
+        ('name = "B"\n', {"B/Y.lean": B, "B/Z.lean": B}, ("A",), ("B.Z",), "lake build A B.Z"),
+        ('name = "B"\n', {"B.lean": B, "B/Y.lean": B, "B/Z.lean": B}, ("A", "B"), ("B.Z",), "lake build A B B.Z"),
+        # One of its roots has a file and is named as a module.
+        ('name = "B"\nroots = ["Foo", "Bar"]\n', {"Foo.lean": B, "Foo/Y.lean": B}, ("A",), ("Foo",), "lake build A Foo"),
+        # Lake would read a bare `B` as the library.
+        ('name = "B"\nroots = ["B", "Bar"]\n', {"B.lean": B, "B/Y.lean": B}, ("A",), ("B",), "lake build A +B"),
+    ],
+)
+def test_the_build_command_names_a_joined_library_only_when_lake_can_build_it(
+    tmp_path: Path, joined: str, files: dict[str, str], built: tuple[str, ...], unbuilt: tuple[str, ...], command: str
+) -> None:
+    lakefile = f'name = "lib"\n\n[[lean_lib]]\nname = "A"\n\n[[lean_lib]]\n{joined}'
+    imported = "Foo.Y" if "Foo.lean" in files else "B.Y"
+    root = library(tmp_path, {"A.lean": f"import {imported}\n"} | files, lakefile=lakefile)
+    sources = library_sources(root, ("A",))
+    assert (sources.libraries, sources.built, sources.unbuilt) == (("A", "B"), built, unbuilt)
+    generated = generate_index(root, sources=sources, runner=runner_for(headers=dict.fromkeys(sources.modules)))
+    assert generated.build_note.endswith(f"; have CI run `{command}` before checking")
+
+
+def test_a_library_a_joined_library_imports_is_joined_too(tmp_path: Path) -> None:
+    libraries = "".join(f'[[lean_lib]]\nname = "{name}"\nglobs = ["{name}.+"]\n\n' for name in "ABC")
+    lakefile = f'name = "lib"\n\n{libraries}'
+    files = {"A/X.lean": "import B.Y\n", "B/Y.lean": "import C.Z\n", "C/Z.lean": B}
+    sources = library_sources(library(tmp_path, files, lakefile=lakefile), ("A",))
+    assert sources.joined == (("B", "A.X", "B.Y"), ("C", "B.Y", "C.Z"))
+
+
+def test_a_stray_file_in_a_library_indexed_for_an_import_says_why_it_is_indexed(tmp_path: Path) -> None:
+    lakefile = _THREE_LIBRARIES.replace('globs = ["Base.+"]', 'globs = ["Base.Core"]')
+    files = {"Lib/A.lean": "import Base.Core\n", "Base/Core.lean": B, "Base/Other.lean": B}
+    with pytest.raises(GenerateError) as raised:
+        library_sources(library(tmp_path, files, lakefile=lakefile), ("Lib",))
+    assert str(raised.value) == (
+        "Base/Other.lean is under an indexed source directory but no indexed library builds it; "
+        "move it, or widen the library's globs (Base is indexed because Lib.A imports Base.Core)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("lakefile", "files", "stray"),
+    [
+        # The joined library shares the named one's root.
+        (
+            'name = "lib"\n\n[[lean_lib]]\nname = "One"\nroots = ["Lib"]\nglobs = ["Lib.A"]\n\n'
+            '[[lean_lib]]\nname = "Two"\nroots = ["Lib"]\nglobs = ["Lib.B"]\n',
+            {"Lib/A.lean": "import Lib.B\n", "Lib/B.lean": B, "Lib/Stray.lean": B},
+            "Lib/Stray.lean",
+        ),
+        # The joined library's root holds the named one's.
+        (
+            'name = "lib"\n\n[[lean_lib]]\nname = "One"\nroots = ["Foo.Bar"]\nglobs = ["Foo.Bar.A"]\n\n'
+            '[[lean_lib]]\nname = "Two"\nroots = ["Foo"]\nglobs = ["Foo.Y"]\n',
+            {"Foo/Bar/A.lean": "import Foo.Y\n", "Foo/Y.lean": B, "Foo/Bar/Stray.lean": B},
+            "Foo/Bar/Stray.lean",
+        ),
+    ],
+)
+def test_a_stray_file_under_a_named_library_s_directory_says_no_join(
+    tmp_path: Path, lakefile: str, files: dict[str, str], stray: str
+) -> None:
+    # It is refused without the join too.
+    with pytest.raises(GenerateError) as raised:
+        library_sources(library(tmp_path, files, lakefile=lakefile), ("One",))
+    assert str(raised.value) == (
+        f"{stray} is under an indexed source directory but no indexed library builds it; "
+        "move it, or widen the library's globs"
+    )
+
+
+@pytest.mark.parametrize("copy", ["A", "x"])
+def test_two_files_that_map_to_one_module_say_why_the_joined_one_is_indexed(tmp_path: Path, copy: str) -> None:
+    # The copy's file sorts before the named library's under A and after it under x.
+    lakefile = (
+        'name = "lib"\n\n[[lean_lib]]\nname = "Lib"\nglobs = ["Lib.A"]\n\n'
+        f'[[lean_lib]]\nname = "Copy"\nsrcDir = "{copy}"\nroots = ["Lib"]\nglobs = ["Lib.+"]\n'
+    )
+    files = {"Lib/A.lean": "import Lib.B\n", f"{copy}/Lib/A.lean": B, f"{copy}/Lib/B.lean": B}
+    with pytest.raises(GenerateError) as raised:
+        library_sources(library(tmp_path, files, lakefile=lakefile), ("Lib",))
+    first, second = sorted(["Lib/A.lean", f"{copy}/Lib/A.lean"])
+    assert str(raised.value) == (
+        f"{first} and {second} both map to module Lib.A (Copy is indexed because Lib.A imports Lib.B)"
+    )
+
+
+def test_strays_say_why_a_joined_library_is_indexed_when_a_named_one_sorts_first(tmp_path: Path) -> None:
+    lakefile = (
+        'name = "lib"\n\n[[lean_lib]]\nname = "Alpha"\nglobs = ["Alpha.A"]\n\n'
+        '[[lean_lib]]\nname = "Base"\nglobs = ["Base.Core"]\n'
+    )
+    files = {"Alpha/A.lean": "import Base.Core\n", "Alpha/Stray.lean": B, "Base/Core.lean": B, "Base/Stray.lean": B}
+    with pytest.raises(GenerateError) as raised:
+        library_sources(library(tmp_path, files, lakefile=lakefile), ("Alpha",))
+    assert str(raised.value) == (
+        "Alpha/Stray.lean, Base/Stray.lean is under an indexed source directory but no indexed library builds it; "
+        "move it, or widen the library's globs (Base is indexed because Alpha.A imports Base.Core)"
+    )
+
+
+def test_an_index_made_before_globs_outside_the_roots_were_read_keeps_its_verdict(tmp_path: Path) -> None:
+    lakefile = 'name = "lib"\n\n[[lean_lib]]\nname = "Lib"\nglobs = ["Lib.+", "Extra.+"]\n'
+    root = library(tmp_path, {"Lib/A.lean": B}, lakefile=lakefile)
+    runner = runner_for(headers={"Lib.A": None})
+    write_index(root, generate_index(root, sources=library_sources(root, legacy=True), runner=runner))
+    warnings: list[str] = []
+    # The glob's directory holds nothing, so the index leaves nothing out.
+    assert check_index(root, runner=runner, warnings=warnings) == ()
+    assert warnings == []
+
+    (root / "Extra").mkdir()
+    (root / "Extra/X.lean").write_text(B, encoding="utf-8")
+    assert check_index(root, runner=runner, warnings=warnings) == ()
+    assert warnings == [
+        "the index leaves out Extra/X.lean, so `--check` notices a change there only when it changes an indexed "
+        "module's records, and a project reading the index never does; regenerate it"
+    ]
+
+    # Generation refuses a file there that no library builds, and the index still keeps its verdict.
+    (root / "Extra.lean").write_text(B, encoding="utf-8")
+    stray = (
+        "Extra.lean is under an indexed source directory but no indexed library builds it; "
+        "move it, or widen the library's globs"
+    )
+    with pytest.raises(GenerateError) as raised:
+        generate_index(root, runner=runner)
+    assert str(raised.value) == stray
+    warnings.clear()
+    assert check_index(root, runner=runner, warnings=warnings) == ()
+    assert warnings == [f"regenerating the index will be refused: {stray}"]
+
+
+def test_check_prints_its_warnings_even_when_it_then_fails(tmp_path: Path, monkeypatch, capsys) -> None:
+    root = library(tmp_path, _JOINING, lakefile=_THREE_LIBRARIES)
+    runner = runner_for(headers={"Lib.A": None})
+    write_index(root, generate_index(root, sources=library_sources(root, ("Lib",), legacy=True), runner=runner))
+    warning = (
+        "warning: the index leaves out Base/Core.lean, so `--check` notices a change there only when it changes an "
+        "indexed module's records, and a project reading the index never does; regenerate it"
+    )
+    _cli(monkeypatch, runner)
+    assert cli.main(["library", "index", str(root), "--lib", "Lib", "--check"]) == 0
+    assert capsys.readouterr().err.startswith(warning)
+
+    def stale(*args: object, **options: object) -> str:
+        raise _stale(["Lib.A"], "✖ [2/2] Building Lib.A")
+
+    _cli(monkeypatch, stale)
+    assert cli.main(["library", "index", str(root), "--lib", "Lib", "--check"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith(warning) and "\nerror: the build is missing or stale; run `lake build Lib` and" in err
 
 
 @pytest.mark.parametrize("glob", ["Lib.?", "Lib.", ".+", "Lib.*.A", "Lib A"])

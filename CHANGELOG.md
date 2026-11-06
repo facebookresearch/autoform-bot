@@ -19,11 +19,23 @@ date when the release is tagged.
   `review-testimony`, `graph-input`, `not-utf8`, `canvas`, `unsupported-type` or
   `not-captured`). A hidden or `published: false` folder is one entry, so
   nothing in it is named. A file's role follows from its path: its first folder
-  (`roadmap`, `sources`, `coverage`), else `hidden` for a dot name, else
-  `other`. It also names the Autoform that rendered it, best effort (`autoform`:
-  its version, its commit when an install from Git or an unmodified checkout
-  records one, and its repository only on github.com). The schema stays
+  (`roadmap`, `sources`, `coverage`, `links`), else `hidden` for a dot name,
+  else `other`. It also names the Autoform that rendered it, best effort
+  (`autoform`: its version, its commit when an install from Git or an unmodified
+  checkout records one, and its repository only on github.com). The schema stays
   `autoform-publication/v3` (#658).
+- **Annotations carry articles' facts.** In a project with `blueprint/links/`,
+  an article's literature-links annotation carries what its frontmatter did: its
+  Lean names, status, kind, article ID, Mathlib link and the `org.autoform` keys
+  ([Annotations](autoform_cli/reference/links.md), #601). The settings stay in
+  README frontmatter. Other frontmatter beside an annotation is ignored, and an
+  article without an annotation keeps its frontmatter, each with a warning.
+  Loading never refuses a vault over the folder: every fact left out is warned
+  about, counted, and `check` adds literature-links' own validation. Render
+  never publishes the folder, whose files the inventory lists as `graph-input`;
+  the runtime source revision and skeleton fingerprints cover it, and
+  `migrate article-ids --write` writes no ID beside it. Autoform now depends on
+  literature-links 1.0.2, pinned to its commit.
 - **Verify workflow off.** `init --no-verify-workflow` writes
   `.github/workflows/autoform-verify.yml` as a stub, for a project the
   generated workflow can't fit, such as one whose roadmap several Lake projects
@@ -139,6 +151,12 @@ date when the release is tagged.
 
 ### Changed
 
+- **Setup's library rule and Formalize's import-impact rerun.** For a library
+  outside the catalog, Setup writes the Lean version with its `v`, as
+  `project new` requires, and asks when the library's revision is unknown.
+  Formalize reports an `import-impact` failure that the
+  `--module-scope import-closure` rerun leaves; that scope narrows nothing in a
+  library with no globs.
 - **Mathlib results in review.** Agent Review's roadmap rubric says when cited
   declarations state an article's result, and has the reviewer quote their
   hypotheses and conclusions before judging. A `mathlib: true` that fails this
@@ -160,6 +178,13 @@ date when the release is tagged.
   longer turns a publishing library's check red. An index another probe
   revision made is stale, said without running Lean, and a stale index names
   the records generation gives otherwise.
+- **Library index: imported libraries.** `library index --lib A` also indexes,
+  transitively, each library of the package that A's modules import from, since
+  a change there changes A's records. A note names each such library and the
+  `lake build` command CI must run before `--check`, which can name modules as
+  well as libraries; such a library must build completely. An index made earlier
+  keeps its `--check` verdict, with a warning naming the files it leaves out,
+  until it is regenerated (#325).
 - **Vault pages on Windows.** `autoform-visualize` writes the dependency
   summary and structure pages with LF line endings on Windows too, as on every
   other system, so a vault regenerated on both no longer flips them.
@@ -365,13 +390,16 @@ date when the release is tagged.
   input", or the files they write "skeleton output" or "packet output"; they
   name the path alone (#506).
 - **Claims.** `claim list TARGET...` fetches and reads only those claims.
-  `--timeout` (120 seconds by default) bounds a listing, a slow step is named on
-  stderr, and a failure goes to stderr labelled `timeout:`, `contention:` or
-  `transport:` with nothing on stdout. Git no longer waits for a terminal
-  password prompt in claim commands, and a `claim list` or `claim cleanup`
-  listing that runs out of time or is interrupted no longer leaves its
-  transport running. Formalize treats a labelled `claim list` failure as an
-  unreadable board, not as a board without claims (#432).
+  `--timeout` (120 seconds by default) bounds a listing's reads of the board,
+  though not the lock-file check after it. A slow step is named on stderr, and a
+  failure to reach or read the board goes to stderr labelled `timeout:`,
+  `contention:` or `transport:` with nothing on stdout. Git no longer waits at
+  its own terminal password prompt in claim commands, though `ssh`, a credential
+  helper or an askpass program can still prompt. A `claim list` or
+  `claim cleanup` listing that runs out of time or is interrupted no longer
+  leaves its transport running. Formalize treats a labelled `claim list` failure
+  as an unreadable board, not as a board without claims, and an import-edit
+  recheck whose `claim list` fails as a conflict (#432).
 - **Work packages and sessions.** A Formalize subagent may keep its worktree
   for a package of related leaves that the lead confirms together, holding only
   the leaf it has taken and taking the next once `work context` shows it ready.
@@ -513,6 +541,9 @@ date when the release is tagged.
   `--json` hits whose `module` is exactly that module, with `--limit` at least
   `total_matches`; searching the module's name also returned other modules'
   declarations, and at most 20 (#204).
+- **Self-caused search refusals.** Formalize fixes a search refusal its own
+  arguments caused, such as `--limit 0` or a query that folds to nothing, and
+  searches again, as Roadmap does, where it reported the leaf as blocked (#171).
 
 ### Deprecated
 
@@ -530,6 +561,12 @@ parse, with or without `--json`, and changes nothing else.
   `lean_targets[].source_file` stays in `autoform-work/v2`, always null;
   `search --lean-root` prints a Lean name's file and line. Removed in 0.8.0
   (#647).
+- **The dashboard's live claim overlay.** `autoform dashboard` keeps serving a
+  built site on loopback, with its Host and Origin checks; its read-only overlay
+  of author claims, the `autoform-live/v1` payload and the `--repo` and
+  `--scratch` flags that feed it go. Removed in 0.8.0 (#669).
+- **`autoform debrief subagent render`.** Nothing replaces it; the records stay
+  JSON under `records/` in the debrief store. Removed in 0.8.0 (#669).
 
 ### Removed
 
@@ -560,6 +597,9 @@ parse, with or without `--json`, and changes nothing else.
 
 ### Fixed
 
+- **Library note from an enclosing project.** Search's note about libraries it
+  did not read looks only at the searched project's own Lake root, so it no
+  longer names the packages of a Lake project that merely contains it.
 - **Finished cards on the map.** A finished statement's card no longer prints
   "fully proved" under its title, since its fill already says so; the line
   names a status only for an unfinished statement.
@@ -593,6 +633,23 @@ parse, with or without `--json`, and changes nothing else.
   published as its own page, about one indented up to three spaces, which only
   Autoform reads as one. A missing title's error names a `#Title` line the site
   reads as the title.
+- **Declarations split across lines.** A `class inductive` or `class abbrev`
+  whose name, or whose `inductive` or `abbrev` with its name, opens the next
+  line is indexed at the `class` line with its modifiers; it was missed, or
+  indexed without its `private`. Its kind is now `class`, as on one line, so
+  `audit` reports `lean-target-kind-mismatch` for an article that declares it
+  `inductive` or `abbrev`. A split name followed by `deriving`, and a split
+  declaration named `module`, are indexed as on one line. The site's Lean block
+  and hover card for a declaration whose name opens the line after its keyword,
+  at the keyword's column, now show that line (#363).
+- **Library index coverage.** `library index` reads the directories of a
+  library's globs outside its roots too, so their modules are no longer left out
+  of the index and its digests; a Lean file there that no indexed library builds
+  is refused, as under a root. A library's modules are those Lake can build for
+  it, so one whose glob matches its root, such as `globs = ["Lib"]`, indexes
+  every module under the root; before, all but the root were refused. A stale
+  build's error gives the `lake build` command that builds every indexed module,
+  naming as targets the modules `lake build` of the libraries leaves out.
 - **Reference links on chapters with a `<` in the title.** A `<` in a
   chapter's title alone left reference-style links in its prose shown as typed
   (#631).

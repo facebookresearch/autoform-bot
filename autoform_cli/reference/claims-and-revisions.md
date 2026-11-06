@@ -20,32 +20,32 @@ A refusal exits 1 with one line such as `error: could not acquire af_y, af_z;
 no claim was acquired: held by another worker: af_y`, naming the blocking
 targets when known; a duplicate target exits 2. Workers that need several
 claims follow a no-hold-and-wait rule, which the CLI does not enforce: acquire
-the whole set in one command and, when it is refused, release everything
-already held and retry with the whole set, never holding some claims while
-waiting for others.
+the whole set in one command and, when it is refused, release everything already
+held and retry with the whole set.
 
-`claim list` copies the board with one fetch and prints each lease as its ref
-named it when the board answered. It is not a consistent snapshot: a peer's
-multi-claim acquire or release made meanwhile can show some of its claims
-changed and others not. A listing is a report, not a lock: every acquire,
-renew, and release checks ownership again.
+`claim list` copies the board and prints each lease as its ref named it when the
+board answered. It is not a consistent snapshot: a peer's multi-claim push made
+meanwhile can show some of its claims changed and others not. A listing is a
+report, not a lock: every acquire, renew, and release checks ownership again.
 
 `claim list TARGET...` lists only those targets' claims, in the same JSON,
 leaving out a target without a claim; a duplicate target exits 2. It fetches
-only those refs but still downloads the board's list of refs, branches
-included. `--timeout SECONDS` (default 120) bounds the listing's Git commands,
-not the removal of its own refs afterwards, and a step still running after five
-seconds is named on stderr as `claim list: <step>...`. `claim list` and `claim
-cleanup` run Git without a terminal on Linux and macOS, and stop a command that
-times out or is interrupted with everything it started. A failed listing exits
-1 with nothing on stdout and one line on stderr: `error: timeout:` when the
-board did not answer in time, naming the step; `error: contention:` when the
-board refused three fetches because claims kept moving; or `error: transport:`
-for any other failure to reach or read the board. Claim commands run Git with
-`GIT_TERMINAL_PROMPT=0` and no input, but a credential helper or `GIT_ASKPASS`
-program Git is configured to use can still prompt, until the time limit. They
-ignore `GIT_DIR`, `GIT_WORK_TREE` and the other variables that point Git at
-another repository, so they work inside a Git hook.
+only those refs but still downloads the board's whole list of refs.
+`--timeout SECONDS` (default 120) bounds the listing's Git commands, not
+removing its own refs afterwards, and a step still running after five seconds is
+named on stderr as `claim list: <step>...`. `claim list`, and the listing
+`claim cleanup` starts with, run Git without a terminal on Linux and macOS, and
+stop a command that times out or is interrupted with everything it started. A
+failed `claim list` exits 1 with nothing on stdout and, after any progress
+lines, an error on stderr that may span lines and starts `error: timeout:` when
+time ran out, naming the step; `error: contention:` when the board refused three
+fetches because claims kept moving; or `error: transport:` for any other failure
+to reach or read the board. Other errors, such as a missing `origin` or
+`--worker-id`, have no label. Claim commands run Git with
+`GIT_TERMINAL_PROMPT=0` and no input, but `ssh`, a credential helper or an
+askpass program can still prompt, and a command waits for it until its time
+limit. They ignore `GIT_DIR`, `GIT_WORK_TREE` and the other variables that point
+Git at another repository, so they work inside a Git hook.
 
 A Git process that stops while updating a claim ref leaves a lock file that
 blocks updates: `refs/autoform-claims/<key>.lock` blocks that claim,

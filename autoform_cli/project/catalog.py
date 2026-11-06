@@ -1,4 +1,4 @@
-"""Autoform's bundled list of known-good Lean and Mathlib release pairs."""
+"""Autoform's bundled list of Lean and Mathlib release pairs."""
 
 from __future__ import annotations
 

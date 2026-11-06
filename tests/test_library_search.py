@@ -458,6 +458,18 @@ def test_search_cli_has_no_note_without_an_indexed_package(tmp_path: Path, capsy
     assert capsys.readouterr().err == ""
 
 
+def test_search_cli_has_no_note_from_an_enclosing_lake_project(tmp_path: Path, capsys) -> None:
+    # A project with no lake-manifest.json yet, nested in another project's Lake
+    # root, does not depend on that project's packages, so the note names none.
+    library = _library(tmp_path, declaration())
+    nested = _project(library.project)
+
+    assert cli.main(["search", str(nested), "separating"]) == 0
+    captured = capsys.readouterr()
+    assert "Separating hyperplane" in captured.out
+    assert captured.err == ""
+
+
 def test_search_cli_emits_v2_json_with_a_library(tmp_path: Path, capsys) -> None:
     library = _library(tmp_path, declaration())
 
