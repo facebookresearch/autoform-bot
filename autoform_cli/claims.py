@@ -53,6 +53,7 @@ import re
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.parse
@@ -77,6 +78,9 @@ _LIST_REF_PREFIX = "refs/autoform-list/"
 # Each listing's namespace there names its host and process, so a later listing
 # on the host can delete the refs of one a signal stopped.
 _LISTING_NAMESPACE_RE = re.compile(r"([0-9a-f]{8})-([0-9]+)-[0-9a-f]{32}")
+# What tells a Linux host's processes apart from another's with the same name.
+_BOOT_ID = "/proc/sys/kernel/random/boot_id"
+_PID_NAMESPACE = "/proc/self/ns/pid"
 _LIST_FETCH_ATTEMPTS = 3
 # A glob that matches no ref, so a fetch given it as `--negotiation-tip` sends no
 # haves; an exact ref name that does not exist would fail the fetch instead.
@@ -224,7 +228,7 @@ class ClaimRefLock:
             blocked = "releasing claims"
         else:
             blocked = f"updates of {self.ref}"
-        return f"Git lock file {self.path} (modified {stamp}) blocks {blocked}"
+        return f"Git lock file {_readable(os.fsencode(self.path))} (modified {stamp}) blocks {blocked}"
 
 
 class ClaimRefLockedError(ClaimTransportError):
@@ -301,16 +305,21 @@ def _lines(output: str) -> list[str]:
     return output.split("\n")
 
 
-def _this_host() -> str:
-    """The first 8 hex digits of a SHA-256 naming this host's processes, as a listing's namespace names it.
+def _this_host() -> str | None:
+    """Name this host's processes with 8 hex digits of a SHA-256, as a listing's namespace does, or return None.
 
     Containers in one pod share a host name but not their processes, so on Linux
-    the boot and the PID namespace count too.
+    the boot ID and the PID namespace count too, and if ``/proc`` cannot give
+    one of them, the host has no name. Elsewhere the host name alone names it,
+    so two machines with one name must not share a scratch.
     """
     identity = socket.gethostname()
-    with contextlib.suppress(OSError):
-        identity += "\0" + Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-        identity += "\0" + os.readlink("/proc/self/ns/pid")
+    if sys.platform.startswith("linux"):
+        try:
+            identity += "\0" + Path(_BOOT_ID).read_text().strip()
+            identity += "\0" + os.readlink(_PID_NAMESPACE)
+        except OSError:
+            return None
     return hashlib.sha256(os.fsencode(identity)).hexdigest()[:8]
 
 
@@ -658,7 +667,7 @@ class ClaimBoard:
     def _remote_oid(self, key: str) -> str | None:
         ref = self._ref(key)
         proc = self._git(["ls-remote", self.repo_url, ref])
-        for line in proc.stdout.splitlines():
+        for line in _lines(proc.stdout):
             oid, _, name = line.partition("\t")
             if name == ref:
                 return oid
@@ -670,7 +679,7 @@ class ClaimBoard:
         keys_by_ref = {self._ref(key): key for key in keys}
         proc = git(["ls-remote", self.repo_url, *keys_by_ref], step="naming the claim refs")
         oids: dict[str, str] = {}
-        for line in proc.stdout.splitlines():
+        for line in _lines(proc.stdout):
             oid, separator, ref = line.partition("\t")
             # ls-remote patterns also match longer names ending in the same
             # path, such as refs/heads/<ref>; only the exact ref is the claim.
@@ -1098,8 +1107,12 @@ class ClaimBoard:
         seconds. A claim ref whose name is not a claim key is left out, and
         ``warn`` hears how many a listing left out, if any.
 
-        A listing first deletes the private refs that this host's stopped
-        listings left, as a signal can.
+        Except on Windows, a listing first deletes the private refs that a
+        listing of this version on this host left when a signal stopped it. On
+        Linux, this host also means this boot and PID namespace, and a host
+        whose ``/proc`` cannot give them deletes none; elsewhere it means this
+        host name, so two machines with one name must not share a scratch. An
+        older version's refs stay.
         """
         targets = None if keys is None else _validate_keys(keys)
         deadline = None if timeout is None else time.monotonic() + _validate_timeout(timeout)
@@ -1122,12 +1135,19 @@ class ClaimBoard:
         """Delete the private refs of this host's listings whose process is gone.
 
         A namespace from another host, from an older version, or whose process
-        ID a new process took stays, and so does every namespace on Windows. A
-        deletion Git refuses leaves them for the next listing.
+        ID a new process took stays, and so does every namespace on Windows or
+        on a Linux host that :func:`_this_host` cannot name. Git deletes a batch
+        of refs whole or not at all, and refuses one that deletes a ref beside
+        its own lock file, as a stopped update leaves, so such a ref stays out of
+        the batch; looking for its lock file runs no Git. A batch Git refuses
+        anyway, as when ``packed-refs.lock`` blocks every deletion, leaves every
+        ref until that lock goes.
         """
         if os.name != "posix":
             return
         host = _this_host()
+        if host is None:
+            return
         found = git(
             ["for-each-ref", "--format=%(refname)", _LIST_REF_PREFIX],
             check=False,
@@ -1138,6 +1158,7 @@ class ClaimBoard:
             owner = _LISTING_NAMESPACE_RE.fullmatch(ref.removeprefix(_LIST_REF_PREFIX).partition("/")[0])
             if owner and owner[1] == host and _process_is_gone(int(owner[2])):
                 stale.append(ref)
+        stale = [ref for ref in stale if not os.path.lexists(self.scratch / f"{ref}.lock")]
         if stale:
             git(
                 ["update-ref", "--stdin"],
@@ -1164,10 +1185,13 @@ class ClaimBoard:
         again by name into numbered refs. Git refuses such a fetch, except that
         some versions, such as Apple's 2.50, store one key's name holding the
         other key's lease without a word, so a case-insensitive scratch names
-        the board's keys after a fetch that wrote any ref. A fetch Git refuses
-        names them too, and they are fetched by name when they explain the
-        refusal: a key beside a folder that differs from it only in case, or a
-        name that is not a claim key, such as one APFS refuses as not UTF-8.
+        the board's keys after a fetch that wrote any ref, and fetches them by
+        name when two collide or when it kept fewer refs than the board has
+        names, as when a key and a name that is not one, such as ``k`` and
+        U+212A KELVIN SIGN, fold together. A fetch Git refuses names them too,
+        and they are fetched by name when they explain the refusal: a key
+        beside a folder that differs from it only in case, or a name that is
+        not a claim key, such as one APFS refuses as not UTF-8.
         With ``targets``, only the present targets are fetched by name, and a
         target released meanwhile has the targets named again, never the board.
         A board that refuses every attempt because claim refs moved raises
@@ -1191,7 +1215,10 @@ class ClaimBoard:
         while True:
             if keys is not None and not keys:
                 return {}, left_out
-            namespace = f"{_LIST_REF_PREFIX}{_this_host()}-{os.getpid()}-{uuid.uuid4().hex}/"
+            host = _this_host()
+            # Without a host name, the form older versions used, which no listing prunes.
+            owner = f"{host}-{os.getpid()}-" if host else ""
+            namespace = f"{_LIST_REF_PREFIX}{owner}{uuid.uuid4().hex}/"
             written[namespace] = None
             # Negotiate only from this fetch's refs, which do not exist yet: the
             # scratch's other refs save nothing here, and under protocol v0 each
@@ -1216,7 +1243,7 @@ class ClaimBoard:
                 if keys is None:
                     if refs and self._scratch_ignores_case():
                         named = name()
-                        if _collide_ignoring_case(named):
+                        if _collide_ignoring_case(named) or len(refs) < len(named) + left_out:
                             keys = named
                             continue
                     claims = _claims_by_key(refs, namespace)
