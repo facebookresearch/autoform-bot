@@ -143,7 +143,10 @@ date when the release is tagged.
   declarations state an article's result, and has the reviewer quote their
   hypotheses and conclusions before judging. A `mathlib: true` that fails this
   caps the rubric's usability score at 2, and Roadmap sets `mathlib: true` only
-  when verified Mathlib declarations state the result (#668).
+  when verified Mathlib declarations state the result (#668). Formalize's library
+  search rules, which Roadmap follows, use the same definition: a library hit
+  that needs only hypotheses the result gives or implies, or several that
+  together state it, is reused like an exact one (#679).
 - **The landing's coverage line** leads with the source areas split into
   statements: "5 source areas, all split into statements", or "3 of 5 source
   areas split into statements" before the other dispositions.
