@@ -282,8 +282,8 @@ def statement_preview(hit: SearchHit) -> str:
 def normalize(text: str) -> str:
     """Fold ``text`` so spellings a reader takes for the same string compare equal.
 
-    Case, width, ligatures, accents, typographic dashes and quotes, and
-    invisible characters such as a soft hyphen all fold away, because the
+    Case, width, ligatures, accents, the dashes U+2010 to U+2015 and U+2212,
+    curly quotes, and invisible characters such as a soft hyphen all fold away, because the
     person searching types none of them the way a source happened to.
     """
 
