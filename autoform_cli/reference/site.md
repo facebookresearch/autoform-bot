@@ -115,9 +115,7 @@ and manual runs build the site but never deploy, and cannot cancel a waiting
 deploy. To redeploy, re-run the Pages run that the newest successful verify run
 on `main` started; re-running an older one deploys the older commit. Deleting or
 renaming `autoform-verify.yml`, or disabling it in the repository's Actions
-settings, stops every deploy, with no error. An older scaffold deploys every
-push; [Upgrading](../../CHANGELOG.md#upgrading-from-050) says how to switch, and no
-pin has to move: every `AUTOFORM_REF` since 0.5.0 has `render --ref`.
+settings, stops every deploy, with no error.
 
 ## Pages reports
 
@@ -126,9 +124,5 @@ Pages gates on `check` and `render`, and runs `audit` after `check` and
 `audit` logs every finding, or `OK: roadmap audit passed`. An invalid coverage
 contract fails `render` before it writes anything, but `MAPPED` rows (each an
 audit `declared-coverage-gap`; a new project lists the template's row) and
-coverage-role issues, which `render` prints as warnings, still publish. An older
-scaffold can add either step by hand with `continue-on-error: true` and the same
-`uvx --from` source: `autoform audit blueprint --lean-root .` after `check`, and
-`autoform site check site --source site-src` after the MkDocs build, which needs
-an `AUTOFORM_REF` from 0.6.0 or later. To block merges on findings, run
-`autoform audit` in CI without `continue-on-error`.
+coverage-role issues, which `render` prints as warnings, still publish. To block
+merges on findings, run `autoform audit` in CI without `continue-on-error`.

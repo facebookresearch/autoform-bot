@@ -735,9 +735,11 @@ theme. Each line names the pull requests to read for detail.
   `catalog:`, `open_statements:`, `published:` and `statement: retracted` in
   `check` and `INVENTORIED` in `render`, so move the pin before using them;
   until then, retract by removing `statement` and `proof` and keeping `lean:`.
-  Older refs assign no areas from `blueprint/atlas.json` but publish it with
-  every id it names, so a project with unpublished folders moves the pin before
-  adding it (#90).
+  It also rejects a dependency cycle that only appears once chapters roll up
+  (#358): leave out the edge that closes it until the pin moves. Older refs
+  assign no areas from `blueprint/atlas.json` but publish it with every id it
+  names, so a project with unpublished folders moves the pin before adding it
+  (#90).
 - **Site.** Render refuses to replace the `autoform-publication/v1` site 0.5.0
   wrote, and the dashboard reports it as stale: delete that output directory,
   such as a local `site-src`, once by hand (#165, #90). A v2 site is replaced
