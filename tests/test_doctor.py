@@ -92,12 +92,12 @@ def test_missing_or_invalid_graph_returns_failed_checks_without_host_paths(tmp_p
 
     project = _clean_project(tmp_path)
     article = project / "blueprint" / "roadmap" / "result.md"
-    article.write_text("# First\n# Second\n", encoding="utf-8")
+    article.write_text("No title\n", encoding="utf-8")
     invalid = diagnose_project(project)
 
     assert not invalid.clean
     assert _checks(invalid)["runtime"] == (False, "canonical graph is invalid")
-    assert "multiple H1 titles" in _checks(invalid)["graph"][1]
+    assert "missing H1 title" in _checks(invalid)["graph"][1]
     assert str(tmp_path) not in invalid.to_json()
 
 

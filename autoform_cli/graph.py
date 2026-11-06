@@ -31,6 +31,7 @@ from .markdown import (
     _block_links,
     _is_hidden_path,
     directory_path,
+    first_unclosed_fence,
     link_definitions,
     link_targets,
     markdown_links,
@@ -49,6 +50,8 @@ _MARKDOWN_LINK_TEXT = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])+)\]\([^)]*\)")
 #: A full, collapsed or shortcut reference link: ``[text][label]``, ``[label][]`` or ``[label]``.
 _REFERENCE_LINK_TEXT = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])+)\](?:\[([^\[\]]*)\])?")
 _HTML_TAG = re.compile(r"<[A-Za-z/!][^>]*>")
+#: A heading with no space after its ``#`` marks, ``##Proof``: the site reads one, the loader reads text.
+_UNSPACED_HEADING = re.compile(r"(#{1,6})[^# \t]")
 ARTICLE_ID_PATTERN = re.compile(r"af_[0-9a-f]{24}\Z")
 _FRONTMATTER_KEYS = frozenset(
     {
@@ -226,7 +229,9 @@ class _ParsedNode:
     metadata: dict[str, str]
     summary: str | None
     informal_targets: tuple[str, ...] = ()
-    informal_warnings: tuple[str, ...] = ()
+    #: What check warns about the article's headings, in the order they come,
+    #: each with whether it holds only for an article published as its own page.
+    heading_warnings: tuple[tuple[str, bool], ...] = ()
     #: Dependency targets named only by wrapped links, which check did not read
     #: before, so a problem with one warns (#325), and the sources such links add.
     wrapped_targets: frozenset[str] = frozenset()
@@ -351,8 +356,14 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     # resolve to.
     wrapped_edges: set[tuple[str, str]] = set()
     informal_named: dict[str, list[str]] = {}
+    containers = {parent for parent in parents.values() if parent is not None}
     for parsed_node in parsed:
-        warnings.extend(parsed_node.informal_warnings)
+        # Render shows a formalizable leaf or a module catalog in its chapter's
+        # box, which reads an indented heading as the loader does.
+        boxed = parsed_node.id not in containers and (
+            parsed_node.metadata.get("declaration") is not None or parsed_node.metadata.get("catalog") is not None
+        )
+        warnings.extend(warning for warning, page_only in parsed_node.heading_warnings if not (boxed and page_only))
         one_line: set[str] = set()
 
         def resolve(
@@ -904,7 +915,8 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
     lines = text.splitlines()
     metadata, body_start, issues = _parse_frontmatter(node_id, lines)
     title: str | None = None
-    title_count = 0
+    # The first line the site reads as an H1 and the loader as text, for a missing title's error.
+    unspaced_title: str | None = None
     targets: dict[str, list[str]] = {
         _STATEMENT_SECTION: [],
         _PROOF_SECTION: [],
@@ -912,7 +924,10 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         _SOURCES_SECTION: [],
     }
     section: str | None = None
-    misplaced: list[str] = []
+    # Each with its kind: how the loader reads a heading ("loader"), a line the
+    # site reads otherwise ("site"), or one only an article's own page reads
+    # otherwise ("page").
+    heading_warnings: list[tuple[str, str]] = []
 
     # Fences, comments and indented code are read as the page and the audit
     # read them, so a section a reader sees never loses its links here, and a
@@ -927,31 +942,67 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
     for start, stop in text_blocks(body):
         block = "\n".join(body[start:stop])
         heading = _HEADING.match(block)
+        number = body_start + start + 1
+        # A line that starts with '#' is read alone, so the block is that line.
+        # It stays text here, and its links count where they did.
+        if unspaced := _UNSPACED_HEADING.match(block):
+            heading_warnings.append(
+                (
+                    f"{node_id}: line {number}: the site reads '{block.strip()}' as a heading and autoform as text; "
+                    "put a plain space after the '#' marks, or write '\\#' to keep it text",
+                    "site",
+                )
+            )
+            if unspaced_title is None and len(unspaced.group(1)) == 1:
+                unspaced_title = f"line {number}, '{block.strip()}',"
         if heading:
             level = len(heading.group(1))
             heading_text = heading.group(2).strip()
-            if level == 1:
-                title_count += 1
-                if title is None:
-                    title = heading_text
-            if level <= 2:
-                heading_key = heading_text.casefold()
-                section = heading_key if level == 2 and heading_key in targets else None
-            elif section in (_STATEMENT_SECTION, _PROOF_SECTION) and heading_text.casefold() == _INFORMAL_SECTION:
-                # A deeper heading stays inside the section above it, so these links count.
-                misplaced.append(
-                    f"{node_id}: '{heading.group(1)} {heading_text}' is read as part of '## {section.capitalize()}', "
-                    "so its links count; write it as '## Informally uses'"
+            if block.startswith(" "):
+                heading_warnings.append(
+                    (
+                        f"{node_id}: line {number}: autoform reads '{block.rstrip()}' as a heading and the site as "
+                        "text, since it is indented; remove the spaces before the '#', or write '\\#' to keep it text",
+                        "page",
+                    )
                 )
+            if level == 1 and title is None:
+                title = heading_text
+                section = None
+            elif level == 2:
+                heading_key = heading_text.casefold()
+                section = heading_key if heading_key in targets else None
+            else:
+                if level == 1:
+                    heading_warnings.append(
+                        (
+                            f"{node_id}: line {number}: '{block.strip()}' is a later H1, which stays in its section; "
+                            "the first H1 is the title",
+                            "loader",
+                        )
+                    )
+                if section in (_STATEMENT_SECTION, _PROOF_SECTION) and heading_text.casefold() == _INFORMAL_SECTION:
+                    # A deeper heading, like a later H1, stays inside the section above it, so these links count.
+                    heading_warnings.append(
+                        (
+                            f"{node_id}: '{heading.group(1)} {heading_text}' is read as part of "
+                            f"'## {section.capitalize()}', so its links count; write it as '## Informally uses'",
+                            "loader",
+                        )
+                    )
             continue
         if section is not None:
             alone[section].extend(target for line in body[start:stop] for target in link_targets(line, references))
             targets[section].extend(target for _, target in _block_links(body[start:stop], references))
 
+    if any(kind != "loader" for _, kind in heading_warnings) and first_unclosed_fence(lines[body_start:]) is not None:
+        # The site shows an article whose fence never closes as typed, which
+        # check warns about, so it shows no heading to compare with.
+        heading_warnings = [warning for warning in heading_warnings if warning[1] == "loader"]
+        unspaced_title = None
     if title is None:
-        issues.append(f"{node_id}: missing H1 title")
-    elif title_count > 1:
-        issues.append(f"{node_id}: multiple H1 titles")
+        hint = f"; the site reads {unspaced_title} as one: put a plain space after the '#'" if unspaced_title else ""
+        issues.append(f"{node_id}: missing H1 title{hint}")
     if issues:
         return None, issues
     # Every link the loader read before still counts, even one the page shows as
@@ -973,7 +1024,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
         metadata,
         _extract_summary(body, references),
         (*alone[_INFORMAL_SECTION], *added[_INFORMAL_SECTION]),
-        tuple(misplaced),
+        tuple((warning, kind == "page") for warning, kind in heading_warnings),
         frozenset(wrapped_dependencies),
         tuple(dict.fromkeys(added[_SOURCES_SECTION])),
     )

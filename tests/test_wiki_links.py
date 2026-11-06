@@ -100,6 +100,18 @@ def test_actual_hash_headings_without_spaces_still_exclude_provenance_and_formal
     ) == site_index.WikiLinks(((0, 1),))
 
 
+@pytest.mark.parametrize("section", ["Sources", "Depends on", "Proof depends on"])
+def test_a_later_h1_stays_in_the_provenance_section_above_it(section: str) -> None:
+    view = _view("a", "b", "c")
+    paths, sources, metadata = _inputs("a", "b", "c")
+    # The loader reads the link below the later H1 as a dependency or a source, as written.
+    body = f"# A\n\n## {section}\n\n# Aside\n\n[C](c.md)\n\n## Exposition\n\n[B](b.md)\n"
+    sources["a"] = body.encode()
+    assert site_index.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == site_index.WikiLinks(((0, 1),))
+
+
 @pytest.mark.parametrize("heading", [
     "Sources\n-------", "**Sources**\n-------", "Depends on\n----------", "Proof depends on\n----------------",
     "## **Sources**", "## References", "**References**\n----------", "## Bibliography", "Bibliography\n------------",
