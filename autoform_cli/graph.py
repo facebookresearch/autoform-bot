@@ -197,7 +197,8 @@ class Graph:
     #: it, each counted, a wrapped link, such as one whose text wraps across
     #: lines, into an unpublished folder, then ``## Informally uses`` links that
     #: do not resolve to another article, the heading written below a dependency
-    #: heading, where its links count, and a wrapped dependency loading would
+    #: heading, where its links count, a later H1, a heading only the site or
+    #: only autoform reads as one, and a wrapped dependency loading would
     #: otherwise refuse, as it does not resolve, names its own article or closes
     #: a cycle. Last come the pinned name lists' warnings about
     #: ``mathlib_declaration`` and ``mathlib_file``.
