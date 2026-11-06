@@ -1070,8 +1070,7 @@ def render_site(
             captured = [name for name, _ in snapshot.files]
             reviews, review_warnings = _review_disclosures(blueprint, graph, review(), cards, macros, captured)
         source_revision = _source_revision(snapshot)
-        # The inventory lists every file the verified commit holds, hidden ones
-        # included, where capture records a hidden folder as one entry.
+        # The inventory accounts for every file the verified commit holds.
         tracked = tracked_files(repo_root, commit, blueprint) if links_blueprint and commit else None
         report = _publish(
             destination,
@@ -1170,7 +1169,7 @@ def _render_pages(
     )
     revisions = {"source_revision": source_revision, "lean_source_revision": lean_source_revision}
     version, commit, source = autoform_revision()
-    revisions["autoform"] = {"version": version, "commit": commit or None, "source": source or None}
+    revisions["autoform"] = {"version": version or None, "commit": commit or None, "source": source or None}
     # Written first, so a Lean walk by a concurrent render skips this stage;
     # rewritten with the file inventory once every page exists.
     _write_publication_manifest(destination, graph, linker, coverage=coverage, **revisions)
@@ -2019,12 +2018,14 @@ def _inventory(
 ) -> dict[str, object]:
     """Where each blueprint file went, by its path in the blueprint: its URL on
     the site, from the site's root; the repository URL the site links instead;
-    or why the site leaves it out. Every file the verified commit holds when
-    there is one (basis ``commit``), else every file render captured and each
-    folder it skipped (basis ``capture``).
+    or why the site leaves it out. Every file the verified commit holds, by
+    Git's spelling of its name, when there is one (basis ``commit``), else
+    every file render captured and each entry it skipped (basis ``capture``).
+    On either basis a hidden or unpublished folder is one key, naming nothing
+    in it.
 
-    The reasons: ``hidden``, ``unpublished``, ``generated`` (render writes its
-    own file there), ``mathjax-config`` (read into the site's script),
+    The reasons: ``hidden``, ``unpublished``, ``generated`` (a name render
+    writes or has retired), ``mathjax-config`` (read into the site's script),
     ``review-testimony`` (read-back cards), ``graph-input`` (read by the graph
     only), ``not-utf8``, ``canvas``, ``unsupported-type`` and ``not-captured``
     (in the commit, not in the tree render read).
@@ -2034,40 +2035,54 @@ def _inventory(
         relative = _relative(page, destination)
         if relative.suffix.lower() in PAGE_SUFFIXES:
             relative = relative.with_suffix(".html")
-        return _as_published(quote(relative.as_posix(), safe="/")) + (f"#{anchor}" if anchor else "")
+        return _as_published(quote(relative.as_posix(), safe="/")) + (f"#{quote(anchor, safe='')}" if anchor else "")
 
     # Render writes these over a page the blueprint has there; a chapter's page is built from its narrative.
     written = set(_site_paths(graph)) - {_group_page(group).as_posix() for group in site.groups}
+    omitted = {_relative(source, blueprint).as_posix(): reason for source, reason in site.omitted.items()}
+    omitted.update((relative, "generated") for source in site.files if (relative := _relative(source, blueprint).as_posix()) in written)
     published = {
         relative: url(destination / relative)
         for relative in (_relative(source, blueprint).as_posix() for source in site.files)
         if relative not in written
     }
     published.update(
-        (_relative(node.path, blueprint).as_posix(), url(*site.targets[node_id]))
+        (relative, url(*site.targets[node_id]))
         for node_id, node in graph.nodes.items()
-        if node.path in captured and node_id in site.targets
+        if node.path in captured
+        and node_id in site.targets
+        and (relative := _relative(node.path, blueprint).as_posix()) not in omitted
     )
     linked = {_relative(source, blueprint).as_posix(): href for source, href in site.linked.items()}
-    omitted = {_relative(source, blueprint).as_posix(): reason for source, reason in site.omitted.items()}
-    omitted.update((relative, "generated") for source in site.files if (relative := _relative(source, blueprint).as_posix()) in written)
-    unpublished = [name for name, kind in left_out if kind == "unpublished"]
+    # Shortest first, so a folder inside an unpublished one goes under the outer folder's key.
+    folders = sorted({unicodedata.normalize("NFC", name) for name, kind in left_out if kind == "unpublished"}, key=len)
 
-    def reason(name: str) -> str:
-        # Capture leaves out hidden names, and the top-level names render writes itself.
-        if _is_hidden(PurePosixPath(name)):
-            return "hidden"
-        if any(name == folder or name.startswith(f"{folder}/") for folder in unpublished):
-            return "unpublished"
-        return "generated" if "/" not in name and name in _GENERATED_FILES else "not-captured"
+    def entry(name: str) -> tuple[str, str]:
+        """The key and reason for a file render did not capture: its unpublished or hidden folder's, else its own."""
+        parts = name.split("/")
+        composed = unicodedata.normalize("NFC", name)
+        for folder in folders:
+            if composed == folder or composed.startswith(f"{folder}/"):
+                return "/".join(parts[: folder.count("/") + 1]), "unpublished"
+        for depth, part in enumerate(parts, 1):
+            if part.startswith("."):
+                return "/".join(parts[:depth]), "hidden"
+        # Capture leaves out the top-level names render writes itself.
+        return name, "generated" if len(parts) == 1 and name in _GENERATED_FILES else "not-captured"
 
     if tracked is None:
-        omitted.update((name, "unpublished" if kind == "unpublished" else reason(name)) for name, kind in left_out)
+        omitted.update(entry(name) for name, _kind in left_out)
         basis = "capture"
     else:
-        # Captured files are in the commit, though Git may spell a name in another Unicode form.
-        placed = {unicodedata.normalize("NFC", name) for name in (*published, *linked, *omitted)}
-        omitted.update((name, reason(name)) for name in tracked if unicodedata.normalize("NFC", name) not in placed)
+        # Git may spell a captured name in another Unicode form, on macOS.
+        spelling = {unicodedata.normalize("NFC", name): name for name in tracked}
+
+        def as_committed(placed: dict[str, str]) -> dict[str, str]:
+            return {spelling.get(unicodedata.normalize("NFC", key), key): value for key, value in placed.items()}
+
+        published, linked, omitted = as_committed(published), as_committed(linked), as_committed(omitted)
+        placed = {*published, *linked, *omitted}
+        omitted.update(entry(name) for name in tracked if name not in placed)
         basis = "commit"
     return {"basis": basis, "published": published, "linked": linked, "omitted": omitted}
 

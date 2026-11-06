@@ -140,7 +140,7 @@ def _git_tree_oids(
 def tracked_files(root: str | Path, commit: str, directory: Path) -> list[str] | None:
     """Every file *commit* holds below *directory*, a directory of the working
     tree at *root*, relative to it, in one ``ls-tree``; ``None`` when the tree
-    cannot be read."""
+    cannot be read. A submodule's commit is not a file of this repository."""
 
     top_level = repository_top_level(root)
     if top_level is None:
@@ -149,11 +149,19 @@ def tracked_files(root: str | Path, commit: str, directory: Path) -> list[str] |
         prefix = Path(directory).resolve().relative_to(top_level).as_posix()
     except ValueError:
         return None
-    completed = run_git(top_level, "ls-tree", "-rz", "--full-tree", "--name-only", commit, "--", f":(literal){prefix}")
+    # The top level itself is ".", and every file lies below it.
+    paths = () if prefix == "." else ("--", f":(literal){prefix}")
+    completed = run_git(top_level, "ls-tree", "-rz", "--full-tree", commit, *paths)
     if completed.returncode != 0:
         return None
-    start = len(prefix) + 1
-    return sorted(os.fsdecode(path)[start:] for path in completed.stdout.split(b"\0") if path)
+    # By parts, not characters: macOS Git prints the composed form of a name decomposed on disk.
+    depth = 0 if prefix == "." else prefix.count("/") + 1
+    names = []
+    for record in completed.stdout.split(b"\0"):
+        header, separator, path = record.partition(b"\t")
+        if separator and not header.startswith(b"160000 "):
+            names.append(os.fsdecode(path).split("/", depth)[-1])
+    return sorted(names)
 
 
 def detect_repository_url(root: str | Path) -> str | None:

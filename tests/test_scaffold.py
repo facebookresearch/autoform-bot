@@ -1062,23 +1062,34 @@ def test_plugin_pin_is_empty_outside_a_checkout(monkeypatch: pytest.MonkeyPatch)
 
 
 class _Distribution:
-    """An installed ``autoform`` as ``importlib.metadata`` reports it."""
+    """An installed ``autoform`` as ``importlib.metadata`` reports it: by
+    default, the install of the code these tests run."""
 
     version = "0.6.0"
 
-    def __init__(self, direct_url: dict[str, object] | None) -> None:
+    def __init__(self, direct_url: dict[str, object] | str | None, root: Path | None = None) -> None:
         self._direct_url = direct_url
+        self._root = root or Path(scaffold_module.__file__).resolve().parent.parent
 
     def read_text(self, name: str) -> str | None:
-        return json.dumps(self._direct_url) if name == "direct_url.json" and self._direct_url is not None else None
+        if name != "direct_url.json" or self._direct_url is None:
+            return None
+        return self._direct_url if isinstance(self._direct_url, str) else json.dumps(self._direct_url)
+
+    def locate_file(self, path: str) -> Path:
+        return self._root / path
 
 
 @pytest.fixture
 def revision(monkeypatch: pytest.MonkeyPatch):
     """Call ``autoform_revision`` afresh, as each process does once."""
 
-    def call(direct_url: dict[str, object] | None, checkout: Path | None = None) -> tuple[str, str, str]:
-        monkeypatch.setattr(scaffold_module.importlib.metadata, "distribution", lambda _name: _Distribution(direct_url))
+    def call(
+        direct_url: dict[str, object] | str | None, checkout: Path | None = None, *, root: Path | None = None
+    ) -> tuple[str, str, str]:
+        monkeypatch.setattr(
+            scaffold_module.importlib.metadata, "distribution", lambda _name: _Distribution(direct_url, root)
+        )
         monkeypatch.setattr(scaffold_module, "_checkout_root", lambda _directory: checkout)
         scaffold_module.autoform_revision.cache_clear()
         return scaffold_module.autoform_revision()
@@ -1098,11 +1109,41 @@ def test_the_autoform_revision_is_the_commit_an_install_from_git_records(revisio
     assert revision(direct_url) == ("0.6.0", commit, "https://github.com/facebookresearch/autoform-bot.git")
 
 
-def test_the_autoform_revision_publishes_no_repository_with_credentials(revision) -> None:
+def test_the_autoform_revision_publishes_only_a_credential_free_github_repository(revision) -> None:
+    """The site publishes the source, so a mirror's host stays private; uv records no ``.git``."""
     commit = "1cf2ca825fec5e6d3303e24374e218bf3e8ab5c1"
-    direct_url = {"url": "https://token@github.com/o/r.git", "vcs_info": {"vcs": "git", "commit_id": commit}}
 
-    assert revision(direct_url) == ("0.6.0", commit, "")
+    def source(url: str) -> str:
+        return revision({"url": url, "vcs_info": {"vcs": "git", "commit_id": commit}})[2]
+
+    assert source("https://token@github.com/o/r.git") == ""
+    assert source("https://git.corp.example/o/r.git") == ""
+    assert source("https://10.0.0.7/o/r.git") == ""
+    assert source("https://github.com/o/r") == "https://github.com/o/r.git"
+
+
+def test_the_autoform_revision_takes_only_a_git_commit_the_running_code_was_installed_from(
+    revision, tmp_path: Path
+) -> None:
+    """Code run from another tree, through PYTHONPATH, does not take the install's commit."""
+    commit = "1CF2CA825FEC5E6D3303E24374E218BF3E8AB5C1"
+    direct_url = {"url": "https://github.com/o/r.git", "vcs_info": {"vcs": "git", "commit_id": commit}}
+
+    assert revision(direct_url) == ("0.6.0", commit.lower(), "https://github.com/o/r.git")
+    assert revision(direct_url, root=tmp_path / "site-packages") == ("0.6.0", "", "")
+    assert revision({**direct_url, "vcs_info": {"vcs": "hg", "commit_id": commit}}) == ("0.6.0", "", "")
+
+
+def test_the_autoform_revision_reads_an_unreadable_record_as_no_record(revision, monkeypatch) -> None:
+    assert revision("{") == ("0.6.0", "", "")
+    assert revision("[" * 100_000) == ("0.6.0", "", "")
+
+    def missing(_name: str) -> None:
+        raise scaffold_module.importlib.metadata.PackageNotFoundError("autoform")
+
+    monkeypatch.setattr(scaffold_module.importlib.metadata, "distribution", missing)
+    scaffold_module.autoform_revision.cache_clear()
+    assert scaffold_module.autoform_revision() == ("", "", "")
 
 
 def test_the_autoform_revision_of_a_checkout_counts_only_while_it_is_unmodified(revision, tmp_path: Path) -> None:
