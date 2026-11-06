@@ -338,7 +338,6 @@ would have made it cheaper, and keep its answer:
 autoform debrief subagent form af_5b0e4d3c2a1f09e8d7c6b5a4 . --phase proof
 autoform debrief subagent record af_5b0e4d3c2a1f09e8d7c6b5a4 . --phase proof \
   --worker-id agent-name < /tmp/answer.json
-autoform debrief subagent render .
 ```
 
 Orchestrator debriefs are on unless `AUTOFORM_DEBRIEF` turns them off; subagent
