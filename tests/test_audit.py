@@ -917,6 +917,12 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
             ("lean-target-kind-mismatch", "Lean target kind def_wanted does not match declaration intent theorem")
         ],
     }
+    # A statement a wanted target backs passes, but no dependent can cite it.
+    cannot_cite = "which no dependent can cite; state the theorem with a sorry proof instead"
+    assert _warning_map(blueprint, lean_root=lean_root) == {
+        "roadmap/corollary.md": [("lean-target-wanted", f"lean target W.legacy is a proof_wanted, {cannot_cite}")],
+        "roadmap/stated.md": [("lean-target-wanted", f"lean target W.stated is a theorem_wanted, {cannot_cite}")],
+    }
 
 
 def test_audit_rejects_a_wanted_target_behind_a_proved_catalog(tmp_path: Path) -> None:

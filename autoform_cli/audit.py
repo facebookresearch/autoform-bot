@@ -557,7 +557,7 @@ def _lean_findings(
     *,
     warnings: list[AuditWarning] | None = None,
 ) -> list[AuditFinding]:
-    """Check every article's Lean targets, adding catalog warnings to *warnings* if given."""
+    """Check every article's Lean targets, adding their warnings to *warnings* if given."""
 
     try:
         root = resolve_lean_root(lean_root)
@@ -580,6 +580,7 @@ def _lean_findings(
     sizes: dict[str, int] = {}
     sources = _SourceLines(snapshot.source_files)
     catalogs: dict[str, tuple[Declaration, ...]] = {}
+    wanted_statements: list[AuditWarning] = []
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
@@ -625,6 +626,21 @@ def _lean_findings(
                             "lean-target-wanted",
                             f"lean target {declaration.name} is {what}, which defers "
                             f"its proof or construction, so it cannot back {claim}",
+                        )
+                    )
+        elif node.statement_formalized and node.catalog is None:
+            # A theorem's statement may rest on a wanted target, but no dependent can cite the placeholder,
+            # so it is warned about, never refused (#325). Another wanted kind is a kind mismatch.
+            for declaration, kind in zip(resolved, kinds):
+                if kind in {"theorem_wanted", "proof_wanted"}:
+                    what = f"an alias of a {kind}" if declaration.alias else f"a {kind}"
+                    wanted_statements.append(
+                        AuditWarning(
+                            article_path,
+                            "lean-target-wanted",
+                            f"lean target {declaration.name} is {what}, which no dependent can cite; "
+                            "state the theorem with a sorry proof instead",
+                            (),
                         )
                     )
 
@@ -676,6 +692,7 @@ def _lean_findings(
             sizes[node_id] = sum(spans[body] for body in bodies)
 
     if warnings is not None:
+        warnings.extend(wanted_statements)
         warnings.extend(_size_warnings(graph, sizes))
         warnings.extend(_catalog_limit_warnings(catalogs, sources, index))
     return findings

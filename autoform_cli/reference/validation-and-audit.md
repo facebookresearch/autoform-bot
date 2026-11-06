@@ -86,9 +86,8 @@ parent folder as the Lean root. A command that indexes during a `render` skips
 the site being written, but one that indexes while `mkdocs build` runs can read
 the site's copies before its `publication.json`, so rerun it after the build.
 When Lean inputs keep changing, indexing retries and then fails naming the
-changed paths relative to the Lean root, for example `Lean sources kept changing
-while they were indexed; changed: Proj/A.lean`. Skipped folders and files other
-than `.lean` sources may change during a capture.
+changed paths relative to the Lean root. Skipped folders and files other than
+`.lean` sources may change during a capture.
 
 Within each file, up to an `#exit` line, the index records the declarations
 written with `theorem`, `lemma`, `def`, `abbrev`, `instance`, `structure`,
@@ -151,18 +150,18 @@ any intent and is measured by its own span and limits. Each name of
 
 A wanted target matches the intent its command mirrors: `theorem_wanted` and
 `proof_wanted` a `theorem`, `lemma`, `proposition`, or `corollary`,
-`def_wanted` a `def` or `definition`, and `instance_wanted` an `instance`. A
-theorem's wanted target can back `statement: formalized`, but no wanted target
-backs a proved article: `lean-target-wanted` reports one named, directly or
-through an alias, by an article that records `proof: formalized`, or by a
-definition that records `statement: formalized`, since a stated definition
-counts as proved. A placeholder carries no `sorry`, so no `sorry` check catches
-one. The generated verify workflow's kernel-trust audit passes a `lean:` name
-that resolves only to a root-package placeholder, or a public alias of one,
-only for an article the assumption contract records as `stated`, `can_prove`,
-`can_state`, `planned` or `not_ready`; any other state fails, including
-`mathlib` and an unknown one. Any other `private` declaration is reported as
-not a declaration of the Lean build.
+`def_wanted` a `def` or `definition`, and `instance_wanted` an `instance`. No
+wanted target backs a proved article: `lean-target-wanted` reports one named,
+directly or through an alias, by an article that records `proof: formalized`, or
+by a definition that records `statement: formalized`, since a stated definition
+counts as proved, and warns about one backing a theorem's `statement:
+formalized`, which no dependent can cite. A placeholder carries no `sorry`, so
+no `sorry` check catches one. The generated verify workflow's kernel-trust audit
+passes a `lean:` name that resolves only to a root-package placeholder, or a
+public alias of one, only for an article the assumption contract records as
+`stated`, `can_prove`, `can_state`, `planned` or `not_ready`; any other state
+fails, including `mathlib` and an unknown one. Any other `private` declaration
+is reported as not a declaration of the Lean build.
 
 ### Warnings
 
@@ -182,13 +181,14 @@ row's links that reach no declaration leaf; `duplicate-lean-target`, at each
 target involved, names the others taking the same credit; `node-too-large`, at
 the node's article, gives its span against the project's median; and
 `invalid-implementation-note`, at the note or folder, gives `check`'s warning.
-A broken link earlier versions missed warns under its finding's code instead. A
-target (a leaf carrying `declaration:`) recording `statement: formalized` takes
-progress credit for its first `lean:` name, and a `mathlib: true` one Mathlib
-credit for its first `mathlib_declaration` name, compared as Lean names:
-`_root_.` and `«»` quoting drop out, and `«x.y»` stays one component. Later
-names, catalogs, containers and a target recording neither, such as a
-`statement: retracted` placeholder left by a migration, take no credit.
+A broken link earlier versions missed, and a theorem's wanted target, warn under
+their finding's code instead. A target (a leaf carrying `declaration:`)
+recording `statement: formalized` takes progress credit for its first `lean:`
+name, and a `mathlib: true` one Mathlib credit for its first
+`mathlib_declaration` name, compared as Lean names: `_root_.` and `«»` quoting
+drop out, and `«x.y»` stays one component. Later names, catalogs, containers and
+a target recording neither, such as a `statement: retracted` placeholder left by
+a migration, take no credit.
 
 ### Structure
 
