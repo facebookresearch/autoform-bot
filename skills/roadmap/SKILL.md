@@ -58,11 +58,10 @@ roadmap article, an exact grouped ledger, or an evidenced coverage disposition;
 and record each module and declaration name, with any separate literary
 provenance, under `blueprint/sources/`.
 
-Inventory and exposition are independent axes: a catalog ledger can close the
-inventory axis but does not make an area `DECOMPOSED`. Keep existing, wishlist,
-conjectural, and planned mathematics in one book and DAG. `DECOMPOSED` means
-represented by declaration articles, so it may describe mathematics already
-implemented in Lean. A checked local declaration is valid grounding.
+Keep existing, wishlist, conjectural, and planned mathematics in one book and
+DAG. `DECOMPOSED` means represented by declaration articles, so it may describe
+mathematics already implemented in Lean. A checked local declaration is valid
+grounding.
 
 ## Ground and decompose
 
@@ -97,9 +96,6 @@ result and for each intermediate result its proof proves or cites, as the
   `## Informally uses` links what that route cites. A proof that needs a library
   result with no article yet gets an article for it, proved from the library and
   linked under `## Proof depends on`.
-- Name a reused library declaration in the implementation note, not the article,
-  and leave `lean:` unset until Formalize declares the result in the project:
-  `lean:` names only a declaration in the project's own Lean files.
 - A refusal (exit 2) is not an empty result: resolve what it reports without
   adding the article, and search again; a warning that names a library is
   handled as the search steps say. A dependency link to a page not yet written
@@ -157,8 +153,7 @@ remote, which is outward-facing, so make sure the request covers them.
 When a revision changes a statement, or Human Review requests a Lean revision,
 retract the article as step 6 of the [revision
 contract](../../autoform_cli/reference/claims-and-revisions.md#revision-contract)
-says. An article without `lean:` just loses `statement` and `proof`, a
-Human-Review Lean revision is recorded in the implementation note, and a
+says. A Human-Review Lean revision is recorded in the implementation note, and a
 dependent found only now means releasing and acquiring the whole set again under
 the no-hold-and-wait rule when the project uses claims. Before the revision
 lands on the branch Formalize works from, and so before releasing any claim,
