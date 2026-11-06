@@ -137,6 +137,33 @@ def _git_tree_oids(
     return result
 
 
+def tracked_files(root: str | Path, commit: str, directory: Path) -> list[str] | None:
+    """Every file *commit* holds below *directory*, a directory of the working
+    tree at *root*, relative to it, in one ``ls-tree``; ``None`` when the tree
+    cannot be read. A submodule's commit is not a file of this repository."""
+
+    top_level = repository_top_level(root)
+    if top_level is None:
+        return None
+    try:
+        prefix = Path(directory).resolve().relative_to(top_level).as_posix()
+    except ValueError:
+        return None
+    # The top level itself is ".", and every file lies below it.
+    paths = () if prefix == "." else ("--", f":(literal){prefix}")
+    completed = run_git(top_level, "ls-tree", "-rz", "--full-tree", commit, *paths)
+    if completed.returncode != 0:
+        return None
+    # By parts, not characters: macOS Git prints the composed form of a name decomposed on disk.
+    depth = 0 if prefix == "." else prefix.count("/") + 1
+    names = []
+    for record in completed.stdout.split(b"\0"):
+        header, separator, path = record.partition(b"\t")
+        if separator and not header.startswith(b"160000 "):
+            names.append(os.fsdecode(path).split("/", depth)[-1])
+    return sorted(names)
+
+
 def detect_repository_url(root: str | Path) -> str | None:
     """Find the project's web URL from the CI environment or the git remote."""
     repository = (
@@ -308,5 +335,6 @@ __all__ = [
     "git",
     "repository_top_level",
     "run_git",
+    "tracked_files",
     "verify_repository_snapshot",
 ]

@@ -147,12 +147,12 @@ Then run the publication sequence in the
 [CLI reference](../../autoform_cli/README.md#publishing-and-the-dashboard),
 keeping `--require-declarations`.
 
-Publication is opt-in: files under `blueprint/` become public site content,
-with derived progress, graph pages, and a path-free publication manifest. Show
-that boundary, confirm the exact repository and
-visibility, default to private, and warn that private Pages may require a paid
-GitHub plan. When approved, prepare the commit, remote, Pages source, and push;
-otherwise leave the workflow inert. If credentials, hosting, or repository
+Publication is opt-in: files under `blueprint/` become public site content, with
+derived progress, graph pages, and a publication manifest that names blueprint
+files, hidden ones included. Show that boundary, confirm the exact repository
+and visibility, default to private, and warn that private Pages may require a
+paid GitHub plan. When approved, prepare the commit, remote, Pages source, and
+push; otherwise leave the workflow inert. If credentials, hosting, or repository
 settings block publication, report the minimal owner action required.
 
 Zulip synchronization is a separate opt-in outward-facing action. When the user
