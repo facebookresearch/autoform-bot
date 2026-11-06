@@ -92,6 +92,33 @@ date when the release is tagged.
   one above it in that file, or one not private in a file it imports.
   Binders, patterns, fields, attributes, tactics, one-letter names and names
   the project does not declare, such as Mathlib's, stay text.
+- **Exact names in a statement's Lean.** `render --ileans DIR` reads a Lean
+  build's `.ilean` files, such as `.lake/build/lib/lean`'s, which record the
+  declaration Lean resolved each name in the sources to. A name in a
+  statement's Lean then links exactly that, whatever namespace or `open` it
+  was written under: a project declaration as above, and a constant of a
+  package Mathlib's documentation covers (Mathlib, Batteries, Init, Std, Lean
+  and others) to its page there, found by its full name, with no card. Locals,
+  binders, notation such as `+` or `ℕ`, field notation such as `h.le`, and
+  other packages' constants stay text. A file whose `.ilean` file is missing,
+  unreadable or of a format other than the one Lean writes since v4.27 links
+  as without one, and so does a declaration the file shows to be older than
+  the source, as after an edit since the build; render says which. An edit the
+  file cannot show, such as to an `open` line, is not caught, so render a local
+  site with a fresh build.
+  Mathlib's documentation follows current Mathlib, so a constant renamed since
+  the project's pin lands on its not-found page, as does a recursor such as
+  `Nat.rec`, which the documentation leaves out. The generated
+  `autoform-verify.yml` uploads the build's `.ilean` files at the end of a
+  passing push to `main`, and `blueprint-pages.yml` passes that run's files to
+  render when the download succeeds and its `AUTOFORM_REF`'s render lists
+  `--ileans`; a failed upload or download fails nothing ([The published
+  site](autoform_cli/reference/site.md#pages-deploys)). A scaffolded project
+  keeps its workflows: delete them and rerun `autoform init`, as 0.6.0's CI
+  note says, or copy three edits from the templates: verify's last step, the
+  Pages fetch step with the render step that reads it, and `actions: read` in
+  the Pages workflow's `permissions`. Pages takes the files only in a
+  workflow that deploys verified commits, as 0.6.0's does.
 - **Check without site warnings.** `check --no-site-warnings` skips the
   warnings about the pages the site would publish, which `render` prints too,
   and still reads the notes under `blueprint/sources/`, which a render that

@@ -121,6 +121,7 @@ from .lean import (
     SourceLinker,
     bound_names,
     declaration_names,
+    declared_name,
     index_failure_message,
     resolve_lean_root,
     snapshot_project_sources,
@@ -941,6 +942,7 @@ def render_site(
     repository_url: str | None = None,
     ref: str | None = None,
     review: Callable[[], SkeletonReport] | None = None,
+    ileans: str | Path | None = None,
 ) -> RenderReport:
     """Write deterministic, read-only projections of the Markdown blueprint.
 
@@ -961,6 +963,11 @@ def render_site(
     cite, are the blueprint the extraction read. It covers the whole vault,
     folders that are not published included, and each article and passage it
     shows is the one the site publishes.
+
+    With ``ileans``, a Lean build's ``lib/lean`` directory, the names in each
+    statement's Lean link to exactly the constants that build's ``.ilean``
+    files record for them (:meth:`SourceLinker.names`), for each declaration
+    whose name its file's record still places where the captured source has it.
     """
     blueprint = blueprint_root(blueprint_dir)
     requested_destination = Path(output_dir).expanduser()
@@ -1058,6 +1065,7 @@ def render_site(
             spellings=spellings,
             root_prefix=root_prefix,
             sources=dict(lean.source_files),
+            ileans=Path(ileans).expanduser() if ileans is not None else None,
         )
         reviews: dict[str, str] = {}
         review_warnings: list[str] = []
@@ -1101,6 +1109,7 @@ def render_site(
         )
     report.warnings[:0] = recovered
     report.warnings.extend(review_warnings)
+    report.warnings.extend(linker.ilean_warnings())
     authored = {*dict(snapshot.files), *dict(snapshot.omitted)}
     report.warnings.extend(
         f"{path} is not published: the dependency explorer writes its own file there"
@@ -4345,6 +4354,13 @@ _DECLARED = re.compile(r"\s*:(?!=)")
 _SLOT = re.compile(r"(?:[({,]|\bwith)\s*$")
 #: An attribute list still open before a name: ``@[simp, ext``.
 _ATTRIBUTE = re.compile(r"@\[[^\]]*$")
+#: The packages whose modules Mathlib's documentation covers, from its navigation (2026-11-05), and its page for a
+#: constant by full name, an exact lookup.
+_DOCUMENTED = frozenset(
+    {"Aesop", "Archive", "Batteries", "Counterexamples", "ImportGraph", "Init", "Lake", "Lean", "LeanSearchClient",
+     "Mathlib", "Plausible", "ProofWidgets", "Qq", "Std"}
+)
+_MATHLIB_DOCS = "https://leanprover-community.github.io/mathlib4_docs/find/?pattern={}#doc"
 
 
 def _lean_blocks(
@@ -4361,18 +4377,38 @@ def _lean_blocks(
 
     A name in them that the project declares links to the statement that formalizes it, else to its
     source, and the block carries a card for each, hidden, that the book shows on hover.
+
+    With the build's ``.ilean`` file for the declaration's file (:meth:`SourceLinker.names`), a name links
+    exactly the constant Lean resolved it to: a project declaration as above, or a constant of a package
+    Mathlib's documentation covers to its page there, with no card. Any other name stays text: a local, a
+    binder, a ``variable``, a constructor or field being declared, notation, a constant of another package.
+    A project constant the index does not hold, such as a constructor, and every name of a declaration without
+    usable data, is looked up among the project's own declarations (:meth:`SourceLinker.resolve`).
     """
     if node.catalog is not None:
         return []
     blocks: list[str] = []
     named: dict[str, Declaration] = {}
     found = filter(None, map(linker.excerpt, declaration_names(node.lean or "")))
-    for declaration, text in islice(found, _LEAN_BLOCK_NAMES):
+    for declaration, source in islice(found, _LEAN_BLOCK_NAMES):
+        text, indent = source, 0
         if declaration.keyword in ("theorem", "lemma"):
-            text = _header(text, 0)
+            # The header leaves out the first line's indent, which the build's columns count.
+            text, indent = _header(source, 0), len(source) - len(source.lstrip())
         bound = bound_names(text)
+        usages = linker.names(declaration, source)
+        exact = None if usages is None else {at - indent: use for at, use in usages.items() if 0 <= at - indent < len(text)}
 
-        def reference(written: str) -> str | None:
+        def project(target: Declaration, prefix: str, rest: str) -> str:
+            named.setdefault(target.name, target)
+            href = links[formalizing[target.name]] if target.name in formalizing else linker.url(target.name)
+            name, rest = html.escape(target.name, quote=True), _typed(rest)
+            if href is None:
+                return f'<span class="bp-lean-ref" tabindex="0" data-lean-name="{name}">{_typed(prefix)}</span>{rest}'
+            href = html.escape(href, quote=True)
+            return f'<a class="bp-lean-ref" href="{href}" data-lean-name="{name}">{_typed(prefix)}</a>{rest}'
+
+        def looked_up(written: str) -> str | None:
             resolved = None if written.split(".", 1)[0] in bound else linker.resolve(written, declaration)
             # A one-letter name is almost always a variable the file declares, which the index cannot see. The card,
             # the link and the formalizing statement go by name, so a declaration the index files under another of
@@ -4380,13 +4416,12 @@ def _lean_blocks(
             if resolved is None or len(resolved[1]) < 2 or linker.location(resolved[0].name) != resolved[0]:
                 return None
             target, prefix = resolved
-            named.setdefault(target.name, target)
-            href = links[formalizing[target.name]] if target.name in formalizing else linker.url(target.name)
-            name, rest = html.escape(target.name, quote=True), _typed(written[len(prefix) :])
-            if href is None:
-                return f'<span class="bp-lean-ref" tabindex="0" data-lean-name="{name}">{_typed(prefix)}</span>{rest}'
-            href = html.escape(href, quote=True)
-            return f'<a class="bp-lean-ref" href="{href}" data-lean-name="{name}">{_typed(prefix)}</a>{rest}'
+            return project(target, prefix, written[len(prefix) :])
+
+        def reference(written: str, at: int) -> str | None:
+            if exact is None:
+                return looked_up(written)
+            return _exact_reference(written, exact.get(at), declaration, linker, project, looked_up)
 
         code = f'<pre class="bp-lean"><code>{_lean_code(text, reference)}</code></pre>'
         count = text.count("\n") + 1
@@ -4399,6 +4434,45 @@ def _lean_blocks(
     cards = [card for target in named.values() if (card := _lean_card(target, linker))]
     hidden = ['<div class="bp-lean-names" hidden>', *cards, "</div>"] if cards else []
     return ["", '<div class="bp-lean-source" data-search-exclude="1">', *blocks, *hidden, "</div>", ""]
+
+
+def _exact_reference(
+    written: str,
+    found: tuple[int, str, str] | None,
+    within: Declaration,
+    linker: SourceLinker,
+    project: Callable[[Declaration, str, str], str],
+    looked_up: Callable[[str], str | None],
+) -> str | None:
+    """*written*, a name in *within*'s Lean, linked to the constant an ``.ilean`` usage starting at it names
+    (:meth:`SourceLinker.names`), or ``None``. The usage must end at a component's end, so dot notation past a name
+    (``Nat.succ_le.mp``) leaves the rest as text.
+
+    A constant the project declares in the file the usage names links as :func:`_lean_blocks` links a project
+    name, unless it is *within* itself: its own name or a recursive call. A private one is named by its
+    declaration. Another constant of a project file, one the index does not hold, such as a constructor, or files
+    elsewhere, as a public declaration may share a private one's name, is *looked_up* as without the ``.ilean``
+    file. A public constant of a package Mathlib's documentation covers links to its page there, by its full
+    name, which its title shows.
+    """
+    if found is None:
+        return None
+    length, constant, module = found
+    prefix, rest = written[:length], written[length:]
+    if rest[:1] not in ("", "."):
+        return None
+    declared = declared_name(constant)
+    target = linker.declared_in(declared, module)
+    if target is not None:
+        return None if target == within else project(target, prefix, rest)
+    if linker.in_project(module):
+        return looked_up(written)
+    if declared != constant or module.split(".", 1)[0] not in _DOCUMENTED:
+        return None
+    href = _MATHLIB_DOCS.format(quote(constant, safe="."))
+    title = html.escape(constant, quote=True)
+    link = f'<a class="bp-lean-doc" href="{html.escape(href, quote=True)}" title="{title}">{_typed(prefix)}</a>'
+    return link + _typed(rest)
 
 
 def _lean_card(declaration: Declaration, linker: SourceLinker) -> str | None:
@@ -4421,9 +4495,9 @@ def _lean_card(declaration: Declaration, linker: SourceLinker) -> str | None:
     )
 
 
-def _lean_code(text: str, reference: Callable[[str], str | None] = lambda _written: None) -> str:
+def _lean_code(text: str, reference: Callable[[str, int], str | None] = lambda _written, _at: None) -> str:
     """``text``, Lean, as HTML the page's Markdown leaves as typed, its comments, strings and keywords marked,
-    and each name *reference* links linked.
+    and each name *reference* links linked; *reference* gets the name as written and its offset in ``text``.
 
     None of these is a reference: tactics, after ``by`` or ``decreasing_by``, to the end; a name in an attribute
     list; a name before ``:=`` in a field's or a named argument's place (after ``(``, ``{``, ``,`` or ``with``,
@@ -4441,7 +4515,7 @@ def _lean_code(text: str, reference: Callable[[str], str | None] = lambda _writt
             opens_line = not before.strip()
             slot = opens_line and not text[:start].rstrip().endswith(":") or _SLOT.search(before)
             given = slot and _GIVEN.match(text, token.end()) or opens_line and _DECLARED.match(text, token.end())
-            marked = None if tactics or given or _ATTRIBUTE.search(before) else reference(token[0])
+            marked = None if tactics or given or _ATTRIBUTE.search(before) else reference(token[0], token.start())
             if marked is None:
                 continue
         else:
@@ -5350,9 +5424,9 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
 .bp-lean-keyword {{ color: var(--md-code-hl-keyword-color); }}
 .bp-lean-comment {{ color: var(--md-code-hl-comment-color); }}
 .bp-lean-string {{ color: var(--md-code-hl-string-color); }}
-/* A name the project declares: dotted until hovered, so the code still reads as code. */
-.md-typeset .bp-lean-ref {{ color: inherit; text-decoration: underline dotted; text-underline-offset: 0.2em; }}
-.md-typeset .bp-lean-ref:is(:hover, :focus-visible) {{ color: var(--bp-link-hover); text-decoration-style: solid; }}
+/* A linked name in Lean: dotted until hovered, so the code still reads as code. */
+.md-typeset :is(.bp-lean-ref, .bp-lean-doc) {{ color: inherit; text-decoration: underline dotted; text-underline-offset: 0.2em; }}
+.md-typeset :is(.bp-lean-ref, .bp-lean-doc):is(:hover, :focus-visible) {{ color: var(--bp-link-hover); text-decoration-style: solid; }}
 /* A card too wide for the page scrolls, with a shade at each edge it can
    scroll toward: covers in the review panel's color scroll with the content
    and hide the shade at the end it has reached. */

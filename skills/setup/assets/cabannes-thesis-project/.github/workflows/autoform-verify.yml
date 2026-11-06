@@ -168,3 +168,18 @@ jobs:
         run: >-
           uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
           autoform review check blueprint --lean-root .
+
+      # The build's .ilean files say which declaration each name in the Lean
+      # sources means, and Blueprint Pages links the names in each statement's
+      # Lean by them. Last, so only a passing push to main keeps them, and a
+      # failure here fails nothing: the site then links names as before. They
+      # are read from the top-level Lake build, so a Lake project in a
+      # subdirectory, or one with another buildDir, needs this path changed.
+      - name: Keep the build's name references for the site
+        if: github.event_name == 'push'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: autoform-ileans
+          path: .lake/build/lib/lean/**/*.ilean
+          include-hidden-files: true
