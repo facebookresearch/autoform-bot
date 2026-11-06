@@ -791,8 +791,8 @@ def _comment_ranges(value: object, text: str | None, *, context: str) -> tuple[t
 
 
 def _graph_snapshot(graph: Graph) -> tuple[tuple[str, str, str], ...]:
-    """Fingerprint the exact Markdown articles used to choose declarations, and the annotations that carry their
-    facts, as a last row with no node ID."""
+    """Fingerprint the exact Markdown articles used to choose declarations, and every file in ``blueprint/links/``
+    as a last row with no node ID."""
 
     articles = tuple(
         (
@@ -807,7 +807,7 @@ def _graph_snapshot(graph: Graph) -> tuple[tuple[str, str, str], ...]:
 
 def _blueprint_hash(graph: Graph, passages: dict[str, tuple[str | None, str | None, str]]) -> str:
     """Identify the exact, path-independent blueprint snapshot behind a report:
-    every article, the annotations that carry their facts, and the passage each
+    every article, every file in ``blueprint/links/``, and the passage each
     cites or why it has none."""
 
     material = json.dumps(

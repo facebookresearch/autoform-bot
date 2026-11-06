@@ -306,10 +306,10 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                 value, problem = _normalize_value(node.id, 0, key, value)
                 if problem:
                     # Without the line number frontmatter would have, the message says what the key accepts.
-                    links.drops.add(REJECTED, f"{node.id} ({problem.split(': ', 1)[1]})")
+                    links.drops.add(REJECTED, f"{node.id} ({problem.removeprefix(f'{node.id}:0: ')})")
                 else:
                     node.metadata[key] = value
-            if links is not None and facts is None and set(node.metadata) - _SETTINGS:
+            if links is not None and links.sha256 is not None and facts is None and set(node.metadata) - _SETTINGS:
                 reason = "articles with no annotation keep their frontmatter facts; move them into blueprint/links/"
                 links.drops.add(reason, node.id)
             article_id = node.metadata.get("article_id")

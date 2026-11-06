@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -14,7 +14,7 @@ from literature_links import discovery
 from autoform_cli.__main__ import main
 from autoform_cli.annotations import Drops, _annotations, _walk
 from autoform_cli.graph import load_graph
-from autoform_cli.render import load_publication_source
+from autoform_cli.render import _left_out, load_publication_source
 from autoform_cli.runtime import load_runtime_graph
 from autoform_cli.skeleton import blueprint_hash
 
@@ -79,7 +79,7 @@ def _own(name: str, role: str | None = None) -> dict[str, object]:
 
 
 def test_an_article_s_annotations_carry_its_facts(tmp_path: Path) -> None:
-    blueprint = _blueprint(tmp_path, {"lagrange": None, "card": None, "unlinked": None})
+    blueprint = _blueprint(tmp_path, {"lagrange": None, "card": None, "unlinked": None, "inventory": None})
     _links(
         blueprint,
         {
@@ -101,6 +101,15 @@ def test_an_article_s_annotations_carry_its_facts(tmp_path: Path) -> None:
                 _about("card", object=[{**MATHLIB, "uri": MATHLIB["uri"] + ".git/"}]),
             ],
             "unlinked.jsonl": [_about("unlinked", object=[])],
+            # A module catalog's status covers every name it inventories.
+            "inventory.jsonl": [
+                _about(
+                    "inventory",
+                    status="formalized",
+                    object=[_own("Groups.Card.one"), _own("Groups.Card.two")],
+                    extensions={"org.autoform": {"catalog": "module"}},
+                )
+            ],
         },
     )
     graph = load_graph(blueprint)
@@ -123,6 +132,13 @@ def test_an_article_s_annotations_carry_its_facts(tmp_path: Path) -> None:
     assert (card.lean, card.statement_formalized, card.proof_formalized) == ("Groups.card", True, False)
     assert (card.mathlib, card.mathlib_declaration) == (False, "Subgroup.card_subgroup_dvd_card")
     assert (unlinked.lean, unlinked.declaration, unlinked.statement_formalized) == (None, None, False)
+    inventory = graph.nodes["inventory"]
+    assert (inventory.lean, inventory.catalog, inventory.statement_formalized, inventory.proof_formalized) == (
+        "Groups.Card.one, Groups.Card.two",
+        "module",
+        True,
+        True,
+    )
 
 
 @pytest.mark.parametrize(
@@ -178,7 +194,7 @@ def test_an_article_without_an_annotation_keeps_its_frontmatter(tmp_path: Path) 
 
 
 def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path) -> None:
-    blueprint = _blueprint(tmp_path, {stem: None for stem in "abcdefghijklmnopq"})
+    blueprint = _blueprint(tmp_path, {stem: None for stem in "abcdefghijklmnopqrst"})
     mathlib = {"org.autoform": {"mathlib": True}}
     _links(
         blueprint,
@@ -225,6 +241,17 @@ def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path
                 _about(
                     "q", object=[{**MATHLIB, "uri": "https://github.com/ImperialCollegeLondon/FLT"}], extensions=mathlib
                 ),
+                # Stated by Mathlib, or by an end left out, the article credits none of the project's declarations.
+                _about("r", status="formalized", object=[{**MATHLIB, "role": "states"}, _own("R.helper")]),
+                _about("s", status="formalized", object=[_own("S.main\a", "states"), _own("S.helper")]),
+                # The file is the first name's, which gives none.
+                _about(
+                    "t",
+                    object=[
+                        {**MATHLIB, "location": {"declaration": "T.one"}},
+                        {**MATHLIB, "location": {"declaration": "T.two", "module": "Mathlib.T"}},
+                    ],
+                ),
             ]
         },
     )
@@ -239,15 +266,18 @@ def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path
         "a status needs a Lean declaration of this project, so it is left out (1): a",
         "a status needs one Lean declaration with role states, or a single one with no role, so it is left out (2): b, m",
         "status values Autoform does not read are left out (1): c (partial)",
-        "annotation values Autoform does not accept are left out (6): d (not_ready), d (kind), i (extensions), l (kind), "
-        "l (object type) and 1 more",
+        "annotation values Autoform does not accept are left out (7): d (not_ready), d (kind), i (extensions), "
+        "l (kind), l (object type) and 2 more",
         "unknown org.autoform keys are left out (1): d (colour)",
         "settings stay in README frontmatter, so in an annotation they are left out (1): d (published)",
-        "an article's annotations give one key several values, so the first is kept (2): e (kind), p (location.module)",
-        "Lean ends naming a project other than this one or Mathlib are left out (2): f, q",
+        "an article's annotations give one key several values, so the first is kept (1): e (kind)",
+        "Lean ends whose uri is neither this project nor https://github.com/leanprover-community/mathlib4 are left out "
+        "(2): f (F), q (Subgroup.card_subgroup_dvd_card)",
         "catalog is left out beside a kind or a Mathlib link (1): h",
         "Lean ends that name no declaration are left out (1): j",
         "status retracted is left out beside org.autoform mathlib true (1): k",
+        "Mathlib modules other than the first name's are left out (2): p (Mathlib.P), t (Mathlib.T)",
+        "a status is left out when an end with role states is not a declaration of this project (2): r, s",
     )
     assert (graph.nodes["b"].lean, graph.nodes["b"].statement_formalized) == ("B.one, B.two", False)
     assert (graph.nodes["e"].declaration, graph.nodes["h"].catalog, graph.nodes["l"].declaration) == (
@@ -258,6 +288,14 @@ def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path
     assert graph.nodes["n"].statement_formalized and not graph.nodes["m"].statement_formalized
     assert graph.nodes["o"].article_id == ARTICLE_ID
     assert (graph.nodes["q"].mathlib, graph.nodes["q"].mathlib_declaration) == (True, None)
+    assert [(graph.nodes[stem].mathlib_declaration, graph.nodes[stem].mathlib_file) for stem in "pt"] == [
+        ("Subgroup.card_subgroup_dvd_card, P.two", "Mathlib/GroupTheory/Coset/Card.lean"),
+        ("T.one, T.two", None),
+    ]
+    assert [(graph.nodes[stem].lean, graph.nodes[stem].statement_formalized) for stem in "rs"] == [
+        ("R.helper", False),
+        ("S.helper", False),
+    ]
 
 
 def test_a_warning_names_the_first_five_places(tmp_path: Path) -> None:
@@ -267,6 +305,34 @@ def test_a_warning_names_the_first_five_places(tmp_path: Path) -> None:
     assert load_graph(blueprint).warnings == (
         "annotations about no roadmap article are left out (7): links/gone.jsonl:1, links/gone.jsonl:2, "
         "links/gone.jsonl:3, links/gone.jsonl:4, links/gone.jsonl:5 and 2 more",
+    )
+
+
+def test_an_annotation_about_part_of_an_article_is_about_no_article(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path, {"result": None})
+    # A fragment or a query names a part of the page, and a backslash separates folders on Windows alone.
+    uris = ["../roadmap/result.md#proof", "../roadmap/result.md?view=1", "..\\roadmap\\result.md"]
+    rows = [{"subject": [{"type": "generic", "uri": uri}], "kind": "lemma"} for uri in uris]
+    _links(blueprint, {"parts.jsonl": rows})
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["result"].declaration is None
+    assert graph.warnings == (
+        "annotations about no roadmap article are left out (3): links/parts.jsonl:1, links/parts.jsonl:2, "
+        "links/parts.jsonl:3",
+    )
+
+
+def test_warnings_name_places_in_one_order_on_every_disk(tmp_path: Path) -> None:
+    blueprint = _blueprint(tmp_path, {"result": None})
+    folder = _links(blueprint, {}, defaults=None)
+    for name in "bca":  # made out of order, as a disk may list them
+        (folder / name).mkdir()
+        (folder / name / "_defaults.json").write_text("[]", encoding="utf-8")
+
+    assert load_graph(blueprint).warnings == (
+        "defaults files that do not hold one JSON object are left out (3): links/a/_defaults.json, "
+        "links/b/_defaults.json, links/c/_defaults.json",
     )
 
 
@@ -350,7 +416,8 @@ def test_a_defaults_file_that_cannot_be_used_leaves_out_the_annotations_below_it
 
 @pytest.mark.parametrize("spelling", ["Links", "links-file"])
 def test_a_folder_that_is_not_links_is_read_nowhere(tmp_path: Path, spelling: str, capsys) -> None:
-    blueprint = _blueprint(tmp_path, {"result": None})
+    blueprint = _blueprint(tmp_path, {"result": None, "old": "declaration: theorem"})
+    revision = load_runtime_graph(blueprint).source_revision
     if spelling == "Links":
         _links(blueprint, {"result.jsonl": [_about("result", kind="lemma")]})
         (blueprint / "links").rename(blueprint / "Links")
@@ -360,7 +427,9 @@ def test_a_folder_that_is_not_links_is_read_nowhere(tmp_path: Path, spelling: st
         warning = "blueprint/links is not a folder, so no annotation is read (1): links"
     graph = load_graph(blueprint)
 
+    # Nothing is read, so nothing else changes: no article is told to move its facts, and no revision moves.
     assert (graph.nodes["result"].declaration, graph.warnings) == (None, (warning,))
+    assert (graph.links_sha256, load_runtime_graph(blueprint).source_revision) == (None, revision)
     if spelling == "Links":
         assert main(["render", str(blueprint), "--output", str(tmp_path / "site")]) == 0
         assert not [
@@ -379,31 +448,49 @@ def test_a_file_that_is_not_utf_8_is_left_out(tmp_path: Path) -> None:
 
 def test_check_adds_literature_links_validation_and_keeps_its_exit_status(tmp_path: Path, capsys) -> None:
     blueprint = _blueprint(tmp_path, {"result": None})
-    _links(blueprint, {"result.jsonl": [_about("result", kind="lemma", colour="red")]})
+    _links(blueprint, {"result.jsonl": [_about("result", kind="lemma", colour="red"), "not json"]})
+    left_out = "annotations that are not JSON are left out (1): links/result.jsonl:2"
 
     assert main(["check", str(blueprint)]) == 0
+    printed = capsys.readouterr().out.splitlines()
     assert (
         "warning: literature-links: is not an allowed key here (with defaults from links/_defaults.json) (1): "
         "links/result.jsonl:1 $.colour"
-    ) in capsys.readouterr().out.splitlines()
+    ) in printed
+    # What loading already warns about, check does not say again.
+    assert [line for line in printed if "result.jsonl:2" in line] == [
+        line for line in printed if line.startswith(f"warning: {left_out}")
+    ]
     graph = load_graph(blueprint)
-    assert (graph.nodes["result"].declaration, graph.warnings) == ("lemma", ())
+    assert graph.nodes["result"].declaration == "lemma"
+    assert [warning.split(" (not JSON")[0] for warning in graph.warnings] == [left_out]
 
 
 def test_render_reads_the_annotations_and_never_publishes_them(tmp_path: Path, capsys) -> None:
     blueprint = _blueprint(tmp_path, {"result": None, "drafts/README": "published: false", "drafts/idea": None})
-    _links(
+    both = [*_about("result")["subject"], *_about("drafts/idea")["subject"]]
+    folder = _links(
         blueprint,
         {
             "result.jsonl": [_about("result", kind="theorem")],
-            "drafts.jsonl": [_about("drafts/idea", kind="lemma")],
+            # About two articles, one unpublished: left out by render's copy too, which lacks that one.
+            "drafts.jsonl": [_about("drafts/idea", kind="lemma"), {"subject": both, "kind": "definition"}],
         },
     )
+    (folder / "notes.md").write_text("# Notes\n", encoding="utf-8")
+    page = blueprint / "roadmap" / "result.md"
+    text = page.read_text(encoding="utf-8").replace("statement.", "statement. See [the notes](../links/notes.md).")
+    page.write_text(text, encoding="utf-8")
 
     assert main(["render", str(blueprint), "--output", str(tmp_path / "site")]) == 0
     assert "links/" not in capsys.readouterr().out
     assert not (tmp_path / "site" / "links").exists()
     assert not list((tmp_path / "site").rglob("*.jsonl"))
+    # A link into the folder keeps only its text, as a link to any file the site leaves out does.
+    published = "".join(path.read_text(encoding="utf-8") for path in (tmp_path / "site").rglob("*.md"))
+    assert "the notes" in published and "notes.md" not in published
+    # Nor can a review cite a passage from there.
+    assert _left_out(PurePosixPath("links/notes.md"), ())
     revision, graph = load_publication_source(blueprint)
     assert graph.nodes["result"].declaration == "theorem"
     assert "drafts/idea" not in graph.nodes
@@ -416,9 +503,12 @@ def test_revisions_cover_the_annotations(tmp_path: Path) -> None:
     linked = load_runtime_graph(blueprint).source_revision, blueprint_hash(load_graph(blueprint))
     (folder / "result.jsonl").write_text(json.dumps(_about("result", kind="theorem")) + "\n", encoding="utf-8")
     edited = load_runtime_graph(blueprint).source_revision, blueprint_hash(load_graph(blueprint))
+    # A defaults file that cannot be used changes what loads below it, though no byte read changes.
+    (folder / "nested" / "_defaults.json").mkdir(parents=True)
+    unusable = load_runtime_graph(blueprint).source_revision, blueprint_hash(load_graph(blueprint))
 
-    assert len({before[0], linked[0], edited[0]}) == 3
-    assert len({before[1], linked[1], edited[1]}) == 3
+    assert len({before[0], linked[0], edited[0], unusable[0]}) == 4
+    assert len({before[1], linked[1], edited[1], unusable[1]}) == 4
 
 
 @pytest.mark.parametrize("assigned", [False, True], ids=["an-id-to-write", "none-to-write"])

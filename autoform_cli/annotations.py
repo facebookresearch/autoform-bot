@@ -82,8 +82,8 @@ class Links:
     facts: dict[Path, dict[str, str]]
     #: What was left out, which the graph adds to.
     drops: Drops
-    #: A digest of every file in the folder, for the revisions built on the graph.
-    sha256: str
+    #: A digest of every file in the folder, for the revisions built on the graph; None when no folder is read.
+    sha256: str | None
 
 
 def links_exist(blueprint: Path) -> bool:
@@ -113,30 +113,35 @@ def read_links(blueprint: Path, articles: dict[Path, str]) -> Links | None:
             f"a folder spelled other than {LINKS_DIR} is not read; rename it (in Git: git mv through a temporary name)",
             spellings[0],
         )
-        return Links({}, drops, hashlib.sha256(b"").hexdigest())
+        return Links({}, drops, None)
     if os.path.islink(folder) or not folder.is_dir():
         drops.add(f"blueprint/{LINKS_DIR} is not a folder, so no annotation is read", LINKS_DIR)
-        return Links({}, drops, hashlib.sha256(b"").hexdigest())
+        return Links({}, drops, None)
     contents, broken = _walk(folder, drops)
     digest = hashlib.sha256(b"autoform-links/v1\0")
-    for relative, data in sorted(contents.items()):
+    # A defaults file that cannot be used changes facts with no byte read, so its folder counts, marked by a NUL no
+    # path holds.
+    for relative, data in [*sorted(contents.items()), *((f"\0{parent}", b"") for parent in sorted(broken))]:
         for part in (relative.encode("utf-8", "surrogateescape"), data):
             digest.update(len(part).to_bytes(8, "big"))
             digest.update(part)
 
     # Paths are compared as strings, which on a large wiki is much faster than as Path objects.
     project = os.path.normpath(blueprint.parent)
+    roadmap = os.path.join(os.path.normpath(blueprint), "roadmap", "")
     spelled = {str(path): path for path in articles}
     grouped: dict[Path, list[tuple[dict[str, Any], str]]] = {}
     for annotation, place, base in _annotations(folder, contents, broken, drops):
         subjects = annotation.get("subject")
         ends = subjects if isinstance(subjects, list) else []
         targets = {_local(end.get("uri"), base) for end in ends if isinstance(end, dict)} - {None}
-        hits = [spelled[target] for target in targets if target in spelled]
-        if len(hits) == 1:
-            grouped.setdefault(hits[0], []).append((annotation, base))
+        # Counted by path, not among the articles loaded, so a copy without the unpublished ones reads alike.
+        pages = [target for target in targets if target.startswith(roadmap) and target.endswith(".md")]
+        if len(pages) == 1 and pages[0] in spelled:
+            grouped.setdefault(spelled[pages[0]], []).append((annotation, base))
         else:
-            drops.add(f"annotations about {'several articles' if hits else 'no roadmap article'} are left out", place)
+            about = "several articles" if pages[1:] else "no roadmap article"
+            drops.add(f"annotations about {about} are left out", place)
     facts = {
         path: _facts(articles[path], entries, project, drops)
         for path, entries in sorted(grouped.items(), key=lambda item: articles[item[0]])
@@ -153,8 +158,8 @@ def scan(blueprint: Path) -> list[str]:
 
     problems = Drops()
     for problem in discovery.collect([folder], root=folder, exclude=["**/.*"]).problems:
-        # A folder of defaults alone holds no annotation yet, which is no problem here.
-        if problem.code != "NO_ANNOTATIONS":
+        # Loading already warns about what it cannot read, and a folder of defaults alone is no problem here.
+        if problem.code not in {"IO", "JSON", "PATH", "SHAPE", "SYMLINK", "DEFAULTS", "NO_ANNOTATIONS"}:
             problems.add(f"literature-links: {_relative(problem.message, folder)}", _relative(problem.path, folder))
     return problems.warnings()
 
@@ -178,11 +183,12 @@ def _walk(folder: Path, drops: Drops) -> tuple[dict[str, bytes], set[str]]:
         directory = pending.pop()
         try:
             with os.scandir(directory) as entries:
-                children = list(entries)
+                children = sorted(entries, key=lambda entry: entry.name)
         except OSError as error:
             where = f"{LINKS_DIR}/{directory[top:]}".replace(os.sep, "/")
             drops.add("folders in blueprint/links/ that cannot be listed are left out", f"{where} ({error.strerror})")
             continue
+        folders = []
         for entry in children:
             if entry.name.startswith("."):
                 continue
@@ -195,7 +201,7 @@ def _walk(folder: Path, drops: Drops) -> tuple[dict[str, bytes], set[str]]:
                 if entry.is_symlink():
                     drops.add("symbolic links in blueprint/links/ are not followed", place)
                 elif entry.is_dir(follow_symlinks=False):
-                    pending.append(entry.path)
+                    folders.append(entry.path)
                 elif regular:
                     with open(entry.path, "rb") as handle:
                         contents[relative] = handle.read()
@@ -205,6 +211,7 @@ def _walk(folder: Path, drops: Drops) -> tuple[dict[str, bytes], set[str]]:
                 if entry.name == _DEFAULTS:
                     broken.add(directory[top:].replace(os.sep, "/"))
                 drops.add("files in blueprint/links/ that cannot be read are left out", f"{place} ({error.strerror})")
+        pending.extend(reversed(folders))  # by name, so every disk gives the warnings in one order
     return contents, broken
 
 
@@ -289,16 +296,18 @@ def _annotations(
 
 
 def _local(uri: Any, base: str) -> str | None:
-    """The path a relative reference names from the folder *base*, percent-decoded; None for any other value."""
+    """The path a relative reference names from the folder *base*, percent-decoded; None for any other value, such as
+    a part of a file (a query or fragment) or a path a backslash separates only on Windows."""
     if not isinstance(uri, str) or not uri:
         return None
     try:
         split = urlsplit(uri)
     except ValueError:
         return None
-    if split.scheme or split.netloc or not split.path:
+    path = unquote(split.path)
+    if split.scheme or split.netloc or split.query or split.fragment or not path or "\\" in path:
         return None
-    return os.path.normpath(os.path.join(base, unquote(split.path)))
+    return os.path.normpath(os.path.join(base, path))
 
 
 def _facts(node_id: str, entries: list[tuple[dict[str, Any], str]], project: str, drops: Drops) -> dict[str, str]:
@@ -306,6 +315,7 @@ def _facts(node_id: str, entries: list[tuple[dict[str, Any], str]], project: str
     facts: dict[str, str] = {}
     own: list[tuple[str, Any]] = []
     mathlib_names: list[str] = []
+    stated_elsewhere = False
 
     def text(value: Any, field: str, *, flag: bool = False, number: bool = False) -> str | None:
         # As frontmatter could hold it: a flag is a JSON boolean, and nothing breaks a line.
@@ -358,36 +368,43 @@ def _facts(node_id: str, entries: list[tuple[dict[str, Any], str]], project: str
             if name is None:
                 drops.add("Lean ends that name no declaration are left out", node_id)
             elif text(name, "location.declaration") is None:
-                continue
+                pass  # left out, with a warning
             elif _local(end.get("uri"), base) == project:
                 own.append((name, end.get("role")))
+                continue
             elif isinstance(end.get("uri"), str) and end["uri"].removesuffix("/").removesuffix(".git") == MATHLIB:
                 mathlib_names.append(name)
                 module = location.get("module")
                 if module is not None and (written := text(module, "location.module")):
                     # Frontmatter holds one file, the first name's.
                     path = written.replace(".", "/") + ".lean"
-                    if facts.setdefault("mathlib_file", path) != path:
-                        drops.add(_SEVERAL, f"{node_id} (location.module)")
+                    if name == mathlib_names[0]:
+                        if facts.setdefault("mathlib_file", path) != path:
+                            drops.add(_SEVERAL, f"{node_id} (location.module)")
+                    elif facts.get("mathlib_file") != path:
+                        drops.add("Mathlib modules other than the first name's are left out", f"{node_id} ({written})")
             else:
-                drops.add(
-                    "Lean ends naming a project other than this one or Mathlib are left out",
-                    node_id,
-                )
+                reason = f"Lean ends whose uri is neither this project nor {MATHLIB} are left out"
+                drops.add(reason, f"{node_id} ({name})")
+            # The article is stated outside the project's declarations, so none of them takes the credit.
+            stated_elsewhere = stated_elsewhere or end.get("role") == "states"
 
     # The declaration that states the article takes its credit: the one with role "states", or the article's only
-    # one, with no role. Never the first by position (#601).
+    # one, with no role. Never the first by position (#601). A module catalog's status covers all it inventories.
     names = list(dict.fromkeys(name for name, _role in own))
     states = list(dict.fromkeys(name for name, role in own if role == "states"))
-    credited = len(states) == 1 or (len(names) == 1 and all(role is None for _name, role in own))
     if names:
         facts["lean"] = ", ".join(dict.fromkeys([*(states if len(states) == 1 else []), *names]))
     if mathlib_names:
         facts["mathlib_declaration"] = ", ".join(dict.fromkeys(mathlib_names))
+    inventory = facts.get("catalog", "").casefold() == "module" and not _DECLARATION_KEYS & facts.keys()
+    credited = inventory or len(states) == 1 or (len(names) == 1 and all(role is None for _name, role in own))
     status = facts.pop("status", None)
     if status in _STATUSES:
         if not declaration_names(facts.get("lean", "")):
             drops.add("a status needs a Lean declaration of this project, so it is left out", node_id)
+        elif stated_elsewhere:
+            drops.add("a status is left out when an end with role states is not a declaration of this project", node_id)
         elif not credited:
             reason = (
                 "a status needs one Lean declaration with role states, or a single one with no role, so it is left out"

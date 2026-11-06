@@ -18,10 +18,10 @@ arbitrary containment hierarchy. A node is dispatchable only when it is both a
 formalizable article and a leaf; narrative containers and prose-only leaves are
 never proof work units, and module inventories are non-formalizable,
 non-dispatchable source records. The source revision hashes exact roadmap
-article paths and bytes, and the annotations in ``blueprint/links/`` that carry
-their facts, excluding timestamps, absolute paths, Git state, and operational
-state. Optional Lean locations come from a local lexical scan and
-do not by themselves establish compilation or proof correctness.
+article paths and bytes, and every file in ``blueprint/links/``, excluding
+timestamps, absolute paths, Git state, and operational state. Optional Lean
+locations come from a local lexical scan and do not by themselves establish
+compilation or proof correctness.
 
 Projection fails when an article's bytes no longer match the digest recorded
 when the graph was loaded, so a source revision never labels node data parsed

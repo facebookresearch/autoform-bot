@@ -614,6 +614,7 @@ def _publication(
         if _relative(source, blueprint).as_posix() not in written_over
         and (
             _relative(source, blueprint).parts[:1] == (READBACKS_DIR,)
+            or _relative(source, blueprint).parts[0].casefold() == LINKS_DIR
             or source.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
             or (source.suffix.lower() in PAGE_SUFFIXES and not _is_utf8(snapshot[source]))
         )
@@ -4000,13 +4001,14 @@ def _folded(name: str) -> str:
 def _left_out(cited: PurePosixPath, written_over: Collection[str]) -> bool:
     """Whether the site leaves out the captured file at ``cited``, a path in
     the blueprint as captured, as :func:`_publication` does: a file under
-    ``readbacks/``, the atlas, a file render writes its own over (one of
+    ``readbacks/`` or ``links/``, the atlas, a file render writes its own over (one of
     ``written_over``, the :func:`_site_paths`), or one that is neither a page
     nor a file the site copies. Notes under ``sources/`` count as published,
     on the site or at the verified commit."""
 
     return (
         cited.parts[:1] == (READBACKS_DIR,)
+        or cited.parts[0].casefold() == LINKS_DIR
         or cited.as_posix().casefold() == "atlas.json"
         or cited.as_posix() in written_over
         or cited.suffix.lower() not in (*PAGE_SUFFIXES, *_STATIC_SUFFIXES)
