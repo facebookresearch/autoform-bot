@@ -126,6 +126,16 @@ date when the release is tagged.
 - **The landing's coverage line** leads with the source areas split into
   statements: "5 source areas, all split into statements", or "3 of 5 source
   areas split into statements" before the other dispositions.
+- **Search warns about a library it cannot verify.** `search --library` leaves
+  out a library it cannot verify, with a `warning: library NAME:` line on
+  standard error and, in `--json`, an entry under the new `refused` key, and
+  still prints the blueprint's hits and the other libraries'. It exited 2 and
+  printed nothing (#325).
+- **Library index check.** `library index --check` counts an index as current
+  when only the Autoform version that wrote it differs, so a new release no
+  longer turns a publishing library's check red. An index another probe
+  revision made is stale, said without running Lean, and a stale index names
+  the records generation gives otherwise.
 - **Vault pages on Windows.** `autoform-visualize` writes the dependency
   summary and structure pages with LF line endings on Windows too, as on every
   other system, so a vault regenerated on both no longer flips them.
@@ -526,6 +536,18 @@ parse, with or without `--json`, and changes nothing else.
 
 ### Fixed
 
+- **Library index guarantees.** `library index` and `--check` refuse a
+  toolchain the probe is not verified on before `lake translate-config` reads a
+  `lakefile.lean`, and refuse a source file with a dot in its path, or two files
+  that map to one module, which failed at the probe or dropped a file. Search
+  leaves out, with a warning, a library whose index names a module other than
+  the one its `source_file` holds, or a declaration whose name is not a Lean
+  name, such as one holding a newline. `--check` reads the index as search does,
+  so on POSIX a symbolic link, named pipe or directory there is stale rather
+  than followed or waited on, and a root under an unknown `~user` exits 2 rather
+  than 1 with a traceback. A refusal names a stale index before a merged or
+  edited one, the missing-manifest refusal no longer suggests `lake update`, and
+  the note naming an unsearched library quotes the flags it suggests.
 - **Reference links on chapters with a `<` in the title.** A `<` in a
   chapter's title alone left reference-style links in its prose shown as typed
   (#631).
