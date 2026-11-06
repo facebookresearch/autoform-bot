@@ -70,9 +70,8 @@ Judge the mathematical plan, not the Lean proof quality.
   judge it by reconciliation instead: its `lean:` names resolve, it links its
   ledger under `blueprint/sources/`, and an `INVENTORIED` row reaches it. The
   pull-request-unit and unique-main-result rules do not apply to it.
-- Every dependency is genuinely used. Missing intermediates, spurious edges,
-  duplicates, missed library reuse, and cross-milestone prerequisites are
-  identified.
+- Every dependency is used. Missing intermediates, spurious edges, duplicates,
+  missed library reuse, and cross-milestone prerequisites are identified.
 - `## Depends on` contains statement prerequisites; `## Proof depends on`
   contains dependencies needed only by the proof.
 - An article whose result a library proves lists only the articles that proof
@@ -88,8 +87,9 @@ Judge the mathematical plan, not the Lean proof quality.
 - Frontmatter asserts only verified facts. Readiness and completion remain
   derived from the DAG.
 - Uncertainty, Mathlib candidates, and unresolved source questions are explicit.
-  Articles hold only frontmatter and informal mathematics, so Mathlib candidates
-  and other Lean-side findings are in the article's implementation note.
+  Articles hold only frontmatter and informal mathematics, plus, in a vault
+  about a library, how it states each result, so Mathlib candidates and other
+  Lean-side findings are in the article's implementation note.
 
 ## Scores and verdict
 

@@ -131,17 +131,17 @@ acyclic. After creating pages, run `autoform migrate article-ids blueprint
 
 ### Articles and implementation notes
 
-Articles hold only frontmatter and informal mathematics. Put Lean-side findings
-such as Mathlib gaps, prior art, and candidate declaration names in
-`blueprint/.implementation-notes/<article_id>.md`, never a transcript, a secret,
-or a machine-local path, and never link a note from an article; a shared library
-declaration that does not apply is recorded on the source's page instead. The
-[note rules](../../autoform_cli/reference/blueprint-format.md) say when a
-note is stale and how to repair an orphan. Move an article by moving its file; a
-page written afresh takes the old page's `article_id` line in the same edit. A
-commit that deletes or merges an article moves what is still useful from its
-note into a surviving article's note and deletes the note. Read and write no
-note while `check` warns `.implementation-notes` is a link.
+Articles hold only frontmatter and informal mathematics, plus, in a vault about
+a library, how that library states each result, in English and TeX. Put
+Lean-side findings such as Mathlib gaps, prior art, and candidate declaration
+names in `blueprint/.implementation-notes/<article_id>.md`, never a transcript,
+a secret, or a machine-local path, and never link a note from an article; a
+shared library declaration that does not apply is recorded on the source's page
+instead. Move an article by moving its file; a page written afresh takes the old
+page's `article_id` line in the same edit. A commit that deletes or merges an
+article moves what is still useful from its note into a surviving article's note
+and deletes the note. Read and write no note while `check` warns
+`.implementation-notes` is a link.
 
 ### Claims and revisions
 
