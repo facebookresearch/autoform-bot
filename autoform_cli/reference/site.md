@@ -1,7 +1,7 @@
 # The published site
 
 What `render` publishes, and how the site is served, deployed and checked. The
-[CLI reference](../README.md#publishing) gives the commands.
+[CLI reference](../README.md#publishing-and-the-dashboard) gives the commands.
 
 ## Rendered pages
 
@@ -95,7 +95,7 @@ its edge, so write one that wide as a display, which scrolls.
 
 ## Dashboard
 
-Only `autoform dashboard` exposes a read-only live overlay of
+Only the loopback server exposes the dashboard's read-only live overlay of
 current author claims, at `/__autoform/live.json`. The overlay matches claims on
 an article's node ID or its `article_id`, reports the `claim_target` each lease
 used, and is never written into the vault, publication manifest, or public site.

@@ -19,7 +19,7 @@ rest; skills link to both, and every invocation in all three is parse-checked.
 Commands are written as they appear on `PATH` with this package installed; in a
 consumer project, where it is not, run each from the project root with the
 prefix `uv run --project "<AUTOFORM_PLUGIN_ROOT>"`, the root resolved from the
-loaded plugin, as [Publishing](#publishing) shows.
+loaded plugin, as [Publishing](#publishing-and-the-dashboard) shows.
 
 `autoform --version` prints the installed version, followed by the plugin
 checkout's commit when it runs from one, as in `autoform 0.6.0 (745a88599469)`.
@@ -70,7 +70,7 @@ that protect it, and `--remove MANIFEST` removes the unprotected ones after
 checking each again ([Project setup](reference/project-setup.md#project-worktrees)).
 Exit 1: no checkout, bad manifest, or a refusal.
 
-### Publishing
+### Publishing and the dashboard
 
 Publishing a project runs four steps in order:
 
@@ -86,10 +86,10 @@ uv run --with mkdocs --with mkdocs-material --with mkdocs-literate-nav \
 Drop `--require-declarations` when reviewing work in progress, where a
 statement may name a Lean declaration that does not exist yet.
 
-`python3 -m http.server --bind 127.0.0.1 --directory site 8000` then serves the
-built site on loopback until you stop it. The generated `blueprint-pages.yml`
-deploys only a commit that `autoform-verify.yml` passed on a push to `main` (see
-[the published site](reference/site.md)).
+`autoform dashboard . --site-dir site` then serves the built site on `127.0.0.1`
+until you stop it, with a read-only live overlay of current author claims. The
+generated `blueprint-pages.yml` deploys only a commit that `autoform-verify.yml`
+passed on a push to `main` (see [the published site](reference/site.md)).
 
 ### check
 
@@ -338,7 +338,6 @@ would have made it cheaper, and keep its answer:
 autoform debrief subagent form af_5b0e4d3c2a1f09e8d7c6b5a4 . --phase proof
 autoform debrief subagent record af_5b0e4d3c2a1f09e8d7c6b5a4 . --phase proof \
   --worker-id agent-name < /tmp/answer.json
-autoform debrief subagent render .
 ```
 
 Orchestrator debriefs are on unless `AUTOFORM_DEBRIEF` turns them off; subagent

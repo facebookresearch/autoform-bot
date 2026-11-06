@@ -496,11 +496,10 @@ parse, with or without `--json`, and changes nothing else.
   `lean_targets[].source_file` stays in `autoform-work/v2`, always null;
   `search --lean-root` prints a Lean name's file and line. Removed in 0.8.0
   (#647).
-- **`autoform dashboard`.** Serve a built site on loopback instead, for example
-  with `python3 -m http.server --bind 127.0.0.1 --directory site 8000`; the live
-  claim overlay and its `autoform-live/v1` payload go with the command. The Human
-  Review skill and the serve line `autoform-visualize` writes into
-  `dependencies.md` now use such a server. Removed in 0.8.0 (#669).
+- **The dashboard's live claim overlay.** `autoform dashboard` keeps serving a
+  built site on loopback, with its Host and Origin checks; its read-only overlay
+  of author claims, the `autoform-live/v1` payload and the `--repo` and
+  `--scratch` flags that feed it go. Removed in 0.8.0 (#669).
 - **`autoform debrief subagent render`.** Nothing replaces it; the records stay
   JSON under `records/` in the debrief store. Removed in 0.8.0 (#669).
 

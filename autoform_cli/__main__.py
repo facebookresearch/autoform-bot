@@ -177,7 +177,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     dashboard = subparsers.add_parser(
         "dashboard",
-        help="deprecated: serve the built publication with a loopback-only live claim overlay",
+        help="serve the built publication with a loopback-only live claim overlay",
     )
     dashboard.add_argument(
         "target",
@@ -186,8 +186,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="project root or blueprint directory (default: current directory)",
     )
     dashboard.add_argument("--site-dir", default="site", help="built MkDocs site directory")
-    dashboard.add_argument("--repo", help="claim-board Git repository; defaults to project origin")
-    dashboard.add_argument("--scratch", type=Path, help="local bare Git object cache")
+    dashboard.add_argument("--repo", help="deprecated: claim-board Git repository; defaults to project origin")
+    dashboard.add_argument("--scratch", type=Path, help="deprecated: local bare Git object cache")
     dashboard.add_argument("--host", default="127.0.0.1", help="loopback host")
     dashboard.add_argument(
         "--port",
@@ -1056,10 +1056,9 @@ def _doctor(args: argparse.Namespace) -> int:
 
 def _dashboard(args: argparse.Namespace) -> int:
     _warn_deprecated(
-        "autoform dashboard",
+        "autoform dashboard's live claim overlay",
         "0.8.0",
-        "serve the built site on loopback instead, for example with python3 -m http.server --bind 127.0.0.1 "
-        "--directory site 8000, which has no live claim overlay",
+        "the dashboard keeps serving the built site on loopback, without --repo and --scratch",
     )
     try:
         paths = resolve_runtime_paths(args.target)
