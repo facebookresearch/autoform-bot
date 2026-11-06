@@ -88,8 +88,8 @@ Judge the mathematical plan, not the Lean proof quality.
   derived from the DAG.
 - Uncertainty, Mathlib candidates, and unresolved source questions are explicit.
   Articles hold only frontmatter and informal mathematics, plus, in a vault
-  about a library, how it states each result, so Mathlib candidates and other
-  Lean-side findings are in the article's implementation note.
+  about a library, how the library states and proves each result in English and
+  TeX, so Lean-side findings are in the article's implementation note.
 
 ## Scores and verdict
 
