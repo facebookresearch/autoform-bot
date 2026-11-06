@@ -141,18 +141,6 @@ audit trusts whatever toolchain `lean-toolchain` names: elan, installed with
 how to activate owner rules for the policy and `.github/`. Owner rules put
 changes in front of an owner; they do not stop project code on the CI runner.
 
-A project scaffolded before open statements existed pins `AUTOFORM_REF` to an
-Autoform without `work assumptions`, and its workflow runs only the strict
-audit. Before opting in, move the pin to a commit that has it and replace
-`.github/workflows/autoform-verify.yml` and `.github/autoform_audit.py` together
-with what `autoform init` writes there; the new probe refuses an older
-workflow's `lake env lean`. With an older pin an opted-in project fails closed:
-`autoform check` stops with `unsupported frontmatter key 'open_statements'`.
-Under the strict policy the step tolerates argparse's `invalid choice:
-'assumptions'`, warning that `AUTOFORM_REF` predates `autoform work assumptions`
-and running the strict audit without the `lean:` name check; any other failure,
-such as a failed fetch, fails the step.
-
 To reproduce the CI audit locally after a build, with `ROOT_PACKAGE` the Lake
 package name the workflow reads from `lake translate-config toml`, and
 `--targets` in place of `--open-statements` under the strict policy:
