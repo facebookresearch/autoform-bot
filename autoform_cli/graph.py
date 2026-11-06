@@ -501,10 +501,11 @@ def unpublished_content(files: tuple[tuple[str, bytes], ...]) -> tuple[str, ...]
     """The folders captured *files* mark ``published: false``, below
     ``roadmap/`` or ``sources/``.
 
-    For render, which leaves those folders out before it loads the graph. A
-    roadmap README that cannot be read here fails ``load_graph`` too; the
-    graph has no source notes, so only render reads the setting below
-    ``sources/``.
+    For render, which leaves those folders out before it loads the graph, and
+    check's site warnings, which capture the same way. A roadmap README that
+    cannot be read here fails ``load_graph`` too; the graph has no source
+    notes, so it never reads the setting below ``sources/``, and
+    :func:`unpublished_setting_issues` says when it does not take effect there.
     """
     folders = []
     for name, data in files:
@@ -517,6 +518,30 @@ def unpublished_content(files: tuple[tuple[str, bytes], ...]) -> tuple[str, ...]
             if metadata.get("published") in _FALSE:
                 folders.append(name.removesuffix("/README.md"))
     return tuple(folders)
+
+
+def unpublished_setting_issues(files: Sequence[tuple[str, bytes]]) -> list[str]:
+    """Why each README below ``sources/`` that tries to set ``published`` does
+    not, so its folder is published. Check's graph reads no source note, so
+    nothing else reports a typo there, which would publish a folder meant to
+    stay off the site."""
+
+    issues = []
+    for name, data in files:
+        parts = name.split("/")
+        if len(parts) <= 2 or parts[0] != "sources" or parts[-1] != "README.md":
+            continue
+        try:
+            lines = data.decode("utf-8").splitlines()
+        except UnicodeError:
+            continue
+        if not any(re.match(r"\s*published\s*:", line) for line in lines):
+            continue
+        metadata, _end, found = _parse_frontmatter(name, lines)
+        if "published" not in metadata:
+            reasons = [issue for issue in found if "published" in issue] or [issue for issue in found if "frontmatter" in issue]
+            issues.append(reasons[0] if reasons else f"{name}: sets published outside its frontmatter")
+    return issues
 
 
 def unpublished_node_ids(files: tuple[tuple[str, bytes], ...], folders: tuple[str, ...]) -> frozenset[str]:
@@ -1363,5 +1388,6 @@ __all__ = [
     "load_graph",
     "pinned_list_omissions",
     "unpublished_content",
+    "unpublished_setting_issues",
     "unpublished_node_ids",
 ]

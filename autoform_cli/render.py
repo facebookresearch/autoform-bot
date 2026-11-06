@@ -93,6 +93,7 @@ from .graph import (
     pinned_list_omissions,
     unpublished_content,
     unpublished_node_ids,
+    unpublished_setting_issues,
 )
 from .graph_views import (
     _containers,
@@ -140,11 +141,13 @@ from .markdown import (
     frontmatter_end,
     mask_fences_and_comments,
     header_title,
+    link_definitions,
     link_targets,
     name_text,
     only_links,
     page_title,
     published_page,
+    reference_images,
     relative_link,
     render_tree,
     rendered_visible_text,
@@ -782,6 +785,10 @@ def _publication(
                 "save it as an image (PNG, JPEG, GIF, WebP), a PDF or plain text, "
                 "or keep it outside blueprint/"
             )
+    warnings.extend(
+        f"{issue}, so the site publishes the folder"
+        for issue in unpublished_setting_issues([(_relative(source, blueprint).as_posix(), data) for source, data in snapshot.items()])
+    )
     if blueprint / TEX_MACROS not in snapshot and any(
         _is_within(source, blueprint / TEX_MACROS) for source in snapshot
     ):
@@ -963,8 +970,13 @@ def render_site(
     relative = blueprint.relative_to(top_level) if _is_within(blueprint, top_level) else Path("blueprint")
     with _private_copy(snapshot, relative) as (copy_root, copy), resolving_once():
         graph = _load_graph(copy, blueprint)
-        # Evidence in an unpublished folder is named as such, not as a missing file.
-        coverage, coverage_issues = load_coverage(copy, unpublished=_unpublished_folders(snapshot, copy))
+        # Evidence in an unpublished folder below roadmap/ stops render, named as
+        # such, as audit reports it; below sources/ it keeps its text, as any link does.
+        omitted = _unpublished_folders(snapshot, copy)
+        below_sources = tuple(folder for folder in omitted if _relative(folder, copy).parts[:1] == (SOURCES_DIR,))
+        coverage, coverage_issues = load_coverage(
+            copy, unpublished=tuple(folder for folder in omitted if folder not in below_sources), accepted=below_sources
+        )
         if coverage_issues:
             raise PublicationError(
                 [
@@ -986,7 +998,12 @@ def render_site(
             raise PublicationError([index_failure_message(error)]) from error
         repository_url = repository_url if repository_url is not None else detect_repository_url(repo_root)
         ref = ref if ref is not None else detect_ref(repo_root)
-        sources = SOURCES_DIR in snapshot.directories
+        # The commit must hold sources/ only when something there may be linked
+        # in it, not when all it holds is a folder that stays off the site.
+        sources = any(
+            name.partition("/")[0] == SOURCES_DIR
+            for name in (*dict(snapshot.files), *(name for name, kind in snapshot.omitted if kind != "unpublished"))
+        )
         reasons: list[str] = []
         blueprint_reasons: list[str] = []
         spellings: dict[str, str] = {}
@@ -1044,7 +1061,14 @@ def render_site(
             macros = project_macros(_captured_files(snapshot, copy).get(copy / TEX_MACROS))
             captured = [name for name, _ in snapshot.files]
             reviews, review_warnings = _review_disclosures(
-                blueprint, graph, review(), cards, macros, captured, sources_linked=sources_base is not None
+                blueprint,
+                graph,
+                review(),
+                cards,
+                macros,
+                captured,
+                sources_linked=sources_base is not None,
+                unpublished=[name for name, kind in snapshot.omitted if kind == "unpublished"],
             )
         source_revision = _source_revision(snapshot)
         report = _publish(
@@ -1267,16 +1291,25 @@ def _render_pages(
         encoding="utf-8",
     )
     report.pages += 1
+    notes = [
+        relative
+        for source, content in site.files.items()
+        if isinstance(content, str) and (relative := _relative(source, blueprint)).parts[:1] == (SOURCES_DIR,)
+    ]
+    # literate-nav reads each entry as a Markdown link, which carries no <, >
+    # or backtick in its path, so the entry would name a file MkDocs cannot find.
+    unnamed = [note for note in notes if re.search(r"[<>`]", note.as_posix())]
+    report.warnings.extend(
+        f"{note.as_posix()}: the nav cannot name a path that holds <, > or a backtick, so the Sources entry "
+        "leaves it out; rename it to list it"
+        for note in unnamed
+    )
     (destination / "SUMMARY.md").write_text(
         _render_summary_nav(
             book_pages,
             destination=destination,
             overview=overview,
-            source_pages=[
-                destination / relative
-                for source, content in site.files.items()
-                if isinstance(content, str) and (relative := _relative(source, blueprint)).parts[:1] == (SOURCES_DIR,)
-            ],
+            source_pages=[destination / note for note in notes if note not in unnamed],
         ),
         encoding="utf-8",
     )
@@ -2811,10 +2844,12 @@ def _render_hero(
     coverage_line = (
         '<div class="bp-hero-coverage">'
         + (f'<span class="bp-hero-coverage-counts">{html.escape(areas)}</span> ' if areas else "")
+        # One item, so the two links wrap together.
+        + '<span class="bp-hero-coverage-links">'
         + f'<a class="bp-hero-coverage-link" href="{html.escape(coverage_href, quote=True)}">'
         "What the sources cover</a>"
-        + (f'<a class="bp-hero-sources-link" href="{html.escape(sources_href, quote=True)}">Source notes</a>' if sources_href else "")
-        + "</div>"
+        + (f' <a class="bp-hero-sources-link" href="{html.escape(sources_href, quote=True)}">Source notes</a>' if sources_href else "")
+        + "</span></div>"
     )
     leads = _lead_paragraphs(body, whole=not tracked)
     return (
@@ -3244,6 +3279,8 @@ def _rewrite_links(
         links = _anchored_links(targets, page, extension=".md")
     if resolved is None:
         resolved = {}
+    # A reference image takes its destination from a definition anywhere on the page.
+    references = link_definitions(_content_lines(text))
 
     def moved_target(raw: str, *, image: bool = False) -> str | None:
         """Where *raw* should point once published, or None to leave it alone."""
@@ -3310,6 +3347,7 @@ def _rewrite_links(
             if image:
                 # A page cannot show a file from the repository, so its image keeps its text.
                 unlinked.add(raw)
+                repository_images.add(raw)
                 if dropped is not None:
                     dropped.append(_RepositoryImage(raw))
                 return ""
@@ -3334,6 +3372,8 @@ def _rewrite_links(
         return f"{href}{asked}{query}{separator}{fragment}"
 
     unlinked: set[str] = set()
+    # The image destinations the site links in the repository, which a page cannot show.
+    repository_images: set[str] = set()
 
     def rewrite(line: str) -> str:
         # A link, an image and a definition each contain a bracket, which
@@ -3375,6 +3415,11 @@ def _rewrite_links(
                 pieces += [line[end : match.start()], line[match.start("label") : match.end("label")]]
                 end = match.end()
         line = "".join(pieces) + line[end:]
+        # So does a reference image of a file the site links in the repository;
+        # its definition stays, for a link that uses it.
+        for start, text_start, text_end, stop, raw in reversed(reference_images(line, references) if references else []):
+            if moved_target(raw, image=True) == "" and raw in repository_images:
+                line = line[:start] + line[text_start:text_end] + line[stop:]
         pieces = []
         end = 0
         for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
@@ -3996,6 +4041,7 @@ def _review_disclosures(
     captured: Iterable[str],
     *,
     sources_linked: bool = False,
+    unpublished: Iterable[str] = (),
 ) -> tuple[dict[str, str], list[str]]:
     """Each Lean-mapped statement ``graph`` publishes, by node id, with its
     review: what a reviewer must trust, what a blind auditor says it means, and
@@ -4012,7 +4058,8 @@ def _review_disclosures(
     has them. A passage shown must come from a file the site publishes, judged
     by its name in ``captured``, the captured files' names, or with
     ``sources_linked`` from one under ``sources/``, which the site links at the
-    verified commit when it does not publish it.
+    verified commit when it does not publish it; ``unpublished`` names the
+    folders capture left out, so a passage from one is refused as such.
     """
 
     changed = "while the site was being rendered; rerun once the blueprint is idle"
@@ -4059,7 +4106,11 @@ def _review_disclosures(
                     edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
             continue
         if shown[0] is None and issues:
-            reason = f"cites a passage the site does not publish: {issues[0]}"
+            cited = (article.passage_locator or "").rpartition("#")[0]
+            if cited and any(_is_within(PurePosixPath(_folded(cited)), PurePosixPath(_folded(folder))) for folder in unpublished):
+                reason = f"cites a passage from {cited}, in a folder that says published: false"
+            else:
+                reason = f"cites a passage the site does not publish: {issues[0]}"
             edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
         else:
             edited.append(ReviewFinding(article.node_id, "review-snapshot-changed", f"the cited passage changed {changed}"))
@@ -4909,13 +4960,14 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-size: 0.72rem;
   color: var(--bp-muted);
 }}
+.bp-hero-coverage-links {{ margin-left: auto; }}
 .bp-hero-coverage-link,
 .bp-hero-sources-link {{
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 0.15em;
 }}
-.bp-hero-coverage-link {{ margin-left: auto; }}
+.bp-hero-sources-link {{ margin-left: 0.65rem; }}
 
 /* On the landing page the hero sits in the explorer's reading pane, or its
    sheet on phones, so it is set, like the pane's chapters, in px rather
@@ -4972,7 +5024,7 @@ a:hover, a:visited:hover {{ color: var(--bp-link-hover); text-decoration: underl
   font-variant-numeric: tabular-nums;
 }}
 .bp-landing-intro.bp-landing-intro .bp-hero-coverage {{ margin-top: 6px; font-size: 12px; }}
-.bp-landing-intro.bp-landing-intro .bp-hero-coverage-link {{ margin-left: 0; }}
+.bp-landing-intro.bp-landing-intro .bp-hero-coverage-links {{ margin-left: 0; }}
 .bp-landing-intro.bp-landing-intro .bp-intro-book {{
   display: inline-block;
   margin-top: 10px;

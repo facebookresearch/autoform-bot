@@ -811,6 +811,30 @@ def test_render_refuses_a_passage_the_site_does_not_publish(
     assert not (tmp_path / "site").exists()
 
 
+def test_render_refuses_a_passage_from_an_unpublished_source_folder(
+    tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Render never copies a folder below sources/ whose README says
+    published: false, so its passage cannot be shown beside the page, and the
+    refusal names the folder's setting rather than a missing file."""
+
+    blueprint = _blueprint(tmp_path)
+    _cite(blueprint / "roadmap/basics/result.md", "../../sources/private/book.txt#L2-L2")
+    folder = blueprint / "sources/private"
+    folder.mkdir(parents=True)
+    (folder / "README.md").write_text("---\npublished: false\n---\n# Private\n", encoding="utf-8")
+    (folder / "book.txt").write_text("Heading\nA private line.\n", encoding="utf-8")
+    _approve_every_article(blueprint, tmp_path, capsys)
+    capsys.readouterr()
+
+    assert _render(blueprint, tmp_path) == 1
+    assert (
+        "review-source-unpublished: cites a passage from sources/private/book.txt, in a folder that says "
+        "published: false"
+    ) in capsys.readouterr().out
+    assert not (tmp_path / "site").exists()
+
+
 def test_the_site_shows_a_card_as_it_was_validated(
     tmp_path: Path, extraction: _Extraction, capsys: pytest.CaptureFixture[str]
 ) -> None:

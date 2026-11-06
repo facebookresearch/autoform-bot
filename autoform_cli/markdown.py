@@ -282,12 +282,15 @@ def _links(
     references: dict[str, str] | None,
     code: re.Pattern[str] = _CODE_SPAN,
     target: re.Pattern[str] = _BLOCK_TARGET,
+    *,
+    images: list[tuple[int, int, int, int, str]] | None = None,
 ) -> list[tuple[int, str]]:
     """Where each link :func:`link_targets` reads in ``value`` starts, and its target.
 
     :func:`_block_links` passes a block instead, whose code spans *code* and
     link destinations *target* find as the site does. :func:`link_targets`
-    passes the patterns check has always read one line with.
+    passes the patterns check has always read one line with. Each reference
+    image read on the way goes to *images*, as :func:`reference_images` gives it.
     """
 
     if _LINK_DEFINITION.match(value):
@@ -331,8 +334,21 @@ def _links(
             continue
         if not image:
             links.append((start, link[0]))
+        elif images is not None and inline is None:
+            images.append((start - 1, start + 1, close, link[1], link[0]))
         start = masked.find("[", link[1])
     return links
+
+
+def reference_images(value: str, references: dict[str, str]) -> list[tuple[int, int, int, int, str]]:
+    """Each reference image the site reads in ``value``, a block, as
+    ``(start, text_start, text_end, end, target)``: ``![text][label]``,
+    ``![label][]`` or ``![label]`` whose label ``references`` defines, read
+    as :func:`_block_links` reads links, so a rewrite can cut one to its text."""
+
+    images: list[tuple[int, int, int, int, str]] = []
+    _links(value, references, images=images)
+    return images
 
 
 def _block_links(lines: list[str], references: dict[str, str]) -> list[tuple[int, str]]:
@@ -1282,13 +1298,16 @@ def local_target_issue(
     *,
     label: str,
     unpublished: tuple[Path, ...] = (),
+    accepted: tuple[Path, ...] = (),
 ) -> tuple[str, str] | None:
     """Return ``(code, reason)`` when a local link does not resolve, or names a path render omits.
 
     ``source_path`` is the file containing the link, ``boundary`` the directory
     the link may not escape, and ``unpublished`` the folders render leaves out.
-    External schemes are the reader's problem and are reported as fine. A
-    fragment on a Markdown target must name a real heading.
+    A link into one of ``accepted``, folders render leaves out but whose links
+    it publishes as their text, is fine. External schemes are the reader's
+    problem and are reported as fine. A fragment on a Markdown target must
+    name a real heading.
     """
 
     try:
@@ -1317,6 +1336,8 @@ def local_target_issue(
     if any(is_within(spelled, folder) for folder in unpublished):
         reason = f"{label} link names an unpublished folder, which render omits: {target!r}"
         return f"unpublished-{label}-target", reason
+    if any(is_within(spelled, folder) for folder in accepted):
+        return None
     candidate = resolved_path(source_path.parent / raw_path if raw_path else source_path)
     if candidate is None:
         return f"{label}-not-found", f"{label} link does not resolve to a file: {target!r}"

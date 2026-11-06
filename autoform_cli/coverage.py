@@ -140,9 +140,12 @@ class CoverageSummary:
 
 
 def load_coverage(
-    blueprint_dir: str | Path, *, unpublished: tuple[Path, ...] = ()
+    blueprint_dir: str | Path, *, unpublished: tuple[Path, ...] = (), accepted: tuple[Path, ...] = ()
 ) -> tuple[CoverageSummary | None, tuple[CoverageIssue, ...]]:
-    """Read and validate ``coverage/README.md`` without modifying it; it may not link into *unpublished* folders."""
+    """Read and validate ``coverage/README.md`` without modifying it; it may not link into *unpublished* folders.
+
+    A link into an *accepted* folder, which render leaves out but publishes the link's text for, counts as
+    resolved."""
 
     blueprint = blueprint_root(blueprint_dir)
     path = blueprint / "coverage" / "README.md"
@@ -157,7 +160,9 @@ def load_coverage(
         return None, (CoverageIssue(0, "coverage contract cannot be read"),)
 
     rows, issues = _parse_table(text)
-    issues.extend(_validate_evidence(rows, blueprint=blueprint, coverage_path=path, unpublished=unpublished))
+    issues.extend(
+        _validate_evidence(rows, blueprint=blueprint, coverage_path=path, unpublished=unpublished, accepted=accepted)
+    )
     if issues:
         return None, tuple(issues)
     return (
@@ -688,6 +693,7 @@ def _validate_evidence(
     blueprint: Path,
     coverage_path: Path,
     unpublished: tuple[Path, ...],
+    accepted: tuple[Path, ...] = (),
 ) -> list[CoverageIssue]:
     issues: list[CoverageIssue] = []
     roadmap = (blueprint / "roadmap").resolve()
@@ -717,7 +723,9 @@ def _validate_evidence(
         # One good link beside a broken one is a broken claim.
         broken: list[str] = []
         for target in targets:
-            problem = local_target_issue(coverage_path, target, blueprint, label="coverage", unpublished=unpublished)
+            problem = local_target_issue(
+                coverage_path, target, blueprint, label="coverage", unpublished=unpublished, accepted=accepted
+            )
             if problem is not None:
                 broken.append(problem[1])
         if broken:
