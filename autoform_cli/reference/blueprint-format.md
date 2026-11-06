@@ -59,7 +59,8 @@ when it rewrites links, orders the book and places a chapter's statements read
 it as open to the end of the file. An HTML comment that never closes, even one
 opened in inline code or an indented code block, hides every later heading and
 dependency link: the graph loses those edges, one opened in the statement puts
-the rest of the article in the theorem box, and nothing reports it.
+the rest of the article in the theorem box; `check` warns about one outside
+code, and the audit about a formalizable article's hidden `## Depends on`.
 
 `## Depends on` lists what the article needs to be *stated*,
 `## Proof depends on` what only its *proof* needs, and `## Informally uses` what
@@ -244,8 +245,7 @@ The contract is read as published Markdown and fails closed:
 
 `coverage.complete` in audit and `publication.json` means only that no declared
 row is still `MAPPED`. It does **not** claim the rows cover the source
-exhaustively, which no local check can judge, nor that linked articles are
-formalized or proved.
+exhaustively, nor that linked articles are formalized or proved.
 
 Target metrics (the denominator, readiness count, and progress breakdowns in the
 book and `autoform check`) count non-container articles carrying `declaration`,

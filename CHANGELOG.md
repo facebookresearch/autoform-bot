@@ -513,6 +513,9 @@ date when the release is tagged.
   `--json` hits whose `module` is exactly that module, with `--limit` at least
   `total_matches`; searching the module's name also returned other modules'
   declarations, and at most 20 (#204).
+- **Self-caused search refusals.** Formalize fixes a search refusal its own
+  arguments caused, such as `--limit 0` or a query that folds to nothing, and
+  searches again, as Roadmap does, where it reported the leaf as blocked (#171).
 
 ### Deprecated
 
