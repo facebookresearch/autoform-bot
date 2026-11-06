@@ -472,6 +472,13 @@ date when the release is tagged.
   unpublished articles' IDs, returns only the folders. CI at an older
   `AUTOFORM_REF` still refuses both, so move the pin before relying on the
   warnings.
+- **Library listing.** Formalize tells the user about the packages
+  `library list` leaves out in one line that counts them by reason, not one line
+  each (nine or ten on a Mathlib project), and searches the blueprint alone when
+  the listing fails. Agent Review lists a module's declarations from the
+  `--json` hits whose `module` is exactly that module, with `--limit` at least
+  `total_matches`; searching the module's name also returned other modules'
+  declarations, and at most 20 (#204).
 
 ### Deprecated
 

@@ -30,15 +30,15 @@ says what is matched.
 ## Which libraries
 
 Run `autoform library list .` once per checkout, in the checkout being edited,
-once its packages are present: in a new worktree, after the step Formalize
-prescribes for a new worktree. A package still reported as not checked out is
-not fetched any other way. Pass every package it reports as usable to each
-search, even while the blueprint is empty, as `--library NAME`, together with
-`--lean-root` naming the same Lake project root. Do not pass a package it
-reports as not usable, such as a dependency that publishes no index. A package
-left out, as not usable or not checked out, is unchecked, as for a refused
-library: tell the user once which package was left out and the reason the
-listing gives, and that whether it has the result is unknown.
+once its packages are present: in a new worktree, after Formalize's step for
+one. A package still reported as not checked out is not fetched any other way.
+If the listing fails, search the blueprint alone and tell the user once why no
+library was searched. Pass every package it reports as usable, and no other, to
+each search, even while the blueprint is empty, as `--library NAME`, together
+with `--lean-root` naming the same Lake project root. The others, such as a
+dependency without an index, are unchecked, as for a refused library: tell the
+user once, in one line, how many were left out for each reason the listing
+gives, and that whether they have the result is unknown.
 
 ## A refusal that names a library
 

@@ -427,7 +427,10 @@ def check_index(
     timeout: float | None = None,
     runner: Callable[..., str] | None = None,
 ) -> tuple[str, ...]:
-    """Return why the index at ``root`` is not current, or nothing. Writes no file."""
+    """Return why the index at ``root`` is not current, or nothing.
+
+    Writes no index, but the probe's freshness check rewrites Lake's ``.hash`` files.
+    """
 
     directory = Path(root).expanduser().resolve()
     if not directory.is_dir():

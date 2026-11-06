@@ -823,7 +823,8 @@ def test_a_failed_rollback_is_not_reported_as_an_unchanged_index(tmp_path: Path,
     assert message.endswith(f"; {INDEX_FILE} is not the file it was before")
 
 
-def test_check_passes_on_a_current_index_and_writes_nothing(tmp_path: Path) -> None:
+def test_check_passes_on_a_current_index_and_writes_no_file_itself(tmp_path: Path) -> None:
+    # The runner is stubbed: the real probe's `lake --rehash` rewrites Lake's .hash files.
     root, runner, _generated, path = _written(tmp_path)
     before = {item: item.read_bytes() for item in root.rglob("*") if item.is_file()}
     assert check_index(root, runner=runner) == ()

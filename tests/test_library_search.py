@@ -536,7 +536,7 @@ def test_search_cli_says_when_the_project_does_not_lock_a_dependency(tmp_path: P
     out = capsys.readouterr().out
 
     assert "None" not in out
-    assert f"  differs: mathlib {MATHLIB_REV} (the project does not lock it)\n" in out
+    assert f"  differs: mathlib {MATHLIB_REV} (the project locks no revision of it)\n" in out
 
 
 def test_search_cli_refuses_a_library_it_cannot_verify_and_prints_no_blueprint_hits(tmp_path: Path, capsys) -> None:

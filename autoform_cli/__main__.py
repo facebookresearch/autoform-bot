@@ -434,7 +434,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="index this lean_lib (repeatable); default: every lean_lib of the package",
     )
     library_index.add_argument(
-        "--check", action="store_true", help="write nothing; exit 1 when the index at the root is not current"
+        "--check",
+        action="store_true",
+        help="write no index (Lake still rewrites its .hash files); exit 1 when the index at the root is not current",
     )
     library_index.add_argument(
         "--timeout",
@@ -1441,7 +1443,11 @@ def _print_library(library: LibraryResult) -> None:
     for difference in library.differences:
         what = difference.what if difference.name is None else difference.name
         if difference.project is None:
-            held = "the project has no lean-toolchain" if difference.name is None else "the project does not lock it"
+            held = (
+                "the project has no lean-toolchain"
+                if difference.name is None
+                else "the project locks no revision of it"
+            )
         else:
             held = f"project: {difference.project}"
         print(_human_text(f"  differs: {what} {difference.library} ({held})"))
