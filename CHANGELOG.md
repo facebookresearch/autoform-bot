@@ -178,6 +178,13 @@ date when the release is tagged.
   longer turns a publishing library's check red. An index another probe
   revision made is stale, said without running Lean, and a stale index names
   the records generation gives otherwise.
+- **Library index: imported libraries.** `library index --lib A` also indexes,
+  transitively, each library of the package that A's modules import from, since
+  a change there changes A's records. A note names each such library and the
+  `lake build` command CI must run before `--check`, which can name modules as
+  well as libraries; such a library must build completely. An index made earlier
+  keeps its `--check` verdict, with a warning naming the files it leaves out,
+  until it is regenerated (#325).
 - **Vault pages on Windows.** `autoform-visualize` writes the dependency
   summary and structure pages with LF line endings on Windows too, as on every
   other system, so a vault regenerated on both no longer flips them.
@@ -623,6 +630,14 @@ parse, with or without `--json`, and changes nothing else.
   declaration named `module`, are indexed as on one line. The site's Lean block
   and hover card for a declaration whose name opens the line after its keyword,
   at the keyword's column, now show that line (#363).
+- **Library index coverage.** `library index` reads the directories of a
+  library's globs outside its roots too, so their modules are no longer left out
+  of the index and its digests; a Lean file there that no indexed library builds
+  is refused, as under a root. A library's modules are those Lake can build for
+  it, so one whose glob matches its root, such as `globs = ["Lib"]`, indexes
+  every module under the root; before, all but the root were refused. A stale
+  build's error gives the `lake build` command that builds every indexed module,
+  naming as targets the modules `lake build` of the libraries leaves out.
 - **Reference links on chapters with a `<` in the title.** A `<` in a
   chapter's title alone left reference-style links in its prose shown as typed
   (#631).
