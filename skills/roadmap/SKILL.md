@@ -178,8 +178,8 @@ explains it. Change it only on the user's request and only once CI meets its
 requirements, and turn it back off only once no open statement remains.
 
 Assert `statement: formalized` or `proof: formalized` only after exact
-verification, and `mathlib: true` only when a verified upstream declaration
-[states the result](../agent-review/references/roadmap-quality.md#evidence). For
+verification, and `mathlib: true` only when verified Mathlib declarations
+[state the result](../agent-review/references/roadmap-quality.md#evidence). For
 declaration leaves, record exact compiled names in `lean`. Set
 `proof: formalized` for a theorem or lemma only after checking that its proof is
 complete and contains no placeholder or proof-wanted mechanism. An axiom or

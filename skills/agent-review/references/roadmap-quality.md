@@ -32,17 +32,18 @@ Judge the mathematical plan, not the Lean proof quality.
    - Read each library declaration a source page names: one named without a
      reason, or with a reason that does not hold for an article reaching that
      source, is a missed reuse.
-6. For each `mathlib: true` article in scope, and each library hit you take to
-   prove a result, quote the declaration's hypotheses and conclusion from the
-   pinned source, with section variables and instance arguments, and judge
-   whether it states the result. It does when its conclusion, read with any
-   convention the statement explains, such as `Nat.card` being 0 for an infinite
-   type, is the result's under the statement's hypotheses or fewer. It does not
-   when it is the additive form of a multiplicative statement or the reverse;
-   only part of the claim, such as one direction of an equivalence, a
-   divisibility or inequality where the statement has an equality, or a special
-   case of a general statement; or needs a hypothesis the statement lacks, such
-   as finiteness, nontriviality, primality, a nonzero exponent, or `[Finite α]`.
+6. For each `mathlib: true` article in scope, and each article you count a
+   library hit as proving, quote the hypotheses and conclusion of each such hit
+   or declaration cited for its result from the pinned source, with section
+   variables and instance arguments (for an `@[to_additive]` name, translated
+   from its original's). Together they state the result when their conclusions,
+   read with any convention the article explains (such as `Nat.card` being 0 for
+   an infinite type), are the result's under hypotheses the statement gives or
+   implies, or a definition defines the article's object; not when they are the
+   additive form of a multiplicative statement or the reverse, only part of the
+   claim (one direction of an equivalence, a divisibility or inequality for an
+   equality, a special case), or need a hypothesis the statement does not imply
+   (finiteness, nontriviality, primality, a nonzero exponent, `[Finite α]`).
 
 ## Source fidelity and coverage — 40%
 
@@ -99,5 +100,4 @@ only when source fidelity and DAG quality are at least 4 and usability is at
 least 3. Reject when source fidelity or DAG quality is 2 or below. Missing
 source evidence caps source fidelity at 2; a node other than a catalog with
 several peer main results and no unique completion target caps DAG quality at 2;
-a `mathlib: true` whose declaration does not state the result caps usability at
-2.
+a `mathlib: true` that fails item 6 caps usability at 2.
