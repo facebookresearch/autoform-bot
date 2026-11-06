@@ -47,8 +47,9 @@
     return root;
   }
 
-  // A tab title or a place line cannot typeset, so a formula there reads as its TeX made readable, as on the map. With
-  // its label, a title's code keeps its dollars; without one, a title is the text its page shows, formulas in \( \).
+  // A tab title, a place line or an accessible name cannot typeset, so a formula there reads as its TeX made readable,
+  // as on the map. With parts for the same title, its code keeps its dollars; otherwise only formulas in \( \) are
+  // reduced, as a page's own title writes them, so a literal $ stays.
   function plainTitle(text, label) {
     var DOUBLE = {R: "ℝ", N: "ℕ", Z: "ℤ", Q: "ℚ", C: "ℂ", F: "𝔽", P: "ℙ", A: "𝔸", H: "ℍ", K: "𝕂"};
     var GREEK = {alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε", varepsilon: "ε", zeta: "ζ", eta: "η", theta: "θ",
@@ -429,8 +430,7 @@
       var isCurrent = bundle.isCurrent;
       if (!alive || (isCurrent && !isCurrent())) return;
       restoration++; restoring = false; clearTimeout(checkpointTimer); currentBundle = bundle; ui$requestedNode = bundle.nodeId || null;
-      var titled = records.get(bundle.nodeId);
-      document.title = plainTitle(bundle.title, titled && titled.reading_title); dom$error.hidden = true;
+      document.title = plainTitle(bundle.title, (records.get(bundle.nodeId) || {}).reading_title); dom$error.hidden = true;
       ui$filtersTouched = false; ui$relationIds = null;
       ui$query = ""; dom$search.value = ""; closeSearch(); setFilters(false); setBrowse(false);
       ui$reading = Boolean(bundle.readingSource);
@@ -736,7 +736,7 @@
     function trailList(entries, className, whole) {
       var list = element("ol", className);
       // A folded trail keeps its ends, first / … / parent / current, and the "…" names the ancestors it stands for.
-      if (!className && !whole && entries.length > 3) entries = [entries[0], {label: "…", hidden: entries.slice(1, -2).map(function (entry) { return entry.label; }).join(" / ")}].concat(entries.slice(-2));
+      if (!className && !whole && entries.length > 3) entries = [entries[0], {label: "…", hidden: entries.slice(1, -2).map(function (entry) { return plainTitle(entry.label, entry.reading_title); }).join(" / ")}].concat(entries.slice(-2));
       entries.forEach(function (entry, index) {
         var href = safeHref(entry.url), item = href ? element("li") : readingLabel("li", "", entry.label, entry.reading_title);
         if (href) {
@@ -1360,7 +1360,7 @@
       } else if (main) main.removeAttribute("inert");
       if (navigation) {
         if (!dom$pageHeading) { dom$pageHeading = element("h1", "bp-dag-sr-only"); host.prepend(dom$pageHeading); }
-        dom$pageHeading.textContent = currentBundle && currentBundle.title || data.title;
+        dom$pageHeading.textContent = plainTitle(currentBundle && currentBundle.title || data.title, (records.get(page.nodeId) || {}).reading_title);
         dom$pageHeading.hidden = !collapsed;
       }
     }

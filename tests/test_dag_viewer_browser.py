@@ -639,7 +639,7 @@ def test_phone_peek_typesets_the_pages_own_chapter_title_without_borrowing_a_cat
     _ready_site(page)
     page.evaluate("window.__chapterHandleDocument=document")
     _complete_source(page, expected)
-    # The tab cannot typeset, so it reads the page's own title with the formula as text.
+    # The tab cannot typeset, so it reads the page's own title with the formula as text; a project macro reads as its name.
     assert page_title == r"Groups \(\ZZ/n\) and code $literal$" and page.title() == "Groups ZZ/n and code $literal$"
     _close_phone_reading(page)
     _paint_frame(page)
@@ -2573,24 +2573,27 @@ def test_explorer_title_math_has_no_raw_tex_tooltips_or_clipped_focus_rings(
     assert related.evaluate("node => getComputedStyle(node.closest('ul')).overflowX") == "visible"
 
 
-def test_tab_titles_and_place_lines_read_title_math_as_text(
+def test_tab_titles_place_lines_and_accessible_names_read_title_math_as_text(
     desktop_page: object, marked_math_site_url: str, marked_math_runtime: object
 ) -> None:
-    """A tab title, a place line or a label cannot typeset: a formula reads as text and code keeps its dollars."""
+    """A tab title, a place line or an accessible name cannot typeset: a formula reads as text and code keeps its dollars."""
     from tests.test_integrated_explorer_browser import _routes
 
     page, site_url = desktop_page, marked_math_site_url
     _routes(page, site_url, marked_math_runtime, graph_client=True)
     page.goto(_site_route(page, site_url, "algebra"))
     _ready_site(page)
-    handle = page.locator(".bp-dag-sheet-handle")
+    handle, heading = page.locator(".bp-dag-sheet-handle"), page.locator(".bp-dag-viewer > h1.bp-dag-sr-only")
+    # The topic's tab and heading read the page's own title; a project macro such as \ZZ reads as its name.
     playwright.expect(page).to_have_title("Groups ZZ/n and code $literal$")
+    playwright.expect(heading).to_have_text("Groups ZZ/n and code $literal$")
     playwright.expect(handle).to_have_attribute("aria-label", "Groups ZZ/n and code $literal$, reading")
     page.locator(".bp-dag-search").fill("algebra/title-foundation")
     hit = page.locator('.bp-dag-result[data-result-id="algebra/title-foundation"]')
     playwright.expect(hit.locator(".bp-dag-result-place")).to_have_text("Groups ZZ/n and code $literal$")
     hit.click()
     playwright.expect(page).to_have_title("Groups ℤ/n and code $literal$")
+    playwright.expect(heading).to_have_text("Groups ℤ/n and code $literal$")
     playwright.expect(handle).to_have_attribute("aria-label", "Groups ℤ/n and code $literal$, reading")
 
 
