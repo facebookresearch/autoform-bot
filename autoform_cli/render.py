@@ -963,7 +963,8 @@ def render_site(
     relative = blueprint.relative_to(top_level) if _is_within(blueprint, top_level) else Path("blueprint")
     with _private_copy(snapshot, relative) as (copy_root, copy), resolving_once():
         graph = _load_graph(copy, blueprint)
-        coverage, coverage_issues = load_coverage(copy)
+        # Evidence in an unpublished folder is named as such, not as a missing file.
+        coverage, coverage_issues = load_coverage(copy, unpublished=_unpublished_folders(snapshot, copy))
         if coverage_issues:
             raise PublicationError(
                 [

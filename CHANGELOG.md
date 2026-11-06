@@ -73,7 +73,9 @@ date when the release is tagged.
   copied beside them. At a verified commit, a hidden note, the folder itself and
   its other files, such as scans, data or a type the site leaves out, are linked
   in the repository, a note's image of one keeps its text, with a warning, and
-  `render --review` accepts a passage cut from one. The nav lists the notes
+  `render --review` accepts a passage cut from one. A folder below `sources/`
+  whose README says `published: false` stays off the site, as one below
+  `roadmap/` does; only render reads the setting there. The nav lists the notes
   after Coverage, headed by `sources/README.md` when there is one.
 - **Check without site warnings.** `check --no-site-warnings` skips the warnings
   about the pages the site would publish, which `render` prints too. The

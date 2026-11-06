@@ -498,15 +498,18 @@ def _unpublished_link_issues(
 
 
 def unpublished_content(files: tuple[tuple[str, bytes], ...]) -> tuple[str, ...]:
-    """The folders captured *files* mark ``published: false``.
+    """The folders captured *files* mark ``published: false``, below
+    ``roadmap/`` or ``sources/``.
 
     For render, which leaves those folders out before it loads the graph. A
-    README that cannot be read here fails ``load_graph`` too.
+    roadmap README that cannot be read here fails ``load_graph`` too; the
+    graph has no source notes, so only render reads the setting below
+    ``sources/``.
     """
     folders = []
     for name, data in files:
         parts = name.split("/")
-        if len(parts) > 2 and parts[0] == "roadmap" and parts[-1] == "README.md":
+        if len(parts) > 2 and parts[0] in {"roadmap", "sources"} and parts[-1] == "README.md":
             try:
                 metadata = _parse_frontmatter(name, data.decode("utf-8").splitlines())[0]
             except UnicodeError:
@@ -525,7 +528,7 @@ def unpublished_node_ids(files: tuple[tuple[str, bytes], ...], folders: tuple[st
     return frozenset(
         name.removeprefix("roadmap/").removesuffix(".md").removesuffix("/README")
         for name, _data in files
-        if name.endswith(".md") and any(name.startswith(f"{folder}/") for folder in folders)
+        if name.startswith("roadmap/") and name.endswith(".md") and any(name.startswith(f"{folder}/") for folder in folders)
     )
 
 

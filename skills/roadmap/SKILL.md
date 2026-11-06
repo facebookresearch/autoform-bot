@@ -72,13 +72,13 @@ material and unrelated changes; send missing infrastructure to Setup and Lean
 execution to Formalize.
 
 Work from exact source passages. When the boundary includes existing Lean, first
-extract docstrings and nearby comments with the signatures; they locate and
-describe code but never replace the adopted source. Record stable source
-locations, assumptions, and uncovered prerequisites under `blueprint/sources/`,
-labelling project-authored specifications as such. Notes there are site pages
-unless dot-prefixed. Under statement review (`blueprint/.autoform-review`), each
-`origin: cited` article must also link an in-vault, non-Markdown snapshot of its
-source with an exact `#L<start>-L<end>` range, as the [review
+extract module and declaration docstrings and nearby comments alongside the Lean
+signatures; they locate and describe code but never replace the adopted source.
+Record stable source locations, assumptions, and uncovered prerequisites under
+`blueprint/sources/`, labelling project-authored specifications as such. Notes
+there are site pages. Under statement review (`blueprint/.autoform-review`),
+each `origin: cited` article must also link an in-vault, non-Markdown snapshot
+of its source with an exact `#L<start>-L<end>` range, as the [review
 contract](../../autoform_cli/reference/skeleton-and-review.md#statement-review)
 says. External research is read-only, and contacting people requires permission.
 Do not invent a statement, motivation, proof narrative, dependency, citation, or

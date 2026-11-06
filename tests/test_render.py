@@ -2202,6 +2202,59 @@ def test_a_file_of_a_type_the_site_leaves_out_is_linked_at_the_commit_under_sour
     ]
 
 
+@pytest.mark.parametrize("verified", [True, False], ids=["commit", "local"])
+def test_a_sources_folder_that_says_published_false_stays_off_the_site(tmp_path: Path, verified: bool) -> None:
+    """``published: false`` in the README of a folder below sources/ keeps the
+    folder off the site, with or without a verified commit, and a link into
+    it keeps only its text, with the warning check gives too (#593).
+    sources/README.md unpublishes nothing, as roadmap/README.md does not."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "sources/README.md").write_text("---\npublished: false\n---\n\n# Reading list\n", encoding="utf-8")
+    (blueprint / "sources/drafts").mkdir()
+    (blueprint / "sources/drafts/README.md").write_text("---\npublished: false\n---\n\n# Drafts\n", encoding="utf-8")
+    (blueprint / "sources/drafts/idea.md").write_text("# Idea\n", encoding="utf-8")
+    _edit(blueprint / "sources/paper.md", "Transcribed statements from the paper.", "See [the idea](drafts/idea.md).")
+    links = {"repository_url": _REPOSITORY, "ref": _commit_project(project)} if verified else {}
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project, **links)
+
+    out = tmp_path / "out"
+    assert sorted(path.name for path in (out / "sources").iterdir()) == ["README.md", "paper.md"]
+    assert "See the idea." in (out / "sources/paper.md").read_text(encoding="utf-8")
+    assert "drafts" not in (out / "SUMMARY.md").read_text(encoding="utf-8")
+    warning = (
+        "sources/paper.md: links to 'drafts/idea.md', which is hidden or in an unpublished folder, so the site "
+        "keeps only the link's text"
+    )
+    assert warning in report.warnings
+    assert warning in render_module.publication_issues(load_graph(blueprint), blueprint)
+
+
+def test_render_names_coverage_evidence_in_an_unpublished_sources_folder(tmp_path: Path) -> None:
+    """A decomposed area's evidence may not point into a folder the site
+    leaves out, below sources/ as below roadmap/, and render says the folder
+    is unpublished rather than that the note is missing."""
+    project = _project(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / "sources/drafts").mkdir(parents=True)
+    (blueprint / "sources/drafts/README.md").write_text("---\npublished: false\n---\n\n# Drafts\n", encoding="utf-8")
+    (blueprint / "sources/drafts/idea.md").write_text("# Idea\n", encoding="utf-8")
+    (blueprint / "coverage/README.md").write_text(
+        "# Coverage\n\n| Area | Coverage | Evidence |\n| --- | --- | --- |\n"
+        "| Top | DECOMPOSED | [Top](../roadmap/top.md), from [the idea](../sources/drafts/idea.md). |\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PublicationError) as raised:
+        render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    assert raised.value.issues == (
+        "coverage contract line 5: coverage link names an unpublished folder, which render omits: "
+        "'../sources/drafts/idea.md'",
+    )
+
+
 def test_a_notes_image_of_a_file_the_site_links_in_the_repository_keeps_its_text(tmp_path: Path) -> None:
     """A page cannot show a scan or a hidden file from the repository, so once
     the commit is verified a note's image of one keeps its text, with a
