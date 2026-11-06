@@ -184,6 +184,10 @@ date when the release is tagged.
   Formalize reports an `import-impact` failure that the
   `--module-scope import-closure` rerun leaves; that scope narrows nothing in a
   library with no globs.
+- **Every sentence in review.** Agent Review's roadmap rubric checks that every
+  mathematical sentence, proof sketch included, is true as written, not only
+  that planned main results preserve their source. A false sentence lowers
+  source fidelity and caps nothing (#689).
 - **Mathlib results in review.** Agent Review's roadmap rubric says when cited
   declarations state an article's result, and has the reviewer quote their
   hypotheses and conclusions before judging. A `mathlib: true` that fails this
