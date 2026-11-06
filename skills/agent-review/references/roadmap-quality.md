@@ -48,7 +48,7 @@ Judge the mathematical plan, not the Lean proof quality.
 
 - Every planned main result has a stable source location and preserves its
   objects, hypotheses, quantifiers, and conclusion.
-- Every other mathematical sentence, proof sketch included, is true as written.
+- Every mathematical sentence, proof sketch included, is true as written.
 - The machine-checkable `Area | Coverage | Evidence` table uses `MAPPED`,
   `DECOMPOSED`, `INVENTORIED`, `DEFERRED`, and `OUT` to distinguish known
   material, roadmap nodes, inventoried existing modules, explicit later work,
