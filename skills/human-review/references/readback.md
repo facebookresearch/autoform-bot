@@ -88,6 +88,5 @@ read-back over 32 KiB or 500 lines is refused.
 ## Return only testimony
 
 Return the read-back and nothing else. Do not create a vault card, copy
-metadata, infer a destination path, or inspect a manifest; the coordinator
-records your response for the exact packet. Never revise old testimony after
-seeing an article or intended statement.
+metadata, infer a destination path, or inspect a manifest. Never revise old
+testimony after seeing an article or intended statement.

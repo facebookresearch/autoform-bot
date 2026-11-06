@@ -28,5 +28,4 @@ Inspect surrounding project and Mathlib code for established names and APIs.
 | 1 | Pervasively opaque or unidiomatic; also applies when no single public declaration represents a multi-part source statement. |
 | 0 | Structurally incomprehensible or dominated by severe Lean/Mathlib anti-patterns. |
 
-Pass at 3. Ignore sorries and axioms on this axis except where they impair readability; proof
-integrity owns their substantive verdict.
+Pass at 3. Ignore sorries and axioms on this axis except where they impair readability.

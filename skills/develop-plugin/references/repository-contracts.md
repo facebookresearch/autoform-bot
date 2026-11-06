@@ -1,8 +1,5 @@
 # Autoform repository contracts
 
-Read these contracts when changing local views, publication surfaces, source
-evidence, generated files, or dependency pins.
-
 ## Knowledge-map publication
 
 Full-viewport knowledge maps draw regions only from authored mathematical areas,
