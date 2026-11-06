@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tests.test_qa_outline_navigation import _run as _execute
@@ -82,6 +84,10 @@ function fixture(count=13,start=true){
   return {root,owner,collection,members,reading};
 }
 """
+    # The explorer's bundle carries the reducer that reads a title's formulas as text for the reading pane's button.
+    + "(function (window) {\n"
+    + (Path(__file__).resolve().parents[1] / "autoform_cli/assets/tex-plain.js").read_text(encoding="utf-8")
+    + "\n})(window);\n"
 )
 
 

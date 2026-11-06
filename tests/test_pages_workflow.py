@@ -310,3 +310,95 @@ def test_check_leaves_the_site_warnings_to_render_when_its_autoform_can(
         ]
     assert names.index("Render the blueprint") > names.index("Validate the theorem DAG and its declarations")
     assert "autoform check" in verify and "--no-site-warnings" not in verify
+
+
+def _verify() -> dict:
+    text = (_TEMPLATES / "autoform-verify.yml").read_text(encoding="utf-8")
+    return yaml.safe_load(text.replace("{{AUTOFORM_SOURCE_YAML}}", '"source"').replace("{{AUTOFORM_REF_YAML}}", '"ref"'))
+
+
+def test_verify_keeps_the_builds_ileans_for_the_site_after_a_push(pages: dict) -> None:
+    """Last, so only a run that passed keeps them, a push to main uploads the root package's .ilean files, which
+    say what each name in the Lean sources means, for Pages to fetch by the same name. Hidden files are kept,
+    since they sit under .lake, and the step can never fail verify."""
+
+    keep = _verify()["jobs"]["build"]["steps"][-1]
+    fetch = next(step for step in pages["jobs"]["build"]["steps"] if step["name"] == "Fetch the build's name references")
+
+    assert keep["name"] == "Keep the build's name references for the site"
+    assert keep["if"] == "github.event_name == 'push'" and keep["continue-on-error"] is True
+    assert keep["uses"].startswith("actions/upload-artifact@")
+    assert keep["with"] == {
+        "name": fetch["with"]["name"],
+        "path": ".lake/build/lib/lean/**/*.ilean",
+        "include-hidden-files": True,
+    }
+
+
+def test_a_deploy_fetches_the_ileans_of_the_verify_run_it_renders(pages: dict) -> None:
+    """Only a verify run's build fetches that run's .ilean files, and a failed fetch stops nothing. Render reads
+    them only when the fetch succeeded, so a partial, rejected or expired download reads as none. Reading another
+    run's artifacts needs actions: read, which the build job takes from the workflow; the deploy job keeps its own
+    permissions."""
+
+    steps = pages["jobs"]["build"]["steps"]
+    names = [step["name"] for step in steps]
+    fetch = steps[names.index("Fetch the build's name references")]
+    render = steps[names.index("Render the blueprint")]
+
+    assert pages["permissions"] == {"contents": "read", "actions": "read"} and "permissions" not in pages["jobs"]["build"]
+    assert pages["jobs"]["deploy"]["permissions"] == {"pages": "write", "id-token": "write"}
+    for event, github in _EVENTS.items():
+        assert bool(_evaluate(fetch["if"], {"github": github})) == (github["event_name"] == "workflow_run"), event
+    assert fetch["id"] == "ileans" and fetch["continue-on-error"] is True
+    assert fetch["uses"].startswith("actions/download-artifact@")
+    assert fetch["with"]["run-id"] == "${{ github.event.workflow_run.id }}"
+    assert fetch["with"]["github-token"] == "${{ github.token }}"
+    assert fetch["with"]["path"] == "${{ runner.temp }}/ileans"
+    assert names.index(fetch["name"]) < names.index(render["name"])
+    for outcome, ileans in [("success", "/runner/ileans"), ("failure", ""), ("skipped", "")]:
+        context = {"steps": {"ileans": {"outcome": outcome}}, "runner": {"temp": "/runner"}}
+        assert _evaluate(_unwrap(render["env"]["ILEANS"]), context) == ileans, outcome
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="the step runs in bash")
+@pytest.mark.parametrize("case", ["fetched, flag listed", "fetched, older pin", "not fetched", "fetched, pin unreachable"])
+def test_render_reads_the_ileans_when_they_came_and_its_autoform_can(pages: dict, tmp_path: Path, case: str) -> None:
+    """Render gets --ileans only when the fetch brought the files and the pinned Autoform's render lists the
+    option; otherwise it renders as before, and without the files it does not ask. As in check, a pin uvx cannot
+    run stops the step."""
+
+    steps = pages["jobs"]["build"]["steps"]
+    render = next(step for step in steps if step["name"] == "Render the blueprint")
+    calls = tmp_path / "calls"
+    help_text = "usage: autoform render [-h] [--lean-root LEAN_ROOT]" + (" [--ileans DIR]" if "listed" in case else "")
+    uvx = tmp_path / "bin" / "uvx"
+    uvx.parent.mkdir()
+    uvx.write_text(
+        f'#!/bin/sh\necho "$*" >> "{calls}"\n'
+        + ("exit 1\n" if "unreachable" in case else f'case "$*" in *--help*) echo "{help_text}" ;; esac\n'),
+        encoding="utf-8",
+    )
+    uvx.chmod(0o755)
+    ileans = "" if case == "not fetched" else str(tmp_path / "ileans")
+    ref = "0" * 40
+    env = {
+        "PATH": f"{uvx.parent}:/usr/bin:/bin",
+        "AUTOFORM_SOURCE": "https://example.invalid/a.git",
+        "AUTOFORM_REF": ref,
+        "PAGES_REF": "1" * 40,
+        "ILEANS": ileans,
+    }
+
+    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", render["run"]], env=env, cwd=tmp_path)
+
+    autoform = f"--from git+https://example.invalid/a.git@{ref} autoform"
+    rendered = f"{autoform} render blueprint --output site-src --lean-root . --require-declarations --ref {'1' * 40}"
+    expected = {
+        "fetched, flag listed": [f"{autoform} render --help", f"{rendered} --ileans {ileans}"],
+        "fetched, older pin": [f"{autoform} render --help", rendered],
+        "not fetched": [rendered],
+        "fetched, pin unreachable": [f"{autoform} render --help"],
+    }
+    assert (result.returncode == 0) == ("unreachable" not in case)
+    assert calls.read_text(encoding="utf-8").splitlines() == expected[case]

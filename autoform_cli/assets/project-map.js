@@ -66,23 +66,18 @@
   }
   function num(value) { return Number(value || 0).toLocaleString("en-US"); }
   function clamp(value, low, high) { return Math.max(low, Math.min(high, value)); }
-  var DOUBLE = {R: "ℝ", N: "ℕ", Z: "ℤ", Q: "ℚ", C: "ℂ", F: "𝔽", P: "ℙ", A: "𝔸", H: "ℍ", K: "𝕂"};
-  var GREEK = {alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε", varepsilon: "ε", zeta: "ζ", eta: "η", theta: "θ",
-    lambda: "λ", mu: "μ", nu: "ν", xi: "ξ", pi: "π", rho: "ρ", sigma: "σ", tau: "τ", phi: "φ", varphi: "φ", chi: "χ", psi: "ψ",
-    omega: "ω", Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ", Pi: "Π", Sigma: "Σ", Phi: "Φ", Psi: "Ψ", Omega: "Ω",
-    infty: "∞", to: "→", le: "≤", ge: "≥", leq: "≤", geq: "≥", ne: "≠", times: "×", cdot: "·", in: "∈", subset: "⊂", ell: "ℓ",
-    Vert: "‖", lVert: "‖", rVert: "‖"};
-  // A label for places that cannot typeset (map text): TeX source made readable, never shown with its dollar signs.
+  // A label for places that cannot typeset (map text): split by withMath's MARKUP tokens, code as typed and each
+  // formula as tex-plain.js reduces it, never shown with its dollar signs.
   function plain(text) {
-    return String(text || "").replace(/\$([^$]*)\$|\\\(([\s\S]*?)\\\)/g, function (_m, a, b) {
-      return (a != null ? a : b)
-        .replace(/\\mathbb\{([A-Za-z])\}/g, function (_x, letter) { return DOUBLE[letter] || letter; })
-        .replace(/\\(?:mathrm|mathcal|mathfrak|operatorname|text|mathbf|mathsf)\{([^}]*)\}/g, "$1")
-        .replace(/\\([A-Za-z]+)/g, function (_x, name) { return GREEK[name] || name; })
-        .replace(/\^\{([^}]*)\}/g, "^$1").replace(/_\{([^}]*)\}/g, "_$1")
-        // \{ and \} are braces the reader sees, \| a norm's bars; other braces only group.
-        .replace(/\\\|/g, "‖").replace(/(\\?)([{}])/g, function (_x, escaped, brace) { return escaped ? brace : ""; });
-    }).replace(/`([^`]*)`/g, "$1");
+    text = String(text || "");
+    var out = "", last = 0, match;
+    MARKUP.lastIndex = 0;
+    while ((match = MARKUP.exec(text))) {
+      out += text.slice(last, match.index) + (match[1] !== undefined ? match[1] : match[2] !== undefined ? match[3].trim() :
+        window.AutoformTexPlain.math(match[4] !== undefined ? match[4] : match[5]));
+      last = MARKUP.lastIndex;
+    }
+    return out + text.slice(last);
   }
   var DONE = {fully_proved: 1, proved: 1, defined: 1, mathlib: 1};
   var PROGRESS = {can_prove: 1, stated: 1, can_state: 1, conditional: 1, statement_formalized: 1};
@@ -731,15 +726,19 @@
     // The title line sits at the top of the band, however tall the band has grown: pin once that line is off the stage.
     return b.y + Math.min(30, band / 2 + 6) >= 12 || b.y + b.h < 60 ? null : record;
   }
+  // A list entry's title: its formulas for the site's MathJax where that runs, else plain text. The list typesets them.
+  function titled(node, text) {
+    if (!hasMath(text)) { node.textContent = plain(text); return node; }
+    return withMath(node, text);
+  }
   function drawPin(record) {
     pin.hidden = !record;
     if (!record) return;
     if (pin.dataset.part !== record.id) {
       pin.dataset.part = record.id;
-      var tex = hasMath(record.summary.title);
-      pin.replaceChildren(tex ? withMath(el("strong"), record.summary.title) : el("strong", "", plain(record.summary.title)));
+      pin.replaceChildren(titled(el("strong"), record.summary.title));
       if (tracked()) pin.append(el("span", "", progressText(record.summary)));
-      if (tex) typesetHidden(pin);
+      if (hasMath(record.summary.title)) typesetHidden(pin);
     }
   }
 
@@ -961,7 +960,7 @@
     hitRows.forEach(function (row, index) {
       var item = el("li"), button = el("button", "pm-hit");
       button.type = "button"; button.setAttribute("role", "option"); button.setAttribute("aria-selected", String(index === activeHit));
-      button.append(el("span", "pm-hit-title", plain(row[0])));
+      button.append(titled(el("span", "pm-hit-title"), row[0]));
       var meta = el("span", "pm-hit-meta"), chain = partChainFromSearch(row[2]);
       meta.append(document.createTextNode(chain.map(function (id) { return plain(model.search.partById.get(id)[1]); }).join(" / ")));
       if (row[1]) { meta.append(document.createTextNode(" · ")); meta.append(el("code", "", row[1])); }
@@ -969,6 +968,7 @@
       button.addEventListener("click", function () { choose(row); });
       item.append(button); hits.append(item);
     });
+    typesetHidden(hits);
     hits.hidden = false;
   }
   function choose(row) {
@@ -1130,13 +1130,14 @@
       more.append(el("summary", "", "Most-used results (" + num(summary.api_total) + ")"));
       summary.api.forEach(function (row) {
         var item = el("li"), button = el("button"); button.type = "button";
-        button.append(el("span", "", plain(row[1])), el("small", "", "used " + num(row[2]) + (row[2] === 1 ? " time" : " times")));
+        button.append(titled(el("span"), row[1]), el("small", "", "used " + num(row[2]) + (row[2] === 1 ? " time" : " times")));
         button.addEventListener("click", function () { arriveById(row[0]).catch(report); });
         item.append(button); list.append(item);
       });
       more.append(list);
       if (summary.api_total > summary.api.length) more.append(el("p", "pm-empty", "The " + num(summary.api.length) + " most used are listed."));
       readerInner.append(more);
+      typesetHidden(list);
     }
   }
   // Neighbouring parts for the panel, biggest first, each with a bar for how many results the link involves.
@@ -1181,7 +1182,7 @@
       shown = Math.min(items.length, shown + step);
       more.textContent = "Show more (" + num(items.length - shown) + " left)";
       more.hidden = shown >= items.length;
-      typeset(list);
+      typesetHidden(list);
     }
     more.addEventListener("click", page);
     page();
@@ -1296,7 +1297,7 @@
         var titleText = other ? other.row.title : outside ? outside[1] : item.id;
         var where = other ? part(other.home).summary.title : outside && outside[2].length ? (part(outside[2][outside[2].length - 1]) || {summary: {title: ""}}).summary.title || "" : "";
         var li = el("li"), button = el("button"); button.type = "button";
-        button.append(el("span", "", plain(titleText)), el("small", "", plain(where) + (item.statement ? "" : " · proof")));
+        button.append(titled(el("span"), titleText), el("small", "", plain(where) + (item.statement ? "" : " · proof")));
         button.addEventListener("click", function () { arriveById(item.id).catch(report); });
         li.append(button);
         return li;

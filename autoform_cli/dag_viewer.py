@@ -244,7 +244,7 @@ _STYLE = _asset_text("blueprint-dag.css").strip()
 
 
 _SCRIPT = "\n".join(_asset_text(name) for name in (
-    "blueprint-navigation.js", "blueprint-dag.js",
+    "tex-plain.js", "blueprint-navigation.js", "blueprint-dag.js",
 ))
 
 

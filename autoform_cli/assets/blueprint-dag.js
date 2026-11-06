@@ -47,26 +47,15 @@
     return root;
   }
 
-  // A tab title, a place line or an accessible name cannot typeset, so a formula there reads as its TeX made readable,
-  // as on the map. With parts for the same title, its code keeps its dollars; otherwise only formulas in \( \) are
-  // reduced, as a page's own title writes them, so a literal $ stays.
+  // A tab title, a place line or an accessible name cannot typeset, so a formula there reads as tex-plain.js makes it.
+  // With parts for the same title, its code keeps its dollars; otherwise only formulas in \( \) are reduced, as a
+  // page's own title writes them, so a literal $ stays.
   function plainTitle(text, label) {
-    var DOUBLE = {R: "ℝ", N: "ℕ", Z: "ℤ", Q: "ℚ", C: "ℂ", F: "𝔽", P: "ℙ", A: "𝔸", H: "ℍ", K: "𝕂"};
-    var GREEK = {alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε", varepsilon: "ε", zeta: "ζ", eta: "η", theta: "θ",
-      lambda: "λ", mu: "μ", nu: "ν", xi: "ξ", pi: "π", rho: "ρ", sigma: "σ", tau: "τ", phi: "φ", varphi: "φ", chi: "χ", psi: "ψ",
-      omega: "ω", Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ", Pi: "Π", Sigma: "Σ", Phi: "Φ", Psi: "Ψ", Omega: "Ω",
-      infty: "∞", to: "→", le: "≤", ge: "≥", leq: "≤", geq: "≥", ne: "≠", times: "×", cdot: "·", in: "∈", subset: "⊂", ell: "ℓ",
-      Vert: "‖", lVert: "‖", rVert: "‖"};
-    function plain(tex) {
-      return tex.replace(/\\mathbb\{([A-Za-z])\}/g, function (_x, letter) { return DOUBLE[letter] || letter; })
-        .replace(/\\(?:mathrm|mathcal|mathfrak|operatorname|text|mathbf|mathsf)\{([^}]*)\}/g, "$1")
-        .replace(/\\([A-Za-z]+)/g, function (_x, name) { return GREEK[name] || name; })
-        .replace(/\^\{([^}]*)\}/g, "^$1").replace(/_\{([^}]*)\}/g, "_$1")
-        .replace(/\\\|/g, "‖").replace(/(\\?)([{}])/g, function (_x, escaped, brace) { return escaped ? brace : ""; });
-    }
     var parts = label && label.format === "inline-parts-v1" && label.source === text && Array.isArray(label.parts) && label.parts;
-    if (!parts) return text.replace(/\\\(([\s\S]*?)\\\)/g, function (_m, tex) { return plain(tex); });
-    return parts.map(function (part) { return part[0] === "math" ? plain(String(part[1]).slice(2, -2)) : String(part[1]); }).join("");
+    if (!parts) return text.replace(/\\\(([\s\S]*?)\\\)/g, function (_m, tex) { return window.AutoformTexPlain.math(tex); });
+    return parts.map(function (part) {
+      return part[0] === "math" ? window.AutoformTexPlain.math(String(part[1]).slice(2, -2)) : String(part[1]);
+    }).join("");
   }
 
   // A title attribute shows text as typed, so a label holding a formula gets

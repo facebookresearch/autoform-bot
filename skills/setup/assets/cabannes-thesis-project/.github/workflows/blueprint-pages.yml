@@ -18,8 +18,11 @@ on:
       - ".github/workflows/blueprint-pages.yml"
   workflow_dispatch:
 
+# The build job reads the verify run's .ilean files, below; the deploy job has
+# permissions of its own.
 permissions:
   contents: read
+  actions: read
 
 env:
   AUTOFORM_SOURCE: "https://github.com/facebookresearch/autoform-bot.git"
@@ -74,6 +77,20 @@ jobs:
         with:
           version: "0.12.1"
 
+      # The verify run's .ilean files, from the build of this very commit, say
+      # which declaration each name in the Lean sources means. Without them, as
+      # on pull requests and manual runs, render links names as before.
+      - name: Fetch the build's name references
+        id: ileans
+        if: github.event_name == 'workflow_run'
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: autoform-ileans
+          path: ${{ runner.temp }}/ileans
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
       # Rejects cycles and dangling links, and fails when a node names a Lean
       # declaration that is not in the sources. Render, two steps on, reports
       # the warnings about the site's pages, so check leaves them to it when
@@ -100,16 +117,28 @@ jobs:
       # Writes site-src/: statement boxes, derived statuses, dependency maps,
       # and permalinks into the Lean code at this exact commit. A deploy names
       # the verified commit, since GITHUB_SHA is then main's newest one.
+      # With the build's .ilean files, when the fetch got them all and this
+      # AUTOFORM_REF's render reads them, each name in a statement's Lean links
+      # exactly what it means.
       - name: Render the blueprint
         env:
           PAGES_REF: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
-        run: >-
-          uvx --from "git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
-          autoform render blueprint
-          --output site-src
-          --lean-root .
-          --require-declarations
-          --ref "$PAGES_REF"
+          ILEANS: ${{ steps.ileans.outcome == 'success' && format('{0}/ileans', runner.temp) || '' }}
+        run: |
+          autoform="git+${AUTOFORM_SOURCE}@${AUTOFORM_REF}"
+          ileans=()
+          if [ -n "$ILEANS" ]; then
+            help="$(uvx --from "$autoform" autoform render --help)"
+            case "$help" in
+              *--ileans*) ileans=(--ileans "$ILEANS") ;;
+            esac
+          fi
+          uvx --from "$autoform" autoform render blueprint \
+            --output site-src \
+            --lean-root . \
+            --require-declarations \
+            --ref "$PAGES_REF" \
+            "${ileans[@]}"
 
       - name: Build the Markdown site
         run: >-

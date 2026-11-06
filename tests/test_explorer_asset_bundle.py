@@ -16,7 +16,7 @@ from autoform_cli import dag_viewer
 _ROOT = Path(__file__).resolve().parents[1]
 _ASSETS = _ROOT / "autoform_cli/assets"
 _BUNDLE = _ASSETS / "blueprint-explorer.min.js"
-_SOURCE_NAMES = ("blueprint-navigation.js", "blueprint-dag.js")
+_SOURCE_NAMES = ("tex-plain.js", "blueprint-navigation.js", "blueprint-dag.js")
 _BANNER = re.compile(rb"\A/\* autoform-explorer-source-sha256:([0-9a-f]{64}) \*/\n")
 
 
@@ -52,7 +52,9 @@ def test_real_compiler_and_node_free_publisher_agree_on_checkout_line_endings(
 ) -> None:
     node, project = _compiler_fixture(tmp_path)
     assets = project / "autoform_cli/assets"
-    for name, source in zip(_SOURCE_NAMES, ("// café\nwindow.AutoformNavigation={create(){return null;}};\n", "// map\nwindow.Explorer={route:'article.html'};\n")):
+    sources = ("// plain\nwindow.AutoformTexPlain={math(t){return t;}};\n",
+               "// café\nwindow.AutoformNavigation={create(){return null;}};\n", "// map\nwindow.Explorer={route:'article.html'};\n")
+    for name, source in zip(_SOURCE_NAMES, sources, strict=True):
         data = source.replace("\n", ending).encode("utf-8")
         (assets / name).write_bytes((b"\xef\xbb\xbf" if bom else b"") + data)
     compiler = project / "scripts/build-explorer.mjs"
@@ -76,7 +78,8 @@ def test_real_compiler_rejects_invalid_utf8_before_writing_a_bundle(tmp_path: Pa
     node, project = _compiler_fixture(tmp_path)
     assets = project / "autoform_cli/assets"
     (assets / _SOURCE_NAMES[0]).write_bytes(b"\xff")
-    (assets / _SOURCE_NAMES[1]).write_text("window.Explorer={};\n", encoding="utf-8")
+    for name in _SOURCE_NAMES[1:]:
+        (assets / name).write_text("window.Explorer={};\n", encoding="utf-8")
     result = subprocess.run([node, str(project / "scripts/build-explorer.mjs")], capture_output=True, text=True, timeout=45)
     assert result.returncode != 0 and not (assets / _BUNDLE.name).exists()
 
