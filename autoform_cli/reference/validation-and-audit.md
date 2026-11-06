@@ -237,12 +237,12 @@ one of three findings reports a statement that does not, checked in this order:
   that is underlined, quoted, or in a list item.
 - `placeholder-statement-text`: every word is one of `pending`, `placeholder`,
   `todo`, `tbd`, `unknown`, or the statement opens with one of them followed by
-  a colon or a dash, as in `TODO: state it`. A single hyphen or en dash counts
-  only with a space after it, so `Unknown-variance` is a word.
+  a colon, an em dash, `--`, or a hyphen or en dash and a space, as in
+  `TODO: state it`, so `Unknown-variance` is a word.
 
 The prose is read as the site publishes it, without headings, code blocks, and
 diagrams; inline code and mathematics count. A status word that begins a
-sentence ("Pending Mathlib PR 1234 ...") passes, and so does a marker written
-without punctuation; both are left to review. A reference-style link is read
-without its definition when that sits in a later section. Coverage evidence is
-held to the same placeholder rule.
+sentence ("Pending Mathlib PR 1234 ...") passes, and so does a marker followed
+by other punctuation or none; both are left to review. A reference-style link is
+read without its definition when that sits in a later section. Coverage evidence
+is held to the same placeholder rule.

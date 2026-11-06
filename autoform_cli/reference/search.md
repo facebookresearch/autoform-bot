@@ -2,24 +2,25 @@
 
 ## Search contract
 
-`autoform search` is a projection of Markdown: it writes nothing, builds no
+`autoform search` is a projection of Markdown: it writes nothing, keeps no
 index, and starts no process. An article is a hit only when every query term is
-a substring of one of its fields, not necessarily the same field for each term;
-this rule, the JSON shape, and the exit codes are the contract. How terms are
-cut, folded, shortened, and ranked may change (`search.py` describes it; `terms`
-in the JSON shows what was searched). Case, width, accents, typographic dashes
-and quotes, and invisible characters do not matter. The fields, best first:
+a substring of one of its fields, or matches `lean` as below, not necessarily
+the same field for each term; this rule, the JSON shape, and the exit codes are
+the contract. How terms are cut, folded, shortened, and ranked may change
+(`search.py` describes it; `terms` in the JSON shows what was searched). Case,
+width, accents, the dashes U+2010 to U+2015 and U+2212, the quotes U+2018,
+U+2019, U+201C and U+201D, and invisible characters do not matter. The fields,
+best first:
 
 - `title`, without its Markdown markup;
-- `lean`, the last component of each `lean:` and `mathlib_declaration` name, or
-  a term that is the whole name or its last components;
+- `lean`, each `lean:` and `mathlib_declaration` name after its last dot, or a
+  term that is the whole name or its last components, `_root_.` and `«»` aside;
 - `node_id`, the last component of the path ID;
 - `statement_text`, as the site publishes it (no headings, code blocks,
   diagrams, comments, or hidden elements), with inline code, and mathematics
   delimited `\(...\)`, so search for a formula's content;
 - `ancestors`, the titles of containing articles below the roadmap root;
-- `qualified_names`, the path ID and Lean names in full, where a namespace
-  alone matches.
+- `qualified_names`, path ID and Lean names in full; a namespace alone matches.
 
 Other frontmatter and the sections after the statement are not searched. There
 is no phrase, synonym, or prefix search, and one absent term means no hit:
@@ -71,8 +72,7 @@ whether search would accept it and if not why; its `--json` emits
 `reason` (`null` when usable). Neither command starts a process or writes a
 file. A search without `--library`, in a project that locks a package with an
 index file, adds one `note:` line on stderr naming the package and the flags
-that search it, and changes nothing else; the note only checks that the file
-exists, and `library list` decides whether the package is usable.
+that search it; the note only checks that the file exists.
 
 The index is the file `autoform-library-index.jsonl` at the package root, or the
 file given as `--library NAME=PATH`. Its format, `autoform-library-index/v0`,

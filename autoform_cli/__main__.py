@@ -186,8 +186,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="project root or blueprint directory (default: current directory)",
     )
     dashboard.add_argument("--site-dir", default="site", help="built MkDocs site directory")
-    dashboard.add_argument("--repo", help="claim-board Git repository; defaults to project origin")
-    dashboard.add_argument("--scratch", type=Path, help="local bare Git object cache")
+    dashboard.add_argument("--repo", help="deprecated: claim-board Git repository; defaults to project origin")
+    dashboard.add_argument("--scratch", type=Path, help="deprecated: local bare Git object cache")
     dashboard.add_argument("--host", default="127.0.0.1", help="loopback host")
     dashboard.add_argument(
         "--port",
@@ -511,7 +511,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
             )
             command.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    debrief_render = debrief_subparsers.add_parser("render", help="rebuild Markdown views of the records")
+    debrief_render = debrief_subparsers.add_parser("render", help="deprecated: rebuild Markdown views of the records")
     debrief_render.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
 
     abstraction_parser = subparsers.add_parser(
@@ -1057,6 +1057,11 @@ def _doctor(args: argparse.Namespace) -> int:
 
 
 def _dashboard(args: argparse.Namespace) -> int:
+    _warn_deprecated(
+        "autoform dashboard's live claim overlay",
+        "0.8.0",
+        "the dashboard keeps serving the built site on loopback, without --repo and --scratch",
+    )
     try:
         paths = resolve_runtime_paths(args.target)
         site = Path(args.site_dir).expanduser()
@@ -1649,6 +1654,11 @@ def _debrief(args: argparse.Namespace) -> int:
         return _debrief_orchestrator(args)
     try:
         if args.debrief_command == "render":
+            _warn_deprecated(
+                "autoform debrief subagent render",
+                "0.8.0",
+                "nothing replaces it; the records stay JSON under records/ in the debrief store",
+            )
             root = debrief.debrief_root(args.target)
             written = debrief.render(root)
             print(f"rendered {len(written)} debrief report(s) into {_human_text(root / debrief.VIEWS)}")

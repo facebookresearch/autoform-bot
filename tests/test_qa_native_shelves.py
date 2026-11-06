@@ -13,7 +13,7 @@ _CALLBACKS = [
     "element", "button", "readingLabel", "refreshReadingLabels", "safeHref", "graphAt", "recordId", "listed",
     "adoptGraph", "selection", "updateProjection",
     "statusLabel", "swatch", "solid", "syncControls", "activateNode", "setMode", "refresh",
-    "setSheet", "sheetLayout", "syncSheetAccessibility", "captureState", "snapshotForRoute", "restoreState", "sourceNodes", "inCurrentScope",
+    "setSheet", "sheetLayout", "syncSheetAccessibility", "plainTitle", "captureState", "snapshotForRoute", "restoreState", "sourceNodes", "inCurrentScope",
 ]
 
 _PEERS = (

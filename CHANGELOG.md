@@ -528,6 +528,9 @@ date when the release is tagged.
   `--json` hits whose `module` is exactly that module, with `--limit` at least
   `total_matches`; searching the module's name also returned other modules'
   declarations, and at most 20 (#204).
+- **Self-caused search refusals.** Formalize fixes a search refusal its own
+  arguments caused, such as `--limit 0` or a query that folds to nothing, and
+  searches again, as Roadmap does, where it reported the leaf as blocked (#171).
 
 ### Deprecated
 
@@ -545,6 +548,12 @@ parse, with or without `--json`, and changes nothing else.
   `lean_targets[].source_file` stays in `autoform-work/v2`, always null;
   `search --lean-root` prints a Lean name's file and line. Removed in 0.8.0
   (#647).
+- **The dashboard's live claim overlay.** `autoform dashboard` keeps serving a
+  built site on loopback, with its Host and Origin checks; its read-only overlay
+  of author claims, the `autoform-live/v1` payload and the `--repo` and
+  `--scratch` flags that feed it go. Removed in 0.8.0 (#669).
+- **`autoform debrief subagent render`.** Nothing replaces it; the records stay
+  JSON under `records/` in the debrief store. Removed in 0.8.0 (#669).
 
 ### Removed
 
@@ -590,6 +599,12 @@ parse, with or without `--json`, and changes nothing else.
   than 1 with a traceback. A refusal names a stale index before a merged or
   edited one, the missing-manifest refusal no longer suggests `lake update`, and
   the note naming an unsearched library quotes the flags it suggests.
+- **TeX in tab titles.** The explorer's browser tab title, the topic line
+  under a search hit or list row, the folded breadcrumb's "…", and what a
+  screen reader hears for the reading pane's button and for the page heading
+  while the reader is collapsed showed a title's formula as TeX source, such
+  as `$L^p$ spaces` or `\(L^p\) spaces`. They now read it as text,
+  `L^p spaces`, and a title's code keeps its dollars.
 - **Reference links on chapters with a `<` in the title.** A `<` in a
   chapter's title alone left reference-style links in its prose shown as typed
   (#631).
