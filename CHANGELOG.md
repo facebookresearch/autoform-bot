@@ -590,6 +590,15 @@ parse, with or without `--json`, and changes nothing else.
   while the reader is collapsed showed a title's formula as TeX source, such
   as `$L^p$ spaces` or `\(L^p\) spaces`. They now read it as text,
   `L^p spaces`, and a title's code keeps its dollars.
+- **Declarations split across lines.** A `class inductive` or `class abbrev`
+  whose name, or whose `inductive` or `abbrev` with its name, opens the next
+  line is indexed at the `class` line with its modifiers; it was missed, or
+  indexed without its `private`. Its kind is now `class`, as on one line, so
+  `audit` reports `lean-target-kind-mismatch` for an article that declares it
+  `inductive` or `abbrev`. A split name followed by `deriving`, and a split
+  declaration named `module`, are indexed as on one line. The site's Lean block
+  and hover card for a declaration whose name opens the line after its keyword,
+  at the keyword's column, now show that line (#363).
 - **Reference links on chapters with a `<` in the title.** A `<` in a
   chapter's title alone left reference-style links in its prose shown as typed
   (#631).

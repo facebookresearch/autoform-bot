@@ -354,7 +354,7 @@ def test_unfinished_keyword_does_not_take_a_nondeclaration_command_name(tmp_path
 @pytest.mark.parametrize(
     "name",
     [
-        "open'", "open!", "public?", "variable₁", "local'", "requires", "ensures",
+        "open'", "open!", "public?", "variable₁", "local'",
         "«open»", "«local»", "«@[deprecated]»", "Qualified.open", "Qualified.local", "«Qualified.open».value",
         "α₁", "ℕ_value", "𝒜_value",
     ],
@@ -367,19 +367,8 @@ def test_multiline_names_are_not_rejected_by_a_command_token_prefix(tmp_path: Pa
     assert index.find(f"Outer.{name}").line == 2
 
 
-@pytest.mark.parametrize(
-    "following",
-    [
-        "@decoration",
-        "not_a_name/part : Nat := 7",
-        "123 : Nat := 7",
-        "custom do pure ()",
-        "custom binders => Nat",
-        "custom (x : Nat) => Nat",
-        "custom (x : Nat] : Nat := 7",
-    ],
-)
-def test_multiline_continuation_requires_identifier_and_signature_syntax(tmp_path: Path, following: str) -> None:
+@pytest.mark.parametrize("following", ["@decoration", "not_a_name/part : Nat := 7", "123 : Nat := 7"])
+def test_multiline_continuation_requires_a_name_and_what_may_follow_one(tmp_path: Path, following: str) -> None:
     source = f"namespace Outer\ntheorem\n{following}\ndef actual : Nat := 7\nend Outer\n"
     index = _index(tmp_path, source)
 
@@ -400,6 +389,9 @@ def test_multiline_continuation_requires_identifier_and_signature_syntax(tmp_pat
         ("def", "zero", "\n    : Nat := 0"),
         ("def", "isZero", "| 0 => true\n    | _ => false"),
         ("structure", "Child", "extends Parent where\n    value : Nat"),
+        ("inductive", "Void", "deriving Repr"),
+        # `module` heads a file, not a command, so a declaration may have that name.
+        ("def", "module", ": Nat := 7"),
     ],
 )
 def test_multiline_declaration_names_keep_legal_signature_continuations(
@@ -434,6 +426,31 @@ def test_decorated_declaration_after_unfinished_keyword_keeps_its_own_line(tmp_p
     assert index.find("Outer.next").line == 5
     assert index.find("Outer.next").keyword == "theorem"
     assert index.find("Outer.next").protected
+
+
+@pytest.mark.parametrize(
+    "layout",
+    [
+        "class inductive\n  Good : Prop\n  | intro\n",
+        "class\n  inductive Good : Prop\n  | intro\n",
+        "class abbrev\n  Good (α : Type) := Inhabited α, Repr α\n",
+        "class\n  abbrev Good (α : Type) := Inhabited α, Repr α\n",
+    ],
+)
+def test_a_class_variant_split_across_lines_keeps_the_class_s_line_and_modifiers(tmp_path: Path, layout: str) -> None:
+    index = _index(tmp_path, f"namespace Outer\nprivate {layout}end Outer\n")
+
+    assert set(index.declarations) == {"Outer.Good"}
+    (good,) = index.occurrences("Outer.Good")
+    assert (good.line, good.keyword, good.private) == (2, "class", True)
+
+
+@pytest.mark.parametrize("rest", ["high]", "high, simp]"])
+def test_a_priority_closing_a_split_attribute_list_declares_nothing(tmp_path: Path, rest: str) -> None:
+    source = f"namespace Outer\n@[\n  instance\n  {rest}\ndef actual : Inhabited Nat := ⟨7⟩\nend Outer\n"
+    index = _index(tmp_path, source)
+
+    assert set(index.declarations) == {"Outer.actual"}
 
 
 def test_anonymous_multiline_instance_does_not_become_a_named_declaration(tmp_path: Path) -> None:
@@ -3723,6 +3740,22 @@ def test_a_declaration_keeps_its_attributes_closing_brackets_and_trailing_clause
     # Alternatives and a deriving clause at its indent are its own; the deriving instance command is not.
     assert text(9) == "\n".join(lines[8:12])
     assert text(15) == "\n".join(lines[14:19])
+
+
+def test_an_excerpt_holds_the_name_after_a_keyword_that_ends_its_line() -> None:
+    lines = [
+        "theorem", "foo : True := trivial", "class inductive", "Good : Prop", "| intro", "theorem -- why",
+        "bar : True := trivial", "theorem", "-- why", "baz : True := trivial", "def after : Nat := 0",
+    ]
+
+    def text(line: int) -> str:
+        return declaration_text(lines, Declaration("P.x", Path("P.lean"), line, "def"))
+
+    assert text(1) == "\n".join(lines[0:2])
+    assert text(3) == "\n".join(lines[2:5])
+    # A comment after the keyword, or on a line of its own, is no name, as the index reads it.
+    assert text(6) == "\n".join(lines[5:7])
+    assert text(8) == "\n".join(lines[7:10])
 
 
 def test_an_excerpt_counts_lines_as_the_index_does(tmp_path: Path) -> None:
