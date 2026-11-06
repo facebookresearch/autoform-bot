@@ -335,25 +335,32 @@ def _links(
             image = masked[start - 1 : start] == "!"
             link = None
             if close is not None:
-                label = masked[start + 1 : close]
                 reference = (
                     _REFERENCE_LABEL.match(masked, close + 1, stop)
                     if start > passed or (image and reading_images)
                     else None
                 )
-                full = _WHITESPACE.sub(" ", (reference.group(1) or label).lower()) if reference else None
-                short = _WHITESPACE.sub(" ", label.lower())
+                # A label is read only when needed: one nested a level deeper holds all the rest.
+                full = (
+                    _WHITESPACE.sub(" ", (reference.group(1) or masked[start + 1 : close]).lower()) if reference else None
+                )
                 inline = target.match(code_masked, close + 1, stop)
                 if reference and full not in references and not image:
                     passed = reference.end() - 1
                 if full in references:
                     if image and reading_images and read_first(reference, stop):
+                        # The site still reads the first label alone as a shortcut image.
+                        short = _WHITESPACE.sub(" ", masked[start + 1 : close].lower())
+                        if short in references:
+                            images.append((start - 1, start + 1, close, close + 1, references[short]))
                         start = masked.find("[", reference.start(1) - 1, stop)
                         continue
                     link = references[full], reference.end()
                 elif inline is not None:
                     link = _unwrap_target(inline.group(1)), inline.end()
-                elif (start > spent or (image and reading_images)) and short in references:
+                elif (start > spent or (image and reading_images)) and (
+                    short := _WHITESPACE.sub(" ", masked[start + 1 : close].lower())
+                ) in references:
                     link = references[short], close + 1
                 elif not image:
                     spent = max(spent, close)
@@ -376,7 +383,8 @@ def reference_images(value: str, references: dict[str, str]) -> list[tuple[int, 
     ``(start, text_start, text_end, end, target)``: ``![text][label]``,
     ``![label][]`` or ``![label]`` whose label ``references`` defines, read
     as :func:`_block_links` reads links, without the block's quote markers,
-    and placed back in ``value``, so a rewrite can cut one to its text."""
+    placed back in ``value`` and in the order they stand, so a rewrite can
+    cut each to its text from the last."""
 
     lines = value.split("\n")
     unquoted = [_unquoted(line)[0] for line in lines]
@@ -394,10 +402,11 @@ def reference_images(value: str, references: dict[str, str]) -> list[tuple[int, 
 
     images: list[tuple[int, int, int, int, str]] = []
     _links("\n".join(unquoted), references, images=images)
-    return [
+    # In the order they stand: an image in a link's text is read after the block.
+    return sorted(
         (placed(start), placed(text_start), placed(text_end), placed(end), target)
         for start, text_start, text_end, end, target in images
-    ]
+    )
 
 
 def _block_links(lines: list[str], references: dict[str, str]) -> list[tuple[int, str]]:

@@ -31,6 +31,7 @@ from .markdown import (
     _blank_code,
     _block_links,
     _is_hidden_path,
+    content_lines,
     directory_path,
     frontmatter_end,
     link_definitions,
@@ -522,13 +523,21 @@ def unpublished_content(files: tuple[tuple[str, bytes], ...]) -> tuple[str, ...]
     return tuple(folders)
 
 
+#: A line that sets the ``published`` key, or tries to: another case, quotes, ``publish``.
+_SETTING_LINE = re.compile(r"""\s*["']?(?P<key>publish(?:ed)?)["']?\s*:\s*(?P<value>.*)$""", re.IGNORECASE)
+#: A value that reads as a yes or a no, even one the frontmatter refuses, such as one with a comment.
+_YES_OR_NO = re.compile(r"""["']?(?:true|false|yes|no|on|off)["']?(?:\s+#.*)?\s*$""", re.IGNORECASE)
+
+
 def unpublished_setting_issues(files: Sequence[tuple[str, bytes]]) -> list[str]:
     """Why each Markdown page under ``sources/`` that tries to set
     ``published`` does not, so the site publishes what it meant to keep off:
     a folder's README.md whose setting does not parse, and ``sources/README.md``,
     another spelling of a README, or a note's frontmatter, where the setting
-    takes no effect. Check's graph reads no source note, so nothing else
-    reports these."""
+    takes no effect. A line in a code block or a comment sets nothing, and
+    outside a README's frontmatter only a yes or a no reads as a setting, so a
+    date or a sentence that starts with the word is left alone. Check's graph
+    reads no source note, so nothing else reports these."""
 
     issues = []
     for name, data in files:
@@ -536,23 +545,33 @@ def unpublished_setting_issues(files: Sequence[tuple[str, bytes]]) -> list[str]:
         if len(parts) < 2 or parts[0] != "sources" or not parts[-1].casefold().endswith(PAGE_SUFFIXES):
             continue
         try:
-            lines = data.decode("utf-8").splitlines()
+            text = data.decode("utf-8")
         except UnicodeError:
             continue
-        setting = [index for index, line in enumerate(lines) if re.match(r"\s*published\s*:", line)]
-        if not setting:
+        settings = [(index, found) for index, line in enumerate(content_lines(text)) if (found := _SETTING_LINE.match(line))]
+        if not settings:
             continue
-        metadata, _end, found = _parse_frontmatter(name, lines)
-        readme = parts[-1].rpartition(".")[0].casefold() == "readme"
+        lines = text.splitlines()
+        front = frontmatter_end(lines)
+        metadata, _end, found_issues = _parse_frontmatter(name, lines)
         if len(parts) > 2 and parts[-1] == "README.md":
-            if "published" not in metadata:
-                reasons = [issue for issue in found if "published" in issue] or [
-                    issue for issue in found if "unterminated frontmatter" in issue
+            # Any try at the key in the frontmatter, or a yes or a no outside it.
+            if "published" not in metadata and any(index < front or _YES_OR_NO.match(found["value"]) for index, found in settings):
+                reasons = [issue for issue in found_issues if "publish" in issue.casefold()] or [
+                    issue for issue in found_issues if "unterminated frontmatter" in issue
                 ]
                 reason = reasons[0] if reasons else f"{name}: sets published outside its frontmatter"
                 issues.append(f"{reason}, so the site publishes the folder")
-        # A note may say "published:" in its text; only its frontmatter sets anything.
-        elif readme or "published" in metadata or setting[0] < frontmatter_end(lines):
+            continue
+        readme = parts[-1].rpartition(".")[0].casefold() == "readme"
+        first = next((index for index, line in enumerate(lines) if line.strip()), -1)
+        # A note's publish key belongs to other tools, such as Obsidian Publish.
+        if "published" in metadata or any(
+            (readme or found["key"].casefold() == "published")
+            and _YES_OR_NO.match(found["value"])
+            and (index < front or (readme and index == first))
+            for index, found in settings
+        ):
             issues.append(
                 f"{name}: published takes effect only in the README.md of a folder below sources/, "
                 f"so the site publishes {'the folder' if readme else 'the note'}"

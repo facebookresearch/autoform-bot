@@ -1023,12 +1023,10 @@ def render_site(
             raise PublicationError([index_failure_message(error)]) from error
         repository_url = repository_url if repository_url is not None else detect_repository_url(repo_root)
         ref = ref if ref is not None else detect_ref(repo_root)
-        # The commit must hold sources/ only when something there may be linked
-        # in it, not when all it holds is a folder that stays off the site.
-        sources = any(
-            name.startswith(f"{SOURCES_DIR}/")
-            for name in (*dict(snapshot.files), *(name for name, kind in snapshot.omitted if kind != "unpublished"))
-        )
+        # The commit must hold sources/ only when a file render captured there
+        # may be linked in it: a hidden file, or a folder that stays off the
+        # site, may be missing from the commit, which then holds no sources/.
+        sources = any(name.startswith(f"{SOURCES_DIR}/") for name, _data in snapshot.files)
         reasons: list[str] = []
         blueprint_reasons: list[str] = []
         spellings: dict[str, str] = {}
@@ -1071,8 +1069,8 @@ def render_site(
         # The inventory accounts for every file the verified commit holds.
         tracked = tracked_files(repo_root, commit, blueprint) if links_blueprint and commit else None
         # Scans and data leave the site only for a directory the verified commit
-        # holds, which it may though nothing there is linked, such as a
-        # committed folder that stays off the site; the folder is linked then.
+        # holds, which it may though render captured nothing there: a committed
+        # hidden note or folder that stays off the site. The folder is linked then.
         if not sources and tracked is not None and SOURCES_DIR in snapshot.directories:
             sources = any(name.startswith(f"{SOURCES_DIR}/") for name in tracked)
         sources_base = _sources_base(copy, copy_root, linker) if sources else None
@@ -3434,15 +3432,14 @@ def _rewrite_links(
             return None
         # Capture leaves out hidden paths and unpublished folders, so the site has
         # no page there, though check's graph knows the articles in such a folder.
-        # Once render verified the commit, a hidden source note is reached
-        # through the repository instead.
+        # A hidden source note is reached through the repository instead.
         try:
             relative = _relative(candidate, blueprint)
         except ValueError:
             relative = None
         if relative is not None and (
             any(_is_within(candidate, folder) for folder in unpublished)
-            or (_is_hidden(relative) and (sources_base is None or relative.parts[:1] != (SOURCES_DIR,)))
+            or (_is_hidden(relative) and relative.parts[:1] != (SOURCES_DIR,))
         ):
             unlinked.add(raw)
             if dropped is not None:
@@ -3576,27 +3573,29 @@ def _page_definitions(text: str) -> dict[str, str]:
     """The reference definitions the site reads in *text* once
     :func:`_rewrite_links` has rewritten it, by label, each with its target as
     written: one the site reads as written, in a quote too, and one the
-    rewrite makes readable, in a block it opens with a definition, such as a
-    target in angle brackets that holds a space. A later definition of a label
-    replaces an earlier one, as on the site."""
+    rewrite makes readable, such as a target in angle brackets that holds a
+    space. A later definition of a label replaces an earlier one, as on the
+    site."""
 
+    # The lines the rewrite reads as definitions, found in the blocks it is given.
+    rewritten: set[str] = set()
+
+    def collect(line: str) -> str:
+        if "\n" in line and _LINK_DEFINITION.match(line.partition("\n")[0]):
+            for piece in line.split("\n"):
+                collect(piece)
+        elif _LINK_DEFINITION.match(line) and ("\n" not in line or _SITE_LINK_DEFINITION.match(line)):
+            rewritten.add(line)
+        return line
+
+    _outside_fences(text, collect, page=True, joined=True)
     definitions: dict[str, str] = {}
-    opens_with_one = False
-    previous_blank = True
     for line in _content_lines(text):
-        if not line.strip():
-            previous_blank = True
-            continue
-        written = _LINK_DEFINITION.match(line)
-        # The rewrite reads a block line by line when its first line is a definition.
-        if previous_blank:
-            opens_with_one = written is not None
-        previous_blank = False
         # The site expands tabs before it reads a definition.
         read = _SITE_LINK_DEFINITION.match(_unquoted(line)[0].expandtabs(4))
         if read is not None:
             definitions[read.group(1).strip().lower()] = read.group(2)
-        elif written is not None and opens_with_one:
+        elif line in rewritten and (written := _LINK_DEFINITION.match(line)):
             definitions[written.group("label").strip().lower()] = written.group("target")
     return definitions
 

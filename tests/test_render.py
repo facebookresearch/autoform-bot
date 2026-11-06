@@ -2308,8 +2308,9 @@ def test_coverage_evidence_in_an_unpublished_folder(tmp_path: Path, folder: str)
             "---\ntitle: Drafts\n---\n\npublished: false\n",
             "sources/drafts/README.md: sets published outside its frontmatter",
         ),
+        ("---\nPublished: false\n---\n\n# Drafts\n", "sources/drafts/README.md:2: unsupported frontmatter key 'Published'"),
     ],
-    ids=["value", "unterminated", "no-frontmatter", "after-another-key"],
+    ids=["value", "unterminated", "no-frontmatter", "after-another-key", "key-case"],
 )
 def test_a_sources_readme_whose_published_setting_does_not_parse_is_warned_about(
     tmp_path: Path, readme: str, issue: str
@@ -2335,20 +2336,37 @@ def test_a_sources_readme_whose_published_setting_does_not_parse_is_warned_about
     [
         ("sources/README.md", "---\npublished: false\n---\n\n# Kept\n", "the folder"),
         ("sources/README.md", "---\npublished: off\n---\n\n# Kept\n", "the folder"),
+        ("sources/README.md", "---\npublish: false\n---\n\n# Kept\n", "the folder"),
+        ("sources/README.md", "---\npublished: false # hide it\n---\n\n# Kept\n", "the folder"),
         ("sources/paper.md", "---\npublished: false\n---\n\n# Kept\n", "the note"),
         ("sources/book.markdown", "---\npublished: false\n---\n\n# Kept\n", "the note"),
         ("sources/drafts/readme.md", "published: false\n\n# Kept\n", "the folder"),
         ("sources/drafts/README.markdown", "---\npublished: false\n---\n\n# Kept\n", "the folder"),
-        ("sources/notes.md", "# Kept\n\npublished: 2012\n", None),
+        ("sources/paper.md", "---\npublished: off\n---\n\n# Kept\n", "the note"),
+        ("sources/notes.md", "# Kept\n\npublished: no\n", None),
+        ("sources/book.md", "---\npublished: 2012\n---\n\n# Kept\n", None),
     ],
-    ids=["sources-readme", "sources-readme-value", "note", "markdown-suffix", "lower-case-readme", "readme-suffix", "note-text"],
+    ids=[
+        "sources-readme",
+        "sources-readme-value",
+        "sources-readme-publish",
+        "sources-readme-comment",
+        "note",
+        "markdown-suffix",
+        "lower-case-readme",
+        "readme-suffix",
+        "note-value",
+        "note-text",
+        "note-year",
+    ],
 )
 def test_published_where_it_takes_no_effect_below_sources_is_warned_about(
     tmp_path: Path, name: str, content: str, published: str | None
 ) -> None:
     """Only a README.md below sources/ keeps its folder off the site, so a
     published setting anywhere else there is warned about, whether or not it
-    parses; a note's text may say "published:" without a word."""
+    parses, as is a README's publish; a note's text, or a year in its
+    frontmatter, sets nothing."""
     project = _with_source_notes(tmp_path)
     blueprint = project / "blueprint"
     (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
@@ -2366,15 +2384,44 @@ def test_published_where_it_takes_no_effect_below_sources_is_warned_about(
     assert [issue for issue in issues if "published takes effect" in issue] == warnings
 
 
+@pytest.mark.parametrize(
+    ("name", "content"),
+    [
+        ("sources/drafts/README.md", "# Drafts\n\nPublished 2002 by Springer.\npublished: 2002 by Springer\n"),
+        ("sources/drafts/README.md", "# Drafts\n\nTo keep it off the site:\n\n```yaml\npublished: false\n```\n"),
+        ("sources/drafts/README.md", "# Drafts\n\n<!-- published: false -->\n"),
+        ("sources/README.md", "---\npublished: 2024-05-01\n---\n\n# Sources\n"),
+        ("sources/paper.md", "---\npublish: false\n---\n\n# Paper\n"),
+    ],
+    ids=["a-date-in-the-text", "a-code-example", "a-comment", "a-date-in-the-frontmatter", "obsidian-publish"],
+)
+def test_a_page_below_sources_that_only_mentions_published_is_not_warned_about(
+    tmp_path: Path, name: str, content: str
+) -> None:
+    """Only a yes or a no reads as the setting where it takes no effect, or
+    outside a folder README's frontmatter; a code example or a comment sets
+    nothing, and a note's publish key belongs to other tools. None of these is
+    warned about."""
+    project = _with_source_notes(tmp_path)
+    blueprint = project / "blueprint"
+    (blueprint / name).parent.mkdir(parents=True, exist_ok=True)
+    (blueprint / name).write_text(content, encoding="utf-8")
+
+    report = render_site(blueprint, tmp_path / "out", lean_root=project)
+
+    assert not [warning for warning in report.warnings if "publishes the" in warning]
+
+
 def test_a_sources_folder_holding_only_an_ignored_unpublished_folder_keeps_the_source_links(tmp_path: Path) -> None:
     """The commit need not hold sources/ when all it holds is a folder that
-    stays off the site, so an ignored private folder there leaves the
-    Markdown source links on."""
+    stays off the site and a hidden file, so an ignored private folder and an
+    ignored .DS_Store there leave the Markdown source links on."""
     project = _project(tmp_path)
-    (project / ".gitignore").write_text("blueprint/sources/private/\n", encoding="utf-8")
+    (project / ".gitignore").write_text("blueprint/sources/private/\nblueprint/sources/.DS_Store\n", encoding="utf-8")
     ref = _commit_project(project)
     private = project / "blueprint/sources/private"
     private.mkdir(parents=True)
+    (project / "blueprint/sources/.DS_Store").write_bytes(b"\0")
     (private / "README.md").write_text("---\npublished: false\n---\n\n# Private\n", encoding="utf-8")
     (private / "notes.md").write_text("# Notes\n", encoding="utf-8")
 
@@ -2414,21 +2461,6 @@ def test_a_file_named_sources_leaves_the_source_links_on(tmp_path: Path) -> None
 
     assert not any("links were omitted" in warning for warning in report.warnings)
     assert f"/blob/{ref}/Project/Basic.lean" in (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
-
-
-def test_a_link_to_a_hidden_source_note_keeps_its_text_without_a_commit(tmp_path: Path) -> None:
-    """Only a verified commit reaches a hidden note in the repository; without
-    one the site has no page for it, so the link keeps its text, with a
-    warning, as a link to any hidden path does."""
-    project = _with_source_notes(tmp_path)
-    sources = project / "blueprint/sources"
-    (sources / ".draft.md").write_text("# Draft\n", encoding="utf-8")
-    _edit(sources / "paper.md", "Transcribed statements from the paper.", "See [the draft](.draft.md).")
-
-    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project)
-
-    assert "See the draft." in (tmp_path / "out/sources/paper.md").read_text(encoding="utf-8")
-    assert any(warning.startswith("sources/paper.md:") and ".draft.md" in warning for warning in report.warnings)
 
 
 def test_the_source_nav_leaves_out_a_path_no_link_can_name(tmp_path: Path) -> None:
@@ -2510,12 +2542,19 @@ def test_a_notes_reference_image_of_a_file_the_site_links_in_the_repository_keep
         ("[![Diagram][d]][d]", "[Diagram][d]", "diagram.svg"),
         ("[![Diagram][d]](diagram.svg)", "[Diagram]({repository}/diagram.svg)", "diagram.svg"),
         ("[![Diagram][d]][nope]", "[Diagram][nope]", "diagram.svg"),
-        ("[![d]]", "[d]\n", "diagram.svg"),
+        ("[see ![d]] here", "[see d] here", "diagram.svg"),
+        ("[![p. 12][d]][d] [![p. 13][d]][d]", "[p. 12][d] [p. 13][d]", "diagram.svg"),
+        ("See [![Figure 1][d]](paper.md) and\n![Figure 2][d] in the scan.", "See [Figure 1](paper.md) and\nFigure 2 in the scan.", "diagram.svg"),
+        ("![Figure 1][] [Lemma 3][] shows it.", "Figure 1[] [Lemma 3][] shows it.", "diagram.svg"),
         ("> ![The\n> diagram][]", "> The\n> diagram", "diagram.svg"),
         ("> ![Diagram]\n> [d]", "> Diagram\n", "diagram.svg"),
         ("![Diagram][t]", "Diagram\n", "diagram.svg"),
         ("See ![Diagram][m] here.\n[m]:\tdiagram.svg", "See Diagram here.", "diagram.svg"),
         ("![Copy][c]", "Copy\n", "<diagram copy.svg>"),
+        ("## Figures\n[h]: <diagram copy.svg>\n\n![Copy][h]", "Copy\n", "<diagram copy.svg>"),
+        ("![Copy][w]\n\n[w]: <diagram copy.svg>\nsays which copy.", "Copy\n", "<diagram copy.svg>"),
+        ("![Quoted][q] here\n\n> [q]: diagram.svg", "Quoted here", "diagram.svg"),
+        ("![Quoted][q] here\n\n> [q]:\tdiagram.svg", "Quoted here", "diagram.svg"),
         ("![#3 diagram][d]", "\\#3 diagram\n", "diagram.svg"),
         ("![ > 1. diagram](diagram.svg)", " \\> 1. diagram\n", "diagram.svg"),
         ("![A][d](paper.md)", "![A][d](paper.md)", None),
@@ -2525,11 +2564,18 @@ def test_a_notes_reference_image_of_a_file_the_site_links_in_the_repository_keep
         "in-an-inline-link",
         "in-brackets-no-reference-reads",
         "in-brackets-no-shortcut-reads",
+        "gallery",
+        "in-a-link-then-alone",
+        "shortcut-beside-a-reference-link",
         "quoted-label-wraps",
         "quoted-label-on-the-next-line",
         "tab",
         "tab-in-a-paragraph",
         "angle-brackets-and-a-space",
+        "definition-under-a-heading",
+        "definition-opening-a-paragraph",
+        "definition-in-a-quote",
+        "definition-in-a-quote-with-a-tab",
         "hash",
         "inline-quote-marker",
         "second-label-is-a-link",
@@ -2539,15 +2585,19 @@ def test_a_reference_image_of_a_file_the_site_links_in_the_repository_keeps_its_
     tmp_path: Path, body: str, kept: str, shown: str | None
 ) -> None:
     """The site reads an image in a link's text, in brackets a link pass
-    skipped, in a label a quote wraps, and through a definition with a tab or
-    one the rewrite makes readable, so each keeps its text, with a warning; a
-    kept text that starts like block markup is escaped. A second label that
-    opens a link is read as one first, so no image is there."""
+    skipped, in a label a quote wraps, and through a definition with a tab, in
+    a quote or one the rewrite makes readable, so each keeps its text, with a
+    warning, every one of several in a block; a kept text that starts like
+    block markup is escaped. A second label that opens a link is read as one
+    first, so only the first label can still be an image."""
     project = _with_source_notes(tmp_path)
     sources = project / "blueprint/sources"
     for name in ("diagram.svg", "diagram copy.svg"):
         (sources / name).write_text("<svg/>\n", encoding="utf-8")
-    definitions = "[d]: diagram.svg\n[the diagram]: diagram.svg\n[t]:\tdiagram.svg\n[c]: <diagram copy.svg>"
+    definitions = (
+        "[d]: diagram.svg\n[the diagram]: diagram.svg\n[t]:\tdiagram.svg\n[c]: <diagram copy.svg>\n"
+        "[figure 1]: diagram.svg\n[lemma 3]: paper.md"
+    )
     _edit(sources / "paper.md", "Transcribed statements from the paper.", f"{body}\n\n{definitions}")
     ref = _commit_project(project)
 
