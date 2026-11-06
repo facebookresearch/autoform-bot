@@ -606,7 +606,6 @@ def test_is_within_and_relative_agree_with_relative_to(path: str, directory: str
     ("body", "message"),
     [
         (_node_text("No title\n"), "missing H1 title"),
-        (_node_text("# First title\n# Second title\n"), "multiple H1 titles"),
         ("---\ndeclaration: theorem\n# Title\n", "unterminated frontmatter"),
         (_node_text("# Title\n", owner="me"), "unsupported frontmatter key"),
         (_node_text("# Title\n", catalog="book"), "'catalog' accepts only 'module'"),
@@ -839,6 +838,220 @@ def test_informally_uses_below_a_dependency_heading_is_a_warning(tmp_path: Path,
     )
 
 
+def test_a_later_h1_warns_with_its_line_and_stays_in_its_section(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "top.md", "# Top\n## Proof depends on\n# Aside\n[Base](base.md)\n")
+
+    graph = load_graph(blueprint)
+
+    # The first H1 is the title. A later one ends no section, as on the site.
+    assert graph.nodes["top"].title == "Top"
+    assert graph.nodes["top"].proof_dependencies == ("base",)
+    assert graph.warnings == (
+        "top: line 5: '# Aside' is a later H1, which stays in its section; the first H1 is the title",
+    )
+
+
+def test_a_later_h1_named_informally_uses_warns_twice_in_line_order(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "top.md", "# Top\n## Proof depends on\n# Informally uses\n[Base](base.md)\n")
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["top"].proof_dependencies == ("base",)
+    assert graph.warnings == (
+        "top: line 5: '# Informally uses' is a later H1, which stays in its section; the first H1 is the title",
+        "top: '# Informally uses' is read as part of '## Proof depends on', so its links count; "
+        "write it as '## Informally uses'",
+    )
+
+
+def test_a_title_below_a_section_ends_that_section_in_the_graph(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "other.md", "# Other\n")
+    _node(blueprint, "top.md", "Intro.\n\n## Depends on\n\n- [Base](base.md)\n\n# Top\n\nSee [Other](other.md).\n")
+
+    graph = load_graph(blueprint)
+
+    # As the statement reads it: the title resumes the statement.
+    assert graph.nodes["top"].dependencies == ("base",)
+    assert graph.warnings == ()
+
+
+def test_check_loads_an_article_whose_unclosed_fence_holds_a_comment(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#171 read an unclosed fence as text, so a shell comment in one was a second H1, and the graph refused."""
+    blueprint = tmp_path / "blueprint"
+    _node(
+        blueprint,
+        "setup.md",
+        "# Setup\n\nBuild it.\n\n```bash\n#!/usr/bin/env bash\n# install the toolchain\nlake build\n",
+    )
+
+    assert main(["check", str(blueprint)]) == 0
+    warnings = [line for line in capsys.readouterr().out.splitlines() if line.startswith("warning: ")]
+    assert warnings[0] == (
+        "warning: setup: line 9: '# install the toolchain' is a later H1, which stays in its section; "
+        "the first H1 is the title"
+    )
+    # The page's own warning names the fence that causes it. The site shows the
+    # page as typed, so '#!' is no heading there to compare with.
+    assert warnings[1].startswith("warning: setup: line 7: code fence is not closed")
+    assert not any("the site reads" in warning for warning in warnings)
+
+
+def test_a_page_the_site_shows_as_typed_for_its_raw_html_has_no_heading_to_compare(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    # The site shows the page as typed for its <pre>, which check names, so
+    # '#!' is no heading there, and '\#!' would only edit the script.
+    _node(blueprint, "setup.md", "# Setup\n\n<pre>\n#!/bin/sh\n</pre>\n")
+
+    assert load_graph(blueprint).warnings == ()
+
+
+def test_a_page_nested_deeper_than_the_converter_reads_has_no_heading_to_compare(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    # Render shows the page as typed rather than stopping, so the loader neither stops nor compares headings.
+    deep = "".join("    " * depth + "- level\n" for depth in range(400))
+    _node(blueprint, "top.md", f"# Top\n\n ## Proof\n\n{deep}")
+
+    assert load_graph(blueprint).warnings == ()
+
+
+def test_a_fence_only_the_loader_reads_keeps_the_heading_warning(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    # The page drops the comment, which leaves the ``` inside a line, so it opens
+    # no fence there and the page shows a heading; the graph has no proof dependency.
+    body = "# Top\n\nSee the code <!-- a note\nends here --> ```\n\n##Proof depends on\n\n- [Base](base.md)\n"
+    _node(blueprint, "top.md", body)
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["top"].dependencies == ()
+    assert graph.warnings == (
+        "top: line 8: the site reads '##Proof depends on' as a heading and autoform as text; "
+        "put a plain space after the '#' marks, or write '\\#' to keep it text",
+    )
+
+
+@pytest.mark.parametrize(
+    ("heading", "statement", "proof", "warning"),
+    [
+        (
+            "##Proof depends on",
+            ("base",),
+            (),
+            "the site reads '##Proof depends on' as a heading and autoform as text; "
+            "put a plain space after the '#' marks, or write '\\#' to keep it text",
+        ),
+        (
+            "##[Lemma](lemma.md)",
+            ("lemma", "base"),
+            (),
+            "the site reads '##[Lemma](lemma.md)' as a heading and autoform as text; "
+            "put a plain space after the '#' marks, or write '\\#' to keep it text",
+        ),
+        (
+            "   ## Proof depends on",
+            (),
+            ("base",),
+            "autoform reads '   ## Proof depends on' as a heading and the site as text, since it is indented; "
+            "remove the spaces before the '#', or write '\\#' to keep it text",
+        ),
+    ],
+    ids=["unspaced", "unspaced-link", "indented"],
+)
+def test_a_heading_the_site_reads_differently_warns_and_keeps_its_reading(
+    tmp_path: Path, heading: str, statement: tuple[str, ...], proof: tuple[str, ...], warning: str
+) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    _node(blueprint, "lemma.md", "# Lemma\n")
+    _node(blueprint, "top.md", f"# Top\n\n## Depends on\n\n{heading}\n\n[Base](base.md)\n")
+
+    graph = load_graph(blueprint)
+
+    node = graph.nodes["top"]
+    assert (node.statement_dependencies, node.proof_dependencies) == (statement, proof)
+    assert graph.warnings == (f"top: line 7: {warning}",)
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        "```\n##Proof\n ## Proof\n```\n",
+        "<!--\n##Proof\n ## Proof\n-->\n",
+        "    ##Proof\n",
+        "\\##Proof\n",
+        "> ##Proof\n",
+        "- ##Proof\n",
+        "##\tProof\n",
+    ],
+    ids=["fence", "comment", "indented-code", "escaped", "quote", "list", "tab"],
+)
+def test_a_hash_line_that_is_a_section_to_both_readers_or_neither_does_not_warn(tmp_path: Path, lines: str) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "top.md", f"# Top\n\nSome text.\n\n{lines}")
+
+    assert load_graph(blueprint).warnings == ()
+
+
+def test_an_indented_heading_warns_only_where_its_article_is_a_page(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    body = "# {}\n\nThe statement.\n\n ## Remarks\n\nA remark.\n"
+    _node(blueprint, "page.md", body.format("Page"))
+    # A leaf's box reads the heading as the loader does, as a module catalog's does.
+    _node(blueprint, "leaf.md", body.format("Leaf"), declaration="theorem")
+    _node(blueprint, "catalog.md", body.format("Catalog"), catalog="module")
+    # A leaf that holds others is a page again.
+    _roadmap_page(blueprint, "held/README.md", _node_text(body.format("Held"), declaration="theorem"))
+    _node(blueprint, "held/part.md", "# Part\n")
+    # Render leaves out an unpublished folder, so a leaf that holds only one keeps its box.
+    _roadmap_page(blueprint, "shut/README.md", _node_text(body.format("Shut"), declaration="theorem"))
+    _node(blueprint, "shut/drafts/README.md", "# Drafts\n", published="false")
+
+    graph = load_graph(blueprint)
+
+    indented = "line {}: autoform reads ' ## Remarks' as a heading and the site as text, since it is indented; "
+    fix = "remove the spaces before the '#', or write '\\#' to keep it text"
+    assert graph.warnings == (f"held: {indented.format(8)}{fix}", f"page: {indented.format(7)}{fix}")
+
+
+_TOP_HINT = "top: missing H1 title; the site reads line 3, '#Top', as one: put a plain space after the '#'"
+
+
+@pytest.mark.parametrize(
+    ("body", "issue"),
+    [
+        ("#Top\n", "top: missing H1 title; the site reads line 3, '#Top', as one: put a plain space after the '#'"),
+        (
+            "#One\n\n#Two\n",
+            "top: missing H1 title; the site reads line 3, '#One', as one: put a plain space after the '#'",
+        ),
+        ("##Top\n", "top: missing H1 title"),
+        ("```sh\n#!/bin/sh\n", "top: missing H1 title"),
+        # Render takes the title from the line even on a page it shows as typed.
+        ("#Top\n\nSee <b>this</b>.\n", _TOP_HINT),
+        ("#Top\n\n```sh\necho\n", _TOP_HINT),
+        ("#Top\n\n" + "".join("    " * depth + "- level\n" for depth in range(400)), _TOP_HINT),
+    ],
+    ids=["title", "first", "h2", "unclosed-fence", "raw-html", "fence-below", "too-deep"],
+)
+def test_a_title_without_a_space_names_its_line(tmp_path: Path, body: str, issue: str) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "top.md", body)
+
+    with pytest.raises(GraphValidationError) as caught:
+        load_graph(blueprint)
+
+    assert caught.value.issues == (issue,)
+
+
 def test_accepts_cycle_created_only_by_chapter_contraction(tmp_path: Path) -> None:
     blueprint = tmp_path / "blueprint"
     _roadmap_page(blueprint, "a/README.md", "# A\n")
@@ -973,7 +1186,14 @@ def test_a_heading_indented_under_a_line_still_opens_its_section(tmp_path: Path)
     _node(blueprint, "base.md", "# Base\n")
     _node(blueprint, "result.md", "# Result\n\nStatement.\n  ## Depends on\n- [Base](base.md)\n")
 
-    assert load_graph(blueprint).nodes["result"].dependencies == ("base",)
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["result"].dependencies == ("base",)
+    # The site reads the line on into the paragraph above it.
+    assert graph.warnings == (
+        "result: line 6: autoform reads '  ## Depends on' as a heading and the site as text, since it is indented; "
+        "remove the spaces before the '#', or write '\\#' to keep it text",
+    )
 
 
 def test_a_wrapped_dependency_inside_an_unpublished_folder_counts(tmp_path: Path) -> None:

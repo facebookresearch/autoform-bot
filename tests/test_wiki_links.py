@@ -100,6 +100,59 @@ def test_actual_hash_headings_without_spaces_still_exclude_provenance_and_formal
     ) == site_index.WikiLinks(((0, 1),))
 
 
+@pytest.mark.parametrize("section", ["Sources", "Depends on", "Proof depends on"])
+def test_a_later_h1_stays_in_the_provenance_section_above_it(section: str) -> None:
+    view = _view("a", "b", "c")
+    paths, sources, metadata = _inputs("a", "b", "c")
+    # The loader reads the link below the later H1 as a dependency or a source, as written.
+    body = f"# A\n\n## {section}\n\n# Aside\n\n[C](c.md)\n\n## Exposition\n\n[B](b.md)\n"
+    sources["a"] = body.encode()
+    assert site_index.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == site_index.WikiLinks(((0, 1),))
+
+
+@pytest.mark.parametrize("heading", ["References\n==========", "#References", "# References"])
+def test_a_later_h1_named_as_a_provenance_section_starts_it(heading: str) -> None:
+    view = _view("a", "b", "c")
+    paths, sources, metadata = _inputs("a", "b", "c")
+    # The page shows the links below it as references; the first two spellings load on main too.
+    sources["a"] = f"# A\n\nSee [B](b.md).\n\n{heading}\n\n- [C](c.md)\n".encode()
+    assert site_index.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == site_index.WikiLinks(((0, 1),))
+
+
+@pytest.mark.parametrize(
+    ("body", "edges"),
+    [
+        ("# A\n\nSee [B](b.md).\n\n# Aside\n\n[C](c.md)\n", ((0, 1), (0, 2))),
+        # The page shows B under Notes, not References, and the loader reads it in no section.
+        ("# A\n\nText.\n\nReferences\n==========\n\n- [C](c.md)\n\nNotes\n=====\n\nSee [B](b.md).\n", ((0, 1),)),
+    ],
+    ids=["outside-a-section", "after-a-later-references"],
+)
+def test_an_unnamed_later_h1_keeps_the_section_the_title_or_an_h2_opened(
+    body: str, edges: tuple[tuple[int, int], ...]
+) -> None:
+    view = _view("a", "b", "c")
+    paths, sources, metadata = _inputs("a", "b", "c")
+    sources["a"] = body.encode()
+    assert site_index.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == site_index.WikiLinks(edges)
+
+
+def test_a_title_below_a_provenance_section_ends_it() -> None:
+    view = _view("a", "b", "c")
+    paths, sources, metadata = _inputs("a", "b", "c")
+    # The first H1 is the title wherever it stands, and it ends the section above it, as in the graph.
+    sources["a"] = b"## Sources\n\n- [C](c.md)\n\n# A\n\nSee [B](b.md).\n"
+    assert site_index.extract_wiki_links(
+        view, captured_sources=sources, source_paths=paths, metadata=metadata,
+    ) == site_index.WikiLinks(((0, 1),))
+
+
 @pytest.mark.parametrize("heading", [
     "Sources\n-------", "**Sources**\n-------", "Depends on\n----------", "Proof depends on\n----------------",
     "## **Sources**", "## References", "**References**\n----------", "## Bibliography", "Bibliography\n------------",
@@ -138,6 +191,8 @@ def test_nested_setext_provenance_does_not_hide_unquoted_mathematical_references
     ("# A\n\nText.\n\n## Sources\n\n- [C](c.md)\n\n## Notes\n\n[B](b.md)\n", False),
     ("# A\n\nText.\n\n## Sources\n\n- [C](c.md)\n\nNotes\n-----\n\n[B](b.md)\n", False),
     ("# A\n\nText.\n\n##Sources\n\n- [C](c.md)\n", False),
+    ("# A\n\nText.\n\n# References\n\n- [C](c.md)\n", True),
+    ("# A\n\nText.\n\n# Sources\n\n- [C](c.md)\n", True),
     ("# A\n\nText.\n## Sources\n- [C](c.md)\n", False),
     ("# A\n\nText.\n{: .wide }\n\n## Sources\n\n- [C](c.md)\n", False),
     ("# A\n\nText &amp; more.\n\n## Sources\n\n- [C](c.md)\n", False),

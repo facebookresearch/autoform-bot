@@ -655,6 +655,18 @@ parse, with or without `--json`, and changes nothing else.
   while the reader is collapsed showed a title's formula as TeX source, such
   as `$L^p$ spaces` or `\(L^p\) spaces`. They now read it as text,
   `Lᵖ spaces`, and a title's code keeps its dollars.
+- **A later H1.** An article with more than one H1 loads: the first H1 is the
+  title, a later one stays in its section, as on the site, and `check` warns,
+  naming its line. Since #171 read a fence that never closes as text, a shell
+  comment in one, such as `# install the toolchain`, made `check`, `audit` and
+  `search` refuse the whole blueprint. Concept links keep a later H1 in its
+  section too, though one named as a provenance or dependency section, such as
+  `# References`, keeps the links below it out. Unless the site shows the
+  article as typed, `check` also warns about a heading with no space after its
+  `#` marks, `##Proof`, which only the site reads as one, and, on an article
+  published as its own page, about one indented up to three spaces, which only
+  Autoform reads as one. A missing title's error names a `#Title` line the site
+  reads as the title.
 - **TeX in map labels.** The map's card labels, tooltips and accessible names
   kept a formula's commands as words glued to their neighbours, such as
   `left(fracupright)`. One reducer, shared with the explorer, now reads
