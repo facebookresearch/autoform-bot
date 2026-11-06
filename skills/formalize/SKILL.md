@@ -133,8 +133,8 @@ it, following the [search steps](references/library-search.md#search-steps),
 which also cover library hits and warnings that name a library.
 
 - A search for an article's own result finds that article, not a duplicate.
-- Retry a refusal that asks for it. Any other refusal blocks the leaf: add no
-  helper and report it as the blocker.
+- Fix a refusal your arguments caused, retry one that asks for it, and report
+  any other as the leaf's blocker, adding no helper.
 - Use the declaration of a blueprint hit that states the helper only when the
   selected article's dependencies reach that hit's article, and as the
   open-statement policy below allows. A hit they do not reach is a missing

@@ -47,6 +47,28 @@
     return root;
   }
 
+  // A tab title, a place line or an accessible name cannot typeset, so a formula there reads as its TeX made readable,
+  // as on the map. With parts for the same title, its code keeps its dollars; otherwise only formulas in \( \) are
+  // reduced, as a page's own title writes them, so a literal $ stays.
+  function plainTitle(text, label) {
+    var DOUBLE = {R: "ℝ", N: "ℕ", Z: "ℤ", Q: "ℚ", C: "ℂ", F: "𝔽", P: "ℙ", A: "𝔸", H: "ℍ", K: "𝕂"};
+    var GREEK = {alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε", varepsilon: "ε", zeta: "ζ", eta: "η", theta: "θ",
+      lambda: "λ", mu: "μ", nu: "ν", xi: "ξ", pi: "π", rho: "ρ", sigma: "σ", tau: "τ", phi: "φ", varphi: "φ", chi: "χ", psi: "ψ",
+      omega: "ω", Gamma: "Γ", Delta: "Δ", Theta: "Θ", Lambda: "Λ", Pi: "Π", Sigma: "Σ", Phi: "Φ", Psi: "Ψ", Omega: "Ω",
+      infty: "∞", to: "→", le: "≤", ge: "≥", leq: "≤", geq: "≥", ne: "≠", times: "×", cdot: "·", in: "∈", subset: "⊂", ell: "ℓ",
+      Vert: "‖", lVert: "‖", rVert: "‖"};
+    function plain(tex) {
+      return tex.replace(/\\mathbb\{([A-Za-z])\}/g, function (_x, letter) { return DOUBLE[letter] || letter; })
+        .replace(/\\(?:mathrm|mathcal|mathfrak|operatorname|text|mathbf|mathsf)\{([^}]*)\}/g, "$1")
+        .replace(/\\([A-Za-z]+)/g, function (_x, name) { return GREEK[name] || name; })
+        .replace(/\^\{([^}]*)\}/g, "^$1").replace(/_\{([^}]*)\}/g, "_$1")
+        .replace(/\\\|/g, "‖").replace(/(\\?)([{}])/g, function (_x, escaped, brace) { return escaped ? brace : ""; });
+    }
+    var parts = label && label.format === "inline-parts-v1" && label.source === text && Array.isArray(label.parts) && label.parts;
+    if (!parts) return text.replace(/\\\(([\s\S]*?)\\\)/g, function (_m, tex) { return plain(tex); });
+    return parts.map(function (part) { return part[0] === "math" ? plain(String(part[1]).slice(2, -2)) : String(part[1]); }).join("");
+  }
+
   // A title attribute shows text as typed, so a label holding a formula gets
   // no tooltip: it would show the TeX source, and the label itself is typeset.
   function tooltip(node, text) {
@@ -408,7 +430,7 @@
       var isCurrent = bundle.isCurrent;
       if (!alive || (isCurrent && !isCurrent())) return;
       restoration++; restoring = false; clearTimeout(checkpointTimer); currentBundle = bundle; ui$requestedNode = bundle.nodeId || null;
-      document.title = bundle.title; dom$error.hidden = true;
+      document.title = plainTitle(bundle.title, (records.get(bundle.nodeId) || {}).reading_title); dom$error.hidden = true;
       ui$filtersTouched = false; ui$relationIds = null;
       ui$query = ""; dom$search.value = ""; closeSearch(); setFilters(false); setBrowse(false);
       ui$reading = Boolean(bundle.readingSource);
@@ -507,7 +529,7 @@
       var record = records.get(recordId(node)) || node, names = [], seen = new Set();
       var pending = records.get(record.scope === record.id ? semanticParent(record) : record.scope);
       while (pending && pending.id !== stop && !seen.has(pending.id) && semanticParent(pending)) {
-        seen.add(pending.id); names.unshift(pending.title); pending = records.get(semanticParent(pending));
+        seen.add(pending.id); names.unshift(plainTitle(pending.title, pending.reading_title)); pending = records.get(semanticParent(pending));
       }
       return names.slice(-2).join(" › ");
     }
@@ -714,7 +736,7 @@
     function trailList(entries, className, whole) {
       var list = element("ol", className);
       // A folded trail keeps its ends, first / … / parent / current, and the "…" names the ancestors it stands for.
-      if (!className && !whole && entries.length > 3) entries = [entries[0], {label: "…", hidden: entries.slice(1, -2).map(function (entry) { return entry.label; }).join(" / ")}].concat(entries.slice(-2));
+      if (!className && !whole && entries.length > 3) entries = [entries[0], {label: "…", hidden: entries.slice(1, -2).map(function (entry) { return plainTitle(entry.label, entry.reading_title); }).join(" / ")}].concat(entries.slice(-2));
       entries.forEach(function (entry, index) {
         var href = safeHref(entry.url), item = href ? element("li") : readingLabel("li", "", entry.label, entry.reading_title);
         if (href) {
@@ -1322,7 +1344,7 @@
       var handleTitle = close ? "" : readingLabel("span", "bp-dag-sheet-title", title, record && record.reading_title);
       dom$sheetHandle.replaceChildren(close ? "×" : record && record.result && record.status ? swatch(record.status) : "", handleTitle);
       if (handleTitle) refreshReadingLabels(dom$sheetHandle);
-      dom$sheetHandle.setAttribute("aria-label", close ? "Close reading" : title + ", reading");
+      dom$sheetHandle.setAttribute("aria-label", close ? "Close reading" : plainTitle(title, record && record.reading_title) + ", reading");
       dom$sheetHandle.title = !opened ? "Open reading" : navigation && sheetLayout() && !host.classList.contains("bp-dag-sheet-full") ? "Expand reading" : "Close reading";
       if (collapsed) {
         if (dom$inspectorInner.contains(document.activeElement)) dom$sheetHandle.focus();
@@ -1338,7 +1360,7 @@
       } else if (main) main.removeAttribute("inert");
       if (navigation) {
         if (!dom$pageHeading) { dom$pageHeading = element("h1", "bp-dag-sr-only"); host.prepend(dom$pageHeading); }
-        dom$pageHeading.textContent = currentBundle && currentBundle.title || data.title;
+        dom$pageHeading.textContent = plainTitle(currentBundle && currentBundle.title || data.title, (records.get(page.nodeId) || {}).reading_title);
         dom$pageHeading.hidden = !collapsed;
       }
     }

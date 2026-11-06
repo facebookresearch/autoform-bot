@@ -151,6 +151,14 @@ date when the release is tagged.
 
 ### Changed
 
+- **Mathlib results in review.** Agent Review's roadmap rubric says when cited
+  declarations state an article's result, and has the reviewer quote their
+  hypotheses and conclusions before judging. A `mathlib: true` that fails this
+  caps the rubric's usability score at 2, and Roadmap sets `mathlib: true` only
+  when verified Mathlib declarations state the result (#668). Formalize's library
+  search rules, which Roadmap follows, use the same definition: a library hit
+  that needs only hypotheses the result gives or implies, or several that
+  together state it, is reused like an exact one (#679).
 - **The landing's coverage line** leads with the source areas split into
   statements: "5 source areas, all split into statements", or "3 of 5 source
   areas split into statements" before the other dispositions.
@@ -517,6 +525,9 @@ date when the release is tagged.
   `--json` hits whose `module` is exactly that module, with `--limit` at least
   `total_matches`; searching the module's name also returned other modules'
   declarations, and at most 20 (#204).
+- **Self-caused search refusals.** Formalize fixes a search refusal its own
+  arguments caused, such as `--limit 0` or a query that folds to nothing, and
+  searches again, as Roadmap does, where it reported the leaf as blocked (#171).
 
 ### Deprecated
 
@@ -564,6 +575,9 @@ parse, with or without `--json`, and changes nothing else.
 
 ### Fixed
 
+- **Finished cards on the map.** A finished statement's card no longer prints
+  "fully proved" under its title, since its fill already says so; the line
+  names a status only for an unfinished statement.
 - **Library index guarantees.** `library index` and `--check` refuse a
   toolchain the probe is not verified on before `lake translate-config` reads a
   `lakefile.lean`, and refuse a source file with a dot in its path, or two files
@@ -576,6 +590,12 @@ parse, with or without `--json`, and changes nothing else.
   than 1 with a traceback. A refusal names a stale index before a merged or
   edited one, the missing-manifest refusal no longer suggests `lake update`, and
   the note naming an unsearched library quotes the flags it suggests.
+- **TeX in tab titles.** The explorer's browser tab title, the topic line
+  under a search hit or list row, the folded breadcrumb's "…", and what a
+  screen reader hears for the reading pane's button and for the page heading
+  while the reader is collapsed showed a title's formula as TeX source, such
+  as `$L^p$ spaces` or `\(L^p\) spaces`. They now read it as text,
+  `L^p spaces`, and a title's code keeps its dollars.
 - **Reference links on chapters with a `<` in the title.** A `<` in a
   chapter's title alone left reference-style links in its prose shown as typed
   (#631).

@@ -36,7 +36,7 @@ assert(constants, 'Production list page size missing');
 const functions = [
   'element', 'readingLabel', 'button', 'bindNodeLink', 'safeHref', 'graphAt', 'recordId', 'listed', 'selection', 'adoptGraph',
   'statusLabel', 'closeSearch', 'activateNode', 'inventoryNodes', 'renderInventory', 'trailList',
-  'semanticParent', 'placeOf', 'pendingMath', 'summaryLine', 'refreshReadingLabels', 'tooltip', 'inCurrentScope', 'sourceNodes'
+  'semanticParent', 'placeOf', 'plainTitle', 'pendingMath', 'summaryLine', 'refreshReadingLabels', 'tooltip', 'inCurrentScope', 'sourceNodes'
 ].map(original).join('\n');
 const fixtureText = fs.readFileSync(0, 'utf8');
 const sandbox = {assert, URL, fixtureText}; vm.createContext(sandbox);
@@ -289,6 +289,26 @@ def test_a_deep_trail_keeps_first_parent_and_current_and_names_what_the_ellipsis
       const whole = trailList(trail, null, true).children;
       assert.deepEqual(whole.map(item => item.title), trail.map(entry => entry.label));
       assert.equal(whole[4].getAttribute('aria-current'), 'page');
+    """)
+
+
+def test_a_folded_trail_and_a_title_without_its_own_parts_read_formulas_as_text() -> None:
+    _run(r"""
+      const label = (text, parts) => ({format: 'inline-parts-v1', source: text, parts});
+      const groups = 'Groups $\\mathbb{Z}/n$', parts = [['text', 'Groups '], ['math', '\\(\\mathbb{Z}/n\\)']];
+      // Parts for the same title reduce its formula; a page's own title has only \( \) formulas, so its $ stays.
+      assert.equal(plainTitle(groups, label(groups, parts)), 'Groups ℤ/n');
+      assert.equal(plainTitle('Groups \\(\\mathbb{Z}/n\\) at $5', label(groups, parts)), 'Groups ℤ/n at $5');
+      assert.equal(plainTitle(groups, undefined), groups);
+      // The ellipsis names the ancestors it folds as text, in its tooltip and for screen readers.
+      const crumb = (text, url, reading_title) => ({label: text, url, reading_title});
+      const trail = [crumb('Library', 'https://example.test/math/roadmap/index.html'),
+        crumb(groups, 'https://example.test/math/roadmap/groups/index.html', label(groups, parts)),
+        crumb('Cyclic groups', 'https://example.test/math/roadmap/cyclic/index.html'),
+        crumb('Orders', 'https://example.test/math/roadmap/orders/index.html'), crumb('Theorem (Orders)')];
+      const folded = trailList(trail).children[1];
+      assert.equal(folded.title, 'Groups ℤ/n / Cyclic groups');
+      assert.equal(folded.children[0].textContent, 'Groups ℤ/n / Cyclic groups');
     """)
 
 

@@ -60,7 +60,8 @@ when it rewrites links, orders the book and places a chapter's statements read
 it as open to the end of the file. An HTML comment that never closes, even one
 opened in inline code or an indented code block, hides every later heading and
 dependency link: the graph loses those edges, one opened in the statement puts
-the rest of the article in the theorem box, and nothing reports it.
+the rest of the article in the theorem box; `check` warns about one outside
+code, and the audit about a formalizable article's hidden `## Depends on`.
 
 `## Depends on` lists what the article needs to be *stated*,
 `## Proof depends on` what only its *proof* needs, and `## Informally uses` what
@@ -82,9 +83,8 @@ target, `bridged` for a result introduced between source targets, and
 The optional `area` field groups the chapters, and deeper containers naming a
 chapter's area, into regions of the project map, and Topics heads each area's
 chapters with its name; on a leaf it only labels the article. Use mathematical
-areas such as `Foundations` or `Geometry & Topology`, never repository or
-workflow buckets such as `MathlibExt` or `catalog-01`. Autoform does not guess
-areas from paths, imports, or titles.
+areas such as `Geometry & Topology`, not buckets such as `MathlibExt` or
+`catalog-01`. Autoform does not guess areas from paths, imports, or titles.
 
 Container-only `navigation` roles separate topics from repository organization:
 
@@ -239,8 +239,8 @@ The contract is read as published Markdown and fails closed:
   existing roadmap article. Every local link must resolve, fragments included.
 
 `coverage.complete` in audit and `publication.json` means only that no declared
-row is `MAPPED`. It does **not** claim the rows cover the whole source, which no
-local check can judge, nor that linked articles are formalized or proved.
+row is `MAPPED`. It does **not** claim the rows cover the whole source, nor that
+linked articles are formalized or proved.
 
 Target metrics (the denominator, readiness count, and progress breakdowns in the
 book and `check`) count leaves carrying `declaration`, never a `catalog: module`

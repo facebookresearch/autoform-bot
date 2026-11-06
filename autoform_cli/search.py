@@ -28,9 +28,10 @@ SEARCH_SCHEMA = "autoform-search/v1"
 #: How many dependents a hit names; ``used_by_count`` is never capped.
 _USED_BY_LIMIT = 10
 #: Indexed fields, best first. A field's position is the rank its matches sort by.
-#: ``lean`` and ``node_id`` hold only the last component of each name, so a
-#: chapter's directory or a project's namespace does not make every article
-#: beneath it a strong match; ``qualified_names`` holds the names in full.
+#: ``lean`` holds each name after its last dot and ``node_id`` the path ID's
+#: last component, so a chapter's directory or a project's namespace does not
+#: make every article beneath it a strong match; ``qualified_names`` holds the
+#: names in full.
 _FIELDS = ("title", "lean", "node_id", "statement_text", "ancestors", "qualified_names")
 #: Words a sentence needs and a search does not. An article that lacks one of
 #: them is no less a match. Words that change a statement's meaning, such as
@@ -282,9 +283,10 @@ def statement_preview(hit: SearchHit) -> str:
 def normalize(text: str) -> str:
     """Fold ``text`` so spellings a reader takes for the same string compare equal.
 
-    Case, width, ligatures, accents, typographic dashes and quotes, and
-    invisible characters such as a soft hyphen all fold away, because the
-    person searching types none of them the way a source happened to.
+    Case, width, ligatures, accents, the dashes U+2010 to U+2015 and U+2212,
+    the quotes U+2018, U+2019, U+201C and U+201D, and invisible characters such
+    as a soft hyphen all fold away, because the person searching types none of
+    them the way a source happened to.
     """
 
     kept: list[str] = []
