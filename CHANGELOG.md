@@ -769,14 +769,16 @@ parse, with or without `--json`, and changes nothing else.
   with Apple's Git a key beside a name that folds into it, such as U+212A
   KELVIN SIGN beside `k`, keeps its own lease. Except on Windows, a listing
   deletes the private refs that a listing of this version on the same host left
-  when a signal stopped it. On Linux, the same host also means the same boot and
+  when a signal stopped it, unless a lock file that a killed Git command left in
+  the scratch blocks that. On Linux, the same host also means the same boot and
   PID namespace, and a host whose `/proc` cannot give them deletes none;
   elsewhere it means the same host name, so two machines with one name must not
-  share a scratch. Older versions' refs stay. On Python 3.11 and 3.12, a listing
-  step still running after five seconds gets the rest of its input instead of
-  running out of time. Claim commands work in a pre-receive hook, a `--timeout`
-  above about 24 days no longer ends in an `OverflowError` once a step runs past
-  five seconds, and a timeout says `ran out of time after <N>s while <step>`.
+  share a scratch. Older versions' refs stay, as do those of a listing `/proc`
+  could not name. On Python 3.11 and 3.12, a listing step still running after
+  five seconds gets the rest of its input instead of running out of time. Claim
+  commands work in a pre-receive hook, a `--timeout` above about 24 days no
+  longer ends in an `OverflowError` once a step runs past five seconds, and a
+  timeout says `ran out of time after <N>s while <step>`.
 - **Site search.** Each statement card is a search result of its own, titled
   by its statement and opening at its anchor, and its exact `lean:` names find
   it even when they show only as code icons. Notes headings such as Sources

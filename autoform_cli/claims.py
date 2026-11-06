@@ -91,6 +91,12 @@ _MOVED_WANT = "not our ref"
 # How a fetch refuses a named ref the board no longer has, which is worth
 # fetching again only when the listing named its refs first.
 _MISSING_REF = "couldn't find remote ref"
+# For a name the board lacks, as a claim released meanwhile, Git fetches
+# refs/<name>, refs/tags/<name>, refs/heads/<name>, refs/remotes/<name> or
+# refs/remotes/<name>/HEAD instead, such as a branch ending in the claim's
+# path. These negative refspecs leave such a name unfetched, and the claim
+# left out.
+_ONLY_CLAIM_REFS = "^refs/refs/*\n^refs/tags/*\n^refs/heads/*\n^refs/remotes/*\n"
 # How Git refuses to store fetched refs: two names, or a name and a folder, that
 # differ only in case on a case-insensitive scratch, or a name the filesystem
 # refuses, such as one that is not UTF-8 on APFS. The words change with Git's
@@ -227,7 +233,7 @@ class ClaimRefLock:
         elif self.ref == "packed-refs":
             blocked = "releasing claims"
         else:
-            blocked = f"updates of {self.ref}"
+            blocked = f"updates of {_readable(self.ref)}"
         return f"Git lock file {_readable(os.fsencode(self.path))} (modified {stamp}) blocks {blocked}"
 
 
@@ -1108,11 +1114,13 @@ class ClaimBoard:
         ``warn`` hears how many a listing left out, if any.
 
         Except on Windows, a listing first deletes the private refs that a
-        listing of this version on this host left when a signal stopped it. On
-        Linux, this host also means this boot and PID namespace, and a host
-        whose ``/proc`` cannot give them deletes none; elsewhere it means this
-        host name, so two machines with one name must not share a scratch. An
-        older version's refs stay.
+        listing of this version on this host left when a signal stopped it,
+        unless a lock file that a killed Git command left in the scratch blocks
+        that. On Linux, this host also means this boot and PID namespace, and a
+        host whose ``/proc`` cannot give them deletes none; elsewhere it means
+        this host name, so two machines with one name must not share a scratch.
+        An older version's refs stay, as do those of a listing ``/proc`` could
+        not name.
         """
         targets = None if keys is None else _validate_keys(keys)
         deadline = None if timeout is None else time.monotonic() + _validate_timeout(timeout)
@@ -1139,14 +1147,14 @@ class ClaimBoard:
         on a Linux host that :func:`_this_host` cannot name. Git deletes a batch
         of refs whole or not at all, and refuses one that deletes a ref beside
         its own lock file, as a stopped update leaves, so such a ref stays out of
-        the batch; looking for its lock file runs no Git. A batch Git refuses
-        anyway, as when ``packed-refs.lock`` blocks every deletion, leaves every
-        ref until that lock goes.
+        the batch; looking for its lock file runs no Git. Git deletes no ref
+        while ``packed-refs.lock`` is held, so the prune then runs no Git at all.
+        A batch Git refuses anyway leaves every ref for a later listing.
         """
         if os.name != "posix":
             return
         host = _this_host()
-        if host is None:
+        if host is None or os.path.lexists(self.scratch / "packed-refs.lock"):
             return
         found = git(
             ["for-each-ref", "--format=%(refname)", _LIST_REF_PREFIX],
@@ -1186,14 +1194,16 @@ class ClaimBoard:
         some versions, such as Apple's 2.50, store one key's name holding the
         other key's lease without a word, so a case-insensitive scratch names
         the board's keys after a fetch that wrote any ref, and fetches them by
-        name when two collide or when it kept fewer refs than the board has
-        names, as when a key and a name that is not one, such as ``k`` and
-        U+212A KELVIN SIGN, fold together. A fetch Git refuses names them too,
-        and they are fetched by name when they explain the refusal: a key
+        name when two collide, or when the board has a name that is not a key
+        and the scratch kept fewer refs than the board has names or reads back a
+        key the board does not have, as when ``k`` and U+212A KELVIN SIGN fold
+        together, or a folder ``K`` takes in ``k/x``. A fetch Git refuses names
+        them too, and they are fetched by name when they explain the refusal: a key
         beside a folder that differs from it only in case, or a name that is
         not a claim key, such as one APFS refuses as not UTF-8.
         With ``targets``, only the present targets are fetched by name, and a
-        target released meanwhile has the targets named again, never the board.
+        target released meanwhile is left out or has the targets named again,
+        never the board.
         A board that refuses every attempt because claim refs moved raises
         ``ClaimContentionError``.
         """
@@ -1232,6 +1242,7 @@ class ClaimBoard:
                 )
             else:
                 refspecs = "".join(f"+{CLAIM_REF_PREFIX}{key}:{namespace}{index}\n" for index, key in enumerate(keys))
+                refspecs += _ONLY_CLAIM_REFS
                 fetch = git(
                     [*args, "--stdin", self.repo_url],
                     check=False,
@@ -1243,7 +1254,13 @@ class ClaimBoard:
                 if keys is None:
                     if refs and self._scratch_ignores_case():
                         named = name()
-                        if _collide_ignoring_case(named) or len(refs) < len(named) + left_out:
+                        # Keys are ASCII, so only a name that is not one folds silently:
+                        # the scratch then keeps fewer refs, or reads back a key the board lacks.
+                        folded = left_out and (
+                            len(refs) < len(named) + left_out
+                            or not _claims_by_key(refs, namespace).keys() <= set(named)
+                        )
+                        if _collide_ignoring_case(named) or folded:
                             keys = named
                             continue
                     claims = _claims_by_key(refs, namespace)
