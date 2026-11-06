@@ -3095,7 +3095,27 @@ def _link_mask(line: str) -> str:
     as check does. Blanking keeps every offset, so a link matched in the mask
     reads its label and target back from *line*.
     """
-    return _BRACKET_ESCAPE.sub(_blank, _INLINE_MATH.sub(_blank, _CODE_SPAN.sub(_blank_code, line)))
+    return _BRACKET_ESCAPE.sub(_blank, _code_and_math_mask(line))
+
+
+def _code_and_math_mask(line: str) -> str:
+    """*line*, or a block's lines joined, with what the site reads before links blanked: code spans and inline math."""
+    return _INLINE_MATH.sub(_blank, _CODE_SPAN.sub(_blank_code, line))
+
+
+def _inline_destination(line: str, match: re.Match[str]) -> str:
+    """The destination of *match*, an inline link or image in *line*, as the site reads it.
+
+    Python-Markdown drops the backslash before a character it escapes, so
+    ``base\\_lemma.md`` names ``base_lemma.md``, but not in code or math, which
+    it reads first. A reference definition's destination keeps its backslashes
+    on the site, so it is read as written.
+    """
+    start, end = match.span("target")
+    escaped = _body_converter().ESCAPED_CHARS
+    masked = _code_and_math_mask(line)[start:end]
+    dropped = {escape.start() for escape in re.finditer(r"\\(.)", masked) if escape.group(1) in escaped}
+    return "".join(char for index, char in enumerate(line[start:end]) if index not in dropped)
 
 
 def _rewrite_links(
@@ -3255,7 +3275,7 @@ def _rewrite_links(
             # As for a link below, a destination on a later line is published as written.
             if "\n" in line[match.end("label") : match.start("target")]:
                 continue
-            raw = line[match.start("target") : match.end("target")]
+            raw = _inline_destination(line, match)
             if moved_target(raw) == "" and raw in unlinked:
                 pieces += [line[end : match.start()], line[match.start("label") : match.end("label")]]
                 end = match.end()
@@ -3267,7 +3287,7 @@ def _rewrite_links(
             # in a quote, the mask keeps the marker in front of it.
             if "\n" in line[match.end("label") : match.start("target")]:
                 continue
-            raw = line[match.start("target") : match.end("target")]
+            raw = _inline_destination(line, match)
             href = moved_target(raw)
             if href is None or raw in (href, f"<{href}>"):  # nothing moved: keep the link as written
                 continue
@@ -3668,7 +3688,9 @@ def _body_converter():
     # The final page assigns heading IDs once, across all its statements.
     # attr_list still keeps an author's explicit {#id} here.
     converter.treeprocessors.deregister("toc")
-    converter.treeprocessors.register(_PublishedBodyLinks(converter), "published-body-links", 5)
+    # After unescaping (priority 0), as MkDocs reads links: before it, a
+    # destination written `a\_b.md` still holds an escape placeholder.
+    converter.treeprocessors.register(_PublishedBodyLinks(converter), "published-body-links", -1)
     return converter
 
 

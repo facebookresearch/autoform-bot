@@ -4110,13 +4110,12 @@ def test_an_escaped_parenthesis_leaves_the_rest_of_its_line_alone(tmp_path: Path
     """Python-Markdown reads `\\(` as text, so `[x]` ends at its own `)`.
     Counted as an open parenthesis, `\\(` took that `)`, and the title after it
     ran on to the `)` closing the aside and dropped ` and [y](../sources/c.md)`.
-    The escape is not decoded, so `x` names no captured note and is left as
-    written, where the strict build reports it."""
+    Decoded as the site decodes it, `x` names the captured note `a(b.md`."""
     line = r"(see [x](../sources/a\(b.md) and [y](../sources/c.md))"
     chapter, commit = _render_statement_link(tmp_path, line, notes=("a(b.md", "c.md"))
 
-    y = f"{_REPOSITORY}/blob/{commit}/blueprint/sources/c.md"
-    assert f"The main result. See {line.replace('../sources/c.md', y)}." in chapter
+    x, y = (f"{_REPOSITORY}/blob/{commit}/blueprint/sources/{name}" for name in ("a%28b.md", "c.md"))
+    assert f"The main result. See (see [x]({x}) and [y]({y}))." in chapter
 
 
 def test_a_title_with_parentheses_ends_where_its_link_does(tmp_path: Path) -> None:
@@ -4514,6 +4513,43 @@ def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypa
     # Two nodes on the same chapter page cost one link to it, not one each.
     assert rewrite("[X](x.md), [Z](z.md)\n") == "[X](a.md#x), [Z](a.md#z)\n"
     assert calls == [chapter]
+
+
+def test_an_escaped_link_destination_is_resolved_as_the_site_reads_it(tmp_path: Path) -> None:
+    """Read with its backslash, `[Base](base\\_lemma.md)` named no article, and
+    its chapter page linked a file the site does not publish. The site keeps
+    the backslashes in math and in a reference definition, and so does render."""
+    from autoform_cli.render import _rewrite_links
+
+    blueprint, destination = tmp_path / "blueprint", tmp_path / "out"
+    source_dir = blueprint / "roadmap"
+    chapter = destination / "roadmap/README.md"
+
+    def rewrite(text: str) -> str:
+        return _rewrite_links(
+            text,
+            source_dir=source_dir,
+            page=chapter,
+            blueprint=blueprint,
+            destination=destination,
+            node_sources={(source_dir / "base_lemma.md").resolve(): "base_lemma"},
+            targets={"base_lemma": (chapter, "base_lemma")},
+            left_out=frozenset({(source_dir / "fig_a.svg").resolve()}),
+        )
+
+    assert rewrite(r"[Base](base\_lemma.md), [it](<base\_lemma.md>)") == "[Base](#base_lemma), [it](#base_lemma)"
+    assert rewrite(r"Drawn in ![the figure](fig\_a.svg).") == "Drawn in the figure."
+    # A link that does not move stays as written.
+    assert rewrite(r"See [the chapter](../other\_ch/README.md).") == r"See [the chapter](../other\_ch/README.md)."
+    assert rewrite("[b]: base\\_lemma.md\n") == "[b]: base\\_lemma.md\n"
+    # A code span over a line break is one span, as on the site, so the link after it is read too;
+    # masked a line at a time, its closing backtick and the next one held the destination.
+    assert rewrite("See `a\nb` and [Base](base\\_lemma.md) or `c`.\n") == "See `a\nb` and [Base](#base_lemma) or `c`.\n"
+    # Only an angle-bracketed destination can hold math: a bare one ends at its mask's blanks.
+    # Python-Markdown escapes no %.
+    line = r"[math](<\(b\_c\)\_d\%.md>)"
+    match = render_module._MARKDOWN_LINK.search(render_module._link_mask(line))
+    assert render_module._inline_destination(line, match) == r"<\(b\_c\)_d\%.md>"
 
 
 def test_the_hierarchical_explorer_indexes_nodes_without_a_full_graph(tmp_path: Path) -> None:
@@ -5258,6 +5294,8 @@ def test_body_protection_reuses_one_converter_but_starts_each_chunk_afresh(monke
         {"Some (field).md": "# Actual\n"}, None,
     ),
     ("For r < n, see ![image](asset.svg).", {"asset.svg": '<svg xmlns="http://www.w3.org/2000/svg"/>'}, None),
+    # Checked before unescaping, the target held an escape placeholder and was never found.
+    (r"For $r<n$, see [target](other\_ch.md).", {"other_ch.md": "# Actual\n"}, None),
     ('For r < n, see <a href="missing.md">raw HTML</a>.', {}, None),
 ])
 def test_body_protection_retains_native_strict_link_validation(tmp_path: Path, caplog, body, files, warning) -> None:
