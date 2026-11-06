@@ -144,8 +144,8 @@ date when the release is tagged.
   about the pages the site would publish, which `render` prints too. The
   generated `blueprint-pages.yml` passes it, since render runs two steps later,
   when its `AUTOFORM_REF`'s `check --help` lists it, so an older pin runs the
-  full check. On one CI runner ATLAS's check took 60 s with the flag instead of
-  255 s, and render printed every warning it skipped. A scaffolded project keeps
+  full check. On one CI runner ATLAS's check took 58 s with the flag instead of
+  149 s, and render printed every warning it skipped. A scaffolded project keeps
   its workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
 - **Panes you can resize and hide.** In the book's workspace, Topics and the
   reading pane resize from splitters on their inner edges, by pointer or
