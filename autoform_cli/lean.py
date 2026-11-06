@@ -1687,7 +1687,7 @@ _ILEAN_LIMIT = 16 * 1024 * 1024
 _ILEAN_FILES = 16
 #: Where an ``.ilean`` file records each usage of a constant, by line and column: its length, full name and module.
 _Usages = dict[int, dict[int, tuple[int, str, str]]]
-#: Explicit universes after a name, which an ``.ilean`` usage's range takes in: ``TopCat.{u}``.
+#: Explicit universes after a name, which an ``.ilean`` range takes in, at a usage or a declaration: ``TopCat.{u}``.
 _UNIVERSES = re.compile(r"\.\{[^{}]*\}\Z")
 #: The declarations an ``.ilean`` file records a definition for, at their name, so a file without one is older
 #: than its source. An alias or a wanted declaration may declare no constant of its own, and is read by its usages.
@@ -1773,9 +1773,15 @@ def _declares(line: str, start: int, end: int, name: str) -> bool:
     declaration's name."""
 
     begin, stop = _utf16_index(line, start), _utf16_index(line, end)
-    if begin is None or stop is None or not _ends_with(name, line[begin:stop]):
+    if begin is None or stop is None:
         return False
-    return not (begin and _NAME_BEFORE.match(line, begin - 1)) and not _NAME_AFTER.match(line, stop)
+    if (universes := _UNIVERSES.search(line, begin, stop)) is not None:
+        stop = universes.start()
+    return (
+        _ends_with(name, line[begin:stop])
+        and not (begin and _NAME_BEFORE.match(line, begin - 1))
+        and not _NAME_AFTER.match(line, stop)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1916,16 +1922,18 @@ class SourceLinker:
         """Where *text* names a constant, by the build's ``.ilean`` file: at each offset into *text* where one
         starts, its written name's length there, its full name and its module. *text* is *declaration*'s text as
         :meth:`excerpt` gives it. Only a usage whose written name is whole components ending the constant's name
-        counts, so notation such as ``ℕ`` and a usage a stale file misplaces are left out.
+        counts, so notation such as ``ℕ`` and a usage a stale file misplaces are left out. So is one the source writes
+        on past a dot with nothing recorded after it, where Lean records the dot notation's own name (``mp`` in
+        ``Nat.succ_le.mp`` is ``Iff.mp``): the source has changed since the build, as from ``Nat`` to ``Nat.Primes``,
+        or the name after the dot failed, as in a tactic alternative that failed.
 
         ``None`` without :attr:`ileans` or a readable ``.ilean`` file of the format Lean writes now for
         *declaration*'s file, or when that file is older than the declaration, as after an edit since the build: it
-        records the name outside the declaration's lines or where the source no longer has it whole, records no place
-        for a kind of declaration Lean always records, or records a name the source writes on past a dot with nothing
-        recorded after it, where Lean records the dot notation's own name (``mp`` in ``Nat.succ_le.mp`` is
-        ``Iff.mp``). A caller then links as without one. Any other declaration the file has no place for, such as a
-        ``proof_wanted``, which declares nothing, is read by its usages alone. The file counts columns in UTF-16 code
-        units, converted here line by line, and a name written after ``@`` starts at the ``@``, left out here.
+        records the name outside the declaration's lines or where the source no longer has it whole, or records no
+        place for a kind of declaration Lean always records. A caller then links as without one. Any other declaration
+        the file has no place for, such as a ``proof_wanted``, which declares nothing, is read by its usages alone. The
+        file counts columns in UTF-16 code units, converted here line by line, and a name written after ``@`` starts at
+        the ``@``, left out here.
         """
         lines, masked = self._lines.get(declaration.path, (None, None))
         data = None if self.ileans is None or lines is None else self._ilean(declaration.path)
@@ -1942,7 +1950,7 @@ class SourceLinker:
             self._ilean_stale.setdefault(declaration.path, set()).add(declaration.name)
             return None
         found: dict[int, tuple[int, str, str]] = {}
-        dotted: list[int] = []
+        dotted: list[tuple[int, int]] = []
         offset = 0
         for number, written in enumerate(text.split("\n"), start):
             for column, (length, constant, module) in usages.get(number, {}).items():
@@ -1956,11 +1964,10 @@ class SourceLinker:
                 if begin < stop and _ends_with(declared_name(constant), written[begin:stop]):
                     found[offset + begin] = (stop - begin, constant, module)
                     if _DOTTED.match(written, stop):
-                        dotted.append(offset + stop + 1)
+                        dotted.append((offset + begin, offset + stop + 1))
             offset += len(written) + 1
-        if any(at not in found for at in dotted):
-            self._ilean_stale.setdefault(declaration.path, set()).add(declaration.name)
-            return None
+        for at in [at for at, rest in dotted if rest not in found]:
+            found.pop(at)
         return found
 
     def in_project(self, module: str) -> bool:
