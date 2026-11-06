@@ -462,6 +462,8 @@
           if (readingTarget) { readingTarget.tabIndex = -1; readingTarget.focus({preventScroll: true}); }
         } else if (bundle.focus && (mapRequested || !readerShown) && !bundle.snapshot) {
           var control = mapControl(); if (control) control.focus({preventScroll: true});
+          // Without a map to take it, a pick leaves focus on the filter, as Back to map does once the map is due.
+          if (!mapRequested && (!control || document.activeElement !== control)) (tracksLean ? dom$filterSummary : dom$search).focus({preventScroll: true});
         }
         resolve();
       }); }); });
@@ -936,14 +938,15 @@
     }
 
     // Topics and the reading pane can be dragged wider or narrower, or hidden, and the choice holds on every page of the
-    // site and on other Autoform sites on its host. Dragging a pane nearly shut hides it, as Enter on its splitter does; a
-    // tab at the map's edge brings it back.
+    // site, scoped as Material scopes its own choices. Dragging a pane nearly shut hides it, as Enter on its splitter does;
+    // a tab at the map's edge brings it back.
     function bindPanes() {
-      var key = "autoform:book-panes:v1", panes = {};
-      try { panes = JSON.parse(window.localStorage.getItem(key)); } catch (error) { panes = null; }
-      // A stored value of another shape, or a width that isn't a number, is dropped rather than written into the grid.
+      var scope = window.__md_scope && window.__md_scope.pathname, key = "autoform:book-panes:v1" + (scope ? ":" + scope : ""), panes;
+      try { panes = JSON.parse(window.localStorage.getItem(key)); } catch (error) { /* No choice stored. */ }
+      // A stored value of another shape, or a width no drag could give, is dropped rather than written into the grid.
       if (!panes || typeof panes !== "object" || Array.isArray(panes)) panes = {};
-      ["topics", "reading"].forEach(function (side) { if (!Number.isFinite(panes[side])) delete panes[side]; });
+      if (!(panes.topics >= 160 && panes.topics <= 480)) delete panes.topics;
+      if (!(panes.reading > 0 && panes.reading < 1)) delete panes.reading;
       var main = dom$body.querySelector(".bp-dag-main"), context = host.querySelector(".bp-dag-context");
       var paneOf = {topics: dom$navigation, reading: dom$inspector};
       // In tab order Topics' splitter follows Topics, and the reader's comes just before the reader.
@@ -979,32 +982,35 @@
         if (panes.reading) host.style.setProperty("--dag-reading-width", "minmax(300px, " + (100 * panes.reading).toFixed(2) + "%)");
         else host.style.removeProperty("--dag-reading-width");
         var shut = hidden("reading") && (hidden("topics") || !wide());
-        pressed(mapOnly, shut); mapOnly.title = shut ? "Show Topics and the reading pane" : "Hide Topics and the reading pane";
+        pressed(mapOnly, shut);
+        mapOnly.title = (shut ? "Show " : "Hide ") + (wide() ? "Topics and the reading pane" : "the reading pane");
         place();
       }
-      // Each splitter sits on its pane's inner edge and reports its pane's share of the width; the overview's collapsed
-      // reader and a drawer have none.
+      // Each pane's bounds: Topics 160-480px, the reader 300px up to where the map keeps 160px of the room the two share
+      // (the grid keeps that floor too, when Topics or the window changes later). A drawer floats over both and takes none.
+      function least(side) { return side === "topics" ? 160 : 300; }
+      function most(side) { return side === "topics" ? 480 : dom$inspector.offsetWidth + main.offsetWidth - 160; }
+      // Each splitter sits on its pane's inner edge and reports its pane's share of the width and the share's bounds; the
+      // overview's collapsed reader and a drawer have none.
       function place() {
         var width = dom$body.clientWidth || 1;
         bars.topics.hidden = !wide() || sheetLayout() || hidden("topics");
         bars.reading.hidden = sheetLayout() || hidden("reading") || dom$inspector.offsetWidth < 100;
-        if (!bars.topics.hidden) {
-          bars.topics.style.left = (dom$navigation.offsetWidth - 4) + "px";
-          bars.topics.setAttribute("aria-valuenow", String(Math.round(100 * dom$navigation.offsetWidth / width)));
-        }
-        if (!bars.reading.hidden) {
-          bars.reading.style.left = (dom$inspector.offsetLeft - 4) + "px";
-          bars.reading.setAttribute("aria-valuenow", String(Math.round(100 * dom$inspector.offsetWidth / width)));
-        }
+        Object.keys(bars).forEach(function (side) {
+          var bar = bars[side], pane = paneOf[side];
+          if (bar.hidden) return;
+          bar.style.left = (side === "topics" ? pane.offsetWidth : pane.offsetLeft) - 4 + "px";
+          [["now", pane.offsetWidth], ["min", least(side)], ["max", most(side)]].forEach(function (value) {
+            bar.setAttribute("aria-value" + value[0], String(Math.round(100 * value[1] / width)));
+          });
+        });
       }
       function save() { try { window.localStorage.setItem(key, JSON.stringify(panes)); } catch (error) { /* A preference only. */ } }
-      // A width from the pointer or the keys, kept within bounds: Topics 160-480px, the reader 300px up to where the map keeps
-      // 160px (the grid keeps that floor too, when Topics or the window changes later). A drawer floats over the map and
-      // takes none of it. Returns whether the pane was pulled nearly shut, which hides it when the drag ends.
+      // A width from the pointer or the keys, kept within the pane's bounds. Returns whether the pane was pulled nearly shut,
+      // which hides it when the drag ends.
       function resizeTo(side, size) {
-        var width = dom$body.clientWidth;
-        if (side === "topics") panes.topics = Math.round(clamp(size, 160, 480));
-        else panes.reading = clamp(size, 300, width - (wide() ? dom$navigation.offsetWidth : 0) - 160) / width;
+        var kept = clamp(size, least(side), most(side));
+        if (side === "topics") panes.topics = Math.round(kept); else panes.reading = kept / dom$body.clientWidth;
         apply();
         return size < (side === "topics" ? 100 : 160);
       }
@@ -1016,19 +1022,20 @@
           event.preventDefault(); bar.focus({preventScroll: true});
           if (bar.setPointerCapture) bar.setPointerCapture(event.pointerId);
           host.classList.add("bp-dag-resizing");
-          // A pane dragged shut comes back at the width it had before the drag.
-          var shut = false, before = panes[side];
+          // A pane dragged shut comes back at the width it had before the drag. A drag ends however the pointer is let go,
+          // including the browser taking it back.
+          var shut = false, before = panes[side], events = ["pointermove", "pointerup", "pointercancel", "lostpointercapture"];
           function move(moved) {
             var box = dom$body.getBoundingClientRect();
             shut = resizeTo(side, side === "topics" ? moved.clientX - box.left : box.right - moved.clientX);
           }
           function end() {
-            ["pointermove", "pointerup", "pointercancel"].forEach(function (type, index) { bar.removeEventListener(type, index ? end : move); });
+            events.forEach(function (type, index) { bar.removeEventListener(type, index ? end : move); });
             host.classList.remove("bp-dag-resizing");
             if (shut) { panes[side + "Hidden"] = true; panes[side] = before; }
             apply(); save();
           }
-          ["pointermove", "pointerup", "pointercancel"].forEach(function (type, index) { bar.addEventListener(type, index ? end : move); });
+          events.forEach(function (type, index) { bar.addEventListener(type, index ? end : move); });
         });
         function reset() { delete panes[side]; apply(); save(); }
         bar.addEventListener("dblclick", reset);
@@ -1037,7 +1044,8 @@
           if (event.key === grow || event.key === shrink) resizeTo(side, paneOf[side].offsetWidth + (event.key === grow ? step : -step));
           else if (event.key === "Home" || event.key === "End") resizeTo(side, event.key === "End" ? Infinity : 0);
           else if (event.key === "Enter") show(side, false);
-          else if (event.key === "Delete") reset();
+          // A Mac's delete key is Backspace.
+          else if (event.key === "Delete" || event.key === "Backspace") reset();
           else return;
           event.preventDefault(); save();
         });
