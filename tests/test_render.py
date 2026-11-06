@@ -984,12 +984,387 @@ def test_a_private_declaration_whose_name_another_file_shares_links_nothing(tmp_
     assert 'data-lean-name="Project.Base"' in top and "Project.helper" not in top
 
 
+def _ilean_place(source: str, written: str, nth: int = 0) -> list[int]:
+    """Where the *nth* *written* in *source* lies, as an ``.ilean`` file says: a 0-based line and UTF-16 columns."""
+    at = -1
+    for _ in range(nth + 1):
+        at = source.index(written, at + 1)
+    line_start = source.rfind("\n", 0, at) + 1
+    column = len(source[line_start:at].encode("utf-16-le")) // 2
+    line = source.count("\n", 0, at)
+    return [line, column, line, column + len(written.encode("utf-16-le")) // 2]
+
+
+def _write_ilean(
+    build: Path,
+    module_name: str,
+    source: str,
+    usages: list[tuple[str | list[int], int, str, str]],
+    definitions: dict[str, str],
+    **fields: object,
+) -> None:
+    """A format-5 ``.ilean`` file for *module_name*: each (written, nth, constant, module) usage, or one at a given
+    range, and each defined constant's definition, at its written name. *fields* replace the file's own."""
+    references: dict[str, dict[str, object]] = {}
+
+    def entry(constant: str, owner: str) -> dict[str, object]:
+        key = json.dumps({"c": {"m": owner, "n": constant}}, separators=(",", ":"))
+        return references.setdefault(key, {"definition": None, "usages": []})
+
+    for written, nth, constant, owner in usages:
+        place = written if isinstance(written, list) else _ilean_place(source, written, nth)
+        entry(constant, owner)["usages"].append([*place, "Project.top"])
+    for constant, written in definitions.items():
+        entry(constant, module_name)["definition"] = [*_ilean_place(source, written), constant]
+    data = {"version": 5, "module": module_name, "directImports": [], "references": references, "decls": {}, **fields}
+    path = build.joinpath(*module_name.split(".")).with_suffix(".ilean")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+_EXACT_SOURCE = (
+    "namespace Project\n\ndef Base : Nat := 0\n\nprivate def helper : Nat := 1\n\nstructure Pt where\n  x : Prop\n\n"
+    "theorem top (𝓕 : Filter.{0} Nat) (f : Nat → Nat) (h : 1 ≤ 2) (n : ℕ) : "
+    "Tendsto f 𝓕 𝓕 ∧ helper = Base + 1 ∧ Prime 2 ∧\n"
+    "    IsIntegral 𝓕 ∧ @id Nat 0 = 0 ∧ Nat.succ_le.mp h ∧ Foo.«bar?&» ∧ Cslib.Thing ∧ "
+    "(Pt.mk True).x := sorry\n\n"
+    "end Project\n"
+)
+# The third and fourth "Nat" are the theorem's first two.
+_EXACT_USAGES: list[tuple[str | list[int], int, str, str]] = [
+    # Lean records a name written with universes twice, with and without them.
+    ("Filter.{0}", 0, "Filter", "Mathlib.Order.Filter.Defs"),
+    ("Filter", 0, "Filter", "Mathlib.Order.Filter.Defs"),
+    ("Nat", 2, "Nat", "Init.Prelude"),
+    ("Nat", 3, "Nat", "Init.Prelude"),
+    # A usage that ends inside the written name, as a stale file's can, notation, and one past its line's end.
+    ("Na", 4, "Na", "Mathlib.Na"),
+    ("ℕ", 0, "Nat", "Init.Prelude"),
+    ([10, 500, 10, 503], 0, "Nat", "Init.Prelude"),
+    ("Tendsto", 0, "Filter.Tendsto", "Mathlib.Order.Filter.Defs"),
+    ("helper", 1, "_private.Project.Basic.0.Project.helper", "Project.Basic"),
+    ("Base", 1, "Project.Base", "Project.Basic"),
+    ("Prime", 0, "Nat.Prime", "Mathlib.Data.Nat.Prime.Defs"),
+    ("IsIntegral", 0, "AlgebraicGeometry.IsIntegral", "Mathlib.AlgebraicGeometry.Properties"),
+    ("@id", 0, "id", "Init.Prelude"),
+    ("Nat.succ_le", 0, "Nat.succ_le", "Init.Data.Nat.Basic"),
+    # Dot notation past a constant: Lean records the name after the dot too.
+    ("mp", 0, "Iff.mp", "Init.Core"),
+    ("Foo.«bar?&»", 0, "Foo.«bar?&»", "Mathlib.Foo"),
+    ("Cslib.Thing", 0, "Cslib.Thing", "Cslib.Foundations.Thing"),
+    # A constructor, which the project's index does not hold.
+    ("Pt.mk", 0, "Project.Pt.mk", "Project.Basic"),
+    # The theorem named in its own text, as a recursive call names a definition.
+    ("top", 0, "Project.top", "Project.Basic"),
+]
+_EXACT_DEFINITIONS = {
+    "Project.Base": "Base",
+    "_private.Project.Basic.0.Project.helper": "helper",
+    "Project.Pt": "Pt",
+    "Project.top": "top",
+}
+#: Below a source folder, which the module's name leaves out.
+_EXACT_PATH = "src/Project/Basic.lean"
+
+
+def _exact_project(tmp_path: Path, **fields: object) -> tuple[Path, Path]:
+    project = _project(tmp_path)
+    (project / "Project/Basic.lean").unlink()
+    (project / _EXACT_PATH).parent.mkdir(parents=True)
+    (project / _EXACT_PATH).write_text(_EXACT_SOURCE, encoding="utf-8")
+    # A project file at a Mathlib module's path is not that module, whose constants still link to the docs.
+    mirror = project / "src/Project/Mathlib/Order/Filter/Defs.lean"
+    mirror.parent.mkdir(parents=True)
+    mirror.write_text("-- The project's own, at a path like Mathlib's.\n", encoding="utf-8")
+    build = tmp_path / "build"
+    _write_ilean(build, "Project.Basic", _EXACT_SOURCE, _EXACT_USAGES, _EXACT_DEFINITIONS, **fields)
+    return project, build
+
+
+def _top_block(out: Path) -> str:
+    """The code of the top statement's Lean block."""
+    page = (out / "roadmap/README.md").read_text(encoding="utf-8")
+    statement = page.split('data-autoform-node-id="top"', 1)[1]
+    return statement.split('<pre class="bp-lean"><code>', 1)[1].split("</code></pre>", 1)[0]
+
+
+def _ilean_notes(report: object) -> list[str]:
+    return [warning for warning in report.warnings if ".ilean" in warning]
+
+
+def test_a_lean_block_links_each_name_to_what_the_build_resolved_it_to(tmp_path: Path) -> None:
+    """With the build's ``.ilean`` file, a name links exactly the constant Lean resolved it to, whatever namespace
+    or ``open`` it was written under: a project declaration as before, by its full name, a private one too, and a
+    constant of a package Mathlib's documentation covers to its page there. Binders, notation, the part of a name
+    past its constant, and another package's constants stay text; a project constant the index does not hold is
+    looked up as without the file."""
+    project, build = _exact_project(tmp_path)
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, ileans=build)
+    code = _top_block(tmp_path / "out")
+    docs = "https://leanprover-community.github.io/mathlib4_docs/find/?pattern="
+
+    def doc(written: str, constant: str, pattern: str | None = None) -> str:
+        href = f"{docs}{pattern or constant}#doc"
+        return f'<a class="bp-lean-doc" href="{href}" title="{html.escape(constant)}">{written}</a>'
+
+    # Only what the file records links, and only where a usage spans whole components of the name written, past any
+    # universes: binders have no usage, the third Nat's ends inside it, and ℕ is notation, not a suffix of Nat.
+    assert (
+        f"(𝓕 : {doc('Filter', 'Filter')}.{{0}} {doc('Nat', 'Nat')}) (f : {doc('Nat', 'Nat')} → Nat) (h : 1 ≤ 2) "
+        f"(n : ℕ) : {doc('Tendsto', 'Filter.Tendsto')} f 𝓕 𝓕 ∧ "
+    ) in code
+    assert '<span class="bp-lean-ref" tabindex="0" data-lean-name="Project.helper">helper</span> = ' in code
+    assert '<a class="bp-lean-ref" href="#base" data-lean-name="Project.Base">Base</a> + 1' in code
+    prime, integral = doc("Prime", "Nat.Prime"), doc("IsIntegral", "AlgebraicGeometry.IsIntegral")
+    assert f"∧ {prime} 2 ∧\n    {integral} 𝓕" in code
+    # A name written after @ links without it; dot notation past a constant stays text.
+    assert f"∧ @{doc('id', 'id')} Nat 0 = 0 ∧ {doc('Nat.succ_le', 'Nat.succ_le')}.mp h ∧ " in code
+    # The full name is percent-encoded in the link and escaped in its title.
+    assert doc("Foo.«bar?&amp;»", "Foo.«bar?&»", "Foo.%C2%ABbar%3F%26%C2%BB") in code
+    # Another package's constant stays text, and so does the theorem's own name; the constructor's type links.
+    pt = '<span class="bp-lean-ref" tabindex="0" data-lean-name="Project.Pt">Pt</span>'
+    assert f"∧ Cslib.Thing ∧ ({pt}.mk True).x" in code
+    assert "Project.top" not in code
+    # The project's names still carry their cards; the build's data raised no warning.
+    assert 'data-lean-name="Project.helper" data-search-exclude="1"' in (tmp_path / "out/roadmap/README.md").read_text(
+        encoding="utf-8"
+    )
+    assert not _ilean_notes(report)
+    # A Mathlib name reads as code, dotted until hovered, as a project name does.
+    css = (tmp_path / "out/stylesheets/blueprint.css").read_text(encoding="utf-8")
+    assert ".md-typeset :is(.bp-lean-ref, .bp-lean-doc) { color: inherit; text-decoration: underline dotted;" in css
+
+
+def test_render_takes_the_build_by_ileans(tmp_path: Path) -> None:
+    project, build = _exact_project(tmp_path)
+
+    argv = ["render", str(project / "blueprint"), "--output", str(tmp_path / "out"), "--lean-root", str(project)]
+    assert main([*argv, "--ileans", str(build)]) == 0
+
+    assert "bp-lean-doc" in _top_block(tmp_path / "out")
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "no build", "format", "stale", "unrecorded", "inside a longer name", "after a dot", "elsewhere", "past a dot",
+        "missing", "no directory", "unreadable", "a list", "too large", "other module", "another file's module",
+    ],
+)
+def test_without_a_matching_ilean_file_a_lean_block_links_as_before(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    """A file whose ``.ilean`` data is missing, of another format, unreadable, too large, or another module's, and a
+    declaration the build no longer records where the file declares it whole (as after an edit since), link names by
+    the project's index, as without a build, and render says which."""
+    project, build = _exact_project(tmp_path)
+    render_site(project / "blueprint", tmp_path / "before", lean_root=project)
+    ilean, given = build / "Project/Basic.ilean", build
+
+    def edit(source: str) -> None:
+        (project / _EXACT_PATH).write_text(source, encoding="utf-8")
+        render_site(project / "blueprint", tmp_path / "before", lean_root=project)
+
+    if problem == "format":
+        _write_ilean(build, "Project.Basic", _EXACT_SOURCE, _EXACT_USAGES, _EXACT_DEFINITIONS, version=4)
+    elif problem == "stale":
+        edit(_EXACT_SOURCE.replace("theorem top", "theorem  top"))
+    elif problem == "unrecorded":
+        definitions = {name: written for name, written in _EXACT_DEFINITIONS.items() if name != "Project.top"}
+        _write_ilean(build, "Project.Basic", _EXACT_SOURCE, _EXACT_USAGES, definitions)
+    elif problem == "inside a longer name":
+        # The file's place for top now starts a longer name, on the declaration's own attribute line.
+        edit(_EXACT_SOURCE.replace("theorem top", "@[simp, top_aux]\ntheorem top"))
+    elif problem == "after a dot":
+        # And here it ends one.
+        edit(_EXACT_SOURCE.replace("theorem top", "@[simpl.top]\ntheorem top"))
+    elif problem == "elsewhere":
+        # Another declaration named top stands where the file places this one.
+        inner = "namespace Inner\ntheorem top : True := trivial\nend Inner\n"
+        edit(_EXACT_SOURCE.replace("  x : Prop\n\n", f"  x : Prop\n{inner}\n"))
+    elif problem == "past a dot":
+        # The file records Nat where the source now writes Nat.Primes, and nothing at Primes.
+        edit(_EXACT_SOURCE.replace("Filter.{0} Nat)", "Filter.{0} Nat.Primes)"))
+    elif problem == "missing":
+        ilean.unlink()
+    elif problem == "no directory":
+        given = tmp_path / "nowhere"
+    elif problem == "unreadable":
+        ilean.write_text("{", encoding="utf-8")
+    elif problem == "a list":
+        ilean.write_text("[]", encoding="utf-8")
+    elif problem == "too large":
+        monkeypatch.setattr(lean_module, "_ILEAN_LIMIT", 1024 * 1024)
+        ilean.write_bytes(ilean.read_bytes() + b" " * (1024 * 1024))
+    elif problem == "other module":
+        _write_ilean(build, "Project.Basic", _EXACT_SOURCE, _EXACT_USAGES, _EXACT_DEFINITIONS, module="Project.Other")
+    elif problem == "another file's module":
+        ilean.unlink()
+        _write_ilean(build, "Basic", _EXACT_SOURCE, _EXACT_USAGES, _EXACT_DEFINITIONS)
+        (project / "Basic.lean").write_text("-- The module Basic.\n", encoding="utf-8")
+
+    report = render_site(
+        project / "blueprint", tmp_path / "after", lean_root=project, ileans=None if problem == "no build" else given
+    )
+
+    assert _top_block(tmp_path / "after") == _top_block(tmp_path / "before")
+    assert "bp-lean-doc" not in _top_block(tmp_path / "after")
+    file = "src/Project/Basic.lean: its .ilean file"
+    missing = (
+        "1 Lean file with a Lean block had no .ilean file in the build given, so its names link as without one: "
+        "src/Project/Basic.lean"
+    )
+    stale = (
+        f"{file} does not record Project.top where the file declares it, as after an edit since the build, so the Lean "
+        "shown for it links as without one"
+    )
+    unreadable = f"{file} cannot be read, so its Lean blocks link as without one"
+    expected = {
+        "no build": [],
+        "format": [f"{file} is format 4, and render reads format 5, so its Lean blocks link as without one"],
+        "stale": [stale],
+        "unrecorded": [stale],
+        "inside a longer name": [stale],
+        "after a dot": [stale],
+        "elsewhere": [stale],
+        "past a dot": [stale],
+        "missing": [missing],
+        "no directory": [
+            f"{tmp_path / 'nowhere'} is not a directory, so no .ilean file was read and the names in Lean blocks link "
+            "as without a build"
+        ],
+        "unreadable": [unreadable],
+        "a list": [unreadable],
+        "too large": [f"{file} is over the 1 MiB render reads, so its Lean blocks link as without one"],
+        "other module": [missing],
+        "another file's module": [missing],
+    }
+    assert _ilean_notes(report) == expected[problem]
+
+
+def test_a_declaration_that_declares_nothing_links_by_its_usages(tmp_path: Path) -> None:
+    """A ``proof_wanted`` declares no constant, so the ``.ilean`` file records no definition for its name, and its
+    usages alone say what its names mean."""
+    project, build = _exact_project(tmp_path)
+    wanted = _EXACT_SOURCE.replace("theorem top", "proof_wanted top").replace(" := sorry", "")
+    (project / _EXACT_PATH).write_text(wanted, encoding="utf-8")
+    definitions = {name: written for name, written in _EXACT_DEFINITIONS.items() if name != "Project.top"}
+    _write_ilean(build, "Project.Basic", wanted, _EXACT_USAGES, definitions)
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, ileans=build)
+    code = _top_block(tmp_path / "out")
+
+    docs = "https://leanprover-community.github.io/mathlib4_docs/find/?pattern="
+    assert f'<a class="bp-lean-doc" href="{docs}Filter.Tendsto#doc"' in code
+    assert not _ilean_notes(report)
+
+
+def test_an_indented_theorem_links_names_on_its_first_line(tmp_path: Path) -> None:
+    """A theorem's statement is shown without its first line's indent, which the build's columns count."""
+    project = _project(tmp_path)
+    source = (
+        "namespace Project\n\n  def Base : Nat := 0\n\n"
+        "  theorem top (x : Base = (0 : Nat)) : Base = 0 := x\n\nend Project\n"
+    )
+    (project / "Project/Basic.lean").write_text(source, encoding="utf-8")
+    build = tmp_path / "build"
+    usages = [
+        ("Base", 1, "Project.Base", "Project.Basic"), ("Nat", 1, "Nat", "Init.Prelude"),
+        ("Base", 2, "Project.Base", "Project.Basic"),
+    ]
+    _write_ilean(build, "Project.Basic", source, usages, {"Project.Base": "Base", "Project.top": "top"})
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, ileans=build)
+    code = _top_block(tmp_path / "out")
+
+    # Mathlib's docs link only from the build's data, so the block was read with it.
+    assert code.count('data-lean-name="Project.Base"') == 2 and code.count("pattern=Nat#doc") == 1
+
+
+def test_a_private_constant_the_index_files_under_a_public_name_links_nothing(tmp_path: Path) -> None:
+    """The ``.ilean`` file names a private constant by its file, so a public declaration elsewhere that shares its
+    name is not the one it means, and a private constant of a documented package has no page."""
+    project = _project(tmp_path)
+    other = "namespace Project\n\ntheorem helper : True := trivial\n\nend Project\n"
+    (project / "Project/Other.lean").write_text(other, encoding="utf-8")
+    source = (
+        "namespace Project\n\ndef Base : Nat := 0\n\nprivate def helper : Nat := 1\n\n"
+        "theorem top : helper = Base + 1 ∧ secret ∧ (0 : Nat) = 0 := rfl\n\nend Project\n"
+    )
+    (project / "Project/Basic.lean").write_text(source, encoding="utf-8")
+    build = tmp_path / "build"
+    usages = [
+        ("helper", 1, "_private.Project.Basic.0.Project.helper", "Project.Basic"),
+        ("Base", 1, "Project.Base", "Project.Basic"),
+        # Mathlib's documentation leaves out private constants.
+        ("secret", 0, "_private.Mathlib.Order.Basic.0.secret", "Mathlib.Order.Basic"),
+        ("Nat", 2, "Nat", "Init.Prelude"),
+    ]
+    _write_ilean(build, "Project.Basic", source, usages, {"Project.Base": "Base", "Project.top": "top"})
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project, ileans=build)
+    code = _top_block(tmp_path / "out")
+
+    # Only Nat links to the docs, which shows the build's data was read.
+    assert 'data-lean-name="Project.Base"' in code and "Project.helper" not in code
+    assert code.count("bp-lean-doc") == 1 and "pattern=Nat#doc" in code
+
+
+def test_ilean_columns_count_utf16_code_units() -> None:
+    assert lean_module._utf16_index("𝓕a", 2) == 1
+    assert lean_module._utf16_index("𝓕a", 3) == 2
+    assert lean_module._utf16_index("𝓕a", 1) is None
+    assert lean_module._utf16_index("ab", 3) is None
+    assert lean_module._utf16_index("", 0) == 0
+    assert lean_module.declared_name("_private.Project.Basic.0.Project.helper") == "Project.helper"
+    assert lean_module.declared_name("Project.helper") == "Project.helper"
+
+
+def test_the_ilean_files_used_last_stay_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    read: list[str] = []
+
+    def counted(self: object, path: Path) -> tuple[dict[int, object], dict[tuple[str, ...], object]]:
+        read.append(path.stem)
+        return {}, {}
+
+    monkeypatch.setattr(lean_module.SourceLinker, "_read_ilean", counted)
+    monkeypatch.setattr(lean_module, "_ILEAN_FILES", 2)
+    linker = lean_module.SourceLinker(None, ileans=Path("build"))
+    for name in "ABACA":
+        linker._ilean(Path(f"{name}.lean"))
+
+    assert read == ["A", "B", "C"]
+
+
+def test_an_ilean_file_s_entries_of_another_shape_are_skipped() -> None:
+    def key(constant: dict[str, object]) -> str:
+        return json.dumps({"c": constant})
+
+    data = {
+        "references": {
+            "not JSON": {"usages": [[0, 0, 0, 1, "M.x"]]},
+            "[" * 100_000: {"usages": [[0, 0, 0, 1, "M.x"]]},
+            key({"n": "M.no_module"}): {"usages": [[0, 0, 0, 1, "M.x"]]},
+            key({"m": "M", "n": "M.no_entry"}): [[0, 0, 0, 1, "M.x"]],
+            # Across lines, backwards, with a column that is not a number, and not a range at all.
+            key({"m": "M", "n": "M.bad"}): {
+                "definition": [2, 0, 3, 1],
+                "usages": [[0, 0, 1, 1], [0, 5, 0, 3], [0, "0", 0, 1], "x"],
+            },
+            key({"m": "M", "n": "M.good"}): {"definition": [4, 4, 4, 8, "M.good"], "usages": [[1, 2, 1, 6, "M.good"]]},
+        }
+    }
+
+    assert lean_module._ilean_records(data) == ({1: {2: (4, "M.good", "M")}}, {("M", "good"): (4, 4, 8)})
+
+
 def test_a_field_an_argument_or_a_tactic_is_no_reference() -> None:
     """A field given or declared, a named argument, an attribute and tactics name no declaration in reach."""
     linked = render_module._lean_code(
         "@[ext] { s with base := base, f (n := base) }\n  base : Nat\nx : List Base := base\ny :\n"
         "    Base := base decreasing_by simp_wf; base",
-        lambda written: f"[{written}]",
+        lambda written, _at: f"[{written}]",
     )
     # An attribute is no reference; a result type before ``:=`` is, on its own line too.
     assert linked == (

@@ -20,15 +20,14 @@ each link it writes from file and folder names, such as the book's dependency
 links; a Markdown link it moves keeps its decoded spelling and starts with `./`
 when its first segment holds a colon, so no name can make a `javascript:` URL.
 
-Render writes no Mermaid graph of its own. Authored Mermaid remains supported in
-the vault and book, drawn in strict mode with plain-text labels and loaded only
-on a page that has one: click callbacks and HTML in labels do not work, links to
-URLs do. Point `mkdocs.yml` at `docs_dir: site-src` and enable `md_in_html` and
-a `pymdownx.superfences` mermaid fence (see the [setup
-template](../templates/mkdocs.yml)); list the generated
-`javascripts/blueprint-mermaid.js`, not the Mermaid library. The [publication
-contract](runtime-and-publication.md#publication-contract) gives the
-schema and when render replaces an earlier site.
+Authored Mermaid is supported in the vault and book, drawn in strict mode with
+plain-text labels and loaded only on a page that has one: click callbacks and
+HTML in labels do not work, links to URLs do. Point `mkdocs.yml` at
+`docs_dir: site-src` and enable `md_in_html` and a `pymdownx.superfences`
+mermaid fence (see the [setup template](../templates/mkdocs.yml)); list the
+generated `javascripts/blueprint-mermaid.js`, not the Mermaid library. The
+[publication contract](runtime-and-publication.md#publication-contract) gives
+the schema and when render replaces an earlier site.
 
 ## Files render writes
 
@@ -104,13 +103,14 @@ in place of the `--lean-root .` the generated `blueprint-pages.yml` passes to
 
 The generated `blueprint-pages.yml` deploys only a commit that the project's own
 `.github/workflows/autoform-verify.yml` (matched by file, not name) passed on a
-push to `main`, with code links rendered at that commit by `--ref`. A failed
-verification deploys nothing, so the last verified site stays up. Pull requests
-and manual runs build the site but never deploy, and cannot cancel a waiting
-deploy. To redeploy, re-run the Pages run that the newest successful verify run
-on `main` started; re-running an older one deploys the older commit. Deleting or
-renaming `autoform-verify.yml`, or disabling it in the repository's Actions
-settings, stops every deploy, with no error.
+push to `main`, with code links rendered at that commit by `--ref` and, when
+that run uploaded its top-level Lake build's `.ilean` files (artifact
+`autoform-ileans`) and `AUTOFORM_REF`'s render takes `--ileans`, the names in
+its Lean linked by them. Pull requests and manual runs build the site but never
+deploy or cancel a waiting deploy. To redeploy, re-run the Pages run that the
+newest successful verify run on `main` started; re-running an older one deploys
+the older commit. Deleting or renaming `autoform-verify.yml`, or disabling it in
+the repository's Actions settings, silently stops every deploy.
 
 ## Pages reports
 
