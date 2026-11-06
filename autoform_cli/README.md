@@ -112,8 +112,7 @@ cannot use. None changes the exit status.
 
 `--no-site-warnings` leaves the site's page warnings to a `render` that runs
 next ([Validation](reference/validation-and-audit.md#validation)); the generated
-`blueprint-pages.yml` passes it when its `AUTOFORM_REF`'s `check --help` lists
-it, and `autoform-verify.yml` does not.
+`blueprint-pages.yml` passes it, and `autoform-verify.yml` does not.
 
 ### audit and coverage
 
@@ -360,8 +359,8 @@ The summary is plain Markdown built from the explorer's project map (the
 scaffolded vault ignores it): the statuses, one row per chapter with its items,
 ready work and dependencies both ways, the articles while the roadmap has at
 most 120, and how to open the explorer. Its front matter carries `kind: graph`
-and `autoform_generated: true`. It replaces a missing page, one it wrote, or the
-Mermaid page earlier versions wrote, and exits 2 refusing any other page.
+and `autoform_generated: true`. It replaces a missing page or one Autoform
+wrote, and exits 2 refusing any other page.
 
 Build the publishable site source, with links to Lean declarations at the
 current commit:

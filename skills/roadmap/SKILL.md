@@ -199,14 +199,6 @@ public name left out of `lean` or unresolved means the catalog must not carry
 formalized assertions. A catalog holds back what depends on it, so a dependent
 that needs one result links the declaration article instead.
 
-When the project's CI pins an older `AUTOFORM_REF`, it rejects the keys and
-markers that ref predates, such as `catalog:`, `area:`, `INVENTORIED` and
-`statement: retracted`, and still rejects a rolled-up dependency cycle that
-newer refs allow. Move the pin, or report it, before relying on one; until it
-moves, omit the edge that closes such a cycle, retract by removing `statement`
-and `proof` but keeping `lean:`, and report the old pin and each change it held
-back.
-
 ### Large sources
 
 For a large source, divide independent sections among available agents while
