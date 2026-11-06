@@ -337,6 +337,10 @@ def test_a_project_that_tracks_no_lean_shows_no_progress(tmp_path: Path, tracks_
       assert(lines.length, 'a card line is drawn');
       assert(tracked ? lines.some(line => /ready to prove|planned/.test(line)) : lines.every(line => /^(Theorem|Lemma)( · |$)/.test(line)),
         lines.join('; '));
+      // A finished card's fill says so, and its line names no status.
+      const finished = $$('.pm-card-meta').find(node => node.dataset.key === 'cm:Algebra/groups/lagrange');
+      assert(finished, lines.join('; '));
+      assert(finished.textContent.startsWith(tracked ? 'used ' : 'Theorem · used '), finished.textContent);
       if (!tracked) {
         // No status words in the map's labels.
         const said = $$('text').map(node => node.textContent).filter(text => /fully proved|ready to prove|planned|finished/.test(text));

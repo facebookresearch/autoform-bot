@@ -557,6 +557,9 @@ parse, with or without `--json`, and changes nothing else.
 
 ### Fixed
 
+- **Finished cards on the map.** A finished statement's card no longer prints
+  "fully proved" under its title, since its fill already says so; the line
+  names a status only for an unfinished statement.
 - **Library index guarantees.** `library index` and `--check` refuse a
   toolchain the probe is not verified on before `lake translate-config` reads a
   `lakefile.lean`, and refuse a source file with a dot in its path, or two files
