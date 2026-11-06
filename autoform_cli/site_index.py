@@ -360,15 +360,21 @@ def _wiki_targets(lines: list[str]) -> list[str] | None:
     if any(element.tag in headings and set(element.attrib) - {"id"} for element in body.iter()):
         return None
     targets: list[str] = []
-    # A later H1 stays in the section above it, as the loader reads it.
+    # A later H1 stays in the section the title or an H2 opened, as the loader
+    # reads it, and one named as a provenance or dependency section also
+    # leaves out the links below it, as the page shows them under it.
     later_titles = set([element for element in body if element.tag == "h1"][1:])
 
     def read(parent: object) -> None:
-        excluded = False
+        excluded = section_excluded = False
         for element in parent:
             if element.tag in headings:
-                if element.tag in {"h1", "h2"} and element not in later_titles:
-                    excluded = "".join(element.itertext()).strip().casefold() in _WIKI_EXCLUDED
+                if element.tag in {"h1", "h2"}:
+                    named = "".join(element.itertext()).strip().casefold() in _WIKI_EXCLUDED
+                    if element in later_titles:
+                        excluded = section_excluded or named
+                    else:
+                        excluded = section_excluded = named
                 continue
             if excluded or element.tag in {"code", "pre", "img"}:
                 continue

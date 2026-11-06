@@ -40,6 +40,7 @@ from .markdown import (
     text_blocks,
 )
 from .markdown import HEADING as _HEADING
+from .publishable import publishable_article
 
 
 #: A display formula written inside a paragraph, ``$$...$$``. There the site reads ``\[...\]`` as escaped
@@ -356,7 +357,8 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     # resolve to.
     wrapped_edges: set[tuple[str, str]] = set()
     informal_named: dict[str, list[str]] = {}
-    containers = {parent for parent in parents.values() if parent is not None}
+    # Render leaves out unpublished folders, so it counts only published children.
+    containers = {parent for node_id, parent in parents.items() if parent is not None and node_id not in omitted}
     for parsed_node in parsed:
         # Render shows a formalizable leaf or a module catalog in its chapter's
         # box, which reads an indented heading as the loader does.
@@ -911,12 +913,22 @@ def _article_depth(node_id: str, parents: dict[str, str | None]) -> int:
     return depth
 
 
+def _shown_as_typed(text: str) -> bool:
+    """Whether the site shows the article ``text`` as typed, as render decides it."""
+    try:
+        return bool(publishable_article(text)[1])
+    except RecursionError:
+        # Render shows a page nested deeper than its converter reads as typed too.
+        return True
+
+
 def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None, list[str]]:
     lines = text.splitlines()
     metadata, body_start, issues = _parse_frontmatter(node_id, lines)
     title: str | None = None
-    # The first line the site reads as an H1 and the loader as text, for a missing title's error.
-    unspaced_title: str | None = None
+    # Where the first line the site reads as an H1 and the loader as text is,
+    # and how to name it, for a missing title's error.
+    unspaced_title: tuple[int, str] | None = None
     targets: dict[str, list[str]] = {
         _STATEMENT_SECTION: [],
         _PROOF_SECTION: [],
@@ -954,7 +966,7 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
                 )
             )
             if unspaced_title is None and len(unspaced.group(1)) == 1:
-                unspaced_title = f"line {number}, '{block.strip()}',"
+                unspaced_title = (start, f"line {number}, '{block.strip()}',")
         if heading:
             level = len(heading.group(1))
             heading_text = heading.group(2).strip()
@@ -995,13 +1007,21 @@ def _parse_node(node_id: str, path: Path, text: str) -> tuple[_ParsedNode | None
             alone[section].extend(target for line in body[start:stop] for target in link_targets(line, references))
             targets[section].extend(target for _, target in _block_links(body[start:stop], references))
 
-    if any(kind != "loader" for _, kind in heading_warnings) and first_unclosed_fence(lines[body_start:]) is not None:
-        # The site shows an article whose fence never closes as typed, which
+    if any(kind != "loader" for _, kind in heading_warnings) and _shown_as_typed(text):
+        # The site shows an article it cannot publish as written, such as one
+        # whose fence never closes or that holds raw HTML, as typed, which
         # check warns about, so it shows no heading to compare with.
         heading_warnings = [warning for warning in heading_warnings if warning[1] == "loader"]
-        unspaced_title = None
     if title is None:
-        hint = f"; the site reads {unspaced_title} as one: put a plain space after the '#'" if unspaced_title else ""
+        # Render takes the title from such a line even on a page shown as
+        # typed. Below a fence that never closes, the line is code the author
+        # meant, and the fence's warning names the fix.
+        fence = first_unclosed_fence(lines[body_start:])
+        hint = (
+            f"; the site reads {unspaced_title[1]} as one: put a plain space after the '#'"
+            if unspaced_title and (fence is None or unspaced_title[0] < fence)
+            else ""
+        )
         issues.append(f"{node_id}: missing H1 title{hint}")
     if issues:
         return None, issues

@@ -586,8 +586,10 @@ parse, with or without `--json`, and changes nothing else.
   naming its line. Since #171 read a fence that never closes as text, a shell
   comment in one, such as `# install the toolchain`, made `check`, `audit` and
   `search` refuse the whole blueprint. Concept links keep a later H1 in its
-  section too. `check` also warns about a heading with no space after its `#`
-  marks, `##Proof`, which only the site reads as one, and, on an article
+  section too, though one named as a provenance or dependency section, such as
+  `# References`, keeps the links below it out. Unless the site shows the
+  article as typed, `check` also warns about a heading with no space after its
+  `#` marks, `##Proof`, which only the site reads as one, and, on an article
   published as its own page, about one indented up to three spaces, which only
   Autoform reads as one. A missing title's error names a `#Title` line the site
   reads as the title.

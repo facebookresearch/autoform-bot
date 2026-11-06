@@ -904,6 +904,41 @@ def test_check_loads_an_article_whose_unclosed_fence_holds_a_comment(
     assert not any("the site reads" in warning for warning in warnings)
 
 
+def test_a_page_the_site_shows_as_typed_for_its_raw_html_has_no_heading_to_compare(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    # The site shows the page as typed for its <pre>, which check names, so
+    # '#!' is no heading there, and '\#!' would only edit the script.
+    _node(blueprint, "setup.md", "# Setup\n\n<pre>\n#!/bin/sh\n</pre>\n")
+
+    assert load_graph(blueprint).warnings == ()
+
+
+def test_a_page_nested_deeper_than_the_converter_reads_has_no_heading_to_compare(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    # Render shows the page as typed rather than stopping, so the loader neither stops nor compares headings.
+    deep = "".join("    " * depth + "- level\n" for depth in range(400))
+    _node(blueprint, "top.md", f"# Top\n\n ## Proof\n\n{deep}")
+
+    assert load_graph(blueprint).warnings == ()
+
+
+def test_a_fence_only_the_loader_reads_keeps_the_heading_warning(tmp_path: Path) -> None:
+    blueprint = tmp_path / "blueprint"
+    _node(blueprint, "base.md", "# Base\n")
+    # The page drops the comment, which leaves the ``` inside a line, so it opens
+    # no fence there and the page shows a heading; the graph has no proof dependency.
+    body = "# Top\n\nSee the code <!-- a note\nends here --> ```\n\n##Proof depends on\n\n- [Base](base.md)\n"
+    _node(blueprint, "top.md", body)
+
+    graph = load_graph(blueprint)
+
+    assert graph.nodes["top"].dependencies == ()
+    assert graph.warnings == (
+        "top: line 8: the site reads '##Proof depends on' as a heading and autoform as text; "
+        "put a plain space after the '#' marks, or write '\\#' to keep it text",
+    )
+
+
 @pytest.mark.parametrize(
     ("heading", "statement", "proof", "warning"),
     [
@@ -970,17 +1005,24 @@ def test_an_indented_heading_warns_only_where_its_article_is_a_page(tmp_path: Pa
     blueprint = tmp_path / "blueprint"
     body = "# {}\n\nThe statement.\n\n ## Remarks\n\nA remark.\n"
     _node(blueprint, "page.md", body.format("Page"))
-    # A leaf's box reads the heading as the loader does.
+    # A leaf's box reads the heading as the loader does, as a module catalog's does.
     _node(blueprint, "leaf.md", body.format("Leaf"), declaration="theorem")
+    _node(blueprint, "catalog.md", body.format("Catalog"), catalog="module")
     # A leaf that holds others is a page again.
     _roadmap_page(blueprint, "held/README.md", _node_text(body.format("Held"), declaration="theorem"))
     _node(blueprint, "held/part.md", "# Part\n")
+    # Render leaves out an unpublished folder, so a leaf that holds only one keeps its box.
+    _roadmap_page(blueprint, "shut/README.md", _node_text(body.format("Shut"), declaration="theorem"))
+    _node(blueprint, "shut/drafts/README.md", "# Drafts\n", published="false")
 
     graph = load_graph(blueprint)
 
     indented = "line {}: autoform reads ' ## Remarks' as a heading and the site as text, since it is indented; "
     fix = "remove the spaces before the '#', or write '\\#' to keep it text"
     assert graph.warnings == (f"held: {indented.format(8)}{fix}", f"page: {indented.format(7)}{fix}")
+
+
+_TOP_HINT = "top: missing H1 title; the site reads line 3, '#Top', as one: put a plain space after the '#'"
 
 
 @pytest.mark.parametrize(
@@ -993,8 +1035,12 @@ def test_an_indented_heading_warns_only_where_its_article_is_a_page(tmp_path: Pa
         ),
         ("##Top\n", "top: missing H1 title"),
         ("```sh\n#!/bin/sh\n", "top: missing H1 title"),
+        # Render takes the title from the line even on a page it shows as typed.
+        ("#Top\n\nSee <b>this</b>.\n", _TOP_HINT),
+        ("#Top\n\n```sh\necho\n", _TOP_HINT),
+        ("#Top\n\n" + "".join("    " * depth + "- level\n" for depth in range(400)), _TOP_HINT),
     ],
-    ids=["title", "first", "h2", "unclosed-fence"],
+    ids=["title", "first", "h2", "unclosed-fence", "raw-html", "fence-below", "too-deep"],
 )
 def test_a_title_without_a_space_names_its_line(tmp_path: Path, body: str, issue: str) -> None:
     blueprint = tmp_path / "blueprint"
