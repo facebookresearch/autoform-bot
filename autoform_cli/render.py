@@ -1032,6 +1032,7 @@ def render_site(
             spellings=spellings,
             root_prefix=root_prefix,
             sources=dict(lean.source_files),
+            mathlib=_builds_on_mathlib(repo_root),
         )
         reviews: dict[str, str] = {}
         review_warnings: list[str] = []
@@ -4233,7 +4234,8 @@ def _lean_blocks(
     body included. A long declaration folds. A catalog shows none, as it shows no code icons.
 
     A name in them that the project declares links to the statement that formalizes it, else to its
-    source, and the block carries a card for each, hidden, that the book shows on hover.
+    source, and the block carries a card for each, hidden, that the book shows on hover. One it does not
+    declare may link to Mathlib's documentation (:func:`_mathlib_reference`).
     """
     if node.catalog is not None:
         return []
@@ -4246,11 +4248,15 @@ def _lean_blocks(
         bound = bound_names(text)
 
         def reference(written: str) -> str | None:
-            resolved = None if written.split(".", 1)[0] in bound else linker.resolve(written, declaration)
+            if written.split(".", 1)[0] in bound:
+                return None
+            resolved = linker.resolve(written, declaration)
+            if resolved is None:
+                return _mathlib_reference(written, declaration, linker)
             # A one-letter name is almost always a variable the file declares, which the index cannot see. The card,
             # the link and the formalizing statement go by name, so a declaration the index files under another of
             # its name's declarations, or under none, links nothing rather than the wrong one.
-            if resolved is None or len(resolved[1]) < 2 or linker.location(resolved[0].name) != resolved[0]:
+            if len(resolved[1]) < 2 or linker.location(resolved[0].name) != resolved[0]:
                 return None
             target, prefix = resolved
             named.setdefault(target.name, target)
@@ -4272,6 +4278,32 @@ def _lean_blocks(
     cards = [card for target in named.values() if (card := _lean_card(target, linker))]
     hidden = ['<div class="bp-lean-names" hidden>', *cards, "</div>"] if cards else []
     return ["", '<div class="bp-lean-source" data-search-exclude="1">', *blocks, *hidden, "</div>", ""]
+
+
+#: A name that may be Mathlib's: a capital, then a lowercase letter before the first dot, as Mathlib writes its types,
+#: structures and namespaces (``Finset``, ``IsOpen``, ``NNReal.sqrt``). A lowercase name, or one like ``G'`` or ``M₂``,
+#: is as likely a variable the file declares, which the index cannot see.
+_MATHLIB_NAME = re.compile(r"[A-Z][A-Z0-9_']*[a-z][A-Za-z0-9_']*(?:\..+)?")
+
+
+def _mathlib_reference(written: str, within: Declaration, linker: SourceLinker) -> str | None:
+    """A link to Mathlib's documentation for *written*, a name in *within* the project does not declare, when it may
+    be Mathlib's. It shows no card: render has no Mathlib source to cut one from."""
+    href = linker.mathlib_url(written, within) if _MATHLIB_NAME.fullmatch(written) else None
+    if href is None:
+        return None
+    return f'<a class="bp-lean-doc" href="{html.escape(href, quote=True)}">{_typed(written)}</a>'
+
+
+def _builds_on_mathlib(lean_root: Path) -> bool:
+    """Whether the Lean root's ``lake-manifest.json`` lists Mathlib among its packages."""
+    try:
+        manifest = json.loads((lean_root / "lake-manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    packages = manifest.get("packages") if isinstance(manifest, dict) else None
+    listed = packages if isinstance(packages, list) else []
+    return any(isinstance(package, dict) and package.get("name") == "mathlib" for package in listed)
 
 
 def _lean_card(declaration: Declaration, linker: SourceLinker) -> str | None:

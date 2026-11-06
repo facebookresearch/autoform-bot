@@ -1359,6 +1359,11 @@ _WHERE = re.compile(r"\bwhere[ \t]*\n([ \t]+)")
 #: A name in a pattern that is no part of a dotted name, so neither a constructor nor a field.
 _PATTERN_NAME = re.compile(rf"(?<![\w.'!?»]){_ID_COMPONENT}(?![\w.'!?«])")
 #: The modules an ``import`` command names.
+#: The packages whose modules Mathlib's documentation covers, from its navigation (2026-11-05).
+_MATHLIB_DOCUMENTED = frozenset(
+    {"Aesop", "Archive", "Batteries", "Counterexamples", "ImportGraph", "Init", "Lake", "Lean", "LeanSearchClient"}
+    | {"Mathlib", "Plausible", "ProofWidgets", "Qq", "Std"}
+)
 _IMPORT = re.compile(r"^[ \t]*(?:(?:public|private|meta)[ \t]+)*import[ \t]+(?:all[ \t]+)?([^\n]*)", re.MULTILINE)
 #: Lean's ASCII identifiers (isIdFirstAscii and isIdRestAscii): the only module
 #: names the impact probe imports and a library index holds.
@@ -1706,11 +1711,16 @@ class SourceLinker:
     """The Lean root's path below the repository's top level, or empty at the top level."""
     sources: Mapping[Path, bytes] = field(default_factory=dict)
     """Each captured Lean file's bytes, by its path below the Lean root."""
+    mathlib: bool = False
+    """True when the project builds on Mathlib, so a name it does not declare can link to Mathlib's documentation."""
     _lines: dict[Path, list[str]] = field(default_factory=dict, repr=False, compare=False)
+    _endings: set[str] = field(default_factory=set, repr=False, compare=False)
     _opens: dict[Path, list[tuple[int, list[str]]]] = field(default_factory=dict, repr=False, compare=False)
     _imports: dict[Path, frozenset[Path]] = field(default_factory=dict, repr=False, compare=False)
     _modules: dict[str, list[Path]] = field(default_factory=dict, repr=False, compare=False)
     _direct: dict[Path, list[Path]] = field(default_factory=dict, repr=False, compare=False)
+    _written: dict[Path, list[str]] = field(default_factory=dict, repr=False, compare=False)
+    _beyond: dict[Path, bool] = field(default_factory=dict, repr=False, compare=False)
 
     def excerpt(self, name: str) -> tuple[Declaration, str] | None:
         """*name*'s declaration and its text as written, or ``None`` if *name* or its file was not captured
@@ -1792,7 +1802,7 @@ class SourceLinker:
                 if current not in self._direct:
                     text = self.sources.get(current, b"").decode("utf-8", "replace")
                     commands = _IMPORT.findall(_without_lean_comments(text, mask_literals=True))
-                    modules = [module for command in commands for module in command.split()]
+                    modules = self._written[current] = [module for command in commands for module in command.split()]
                     self._direct[current] = [source for module in modules for source in self._modules.get(module, ())]
                 fresh = [source for source in self._direct[current] if source not in seen]
                 seen.update(fresh)
@@ -1817,6 +1827,37 @@ class SourceLinker:
             for part in self.spellings.get(relative, relative).split("/")
         )
         return f"{self.repository_url}/blob/{encoded_ref}/{path}#L{declaration.line}"
+
+    def mathlib_url(self, written: str, within: Declaration) -> str | None:
+        """Mathlib's documentation of *written*, a name in *within*'s text that :meth:`resolve` found no
+        declaration for, or ``None``: when the project does not build on Mathlib; when *within*'s file sees
+        another package, whose names Mathlib's documentation lacks or would take for its own; or when a project
+        declaration's name ends with *written* or a name it starts with, as a recursive type names itself and a
+        constructor names its type. The link is a search, which reaches the name in Mathlib's current
+        documentation, not the project's pinned version."""
+        if not self.mathlib or self._beyond_mathlib(within.path):
+            return None
+        if not self._endings:
+            for name in self.index.declarations:
+                parts = _name_parts(name)
+                self._endings.update(".".join(parts[start:]) for start in range(len(parts)))
+        parts = _name_parts(written)
+        if any(".".join(parts[:count]) in self._endings for count in range(1, len(parts) + 1)):
+            return None
+        pattern = quote_from_bytes(written.encode("utf-8"), safe=".")
+        return f"https://leanprover-community.github.io/mathlib4_docs/find/?pattern={pattern}#doc"
+
+    def _beyond_mathlib(self, path: Path) -> bool:
+        """Whether *path*, or a captured file it imports, imports a module outside the project and outside the
+        packages Mathlib's documentation covers."""
+        if path not in self._beyond:
+            files = [path, *self._imported(path)]
+            self._beyond[path] = any(
+                module not in self._modules and _name_parts(module)[0] not in _MATHLIB_DOCUMENTED
+                for source in files
+                for module in self._written.get(source, ())
+            )
+        return self._beyond[path]
 
 
 __all__ = [

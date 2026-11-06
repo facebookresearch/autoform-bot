@@ -983,6 +983,79 @@ def test_a_private_declaration_whose_name_another_file_shares_links_nothing(tmp_
     assert 'data-lean-name="Project.Base"' in top and "Project.helper" not in top
 
 
+def test_a_name_the_project_does_not_declare_links_mathlib_s_documentation(tmp_path: Path) -> None:
+    """In a project built on Mathlib, a name the project does not declare links to Mathlib's documentation, with no
+    card. A variable-like name, one a project declaration's name ends with, and any name in a file that sees another
+    package stay text."""
+    project = _project(tmp_path)
+    (project / "Project/Other.lean").write_text(
+        "import Cslib.Automata.DFA\n\nnamespace Project\n\ntheorem other (s : Finset DFA) : True := trivial\n\nend Project\n",
+        encoding="utf-8",
+    )
+    (project / "Project/Uses.lean").write_text(
+        "import Project.Other\n\nnamespace Project\n\ntheorem uses (s : Finset Nat) : True := trivial\n\nend Project\n",
+        encoding="utf-8",
+    )
+    (project / "Project/Basic.lean").write_text(
+        "import Mathlib.Data.Finset.Basic\n\nnamespace Project\n\ninductive Tree where\n  | leaf : Tree\n  | node : List Tree → Tree\n\n"
+        "def Base : Nat := 0\n\ndef Loop : Nat → Nat\n  | n => Loop.Step n\n\n"
+        "theorem top (Gr : Type) (s : Finset Nat) : IsOpen (Set.univ : Set Real) ∧ Nat.Prime 2 ∧ Base ≤ s.card"
+        " ∧ M₂ = G' ∧ Gr = GL ∧ Tree.size = 0 ∧ exp 0 = 1 := by\n  sorry\n\nend Project\n",
+        encoding="utf-8",
+    )
+    index = lean_module.index_project(project)
+    sources = {path.relative_to(project): path.read_bytes() for path in (project / "Project").glob("*.lean")}
+
+    def code(lean: str, mathlib: bool = True) -> str:
+        linker = lean_module.SourceLinker(index, sources=sources, mathlib=mathlib)
+        node = SimpleNamespace(catalog=None, lean=lean)
+        return "\n".join(render_module._lean_blocks(node, linker, links={}, formalizing={}))
+
+    def documented(text: str) -> list[str]:
+        return re.findall(r'<a class="bp-lean-doc" href="[^"]*">([^<]*)</a>', text)
+
+    top = code("Project.top")
+    assert documented(top) == ["Finset", "Nat", "IsOpen", "Set.univ", "Set", "Real", "Nat.Prime"]
+    assert (
+        '<a class="bp-lean-doc" href="https://leanprover-community.github.io/mathlib4_docs/find/?pattern=Nat.Prime#doc">'
+        in top
+    )
+    # The project's own name keeps its card, and a Mathlib name has none.
+    assert 'data-lean-name="Project.Base"' in top and 'data-lean-name="Nat' not in top
+    # A recursive type or definition names itself, which the index finds no declaration for in its own text, and
+    # so does a name it starts.
+    assert documented(code("Project.Tree")) == ["List"]
+    assert documented(code("Project.Loop")) == ["Nat", "Nat"]
+    assert documented(code("Project.top", mathlib=False)) == []
+    # Mathlib's documentation lacks Cslib's names and has its own DFA, so a file that sees Cslib, itself or through
+    # a project file, links none.
+    assert documented(code("Project.other")) == documented(code("Project.uses")) == []
+    within = index.find("Project.top")
+    assert within is not None
+    assert lean_module.SourceLinker(index, mathlib=True).mathlib_url("Finset.sum_comm'", within) == (
+        "https://leanprover-community.github.io/mathlib4_docs/find/?pattern=Finset.sum_comm%27#doc"
+    )
+
+
+def test_a_project_builds_on_mathlib_when_its_lake_manifest_lists_it(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    manifest = project / "lake-manifest.json"
+    assert not render_module._builds_on_mathlib(project)
+    manifest.write_text('{"packages": [{"name": "batteries"}]}', encoding="utf-8")
+    assert not render_module._builds_on_mathlib(project)
+    manifest.write_text("{", encoding="utf-8")
+    assert not render_module._builds_on_mathlib(project)
+    manifest.write_text('{"version": "1.1.0", "packages": [{"name": "batteries"}, {"name": "mathlib"}]}', encoding="utf-8")
+    assert render_module._builds_on_mathlib(project)
+
+    (project / "Project/Basic.lean").write_text(
+        "namespace Project\n\ndef Base : Nat := 0\n\ntheorem top : Base = Nat.zero := rfl\n\nend Project\n", encoding="utf-8"
+    )
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+    page = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert 'pattern=Nat.zero#doc">Nat.zero</a>' in page
+
+
 def test_a_field_an_argument_or_a_tactic_is_no_reference() -> None:
     """A field given or declared, a named argument, an attribute and tactics name no declaration in reach."""
     linked = render_module._lean_code(

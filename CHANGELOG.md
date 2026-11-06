@@ -65,8 +65,12 @@ date when the release is tagged.
   among the project's own declarations, in the namespaces around the
   declaration and those its file opens, and takes only one the file can see:
   one above it in that file, or one not private in a file it imports.
-  Binders, patterns, fields, attributes, tactics, one-letter names and names
-  the project does not declare, such as Mathlib's, stay text.
+  Binders, patterns, fields, attributes, tactics and one-letter names stay
+  text. When the Lean root's `lake-manifest.json` lists Mathlib, a name the
+  project does not declare that starts as Mathlib's types and namespaces do,
+  a capital and then a lowercase letter (`Finset`, `Nat.Prime`), links to
+  Mathlib's documentation search, with no card; any other name the project
+  does not declare stays text.
 - **Check without site warnings.** `check --no-site-warnings` skips the
   warnings about the pages the site would publish, which `render` prints too,
   and still reads the notes under `blueprint/sources/`, which a render that
