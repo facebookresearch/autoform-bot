@@ -43,7 +43,7 @@ refused names, `--no-verify-workflow`, and the pin without which CI is omitted.
 ### project
 
 Create or inspect a Lean project, report its worktrees, and list Autoform's
-bundled known-good release pairs, the ones `project new` can lock offline:
+bundled release pairs, the ones `project new` can lock offline:
 
 ```bash
 autoform project versions
@@ -249,9 +249,9 @@ autoform work import-impact SELECTOR MODULE [TARGET] --lean-root PATH [--json] [
 ```
 
 `import-impact` is advisory and edits no authored roadmap or Lean source. By
-default the probe imports every module of the root libraries, so each must be
-built in this checkout: a missing or stale build exits 2 with the `lake build`
-command for them. [work import-impact](reference/work.md#work-import-impact)
+default the probe imports every root library module, so each must be built here
+or, with Lake's artifact cache on, from the same inputs elsewhere; a missing or
+stale build exits 2. [work import-impact](reference/work.md#work-import-impact)
 gives the scopes, ownership rules, JSON and every field.
 
 Imports are allowed regardless of reported breadth; follow the [Formalize import

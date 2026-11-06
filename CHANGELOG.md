@@ -139,6 +139,12 @@ date when the release is tagged.
 
 ### Changed
 
+- **Setup's library rule and Formalize's import-impact rerun.** For a library
+  outside the catalog, Setup writes the Lean version with its `v`, as
+  `project new` requires, and asks when the library's revision is unknown.
+  Formalize reports an `import-impact` failure that the
+  `--module-scope import-closure` rerun leaves; that scope narrows nothing in a
+  library with no globs.
 - **Mathlib results in review.** Agent Review's roadmap rubric says when cited
   declarations state an article's result, and has the reviewer quote their
   hypotheses and conclusions before judging. A `mathlib: true` that fails this
@@ -560,6 +566,9 @@ parse, with or without `--json`, and changes nothing else.
 
 ### Fixed
 
+- **Library note from an enclosing project.** Search's note about libraries it
+  did not read looks only at the searched project's own Lake root, so it no
+  longer names the packages of a Lake project that merely contains it.
 - **Finished cards on the map.** A finished statement's card no longer prints
   "fully proved" under its title, since its fill already says so; the line
   names a status only for an unfinished statement.
