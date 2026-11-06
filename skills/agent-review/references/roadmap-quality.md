@@ -4,8 +4,7 @@ Judge the mathematical plan, not the Lean proof quality.
 
 ## Evidence
 
-1. Read the coverage contract and the cited source passages; summaries are not
-   substitutes for the source.
+1. Read the coverage contract and the cited source passages, not summaries.
 2. Run `autoform check` with `--lean-root` and inspect the project, chapter, and
    node-neighborhood graphs. Treat each warning that a library declaration's
    docstring cites a blueprint source as a library hit for item 5, and one about
@@ -49,6 +48,7 @@ Judge the mathematical plan, not the Lean proof quality.
 
 - Every planned main result has a stable source location and preserves its
   objects, hypotheses, quantifiers, and conclusion.
+- Every mathematical sentence, proof sketch included, is true as written.
 - The machine-checkable `Area | Coverage | Evidence` table uses `MAPPED`,
   `DECOMPOSED`, `INVENTORIED`, `DEFERRED`, and `OUT` to distinguish known
   material, roadmap nodes, inventoried existing modules, explicit later work,

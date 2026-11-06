@@ -3,9 +3,9 @@
 ## Validation
 
 `autoform check` rejects cycles between authored articles, missing targets,
-escaping paths, symbolic links under `roadmap/`, self-dependencies, missing or
-multiple H1 titles, unsupported frontmatter keys, unrecognized assertion values,
-and assertions the Lean cannot back: `proof: formalized` without
+escaping paths, symbolic links under `roadmap/`, self-dependencies, missing H1
+titles, unsupported frontmatter keys, unrecognized assertion values, and
+assertions the Lean cannot back: `proof: formalized` without
 `statement: formalized`, or either without a `lean:` name, even beside
 `mathlib: true`. With `--lean-root`, it also fails on a `lean:` name absent from
 the sources or defined more than once in them. Only the article graph must be

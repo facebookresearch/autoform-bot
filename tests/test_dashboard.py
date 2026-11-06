@@ -447,3 +447,19 @@ def test_dashboard_cli_warns_before_a_target_it_cannot_resolve(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err.startswith(_DASHBOARD_DEPRECATED + "error: ")
+
+
+def test_dashboard_cli_names_an_origin_git_could_not_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from autoform_cli import __main__ as cli
+
+    project = tmp_path / "project"
+    (project / "blueprint/roadmap").mkdir(parents=True)
+    failure = b"git remote could not run: timed out after 10 seconds"
+    timed_out = SimpleNamespace(returncode=-1, stderr=failure)
+    monkeypatch.setattr(cli, "run_git", lambda root, *arguments, **kwargs: timed_out)
+
+    assert cli.main(["dashboard", str(project)]) == 2
+    expected = f"error: cannot read the origin remote: {failure.decode()}\n"
+    assert capsys.readouterr().err == _DASHBOARD_DEPRECATED + expected

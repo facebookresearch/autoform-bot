@@ -497,6 +497,12 @@ def test_repo_names_the_board_instead_of_origin(repo: Path, board: Path, tmp_pat
     assert list(_codes(report["worktrees"][0])) == ["claimed"]
 
 
+def test_a_board_path_whose_home_cannot_be_found_is_an_error(repo: Path) -> None:
+    # Not the RuntimeError traceback of Path.expanduser.
+    with pytest.raises(worktrees.WorktreeError, match="'~autoform-no-such-user/board.git' cannot be resolved"):
+        worktrees.report_worktrees(repo, repo="~autoform-no-such-user/board.git")
+
+
 def test_a_board_url_is_reported_without_its_credentials() -> None:
     assert worktrees._without_credentials("https://me:secret@example.com/r.git") == "https://example.com/r.git"
     # A token often goes where the user name does.

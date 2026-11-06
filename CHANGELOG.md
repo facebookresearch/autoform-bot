@@ -203,6 +203,10 @@ date when the release is tagged.
   Formalize reports an `import-impact` failure that the
   `--module-scope import-closure` rerun leaves; that scope narrows nothing in a
   library with no globs.
+- **Every sentence in review.** Agent Review's roadmap rubric checks that every
+  mathematical sentence, proof sketch included, is true as written, not only
+  that planned main results preserve their source. A false sentence lowers
+  source fidelity and caps nothing (#689).
 - **Mathlib results in review.** Agent Review's roadmap rubric says when cited
   declarations state an article's result, and has the reviewer quote their
   hypotheses and conclusions before judging. A `mathlib: true` that fails this
@@ -210,7 +214,10 @@ date when the release is tagged.
   when verified Mathlib declarations state the result (#668). Formalize's library
   search rules, which Roadmap follows, use the same definition: a library hit
   that needs only hypotheses the result gives or implies, or several that
-  together state it, is reused like an exact one (#679).
+  together state it, is reused like an exact one (#679). When a theorem holds
+  without one of the source's hypotheses, Formalize proves the source's
+  statement from a general declaration that already exists instead of re-proving
+  it as a new lemma (#686).
 - **The landing's coverage line** leads with the source areas split into
   statements: "5 source areas, all split into statements", or "3 of 5 source
   areas split into statements" before the other dispositions.
@@ -667,6 +674,18 @@ parse, with or without `--json`, and changes nothing else.
   while the reader is collapsed showed a title's formula as TeX source, such
   as `$L^p$ spaces` or `\(L^p\) spaces`. They now read it as text,
   `Lᵖ spaces`, and a title's code keeps its dollars.
+- **A later H1.** An article with more than one H1 loads: the first H1 is the
+  title, a later one stays in its section, as on the site, and `check` warns,
+  naming its line. Since #171 read a fence that never closes as text, a shell
+  comment in one, such as `# install the toolchain`, made `check`, `audit` and
+  `search` refuse the whole blueprint. Concept links keep a later H1 in its
+  section too, though one named as a provenance or dependency section, such as
+  `# References`, keeps the links below it out. Unless the site shows the
+  article as typed, `check` also warns about a heading with no space after its
+  `#` marks, `##Proof`, which only the site reads as one, and, on an article
+  published as its own page, about one indented up to three spaces, which only
+  Autoform reads as one. A missing title's error names a `#Title` line the site
+  reads as the title.
 - **TeX in map labels.** The map's card labels, tooltips and accessible names
   kept a formula's commands as words glued to their neighbours, such as
   `left(fracupright)`. One reducer, shared with the explorer, now reads
@@ -875,13 +894,45 @@ parse, with or without `--json`, and changes nothing else.
   `LiterateNavParseError`. Where MkDocs accepted the nav, a page could sit
   under the wrong chapter. A page beside its chapter's README now sits inside
   that chapter in the sidebar rather than next to it (#481).
+- **Claim board location.** When `git remote get-url origin` cannot run, runs
+  out of time or is killed, claim commands and `autoform dashboard` say they
+  cannot read the origin remote (`error: transport:` in `claim list`), where
+  they asked for `--repo` as outside a checkout, after which Formalize went on
+  without claims. A board path naming a user who does not exist, such as
+  `~nosuchuser/board.git`, is a one-line error in claim commands, the dashboard
+  and `project worktrees`, not a traceback, and an origin URL holding a byte
+  that is not UTF-8 is read as its path.
 - **Claims.** `autoform dashboard` runs its claim listing's Git in the
   dashboard's process group again, so Ctrl+C or a signal to that group stops
   Git along with the dashboard (#447). On macOS and Windows, a listing shows
   both of two claims whose keys, or folders in them, differ only in case,
   including with Apple's Git, which stored one key's name holding the other's
   lease (#452). The claim contract now says what `--timeout` bounds and which
-  listings run Git apart from their caller (#448).
+  listings run Git apart from their caller (#448). A claim ref whose name is
+  not UTF-8 no longer fails `claim list`, `claim cleanup`, the dashboard and
+  `project worktrees`, and one whose name holds U+2028 no longer gives its
+  lease to another claim in a listing, `claim acquire`, `renew` or `release`: a
+  full listing leaves such names out, and `claim list` warns how many claim refs
+  it left out. A board hook that prints a byte that is not UTF-8 no longer fails
+  a claim command whose push went through, and error messages show such a byte
+  as `\xff`. A branch whose name ends in a claim's path, such as
+  `refs/heads/refs/autoform-claims/x`, is no longer read as a claim; on macOS
+  and Windows it could fail every full listing as `contention:`. On those
+  systems, a claim key beside a folder that differs from it only in case, such
+  as `lean/Foo` and `lean/foo/bar`, no longer fails every full listing, and
+  with Apple's Git a key beside a name that folds into it, such as U+212A
+  KELVIN SIGN beside `k`, keeps its own lease. Except on Windows, a listing
+  deletes the private refs that a listing of this version on the same host left
+  when a signal stopped it, unless a lock file that a killed Git command left in
+  the scratch blocks that. On Linux, the same host also means the same boot and
+  PID namespace, and a host whose `/proc` cannot give them deletes none;
+  elsewhere it means the same host name, so two machines with one name must not
+  share a scratch. Older versions' refs stay, as do those of a listing `/proc`
+  could not name. On Python 3.11 and 3.12, a listing step still running after
+  five seconds gets the rest of its input instead of running out of time. Claim
+  commands work in a pre-receive hook, a `--timeout` above about 24 days no
+  longer ends in an `OverflowError` once a step runs past five seconds, and a
+  timeout says `ran out of time after <N>s while <step>`.
 - **Site search.** Each statement card is a search result of its own, titled
   by its statement and opening at its anchor, and its exact `lean:` names find
   it even when they show only as code icons. Notes headings such as Sources

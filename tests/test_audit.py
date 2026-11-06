@@ -1811,7 +1811,7 @@ def test_audit_preserves_valid_coverage_when_graph_is_invalid(tmp_path: Path) ->
     blueprint = tmp_path / "blueprint"
     _coverage(blueprint)
     _article(blueprint, "bad.md", declaration="theorem")
-    (blueprint / "roadmap/bad.md").write_text("# First\n# Second\n", encoding="utf-8")
+    (blueprint / "roadmap/bad.md").write_text("No title\n", encoding="utf-8")
 
     result = audit_blueprint(blueprint)
 
