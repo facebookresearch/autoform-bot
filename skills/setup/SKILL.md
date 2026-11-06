@@ -80,16 +80,13 @@ the user names, writing `4.34.1` as `v4.34.1`; a read-only fetch of both files
 is fine. Ask when the revision or either value is unknown, and report the pair
 and why. Do not add the `require` or fetch the library into the project.
 
-`project new` writes the complete Autoform vault, site, ignore rules, and CI, so
-no later `init` is needed. For an incomplete existing repository, run
-`autoform init` through the same `uv run --project "$AUTOFORM_PLUGIN_ROOT"`
-prefix: it writes the whole vault, keeps existing files, and reports what it
-left alone. Do not hand-build any of the vault. Without `--autoform-ref`, both
-write CI only when they can verify the Autoform commit that ran them; otherwise
-find the commit the plugin was installed from and run `init` on the target with
-`--autoform-ref <40-char-sha>`, or report that CI was not configured. Never
-invent a ref or workflow source; `init` refuses a branch, a tag, or an
-abbreviated sha.
+`project new` writes the complete Autoform vault, site, ignore rules, and CI.
+For an incomplete existing repository, run `autoform init` through the same
+`uv run --project "$AUTOFORM_PLUGIN_ROOT"` prefix: it writes the whole vault and
+keeps existing files. Do not hand-build any of the vault. When either says it
+omitted CI, run the `init` it names with the commit the plugin was installed
+from, or report that CI was not configured. Never invent a ref or workflow
+source.
 
 Neither `project new` nor `init` adds the Lean REPL that the REPL tool runs.
 Require `leanprover-community/repl` under the name `repl` at the commit of the
@@ -103,11 +100,7 @@ manifest locks it without moving Mathlib, and commit the manifest.
 For an existing project whose lakefile lacks either of
 `enableArtifactCache = true` and `restoreAllArtifacts = true`, offer to add the
 missing one; a `lakefile.lean` takes them in its `package` declaration. Never
-enable the cache without `restoreAllArtifacts`: Autoform's probes load each
-module's `.olean` from `.lake/build`, where only a restore puts it.
-
-Put the project's notation in `blueprint/tex-macros.json` as MathJax
-`tex.macros` definitions, never in articles.
+enable the cache without `restoreAllArtifacts`.
 
 The [CLI reference](../../autoform_cli/README.md#publishing-and-the-dashboard)
 says when Pages deploys, and [open

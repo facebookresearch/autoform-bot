@@ -78,6 +78,7 @@ def test_opting_out_without_a_ref_writes_the_stub_and_reports_it_once(tmp_path: 
     assert f"  + {_VERIFY} (verification turned off)\n" in captured.out
     assert captured.out.count(_VERIFY) == 1
     assert "The rest of CI was not written" in captured.err
+    assert "  autoform init --autoform-ref <40-char-sha>" in captured.err
 
 
 @pytest.mark.parametrize(
