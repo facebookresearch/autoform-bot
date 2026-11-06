@@ -17,7 +17,9 @@ refuses such a fetch, except that some versions, such as Apple's 2.50, store one
 key's name holding the other key's lease without a word. So on such a scratch a
 listing whose fetch wrote any ref also names the board's claims, with one more
 command that downloads the board's list of refs, and fetches the claims again by
-name when two of them collide. ``claim list TARGET...`` names the targets' refs
+name when two of them collide. A scratch that cannot store a name that is not a
+claim key, as APFS refuses one that is not UTF-8, fails the whole fetch, and the
+claims are then named and fetched by name too. ``claim list TARGET...`` names the targets' refs
 and fetches only those, so changes to other claims never make it retry and no
 other claim's lease is copied, and a target released meanwhile has the targets
 named again, never the whole board; over a network its cost still grows with the
@@ -25,7 +27,7 @@ board's list of refs.
 
 A listing, by ``claim list`` or the one ``claim cleanup`` starts with, runs Git
 in its own process group, without a controlling terminal on Linux and macOS so
-``ssh`` cannot prompt, and stops a Git command that runs out of time or is
+``ssh`` cannot prompt on one, and stops a Git command that runs out of time or is
 interrupted together with everything it started; only removing its own refs
 afterwards runs in the caller's group. That holds on the main thread, where
 ``claim list`` and ``claim cleanup`` list. Off it, as in ``autoform dashboard``,
@@ -71,6 +73,9 @@ _SCRATCH_INIT_ATTEMPTS = 10
 _SCRATCH_INIT_DELAY_S = 0.05
 # `claim list` fetches into refs under this prefix that only that call reads.
 _LIST_REF_PREFIX = "refs/autoform-list/"
+# Each listing's namespace there names its host and process, so a later listing
+# on the host can delete the refs of one a signal stopped.
+_LISTING_NAMESPACE_RE = re.compile(r"([0-9a-f]{8})-([0-9]+)-[0-9a-f]{32}")
 _LIST_FETCH_ATTEMPTS = 3
 # A glob that matches no ref, so a fetch given it as `--negotiation-tip` sends no
 # haves; an exact ref name that does not exist would fail the fetch instead.
@@ -84,6 +89,9 @@ _MISSING_REF = "couldn't find remote ref"
 # How Git refuses to store two fetched refs whose names differ only in case:
 # with `core.ignorecase`, or by finding the other one's file already there.
 _CASE_COLLISION = ("only differ in casing", "reference already exists")
+# How Git refuses to store a fetched ref, such as one whose name is not UTF-8 on
+# APFS. A ref name holds no colon.
+_CANNOT_LOCK_RE = re.compile(r"cannot lock ref '([^:]*)': ")
 # The warning a fetch prints for a `--negotiation-tip` that matches no ref yet.
 _NEGOTIATION_TIP_WARNING = "warning: ignoring --negotiation-tip="
 # A peer's push holds a ref's lock file for milliseconds; one that outlasts
@@ -94,13 +102,17 @@ _LOCK_POLL_S = 0.05
 _GIT_CALL_TIMEOUT_S = 120.0
 # A step still running after this long is named to a progress callback.
 _PROGRESS_AFTER_S = 5.0
+# The longest one wait for a git command may be: poll() takes milliseconds that
+# must fit a C int, about 24.8 days.
+_LONGEST_WAIT_S = 24 * 86400.0
 # How long a stopped git command gets to clean up, such as removing a ref's
 # lock file, before it is killed.
 _STOP_GRACE_S = 1.0
 # How long a killed git command gets to be reaped.
 _KILL_GRACE_S = 5.0
-# An isolated git command leads its own process group, without a controlling
-# terminal, so ssh cannot prompt and stopping it also ends git's transport.
+# An isolated git command leads its own process group, on POSIX without a
+# controlling terminal, so ssh cannot prompt on one and stopping it also ends
+# git's transport.
 _OWN_PROCESS_GROUP: dict[str, Any] = (
     {"start_new_session": True}
     if os.name == "posix"
@@ -130,7 +142,11 @@ _LOCAL_GIT_ENV = frozenset(
 # Those of them that name a repository, its objects or its work tree. A Git
 # hook runs with GIT_DIR set to its own repository, so the board's Git drops
 # them; configuration variables stay, so `git -c` settings still reach the board.
-_REPOSITORY_GIT_ENV = _LOCAL_GIT_ENV - {"GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"}
+# A pre-receive hook also runs in the receiving repository's quarantine, in
+# which Git refuses every ref update, the scratch's included.
+_REPOSITORY_GIT_ENV = (_LOCAL_GIT_ENV - {"GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"}) | {
+    "GIT_QUARANTINE_PATH"
+}
 
 _GIT_ENV = {
     "GIT_AUTHOR_NAME": "autoform",
@@ -172,10 +188,10 @@ class MalformedLeaseError(ClaimTransportError):
 
 
 class ClaimTimeoutError(ClaimTransportError):
-    """The claim board did not answer before the caller's deadline."""
+    """The caller's deadline passed before a step finished."""
 
     def __init__(self, step: str) -> None:
-        super().__init__(f"no answer from the claim board while {step}")
+        super().__init__(f"ran out of time while {step}")
         self.step = step
 
 
@@ -258,6 +274,9 @@ def _claims_by_key(refs: Mapping[str, str], namespace: str) -> dict[str, str]:
     """Return the object ID of every ref under ``namespace`` whose rest is a valid claim key, by key."""
     claims: dict[str, str] = {}
     for ref, oid in refs.items():
+        # ls-remote patterns also match longer names ending in the same path.
+        if not ref.startswith(namespace):
+            continue
         key = ref[len(namespace) :]
         try:
             _validate_key(key)
@@ -265,6 +284,41 @@ def _claims_by_key(refs: Mapping[str, str], namespace: str) -> dict[str, str]:
             continue
         claims[key] = oid
     return claims
+
+
+def _left_out(refs: Mapping[str, str], namespace: str, claims: Mapping[str, str]) -> int:
+    """How many refs under ``namespace`` are not among ``claims``, since their names are not claim keys."""
+    return sum(ref.startswith(namespace) for ref in refs) - len(claims)
+
+
+def _lines(output: str) -> list[str]:
+    """Git's output split at newlines only: a ref name can hold U+2028, at which ``splitlines`` splits too."""
+    return output.split("\n")
+
+
+def _this_host() -> str:
+    """The first 8 hex digits of a SHA-256 naming this host's processes, as a listing's namespace names it.
+
+    Containers in one pod share a host name but not their processes, so on Linux
+    the boot and the PID namespace count too.
+    """
+    identity = socket.gethostname()
+    with contextlib.suppress(OSError):
+        identity += "\0" + Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        identity += "\0" + os.readlink("/proc/self/ns/pid")
+    return hashlib.sha256(os.fsencode(identity)).hexdigest()[:8]
+
+
+def _process_is_gone(pid: int) -> bool:
+    """Whether no process has ``pid``; POSIX only, since ``os.kill`` ends the process on Windows."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except (OSError, OverflowError):
+        # Another user's process, or a number no process has.
+        pass
+    return False
 
 
 def _collide_ignoring_case(keys: Sequence[str]) -> bool:
@@ -283,7 +337,14 @@ def _collide_ignoring_case(keys: Sequence[str]) -> bool:
 def _fetch_failure(stderr: str) -> str:
     """Why a fetch failed, without the warning every listing's fetch prints."""
     lines = (line for line in stderr.splitlines() if not line.startswith(_NEGOTIATION_TIP_WARNING))
-    return "\n".join(lines).strip()[:300]
+    return _readable("\n".join(lines).strip()[:300])
+
+
+def _readable(output: str | bytes) -> str:
+    """Git's ``output`` as text a message can hold, each byte that is not UTF-8 written as ``\\xff``."""
+    if isinstance(output, str):
+        output = output.encode("utf-8", "surrogateescape")
+    return output.decode("utf-8", "backslashreplace")
 
 
 def _rejected_keys(detail: str, keys_by_ref: Mapping[str, str], markers: Sequence[str]) -> tuple[str, ...]:
@@ -401,21 +462,33 @@ def _communicate(
     progress: Callable[[str], None] | None,
 ) -> tuple[Any, Any]:
     """Wait up to ``limit`` seconds for ``process``, naming a slow ``step`` to ``progress`` once."""
-    if progress is not None and limit > _PROGRESS_AFTER_S:
-        try:
-            return process.communicate(data, timeout=_PROGRESS_AFTER_S)
-        except subprocess.TimeoutExpired:
-            progress(step)
-        # communicate keeps the input it was given and never sends it twice.
-        return process.communicate(timeout=limit - _PROGRESS_AFTER_S)
-    return process.communicate(data, timeout=limit)
+    limit = min(limit, _LONGEST_WAIT_S)
+    if progress is None or limit <= _PROGRESS_AFTER_S:
+        return process.communicate(data, timeout=limit)
+    if data is not None:
+        # A communicate call after one that timed out takes no input, and before
+        # Python 3.13 it sends none of what is left, so a thread sends it all.
+        threading.Thread(target=_send, args=(process.stdin, data), daemon=True).start()
+        process.stdin = None
+    try:
+        return process.communicate(timeout=_PROGRESS_AFTER_S)
+    except subprocess.TimeoutExpired:
+        progress(step)
+    return process.communicate(timeout=limit - _PROGRESS_AFTER_S)
+
+
+def _send(pipe: Any, data: str | bytes) -> None:
+    """Write ``data`` to a command's input and close it, as communicate does; one that stops early ends it."""
+    with contextlib.suppress(OSError, ValueError), pipe:
+        pipe.write(data)
 
 
 def _stop(process: subprocess.Popen[Any], *, group: bool) -> None:
-    """Stop a git command: SIGTERM, a grace to clean up, then SIGKILL; then reap it.
+    """Stop a git command and reap it: on POSIX, SIGTERM, a grace to clean up, then SIGKILL.
 
     With ``group``, the command leads its own process group and the signals
-    reach everything it started.
+    reach everything it started. On Windows the command is killed at once, and
+    with ``group`` taskkill ends what it started first.
     """
     if os.name != "posix":
         with contextlib.suppress(OSError, subprocess.SubprocessError):
@@ -516,7 +589,9 @@ class ClaimBoard:
                 stdin=subprocess.DEVNULL if data is None else subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=text,
+                # A ref name need not be UTF-8; such a name reads as an invalid claim key.
+                encoding="utf-8" if text else None,
+                errors="surrogateescape" if text else None,
                 env={**env, **_GIT_ENV},
                 **(_OWN_PROCESS_GROUP if isolated else {}),
             )
@@ -534,9 +609,9 @@ class ClaimBoard:
             raise
         proc = subprocess.CompletedProcess(["git", *args], process.returncode, stdout, stderr)
         if check and proc.returncode != 0:
-            output = proc.stderr or proc.stdout
-            detail = (output if isinstance(output, str) else os.fsdecode(output)).strip()[:300]
-            raise ClaimTransportError(f"git {' '.join(args[:2])} failed against claim board: {detail}")
+            detail = _readable(proc.stderr or proc.stdout).strip()[:300]
+            command = _readable(" ".join(args[:2]))
+            raise ClaimTransportError(f"git {command} failed against claim board: {detail}")
         return proc
 
     def _ensure_scratch(self, git: _Git | None = None) -> None:
@@ -624,6 +699,9 @@ class ClaimBoard:
         if not separator:
             raise MalformedLeaseError(f"claim {key!r} has no lease message")
         try:
+            # A lease commit is UTF-8, as a listing reads it; git's output reads
+            # any other byte as a surrogate.
+            commit.encode()
             lease = json.loads(
                 message,
                 object_pairs_hook=strict_json_object,
@@ -850,7 +928,7 @@ class ClaimBoard:
             or (store is not None and self._names_a_needed_lock(detail, updates))
         ):
             return ClaimBatchResult(False, stale, "changed concurrently" if stale else "a claim changed concurrently")
-        raise ClaimTransportError(f"claim CAS push failed: {detail[:300]}")
+        raise ClaimTransportError(f"claim CAS push failed: {_readable(detail[:300])}")
 
     def _names_a_needed_lock(self, detail: str, updates: Sequence[tuple[str, str | None, str]]) -> bool:
         """Whether Git could not take a pushed ref's lock, or ``packed-refs.lock`` for a deletion."""
@@ -991,10 +1069,11 @@ class ClaimBoard:
         *,
         timeout: float | None = None,
         progress: Callable[[str], None] | None = None,
+        warn: Callable[[str], None] | None = None,
     ) -> list[dict[str, Any]]:
         """Return all claim refs, or those of ``keys``, including malformed and expired entries.
 
-        One fetch copies every claim ref and its commit into refs private to
+        A fetch copies every claim ref and its commit into refs private to
         this call, so each listed lease is the one its ref named when the board
         answered, other processes sharing the scratch cannot change it, and the
         git commands it takes do not grow with the number of claims. A ref that
@@ -1011,27 +1090,67 @@ class ClaimBoard:
         and running out raises ``ClaimTimeoutError`` naming the step it was on;
         deleting the private refs afterwards has its own time limit.
         ``progress`` hears the name of each step still running after five
-        seconds.
+        seconds. A claim ref whose name is not a claim key is left out, and
+        ``warn`` hears how many a listing left out, if any.
+
+        A listing first deletes the private refs that this host's stopped
+        listings left, as a signal can.
         """
         targets = None if keys is None else _validate_keys(keys)
         deadline = None if timeout is None else time.monotonic() + _validate_timeout(timeout)
         git = functools.partial(self._git, deadline=deadline, progress=progress, isolated=True)
         self._ensure_scratch(git)
+        self._prune_stopped_listings(git)
         written: dict[str, dict[str, str] | None] = {}
         try:
-            return self._read_listed(self._fetch_claims(written, git, targets), git)
+            listed, left_out = self._fetch_claims(written, git, targets)
+            leases = self._read_listed(listed, git)
         finally:
             # Deleting the private refs gets its own time limit, even after the deadline.
             for namespace, refs in written.items():
                 self._delete_refs(namespace, refs)
+        if left_out and warn is not None:
+            warn(f"left out {left_out} claim ref(s) whose name is not a valid claim key")
+        return leases
+
+    def _prune_stopped_listings(self, git: _Git) -> None:
+        """Delete the private refs of this host's listings whose process is gone.
+
+        A namespace from another host, from an older version, or whose process
+        ID a new process took stays, and so does every namespace on Windows. A
+        deletion Git refuses leaves them for the next listing.
+        """
+        if os.name != "posix":
+            return
+        host = _this_host()
+        found = git(
+            ["for-each-ref", "--format=%(refname)", _LIST_REF_PREFIX],
+            check=False,
+            step="finding refs that stopped listings left",
+        )
+        stale = []
+        for ref in _lines(found.stdout) if found.returncode == 0 else ():
+            owner = _LISTING_NAMESPACE_RE.fullmatch(ref.removeprefix(_LIST_REF_PREFIX).partition("/")[0])
+            if owner and owner[1] == host and _process_is_gone(int(owner[2])):
+                stale.append(ref)
+        if stale:
+            git(
+                ["update-ref", "--stdin"],
+                check=False,
+                input_text="".join(f"delete {ref}\n" for ref in stale),
+                step="deleting refs that stopped listings left",
+            )
 
     def _fetch_claims(
         self,
         written: dict[str, dict[str, str] | None],
         git: _Git,
         targets: tuple[str, ...] | None = None,
-    ) -> dict[str, str]:
-        """Fetch every claim ref, or those of ``targets``, into refs private to this call; return each claim's object ID, by key.
+    ) -> tuple[dict[str, str], int]:
+        """Fetch every claim ref, or those of ``targets``, into refs private to this call.
+
+        Return each claim's object ID, by key, and how many claim refs were
+        left out because their names are not claim keys.
 
         Each fetch's namespace goes into ``written`` before it runs, with the refs
         it wrote once they are read. A private ref is named after its claim key,
@@ -1040,17 +1159,22 @@ class ClaimBoard:
         again by name into numbered refs. Git refuses such a fetch, except that
         some versions, such as Apple's 2.50, store one key's name holding the
         other key's lease without a word, so a case-insensitive scratch names
-        the board's keys after a fetch that wrote any ref.
+        the board's keys after a fetch that wrote any ref. A filesystem that
+        cannot store a name that is not a claim key, as APFS refuses one that
+        is not UTF-8, fails the whole fetch too, so the board's keys are named.
         With ``targets``, only the present targets are fetched by name, and a
         target released meanwhile has the targets named again, never the board.
         A board that refuses every attempt because claim refs moved raises
         ``ClaimContentionError``.
         """
         keys: list[str] | None = None
+        left_out = 0
         if targets is None:
 
             def name() -> list[str]:
-                return self._remote_keys(git)
+                nonlocal left_out
+                named, left_out = self._remote_keys(git)
+                return named
         else:
 
             def name() -> list[str]:
@@ -1060,8 +1184,8 @@ class ClaimBoard:
         failures = 0
         while True:
             if keys is not None and not keys:
-                return {}
-            namespace = f"{_LIST_REF_PREFIX}{uuid.uuid4().hex}/"
+                return {}, left_out
+            namespace = f"{_LIST_REF_PREFIX}{_this_host()}-{os.getpid()}-{uuid.uuid4().hex}/"
             written[namespace] = None
             # Negotiate only from this fetch's refs, which do not exist yet: the
             # scratch's other refs save nothing here, and under protocol v0 each
@@ -1089,10 +1213,13 @@ class ClaimBoard:
                         if _collide_ignoring_case(named):
                             keys = named
                             continue
-                    return _claims_by_key(refs, namespace)
+                    claims = _claims_by_key(refs, namespace)
+                    return claims, _left_out(refs, namespace, claims)
                 numbered = ((key, refs.get(f"{namespace}{index}")) for index, key in enumerate(keys))
-                return {key: oid for key, oid in numbered if oid is not None}
-            if keys is None and any(marker in fetch.stderr for marker in _CASE_COLLISION):
+                return {key: oid for key, oid in numbered if oid is not None}, left_out
+            # A name the scratch cannot store fails the whole fetch.
+            unstorable = any(not _claims_by_key({ref: ""}, namespace) for ref in _CANNOT_LOCK_RE.findall(fetch.stderr))
+            if keys is None and (unstorable or any(marker in fetch.stderr for marker in _CASE_COLLISION)):
                 keys = name()
                 continue
             failures += 1
@@ -1116,11 +1243,12 @@ class ClaimBoard:
         """
         return os.path.lexists(self.scratch / "head")
 
-    def _remote_keys(self, git: _Git) -> list[str]:
-        """Return every validly named claim key the board advertises."""
+    def _remote_keys(self, git: _Git) -> tuple[list[str], int]:
+        """Return every validly named claim key the board advertises, and how many claim refs it leaves out."""
         proc = git(["ls-remote", "--refs", self.repo_url, f"{CLAIM_REF_PREFIX}*"], step="naming the claim refs")
-        refs = {line.partition("\t")[2]: "" for line in proc.stdout.splitlines()}
-        return list(_claims_by_key(refs, CLAIM_REF_PREFIX))
+        refs = {line.partition("\t")[2]: "" for line in _lines(proc.stdout)}
+        claims = _claims_by_key(refs, CLAIM_REF_PREFIX)
+        return list(claims), _left_out(refs, CLAIM_REF_PREFIX, claims)
 
     def _refs_in(self, namespace: str, git: _Git) -> dict[str, str]:
         """Return the object ID of every ref under ``namespace``, by ref name."""
@@ -1129,7 +1257,7 @@ class ClaimBoard:
             step="reading the fetched refs",
         )
         refs: dict[str, str] = {}
-        for line in proc.stdout.splitlines():
+        for line in _lines(proc.stdout):
             oid, separator, ref = line.partition("\t")
             if separator and ref.startswith(namespace):
                 refs[ref] = oid
@@ -1201,7 +1329,7 @@ class ClaimBoard:
         return sorted(leases, key=lambda lease: str(lease["_key"]))
 
     def cleanup(self) -> int:
-        """CAS-delete leases expired at snapshot time and return the deletion count.
+        """CAS-delete the leases a listing shows expired and return the deletion count.
 
         A lease whose deletion a lock file blocks stays, as :meth:`ref_locks`
         reports. A lock on ``packed-refs`` or a reftable board blocks every

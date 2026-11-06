@@ -754,7 +754,22 @@ parse, with or without `--json`, and changes nothing else.
   both of two claims whose keys, or folders in them, differ only in case,
   including with Apple's Git, which stored one key's name holding the other's
   lease (#452). The claim contract now says what `--timeout` bounds and which
-  listings run Git apart from their caller (#448).
+  listings run Git apart from their caller (#448). A claim ref whose name is
+  not UTF-8 no longer fails `claim list`, `claim cleanup`, the dashboard and
+  `project worktrees`, and one whose name holds U+2028 no longer gives its
+  lease to another claim: a full listing leaves such names out, and `claim
+  list` warns how many claim refs it left out. A board hook that prints a byte
+  that is not UTF-8 no longer fails a claim command whose push went through,
+  and error messages show such a byte as `\xff`. A branch whose name ends in a
+  claim's path, such as `refs/heads/refs/autoform-claims/x`, is no longer read
+  as a claim; on macOS and Windows it could fail every full listing as
+  `contention:`. Except on Windows, a listing deletes the private refs left by
+  a listing on the same host that a signal stopped. On Python 3.11 and 3.12, a
+  listing step still running after five seconds gets the rest of its input
+  instead of running out of time. Claim commands work in a pre-receive hook, a
+  `--timeout` above about 24 days no longer ends in an `OverflowError` once a
+  step runs past five seconds, and a timeout says `ran out of time after <N>s
+  while <step>`.
 - **Site search.** Each statement card is a search result of its own, titled
   by its statement and opening at its anchor, and its exact `lean:` names find
   it even when they show only as code icons. Notes headings such as Sources
