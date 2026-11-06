@@ -2537,6 +2537,9 @@ def test_authored_explorer_title_math_keeps_native_outline_related_and_summary_c
     assert page.evaluate("() => document===__titleMathDocument")
     page.go_back()
     page.wait_for_url(first)
+    # Back commits the route and then restores the view saved with it, which draws the outline again. Focus the outline
+    # once the navigation is done, or that redraw takes the focused link away.
+    playwright.expect(page.locator(".bp-dag-integrated")).not_to_have_attribute("aria-busy", "true")
     playwright.expect(related).to_have_attribute("href", foundation_route)
     outline.focus()
     outline.evaluate("node=>window.__titleMathReturnOutline=node")
