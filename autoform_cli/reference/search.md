@@ -116,16 +116,16 @@ project lacks it); it does not say the library fails to build. Without
 #### Publishing an index
 
 `autoform library index ROOT` writes `autoform-library-index.jsonl` at the
-package root of a built library, from the modules of every `lean_lib` of the
-package, or of those `--lib` names. It imports the library's modules, so run it
+package root of a built library, from the modules every `lean_lib` of the
+package can build, or those of the `--lib` names and the package's libraries
+they import, each named in a note. It imports the library's modules, so run it
 on a trusted checkout or in a sandbox. It does not build: a missing or stale
-build exits 2 with the `lake build` command for the indexed targets and the
-first module Lake found unbuilt. The freshness check, which `--check` also runs,
-rewrites Lake's `.hash` files, so `.lake` must be writable. `--timeout` takes a
-positive number of seconds (default 600). The index records the Autoform version
-that wrote it, so the command refuses to run from an Autoform that is not
-installed. The index is written whole or not at all; a failed write says why and
-whether the previous index is unchanged.
+build exits 2 with the `lake build` command that would fix it. The freshness
+check, which `--check` also runs, rewrites Lake's `.hash` files, so `.lake` must
+be writable. `--timeout` takes a positive number of seconds (default 600). The
+index records the Autoform version that wrote it, so the command refuses to run
+from an Autoform that is not installed. The index is written whole or not at
+all; a failed write says why and whether the previous index is unchanged.
 
 `library/declarations.py` says which declarations are indexed (those a user
 wrote with a declaration keyword), their `line`, and where a `statement` is cut
@@ -139,9 +139,9 @@ module: the source is not the one the library was built from.
 `--check` writes no index. It exits 0 when the index at the root is current,
 even if another Autoform version wrote it, 1 when it is stale (as when there is
 no index, it is not a regular file, or another probe revision made it), and 2
-when it cannot tell: the package root does not exist, the index exists but
-cannot be read, or the build is missing or stale. Run it in the library's CI
-after the build, with the same `--lib` flags, and pin the Autoform revision.
+when it cannot tell: the package root does not exist, the index cannot be read,
+or the build is missing or stale. Run it in the library's CI after building what
+the index covers, with the same `--lib` flags, and pin the Autoform revision.
 
 The generator has been tested on Lean 4.34.1 and 4.35.0 only, CI runs its real
 tests on 4.35.0, and it is not supported on Windows. It exits 2, before it runs

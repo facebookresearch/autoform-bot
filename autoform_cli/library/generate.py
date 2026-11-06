@@ -14,8 +14,12 @@ may hold a whole proof. If such a name's docstring comes from
 ``@[inherit_doc]``, the record has none. A wanted name is private to its
 module, so each module's copy is indexed.
 
-Only the source directories of the indexed ``lean_lib`` targets are read, and
-a target's ``globs`` select its modules as Lake does (see ``_glob``).
+Only the source directories of the indexed ``lean_lib`` targets are read: those
+of their roots, and of their globs outside the roots. The modules are the files
+there that an indexed library with the same ``srcDir`` can build, as Lake
+decides (``lean_probe.builds``). A module one of them imports, as its header
+reads, from a file not indexed yet brings in the library of the package that
+Lake builds it with.
 ``library index`` and ``--check`` refuse a toolchain the probe is not verified
 on before anything else, so before anything runs Lean, even
 ``lake translate-config``. ``--check`` then finds another probe revision,
@@ -31,7 +35,7 @@ import json
 import os
 import re
 import stat
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
@@ -40,7 +44,8 @@ import tomli
 
 from .. import lean_probe
 from .._managed_output import output_identity, remove_output, replace_outputs, stage_output
-from ..lean_probe import SkeletonError, lean_libraries
+from ..lean import _IMPORT, _without_lean_comments
+from ..lean_probe import LeanLibrary, SkeletonError, lean_libraries
 from ..project.catalog import canonical_lean_toolchain
 from .declarations import ProbeOutputError, classify, parse_probe_output, starts_with_module
 from .index import (
@@ -53,6 +58,7 @@ from .index import (
     LibraryIndex,
     LibraryIndexError,
     _module_name,
+    covers,
     dump_index,
     module_digest,
     parse_index,
@@ -118,6 +124,9 @@ class Generated:
     #: The names several modules declare that are left out, and counted in ``left_out``, because the
     #: declaration in ``module`` rests on ``sorry`` or another axiom, in name order.
     shared_left_out: tuple[SharedName, ...] = ()
+    #: What CI must build before ``--check`` when ``lake build`` of the libraries asked for leaves an
+    #: indexed module unbuilt, and why; empty when it builds them all.
+    build_note: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +138,10 @@ class LibrarySources:
     modules: dict[str, str]
     #: Source file to its digest.
     digests: dict[str, str]
+    #: Each library indexed although not named: its name, a module that imports it, and the module imported.
+    joined: tuple[tuple[str, str, str], ...]
+    #: The indexed modules that ``lake build`` of the libraries does not build, by name.
+    unbuilt: tuple[str, ...]
 
 
 def render_library_probe(modules: Sequence[str]) -> str:
@@ -156,8 +169,15 @@ def _module_set(names: Sequence[str]) -> str:
     return json.dumps("\n".join(names))
 
 
-def library_sources(root: Path, libraries: Sequence[str] = ()) -> LibrarySources:
-    """Find the modules of the indexed libraries by reading files; this starts no process for a TOML lakefile."""
+def library_sources(root: Path, libraries: Sequence[str] = (), *, legacy: bool = False) -> LibrarySources:
+    """Find the modules of the indexed libraries by reading files; this starts no process for a TOML lakefile.
+
+    The modules are the files under the libraries' roots and globs that an indexed library with the same
+    ``srcDir`` can build, as Lake decides (``lean_probe.builds``). When the file Lake would use for an
+    import is not among them, the library of the package Lake builds it with is indexed too, since a
+    change there changes their records. ``legacy=True`` reads the named libraries' roots alone and joins
+    nothing, which gives what Autoform indexed before 0.7.0.
+    """
 
     try:
         targets = lean_libraries(root)
@@ -167,57 +187,201 @@ def library_sources(root: Path, libraries: Sequence[str] = ()) -> LibrarySources
     for name in libraries:
         if name not in known:
             raise GenerateError(f"no lean_lib named {name}; the package has: {', '.join(sorted(known)) or 'none'}")
-    chosen = [known[name] for name in sorted(set(libraries) or known)]
+    chosen = {name: known[name] for name in sorted(set(libraries) or known)}
     if not chosen:
         raise GenerateError("the package declares no lean_lib")
 
+    imports: dict[str, tuple[str, ...]] = {}
+    joined: dict[str, tuple[str, str]] = {}
+    joining: dict[str, tuple[str, str]] = {}
+    while True:
+        directories, prefixes = _source_directories(root, chosen.values(), joined, roots_only=legacy)
+        source_dirs = tuple(sorted(directories))
+        try:
+            digests = _sources(root, source_dirs, GenerateError)
+        except GenerateError as error:
+            # Only the directories of the libraries the last round joined are new to this read.
+            raise GenerateError(f"{error}{''.join(_why_indexed(library, joined) for library in joining)}") from None
+        # The modules come from the files under the source directories alone: the rest of the
+        # package, which may hold many more Lean files, is not read.
+        modules: dict[str, str] = {}
+        whys: dict[str, str] = {}
+        unbuildable: dict[str, tuple[str, str]] = {}
+        for relative in sorted(digests):
+            holder = directories[next(d for d in source_dirs if covers((d,), relative))]
+            why = whys[relative] = _why_indexed(holder, joined)
+            path = relative.removeprefix(prefixes[holder]).removesuffix(".lean")
+            if "." in path:
+                raise GenerateError(
+                    f"{relative} has a dot in its file or directory name, so no module name maps to it; rename it{why}"
+                )
+            name = path.replace("/", ".")
+            if not _module_name(name):
+                raise GenerateError(
+                    f"{relative} is not a module name the index format holds (ASCII identifiers only){why}"
+                )
+            if name in modules:
+                raise GenerateError(f"{modules[name]} and {relative} both map to module {name}{why}")
+            modules[name] = relative
+            if not any(
+                prefixes[library] == prefixes[holder] and lean_probe.builds(target, name)
+                for library, target in chosen.items()
+            ):
+                unbuildable[relative] = (name, why)
+        if legacy:
+            break
+        joining = {}
+        indexed = digests.keys() - unbuildable.keys()
+        for name, relative in modules.items():
+            try:
+                imported_names = _imports(root, relative, imports)
+            except GenerateError as error:
+                raise GenerateError(f"{error}{whys[relative]}") from None
+            for imported in imported_names:
+                # An import of a file a chosen library builds joins nothing, even when a later library builds it too.
+                if (
+                    (owner := _owner(targets, imported))
+                    and owner.name not in chosen
+                    and _source_file(root, owner, imported) not in indexed
+                ):
+                    joining.setdefault(owner.name, (name, imported))
+        if not joining:
+            break
+        joined |= joining
+        chosen |= {library: known[library] for library in joining}
+
+    if unbuildable:
+        others = sorted(
+            {
+                owner.name
+                for name, _why in unbuildable.values()
+                if (owner := _owner(targets, name)) and owner.name not in chosen
+            }
+        )
+        raise GenerateError(
+            f"{_some(list(unbuildable))} is under an indexed source directory but no indexed library builds it; "
+            "move it, or widen the library's globs"
+            + (f", or index {' and '.join(others)} as well" if others else "")
+            + next(iter(unbuildable.values()))[1]
+        )
+    return LibrarySources(
+        tuple(sorted(chosen)),
+        source_dirs,
+        modules,
+        digests,
+        joined=tuple((library, *joined[library]) for library in sorted(joined)),
+        unbuilt=_unbuilt(root, chosen.values(), modules, imports),
+    )
+
+
+def _source_directories(
+    root: Path, chosen: Iterable[LeanLibrary], joined: dict[str, tuple[str, str]], *, roots_only: bool
+) -> tuple[dict[str, str], dict[str, str]]:
+    """The source directories the chosen libraries' roots and globs give, each with the library that holds
+    it, and each library's prefix, which its module names drop."""
+
+    directories: dict[str, str] = {}
     prefixes: dict[str, str] = {}
-    # What each source directory of a library with globs builds; a library without globs builds
-    # what its root imports, which is not known here, and a file it does not build fails the
-    # freshness check instead.
-    globs: dict[str, list[tuple[str, str]]] = {}
+    globbed: list[tuple[str, str]] = []
     for target in chosen:
+        why = _why_indexed(target.name, joined)
         try:
             base = PurePosixPath(target.src_dir.resolve().relative_to(root).as_posix())
+            globs = [_glob(glob, target.name) for glob in target.globs or ()]
         except ValueError:
-            raise GenerateError(f"the source directory of {target.name} is outside the package") from None
-        selecting = [_glob(glob, target.name) for glob in target.globs or ()]
-        for module, mode in selecting:
+            raise GenerateError(f"the source directory of {target.name} is outside the package{why}") from None
+        except GenerateError as error:
+            raise GenerateError(f"{error}{why}") from None
+        for module, mode in globs:
             if mode != "+" and not (target.src_dir / f"{module.replace('.', '/')}.lean").is_file():
-                raise GenerateError(f"lean_lib {target.name}: module {module} has no source file")
+                raise GenerateError(f"lean_lib {target.name}: module {module} has no source file{why}")
+        prefixes[target.name] = "" if base == PurePosixPath(".") else f"{base.as_posix()}/"
         for module_root in target.roots:
-            directory = (base / module_root.replace(".", "/")).as_posix()
-            prefixes[directory] = "" if base == PurePosixPath(".") else f"{base.as_posix()}/"
-            if target.globs is not None:
-                globs.setdefault(directory, []).extend(selecting)
-    source_dirs = tuple(sorted(prefixes))
-    digests = _sources(root, source_dirs, GenerateError)
+            directories[(base / module_root.replace(".", "/")).as_posix()] = target.name
+        globbed.extend(((base / module.replace(".", "/")).as_posix(), target.name) for module, _mode in globs)
+    # A glob outside every root adds its directory; one under a source directory adds nothing.
+    for directory, holder in [] if roots_only else sorted(globbed):
+        if directory not in directories and not covers(tuple(directories), directory):
+            directories[directory] = holder
+    return directories, prefixes
 
-    # The modules come from the files under the source directories alone: the rest of the
-    # package, which may hold many more Lean files, is not read.
-    modules: dict[str, str] = {}
-    unbuilt: list[str] = []
-    for relative in sorted(digests):
-        directory = next(d for d in source_dirs if relative == f"{d}.lean" or relative.startswith(f"{d}/"))
-        path = relative.removeprefix(prefixes[directory]).removesuffix(".lean")
-        if "." in path:
-            raise GenerateError(
-                f"{relative} has a dot in its file or directory name, so no module name maps to it; rename it"
-            )
-        name = path.replace("/", ".")
-        if not _module_name(name):
-            raise GenerateError(f"{relative} is not a module name the index format holds (ASCII identifiers only)")
-        if name in modules:
-            raise GenerateError(f"{modules[name]} and {relative} both map to module {name}")
-        modules[name] = relative
-        if directory in globs and not any(_selects(glob, name) for glob in globs[directory]):
-            unbuilt.append(relative)
-    if unbuilt:
-        raise GenerateError(
-            f"{_some(unbuilt)} is under an indexed source directory but no indexed library builds it; "
-            "move it, or widen the library's globs"
+
+def _why_indexed(library: str, joined: dict[str, tuple[str, str]]) -> str:
+    """Why a library not asked for is indexed, to append to a refusal; nothing for one asked for."""
+
+    return f" ({library} is indexed because {' imports '.join(joined[library])})" if library in joined else ""
+
+
+def _owner(targets: Sequence[LeanLibrary], module: str) -> LeanLibrary | None:
+    """The library Lake builds ``module`` with: the last declared that can (``Package.findModule?``)."""
+
+    return next((target for target in reversed(targets) if lean_probe.builds(target, module)), None)
+
+
+def _source_file(root: Path, target: LeanLibrary, module: str) -> str | None:
+    """The file ``target`` builds ``module`` from, relative to ``root``; None outside it."""
+
+    try:
+        return (target.src_dir.resolve() / f"{module.replace('.', '/')}.lean").relative_to(root).as_posix()
+    except ValueError:
+        return None
+
+
+def _imports(root: Path, relative: str, cache: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
+    """The modules the header of the file at ``relative`` imports, read as text without Lean."""
+
+    if relative not in cache:
+        try:
+            text = (root / relative).read_bytes().decode("utf-8")
+        except OSError as error:
+            raise GenerateError(f"{relative} cannot be read ({_reason(error)})") from None
+        except UnicodeError:
+            raise GenerateError(f"{relative} is not valid UTF-8") from None
+        names: list[str] = []
+        # Lean reads imports only in the header, which ends at the first other command.
+        for line in _without_lean_comments(text, mask_literals=True).splitlines():
+            if found := _IMPORT.match(line):
+                names.extend(found.group(1).split())
+            elif line.strip() not in ("", "module", "prelude"):
+                break
+        cache[relative] = tuple(names)
+    return cache[relative]
+
+
+def _unbuilt(
+    root: Path, chosen: Collection[LeanLibrary], modules: dict[str, str], cache: dict[str, tuple[str, ...]]
+) -> tuple[str, ...]:
+    """The indexed modules that ``lake build`` of the libraries does not build: no glob selects them,
+    each root standing for itself when there are none, and no module it builds imports them."""
+
+    def selected(target: LeanLibrary, name: str) -> bool:
+        if target.globs is None:
+            return name in target.roots
+        return any(_selects(_glob(glob, target.name), name) for glob in target.globs)
+
+    reached = {name for name in modules if any(selected(target, name) for target in chosen)}
+    pending = sorted(reached)
+    while pending:
+        for imported in _imports(root, modules[pending.pop()], cache):
+            if imported in modules and imported not in reached:
+                reached.add(imported)
+                pending.append(imported)
+    return tuple(name for name in modules if name not in reached)
+
+
+def _build_advice(sources: LibrarySources) -> tuple[str, str]:
+    """The ``lake build`` command that builds every indexed module, and why it names more than the
+    libraries asked for (nothing when it does not)."""
+
+    reasons = [
+        f"{library} is indexed because {importer} imports {imported}" for library, importer, imported in sources.joined
+    ]
+    if sources.unbuilt:
+        reasons.append(
+            f"`lake build {' '.join(sources.libraries)}` alone does not build {_some(list(sources.unbuilt))}, "
+            "which no module it builds imports"
         )
-    return LibrarySources(tuple(target.name for target in chosen), source_dirs, modules, digests)
+    return f"lake build {' '.join((*sources.libraries, *sources.unbuilt))}", "; ".join(reasons)
 
 
 def generate_index(
@@ -226,12 +390,17 @@ def generate_index(
     libraries: Sequence[str] = (),
     timeout: float | None = None,
     runner: Callable[..., str] | None = None,
+    sources: LibrarySources | None = None,
 ) -> Generated:
-    """Return the index of the built library at ``root`` without writing it."""
+    """Return the index of the built library at ``root`` without writing it.
+
+    ``sources`` is what ``library_sources`` found when the caller has already looked; ``libraries`` is
+    then ignored.
+    """
 
     directory = _package_root(root)
     pins = _verified_pins(directory)
-    sources = library_sources(directory, libraries)
+    sources = library_sources(directory, libraries) if sources is None else sources
     package = _package_name(pins)
     try:
         generator = importlib.metadata.version("autoform")
@@ -256,10 +425,12 @@ def generate_index(
             raise GenerateError(_clash(first, second, name)) from None
         said = lean_probe.stale_build_said(error)
         if said is not None:
-            # The probe imports every module, and `run_probe` names each one; the libraries say the same.
+            # The probe imports every module, and the command builds each one.
+            build, why = _build_advice(sources)
             raise GenerateError(
-                f"the build is missing or stale; run `lake build {' '.join(sources.libraries)}` and index again"
+                f"the build is missing or stale; run `{build}` and index again"
                 + (f" (Lake: {said})" if said else "")
+                + (f"; {why}" if why else "")
             ) from None
         if detail.startswith(f"the {_LABEL} failed"):
             detail += f"\nIf the project is built, the toolchain {pins.lean_toolchain} may be the cause."
@@ -368,12 +539,14 @@ def generate_index(
             raise GenerateError("the generated index does not read back as written; this is a bug in Autoform")
     except LibraryIndexError as error:
         raise GenerateError(f"the generated index is not one a reader accepts ({error}); this is a bug in Autoform") from None
+    build, why = _build_advice(sources)
     return Generated(
         index,
         data,
         left_out,
         tuple(sorted(twice, key=lambda item: item.name)),
         tuple(sorted(dropped, key=lambda item: item.name)),
+        f"{why}; have CI run `{build}` before checking" if why else "",
     )
 
 
@@ -424,10 +597,12 @@ def check_index(
     libraries: Sequence[str] = (),
     timeout: float | None = None,
     runner: Callable[..., str] | None = None,
+    warnings: list[str] | None = None,
 ) -> tuple[str, ...]:
     """Return why the index at ``root`` is not current, or nothing.
 
-    Writes no index, but the probe's freshness check rewrites Lake's ``.hash`` files.
+    Writes no index, but the probe's freshness check rewrites Lake's ``.hash`` files. What the verdict
+    leaves unsaid, such as a library the index should also cover, is appended to ``warnings``.
     """
 
     directory = _package_root(root)
@@ -454,7 +629,9 @@ def check_index(
         return (f"the index was made by probe revision {index.header.probe}, and this Autoform's is {PROBE_REVISION}",)
     if tree_digest(((module.name, module.sha256) for module in index.modules), pins.files) != index.header.tree:
         return ("the toolchain, the manifest or the Lake configuration changed since the index was generated",)
-    sources = library_sources(directory, libraries)
+    sources, warning = _sources_to_check(directory, libraries, index.header.source_dirs)
+    if warning and warnings is not None:
+        warnings.append(warning)
     recorded = {module.source_file: module.sha256 for module in index.modules}
     changed = sorted(p for p in recorded.keys() & sources.digests.keys() if recorded[p] != sources.digests[p])
     reasons = [
@@ -469,12 +646,49 @@ def check_index(
     if reasons:
         return tuple(reasons)
 
-    generated = generate_index(directory, libraries=libraries, timeout=timeout, runner=runner).index
+    generated = generate_index(directory, timeout=timeout, runner=runner, sources=sources).index
     # An Autoform release that writes the same records leaves the index current, whatever version it records.
     generated = replace(generated, header=replace(generated.header, generator=index.header.generator))
     if dump_index(generated) == data.replace(b"\r\n", b"\n"):
         return ()
     return (_what_differs(index, generated),)
+
+
+def _sources_to_check(
+    directory: Path, libraries: Sequence[str], source_dirs: tuple[str, ...]
+) -> tuple[LibrarySources, str]:
+    """The sources an index recording ``source_dirs`` is checked against, and a warning or nothing.
+
+    An index made before globs' directories and imported libraries were read keeps its verdict (#325):
+    it is checked against the legacy read, with a warning naming what it leaves out.
+    """
+
+    try:
+        sources = library_sources(directory, libraries)
+    except GenerateError as error:
+        sources, refusal = None, error
+    else:
+        if set(sources.source_dirs) == set(source_dirs):
+            return sources, ""
+        refusal = None
+    try:
+        legacy = library_sources(directory, libraries, legacy=True)
+    except GenerateError:
+        legacy = None
+    if legacy is None or set(legacy.source_dirs) != set(source_dirs):
+        if sources is None:
+            raise refusal
+        return sources, ""
+    if sources is None:
+        return legacy, f"regenerating the index will be refused: {refusal}"
+    left_out = sorted(sources.digests.keys() - legacy.digests.keys())
+    if not left_out:
+        return legacy, ""
+    build, why = _build_advice(sources)
+    return legacy, (
+        f"the index leaves out {_some(left_out)}, so a change there leaves it current; regenerate it"
+        + (f", and have CI run `{build}` before checking; {why}" if why else "")
+    )
 
 
 def _package_root(root: str | Path) -> Path:

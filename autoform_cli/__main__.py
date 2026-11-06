@@ -431,7 +431,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         dest="libraries",
         metavar="NAME",
-        help="index this lean_lib (repeatable); default: every lean_lib of the package",
+        help="index this lean_lib and the package's libraries it imports (repeatable); default: every lean_lib",
     )
     library_index.add_argument(
         "--check",
@@ -1481,7 +1481,13 @@ def _library_index(args: argparse.Namespace) -> int:
     options = {"libraries": tuple(args.libraries), "timeout": args.timeout}
     try:
         if args.check:
-            reasons = check_index(args.target, **options)
+            warnings: list[str] = []
+            try:
+                reasons = check_index(args.target, **options, warnings=warnings)
+            finally:
+                # Printed even when the check then fails: a warning can say why.
+                for warning in warnings:
+                    print(f"warning: {_human_text(warning)}", file=sys.stderr)
             for reason in reasons:
                 print(f"stale: {_human_text(reason)}", file=sys.stderr)
             if not reasons:
@@ -1509,6 +1515,8 @@ def _library_index(args: argparse.Namespace) -> int:
     )
     # Flush first: stdout is block-buffered when piped, and the warnings explain the count.
     sys.stdout.flush()
+    if generated.build_note:
+        print(_human_text(f"note: {generated.build_note}"), file=sys.stderr)
     for shared in generated.shared:
         print(
             _human_text(
