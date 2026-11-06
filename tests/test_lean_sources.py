@@ -7,8 +7,6 @@ import re
 import shutil
 import stat
 import subprocess
-import sys
-import types
 from collections.abc import Callable
 from pathlib import Path
 
@@ -78,18 +76,6 @@ def toplevel : Nat := 3
 def _require_directory_descriptors() -> None:
     if not directory_binding_module.DIRECTORY_BINDING_SUPPORTED:
         pytest.skip("directory descriptors are unavailable")
-
-
-def _require_descriptor_capture() -> None:
-    if not (
-        directory_binding_module.DIRECTORY_BINDING_SUPPORTED
-        and tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED
-    ):
-        pytest.skip("directory descriptor capture is unavailable")
-
-
-def _use_portable_capture(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(directory_binding_module, "DIRECTORY_BINDING_SUPPORTED", False)
 
 
 def _index(tmp_path: Path, text: str = _SOURCE, name: str = "Project/Basic.lean"):
@@ -951,7 +937,6 @@ def test_changes_inside_an_excluded_build_directory_do_not_invalidate_capture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _require_descriptor_capture()
     _index(tmp_path, "def canonical : Nat := 0\n")
     build_state = tmp_path / ".lake" / "build-state"
     build_state.parent.mkdir()
@@ -1069,7 +1054,6 @@ def test_source_capture_rejects_mid_capture_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _require_descriptor_capture()
     source = tmp_path / "Project" / "Basic.lean"
     _index(tmp_path, "def before : Nat := 0\n")
     changed = False
@@ -1137,7 +1121,6 @@ def test_snapshot_reports_sources_that_keep_changing(
     unattributed_first_open: bool,
     named: str,
 ) -> None:
-    _require_descriptor_capture()
     _index(tmp_path, "def a : Nat := 0\n", "Project/A.lean")
     _index(tmp_path, "def b : Nat := 0\n", "Project/B.lean")
     edits = 0
@@ -1176,11 +1159,10 @@ def test_snapshot_reports_sources_that_keep_changing(
 def _at(monkeypatch: pytest.MonkeyPatch, when: str, action: Callable[[], object]) -> list[str]:
     """Run `action` once at the capture moment `when`; the returned list records that it ran.
 
-    `when` is "verify" (the checkpoint before the final verification), "list F"
-    (the checkpoint after the scan lists folder F; "list " is the root),
-    "relist F" (just before folder F's end-of-scan relist, not verification's), or "open N after W"
-    or "opendir N after W" (just before the first descriptor-relative open of N
-    as a file or as a folder once moment W has passed).
+    `when` is "verify" (the checkpoint before the verifying walk), "list F"
+    (the checkpoint after the capturing walk lists folder F; "list " is the
+    root), or "open N after W" (just before the first open of the file N once
+    moment W has passed).
     """
     fired: list[str] = []
 
@@ -1194,27 +1176,15 @@ def _at(monkeypatch: pytest.MonkeyPatch, when: str, action: Callable[[], object]
         _on_checkpoint(monkeypatch, "before-final-verification", once)
     elif kind == "list":
         _on_checkpoint(monkeypatch, "after-directory-list", once, relative=rest)
-    elif kind == "relist":
-        original_recheck = tree_snapshot_module._recheck_scanned_directory
-
-        def recheck(descriptor, *, relative: str, **kwargs):
-            # Verification relists through the same function; only the scan's
-            # call, which passes no verify_kept, is the end-of-scan relist.
-            if relative == rest and kwargs.get("verify_kept") is None:
-                once()
-            return original_recheck(descriptor, relative=relative, **kwargs)
-
-        monkeypatch.setattr(tree_snapshot_module, "_recheck_scanned_directory", recheck)
     else:
         name, _, after = rest.partition(" after ")
         armed = _at(monkeypatch, after, lambda: None)
         original_open = os.open
 
-        def open_after(path, flags, mode=0o777, *, dir_fd=None):
-            directory = bool(flags & getattr(os, "O_DIRECTORY", 0))
-            if armed and path == name and dir_fd is not None and directory == (kind == "opendir"):
+        def open_after(path, flags, *args, **kwargs):
+            if armed and os.path.basename(os.fspath(path)) == name:
                 once()
-            return original_open(path, flags, mode, dir_fd=dir_fd)
+            return original_open(path, flags, *args, **kwargs)
 
         monkeypatch.setattr(os, "open", open_after)
     return fired
@@ -1353,9 +1323,9 @@ _UNRELATED_CHANGES = [
     ),
     pytest.param(
         lambda r: _write_site(r / "site", 0),
-        [("opendir site after verify", lambda r: _remove(r / "site"))],
+        [("verify", lambda r: _remove(r / "site"))],
         (),
-        id="site-removed-before-verification-opens-it",
+        id="site-removed-before-verification",
     ),
     pytest.param(
         lambda r: (r / "notes.md").write_text("0\n", encoding="utf-8"),
@@ -1377,15 +1347,15 @@ _UNRELATED_CHANGES = [
     ),
     pytest.param(
         lambda r: _notes_folder(r / "Proj/site"),
-        [("relist Proj", lambda r: _replace(r / "Proj/site", lambda p: p.write_text("<html></html>\n")))],
+        [("list Proj", lambda r: _replace(r / "Proj/site", lambda p: p.write_text("<html></html>\n")))],
         (),
-        id="folder-turned-file-before-relist",
+        id="folder-turned-file-after-its-folders-listing",
     ),
     pytest.param(
         lambda r: _lock_link(r / "Proj/.#A.lean"),
-        [("relist Proj", lambda r: _lock_link(r / "Proj/.#A.lean", 2))],
+        [("list Proj", lambda r: _lock_link(r / "Proj/.#A.lean", 2))],
         (),
-        id="lock-link-rewritten-before-relist",
+        id="lock-link-rewritten-after-its-folders-listing",
     ),
     pytest.param(
         lambda r: _lean(r / "Proj/B.lean", "b"),
@@ -1440,7 +1410,6 @@ def test_change_without_lean_inputs_is_captured_once(
     changes: list,
     absent: tuple[str, ...],
 ) -> None:
-    _require_descriptor_capture()
     _index(tmp_path, "def kept : Nat := 0\n", "Proj/A.lean")
     setup(tmp_path)
     fired = [_at(monkeypatch, when, lambda change=change: change(tmp_path)) for when, change in changes]
@@ -1534,90 +1503,12 @@ _LEAN_CHANGES = [
         "site/deep/New.lean",
         id="lean-file-in-new-nested-folder",
     ),
-    # Only the relist at the end of the folder's scan sees X.lean, as on the
-    # strict path: it appears after the listing and is gone by verification.
-    pytest.param(
-        lambda r: _lean(r / "Zed/B.lean", "b"),
-        [("list Zed", lambda r: _lean(r / "Zed/X.lean")), ("verify", lambda r: _remove(r / "Zed/X.lean"))],
-        "Zed/X.lean",
-        id="lean-file-only-during-its-lean-folders-scan",
-    ),
-    # site holds no Lean file, so it is relisted although it is not recorded.
-    pytest.param(
-        lambda r: _write_site(r / "site", 0),
-        [("list site", lambda r: _lean(r / "site/X.lean")), ("verify", lambda r: _remove(r / "site/X.lean"))],
-        "site/X.lean",
-        id="lean-file-only-during-its-unrelated-folders-scan",
-    ),
-    # An empty folder named X.lean becomes a regular file between the
-    # verification walk's stat and its open, which fails with ENOTDIR.
+    # An empty folder named X.lean is a regular file by the verifying walk.
     pytest.param(
         lambda r: (r / "X.lean").mkdir(),
-        [("opendir X.lean after verify", lambda r: _replace(r / "X.lean", _lean))],
+        [("verify", lambda r: _replace(r / "X.lean", _lean))],
         "X.lean",
         id="lean-named-folder-turned-file-during-verification-walk",
-    ),
-    # The scan keeps nothing for the entry, which becomes a .lean file before
-    # Proj's end-of-scan relist and is gone before verification.
-    pytest.param(
-        lambda r: _notes_folder(r / "Proj/X.lean"),
-        [("relist Proj", lambda r: _replace(r / "Proj/X.lean", _lean)), ("verify", lambda r: _remove(r / "Proj/X.lean"))],
-        "Proj/X.lean",
-        id="unselected-folder-turned-lean-file-before-relist",
-    ),
-    pytest.param(
-        lambda r: _lock_link(r / "Proj/.#A.lean"),
-        [("relist Proj", lambda r: _replace(r / "Proj/.#A.lean", _lean)), ("verify", lambda r: _remove(r / "Proj/.#A.lean"))],
-        "Proj/.#A.lean",
-        id="lock-link-turned-lean-file-before-relist",
-    ),
-    # Moved out of the tree between the scan's lookup and its open, so the scan
-    # drops B.lean as vanished or walks the notes folder that took D's place;
-    # moved back before Proj's relist, it loses its Lean input before
-    # verification.  Only the relist sees it, and only because the scan keeps
-    # no identity for a dropped file and the opened identity of a walked folder.
-    pytest.param(
-        lambda r: _lean(r / "Proj/B.lean", "b"),
-        [
-            ("open B.lean after list Proj", lambda r: _moved_out(r, "B.lean")),
-            ("relist Proj", lambda r: _moved_in(r, "B.lean")),
-            ("verify", lambda r: _remove(r / "Proj/B.lean")),
-        ],
-        "Proj/B.lean",
-        id="lean-file-moved-out-at-open-and-back-before-relist",
-    ),
-    pytest.param(
-        lambda r: _lean(r / "Proj/D/New.lean", "n"),
-        [
-            ("opendir D after list Proj", lambda r: _moved_out(r, "D", _notes_folder)),
-            ("relist Proj", lambda r: _moved_in(r, "D")),
-            ("verify", lambda r: _remove(r / "Proj/D/New.lean")),
-        ],
-        "Proj/D/New.lean",
-        id="lean-folder-moved-out-at-open-and-back-before-relist",
-    ),
-    # Proj/Sub is restored before verification, so only the scan's own checks
-    # see it: gone at Proj's relist, or a different folder when Proj looks at
-    # Sub again after descending into it.
-    pytest.param(
-        _sub_and_tail,
-        [("list Proj/Tail", lambda r: _away(r, "Proj/Sub")), ("verify", lambda r: _back(r, "Proj/Sub"))],
-        "Proj/Sub",
-        id="lean-folder-moved-away-during-its-parents-scan",
-    ),
-    pytest.param(
-        lambda r: _lean(r / "Proj/Sub/S.lean", "s"),
-        [("list Proj/Sub", lambda r: _away(r, "Proj/Sub", copy=True)), ("verify", lambda r: _back(r, "Proj/Sub"))],
-        "Proj/Sub",
-        id="lean-folder-replaced-by-copy-during-its-scan",
-    ),
-    # A marker that appears in a folder of Lean files hides them; only the
-    # folder's end-of-scan relist sees one that is gone again by verification.
-    pytest.param(
-        lambda r: _lean(r / "vendor/lib/Lib.lean", "vendored"),
-        [("relist vendor/lib", lambda r: (r / "vendor/lib/.git").mkdir()), ("verify", lambda r: (r / "vendor/lib/.git").rmdir())],
-        "vendor/lib",
-        id="checkout-marker-only-at-its-folders-relist",
     ),
     pytest.param(
         lambda r: _packets_output(r / "review-packets", 0),
@@ -1631,12 +1522,6 @@ _LEAN_CHANGES = [
         "review-packets/Packet.lean",
         id="skeleton-output-unmarked-in-place",
     ),
-    pytest.param(
-        lambda r: _packets_output(r / "review-packets", 0),
-        [("relist ", lambda r: _expose_packets(r / "review-packets")), ("verify", lambda r: _rehide_packets(r / "review-packets"))],
-        "review-packets/Packet.lean",
-        id="skeleton-output-exposed-only-at-root-relist",
-    ),
 ]
 
 
@@ -1648,77 +1533,19 @@ def test_lean_change_is_caught_and_named(
     changes: list,
     named: str,
 ) -> None:
-    _require_descriptor_capture()
     root = tmp_path / "root"
     _index(root, "def kept : Nat := 0\n", "Proj/A.lean")
     setup(root)
     fired = [_at(monkeypatch, when, lambda change=change: change(root)) for when, change in changes]
 
     assert _changed_path(root) == named
-    expected = [[when] for when, _change in changes]
-    if len(changes) > 1:
-        # The last change hides the first from the final verification, so an
-        # earlier check must catch it and verification is never reached.
-        expected[-1] = []
-    assert fired == expected
-
-
-@pytest.mark.parametrize("step", ["lookup", "examine"])
-@pytest.mark.parametrize(
-    ("name", "named"),
-    [("B.lean", "Proj/B.lean"), ("Sub", "Proj/Sub/S.lean"), ("L.lean", "Proj/L.lean")],
-    ids=["file", "folder", "link"],
-)
-def test_lean_entry_dropped_as_vanished_and_back_at_its_folders_relist_is_caught(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    name: str,
-    named: str,
-    step: str,
-) -> None:
-    # The scan finds the entry gone at its lookup, or when it examines it (the
-    # open of a file or folder, the readlink of a link), and drops it.  The
-    # entry is back right after that call, so Proj's end-of-scan relist lists
-    # it, and it is gone again before verification.  Only that relist can see
-    # it, by examining the name it dropped.
-    _require_descriptor_capture()
-    _index(tmp_path, "def a : Nat := 0\n", "Proj/A.lean")
-    entry = tmp_path / "Proj" / name
-
-    def restore() -> None:
-        if name == "L.lean":
-            entry.symlink_to("A.lean")
-        else:
-            _lean(entry / "S.lean" if name == "Sub" else entry, "b")
-
-    restore()
-    call = "stat" if step == "lookup" else "readlink" if name == "L.lean" else "open"
-    original = getattr(os, call)
-    armed = _at(monkeypatch, "list Proj", lambda: None)
-    fired: list[str] = []
-
-    def vanish_around_call(path, *args, **kwargs):
-        if armed and not fired and path == name and kwargs.get("dir_fd") is not None:
-            fired.append(step)
-            _remove(entry)
-            try:
-                return original(path, *args, **kwargs)
-            finally:
-                restore()
-        return original(path, *args, **kwargs)
-
-    monkeypatch.setattr(os, call, vanish_around_call)
-    _at(monkeypatch, "verify", lambda: _remove(entry))
-
-    assert _changed_path(tmp_path) == named
-    assert fired == [step]
+    assert fired == [[when] for when, _change in changes]
 
 
 def test_lean_file_edited_while_it_is_read_is_named(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _require_descriptor_capture()
     _index(tmp_path, "def kept : Nat := 0\n", "Proj/A.lean")
     source = tmp_path / "Proj" / "A.lean"
     original_fdopen = os.fdopen
@@ -1752,7 +1579,6 @@ def test_marker_candidate_removed_before_it_is_read_is_absent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _require_descriptor_capture()
     _index(tmp_path, "def kept : Nat := 0\n", "Proj/A.lean")
     site = tmp_path / "site"
     site.mkdir()
@@ -1784,7 +1610,6 @@ def test_checkout_marker_appearing_beside_lean_files_is_caught(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _require_descriptor_capture()
     _index(tmp_path, "def main : Nat := 0\n", "Main.lean")
     _index(tmp_path, "def vendored : Nat := 0\n", "vendor/lib/Lib.lean")
     marker = tmp_path / "vendor" / "lib" / ".git"
@@ -1807,7 +1632,6 @@ def test_checkout_marker_appearing_beside_lean_files_is_caught(
 
 
 def test_unrelated_folders_do_not_change_tree_revisions(tmp_path: Path) -> None:
-    _require_descriptor_capture()
     plain = tmp_path / "plain"
     busy = tmp_path / "busy"
     for root in (plain, busy):
@@ -1839,7 +1663,6 @@ def test_verification_walk_charges_capture_limits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _require_descriptor_capture()
     _index(tmp_path, "def kept : Nat := 0\n", "Proj/A.lean")
     (tmp_path / "site").mkdir()
     # Proj, site and Proj/A.lean: three entries per pass.
@@ -1866,7 +1689,6 @@ def test_rechecks_do_not_walk_excluded_folders(
     monkeypatch: pytest.MonkeyPatch,
     excluded: str,
 ) -> None:
-    _require_descriptor_capture()
     _index(tmp_path, "def kept : Nat := 0\n", "Proj/A.lean")
     (tmp_path / excluded).mkdir()
     for number in range(10):
@@ -1899,7 +1721,6 @@ def test_folder_refused_to_a_selected_recheck_is_not_accepted(
     mode: int,
     reason: str,
 ) -> None:
-    _require_descriptor_capture()
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("root bypasses directory permissions")
     _index(tmp_path, "def kept : Nat := 0\n", "Proj/A.lean")
@@ -1929,7 +1750,6 @@ def test_snapshot_retries_a_root_replaced_while_it_is_bound(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _require_descriptor_capture()
     project = tmp_path / "project"
     _index(project, "def canonical : Nat := 0\n")
     replacement = tmp_path / "replacement"
@@ -2070,23 +1890,24 @@ def test_snapshot_retries_a_one_shot_initial_bind_race(
 ) -> None:
     root = tmp_path / "project"
     _index(root, "def recoveredAfterRename : Nat := 0\n")
-    original_open = directory_binding_module.os.open
-    root_opens = 0
+    original_stat = tree_snapshot_module.os.stat
+    failures = 0
 
-    def missing_once(path, flags, *args, **kwargs):
-        nonlocal root_opens
-        if kwargs.get("dir_fd") is None and Path(path) == root:
-            root_opens += 1
-            if root_opens == 1:
-                raise OSError(transient_errno, os.strerror(transient_errno))
-        return original_open(path, flags, *args, **kwargs)
+    def missing_once(path, *args, **kwargs):
+        nonlocal failures
+        if not failures and Path(path) == root:
+            failures += 1
+            raise OSError(transient_errno, os.strerror(transient_errno))
+        return original_stat(path, *args, **kwargs)
 
-    monkeypatch.setattr(directory_binding_module.os, "open", missing_once)
+    monkeypatch.setattr(tree_snapshot_module.os, "stat", missing_once)
     monkeypatch.setattr(lean_module, "_SNAPSHOT_RETRY_DELAY_SECONDS", 0)
+    binds = _count_binds(monkeypatch)
 
     snapshot = snapshot_project_sources(root)
 
-    assert root_opens == 2
+    assert failures == 1
+    assert len(binds) == 2
     assert snapshot.index.find("recoveredAfterRename") is not None
 
 
@@ -2096,7 +1917,6 @@ def test_lasting_capture_failure_is_reported_without_retrying(
     monkeypatch: pytest.MonkeyPatch,
     failure: str,
 ) -> None:
-    _require_descriptor_capture()
     _index(tmp_path, "def canonical : Nat := 0\n")
 
     def fail_read(*_args, **_kwargs):
@@ -2120,63 +1940,6 @@ def test_lasting_capture_failure_is_reported_without_retrying(
         snapshot_project_sources(tmp_path)
 
     assert len(attempts) == 1
-
-
-def test_selected_verification_recurses_in_three_frames_per_folder(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Capture has no depth limit, so the frames verification spends per
-    # folder level decide how deep a tree fits under the recursion limit.
-    _require_descriptor_capture()
-    folder = tmp_path / "d" / "d" / "d" / "d"
-    folder.mkdir(parents=True)
-    (folder / "Deep.lean").write_text("def deep : Nat := 0\n")
-    frames_at_level: dict[int, int] = {}
-    lookup = tree_snapshot_module._lookup
-
-    def counting_lookup(descriptor: int, name: str, relative: str) -> os.stat_result:
-        names = []
-        frame = sys._getframe()
-        while frame is not None:
-            names.append(frame.f_code.co_name)
-            frame = frame.f_back
-        if "_verify_snapshot" in names:
-            level = relative.count("/") + 1 if relative else 0
-            frames_at_level.setdefault(level, len(names))
-        return lookup(descriptor, name, relative)
-
-    monkeypatch.setattr(tree_snapshot_module, "_lookup", counting_lookup)
-
-    snapshot = snapshot_project_sources(tmp_path)
-
-    assert snapshot.index.find("deep") is not None
-    assert [frames_at_level[level + 1] - frames_at_level[level] for level in range(4)] == [3, 3, 3, 3]
-
-
-def test_selected_verification_calls_back_through_a_plain_function(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # A C-implemented callback such as functools.partial adds no Python frame,
-    # so the frame count above misses it, but it spends CPython's separate C
-    # recursion budget at every folder level of verification.
-    _require_descriptor_capture()
-    (tmp_path / "d").mkdir()
-    (tmp_path / "d" / "Deep.lean").write_text("def deep : Nat := 0\n")
-    callbacks: list[type] = []
-    recheck = tree_snapshot_module._recheck_scanned_directory
-
-    def recording_recheck(*args: object, **kwargs: object) -> object:
-        if kwargs.get("verify_kept") is not None:
-            callbacks.append(type(kwargs["verify_kept"]))
-        return recheck(*args, **kwargs)
-
-    monkeypatch.setattr(tree_snapshot_module, "_recheck_scanned_directory", recording_recheck)
-
-    snapshot_project_sources(tmp_path)
-
-    assert callbacks and set(callbacks) == {types.FunctionType}
 
 
 @pytest.mark.parametrize(
@@ -2214,7 +1977,6 @@ def test_unsearchable_directory_is_blamed_instead_of_its_children(tmp_path: Path
     """A folder with read but no search permission lists its names, but every
     lookup of one fails; the folder is at fault, not its entries."""
 
-    _require_descriptor_capture()
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("root bypasses directory permissions")
     _index(tmp_path, "def canonical : Nat := 0\n")
@@ -2240,7 +2002,6 @@ def test_search_permission_revoked_at_any_lookup_or_open_blames_the_folder(
     open and readlink of a name in it. Whichever of them the revocation
     precedes, during capture or final verification, the folder is named."""
 
-    _require_descriptor_capture()
     _index(tmp_path, "def canonical : Nat := 0\n")
     project = tmp_path / "Project"
     (project / "Sub").mkdir()
@@ -2292,10 +2053,9 @@ def test_entry_vanishing_after_a_refused_open_is_retried_as_a_change(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Telling who refused an open repeats the lookup; if the entry is gone
-    by then, nothing was refused for good and the capture is retried."""
+    """A refused open looks at the entry again; if it is gone by then, nothing
+    was refused for good and the capture is retried."""
 
-    _require_descriptor_capture()
     _index(tmp_path, "def canonical : Nat := 0\n")
     failures = [
         ("open", PermissionError(errno.EACCES, "refused")),
@@ -2303,17 +2063,18 @@ def test_entry_vanishing_after_a_refused_open_is_retried_as_a_change(
     ]
 
     def failing(name):
-        original = getattr(os, name)
+        original = getattr(tree_snapshot_module.os, name)
 
-        def operation(path, *args, dir_fd=None, **kwargs):
-            if dir_fd is not None and path == "Basic.lean" and failures[:1] and failures[0][0] == name:
+        def operation(path, *args, **kwargs):
+            if os.path.basename(os.fspath(path)) == "Basic.lean" and failures[:1] and failures[0][0] == name:
                 raise failures.pop(0)[1]
-            return original(path, *args, dir_fd=dir_fd, **kwargs)
+            return original(path, *args, **kwargs)
 
         return operation
 
     for name in ("open", "stat"):
-        monkeypatch.setattr(os, name, failing(name))
+        monkeypatch.setattr(tree_snapshot_module.os, name, failing(name))
+    monkeypatch.setattr(lean_module, "_SNAPSHOT_RETRY_DELAY_SECONDS", 0)
     snapshot_project_sources(tmp_path)
     assert failures == []
 
@@ -2337,96 +2098,7 @@ def test_unsupported_entry_name_is_reported_without_retrying(
     assert len(attempts) == 1
 
 
-def test_portable_binding_rejects_a_replacement_root_generation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    project = tmp_path / "project"
-    _index(project, "def original : Nat := 0\n")
-    replacement = tmp_path / "replacement"
-    _index(replacement, "def replacement : Nat := 0\n")
-    displaced = tmp_path / "displaced"
-    _use_portable_capture(monkeypatch)
-    bound = BoundDirectoryTree(project)
-    original_verify = bound.verify
-    original_capture = tree_snapshot_module._capture_portable
-    capture_count = 0
-    replacement_started = False
-
-    def verify_then_replace() -> None:
-        nonlocal replacement_started
-        original_verify()
-        if not replacement_started:
-            project.rename(displaced)
-            replacement.rename(project)
-            replacement_started = True
-
-    def capture_then_restore(*args, **kwargs):
-        nonlocal capture_count
-        snapshot = original_capture(*args, **kwargs)
-        capture_count += 1
-        if capture_count == 2:
-            project.rename(replacement)
-            displaced.rename(project)
-        return snapshot
-
-    monkeypatch.setattr(bound, "verify", verify_then_replace)
-    monkeypatch.setattr(tree_snapshot_module, "_capture_portable", capture_then_restore)
-    try:
-        with pytest.raises(TreeSnapshotError, match="cannot be inspected safely"):
-            bound.capture()
-    finally:
-        bound.close()
-        if displaced.exists():
-            if project.exists():
-                project.rename(replacement)
-            displaced.rename(project)
-
-
-def test_descriptor_and_portable_capture_have_identical_order(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _require_directory_descriptors()
-    root = tmp_path / "tree"
-    (root / "a" / "x").mkdir(parents=True)
-    (root / "a-").mkdir()
-    (root / "a" / "x" / "One.lean").write_text("def one : Nat := 1\n")
-    (root / "a-" / "Two.lean").write_text("def two : Nat := 2\n")
-    with bind_directory_tree(root) as bound:
-        descriptor_snapshot = bound.capture()
-
-    _use_portable_capture(monkeypatch)
-    with bind_directory_tree(root) as bound:
-        portable_snapshot = bound.capture()
-
-    assert descriptor_snapshot == portable_snapshot
-    assert descriptor_snapshot.revision == portable_snapshot.revision
-    assert (
-        descriptor_snapshot.generation_revision
-        == portable_snapshot.generation_revision
-    )
-
-
-def test_portable_binding_rejects_a_symlinked_ancestor(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    real = tmp_path / "real"
-    project = real / "project"
-    project.mkdir(parents=True)
-    alias = tmp_path / "alias"
-    try:
-        alias.symlink_to(real, target_is_directory=True)
-    except OSError:
-        pytest.skip("symlinks are unavailable")
-    _use_portable_capture(monkeypatch)
-
-    with pytest.raises(TreeSnapshotError, match="unsafe component"):
-        BoundDirectoryTree(alias / "project")
-
-
-def test_portable_capture_does_not_require_path_stat_no_follow(
+def test_capture_does_not_require_path_stat_no_follow(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2439,7 +2111,6 @@ def test_portable_capture_does_not_require_path_stat_no_follow(
             raise NotImplementedError("no-follow stat is unavailable")
         return original_stat(self, *args, **kwargs)
 
-    _use_portable_capture(monkeypatch)
     monkeypatch.setattr(Path, "stat", stat_without_no_follow)
 
     with bind_directory_tree(root) as bound:
@@ -2448,7 +2119,7 @@ def test_portable_capture_does_not_require_path_stat_no_follow(
     assert snapshot.files == (("Project/Basic.lean", b"def portable : Nat := 0\n"),)
 
 
-def test_portable_capture_rejects_an_unrestored_nested_directory_redirection(
+def test_capture_rejects_an_unrestored_nested_directory_redirection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2480,8 +2151,6 @@ def test_portable_capture_rejects_an_unrestored_nested_directory_redirection(
             return (*signature[:3], 0, 0, 0, 0)
         return signature
 
-    _use_portable_capture(monkeypatch)
-    _on_checkpoint(monkeypatch, "between-portable-captures", restore)
     monkeypatch.setattr(tree_snapshot_module, "_stat_signature", coarse_directory_signature)
     bound = BoundDirectoryTree(
         root,
@@ -2495,18 +2164,14 @@ def test_portable_capture_rejects_an_unrestored_nested_directory_redirection(
         bound.close()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason=(
-        "the portable fallback is best effort: a redirection restored before the "
-        "directory is re-examined, with directory times reset, is not detected"
-    ),
-)
-def test_portable_capture_rejects_a_restored_nested_directory_redirection(
+def test_capture_rejects_a_restored_nested_directory_redirection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # A folder swapped for a link to outside the tree just before it is listed,
+    # and swapped back after one file is read through the link, with directory
+    # times hidden.  The old Windows fallback missed this; the listing is now
+    # checked against the folder its parent examined.
     try:
         (tmp_path / "symlink-probe").symlink_to("target", target_is_directory=True)
     except OSError:
@@ -2520,22 +2185,19 @@ def test_portable_capture_rejects_a_restored_nested_directory_redirection(
     (outside / "Escaped.lean").write_bytes(b"def escaped : Nat := 0\n")
     displaced = root / "nested-displaced"
     redirected = 0
-    restored = 0
 
     def restore() -> None:
-        nonlocal restored
         if nested.is_symlink():
             nested.unlink()
             displaced.rename(nested)
-            restored += 1
 
     original_names = tree_snapshot_module._capture_directory_names
-    original_read = tree_snapshot_module._read_portable_file
+    original_read = tree_snapshot_module._read_file
     original_signature = tree_snapshot_module._stat_signature
 
     def redirect_then_list(directory, **kwargs):
         nonlocal redirected
-        if os.fspath(directory) == os.fspath(nested) and not nested.is_symlink():
+        if os.fspath(directory) == os.fspath(nested) and not nested.is_symlink() and not redirected:
             nested.rename(displaced)
             nested.symlink_to(outside, target_is_directory=True)
             redirected += 1
@@ -2552,32 +2214,24 @@ def test_portable_capture_rejects_a_restored_nested_directory_redirection(
             return (*signature[:3], 0, 0, 0, 0)
         return signature
 
-    _use_portable_capture(monkeypatch)
     monkeypatch.setattr(tree_snapshot_module, "_capture_directory_names", redirect_then_list)
-    monkeypatch.setattr(tree_snapshot_module, "_read_portable_file", read_then_restore)
+    monkeypatch.setattr(tree_snapshot_module, "_read_file", read_then_restore)
     monkeypatch.setattr(tree_snapshot_module, "_stat_signature", coarse_directory_signature)
     bound = BoundDirectoryTree(
         root,
         selection=TreeSelection(include=lambda _path, _mode: True, descend=lambda _path: True),
     )
     try:
-        try:
-            snapshot = bound.capture()
-        except TreeSnapshotError as error:
-            assert "changed while it was captured" in str(error)
-            return
-        staged = (redirected, restored)
+        with pytest.raises(TreeSnapshotError, match="changed while it was captured"):
+            bound.capture()
     finally:
         restore()
         bound.close()
 
-    # The xfail must come from an undetected redirection, not a broken setup.
-    assert staged == (2, 2)
-    assert ("nested/Escaped.lean", b"def escaped : Nat := 0\n") in snapshot.files
-    pytest.fail("a restored nested directory redirection was not detected")
+    assert redirected == 1
 
 
-def test_portable_capture_rejects_a_file_swapped_to_fifo_without_blocking(
+def test_capture_rejects_a_file_swapped_to_fifo_without_blocking(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2599,9 +2253,8 @@ def test_portable_capture_rejects_a_file_swapped_to_fifo_without_blocking(
         return True
 
     def blocking_path_open(*_args, **_kwargs):
-        raise AssertionError("portable capture must use nonblocking os.open")
+        raise AssertionError("capture must use nonblocking os.open")
 
-    _use_portable_capture(monkeypatch)
     monkeypatch.setattr(Path, "open", blocking_path_open)
     bound = BoundDirectoryTree(
         root,
@@ -2616,11 +2269,10 @@ def test_portable_capture_rejects_a_file_swapped_to_fifo_without_blocking(
     assert swapped
 
 
-def test_portable_binding_normalizes_an_invalid_root_path(
+def test_binding_normalizes_an_invalid_root_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _use_portable_capture(monkeypatch)
 
     with pytest.raises(TreeSnapshotError, match="cannot be inspected safely"):
         BoundDirectoryTree(tmp_path / "bad\0name")
@@ -3013,7 +2665,6 @@ def test_lean_symlink_is_refused_whether_or_not_its_target_exists(tmp_path: Path
 
 
 def test_case_variants_of_the_lean_suffix_are_ignored(tmp_path: Path) -> None:
-    _require_descriptor_capture()
     _index(tmp_path, "def canonical : Nat := 0\n")
     project = tmp_path / "Project"
     clean = snapshot_project_sources(tmp_path)
@@ -3294,11 +2945,8 @@ def test_managed_marker_folder_is_listed_once_per_look_and_never_entered(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Skeleton output contributes no Lean input, so verification looks at it
-    # as at any unrecorded folder: one listing to recognize its marker, and
-    # no further.  The scan's listing is the only other one; the end-of-scan
-    # relist skips the folder because its identity did not change.  Growth
-    # inside it now counts against capture limits as a fresh scan would.
+    # Skeleton output contributes no Lean input, so each walk lists it once to
+    # recognize its marker, and goes no further.
     _index(tmp_path, "def authored : Nat := 0\n", "Authored.lean")
     generated = tmp_path / "review-packets"
     generated.mkdir()
@@ -3306,23 +2954,20 @@ def test_managed_marker_folder_is_listed_once_per_look_and_never_entered(
     (generated / "manifest.json").write_text(
         '{"kind":"packets","packets":[],"schema":"autoform-skeleton-packets/v2"}\n'
     )
-    generated_identity = (generated.stat().st_dev, generated.stat().st_ino)
     original_scandir = tree_snapshot_module.os.scandir
     opaque_scans = 0
 
     def count_opaque_scans(path):
         nonlocal opaque_scans
-        if isinstance(path, int):
-            metadata = os.fstat(path)
-            if (metadata.st_dev, metadata.st_ino) == generated_identity:
-                opaque_scans += 1
+        if os.fspath(path) == os.fspath(generated):
+            opaque_scans += 1
         return original_scandir(path)
     original_read = tree_snapshot_module._read_file
 
-    def refuse_descendant(parent_descriptor, name, *args, **kwargs):
-        if name == "Packet.lean":
+    def refuse_descendant(path, *args, **kwargs):
+        if os.path.basename(os.fspath(path)) == "Packet.lean":
             raise AssertionError("managed descendants must not be opened")
-        return original_read(parent_descriptor, name, *args, **kwargs)
+        return original_read(path, *args, **kwargs)
 
     def add_irrelevant_churn() -> None:
         for index in range(100):

@@ -322,10 +322,33 @@ def test_blank_lines_inside_a_comment_or_a_fence_belong_to_it(text: str, hidden:
     assert not view.ends_block(2)
 
 
-def test_markdown_links_report_visible_links_with_line_numbers() -> None:
-    text = "# Title\n\n[One](a.md)\n\n```\n[Two](b.md)\n```\n\n[Three](c.md)\n"
-
-    assert markdown_links(text) == [(3, "a.md"), (9, "c.md")]
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "# Title\n\n[One](a.md)\n\n```\n[Two](b.md)\n```\n\n[Three](c.md)\n",
+            [(3, "a.md", False), (9, "c.md", False)],
+        ),
+        # A link whose text wraps is reported on the line it starts on.
+        ("# Title\n\nSee [the\nbase](a.md) and [top](b.md).\n", [(3, "a.md", True), (4, "b.md", False)]),
+        # So is one only reading the block whole finds: a line read alone hides it in code.
+        ("See ` one\ntwo ` [x](a.md) ` three\n", [(2, "a.md", True)]),
+        # A line read alone opened a code span at an escaped backtick, which the site does not.
+        ("a \\` b [x](a.md) \\` c\n", [(1, "a.md", True)]),
+        # A link a line read alone finds is still read, though the site shows it as code.
+        ("A `code\n[x](m.md) end`\nand [y](m.md) z.\n", [(2, "m.md", False), (3, "m.md", False)]),
+        # A full reference is read once, though a line read alone takes its label for a shortcut.
+        ("See [the\nlemma][d] for it.\n\n[d]: x.md\n", [(2, "x.md", False)]),
+        # A wrapped link stays wrapped beside a link to its target on the line it starts on.
+        ("See [A](x.md) and [the\nidea](x.md).\n", [(1, "x.md", False), (1, "x.md", True)]),
+        # An autolink starts no raw HTML, so a link can wrap beside it.
+        ("Source:\n<https://arxiv.org/abs/1>, see [the\nlemma](a.md).\n", [(2, "a.md", True)]),
+    ],
+)
+def test_markdown_links_report_visible_links_with_line_numbers(
+    text: str, expected: list[tuple[int, str, bool]]
+) -> None:
+    assert markdown_links(text) == expected
 
 
 #: Link forms paired with the targets the configured renderer links them to. A
@@ -364,6 +387,59 @@ LINK_CORPUS = [
     ("[Node](<a b.md>)", ["a b.md"]),
     ("[Node](a.md", []),
     ("![Figure](a.png)", []),
+    # A paragraph or a list item is read whole, so a link can wrap across its lines.
+    ("[Wrapped\nlabel](a.md)", ["a.md"]),
+    ("- [Wrapped\n  label](a.md)\n- [Next](b.md)", ["a.md", "b.md"]),
+    ("Text [a\n- b](a.md)", ["a.md"]),
+    ("> [Quoted\nlazily](a.md)", ["a.md"]),
+    ("> [Quoted\n> lines](a.md)", ["a.md"]),
+    ("`[In\ncode](a.md)`", []),
+    ("- [One\n- two](a.md)", []),
+    ("Text [a\n# Heading\nb](a.md)", []),
+    ("Title [a\n===\nb](a.md)", []),
+    ("Text [a\n> b](a.md)", []),
+    ("Text [a\n<div>\nb](a.md)\n</div>", []),
+    ("| A | B |\n| --- | --- |\n| [x | y |\n| z](a.md) | w |", []),
+    ("See [Exercise\n#3](a.md)", []),
+    ("[a]:\n  x.md\nSee [y](y.md).", ["y.md"]),
+    ("[a]:\n  x.md\nSee [y\nz](y.md).", ["y.md"]),
+    ("[a \\` b](a.md)\nand `c` here", ["a.md"]),
+    ("a \\` b [x](a.md) \\` c", ["a.md"]),
+    ("> [a\n>\n> b](a.md)", []),
+    ("> - [One\n> - two](a.md)", []),
+    ("> a [x\n> > b](a.md)", []),
+    ("A\nb [x\n===\ny](a.md)", ["a.md"]),
+    ("> - a\n- [b\n> c](a.md)", ["a.md"]),
+    ("- a\n\n> q\n- [b\n> c](a.md)", ["a.md"]),
+    ("# H\n    [a\n    b](a.md)", []),
+    ("> a [x\n> <div>b</div>](a.md)", ["a.md"]),
+    (">\n1. [item\n> lemma](a.md)", ["a.md"]),
+    ("> q\n# h\nb [x\n> c](a.md)", []),
+    ("> > a [x\n> b](a.md)", ["a.md"]),
+    ("- a\n## h\n    - [d\n  t](a.md)", []),
+    (">\n- [a\n> - b](a.md)", []),
+    ("> a\n\nb [x\n> c](a.md)", []),
+    ("- a\n[d]: x.md\n    b [c\n    d](a.md)", ["a.md"]),
+    ("[d]:\n>[x](a.md)", ["a.md"]),
+    ("[d]:\n>[x\n>y](a.md)", ["a.md"]),
+    ("- a\n> q\n- [b\n> c](a.md)", []),
+    ("Text [a\n<?x y?>\nb](a.md)", []),
+    ("Text [a\n<!DOCTYPE x>\nb](a.md)", []),
+    ("Text [a\n<![CDATA[ x ]]>\nb](a.md)", []),
+    ("Text [a\n<![x]>\nb](a.md)", ["a.md"]),
+    ("Text [a\n-   -   -\nb](a.md)", ["a.md"]),
+    ("Text [a\n- -\t-\nb](a.md)", []),
+    ("Title [a\n=-=\nb](a.md)", ["a.md"]),
+    ("Text [a\n|---|\nb](a.md)", ["a.md"]),
+    ("> [a](\n> x.md)", ["x.md"]),
+    ("> [Lemma\n> B][]\n\n[Lemma B]: b.md", ["b.md"]),
+    ("See [the\n<em>lemma</em>](a.md).", ["a.md"]),
+    ("For [all $a\n<b$ see](a.md).", ["a.md"]),
+    ("> - [a\n- b](a.md)", []),
+    ("1) [One\n2) two](a.md)", ["a.md"]),
+    ("| A | B |\n| --- | --- |\n| x | y |\n\nSee [the\nbase](a.md).", ["a.md"]),
+    ("- By [the lemma](a.md see\n  the notes (below) for more.", []),
+    ('- By [the\n  lemma](a.md "Title (draft)")', ["a.md"]),
 ]
 
 
@@ -372,7 +448,25 @@ def test_links_are_the_ones_the_configured_renderer_publishes(source: str, expec
     published = re.findall(r'<a href="([^"]*)"', render_html(source))
 
     assert [html.unescape(href) for href in published] == expected
-    assert [target for _, target in markdown_links(source)] == expected
+    assert [target for _, target, _ in markdown_links(source)] == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "site", "read"),
+    [
+        ("A `code span\n[hides](a.md) this` link", [], ["a.md"]),
+        ("A $x\n[y](a.md) z$ link", [], ["a.md"]),
+        ("> [d]:\n> [x](a.md)", [], ["a.md"]),
+        # The site reads the two lines as one full reference.
+        ("[Paper]\n[paper]\n\n[paper]: a.md", ["a.md"], ["a.md", "a.md"]),
+    ],
+)
+def test_a_link_a_line_read_alone_shows_is_still_read(source: str, site: list[str], read: list[str]) -> None:
+    # The site shows less here than check read a line at a time before, and check still reads it all (#325).
+    published = re.findall(r'<a href="([^"]*)"', render_html(source))
+
+    assert [html.unescape(href) for href in published] == site
+    assert [(target, wrapped) for _, target, wrapped in markdown_links(source)] == [(target, False) for target in read]
 
 
 def test_anchor_rendering_is_cached_by_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

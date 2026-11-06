@@ -511,6 +511,54 @@ def test_empty_authored_overview_opens_on_the_map_and_restores_its_reading_and_c
     assert len(documents) == 1
 
 
+_PANE_WIDTHS = """() => Object.fromEntries([["body", ".bp-dag-body"], ["topics", ".bp-dag-navigation"],
+  ["map", ".bp-dag-main"], ["reading", ".bp-reading-pane"]].map(([name, selector]) =>
+  [name, document.querySelector(selector).getBoundingClientRect().width]))"""
+
+
+@pytest.mark.parametrize("width", [1101, 1600])
+def test_map_only_gives_an_overview_the_whole_body_and_its_tab_brings_back_the_handle(
+    workspace_page: object, navigation_overview_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int,
+) -> None:
+    """Map only on a collapsed overview left an empty 48px column; the reader comes back as its handle, which takes focus."""
+    page, site = workspace_page, navigation_overview_site
+    page.set_viewport_size({"width": width, "height": 900})
+    _open(page, site, workspace_runtime)
+    page.locator(".bp-dag-overview-only").wait_for()
+    _frames(page)
+    assert page.evaluate(_PANE_WIDTHS)["reading"] == pytest.approx(48, abs=2)
+    map_only = page.get_by_role("button", name="Map only")
+    map_only.click()
+    playwright.expect(map_only).to_have_attribute("aria-pressed", "true")
+    _frames(page)
+    shut = page.evaluate(_PANE_WIDTHS)
+    assert shut["map"] == pytest.approx(shut["body"], abs=2)
+    page.get_by_role("button", name="Show the reading pane").click()
+    playwright.expect(page.locator(".bp-reading-pane > .bp-dag-sheet-handle")).to_be_focused()
+    page.get_by_role("button", name="Show Topics").click()
+    _frames(page)
+    back = page.evaluate(_PANE_WIDTHS)
+    assert back["reading"] == pytest.approx(48, abs=2) and back["topics"] > 100
+
+
+def test_the_maps_general_hint_hides_on_a_narrow_map(
+    workspace_page: object, navigation_overview_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime,
+) -> None:
+    """The whole project's hint shows on a wide map and hides at the 160px the book keeps for the map."""
+    page, site = workspace_page, navigation_overview_site
+    _open(page, site, workspace_runtime)
+    page.locator(".bp-dag-overview-only").wait_for()
+    page.locator(".bp-reading-pane > .bp-dag-sheet-handle").click()
+    _frames(page)
+    hint = page.locator(".bp-whole-map .pm-hint")
+    playwright.expect(hint).to_be_visible()
+    page.get_by_role("separator", name="Resize the reading pane").focus()
+    page.keyboard.press("End")
+    _frames(page)
+    assert page.evaluate(_PANE_WIDTHS)["map"] == pytest.approx(160, abs=2)
+    playwright.expect(hint).to_be_hidden()
+
+
 @pytest.mark.parametrize("width", [1280, 1600, 390])
 def test_far_right_genuine_math_menu_and_hover_submenu_stay_inside_the_workspace(
     workspace_page: object, workspace_site: _WorkspaceSite, workspace_runtime: _PinnedRuntime, width: int,

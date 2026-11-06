@@ -40,9 +40,9 @@ mismatches. A new-tab canonical article provides fresh server-rendered reading.
 [blueprint-dag.js](../autoform_cli/assets/blueprint-dag.js) owns the outline, search, status
 filter, statement lists and reader state; its stage hosts [project-map.js](../autoform_cli/assets/project-map.js).
 On the book's host, `data-map-start` names the page's node or scope, `data-map-statuses` the
-statuses the filter keeps (the map dims the rest), and `bp-dag-has-selection` whether the book
-holds a result; a pick on the map is an `autoform-map-select` event, and the book owns the
-address and history. A map script that fails before marking its host `data-pm-ready` leaves a
+statuses the filter keeps (the map dims the rest), `bp-dag-has-selection` a selected result, and
+`bp-dag-resizing` a pane drag; a pick on the map is an `autoform-map-select` event, and the book owns the
+address and history. A map that never marks its host `data-pm-ready` leaves a
 notice; outline, search and lists still work. A page whose reader only lists its children opens
 map-first, as chapters and Home do when a phone lands on them; statements open in the reader.
 Server-produced pages contain complete mathematical reading and theorem anchors without

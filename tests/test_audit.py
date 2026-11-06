@@ -444,6 +444,25 @@ def test_coverage_may_not_link_into_an_unpublished_folder(tmp_path: Path) -> Non
     }
 
 
+@pytest.mark.parametrize(
+    ("page", "text", "code"),
+    [
+        ("roadmap/result.md", "## Sources\n\n- [the\n  paper](../sources/missing.md)\n", "source-not-found"),
+        ("coverage/README.md", "See [the\npaper](../sources/missing.md).\n", "coverage-not-found"),
+    ],
+)
+def test_a_broken_link_whose_text_wraps_is_a_warning(tmp_path: Path, page: str, text: str, code: str) -> None:
+    # Audit never read these links, so a finding would fail a blueprint that passed (#325).
+    blueprint = tmp_path / "blueprint"
+    _coverage(blueprint)
+    _article(blueprint, "result.md", declaration="theorem")
+    path = blueprint / page
+    path.write_text(f"{path.read_text(encoding='utf-8')}\n{text}", encoding="utf-8")
+
+    assert page not in _finding_map(blueprint)
+    assert [found for found, _ in _warning_map(blueprint)[page]] == [code]
+
+
 @pytest.mark.parametrize("folder", ["roadmap", "roadmap/chapter"])
 def test_audit_reports_a_misplaced_notes_directory_where_it_is(tmp_path: Path, folder: str) -> None:
     blueprint = tmp_path / "blueprint"

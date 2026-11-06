@@ -21,6 +21,8 @@ from autoform_cli.library.index import (
 
 REV = "1" * 40
 MATHLIB_REV = "2" * 40
+#: A library checkout as published, with the index this writer made for it.
+GOLDEN = Path(__file__).parent / "fixtures" / "library-index-golden"
 
 
 def entry(

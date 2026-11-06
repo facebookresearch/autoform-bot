@@ -1,8 +1,5 @@
 # Autoform repository contracts
 
-Read these contracts when changing local views, publication surfaces, source
-evidence, generated files, or dependency pins.
-
 ## Knowledge-map publication
 
 Full-viewport knowledge maps draw regions only from authored mathematical areas,
@@ -18,9 +15,9 @@ paths.
 
 ## Source evidence
 
-- Source indexes, revisions, and links retain the descriptors they read
-  through: repeated pathname reads are not a generation boundary, so where
-  descriptors cannot be retained (Windows) a render omits code links. Read
+- Source indexes, revisions, and links come from one capture: a walk by path
+  that follows no link, then a second walk that must see the same folders,
+  names and `stat` signatures; any difference is a change, never a mix. Read
   bounded outputs before descendants, keep each marker schema in its owning
   feature, and require links to match the blob at the stable detected commit.
 - Treat a rewritten private declaration's safety as fail-closed evidence:

@@ -16,20 +16,23 @@ module, so each module's copy is indexed.
 
 Only the source directories of the indexed ``lean_lib`` targets are read, and
 a target's ``globs`` select its modules as Lake does (see ``_glob``).
-``--check`` finds changed, new and missing source files by reading files,
-before it runs Lean.
+``library index`` and ``--check`` refuse a toolchain the probe is not verified
+on before anything else, so before anything runs Lean, even
+``lake translate-config``. ``--check`` then finds another probe revision,
+changed pin files, and changed, new and missing source files, by reading files.
 """
 
 from __future__ import annotations
 
 import contextlib
+import errno
 import importlib.metadata
 import json
 import os
 import re
 import stat
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 # Not tomllib: Lake reads TOML 1.0, and from Python 3.15 tomllib parses 1.1 (see pyproject.toml).
@@ -56,7 +59,7 @@ from .index import (
     tree_digest,
 )
 from .locate import WorkspaceError
-from .verify import CheckoutPins, _sources, checkout_pins
+from .verify import CheckoutPins, _index_bytes, _sources, checkout_pins
 
 LIBRARY_MARKER = "AUTOFORM_LIBRARY "
 #: Raised by any change, here or in the probe, that can alter the bytes of an index.
@@ -196,9 +199,16 @@ def library_sources(root: Path, libraries: Sequence[str] = ()) -> LibrarySources
     unbuilt: list[str] = []
     for relative in sorted(digests):
         directory = next(d for d in source_dirs if relative == f"{d}.lean" or relative.startswith(f"{d}/"))
-        name = relative.removeprefix(prefixes[directory]).removesuffix(".lean").replace("/", ".")
+        path = relative.removeprefix(prefixes[directory]).removesuffix(".lean")
+        if "." in path:
+            raise GenerateError(
+                f"{relative} has a dot in its file or directory name, so no module name maps to it; rename it"
+            )
+        name = path.replace("/", ".")
         if not _module_name(name):
             raise GenerateError(f"{relative} is not a module name the index format holds (ASCII identifiers only)")
+        if name in modules:
+            raise GenerateError(f"{modules[name]} and {relative} both map to module {name}")
         modules[name] = relative
         if directory in globs and not any(_selects(glob, name) for glob in globs[directory]):
             unbuilt.append(relative)
@@ -219,21 +229,9 @@ def generate_index(
 ) -> Generated:
     """Return the index of the built library at ``root`` without writing it."""
 
-    directory = Path(root).expanduser().resolve()
-    if not directory.is_dir():
-        raise GenerateError("the package root does not exist or is not a directory")
+    directory = _package_root(root)
+    pins = _verified_pins(directory)
     sources = library_sources(directory, libraries)
-    try:
-        pins = checkout_pins(directory)
-    except WorkspaceError as error:
-        raise GenerateError(str(error)) from None
-    if pins.lean_toolchain is None:
-        raise GenerateError("the package has no lean-toolchain")
-    if canonical_lean_toolchain(pins.lean_toolchain) not in VERIFIED_TOOLCHAINS:
-        raise GenerateError(
-            f"the package pins {_cut(pins.lean_toolchain)}, but the library probe is verified only on "
-            + ", ".join(VERIFIED_TOOLCHAINS)
-        )
     package = _package_name(pins)
     try:
         generator = importlib.metadata.version("autoform")
@@ -382,7 +380,7 @@ def generate_index(
 def write_index(root: str | Path, generated: Generated) -> Path:
     """Install the index at the package root, whole or not at all."""
 
-    destination = Path(root).expanduser().resolve() / INDEX_FILE
+    destination = _package_root(root) / INDEX_FILE
     stage: Path | None = None
     before: tuple[int, int, str] | None = None
     #: Whether there was an index before; not known until the destination has been inspected.
@@ -427,24 +425,35 @@ def check_index(
     timeout: float | None = None,
     runner: Callable[..., str] | None = None,
 ) -> tuple[str, ...]:
-    """Return why the index at ``root`` is not current, or nothing. Writes no file."""
+    """Return why the index at ``root`` is not current, or nothing.
 
-    directory = Path(root).expanduser().resolve()
-    if not directory.is_dir():
-        raise GenerateError("the package root does not exist or is not a directory")
+    Writes no index, but the probe's freshness check rewrites Lake's ``.hash`` files.
+    """
+
+    directory = _package_root(root)
+    # Before anything is called stale: regenerating could not fix it.
+    pins = _verified_pins(directory)
     try:
-        data = (directory / INDEX_FILE).read_bytes()
+        # Read as every project reads it: a symbolic link, a FIFO or an oversized file is no index.
+        data = _index_bytes(directory / INDEX_FILE)
     except FileNotFoundError:
         return (f"there is no {INDEX_FILE}",)
     except OSError as error:
-        # Not stale: whether it is current cannot be told.
-        raise GenerateError(f"{INDEX_FILE} exists but cannot be read: {_reason(error)}") from None
+        # A link (refused as ELOOP) or a file that is not regular; any other failure is not stale:
+        # whether the index is current cannot be told.
+        if error.errno not in (None, errno.ELOOP):
+            raise GenerateError(f"{INDEX_FILE} exists but cannot be read: {_reason(error)}") from None
+        return (f"{INDEX_FILE} is not a regular file, so no project reads it",)
     try:
         index = parse_index(data)
     except LibraryIndexError as error:
         return (f"the index is not usable: {error}",)
 
-    # First by reading files only, so a pull request that forgot to regenerate fails in seconds.
+    # Then by reading files only, so a pull request that forgot to regenerate fails in seconds.
+    if index.header.probe != PROBE_REVISION:
+        return (f"the index was made by probe revision {index.header.probe}, and this Autoform's is {PROBE_REVISION}",)
+    if tree_digest(((module.name, module.sha256) for module in index.modules), pins.files) != index.header.tree:
+        return ("the toolchain, the manifest or the Lake configuration changed since the index was generated",)
     sources = library_sources(directory, libraries)
     recorded = {module.source_file: module.sha256 for module in index.modules}
     changed = sorted(p for p in recorded.keys() & sources.digests.keys() if recorded[p] != sources.digests[p])
@@ -459,17 +468,57 @@ def check_index(
     ]
     if reasons:
         return tuple(reasons)
+
+    generated = generate_index(directory, libraries=libraries, timeout=timeout, runner=runner).index
+    # An Autoform release that writes the same records leaves the index current, whatever version it records.
+    generated = replace(generated, header=replace(generated.header, generator=index.header.generator))
+    if dump_index(generated) == data.replace(b"\r\n", b"\n"):
+        return ()
+    return (_what_differs(index, generated),)
+
+
+def _package_root(root: str | Path) -> Path:
+    try:
+        directory = Path(root).expanduser().resolve()
+    except RuntimeError as error:
+        # `~name` for a user this system does not know.
+        raise GenerateError(f"the package root cannot be resolved: {error}") from None
+    if not directory.is_dir():
+        raise GenerateError("the package root does not exist or is not a directory")
+    return directory
+
+
+def _verified_pins(directory: Path) -> CheckoutPins:
+    """The package's pin files, once its toolchain is one the probe is verified on; nothing here starts a process."""
+
     try:
         pins = checkout_pins(directory)
     except WorkspaceError as error:
         raise GenerateError(str(error)) from None
-    if tree_digest(((module.name, module.sha256) for module in index.modules), pins.files) != index.header.tree:
-        return ("the toolchain, the manifest or the Lake configuration changed since the index was generated",)
+    if pins.lean_toolchain is None:
+        raise GenerateError("the package has no lean-toolchain")
+    if canonical_lean_toolchain(pins.lean_toolchain) not in VERIFIED_TOOLCHAINS:
+        raise GenerateError(
+            f"the package pins {_cut(pins.lean_toolchain)}, but the library probe is verified only on "
+            + ", ".join(VERIFIED_TOOLCHAINS)
+        )
+    return pins
 
-    generated = generate_index(directory, libraries=libraries, timeout=timeout, runner=runner)
-    if generated.data != data.replace(b"\r\n", b"\n"):
-        return ("the index differs from what generation gives for these sources",)
-    return ()
+
+def _what_differs(recorded: LibraryIndex, generated: LibraryIndex) -> str:
+    """Name the records that differ between ``recorded`` and what generation gives."""
+
+    ours, theirs = recorded.header.as_dict(), generated.header.as_dict()
+    fields = [key for key in theirs if ours[key] != theirs[key]]
+    modules = sorted({module.name for module in set(recorded.modules) ^ set(generated.modules)})
+    declarations = sorted({item.name for item in set(recorded.declarations) ^ set(generated.declarations)})
+    parts = [f"the header's {', '.join(fields)}"] if fields else []
+    for what, names in (("module", modules), ("declaration", declarations)):
+        if names:
+            parts.append(f"{len(names)} {what}{'' if len(names) == 1 else 's'} ({_some(names)})")
+    if not parts:
+        return "the index holds the records generation gives, but not in the bytes it writes"
+    return "generation gives other records for these sources: " + "; ".join(parts)
 
 
 def _glob(glob: str, library: str) -> tuple[str, str]:

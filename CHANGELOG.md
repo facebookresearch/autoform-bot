@@ -11,6 +11,19 @@ date when the release is tagged.
 
 ### Added
 
+- **Publication inventory.** `publication.json` says where each blueprint file
+  went (`inventory`): for every file the verified commit holds below the
+  blueprint, or else every file render read and each entry it skipped, its URL
+  on the site, the repository URL the site links instead, or why the site leaves
+  it out (`hidden`, `unpublished`, `generated`, `mathjax-config`,
+  `review-testimony`, `graph-input`, `not-utf8`, `canvas`, `unsupported-type` or
+  `not-captured`). A hidden or `published: false` folder is one entry, so
+  nothing in it is named. A file's role follows from its path: its first folder
+  (`roadmap`, `sources`, `coverage`), else `hidden` for a dot name, else
+  `other`. It also names the Autoform that rendered it, best effort (`autoform`:
+  its version, its commit when an install from Git or an unmodified checkout
+  records one, and its repository only on github.com). The schema stays
+  `autoform-publication/v3` (#658).
 - **Verify workflow off.** `init --no-verify-workflow` writes
   `.github/workflows/autoform-verify.yml` as a stub, for a project the
   generated workflow can't fit, such as one whose roadmap several Lake projects
@@ -78,12 +91,15 @@ date when the release is tagged.
   workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
 - **Panes you can resize and hide.** In the book's workspace, Topics and the
   reading pane resize from splitters on their inner edges, by pointer or
-  keys, up to a reader of all but 160px of the map. A pane dragged nearly
+  keys, and the map always keeps at least 160px. A pane dragged nearly
   shut, or whose splitter takes Enter, hides, and a tab at the map's edge
   brings it back; "Map only" in the trail row hides both. The choice holds
-  on every page of the site, and a double-click on a splitter restores the
-  usual width. While a pane is dragged the map holds its camera, and it
-  settles once the drag ends. A phone keeps its sheet.
+  on every page of the site, as the theme's own choices do; a double-click,
+  Delete or a Mac's delete key on a splitter restores the usual width.
+  While a pane is dragged the map holds its camera, and it settles once the
+  drag ends. Where touch is the main pointer, as on a tablet, the splitters
+  are 24px wide, and Windows' forced colours keep the splitter's line and
+  Map only's pressed look. A phone keeps its sheet.
 - **Whole-project map.** Every rendered site gets `dependencies/map/`, one
   zoomable page for the whole project. Regions (authored areas, or the top-level
   chapters) open into their parts and parts into their results as the camera
@@ -116,12 +132,31 @@ date when the release is tagged.
   dependency references and the chapter progress lines. The explorer drops its
   status filter and status words, and the whole-project map its tints, progress
   bars and status words; its cards name their kind instead. Neither search box
-  mentions Lean names, though both still match them. Check warns about the
-  setting anywhere else under `roadmap/`, or with a value other than true or
-  false, and ignores it.
+  mentions Lean names, though both still match them. In place of the figures,
+  the landing hero shows the README's opening paragraphs, up to its first
+  heading or list. Check warns about the setting anywhere else under
+  `roadmap/`, or with a value other than true or false, and ignores it.
 
 ### Changed
 
+- **Mathlib results in review.** Agent Review's roadmap rubric says when cited
+  declarations state an article's result, and has the reviewer quote their
+  hypotheses and conclusions before judging. A `mathlib: true` that fails this
+  caps the rubric's usability score at 2, and Roadmap sets `mathlib: true` only
+  when verified Mathlib declarations state the result (#668).
+- **The landing's coverage line** leads with the source areas split into
+  statements: "5 source areas, all split into statements", or "3 of 5 source
+  areas split into statements" before the other dispositions.
+- **Search warns about a library it cannot verify.** `search --library` leaves
+  out a library it cannot verify, with a `warning: library NAME:` line on
+  standard error and, in `--json`, an entry under the new `refused` key, and
+  still prints the blueprint's hits and the other libraries'. It exited 2 and
+  printed nothing (#325).
+- **Library index check.** `library index --check` counts an index as current
+  when only the Autoform version that wrote it differs, so a new release no
+  longer turns a publishing library's check red. An index another probe
+  revision made is stale, said without running Lean, and a stale index names
+  the records generation gives otherwise.
 - **Vault pages on Windows.** `autoform-visualize` writes the dependency
   summary and structure pages with LF line endings on Windows too, as on every
   other system, so a vault regenerated on both no longer flips them.
@@ -153,6 +188,16 @@ date when the release is tagged.
   table is not the contract's gets no view, and render warns. The rest of the
   page is unchanged. In the sidebar the page is the book's last entry, named by
   its title, and Mathematics no longer opens it (#631, #645).
+- **One way to read a tree.** Lean sources, the blueprint and an output site
+  are read by path in one walk that never follows a symbolic link, and a second
+  walk must find the same folders, names and `stat` signatures; any difference
+  is a change, which the Lean commands retry as before. This replaces the
+  directory-descriptor capture and its Windows fallback (about 1,250 fewer
+  lines). On native Windows, `check`, `render` and the other Lean commands now
+  read Lean sources, so sites get code links there too, and `render
+  --require-declarations` no longer fails for declarations it could not look
+  up. A change that appears and is undone between the two walks is not seen,
+  as with the old engine between its checks.
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
@@ -458,6 +503,30 @@ date when the release is tagged.
   unpublished articles' IDs, returns only the folders. CI at an older
   `AUTOFORM_REF` still refuses both, so move the pin before relying on the
   warnings.
+- **Library listing.** Formalize tells the user about the packages
+  `library list` leaves out in one line that counts them by reason, not one line
+  each (nine or ten on a Mathlib project), and searches the blueprint alone when
+  the listing fails. Agent Review lists a module's declarations from the
+  `--json` hits whose `module` is exactly that module, with `--limit` at least
+  `total_matches`; searching the module's name also returned other modules'
+  declarations, and at most 20 (#204).
+
+### Deprecated
+
+Each prints one `warning[deprecated]:` line on standard error once its arguments
+parse, with or without `--json`, and changes nothing else.
+
+- **`autoform search --state`.** Filter each `--json` hit's `state` instead, with
+  `--limit` at least `total_matches`, since the flag filters before the limit.
+  Removed in 0.8.0 (#647).
+- **`autoform search --declaration`.** Filter each `--json` hit's `declaration`
+  the same way, comparing case-insensitively and allowing leading modifiers
+  (`def` keeps `noncomputable def` and `public def`); a misspelled kind then
+  matches nothing instead of exiting 2. Removed in 0.8.0 (#647).
+- **`autoform work list --lean-root` and `work context --lean-root`.**
+  `lean_targets[].source_file` stays in `autoform-work/v2`, always null;
+  `search --lean-root` prints a Lean name's file and line. Removed in 0.8.0
+  (#647).
 
 ### Removed
 
@@ -491,6 +560,18 @@ date when the release is tagged.
 - **Finished cards on the map.** A finished statement's card no longer prints
   "fully proved" under its title, since its fill already says so; the line
   names a status only for an unfinished statement.
+- **Library index guarantees.** `library index` and `--check` refuse a
+  toolchain the probe is not verified on before `lake translate-config` reads a
+  `lakefile.lean`, and refuse a source file with a dot in its path, or two files
+  that map to one module, which failed at the probe or dropped a file. Search
+  leaves out, with a warning, a library whose index names a module other than
+  the one its `source_file` holds, or a declaration whose name is not a Lean
+  name, such as one holding a newline. `--check` reads the index as search does,
+  so on POSIX a symbolic link, named pipe or directory there is stale rather
+  than followed or waited on, and a root under an unknown `~user` exits 2 rather
+  than 1 with a traceback. A refusal names a stale index before a merged or
+  edited one, the missing-manifest refusal no longer suggests `lake update`, and
+  the note naming an unsearched library quotes the flags it suggests.
 - **Reference links on chapters with a `<` in the title.** A `<` in a
   chapter's title alone left reference-style links in its prose shown as typed
   (#631).
@@ -511,6 +592,20 @@ date when the release is tagged.
   digest as before. A decision file with a 0x1A byte or a CR CR LF line ending
   now parses and digests whole, so a 0x1A on `lean-toolchain`'s first line
   gets `invalid-lean-toolchain` instead of passing.
+- **Links whose text wraps.** A link whose text runs onto the next line of its
+  paragraph or list item is read as the site reads it. Loading dropped one in a
+  dependency section without a word, so Hartshorne's relative degree-zero
+  Picard functor gains the proof dependency it was written with. Render
+  published one as written, so a link to an article its chapter absorbs was
+  dead on the site, and a chapter linked that way had no place in the book's
+  order. Code spans are read as the site reads them too, so a link that an
+  escaped backtick or a code span from the line above hid is read. Since these
+  links went unread, a problem with one warns rather than fails: a dependency
+  that does not resolve, names its own article, closes a cycle or leads into
+  an unpublished folder is not counted, any link into an unpublished folder
+  warns, and check and audit warn about a broken one under `## Sources`, audit
+  about one in a coverage file. Every link read before still counts, even one
+  the site shows as code, and only those give an article its cited passage.
 - **Claims inside a Git hook.** The claim commands' Git ignores `GIT_DIR`,
   `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the other variables that point Git at
   another repository, as a hook sets them. With only `GIT_DIR` set, the board's
@@ -693,9 +788,11 @@ theme. Each line names the pull requests to read for detail.
   `catalog:`, `open_statements:`, `published:` and `statement: retracted` in
   `check` and `INVENTORIED` in `render`, so move the pin before using them;
   until then, retract by removing `statement` and `proof` and keeping `lean:`.
-  Older refs assign no areas from `blueprint/atlas.json` but publish it with
-  every id it names, so a project with unpublished folders moves the pin before
-  adding it (#90).
+  It also rejects a dependency cycle that only appears once chapters roll up
+  (#358): leave out the edge that closes it until the pin moves. Older refs
+  assign no areas from `blueprint/atlas.json` but publish it with every id it
+  names, so a project with unpublished folders moves the pin before adding it
+  (#90).
 - **Site.** Render refuses to replace the `autoform-publication/v1` site 0.5.0
   wrote, and the dashboard reports it as stale: delete that output directory,
   such as a local `site-src`, once by hand (#165, #90). A v2 site is replaced

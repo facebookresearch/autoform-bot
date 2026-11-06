@@ -38,17 +38,11 @@ each `AUTOFORM_REQUIRE_*` variable below, so it fails where a local run skips:
 
 `autoform_cli/assets/` holds the book/map's shared JS and CSS.
 With Node 22.23.2, run `make build-explorer`, `make check-explorer`, and browser tests.
-Pinned esbuild/Terser emit one JS response below 145 KB; publication checks the
-UTF-8/LF source fingerprint. CRLF checkouts work too. Consumers need no Node.
-Compression renames only private properties, never graph/index/route/history
-fields, and uses no unsafe transforms or dropped logs.
 See [explorer ownership and failure boundaries](docs/explorer-design.md) before changing the client.
 
-The kernel probe `autoform_cli/probes/audit_probe.lean` is copied verbatim to
-`.github/autoform_audit.py`; after editing it, run `python3 scripts/sync_audit_probe.py`
-to sync the template and example. Check without a project (silent when clean):
-`elan run "$(cat tests/fixtures/library-project/lean-toolchain)" lean
-autoform_cli/probes/audit_probe.lean`.
+After editing the audit probe, run `python3 scripts/sync_audit_probe.py` and
+check it: `elan run "$(cat tests/fixtures/library-project/lean-toolchain)" lean
+autoform_cli/probes/audit_probe.lean` prints nothing when it is clean.
 
 `tests/test_real_repl.py` skips unless `AUTOFORM_RUN_REAL_REPL_TESTS=1`. To run
 it locally, build its fixture and install the oldest supported toolchain first:
@@ -60,14 +54,17 @@ AUTOFORM_RUN_REAL_REPL_TESTS=1 uv run pytest -q tests/test_real_repl.py
 ```
 
 ## Pull Requests
-We actively welcome your pull requests.
-
 1. Fork the repo and create your branch from `main`.
-2. If you've added code that should be tested, add tests.
-3. If you've changed APIs, update the documentation.
-4. Ensure the test suite passes.
-5. Make sure your code lints.
-6. If you haven't already, complete the Contributor License Agreement ("CLA").
+2. Fill in the [pull request template](.github/pull_request_template.md).
+3. If you haven't already, complete the Contributor License Agreement ("CLA").
+
+## Reviews
+A review finding blocks merge only with evidence (a reproduction, a failing
+test, a CI run, or a differential against `main`) of a regression, data loss, a
+leaked secret or private path, misleading docs or skill rules, a test that
+cannot fail, or public surface that is undeclared or removed without
+deprecation; #441's 14x slower audit blocked. Everything else (wording, naming,
+a missing comment) is a note. After fixes, re-check only the blockers.
 
 ## Contributor License Agreement ("CLA")
 Submit the [CLA](https://code.facebook.com/cla) once for Meta's open source projects.
@@ -78,10 +75,9 @@ Disclose security bugs through Meta's [bounty program](https://bugbounty.meta.co
 following its process, not a public issue.
 
 ## Coding Style
-* Python uses 4-space indentation and a 120-character line length
-  (`[tool.ruff]`); `make lint` and CI run only ruff's default rules, which do
-  not enforce them.
-* There is no formatter: match the surrounding code and leave unrelated lines.
+Python uses 4-space indentation and 120-character lines (`[tool.ruff]`), which
+lint does not enforce: it runs only ruff's default rules. There is no formatter:
+match the surrounding code and leave unrelated lines.
 
 ## License
 Contributions are licensed under the root LICENSE file.

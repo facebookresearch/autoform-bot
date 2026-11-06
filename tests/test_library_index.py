@@ -6,7 +6,9 @@ from dataclasses import replace
 import pytest
 
 from autoform_cli.library.index import (
+    INDEX_FILE,
     INDEX_SCHEMA,
+    TREE_FILES,
     IndexDeclaration,
     IndexDependency,
     IndexHeader,
@@ -20,6 +22,7 @@ from autoform_cli.library.index import (
     relative_path,
     tree_digest,
 )
+from tests.library_fixture import GOLDEN
 
 _SHA = "a" * 64
 
@@ -154,20 +157,42 @@ def _changed(position: int, **changes: object) -> bytes:
         (_changed(1, source_file="Other/Lib.lean"), "module Lib: source_file"),
         (_changed(1, source_file="Lib/../Lib.lean"), "module Lib: source_file"),
         (_changed(1, source_file="/Lib.lean"), "module Lib: source_file"),
-        (_changed(1, source_file="Lib/Convex.lean"), "two modules share the source file Lib/Convex.lean"),
-        (_changed(1, name="Lib.Convex"), "two records for module Lib.Convex"),
+        (_changed(1, source_file="Lib/Convex.lean"), "module Lib: its name is not the module its source_file holds"),
         (_changed(3, module="Lib.Missing"), "names module Lib.Missing, which has no record"),
         (_changed(3, line=0), "declaration Lib.Convex.separation: line"),
         (_changed(3, line=1.5), "declaration Lib.Convex.separation: line"),
         (_changed(3, kind="axiom"), "declaration Lib.Convex.separation: kind"),
         (_changed(3, status="incomplete"), "declaration Lib.Convex.separation: status"),
         (_changed(3, mentions="True"), "declaration Lib.Convex.separation: mentions"),
+        (
+            _changed(3, name='Lib.Convex.separation\n#eval IO.println "hi"'),
+            "line 4: declaration name is not a Lean name",
+        ),
+        (_changed(3, name="Lib..separation"), "line 4: declaration name is not a Lean name"),
         (_changed(3, docstring=7), "declaration Lib.Convex.separation: docstring"),
     ],
 )
 def test_a_record_outside_the_schema_is_refused(data: bytes, message: str) -> None:
     with pytest.raises(LibraryIndexError, match=message):
         parse_index(data)
+
+
+def test_a_module_is_named_for_its_file_under_a_source_directory() -> None:
+    def parsed(source_dirs: tuple[str, ...], *modules: tuple[str, str]) -> LibraryIndex:
+        header = replace(_index().header, source_dirs=source_dirs)
+        records = tuple(IndexModule(name, path, _SHA, None, False) for name, path in modules)
+        return parse_index(dump_index(LibraryIndex(header, records, ())))
+
+    assert len(parsed(("src/Lib",), ("Lib", "src/Lib.lean"), ("Lib.Convex", "src/Lib/Convex.lean")).modules) == 2
+    for name in ("Lib.Classic", "Convex", "ib.Convex"):
+        message = f"^module {name}: its name is not the module its source_file holds$"
+        with pytest.raises(LibraryIndexError, match=message):
+            parsed(("src/Lib", "src/Lib/Sub"), (name, "src/Lib/Convex.lean"))
+    # Lake's srcDir is not in the index, so a source directory src/Lib can hold Lib.A or src.Lib.A.
+    with pytest.raises(LibraryIndexError, match="two modules share the source file src/Lib/A.lean"):
+        parsed(("src/Lib",), ("Lib.A", "src/Lib/A.lean"), ("src.Lib.A", "src/Lib/A.lean"))
+    with pytest.raises(LibraryIndexError, match="two records for module Lib.A"):
+        parsed(("Lib",), ("Lib.A", "Lib/A.lean"), ("Lib.A", "Lib/A.lean"))
 
 
 def test_a_declaration_is_keyed_by_name_and_module() -> None:
@@ -196,6 +221,25 @@ def test_the_tree_digest_covers_every_module_and_pin_file_in_one_order() -> None
     assert digest != tree_digest([("Lib", _SHA), ("Lib.Convex", "c" * 64)], files)
     assert digest != tree_digest(modules, [files[0], ("lake-manifest.json", b"{ }\n")])
     assert digest != tree_digest(modules, files[:1])
+
+
+def test_the_golden_index_is_written_back_byte_for_byte() -> None:
+    # Libraries publish indexes this writer made, ATLAS's among them (tag autoform-index/64c2773ffad3), and every
+    # consumer recomputes their digests, so these bytes change only with the schema version.
+    data = (GOLDEN / INDEX_FILE).read_bytes().replace(b"\r\n", b"\n")
+    index = parse_index(data)
+
+    assert dump_index(index) == data
+    assert index.header.tree == "677c6697d077eb9821bb2638d6724572d2b1c8195f203bae0465158f8c81c937"
+
+
+def test_the_published_digests_are_those_of_the_sources_and_pins() -> None:
+    index = parse_index((GOLDEN / INDEX_FILE).read_bytes())
+    for module in index.modules:
+        assert module_digest((GOLDEN / module.source_file).read_bytes()) == module.sha256
+    pins = [(name, (GOLDEN / name).read_bytes()) for name in TREE_FILES if (GOLDEN / name).exists()]
+
+    assert tree_digest(((module.name, module.sha256) for module in index.modules), pins) == index.header.tree
 
 
 def test_relative_paths_and_source_directories() -> None:

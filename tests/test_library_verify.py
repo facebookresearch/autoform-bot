@@ -12,9 +12,15 @@ import pytest
 
 from autoform_cli.library.index import INDEX_FILE
 from autoform_cli.library.locate import LibraryError, read_workspace
-from autoform_cli.library.verify import Difference, load_library
+from autoform_cli.library.verify import Difference, _index_bytes, load_library
 from autoform_cli.project import _snapshot
-from tests.library_fixture import MATHLIB_REV, REV, build_index, entry, make_library, manifest, write_index
+from tests.library_fixture import GOLDEN, MATHLIB_REV, REV, build_index, entry, make_library, manifest, write_index
+
+
+_STALE = (
+    "its index is stale: the library's pin files (lean-toolchain, lakefile, lake-manifest.json) changed "
+    "since the index was generated, or the index was merged or edited"
+)
 
 
 def _load(library, name: str = "atlas", index_path: Path | None = None):
@@ -36,6 +42,17 @@ def test_a_current_index_is_loaded_with_its_revision(tmp_path: Path) -> None:
     assert (verified.name, verified.revision) == ("atlas", REV)
     assert [item.name for item in verified.index.declarations] == ["Lib.Convex.separation"]
     assert verified.differences == ()
+
+
+def test_the_golden_index_is_loaded_as_published(tmp_path: Path) -> None:
+    # The consumer accepts the checkout whose index test_library_index pins byte for byte.
+    library = make_library(tmp_path, name="gold", sources={}, declarations=())
+    shutil.copytree(GOLDEN, library.root, dirs_exist_ok=True)
+
+    verified = _load(library, "gold")
+
+    assert (verified.name, verified.revision) == ("gold", REV)
+    assert verified.differences == (Difference("dependency", "batteries", "3" * 40, None),)
 
 
 def test_a_package_in_a_sub_directory_or_with_a_quoted_name_is_loaded(tmp_path: Path) -> None:
@@ -120,9 +137,23 @@ def test_an_index_merged_from_two_current_ones_is_refused(tmp_path: Path) -> Non
     current = build_index(library.root, library.index.declarations)
     write_index(library.root, replace(current, header=replace(current.header, tree=stale)))
 
-    assert _refusal(library) == (
-        "its index does not match its sources and pins as a whole; it was merged or edited, not generated"
-    )
+    assert _refusal(library) == _STALE
+
+
+def test_the_index_is_read_no_further_than_one_byte_past_the_limit(tmp_path: Path, monkeypatch) -> None:
+    # One byte over is enough for the parser to refuse by size; reading further only costs memory.
+    path = tmp_path / INDEX_FILE
+    path.write_bytes(b"x" * 1000)
+    monkeypatch.setattr("autoform_cli.library.verify.MAX_INDEX_BYTES", 100)
+    assert len(_index_bytes(path)) == 101
+
+
+def test_an_index_older_than_its_lakefile_is_refused_as_stale(tmp_path: Path) -> None:
+    library = make_library(tmp_path)
+    with (library.root / "lakefile.toml").open("a", encoding="utf-8") as lakefile:
+        lakefile.write("# a comment\n")
+
+    assert _refusal(library) == _STALE
 
 
 def test_a_header_that_disagrees_with_the_checkout_is_refused(tmp_path: Path) -> None:

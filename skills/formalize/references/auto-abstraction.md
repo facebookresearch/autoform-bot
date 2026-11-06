@@ -1,12 +1,10 @@
 # Raise copied code into shared declarations
 
-Workers keep the helpers they add in their own article's file, so a later
-worker that needs one copies it. The [subagent debrief](debrief-subagent.md)
-asks each worker for the code it copied (`copied_code`), and `autoform
-abstraction list` turns the answers into a to-do list of clusters of code that
-now exists more than once (see [copied
-code](../../../autoform_cli/reference/abstraction.md)). It lives in the debrief
-store, `abstractions/TODO.md`, which every worktree shares.
+Workers keep the helpers they add in their own article's file, so a later worker
+that needs one copies it. The [subagent debrief](debrief-subagent.md) asks each
+worker for the code it copied (`copied_code`), and `autoform abstraction list`
+turns the answers into a to-do list of clusters of code that now exists more
+than once (see [copied code](../../../autoform_cli/reference/abstraction.md)).
 
 Raise copies only once no worker of the run is running, after the frontier loop
 has stopped and before the orchestrator debrief. When the run uses claims, the

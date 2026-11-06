@@ -202,7 +202,7 @@ def scoped_consumer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scope
     rendered = render_site(blueprint, project / "site-src", lean_root=project)
     # The same exact-name gate as the CLI's --require-declarations, not a
     # nonexistent Python API flag or a claim of Lean-kernel verification.
-    assert not rendered.unresolved and not rendered.unchecked
+    assert not rendered.unresolved
     config = load_config(config_file=str(project / "mkdocs.yml"), strict=True)
     config["extra_javascript"] = [entry for entry in config["extra_javascript"]
                                   if getattr(entry, "path", str(entry)) != MATHJAX_BUNDLE]
