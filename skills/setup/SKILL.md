@@ -109,7 +109,7 @@ module's `.olean` from `.lake/build`, where only a restore puts it.
 Put the project's notation in `blueprint/tex-macros.json` as MathJax
 `tex.macros` definitions, never in articles.
 
-The [CLI reference](../../autoform_cli/README.md#publishing-and-the-dashboard)
+The [CLI reference](../../autoform_cli/README.md#publishing)
 says when Pages deploys, and [open
 statements](../../autoform_cli/reference/open-statements.md#open-statements)
 what the generated verify workflow audits. Where several Lake projects back the
@@ -144,7 +144,7 @@ lake build @repl/repl
 ```
 
 Then run the publication sequence in the
-[CLI reference](../../autoform_cli/README.md#publishing-and-the-dashboard),
+[CLI reference](../../autoform_cli/README.md#publishing),
 keeping `--require-declarations`.
 
 Publication is opt-in: files under `blueprint/` become public site content,

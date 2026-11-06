@@ -322,6 +322,12 @@ def test_a_symlinked_records_directory_is_refused(monkeypatch, tmp_path: Path) -
 
 # --- derived views --------------------------------------------------------------------
 
+_RENDER_DEPRECATED = (
+    "warning[deprecated]: autoform debrief subagent render is deprecated and will be removed in 0.8.0; nothing "
+    "replaces it; the records stay JSON under records/ in the debrief store\n"
+)
+
+
 
 def test_render_escapes_agent_text_and_derives_the_index(monkeypatch, tmp_path: Path) -> None:
     project = _repo(tmp_path)
@@ -334,10 +340,11 @@ def test_render_escapes_agent_text_and_derives_the_index(monkeypatch, tmp_path: 
     )
     _, path = debrief.record(project, PROVE, answer, phase="proof", note=hostile, worker_id="w1")
 
-    code, out, _ = _cli(["debrief", "subagent", "render", str(project)], monkeypatch)
+    code, out, err = _cli(["debrief", "subagent", "render", str(project)], monkeypatch)
 
     views = debrief.debrief_root(project) / "views"
     assert code == 0 and "rendered 1" in out and str(views) in out
+    assert err == _RENDER_DEPRECATED
     assert _git(project, "status", "--porcelain") == ""
     [report] = (views / "reports").iterdir()
     text = report.read_text()
@@ -352,6 +359,13 @@ def test_render_escapes_agent_text_and_derives_the_index(monkeypatch, tmp_path: 
     assert _cli(["debrief", "subagent", "render", str(project)], monkeypatch)[0] == 0
     assert list((views / "reports").iterdir()) == []
     assert "No debrief records found." in (views / "README.md").read_text()
+
+
+def test_render_warns_before_a_target_it_cannot_resolve(monkeypatch, tmp_path: Path) -> None:
+    code, out, err = _cli(["debrief", "subagent", "render", str(tmp_path / "missing")], monkeypatch)
+
+    assert (code, out) == (2, "")
+    assert err.startswith(_RENDER_DEPRECATED + "error: ")
 
 
 # --- the orchestrator debrief -----------------------------------------------------------

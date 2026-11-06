@@ -177,7 +177,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     dashboard = subparsers.add_parser(
         "dashboard",
-        help="serve the built publication with a loopback-only live claim overlay",
+        help="deprecated: serve the built publication with a loopback-only live claim overlay",
     )
     dashboard.add_argument(
         "target",
@@ -511,7 +511,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 help="stable identity for this agent (or set AUTOFORM_WORKER_ID)",
             )
             command.add_argument("--json", action="store_true", help="write stable machine-readable output")
-    debrief_render = debrief_subparsers.add_parser("render", help="rebuild Markdown views of the records")
+    debrief_render = debrief_subparsers.add_parser("render", help="deprecated: rebuild Markdown views of the records")
     debrief_render.add_argument("target", nargs="?", default=".", help="project root or blueprint directory")
 
     abstraction_parser = subparsers.add_parser(
@@ -1055,6 +1055,12 @@ def _doctor(args: argparse.Namespace) -> int:
 
 
 def _dashboard(args: argparse.Namespace) -> int:
+    _warn_deprecated(
+        "autoform dashboard",
+        "0.8.0",
+        "serve the built site on loopback instead, for example with python3 -m http.server --bind 127.0.0.1 "
+        "--directory site 8000, which has no live claim overlay",
+    )
     try:
         paths = resolve_runtime_paths(args.target)
         site = Path(args.site_dir).expanduser()
@@ -1646,6 +1652,11 @@ def _debrief(args: argparse.Namespace) -> int:
         return _debrief_orchestrator(args)
     try:
         if args.debrief_command == "render":
+            _warn_deprecated(
+                "autoform debrief subagent render",
+                "0.8.0",
+                "nothing replaces it; the records stay JSON under records/ in the debrief store",
+            )
             root = debrief.debrief_root(args.target)
             written = debrief.render(root)
             print(f"rendered {len(written)} debrief report(s) into {_human_text(root / debrief.VIEWS)}")

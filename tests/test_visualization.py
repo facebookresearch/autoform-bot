@@ -95,7 +95,8 @@ def test_export_writes_a_plain_markdown_summary_linking_into_the_vault(tmp_path:
     assert rows["| [Foundations](roadmap/foundations/README.md)"].endswith("| none | Top level |")
     # Main waits on a lemma not yet stated, so it is planned.
     assert "| Top level | 1 | 1 planned | 0 | Foundations | none |" in document
-    assert 'uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform dashboard . --site-dir site' in document
+    assert 'uv run --project "<AUTOFORM_PLUGIN_ROOT>" python -m http.server --bind 127.0.0.1 --directory site 8000' in document
+    assert "autoform dashboard" not in document
 
 
 def test_the_summary_marks_dependencies_only_a_proof_needs(tmp_path: Path) -> None:

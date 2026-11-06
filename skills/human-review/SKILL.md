@@ -21,16 +21,16 @@ the same way, where the root is the absolute plugin directory holding `skills/`
 and `pyproject.toml`; give a subagent that prefix.
 
 Regenerate the review views from `<PROJECT>` with the publication sequence in
-the [CLI reference](../../autoform_cli/README.md#publishing-and-the-dashboard),
+the [CLI reference](../../autoform_cli/README.md#publishing),
 but omit `--require-declarations` so the reviewer sees missing declarations.
 
 Stop on structural failures and present them before asking for mathematical
 judgment. For vault review, point the user to `blueprint/README.md`, coverage,
 chapter pages, and the status and chapter summary in `blueprint/dependencies.md`
-in Obsidian. For browser review, run
-`autoform dashboard <PROJECT> --site-dir site`, which serves the deployed site
-on loopback with local-only live claim badges, and give the overview plus the
-relevant project, chapter, nested-scope, and statement-context links. Every
+in Obsidian. For browser review, serve the built site on loopback from
+`<PROJECT>` with `uv run --project "<AUTOFORM_PLUGIN_ROOT>" python -m
+http.server --bind 127.0.0.1 --directory site 8000`, and give the overview plus
+the relevant project, chapter, nested-scope, and statement-context links. Every
 generated site page but the standalone `dependencies/map/` page uses the same
 viewer, the reader beside the project map; the old `dependencies/` pages only
 redirect to it. Drill from the project's topics to a

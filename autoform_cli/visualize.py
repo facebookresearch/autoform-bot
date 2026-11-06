@@ -230,7 +230,7 @@ def summary_page(
             "  --output site-src --lean-root .",
             "uv run --with mkdocs --with mkdocs-material --with mkdocs-literate-nav \\",
             "  --with pymdown-extensions mkdocs build --strict",
-            'uv run --project "<AUTOFORM_PLUGIN_ROOT>" autoform dashboard . --site-dir site',
+            'uv run --project "<AUTOFORM_PLUGIN_ROOT>" python -m http.server --bind 127.0.0.1 --directory site 8000',
             "```",
         ]
     )
