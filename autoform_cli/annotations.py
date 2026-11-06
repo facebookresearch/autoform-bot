@@ -134,14 +134,24 @@ def read_links(blueprint: Path, articles: dict[Path, str]) -> Links | None:
     for annotation, place, base in _annotations(folder, contents, broken, drops):
         subjects = annotation.get("subject")
         ends = subjects if isinstance(subjects, list) else []
-        targets = {_local(end.get("uri"), base) for end in ends if isinstance(end, dict)} - {None}
-        # Counted by path, not among the articles loaded, so a copy without the unpublished ones reads alike.
-        pages = [target for target in targets if target.startswith(roadmap) and target.endswith(".md")]
-        if len(pages) == 1 and pages[0] in spelled:
-            grouped.setdefault(spelled[pages[0]], []).append((annotation, base))
+        # Each roadmap page a subject names, and whether one names all of it, without a fragment, query or location:
+        # counted by path, not among the articles loaded, so a copy without the unpublished ones reads alike.
+        pages: dict[str, bool] = {}
+        for end in ends:
+            uri = end.get("uri") if isinstance(end, dict) else None
+            if (page := _local(uri, base)) and page.startswith(roadmap) and page.endswith(".md"):
+                split = urlsplit(uri)
+                pages[page] = pages.get(page, False) or not (split.query or split.fragment or "location" in end)
+        if len(pages) > 1:
+            about = "several articles"
+        elif pages and not any(pages.values()):
+            about = "part of an article"
+        elif (page := next(iter(pages), None)) in spelled:
+            grouped.setdefault(spelled[page], []).append((annotation, base))
+            continue
         else:
-            about = "several articles" if pages[1:] else "no roadmap article"
-            drops.add(f"annotations about {about} are left out", place)
+            about = "no roadmap article"
+        drops.add(f"annotations about {about} are left out", place)
     facts = {
         path: _facts(articles[path], entries, project, drops)
         for path, entries in sorted(grouped.items(), key=lambda item: articles[item[0]])
@@ -297,8 +307,8 @@ def _annotations(
 
 
 def _local(uri: Any, base: str) -> str | None:
-    """The path a relative reference names from the folder *base*, percent-decoded; None for any other value, such as
-    a part of a file (a query or fragment) or a path a backslash separates only on Windows."""
+    """The path a relative reference names from the folder *base*, percent-decoded, without its query or fragment;
+    None for any other value, such as a path a backslash separates only on Windows."""
     if not isinstance(uri, str) or not uri:
         return None
     try:
@@ -306,7 +316,7 @@ def _local(uri: Any, base: str) -> str | None:
     except ValueError:
         return None
     path = unquote(split.path)
-    if split.scheme or split.netloc or split.query or split.fragment or not path or "\\" in path:
+    if split.scheme or split.netloc or not path or "\\" in path:
         return None
     return os.path.normpath(os.path.join(base, path))
 
@@ -362,6 +372,8 @@ def _facts(node_id: str, entries: list[tuple[dict[str, Any], str]], project: str
         for end in objects:
             if not isinstance(end, dict) or not isinstance(end.get("type"), str) or end["type"] not in _END_TYPES:
                 drops.add(REJECTED, f"{node_id} (object type)")
+                # Left out, an end that states the article still keeps the credit from the project's others.
+                stated_elsewhere = stated_elsewhere or (isinstance(end, dict) and end.get("role") == "states")
                 continue
             location = end.get("location")
             if end["type"] != "lean":

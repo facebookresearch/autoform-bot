@@ -3,7 +3,7 @@
 `blueprint/links/` holds [literature-links](https://github.com/mathlib-initiative/literature-links)
 1.0.2 annotations in `.json` (one each) or JSON Lines files, with optional
 `_defaults.json` folder defaults; render never publishes it. An annotation whose
-subject's `uri` names a roadmap article, as `../roadmap/result.md` does from
+subject names a whole roadmap article, as `../roadmap/result.md` does from
 `links/result.jsonl`, carries that article's facts, which every command reads
 instead of its frontmatter; only the settings `open_statements`, `tracks_lean`,
 `published` and `coverage_list_limit` stay there. An article with no annotation

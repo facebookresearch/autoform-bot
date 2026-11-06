@@ -347,7 +347,7 @@ jobs:
           tests/test_graph.py::test_a_roadmap_folder_spelled_with_other_capitals_is_refused
           tests/test_annotations.py::test_an_article_s_annotations_carry_its_facts
           tests/test_annotations.py::test_annotations_are_read_as_literature_links_reads_them
-          tests/test_annotations.py::test_an_annotation_about_part_of_an_article_is_about_no_article
+          tests/test_annotations.py::test_an_annotation_about_part_of_an_article_is_left_out
           "tests/test_annotations.py::test_a_folder_that_is_not_links_is_read_nowhere[links-file]"
           tests/test_lean_probe.py::test_bounded_command_rejects_excess_output
           tests/test_lean_probe.py::test_bounded_command_caps_stdout_and_stderr_together

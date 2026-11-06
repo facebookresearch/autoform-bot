@@ -1,11 +1,11 @@
 """Compile an Autoform dependency graph from its Markdown blueprint.
 
-Markdown is both the human wiki and the sole authored graph representation:
-node paths are stable ids, frontmatter or an annotation in ``blueprint/links/``
-(:mod:`.annotations`) carries checked facts, and links under the two dependency
-headings are typed edges. ``Graph`` is only a validated in-memory projection.
-It rejects broken links and cycles instead of persisting a second graph file
-that could drift from the book.
+Markdown is the human wiki and, with the annotations in ``blueprint/links/``
+(:mod:`.annotations`), the sole authored graph representation: node paths are
+stable ids, frontmatter or an annotation carries checked facts, and links under
+the two dependency headings are typed edges. ``Graph`` is only a validated
+in-memory projection. It rejects broken links and cycles instead of persisting
+a second graph file that could drift from the book.
 """
 
 from __future__ import annotations

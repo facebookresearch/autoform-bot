@@ -97,7 +97,12 @@ def test_an_article_s_annotations_carry_its_facts(tmp_path: Path) -> None:
                     kind="theorem",
                     status="formalized",
                     # Credit goes by role, never by position.
-                    object=[_own("Groups.card_dvd", "supports"), _own("Groups.lagrange", "states")],
+                    object=[
+                        _own("Groups.card_dvd", "supports"),
+                        _own("Groups.lagrange", "states"),
+                        # A fragment selects nothing on a Lean end, whose location is the selection.
+                        {"type": "lean", "uri": "../..#readme", "location": {"declaration": "Groups.card_dvd"}},
+                    ],
                     extensions={"org.autoform": {"origin": "cited", "not_ready": False, "discussion": 42, **REVIEWED}},
                 ),
                 # Two Mathlib names in one file give that file.
@@ -217,7 +222,7 @@ def test_an_article_without_an_annotation_keeps_its_frontmatter(tmp_path: Path) 
 
 
 def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path) -> None:
-    blueprint = _blueprint(tmp_path, {stem: None for stem in "abcdefghijklmnopqrstuw"})
+    blueprint = _blueprint(tmp_path, {stem: None for stem in "abcdefghijklmnopqrstuwx"})
     mathlib = {"org.autoform": {"mathlib": True}}
     _links(
         blueprint,
@@ -294,6 +299,15 @@ def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path
                     status="formalized",
                     object=[{"type": "lean", "uri": "https://example.com/other", "role": "states"}, _own("W.main")],
                 ),
+                # So can an end left out for its type.
+                _about(
+                    "x",
+                    status="formalized",
+                    object=[
+                        {"type": "Lean", "location": {"declaration": "X.main"}, "role": "states"},
+                        _own("X.helper"),
+                    ],
+                ),
                 # The file is the first name's, which gives none.
                 _about(
                     "t",
@@ -317,14 +331,15 @@ def test_every_fact_left_out_is_warned_about_once_for_each_reason(tmp_path: Path
         "a status needs one Lean declaration with role states, or a single one with no role, so it is left out "
         "(3): b, m, u",
         "status values Autoform does not read are left out (1): c (partial)",
-        "annotation values Autoform does not accept are left out (7): d (not_ready), d (kind), i (extensions), "
-        "l (kind), l (object type) and 2 more",
+        "annotation values Autoform does not accept are left out (8): d (not_ready), d (kind), i (extensions), "
+        "l (kind), l (object type) and 3 more",
         "unknown org.autoform keys are left out (1): d (colour\\nwarning: forged)",
         "settings stay in README frontmatter, so in an annotation they are left out (1): d (published)",
         "an article's annotations give one key several values, so the first is kept (1): e (kind)",
         "Lean ends whose uri is neither this project nor https://github.com/leanprover-community/mathlib4 are left out "
         "(2): f (F), q (Subgroup.card_subgroup_dvd_card)",
-        "a status is left out when an end with role states is not a declaration of this project (5): f, j, r, s, w",
+        "a status is left out when an end with role states is not a declaration of this project (6): f, j, r, s, w "
+        "and 1 more",
         "catalog is left out beside a kind or a Mathlib link (1): h",
         "Lean ends that name no declaration are left out (1): j",
         "status retracted is left out beside org.autoform mathlib true (1): k",
@@ -359,7 +374,7 @@ def test_a_warning_names_the_first_five_places(tmp_path: Path) -> None:
     )
 
 
-def test_an_annotation_about_part_of_an_article_is_about_no_article(tmp_path: Path) -> None:
+def test_an_annotation_about_part_of_an_article_is_left_out(tmp_path: Path) -> None:
     blueprint = _blueprint(tmp_path, {"result": None})
     # A fragment or a query names a part of the page, and a backslash separates folders on Windows alone.
     uris = [
@@ -369,13 +384,29 @@ def test_an_annotation_about_part_of_an_article_is_about_no_article(tmp_path: Pa
         "//[x/roadmap/result.md",
     ]
     rows = [{"subject": [{"type": "generic", "uri": uri}], "kind": "lemma"} for uri in uris]
-    _links(blueprint, {"parts.jsonl": rows})
+    whole = _about("result")["subject"]
+    # So does a location, even an empty one.
+    rows.insert(2, {"subject": [{**whole[0], "location": {}}], "kind": "lemma"})
+    # Beside the whole article, part of another still makes two, and part of the same one changes nothing.
+    other, same = ({"type": "generic", "uri": f"../roadmap/{stem}.md#proof"} for stem in ("other", "result"))
+    _links(
+        blueprint,
+        {
+            "parts.jsonl": [
+                *rows,
+                {"subject": [*whole, other], "kind": "lemma"},
+                {"subject": [*whole, same], "kind": "theorem"},
+            ]
+        },
+    )
     graph = load_graph(blueprint)
 
-    assert graph.nodes["result"].declaration is None
+    assert graph.nodes["result"].declaration == "theorem"
     assert graph.warnings == (
-        "annotations about no roadmap article are left out (4): links/parts.jsonl:1, links/parts.jsonl:2, "
-        "links/parts.jsonl:3, links/parts.jsonl:4",
+        "annotations about part of an article are left out (3): links/parts.jsonl:1, links/parts.jsonl:2, "
+        "links/parts.jsonl:3",
+        "annotations about no roadmap article are left out (2): links/parts.jsonl:4, links/parts.jsonl:5",
+        "annotations about several articles are left out (1): links/parts.jsonl:6",
     )
 
 
