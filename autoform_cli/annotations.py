@@ -321,6 +321,12 @@ def _local(uri: Any, base: str) -> str | None:
     return os.path.normpath(os.path.join(base, path))
 
 
+def _mathlib(uri: Any) -> bool:
+    """Whether a Lean end's *uri* is Mathlib's repository, with or without a trailing ``/`` or ``.git``; a query or
+    fragment selects nothing there either."""
+    return isinstance(uri, str) and re.split("[?#]", uri)[0].removesuffix("/").removesuffix(".git") == MATHLIB
+
+
 def _facts(node_id: str, entries: list[tuple[dict[str, Any], str]], project: str, drops: Drops) -> dict[str, str]:
     """The frontmatter one article's annotations amount to, leaving out, with a warning, what cannot hold."""
     facts: dict[str, str] = {}
@@ -392,7 +398,7 @@ def _facts(node_id: str, entries: list[tuple[dict[str, Any], str]], project: str
             elif _local(end.get("uri"), base) == project:
                 own.append((name, end.get("role")))
                 continue
-            elif isinstance(end.get("uri"), str) and end["uri"].removesuffix("/").removesuffix(".git") == MATHLIB:
+            elif _mathlib(end.get("uri")):
                 mathlib_names.append(name)
                 module = location.get("module")
                 if module is not None and (written := text(module, "location.module")):

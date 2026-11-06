@@ -105,11 +105,14 @@ def test_an_article_s_annotations_carry_its_facts(tmp_path: Path) -> None:
                     ],
                     extensions={"org.autoform": {"origin": "cited", "not_ready": False, "discussion": 42, **REVIEWED}},
                 ),
-                # Two Mathlib names in one file give that file.
+                # Two Mathlib names in one file give that file, and a query or fragment selects nothing there either.
                 _about(
                     "lagrange",
                     id=ARTICLE_ID,
-                    object=[MATHLIB, SAME_FILE],
+                    object=[
+                        {**MATHLIB, "uri": MATHLIB["uri"] + "?tab=readme"},
+                        {**SAME_FILE, "uri": MATHLIB["uri"] + "#readme"},
+                    ],
                     extensions={"org.autoform": {"mathlib": True}},
                 ),
             ],
