@@ -1327,9 +1327,9 @@ def local_target_issue(
     # is hidden. A link naming a hidden part that its `..` steps leave again, as
     # `.x/../paper.md` does, is refused too: nothing needs one, and render opens
     # coverage evidence in its copy, which has no `.x`. Only a repository link
-    # reaches a hidden note under `sources/`, and render writes one when it links
-    # the other source notes there; that link resolves only once the note is
-    # committed, so it is reported too, and `check` only warns about it.
+    # reaches a hidden note under `sources/`, which render writes once it
+    # verifies the commit; that link resolves only once the note is committed,
+    # so it is reported too, and `check` only warns about it.
     named = any(part.startswith(".") and part != ".." for part in Path(raw_path).parts)
     if named or _is_hidden_path(spelled, boundary):
         return f"hidden-{label}-target", f"{label} link names a hidden path, which render omits: {target!r}"

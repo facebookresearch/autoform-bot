@@ -672,8 +672,11 @@ def _publication(
         label = node_sources.get(_resolve(source)) or _relative(source, blueprint).as_posix()
         warnings.extend(f"{label}: {issue}" for issue in (*found, *notation))
         warnings.extend(
-            f"{label}: links to {target!r}, which is hidden or in an unpublished folder, so the site keeps only "
-            "the link's text"
+            f"{label}: shows {target!r}, which the site links in the repository rather than copying, so it keeps "
+            "only the image's text"
+            if isinstance(target, _RepositoryImage)
+            else f"{label}: links to {target!r}, which is hidden or in an unpublished folder, so the site keeps "
+            "only the link's text"
             for target in dict.fromkeys(dropped)
         )
         if found and source.parent == blueprint and source.name.lower() == "readme.md":
@@ -1899,7 +1902,7 @@ class _SourceBase:
 
 
 def _source_href(sources_base: _SourceBase, tail: tuple[str, ...]) -> str:
-    """A repository URL for a source note, or for the sources directory itself."""
+    """A repository URL for a file under ``sources/`` the site does not publish, or for the folder itself."""
     return sources_base.href(tail)
 
 
@@ -2418,21 +2421,34 @@ def _source_nav(notes: list[Path], *, destination: Path, depth: int) -> list[str
             return name_text(page.parent.name)
         return name_text(named) if named else title_text(_first_h1(text) or page.stem)
 
+    def href(page: Path) -> str:
+        return _bracketed(_relative(page, destination).as_posix())
+
     named = _header_title(top.read_text(encoding="utf-8")) if top else None
     label = name_text(named) if top and named and named != _file_title(top) else "Sources"
-    lines = [f"{'    ' * depth}- [{label}]({_relative(top, destination).as_posix()})" if top else f"{'    ' * depth}- {label}"]
+    lines = [f"{'    ' * depth}- [{label}]({href(top)})" if top else f"{'    ' * depth}- {label}"]
     stack = [(page, depth + 1) for page in reversed(children.get(None, []))]
     while stack:
         page, level = stack.pop()
-        entry = f"[{title(page)}]({_relative(page, destination).as_posix()})"
-        if top is None and level == depth + 1 and page in heads.values() and not children.get(page):
-            # Under a heading with no page, navigation.indexes would make a lone
-            # README the page the heading opens, so it gets a heading of its own.
-            lines += [f"{'    ' * level}- {title(page)}", f"{'    ' * (level + 1)}- {entry}"]
+        entry = f"[{title(page)}]({href(page)})"
+        # MkDocs takes a page named README or index for its section's own page,
+        # and navigation.indexes makes a heading with no page open the first
+        # such child, so one directly under it gets a heading of its own.
+        if top is None and level == depth + 1 and page.stem in {"README", "index"} and not children.get(page):
+            lines += [f"{'    ' * level}- {_bare_title(title(page))}", f"{'    ' * (level + 1)}- {entry}"]
             continue
         lines.append(f"{'    ' * level}- {entry}")
         stack.extend((child, level + 1) for child in reversed(children.get(page, [])))
     return lines
+
+
+def _bare_title(title: str) -> str:
+    """*title*, written as :func:`~autoform_cli.markdown.name_text` writes it,
+    as the title of a nav section with no page. literate-nav reads the line as
+    a Markdown list item, so a marker it starts with that would open a list or
+    a heading, as in ``1. Background``, is written as a reference too."""
+
+    return re.sub(r"^(\d*)([.+#-])", lambda m: m[0] if m[0] == "." else f"{m[1]}&#{ord(m[2])};", title)
 
 
 def _render_landing_page(
@@ -3163,6 +3179,12 @@ def _inline_destination(line: str, match: re.Match[str]) -> str:
     return "".join(char for index, char in enumerate(line[start:end]) if index not in dropped)
 
 
+class _RepositoryImage(str):
+    """An image's destination, among the targets :func:`_rewrite_links` drops,
+    that the site links in the repository rather than copying, such as a scan
+    under ``sources/`` once render verified the commit."""
+
+
 def _rewrite_links(
     text: str,
     *,
@@ -3186,7 +3208,8 @@ def _rewrite_links(
     of its own directory onto the chapter page, so its remaining relative links
     have to be recomputed from there. And what the site does not publish from
     ``sources/`` (a hidden note, the folder itself, scans and data) is reached
-    in the repository when *sources_base* says where.
+    in the repository when *sources_base* says where; an image of one keeps
+    only its text, since a page cannot show a file from there.
 
     The site holds only the blueprint, so an inline link to a file outside it,
     such as a source note's evidence link to a Lean file, keeps its text and
@@ -3203,7 +3226,7 @@ def _rewrite_links(
     if resolved is None:
         resolved = {}
 
-    def moved_target(raw: str) -> str | None:
+    def moved_target(raw: str, *, image: bool = False) -> str | None:
         """Where *raw* should point once published, or None to leave it alone."""
         bare = raw[1:-1] if raw.startswith("<") and raw.endswith(">") else raw
         # The query and fragment are not part of the file's name: they are
@@ -3270,6 +3293,12 @@ def _rewrite_links(
                 or (os.path.exists(candidate) and candidate.suffix.lower() not in _PUBLISHED_SOURCE_SUFFIXES)
             )
         ):
+            if image:
+                # A page cannot show a file from the repository, so its image keeps its text.
+                unlinked.add(raw)
+                if dropped is not None:
+                    dropped.append(_RepositoryImage(raw))
+                return ""
             return f"{_source_href(sources_base, relative.parts[1:])}{asked}{query}{separator}{fragment}"
         published = destination / relative
         # relative_link percent-encodes for raw HTML and explorer payloads.
@@ -3284,12 +3313,6 @@ def _rewrite_links(
         return f"{href}{asked}{query}{separator}{fragment}"
 
     unlinked: set[str] = set()
-
-    def bracketed(href: str) -> str:
-        # A decoded path, or a query or fragment kept from angle brackets, can
-        # hold a space or a parenthesis. CommonMark allows no space in a bare
-        # destination, and Python-Markdown needs its parentheses balanced.
-        return f"<{href}>" if re.search(r"[\s()]", href) else href
 
     def rewrite(line: str) -> str:
         # A link, an image and a definition each contain a bracket, which
@@ -3327,7 +3350,7 @@ def _rewrite_links(
             if "\n" in line[match.end("label") : match.start("target")]:
                 continue
             raw = _inline_destination(line, match)
-            if moved_target(raw) == "" and raw in unlinked:
+            if moved_target(raw, image=True) == "" and raw in unlinked:
                 pieces += [line[end : match.start()], line[match.start("label") : match.end("label")]]
                 end = match.end()
         line = "".join(pieces) + line[end:]
@@ -3346,11 +3369,20 @@ def _rewrite_links(
             # A title on the next line goes, but a moved link keeps its line, so every later line stays where
             # it was written. A link cut down to its label does not, as a break there could end the paragraph.
             breaks = "\n" * line.count("\n", match.end("label"), match.end())
-            pieces += [line[end : match.start()], f"[{label}]({bracketed(href)}{breaks})" if href else label]
+            pieces += [line[end : match.start()], f"[{label}]({_bracketed(href)}{breaks})" if href else label]
             end = match.end()
         return "".join(pieces) + line[end:]
 
     return _outside_fences(text, rewrite, page=True, joined=True)
+
+
+def _bracketed(href: str) -> str:
+    """*href* as a Markdown link's destination. A decoded path, or a query or
+    fragment kept from angle brackets, can hold a space or a parenthesis.
+    CommonMark allows no space in a bare destination, and Python-Markdown
+    needs its parentheses balanced."""
+
+    return f"<{href}>" if re.search(r"[\s()]", href) else href
 
 
 def _in_working_tree(path: Path, root: Path) -> bool:

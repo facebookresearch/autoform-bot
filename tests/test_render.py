@@ -2120,6 +2120,85 @@ def test_the_source_notes_follow_coverage_in_the_nav(tmp_path: Path, files: dict
     assert nav.endswith("\n".join(["        - [Coverage](coverage/README.md)", *entries]) + "\n")
 
 
+def _literate_nav(nav: str) -> list:
+    """*nav* as MkDocs reads it, through literate-nav, which raises on a line it cannot read."""
+    from mkdocs_literate_nav import parser
+
+    nothing = SimpleNamespace(find_index=lambda *_: None, isdir=lambda *_: False, glob=lambda *_: [])
+    return parser.NavParser(lambda folder: ("SUMMARY.md", nav) if folder in (".", "") else None, nothing).markdown_to_nav()
+
+
+def test_the_source_nav_reads_for_any_note_name(tmp_path: Path) -> None:
+    """A path with a parenthesis is bracketed, as a moved link is. Under a
+    Sources heading with no page, a README or index page gets a heading of its
+    own, whose title starts with no list marker, or literate-nav could not read
+    it and navigation.indexes would make the page the one Sources opens."""
+    project = _project(tmp_path)
+    sources = project / "blueprint/sources"
+    for name, text in {
+        "a(b.md": "# A\n",
+        "ch/README.md": "# 1. Background\n",
+        "2. Part/README.md": "No title.\n",
+        "index.md": "# Index of notes\n",
+    }.items():
+        (sources / name).parent.mkdir(parents=True, exist_ok=True)
+        (sources / name).write_text(text, encoding="utf-8")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    nav = (tmp_path / "out/SUMMARY.md").read_text(encoding="utf-8")
+    assert nav.endswith(
+        "\n".join(
+            [
+                "        - Sources",
+                "            - 2&#46; Part",
+                "                - [2. Part](<sources/2. Part/README.md>)",
+                "            - [A](<sources/a(b.md>)",
+                "            - 1&#46; Background",
+                "                - [1. Background](sources/ch/README.md)",
+                "            - Index of notes",
+                "                - [Index of notes](sources/index.md)",
+            ]
+        )
+        + "\n"
+    )
+    (book,) = _literate_nav(nav)[1]["Mathematics"]
+    assert book["Roadmap"][-1] == {
+        "Sources": [
+            {"2&#46; Part": [{"2. Part": "sources/2. Part/README.md"}]},
+            {"A": "sources/a(b.md"},
+            {"1&#46; Background": [{"1. Background": "sources/ch/README.md"}]},
+            {"Index of notes": [{"Index of notes": "sources/index.md"}]},
+        ]
+    }
+
+
+def test_a_notes_image_of_a_file_the_site_links_in_the_repository_keeps_its_text(tmp_path: Path) -> None:
+    """A page cannot show a scan or a hidden file from the repository, so once
+    the commit is verified a note's image of one keeps its text, with a
+    warning, rather than pointing at a file the site never copied."""
+    project = _with_source_notes(tmp_path)
+    sources = project / "blueprint/sources"
+    (sources / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+    (sources / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    _edit(
+        sources / "paper.md",
+        "Transcribed statements from the paper.",
+        "![The scan](scan.pdf) ![A hidden figure](.figures/h.png) ![A figure](figure.png) [The scan](scan.pdf)",
+    )
+    ref = _commit_project(project)
+
+    report = render_site(project / "blueprint", tmp_path / "out", lean_root=project, repository_url=_REPOSITORY, ref=ref)
+
+    note = (tmp_path / "out/sources/paper.md").read_text(encoding="utf-8")
+    assert f"The scan A hidden figure ![A figure](figure.png) [The scan]({_REPOSITORY}/blob/{ref}/blueprint/sources/scan.pdf)" in note
+    assert [warning for warning in report.warnings if "shows" in warning] == [
+        f"sources/paper.md: shows {target!r}, which the site links in the repository rather than copying, so it "
+        "keeps only the image's text"
+        for target in ("scan.pdf", ".figures/h.png")
+    ]
+
+
 def test_a_source_note_holding_markup_keeps_its_heading_ids(tmp_path: Path) -> None:
     """Links into a note name its headings' ids. A note holding a `<` is
     converted to HTML whole, and the site still gives its headings their ids,

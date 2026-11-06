@@ -68,20 +68,19 @@ date when the release is tagged.
   Binders, patterns, fields, attributes, tactics, one-letter names and names
   the project does not declare, such as Mathlib's, stay text.
 - **Source pages.** Markdown notes under `blueprint/sources/` are pages of the
-  site, and links to them stay on it, where a render with repository links
-  used to send every note to the repository (#593). The images they show are
-  copied beside them; a hidden note, the folder itself and its other files,
-  such as scans and data, are still linked at the verified commit. The nav
-  lists the notes after Coverage, headed by `sources/README.md` when there is
-  one.
-- **Check without site warnings.** `check --no-site-warnings` skips the
-  warnings about the pages the site would publish, which `render` prints too.
-  The generated
-  `blueprint-pages.yml` passes it, since render runs two steps later, when its
-  `AUTOFORM_REF`'s `check --help` lists it, so an older pin runs the full check.
-  On one CI runner ATLAS's check took 60 s with the flag instead of 255 s, and
-  render printed every warning it skipped. A scaffolded project keeps its
-  workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
+  site, and links to them stay on it, where a render with repository links used
+  to send every note to the repository (#593). Images under `sources/` are
+  copied beside them. At a verified commit, a hidden note, the folder itself and
+  its other files, such as scans and data, are still linked in the repository,
+  and a note's image of one keeps its text, with a warning. The nav lists the
+  notes after Coverage, headed by `sources/README.md` when there is one.
+- **Check without site warnings.** `check --no-site-warnings` skips the warnings
+  about the pages the site would publish, which `render` prints too. The
+  generated `blueprint-pages.yml` passes it, since render runs two steps later,
+  when its `AUTOFORM_REF`'s `check --help` lists it, so an older pin runs the
+  full check. On one CI runner ATLAS's check took 60 s with the flag instead of
+  255 s, and render printed every warning it skipped. A scaffolded project keeps
+  its workflow: add the flag by hand once its `AUTOFORM_REF` includes it.
 - **Panes you can resize and hide.** In the book's workspace, Topics and the
   reading pane resize from splitters on their inner edges, by pointer or
   keys, up to a reader of all but 160px of the map. A pane dragged nearly

@@ -808,8 +808,8 @@ def _source_link_issues(graph: Graph) -> tuple[list[str], list[str]]:
     repository URL that 404s for a hidden note under ``sources/``, or the link's
     text alone. Render omits hidden files, so a hidden target is refused too,
     unless it is a note under ``sources/`` that exists. Only a repository link
-    reaches that note, and render writes one when it links the other source
-    notes there, so it is only warned about: it must be committed. A link whose
+    reaches that note, which render writes once it verifies the commit, so it
+    is only warned about: it must be committed. A link whose
     text wraps across lines is only warned about too. Fragments and other
     schemes stay with ``audit``, whose anchor check renders each cited note.
     """

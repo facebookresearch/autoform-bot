@@ -80,10 +80,10 @@ matches. Otherwise the render stays local, records no Git ref, and warns with
 the first mismatch. Links into the blueprint (an article's Markdown source, and
 under `sources/` a hidden note or a file other than a note or an image) also
 need the blueprint's bytes in that commit; when they differ, render keeps the
-code links, copies those files into the site, and warns with the first mismatch,
-or, for a blueprint outside the repository or in a nested checkout, does the
-same without a warning. When render reads no Lean file, it records the Git ref
-only if the blueprint matches it.
+code links, publishes `sources/` as any other folder, and warns with the first
+mismatch, or, for a blueprint outside the repository or in a nested checkout,
+does the same without a warning. When render reads no Lean file, it records the
+Git ref only if the blueprint matches it.
 
 Render replaces only an empty directory or a complete `autoform-publication/v2`
 or v3 site whose files match its inventory (`.DS_Store` and `._*` are ignored),
