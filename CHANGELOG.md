@@ -19,11 +19,23 @@ date when the release is tagged.
   `review-testimony`, `graph-input`, `not-utf8`, `canvas`, `unsupported-type` or
   `not-captured`). A hidden or `published: false` folder is one entry, so
   nothing in it is named. A file's role follows from its path: its first folder
-  (`roadmap`, `sources`, `coverage`), else `hidden` for a dot name, else
-  `other`. It also names the Autoform that rendered it, best effort (`autoform`:
-  its version, its commit when an install from Git or an unmodified checkout
-  records one, and its repository only on github.com). The schema stays
+  (`roadmap`, `sources`, `coverage`, `links`), else `hidden` for a dot name,
+  else `other`. It also names the Autoform that rendered it, best effort
+  (`autoform`: its version, its commit when an install from Git or an unmodified
+  checkout records one, and its repository only on github.com). The schema stays
   `autoform-publication/v3` (#658).
+- **Annotations carry articles' facts.** In a project with `blueprint/links/`,
+  an article's literature-links annotation carries what its frontmatter did: its
+  Lean names, status, kind, article ID, Mathlib link and the `org.autoform` keys
+  ([Annotations](autoform_cli/reference/links.md), #601). The settings stay in
+  README frontmatter. Other frontmatter beside an annotation is ignored, and an
+  article without an annotation keeps its frontmatter, each with a warning.
+  Loading never refuses a vault over the folder: every fact left out is warned
+  about, counted, and `check` adds literature-links' own validation. Render
+  never publishes the folder, whose files the inventory lists as `graph-input`;
+  the runtime source revision and skeleton fingerprints cover it, and
+  `migrate article-ids --write` writes no ID beside it. Autoform now depends on
+  literature-links 1.0.2, pinned to its commit.
 - **Verify workflow off.** `init --no-verify-workflow` writes
   `.github/workflows/autoform-verify.yml` as a stub, for a project the
   generated workflow can't fit, such as one whose roadmap several Lake projects
