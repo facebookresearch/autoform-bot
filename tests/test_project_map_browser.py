@@ -331,22 +331,28 @@ def test_the_statement_being_read_lights_up_on_the_map(webkit_browser: object, m
         playwright.expect(page.locator('.bp-whole-map .pm-result.pm-reading[data-result="algebra/lagrange"]')).to_have_count(1)
 
 
-def test_the_map_typesets_a_title_with_a_formula_over_its_card(webkit_browser: object, map_url: str) -> None:
+def _serve_mathjax(page: object, url: str) -> None:
+    """Serve the site from ``url`` and the pinned MathJax in place of the CDN; block everything else."""
     from autoform_cli.mathjax import MATHJAX_BASE
     from tests.test_integrated_explorer_browser import _PinnedRuntime
 
     runtime = _PinnedRuntime()
-    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
-        def serve(route: object) -> None:
-            target = route.request.url
-            if target.startswith(MATHJAX_BASE + "/"):
-                runtime.serve(route)
-            elif target.startswith(map_url + "/"):
-                route.continue_()
-            else:
-                route.abort()
 
-        page.route("**/*", serve)
+    def serve(route: object) -> None:
+        target = route.request.url
+        if target.startswith(MATHJAX_BASE + "/"):
+            runtime.serve(route)
+        elif target.startswith(url + "/"):
+            route.continue_()
+        else:
+            route.abort()
+
+    page.route("**/*", serve)
+
+
+def test_the_map_typesets_a_title_with_a_formula_over_its_card(webkit_browser: object, map_url: str) -> None:
+    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        _serve_mathjax(page, map_url)
         page.goto(f"{map_url}/roadmap/analysis/index.html")
         # Abel summation's card title is set by the site's MathJax, on its card, with no TeX and no SVG copy left.
         title = page.locator(".bp-whole-map .pm-tex.pm-card-title")
@@ -366,3 +372,23 @@ def test_the_map_typesets_a_title_with_a_formula_over_its_card(webkit_browser: o
             box = title.bounding_box()
             assert card["x"] < box["x"] and box["x"] + box["width"] < card["x"] + card["width"], (card, box)
             assert card["y"] < box["y"] and box["y"] + box["height"] < card["y"] + card["height"], (card, box)
+
+
+def test_the_map_typesets_formulas_in_its_lists(webkit_browser: object, map_url: str) -> None:
+    """A list entry is HTML, so the site's MathJax sets its formula, as on the cards; only SVG text reads it as text."""
+    with _page(webkit_browser, viewport={"width": 1440, "height": 900}, reduced_motion="reduce") as page:
+        _serve_mathjax(page, map_url)
+        page.goto(f"{map_url}/dependencies/map/")
+        page.locator(".pm-part").first.wait_for()
+        search = page.get_by_role("searchbox")
+        search.fill("abel")
+        hit = page.locator(".pm-hit-title")
+        playwright.expect(hit.locator("mjx-container")).to_have_count(1)
+        playwright.expect(hit).to_contain_text("Abel summation for")
+        assert "\\(" not in hit.inner_text() and "mathbb" not in hit.inner_text()
+        # So is an entry in the list of what uses Lagrange's theorem.
+        search.fill("Subgroup.card_dvd")
+        playwright.expect(page.locator(".pm-hit")).to_have_count(1)
+        search.press("Enter")
+        used_by = page.locator(".pm-reader .pm-list button", has_text="Abel summation for")
+        playwright.expect(used_by.locator("mjx-container")).to_have_count(1)

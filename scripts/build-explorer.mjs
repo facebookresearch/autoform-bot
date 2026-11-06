@@ -22,10 +22,11 @@ if (args.length > 1 || (args.length && args[0] !== "--check")) {
   if (version !== "0.28.2") throw new Error("The explorer compiler must be esbuild 0.28.2");
   const terserPackage = JSON.parse(await readFile(resolve(root, "node_modules/terser/package.json"), "utf8"));
   if (terserPackage.version !== "5.51.2") throw new Error("The explorer compressor must be Terser 5.51.2");
-  // Capture both inputs before compiling; fingerprint their canonical LF text.
+  // Capture every input before compiling; fingerprint their canonical LF text.
+  const plain = await readFile(resolve(root, "autoform_cli/assets/tex-plain.js"));
   const navigation = await readFile(resolve(root, "autoform_cli/assets/blueprint-navigation.js"));
   const viewer = await readFile(resolve(root, "autoform_cli/assets/blueprint-dag.js"));
-  const source = [navigation, viewer].map(sourceText).join("\n");
+  const source = [plain, navigation, viewer].map(sourceText).join("\n");
   const digest = createHash("sha256").update(source, "utf8").digest("hex");
   const compiled = await transform(source, {
     loader: "js",
