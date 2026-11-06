@@ -664,6 +664,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="add each statement's review, judged as review check judges it (needs --lean-root)",
     )
+    render.add_argument(
+        "--ileans",
+        type=Path,
+        metavar="DIR",
+        help="a Lean build's lib/lean directory, such as .lake/build/lib/lean, whose .ilean files say which "
+        "declaration each name in a statement's Lean means, so it links exactly that",
+    )
     _add_probe_timeout_argument(render)
 
     args = parser.parse_args(argv)
@@ -2325,6 +2332,7 @@ def _render(args: argparse.Namespace) -> int:
                 repository_url=args.repository_url,
                 ref=args.ref,
                 review=review if args.review else None,
+                ileans=args.ileans,
             )
     except (GraphValidationError, PublicationError, ReviewError, SkeletonError) as exc:
         _print_refusal(exc, stream=sys.stdout)

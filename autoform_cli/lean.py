@@ -1609,8 +1609,15 @@ def declaration_names(lean: str) -> list[str]:
 
 
 def declaration_text(lines: list[str], declaration: Declaration, masked: list[str] | None = None) -> str:
-    """``declaration`` as written in ``lines``, its file's lines: from its attributes and modifiers on the
-    lines above its keyword, if any, to its own last line.
+    """``declaration`` as written in ``lines``, its file's lines: the lines :func:`declaration_span` gives."""
+
+    start, end = declaration_span(lines, declaration, masked)
+    return "\n".join(lines[start:end])
+
+
+def declaration_span(lines: list[str], declaration: Declaration, masked: list[str] | None = None) -> tuple[int, int]:
+    """Where ``declaration`` lies in ``lines``, its file's lines, as a slice of them: from its attributes and
+    modifiers on the lines above its keyword, if any, to its own last line.
 
     The index records only where a declaration starts. It ends before the next line indented no deeper
     than its keyword's that is not an alternative, a ``where`` block, a trailing clause or a closing
@@ -1643,7 +1650,7 @@ def declaration_text(lines: list[str], declaration: Declaration, masked: list[st
             if len(line) - len(line.lstrip()) <= indent and not _CONTINUATION.match(line):
                 break
             end = number
-    return "\n".join(lines[start:end])
+    return start, end
 
 
 def _opened(text: str) -> list[tuple[int, list[str]]]:
@@ -1672,6 +1679,105 @@ def bound_names(text: str) -> frozenset[str]:
     return frozenset(bound)
 
 
+#: The ``.ilean`` format :meth:`SourceLinker.names` reads, which Lean writes since v4.27.0.
+_ILEAN_VERSION = 5
+#: The largest ``.ilean`` file read, as the audit caps them.
+_ILEAN_LIMIT = 16 * 1024 * 1024
+#: How many files' ``.ilean`` data stays read at once.
+_ILEAN_FILES = 16
+#: Where an ``.ilean`` file records each usage of a constant, by line and column: its length, full name and module.
+_Usages = dict[int, dict[int, tuple[int, str, str]]]
+#: Explicit universes after a name, which an ``.ilean`` usage's range takes in: ``TopCat.{u}``.
+_UNIVERSES = re.compile(r"\.\{[^{}]*\}\Z")
+#: The declarations an ``.ilean`` file records a definition for, at their name, so a file without one is older
+#: than its source. An alias or a wanted declaration may declare no constant of its own, and is read by its usages.
+_RECORDED = frozenset(
+    {"theorem", "lemma", "def", "abbrev", "instance", "structure", "class", "inductive", "opaque", "axiom", "field"}
+)
+#: What, just before or just after a recorded name's range, would make it part of a longer name.
+_NAME_BEFORE = re.compile(r"[\w.'!?»]")
+_NAME_AFTER = re.compile(r"[\w'!?«]|\.(?!\{)")
+#: Dot notation after a name: a dot and the start of the name after it, not universes or a numbered field.
+_DOTTED = re.compile(r"\.(?:[^\W\d]|«)")
+
+
+def _utf16_index(text: str, units: int) -> int | None:
+    """The index in *text* after its first *units* UTF-16 code units, or ``None`` if that falls inside a character
+    or past its end: an ``.ilean`` file counts columns in UTF-16, and Python counts code points."""
+
+    count = 0
+    for index, character in enumerate(text):
+        if count == units:
+            return index
+        count += 2 if ord(character) > 0xFFFF else 1
+    return len(text) if count == units else None
+
+
+def declared_name(constant: str) -> str:
+    """*constant* as its declaration names it: Lean names a private one ``_private.<module>.0.<name>``."""
+
+    parts = _name_parts(constant)
+    if parts[:1] == ["_private"]:
+        for index, part in enumerate(parts[1:], 1):
+            if part.isdigit():
+                return ".".join(parts[index + 1 :])
+    return constant
+
+
+def _ends_with(name: str, written: str) -> bool:
+    """Whether *written*, a name as written, is whole components at the end of *name*."""
+
+    tail = _unquoted_parts(written)
+    return bool(tail) and _unquoted_parts(name)[-len(tail) :] == tail
+
+
+def _ilean_range(value: object) -> tuple[int, int, int] | None:
+    """An ``.ilean`` file's range on one line, ``[line, start, line, end, ...]``, as its line and columns."""
+
+    if isinstance(value, list) and len(value) >= 4 and all(type(number) is int for number in value[:4]):
+        if value[0] == value[2] and 0 <= value[1] < value[3]:
+            return value[0], value[1], value[3]
+    return None
+
+
+def _ilean_records(data: dict[str, object]) -> tuple[_Usages, dict[tuple[str, ...], tuple[int, int, int]]]:
+    """An ``.ilean`` file's usages of constants on one line, the longest where two start together, and where it
+    records each constant it defines, at its name, by its declared name's components. Entries of another shape are
+    skipped."""
+
+    usages: _Usages = {}
+    recorded: dict[tuple[str, ...], tuple[int, int, int]] = {}
+    references = data.get("references")
+    for key, entry in references.items() if isinstance(references, dict) else ():
+        try:
+            constant = json.loads(key)["c"]
+            name, module = constant["n"], constant["m"]
+        except (ValueError, TypeError, KeyError, RecursionError):
+            continue
+        if not isinstance(name, str) or not isinstance(module, str) or not isinstance(entry, dict):
+            continue
+        if (definition := _ilean_range(entry.get("definition"))) is not None:
+            recorded[_unquoted_parts(declared_name(name))] = definition
+        found = entry.get("usages")
+        for usage in found if isinstance(found, list) else ():
+            if (place := _ilean_range(usage)) is not None:
+                line, start, end = place
+                row = usages.setdefault(line, {})
+                if start not in row or row[start][0] < end - start:
+                    row[start] = (end - start, name, module)
+    return usages, recorded
+
+
+def _declares(line: str, start: int, end: int, name: str) -> bool:
+    """Whether *line* holds *name* whole at the UTF-16 columns *start* to *end*, where an ``.ilean`` file records a
+    declaration's name."""
+
+    begin, stop = _utf16_index(line, start), _utf16_index(line, end)
+    if begin is None or stop is None or not _ends_with(name, line[begin:stop]):
+        return False
+    return not (begin and _NAME_BEFORE.match(line, begin - 1)) and not _NAME_AFTER.match(line, stop)
+
+
 @dataclass(frozen=True, slots=True)
 class SourceLinker:
     """Build permalinks into, and excerpts of, the project's Lean sources."""
@@ -1687,11 +1793,21 @@ class SourceLinker:
     """The Lean root's path below the repository's top level, or empty at the top level."""
     sources: Mapping[Path, bytes] = field(default_factory=dict)
     """Each captured Lean file's bytes, by its path below the Lean root."""
+    ileans: Path | None = None
+    """A Lean build's ``lib/lean`` directory, whose ``.ilean`` files say which constant each name in a source file
+    means (:meth:`names`). Without it, a name is looked up among the project's declarations (:meth:`resolve`)."""
     _lines: dict[Path, tuple[list[str], list[str]]] = field(default_factory=dict, repr=False, compare=False)
     _opens: dict[Path, list[tuple[int, list[str]]]] = field(default_factory=dict, repr=False, compare=False)
     _imports: dict[Path, frozenset[Path]] = field(default_factory=dict, repr=False, compare=False)
     _modules: dict[str, list[Path]] = field(default_factory=dict, repr=False, compare=False)
     _direct: dict[Path, list[Path]] = field(default_factory=dict, repr=False, compare=False)
+    _ilean_data: dict[Path, tuple[_Usages, dict[tuple[str, ...], tuple[int, int, int]]] | None] = field(
+        default_factory=dict, repr=False, compare=False
+    )
+    _ilean_notes: dict[Path, str] = field(default_factory=dict, repr=False, compare=False)
+    _ilean_stale: dict[Path, set[str]] = field(default_factory=dict, repr=False, compare=False)
+    _ilean_missing: set[Path] = field(default_factory=set, repr=False, compare=False)
+    _project_modules: dict[str, bool] = field(default_factory=dict, repr=False, compare=False)
 
     def excerpt(self, name: str) -> tuple[Declaration, str] | None:
         """*name*'s declaration and its text as written, or ``None`` if *name* or its file was not captured
@@ -1785,6 +1901,157 @@ class SourceLinker:
     def location(self, name: str) -> Declaration | None:
         return self.index.find(name)
 
+    def declared_in(self, name: str, module: str) -> Declaration | None:
+        """The project's declaration *name*, if the index files it in *module*'s file, as an ``.ilean`` file names
+        a constant's module; ``None`` if it files none, or one in another file, such as a public declaration that
+        shares a private one's name."""
+        declaration = self.index.find(name)
+        if declaration is None:
+            return None
+        wanted = _unquoted_parts(module)
+        parts = (*declaration.path.parts[:-1], declaration.path.stem)
+        return declaration if wanted and parts[-len(wanted) :] == wanted else None
+
+    def names(self, declaration: Declaration, text: str) -> dict[int, tuple[int, str, str]] | None:
+        """Where *text* names a constant, by the build's ``.ilean`` file: at each offset into *text* where one
+        starts, its written name's length there, its full name and its module. *text* is *declaration*'s text as
+        :meth:`excerpt` gives it. Only a usage whose written name is whole components ending the constant's name
+        counts, so notation such as ``ℕ`` and a usage a stale file misplaces are left out.
+
+        ``None`` without :attr:`ileans` or a readable ``.ilean`` file of the format Lean writes now for
+        *declaration*'s file, or when that file is older than the declaration, as after an edit since the build: it
+        records the name outside the declaration's lines or where the source no longer has it whole, records no place
+        for a kind of declaration Lean always records, or records a name the source writes on past a dot with nothing
+        recorded after it, where Lean records the dot notation's own name (``mp`` in ``Nat.succ_le.mp`` is
+        ``Iff.mp``). A caller then links as without one. Any other declaration the file has no place for, such as a
+        ``proof_wanted``, which declares nothing, is read by its usages alone. The file counts columns in UTF-16 code
+        units, converted here line by line, and a name written after ``@`` starts at the ``@``, left out here.
+        """
+        lines, masked = self._lines.get(declaration.path, (None, None))
+        data = None if self.ileans is None or lines is None else self._ilean(declaration.path)
+        if data is None or lines is None or masked is None:
+            return None
+        usages, recorded = data
+        start, end = declaration_span(lines, declaration, masked)
+        place = recorded.get(_unquoted_parts(declaration.name))
+        if (
+            declaration.keyword in _RECORDED
+            if place is None
+            else not (start <= place[0] < end and _declares(lines[place[0]], place[1], place[2], declaration.name))
+        ):
+            self._ilean_stale.setdefault(declaration.path, set()).add(declaration.name)
+            return None
+        found: dict[int, tuple[int, str, str]] = {}
+        dotted: list[int] = []
+        offset = 0
+        for number, written in enumerate(text.split("\n"), start):
+            for column, (length, constant, module) in usages.get(number, {}).items():
+                begin, stop = _utf16_index(written, column), _utf16_index(written, column + length)
+                if begin is None or stop is None:
+                    continue
+                if written[begin : begin + 1] == "@":
+                    begin += 1
+                if (universes := _UNIVERSES.search(written, begin, stop)) is not None:
+                    stop = universes.start()
+                if begin < stop and _ends_with(declared_name(constant), written[begin:stop]):
+                    found[offset + begin] = (stop - begin, constant, module)
+                    if _DOTTED.match(written, stop):
+                        dotted.append(offset + stop + 1)
+            offset += len(written) + 1
+        if any(at not in found for at in dotted):
+            self._ilean_stale.setdefault(declaration.path, set()).add(declaration.name)
+            return None
+        return found
+
+    def in_project(self, module: str) -> bool:
+        """Whether *module*, as an ``.ilean`` file names a constant's module, is the project's: one the build in
+        :attr:`ileans` holds, as Lake builds each package the project depends on in a directory of its own."""
+        if module not in self._project_modules:
+            parts = _unquoted_parts(module)
+            built = self.ileans.joinpath(*parts[:-1], f"{parts[-1]}.ilean") if self.ileans and parts else None
+            self._project_modules[module] = built is not None and built.is_file()
+        return self._project_modules[module]
+
+    def ilean_warnings(self) -> list[str]:
+        """What render reports about :attr:`ileans`: each file whose ``.ilean`` data it set aside, the declarations
+        it found the build older than, and the files with a Lean block it found none for."""
+        notes = [self._ilean_notes[path] for path in sorted(self._ilean_notes)]
+        for path in sorted(self._ilean_stale):
+            names = sorted(self._ilean_stale[path])
+            listed = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+            them = "it" if len(names) == 1 else "them"
+            notes.append(
+                f"{path.as_posix()}: its .ilean file does not record {listed} where the file declares {them}, as after "
+                f"an edit since the build, so the Lean shown for {them} links as without one"
+            )
+        if self.ileans is not None and self._ilean_missing and not self.ileans.is_dir():
+            notes.append(
+                f"{self.ileans} is not a directory, so no .ilean file was read and the names in Lean blocks link as "
+                "without a build"
+            )
+        elif missing := sorted(self._ilean_missing - self._ilean_notes.keys()):
+            listed = ", ".join(path.as_posix() for path in missing[:3]) + (", …" if len(missing) > 3 else "")
+            files, their = ("file", "its") if len(missing) == 1 else ("files", "their")
+            notes.append(
+                f"{len(missing)} Lean {files} with a Lean block had no .ilean file in the build given, so {their} "
+                f"names link as without one: {listed}"
+            )
+        return notes
+
+    def _ilean(self, path: Path) -> tuple[_Usages, dict[tuple[str, ...], tuple[int, int, int]]] | None:
+        """*path*'s ``.ilean`` data, read once while it stays among the :data:`_ILEAN_FILES` files used last."""
+        if path in self._ilean_notes or path in self._ilean_missing:
+            return None
+        if path in self._ilean_data:
+            # The file used last goes last, so the one dropped below is the one used longest ago.
+            self._ilean_data[path] = self._ilean_data.pop(path)
+        else:
+            self._ilean_data[path] = self._read_ilean(path)
+            if len(self._ilean_data) > _ILEAN_FILES:
+                del self._ilean_data[next(iter(self._ilean_data))]
+        return self._ilean_data[path]
+
+    def _read_ilean(self, path: Path) -> tuple[_Usages, dict[tuple[str, ...], tuple[int, int, int]]] | None:
+        """*path*'s ``.ilean`` file in :attr:`ileans`, found by the module its path names below some source root,
+        whose ``module`` field must say so, and that no other captured file names; ``None``, with a note, when it is
+        missing, too large, unreadable or of another format."""
+        assert self.ileans is not None
+        parts = (*path.parts[:-1], path.stem)
+        shown = path.as_posix()
+        for start in range(len(parts)):
+            if start and Path(*parts[start:-1], f"{parts[-1]}.lean") in self.sources:
+                continue
+            candidate = self.ileans.joinpath(*parts[start:-1], f"{parts[-1]}.ilean")
+            try:
+                if not candidate.is_file():
+                    continue
+                if candidate.stat().st_size > _ILEAN_LIMIT:
+                    self._ilean_notes[path] = (
+                        f"{shown}: its .ilean file is over the {_ILEAN_LIMIT // (1024 * 1024)} MiB render reads, so "
+                        "its Lean blocks link as without one"
+                    )
+                    return None
+                data = json.loads(candidate.read_bytes())
+            except (OSError, ValueError, RecursionError):
+                data = None
+            if not isinstance(data, dict):
+                self._ilean_notes[path] = (
+                    f"{shown}: its .ilean file cannot be read, so its Lean blocks link as without one"
+                )
+                return None
+            if (version := data.get("version")) != _ILEAN_VERSION:
+                described = f"format {version}" if type(version) is int else "of an unknown format"
+                self._ilean_notes[path] = (
+                    f"{shown}: its .ilean file is {described}, and render reads format {_ILEAN_VERSION}, so its Lean "
+                    "blocks link as without one"
+                )
+                return None
+            if not isinstance(module := data.get("module"), str) or _unquoted_parts(module) != parts[start:]:
+                continue
+            return _ilean_records(data)
+        self._ilean_missing.add(path)
+        return None
+
     def url(self, name: str) -> str | None:
         """Return a permanent link to *name*, or ``None`` if it cannot be built."""
         declaration = self.index.find(name)
@@ -1817,7 +2084,9 @@ __all__ = [
     "bind_project_source_snapshot",
     "bound_names",
     "declaration_names",
+    "declaration_span",
     "declaration_text",
+    "declared_name",
     "index_failure_message",
     "index_project",
     "resolve_lean_root",

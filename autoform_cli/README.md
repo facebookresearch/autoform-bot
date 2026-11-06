@@ -362,6 +362,15 @@ page combines the mathematical reader and dependency map in one full-page
 client. [The published site](reference/site.md#rendered-pages) gives the rest,
 [MathJax](reference/site.md#mathjax) included.
 
+`--ileans DIR` names a Lean build's `lib/lean` directory, such as
+`.lake/build/lib/lean`. Each name in a statement's Lean then links the
+declaration Lean resolved it to: a project's as above, and a constant of a
+package Mathlib's documentation covers to its page there. A file without usable
+`.ilean` data, or a declaration that data shows to be older than the source,
+links as without the option, with a warning. An edit the data cannot show, such
+as to an `open` line, is not caught, so build first; Pages passes the verified
+commit's own build ([Pages deploys](reference/site.md#pages-deploys)).
+
 ## Contracts
 
 Each area's contract has its own page:

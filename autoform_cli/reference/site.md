@@ -7,8 +7,7 @@ What `render` publishes, and how the site is served, deployed and checked. The
 
 `dependencies.md` and old pages under `dependencies/` redirect to the matching
 book page, keeping the address's fragment when JavaScript runs; `structure.md`
-links the book. Complete published statements, proofs and citations remain the
-reading content. The index `dependencies/index.json`, project payload
+links the book. The index `dependencies/index.json`, project payload
 `dependencies.json`, and other `dependencies/` payloads are internal to this
 viewer; their schemas may change. `dependencies/map/` is a standalone page: one
 zoomable map of the project, which loads `dependencies/map/data/` one level at a
@@ -104,13 +103,14 @@ in place of the `--lean-root .` the generated `blueprint-pages.yml` passes to
 
 The generated `blueprint-pages.yml` deploys only a commit that the project's own
 `.github/workflows/autoform-verify.yml` (matched by file, not name) passed on a
-push to `main`, with code links rendered at that commit by `--ref`. A failed
-verification deploys nothing, so the last verified site stays up. Pull requests
-and manual runs build the site but never deploy, and cannot cancel a waiting
-deploy. To redeploy, re-run the Pages run that the newest successful verify run
-on `main` started; re-running an older one deploys the older commit. Deleting or
-renaming `autoform-verify.yml`, or disabling it in the repository's Actions
-settings, stops every deploy, with no error.
+push to `main`, with code links rendered at that commit by `--ref` and, when
+that run uploaded its top-level Lake build's `.ilean` files (artifact
+`autoform-ileans`) and `AUTOFORM_REF`'s render takes `--ileans`, the names in
+its Lean linked by them. Pull requests and manual runs build the site but never
+deploy or cancel a waiting deploy. To redeploy, re-run the Pages run that the
+newest successful verify run on `main` started; re-running an older one deploys
+the older commit. Deleting or renaming `autoform-verify.yml`, or disabling it in
+the repository's Actions settings, silently stops every deploy.
 
 ## Pages reports
 
