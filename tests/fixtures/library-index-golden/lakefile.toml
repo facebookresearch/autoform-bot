@@ -1,0 +1,16 @@
+# Gold: naturals, à la carte.
+name = "gold"
+defaultTargets = ["Gold"]
+
+[[require]]
+name = "batteries"
+git = "https://example.invalid/batteries"
+rev = "main"
+
+[[require]]
+name = "mathlib"
+git = "https://example.invalid/mathlib"
+rev = "main"
+
+[[lean_lib]]
+name = "Gold"

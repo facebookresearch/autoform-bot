@@ -291,7 +291,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     work_list.add_argument(
         "target", nargs="?", default=".", help="project root or blueprint directory"
     )
-    work_list.add_argument("--lean-root", type=Path, help="resolve local Lean declaration targets")
+    work_list.add_argument("--lean-root", type=Path, help="deprecated: resolve local Lean declaration targets")
     work_list.add_argument("--json", action="store_true", help="write stable machine-readable output")
     work_context_parser = work_subparsers.add_parser(
         "context", help="show one article's phase, dependencies, sources, and claim target"
@@ -301,7 +301,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "target", nargs="?", default=".", help="project root or blueprint directory"
     )
     work_context_parser.add_argument(
-        "--lean-root", type=Path, help="resolve local Lean declaration targets"
+        "--lean-root", type=Path, help="deprecated: resolve local Lean declaration targets"
     )
     work_context_parser.add_argument(
         "--json", action="store_true", help="write stable machine-readable output"
@@ -384,7 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         dest="states",
         choices=[state.key for state in status.STATES],
         metavar="KEY",
-        help="keep articles in exactly this derived state (repeatable): "
+        help="deprecated: keep articles in exactly this derived state (repeatable): "
         + ", ".join(state.key for state in status.STATES),
     )
     search.add_argument(
@@ -393,7 +393,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         dest="declarations",
         metavar="KIND",
-        help="keep articles whose frontmatter declaration is KIND: theorem, lemma, def, ... (repeatable)",
+        help="deprecated: keep articles whose frontmatter declaration is KIND: theorem, lemma, def, ... (repeatable)",
     )
     search.add_argument(
         "--limit",
@@ -807,9 +807,9 @@ def _source_link_issues(graph: Graph) -> tuple[list[str], list[str]]:
     text alone. Render omits hidden files, so a hidden target is refused too,
     unless it is a note under ``sources/`` that exists. Only a repository link
     reaches that note, and render writes one when it links the other source
-    notes there, so it is only warned about: it must be committed. Fragments and
-    other schemes stay with ``audit``, whose anchor check renders each cited
-    note.
+    notes there, so it is only warned about: it must be committed. A link whose
+    text wraps across lines is only warned about too. Fragments and other
+    schemes stay with ``audit``, whose anchor check renders each cited note.
     """
     rejected = {
         "source-not-found": "does not resolve to a file",
@@ -821,7 +821,7 @@ def _source_link_issues(graph: Graph) -> tuple[list[str], list[str]]:
     }
     issues, warnings = [], []
     for node in graph.nodes.values():
-        for target in node.sources:
+        for target in (*node.sources, *node.wrapped_sources):
             located = target.partition("#")[0]
             issue = local_target_issue(node.path, located, graph.blueprint_dir, label="source")
             if issue is None or issue[0] not in rejected:
@@ -843,7 +843,9 @@ def _source_link_issues(graph: Graph) -> tuple[list[str], list[str]]:
                         )
                         continue
                     code = "source-not-found"
-            issues.append(f"{node.id}: source target {rejected[code]}: {target!r}")
+            # Check did not read a wrapped link before, so it warns (#325).
+            found = warnings if target in node.wrapped_sources else issues
+            found.append(f"{node.id}: source target {rejected[code]}: {target!r}")
     return issues, warnings
 
 
@@ -1222,6 +1224,12 @@ def _work(args: argparse.Namespace) -> int:
         return _work_assumptions(args)
     if args.work_command in {"impact", "import-impact"}:
         return _work_impact(args)
+    if args.lean_root is not None:
+        _warn_deprecated(
+            f"autoform work {args.work_command} --lean-root",
+            "0.8.0",
+            "source_file will then be null, and search --lean-root prints a Lean name's file and line",
+        )
     # Only loading the roadmap can fail on the project's paths; printing the
     # result stays outside, so an output error is not reported as one.
     try:
@@ -1307,6 +1315,19 @@ def _work(args: argparse.Namespace) -> int:
 
 
 def _search(args: argparse.Namespace) -> int:
+    if args.states:
+        _warn_deprecated(
+            "autoform search --state",
+            "0.8.0",
+            'filter each hit\'s "state" in --json output instead, with --limit at least total_matches',
+        )
+    if args.declarations:
+        _warn_deprecated(
+            "autoform search --declaration",
+            "0.8.0",
+            'filter each hit\'s "declaration" in --json output instead, ignoring case and leading modifiers, '
+            "with --limit at least total_matches",
+        )
     # Only reading the blueprint and the libraries can fail on the project's
     # paths; printing the result stays outside, so an output error is not
     # reported as one.
@@ -1806,6 +1827,13 @@ def _human_text(value: object) -> str:
     )
 
 
+def _warn_deprecated(spelling: str, removal: str, instead: str) -> None:
+    """Warn on stderr that *spelling* goes in release *removal*; stdout and the exit code stay the same."""
+
+    message = f"warning[deprecated]: {spelling} is deprecated and will be removed in {removal}; {instead}"
+    print(_human_text(message), file=sys.stderr)
+
+
 def _ascii_text(value: object) -> str:
     """Escape untrusted text into one unambiguous printable ASCII line.
 
@@ -2279,8 +2307,7 @@ def _render(args: argparse.Namespace) -> int:
     print(f"{report.output_dir}: {report.pages} pages, {report.nodes} nodes, {report.linked} code links")
     for issue in (*report.unresolved, *report.warnings):
         print(f"warning: {issue}")
-    # A declaration that was never looked up is not known to exist.
-    if (report.unresolved or report.unchecked) and args.require_declarations:
+    if report.unresolved and args.require_declarations:
         return 1
     return 0
 

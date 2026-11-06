@@ -29,9 +29,8 @@ renames, the next render moves it back before anything else. macOS metadata
 files are ignored when an existing site is matched against its inventory.
 Render never indexes a leftover staging directory as Lean source. On macOS
 ``fsync`` does not flush the drive's cache, so a power loss can still lose the
-newest site. Native Windows has no directory-descriptor traversal: render reads
-the blueprint and the output as two pathname captures that must agree and
-commits through the backup swap without a lock.
+newest site. Render reads the blueprint and the output by path in two walks
+that must agree. Native Windows commits through the backup swap without a lock.
 """
 
 from __future__ import annotations
@@ -81,7 +80,6 @@ from ._tree_snapshot import (
     TreeSnapshotError,
     _update_digest,
     bind_directory_tree,
-    descriptor_capture_supported,
 )
 from .approvals import approval_statuses
 from .coverage import (
@@ -118,9 +116,7 @@ from .lean import (
     PUBLICATION_MANIFEST,
     PUBLICATION_SCHEMA,
     Declaration,
-    IndexedSourceSnapshot,
     LeanSourceError,
-    SourceIndex,
     SourceLinker,
     bound_names,
     declaration_names,
@@ -132,16 +128,17 @@ from .library.declarations import _header
 from .library.pinned_names import FOLDER as PINNED_NAMES_FOLDER
 from .markdown import (
     _BRACKET_ESCAPE,
+    _CODE_SPAN,
     _INLINE_MATH,
     FORMULA_CLASS,
     GENERATED_VIEWS,
-    INLINE_CODE,
     NOTES_BOX,
     PAGE_HEADER,
     PAGE_SUFFIXES,
     RETIRED_VIEWS,
     STATEMENT_BOX,
     _blank,
+    _blank_code,
     blueprint_root,
     boxed,
     converted_alone,
@@ -470,8 +467,6 @@ class RenderReport:
     linked: int = 0
     unresolved: list[str] = field(default_factory=list)
     """A message for each published declaration not found, or defined more than once, in the sources."""
-    unchecked: bool = False
-    """A published declaration was not looked up because the sources were not read."""
     warnings: list[str] = field(default_factory=list)
 
 
@@ -1009,21 +1004,13 @@ def render_site(
         if coverage is None:
             raise PublicationError(["coverage contract could not be loaded"])
         expected = _destination_state(destination)
-        # Without descriptor capture every Lean capture fails closed. The implicit
-        # root is then not read and the site has no code links; an explicit Lean
-        # root asks for links, so it still fails. Like every Lean capture, this one
-        # skips each folder holding a complete publication.json: a finished site,
-        # mkdocs' copy of one, or a replaced site kept as a backup.
-        indexed = lean_root is not None or descriptor_capture_supported()
+        # Like every Lean capture, this one skips each folder holding a complete
+        # publication.json: a finished site, mkdocs' copy of one, or a replaced
+        # site kept as a backup.
         try:
-            lean = (
-                snapshot_project_sources(repo_root, exclude_roots=(copy_root,))
-                if indexed
-                else IndexedSourceSnapshot(SourceIndex(repo_root, {}, ""), revision="")
-            )
+            lean = snapshot_project_sources(repo_root, exclude_roots=(copy_root,))
         except OSError as error:
-            hint = "" if descriptor_capture_supported() else "; run without --lean-root to publish without code links"
-            raise PublicationError([index_failure_message(error) + hint]) from error
+            raise PublicationError([index_failure_message(error)]) from error
         repository_url = repository_url if repository_url is not None else detect_repository_url(repo_root)
         ref = ref if ref is not None else detect_ref(repo_root)
         sources = SOURCES_DIR in snapshot.directories
@@ -1061,7 +1048,6 @@ def render_site(
             lean.index,
             repository_url,
             linked,
-            indexed=indexed,
             links_blueprint=links_blueprint,
             spellings=spellings,
             root_prefix=root_prefix,
@@ -1191,20 +1177,6 @@ def _render_pages(
 
     report = RenderReport(output_dir=destination, warnings=[*coverage_warnings, *site.warnings])
     groups, targets, node_sources = site.groups, site.targets, site.node_sources
-    if not linker.indexed:
-        # Only the declarations a page would link are lost. A blueprint that
-        # names none publishes the same pages as a host that read the sources.
-        report.unchecked = any(
-            declaration_names(graph.nodes[node_id].lean or "")
-            for node_ids in groups.values()
-            for node_id in node_ids
-        )
-        if report.unchecked:
-            report.warnings.append(
-                "code links were skipped because this platform cannot capture Lean "
-                "sources safely (directory-descriptor traversal is unavailable); "
-                "render on Linux or macOS to link declarations"
-            )
     containers = _containers(graph)
     group_pages = {group: destination / _group_page(group) for group in groups}
     for source, content in site.files.items():
@@ -1437,8 +1409,7 @@ def _integrated_page(
 def _capture_blueprint(blueprint: Path) -> tuple[TreeSnapshot, frozenset[str]]:
     """Read the blueprint once, refusing what must not be published.
 
-    Through descriptors where the host has them; elsewhere (Windows) as two
-    pathname captures that must agree. Folders whose README says ``published:
+    As two walks by path that must agree. Folders whose README says ``published:
     false`` are left out before anything is refused or published, so no page,
     hash or check sees them; the node IDs in them come beside the snapshot.
     """
@@ -2173,7 +2144,7 @@ def _book_links(source: Path, blueprint: Path, targets: Collection[Path]) -> lis
         text = source.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return []  # the site leaves out a page that is not UTF-8, as check warns
-    _outside_fences(published_page(text), collect)
+    _outside_fences(published_page(text), collect, joined=True)
     return linked_sources
 
 
@@ -2746,17 +2717,27 @@ def _render_coverage_page(
 
 
 def _coverage_summary(coverage: CoverageSummary) -> str:
-    """Count the declared source areas by disposition, without a percentage."""
+    """Count the declared source areas by disposition, without a percentage.
+
+    Split areas lead, as "all" or "N of M"; the other dispositions follow.
+    """
 
     counts = coverage.counts
     total = len(coverage.entries)
     if not total:
         return ""
-    return f"{total:,} source {'area' if total == 1 else 'areas'}: " + " · ".join(
+    areas = f"{total:,} source {'area' if total == 1 else 'areas'}"
+    split = counts["DECOMPOSED"]
+    if split == total:
+        return f"{areas}, {'all ' if total > 1 else ''}{_COVERAGE_WORDS['DECOMPOSED']}"
+    rest = " · ".join(
         f"{counts[disposition]:,} {_COVERAGE_WORDS[disposition]}"
         for disposition in _COVERAGE_SUMMARY_ORDER
-        if counts[disposition]
+        if counts[disposition] and disposition != "DECOMPOSED"
     )
+    if not split:
+        return f"{areas}: {rest}"
+    return f"{split:,} of {areas} {_COVERAGE_WORDS['DECOMPOSED']} · {rest}"
 
 
 def _render_hero(
@@ -2781,7 +2762,8 @@ def _render_hero(
     them. With *ready_href* the ready figure links the list of what it counts,
     and *book_href* puts the way into the book right under the claim. A project
     that tracks no Lean has no progress to show, so its hero keeps the title,
-    the claim, the way in and the coverage line.
+    the way in and the coverage line, and its claim is the README's whole opening
+    prose rather than its first sentence.
     """
     tracked = graph.tracks_lean
     leaves = _countable(graph)
@@ -2855,12 +2837,12 @@ def _render_hero(
         "What the sources cover</a>"
         "</div>"
     )
-    lead = _lead_sentence(body)
+    leads = _lead_paragraphs(body, whole=not tracked)
     return (
         '<div class="bp-hero">'
         + ("" if rail or not tracked else '<div class="bp-hero-kicker">Formalization blueprint</div>')
         + f'<h1 class="bp-hero-title">{html.escape(title)}</h1>'
-        + (f'<p class="bp-hero-lead">{lead}</p>' if lead else "")
+        + "".join(f'<p class="bp-hero-lead">{lead}</p>' for lead in leads)
         # In its own block: Markdown breaks an inline link between blocks apart.
         + (f"<div>{ways_in}</div>" if ways_in else "")
         + (f'<p class="bp-hero-status">{sentence}</p>' if sentence else "")
@@ -2879,25 +2861,31 @@ def _render_hero(
     )
 
 
-def _lead_sentence(body: str) -> str:
-    """The blueprint's own opening sentence, for the hero.
+def _lead_paragraphs(body: str, *, whole: bool = False) -> list[str]:
+    """The blueprint's own opening prose, for the hero: its first sentence, or
+    with *whole* every paragraph from the first until a heading or list.
 
     Written by a human in `blueprint/README.md`, so it says what the project is
     far better than anything derived from the graph could. Prose only: a
-    heading or a list is structure rather than a claim. The first paragraph
-    with words is read through the site's own converter, so code and formulas
-    keep their contents, a link keeps its words without its target, and an
-    image, such as a badge, is dropped.
+    heading or a list is structure rather than a claim. Each paragraph with
+    words is read through the site's own converter, so code and formulas keep
+    their contents, a link keeps its words without its target, and an image,
+    such as a badge, is dropped.
     """
     lines = mask_fences_and_comments(body.splitlines())
+    found: list[str] = []
     if _read_page(body)[1]:
         # Check flags this page, and the landing page then shows only its
-        # title and lead, as text: the first prose block, escaped as typed.
+        # title and lead, as text: the prose blocks, escaped as typed.
         for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
             typed = " ".join(block.split())
+            if found and re.match(r"#|[-*+]\s|\d+[.)]\s", typed):
+                break
             if typed and not typed.startswith(("#", "-", "*", "<", "|", ">", "!", "[")):
-                return _lead_html([("text", typed)])
-        return ""
+                found.append(_lead_html([("text", typed)], whole=whole))
+                if not whole:
+                    break
+        return found
     # Each block is read alone, so raw HTML elsewhere does not hide the lead,
     # with the reference definitions its links may name. Only lines the site's
     # converter reads as definitions, so a footnote never becomes a paragraph.
@@ -2905,11 +2893,15 @@ def _lead_sentence(body: str) -> str:
     for block in re.split(r"\n[ \t]*\n", "\n".join(lines)):
         tree = render_tree(f"{block}\n\n{definitions}", allow_html=False) if block.strip() else None
         page = tree.find("body") if tree is not None else None
-        for paragraph in page if page is not None else ():
-            parts = _lead_parts(paragraph) if paragraph.tag == "p" else []
+        for element in page if page is not None else ():
+            if found and (element.tag in {"ul", "ol"} or _HEADING_TAG.fullmatch(element.tag)):
+                return found
+            parts = _lead_parts(element) if element.tag == "p" else []
             if any(kind in {"code", "math"} or (kind == "text" and value.strip()) for kind, value in parts):
-                return _lead_html(parts)
-    return ""
+                found.append(_lead_html(parts, whole=whole))
+                if not whole:
+                    return found
+    return found
 
 
 def _lead_parts(element: object) -> list[tuple[str, str]]:
@@ -2947,8 +2939,8 @@ def _lead_parts(element: object) -> list[tuple[str, str]]:
     return parts
 
 
-def _lead_html(parts: list[tuple[str, str]]) -> str:
-    """The first sentence of ``parts`` as escaped HTML.
+def _lead_html(parts: list[tuple[str, str]], *, whole: bool = False) -> str:
+    """The first sentence of ``parts`` as escaped HTML, or with *whole* all of it.
 
     The hero is raw HTML, so Markdown never runs over it. Escaping every part
     means the only tags are the emphasis, code and formula span built here,
@@ -2966,7 +2958,7 @@ def _lead_html(parts: list[tuple[str, str]]) -> str:
         # Code and formulas stand in as one character no rule below matches.
         plain += value if kind == "text" else "\x01" if kind in {"code", "math"} else ""
     cut = len(plain)
-    for stop in re.finditer(r"\.\s+(?![a-z])", plain):
+    for stop in () if whole else re.finditer(r"\.\s+(?![a-z])", plain):
         before = plain[: stop.start()]
         words = [word.lstrip("(") for word in before.split()] or [""]
         word, previous = words[-1], words[-2] if len(words) > 1 else ""
@@ -2981,7 +2973,8 @@ def _lead_html(parts: list[tuple[str, str]]) -> str:
             continue
         cut = stop.start()
         break
-    cut = len(plain[:cut].rstrip().rstrip(".").rstrip())
+    kept = plain[:cut].rstrip()
+    cut = len(kept if whole else kept.rstrip(".").rstrip())
     begin = len(plain) - len(plain.lstrip())
     shown: list[str] = []
     opened: list[str] = []
@@ -3000,7 +2993,7 @@ def _lead_html(parts: list[tuple[str, str]]) -> str:
         else:
             opened.pop()
             shown.append(f"</{value}>")
-    return "".join(shown) + "".join(f"</{tag}>" for tag in reversed(opened)) + "."
+    return "".join(shown) + "".join(f"</{tag}>" for tag in reversed(opened)) + ("" if whole else ".")
 
 
 #: Words whose period does not end the hero's sentence.
@@ -3197,13 +3190,33 @@ def _as_published(href: str) -> str:
 
 
 def _link_mask(line: str) -> str:
-    """*line* with its code spans, inline math and bracket escapes blanked.
+    """*line*, or a block's lines joined, with its code spans, inline math and bracket escapes blanked.
 
     The site reads code and math before links and an escaped bracket as text,
-    as ``markdown.link_targets`` does for check. Blanking keeps every offset,
-    so a link matched in the mask reads its label and target back from *line*.
+    as check does. Blanking keeps every offset, so a link matched in the mask
+    reads its label and target back from *line*.
     """
-    return _BRACKET_ESCAPE.sub(_blank, _INLINE_MATH.sub(_blank, INLINE_CODE.sub(_blank, line)))
+    return _BRACKET_ESCAPE.sub(_blank, _code_and_math_mask(line))
+
+
+def _code_and_math_mask(line: str) -> str:
+    """*line*, or a block's lines joined, with what the site reads before links blanked: code spans and inline math."""
+    return _INLINE_MATH.sub(_blank, _CODE_SPAN.sub(_blank_code, line))
+
+
+def _inline_destination(line: str, match: re.Match[str]) -> str:
+    """The destination of *match*, an inline link or image in *line*, as the site reads it.
+
+    Python-Markdown drops the backslash before a character it escapes, so
+    ``base\\_lemma.md`` names ``base_lemma.md``, but not in code or math, which
+    it reads first. A reference definition's destination keeps its backslashes
+    on the site, so it is read as written.
+    """
+    start, end = match.span("target")
+    escaped = _body_converter().ESCAPED_CHARS
+    masked = _code_and_math_mask(line)[start:end]
+    dropped = {escape.start() for escape in re.finditer(r"\\(.)", masked) if escape.group(1) in escaped}
+    return "".join(char for index, char in enumerate(line[start:end]) if index not in dropped)
 
 
 def _rewrite_links(
@@ -3333,14 +3346,22 @@ def _rewrite_links(
         # masking never adds, so a line without one has nothing to move.
         if "[" not in line:
             return line
+        # A definition whose title is on the next line is one block, and is
+        # rewritten a line at a time, as before.
+        if "\n" in line and _LINK_DEFINITION.match(line.partition("\n")[0]):
+            return "\n".join(map(rewrite, line.split("\n")))
         # A reference definition carries the destination for every `[x][label]`
         # on the page. Rewriting only inline links leaves it pointing at the
         # unpublished path and the rendered link dangles.
         definition = _LINK_DEFINITION.match(line)
+        # Lines read together are one definition only where the site reads one.
+        if definition is not None and "\n" in line and not _SITE_LINK_DEFINITION.match(line):
+            definition = None
         if definition is not None:
             href = moved_target(definition.group("target"))
             if href == "" and definition.group("target") in unlinked:
-                return ""
+                # A label over two lines keeps both, so every later line stays where it was written.
+                return "\n" * line.count("\n")
             if href:
                 indent, label = definition.group("indent"), definition.group("label")
                 # Python-Markdown reads a definition's destination only up to
@@ -3352,7 +3373,10 @@ def _rewrite_links(
         pieces: list[str] = []
         end = 0
         for match in _MARKDOWN_IMAGE.finditer(_link_mask(line)):
-            raw = line[match.start("target") : match.end("target")]
+            # As for a link below, a destination on a later line is published as written.
+            if "\n" in line[match.end("label") : match.start("target")]:
+                continue
+            raw = _inline_destination(line, match)
             if moved_target(raw) == "" and raw in unlinked:
                 pieces += [line[end : match.start()], line[match.start("label") : match.end("label")]]
                 end = match.end()
@@ -3360,16 +3384,23 @@ def _rewrite_links(
         pieces = []
         end = 0
         for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
-            raw = line[match.start("target") : match.end("target")]
+            # A destination on a later line is published as written, as before:
+            # in a quote, the mask keeps the marker in front of it.
+            if "\n" in line[match.end("label") : match.start("target")]:
+                continue
+            raw = _inline_destination(line, match)
             href = moved_target(raw)
             if href is None or raw in (href, f"<{href}>"):  # nothing moved: keep the link as written
                 continue
             label = line[match.start("label") : match.end("label")]
-            pieces += [line[end : match.start()], f"[{label}]({bracketed(href)})" if href else label]
+            # A title on the next line goes, but a moved link keeps its line, so every later line stays where
+            # it was written. A link cut down to its label does not, as a break there could end the paragraph.
+            breaks = "\n" * line.count("\n", match.end("label"), match.end())
+            pieces += [line[end : match.start()], f"[{label}]({bracketed(href)}{breaks})" if href else label]
             end = match.end()
         return "".join(pieces) + line[end:]
 
-    return _outside_fences(text, rewrite, page=True)
+    return _outside_fences(text, rewrite, page=True, joined=True)
 
 
 def _in_working_tree(path: Path, root: Path) -> bool:
@@ -3758,7 +3789,9 @@ def _body_converter():
     # The final page assigns heading IDs once, across all its statements.
     # attr_list still keeps an author's explicit {#id} here.
     converter.treeprocessors.deregister("toc")
-    converter.treeprocessors.register(_PublishedBodyLinks(converter), "published-body-links", 5)
+    # After unescaping (priority 0), as MkDocs reads links: before it, a
+    # destination written `a\_b.md` still holds an escape placeholder.
+    converter.treeprocessors.register(_PublishedBodyLinks(converter), "published-body-links", -1)
     return converter
 
 
@@ -4230,10 +4263,7 @@ def _lean_presentation(
         url = linker.url(name)
         location = linker.location(name)
         code = f"<code>{html.escape(name)}</code>"
-        if not linker.indexed:
-            # The sources were not read, so "not found" would be false.
-            fallback.append(code)
-        elif url and node.catalog == "module":
+        if url and node.catalog == "module":
             fallback.append(f'<a href="{html.escape(url, quote=True)}">{code}</a>')
             linked += 1
         elif url:

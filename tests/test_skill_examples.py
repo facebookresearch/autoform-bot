@@ -354,7 +354,7 @@ def test_setup_asset_static_site_contract(repo_root: Path, tmp_path: Path) -> No
     assert '<div class="bp-figure-label">Fully proved</div>' in overview
     assert '<div class="bp-figure-note">5 of 7 statements</div>' in overview
     assert ">71%<" in overview
-    assert "7 source areas: 1 split into statements · 5 not yet settled · 1 out of scope" in overview
+    assert "1 of 7 source areas split into statements · 5 not yet settled · 1 out of scope" in overview
     assert 'href="coverage/index.html"' in overview
     assert "items settled" not in overview
     assert "bp-progress-link" not in overview
@@ -605,7 +605,7 @@ def test_markdown_links_and_anchors_resolve(repo_root: Path) -> None:
     for page in _tracked_markdown(repo_root):
         where = page.relative_to(repo_root).as_posix()
         text = page.read_text(encoding="utf-8")
-        for line, target in markdown_links(text):
+        for line, target, _ in markdown_links(text):
             if re.match(r"[a-z][a-z0-9+.-]*:|/", target) or (where, target) in _GENERATED_LINKS:
                 continue
             checked += 1

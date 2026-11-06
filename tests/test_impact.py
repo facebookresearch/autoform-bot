@@ -3572,8 +3572,6 @@ def test_revision_impact_refuses_byte_identical_source_replacement_during_the_pr
 def test_revision_impact_accepts_unrelated_churn_during_its_final_capture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    if not tree_snapshot_module._DESCRIPTOR_CAPTURE_SUPPORTED:
-        pytest.skip("directory descriptor capture is unavailable")
     project = _blueprint_project(tmp_path, "Demo")
     lean_root = _stub_lean_root(tmp_path)
     _stub_probe(monkeypatch)

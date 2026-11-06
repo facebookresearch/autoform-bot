@@ -1250,6 +1250,37 @@ def test_a_hero_that_tracks_no_lean_keeps_its_claim_and_ways_in(tmp_path: Path) 
     assert "Formalization blueprint" in wide and "Fully proved" in wide and "bp-hero-bar" in wide
 
 
+def test_a_hero_that_tracks_no_lean_shows_the_readmes_opening_prose(tmp_path: Path) -> None:
+    """With no figures to show, the hero carries the README's paragraphs up to its first heading or list."""
+    readme = "# Notes\n\nThese notes cover rings. They start from groups.\n\nEach chapter ends with exercises.\n\n## Plan\n\nLater.\n"
+    coverage, _issues = render_module.load_coverage(_informal_project(tmp_path, "tracks_lean: false\n"))
+    untracked = load_graph(_informal_project(tmp_path / "untracked", "tracks_lean: false\n"))
+    tracked = load_graph(_informal_project(tmp_path / "tracked", ""))
+    whole = ['<p class="bp-hero-lead">These notes cover rings. They start from groups.</p>',
+             '<p class="bp-hero-lead">Each chapter ends with exercises.</p>']
+    for rail in (False, True):
+        hero = render_module._render_hero(
+            "Notes", readme, untracked, derive(untracked), coverage=coverage, coverage_href="coverage/", rail=rail
+        )
+        assert re.findall(r'<p class="bp-hero-lead">.*?</p>', hero) == whole, rail
+        assert "Later" not in hero
+        hero = render_module._render_hero(
+            "Notes", readme, tracked, derive(tracked), coverage=coverage, coverage_href="coverage/", rail=rail
+        )
+        assert re.findall(r'<p class="bp-hero-lead">.*?</p>', hero) == ['<p class="bp-hero-lead">These notes cover rings.</p>']
+
+
+@pytest.mark.parametrize(("readme", "leads"), [
+    ("# T\n\nOne. Two.\n\nThree with `x`.\n\n## H\n\nFour.\n", ["One. Two.", "Three with <code>x</code>."]),
+    ("# T\n\nOne.\n\n- item\n\nTwo.\n", ["One."]),
+    ("# T\n\n![badge](b.svg)\n\nOne.\n\n> A quote.\n\nTwo\n\n1. first\n\nThree.\n", ["One.", "Two"]),
+    ("# T\n\n- item\n\nOne.\n", ["One."]),
+])
+def test_the_whole_lead_runs_from_the_first_paragraph_to_a_heading_or_list(readme: str, leads: list[str]) -> None:
+    """Structure before the first paragraph is skipped; a heading or list after it ends the lead; other blocks are passed over."""
+    assert render_module._lead_paragraphs(readme, whole=True) == leads
+
+
 @pytest.mark.parametrize("tracked", [True, False])
 def test_a_project_that_tracks_no_lean_never_says_every_statement_is_fully_proved(
     tmp_path: Path, tracked: bool
@@ -1377,9 +1408,8 @@ def test_a_mathlib_article_shows_its_mathlib_declarations_as_text(tmp_path: Path
     # The row is the page's only change, and --require-declarations ignores it.
     before = (tmp_path / "without/roadmap/README.md").read_text(encoding="utf-8")
     assert page.replace(f'<div class="bp-meta">{row}</div>\n', "") == before
-    assert (shown.unresolved, shown.unchecked, shown.warnings) == (
+    assert (shown.unresolved, shown.warnings) == (
         without.unresolved,
-        without.unchecked,
         without.warnings,
     )
 
@@ -1402,6 +1432,18 @@ def test_coverage_summary_tracks_every_canonical_disposition() -> None:
     entries = tuple(CoverageEntry(f"Area {n}", "MAPPED", "Pending", n) for n in range(1234))
     summary = render_module._coverage_summary(CoverageSummary(COVERAGE_SCHEMA, "README.md", "0" * 64, entries))
     assert summary.startswith("1,234 ") and " 1,234 " in summary
+
+
+@pytest.mark.parametrize(("dispositions", "line"), [
+    (["DECOMPOSED"], "1 source area, split into statements"),
+    (["DECOMPOSED"] * 3, "3 source areas, all split into statements"),
+    (["DECOMPOSED", "MAPPED", "OUT"], "1 of 3 source areas split into statements · 1 not yet settled · 1 out of scope"),
+    (["MAPPED", "MAPPED"], "2 source areas: 2 not yet settled"),
+])
+def test_the_coverage_line_says_how_many_source_areas_are_split(dispositions: list[str], line: str) -> None:
+    """Every project's landing says how many of its source areas are split into statements, "all" or "N of M"."""
+    entries = tuple(CoverageEntry(f"Area {n}", disposition, "Why", n) for n, disposition in enumerate(dispositions))
+    assert render_module._coverage_summary(CoverageSummary(COVERAGE_SCHEMA, "README.md", "0" * 64, entries)) == line
 
 
 def test_single_target_uses_singular_completion_copy(tmp_path: Path) -> None:
@@ -1517,7 +1559,7 @@ def test_a_catalog_links_a_few_lean_names_and_counts_the_rest() -> None:
     names = [f"Project.lemma_{index:02d}" for index in range(40)]
     node = SimpleNamespace(id="catalog", lean=", ".join(names), catalog="module")
     linker = SimpleNamespace(
-        indexed=True, url=lambda name: f"{_REPOSITORY}/blob/abc/Project.lean#{name}", location=lambda name: None
+        url=lambda name: f"{_REPOSITORY}/blob/abc/Project.lean#{name}", location=lambda name: None
     )
 
     icons, rows, linked, unresolved = render_module._lean_presentation(node, linker)
@@ -1807,7 +1849,7 @@ def test_the_rail_hero_keeps_two_figures_and_the_coverage_counts_and_hides_nothi
 ])
 def test_the_hero_lead_is_the_whole_first_sentence_as_readable_html(readme: str, lead: str) -> None:
     """The README's link targets never reach the hero, code and formulas keep their contents, and abbreviations and initials do not end it."""
-    assert render_module._lead_sentence(readme) == lead
+    assert render_module._lead_paragraphs(readme) == ([lead] if lead else [])
 
 
 def test_the_legends_count_what_the_scope_views_count(tmp_path: Path) -> None:
@@ -3973,6 +4015,23 @@ def test_a_line_that_only_looks_like_a_definition_keeps_its_words_and_has_its_li
     assert f'[paper]: {paper} "The paper"' in chapter
 
 
+def test_definitions_on_consecutive_lines_are_each_rewritten(tmp_path: Path) -> None:
+    """Links are rewritten a block at a time, and a definition is a block of
+    its own, tab or not, with its title on the next line or not."""
+    project = _project(tmp_path)
+    roadmap = project / "blueprint" / "roadmap" / "README.md"
+    roadmap.write_text(
+        roadmap.read_text(encoding="utf-8")
+        + '\nSee [the base] and [the top].\n[the base]:\tbase.md\n[the top]:\ttop.md\n  "The top"\n',
+        encoding="utf-8",
+    )
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8").splitlines()
+    assert "[the base]: #base" in chapter and "[the top]: #top" in chapter
+
+
 @pytest.mark.parametrize(
     "rest", ["   ", "\t", '\t"The paper"', ' "The paper"\t', " 'The paper'", " (The paper)", " (The paper)\t"]
 )
@@ -4131,13 +4190,12 @@ def test_an_escaped_parenthesis_leaves_the_rest_of_its_line_alone(tmp_path: Path
     """Python-Markdown reads `\\(` as text, so `[x]` ends at its own `)`.
     Counted as an open parenthesis, `\\(` took that `)`, and the title after it
     ran on to the `)` closing the aside and dropped ` and [y](../sources/c.md)`.
-    The escape is not decoded, so `x` names no captured note and is left as
-    written, where the strict build reports it."""
+    Decoded as the site decodes it, `x` names the captured note `a(b.md`."""
     line = r"(see [x](../sources/a\(b.md) and [y](../sources/c.md))"
     chapter, commit = _render_statement_link(tmp_path, line, notes=("a(b.md", "c.md"))
 
-    y = f"{_REPOSITORY}/blob/{commit}/blueprint/sources/c.md"
-    assert f"The main result. See {line.replace('../sources/c.md', y)}." in chapter
+    x, y = (f"{_REPOSITORY}/blob/{commit}/blueprint/sources/{name}" for name in ("a%28b.md", "c.md"))
+    assert f"The main result. See (see [x]({x}) and [y]({y}))." in chapter
 
 
 def test_a_title_with_parentheses_ends_where_its_link_does(tmp_path: Path) -> None:
@@ -4204,6 +4262,69 @@ def test_a_query_on_a_node_link_is_kept_before_its_anchor(tmp_path: Path) -> Non
 
     published = (tmp_path / "out/coverage/README.md").read_text(encoding="utf-8")
     assert "See [Top](../roadmap/README.md?plain=1#top) and [the overview](../README.md?plain=1)." in published
+
+
+def test_a_link_whose_text_wraps_points_at_its_card(tmp_path: Path) -> None:
+    """Read a line at a time, the link was published as written, to a file its chapter absorbs."""
+    project = _project(tmp_path)
+    _edit(project / "blueprint/roadmap/README.md", "develops the base object", "develops [the base\nobject](base.md)")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    chapter = (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+    assert "develops [the base\nobject](#base) before" in chapter
+
+
+def test_a_link_whose_text_wraps_in_code_is_published_as_typed(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    code = (
+        "As `[the base\nobject](base.md)` shows:\n\n    [the base\n    object](base.md)\n\n"
+        "```\n[the base\nobject](base.md)\n```\n"
+    )
+    _edit(project / "blueprint/roadmap/README.md", "## Definitions", f"{code}\n## Definitions")
+
+    render_site(project / "blueprint", tmp_path / "out", lean_root=project)
+
+    assert code in (tmp_path / "out/roadmap/README.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # A destination on the next line stays as written: in a quote, the marker before it is no target.
+        ("> See [the paper](\n> https://example.org/paper).\n", "> See [the paper](\n> https://example.org/paper).\n"),
+        ("> See [X](\n> x.md).\n", "> See [X](\n> x.md).\n"),
+        ("See ![the figure](\n../drafts/f.png) now.\nNext.\n", "See ![the figure](\n../drafts/f.png) now.\nNext.\n"),
+        # A title on the next line goes, but not its line, so every later line keeps its number.
+        ('See [X](x.md\n  "The X") here.\nNext.\n', "See [X](#x\n) here.\nNext.\n"),
+        ("[two\nlines]: ../drafts/idea.md\nNext.\n", "\n\nNext.\n"),
+        # The site reads no definition whose label holds a bracket.
+        ("[a [b\nc]: ../drafts/idea.md\n\nNext.\n", "[a [b\nc]: ../drafts/idea.md\n\nNext.\n"),
+        # A backtick in a comment, which the page never reads, pairs with none on the next line.
+        ("See <!-- a ` tick --> [X](x.md) and\nmore ` text.\n", "See <!-- a ` tick --> [X](#x) and\nmore ` text.\n"),
+    ],
+    ids=["quoted-url", "quoted-article", "image-below", "title-below", "two-line-label", "bracket-label", "comment-tick"],
+)
+def test_a_block_is_rewritten_in_its_own_lines(tmp_path: Path, text: str, expected: str) -> None:
+    """A body hoisted onto its chapter's page, one folder up, has its links rewritten a block at a time."""
+    from autoform_cli.render import _rewrite_links
+
+    blueprint = tmp_path / "blueprint"
+    source_dir = blueprint / "roadmap" / "ch" / "theorems"
+    page = tmp_path / "out" / "roadmap" / "ch" / "README.md"
+
+    rewritten = _rewrite_links(
+        text,
+        source_dir=source_dir,
+        page=page,
+        blueprint=blueprint,
+        destination=tmp_path / "out",
+        node_sources={(source_dir / "x.md").resolve(): "ch/theorems/x"},
+        targets={"ch/theorems/x": (page, "x")},
+        unpublished=(blueprint / "roadmap" / "ch" / "drafts",),
+    )
+
+    assert rewritten == expected
 
 
 def test_a_query_on_a_book_link_keeps_its_chapter_in_the_book(tmp_path: Path) -> None:
@@ -4474,6 +4595,43 @@ def test_rewriting_a_page_links_only_the_nodes_it_names(tmp_path: Path, monkeypa
     assert calls == [chapter]
 
 
+def test_an_escaped_link_destination_is_resolved_as_the_site_reads_it(tmp_path: Path) -> None:
+    """Read with its backslash, `[Base](base\\_lemma.md)` named no article, and
+    its chapter page linked a file the site does not publish. The site keeps
+    the backslashes in math and in a reference definition, and so does render."""
+    from autoform_cli.render import _rewrite_links
+
+    blueprint, destination = tmp_path / "blueprint", tmp_path / "out"
+    source_dir = blueprint / "roadmap"
+    chapter = destination / "roadmap/README.md"
+
+    def rewrite(text: str) -> str:
+        return _rewrite_links(
+            text,
+            source_dir=source_dir,
+            page=chapter,
+            blueprint=blueprint,
+            destination=destination,
+            node_sources={(source_dir / "base_lemma.md").resolve(): "base_lemma"},
+            targets={"base_lemma": (chapter, "base_lemma")},
+            left_out=frozenset({(source_dir / "fig_a.svg").resolve()}),
+        )
+
+    assert rewrite(r"[Base](base\_lemma.md), [it](<base\_lemma.md>)") == "[Base](#base_lemma), [it](#base_lemma)"
+    assert rewrite(r"Drawn in ![the figure](fig\_a.svg).") == "Drawn in the figure."
+    # A link that does not move stays as written.
+    assert rewrite(r"See [the chapter](../other\_ch/README.md).") == r"See [the chapter](../other\_ch/README.md)."
+    assert rewrite("[b]: base\\_lemma.md\n") == "[b]: base\\_lemma.md\n"
+    # A code span over a line break is one span, as on the site, so the link after it is read too;
+    # masked a line at a time, its closing backtick and the next one held the destination.
+    assert rewrite("See `a\nb` and [Base](base\\_lemma.md) or `c`.\n") == "See `a\nb` and [Base](#base_lemma) or `c`.\n"
+    # Only an angle-bracketed destination can hold math: a bare one ends at its mask's blanks.
+    # Python-Markdown escapes no %.
+    line = r"[math](<\(b\_c\)\_d\%.md>)"
+    match = render_module._MARKDOWN_LINK.search(render_module._link_mask(line))
+    assert render_module._inline_destination(line, match) == r"<\(b\_c\)_d\%.md>"
+
+
 def test_the_hierarchical_explorer_indexes_nodes_without_a_full_graph(tmp_path: Path) -> None:
     """Global search jumps into a small scope instead of fitting every node."""
     from autoform_cli.graph_pages import scope_page_path, write_graph_pages
@@ -4615,6 +4773,19 @@ def test_a_comment_opener_in_code_hides_no_link_from_the_book_order(tmp_path: Pa
     authored = roadmap.read_text(encoding="utf-8")
     aside = "## Chapters\n\nHide a line with `<!--` before it.\n\n"
     roadmap.write_text(authored.replace("## Chapters\n\n", aside) + "\n<!-- TODO -->\n", encoding="utf-8")
+    out = tmp_path / "out"
+
+    render_site(project / "blueprint", out, lean_root=project)
+
+    assert _summary_chapters(out) == ["zeta", "alpha", "irrationality-proof"]
+
+
+def test_a_chapter_link_whose_text_wraps_places_its_chapter(tmp_path: Path) -> None:
+    """Read a line at a time, the link placed nothing, and zeta fell to the end of the book."""
+    project = _book_order_project(tmp_path)
+    _edit(
+        project / "blueprint/roadmap/README.md", "- [Zeta](zeta/README.md)", "- [The zeta\n  chapter](zeta/README.md)"
+    )
     out = tmp_path / "out"
 
     render_site(project / "blueprint", out, lean_root=project)
@@ -5203,6 +5374,8 @@ def test_body_protection_reuses_one_converter_but_starts_each_chunk_afresh(monke
         {"Some (field).md": "# Actual\n"}, None,
     ),
     ("For r < n, see ![image](asset.svg).", {"asset.svg": '<svg xmlns="http://www.w3.org/2000/svg"/>'}, None),
+    # Checked before unescaping, the target held an escape placeholder and was never found.
+    (r"For $r<n$, see [target](other\_ch.md).", {"other_ch.md": "# Actual\n"}, None),
     ('For r < n, see <a href="missing.md">raw HTML</a>.', {}, None),
 ])
 def test_body_protection_retains_native_strict_link_validation(tmp_path: Path, caplog, body, files, warning) -> None:

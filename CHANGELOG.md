@@ -124,12 +124,16 @@ date when the release is tagged.
   dependency references and the chapter progress lines. The explorer drops its
   status filter and status words, and the whole-project map its tints, progress
   bars and status words; its cards name their kind instead. Neither search box
-  mentions Lean names, though both still match them. Check warns about the
-  setting anywhere else under `roadmap/`, or with a value other than true or
-  false, and ignores it.
+  mentions Lean names, though both still match them. In place of the figures,
+  the landing hero shows the README's opening paragraphs, up to its first
+  heading or list. Check warns about the setting anywhere else under
+  `roadmap/`, or with a value other than true or false, and ignores it.
 
 ### Changed
 
+- **The landing's coverage line** leads with the source areas split into
+  statements: "5 source areas, all split into statements", or "3 of 5 source
+  areas split into statements" before the other dispositions.
 - **Vault pages on Windows.** `autoform-visualize` writes the dependency
   summary and structure pages with LF line endings on Windows too, as on every
   other system, so a vault regenerated on both no longer flips them.
@@ -161,6 +165,16 @@ date when the release is tagged.
   table is not the contract's gets no view, and render warns. The rest of the
   page is unchanged. In the sidebar the page is the book's last entry, named by
   its title, and Mathematics no longer opens it (#631, #645).
+- **One way to read a tree.** Lean sources, the blueprint and an output site
+  are read by path in one walk that never follows a symbolic link, and a second
+  walk must find the same folders, names and `stat` signatures; any difference
+  is a change, which the Lean commands retry as before. This replaces the
+  directory-descriptor capture and its Windows fallback (about 1,250 fewer
+  lines). On native Windows, `check`, `render` and the other Lean commands now
+  read Lean sources, so sites get code links there too, and `render
+  --require-declarations` no longer fails for declarations it could not look
+  up. A change that appears and is undone between the two walks is not seen,
+  as with the old engine between its checks.
 - **Titles typeset their math.** Statement headings, Next up and the
   Previous/Next links typeset a title's formulas, as the reader's dependency
   references already did, instead of showing its TeX as typed.
@@ -467,6 +481,23 @@ date when the release is tagged.
   `AUTOFORM_REF` still refuses both, so move the pin before relying on the
   warnings.
 
+### Deprecated
+
+Each prints one `warning[deprecated]:` line on standard error once its arguments
+parse, with or without `--json`, and changes nothing else.
+
+- **`autoform search --state`.** Filter each `--json` hit's `state` instead, with
+  `--limit` at least `total_matches`, since the flag filters before the limit.
+  Removed in 0.8.0 (#647).
+- **`autoform search --declaration`.** Filter each `--json` hit's `declaration`
+  the same way, comparing case-insensitively and allowing leading modifiers
+  (`def` keeps `noncomputable def` and `public def`); a misspelled kind then
+  matches nothing instead of exiting 2. Removed in 0.8.0 (#647).
+- **`autoform work list --lean-root` and `work context --lean-root`.**
+  `lean_targets[].source_file` stays in `autoform-work/v2`, always null;
+  `search --lean-root` prints a Lean name's file and line. Removed in 0.8.0
+  (#647).
+
 ### Removed
 
 - **Previous/Next links.** Render no longer ends each book page, or the
@@ -516,6 +547,20 @@ date when the release is tagged.
   digest as before. A decision file with a 0x1A byte or a CR CR LF line ending
   now parses and digests whole, so a 0x1A on `lean-toolchain`'s first line
   gets `invalid-lean-toolchain` instead of passing.
+- **Links whose text wraps.** A link whose text runs onto the next line of its
+  paragraph or list item is read as the site reads it. Loading dropped one in a
+  dependency section without a word, so Hartshorne's relative degree-zero
+  Picard functor gains the proof dependency it was written with. Render
+  published one as written, so a link to an article its chapter absorbs was
+  dead on the site, and a chapter linked that way had no place in the book's
+  order. Code spans are read as the site reads them too, so a link that an
+  escaped backtick or a code span from the line above hid is read. Since these
+  links went unread, a problem with one warns rather than fails: a dependency
+  that does not resolve, names its own article, closes a cycle or leads into
+  an unpublished folder is not counted, any link into an unpublished folder
+  warns, and check and audit warn about a broken one under `## Sources`, audit
+  about one in a coverage file. Every link read before still counts, even one
+  the site shows as code, and only those give an article its cited passage.
 - **Claims inside a Git hook.** The claim commands' Git ignores `GIT_DIR`,
   `GIT_WORK_TREE`, `GIT_INDEX_FILE` and the other variables that point Git at
   another repository, as a hook sets them. With only `GIT_DIR` set, the board's
@@ -698,9 +743,11 @@ theme. Each line names the pull requests to read for detail.
   `catalog:`, `open_statements:`, `published:` and `statement: retracted` in
   `check` and `INVENTORIED` in `render`, so move the pin before using them;
   until then, retract by removing `statement` and `proof` and keeping `lean:`.
-  Older refs assign no areas from `blueprint/atlas.json` but publish it with
-  every id it names, so a project with unpublished folders moves the pin before
-  adding it (#90).
+  It also rejects a dependency cycle that only appears once chapters roll up
+  (#358): leave out the edge that closes it until the pin moves. Older refs
+  assign no areas from `blueprint/atlas.json` but publish it with every id it
+  names, so a project with unpublished folders moves the pin before adding it
+  (#90).
 - **Site.** Render refuses to replace the `autoform-publication/v1` site 0.5.0
   wrote, and the dashboard reports it as stale: delete that output directory,
   such as a local `site-src`, once by hand (#165, #90). A v2 site is replaced

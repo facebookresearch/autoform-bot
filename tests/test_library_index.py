@@ -6,7 +6,9 @@ from dataclasses import replace
 import pytest
 
 from autoform_cli.library.index import (
+    INDEX_FILE,
     INDEX_SCHEMA,
+    TREE_FILES,
     IndexDeclaration,
     IndexDependency,
     IndexHeader,
@@ -20,6 +22,7 @@ from autoform_cli.library.index import (
     relative_path,
     tree_digest,
 )
+from tests.library_fixture import GOLDEN
 
 _SHA = "a" * 64
 
@@ -196,6 +199,25 @@ def test_the_tree_digest_covers_every_module_and_pin_file_in_one_order() -> None
     assert digest != tree_digest([("Lib", _SHA), ("Lib.Convex", "c" * 64)], files)
     assert digest != tree_digest(modules, [files[0], ("lake-manifest.json", b"{ }\n")])
     assert digest != tree_digest(modules, files[:1])
+
+
+def test_the_golden_index_is_written_back_byte_for_byte() -> None:
+    # Libraries publish indexes this writer made, ATLAS's among them (tag autoform-index/64c2773ffad3), and every
+    # consumer recomputes their digests, so these bytes change only with the schema version.
+    data = (GOLDEN / INDEX_FILE).read_bytes().replace(b"\r\n", b"\n")
+    index = parse_index(data)
+
+    assert dump_index(index) == data
+    assert index.header.tree == "677c6697d077eb9821bb2638d6724572d2b1c8195f203bae0465158f8c81c937"
+
+
+def test_the_published_digests_are_those_of_the_sources_and_pins() -> None:
+    index = parse_index((GOLDEN / INDEX_FILE).read_bytes())
+    for module in index.modules:
+        assert module_digest((GOLDEN / module.source_file).read_bytes()) == module.sha256
+    pins = [(name, (GOLDEN / name).read_bytes()) for name in TREE_FILES if (GOLDEN / name).exists()]
+
+    assert tree_digest(((module.name, module.sha256) for module in index.modules), pins) == index.header.tree
 
 
 def test_relative_paths_and_source_directories() -> None:

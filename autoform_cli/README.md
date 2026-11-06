@@ -84,9 +84,7 @@ uv run --with mkdocs --with mkdocs-material --with mkdocs-literate-nav \
 ```
 
 Drop `--require-declarations` when reviewing work in progress, where a
-statement may name a Lean declaration that does not exist yet. On native
-Windows, run `check` and `render` without `--lean-root`; the site then has no
-code links or Lean code ([publication contract](reference/runtime-and-publication.md#publication-contract)).
+statement may name a Lean declaration that does not exist yet.
 
 `autoform dashboard . --site-dir site` then serves the built site on `127.0.0.1`
 until you stop it, with a read-only live overlay of current author claims. The
@@ -114,8 +112,7 @@ cannot use. None changes the exit status.
 
 `--no-site-warnings` leaves the site's page warnings to a `render` that runs
 next ([Validation](reference/validation-and-audit.md#validation)); the generated
-`blueprint-pages.yml` passes it when its `AUTOFORM_REF`'s `check --help` lists
-it, and `autoform-verify.yml` does not.
+`blueprint-pages.yml` passes it, and `autoform-verify.yml` does not.
 
 ### audit and coverage
 
@@ -207,9 +204,9 @@ Inspect the current Markdown-derived formalization frontier, and list the open
 statements and the articles that rest on them:
 
 ```bash
-autoform work list . --lean-root .
-autoform work list . --lean-root . --json
-autoform work context chapter/result . --lean-root . --json
+autoform work list .
+autoform work list . --json
+autoform work context chapter/result . --json
 autoform work assumptions .
 autoform work assumptions blueprint --json
 ```
@@ -267,7 +264,7 @@ Before adding an article or a Lean helper, check the blueprint for its result:
 ```bash
 autoform search . "separating hyperplane" --lean-root .
 autoform search . "non-ambiguous" --lean-root . --json --limit 20
-autoform search blueprint "interlacing" --state proved --state fully_proved
+autoform search blueprint "interlacing"
 autoform library list .
 autoform library index . --lib MathlibExt
 ```
@@ -362,8 +359,8 @@ The summary is plain Markdown built from the explorer's project map (the
 scaffolded vault ignores it): the statuses, one row per chapter with its items,
 ready work and dependencies both ways, the articles while the roadmap has at
 most 120, and how to open the explorer. Its front matter carries `kind: graph`
-and `autoform_generated: true`. It replaces a missing page, one it wrote, or the
-Mermaid page earlier versions wrote, and exits 2 refusing any other page.
+and `autoform_generated: true`. It replaces a missing page or one Autoform
+wrote, and exits 2 refusing any other page.
 
 Build the publishable site source, with links to Lean declarations at the
 current commit:

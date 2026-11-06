@@ -82,27 +82,22 @@ blueprint (an article's Markdown source, a source note) also need the
 blueprint's bytes in that commit; when they differ, render keeps the code links,
 keeps source notes in the site, and warns with the first mismatch, or, for a
 blueprint outside the repository or in a nested checkout, does the same without
-a warning. When render reads no Lean file (native Windows, or a project with no
-`.lean` file yet), it records the Git ref only if the blueprint matches it.
+a warning. When render reads no Lean file (a project with no `.lean` file yet),
+it records the Git ref only if the blueprint matches it.
 
 Render replaces only an empty directory or a complete `autoform-publication/v2`
 or v3 site whose files match its inventory (`.DS_Store` and `._*` are ignored),
-and refuses anything else, including a legacy v1 output, which you remove once
-by hand. A failed or refused render leaves the output as it was. The site is
-built in a hidden `.autoform-publication-*` directory beside the output (the
-repository root for `--output site-src`) and swapped in at once; renders into
-one parent directory take turns when it can be locked. A build directory a
-killed render leaves behind is covered by the setup ignore rules but may hold
-the previous site, so inspect it before deleting it. On filesystems without an
-atomic exchange the previous site is first renamed to
+and refuses anything else. A failed or refused render leaves the output as it
+was. The site is built in a hidden `.autoform-publication-*` directory beside
+the output (the repository root for `--output site-src`) and swapped in at once;
+renders into one parent directory take turns when it can be locked. A build
+directory a killed render leaves behind is covered by the setup ignore rules but
+may hold the previous site, so inspect it before deleting it. On filesystems
+without an atomic exchange the previous site is first renamed to
 `.autoform-publication-backup-<name>`, which the next render moves back if the
 swap died midway. On macOS `fsync` does not flush the drive's cache, so a power
-loss can still lose the newest site. Native Windows reads the blueprint and the
-output as two pathname captures that must agree, commits through the backup
-swap without a lock, and reads the Lean sources only for an explicit
-`--lean-root`, which then fails closed. Without one it publishes no code
-links; when a published statement names a `lean:` declaration it warns, and
-`--require-declarations` makes it exit 1.
+loss can still lose the newest site. Native Windows commits through the backup
+swap without a lock.
 
 Check the site MkDocs builds from render's output for what the build broke:
 
