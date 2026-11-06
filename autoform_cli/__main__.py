@@ -291,7 +291,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     work_list.add_argument(
         "target", nargs="?", default=".", help="project root or blueprint directory"
     )
-    work_list.add_argument("--lean-root", type=Path, help="resolve local Lean declaration targets")
+    work_list.add_argument("--lean-root", type=Path, help="deprecated: resolve local Lean declaration targets")
     work_list.add_argument("--json", action="store_true", help="write stable machine-readable output")
     work_context_parser = work_subparsers.add_parser(
         "context", help="show one article's phase, dependencies, sources, and claim target"
@@ -301,7 +301,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "target", nargs="?", default=".", help="project root or blueprint directory"
     )
     work_context_parser.add_argument(
-        "--lean-root", type=Path, help="resolve local Lean declaration targets"
+        "--lean-root", type=Path, help="deprecated: resolve local Lean declaration targets"
     )
     work_context_parser.add_argument(
         "--json", action="store_true", help="write stable machine-readable output"
@@ -384,7 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         dest="states",
         choices=[state.key for state in status.STATES],
         metavar="KEY",
-        help="keep articles in exactly this derived state (repeatable): "
+        help="deprecated: keep articles in exactly this derived state (repeatable): "
         + ", ".join(state.key for state in status.STATES),
     )
     search.add_argument(
@@ -393,7 +393,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=[],
         dest="declarations",
         metavar="KIND",
-        help="keep articles whose frontmatter declaration is KIND: theorem, lemma, def, ... (repeatable)",
+        help="deprecated: keep articles whose frontmatter declaration is KIND: theorem, lemma, def, ... (repeatable)",
     )
     search.add_argument(
         "--limit",
@@ -1224,6 +1224,12 @@ def _work(args: argparse.Namespace) -> int:
         return _work_assumptions(args)
     if args.work_command in {"impact", "import-impact"}:
         return _work_impact(args)
+    if args.lean_root is not None:
+        _warn_deprecated(
+            f"autoform work {args.work_command} --lean-root",
+            "0.8.0",
+            "source_file will then be null, and search --lean-root prints a Lean name's file and line",
+        )
     # Only loading the roadmap can fail on the project's paths; printing the
     # result stays outside, so an output error is not reported as one.
     try:
@@ -1309,6 +1315,19 @@ def _work(args: argparse.Namespace) -> int:
 
 
 def _search(args: argparse.Namespace) -> int:
+    if args.states:
+        _warn_deprecated(
+            "autoform search --state",
+            "0.8.0",
+            'filter each hit\'s "state" in --json output instead, with --limit at least total_matches',
+        )
+    if args.declarations:
+        _warn_deprecated(
+            "autoform search --declaration",
+            "0.8.0",
+            'filter each hit\'s "declaration" in --json output instead, ignoring case and leading modifiers, '
+            "with --limit at least total_matches",
+        )
     # Only reading the blueprint and the libraries can fail on the project's
     # paths; printing the result stays outside, so an output error is not
     # reported as one.
@@ -1806,6 +1825,13 @@ def _human_text(value: object) -> str:
         character if character.isprintable() else character.encode("unicode_escape").decode("ascii")
         for character in str(value)
     )
+
+
+def _warn_deprecated(spelling: str, removal: str, instead: str) -> None:
+    """Warn on stderr that *spelling* goes in release *removal*; stdout and the exit code stay the same."""
+
+    message = f"warning[deprecated]: {spelling} is deprecated and will be removed in {removal}; {instead}"
+    print(_human_text(message), file=sys.stderr)
 
 
 def _ascii_text(value: object) -> str:
