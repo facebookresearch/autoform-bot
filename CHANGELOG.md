@@ -647,7 +647,7 @@ parse, with or without `--json`, and changes nothing else.
   screen reader hears for the reading pane's button and for the page heading
   while the reader is collapsed showed a title's formula as TeX source, such
   as `$L^p$ spaces` or `\(L^p\) spaces`. They now read it as text,
-  `L^p spaces`, and a title's code keeps its dollars.
+  `Lᵖ spaces`, and a title's code keeps its dollars.
 - **A later H1.** An article with more than one H1 loads: the first H1 is the
   title, a later one stays in its section, as on the site, and `check` warns,
   naming its line. Since #171 read a fence that never closes as text, a shell
@@ -660,7 +660,6 @@ parse, with or without `--json`, and changes nothing else.
   published as its own page, about one indented up to three spaces, which only
   Autoform reads as one. A missing title's error names a `#Title` line the site
   reads as the title.
-  `Lᵖ spaces`, and a title's code keeps its dollars.
 - **TeX in map labels.** The map's card labels, tooltips and accessible names
   kept a formula's commands as words glued to their neighbours, such as
   `left(fracupright)`. One reducer, shared with the explorer, now reads
