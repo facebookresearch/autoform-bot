@@ -168,6 +168,9 @@ date when the release is tagged.
 - **The landing's coverage line** leads with the source areas split into
   statements: "5 source areas, all split into statements", or "3 of 5 source
   areas split into statements" before the other dispositions.
+- **How a library states a result.** In a vault about a library, Roadmap lets an
+  article say, in English and TeX, how that library states each result, and
+  Agent Review's roadmap rubric no longer counts that text as Lean-side (#691).
 - **Search warns about a library it cannot verify.** `search --library` leaves
   out a library it cannot verify, with a `warning: library NAME:` line on
   standard error and, in `--json`, an entry under the new `refused` key, and
