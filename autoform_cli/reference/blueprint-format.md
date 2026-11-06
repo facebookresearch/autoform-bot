@@ -86,8 +86,7 @@ areas such as `Foundations` or `Geometry & Topology`, never repository or
 workflow buckets such as `MathlibExt` or `catalog-01`. Autoform does not guess
 areas from paths, imports, or titles.
 
-An optional container-only `navigation` role separates mathematical topics
-from repository organization:
+Container-only `navigation` roles separate topics from repository organization:
 
 - `topic` (the default): a mathematical subject or coherent group of results.
 - `collection`: a library or other organizational collection; its parent's
@@ -157,8 +156,7 @@ Render omits the hidden directory from the site and the publication hash.
 
 ## Assertions and derived status
 
-An article asserts only facts a human or agent verified, in its frontmatter or,
-in a project with `blueprint/links/`, in its [annotation](links.md):
+An article asserts only facts a human or agent verified:
 
 | Key | Meaning |
 | --- | --- |
@@ -195,11 +193,10 @@ Readiness depends on the [policy](open-statements.md#open-statements).
 
 A proved theorem that rests on unfinished work is green, not the dark green of
 `fully_proved`. A `conditional` ("conditionally proved") article reaches an
-[open statement](open-statements.md#open-statements) through its
-dependencies; an open dependency counts together with whatever its statement
-prerequisites reach, and a proved dependency passes on everything it reaches.
-The site colours it violet and lists those open statements in an `Assumes`
-row of its statement box.
+[open statement](open-statements.md#open-statements) through its dependencies;
+an open dependency counts together with whatever its statement prerequisites
+reach, and a proved one passes on everything it reaches. The site colours it
+violet and lists those open statements in an `Assumes` row of its statement box.
 
 ## Coverage
 
@@ -219,12 +216,11 @@ The machine-checkable `coverage/README.md` contract contains one
 
 Audit JSON includes canonical rows, the exact coverage source hash, and counts,
 which always have an integer `INVENTORIED` key; `publication.json` records only
-aggregate counts. To record both axes of one source area, use distinct
-axis-qualified `Area` labels, unrelated to an article's `area:` field:
-`Repository inventory / MathlibExt` may be `INVENTORIED` while
-`Mathematical exposition / MathlibExt` is still `MAPPED`. Duplicate exact area
-labels are invalid. A broad inventory row may link a container and classify
-every catalog below it.
+aggregate counts. To record both axes of one source area, use axis-qualified
+`Area` labels, unrelated to an article's `area:` field: `Repository inventory /
+MathlibExt` may be `INVENTORIED` while `Mathematical exposition / MathlibExt` is
+still `MAPPED`. Duplicate exact area labels are invalid. A broad inventory row
+may link a container and classify every catalog below it.
 
 The contract is read as published Markdown and fails closed:
 
@@ -243,15 +239,13 @@ The contract is read as published Markdown and fails closed:
   existing roadmap article. Every local link must resolve, fragments included.
 
 `coverage.complete` in audit and `publication.json` means only that no declared
-row is still `MAPPED`. It does **not** claim the rows cover the source
-exhaustively, which no local check can judge, nor that linked articles are
-formalized or proved.
+row is `MAPPED`. It does **not** claim the rows cover the whole source, which no
+local check can judge, nor that linked articles are formalized or proved.
 
 Target metrics (the denominator, readiness count, and progress breakdowns in the
-book and `autoform check`) count non-container articles carrying `declaration`,
-never a `catalog: module` record. A scope's status bar, item count, and
-dependency-map legend also count `not_ready` leaves that declare nothing yet, so
-deferred work holds its scope open, and each catalog under a neutral status,
-`inventory checked` once fully proved and `inventory pending` until then, which
-never changes the scope's rolled-up status; a target that depends on a catalog
-still waits for it.
+book and `check`) count leaves carrying `declaration`, never a `catalog: module`
+record. A scope's status bar, item count, and dependency-map legend also count
+`not_ready` leaves that declare nothing yet, so deferred work holds its scope
+open, and each catalog under a neutral status, `inventory checked` once fully
+proved and `inventory pending` until then, which never changes the scope's
+rolled-up status; a target that depends on a catalog still waits for it.

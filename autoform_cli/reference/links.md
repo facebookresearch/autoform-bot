@@ -2,17 +2,14 @@
 
 `blueprint/links/` holds [literature-links](https://github.com/mathlib-initiative/literature-links)
 1.0.2 annotations in JSON Lines files, with optional `_defaults.json` folder
-defaults; render never publishes it. An annotation about a roadmap article
-carries its facts, which every command reads there instead of in its
-frontmatter, where only the settings `open_statements`, `tracks_lean`,
-`published` and `coverage_list_limit` stay. An article with no annotation keeps
-its frontmatter facts, with a warning. With `links/_defaults.json` holding
-`{"object": {"type": "lean", "uri": "../.."}}`, which makes an end without a
-`uri` the project's, `links/varieties/nullstellensatz.jsonl` may hold:
-
-```json
-{"id": "af_f8d7b54996f51594f707d44f", "kind": "theorem", "status": "formalized", "subject": [{"type": "generic", "uri": "../../roadmap/varieties/nullstellensatz.md"}], "object": [{"location": {"declaration": "Hartshorne.nullstellensatz"}}], "extensions": {"org.autoform": {"origin": "background"}}}
-```
+defaults; render never publishes it. An annotation whose subject is a roadmap
+article, such as `{"type": "generic", "uri": "../roadmap/topic/result.md"}` from
+`links/result.jsonl`, carries that article's facts, which every command reads
+there instead of in its frontmatter; only the settings `open_statements`,
+`tracks_lean`, `published` and `coverage_list_limit` stay there. An article with
+no annotation keeps its frontmatter facts, with a warning. `links/_defaults.json`
+holding `{"object": {"type": "lean", "uri": "../.."}}` makes every end without a
+`uri` the project's, so an end needs only its `location`.
 
 | Annotation | Frontmatter |
 | --- | --- |

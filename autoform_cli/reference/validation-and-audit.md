@@ -64,33 +64,31 @@ and a list nested hundreds of levels deep, past what the site's converter reads.
 turns off ([MathJax](site.md#mathjax) lists them); the rest of the page is
 published as written. Put the project's notation in `blueprint/tex-macros.json`.
 
-`check --no-site-warnings` leaves these page warnings, and what would stop
-`render`, to `render`, which prints the same. It still reads the notes under
-`blueprint/sources/`, since a render that links them in the repository never
-reads them.
+`check --no-site-warnings` leaves these warnings, and what would stop `render`,
+to `render`, which prints the same. It still reads the notes under
+`blueprint/sources/`, since a render linking them in the repository never does.
 
 Lean indexing reads the whole Lean root or nothing. It stops with an error when
-an entry it must read cannot be read safely: a `.lean` file that cannot be
-read, a folder that cannot be listed or searched, a `.lean` entry that is a
-symbolic link or a special file (editor lock links named `.#*.lean` are
-skipped), or an unreadable `manifest.json` or `publication.json` below the
-root, in any folder the walk enters, even one of unrelated files; other files
-are never read. To clear a stop, fix the permissions, or move the entry out of
-the Lean root or into a folder every command skips: `.direnv`, `.git`, `.lake`,
-`.obsidian`, `.trash`, `.venv`, `build`, a folder below the root that holds a
-`.git` entry, a skeleton or review packet output folder, or a folder below the
-root that holds a complete `publication.json`, such as a rendered site or the
-`mkdocs` copy of one. There is no command-line option to exclude other
-folders. These names match in any letter case, except `build`, which must be
-lowercase; the `.lean` suffix must match exactly, so `A.LEAN` is not indexed.
-`render` without `--lean-root` uses the blueprint's parent folder as the Lean
-root. A command that indexes during a `render` skips the site being written,
-but one that indexes while `mkdocs build` runs can read the site's copies
-before its `publication.json`, so run it again once the build is done. When
-Lean inputs keep changing, indexing retries and then fails naming the changed
-paths relative to the Lean root, for example `Lean sources kept changing while
-they were indexed; changed: Proj/A.lean`. Skipped folders and files other than
-`.lean` sources may change during a capture.
+an entry it must read cannot be read safely: a `.lean` file that cannot be read,
+a folder that cannot be listed or searched, a `.lean` entry that is a symbolic
+link or a special file (editor lock links named `.#*.lean` are skipped), or an
+unreadable `manifest.json` or `publication.json` below the root, in any folder
+the walk enters, even one of unrelated files; other files are never read. To
+clear a stop, fix the permissions, or move the entry out of the Lean root or
+into a folder every command skips: `.direnv`, `.git`, `.lake`, `.obsidian`,
+`.trash`, `.venv`, `build`, a skeleton or review packet output folder, or a
+folder below the root that holds a `.git` entry or a complete
+`publication.json`, such as a rendered site or the `mkdocs` copy of one. There
+is no command-line option to exclude other folders. These names match in any
+letter case, `build` only in lowercase; the `.lean` suffix must match exactly,
+so `A.LEAN` is not indexed. `render` without `--lean-root` uses the blueprint's
+parent folder as the Lean root. A command that indexes during a `render` skips
+the site being written, but one that indexes while `mkdocs build` runs can read
+the site's copies before its `publication.json`, so rerun it after the build.
+When Lean inputs keep changing, indexing retries and then fails naming the
+changed paths relative to the Lean root, for example `Lean sources kept changing
+while they were indexed; changed: Proj/A.lean`. Skipped folders and files other
+than `.lean` sources may change during a capture.
 
 Within each file, up to an `#exit` line, the index records the declarations
 written with `theorem`, `lemma`, `def`, `abbrev`, `instance`, `structure`,
@@ -196,11 +194,10 @@ names, catalogs, containers and a target recording neither, such as a
 
 `missing-chapter-article` reports a directory directly under `roadmap/` that
 holds articles but names no chapter, so its pages would attach to the roadmap
-root. Deeper directories, such as `definitions/` and `theorems/` buckets, are
-not checked. `overfull-container` reports a mathematical article with more than
-24 direct children. A roadmap root whose direct children are all chapter pages
-may hold 64; one root-level leaf returns it to 24. A `navigation: module` page
-may hold 120.
+root. Deeper ones, such as `definitions/` and `theorems/` buckets, are exempt.
+`overfull-container` reports a mathematical article with more than 24 direct
+children. A roadmap root whose children are all chapter pages may hold 64; one
+root-level leaf returns it to 24. A `navigation: module` page may hold 120.
 
 ### Elaboration limits
 
@@ -232,8 +229,7 @@ A formalizable article must state its result in prose a reader sees. At most
 one of three findings reports a statement that does not, checked in this order:
 
 - `missing-statement-text`: the statement has no prose outside code blocks, HTML
-  comments, and lines that hold only a heading written with `#` marks, such as
-  `### Setting`.
+  comments, and lines that hold only a `#` heading, such as `### Setting`.
 - `empty-statement-text`: the published prose has no letter or digit, as with a
   hidden element, a horizontal rule, an image, a link with no text, or a heading
   that is underlined, quoted, or in a list item.

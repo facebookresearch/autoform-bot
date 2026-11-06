@@ -13,21 +13,21 @@ BUDGETS = {
     "CONTRIBUTING.md": 87,
     "docs/explorer-design.md": 65,  # Internal architecture and failure contracts, not another user guide.
     "README.md": 120,
-    "autoform_cli/README.md": 422,  # K5: command contracts moved to their reference pages.
+    "autoform_cli/README.md": 413,  # K5: command contracts moved to their reference pages.
     "autoform_cli/project/README.md": 120,
     "autoform_cli/reference/abstraction.md": 37,  # New in #491; other docs' budgets fell by as much.
-    "autoform_cli/reference/blueprint-format.md": 257,  # K5: the README's format sections.
+    "autoform_cli/reference/blueprint-format.md": 251,  # K5: the README's format sections.
     "autoform_cli/reference/claims-and-revisions.md": 164,
     "autoform_cli/reference/debrief.md": 45,
-    "autoform_cli/reference/links.md": 38,  # New in #601: the annotations that carry articles' facts.
+    "autoform_cli/reference/links.md": 26,  # New in #660; other docs' budgets fell by more.
     "autoform_cli/reference/open-statements.md": 180,
     "autoform_cli/reference/pinned-names.md": 41,
     "autoform_cli/reference/project-setup.md": 97,
     "autoform_cli/reference/runtime-and-publication.md": 123,
     "autoform_cli/reference/search.md": 180,
-    "autoform_cli/reference/site.md": 134,
-    "autoform_cli/reference/skeleton-and-review.md": 196,
-    "autoform_cli/reference/validation-and-audit.md": 250,  # #193's credit rule; #485's list of captioned commands.
+    "autoform_cli/reference/site.md": 128,
+    "autoform_cli/reference/skeleton-and-review.md": 191,
+    "autoform_cli/reference/validation-and-audit.md": 246,  # #193's credit rule; #485's list of captioned commands.
     "autoform_cli/reference/wiki-links.md": 20,  # Internal optional viewer transport; keep it on demand and concise.
     "autoform_cli/reference/work.md": 127,
     "servers/README.md": 121,

@@ -99,16 +99,15 @@ Validate structure and, with `--lean-root`, that every `lean:` name exists:
 autoform check blueprint --lean-root .
 ```
 
-With `--lean-root`, `check` resolves names only in the project's own Lean files,
-not in Mathlib or other dependencies under `.lake`. A name not found, unless the
-error gives its type's `path:line`
-([Validation](reference/validation-and-audit.md#validation)), adds a note at the
-end of the output: a shared library's declaration belongs in the article's
-implementation note. It also warns about a shared library's declaration that
-[cites a source](reference/search.md#citing-declarations) an unproved article
-reaches, a library index it cannot read or parse, a library with such a
-declaration that fails verification against its checkout, and Lake files it
-cannot use. None changes the exit status.
+`check` resolves names only in the project's own Lean files, not in Mathlib or
+other dependencies under `.lake`. A name not found, unless the error gives its
+type's `path:line` ([Validation](reference/validation-and-audit.md#validation)),
+adds a note at the end of the output: a shared library's declaration belongs in
+the article's implementation note. It also warns about a shared library's
+declaration that [cites a source](reference/search.md#citing-declarations) an
+unproved article reaches, a library index it cannot read or parse, a library
+with such a declaration that fails verification against its checkout, and Lake
+files it cannot use. None changes the exit status.
 
 `--no-site-warnings` leaves the site's page warnings to a `render` that runs
 next ([Validation](reference/validation-and-audit.md#validation)); the generated
@@ -144,8 +143,6 @@ definition with its body, a theorem with its type only. It reports the axioms
 the declaration rests on (a `sorry` shows as `sorryAx`). `--output` records the
 `autoform-skeleton/v5` report, `--packets DIR` writes one packet per skeleton,
 and `--passages DIR`, which requires `--packets`, each article's cited passage.
-An unresolved `lean:` name affects only its article: the others still extract,
-the command exits nonzero, and nothing is written into the vault.
 
 Run skeleton extraction only in a trusted checkout or an operating-system
 sandbox: Lake evaluates `lakefile.lean`, and the probe imports project code
@@ -170,11 +167,10 @@ autoform render blueprint --lean-root . --review
 ```
 
 `review prepare` writes one blind packet per declaration of every Lean-mapped
-article, named by its hash, with a manifest for the coordinator. `review record`
-runs no Lean and files a blind auditor's read-back as a card. `review check`
-fails until every Lean-mapped article has current cards and a `review_approved`
-equal to the review hash it prints. `render --review` puts a *Review* disclosure
-under every formalized statement. [Statement
+article. `review record` runs no Lean and files a blind auditor's read-back as a
+card. `review check` fails until every Lean-mapped article has current cards and
+a `review_approved` equal to the review hash it prints. `render --review` puts a
+*Review* disclosure under every formalized statement. [Statement
 review](reference/skeleton-and-review.md#statement-review) gives each command's
 rules and refusals. `review prepare`, `review check`, and `render --review` take
 the same `--timeout SECONDS` as `skeleton`.
@@ -217,11 +213,8 @@ is unblocked, by the rule behind the derived `can_state` and `can_prove` states
 and the site's Next up card (see [Open
 statements](reference/open-statements.md#open-statements)).
 
-`work context` takes the path-derived node ID or an `article_id`; `work list`
-fails if an unfinished formalizable leaf lacks one (add them with `autoform
-migrate article-ids --write`). Both are read-only and refuse an article whose
-bytes changed after the graph loaded; rerun once the project is idle. [Work list
-and context](reference/work.md#work-list-and-context) gives the report, the
+`work context` takes the path-derived node ID or an `article_id`. [Work list and
+context](reference/work.md#work-list-and-context) gives the report, the
 `autoform-work/v2` JSON, blockers, revision lines and open-policy output.
 
 `work assumptions --json` writes the `autoform-assumptions/v1` contract CI
@@ -255,8 +248,7 @@ built in this checkout: a missing or stale build exits 2 with the `lake build`
 command for them. [work import-impact](reference/work.md#work-import-impact)
 gives the scopes, ownership rules, JSON and every field.
 
-Imports are allowed regardless of reported breadth; follow the [Formalize import
-workflow](../skills/formalize/SKILL.md#import-edits).
+Use the [Formalize import workflow](../skills/formalize/SKILL.md#import-edits).
 
 ### search
 
@@ -284,13 +276,12 @@ autoform migrate article-ids blueprint --check
 autoform migrate article-ids blueprint --write
 ```
 
-Without `--write` the planner is read-only: it validates uniqueness and
-proposes deterministic IDs, with exact source hashes, for articles that lack
-one. `--write` only adds each ID as the first frontmatter line, or as a
-frontmatter block of its own. It checks every article before writing the first,
-writes one only while its bytes still have the planned hash, and refuses one
-that changed or became a symlink; a rerun completes the plan. The runtime and
-`autoform work` see assigned IDs at once.
+Without `--write` the planner is read-only: it validates uniqueness and proposes
+deterministic IDs, with exact source hashes, for articles that lack one.
+`--write` only adds each ID as the first frontmatter line, or as its own
+frontmatter block. It checks every article before writing the first, and refuses
+one that changed since the plan or became a symlink; a rerun completes the plan.
+The runtime and `autoform work` see assigned IDs at once.
 
 ### claim
 
@@ -363,8 +354,7 @@ most 120, and how to open the explorer. Its front matter carries `kind: graph`
 and `autoform_generated: true`. It replaces a missing page, one it wrote, or the
 Mermaid page earlier versions wrote, and exits 2 refusing any other page.
 
-Build the publishable site source, with links to Lean declarations at the
-current commit:
+Build the site source, with links to Lean declarations at the current commit:
 
 ```bash
 autoform render blueprint --output site-src --lean-root . --require-declarations
