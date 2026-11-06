@@ -730,6 +730,24 @@ def _contrast(first: str, second: str) -> float:
     return (high + 0.05) / (low + 0.05)
 
 
+def test_the_pane_splitters_keep_their_targets_on_touch_and_their_marks_in_forced_colours() -> None:
+    """The splitters were 8px wide on a touch screen, and forced colours dropped their line and Map only's pressed look."""
+    style = dag_viewer._STYLE
+    # The line stays centred however wide the splitter is.
+    assert ".bp-dag-splitter::after { content: \"\"; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px;" in style
+    assert "@media (pointer: coarse) { .bp-dag-splitter { width: 24px; } }" in style
+    # Forced colours replace backgrounds, so the line and the pressed look use system colours, and a border for the latter.
+    forced = style.split("@media (forced-colors: active) {\n", 1)[1].split("\n}", 1)[0]
+    assert (".bp-dag-splitter:hover::after, .bp-dag-resizing .bp-dag-splitter:focus::after "
+            "{ background: Highlight; forced-color-adjust: none; }") in forced
+    assert ".bp-dag-viewer .bp-dag-map-only[aria-pressed=true] { border: 2px solid Highlight; }" in forced
+    # The border would take 4px of the pressed button's 44px reach.
+    assert ".bp-dag-viewer .bp-dag-map-only[aria-pressed=true]::after { inset: -8px; }" in forced
+    # A focused splitter shows the ring without its line, except while dragged.
+    assert ".bp-dag-splitter:focus-visible::after" not in style
+    assert ".bp-dag-splitter:hover::after, .bp-dag-resizing .bp-dag-splitter:focus::after { background: var(--dag-link); }" in style
+
+
 def test_dark_explorer_cards_read_against_the_page_toned_map() -> None:
     """Outlined cards were filled with the dark map's own #18191A, and planned's stroke had 2.1:1 against it."""
     style = dag_viewer._STYLE

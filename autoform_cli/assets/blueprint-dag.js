@@ -462,8 +462,11 @@
           if (readingTarget) { readingTarget.tabIndex = -1; readingTarget.focus({preventScroll: true}); }
         } else if (bundle.focus && (mapRequested || !readerShown) && !bundle.snapshot) {
           var control = mapControl(); if (control) control.focus({preventScroll: true});
-          // Without a map to take it, a pick leaves focus on the filter, as Back to map does once the map is due.
-          if (!mapRequested && (!control || document.activeElement !== control)) (tracksLean ? dom$filterSummary : dom$search).focus({preventScroll: true});
+          // A pick made while the map is missing or not yet drawn leaves focus on the filter, as Back to map does; a page
+          // just opened leaves focus where it is.
+          if (!mapRequested && bundle.reason !== "start" && (!control || document.activeElement !== control)) {
+            (tracksLean ? dom$filterSummary : dom$search).focus({preventScroll: true});
+          }
         }
         resolve();
       }); }); });
@@ -942,8 +945,8 @@
     // a tab at the map's edge brings it back.
     function bindPanes() {
       var scope = window.__md_scope && window.__md_scope.pathname, key = "autoform:book-panes:v1" + (scope ? ":" + scope : ""), panes;
-      try { panes = JSON.parse(window.localStorage.getItem(key)); } catch (error) { /* No choice stored. */ }
-      // A stored value of another shape, or a width no drag could give, is dropped rather than written into the grid.
+      try { panes = JSON.parse(window.localStorage.getItem(key)); } catch (error) { /* Refused storage, or not JSON. */ }
+      // A stored value of another shape, or a width out of range, is dropped rather than written into the grid.
       if (!panes || typeof panes !== "object" || Array.isArray(panes)) panes = {};
       if (!(panes.topics >= 160 && panes.topics <= 480)) delete panes.topics;
       if (!(panes.reading > 0 && panes.reading < 1)) delete panes.reading;
@@ -958,7 +961,8 @@
       var bars = {topics: splitter("Resize Topics", main), reading: splitter("Resize the reading pane", dom$inspector)};
       var tabs = {topics: button("bp-dag-pane-tab bp-dag-pane-tab-topics", "Topics", "Show Topics"),
         reading: button("bp-dag-pane-tab bp-dag-pane-tab-reading", "Reading", "Show the reading pane")};
-      main.append(tabs.topics, tabs.reading);
+      // Each tab comes in tab order where it sits: Topics' before the map, the reader's after it.
+      main.prepend(tabs.topics); main.append(tabs.reading);
       // A drawn full-screen mark, like the theme switch beside it, so the trail row stays one line high.
       var mapOnly = button("bp-dag-map-only", "", "Map only"), svg = "http://www.w3.org/2000/svg", mark = document.createElementNS(svg, "svg");
       mark.setAttribute("viewBox", "0 0 20 20"); mark.setAttribute("aria-hidden", "true");
@@ -993,17 +997,20 @@
       // Each splitter sits on its pane's inner edge and reports its pane's share of the width and the share's bounds; the
       // overview's collapsed reader and a drawer have none.
       function place() {
-        var width = dom$body.clientWidth || 1;
+        var width = dom$body.clientWidth || 1, focused = document.activeElement;
         bars.topics.hidden = !wide() || sheetLayout() || hidden("topics");
         bars.reading.hidden = sheetLayout() || hidden("reading") || dom$inspector.offsetWidth < 100;
         Object.keys(bars).forEach(function (side) {
           var bar = bars[side], pane = paneOf[side];
           if (bar.hidden) return;
-          bar.style.left = (side === "topics" ? pane.offsetWidth : pane.offsetLeft) - 4 + "px";
+          bar.style.left = (side === "topics" ? pane.offsetWidth : pane.offsetLeft) - bar.offsetWidth / 2 + "px";
           [["now", pane.offsetWidth], ["min", least(side)], ["max", most(side)]].forEach(function (value) {
             bar.setAttribute("aria-value" + value[0], String(Math.round(100 * value[1] / width)));
           });
         });
+        // A splitter that a narrower window or an overview hides hands its focus to what stands for its pane there.
+        if (bars.topics.hidden && focused === bars.topics) dom$outlineToggle.focus({preventScroll: true});
+        if (bars.reading.hidden && focused === bars.reading) dom$sheetHandle.focus({preventScroll: true});
       }
       function save() { try { window.localStorage.setItem(key, JSON.stringify(panes)); } catch (error) { /* A preference only. */ } }
       // A width from the pointer or the keys, kept within the pane's bounds. Returns whether the pane was pulled nearly shut,
@@ -1022,12 +1029,13 @@
           event.preventDefault(); bar.focus({preventScroll: true});
           if (bar.setPointerCapture) bar.setPointerCapture(event.pointerId);
           host.classList.add("bp-dag-resizing");
-          // A pane dragged shut comes back at the width it had before the drag. A drag ends however the pointer is let go,
-          // including the browser taking it back.
+          // The edge moves as far as the pointer does, wherever on the splitter it was pressed. A pane dragged shut comes back
+          // at the width it had before the drag. A drag ends however the pointer is let go, including the browser taking it.
           var shut = false, before = panes[side], events = ["pointermove", "pointerup", "pointercancel", "lostpointercapture"];
+          var held = bar.getBoundingClientRect(), grab = event.clientX - held.left - held.width / 2;
           function move(moved) {
-            var box = dom$body.getBoundingClientRect();
-            shut = resizeTo(side, side === "topics" ? moved.clientX - box.left : box.right - moved.clientX);
+            var box = dom$body.getBoundingClientRect(), x = moved.clientX - grab;
+            shut = resizeTo(side, side === "topics" ? x - box.left : box.right - x);
           }
           function end() {
             events.forEach(function (type, index) { bar.removeEventListener(type, index ? end : move); });
@@ -1059,11 +1067,7 @@
         var shut = mapOnly.getAttribute("aria-pressed") === "true";
         panes.readingHidden = !shut;
         if (wide()) panes.topicsHidden = !shut;
-        else if (!shut && host.classList.contains("bp-dag-outline-open")) {
-          host.classList.remove("bp-dag-outline-open");
-          if (dom$outlineToggle) dom$outlineToggle.setAttribute("aria-expanded", "false");
-          remember();
-        }
+        else if (!shut && host.classList.contains("bp-dag-outline-open")) dom$outlineToggle.click();
         apply(); save();
       });
       if (window.ResizeObserver) { var ro = new ResizeObserver(place); ro.observe(dom$inspector); ro.observe(dom$navigation); observers.push(ro); }

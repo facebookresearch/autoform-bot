@@ -203,10 +203,12 @@ body.pm-page { background: var(--pm-bg); color: var(--pm-fg); font: 14px/1.45 va
 .pm-app.pm-embedded { position: absolute; inset: 0; display: block; height: auto; container-type: inline-size; color: var(--pm-fg); font: 14px/1.45 var(--pm-font); }
 .pm-embedded .pm-stage { position: absolute; inset: 0; background: var(--pm-bg); }
 .pm-embedded .pm-top { position: absolute; z-index: 6; right: 12px; bottom: 12px; max-width: calc(100% - 24px); padding: 0; border: 0; background: none; }
-/* A narrow map (the book keeps it 160px wide at least) wraps its tools and drops the general hint. */
-.pm-embedded .pm-tools { flex-wrap: wrap; justify-content: flex-end; }
 .pm-embedded .pm-hint:not(.pm-hint-strong) { right: 260px; }
+/* A narrow map (the book keeps it 160px wide at least) wraps its tools, drops the general hint and keeps a strong hint
+   as wide as its words, up to the map's width. */
+.pm-embedded .pm-tools { flex-wrap: wrap; justify-content: flex-end; }
+@container (max-width: 520px) { .pm-embedded .pm-hint:not(.pm-hint-strong) { display: none; } }
+.pm-embedded .pm-hint.pm-hint-strong { width: max-content; max-width: calc(100% - 24px); }
 /* A phone has no keys or Control-scroll, and its stage is short. */
 @media (max-width: 700px) { .pm-embedded .pm-hint:not(.pm-hint-strong) { display: none; } }
-@container (max-width: 520px) { .pm-embedded .pm-hint:not(.pm-hint-strong) { display: none; } }
 .pm-embedded :is(.pm-home, .pm-trail, .pm-search, .pm-side, .pm-reader) { display: none !important; }
