@@ -140,6 +140,7 @@ from .markdown import (
     STATEMENT_BOX,
     _blank,
     _blank_code,
+    _unquoted,
     blueprint_root,
     boxed,
     converted_alone,
@@ -147,7 +148,6 @@ from .markdown import (
     frontmatter_end,
     mask_fences_and_comments,
     header_title,
-    link_definitions,
     link_targets,
     name_text,
     only_links,
@@ -210,6 +210,9 @@ _LINK_DEFINITION = re.compile(
     r'(?P<target><[^>\r\n]+>|[^\s]+)'
     r'(?P<rest>[ \t]*(?:(?P<quote>["\'])(?:.*)(?P=quote)[ \t]*|\(.*\)[ \t]*)?)$'
 )
+#: A block marker an image's kept text may start with: a heading or quote
+#: marker, a bullet or rule character, or an ordered item's period.
+_KEPT_TEXT_MARKER = re.compile(r"^ {0,3}\d*(?P<char>(?<=\d)\.|(?<!\d)[#>*+-])")
 _ARTICLE_SLOT = re.compile(
     rf"^(?P<indent>[ \t]*)[-*+]\s+\[(?=[^\]]){_LINK_LABEL}\]"
     r"\(\s*(?P<target>[^)\s]+)(?:\s+[^)]*)?\)\s*$"
@@ -780,7 +783,11 @@ def _publication(
                     f"{relative.as_posix()}: is not UTF-8 text, as a Markdown page must be, so the site leaves it "
                     "out; save it as UTF-8"
                 )
-                omitted[source] = "not-utf8"
+                if sources_base is not None and relative.parts[:1] == (SOURCES_DIR,):
+                    # A link to it is reached in the repository, as the rest of sources/ the site leaves out.
+                    linked[source] = _source_href(sources_base, relative.parts[1:])
+                else:
+                    omitted[source] = "not-utf8"
                 continue
             text, found = published(written, source, destination / relative)
             files[source] = (
@@ -805,10 +812,8 @@ def _publication(
                 "save it as an image (PNG, JPEG, GIF, WebP), a PDF or plain text, "
                 "or keep it outside blueprint/"
             )
-    warnings.extend(
-        f"{issue}, so the site publishes the folder"
-        for issue in unpublished_setting_issues([(_relative(source, blueprint).as_posix(), data) for source, data in snapshot.items()])
-    )
+    named = [(_relative(source, blueprint).as_posix(), data) for source, data in snapshot.items()]
+    warnings.extend(unpublished_setting_issues(named))
     if blueprint / TEX_MACROS not in snapshot and any(
         _is_within(source, blueprint / TEX_MACROS) for source in snapshot
     ):
@@ -1021,7 +1026,7 @@ def render_site(
         # The commit must hold sources/ only when something there may be linked
         # in it, not when all it holds is a folder that stays off the site.
         sources = any(
-            name.partition("/")[0] == SOURCES_DIR
+            name.startswith(f"{SOURCES_DIR}/")
             for name in (*dict(snapshot.files), *(name for name, kind in snapshot.omitted if kind != "unpublished"))
         )
         reasons: list[str] = []
@@ -1063,7 +1068,13 @@ def render_site(
             root_prefix=root_prefix,
             sources=dict(lean.source_files),
         )
-        # Scans and data leave the site only for a directory the verified commit holds.
+        # The inventory accounts for every file the verified commit holds.
+        tracked = tracked_files(repo_root, commit, blueprint) if links_blueprint and commit else None
+        # Scans and data leave the site only for a directory the verified commit
+        # holds, which it may though nothing there is linked, such as a
+        # committed folder that stays off the site; the folder is linked then.
+        if not sources and tracked is not None and SOURCES_DIR in snapshot.directories:
+            sources = any(name.startswith(f"{SOURCES_DIR}/") for name in tracked)
         sources_base = _sources_base(copy, copy_root, linker) if sources else None
         reviews: dict[str, str] = {}
         review_warnings: list[str] = []
@@ -1091,8 +1102,6 @@ def render_site(
                 unpublished=[name for name, kind in snapshot.omitted if kind == "unpublished"],
             )
         source_revision = _source_revision(snapshot)
-        # The inventory accounts for every file the verified commit holds.
-        tracked = tracked_files(repo_root, commit, blueprint) if links_blueprint and commit else None
         report = _publish(
             destination,
             expected,
@@ -2639,6 +2648,10 @@ def _render_landing_page(
     scopes = graph_views.group_nodes(graph)
     book = graph_pages.book_contents(graph, scopes) if scopes else None
     book_href = _as_published(relative_link(destination / book, page, ".html")) if book else None
+    sources_href = relative_link(sources_page, page, ".html") if sources_page else None
+    # MkDocs serves a README as its folder's index only when it is spelled README.md.
+    if sources_page is not None and sources_page.name == "README.md":
+        sources_href = _as_published(sources_href)
     hero = _render_hero(
         title,
         body,
@@ -2653,7 +2666,7 @@ def _render_landing_page(
         ready_href=f"{book_href}#view=list&status=can_state,can_prove" if book_href else None,
         # Without a roadmap contents page the book starts here.
         book_href=None if book == Path("README.md") else book_href,
-        sources_href=_as_published(relative_link(sources_page, page, ".html")) if sources_page else None,
+        sources_href=sources_href,
     )
     next_up = _next_target(
         graph,
@@ -3396,7 +3409,7 @@ def _rewrite_links(
     if resolved is None:
         resolved = {}
     # A reference image takes its destination from a definition anywhere on the page.
-    references = link_definitions(_content_lines(text))
+    references = _page_definitions(text)
 
     def moved_target(raw: str, *, image: bool = False) -> str | None:
         """Where *raw* should point once published, or None to leave it alone."""
@@ -3421,14 +3434,15 @@ def _rewrite_links(
             return None
         # Capture leaves out hidden paths and unpublished folders, so the site has
         # no page there, though check's graph knows the articles in such a folder.
-        # A hidden source note is reached through the repository instead.
+        # Once render verified the commit, a hidden source note is reached
+        # through the repository instead.
         try:
             relative = _relative(candidate, blueprint)
         except ValueError:
             relative = None
         if relative is not None and (
             any(_is_within(candidate, folder) for folder in unpublished)
-            or (_is_hidden(relative) and relative.parts[:1] != (SOURCES_DIR,))
+            or (_is_hidden(relative) and (sources_base is None or relative.parts[:1] != (SOURCES_DIR,)))
         ):
             unlinked.add(raw)
             if dropped is not None:
@@ -3528,14 +3542,14 @@ def _rewrite_links(
                 continue
             raw = _inline_destination(line, match)
             if moved_target(raw, image=True) == "" and raw in unlinked:
-                pieces += [line[end : match.start()], line[match.start("label") : match.end("label")]]
+                pieces += [line[end : match.start()], _kept_text(line[match.start("label") : match.end("label")])]
                 end = match.end()
         line = "".join(pieces) + line[end:]
         # So does a reference image of a file the site links in the repository;
         # its definition stays, for a link that uses it.
         for start, text_start, text_end, stop, raw in reversed(reference_images(line, references) if references else []):
             if moved_target(raw, image=True) == "" and raw in repository_images:
-                line = line[:start] + line[text_start:text_end] + line[stop:]
+                line = line[:start] + _kept_text(line[text_start:text_end]) + line[stop:]
         pieces = []
         end = 0
         for match in _MARKDOWN_LINK.finditer(_link_mask(line)):
@@ -3556,6 +3570,44 @@ def _rewrite_links(
         return "".join(pieces) + line[end:]
 
     return _outside_fences(text, rewrite, page=True, joined=True)
+
+
+def _page_definitions(text: str) -> dict[str, str]:
+    """The reference definitions the site reads in *text* once
+    :func:`_rewrite_links` has rewritten it, by label, each with its target as
+    written: one the site reads as written, in a quote too, and one the
+    rewrite makes readable, in a block it opens with a definition, such as a
+    target in angle brackets that holds a space. A later definition of a label
+    replaces an earlier one, as on the site."""
+
+    definitions: dict[str, str] = {}
+    opens_with_one = False
+    previous_blank = True
+    for line in _content_lines(text):
+        if not line.strip():
+            previous_blank = True
+            continue
+        written = _LINK_DEFINITION.match(line)
+        # The rewrite reads a block line by line when its first line is a definition.
+        if previous_blank:
+            opens_with_one = written is not None
+        previous_blank = False
+        # The site expands tabs before it reads a definition.
+        read = _SITE_LINK_DEFINITION.match(_unquoted(line)[0].expandtabs(4))
+        if read is not None:
+            definitions[read.group(1).strip().lower()] = read.group(2)
+        elif written is not None and opens_with_one:
+            definitions[written.group("label").strip().lower()] = written.group("target")
+    return definitions
+
+
+def _kept_text(text: str) -> str:
+    """*text*, an image's alternative text, kept where the image stood. Where
+    it starts a line, the site would read a leading ``#``, ``>``, list marker
+    or rule as block markup, so that character is escaped."""
+
+    marker = _KEPT_TEXT_MARKER.match(text)
+    return f"{text[: marker.start('char')]}\\{text[marker.start('char') :]}" if marker else text
 
 
 def _bracketed(href: str) -> str:
@@ -4174,8 +4226,9 @@ def _review_disclosures(
     has them. A passage shown must come from a file the site publishes, judged
     by its name in ``captured``, the captured files' names, or with
     ``sources_linked`` from one under ``sources/``, which the site links at the
-    verified commit when it does not publish it; ``unpublished`` names the
-    folders capture left out, so a passage from one is refused as such.
+    verified commit when it does not publish it. A passage from a hidden file,
+    or from one of ``unpublished``, the folders capture left out, is refused
+    as such.
     """
 
     changed = "while the site was being rendered; rerun once the blueprint is idle"
@@ -4206,27 +4259,49 @@ def _review_disclosures(
     # Render writes its own file where a vault's copy of one of these would go.
     # Planned once: the plan names every page the site writes.
     written_over = frozenset(_site_paths(graph))
+    # The copy lacks what capture leaves out, hidden files and the folders
+    # that say published: false. A passage from one is refused as such, and a
+    # locator into a note there, which the vault skips, is skipped in the copy
+    # too. Names are compared as capture lists them, in one Unicode form.
+    withheld = [PurePosixPath(unicodedata.normalize("NFC", folder)) for folder in unpublished]
+
+    def unpublished_at(name: str) -> bool:
+        return any(_is_within(PurePosixPath(unicodedata.normalize("NFC", name)), folder) for folder in withheld)
+
+    def skipped(target: str, page: Path) -> bool:
+        name = _cited_name(target, page, graph.blueprint_dir)
+        hidden = _is_hidden(PurePosixPath(name))
+        return name.casefold().endswith(".md") and (hidden or unpublished_at(name))
+
     # A passage shown must be the one the copy cuts, from a file the site holds.
     for article in bundle.articles:
         if article.node_id not in graph.nodes:
             continue
+        # The locator ends in its line range; a file's name may hold a #.
+        cited = (article.passage_locator or "").rpartition("#")[0]
+        if cited and unpublished_at(cited):
+            reason = f"cites a passage from {cited}, in a folder that says published: false"
+            edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
+            continue
+        if cited and _is_hidden(PurePosixPath(cited)):
+            reason = f"cites a passage from {cited}, a hidden file render does not read"
+            edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
+            continue
+        node = graph.nodes[article.node_id]
+        kept = tuple(target for target in node.sources if not skipped(target, node.path))
+        if kept != node.sources:
+            node = replace(node, sources=kept)
         issues: list[str] = []
-        shown = source_passage(graph.nodes[article.node_id], graph.blueprint_dir, issues=issues)
+        shown = source_passage(node, graph.blueprint_dir, issues=issues)
         if shown == (article.passage, article.passage_locator):
             if article.passage_locator is not None:
-                # The locator ends in its line range; a file's name may hold a #.
-                cited = article.passage_locator.rpartition("#")[0]
                 cited = spellings.get(_folded(cited), cited)
                 if _left_out(PurePosixPath(cited), written_over, sources_linked=sources_linked):
                     reason = f"cites a passage from {cited}, a file the site leaves out"
                     edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
             continue
         if shown[0] is None and issues:
-            cited = (article.passage_locator or "").rpartition("#")[0]
-            if cited and any(_is_within(PurePosixPath(_folded(cited)), PurePosixPath(_folded(folder))) for folder in unpublished):
-                reason = f"cites a passage from {cited}, in a folder that says published: false"
-            else:
-                reason = f"cites a passage the site does not publish: {issues[0]}"
+            reason = f"cites a passage the site does not publish: {issues[0]}"
             edited.append(ReviewFinding(article.node_id, "review-source-unpublished", reason))
         else:
             edited.append(ReviewFinding(article.node_id, "review-snapshot-changed", f"the cited passage changed {changed}"))
@@ -4262,6 +4337,23 @@ def _folded(name: str) -> str:
     """``name`` as capture compares names for a collision."""
 
     return unicodedata.normalize("NFC", name).casefold()
+
+
+def _cited_name(target: str, page: Path, blueprint: Path) -> str:
+    """The path in ``blueprint`` that a link ``target`` on ``page`` names, as
+    :func:`~autoform_cli.skeleton.source_passage` resolves it, or "" for none."""
+
+    try:
+        parsed = urlsplit(target)
+    except ValueError:
+        return ""
+    if parsed.scheme or parsed.netloc or not parsed.path:
+        return ""
+    spelled = Path(os.path.normpath(page.parent / unquote(parsed.path)))
+    try:
+        return spelled.relative_to(blueprint.resolve()).as_posix()
+    except ValueError:
+        return ""
 
 
 def _left_out(cited: PurePosixPath, written_over: Collection[str], *, sources_linked: bool = False) -> bool:

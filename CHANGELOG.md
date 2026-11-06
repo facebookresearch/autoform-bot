@@ -86,15 +86,17 @@ date when the release is tagged.
   copied beside them. At a verified commit, a hidden note, the folder itself and
   its other files, such as scans, data or a type the site leaves out, are linked
   in the repository, a note's image of one keeps its text, with a warning, and
-  `render --review` accepts a passage cut from one; `publication.json`'s
-  inventory lists the notes and images as `published` and the other captured
-  files there as `linked`. A folder below `sources/` whose README says
-  `published: false` stays off the site, as one below `roadmap/` does, and every
-  link into it, coverage evidence included, keeps its text, with a warning;
-  check's graph does not read the setting there, so render and check warn about
-  a README whose setting does not parse. The nav lists the notes after Coverage,
-  headed by `sources/README.md` when there is one, and the landing page links
-  that page beside the coverage view.
+  `render --review` accepts a passage cut from one it reads, which a hidden one
+  is not; `publication.json`'s inventory lists the notes and images as
+  `published` and the other captured files there as `linked`. A folder below
+  `sources/` whose README says `published: false` stays off the site, as one
+  below `roadmap/` does, and every link into it, coverage evidence included,
+  keeps its text, with a warning. Check's graph does not read the setting there,
+  so render and check warn about a README whose setting does not parse, and
+  about `published` where it takes no effect: in `sources/README.md`, another
+  spelling of a README, or a note's frontmatter. The nav lists the notes after
+  Coverage, headed by `sources/README.md` when there is one, and the landing
+  page links that page beside the coverage view.
 - **Check without site warnings.** `check --no-site-warnings` skips the warnings
   about the pages the site would publish, which `render` prints too. The
   generated `blueprint-pages.yml` passes it, since render runs two steps later,

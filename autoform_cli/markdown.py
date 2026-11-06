@@ -36,6 +36,7 @@ opens in (statement or section) keeps the rest.
 
 from __future__ import annotations
 
+import bisect
 import html
 import json
 import os
@@ -290,7 +291,10 @@ def _links(
     :func:`_block_links` passes a block instead, whose code spans *code* and
     link destinations *target* find as the site does. :func:`link_targets`
     passes the patterns check has always read one line with. Each reference
-    image read on the way goes to *images*, as :func:`reference_images` gives it.
+    image read on the way goes to *images*, as :func:`reference_images` gives
+    it, and only then are the site's image passes followed further: past what
+    a link pass skipped, into a link's text, and giving way to a link those
+    passes read first.
     """
 
     if _LINK_DEFINITION.match(value):
@@ -302,41 +306,68 @@ def _links(
     masked = _BRACKET_ESCAPE.sub(_blank, code_masked)
     closing = _closing_brackets(masked)
     links: list[tuple[int, str]] = []
-    # Python-Markdown reads full and collapsed references, inline links and
-    # shortcut references in that order, each in its own pass. A reference pass
-    # skips what it reads without a definition: both labels of a full or
-    # collapsed reference, the whole bracket pair of a shortcut one, so `[[1]]`
-    # links nothing even with `[1]` defined. Neither pass starts at `![`.
-    passed = spent = -1
-    start = masked.find("[")
-    while start >= 0:
-        close = closing.get(start)
-        image = masked[start - 1 : start] == "!"
-        link = None
-        if close is not None:
-            label = masked[start + 1 : close]
-            reference = _REFERENCE_LABEL.match(masked, close + 1) if start > passed else None
-            full = _WHITESPACE.sub(" ", (reference.group(1) or label).lower()) if reference else None
-            short = _WHITESPACE.sub(" ", label.lower())
-            inline = target.match(code_masked, close + 1)
-            if reference and full not in references and not image:
-                passed = reference.end() - 1
-            if full in references:
-                link = references[full], reference.end()
-            elif inline is not None:
-                link = _unwrap_target(inline.group(1)), inline.end()
-            elif start > spent and short in references:
-                link = references[short], close + 1
-            elif not image:
-                spent = max(spent, close)
-        if link is None:
-            start = masked.find("[", start + 1)
-            continue
-        if not image:
-            links.append((start, link[0]))
-        elif images is not None and inline is None:
-            images.append((start - 1, start + 1, close, link[1], link[0]))
-        start = masked.find("[", link[1])
+    reading_images = images is not None
+
+    def read_first(reference: re.Match[str], stop: int) -> bool:
+        """Whether the second label an image's *reference* matched opens a link
+        the site's reference or inline link pass reads before any image."""
+        close = reference.end() - 1
+        if target.match(code_masked, close + 1, stop):
+            return True
+        following = _REFERENCE_LABEL.match(masked, close + 1, stop)
+        return following is not None and _WHITESPACE.sub(" ", (following.group(1) or reference.group(1)).lower()) in references
+
+    # The block, then, while images are read, each link's text, which the
+    # site reads for images too: a list, not recursion, so links nested
+    # however deep are read.
+    ranges = [(0, len(masked))]
+    while ranges:
+        begin, stop = ranges.pop()
+        # Python-Markdown reads full and collapsed references, inline links and
+        # shortcut references in that order, each in its own pass. A reference
+        # pass skips what it reads without a definition: both labels of a full or
+        # collapsed reference, the whole bracket pair of a shortcut one, so `[[1]]`
+        # links nothing even with `[1]` defined. Neither pass starts at `![`.
+        passed = spent = begin - 1
+        start = masked.find("[", begin, stop)
+        while start >= 0:
+            close = closing.get(start)
+            image = masked[start - 1 : start] == "!"
+            link = None
+            if close is not None:
+                label = masked[start + 1 : close]
+                reference = (
+                    _REFERENCE_LABEL.match(masked, close + 1, stop)
+                    if start > passed or (image and reading_images)
+                    else None
+                )
+                full = _WHITESPACE.sub(" ", (reference.group(1) or label).lower()) if reference else None
+                short = _WHITESPACE.sub(" ", label.lower())
+                inline = target.match(code_masked, close + 1, stop)
+                if reference and full not in references and not image:
+                    passed = reference.end() - 1
+                if full in references:
+                    if image and reading_images and read_first(reference, stop):
+                        start = masked.find("[", reference.start(1) - 1, stop)
+                        continue
+                    link = references[full], reference.end()
+                elif inline is not None:
+                    link = _unwrap_target(inline.group(1)), inline.end()
+                elif (start > spent or (image and reading_images)) and short in references:
+                    link = references[short], close + 1
+                elif not image:
+                    spent = max(spent, close)
+            if link is None:
+                start = masked.find("[", start + 1, stop)
+                continue
+            if not image:
+                if begin == 0:
+                    links.append((start, link[0]))
+                if reading_images:
+                    ranges.append((start + 1, close))
+            elif reading_images and inline is None:
+                images.append((start - 1, start + 1, close, link[1], link[0]))
+            start = masked.find("[", link[1], stop)
     return links
 
 
@@ -344,11 +375,29 @@ def reference_images(value: str, references: dict[str, str]) -> list[tuple[int, 
     """Each reference image the site reads in ``value``, a block, as
     ``(start, text_start, text_end, end, target)``: ``![text][label]``,
     ``![label][]`` or ``![label]`` whose label ``references`` defines, read
-    as :func:`_block_links` reads links, so a rewrite can cut one to its text."""
+    as :func:`_block_links` reads links, without the block's quote markers,
+    and placed back in ``value``, so a rewrite can cut one to its text."""
+
+    lines = value.split("\n")
+    unquoted = [_unquoted(line)[0] for line in lines]
+    # Where each line starts, in the block as read and in value, and the length of its markers.
+    starts: list[tuple[int, int, int]] = []
+    read = written = 0
+    for line, content in zip(lines, unquoted):
+        starts.append((read, written, len(line) - len(content)))
+        read += len(content) + 1
+        written += len(line) + 1
+
+    def placed(offset: int) -> int:
+        read_start, written_start, markers = starts[bisect.bisect_right(starts, (offset, len(value) + 1, 0)) - 1]
+        return written_start + markers + offset - read_start
 
     images: list[tuple[int, int, int, int, str]] = []
-    _links(value, references, images=images)
-    return images
+    _links("\n".join(unquoted), references, images=images)
+    return [
+        (placed(start), placed(text_start), placed(text_end), placed(end), target)
+        for start, text_start, text_end, end, target in images
+    ]
 
 
 def _block_links(lines: list[str], references: dict[str, str]) -> list[tuple[int, str]]:

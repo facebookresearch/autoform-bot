@@ -27,10 +27,12 @@ from .library.pinned_names import PinnedLists, load_pinned_lists, name_warnings
 from .markdown import (
     _CODE_SPAN,
     _INLINE_MATH,
+    PAGE_SUFFIXES,
     _blank_code,
     _block_links,
     _is_hidden_path,
     directory_path,
+    frontmatter_end,
     link_definitions,
     link_targets,
     markdown_links,
@@ -521,26 +523,40 @@ def unpublished_content(files: tuple[tuple[str, bytes], ...]) -> tuple[str, ...]
 
 
 def unpublished_setting_issues(files: Sequence[tuple[str, bytes]]) -> list[str]:
-    """Why each README below ``sources/`` that tries to set ``published`` does
-    not, so its folder is published. Check's graph reads no source note, so
-    nothing else reports a typo there, which would publish a folder meant to
-    stay off the site."""
+    """Why each Markdown page under ``sources/`` that tries to set
+    ``published`` does not, so the site publishes what it meant to keep off:
+    a folder's README.md whose setting does not parse, and ``sources/README.md``,
+    another spelling of a README, or a note's frontmatter, where the setting
+    takes no effect. Check's graph reads no source note, so nothing else
+    reports these."""
 
     issues = []
     for name, data in files:
         parts = name.split("/")
-        if len(parts) <= 2 or parts[0] != "sources" or parts[-1] != "README.md":
+        if len(parts) < 2 or parts[0] != "sources" or not parts[-1].casefold().endswith(PAGE_SUFFIXES):
             continue
         try:
             lines = data.decode("utf-8").splitlines()
         except UnicodeError:
             continue
-        if not any(re.match(r"\s*published\s*:", line) for line in lines):
+        setting = [index for index, line in enumerate(lines) if re.match(r"\s*published\s*:", line)]
+        if not setting:
             continue
         metadata, _end, found = _parse_frontmatter(name, lines)
-        if "published" not in metadata:
-            reasons = [issue for issue in found if "published" in issue] or [issue for issue in found if "frontmatter" in issue]
-            issues.append(reasons[0] if reasons else f"{name}: sets published outside its frontmatter")
+        readme = parts[-1].rpartition(".")[0].casefold() == "readme"
+        if len(parts) > 2 and parts[-1] == "README.md":
+            if "published" not in metadata:
+                reasons = [issue for issue in found if "published" in issue] or [
+                    issue for issue in found if "unterminated frontmatter" in issue
+                ]
+                reason = reasons[0] if reasons else f"{name}: sets published outside its frontmatter"
+                issues.append(f"{reason}, so the site publishes the folder")
+        # A note may say "published:" in its text; only its frontmatter sets anything.
+        elif readme or "published" in metadata or setting[0] < frontmatter_end(lines):
+            issues.append(
+                f"{name}: published takes effect only in the README.md of a folder below sources/, "
+                f"so the site publishes {'the folder' if readme else 'the note'}"
+            )
     return issues
 
 

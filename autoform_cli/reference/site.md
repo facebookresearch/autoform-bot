@@ -56,7 +56,7 @@ list](pinned-names.md) are left out silently, as `.obsidian` is, and a Markdown
 page that is not UTF-8 with a warning. When the verified commit holds the
 blueprint, `sources/` publishes only notes and images and links the rest there.
 A link to a file the site leaves out, a hidden path outside `sources/`, or a
-page in a `published: false` folder keeps only its text; `check` and `render`
+file in a `published: false` folder keeps only its text; `check` and `render`
 warn about each such link to a hidden path or an unpublished folder.
 
 ## MathJax

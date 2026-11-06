@@ -807,7 +807,9 @@ def test_render_refuses_a_passage_the_site_does_not_publish(
     capsys.readouterr()
 
     assert _render(blueprint, tmp_path) == 1
-    assert "review-source-unpublished: cites a passage the site does not publish" in capsys.readouterr().out
+    assert (
+        "review-source-unpublished: cites a passage from sources/.private/book.txt, a hidden file render does not read"
+    ) in capsys.readouterr().out
     assert not (tmp_path / "site").exists()
 
 
@@ -833,6 +835,34 @@ def test_render_refuses_a_passage_from_an_unpublished_source_folder(
         "published: false"
     ) in capsys.readouterr().out
     assert not (tmp_path / "site").exists()
+
+
+@pytest.mark.parametrize("folder", ["private", ".private"], ids=["unpublished", "hidden"])
+def test_render_shows_a_passage_cited_after_a_note_the_copy_lacks(
+    tmp_path: Path, whole_extraction: None, capsys: pytest.CaptureFixture[str], folder: str
+) -> None:
+    """The vault skips a locator into a note, which names no passage, and so
+    does the copy for one capture left out, in a folder that says published:
+    false or a hidden one, so the passage after it shows."""
+
+    blueprint = _blueprint(tmp_path)
+    notes = blueprint / "sources" / folder
+    notes.mkdir(parents=True)
+    (notes / "README.md").write_text("---\npublished: false\n---\n# Private\n", encoding="utf-8")
+    (notes / "notes.md").write_text("# Notes\n\nA private note.\n", encoding="utf-8")
+    (blueprint / "sources/book.txt").write_text("Heading\nA published line.\n", encoding="utf-8")
+    article = blueprint / "roadmap/basics/result.md"
+    article.write_text(
+        article.read_text(encoding="utf-8")
+        + f"\n## Sources\n\n- [Notes](../../sources/{folder}/notes.md#L3-L3)\n- [Book](../../sources/book.txt#L2-L2)\n",
+        encoding="utf-8",
+    )
+    _approve_every_article(blueprint, tmp_path, capsys)
+    capsys.readouterr()
+
+    assert _render(blueprint, tmp_path) == 0
+    panel = _review_panel((tmp_path / "site/roadmap/basics/README.md").read_text(encoding="utf-8"), "result")
+    assert "Source passage · sources/book.txt#L2-L2" in panel and "A published line." in panel
 
 
 def test_the_site_shows_a_card_as_it_was_validated(
