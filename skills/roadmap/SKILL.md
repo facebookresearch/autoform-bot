@@ -205,20 +205,20 @@ contract, `blueprint/README.md`, and the repository `README.md`.
 
 After the final edit, run `autoform check` and `autoform audit` with
 `--lean-root .`, refresh the dependency summary with `autoform-visualize`, and
-resolve every finding introduced by this work or inside the adopted boundary. A
-`check` warning that a shared library declaration's docstring, or its module's,
-cites one of the blueprint's sources usually means a library search was skipped:
-reuse or record the declaration as the [CLI
-reference](../../autoform_cli/README.md#check) says, with a reason that
-holds for every article reaching the source, revisited when the boundary
-changes; review a module when its warning first appears. Report unrelated
-pre-existing findings instead of widening scope. A `catalog-unbounded-limit`,
-`catalog-unscoped-limit` or `lean-target-wanted` warning describes existing Lean
-code: report it, and change that code only when the user asks, through
-Formalize, rebuilding before anything is recorded. Fix the other `warning:`
-lines inside the adopted boundary as findings. Commit the vault, with the
-refreshed summary where the repository tracks it, only after this final
-validation; pushing is outward-facing and requires a user request.
+resolve every finding introduced by this work or inside the adopted boundary,
+except a `lean-target-deprecated` that the revision contract expects. A `check`
+warning that a shared library declaration's docstring, or its module's, cites
+one of the blueprint's sources usually means a library search was skipped: reuse
+or record the declaration as the [CLI
+reference](../../autoform_cli/README.md#check) says, with a reason that holds
+for every article reaching the source, revisited when the boundary changes;
+review a module when its warning first appears. Report unrelated pre-existing
+findings instead of widening scope, and any finding or warning only a Lean edit
+clears, such as a limit on existing code or an open statement's
+`lean-target-wanted`: Formalize changes that code, and only when the user asks.
+Fix the other `warning:` lines inside the adopted boundary as findings. Commit
+the vault, with the refreshed summary where the repository tracks it, only after
+this final validation; pushing is outward-facing and requires a user request.
 
 Finish only when the adopted boundary has no `MAPPED` rows, every `DECOMPOSED`
 area links source-grounded declaration articles, every `INVENTORIED` area links
