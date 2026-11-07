@@ -24,7 +24,7 @@ from urllib.parse import unquote, urlsplit
 
 from ._fs import is_within as _is_within
 from .annotations import DECLARATION_KEYS as _CATALOG_DECLARATION_KEYS
-from .annotations import REJECTED, read_links
+from .annotations import REJECTED, article_revision, read_links
 from .annotations import SETTINGS as _SETTINGS
 from .lean import declaration_names
 from .library.pinned_names import PinnedLists, load_pinned_lists, name_warnings
@@ -163,6 +163,9 @@ class Node:
     depth: int = 0
     article_id: str | None = None
     source_sha256: str | None = None
+    #: What ``work`` reports as the article's revision: ``source_sha256``, with its annotation's facts folded in when
+    #: one counts (:func:`~autoform_cli.annotations.article_revision`).
+    article_revision: str | None = None
     catalog: str | None = None
     summary: str | None = None
     area: str | None = None
@@ -289,6 +292,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
     coverage_list_limit = _COVERAGE_LIST_LIMIT
     links = read_links(blueprint, {source.path: source.id for source in sources})
     annotated: set[str] = set()
+    revisions: dict[str, str] = {}
 
     for source in sources:
         canonical = source.path.resolve()
@@ -305,6 +309,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
         canonical_ids[canonical] = source.id
         node_ids[source.id] = canonical
         facts = None if links is None else links.facts.get(canonical)
+        revisions[source.id] = article_revision(source.source_sha256, facts)
         text = source.text
         if facts is not None:
             annotated.add(source.id)
@@ -483,6 +488,7 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             depth=_article_depth(parsed_node.id, parents),
             article_id=metadata.get("article_id"),
             source_sha256=source_hashes[parsed_node.id],
+            article_revision=revisions[parsed_node.id],
             summary=parsed_node.summary,
             navigation=metadata.get("navigation"),
             area=metadata.get("area"),

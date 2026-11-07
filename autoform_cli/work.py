@@ -134,7 +134,7 @@ def _item(node: RuntimeNode, *, open_statements: bool) -> WorkItem:
         article_id=node.article_id,
         title=node.title,
         article_path=node.article_path,
-        article_revision=node.source_sha256,
+        article_revision=node.article_revision,
         phase=_phase(node, blockers),
         state=node.status.state,
         claim_target=node.article_id or node.id,

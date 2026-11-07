@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import subprocess
 import sys
@@ -12,13 +13,16 @@ import pytest
 
 from literature_links import discovery
 
+from autoform_cli import debrief
 from autoform_cli.__main__ import main
 from autoform_cli.annotations import Drops, _annotations, _walk
 from autoform_cli.graph import load_graph
 from autoform_cli.render import _left_out, _review_disclosures, load_publication_source
 from autoform_cli.review import ReviewError
 from autoform_cli.runtime import load_runtime_graph
+from autoform_cli.search import search_blueprint
 from autoform_cli.skeleton import blueprint_hash
+from autoform_cli.work import work_context
 
 ARTICLE_ID = "af_f8d7b54996f51594f707d44f"
 #: The project, from links/_defaults.json, is two folders up: links/, then blueprint/.
@@ -679,6 +683,42 @@ def test_revisions_cover_the_annotations(tmp_path: Path) -> None:
     assert hidden == (edited[0], "theorem")
     assert len({before[0], linked[0], edited[0], renamed[0], unusable[0]}) == 5
     assert len({before[1], linked[1], edited[1], renamed[1], unusable[1]}) == 5
+
+
+def test_the_article_revision_covers_its_annotation_and_no_other_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The project sits in a folder of its own, so the debrief store below is outside it.
+    blueprint = _blueprint(tmp_path / "project", {"result": None, "other": None, "plain": "declaration: lemma"})
+
+    def revisions(result: str, other: str) -> dict[str, str | None]:
+        _links(blueprint, {"both.jsonl": [_about("result", kind=result, id=ARTICLE_ID), _about("other", kind=other)]})
+        return {node_id: node.article_revision for node_id, node in load_graph(blueprint).nodes.items()}
+
+    before = revisions("lemma", "lemma")
+    sibling = revisions("lemma", "theorem")
+    edited = revisions("theorem", "theorem")
+
+    digest = hashlib.sha256((blueprint / "roadmap" / "result.md").read_bytes()).hexdigest()
+    # Keys in sorted order, which is not the order loading reads them in.
+    facts = json.dumps({"article_id": ARTICLE_ID, "declaration": "lemma"}, separators=(",", ":"))
+    assert before["result"] == hashlib.sha256(f"autoform-article/v1\0{digest}{facts}".encode()).hexdigest()
+    # A line about another article in the same file leaves the revision alone; an edit to its own moves it.
+    assert sibling["result"] == before["result"] and sibling["other"] != before["other"]
+    assert edited["result"] != sibling["result"] and edited["other"] == sibling["other"]
+    # An article no annotation counts for keeps the hash of its bytes, the value without the folder.
+    plain = hashlib.sha256((blueprint / "roadmap" / "plain.md").read_bytes()).hexdigest()
+    assert before["plain"] == edited["plain"] == plain
+    # Each command that reports the revision reports this one.
+    monkeypatch.delenv(debrief.DEBRIEF_DIR_ENV, raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    entry, _ = debrief.record(blueprint, "result", '{"nothing_to_report": true}', phase="statement", worker_id="w1")
+    assert {
+        load_runtime_graph(blueprint).get("result").article_revision,
+        work_context(blueprint, "result")[1].article_revision,
+        {hit.node_id: hit.article_revision for hit in search_blueprint(blueprint, "result").hits}["result"],
+        entry.article_revision,
+    } == {edited["result"]}
 
 
 @pytest.mark.parametrize("assigned", [False, True], ids=["an-id-to-write", "none-to-write"])
