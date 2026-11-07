@@ -72,7 +72,7 @@ _ASSUMPTIONS_SCHEMA = "autoform-assumptions/v1"
 #: neither its proof nor, for a definition, its statement is formalized, which is
 #: what a wanted command defers. Every other state is refused, a `mathlib` one or
 #: one this helper does not know included; `autoform audit`'s lean-target-wanted
-#: refuses the proved ones too.
+#: refuses the proved and Mathlib ones too.
 _WANTED_STATES = frozenset({"can_prove", "can_state", "not_ready", "planned", "stated"})
 _DECLARATION_NAME_PART = r"«([^»]*)»|([^.\s«»]+)"
 _DECLARATION_NAME = re.compile(
