@@ -878,6 +878,9 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
     articles = {
         "stated.md": {"declaration": "theorem", "statement": "formalized", "lean": "W.stated"},
         "corollary.md": {"declaration": "corollary", "statement": "formalized", "lean": "W.legacy"},
+        "alias.md": {"declaration": "lemma", "statement": "formalized", "lean": "W.ofStated"},
+        "draft.md": {"declaration": "theorem", "lean": "W.draft"},
+        "axiom.md": {"declaration": "axiom", "statement": "formalized", "lean": "W.postulate"},
         "proved.md": {"declaration": "theorem", "statement": "formalized", "proof": "formalized", "lean": "W.proved"},
         "signature.md": {"declaration": "def", "lean": "W.signature"},
         "defined.md": {"declaration": "definition", "statement": "formalized", "lean": "W.defined"},
@@ -891,6 +894,10 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
     source = [
         "namespace W",
         "public theorem_wanted stated : True",
+        "alias ofStated := stated",
+        "theorem_wanted draft : True",
+        "theorem_wanted postulate : True",
+        "theorem_wanted upstream : True",
         "proof_wanted legacy : True",
         "theorem_wanted proved : True",
         "def_wanted signature : Nat",
@@ -916,6 +923,34 @@ def test_audit_accepts_wanted_targets_as_statements_but_not_proofs(tmp_path: Pat
         "roadmap/wrong-kind.md": [
             ("lean-target-kind-mismatch", "Lean target kind def_wanted does not match declaration intent theorem")
         ],
+        "roadmap/axiom.md": [
+            ("lean-target-kind-mismatch", "Lean target kind theorem_wanted does not match declaration intent axiom")
+        ],
+    }
+    # A statement a wanted target backs passes. Under the strict policy a dependent waits for its proof.
+    assert _warning_map(blueprint, lean_root=lean_root) == {}
+
+    # Under the open policy a dependent's proof may cite an open statement, but not a wanted placeholder.
+    # A Mathlib article counts as proved, so it is not open.
+    (blueprint / "roadmap" / "README.md").write_text(
+        "---\nopen_statements: allowed\n---\n\n# Roadmap\n", encoding="utf-8"
+    )
+    _article(
+        blueprint,
+        "upstream.md",
+        declaration="theorem",
+        statement="formalized",
+        mathlib="true",
+        mathlib_declaration="Nat.le_refl",
+        lean="W.upstream",
+    )
+    cannot_cite = "which no dependent can cite; state the theorem with a sorry proof instead"
+    assert _warning_map(blueprint, lean_root=lean_root) == {
+        "roadmap/alias.md": [
+            ("lean-target-wanted", f"lean target W.ofStated is an alias of a theorem_wanted, {cannot_cite}")
+        ],
+        "roadmap/corollary.md": [("lean-target-wanted", f"lean target W.legacy is a proof_wanted, {cannot_cite}")],
+        "roadmap/stated.md": [("lean-target-wanted", f"lean target W.stated is a theorem_wanted, {cannot_cite}")],
     }
 
 

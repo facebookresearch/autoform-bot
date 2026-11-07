@@ -557,7 +557,7 @@ def _lean_findings(
     *,
     warnings: list[AuditWarning] | None = None,
 ) -> list[AuditFinding]:
-    """Check every article's Lean targets, adding catalog warnings to *warnings* if given."""
+    """Check every article's Lean targets, adding their warnings to *warnings* if given."""
 
     try:
         root = resolve_lean_root(lean_root)
@@ -580,6 +580,7 @@ def _lean_findings(
     sizes: dict[str, int] = {}
     sources = _SourceLines(snapshot.source_files)
     catalogs: dict[str, tuple[Declaration, ...]] = {}
+    wanted_statements: list[AuditWarning] = []
     for node_id in sorted(graph.nodes):
         node = graph.nodes[node_id]
         article_path = _relative_path(node.path, graph.blueprint_dir)
@@ -604,6 +605,7 @@ def _lean_findings(
                 resolved.append(declaration)
 
         kinds = [_kind(declaration, index) for declaration in resolved]
+        expected = _DECLARATION_KEYWORDS.get(status.declaration_command(node.declaration).casefold())
 
         # A wanted target states its result and nothing more. Without a body it
         # elaborates to a placeholder without sorry, so no sorry check catches it.
@@ -627,9 +629,24 @@ def _lean_findings(
                             f"its proof or construction, so it cannot back {claim}",
                         )
                     )
+        elif graph.open_statements and node.statement_formalized and not node.mathlib and expected == _THEOREM_KEYWORDS:
+            # Under the open policy a dependent's proof may cite a theorem once it is stated, but not a wanted
+            # placeholder, so one behind an open statement warns (#325). Under the strict policy it waits for the proof.
+            for declaration, kind in zip(resolved, kinds):
+                if kind in {"theorem_wanted", "proof_wanted"}:
+                    what = f"an alias of a {kind}" if declaration.alias else f"a {kind}"
+                    wanted_statements.append(
+                        AuditWarning(
+                            article_path,
+                            "lean-target-wanted",
+                            f"lean target {declaration.name} is {what}, which no dependent can cite; "
+                            "state the theorem with a sorry proof instead",
+                            (),
+                        )
+                    )
 
         # Catalog declarations were resolved above like every other Lean target,
-        # and the wanted check applies to them. A catalog inventories code
+        # and the wanted finding applies to them. A catalog inventories code
         # that already exists, so its limits are only warnings, read like a
         # declaration article's from what each alias reaches, and the
         # deprecation, kind and size checks below apply only to declaration
@@ -657,7 +674,6 @@ def _lean_findings(
         for body in bodies:
             findings.extend(_limit_findings(article_path, body, sources, _limit_line(body, index)))
 
-        expected = _DECLARATION_KEYWORDS.get(status.declaration_command(node.declaration).casefold())
         # An alias whose target the index cannot place may have any kind.
         if expected and resolved and not any(kind is None or kind in expected for kind in kinds):
             described = {
@@ -676,6 +692,7 @@ def _lean_findings(
             sizes[node_id] = sum(spans[body] for body in bodies)
 
     if warnings is not None:
+        warnings.extend(wanted_statements)
         warnings.extend(_size_warnings(graph, sizes))
         warnings.extend(_catalog_limit_warnings(catalogs, sources, index))
     return findings
