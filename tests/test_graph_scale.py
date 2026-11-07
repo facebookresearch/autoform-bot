@@ -542,7 +542,8 @@ def test_site_rendering_indexes_containers_a_fixed_number_of_times(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # render imports the index builder that graph_views' own helpers call.
+    # render imports the index builder that graph's and graph_views' own helpers call.
+    monkeypatch.setattr("autoform_cli.graph._containers", lambda graph: render._containers(graph))
     monkeypatch.setattr(graph_views, "_containers", lambda graph: render._containers(graph))
     small, large = (
         _render_calls(_written_blueprint(tmp_path / str(sections), sections), monkeypatch, render, "_containers")

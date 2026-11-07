@@ -414,7 +414,7 @@ def test_dashboard_cli_resolves_project_site_and_stays_loopback(
         observed.update(site=site_dir, state=state, host=host, port=port)
         on_ready(host, 43210)
 
-    monkeypatch.setattr(cli, "serve_dashboard", serve)
+    monkeypatch.setattr("autoform_cli.dashboard.serve_dashboard", serve)
 
     assert cli.main(
         [

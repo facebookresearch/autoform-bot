@@ -26,7 +26,7 @@ from .markdown import (
     published_page,
     strip_line_comments,
 )
-from .mathjax import NEUTRALISED, TEX_MACROS
+from .tex_macros import NEUTRALISED, TEX_MACROS
 
 
 #: Raw HTML in CommonMark's grammar: open and closing tags, and the openers of

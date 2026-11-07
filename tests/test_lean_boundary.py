@@ -194,6 +194,8 @@ def test_autoform_cli_loads_process_helpers_from_beside_itself(repo_root: Path, 
     program = (
         "import sys\n"
         "import autoform_cli.__main__\n"  # every startup import, not just lean_probe's
+        # and what the render, check, site check and dashboard handlers import
+        "import autoform_cli.render, autoform_cli.dashboard, autoform_cli.site_check\n"
         "from autoform_cli import lean_probe\n"
         "print(lean_probe._process_helpers.__file__)\n"
         "print('servers' in sys.modules)\n"
