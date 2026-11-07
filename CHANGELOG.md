@@ -203,6 +203,12 @@ date when the release is tagged.
   "sections", in its counts, its "How the sections build on each other" list,
   its kicker and the names of its grouped parts. Every site changes, those
   that track Lean too.
+- **Roadmap's final audit reads the Lean.** Roadmap runs `autoform audit` with
+  `--lean-root .`, as Formalize does, so a pass ends clean only when Formalize's
+  first audit would too. It reports, rather than fixes, a finding or warning
+  that only a Lean edit clears, such as a limit on existing code or an open
+  statement's `lean-target-wanted`, and, as Formalize does, leaves a
+  `lean-target-deprecated` the revision contract expects.
 - **Audit warns about an open statement a wanted placeholder states.** Under
   `open_statements: allowed`, `audit` with `--lean-root` warns under
   `lean-target-wanted` about a theorem that records only `statement: formalized`
@@ -675,6 +681,12 @@ parse, with or without `--json`, and changes nothing else.
 
 ### Fixed
 
+- **Audit refuses a placeholder behind a Mathlib article, as CI does.** With
+  `--lean-root`, `audit` and `doctor` report `lean-target-wanted` for a `lean:`
+  name that resolves to a wanted placeholder, directly or through an alias, on
+  an article that records `mathlib: true`. The kernel-trust audit in the verify
+  workflow `init` writes already refused one; a project with verification turned
+  off, or an older copy of that audit, sees it here first.
 - **Library note from an enclosing project.** Search's note about libraries it
   did not read looks only at the searched project's own Lake root, so it no
   longer names the packages of a Lake project that merely contains it.
