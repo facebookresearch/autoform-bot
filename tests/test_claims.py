@@ -2695,12 +2695,18 @@ def test_list_of_targets_stops_at_its_timeout_while_naming_them(tmp_path: Path, 
     assert timed_out.value.step == "naming the claim refs"
 
 
-@pytest.mark.skipif(os.name != "posix", reason="process groups and SIGTERM are POSIX")
-def test_git_ends_with_its_caller_when_the_caller_is_terminated(tmp_path: Path) -> None:
+@pytest.mark.skipif(os.name != "posix", reason="process groups and these signals are POSIX")
+@pytest.mark.parametrize("name", ["SIGTERM", "SIGHUP", "SIGQUIT"])
+def test_git_ends_with_its_caller_when_the_caller_is_terminated(tmp_path: Path, name: str) -> None:
+    signum = getattr(signal, name)
     pid_file = tmp_path / "pid"
     script = (
-        "import pathlib\n"
+        "import pathlib, resource, signal\n"
         "from autoform_cli import claims\n"
+        # Start from a terminal's disposition even when pytest runs under nohup or in the background.
+        f"signal.signal(signal.{name}, signal.SIG_DFL)\n"
+        # SIGQUIT's default action dumps core; the caller leaves no core file behind.
+        "resource.setrlimit(resource.RLIMIT_CORE, (0, 0))\n"
         f"board = claims.ClaimBoard(pathlib.Path({str(tmp_path / 'unused.git')!r}), 'w', "
         f"pathlib.Path({str(tmp_path / 'scratch')!r}))\n"
         "board._ensure_scratch()\n"
@@ -2712,9 +2718,9 @@ def test_git_ends_with_its_caller_when_the_caller_is_terminated(tmp_path: Path) 
         assert time.monotonic() < started_by, "git never started its command"
         time.sleep(0.05)
 
-    caller.send_signal(signal.SIGTERM)
+    caller.send_signal(signum)
 
-    assert caller.wait(timeout=10) == -signal.SIGTERM
+    assert caller.wait(timeout=10) == -signum
     _assert_gone(int(pid_file.read_text()))
 
 
@@ -2971,21 +2977,47 @@ def test_list_runs_every_git_command_isolated_except_cleanup(
     assert all(isolated.values())
 
 
-@pytest.mark.skipif(os.name != "posix", reason="signals are POSIX")
-def test_git_reports_a_termination_its_caller_survives_as_a_transport_error(tmp_path: Path) -> None:
+@pytest.mark.skipif(os.name != "posix", reason="these signals are POSIX")
+@pytest.mark.parametrize("name", ["SIGTERM", "SIGHUP", "SIGQUIT"])
+def test_git_reports_a_termination_its_caller_survives_as_a_transport_error(tmp_path: Path, name: str) -> None:
+    signum = getattr(signal, name)
     board = _scratch_board(tmp_path)
     seen: list[int] = []
-    previous = signal.signal(signal.SIGTERM, lambda signum, frame: seen.append(signum))
-    timer = threading.Timer(0.5, os.kill, (os.getpid(), signal.SIGTERM))
+
+    def survive(received: int, frame: object) -> None:
+        seen.append(received)
+
+    # The guard replaces all three handlers, so a survived signal must put each one back.
+    handlers = {getattr(signal, other): lambda received, frame: None for other in ("SIGTERM", "SIGHUP", "SIGQUIT")}
+    handlers[signum] = survive
+    previous = {each: signal.signal(each, handler) for each, handler in handlers.items()}
+    timer = threading.Timer(0.5, os.kill, (os.getpid(), signum))
     try:
         timer.start()
-        with pytest.raises(claims.ClaimTransportError, match="SIGTERM"):
+        with pytest.raises(claims.ClaimTransportError, match=name):
             board._git(_alias("hang", "sleep 30"), isolated=True)
+        assert {each: signal.getsignal(each) for each in handlers} == handlers
     finally:
         timer.cancel()
-        signal.signal(signal.SIGTERM, previous)
+        for each, handler in previous.items():
+            signal.signal(each, handler)
 
-    assert seen == [signal.SIGTERM]
+    assert seen == [signum]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="these signals are POSIX")
+def test_a_listing_puts_back_the_signal_handlers_it_replaced(tmp_path: Path, board_repo: Path) -> None:
+    owner = _board(tmp_path, board_repo, "worker-a")
+    assert owner.acquire("a", ttl=600)
+    reader = _board(tmp_path, board_repo, "worker-b")
+    handlers = {getattr(signal, name): lambda received, frame: None for name in ("SIGTERM", "SIGHUP", "SIGQUIT")}
+    previous = {signum: signal.signal(signum, handler) for signum, handler in handlers.items()}
+    try:
+        assert [item["_key"] for item in reader.list()] == ["a"]
+        assert {signum: signal.getsignal(signum) for signum in handlers} == handlers
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process groups and signals are POSIX")
