@@ -8,12 +8,12 @@ reference](../README.md#work) gives the synopses and exit statuses.
 
 `work context` takes the path-derived node ID or an `article_id` and reports the
 article, dependencies, source and Lean targets, blockers, article and graph
-source revisions (the article revision hashes that article's bytes alone), and
-the claim target, which prefers the `article_id`. A Lean target's `source_file`
-is relative to `--lean-root`, and null without one or when the local scan, which
-skips build output and nested checkouts (any subdirectory with a `.git` entry),
-finds the declaration nowhere or several times with none chosen. Blockers are
-unmet dependency IDs or `roadmap:not-a-formalizable-leaf`,
+source revisions (the article revision hashes that article and its annotation
+alone), and the claim target, which prefers the `article_id`. A Lean target's
+`source_file` is relative to `--lean-root`, and null without one or when the
+local scan, which skips build output and nested checkouts (any subdirectory with
+a `.git` entry), finds the declaration nowhere or several times with none
+chosen. Blockers are unmet dependency IDs or `roadmap:not-a-formalizable-leaf`,
 `roadmap:missing-article-id`, `roadmap:missing-article-revision`, or
 `roadmap:not-ready`. `work list` fails if an unfinished formalizable leaf lacks
 an `article_id` (add them with `autoform migrate article-ids --write`); `work

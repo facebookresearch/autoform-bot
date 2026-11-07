@@ -569,7 +569,7 @@ def record(
         attempt_id=uuid.uuid4().hex,
         node_id=_text(node.id, 256),
         article_id=node.article_id or "",
-        article_revision=node.source_sha256 or "",
+        article_revision=node.article_revision or "",
         source_revision=source_revision,
         phase=phase,
         outcome=outcome,

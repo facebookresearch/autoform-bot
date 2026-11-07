@@ -115,7 +115,7 @@ def _blockers(node: RuntimeNode) -> tuple[str, ...]:
     metadata_blockers: list[str] = []
     if node.article_id is None:
         metadata_blockers.append("roadmap:missing-article-id")
-    if node.source_sha256 is None:
+    if node.source_sha256 is None or node.article_revision is None:
         metadata_blockers.append("roadmap:missing-article-revision")
     if metadata_blockers:
         return tuple(metadata_blockers)
@@ -134,7 +134,7 @@ def _item(node: RuntimeNode, *, open_statements: bool) -> WorkItem:
         article_id=node.article_id,
         title=node.title,
         article_path=node.article_path,
-        article_revision=node.source_sha256,
+        article_revision=node.article_revision,
         phase=_phase(node, blockers),
         state=node.status.state,
         claim_target=node.article_id or node.id,
@@ -170,7 +170,7 @@ def list_ready_work(
             + " (add them with `autoform migrate article-ids <blueprint> --write`, or as each annotation's id in"
             " blueprint/links/)"
         )
-    unversioned = tuple(node.id for node in unfinished if node.source_sha256 is None)
+    unversioned = tuple(node.id for node in unfinished if node.source_sha256 is None or node.article_revision is None)
     if unversioned:
         raise WorkError(
             "formalizable leaves need durable article revision metadata: "
