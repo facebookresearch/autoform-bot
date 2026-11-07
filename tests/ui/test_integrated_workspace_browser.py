@@ -375,7 +375,7 @@ def _open(
 def _selected(page: object, node_id: str) -> object:
     """The book has routed to ``node_id`` and the whole-project map has followed: it selects a result's card, or opens a
     part."""
-    playwright.expect(page.locator(".bp-dag-viewer")).to_have_attribute("data-map-start", node_id)
+    playwright.expect(page.locator(".bp-dag-viewer[data-graph-src]")).to_have_attribute("data-map-start", node_id)
     place = page.locator(f'.bp-whole-map .pm-result.pm-selected[data-result="{node_id}"], '
                          f'.bp-whole-map .pm-part.pm-focus[data-part="{node_id}"]')
     playwright.expect(place).to_have_count(1)
@@ -709,7 +709,8 @@ def test_native_anchor_boot_after_delayed_index_selects_and_centers_the_real_the
     held: list[object] = []
     page.route(site.url + "/dependencies/index.json", lambda route: held.append(route))
     page.goto(site.route(_TARGET), wait_until="domcontentloaded")
-    playwright.expect(page.locator(".bp-explorer-page > .bp-reading-source")).to_be_visible()
+    # Until the index arrives, the reading waits in the book's frame, laid out where the book will keep it.
+    playwright.expect(page.locator(".bp-book-frame .bp-reading-body > .bp-reading-source")).to_be_visible()
     assert page.evaluate("() => AutoformMath.refresh(document)") is True
     assert held
     for route in held:
@@ -1106,6 +1107,9 @@ def test_native_reader_and_library_links_remain_soft_navigation(
     assert published.ok and published.url == home_url
     tree = html5lib.parse(published.text(), treebuilder="etree", namespaceHTMLElements=False)
     reading = next(element for element in tree.iter() if "bp-reading-source" in element.get("class", "").split())
+    # The reading starts with the renderer's boot script (dag_viewer.BOOT_SCRIPT), which removes itself as it runs.
+    assert reading[0].tag == "script"
+    reading.remove(reading[0])
     heading = next(element for element in reading.iter() if element.tag == "h1")
     home_heading = " ".join("".join(heading.itertext()).split())
     home_text = " ".join("".join(reading.itertext()).split())

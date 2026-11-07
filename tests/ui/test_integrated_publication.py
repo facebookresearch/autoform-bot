@@ -109,7 +109,9 @@ def test_complete_book_content_and_authoritative_cards_survive_without_javascrip
         tree = _tree(output / relative)
         assert len(_class(tree, "bp-explorer-page")) == 1
         (reading,) = _class(tree, "bp-reading-source")
-        (viewer,) = _class(tree, "bp-dag-viewer")
+        # The page's first-paint frame (dag_viewer.render_boot) shares the viewer's classes.
+        frames = _class(tree, "bp-book-frame")
+        (viewer,) = [element for element in _class(tree, "bp-dag-viewer") if element not in frames]
         assert reading.get("data-page-title")
         assert viewer.get("data-graph-src") and viewer.get("data-catalog-src") and viewer.get("data-page-href")
         assert viewer.get("data-scope-id")
@@ -128,6 +130,75 @@ def test_complete_book_content_and_authoritative_cards_survive_without_javascrip
     assert not (output / "roadmap" / group / "main.md").exists()
     assert not _class(tree, "bp-context-link")
     assert before == {path.relative_to(blueprint): path.read_bytes() for path in blueprint.rglob("*.md")}
+
+
+def test_each_page_first_paints_the_books_frame_with_the_trail_its_first_commit_draws(tmp_path: Path) -> None:
+    """Before the explorer starts, a page shows the book's frame with the trail, "← topic" line and Browse label the
+    explorer's routeTrail, renderReaderContext and syncControls draw at its first commit, so nothing in the head moves
+    when it takes over."""
+    project, group, _explanation = _project(tmp_path)
+    _write(project / "blueprint/roadmap/chapter/library/README.md", "---\nnavigation: source\n---\n\n# Library inventory\n")
+    output = tmp_path / "out"
+
+    render.render_site(project / "blueprint", output, lean_root=project)
+
+    def first_paint(relative: str, depth: int):
+        tree = _tree(output / relative)
+        (frame,) = _class(tree, "bp-book-frame")
+        assert frame.get("hidden") is not None and frame.get("data-search-exclude") is not None
+        # The frame stands before the page's container. Both link the explorer's stylesheet: the frame's styles the first
+        # paint, and the container's keeps the book styled once the explorer removes the frame.
+        body = tree.find("body")
+        assert [child.get("class") for child in body] == [frame.get("class"), "bp-explorer-page"]
+        sheets = [link for link in tree.iter("link") if link.get("data-autoform-dag-style") is not None]
+        assert [link.get("href") for link in sheets] == ["../" * depth + "stylesheets/blueprint-dag.css"] * 2
+        assert sheets[0] in frame.iter("link") and sheets[1] in body[1].iter("link")
+        # The script that moves the reading into the frame comes first in the reading, before anything it would show.
+        (reading,) = _class(tree, "bp-reading-source")
+        assert reading[0].tag == "script" and "<script>" + reading[0].text + "</script>" == dag_viewer.BOOT_SCRIPT
+        assert not _class(frame, "bp-dag-stage") and _class(frame, "bp-reading-body")
+        trail = [
+            ("".join(item.itertext()), None if (link := item.find("a")) is None else link.get("href"),
+             item.get("aria-current"))
+            for item in frame.iter("li")
+        ]
+        lines = [
+            ("".join(line.itertext()), line.find("a").get("href"), line.get("data-boot-target"))
+            for line in _class(frame, "bp-reading-context")
+        ]
+        (browse,) = _class(frame, "bp-dag-browse")
+        return trail, lines, "".join(browse.itertext())
+
+    # Browse offers source texts where the page's topic holds a source track: the chapter's library, or anything in
+    # the project on a page outside a topic.
+    assert first_paint("README.md", 0) == ([("Home", None, "page")], [], "Browse")
+    # A topic's page says which topic it is only while its address names one of its statements, as the book does.
+    assert first_paint("roadmap/README.md", 1) == (
+        [("Home", "../index.html", None), ("All mathematics", None, "page")],
+        [("← All mathematics", "index.html", "")], "Browse",
+    )
+    assert first_paint("roadmap/chapter/README.md", 2) == (
+        [("Home", "../../index.html", None), ("All mathematics", "../index.html", None),
+         ("Operator theory", None, "page")],
+        [("← Operator theory", "index.html", "")], "Browse",
+    )
+    # A page in a topic links its topic in the trail and above its reading.
+    assert first_paint("roadmap/chapter/note.md", 2) == (
+        [
+            ("Home", "../../index.html", None), ("All mathematics", "../index.html", None),
+            ("Operator theory", "index.html", None), ("A mathematical note", None, "page"),
+        ],
+        [("← Operator theory", "index.html", None)], "Browse",
+    )
+    # A transparent group stands for its topic in the trail, as the book's trail flattens it.
+    assert first_paint(f"roadmap/{group}/README.md", 3) == (
+        [("Home", "../../../index.html", None), ("All mathematics", "../../index.html", None),
+         ("Operator theory", "../index.html", None)],
+        [("← Operator statements", "index.html", "")], "Statements",
+    )
+    # A title is typeset where the book's reading label typesets it, and shown as typed otherwise.
+    assert render._label_html("Operators on $L^2$") == 'Operators on <span class="arithmatex">\\(L^2\\)</span>'
+    assert render._label_html("A < B and `code`") == "A &lt; B and `code`"
 
 
 def test_routes_preserve_encoded_book_anchors_and_real_scope_metadata(tmp_path: Path) -> None:
@@ -252,7 +323,8 @@ def test_shared_style_is_planned_written_and_not_duplicated_in_pages(tmp_path: P
     page = output / "roadmap" / group / "README.md"
     assert '<style data-autoform-dag-style>' not in page.read_text(encoding="utf-8")
     links = [element for element in _tree(page).iter("link") if element.get("data-autoform-dag-style") is not None]
-    assert len(links) == 1
+    # The first paint's frame links the stylesheet, and so does the container that outlasts it.
+    assert len(links) == 2
     # An old dependency page only redirects, so it loads no stylesheet.
     assert "data-autoform-dag-style" not in (output / "dependencies.md").read_text(encoding="utf-8")
     summary = (output / "SUMMARY.md").read_text(encoding="utf-8")
