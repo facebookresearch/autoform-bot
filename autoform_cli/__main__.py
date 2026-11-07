@@ -49,6 +49,7 @@ from .impact import (
     IMPORT_CLOSURE_SCOPE,
     MODULE_IMPORT_SCOPE,
     ImpactError,
+    Phases,
     format_impact,
     format_module_import_impact,
     module_import_impact,
@@ -1635,7 +1636,32 @@ def _work_assumptions(args: argparse.Namespace) -> int:
     return 0
 
 
+def _note(line: str) -> None:
+    """Print ``line`` on stderr, as information only. Without fd 2, print(file=None)
+    would write to stdout, and a line left in a broken stderr's buffer would fail
+    the exit-time flush."""
+
+    if sys.stderr is None:
+        return
+    try:
+        print(line, file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        # A closed stream raises ValueError, a broken one OSError.
+        with contextlib.suppress(OSError, ValueError):
+            descriptor = sys.stderr.fileno()
+            os.dup2(os.open(os.devnull, os.O_WRONLY), descriptor)
+
+
 def _work_impact(args: argparse.Namespace) -> int:
+    label = f"work {args.work_command}"
+    phases = Phases(lambda phase: _note(f"{label}: {_human_text(phase)}..."))
+
+    def timed(code: int) -> int:
+        # After the report or the refusal, so a slow run says where its time went.
+        if summary := phases.summary():
+            _note(f"{label}: timing: {_human_text(summary)}")
+        return code
+
     try:
         if args.work_command == "impact":
             report = revision_impact(
@@ -1644,6 +1670,7 @@ def _work_impact(args: argparse.Namespace) -> int:
                 lean_root=args.lean_root,
                 declarations=args.declarations,
                 timeout=args.timeout,
+                phases=phases,
             )
         else:
             report = module_import_impact(
@@ -1653,31 +1680,33 @@ def _work_impact(args: argparse.Namespace) -> int:
                 lean_root=args.lean_root,
                 timeout=args.timeout,
                 module_scope=args.module_scope,
+                phases=phases,
             )
     except (GraphValidationError, RuntimeProjectionError) as error:
         for issue in error.issues:
             print(f"error: {_human_text(issue)}", file=sys.stderr)
-        return 2
+        return timed(2)
     except (WorkError, ImpactError) as error:
         print(f"error: {_human_text(error)}", file=sys.stderr)
-        return 2
+        return timed(2)
     except SkeletonError as error:
         # Probe failures carry Lean's multi-line output; escape it line by line.
         for issue in error.issues:
             for index, line in enumerate(str(issue).splitlines() or [""]):
                 print(("error: " if index == 0 else "") + _human_text(line), file=sys.stderr)
-        return 2
+        return timed(2)
     except (OSError, RuntimeError, ValueError):
         print("error: project, blueprint, or Lean root path cannot be read", file=sys.stderr)
-        return 2
+        return timed(2)
 
+    phases.stop()
     if args.json:
         print(report.to_json())
-        return 0
+        return timed(0)
     lines = format_impact(report) if args.work_command == "impact" else format_module_import_impact(report)
     for line in lines:
         print(_human_text(line))
-    return 0
+    return timed(0)
 
 
 def _read_answer(args: argparse.Namespace) -> str:
@@ -2155,15 +2184,7 @@ def _skeleton(args: argparse.Namespace) -> int:
     stream = sys.stderr if args.json else sys.stdout
 
     def progress(phase: str) -> None:
-        # Information only. Without fd 2, print(file=None) would write to stdout,
-        # and a line left in a broken stderr's buffer would fail the exit-time flush.
-        if sys.stderr is None:
-            return
-        try:
-            print(f"skeleton: {phase}...", file=sys.stderr, flush=True)
-        except OSError:
-            with contextlib.suppress(OSError, ValueError):
-                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stderr.fileno())
+        _note(f"skeleton: {phase}...")
 
     try:
         report = extract_skeletons(

@@ -37,6 +37,7 @@ import json
 import os
 import re
 import shlex
+import time
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -61,6 +62,7 @@ from .lean_probe import (
     lean_name_components,
     lean_name_parts,
     lean_requests,
+    plural,
 )
 from .runtime import load_runtime_graph
 from .work import select_work_item
@@ -1581,6 +1583,37 @@ def _project_controls(root: Path) -> tuple[tuple[str, tuple[int, str] | None], .
         ) from exc
 
 
+class Phases:
+    """The phases of an impact run: each is named through ``announce`` as it
+    starts, and :meth:`summary` gives the seconds each took, with what it counted."""
+
+    def __init__(self, announce: Callable[[str], None] = lambda _phase: None) -> None:
+        self._announce = announce
+        self._phases: list[tuple[str, float, list[str]]] = []
+        self._stopped: float | None = None
+
+    def start(self, name: str, *counts: str) -> None:
+        """Start the phase ``name``, with what it counts from the start."""
+        self._phases.append((name, time.monotonic(), list(counts)))
+        self._announce(f"{name} ({', '.join(counts)})" if counts else name)
+
+    def counted(self, what: str) -> None:
+        """Note what the current phase counted, such as its modules."""
+        self._phases[-1][2].append(what)
+
+    def stop(self) -> None:
+        """End the last phase, so the summary leaves out what comes after."""
+        self._stopped = self._stopped or time.monotonic()
+
+    def summary(self) -> str:
+        ends = [started for _name, started, _counts in self._phases[1:]]
+        ends.append(self._stopped or time.monotonic())
+        return "; ".join(
+            f"{name} {end - started:.1f} s" + (f" ({', '.join(counts)})" if counts else "")
+            for (name, started, counts), end in zip(self._phases, ends)
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class _ImpactEvidence:
     source_revision: str
@@ -1604,14 +1637,18 @@ def _load_impact_evidence(
     require_default_declarations: bool,
     module: str | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
+    phases: Phases,
 ) -> _ImpactEvidence:
-    """Load one freshness-bound roadmap, source, module, and Lean environment.
+    """Load one freshness-bound roadmap, source, module, and Lean environment,
+    starting each phase in ``phases``.
 
     A ``module`` outside the project is refused from the source inventory
     alone, before the freshness check and the probe.
     """
 
+    phases.start("reading the roadmap")
     runtime = load_runtime_graph(project_or_blueprint)
+    phases.counted(plural(len(runtime.nodes), "article"))
     source_revision = runtime.source_revision
     item = select_work_item(runtime, selector)
     articles_by_id = {
@@ -1635,7 +1672,11 @@ def _load_impact_evidence(
     except LeanSourceError as error:
         raise ImpactError(str(error)) from error
     controls = _project_controls(root)
+    phases.start("reading the Lean sources")
     with bind_project_source_snapshot(root) as (bound_sources, source_snapshot):
+        phases.counted(plural(len(source_snapshot.source_files), "file"))
+        phases.counted(plural(len(source_snapshot.index.declarations), "declaration"))
+        phases.start("reading the Lake libraries")
         libraries = lean_libraries(root)
         if _project_controls(root) != controls:
             raise ImpactError(
@@ -1647,6 +1688,8 @@ def _load_impact_evidence(
             source_snapshot,
             strict_module_ownership=require_modules,
         )
+        phases.counted(plural(len(libraries), "library", "libraries"))
+        phases.counted(plural(len(imports), "module"))
         if module is not None:
             module_paths = _module_source_paths(libraries, source_snapshot, strict=True)
             module = _check_import_module(module, selected, module_paths, source_snapshot)
@@ -1654,6 +1697,7 @@ def _load_impact_evidence(
         declaration_modules = None
         if module_scope == IMPORT_CLOSURE_SCOPE:
             assert module is not None
+            phases.start(f"taking the import closure of {module}")
             captured = dict(source_snapshot.source_files)
             # Libraries sharing a srcDir map the same files; each is read once.
             pairs = dict.fromkeys(
@@ -1671,6 +1715,7 @@ def _load_impact_evidence(
                 if name not in index.duplicates and declaration.path.as_posix() in paths
             }
             imports = tuple(name for name in imports if name in closure)
+            phases.counted(plural(len(imports), "module"))
             if not imports:
                 raise ImpactError(f"not a loaded project module: {module}")
         try:
@@ -1686,6 +1731,7 @@ def _load_impact_evidence(
                 root,
                 timeout=lean_probe.DEFAULT_PROBE_TIMEOUT if timeout is None else timeout,
                 label="impact probe",
+                progress=phases.start,
             )
         except SkeletonError as error:
             said = lean_probe.stale_build_said(error)
@@ -1703,6 +1749,7 @@ def _load_impact_evidence(
                     f"({checked}" + (f"; Lake: {said})" if said else ")")
                 ]
             ) from None
+        phases.start("rechecking the roadmap and the Lean sources")
         latest = load_runtime_graph(project_or_blueprint)
         if latest.source_revision != source_revision:
             raise ImpactError("the roadmap changed while the impact probe ran; rerun the command")
@@ -1720,7 +1767,9 @@ def _load_impact_evidence(
         if latest_sources.generation_revision != source_snapshot.generation_revision:
             raise ImpactError("the Lean sources changed while the impact probe ran; rebuild and rerun the command")
 
+    phases.start("reading the probe's output")
     records = parse_impact_output(output, allow_empty=require_modules)
+    phases.counted(plural(len(records), "constant"))
     module_evidence: Mapping[str, ModuleEvidence] = {}
     if require_modules:
         required_modules = {*imports, *(record.module for record in records.values())}
@@ -1731,6 +1780,7 @@ def _load_impact_evidence(
             snapshot=source_snapshot,
             required_modules=required_modules,
         )
+        phases.counted(plural(len(module_evidence), "module"))
     module_generated = False
     if require_modules and module is not None:
         paths = _module_source_paths(libraries, source_snapshot, strict=True)
@@ -1757,14 +1807,17 @@ def revision_impact(
     lean_root: str | Path,
     declarations: Sequence[str] = (),
     timeout: float | None = None,
+    phases: Phases | None = None,
 ) -> ImpactReport:
     """Report what revising the Lean declarations of the selected article would affect.
 
     ``declarations`` replaces the article's ``lean:`` names as the revised set.
     The Lean project must be built and fresh: the probe runs through
     ``lean_probe.run_probe``, with its freshness check, time limit and output bound.
+    Each phase starts in ``phases``.
     """
 
+    phases = Phases() if phases is None else phases
     evidence = _load_impact_evidence(
         project_or_blueprint,
         selector,
@@ -1772,9 +1825,11 @@ def revision_impact(
         timeout=timeout,
         require_modules=False,
         require_default_declarations=not declarations,
+        phases=phases,
     )
     # Without --declaration, _load_impact_evidence refused an article that names none.
     names = tuple(dict.fromkeys(declarations)) or evidence.selected.declarations
+    phases.start("computing the impact")
     return compute_impact(
         evidence.records,
         evidence.articles,
@@ -1794,11 +1849,14 @@ def module_import_impact(
     lean_root: str | Path,
     timeout: float | None = None,
     module_scope: str = MODULE_IMPORT_SCOPE,
+    phases: Phases | None = None,
 ) -> ModuleImportImpactReport:
-    """Report, without blocking it, the reverse-import scope of an import edit."""
+    """Report, without blocking it, the reverse-import scope of an import edit,
+    starting each phase in ``phases``."""
 
     if module_scope not in (MODULE_IMPORT_SCOPE, IMPORT_CLOSURE_SCOPE):
         raise ImpactError(f"unknown module scope: {module_scope}")
+    phases = Phases() if phases is None else phases
     evidence = _load_impact_evidence(
         project_or_blueprint,
         selector,
@@ -1808,7 +1866,9 @@ def module_import_impact(
         require_default_declarations=False,
         module=module,
         module_scope=module_scope,
+        phases=phases,
     )
+    phases.start("computing the impact")
     return compute_module_import_impact(
         evidence.records,
         evidence.modules,

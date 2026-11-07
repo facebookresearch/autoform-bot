@@ -219,6 +219,12 @@ date when the release is tagged.
   the landing hero shows the README's opening paragraphs, up to its first
   heading or list. Check warns about the setting anywhere else under
   `roadmap/`, or with a value other than true or false, and ignores it.
+- **Progress from the impact commands.** `work impact` and `work import-impact`
+  name each phase on stderr as it starts, as in
+  `work impact: reading the roadmap...`, and end with a `timing:` line giving
+  the seconds each phase took and what it counted, after a report or a refusal,
+  so a slow run shows where its time went. stdout, the JSON reports and the
+  exit statuses are unchanged (#705).
 
 ### Changed
 

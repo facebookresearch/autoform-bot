@@ -1152,6 +1152,12 @@ def _raise_if_core_module_shadowed(output: str, detail: str, label: str = "skele
         )
 
 
+def plural(count: int, noun: str, nouns: str | None = None) -> str:
+    """``count`` and ``noun``, or ``nouns`` (``noun`` with an s) for any count but one."""
+
+    return f"{count} {noun if count == 1 else nouns or f'{noun}s'}"
+
+
 def run_probe(
     probe: str,
     lean_root: Path,
@@ -1161,6 +1167,7 @@ def run_probe(
     check_freshness: bool = True,
     helper: Path | None = None,
     label: str = "skeleton probe",
+    progress: Callable[..., None] = lambda *_phase: None,
 ) -> str:
     """Run ``probe`` with ``lake env lean`` inside the built project.
 
@@ -1169,12 +1176,15 @@ def run_probe(
     checks freshness once for all its probes and passes ``check_freshness=False``.
     ``helper`` is the directory ``_build_probe_helper`` put the helpers in;
     without one, a probe that imports them gets its own within ``timeout``.
-    ``label`` names the probe in failure messages.
+    ``label`` names the probe in failure messages, and ``progress`` is told
+    each phase as it starts, with how many modules it reads.
     """
 
     lake = _lake_executable(lean_root, label)
     modules = _probe_modules(probe)
+    count = plural(len(modules), "module")
     if check_freshness:
+        progress("checking the build's freshness", count)
         _check_artifacts_fresh(lake, lean_root, modules, timeout=freshness_timeout, label=label)
     deadline = time.monotonic() + timeout
     env = _process_helpers.inherit_clean_env()
@@ -1195,6 +1205,7 @@ def run_probe(
         # Records go to their own file: on stdout any other write could split one.
         records = Path(scratch) / "records.out"
         env[PROBE_OUTPUT_ENV] = str(records)
+        progress(f"running the {label}", count)
         try:
             result = _run_bounded_command(
                 [lake, "env", "lean", str(source)],

@@ -156,7 +156,9 @@ def test_command_names_the_unusable_lean_root(
     assert main([*arguments, "--lean-root", str(root)]) == code
 
     captured = capsys.readouterr()
-    assert captured.out + captured.err == expected.format(reason)
+    # Progress aside: work impact names each phase and times them on stderr.
+    shown = "".join(line for line in (captured.out + captured.err).splitlines(True) if not line.startswith("work impact: "))
+    assert shown == expected.format(reason)
     assert _without_host_paths(captured.out + captured.err, tmp_path)
 
 

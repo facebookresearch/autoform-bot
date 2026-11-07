@@ -67,13 +67,13 @@ loaded root-package module missing from the repository's source inventory, which
 skips nested Git checkouts, ignored directories such as `build`, and symlinked
 directories, and a module an `M.*` or `M.+` glob finds that it did not load.
 
-The command refuses if the roadmap or the Lean sources change during the probe.
-JSON uses `autoform-impact/v1`, bound to the Markdown `source_revision`, the
-repository `lean_source_revision`, and a `build_revision` hash of the normalized
-Lean records. A missing or stale build is reported as for `work import-impact`.
-Changes to notation, attributes, instance priority, or unreported generated
-declarations still require human review. Both impact probes import project
-modules, so run them only in a trusted checkout or sandbox.
+It refuses if the roadmap or Lean sources change during the probe. JSON uses
+`autoform-impact/v1`, bound to the Markdown `source_revision`, the repository
+`lean_source_revision`, and a `build_revision` hash of normalized Lean records.
+A missing or stale build is reported as for `work import-impact`. Changes to
+notation, attributes, instance priority and unreported generated declarations
+need human review. Both commands import project modules, so run them only in a
+trusted checkout or sandbox; each names and times its phases on stderr.
 
 ## Work import-impact
 
