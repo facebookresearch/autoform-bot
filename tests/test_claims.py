@@ -2701,8 +2701,10 @@ def test_git_ends_with_its_caller_when_the_caller_is_terminated(tmp_path: Path, 
     signum = getattr(signal, name)
     pid_file = tmp_path / "pid"
     script = (
-        "import pathlib, resource\n"
+        "import pathlib, resource, signal\n"
         "from autoform_cli import claims\n"
+        # Start from a terminal's disposition even when pytest runs under nohup or in the background.
+        f"signal.signal(signal.{name}, signal.SIG_DFL)\n"
         # SIGQUIT's default action dumps core; the caller leaves no core file behind.
         "resource.setrlimit(resource.RLIMIT_CORE, (0, 0))\n"
         f"board = claims.ClaimBoard(pathlib.Path({str(tmp_path / 'unused.git')!r}), 'w', "
@@ -2985,16 +2987,20 @@ def test_git_reports_a_termination_its_caller_survives_as_a_transport_error(tmp_
     def survive(received: int, frame: object) -> None:
         seen.append(received)
 
-    previous = signal.signal(signum, survive)
+    # The guard replaces all three handlers, so a survived signal must put each one back.
+    handlers = {getattr(signal, other): lambda received, frame: None for other in ("SIGTERM", "SIGHUP", "SIGQUIT")}
+    handlers[signum] = survive
+    previous = {each: signal.signal(each, handler) for each, handler in handlers.items()}
     timer = threading.Timer(0.5, os.kill, (os.getpid(), signum))
     try:
         timer.start()
         with pytest.raises(claims.ClaimTransportError, match=name):
             board._git(_alias("hang", "sleep 30"), isolated=True)
-        assert signal.getsignal(signum) is survive
+        assert {each: signal.getsignal(each) for each in handlers} == handlers
     finally:
         timer.cancel()
-        signal.signal(signum, previous)
+        for each, handler in previous.items():
+            signal.signal(each, handler)
 
     assert seen == [signum]
 
