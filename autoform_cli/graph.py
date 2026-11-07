@@ -310,7 +310,11 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
             annotated.add(source.id)
             text, ignored = _settings_only(text)
             if ignored:
-                beside = "frontmatter beside an annotation is ignored, except " + ", ".join(sorted(_SETTINGS))
+                beside = (
+                    "frontmatter beside an annotation is ignored, except "
+                    + ", ".join(sorted(_SETTINGS))
+                    + "; keep it until `autoform migrate links blueprint` shows the annotation holds it"
+                )
                 links.drops.add(beside, source.id)
         node, node_issues = _parse_node(source.id, canonical, text)
         issues.extend(node_issues)
@@ -323,7 +327,10 @@ def load_graph(blueprint_dir: str | Path) -> Graph:
                 else:
                     node.metadata[key] = value
             if links is not None and links.sha256 is not None and facts is None and set(node.metadata) - _SETTINGS:
-                reason = "articles with no annotation keep their frontmatter facts; move them into blueprint/links/"
+                reason = (
+                    "articles with no annotation keep their frontmatter facts; move them into blueprint/links/ with "
+                    "`autoform migrate links blueprint --write`"
+                )
                 links.drops.add(reason, node.id)
             article_id = node.metadata.get("article_id")
             if article_id is not None:

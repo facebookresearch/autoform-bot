@@ -84,6 +84,9 @@ class Links:
     drops: Drops
     #: A digest of every file in the folder, for the revisions built on the graph; None when no folder is read.
     sha256: str | None
+    #: The files holding each annotated article's annotations, as ``links/...`` in the order read, by its resolved
+    #: path: the articles of ``facts``.
+    files: dict[Path, tuple[str, ...]]
 
 
 def links_exist(blueprint: Path) -> bool:
@@ -116,7 +119,7 @@ def read_links(blueprint: Path, articles: dict[Path, str]) -> Links | None:
             drops.add(f"a folder spelled other than {LINKS_DIR} is not read; {rename}", spellings[0])
         else:
             return None
-        return Links({}, drops, None)
+        return Links({}, drops, None, {})
     contents, broken = _walk(folder, drops)
     digest = hashlib.sha256(b"autoform-links/v1\0")
     # A defaults file that cannot be used changes facts with no byte read, so its folder counts, marked by a NUL no
@@ -131,7 +134,8 @@ def read_links(blueprint: Path, articles: dict[Path, str]) -> Links | None:
     roadmap = os.path.join(os.path.normpath(blueprint), "roadmap", "")
     spelled = {str(path): path for path in articles}
     grouped: dict[Path, list[tuple[dict[str, Any], str]]] = {}
-    for annotation, place, base in _annotations(folder, contents, broken, drops):
+    files: dict[Path, dict[str, None]] = {}
+    for annotation, place, base, file in _annotations(folder, contents, broken, drops):
         subjects = annotation.get("subject")
         ends = subjects if isinstance(subjects, list) else []
         # Each roadmap page a subject names, and whether one names all of it, without a fragment, query or location:
@@ -148,6 +152,7 @@ def read_links(blueprint: Path, articles: dict[Path, str]) -> Links | None:
             about = "part of an article"
         elif (page := next(iter(pages), None)) in spelled:
             grouped.setdefault(spelled[page], []).append((annotation, base))
+            files.setdefault(spelled[page], {})[file] = None
             continue
         else:
             about = "no roadmap article"
@@ -156,7 +161,7 @@ def read_links(blueprint: Path, articles: dict[Path, str]) -> Links | None:
         path: _facts(articles[path], entries, project, drops)
         for path, entries in sorted(grouped.items(), key=lambda item: articles[item[0]])
     }
-    return Links(facts, drops, digest.hexdigest())
+    return Links(facts, drops, digest.hexdigest(), {path: tuple(names) for path, names in files.items()})
 
 
 def scan(blueprint: Path) -> list[str]:
@@ -228,9 +233,9 @@ def _walk(folder: Path, drops: Drops) -> tuple[dict[str, bytes], set[str]]:
 
 def _annotations(
     folder: Path, contents: dict[str, bytes], broken: set[str], drops: Drops
-) -> list[tuple[dict[str, Any], str, str]]:
+) -> list[tuple[dict[str, Any], str, str, str]]:
     """Each annotation in *contents*, with its folder defaults applied as discovery applies them:
-    ``(annotation, place, the folder its relative references start from)``."""
+    ``(annotation, place, the folder its relative references start from, its file)``."""
     from literature_links import companion
 
     defaults: dict[str, dict[str, Any] | None] = dict.fromkeys(broken)
@@ -266,7 +271,7 @@ def _annotations(
             merged[parent] = result
         return merged[parent]
 
-    rows: list[tuple[dict[str, Any], str, str]] = []
+    rows: list[tuple[dict[str, Any], str, str, str]] = []
     for relative, data in sorted(contents.items()):
         parent, _, name = relative.rpartition("/")
         if name == _DEFAULTS or not name.lower().endswith(_SUFFIXES):
@@ -302,7 +307,7 @@ def _annotations(
             if not isinstance(annotation, dict):
                 drops.add("annotations that are not JSON objects are left out", where)
                 continue
-            rows.append((annotation, where, base))
+            rows.append((annotation, where, base, place))
     return rows
 
 
